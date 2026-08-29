@@ -680,35 +680,35 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
 }
 
 
-// --- Szenen-Rezept (schnittstellen-3d.md Teil B) ------------------------------
-// Der Server komponiert die GANZE Szene einer Location; der Client stellt sie
-// nur dar. Jede Zahl ist bereits ein WELT-Meter um das Kachelzentrum — keine
-// Fraktionen, keine Maßstabsfaktoren, keine Geometrie-Entscheidung hier.
-// Gegenstück auf der Serverseite: app/core/scene_recipe.py.
+// --- Scene recipe (schnittstellen-3d.md part B) -------------------------------
+// The server composes the WHOLE scene of a location; the client only renders
+// it. Every number already is a WORLD metre around the tile centre — no
+// fractions, no scale factors, no geometry decision here.
+// Counterpart on the server side: app/core/scene_recipe.py.
 //
-// Die Typen selbst leben in @anima/scene-render: EINE Definition für diesen
-// Client und die Admin-Vorschau. Sie standen vorher doppelt (hier und in
-// frontend/src/tabs/world/worldTypes.ts) und waren bereits auseinander-
-// gelaufen. Re-Export, damit kein Importeur angefasst werden muss.
+// The types themselves live in @anima/scene-render: ONE definition for this
+// client and the admin preview. They used to exist twice (here and in
+// frontend/src/tabs/world/worldTypes.ts) and had already drifted apart.
+// Re-exported so that no importer has to be touched.
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, SceneFloor,
   SceneMarker, SceneStyle, SceneRoom, SceneStairs, ModelTier,
   SceneBoundaryOpening, SceneDoorway, SceneProblem,
-  /** hiess hier frueher ApiOpening */
+  /** used to be called ApiOpening here */
   SceneOpening,
 } from '@anima/scene-render';
 
-/** Komplette Szene einer Location (§ B1). 404 = nichts zu komponieren (kein
- *  Grundriss, kein Raum mit Layout, kein Gebäudemodell) → Legacy-Pfad wie
- *  bisher. Andere Fehler werfen; der Aufrufer versucht es später erneut. */
+/** The complete scene of a location (§ B1). 404 = nothing to compose (no
+ *  floor plan, no room with a layout, no building model) → legacy path as
+ *  before. Other errors throw; the caller retries later. */
 export async function getLocationScene(locationId: string): Promise<ScenePayload | null> {
   const res = await fetch(`/play/locations/${encodeURIComponent(locationId)}/scene`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`scene ${locationId}: HTTP ${res.status}`);
   const data = await res.json();
   if (!data?.signature) return null;
-  // Defensiv nur da, wo eine kaputte Liste den Aufbau abbrechen ließe; die
-  // Zahlenfelder kommen aus dem Composer und werden NICHT nachgerechnet.
+  // Defensive only where a broken list would abort the build-up; the numeric
+  // fields come from the composer and are NOT recomputed.
   const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
   return {
     signature: String(data.signature),
@@ -739,9 +739,9 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
       .filter((f) => arr(f.polygon_world).length >= 3),
     walls: arr<SceneWall>(data.walls),
     extras: arr<SceneExtra>(data.extras),
-    // Modelle wandern unveraendert durch: `variants` je Stufe (§ B1) statt
-    // einer festen URL — welche Stufe geladen wird, entscheidet der Renderer
-    // ueber pickVariant(), nicht diese Schicht.
+    // Models pass through unchanged: `variants` per tier (§ B1) instead of a
+    // fixed URL — which tier gets loaded is decided by the renderer via
+    // pickVariant(), not by this layer.
     models: arr<SceneModelSpec>(data.models),
     figures: data.figures ?? { base_height_m_world: 1.7, stand_clearance: 0.12 },
     markers: arr<SceneMarker>(data.markers),
@@ -758,7 +758,7 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     boundary_openings: Array.isArray(data.boundary_openings)
       && data.boundary_openings.length
       ? (data.boundary_openings as SceneBoundaryOpening[]) : undefined,
-    // Detail-Modus der Location (v5.2 Nr. 10) — gilt auch ohne Modell.
+    // Detail mode of the location (v5.2 no. 10) — applies without a model too.
     area_detail: data.area_detail === true ? true : undefined,
     // `terrain` and `natural_floor` ARE NOT READ ANY MORE (E5a, § A19 no. 1
     // and no. 6): the scene's own 17 x 17 relief is deleted, and "this

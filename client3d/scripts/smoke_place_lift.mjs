@@ -236,7 +236,8 @@ async function main() {
         pickablePlaceFor({ x: 0.4, z: 0.5 }, ONE, PLACE_PICK_RADIUS_M), null);
   check('the gate never changes WHICH place wins, only whether one does',
         pickablePlaceFor({ x: 1.9, z: 0 }, PLACES, PLACE_PICK_RADIUS_M), 'b1/seat2');
-  check('...and it is the WINNER that is measured: the bench is 1.3 m away',
+  check('...and it is the WINNER that is measured: the bench\'s nearest slot '
+        + '(x = 0.6) is 0.7 m away',
         pickablePlaceFor({ x: 1.3, z: 0 }, [PLACES[0]], PLACE_PICK_RADIUS_M), null);
   check('without a gate the same far hit still answers the nearest',
         pickablePlaceFor({ x: -0.7, z: 0 }, ONE), 'stool');

@@ -238,7 +238,7 @@ export interface NpcState {
   lean?: { tilt: number; roll: number };
   /** hide the figure (e.g. a storey other than the shown one) */
   hidden?: boolean;
-  /** Zwischenstationen (z.B. Raum-Ausgänge bei Raumwechsel, AV3D-2) */
+  /** Waypoints in between (e.g. room exits on a room change, AV3D-2) */
   via?: THREE.Vector3[];
   /** Put the figure at `pos` instead of walking it there. Set for placements
    *  that are not a MOVE at all: the detail view opening or closing (the
@@ -990,7 +990,6 @@ export class NpcManager {
     npc.bubbleUntil = performance.now() + bubbleMs(text);
   }
 
-  /** Pro Frame: Richtung Ziel laufen, Animation nach Zustand wählen. */
   /** Is this figure bound in a pair interaction right now? main.ts asks
    *  before it reports the avatar's position: the clip moves the root, and a
    *  reported "move" would make the server end the very interaction. */

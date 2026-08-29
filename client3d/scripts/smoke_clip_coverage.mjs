@@ -105,11 +105,17 @@
  * ---------------------------------------------------------------------------
  * Exact wins; then the FAMILY BASE among the relatives; then the first listed
  * relative; `''` when nothing is of the sort. The entry comes back AS PASSED
- * IN, so the caller can look it up in its own map. It matches BOTH ways —
- * that is the marker half of the finding.
+ * IN, so the caller can look it up in its own map. It matches BOTH ways: a
+ * wanted kind finds an older relative, and an older wanted kind finds a
+ * renamed one.
+ *
+ * Only the FUNCTION is checked here. The room-marker call site in `main.ts`
+ * that this once served is gone (places strand, task 13: the keyword
+ * heuristic was removed), so nothing below greps `main.ts` for it any more —
+ * `figures.ts` is the remaining consumer, and it is the one checked.
  *
  *   ([walk, idle], walk-cmu)                 -> walk        rename, rig side
- *   ([walk-cmu, idle], walk)                 -> walk-cmu    rename, marker side
+ *   ([walk-cmu, idle], walk)                 -> walk-cmu    the other direction
  *   ([walk, walk-cmu], walk-cmu)             -> walk-cmu    exact beats the
  *                                                           relative listed first
  *   ([walk-mixamo, walk], walk-cmu)          -> walk        the family BASE
@@ -379,15 +385,12 @@ async function main() {
 
   console.log('the rules are WIRED at their consumers');
   const figures = await readFile(join(ROOT, 'client3d/src/scene/figures.ts'), 'utf8');
-  const mainTs = await readFile(join(ROOT, 'client3d/src/main.ts'), 'utf8');
   check('figures.play resolves through resolveClipKind',
     /resolveClipKind\(kind,/.test(figures), true);
   check('the procedural gait gate asks proceduralGait',
     /proceduralGait\(this\.currentKind\)/.test(figures), true);
   check('...and no literal kind comparison is left in figures.ts',
     !/currentKind === '(walk|run)'/.test(figures), true);
-  check('the room markers match through matchAnimKind',
-    /matchAnimKind\(\[\.\.\.byKind\.keys\(\)\], kind\)/.test(mainTs), true);
 
   console.log('animatablePool — the rigs a character may be drawn from');
   const soldier = { name: 'Soldier', libraryFits: true };

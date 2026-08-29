@@ -927,15 +927,15 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // carries no plate any more, so nothing here places, biases or drapes one:
   // what the scene does not cover, the world terrain shows.
 
-  // Flächen-/Gelände-Location (Wald, See, Dorf): Räume sind ZONEN, keine
-  // Zimmer — die Regel speist Raum-Labels, Panel UND die Platten unten.
+  // Area/terrain location (forest, lake, village): rooms are ZONES, not
+  // rooms — the rule feeds the room labels, the panel AND the plates below.
   const areaLoc = tile.natureSite || !tile.isBuilding || !!scene.area_detail
     || (scene.models || []).some((m) => m.role === 'building'
         && (m.display === 'ground' || m.display === 'shell_area'));
 
-  // ── Räume: Gruppen, Etagen, Outdoor-Flags ───────────────────────────────
-  // Outdoor-Räume (§ A5) hängen direkt an der Kachel und sind damit in jeder
-  // Zoomstufe sichtbar; Innenräume hängen an der Innenansicht.
+  // ── Rooms: groups, storeys, outdoor flags ───────────────────────────────
+  // Outdoor rooms (§ A5) hang straight off the tile and are therefore visible
+  // at every zoom level; interior rooms hang off the interior view.
   const outdoor = new Set(scene.outdoor_rooms);
   const roomGroup = new Map<string, THREE.Group>();
   const roomLevel = new Map<string, number>();
@@ -1012,7 +1012,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     parentFor(plate.room_id).add(mesh);
     builtPlates.push({ mesh, plate });
     if (!plate.room_id) {
-      // Kontur-Platte der Etage — Grundlage des Etagen-Umschalters
+      // The storey's outline plate — the basis of the storey switch
       tile.levelSlabs.set(plate.level, mesh);
       continue;
     }
@@ -1286,7 +1286,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // location the rooms are zones like "Road"/"Forest", and their generic
   // names over the scene are noise (user directive 2026-08-02).
   for (const [id, rg] of roomGroup) {
-    if (areaLoc) break;  // Zonen statt Zimmer — keine Namen einblenden
+    if (areaLoc) break;  // zones instead of rooms — show no names
     const name = nameOf.get(id);
     if (!name) continue;
     const rect = tile.roomRects.get(id);
@@ -1303,8 +1303,8 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     rg.add(label);
     tile.interiorLabels.push(label);
   }
-  // `interiorLift` stand hier bis Etappe 3: die Zoom-Zugabe des entfernten
-  // Distanz-Aufklappens — die Detail-Ansicht öffnet jetzt ereignisgetrieben.
+  // `interiorLift` stood here until stage 3: the zoom bonus of the removed
+  // distance-based unfolding — the detail view now opens on an event.
   if (levels.length > 1) {
     const el = document.createElement('div');
     el.className = 'level-switch';
@@ -1505,15 +1505,15 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     walls: scene.walls.length,
   })) buildFarShell(tile, builtPlates, builtWalls);
 
-  // ── DIE DEKLARIERTEN BÖDEN dieser Szene (§ B6 Nr. 7) ────────────────────
-  // Bis hier war `walk_y_world` eine reine Abtast-Vorgabe und endete in
-  // diesem Block; die laufende Figur (`tileWalkY`) hat sie NIE gesehen. Genau
-  // das war der Befund an der Mondhütte: der Regler bewegte die NPC-Spots und
-  // die Raummitte, die Figur stand weiter auf dem Kachelboden. Die Ansage
-  // gehört an die Kachel, nicht in diese Funktion.
+  // ── THE DECLARED FLOORS of this scene (§ B6 no. 7) ──────────────────────
+  // Until here `walk_y_world` was a pure sampling hint and ended inside this
+  // block; the walking figure (`tileWalkY`) NEVER saw it. That was exactly the
+  // finding at the moon hut: the slider moved the NPC spots and the room
+  // centre, the figure kept standing on the tile ground. The declaration
+  // belongs on the tile, not in this function.
   //
-  // Die Hülle ist die des RAUMS aus dem Payload (§ B1), nicht die der Platte:
-  // eine Ansage gilt für den Raum, auch wenn er gar keine Platte zeichnet.
+  // The hull is the ROOM's from the payload (§ B1), not the plate's: a
+  // declaration holds for the room even when it draws no plate at all.
   tile.declaredFloors = [];
   for (const room of scene.rooms) {
     const top = walkY.get(room.room_id);

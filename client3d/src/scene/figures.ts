@@ -181,7 +181,7 @@ function boneOverlap(clips: readonly THREE.AnimationClip[], target: THREE.Object
   return { matched, total: nodes.size };
 }
 
-/** Alle Knochennamen (Node-Namen unterhalb von Skinnen) eines Modells. */
+/** All bone names (node names below the skins) of a model. */
 function boneNames(root: THREE.Object3D): Set<string> {
   const names = new Set<string>();
   root.traverse((o) => {
@@ -199,12 +199,12 @@ function findSkinnedMesh(root: THREE.Object3D): THREE.SkinnedMesh | null {
 }
 
 /**
- * Clips eines Spender-Modells auf ein anderes Skelett übertragen.
- * SkeletonUtils.retargetClip arbeitet über Welt-Transformationen und
- * kompensiert damit unterschiedliche Bind-Posen (naives Track-Kopieren
- * verrenkt die Figur, sobald die Ruhe-Rotationen der Knochen abweichen).
- * Knochennamen müssen übereinstimmen (Mixamo-Standard; das mixamorig:-Präfix
- * wird beim Ziel notfalls abgeschnitten).
+ * Transfer the clips of a donor model onto another skeleton.
+ * SkeletonUtils.retargetClip works over world transforms and therefore
+ * compensates for differing bind poses (copying tracks naively contorts the
+ * figure as soon as the bones' rest rotations differ). Bone names have to
+ * match (Mixamo standard; the mixamorig: prefix is cut off the target's names
+ * if need be).
  */
 function retargetClips(
   target: THREE.Object3D,
@@ -215,14 +215,14 @@ function retargetClips(
   const donorSkin = findSkinnedMesh(donor);
   if (!targetSkin || !donorSkin) return [];
 
-  // Hierarchisches FK-Retargeting: Spender-Clip framebasiert abtasten,
-  // Welt-Rotations-Deltas top-down auf das Ziel-Skelett heben. Im Gegensatz
-  // zum Rest-Pose-Konjugieren werden dabei die bereits animierten
-  // ELTERN-Rotationen des Ziels berücksichtigt — sonst verrenken sich Ketten
-  // (Schulter/Arm), sobald sich Knochenkonventionen unterscheiden.
+  // Hierarchical FK retargeting: sample the donor clip frame by frame, then
+  // lift the world rotation deltas top-down onto the target skeleton. Unlike
+  // conjugating by the rest pose, this accounts for the target's already
+  // animated PARENT rotations — otherwise chains (shoulder/arm) contort as soon
+  // as bone conventions differ.
   const FPS = 24;
 
-  // Spender-Klon zum Abtasten (Template nicht mutieren)
+  // a donor clone to sample from (never mutate the template)
   const donorClone = SkeletonUtils.clone(donor);
   donorClone.updateMatrixWorld(true);
   const donorSkinClone = findSkinnedMesh(donorClone)!;
@@ -233,13 +233,13 @@ function retargetClips(
     donorRestW.set(b.name, b.getWorldQuaternion(new THREE.Quaternion()));
   }
 
-  // Ziel-Knochen: Rest-Welt-Rotationen + Hierarchie-Reihenfolge (Eltern zuerst)
+  // target bones: rest world rotations + hierarchy order (parents first)
   const targetBones: THREE.Bone[] = [];
   const collect = (o: THREE.Object3D) => {
     if ((o as THREE.Bone).isBone) targetBones.push(o as THREE.Bone);
     for (const c of o.children) collect(c);
   };
-  // ab Wurzel sammeln, damit die Reihenfolge Eltern->Kind garantiert ist
+  // collect from the root so that the order parent -> child is guaranteed
   let skRoot: THREE.Object3D = targetSkin.skeleton.bones[0];
   while (skRoot.parent && (skRoot.parent as THREE.Bone).isBone) skRoot = skRoot.parent;
   collect(skRoot);
@@ -247,13 +247,13 @@ function retargetClips(
   const targetRestW = new Map<THREE.Bone, THREE.Quaternion>();
   for (const b of targetBones) targetRestW.set(b, b.getWorldQuaternion(new THREE.Quaternion()));
 
-  // Zuordnung Ziel-Knochen -> Spender-Knochen (mixamorig-Präfix tolerant)
+  // mapping target bone -> donor bone (tolerant of the mixamorig prefix)
   const donorByKey = new Map<string, THREE.Bone>();
   for (const b of donorSkinClone.skeleton.bones) {
     donorByKey.set(b.name.replace(/^mixamorig:?/i, '').toLowerCase(), b as THREE.Bone);
   }
-  // Spiegel-Erkennung: sitzt der "Left*"-Knochen des Ziels auf der anderen
-  // Welt-Seite als beim Spender, Links/Rechts in der Zuordnung tauschen.
+  // Mirror detection: if the target's "Left*" bone sits on the other world side
+  // than the donor's, swap left/right in the mapping.
   const worldX = (b: THREE.Object3D) => b.getWorldPosition(new THREE.Vector3()).x;
   const pair = new Map<THREE.Bone, THREE.Bone>();
   for (const tb of targetBones) {
@@ -271,7 +271,7 @@ function retargetClips(
   }
   if (pair.size < 8) return [];
 
-  // Hüfte für Positions-Track (Lauf-Bounce), skaliert über Hüfthöhen-Verhältnis
+  // hips for the position track (walking bounce), scaled by the hips-height ratio
   const targetHips = targetBones.find((b) => /hips$/i.test(b.name));
   const donorHips = donorHipsBone(donorSkinClone);
   const tHipsRestPos = targetHips?.getWorldPosition(new THREE.Vector3());
@@ -281,8 +281,8 @@ function retargetClips(
     ? new THREE.Matrix4().copy((targetHips.parent as THREE.Object3D).matrixWorld).invert()
     : null;
 
-  // Aim-Retargeting: pro Knochen die Richtung zum Kind übertragen statt
-  // Rotations-Deltas — robust gegen gespiegelte/abweichende Knochen-Frames.
+  // Aim retargeting: per bone transfer the DIRECTION towards the child rather
+  // than rotation deltas — robust against mirrored/deviating bone frames.
   const firstBoneChild = (b: THREE.Object3D): THREE.Bone | undefined =>
     b.children.find((c) => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
   const donorChild = new Map<THREE.Bone, THREE.Bone>();
@@ -330,15 +330,15 @@ function retargetClips(
           : parent.getWorldQuaternion(new THREE.Quaternion());
         const db = pair.get(tb);
         if (!db) {
-          // unanimierter Knochen: Rest-Lokalrotation beibehalten
+          // unanimated bone: keep the rest local rotation
           worldQ.set(tb, pW.clone().multiply(tb.quaternion));
           continue;
         }
         const dc = donorChild.get(db);
         const restDir = targetRestDir.get(tb);
         if (dc && restDir) {
-          // Aim: Ziel-Knochen so drehen, dass er in die Welt-Richtung des
-          // Spender-Knochens zeigt (Rest-Richtung -> aktuelle Richtung)
+          // Aim: turn the target bone so that it points in the donor bone's
+          // world direction (rest direction -> current direction)
           dc.getWorldPosition(vA);
           db.getWorldPosition(vB);
           vA.sub(vB);
@@ -349,7 +349,7 @@ function retargetClips(
             desired.copy(targetRestW.get(tb)!);
           }
         } else {
-          // End-Knochen (Hände, Zehen): Eltern-Bewegung erben, Rest-Lokalrotation halten
+          // end bones (hands, toes): inherit the parent's motion, keep the rest local rotation
           worldQ.set(tb, pW.clone().multiply(tb.quaternion));
           const rest = new THREE.Quaternion().copy(tb.quaternion);
           rest.toArray(values.get(tb)!, f * 4);
@@ -387,11 +387,10 @@ function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
 }
 
 /**
- * Mixamo-Animations-Clips (aus FBX) direkt auf ein Mixamo-Rig anwenden:
- * Tracknamen auf die tatsächlichen Knochennamen des Ziels normalisieren,
- * Hips-Positions-Track auf die Rig-Größe skalieren, übrige Positions-/
- * Scale-Tracks verwerfen. Kein Retargeting — funktioniert, weil beide Seiten
- * dieselbe Mixamo-Bind-Pose verwenden.
+ * Apply Mixamo animation clips (from FBX) directly to a Mixamo rig: normalise
+ * the track names to the target's actual bone names, scale the hips position
+ * track to the rig's size, discard the remaining position/scale tracks. No
+ * retargeting — this works because both sides use the same Mixamo bind pose.
  *
  * Exported for `client3d/scripts/smoke_clip_ground.mjs` alone: the clip ground
  * offset is measured on the clips THIS produces, so the check has to walk the
@@ -405,11 +404,11 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
   if (!boneByKey.size) return [];
   const hips = [...boneByKey.entries()].find(([k]) => /hips$/.test(k))?.[1];
 
-  // Hüfte: Mixamo-Clips sind für ein Rig ohne Armature-Rotation autoriert
-  // (Hüft-Rest ~ Identität). Unsere Rigs kompensieren die +90°-Armature-
-  // Rotation in der Hüft-Ruhe-Rotation — direktes Kopieren überschreibt die
-  // Kompensation und kippt die Figur auf den Bauch. Deshalb: Clip-Werte in
-  // den Eltern-Raum der Ziel-Hüfte heben (Rotation UND Position).
+  // Hips: Mixamo clips are authored for a rig without an armature rotation
+  // (hips rest ~ identity). Our rigs compensate the +90° armature rotation in
+  // the hips' rest rotation — copying straight over would overwrite that
+  // compensation and tip the figure onto its belly. Hence: lift the clip values
+  // into the PARENT SPACE of the target hips (rotation AND position).
   target.updateMatrixWorld(true);
   let hipsRotFix = new THREE.Quaternion();
   let hipsPosMatrix: THREE.Matrix4 | null = null;
@@ -419,21 +418,21 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
     hipsRotFix = parent.getWorldQuaternion(new THREE.Quaternion()).invert();
     hipsPosMatrix = parent.matrixWorld.clone().invert();
     const restWorldY = hips.getWorldPosition(new THREE.Vector3()).y;
-    // Mixamo-Hüfthöhe (~98cm) auf die Welthöhe des Ziel-Rigs skalieren
+    // scale the Mixamo hips height (~98 cm) to the world height of the target rig
     hipsPosScale = restWorldY > 1e-6 ? restWorldY : 1;
   }
 
   const q = new THREE.Quaternion();
   const v = new THREE.Vector3();
-  // Steh-Referenz der Quelle. Früher: MAXIMALE Hüfthöhe über ALLE Clips —
-  // ein EINZELNER falsch skalierter Clip wurde damit zur Referenz und
-  // drückte JEDE Figur in den Boden (Befund 2026-07-26: taking-fotos.fbx
-  // mit Hüfte ~211 statt ~110 → alle NPCs ~0,47 m tief, überall).
-  // Jetzt: pro Clip die MEDIAN-Hüfthöhe messen; Referenz = größter
-  // Clip-Median, den mindestens ein zweiter Clip zu 70 % bestätigt
-  // (Sitz-/Liege-Clips bleiben legitim darunter und senken die Hüfte wie
-  // gewollt). Ein Clip ÜBER dem 1,5-fachen der Referenz ist ein
-  // Export-Maßstabsfehler und wird selbst auf die Referenz zurückskaliert.
+  // The source's STANDING reference. It used to be the MAXIMUM hips height over
+  // ALL clips — which made a SINGLE badly scaled clip the reference and pushed
+  // EVERY figure into the ground (finding 2026-07-26: taking-fotos.fbx with
+  // hips ~211 instead of ~110 → all NPCs ~0.47 m too deep, everywhere).
+  // Now: measure the MEDIAN hips height per clip; the reference is the largest
+  // clip median that at least one second clip confirms to within 70 % (sitting
+  // and lying clips legitimately stay below it and lower the hips as intended).
+  // A clip ABOVE 1.5 × the reference is an export scale error and is itself
+  // scaled back onto the reference.
   const hipMedian = (clip: THREE.AnimationClip): number => {
     const ys: number[] = [];
     for (const track of clip.tracks) {
@@ -447,10 +446,10 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
   const medians = new Map<THREE.AnimationClip, number>(
     clips.map((c) => [c, hipMedian(c)] as [THREE.AnimationClip, number]));
   const sorted = [...medians.values()].filter((m) => m > 1e-6).sort((a, b) => b - a);
-  // Obergrenze (cap) = größter Wert, den ein zweiter Clip zu 70 % bestätigt;
-  // Referenz = Median des STEH-Clusters [0,7 × cap .. cap] — so bestimmt
-  // weder ein Maßstabs-Ausreißer (211) noch ein einzelner hoher Clip (sleep
-  // 119,5) die Stehhöhe, sondern die dichte Idle/Walk-Gruppe (~110).
+  // The cap = the largest value a second clip confirms to within 70 %; the
+  // reference = the median of the STANDING cluster [0.7 × cap .. cap] — so
+  // neither a scale outlier (211) nor a single tall clip (sleep 119.5) decides
+  // the standing height, but the dense idle/walk group (~110).
   let cap = sorted[0] || 0;
   for (let i = 0; i < sorted.length; i++) {
     if (sorted.length === 1 || (sorted[i + 1] !== undefined && sorted[i + 1] >= sorted[i] * 0.7)) {
@@ -462,8 +461,8 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
   const sourceRest = cluster.length
     ? cluster[Math.floor(cluster.length / 2)]
     : (sorted[0] || 0);
-  // Maßstabs-Heilung pro Clip: |y|-Werte eines Ausreißers vor der
-  // Bounce-Rechnung auf die Referenz normieren.
+  // Scale healing per clip: normalise an outlier's |y| values onto the
+  // reference before the bounce is computed.
   const scaleFixOf = (clip: THREE.AnimationClip): number => {
     const m = medians.get(clip) || 0;
     return sourceRest > 1e-6 && m > sourceRest * 1.5 ? sourceRest / m : 1;
@@ -491,17 +490,17 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
           tracks.push(t);
         }
       } else if (prop === 'position' && bone === hips && hips && hipsPosMatrix && sourceRest > 1e-6) {
-        // Nur die vertikale Hüftbewegung übernehmen (relativ zur STEH-
-        // Referenz der Quelle — so senken Sitz-/Liege-Clips die Hüfte ab),
-        // Lokomotion/Drift verwerfen — die Wurzel bewegt der Client selbst.
+        // Take only the VERTICAL hips motion (relative to the source's STANDING
+        // reference — that is how sitting/lying clips lower the hips) and
+        // discard locomotion/drift — the client moves the root itself.
         const k = hipsPosScale / sourceRest;
         const scaleFix = scaleFixOf(clip);
         const rest = hips.position;
         const vals = new Float32Array(track.values.length);
         for (let i = 0; i < track.values.length; i += 3) {
-          const bounce = (Math.abs(track.values[i + 1]) * scaleFix - sourceRest) * k; // Welt-Delta in m
-          v.set(0, bounce, 0).applyMatrix4(hipsPosMatrix); // in Eltern-Raum (Richtung+Skala)
-          v.sub(new THREE.Vector3().setFromMatrixPosition(hipsPosMatrix!)); // nur Richtungsanteil
+          const bounce = (Math.abs(track.values[i + 1]) * scaleFix - sourceRest) * k; // world delta in m
+          v.set(0, bounce, 0).applyMatrix4(hipsPosMatrix); // into parent space (direction+scale)
+          v.sub(new THREE.Vector3().setFromMatrixPosition(hipsPosMatrix!)); // direction part only
           v.add(rest);
           v.toArray(vals, i);
         }

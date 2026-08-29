@@ -38,7 +38,7 @@
  *           0x6a = 106/255 = 0.41568627… -> (0.47068627/1.055)^2.4
  *                                        = 0.44614813^2.4 = 0.144128
  *           0x65 = 101/255 = 0.39607843… -> 0.42756249^2.4  = 0.130136
- *           0x55 =  85/255 = 0.33333333… -> 0.36808057^2.4  = 0.090842
+ *           0x55 =  85/255 = 0.33333333… -> 0.36808846^2.4  = 0.090842
  *         …and those three ARE `THREE.Color(0x6a6555).r/g/b`, which is where
  *         the module reads them: parity with the prop hover by construction,
  *         in a `ColorManagement`-off build too.

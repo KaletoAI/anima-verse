@@ -82,7 +82,7 @@ import { OpeningDoorProp } from './DoorPropPicker'
 import type { PropSlot } from '../props/propTypes'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
-import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SurfaceKind } from './worldTypes'
+import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SceneStairs, SurfaceKind } from './worldTypes'
 import { GROUND_ROOM_ID, groundRoomLabel, hasRect, readMapWater } from './worldTypes'
 import { groupKeys, groupLabel, newId, posesInGroup, usePoseCatalog } from './placeTypes'
 import { isWaterKind } from '../map/mapTypes'
@@ -807,13 +807,32 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // ── The composed FLIGHTS (contract § B1 `stairs`) ────────────────────
   // Same law as the openings above: the run, the step count and the floor a
   // flight eats are the server's numbers, keyed by the position of the flight
-  // in `map3d.stairs` (`id`). The plan used to compute them from the storey
-  // height with a copy of the server's formula; it reads them now, so what an
-  // author sees on the plan is what the client walks on. Until the preview has
-  // answered (it is debounced), a freshly placed flight has no symbol yet.
-  const sceneStairs = useMemo(
-    () => new Map((scene?.stairs || []).map((s) => [s.id, s])),
-    [scene])
+  // in `map3d.stairs` (`id` — `_stair_flights` enumerates that very list). The
+  // plan used to compute them from the storey height with a copy of the
+  // server's formula; it reads them now, so what an author sees on the plan is
+  // what the client walks on. Until the preview has answered (it is debounced),
+  // a freshly placed flight has no symbol yet.
+  //
+  // THE INDEX IS THE IDENTITY, AND AN INDEX GOES STALE. The preview is a
+  // debounced round trip, so between deleting or reordering a flight and the
+  // answer arriving, `id` 0 still describes the flight that used to be first —
+  // and the plan would draw ITS rectangle at the new first flight's place while
+  // the number row mixed those steps and that run with the live `dir_deg`.
+  // So the index is not trusted on its own: the composed block echoes the
+  // author's own `at`/`dir_deg`/`from_level` (rounded to 4 decimals), and a
+  // block that does not match the flight at that index is treated as ABSENT —
+  // no symbol, "measuring the flight…" — exactly like a flight the preview has
+  // never seen. Nothing stale is ever drawn or stated.
+  const sceneFlightAt = useCallback((i: number): SceneStairs | null => {
+    const local = map3d?.stairs?.[i]
+    const block = (scene?.stairs || []).find((s) => s.id === i)
+    if (!local || !block) return null
+    const same = Math.abs(block.at[0] - local.at[0]) < 1e-3
+      && Math.abs(block.at[1] - local.at[1]) < 1e-3
+      && block.dir_deg === ((Math.trunc(local.dir_deg) % 360) + 360) % 360
+      && block.from_level === local.from_level
+    return same ? block : null
+  }, [scene, map3d])
   // A mirrored opening is one hole seen from the other side — find the
   // ORIGINAL in the owning room so a click can select it there. Identity by
   // position (plan fractions), since the payload does not index back.
@@ -2953,7 +2972,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               // composed `stairs` block, so the plan cannot state a run the
               // scene does not have. No symbol = the preview has not answered
               // yet, and then nothing is drawn rather than a guess.
-              const flight = sceneStairs.get(i)
+              const flight = sceneFlightAt(i)
               const sym = flight ? stairSymbol(flight) : null
               if (!sym) return null
               const { steps, run, outline, treads, arrow } = sym
@@ -4033,9 +4052,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         const st = map3d.stairs![stairSel]
         const list = map3d.stairs || []
         // The two numbers that decide whether a flight fits are the SERVER's
-        // (§ B1 `stairs`), not a formula repeated here. Absent = the scene
-        // preview has not answered for this draft yet.
-        const flight = sceneStairs.get(stairSel)
+        // (§ B1 `stairs`), not a formula repeated here. Absent = no composed
+        // block matches THIS flight — the preview has not answered for the
+        // draft yet, or its answer still describes the list as it was before
+        // the last delete/reorder (`sceneFlightAt`). Either way the row states
+        // no steps and no run rather than another flight's.
+        const flight = sceneFlightAt(stairSel)
         const patch = (next: typeof st | null) => {
           const rest = list.filter((_, i) => i !== stairSel)
           if (!next) {

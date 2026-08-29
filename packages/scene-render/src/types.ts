@@ -178,8 +178,8 @@ export interface SceneWall {
   outward_normal: [number, number]
 }
 
-/** Typisiertes Box-Primitiv (Fahrstuhl: Schacht/Glas/Pad/Kabine) — Zentrum
- *  plus Größe, fertig in Welt-Metern. */
+/** Typed box primitive (elevator: shaft/glass/pad/cabin) — centre plus size,
+ *  finished in world metres. */
 export interface SceneExtra {
   kind: string
   center: [number, number, number]
@@ -198,14 +198,14 @@ export interface SceneExtra {
   end?: 'foot' | 'head'
 }
 
-/** Auflösungsstufen eines Meshes, in FALLBACK-Reihenfolge (§ B1 variants).
- *  Der Server liefert nur die Stufen, die es wirklich gibt. */
+/** Resolution tiers of a mesh, in FALLBACK order (§ B1 variants). The server
+ *  only delivers the tiers that really exist. */
 export const MODEL_TIERS = ['full', 'low'] as const
 export type ModelTier = (typeof MODEL_TIERS)[number]
 
-/** URL der gewünschten Stufe, sonst die beste vorhandene ('' = kein Mesh).
- *  EINE Regel für beide Renderer: eine fehlende Low-Variante darf ein Objekt
- *  nie verschwinden lassen, und kein Renderer erfindet dafür eigene Logik. */
+/** URL of the wanted tier, else the best one present ('' = no mesh). ONE rule
+ *  for both renderers: a missing low variant must never make an object
+ *  disappear, and no renderer invents logic of its own for that. */
 export function pickVariant(
   variants: Record<string, string> | undefined,
   tier: string = 'full',
@@ -219,19 +219,18 @@ export function pickVariant(
   return ''
 }
 
-/** URL des Meshes, das DIESE Platzierung zeigt — Modell-Variante zuerst,
- *  Auflösungsstufe danach (§ B2-Nachtrag, E2.3).
+/** URL of the mesh THIS placement shows — model variant first, resolution tier
+ *  second (§ B2 addendum, E2.3).
  *
- *  DIE Stelle, an der ein Prop mit mehreren Varianten zu einer Datei wird, und
- *  zwar für beide Renderer: aus `model_variants` wird die Karte mit dem Index
- *  `variant` genommen, aus ihr die Stufe wie eh und je (`pickVariant`). Ohne
- *  `model_variants` ist das Ergebnis Zeichen für Zeichen das alte
- *  `pickVariant(spec.variants, tier)` — ein Prop mit einer Variante merkt von
- *  der Liste nichts.
+ *  THE place where a prop with several variants becomes one file, and for both
+ *  renderers alike: from `model_variants` the map at index `variant` is taken,
+ *  and from that the tier as ever (`pickVariant`). Without `model_variants` the
+ *  result is character for character the old `pickVariant(spec.variants, tier)`
+ *  — a prop with one variant notices nothing of the list.
  *
- *  Der Index wird MODULO gerechnet, nicht geklemmt: die Variantenzahl bewegt
- *  sich, wenn der Admin ein Mesh ergänzt oder löscht, und eine Platzierung
- *  darf davon nicht verschwinden. */
+ *  The index is taken MODULO, not clamped: the number of variants moves when
+ *  the admin adds or deletes a mesh, and a placement must not disappear over
+ *  that. */
 export function pickModelVariant(
   spec: Pick<SceneModelSpec, 'variants' | 'model_variants' | 'variant'>,
   tier: string = 'full',
@@ -261,50 +260,50 @@ export interface SceneSurface {
   extent_snapped: [number, number, number]
 }
 
-/** EINE Platzierungs-Spec für Gebäude, Raum-Diorama und Prop gleichermaßen —
- *  Futter für die einzige place()-Routine des Vertrags (§ B2). */
+/** ONE placement spec for building, room diorama and prop alike — the food of
+ *  the contract's single place() routine (§ B2). */
 export interface SceneModelSpec {
   role: 'building' | 'room' | 'prop'
-  /** Nur am building-Spec: was das Modell IST. `shell` = ein Gebäude, das auf
-   *  dem Boden steht und beim Reinzoomen wie ein Dach aufblendet; `ground` =
-   *  eine Flächen-Location, deren Modell DER Boden ist — es bleibt stehen und
-   *  bekommt Löcher (cutouts). Der Client hat das früher aus `cutouts.length`
-   *  geraten und lag bei Flächen ohne Grundriss falsch (2026-07-28).
-   *  `shell_area` (v5.2, plan-area-detail-scenes.md) = Flächen-Location im
-   *  Detail-Modus: ANKER wie `ground` (Gehfläche auf Etage 0), blendet aber
-   *  beim Reinzoomen aus wie `shell` — darunter liegt die Detailszene. */
+  /** Building spec only: what the model IS. `shell` = a building that stands
+   *  on the ground and fades out like a roof when zooming in; `ground` = an
+   *  area location whose model IS the ground — it stays standing and gets
+   *  holes (cutouts). The client used to guess this from `cutouts.length` and
+   *  got it wrong for areas without a floor plan (2026-07-28).
+   *  `shell_area` (v5.2, plan-area-detail-scenes.md) = an area location in
+   *  detail mode: ANCHORED like `ground` (walking surface on storey 0), but it
+   *  fades out on zoom-in like `shell` — the detail scene lies underneath. */
   display?: 'shell' | 'ground' | 'shell_area'
-  /** Nur am building-Spec: das Modell ist NUR DAS DACH (Nachtrag 2026-08-20,
-   *  docs/llm-blender-models.md) — parametrisch über den Umriss gebaut, ohne
-   *  Wände. Ein Renderer, der eine eigene Fernsicht-Hülle aus den § B
-   *  Primitiven baut, LÄSST SIE STEHEN und setzt dieses Modell obendrauf;
-   *  ohne das Flag ersetzt ein Gebäudemodell die Hülle wie bisher. Fehlt =
-   *  false = das Modell IST das Gebäude. */
+  /** Building spec only: the model is ONLY THE ROOF (addendum 2026-08-20,
+   *  docs/llm-blender-models.md) — built parametrically over the outline,
+   *  without walls. A renderer that builds a far-view shell of its own from the
+   *  § B primitives LEAVES IT STANDING and puts this model on top of it;
+   *  without the flag a building model replaces the shell as before. Absent =
+   *  false = the model IS the building. */
   roof_only?: boolean
   id: string
-  /** ETag-Endpunkte je Auflösungsstufe (`full` = modellierte Qualität,
-   *  `low` = Fernsicht-Mesh; fehlende Stufe fehlt im Objekt). LEER = kein
-   *  Mesh (dann placeholder_dims). Ein Konsument nimmt die gewünschte Stufe
-   *  und sonst die beste vorhandene — `pickVariant()` macht genau das, und
-   *  beide Renderer benutzen sie (plan-3d-lod-und-betreten.md, 2026-08-03). */
+  /** ETag endpoints per resolution tier (`full` = modelled quality, `low` =
+   *  far-view mesh; a missing tier is absent from the object). EMPTY = no mesh
+   *  (then placeholder_dims). A consumer takes the wanted tier and otherwise
+   *  the best one present — `pickVariant()` does exactly that, and both
+   *  renderers use it (plan-3d-lod-und-betreten.md, 2026-08-03). */
   variants: Partial<Record<ModelTier, string>> & Record<string, string>
-  /** Props mit MEHREREN Modell-Varianten (E2.3, § B2-Nachtrag): eine
-   *  Stufen-Karte je AKTIVER Variante, in der Reihenfolge des Props.
-   *  Element 0 IST `variants` — die primäre Variante. Fehlt das Feld, hat das
-   *  Prop genau eine Variante; nur ein Prop mit mehr als einer schickt es.
-   *  Nicht anfassen ohne `variant`: welche Variante DIESE Platzierung zeigt,
-   *  steht dort und wird vom Server bestimmt. */
+  /** Props with SEVERAL model variants (E2.3, § B2 addendum): one tier map per
+   *  ACTIVE variant, in the prop's own order. Element 0 IS `variants` — the
+   *  primary variant. Absent means the prop has exactly one variant; only a
+   *  prop with more than one sends it. Do not touch it without `variant`:
+   *  which variant THIS placement shows is stated there and is decided by the
+   *  server. */
   model_variants?: (Partial<Record<ModelTier, string>> & Record<string, string>)[]
-  /** Index in `model_variants` für DIESE Platzierung (fehlt = 0 = primär).
-   *  Der Server löst ihn auf — bei Streu-Kopien mit der einen Formel
-   *  `(scatter_seed + Instanz) mod Anzahl`, sonst aus der Platzierung selbst.
-   *  Kein Renderer würfelt hier: dieselbe Kopie zeigt in beiden Renderern
-   *  dasselbe Mesh. */
+  /** Index into `model_variants` for THIS placement (absent = 0 = primary).
+   *  The server resolves it — for scattered copies with the one formula
+   *  `(scatter_seed + instance) mod count`, otherwise from the placement
+   *  itself. No renderer rolls a die here: the same copy shows the same mesh in
+   *  both renderers. */
   variant?: number
   room_id?: string
   level: number
-  /** Orientierungs-Fix, Euler 'YXZ' in Grad — VOR dem Messen. Yaw außen,
-   *  Tilt/Roll im schon gedrehten Rahmen (2026-07-28). */
+  /** Orientation fix, Euler 'YXZ' in degrees — BEFORE measuring. Yaw on the
+   *  outside, tilt/roll in the already turned frame (2026-07-28). */
   fix_euler: { x: number; y: number; z: number }
   yaw_deg: number
   /** Target extent in WORLD metres. ONE factor on all three axes
@@ -426,9 +425,9 @@ export interface SceneModelSpec {
 export type SceneSlotValues = Record<string,
   { image?: string; preset?: string }>
 
-/** Eine Halbraum-Ebene in den Weltmetern des Szenen-Payloads. Behalten wird,
- *  wo `normal·p + constant >= 0` — three.js' eigene `Plane`-Konvention, damit
- *  aus den zwei Feldern genau ein Konstruktoraufruf wird. */
+/** A half-space plane in the world metres of the scene payload. What is KEPT is
+ *  where `normal·p + constant >= 0` — three.js' own `Plane` convention, so that
+ *  the two fields become exactly one constructor call. */
 export interface SceneCutPlane {
   normal: [number, number, number]
   constant: number
@@ -488,7 +487,7 @@ export interface SceneMarker {
   source: 'room' | 'prop'
 }
 
-/** Gemeinsames Farb-Vokabular beider Renderer — keine Hex-Konstanten hier. */
+/** The shared colour vocabulary of both renderers — no hex constants here. */
 export interface SceneStyle {
   wall_color: string
   floor_color: string
@@ -501,8 +500,7 @@ export interface SceneStyle {
   upper_wall_opacity: number
   upper_floor_opacity: number
   room_palette: string[]
-  /** Nur gesetzt, wenn die Szene einen Fahrstuhl hat — Aufrufer brauchen
-   *  Fallbacks. */
+  /** Only set when the scene has an elevator — callers need fallbacks. */
   elevator_frame_color?: string
   elevator_pad_color?: string
   elevator_cabin_color?: string
@@ -516,40 +514,39 @@ export interface SceneStyle {
   stair_color?: string
 }
 
-/** Öffnung einer Raumkante, im Payload bereits auf Kanten-INDIZES normalisiert
- *  (der Editor-Typ `RoomOpening` kennt zusätzlich 'N'|'S'|'E'|'W' und bleibt
- *  deshalb im Admin). Im 3D-Client rein informativ: die Wände kommen bereits
- *  um jede Öffnung geteilt als `walls`. */
+/** An opening in a room edge, already normalised to edge INDICES in the payload
+ *  (the editor type `RoomOpening` additionally knows 'N'|'S'|'E'|'W' and
+ *  therefore stays in the admin). Purely informational in the 3D client: the
+ *  walls already arrive split around every opening as `walls`. */
 export interface SceneOpening {
-  /** Kanten-INDEX in outline (Kante i = Punkt i -> i+1) */
+  /** edge INDEX into outline (edge i = point i -> i+1) */
   edge: number
-  /** 0..1 ENTLANG der gerichteten Kante (Öffnungs-Mitte) */
+  /** 0..1 ALONG the directed edge (centre of the opening) */
   at: number
   width_m: number
   height_m: number
-  /** Brüstungshöhe in Metern — Tür = 0, Fenster ≈ 0,9 */
+  /** sill height in metres — door = 0, window ≈ 0.9 */
   sill_m: number
-  /** "window" | "door" | "passage" — Vokabular ist laut Vertrag offen */
+  /** "window" | "door" | "passage" — the vocabulary is open per the contract */
   type: string
-  /** Ziel der Verbindung: Raum-ID oder 'outside' */
+  /** target of the connection: room id or 'outside' */
   to?: string
   prop_id?: string
-  /** vom Nachbarraum gespiegelte Öffnung (rein informativ) */
+  /** opening mirrored from the neighbouring room (purely informational) */
   mirrored?: boolean
 }
 
-/** Raum-Vokabular in PLAN-FRAKTIONEN — was der 2D-Editor zum ZEICHNEN
- *  braucht; im 3D-Client nur als Raum-Verzeichnis (Etage, Outdoor-Flag). */
+/** Room vocabulary in PLAN FRACTIONS — what the 2D editor needs for DRAWING;
+ *  in the 3D client only a room directory (storey, outdoor flag). */
 export interface SceneRoom {
   room_id: string
   level: number
   always_visible: boolean
   outline: [number, number][]
   openings?: SceneOpening[]
-  /** Flächen-Locations: dieser Outdoor-Raum liegt AUF der Modelloberfläche
-   *  statt gebaut zu werden — es gibt weder Platte noch Wände, also kommen
-   *  Mitte, Rechteck und Höhe (alles Welt-Meter) von hier. Fehlt = normaler
-   *  Raum. */
+  /** Area locations: this outdoor room lies ON the model surface instead of
+   *  being built — there is neither a plate nor walls, so centre, rectangle and
+   *  height (all world metres) come from here. Absent = a normal room. */
   overlay?: {
     centre: [number, number]
     rect: { x: number; z: number; w: number; d: number }
