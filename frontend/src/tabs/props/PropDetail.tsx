@@ -304,7 +304,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   }, [variant])
 
   // ── ONE 3D VIEW PER PROP (v2 ruling V11) ───────────────────────────────
-  // The Areas tools are a MODE of the preview above, not a viewer of their
+  // The Areas tools are a MODE of the one preview, not a viewer of their
   // own: outlines, front view, polygon ring, assembly preview and test swing
   // ride the model the admin is already looking at — which is also the only
   // mesh whose R1 face order matches the `mesh_layout` a ring is flattened
@@ -959,7 +959,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
           </>
         }
       />
-      <div className="ga-detail-cols">
+      <div className="ga-detail-cols ga-detail-cols-3">
         {/* Inputs: everything the sidecar stores. */}
         <div className="ga-form">
           {/* Editable sidecar fields. */}
@@ -999,8 +999,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 same row as the other prop-wide fields instead of holding a
                 line of its own for one narrow number (§ B1). Size, subject,
                 sink and markers moved into the variants (2026-08-25). */}
-            <Field label={t('Sway factor')}>
+            {/* One number between 0 and 1 — `compact` keeps it at the width
+                of what it holds instead of taking an equal share of the row
+                from the three text fields beside it. */}
+            <Field label={t('Sway factor')} compact>
               <input className="ga-input" type="number" min={0} max={1} step={0.05}
+                style={{ width: 76 }}
                 value={swayDraft}
                 title={t('How much of its ground’s wind this prop takes part in when it is scattered over a painted area: the terrain kind says how far things bend there, this multiplies it. 1 = the full amount, 0 = stands still whatever blows, empty = 1. Very small products stand still as well — the deflection only starts at about 0.005 m, so on a ground that bends 0.06 m every factor up to 0.08 comes to a standstill.')}
                 onChange={(e) => setSwayDraft(e.target.value)}
@@ -1312,12 +1316,14 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
           </div>
         </div>
 
-        {/* Preview: the viewer plus everything the SELECTED variant is —
-            sticky, so it stays in view while a long marker list scrolls.
+        {/* THE VARIANT COLUMN — everything the SELECTED variant IS: its
+            picture, its metres, its sink, its orientation fix, its walkable
+            surface, its areas. The model all of it is dialled against stands
+            in the column to the right, in view the whole time.
             ONE HEADER (2026-08-29, user decision): this whole column speaks
             about the variant the strip has open, so it is named ONCE at the
             top instead of appending "· Variant n" to every section below. */}
-        <div className="ga-form ga-detail-cols-sticky">
+        <div className="ga-form">
           <div className="ga-form-section-label" style={{ marginTop: 0 }}>
             {t('Variant')} {variant + 1}
           </div>
@@ -1332,15 +1338,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               {t('Another variant of this prop is generating.')}
             </span>
           ) : null}
-          {/* Split preview: the SELECTED VARIANT's source image on the left,
-              its model on the right — and that image can be re-meshed
-              directly (dialog picks backend / face count / texture size;
-              the image render is skipped). Both panes follow the strip: the
-              image belongs to the variant, so a second version of the object
-              never shows (or overwrites) the first one's picture. */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexWrap: 'wrap' }}>
-          <div style={{ flex: '0 1 220px', minWidth: 160, display: 'flex',
-            flexDirection: 'column', gap: 4 }}>
+          {/* The SELECTED VARIANT's source image — and it can be re-meshed
+              straight from here into the model opposite (the dialog picks
+              backend / face count / texture size; the image render is
+              skipped). It follows the strip: the image belongs to the variant,
+              so a second version of the object never shows (or overwrites) the
+              first one's picture. */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div className="ga-form-section-label" style={{ margin: 0 }}>
               {t('Source image')}
             </div>
@@ -1349,13 +1353,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 src={`/assets/props/${enc}/source?variant=${variant}&v=${reloadKey}`}
                 alt={t('Source image')}
                 onError={() => setSrcOk(false)}
-                style={{ width: '100%', flex: 1, maxHeight: 340,
+                style={{ width: '100%', maxHeight: 300,
                   objectFit: 'contain', borderRadius: 8,
                   border: '1px solid var(--border, #30363d)',
                   background: 'rgba(255,255,255,0.04)' }}
               />
             ) : (
-              <div className="ga-empty" style={{ flex: 1 }}>
+              <div className="ga-empty">
                 {variants.length > 1
                   ? t('This variant has no source image yet — render one or upload a picture.')
                   : t('No source image (uploaded model).')}
@@ -1423,160 +1427,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               ⚙ {t('3D from this image')}
             </button>
           </div>
-          <div style={{ flex: '1 1 260px', minWidth: 240 }} ref={viewerRef}>
-          {shownHasMesh || previewFile ? (
-            <Model3DViewer
-              url={previewFile
-                // A file picked in the gallery below — including ones no tier
-                // serves (only the admin route hands those out).
-                ? `/world/props/${enc}/variants/${variant}/models/files/${encodeURIComponent(previewFile)}?v=${reloadKey}`
-                // The serving URL of the SELECTED variant; `variant` is
-                // explicit even for the primary one, so the preview cannot
-                // quietly fall back to another mesh.
-                : `/assets/props/${enc}/model?variant=${variant}&v=${encodeURIComponent(prop.created_at || '')}-${reloadKey}`}
-              format="glb"
-              height={340}
-              // The fix of the OPEN variant's file (v2 E1) — the prop has none
-              // any more, and a neighbour's angles would tilt this mesh.
-              rotation={variantRotation}
-              // Switching variant or tier swaps ANOTHER VERSION of the same
-              // object under the camera — the angle stays, "Reset view" frames
-              // again on demand (§ B1).
-              keepCamera
-              // ── THE AREAS MODE (V11) ──────────────────────────────────
-              // The one view is also the authoring view: the front view is a
-              // mode of it, the outlines are drawn on it, a ring is projected
-              // against ITS camera, and the assembly the panel below picks is
-              // hung on this very mesh. Everything mesh-bound is offered only
-              // while the SERVED file of the open variant is on screen — a
-              // file picked in the gallery has another face order.
-              frontal={areaFrontal}
-              onFrontalChange={(on) => setAreaView({ frontal: on })}
-              areaOutlines={areasOnView ? areaOutlines : undefined}
-              meshLayout={areasOnView ? variantAreas?.mesh_layout : undefined}
-              slots={areasOnView ? previewSlots : undefined}
-              drawing={areasOnView && !!drawKind}
-              drawThrough={drawKind === 'leaf'}
-              onPolygonFaces={onPolygonFaces}
-              onDrawCancel={() => setAreaView({ drawKind: '' })}
-              leafBbox={areasOnView ? (variantAreas?.leaf_bbox || null) : null}
-              onBounds={(b) => setShownBbox(b.size)}
-              // ONE FIGURE PER SLOT, holding the pose the cycler stands on
-              // (else the place type's default). `root_drop` comes from the
-              // pose catalog because this prop is UNCOMPOSED — the payload's
-              // `root_offset` only exists for a placed one.
-              markers={markers.map((m) => {
-                const entry = previewEntry(poseCatalog, m.group,
-                                           m.id ? previewPose[m.id] : undefined)
-                return {
-                  at: m.at, group: m.group, capacity: m.capacity,
-                  spacing_m: m.spacing_m, facing: m.facing,
-                  previewKind: entry?.animation,
-                  previewYawOffset: entry?.yaw_offset,
-                  rootDrop: groups[m.group]?.root_drop,
-                }
-              })}
-              // The DISPLAYED variant's own size — the three numbers the strip
-              // edits for exactly this chip.
-              dimsOverlay={shownDims}
-              // HOW DEEP IT STANDS, on the same draft the gauge above reads:
-              // the viewer's ground plane goes where the scene's floor would
-              // be (`bottom_y = floor + ground_offset_m`), so the buried part
-              // disappears under it while the mesh, its W/D/H box and its
-              // markers stay exactly where they are. Typing in the chip's
-              // sink field moves the ground immediately — `variants` is the
-              // draft, not the server's answer.
-              groundOffsetM={shownVariant?.ground_offset_m ?? 0}
-              // 1.7 m in MESH units — real scale = the displayed mesh's own
-              // largest raw edge over its largest real dim; every figure in
-              // the viewer (the marker poses and the standing reference)
-              // sizes itself to that.
-              figureHeight={(() => {
-                const bb = shownBbox ?? (shownVariant?.primary ? prop.bbox : null)
-                if (!bb) return 0
-                const maxExtent = Math.max(bb[0], bb[1], bb[2])
-                const maxDim = Math.max(shownDims.width_m, shownDims.depth_m,
-                  shownDims.height_m) || 1
-                return FIGURE_HEIGHT_M * (maxExtent / maxDim)
-              })()}
-              scaleFigure={scaleFigure}
-              picking={placing !== null}
-              onPickPoint={onPickPoint}
-            />
-          ) : (
-            <div className="ga-empty">
-              {variants.length > 1
-                ? t('This variant has no model yet — mesh the source image into it or upload a GLB below.')
-                : t('No model yet — generate it or upload a GLB below.')}
-            </div>
-          )}
-          {/* The scale of the preview. A mesh fills its frame whatever it
-              measures, so "is this 40 cm or 4 m" is unanswerable without a
-              human beside it — the figure IS the answer, and it never scales
-              with the model. */}
-          {shownHasMesh || previewFile ? (
-            <label
-              className="ga-hint"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
-                marginTop: 4, cursor: 'pointer' }}
-              title={t('Puts a FIXED 1.70 m person beside the model, on the ground the model stands IN, over a one-metre grid — the preview’s scale. The ground is solid, so whatever the sink buries really disappears under it. The figure never scales with the prop: if it looks wrong, the W/D/H of this variant are wrong.')}
-            >
-              <input
-                type="checkbox"
-                checked={scaleFigure}
-                onChange={(e) => {
-                  setScaleFigure(e.target.checked)
-                  saveScaleFigure(e.target.checked)
-                }}
-              />
-              {t('Reference figure (1.70 m)')}
-            </label>
-          ) : null}
-          {/* WHICH numbers the preview is measuring — the open variant's,
-              always. It is the one this whole column is about (the header
-              names it), so the line says the metres and not the number. */}
-          <span className="ga-hint" style={{ display: 'block' }}>
-            {t('Measured: {w} × {d} × {h} m.')
-              .replace('{w}', shownDims.width_m.toFixed(2))
-              .replace('{d}', shownDims.depth_m.toFixed(2))
-              .replace('{h}', shownDims.height_m.toFixed(2))}
-          </span>
-          </div>
-          </div>
-
-          {/* THE RESOLUTION TIERS of the SELECTED variant, directly under the
-              preview (user 2026-08-29): which file the clients get at which
-              distance is what the viewer above is showing, so the two belong
-              together. The section carries the gallery — every stored run, one
-              active file per tier, upload and delete — and the two triangle
-              budgets that decide what the next run costs. */}
-          <PropModelPanel
-            propId={prop.id}
-            variant={variant}
-            reloadKey={reloadKey}
-            preview={previewFile}
-            onPreview={showStoredFile}
-            onChanged={meshesChanged}
-            pending={variantBusy}
-            // The SELECTED variant's own budgets (v2 E5) — the distance-mesh
-            // button names the low one, the reduction dialog opens on it, and
-            // the two fields in the section edit them.
-            faceTargets={{ high: shownVariant?.target_faces_high,
-              low: shownVariant?.target_faces_low }}
-            // Without a variant record there is nothing to commit into —
-            // `commitFaces` would return on its own doorstep — so the two
-            // fields are not offered at all, the same gate the Variant
-            // settings below stand behind.
-            onEditFaceTarget={shownVariant ? commitFaces : undefined}
-            backendFaces={backendFaces}
-            onGenerating={onGenerating}
-          />
-
           {/* WHAT THIS VERSION IS (2026-08-29). The three numbers every
               renderer scales its mesh by, how deep it stands in the ground and
               the subject its product shot is rendered from — the variant's own
-              fields, dialled against the model above them rather than inside a
-              chip in the other column. Nothing is written until Save: every
+              fields, dialled against the model beside them rather than inside
+              a chip in the other column. Nothing is written until Save: every
               commit here goes into the change buffer, which is also what the
               preview reads, so a typed metre is on screen at once. */}
           {shownVariant ? (
@@ -1628,7 +1483,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   sinking is a value you know — 0.05 for a mesh with a base
                   plate, 0.4 to bury a root ball — and a slider that has to
                   sweep the whole ±5 m range cannot hit either. What makes it
-                  judgeable is the 1.70 m figure in the viewer above. */}
+                  judgeable is the 1.70 m figure in the viewer beside it. */}
               <SliderInput
                 ariaLabel={t('Ground offset (m)')}
                 label={<span className="ga-hint"
@@ -1777,12 +1632,172 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               info={variantAreas}
               infoFailed={areasFailed}
               // The one 3D view (V11): the panel has none of its own, it
-              // switches the preview above and shares its call lock.
+              // switches the preview in the column beside it and shares its
+              // call lock.
               tools={areaTools}
               onVariantsChanged={() => { void loadVariants() }}
             />
           ) : null}
 
+        </div>
+
+        {/* THE MODEL COLUMN — the widest of the three, because it is the
+            thing being judged: the mesh of the SELECTED variant, and
+            directly under it the resolution tiers, which are nothing but
+            "which file of it do the clients get at which distance".
+            Sticky, so it stays in view while the two columns to its left
+            scroll through places, settings and areas. */}
+        <div className="ga-form ga-detail-cols-sticky">
+          <div className="ga-form-section-label" style={{ marginTop: 0 }}>
+            {t('3D preview')}
+          </div>
+          <div ref={viewerRef}>
+          {shownHasMesh || previewFile ? (
+            <Model3DViewer
+              url={previewFile
+                // A file picked in the gallery below — including ones no tier
+                // serves (only the admin route hands those out).
+                ? `/world/props/${enc}/variants/${variant}/models/files/${encodeURIComponent(previewFile)}?v=${reloadKey}`
+                // The serving URL of the SELECTED variant; `variant` is
+                // explicit even for the primary one, so the preview cannot
+                // quietly fall back to another mesh.
+                : `/assets/props/${enc}/model?variant=${variant}&v=${encodeURIComponent(prop.created_at || '')}-${reloadKey}`}
+              format="glb"
+              height={340}
+              // The fix of the OPEN variant's file (v2 E1) — the prop has none
+              // any more, and a neighbour's angles would tilt this mesh.
+              rotation={variantRotation}
+              // Switching variant or tier swaps ANOTHER VERSION of the same
+              // object under the camera — the angle stays, "Reset view" frames
+              // again on demand (§ B1).
+              keepCamera
+              // ── THE AREAS MODE (V11) ──────────────────────────────────
+              // The one view is also the authoring view: the front view is a
+              // mode of it, the outlines are drawn on it, a ring is projected
+              // against ITS camera, and the assembly the panel below picks is
+              // hung on this very mesh. Everything mesh-bound is offered only
+              // while the SERVED file of the open variant is on screen — a
+              // file picked in the gallery has another face order.
+              frontal={areaFrontal}
+              onFrontalChange={(on) => setAreaView({ frontal: on })}
+              areaOutlines={areasOnView ? areaOutlines : undefined}
+              meshLayout={areasOnView ? variantAreas?.mesh_layout : undefined}
+              slots={areasOnView ? previewSlots : undefined}
+              drawing={areasOnView && !!drawKind}
+              drawThrough={drawKind === 'leaf'}
+              onPolygonFaces={onPolygonFaces}
+              onDrawCancel={() => setAreaView({ drawKind: '' })}
+              leafBbox={areasOnView ? (variantAreas?.leaf_bbox || null) : null}
+              onBounds={(b) => setShownBbox(b.size)}
+              // ONE FIGURE PER SLOT, holding the pose the cycler stands on
+              // (else the place type's default). `root_drop` comes from the
+              // pose catalog because this prop is UNCOMPOSED — the payload's
+              // `root_offset` only exists for a placed one.
+              markers={markers.map((m) => {
+                const entry = previewEntry(poseCatalog, m.group,
+                                           m.id ? previewPose[m.id] : undefined)
+                return {
+                  at: m.at, group: m.group, capacity: m.capacity,
+                  spacing_m: m.spacing_m, facing: m.facing,
+                  previewKind: entry?.animation,
+                  previewYawOffset: entry?.yaw_offset,
+                  rootDrop: groups[m.group]?.root_drop,
+                }
+              })}
+              // The DISPLAYED variant's own size — the three numbers the strip
+              // edits for exactly this chip.
+              dimsOverlay={shownDims}
+              // HOW DEEP IT STANDS, on the same draft the gauge above reads:
+              // the viewer's ground plane goes where the scene's floor would
+              // be (`bottom_y = floor + ground_offset_m`), so the buried part
+              // disappears under it while the mesh, its W/D/H box and its
+              // markers stay exactly where they are. Typing in the chip's
+              // sink field moves the ground immediately — `variants` is the
+              // draft, not the server's answer.
+              groundOffsetM={shownVariant?.ground_offset_m ?? 0}
+              // 1.7 m in MESH units — real scale = the displayed mesh's own
+              // largest raw edge over its largest real dim; every figure in
+              // the viewer (the marker poses and the standing reference)
+              // sizes itself to that.
+              figureHeight={(() => {
+                const bb = shownBbox ?? (shownVariant?.primary ? prop.bbox : null)
+                if (!bb) return 0
+                const maxExtent = Math.max(bb[0], bb[1], bb[2])
+                const maxDim = Math.max(shownDims.width_m, shownDims.depth_m,
+                  shownDims.height_m) || 1
+                return FIGURE_HEIGHT_M * (maxExtent / maxDim)
+              })()}
+              scaleFigure={scaleFigure}
+              picking={placing !== null}
+              onPickPoint={onPickPoint}
+            />
+          ) : (
+            <div className="ga-empty">
+              {variants.length > 1
+                ? t('This variant has no model yet — mesh the source image into it or upload a GLB below.')
+                : t('No model yet — generate it or upload a GLB below.')}
+            </div>
+          )}
+          {/* The scale of the preview. A mesh fills its frame whatever it
+              measures, so "is this 40 cm or 4 m" is unanswerable without a
+              human beside it — the figure IS the answer, and it never scales
+              with the model. */}
+          {shownHasMesh || previewFile ? (
+            <label
+              className="ga-hint"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
+                marginTop: 4, cursor: 'pointer' }}
+              title={t('Puts a FIXED 1.70 m person beside the model, on the ground the model stands IN, over a one-metre grid — the preview’s scale. The ground is solid, so whatever the sink buries really disappears under it. The figure never scales with the prop: if it looks wrong, the W/D/H of this variant are wrong.')}
+            >
+              <input
+                type="checkbox"
+                checked={scaleFigure}
+                onChange={(e) => {
+                  setScaleFigure(e.target.checked)
+                  saveScaleFigure(e.target.checked)
+                }}
+              />
+              {t('Reference figure (1.70 m)')}
+            </label>
+          ) : null}
+          {/* WHICH numbers the preview is measuring — the open variant's,
+              always. It is the one the column to the left is about,
+              so the line says the metres and not the number. */}
+          <span className="ga-hint" style={{ display: 'block' }}>
+            {t('Measured: {w} × {d} × {h} m.')
+              .replace('{w}', shownDims.width_m.toFixed(2))
+              .replace('{d}', shownDims.depth_m.toFixed(2))
+              .replace('{h}', shownDims.height_m.toFixed(2))}
+          </span>
+          </div>
+
+          {/* THE RESOLUTION TIERS of the SELECTED variant, directly under the
+              preview (user 2026-08-29): which file the clients get at which
+              distance is what the viewer above is showing, so the two belong
+              together. The section carries the gallery — every stored run, one
+              active file per tier, upload and delete — and the two triangle
+              budgets that decide what the next run costs. */}
+          <PropModelPanel
+            propId={prop.id}
+            variant={variant}
+            reloadKey={reloadKey}
+            preview={previewFile}
+            onPreview={showStoredFile}
+            onChanged={meshesChanged}
+            pending={variantBusy}
+            // The SELECTED variant's own budgets (v2 E5) — the distance-mesh
+            // button names the low one, the reduction dialog opens on it, and
+            // the two fields in the section edit them.
+            faceTargets={{ high: shownVariant?.target_faces_high,
+              low: shownVariant?.target_faces_low }}
+            // Without a variant record there is nothing to commit into —
+            // `commitFaces` would return on its own doorstep — so the two
+            // fields are not offered at all, the same gate the Variant
+            // settings in the column beside them stand behind.
+            onEditFaceTarget={shownVariant ? commitFaces : undefined}
+            backendFaces={backendFaces}
+            onGenerating={onGenerating}
+          />
         </div>
       </div>
     </>

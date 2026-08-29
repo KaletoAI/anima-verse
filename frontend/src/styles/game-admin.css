@@ -759,8 +759,21 @@ a.ga-btn {
   top: 48px;
 }
 
+/* Three columns for a detail that carries a viewer AND a long settings
+   stack (the prop detail): fields 30%, the variant's settings 30%, the 3D
+   preview 40% — the preview is the widest because it is the thing being
+   judged. Steps down to two columns before it steps down to one. */
+.ga-detail-cols-3 {
+  grid-template-columns: minmax(0, 30fr) minmax(0, 30fr) minmax(0, 40fr);
+}
+
+@media (max-width: 1400px) {
+  .ga-detail-cols-3 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
 @media (max-width: 900px) {
-  .ga-detail-cols { grid-template-columns: 1fr; }
+  .ga-detail-cols,
+  .ga-detail-cols-3 { grid-template-columns: 1fr; }
   .ga-detail-cols-sticky { position: static; }
 }
 
