@@ -4799,9 +4799,11 @@ async function startApp(username: string, role: string) {
     roomWalk = idleRoomWalk();   // fresh hysteresis: no instant switch back
     // The offer is gone the moment the ride starts, the same way the climb
     // drops its landing: the storey behind the figure must not stand as an
-    // offer for the whole ride. `updateElevator` puts it back — with the new
-    // storey as `current` — within a second of the arrival.
-    setGameState({ elevator: null, elevatorOpen: false });
+    // offer for the whole ride. BOTH offers go — F is a priority chain, so a
+    // stairs chip the 1 Hz tick has not cleared yet would simply be the next
+    // one answered. `updateElevator`/`updateStairs` put back whatever really
+    // stands within a second of the arrival.
+    setGameState({ elevator: null, elevatorOpen: false, stairs: null });
   }
 
   // --- Taking the stairs (stairs task 5) ------------------------------------
@@ -4899,8 +4901,11 @@ async function startApp(username: string, role: string) {
     // room change is in flight would let the network order decide which room
     // the avatar ends up in. No second enter-room path, and the SAME cooldown:
     // a room the server just refused stays refused for the climb as well, or
-    // every press would run into the same 403.
-    if (roomRequestInFlight
+    // every press would run into the same 403. And `verticalRide` is the
+    // guard this docstring has claimed all along, now enforced: it is the
+    // lift's ride as much as the climb's, so a stale stairs chip cannot start
+    // a climb while the lift is still travelling.
+    if (roomRequestInFlight || verticalRide
       || (roomRejectedUntil.get(target) ?? 0) > performance.now()) return;
     // A click order would fight the climb from the next frame on — and it was
     // made for the storey the player is leaving.
@@ -4932,8 +4937,10 @@ async function startApp(username: string, role: string) {
     tile.levelSwitch?.();
     roomWalk = idleRoomWalk();   // fresh hysteresis: no instant switch back
     // The offer is gone the moment the climb starts: the landing behind the
-    // figure would otherwise stand as an offer for the whole ride.
-    setGameState({ stairs: null });
+    // figure would otherwise stand as an offer for the whole ride. The lift's
+    // goes with it for the same reason the ride drops the climb's — one press
+    // must not be answered by the other offer of the chain.
+    setGameState({ stairs: null, elevator: null, elevatorOpen: false });
   }
 
   // --- Entering a location (Etappe 3, "Betreten"; metres since E4 task 5) ---

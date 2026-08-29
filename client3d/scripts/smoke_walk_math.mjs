@@ -2161,6 +2161,11 @@ async function main() {
    * @param opts.interlock       task 4 review: a running ride makes no offer and
    *                             refuses a second ride (false = the old behaviour)
    * @param opts.stopY           height of each storey's holding point, by level
+   * @param opts.staleStairs     {room, x, z, y} a stairs offer the 1 Hz tick has
+   *                             not cleared yet — what the F chain reaches once
+   *                             the lift chip is gone
+   * @param opts.stairsGuard     `rideStairs` carries the same `verticalRide`
+   *                             guard (false = the old behaviour)
    */
   function elevatorRideSim(opts) {
     const speed = WALK_SPEED * DT;
@@ -2186,6 +2191,7 @@ async function main() {
     }
     let pressed = false;
     let offerAtPress;
+    let stairsPress;
     for (let i = 1; i <= opts.frames; i++) {
       const now = i * DT * 1000;
       // --- the F key, once, in the middle of the ride (task 4 review) ---
@@ -2210,6 +2216,21 @@ async function main() {
             current = back;
             goal.x = stopBack.pos.x; goal.z = stopBack.pos.z;
             goal.y = opts.stopY?.[sole] ?? 0;
+            if (opts.rideOwnsFigure) ride = { until: now + RIDE_MS };
+            roomWalk = idleRoomWalk();
+          }
+        } else if (!offerAtPress && opts.staleStairs) {
+          // F is a priority CHAIN (talk → lift → stairs): with the lift chip
+          // cleared for the ride, the press reaches a stairs offer that the
+          // 1 Hz tick has not dropped yet. `rideStairs` carries the same
+          // `verticalRide` guard, so a running ride refuses the climb too.
+          const barredByRide = opts.stairsGuard !== false && !!ride;
+          stairsPress = barredByRide ? 'refused' : 'ridden';
+          if (!barredByRide) {
+            requests.push({ at: now, room: opts.staleStairs.room });
+            current = opts.staleStairs.room;
+            goal.x = opts.staleStairs.x; goal.z = opts.staleStairs.z;
+            goal.y = opts.staleStairs.y;
             if (opts.rideOwnsFigure) ride = { until: now + RIDE_MS };
             roomWalk = idleRoomWalk();
           }
@@ -2254,7 +2275,7 @@ async function main() {
         current = out.next;
       }
     }
-    return { requests, pos, current, arrivedAt, offerAtPress };
+    return { requests, pos, current, arrivedAt, offerAtPress, stairsPress };
   }
 
   // --- the elevator OFFER (E3) and its sole option (Treppen v2 task 4) -----
@@ -2391,6 +2412,31 @@ async function main() {
     check('...the one the ride started from', turned.requests[1], { at: 300, room: 'hall' }, 1);
     check('...so the figure sinks back to the storey it left', turned.arrivedAt?.y, 0.1984, 0.01);
     check('...arriving there instead, at 866.67 ms', turned.arrivedAt?.at ?? null, 866.67, 1);
+
+    // --- and the press must not fall THROUGH to the stairs (re-review) -----
+    // F is a priority chain: talk -> lift -> stairs. Clearing the lift chip
+    // for the ride hands the next press to `state.stairs`, which is written
+    // by its own 1 Hz tick and can stand for up to a second longer. So
+    // `rideStairs` carries the SAME `verticalRide` guard, and each ride drops
+    // the other's chip as well. The stale flight below leads back down into
+    // the hall (a descent beside the shaft), so the numbers are the very same
+    // ones as above: turned around at 300 ms, back at y = 0.1984 at 866.67.
+    const STALE_DOWN = { room: 'hall', x: 0, z: 0, y: 0 };
+    const fellThrough = rideTo1({ rideOwnsFigure: true, pressAt: 300,
+      staleStairs: STALE_DOWN, stairsGuard: false });
+    check('without its guard the stale flight is climbed mid-ride',
+      fellThrough.stairsPress, 'ridden');
+    check('...which is a second enter-room', fellThrough.requests.length, 2);
+    check('...that takes the figure back down', fellThrough.arrivedAt?.y, 0.1984, 0.01);
+
+    const chainGuarded = rideTo1({ rideOwnsFigure: true, pressAt: 300,
+      staleStairs: STALE_DOWN });
+    check('the climb refuses while the lift owns the figure',
+      chainGuarded.stairsPress, 'refused');
+    check('...so the press asks for no room of its own',
+      chainGuarded.requests.filter((r) => Math.abs(r.at - 300) < 1).length, 0);
+    check('...and the lift lands on the storey it was going to',
+      chainGuarded.arrivedAt?.y, 3, 0.2);
   }
 
   // --- stairs: the chain routes per storey (stairs task 4) -----------------
