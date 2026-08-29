@@ -231,8 +231,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     placement?: TilePlacement
     /** Object-local PLACES (numbered dots) — `at` = fractions of the RAW
      *  model bounding box, `group` the pose catalog's place type, and the
-     *  place seats `capacity` figures `spacing_m` metres apart across its
-     *  `facing`. The preview puts ONE figure on every slot, playing
+     *  place seats `capacity` figures `spacing_m` metres apart in a row
+     *  `slot_axis` degrees off its `facing` (absent = 90 = across it). The preview puts ONE figure on every slot, playing
      *  `previewKind` (the clip of the pose the editor cycled to); a PAIR clip
      *  seats its two halves around the marker instead, turned by
      *  `previewYawOffset`. `rootDrop` is the place type's root drop as a
@@ -242,6 +242,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  Model mode only; refreshed live. */
     markers?: Array<{ at: [number, number, number]
       group?: string; capacity?: number; spacing_m?: number; facing?: number
+      slot_axis?: number
       previewKind?: string; previewYawOffset?: number; rootDrop?: number }>
     /** Height of a 1.7 m preview figure in MESH units (the caller derives
      *  it from bbox ÷ dims). > 0 shows a posed test figure at every marker
@@ -1575,7 +1576,18 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
               if (anim) {
                 const mixer = new THREE.AnimationMixer(inst)
                 mixer.clipAction(anim.clip).play()
-                mixer.update(0)  // static frame-0 pose — no per-frame cost
+                // THE SETTLED POSE, not the approach (2026-08-29). A clip is
+                // a MOVEMENT, and its first frame is where the body starts
+                // OUT of the pose: measured on `laying-back` (hips → head
+                // against the rig's forward axis) the first frame lies 68.5°
+                // ACROSS the facing and the last one 5.6° ALONG it. A place
+                // preview that showed frame 0 therefore showed a figure
+                // mid-roll — and a facing dialled against that put the
+                // capacity slots at an angle to the bed, so two sleepers came
+                // out head-to-foot instead of side by side. A hair before the
+                // end rather than exactly on it: a looping action wraps at
+                // `duration` and would land back on frame 0.
+                mixer.setTime(Math.max(0, anim.clip.duration - 0.001))
               }
               const fig = new THREE.Group()
               fig.position.set(o.x, o.y - hipsDrop, o.z)
@@ -1656,7 +1668,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
                 // 0.6 m = one person's width on a bench, the server's default.
                 for (const [sx, sz] of markerSlots([world.x, world.z], m.facing,
                                                    m.capacity || 1,
-                                                   (m.spacing_m || 0.6) * perMetre)) {
+                                                   (m.spacing_m || 0.6) * perMetre,
+                                                   m.slot_axis)) {
                   await addMarkerFigure({ x: sx, y: rootY, z: sz, kind,
                                           facingDeg: m.facing, figH, token: figToken })
                 }
