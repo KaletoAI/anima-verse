@@ -541,6 +541,13 @@
  *   options of {levels:[0,1,2], current:1}             -> [0,2]
  *   target room storey 1: attic |1-2| = 1, loft |6-2| = 4  -> attic
  *   target room storey 0: hall  |0-2| = 2, store |8-2| = 6 -> hall
+ *  5. TWO storeys leave nothing to choose (Treppen v2 task 4): `elevatorOptions`
+ *     returns exactly ONE storey, so the picker would be a single button.
+ *     `elevatorSoleOption` names that storey and F rides it straight away;
+ *     from the third storey on there is a choice again and the answer is null.
+ *   sole option of {levels:[0,1], current:0}           -> 1 (up)
+ *   sole option of {levels:[0,1], current:1}           -> 0 (down)
+ *   sole option of {levels:[0,1,2], current:1}         -> null (two to choose)
  *
  * --- the elevator RIDE (E3 review, two findings) --------------------------
  * `elevatorAt`/`elevatorTargetRoom` decide WHETHER and WHERE; the ride itself
@@ -959,8 +966,8 @@ async function main() {
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
   const { talkTargetNear, TALK_RANGE } = proximity;
   const { nearestRoomSwitch, idleRoomWalk } = roomwalk;
-  const { elevatorAt, elevatorLevels, elevatorOptions, elevatorTargetRoom,
-    ELEVATOR_RANGE } = elevator;
+  const { elevatorAt, elevatorLevels, elevatorOptions, elevatorSoleOption,
+    elevatorTargetRoom, ELEVATOR_RANGE } = elevator;
   const { wallSegments, clampAgainstWalls, bodyRadius, BODY_RADIUS_M,
     DOOR_EASE_M } = collide;
   const { doorMarkers, roomDoor, doorwayBetween } = doors;
@@ -2215,6 +2222,53 @@ async function main() {
       }
     }
     return { requests, pos, current, arrivedAt };
+  }
+
+  // --- the elevator OFFER (E3) and its sole option (Treppen v2 task 4) -----
+  // The header cases of this file, now measured instead of merely written
+  // down. Layout: holding points at (2,0) on both storeys, rooms hall (0,0)
+  // and store (8,0) on storey 0, attic (1,0) and loft (6,0) on storey 1.
+  console.log('elevator offer — the holding point of one\'s OWN storey, scaled range');
+  {
+    const STOPS = [{ level: 0, pos: { x: 2, z: 0 } }, { level: 1, pos: { x: 2, z: 0 } }];
+    const ROOMS = [
+      { id: 'hall', level: 0, center: { x: 0, z: 0 } },
+      { id: 'store', level: 0, center: { x: 8, z: 0 } },
+      { id: 'attic', level: 1, center: { x: 1, z: 0 } },
+      { id: 'loft', level: 1, center: { x: 6, z: 0 } },
+    ];
+    const at = (x, level, scale, stops = STOPS, rooms = ROOMS) =>
+      elevatorAt({ x, z: 0 }, level, stops, rooms, scale);
+
+    check('range is 1.5 figure metres', ELEVATOR_RANGE, 1.5);
+    check('both storeys have a stop AND a room', elevatorLevels(STOPS, ROOMS), [0, 1]);
+    check('0.9 m at scale 1 is inside the range', at(2.9, 0, 1), { levels: [0, 1], current: 0 });
+    check('...1.5 m IS the range and is already out (strict)', at(3.5, 0, 1), null);
+    check('...1.6 m is out', at(3.6, 0, 1), null);
+    check('0.4 m at scale 0.3 is inside 0.45', at(2.4, 0, 0.3), { levels: [0, 1], current: 0 });
+    check('...0.5 m is out', at(2.5, 0, 0.3), null);
+    check('a stop on a storey without a room does not count',
+      elevatorLevels([...STOPS, { level: 2, pos: { x: 2, z: 0 } }], ROOMS), [0, 1]);
+    check('one storey left is no ride at all',
+      at(2.9, 0, 1, STOPS, ROOMS.filter((r) => r.level === 0)), null);
+    check('a storey with a room but no stop has no holding point to stand at',
+      at(2.9, 3, 1, STOPS, [...ROOMS, { id: 'shed', level: 3, center: { x: 0, z: 0 } }]), null);
+    check('the own storey is never offered as a destination',
+      elevatorOptions({ levels: [0, 1, 2], current: 1 }), [0, 2]);
+    check('the ride ends in the room nearest that storey\'s stop',
+      elevatorTargetRoom(1, STOPS, ROOMS), 'attic');
+    check('...and downwards likewise', elevatorTargetRoom(0, STOPS, ROOMS), 'hall');
+
+    // Two storeys: one option, so F rides it instead of unfolding a picker
+    // with a single button.
+    check('two storeys, standing below: the sole option is up',
+      elevatorSoleOption({ levels: [0, 1], current: 0 }), 1);
+    check('...standing above: the sole option is down',
+      elevatorSoleOption({ levels: [0, 1], current: 1 }), 0);
+    check('three storeys leave a choice, so there is no sole option',
+      elevatorSoleOption({ levels: [0, 1, 2], current: 1 }), null);
+    check('and the offer of a two-storey house carries exactly that one option',
+      elevatorOptions(at(2.9, 0, 1)), [1]);
   }
 
   console.log('elevator ride — the ride owns the figure until it arrives (E3 review)');

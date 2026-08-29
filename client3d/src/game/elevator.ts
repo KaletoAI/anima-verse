@@ -94,6 +94,19 @@ export function elevatorOptions(state: ElevatorState): number[] {
 }
 
 /**
+ * The ONE storey there is to ride to, or null when there is a choice.
+ *
+ * A building with two served storeys leaves nothing to pick: the picker would
+ * unfold a single button, and the press that opened it could have been the
+ * ride. So the offer IS the ride there, exactly as it is on the stairs — from
+ * the third storey on the choice comes back.
+ */
+export function elevatorSoleOption(state: ElevatorState): number | null {
+  const options = elevatorOptions(state);
+  return options.length === 1 ? options[0] : null;
+}
+
+/**
  * Room of `level` the ride ends in: the one whose centre lies NEAREST that
  * storey's holding point — stepping out of the lift puts you in the room it
  * opens into. Ties fall to the lower id, so the destination of a symmetric

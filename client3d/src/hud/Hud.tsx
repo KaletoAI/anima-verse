@@ -40,7 +40,7 @@ import { GameMenu } from './GameMenu';
 import { Minimap } from './Minimap';
 import { PerfOverlay } from './PerfOverlay';
 import { ttsSpeak, ttsStatus } from '../api';
-import { elevatorOptions } from '../game/elevator';
+import { elevatorOptions, elevatorSoleOption } from '../game/elevator';
 import { getAudio } from '../game/audio';
 import { loadPrefs, loadScatterPrefs, savePrefs, saveScatterPrefs, PREFS_KEY,
   SCATTER_PREFS_KEY, type Prefs, type ScatterPrefs } from '../game/prefs';
@@ -677,6 +677,10 @@ export function Hud({ avatar, username, role }: {
     </header>
   );
 
+  // Two served storeys leave nothing to choose, so the chip names the one
+  // direction F leads and the picker never unfolds (Treppen v2 task 4).
+  const soleFloor = game.elevator ? elevatorSoleOption(game.elevator) : null;
+
   return (
     <>
       {/* Performance readout (Etappe 5): shown while the menu switch is on,
@@ -903,9 +907,16 @@ export function Hud({ avatar, username, role }: {
             one F press is never two offers at once. Unfolded (F again, or a
             click) the prompt becomes one button per storey; the current one is
             not among them. Unlike the prompt these are operated, so they take
-            the pointer back (hud.css). */}
+            the pointer back (hud.css). With only ONE storey to ride to there
+            is nothing to unfold: the chip says which way F leads and the press
+            is the ride (Treppen v2 task 4). */}
         {!game.talkTarget && game.elevator && (
-          game.elevatorOpen ? (
+          soleFloor !== null ? (
+            <div className="hud-talk">
+              {soleFloor > game.elevator.current
+                ? t('Press F to go up') : t('Press F to go down')}
+            </div>
+          ) : game.elevatorOpen ? (
             <div className="hud-elevator">
               <span className="hud-elevator-label">{t('Elevator')}</span>
               {elevatorOptions(game.elevator).map((level) => (

@@ -21,7 +21,8 @@ import {
 } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
-import { elevatorAt, elevatorTargetRoom, type ElevatorStop } from './game/elevator';
+import { elevatorAt, elevatorSoleOption, elevatorTargetRoom,
+  type ElevatorStop } from './game/elevator';
 import { nearestRoomAt, stairChain, stairLegTo, stairLegs, stairsAt,
   type StairLink } from './game/stairs';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
@@ -5132,6 +5133,14 @@ async function startApp(username: string, role: string) {
       return;
     }
     if (state.elevator) {
+      // Two served storeys leave nothing to choose: the press IS the ride,
+      // just as it is on the stairs below — a picker with a single button
+      // costs a click and says nothing.
+      const sole = elevatorSoleOption(state.elevator);
+      if (sole !== null) {
+        gameActions.rideElevator?.(sole);
+        return;
+      }
       // Pressing again closes the storey choice — the same key, both ways.
       setGameState({ elevatorOpen: !state.elevatorOpen });
       return;
