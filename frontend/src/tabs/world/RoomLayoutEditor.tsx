@@ -3884,7 +3884,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             <SliderInput
               label={t('Capacity')}
               ariaLabel={t('Marker capacity (figures)')}
-              title={t('How many figures this place takes — a bench seats several. The slots line up across the facing.')}
+              title={t('How many figures this place takes — a bench seats several. The slots line up in a row; the slot axis says which way it runs.')}
               min={1}
               max={8}
               step={1}
@@ -3893,7 +3893,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 const cap = Math.max(1, Math.min(8, Math.round(v)))
                 patchMarker(cap > 1
                   ? { capacity: cap }
-                  : { capacity: undefined, spacing_m: undefined })
+                  : { capacity: undefined, spacing_m: undefined,
+                      slot_axis: undefined })
               }}
               sliderWidth={80}
               inputWidth={52}
@@ -3909,6 +3910,27 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 value={marker.spacing_m ?? 0.6}
                 onChange={(v) => patchMarker({ spacing_m: rM(v) })}
                 unit="m"
+                sliderWidth={90}
+                inputWidth={62}
+              />
+            ) : null}
+            {/* WHICH WAY THE ROW RUNS. 90° — across the facing — is right for
+                everyone who sits or stands: their shoulders are the narrow
+                side. A LYING pose turns the body across the facing instead,
+                so the same 90° row runs down the body and two sleepers land
+                head-to-foot; 0° puts them side by side. */}
+            {capacity > 1 ? (
+              <SliderInput
+                label={t('Slot axis')}
+                ariaLabel={t('Marker slot axis (degrees off the facing)')}
+                title={t('Which way the row of slots runs, in degrees off the facing. 90 = across it — right for sitting and standing, where the shoulders are the narrow side. 0 = along it, which is what a bed wants: a lying figure already lies across its facing, so a 90° row would stack the sleepers head-to-foot instead of side by side.')}
+                min={0}
+                max={180}
+                step={5}
+                value={marker.slot_axis ?? 90}
+                onChange={(v) => patchMarker(
+                  { slot_axis: Math.max(0, Math.min(180, Math.round(v))) })}
+                unit="°"
                 sliderWidth={90}
                 inputWidth={62}
               />

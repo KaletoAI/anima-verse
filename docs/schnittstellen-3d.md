@@ -1347,7 +1347,7 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
                                       # id = stabile Platzierungs-ID,
                                       # label = optionale Beschriftung,
                                       # prop_name = Name aus der Bibliothek
-  prop_markers: [{ placement, id, group, capacity, spacing_m,
+  prop_markers: [{ placement, id, group, capacity, spacing_m, slot_axis?,
                    offset_m: [dx, dz], height_m, facing }],
                                       # id = Marker-ID am Objekt, group =
                                       # Platz-Typ des Posen-Katalogs
@@ -1427,11 +1427,20 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   Süden, einmal am Objekt-Marker korrigieren. (Befund Café-Terrasse:
   gedrehte Stühle, alle Sitzenden schauten in dieselbe Richtung.)
   Raum-Marker (`markers`) = unverändert `layout.markers` (raumlokal:
-  `id`/`group`/`at`/`capacity?`/`spacing_m?`/`rotation`/`offset_y` additiv
-  zur abgetasteten Auflagehöhe/`tilt`/`roll`). **Ein Marker nennt seit v7
-  keinen Clip mehr, sondern einen PLATZ-TYP** (`group` = Gruppe des
+  `id`/`group`/`at`/`capacity?`/`spacing_m?`/`slot_axis?`/`rotation`/`offset_y`
+  additiv zur abgetasteten Auflagehöhe/`tilt`/`roll`). **Ein Marker nennt seit
+  v7 keinen Clip mehr, sondern einen PLATZ-TYP** (`group` = Gruppe des
   Posen-Katalogs: seat/bed/floor/counter/stand …, Nachtrag 2026-08-28);
   die fertigen Sitzplätze (`slots`) rechnet allein das Szenen-Rezept.
+- **`slot_axis` — in welche Richtung die Reihe der Plätze läuft** (Grad zur
+  Blickrichtung, 0..180, Standard 90 = quer; Nachtrag 2026-08-29). Quer ist
+  richtig für jeden, der SITZT oder STEHT: die Schultern sind die schmale
+  Seite. Eine LIEGENDE Pose legt den Körper dagegen quer zur Blickrichtung
+  (am Bibliotheks-Clip `laying-back` gemessen), eine 90°-Reihe liefe also den
+  Körper entlang und stapelte zwei Schlafende Kopf an Fuß — dafür ist 0
+  gedacht. 180 ist 0 mit vertauschter Reihenfolge; eine Reihe ist eine Achse,
+  keine Richtung. Objekt-lokal wie das `facing`, gegen das sie gemessen wird,
+  damit die Platzierungs-Drehung beide zugleich mitnimmt.
 - `placements[].model_url` ist deprecated — immer über
   `/assets/props/{id}/model` laden.
 - **Signatur-Polling** genügt; eine Änderung im NACHBARRAUM bewegt die
@@ -4500,9 +4509,14 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # Name, sonst Gruppen-Label;
                                            # root_offset =
                                            # groups[group].root_drop × 1,70;
-                                           # Slots quer zur Blickrichtung,
-                                           # Kapazität 1 ⇒ slots == [at_world]
-                                           # (Nachtrag 2026-08-28, v7);
+                                           # Slots in EINER Reihe: Richtung =
+                                           # Kompasskurs facing + slot_axis
+                                           # (Einheitsvektor (sin, cos)),
+                                           # slot_axis Standard 90° = quer zur
+                                           # Blickrichtung; Kapazität 1 ⇒
+                                           # slots == [at_world]
+                                           # (Nachtrag 2026-08-28, v7,
+                                           # slot_axis 2026-08-29);
                                            # anchor = Anker SEINER Platzierung,
                                            # dieselbe Zahl wie models[].anchor
                                            # (Nachtrag 2026-08-28): der Punkt,

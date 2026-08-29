@@ -2697,16 +2697,28 @@ def _store_variant_index(placement: Dict[str, Any],
 # ── Markers, figures ────────────────────────────────────────────────────
 
 def marker_slots(at: Tuple[float, float], facing_deg: Optional[float],
-                 capacity: int, spacing_m: float) -> List[List[float]]:
+                 capacity: int, spacing_m: float,
+                 slot_axis: Optional[float] = None) -> List[List[float]]:
     """The seats of one marker, world metres, centred on the marker along the
-    axis ACROSS the facing (a bench runs sideways). Facing 0 = south (+z),
-    90 = east (+x); the lateral unit vector is the facing turned by +90°:
-    (cos f, −sin f). Capacity 1 is the marker itself."""
+    row the place seats its figures in. Facing 0 = south (+z), 90 = east (+x),
+    and the row is the compass direction ``facing + slot_axis`` — unit vector
+    (sin, cos). Capacity 1 is the marker itself.
+
+    ``slot_axis`` is the angle of the ROW against the facing, 90° (across it)
+    by default: a bench runs sideways, and so does a bed with two sleepers.
+    It exists because the row is only "across the facing" for a pose that
+    stands or sits UPRIGHT. A lying pose puts the body itself across the
+    facing (measured on the library's laying clip), and then a 90° row runs
+    down the body — two sleepers end up head-to-foot instead of side by side.
+    0° lays the row along the facing for exactly that case; anything between
+    is available for a place no rule anticipated (user decision 2026-08-29).
+    """
     n = max(1, int(capacity))
     if n == 1:
         return [[_r(at[0]), _r(at[1])]]
-    f = math.radians(float(facing_deg or 0.0))
-    lx, lz = math.cos(f), -math.sin(f)
+    d = math.radians(float(facing_deg or 0.0)
+                     + (90.0 if slot_axis is None else float(slot_axis)))
+    lx, lz = math.sin(d), math.cos(d)
     return [[_r(at[0] + (i - (n - 1) / 2.0) * spacing_m * lx),
              _r(at[1] + (i - (n - 1) / 2.0) * spacing_m * lz)] for i in range(n)]
 
@@ -2789,7 +2801,8 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             "capacity": cap,
             "at_world": [_r(anchor_u), _r(anchor_v)],
             "slots": marker_slots((anchor_u, anchor_v), facing, cap,
-                                  _num(marker.get("spacing_m"), 0.6)),
+                                  _num(marker.get("spacing_m"), 0.6),
+                                  marker.get("slot_axis")),
             "y_world": _r(floor_y + _num(marker.get("offset_y"))),
             "root_offset": _root_drop(group),
             "source": "room",
@@ -2840,7 +2853,8 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             "capacity": cap,
             "at_world": [_r(au), _r(av)],
             "slots": marker_slots((au, av), facing, cap,
-                                  _num(marker.get("spacing_m"), 0.6)),
+                                  _num(marker.get("spacing_m"), 0.6),
+                                  marker.get("slot_axis")),
             # THE MARKER RIDES THE MESH (§ B2 addendum 2026-08-20): a sunk
             # trunk sinks its seat with it, so the placement's ground offset is
             # added here as well — the same term the prop spec adds to its

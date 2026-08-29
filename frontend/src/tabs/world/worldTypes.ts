@@ -72,13 +72,16 @@ export interface RoomLayout {
    *  server seats characters on it. id = stable marker id (the server mints
    *  one for a marker stored without); at = METRES from the room's min
    *  corner; capacity = how many figures the place takes (default 1),
-   *  spacing_m = the distance between its slots across the facing (default
-   *  0.6); rotation = facing in degrees (0 south / 90 east / 180 north /
-   *  270 west, absent = client default); offset_y = metres, additive to the
-   *  sampled seat height; tilt/roll = the two lean axes in degrees (±90,
-   *  head up/down and sideways) for figures that are not upright. */
+   *  spacing_m = the distance between its slots (default 0.6), slot_axis =
+   *  the degrees that ROW stands off the facing (default 90 = across it; a
+   *  bed with two sleepers wants 0, because a lying figure already lies
+   *  across its facing); rotation = facing in degrees (0 south / 90 east /
+   *  180 north / 270 west, absent = client default); offset_y = metres,
+   *  additive to the sampled seat height; tilt/roll = the two lean axes in
+   *  degrees (±90, head up/down and sideways) for figures that are not
+   *  upright. */
   markers?: Array<{ id?: string; group: string; at: [number, number]
-    capacity?: number; spacing_m?: number
+    capacity?: number; spacing_m?: number; slot_axis?: number
     rotation?: number; offset_y?: number; tilt?: number; roll?: number }>
   /** Room shell (plan-room-props.md): per-room surface-texture kinds. The
    *  client derives walls/floor from the geometry × storey height and skins

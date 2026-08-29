@@ -191,7 +191,7 @@ from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
                                      shrink_capability)
 from app.core.picture_areas import KINDS as COLOUR_KINDS
 from app.core.timeutils import utc_now_iso
-from app.core.world_ops import _capacity, _place_id, _spacing
+from app.core.world_ops import _capacity, _place_id, _slot_axis, _spacing
 
 logger = get_logger(__name__)
 
@@ -1191,8 +1191,9 @@ def _sanitize_rotation(raw: Any, cur: Optional[Dict[str, Any]] = None) -> Dict[s
 def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     """Object-local place markers (A4, plan-posen-plaetze.md). Same vocabulary
     as ``layout.markers`` — ``group`` = a PLACE TYPE of the pose catalog
-    (``pose_catalog.get_groups()``), ``id`` stable, ``capacity``/``spacing_m``
-    for a bench, ``facing`` = degrees (0 south / 90 east / 180 north / 270
+    (``pose_catalog.get_groups()``), ``id`` stable,
+    ``capacity``/``spacing_m``/``slot_axis`` for a place that seats several,
+    ``facing`` = degrees (0 south / 90 east / 180 north / 270
     west, absent = client default) — but ``at`` is an OBJECT-LOCAL
     ``[u, v, w]`` (three fractions of the model bounding box) instead of a
     room ``[x, y]``.
@@ -1229,6 +1230,7 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
         if cap > 1:
             entry["capacity"] = cap
             entry["spacing_m"] = _spacing(m.get("spacing_m"))
+            entry["slot_axis"] = _slot_axis(m.get("slot_axis"))
         fac = m.get("facing")
         if fac is not None and f"{fac}".strip() != "":
             try:

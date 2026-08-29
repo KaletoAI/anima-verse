@@ -424,7 +424,8 @@ async def prop_variant_ground_offset(prop_id: str, index: int,
 async def prop_variant_markers(prop_id: str, index: int,
                                request: Request) -> Dict[str, Any]:
     """Replace THIS variant's object-local marker list (body: ``{markers:
-    [{id?, group, at: [u,v,w], capacity?, spacing_m?, facing?}]}``) — same
+    [{id?, group, at: [u,v,w], capacity?, spacing_m?, slot_axis?,
+    facing?}]}``) — same
     vocabulary as room markers (``group`` = a place type of the pose catalog),
     object-local frame.
 

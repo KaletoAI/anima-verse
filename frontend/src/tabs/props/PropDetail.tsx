@@ -1267,7 +1267,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     // the same shape the server stores.
                     patchMarker(selIdx, cap > 1
                       ? { capacity: cap }
-                      : { capacity: undefined, spacing_m: undefined })
+                      : { capacity: undefined, spacing_m: undefined,
+                          slot_axis: undefined })
                   }}
                   sliderWidth="auto"
                   sliderStyle={{ flex: 1, minWidth: 60 }}
@@ -1287,6 +1288,33 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     value={selMarker.spacing_m ?? 0.6}
                     onChange={(v) => patchMarker(selIdx, { spacing_m: Math.round(v * 100) / 100 })}
                     unit="m"
+                    sliderWidth="auto"
+                    sliderStyle={{ flex: 1, minWidth: 60 }}
+                    inputWidth={72}
+                  />
+                ) : null}
+                {/* WHICH WAY THE ROW RUNS (2026-08-29, user decision). 90° —
+                    across the facing — is right for everyone who sits or
+                    stands: their shoulders are the narrow side. A LYING pose
+                    turns the body across the facing instead, so the same 90°
+                    row runs down the body and two sleepers land head-to-foot;
+                    0° puts them side by side. The figures in the preview
+                    follow it live, which is what makes it dialable at all. */}
+                {selCapacity > 1 ? (
+                  <SliderInput
+                    className="ga-marker-axis"
+                    style={{ display: 'flex', fontSize: '0.8em' }}
+                    title={t('Which way the row of slots runs, in degrees off the facing. 90 = across it — right for sitting and standing, where the shoulders are the narrow side. 0 = along it, which is what a bed wants: a lying figure already lies across its facing, so a 90° row would stack the sleepers head-to-foot instead of side by side. Watch the preview figures while you turn it.')}
+                    label={<span className="ga-hint" style={{ width: 66, flex: '0 0 auto' }}>{t('Slot axis')}</span>}
+                    ariaLabel={t('Slot axis')}
+                    min={0}
+                    max={180}
+                    step={5}
+                    fineStep={1}
+                    value={selMarker.slot_axis ?? 90}
+                    onChange={(v) => patchMarker(selIdx,
+                      { slot_axis: Math.max(0, Math.min(180, Math.round(v))) })}
+                    unit="°"
                     sliderWidth="auto"
                     sliderStyle={{ flex: 1, minWidth: 60 }}
                     inputWidth={72}
@@ -1699,6 +1727,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 return {
                   at: m.at, group: m.group, capacity: m.capacity,
                   spacing_m: m.spacing_m, facing: m.facing,
+                  slot_axis: m.slot_axis,
                   previewKind: entry?.animation,
                   previewYawOffset: entry?.yaw_offset,
                   rootDrop: groups[m.group]?.root_drop,

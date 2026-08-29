@@ -28,19 +28,26 @@ const deg = (v: number | undefined) => ((v || 0) * Math.PI) / 180
 
 /**
  * The slot points of one place — `scene_recipe.marker_slots`: `capacity`
- * seats `spacingM` apart on the axis ACROSS the facing (a bench runs
- * sideways), centred on the marker. The lateral unit vector is the facing
- * turned by +90°, `(cos f, −sin f)`; slot i sits at `(i − (n−1)/2) ·
- * spacingM` along it. Capacity 1 is the marker itself. Unrounded — the
- * server rounds its world metres to centimetres for the payload.
+ * seats `spacingM` apart in a row, centred on the marker. The row is the
+ * COMPASS DIRECTION `facing + slotAxis`, unit vector `(sin, cos)`; slot i
+ * sits at `(i − (n−1)/2) · spacingM` along it. Capacity 1 is the marker
+ * itself. Unrounded — the server rounds its world metres to centimetres for
+ * the payload.
+ *
+ * `slotAxis` defaults to 90° — across the facing, a bench running sideways.
+ * It is a value rather than a rule because "across the facing" only holds
+ * for a pose that stands or sits UPRIGHT: a lying pose puts the body itself
+ * across the facing, so a 90° row runs down the body and two sleepers land
+ * head-to-foot instead of side by side.
  */
 export function markerSlots(at: XZ, facingDeg: number | undefined,
-                            capacity: number, spacingM: number): XZ[] {
+                            capacity: number, spacingM: number,
+                            slotAxis?: number): XZ[] {
   const n = Math.max(1, Math.round(capacity || 1))
   if (n === 1) return [[at[0], at[1]]]
-  const f = deg(facingDeg)
-  const lx = Math.cos(f)
-  const lz = -Math.sin(f)
+  const d0 = deg((facingDeg || 0) + (slotAxis === undefined ? 90 : slotAxis))
+  const lx = Math.sin(d0)
+  const lz = Math.cos(d0)
   return Array.from({ length: n }, (_, i) => {
     const d = (i - (n - 1) / 2) * spacingM
     return [at[0] + d * lx, at[1] + d * lz] as XZ

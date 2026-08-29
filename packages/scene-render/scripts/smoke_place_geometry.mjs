@@ -11,13 +11,20 @@
  * the two implementations fails here, not on the user's screen:
  *
  *   [1] markerSlots — scripts/smoke_scene_recipe.py block [M]: marker at
- *       (−2, −3), facing 90 (east = +x), capacity 3, spacing 0.6. Lateral
- *       = facing turned +90° = (cos 90°, −sin 90°) = (0, −1); slot i at
- *       (i − 1) × 0.6 along it → z = −3 − (i − 1) × 0.6:
+ *       (−2, −3), facing 90 (east = +x), capacity 3, spacing 0.6. The row
+ *       runs along the compass bearing `facing + slotAxis`, unit vector
+ *       (sin, cos), and slotAxis defaults to 90 = across the facing: bearing
+ *       180°, (sin 180°, cos 180°) = (0, −1); slot i at (i − 1) × 0.6 along
+ *       it → z = −3 − (i − 1) × 0.6:
  *         [[-2, -2.4], [-2, -3], [-2, -3.6]]   (an N–S line, centre = marker)
+ *       slotAxis 0 turns the row ALONG the facing — bearing 90°, (1, 0) →
+ *         [[-2.6, -3], [-2, -3], [-1.4, -3]]   (the bed case)
+ *       and slotAxis 180 is 0 with the slots in the other order: marker
+ *       (0, 0), facing 0, capacity 2, spacing 1 → [[0,-0.5],[0,0.5]] at 0
+ *       and [[0,0.5],[0,-0.5]] at 180.
  *       Capacity 1 → the marker itself: markerSlots([1, 2], undefined, 1,
  *       0.6) = [[1, 2]]. And scripts/smoke_places.py s2: (1, −3), facing 0
- *       (south, lateral (1, 0)), capacity 2 → [[0.7, -3], [1.3, -3]].
+ *       (south, row (1, 0)), capacity 2 → [[0.7, -3], [1.3, -3]].
  *   [2] pairYaw — scripts/smoke_interaction.py [9]: facing 90 → clip +X on
  *       world +x → 0 rad; scripts/smoke_places.py [7]: facing 0 → −π/2,
  *       and facing 0 with yaw_offset 90 → 0 ("lapsitting").
@@ -81,6 +88,14 @@ async function main() {
     markerSlots([-2, -3], 90, 3, 0.6), [[-2, -2.4], [-2, -3], [-2, -3.6]])
   check('capacity 1 is the marker', markerSlots([1, 2], undefined, 1, 0.6), [[1, 2]])
   check('facing 0, cap 2 at (1, −3)', markerSlots([1, -3], 0, 2, 0.6), [[0.7, -3], [1.3, -3]])
+  check('an explicit 90 is the same default',
+    markerSlots([-2, -3], 90, 3, 0.6, 90), [[-2, -2.4], [-2, -3], [-2, -3.6]])
+  check('slotAxis 0 lays the row ALONG the facing',
+    markerSlots([-2, -3], 90, 3, 0.6, 0), [[-2.6, -3], [-2, -3], [-1.4, -3]])
+  check('slotAxis 180 is 0 with the slots swapped',
+    markerSlots([0, 0], 0, 2, 1, 180), [[0, 0.5], [0, -0.5]])
+  check('...and slotAxis 0 the other way round',
+    markerSlots([0, 0], 0, 2, 1, 0), [[0, -0.5], [0, 0.5]])
 
   console.log('\n[2] pairYaw (smoke_interaction [9], smoke_places [7])')
   check('facing 90 → 0', pairYaw(90, 0), 0)

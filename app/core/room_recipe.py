@@ -669,6 +669,12 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
             composed["group"] = str(marker.get("group") or "")
             composed["capacity"] = int(marker.get("capacity") or 1)
             composed["spacing_m"] = float(marker.get("spacing_m") or 0.6)
+            # WHICH WAY THE ROW RUNS (2026-08-29). Object-local like the
+            # facing it is measured against, so the placement yaw carries both
+            # at once — the angle between them never changes when the prop is
+            # turned. Absent = 90° = across the facing, the bench default.
+            if marker.get("slot_axis") is not None:
+                composed["slot_axis"] = float(marker.get("slot_axis"))
             composed["placement"] = idx
             prop_markers.append(composed)
     return placements, prop_markers

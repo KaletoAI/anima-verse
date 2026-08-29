@@ -22,6 +22,11 @@ export interface PropMarker {
   capacity?: number
   /** Metres between two slots, 0.2..3.0 — only stored with a capacity > 1. */
   spacing_m?: number
+  /** Degrees the ROW of slots stands against the facing, 0..180 (absent = 90
+   *  = across it). Only stored with a capacity > 1. A lying pose puts the
+   *  BODY across the facing, so a bed with two sleepers wants 0 — else the
+   *  row runs down the body and they land head-to-foot. */
+  slot_axis?: number
   /** Facing in degrees (0 south / 90 east / 180 north / 270 west). */
   facing?: number
 }

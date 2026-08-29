@@ -1345,6 +1345,22 @@ def _spacing(raw: Any) -> float:
         return 0.6
 
 
+def _slot_axis(raw: Any) -> float:
+    """Degrees the ROW of slots stands against the marker's facing, 0..180
+    (default 90 = ACROSS it, a bench running sideways).
+
+    It is a value and not a rule because "across the facing" only holds for a
+    pose that stands or sits UPRIGHT. A lying pose puts the body itself across
+    the facing, so a 90° row runs down the body and two sleepers land
+    head-to-foot; 0° lays the row along the facing and puts them side by side.
+    180° is 0° with the slots in the other order, which is why the range stops
+    there — a row is an axis, not a direction."""
+    try:
+        return round(max(0.0, min(180.0, float(raw))), 1)
+    except (TypeError, ValueError):
+        return 90.0
+
+
 def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     """Place markers (schnittstellen-3d.md § B, plan-posen-plaetze.md): the
     spots of a layout a figure can take. ``at`` = METRES in the frame of
@@ -1357,7 +1373,8 @@ def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     deleted neighbour never renumbers it.
 
     Optional per marker: ``capacity`` (2..8 → a bench; the scene composes
-    that many slots ``spacing_m`` apart, across the facing), ``rotation`` =
+    that many slots ``spacing_m`` apart, in a row ``slot_axis`` degrees off
+    the facing — 90° = across it), ``rotation`` =
     the figure's facing in degrees (0 = south, 90 = east, 180 = north, 270 =
     west; absent = the client's face-the-neighbours default), ``offset_y``
     (metres, ± — ADDITIVE to the client-sampled surface height under the
@@ -1385,6 +1402,7 @@ def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
         if cap > 1:
             entry["capacity"] = cap
             entry["spacing_m"] = _spacing(m.get("spacing_m"))
+            entry["slot_axis"] = _slot_axis(m.get("slot_axis"))
         rot = m.get("rotation")
         if rot is not None and f"{rot}".strip() != "":
             try:

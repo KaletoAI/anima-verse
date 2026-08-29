@@ -3311,12 +3311,24 @@ def test_place_slots() -> None:
     """[M] Place slots (plan-posen-plaetze.md § 3.3/3.4). A room marker at
     room-local (2, 1) in room "a" (min corner −4/−4, no room turn), group
     "seat", capacity 3, spacing 0.6, facing 90 (east). Facing 0 = south = +z;
-    east = +x. The lateral axis is the facing turned by +90°: (cos 90°,
-    −sin 90°) = (0, −1). Slot i ∈ {0,1,2} sits at (i − 1) × 0.6 along that
-    vector, i.e. at world x −2 and z = −3 − (i − 1) × 0.6: slot 0 at −2.4,
-    slot 1 at −3, slot 2 at −3.6 → slots [[-2,-2.4],[-2,-3],[-2,-3.6]] (an
-    N–S line, centre = the marker, slot 0 on the sitter's RIGHT when facing
-    east). root_offset = seat.root_drop 0.314 × 1.70 = 0.5338 → 0.534
+    east = +x. The slots run in a ROW whose direction is the compass bearing
+    ``facing + slot_axis``, unit vector (sin, cos); ``slot_axis`` defaults to
+    90° = across the facing. Here that is bearing 90 + 90 = 180°, unit vector
+    (sin 180°, cos 180°) = (0, −1). Slot i ∈ {0,1,2} sits at (i − 1) × 0.6
+    along that vector, i.e. at world x −2 and z = −3 − (i − 1) × 0.6: slot 0
+    at −2.4, slot 1 at −3, slot 2 at −3.6 → slots [[-2,-2.4],[-2,-3],
+    [-2,-3.6]] (an N–S line, centre = the marker, slot 0 on the sitter's
+    RIGHT when facing east).
+
+    THE ROW'S ANGLE (2026-08-29). ``slot_axis`` 0 turns the same row ALONG
+    the facing: bearing 90 + 0 = 90°, unit vector (1, 0), so the three slots
+    become an E–W line [[-2.6,-3],[-2,-3],[-1.4,-3]] — the bed case, where a
+    lying body already lies across its facing and a 90° row would stack the
+    sleepers head-to-foot. 180° is 0° with the slots in the OTHER ORDER, and
+    that is the whole range: a marker at (0, 0), facing 0, capacity 2,
+    spacing 1 gives bearing 0 → (0, 1) → [[0,-0.5],[0,0.5]] at axis 0, and
+    bearing 180 → (0, −1) → [[0,0.5],[0,-0.5]] at axis 180 — same two points,
+    swapped. root_offset = seat.root_drop 0.314 × 1.70 = 0.5338 → 0.534
     (three decimals, like every drop in the payload). The payload
     marker carries id "m1seat00", group "seat", label "Seat" (a room marker
     has no prop → the group label), capacity 3. Capacity 1 → slots ==
@@ -3329,6 +3341,20 @@ def test_place_slots() -> None:
           == [[-2.0, -2.4], [-2.0, -3.0], [-2.0, -3.6]],
           str(marker_slots((-2.0, -3.0), 90.0, 3, 0.6)))
     check("marker_slots cap 1", marker_slots((1.0, 2.0), None, 1, 0.6) == [[1.0, 2.0]])
+    check("...an explicit 90 is the same default",
+          marker_slots((-2.0, -3.0), 90.0, 3, 0.6, 90.0)
+          == marker_slots((-2.0, -3.0), 90.0, 3, 0.6),
+          str(marker_slots((-2.0, -3.0), 90.0, 3, 0.6, 90.0)))
+    check("slot_axis 0 lays the row ALONG the facing",
+          marker_slots((-2.0, -3.0), 90.0, 3, 0.6, 0.0)
+          == [[-2.6, -3.0], [-2.0, -3.0], [-1.4, -3.0]],
+          str(marker_slots((-2.0, -3.0), 90.0, 3, 0.6, 0.0)))
+    check("slot_axis 180 is 0 with the slots swapped",
+          (marker_slots((0.0, 0.0), 0.0, 2, 1.0, 0.0) == [[0.0, -0.5], [0.0, 0.5]]
+           and marker_slots((0.0, 0.0), 0.0, 2, 1.0, 180.0)
+           == [[0.0, 0.5], [0.0, -0.5]]),
+          str((marker_slots((0.0, 0.0), 0.0, 2, 1.0, 0.0),
+               marker_slots((0.0, 0.0), 0.0, 2, 1.0, 180.0))))
     loc_m = fixture()
     loc_m["rooms"][0]["layout"]["markers"] = [
         {"id": "m1seat00", "group": "seat", "at": [2.0, 1.0], "capacity": 3,
@@ -3345,6 +3371,17 @@ def test_place_slots() -> None:
           str((m.get("id"), m.get("group"), m.get("label"), m.get("capacity"))))
     check("payload slots", m["slots"] == [[-2.0, -2.4], [-2.0, -3.0], [-2.0, -3.6]],
           str(m["slots"]))
+    # …and the stored angle reaches the payload, not just the function.
+    loc_a = fixture()
+    loc_a["rooms"][0]["layout"]["markers"] = [
+        {"id": "m1seat00", "group": "seat", "at": [2.0, 1.0], "capacity": 3,
+         "spacing_m": 0.6, "rotation": 90, "slot_axis": 0},
+    ]
+    ma = [m2 for m2 in scene_recipe.compose_scene(
+        loc_a, plan_width_m=PLAN_W)["markers"] if m2["room_id"] == "a"][0]
+    check("payload slots follow slot_axis 0",
+          ma["slots"] == [[-2.6, -3.0], [-2.0, -3.0], [-1.4, -3.0]],
+          str(ma["slots"]))
     check("payload root_offset 0.534", m["root_offset"] == 0.534,
           str(m["root_offset"]))
     check("no animation key any more", "animation" not in m)
