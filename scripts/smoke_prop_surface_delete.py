@@ -15,10 +15,15 @@ The fixture writes a COMPLETE, VALID sidecar by hand — `_valid` demands the
 current SURFACE_VERSION, the eight PAYLOAD_KEYS, the model file's own
 (name, size, mtime) and the fix the lattice was baked under — so the state
 before the delete is "baked" and the state after it can only be "missing":
-  before:  read_surface != None, surface_status = baked 3x3 @ 0.25
+  before:  read_surface != None, surface_status = baked 3x3 @ 0.25, file True
   delete:  True, and the file is gone from disk
-  after:   read_surface = None, surface_status = missing
+  after:   read_surface = None, surface_status = missing, file False
   again:   False (nothing left to delete), state still missing
+`state` and `file` answer two different questions, which is why the status
+carries both: a sidecar nobody can parse reads as "no surface" to every
+renderer — state missing, exactly like an absent one — while the file is still
+on disk, and deleting it is the repair. So the garbage sidecar below reads
+(missing, file True) and deletes like any other.
 The parsed-sidecar cache is keyed by (path, size, mtime), so a deleted file can
 never be answered from it — but the entry has to GO all the same, because
 nothing else would ever evict it: a file that is read, deleted and re-baked
@@ -95,13 +100,30 @@ def part0():
               (st["state"], st["cols"], st["rows"], st["step"]) == ("baked", 3, 3, 0.25),
               str(st))
 
+        check("status says there is a file", st["file"] is True)
+
         check("delete answers True", ms.delete_surface(model) is True)
         check("the sidecar is gone", not ms.surface_path(model).exists())
         check("the model itself stands", model.exists())
         check("read_surface is None", ms.read_surface(model, fix) is None)
-        check("status missing", ms.surface_status(model, fix)["state"] == "missing")
+        st = ms.surface_status(model, fix)
+        check("status missing without a file",
+              (st["state"], st["file"]) == ("missing", False), str(st))
         check("the second delete answers False", ms.delete_surface(model) is False)
         check("status still missing", ms.surface_status(model, fix)["state"] == "missing")
+
+        # THE CORRUPT SIDECAR — the one case where deleting IS the repair.
+        # Nothing can parse it, so it reads as "no surface" to every renderer
+        # (state missing, like an absent one) while the file is very much
+        # there: `file` is what the admin's Remove button is gated on, and a
+        # gate on the state would hide the button exactly here.
+        ms.surface_path(model).write_text("{not json at all", encoding="utf-8")
+        st = ms.surface_status(model, fix)
+        check("a corrupt sidecar reads missing WITH a file",
+              (st["state"], st["file"]) == ("missing", True), str(st))
+        check("read_surface says no surface", ms.read_surface(model, fix) is None)
+        check("the corrupt file can be deleted", ms.delete_surface(model) is True)
+        check("and it is gone", not ms.surface_path(model).exists())
 
         # The parse cache must not keep what was deleted (see the docstring).
         write_lattice(model)

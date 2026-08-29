@@ -2367,6 +2367,7 @@
     "Throw the baked lattice away — figures walk on the terrain again until it is baked anew": "Wirft das gebackene Raster weg — Figuren laufen wieder auf dem Gelände, bis neu gebacken wird",
     "Surface removed.": "Oberfläche gelöscht.",
     "There was no surface to remove.": "Es gab keine Oberfläche zu löschen.",
+    "A bake is running for this prop — try again when it has finished.": "Für dieses Prop läuft gerade ein Backvorgang — bitte danach noch einmal versuchen.",
     "Tags (comma-separated)": "Tags (kommagetrennt)",
     "Tag \"walkable\" lets figures stand on this prop; its surface is baked from the mesh.": "Tag „walkable“ lässt Figuren auf diesem Prop stehen; die Oberfläche wird aus dem Mesh gebacken.",
     "unknown reason": "unbekannter Grund",

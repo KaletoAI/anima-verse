@@ -272,7 +272,15 @@ def read_surface(model_path: Path, rotation: Any) -> Optional[Dict[str, Any]]:
 
 
 def surface_status(model_path: Optional[Path], rotation: Any) -> Dict[str, Any]:
-    """What the admin panels show: baked / missing / stale (+ lattice size).
+    """What the admin panels show: baked / missing / stale (+ lattice size),
+    plus ``file`` — whether there is a sidecar ON DISK at all.
+
+    THE TWO ARE NOT THE SAME QUESTION. ``state`` is what the renderers get:
+    a sidecar that cannot be parsed reads as "no surface" exactly like an
+    absent one, which is the right answer for anything that draws. ``file``
+    is what an ADMIN ACTION needs: a corrupt lattice is the one case where
+    deleting it is the repair, and a Remove button gated on the state would
+    be hidden precisely there.
 
     ``step`` is the WORLD step ("baked 81×81 @ 0.25 m") — the resolution the
     label promises is a length on the ground, not in the model's own units. The
@@ -281,12 +289,14 @@ def surface_status(model_path: Optional[Path], rotation: Any) -> Dict[str, Any]:
     resolves the ground every 25 cm.
     """
     if not model_path:
-        return {"state": "missing"}
+        return {"state": "missing", "file": False}
+    exists = surface_path(model_path).exists()
     surface = _load(model_path)
     if not surface:
-        return {"state": "missing"}
+        return {"state": "missing", "file": exists}
     state = "baked" if _valid(surface, model_path, rotation) else "stale"
-    return {"state": state, "cols": surface.get("cols"), "rows": surface.get("rows"),
+    return {"state": state, "file": exists,
+            "cols": surface.get("cols"), "rows": surface.get("rows"),
             "step": surface.get("step_world", surface.get("step"))}
 
 

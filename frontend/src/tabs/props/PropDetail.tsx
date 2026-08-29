@@ -53,7 +53,7 @@ import { Field } from '../../components/Field'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPost } from '../../lib/api'
+import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { setUnsavedGuard } from '../../lib/unsavedGuard'
 import {
@@ -759,7 +759,15 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
       toast(d?.deleted ? t('Surface removed.') : t('There was no surface to remove.'))
       await meshesChanged()
     } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      // 409 = a bake of this prop is running, and it would write the file
+      // again anyway. It is the one refusal that is neither a defect nor a
+      // reason to try something else, so it says WHEN to try again instead of
+      // showing the server sentence.
+      if ((e as ApiError)?.status === 409) {
+        toast(t('A bake is running for this prop — try again when it has finished.'), 'error')
+      } else {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
     }
   }, [enc, variant, meshesChanged, t, toast])
 
@@ -1723,11 +1731,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   title={t('Bake the surface figures walk on — runs Blender in the background')}>
                   {t('Bake surface')}
                 </button>
-                {/* Only where there IS one: a lattice is a file, and offering
-                    to remove nothing teaches the wrong thing about the state
-                    the line above reports. Stale counts — the file is what the
-                    line shows and what a corrected fix would revive. */}
-                {shownSurface && shownSurface.state !== 'missing' ? (
+                {/* Gated on the FILE, not on the state: a lattice is a file,
+                    and offering to remove nothing teaches the wrong thing —
+                    but an unparseable sidecar reads as `missing` while lying
+                    on disk, and that is exactly the case where removing it is
+                    the repair. Stale counts too. */}
+                {shownSurface?.file ? (
                   <>
                     <button type="button"
                       className={'ga-btn ga-btn-sm' + (removeArmed ? ' ga-btn-danger' : '')}

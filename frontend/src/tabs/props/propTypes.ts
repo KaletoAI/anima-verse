@@ -57,9 +57,14 @@ export interface PropDims {
 
 /** State of the walkable-surface lattice baked out of a mesh
  *  (`model_surface.surface_status`): `baked` with its size, `stale` when the
- *  mesh or its orientation fix moved on, `missing` when none was ever baked. */
+ *  mesh or its orientation fix moved on, `missing` when none was ever baked.
+ *  `file` is the other question — whether a sidecar is on disk AT ALL: an
+ *  unparseable one reads as `missing` (that is what every renderer gets) but
+ *  is still a file, and deleting it is the repair. Admin actions read `file`,
+ *  the label reads `state`. */
 export interface SurfaceStatus {
   state: string
+  file?: boolean
   cols?: number
   rows?: number
   step?: number
