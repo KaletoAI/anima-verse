@@ -6,8 +6,9 @@ credit the sidecar carries. That makes it the one mocap source whose clips may
 travel WITH the repository, unlike the Mixamo library.
 
 One import is: locate the take's ASF/AMC originals, hand them to Blender
-(``app/blender/scripts/cmu_clip.py``) together with the Mixamo rig every other
-clip already uses, and drop the resulting ``<kind>.fbx`` (or ``<kind>__a.fbx``
+(``app/blender/scripts/cmu_clip.py``) together with the project's reference
+skeleton (``shared/models/rig/reference.fbx``, ``default_rig()`` — every clip
+sits on that one rig), and drop the resulting ``<kind>.fbx`` (or ``<kind>__a.fbx``
 + ``<kind>__b.fbx`` for a pair) plus the ``<kind>.json`` sidecar into the
 target library.
 
@@ -113,17 +114,25 @@ def catalog_framerate(take: str) -> float:
 
 
 def default_rig() -> Path:
-    """The skeleton a new clip is retargeted onto.
+    """The skeleton a new clip is retargeted onto — the ONE reference file
+    ``shared/models/rig/reference.fbx`` (``paths.get_rig_file()``).
 
-    The library's own skeleton first: the client measures every clip's standing
-    hip height against the library median (``figures.ts adaptExternalClips``),
-    so a clip on a shorter rig (x-bot, hips 104 cm vs 113 cm) would be read as
-    "crouching" and sink into the ground. Only without any idle clip does the
-    test figure stand in.
+    Every clip must sit on the SAME skeleton: the client measures each clip's
+    standing hip height against the library median (``figures.ts
+    adaptExternalClips``), so a clip driven onto a shorter rig would be read as
+    "crouching" and sink into the ground.
+
+    The reference deliberately does NOT come out of the clip library any more:
+    the library is content — it may be emptied, replaced or deleted — while the
+    converter's reference is part of the pipeline. Missing it is an error, not
+    a reason to fall back onto whatever else carries a skeleton.
     """
-    return next((d / "idle.fbx" for d, _src in paths.get_animation_clips_dirs()
-                 if (d / "idle.fbx").is_file()),
-                paths.get_test_figure_dir() / "x-bot.fbx")
+    rig = paths.get_rig_file()
+    if not rig.is_file():
+        raise ClipImportError(
+            f"reference skeleton missing: {rig} "
+            "— see shared/models/rig/README.md")
+    return rig
 
 
 def validate_kind(raw: Any) -> str:
@@ -170,7 +179,8 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
 
     rig = Path(rig) if rig else default_rig()
     if not rig.is_file():
-        raise ClipImportError(f"rig not found: {rig} — the clip library needs an idle.fbx")
+        raise ClipImportError(f"rig not found: {rig} "
+                              "— see shared/models/rig/README.md")
 
     inputs: Dict[str, Path] = {"rig": rig}
     takes: List[str] = [take_a]

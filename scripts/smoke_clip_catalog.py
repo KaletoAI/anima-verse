@@ -378,13 +378,10 @@ def test_real(take: str) -> None:
     st = runner.status()
     subject = take.partition("_")[0]
     src = paths.get_mocap_source_dir() / "cmu" / subject / f"{take}.amc"
-    # The throwaway library holds a FAKE idle.fbx, so the rig has to be named
-    # explicitly — the real library's own skeleton, which is what an import in
-    # production would pick.
-    repo = Path(__file__).resolve().parents[1]
-    rig = next((p for p in [repo / "shared/models/clips/idle.fbx",
-                            repo / "shared/models/figure/x-bot.fbx"] if p.is_file()),
-               Path("/nonexistent"))
+    # The project's reference skeleton — the same file an import in production
+    # picks (``cmu_import.default_rig()``). It lives outside the clip
+    # libraries, so the throwaway library this smoke builds does not hide it.
+    rig = paths.get_rig_file()
     if not st["executable"] or not src.is_file() or not rig.is_file():
         print(f"  – skipped (blender={bool(st['executable'])}, "
               f"original={src.is_file()}, rig={rig.is_file()})")

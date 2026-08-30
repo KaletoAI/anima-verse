@@ -337,7 +337,8 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
 
     rig = Path(rig) if rig else cmu_import.default_rig()
     if not rig.is_file():
-        raise ClipImportError(f"rig not found: {rig} — the clip library needs an idle.fbx")
+        raise ClipImportError(f"rig not found: {rig} "
+                              "— see shared/models/rig/README.md")
 
     inputs: Dict[str, Path] = {"rig": rig}
     if len(paths_in) == 2:

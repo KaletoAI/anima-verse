@@ -1,7 +1,8 @@
 # Trial clip archive (untracked)
 
-The whole CMU database converted to Mixamo-rig FBX clips — a browsing pool to
-pick from, NOT the animation library the game plays from. That library is
+The whole CMU database converted to FBX clips on the project's rig
+(`../rig/README.md`) — a browsing pool to pick from, NOT the animation library
+the game plays from. That library is
 `shared/models/clips/`; a clip only moves there once it has been reviewed
 (and usually re-cut: trimmed, looped, given a real name).
 

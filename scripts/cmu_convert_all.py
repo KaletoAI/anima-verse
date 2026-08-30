@@ -2,8 +2,8 @@
 """Converts every CMU take into the trial clip library, sorted by category.
 
 Reads ``shared/models/cmu_catalog.json`` and the originals fetched by
-``scripts/cmu_fetch_all.py``, retargets each take onto the Mixamo rig with the
-same Blender script the single-take import uses
+``scripts/cmu_fetch_all.py``, retargets each take onto the project's reference
+skeleton with the same Blender script the single-take import uses
 (``app/blender/scripts/cmu_clip.py``) and writes
 
     shared/models/clips-trial/<main-category>/<sub-category>/<id>.fbx
@@ -30,8 +30,8 @@ Options:
     --catalog <file>  catalog to read (default: shared/models/cmu_catalog.json)
     --src <dir>       downloaded originals (default: shared/models/mocap-src/cmu)
     --out <dir>       clip target (default: shared/models/clips-trial)
-    --rig <fbx>       skeleton to drive (default: the licensed library's
-                      idle.fbx, else the free library's idle.fbx)
+    --rig <fbx>       skeleton to drive (default: the reference skeleton
+                      shared/models/rig/reference.fbx)
     --only-main <n>   restrict to one main category id
     --only <list>     comma-separated take ids (e.g. 18_01,55_02)
     --jobs <n>        parallel Blender runs (default 1)
@@ -62,19 +62,15 @@ def slug(name: str) -> str:
 
 
 def rig_path(explicit: str) -> Path:
-    """The skeleton every clip is driven on.
+    """The skeleton every clip is driven on — the project's reference rig.
 
     All clips must share ONE skeleton: the client normalises a clip against the
     library's standing hip height, so a clip baked on a shorter rig would read
-    as "crouching" and sink into the ground.
+    as "crouching" and sink into the ground. Which is why the reference is a
+    file of its own (``shared/models/rig/``) and not picked out of the clip
+    library.
     """
-    if explicit:
-        return Path(explicit)
-    for candidate in (paths.get_licensed_clips_dir() / "idle.fbx",
-                      paths.get_animation_clips_dir() / "idle.fbx"):
-        if candidate.is_file():
-            return candidate
-    return paths.get_test_figure_dir() / "x-bot.fbx"
+    return Path(explicit) if explicit else paths.get_rig_file()
 
 
 def category_dir(take: dict, mains: dict, subs: dict) -> str:
@@ -220,7 +216,7 @@ def main() -> int:
     args.out_root = out
     rig = rig_path(args.rig)
     if not rig.is_file():
-        raise SystemExit(f"rig not found: {rig}")
+        raise SystemExit(f"rig not found: {rig} — see shared/models/rig/README.md")
     st = runner.status()
     if not st["executable"]:
         raise SystemExit("no Blender executable found (image_generation.blender_executable)")

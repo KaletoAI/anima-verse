@@ -3,7 +3,8 @@ the library can play, through the same pipeline as the CMU converter.
 
 Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
 
-    inputs   rig            the Mixamo skeleton to drive (library idle.fbx)
+    inputs   rig            the Mixamo skeleton to drive
+                            (``shared/models/rig/reference.fbx``)
              src            the animation FBX (solo), or
              src_a, src_b   the two halves of a pair (same world space)
              rest           OPTIONAL: an FBX of the SAME rig in a reference

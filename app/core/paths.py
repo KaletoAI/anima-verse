@@ -123,6 +123,28 @@ def get_clips_inbox_dir() -> Path:
     return get_shared_dir() / "models" / "clips-inbox"
 
 
+def get_rig_file() -> Path:
+    """The RETARGET REFERENCE skeleton — ``shared/models/rig/reference.fbx``.
+
+    One FBX with the project's ``mixamorig:`` armature and nothing else: no
+    mesh, no animation. Every clip conversion is driven onto it
+    (``app.core.cmu_import.default_rig()``), so all clips share one skeleton
+    and one standing hip height — the height the client normalises against.
+
+    It lives OUTSIDE the clip libraries on purpose: the libraries are content
+    that may be emptied, replaced or deleted, and the importer's reference must
+    not go with them. Tracked in git (CMU-derived, redistributable); see the
+    README next to it for how to rebuild it.
+
+    ``ANIMATION_RIG_FILE`` overrides the location — tests must set it, same
+    rule as ANIMATION_CLIPS_DIR (never touch the real file).
+    """
+    override = os.environ.get("ANIMATION_RIG_FILE", "").strip()
+    if override:
+        return Path(override)
+    return get_shared_dir() / "models" / "rig" / "reference.fbx"
+
+
 def get_mocap_source_dir() -> Path:
     """The downloaded ORIGINAL mocap recordings (``cmu/<subject>/*.asf|amc``).
 

@@ -2,8 +2,8 @@
 """Imports CMU Graphics Lab mocap takes as shared animation clips.
 
 Locates the ASF/AMC files of one take (solo) or of two takes recorded together
-(pair), retargets them onto the Mixamo rig with Blender (headless,
-``app/blender/scripts/cmu_clip.py``) and drops the resulting FBX files plus
+(pair), retargets them onto the project's REFERENCE SKELETON with Blender
+(headless, ``app/blender/scripts/cmu_clip.py``) and drops the resulting FBX files plus
 the ``<kind>.json`` sidecar into the shared clips directory — or any ``--out``.
 
 This is the CLI face of ``app/core/cmu_import.py``; the Poses admin tab's CMU
@@ -44,11 +44,11 @@ Options:
     --fps <n>         output frame rate (default 30)
     --cache <dir>     where the downloaded ASF/AMC files are kept
                       (default: storage-independent ~/.cache/anima-verse/cmu)
-    --rig <fbx>       Mixamo skeleton to drive (default: the first idle.fbx of
-                      the free, then the licensed library, so the new clip
+    --rig <fbx>       skeleton to drive (default: the project's reference
+                      skeleton shared/models/rig/reference.fbx, so the new clip
                       shares the skeleton — and the standing hip height the
-                      client normalises on — with every other clip; x-bot.fbx
-                      when no idle clip exists)
+                      client normalises on — with every other clip; rebuild it
+                      with scripts/make_reference_rig.py)
 
 A pair is written as ``<kind>__a.fbx`` + ``<kind>__b.fbx`` (A = first take);
 the sidecar records the anchor geometry both clips share.
@@ -82,11 +82,16 @@ def main() -> int:
                     help="capture rate; default: from shared/models/cmu_catalog.json, else 120")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--cache", default=str(default_cache_dir()))
-    ap.add_argument("--rig", default="")
+    ap.add_argument("--rig", default="",
+                    help="skeleton to drive; default: shared/models/rig/reference.fbx")
     a = ap.parse_args()
 
     out_dir = Path(a.out) if a.out else paths.get_animation_clips_dir()
-    rig = Path(a.rig) if a.rig else default_rig()
+    try:
+        rig = Path(a.rig) if a.rig else default_rig()
+    except ClipImportError as e:
+        print(f"FAILED: {e}")
+        return 1
     st = runner.status()
     print(f"fetching take(s) into {a.cache} (originals under "
           f"{paths.get_mocap_source_dir()} are used when present)")

@@ -5,7 +5,7 @@ One run produces ONE clip kind: either a solo clip (one ASF/AMC) or a PAIR
 Invoked through ``app.blender.runner.run("cmu_clip", inputs=…, params=…)``:
 
     inputs   rig            FBX with the Mixamo skeleton to drive
-                            (``shared/models/figure/x-bot.fbx``)
+                            (``shared/models/rig/reference.fbx``)
              asf, amc       the solo take, or
              asf_a, amc_a, asf_b, amc_b   the two takes of a pair
     params   kind           file stem, e.g. "handshake"
@@ -58,8 +58,8 @@ Frames of reference the clips are written in
 * Floor: the lowest joint over the whole (pair) take sits at y = 0.
 
 Units stay Mixamo's: centimetres in armature space, the armature object
-carrying the usual 0.01 scale / +90° X, which is what the library's clips and
-``x-bot.fbx`` carry.
+carrying the usual 0.01 scale / +90° X, which is what the reference skeleton
+(``shared/models/rig/reference.fbx``) and every library clip carry.
 """
 import json
 import math

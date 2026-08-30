@@ -17,10 +17,12 @@ Two libraries, one layout:
   both libraries resolves to the licensed one, so a pack overrides the base set
   clip by clip.
 
-**`idle.fbx` in THIS library is the retarget reference.** Every import
-(`clip_import_cmu.py`, the Poses tab) drives its take onto that skeleton
-(`cmu_import.default_rig()`), so all clips share one rig and one standing hip
-height — the height the client normalises against.
+**The retarget reference is NOT in this library.** Every import
+(`clip_import_cmu.py`, the Poses tab, the inbox) drives its take onto
+`../rig/reference.fbx` (`cmu_import.default_rig()`, see the README there), so
+all clips share one rig and one standing hip height — the height the client
+normalises against. `idle.fbx` here is an ordinary clip like every other one;
+this library may be emptied or deleted without touching the pipeline.
 
 Only put a file HERE if its licence allows redistribution. Drop the `.fbx`
 files straight in — no registration, no config.
@@ -95,8 +97,9 @@ may be redistributed with the repository:
     ./.venv/bin/python scripts/clip_import_cmu.py handshake 18_01 19_01
     ./.venv/bin/python scripts/clip_import_cmu.py dance 55_02 --in-place
 
-It retargets onto the library's own `idle.fbx` skeleton, so the result keeps
-the same skeleton — and the same standing hip height — as every other clip.
+It retargets onto the reference skeleton `../rig/reference.fbx`, so the result
+keeps the same skeleton — and the same standing hip height — as every other
+clip.
 
 ## Hard requirements for the files
 
@@ -105,9 +108,9 @@ pack, a hand-authored take. Violating them does not fail loudly; it produces
 characters that walk on their belly:
 
 1. **FBX with keyframes only** — no mesh, no texture ("Without Skin").
-2. **The Mixamo 52-bone rig**, the same basis the character GLBs and the
-   generated meshes carry. A foreign convention (e.g. "UE4 Skeleton") tips the
-   figures over; the CMU importer retargets onto `idle.fbx` precisely so every
+2. **The Mixamo rig**, the same basis the character GLBs and the generated
+   meshes carry. A foreign convention (e.g. "UE4 Skeleton") tips the figures
+   over; the importers retarget onto `../rig/reference.fbx` precisely so every
    clip ends up on that one skeleton.
 3. **Movement clips must be IN PLACE.** The client moves the figure itself (the
    walk, the journey, the click route); a clip that also carries root motion
