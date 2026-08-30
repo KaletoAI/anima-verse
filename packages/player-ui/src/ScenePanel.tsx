@@ -154,6 +154,16 @@ export interface ScenePanelProps {
    * (`image_generation`), so a missing button is an existing UI state.
    */
   photoDialog?: (ctl: PhotoDialogControl) => ReactNode
+  /**
+   * Handed straight to `SceneView` — the panel decides nothing about them.
+   * Both stay OPTIONAL, and both are inert when left out: no row is ever
+   * marked and no pointer handler is attached, which is exactly the markup
+   * `/play` has always rendered. The 3D HUD sets them (it measures the
+   * transcript and marks the row its portrait column follows); see
+   * `SCENE_ROW_ACTIVE_CLASS` / `SCENE_ROW_ID_ATTR` in `SceneView`.
+   */
+  highlightedId?: number | null
+  onRowHover?: (id: number | null) => void
 }
 
 /** Chat image attachment (#5 upload / #6 gallery). Exactly one source is set:
@@ -206,7 +216,7 @@ function resetDraft(avatar: string) {
 }
 
 export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, onEnterRoom,
-  photoDialog }: ScenePanelProps) {
+  photoDialog, highlightedId, onRowHover }: ScenePanelProps) {
   const { t } = useI18n()
   // Different avatar than the cached draft (incl. the '' of a fresh PlayerApp
   // mount) → drop the cache BEFORE the initializers below read it.
@@ -456,7 +466,8 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         <ScenesRecap />
         <div className="player-scene-scroll" ref={sceneScrollRef} onScroll={onSceneScroll}>
           <SceneView lines={lines} emptyHint={t('Nothing here yet.')} thinking={thinkingHere}
-            onOpenImage={(u) => lightbox.open({ src: u })} />
+            onOpenImage={(u) => lightbox.open({ src: u })}
+            highlightedId={highlightedId} onRowHover={onRowHover} />
         </div>
 
         {(data?.follow_suggestions?.length ?? 0) > 0 && (

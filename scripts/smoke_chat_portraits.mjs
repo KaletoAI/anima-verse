@@ -218,6 +218,13 @@ async function main() {
   check('scrolled up → the row in the middle', F(null, 42, false), 42)
   check('THE MOUSE BEATS THE MIDDLE', F(7, 42, false), 7)
   check('…and it beats the resting state too', F(7, null, true), 7)
+  // Both other inputs are set AND favourable at once — the transcript sticks
+  // to its end (resting → null) and row 42 crosses the middle. The rule reads
+  // the pointer FIRST and returns before either can speak, so 7 it is. This is
+  // the case a hovering user is actually in: the chat follows the conversation
+  // while the mouse rests on an older line.
+  check('the pointer wins even when the end AND the middle would both answer',
+        F(7, 42, true), 7)
   check('the pointer leaves while scrolled up → the middle again',
         F(null, 42, false), 42)
   check('scrolled back to the end → the resting state returns',

@@ -839,15 +839,17 @@ export function Hud({ avatar, username, role }: {
   // happened by the time this does.
   useEffect(() => { measureChat(); }, [sceneStamp, chatSize, measureChat]);
 
-  // WHOSE faces the column shows. `hoveredId` is a hard `null` and not an
-  // oversight: `ScenePanel` does not forward `highlightedId`/`onRowHover` to
-  // `SceneView` (task 1 added the two props to `SceneView`/`SceneRow` only),
-  // so the HUD has no way to be told about the pointer or to have a row
-  // marked. The rule already covers that case — without a pointer it is the
-  // resting state and the middle row that decide — and the moment the package
-  // forwards the two props this is where they get wired in.
+  // WHOSE faces the column shows. The pointer half comes from the panel:
+  // `ScenePanel` forwards `onRowHover` to every row, so this only stores what
+  // it is told — the rule decides, and it lets the pointer win over both the
+  // middle row and the resting state.
+  const [hoveredRowId, setHoveredRowId] = useState<number | null>(null);
+  // A closing window never sends the leaving pointer (React fires no
+  // `mouseleave` on unmount), so the last hovered row would outlive it and
+  // still govern the column on the next opening.
+  useEffect(() => { if (!open.chat) setHoveredRowId(null); }, [open.chat]);
   const chatFocus = chatFocusId({
-    hoveredId: null,
+    hoveredId: hoveredRowId,
     centeredId: chatScroll.centeredId,
     stuck: chatScroll.stuck,
   });
@@ -1004,9 +1006,14 @@ export function Hud({ avatar, username, role }: {
                     not the old one with new props — without the key the edited
                     prompt and the chip selection of the previous 📷 press would
                     survive into it. */}
+                {/* `highlightedId` is the SAME answer the portrait column
+                    follows: the row the faces belong to is the row the
+                    transcript marks. Resting (`null`) marks nothing — the
+                    column then simply shows the last speakers. */}
                 <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
                   hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
-                  photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.prompt} {...ctl} />} />
+                  photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.prompt} {...ctl} />}
+                  highlightedId={chatFocus} onRowHover={setHoveredRowId} />
               </ErrorBoundary>
             </div>
           </div>
