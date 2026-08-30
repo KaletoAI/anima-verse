@@ -599,15 +599,6 @@
       "group": "stand",
       "places": 2,
       "yaw_offset": 0
-    },
-    "sitting-cowgirl": {
-      "prompt": "woman is riding mens cock",
-      "synonyms": [],
-      "animation": "sitting-cowgirl",
-      "solo": false,
-      "group": "seat",
-      "places": 2,
-      "yaw_offset": 0.0
     }
   }
 }
