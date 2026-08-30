@@ -44,6 +44,7 @@ import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from app.core.log import get_logger
 from app.core.paths import (get_animation_clips_dir, get_animation_clips_dirs,
@@ -245,9 +246,13 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "rel": entry["rel"],
         "name": path.stem,
         "filename": path.name,
+        # Percent-encoded PER SEGMENT: clip file names are free text and do
+        # contain spaces ("standing washing.fbx"), so the raw rel is not a
+        # usable URL. Clients take this string as it is — they never encode
+        # it a second time and never rebuild it from name + set.
         "url": "/assets/animation-clips/"
                + ("licensed/" if entry["source"] == "licensed" else "")
-               + entry["rel"],
+               + "/".join(quote(seg) for seg in entry["rel"].split("/")),
         "size": path.stat().st_size,
         "has_sidecar": meta is not None,
         "origin": _origin(meta),

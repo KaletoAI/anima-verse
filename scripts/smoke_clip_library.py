@@ -49,7 +49,12 @@ Expected values, derived by hand from that fixture and the layout rules:
 * Renaming run_02 -> jog: the file becomes jog_02.fbx and its own sidecar
   travels along as jog_02.json with kind "jog"; run.json stays with run.fbx.
 * Moving female/sit.fbx to the root moves sit.json with it (nothing of kind
-  sit is left in female/) and removes the then-empty female/ directory.
+  sit is left in female/) and removes the then-empty female/ directory;
+  DELETING the last clip of a set empties the same directory and removes it
+  the same way (never the library root itself).
+* ``url`` is percent-encoded per segment: the kind "climbing a ladder" has two
+  spaces, so its url is ``…/climbing%20a%20ladder.fbx`` while ``rel`` keeps the
+  raw file path, and a set segment is encoded on its own (the ``/`` survives).
 
 Usage:  ./.venv/bin/python scripts/smoke_clip_library.py
 """
@@ -250,6 +255,8 @@ def test_delete() -> None:
           (res["set"], res["kind"], res["deleted"])
           == ("female", "sit", ["female/sit.fbx"])
           and not (FREE / "female" / "sit.json").exists(), str(res))
+    check("the emptied set directory is gone, the library root stays",
+          not (FREE / "female").exists() and FREE.is_dir())
 
     res = ac.delete_clip("licensed", "wave.fbx")
     check("the licensed library is deleted from independently",
@@ -383,9 +390,18 @@ def test_validation() -> None:
            lambda: ac.rename_clip("free", "walk.fbx", to_library="trial"))
     # Spaces are part of the kind alphabet on purpose — clip files whose name
     # is a short phrase exist, so a rename must not refuse one.
-    check("a kind with a space is legal",
-          ac.rename_clip("free", "walk.fbx", kind="climbing a ladder"
-                         )[0]["kind"] == "climbing a ladder")
+    spaced = ac.rename_clip("free", "walk.fbx", kind="climbing a ladder")[0]
+    check("a kind with a space is legal", spaced["kind"] == "climbing a ladder")
+    # The url is a URL, the rel a file path: the ONE space of the name is the
+    # ONE %20 of the url, the rel keeps it raw.
+    check("the url percent-encodes the space, the rel does not",
+          (spaced["url"], spaced["rel"])
+          == ("/assets/animation-clips/climbing%20a%20ladder.fbx",
+              "climbing a ladder.fbx"), spaced["url"])
+    moved = ac.rename_clip("free", "climbing a ladder.fbx", cset="male")[0]
+    check("a set segment is encoded on its own, the separator survives",
+          moved["url"] == "/assets/animation-clips/male/climbing%20a%20ladder.fbx",
+          moved["url"])
     check("nothing was moved by the refused calls",
           not (FREE / "walk__a.fbx").exists()
           and (FREE / "walk_02.fbx").is_file())

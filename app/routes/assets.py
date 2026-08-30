@@ -140,20 +140,28 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     """Renames a clip and/or moves it to another set or library.
 
     Body ``{kind?, set?, library?}``, at least one of them. ``set: ""`` moves
-    the clip to the neutral root. The answer carries the moved clips in the
-    shape of the listing.
+    the clip to the neutral root — the ONE empty value with a meaning;
+    ``library: ""`` is a bad request, not a silent no-op. The answer carries
+    the moved clips in the shape of the listing.
     """
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
     if not any(k in body for k in ("kind", "set", "library")):
         raise HTTPException(status_code=400,
                             detail="one of kind, set, library is required")
+    if "library" in body and not str(body["library"] or "").strip():
+        raise HTTPException(status_code=400,
+                            detail="library must be 'free' or 'licensed'")
     try:
         clips = rename_clip(library, rel,
                             kind=body["kind"] if "kind" in body else None,
                             cset=body["set"] if "set" in body else None,
-                            to_library=body.get("library") or None)
+                            to_library=body["library"] if "library" in body
+                            else None)
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips}
