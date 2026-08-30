@@ -22,10 +22,10 @@ import {
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { nearestOffer, type OfferKind } from './game/offers';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
-import { elevatorAt, elevatorSoleOption, elevatorTargetRoom,
+import { elevatorAt, elevatorLevels, elevatorSoleOption, elevatorTargetRoom,
   type ElevatorStop } from './game/elevator';
 import { nearestRoomAt, stairChain, stairLegTo, stairLegs, stairsAt,
-  type StairLink } from './game/stairs';
+  type StairLink, type StairPrompt } from './game/stairs';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
@@ -49,7 +49,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintCentre, redatumTile, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintCentre, redatumTile, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
@@ -1669,11 +1669,12 @@ async function startApp(username: string, role: string) {
     applyHoverCursor();
   };
   /** ONE writer for the cursor: a tile under the pointer says "clickable",
-   *  and so does a seatable prop (`propHover`). Two independent handlers
-   *  setting `body.style.cursor` would take it away from each other on every
-   *  pointer move. */
+   *  and so do a seatable prop (`propHover`) and a usable staircase or lift
+   *  (`verticalHover`). Two independent handlers setting `body.style.cursor`
+   *  would take it away from each other on every pointer move. */
   function applyHoverCursor(): void {
-    document.body.style.cursor = (hovered || propHover) ? 'pointer' : 'default';
+    document.body.style.cursor = (hovered || propHover || verticalHover)
+      ? 'pointer' : 'default';
   }
   engine.onPick = (id) => {
     if (!id) {
@@ -1746,6 +1747,15 @@ async function startApp(username: string, role: string) {
       const placeId = placeGlyphs ? hitPlace(placeGlyphs, ray) : null;
       if (placeId) {
         openPlaceMenuFor(placeId, x, y);
+        return true;
+      }
+      // AND THE STAIRCASE OR THE LIFT (bug round 2026-08-30) — last of the
+      // targets and still before the ground, so the click is not additionally
+      // answered by the tile's info panel. In reach it does what F does; out
+      // of reach it walks the avatar to the landing and nothing more.
+      const climb = hitVertical(usableVerticalTargets(), ray);
+      if (climb) {
+        useVerticalTarget(climb);
         return true;
       }
       return false;
@@ -3432,6 +3442,11 @@ async function startApp(username: string, role: string) {
    *  entire room) but spot-lit around the hovered slot through uniforms, and
    *  there is nothing to put back — `setSpot(…, null)` switches it off. */
   let propHover: { prop: PickableProp; lit: PropHighlight | null } | null = null;
+  /** The staircase or lift the pointer stands on right now, lit, with the
+   *  materials it wore before (bug round 2026-08-30). Exactly one at a time
+   *  and never together with `propHover`: a seatable prop in front of the
+   *  stairs wins the pointer, the same order the click keeps. */
+  let verticalHover: { target: VerticalTarget; lit: PropHighlight } | null = null;
   /** DIRTY MARKS of that hover probe — what it last looked at. `−1` is "ask
    *  again whatever the pointer does" and is what `rebuildPlaceGlyphs` sets;
    *  `engine.pointerSeq` never reaches it. */
@@ -4247,15 +4262,17 @@ async function startApp(username: string, role: string) {
         && hoverCam.distanceToSquared(engine.camera.position) <= HOVER_CAM_EPS_M2) return;
     hoverSeq = engine.pointerSeq;
     hoverCam.copy(engine.camera.position);
-    const at = placeProps.length ? engine.pointerAt : null;
-    const hit = at ? hitProp(placeProps, engine.raycasterAt(at.x, at.y)) : null;
+    const at = engine.pointerAt;
+    const ray = at ? engine.raycasterAt(at.x, at.y) : null;
+    const hit = ray && placeProps.length ? hitProp(placeProps, ray) : null;
     // A DIORAMA is the whole room, so "the same target as last frame" says
     // nothing: the pointer slides from the chair to the table without leaving
     // the mesh. Its spot is therefore re-aimed on every probe — at the free
     // slot nearest the hit, and only while one lies inside the pick radius,
     // which is exactly the condition under which the click would take it
     // (`pickablePlaceFor` with the same gate). No slot near: no light, no
-    // pointer cursor, and the click falls through to the ground.
+    // pointer cursor, and the probe goes ON — exactly as the click falls
+    // through the diorama in that case (`pickFigure`).
     if (hit && hit.prop.role === 'room') {
       if (propHover && propHover.prop !== hit.prop) clearPropHover();
       const id = pickablePlaceFor({ x: hit.point.x, z: hit.point.z }, hit.prop.places,
@@ -4263,13 +4280,30 @@ async function startApp(username: string, role: string) {
       const spot = id ? spotPointFor(id, hit.point) : null;
       setSpot(hit.prop.object, spot, PLACE_PICK_RADIUS_M);
       propHover = spot ? { prop: hit.prop, lit: null } : null;
+      if (spot) clearVerticalHover();
+      applyHoverCursor();
+      if (spot) return;
+    } else if (hit) {
+      // A SEATABLE PROP WINS over the staircase behind it — the same order the
+      // click keeps, so the lit object is the one that would answer.
+      if (hit.prop === propHover?.prop) return;
+      clearPropHover();
+      clearVerticalHover();
+      propHover = { prop: hit.prop, lit: highlightProp(hit.prop.object) };
       applyHoverCursor();
       return;
+    } else {
+      clearPropHover();
     }
-    if (hit?.prop === propHover?.prop) return;
-    clearPropHover();
-    if (!hit) return;
-    propHover = { prop: hit.prop, lit: highlightProp(hit.prop.object) };
+    // NO seat under the pointer: a staircase or the lift may be one (bug round
+    // 2026-08-30). Lit exactly like a prop — clones, never the worn material —
+    // and only while it is usable from where the avatar stands, so what lights
+    // up is what a click would answer.
+    const climb = ray ? hitVertical(usableVerticalTargets(), ray) : null;
+    if (climb === (verticalHover?.target ?? null)) return;
+    clearVerticalHover();
+    if (!climb) return;
+    verticalHover = { target: climb, lit: highlightProp(climb.group) };
     applyHoverCursor();
   });
 
@@ -4947,6 +4981,148 @@ async function startApp(username: string, role: string) {
     // must not be answered by the other offer of the chain.
     setGameState({ stairs: null, elevator: null, elevatorOpen: false });
   }
+
+  // --- The stairs and the lift as OBJECTS one points at (bug round 2026-08-30)
+  // The offer chips are not the only way to a storey change any more: the
+  // staircase and the lift brighten under the pointer and take a click, like a
+  // seatable prop. They are already single meshes — one box per `extras` entry
+  // with a material of its own — so this is the PROP way (material clones,
+  // `highlightProp`), not the diorama's shader spot.
+  //
+  // TWO CONDITIONS DECIDE, and hover and click ask exactly the same ones:
+  //  - the storey. `extras` are deliberately NOT storey-filtered (the lift is
+  //    one structure across all storeys, `applyLevelDisplay`), so a flight is
+  //    drawn on every floor. A way ONTO it exists only where it has a landing
+  //    of the storey the avatar is on — the gate `stairsAt` draws, and
+  //    `elevatorLevels` for the lift.
+  //  - the reach. Within it the click IS the ride, exactly what F does; out of
+  //    it the click plans a walk to the landing AND NOTHING ELSE (user ruling
+  //    2026-08-30): no arrival callback, no queue — the offer appears on
+  //    arrival and the player presses F or clicks again.
+  /** Where the avatar stands, if a vertical connection can be used from there
+   *  at all: the tile it is in with an OPEN interior, and its storey. */
+  function verticalHere(): { tile: Tile; level: number } | null {
+    const state = getGameState();
+    if (state.mode !== 'embodied' || state.movementLocked) return null;
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return null;
+    const tile = tileAt(pos.x, pos.z);
+    if (!tile || tile.fadeTarget !== 1 || !tile.verticalTargets?.length) return null;
+    const room = avatarRoomId(tile);
+    if (!room) return null;
+    return { tile, level: tile.roomLevels.get(room) ?? 0 };
+  }
+
+  /** WHERE one stands to use this connection from `level` — the landing of the
+   *  flight on that storey, or the lift's holding point there. `null` means
+   *  the storey has no way onto it, and then it is neither lit nor clickable. */
+  function verticalStandPoint(tile: Tile, level: number,
+                              target: VerticalTarget): THREE.Vector3 | null {
+    if (target.kind === 'elevator') {
+      // The two conditions `elevatorAt` puts BEFORE its measurement: a lift
+      // with somewhere to ride to, and a holding point on this storey.
+      const levels = elevatorLevels(elevatorStopsOf(tile), interiorRooms(tile));
+      if (levels.length < 2 || !levels.includes(level)) return null;
+      return tile.elevatorStops?.get(level) ?? null;
+    }
+    const link = tile.stairs?.[target.flight];
+    if (!link) return null;
+    if (link.foot.level === level) return link.foot.pos;
+    if (link.head.level === level) return link.head.pos;
+    return null;
+  }
+
+  /** The connections that can be used from where the avatar stands — the list
+   *  the hover and the click raycast against. */
+  function usableVerticalTargets(): VerticalTarget[] {
+    const here = verticalHere();
+    if (!here) return [];
+    return (here.tile.verticalTargets ?? [])
+      .filter((t) => !!verticalStandPoint(here.tile, here.level, t));
+  }
+
+  /** The connection the ray hits first, or null — the shape of `hitProp`, and
+   *  asked in the same place in the chain (after the figures and the seats,
+   *  before the ground). */
+  function hitVertical(targets: VerticalTarget[],
+                       raycaster: THREE.Raycaster): VerticalTarget | null {
+    if (!targets.length) return null;
+    const byRoot = new Map<THREE.Object3D, VerticalTarget>();
+    for (const t of targets) byRoot.set(t.group, t);
+    for (const hit of raycaster.intersectObjects([...byRoot.keys()], true)) {
+      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
+        const target = byRoot.get(o);
+        if (target) return target;
+      }
+    }
+    return null;
+  }
+
+  /** Is the standing stair offer the one of THIS flight? Compared on the far
+   *  landing, which is what the offer names — storey included, because a
+   *  stairwell may stack two flights over the same footprint. Both sides are
+   *  the same payload numbers (`stairLinksOf` copies them), so they compare
+   *  exactly. */
+  function stairOfferIsFlight(tile: Tile, level: number, flight: number,
+                              offer: StairPrompt): boolean {
+    const link = tile.stairs?.[flight];
+    if (!link) return false;
+    const far = link.foot.level === level ? link.head : link.foot;
+    return offer.dest.level === far.level
+      && offer.dest.x === far.pos.x && offer.dest.z === far.pos.z;
+  }
+
+  /** A click order to a point — the tail of `engine.onGroundClick`, with the
+   *  same interlocks: no steering while a ride or a walk-in owns the figure. */
+  function walkAvatarTo(x: number, z: number): void {
+    const state = getGameState();
+    if (state.mode !== 'embodied' || state.movementLocked
+      || verticalRide || walkIn) return;
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return;
+    const goal = planClickWalk({ x: pos.x, z: pos.z }, { x, z },
+      (bx, bz) => blockedForAvatar(bx, bz));
+    if (!goal) return;
+    route = goal;
+    routeStalled = 0;
+    npcs.setWalkTarget(new THREE.Vector3(goal.x,
+      roomFloorY(tileAt(goal.x, goal.z), goal.x, goal.z) ?? groundY(goal.x, goal.z),
+      goal.z));
+  }
+
+  /** Answer a click on a staircase or on the lift. */
+  function useVerticalTarget(target: VerticalTarget): void {
+    const here = verticalHere();
+    if (!here) return;
+    const state = getGameState();
+    // THE OFFER OF THIS OBJECT STANDS: the click is the ride, and it goes
+    // through the very body the key runs — picker and all.
+    if (target.kind === 'elevator') {
+      if (state.elevator) return triggerOffer('elevator');
+    } else if (state.stairs
+      && stairOfferIsFlight(here.tile, here.level, target.flight, state.stairs)) {
+      return triggerOffer('stairs');
+    }
+    // Out of reach — or the standing offer belongs to ANOTHER flight: walk
+    // there, and leave it at that.
+    const goal = verticalStandPoint(here.tile, here.level, target);
+    if (goal) walkAvatarTo(goal.x, goal.z);
+  }
+
+  /** Let the hovered connection have its own materials back. */
+  function clearVerticalHover(): void {
+    if (!verticalHover) return;
+    clearPropHighlight(verticalHover.lit);
+    verticalHover = null;
+    applyHoverCursor();
+  }
+  // Leaving the mode takes the highlight with the offers: the pointer may
+  // never move again, and a staircase must not stay lit in the overview.
+  subscribeGameState(() => {
+    if (getGameState().mode === 'embodied' || !verticalHover) return;
+    clearVerticalHover();
+    hoverSeq = -1;   // probe again whatever the pointer does
+  });
 
   // --- Entering a location (Etappe 3, "Betreten"; metres since E4 task 5) ---
   // The offer is view logic, the ENTRY is the server's — and since free

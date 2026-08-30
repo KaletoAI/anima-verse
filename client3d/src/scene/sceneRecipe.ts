@@ -25,7 +25,7 @@ import {
   surfaceMaterialSpec, tileDirToWorld, tileToWorld, worldGroundSampler,
   worldWaterSampler,
   type PlacedSceneModel, type RoomFloor, type StairWorldLink, type SwingingDoor,
-  type Tile,
+  type Tile, type VerticalTarget,
 } from './tiles';
 import { SubmergedGhost } from './submergedGhost';
 import { ghostCutY, ghostWaterLevel } from '../game/walk';
@@ -1134,9 +1134,35 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // part. The ELEVATOR's pads double as the stops of its level routing (one
   // per storey); a staircase is read from `scene.stairs` below, not measured
   // back out of its boxes.
+  //
+  // THE BOXES OF ONE CONNECTION GO INTO ONE GROUP (bug round 2026-08-30), so
+  // the pointer can light a whole flight and a click can name it: the lift
+  // gets a single group across all storeys — it is one structure, which is why
+  // nothing storey-filters it — and every flight its own, keyed by the
+  // payload's `stair` index. Each box keeps its OWN material (`extraMaterial`
+  // builds a fresh one per call), so a hover clone lights exactly what it
+  // covers. Anything typed neither is added loose, as before.
   let elevatorXZ: THREE.Vector2 | null = null;
+  const liftGroup = new THREE.Group();
+  liftGroup.name = 'extrasLift';
+  const stairGroups = new Map<number, THREE.Group>();
   for (const extra of scene.extras) {
-    g.add(buildExtra(THREE, extra, extraMaterial(extra, style)));
+    const box = buildExtra(THREE, extra, extraMaterial(extra, style));
+    const isStair = extra.kind === 'stair_step' || extra.kind === 'stair_pad';
+    if (extra.kind.startsWith('elevator_')) {
+      liftGroup.add(box);
+    } else if (isStair && extra.stair !== undefined) {
+      let flight = stairGroups.get(extra.stair);
+      if (!flight) {
+        flight = new THREE.Group();
+        flight.name = `extrasStair${extra.stair}`;
+        stairGroups.set(extra.stair, flight);
+        g.add(flight);
+      }
+      flight.add(box);
+    } else {
+      g.add(box);
+    }
     // Only the ELEVATOR anchors the storey switch (finding 2026-08-25): the
     // first extra of a scene with stairs but no lift is a step, and the widget
     // would hang on it.
@@ -1154,6 +1180,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     tile.elevatorStops.set(extra.level, tileToWorld(tile,
       extra.center[0], extra.center[2], stopY));
   }
+  if (liftGroup.children.length) g.add(liftGroup);
   // ── Staircases, from the payload's own block (§ B1 `stairs`) ────────────
   // The flight AS DATA: the two landings finished (the server states where one
   // stands, this only turns the point into the world frame), plus the run it
@@ -1184,6 +1211,18 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     };
   });
   if (stairs.length) tile.stairs = stairs;
+  // The click targets, matched to the flights they belong to: `extras[].stair`
+  // and `stairs[].id` are the same number out of the same payload, so the
+  // group is looked up BY ID rather than by position in the list.
+  const verticalTargets: VerticalTarget[] = [];
+  if (liftGroup.children.length) {
+    verticalTargets.push({ kind: 'elevator', flight: -1, group: liftGroup });
+  }
+  scene.stairs.forEach((s, i) => {
+    const flight = stairGroups.get(s.id);
+    if (flight) verticalTargets.push({ kind: 'stairs', flight: i, group: flight });
+  });
+  if (verticalTargets.length) tile.verticalTargets = verticalTargets;
 
   // ── Doors & places: finished in world coordinates ───────────────────────
   // THE door of each room, for the floor sampling's reference ray: the one
@@ -2032,6 +2071,10 @@ export function unmountScene(tile: Tile): void {
   tile.levelWallMats.clear();
   tile.elevatorStops = undefined;
   tile.stairs = undefined;
+  // The click targets point at groups that just left the graph — the next
+  // mount builds its own, and a hover holding one of them lets go the moment
+  // the target is no longer offered (main.ts).
+  tile.verticalTargets = undefined;
   // The old scene's switch is gone with its DOM — its refresh function would
   // otherwise write to a widget that is no longer there.
   tile.levelSwitch = undefined;

@@ -494,6 +494,28 @@ export interface StairWorldLink {
   footprint: [number, number][];
 }
 
+/**
+ * A vertical connection AS A CLICK TARGET (bug round 2026-08-30): the `extras`
+ * boxes of ONE staircase flight, or all parts of the lift, gathered in one
+ * group so the pointer can light them (`highlightProp`) and a click can name
+ * what it hit.
+ *
+ * The grouping follows the payload's own: the lift is ONE structure across all
+ * storeys (which is why `applyLevelDisplay` never filters extras), while every
+ * flight is its own target — `extras[].stair` says which, and it is the index
+ * into the scene's `stairs` block, not a saved identity.
+ *
+ * Whether a target may be used from where the avatar stands is NOT decided
+ * here: the boxes stay visible on every storey, so hover and click ask the
+ * same storey condition `stairsAt`/`elevatorAt` ask (main.ts).
+ */
+export interface VerticalTarget {
+  kind: 'stairs' | 'elevator';
+  /** Index of the flight in `Tile.stairs`; −1 for the lift. */
+  flight: number;
+  group: THREE.Group;
+}
+
 export interface Tile {
   loc: WorldLocation;
   /** Fassaden mit Fensterraster — leuchten nachts (emissive) */
@@ -595,6 +617,9 @@ export interface Tile {
    *  payload (world coordinates). The second vertical connection next to the
    *  elevator: where a staircase links the two storeys, a route prefers it. */
   stairs?: StairWorldLink[];
+  /** The lift and the flights as HOVER/CLICK targets — one group of extras
+   *  each (`VerticalTarget`). Undefined while the scene has neither. */
+  verticalTargets?: VerticalTarget[];
   /** Grundriss-Wandstücke mit Außennormale (Welt-XZ) — fürs Blickrichtungs-Culling */
   outlineWalls: { mesh: THREE.Mesh; level: number; mid: THREE.Vector2; normal: THREE.Vector2 }[];
   /** Etagen-Bodenplatten des Grundrisses (für Boden-Farbübernahme) */
