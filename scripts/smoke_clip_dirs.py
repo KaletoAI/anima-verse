@@ -188,7 +188,10 @@ def test_listing() -> None:
           set(data) == {"clips", "kinds", "pair_kinds", "pairs", "clip_sets", "sets"},
           str(sorted(data)))
     check("per-clip fields",
-          set(data["clips"][0]) == {"kind", "role", "set", "source", "name", "filename", "url", "size"},
+          set(data["clips"][0]) == {"kind", "role", "set", "source", "library",
+                                    "rel", "name", "filename", "url", "size",
+                                    "has_sidecar", "origin", "duration_s",
+                                    "fps", "frames", "loop"},
           str(sorted(data["clips"][0])))
     check("pairs carries the sidecar of every complete pair",
           data["pair_kinds"] == ["hug"] and data["pairs"]["hug"]["duration_s"] == 2.0

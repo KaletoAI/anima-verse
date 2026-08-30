@@ -1,4 +1,9 @@
-"""Shared 3D assets — animation clips + surface textures (read-only).
+"""Shared 3D assets — animation clips + surface textures.
+
+Reading is public, editing is not: everything a client plays is served
+unauthenticated, while the import sources and the two library edit routes
+(``DELETE`` / ``PATCH /assets/animation-clips/{library}/{rel}``) are
+admin-only.
 
 Clips live in ``shared/models/clips`` (see the README there for the hard file
 requirements: Mixamo FBX "Without Skin", one rig source, 52-bone rig). They
@@ -40,8 +45,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from app.core import clip_catalog, fbx_import
-from app.core.animation_clips import (CLIP_EXTS, clip_entries, clip_meta,
-                                      pair_kinds)
+from app.core.animation_clips import (CLIP_EXTS, ClipExists, ClipLibraryError,
+                                      ClipNotFound, clip_entries, clip_meta,
+                                      clip_view, delete_clip, pair_kinds,
+                                      rename_clip)
 from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError
 from app.core.http_files import etag_file_response
@@ -65,25 +72,16 @@ def list_animation_clips() -> Dict[str, Any]:
     complete pair kind to its sidecar (duration, fps, anchor geometry) — the
     data a client needs to play both halves at one anchor (§ A8a).
 
+    For the library view every clip also carries what its sidecar knows —
+    ``duration_s`` / ``fps`` / ``frames`` (``null`` without a sidecar),
+    ``loop``, ``origin`` (``cmu`` / the skeleton family / ``unknown``) and
+    ``has_sidecar`` — plus ``library`` (= ``source``) and ``rel``, the
+    library-relative ``[<set>/]<file>`` the edit routes address it by.
+
     A set clip's ``url`` carries its directory segment. Clients take the URL
     from this listing opaquely — they never build it from name + set.
     """
-    clips = []
-    for entry in clip_entries():
-        p: Path = entry["path"]
-        cset = entry["set"]
-        clips.append({
-            "kind": entry["kind"],
-            "role": entry["role"],
-            "set": cset,
-            "source": entry["source"],
-            "name": p.stem,
-            "filename": p.name,
-            "url": "/assets/animation-clips/"
-                   + ("licensed/" if entry["source"] == "licensed" else "")
-                   + entry["rel"],
-            "size": p.stat().st_size,
-        })
+    clips = [clip_view(entry) for entry in clip_entries()]
     from app.core.animation_sets import available_sets
     pairs = {}
     for kind in pair_kinds():
@@ -104,6 +102,61 @@ def list_animation_clips() -> Dict[str, Any]:
             # (female/male/animal, which follow from gender + the humanoid
             # feature) plus any further set found in the files.
             "sets": available_sets()}
+
+
+# ── Editing the libraries (the Poses tab's "Library" view) ───────────────
+#
+# Both routes address a clip as ``{library}/{rel}`` — the library it lives in
+# plus its library-relative ``[<set>/]<file>``, exactly the ``library`` /
+# ``rel`` pair of the listing. They are ADMIN-only (same gate as the inbox)
+# and they are thin: every rule lives in ``animation_clips``, so the smoke
+# check can exercise it without HTTP.
+
+def _clip_edit_error(e: ClipLibraryError) -> HTTPException:
+    """The one mapping of the core's errors onto status codes."""
+    if isinstance(e, ClipNotFound):
+        return HTTPException(status_code=404, detail=str(e))
+    if isinstance(e, ClipExists):
+        return HTTPException(status_code=409, detail=str(e))
+    return HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/animation-clips/{library}/{rel:path}")
+def delete_animation_clip(library: str, rel: str,
+                          _: Dict[str, Any] = Depends(require_admin)
+                          ) -> Dict[str, Any]:
+    """Deletes one clip — both halves when it is a pair, and the ``<kind>.json``
+    sidecar once no file of that kind is left beside it."""
+    try:
+        return delete_clip(library, rel)
+    except ClipLibraryError as e:
+        raise _clip_edit_error(e)
+
+
+@router.patch("/animation-clips/{library}/{rel:path}")
+async def patch_animation_clip(library: str, rel: str, request: Request,
+                               _: Dict[str, Any] = Depends(require_admin)
+                               ) -> Dict[str, Any]:
+    """Renames a clip and/or moves it to another set or library.
+
+    Body ``{kind?, set?, library?}``, at least one of them. ``set: ""`` moves
+    the clip to the neutral root. The answer carries the moved clips in the
+    shape of the listing.
+    """
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="object expected")
+    if not any(k in body for k in ("kind", "set", "library")):
+        raise HTTPException(status_code=400,
+                            detail="one of kind, set, library is required")
+    try:
+        clips = rename_clip(library, rel,
+                            kind=body["kind"] if "kind" in body else None,
+                            cset=body["set"] if "set" in body else None,
+                            to_library=body.get("library") or None)
+    except ClipLibraryError as e:
+        raise _clip_edit_error(e)
+    return {"clips": clips}
 
 
 # ── The CMU trial archive (plan-clip-import.md step 1) ───────────────────

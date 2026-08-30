@@ -39,14 +39,40 @@ route, the animation sets and the pose presets all read from here.
 """
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.core.paths import get_animation_clips_dir, get_animation_clips_dirs
+from app.core.log import get_logger
+from app.core.paths import (get_animation_clips_dir, get_animation_clips_dirs,
+                            get_licensed_clips_dir)
+
+logger = get_logger(__name__)
 
 CLIP_EXTS = (".fbx", ".glb", ".gltf")
 PAIR_ROLES = ("a", "b")
 ROLE_SEPARATOR = "__"
+LIBRARIES = ("free", "licensed")
+
+# A kind is a file stem: lowercase, spaces allowed (they exist in the shipped
+# library), but never the pair-role separator and never a path separator.
+KIND_RE = re.compile(r"^[a-z0-9][a-z0-9 _-]*$")
+# A set is a DIRECTORY name — same alphabet without spaces; "" is the root.
+SET_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# ``<kind>__<role>[_<n>]`` — the parts a rename has to keep apart.
+_STEM_RE = re.compile(r"^(?P<kind>.*?)(?:__(?P<role>[ab]))?(?P<num>_\d+)?$")
+
+
+class ClipLibraryError(Exception):
+    """Bad input for a library operation (route: 400)."""
+
+
+class ClipNotFound(ClipLibraryError):
+    """The addressed clip does not exist (route: 404)."""
+
+
+class ClipExists(ClipLibraryError):
+    """The target name is already taken (route: 409)."""
 
 
 def parse_clip_name(filename: str) -> str:
@@ -161,3 +187,304 @@ def clip_meta(kind: str, cset: str = "") -> Optional[Dict[str, Any]]:
 def clip_sets() -> List[str]:
     """The sets that actually have clips — i.e. the non-empty subdirectories."""
     return sorted({e["set"] for e in clip_entries()} - {""})
+
+
+# ── The library view: one clip as the listing (and the editor) sees it ────
+
+def _origin(meta: Optional[Dict[str, Any]]) -> str:
+    """Where the clip came from, in one word: ``cmu`` for a CMU-derived take,
+    otherwise the skeleton family the FBX import retargeted from
+    (``unity-humanoid``, …), ``unknown`` without a sidecar."""
+    src = (meta or {}).get("source")
+    if not isinstance(src, dict):
+        return "unknown"
+    database = str(src.get("database") or "")
+    if "CMU" in database:
+        return "cmu"
+    return str(src.get("bone_map") or "") or "unknown"
+
+
+def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """One ``clip_entries()`` entry as the API delivers it — the file facts
+    plus what its ``<kind>.json`` sidecar knows.
+
+    The sidecar is looked up exactly the way playback looks it up
+    (``clip_meta``: set directory first, then the library root, licensed
+    before free), so a numbered variant reports the numbers of the kind it
+    belongs to. Without a sidecar the numeric fields are ``None`` — that is a
+    normal state, not an error.
+    """
+    path: Path = entry["path"]
+    meta = clip_meta(entry["kind"], entry["set"])
+    geometry = meta.get("geometry") if isinstance(meta, dict) else None
+    loop = bool(meta and (meta.get("loop")
+                          or (isinstance(geometry, dict) and geometry.get("loop"))))
+    return {
+        "kind": entry["kind"],
+        "role": entry["role"],
+        "set": entry["set"],
+        "source": entry["source"],
+        "library": entry["source"],
+        "rel": entry["rel"],
+        "name": path.stem,
+        "filename": path.name,
+        "url": "/assets/animation-clips/"
+               + ("licensed/" if entry["source"] == "licensed" else "")
+               + entry["rel"],
+        "size": path.stat().st_size,
+        "has_sidecar": meta is not None,
+        "origin": _origin(meta),
+        "duration_s": (meta or {}).get("duration_s"),
+        "fps": (meta or {}).get("fps"),
+        "frames": (meta or {}).get("frames"),
+        "loop": loop,
+    }
+
+
+# ── Editing the libraries: delete, rename, move ──────────────────────────
+
+def library_root(library: str) -> Path:
+    """The directory of ``free`` / ``licensed``; anything else is an error."""
+    lib = str(library or "").strip().lower()
+    if lib == "free":
+        return get_animation_clips_dir()
+    if lib == "licensed":
+        return get_licensed_clips_dir()
+    raise ClipLibraryError(f"unknown library '{library}' (free|licensed)")
+
+
+def resolve_clip(library: str, rel: str) -> Path:
+    """``[<set>/]<file>`` inside one library → the file path.
+
+    The same hardening as the serving route: at most one set segment, no empty
+    segment, no ``.``/``..``, no backslash, only clip extensions, and the
+    resolved path must stay inside the library (``resolve()`` on both sides,
+    so a symlink pointing out is refused too). The file need not exist —
+    that is the caller's 404.
+    """
+    base = library_root(library)
+    segments = str(rel or "").split("/")
+    if not 1 <= len(segments) <= 2:
+        raise ClipLibraryError("path must be [<set>/]<file>")
+    for seg in segments:
+        if not seg or seg in (".", "..") or "\\" in seg:
+            raise ClipLibraryError("invalid path segment")
+    base = base.resolve()
+    path = base.joinpath(*segments).resolve()
+    if not path.is_relative_to(base):
+        raise ClipLibraryError("path escapes the library")
+    if path.suffix.lower() not in CLIP_EXTS:
+        raise ClipLibraryError(f"not a clip file ({', '.join(CLIP_EXTS)})")
+    return path
+
+
+def _split_stem(stem: str) -> Tuple[str, str, str]:
+    """``(kind, role, numbering)`` of a file stem — ``hug__a_02`` →
+    ``("hug", "a", "_02")``. The three parts a rename recombines."""
+    m = _STEM_RE.match(stem.strip().lower())
+    if not m:                                                # pragma: no cover
+        return stem.strip().lower(), "", ""
+    return m.group("kind") or stem, m.group("role") or "", m.group("num") or ""
+
+
+def _pair_partner(path: Path) -> Optional[Path]:
+    """The other half of a pair clip (``kiss__a`` ↔ ``kiss__b``), None when the
+    clip is a solo one or the partner file is missing."""
+    kind, role, num = _split_stem(path.stem)
+    if not role:
+        return None
+    other = PAIR_ROLES[0] if role == PAIR_ROLES[1] else PAIR_ROLES[1]
+    partner = path.with_name(f"{kind}{ROLE_SEPARATOR}{other}{num}{path.suffix}")
+    return partner if partner.is_file() else None
+
+
+def _kind_files(directory: Path, kind: str) -> List[Path]:
+    """Every clip file of one kind still lying in one directory — the numbered
+    variants and both pair halves. Asked AFTER a delete or a move, so what it
+    returns is what still needs the shared ``<kind>.json``."""
+    if not directory.is_dir():
+        return []
+    return [p for p in sorted(directory.iterdir())
+            if p.is_file() and p.suffix.lower() in CLIP_EXTS
+            and parse_clip_role(p.name)[0] == kind]
+
+
+def _validate_kind(raw: Any) -> str:
+    kind = str(raw or "").strip().lower()
+    if ROLE_SEPARATOR in kind:
+        raise ClipLibraryError(
+            f"kind must not contain '{ROLE_SEPARATOR}' (the pair role separator)")
+    if not KIND_RE.match(kind):
+        raise ClipLibraryError(
+            "kind must be lowercase letters, digits, space, '-' or '_'")
+    return kind
+
+
+def _validate_set(raw: Any) -> str:
+    cset = str(raw or "").strip().lower()
+    if not cset:
+        return ""                                    # the neutral root
+    if not SET_RE.match(cset):
+        raise ClipLibraryError(
+            "set must be lowercase letters, digits, '-' or '_'")
+    return cset
+
+
+def reload_clip_caches() -> None:
+    """Re-read what caches the clip vocabulary. The pose dropdown and the
+    animation-set fallback read from the preset caches — an edited library has
+    to be visible at once, not after a restart (same reload the clip import
+    does)."""
+    try:
+        from app.core import expression_pose_maps as epm
+        epm.reload_presets()
+    except Exception as e:                                   # pragma: no cover
+        logger.warning("preset reload after clip library change failed: %s", e)
+    try:
+        from app.core import pose_catalog
+        pose_catalog.reload_catalogs()
+    except Exception as e:                                   # pragma: no cover
+        logger.warning("pose catalog reload after clip library change failed: %s", e)
+
+
+def delete_clip(library: str, rel: str) -> Dict[str, Any]:
+    """Removes one clip from one library — both halves when it is a pair.
+
+    The ``<kind>.json`` sidecar goes with it only when NO file of that kind is
+    left in the same directory: numbered variants (``walk.fbx`` +
+    ``walk_02.fbx``) share one sidecar, and the last one takes it along.
+    """
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, _role = parse_clip_role(path.name)
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+
+    targets = [path]
+    partner = _pair_partner(path)
+    if partner is not None:
+        targets.append(partner)
+    for p in targets:
+        p.unlink(missing_ok=True)
+
+    sidecar = path.parent / f"{kind}.json"
+    sidecar_removed = False
+    if sidecar.is_file() and not _kind_files(path.parent, kind):
+        sidecar.unlink(missing_ok=True)
+        sidecar_removed = True
+
+    reload_clip_caches()
+    deleted = sorted(f"{cset}/{p.name}" if cset else p.name for p in targets)
+    logger.info("clip deleted: %s (%s library)", ", ".join(deleted), library)
+    return {"deleted": deleted, "kind": kind, "set": cset, "library": library,
+            "sidecar_removed": sidecar_removed}
+
+
+def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
+                cset: Optional[str] = None,
+                to_library: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Renames a clip and/or moves it to another set or library.
+
+    A pair moves as a pair (both halves), a numbered variant keeps its
+    ``_<n>``. The sidecar follows: it MOVES when nothing of the old kind stays
+    behind, and is COPIED when other variants still need it. Its ``kind``
+    field is rewritten with the new name. An existing sidecar at the target is
+    left untouched — it belongs to the variants already there.
+
+    Returns the moved clips as listing views.
+    """
+    src = resolve_clip(library, rel)
+    if not src.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    src_root = library_root(library).resolve()
+    old_set = src.parent.name if src.parent.resolve() != src_root else ""
+    old_kind, _role, _num = _split_stem(src.stem)
+
+    new_kind = _validate_kind(kind) if kind is not None else old_kind
+    new_set = _validate_set(cset) if cset is not None else old_set
+    new_library = str(to_library or library).strip().lower()
+    if new_library not in LIBRARIES:
+        raise ClipLibraryError(f"unknown library '{to_library}' (free|licensed)")
+
+    dest_dir = library_root(new_library).resolve() / new_set if new_set \
+        else library_root(new_library).resolve()
+
+    sources = [src]
+    partner = _pair_partner(src)
+    if partner is not None:
+        sources.append(partner)
+
+    moves: List[Tuple[Path, Path]] = []
+    for p in sources:
+        _k, role, num = _split_stem(p.stem)
+        name = new_kind + (f"{ROLE_SEPARATOR}{role}" if role else "") + num + p.suffix
+        dest = dest_dir / name
+        if dest.resolve() == p.resolve():
+            continue                                  # nothing to do for this half
+        if dest.exists():
+            raise ClipExists(
+                f"{new_set + '/' if new_set else ''}{name} already exists "
+                f"in the {new_library} library")
+        moves.append((p, dest))
+    if not moves:
+        return [_view_of(src, new_set, new_library)]        # nothing changed
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for source, dest in moves:
+        shutil.move(str(source), str(dest))
+
+    _move_sidecar(src.parent, old_kind, dest_dir, new_kind)
+
+    # A set directory that lost its last file is no set any more.
+    if old_set and src.parent.is_dir() and not any(src.parent.iterdir()):
+        src.parent.rmdir()
+
+    reload_clip_caches()
+    logger.info("clip renamed: %s%s (%s) -> %s%s (%s)",
+                f"{old_set}/" if old_set else "", old_kind, library,
+                f"{new_set}/" if new_set else "", new_kind, new_library)
+    return [_view_of(dest, new_set, new_library) for _s, dest in moves]
+
+
+def _view_of(path: Path, cset: str, library: str) -> Dict[str, Any]:
+    """The listing view of one file that was just written — built from the
+    path, not from a rescan: a free clip shadowed by a licensed twin would
+    otherwise not appear in ``clip_entries()`` at all."""
+    kind, role = parse_clip_role(path.name)
+    rel = f"{cset}/{path.name}" if cset else path.name
+    return clip_view({"kind": kind, "role": role, "set": cset,
+                      "source": library, "rel": rel, "path": path})
+
+
+def _move_sidecar(src_dir: Path, old_kind: str, dest_dir: Path,
+                  new_kind: str) -> None:
+    """Takes the ``<kind>.json`` along with the files that just moved.
+
+    It MOVES when no file of the old kind is left in the source directory and
+    COPIES when there still are numbered variants sharing it. A sidecar
+    already sitting at the target wins — those are the numbers of the clips
+    that were there first.
+    """
+    sidecar = src_dir / f"{old_kind}.json"
+    if not sidecar.is_file():
+        return
+    orphaned = not _kind_files(src_dir, old_kind)
+    target = dest_dir / f"{new_kind}.json"
+    if target.exists() and target.resolve() != sidecar.resolve():
+        if orphaned:
+            sidecar.unlink(missing_ok=True)
+        return
+    if orphaned:
+        shutil.move(str(sidecar), str(target))
+    else:
+        shutil.copy2(str(sidecar), str(target))
+    if new_kind != old_kind:
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(data, dict):
+            data["kind"] = new_kind
+            target.write_text(json.dumps(data, indent=2, ensure_ascii=False),
+                              encoding="utf-8")
