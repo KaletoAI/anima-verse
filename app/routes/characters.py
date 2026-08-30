@@ -1623,13 +1623,17 @@ def _set_character_model_refs_auto_sync(character_name: str,
 
 @router.get("/{character_name}/model-refs/{kind}")
 def get_character_model_ref_image(character_name: str, kind: str, request: Request):
-    """Serves the reference render (kind: tpose|pose) of the CURRENT outfit
-    combination; 404 when absent. ETag so a re-render of the same combination
-    (or an outfit switch) is picked up instead of a stale cached image."""
+    """Serves the reference render of the CURRENT outfit combination; 404
+    when absent. ``kind`` is ``tpose``/``pose`` or one of the extra T-pose
+    view kinds (``tpose_back``/``tpose_left``/``tpose_right``). ETag so a
+    re-render of the same combination (or an outfit switch) is picked up
+    instead of a stale cached image."""
     from fastapi.responses import Response
-    from app.core.model_refs import REF_KINDS, find_ref_image
-    if kind not in REF_KINDS:
-        raise HTTPException(status_code=400, detail="kind must be tpose|pose")
+    from app.core.model_refs import REF_KINDS, VIEW_KINDS, find_ref_image
+    if kind not in REF_KINDS and kind not in VIEW_KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"kind must be one of {', '.join(REF_KINDS + VIEW_KINDS)}")
     path = find_ref_image(character_name, kind)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})

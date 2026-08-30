@@ -472,9 +472,10 @@ with tempfile.TemporaryDirectory() as tmp:
     mesh.write_bytes(b"glTF\x02\x00\x00\x00" + b"\x01" * 120)
     b.build_input_files({"source_model_path": str(mesh)})
     ours = hashlib.sha256(mesh.read_bytes()).hexdigest()
+    _ours_list = list(getattr(b._tls, "input_sha256s", None) or [])
     check("the uploaded bytes are hashed",
-          getattr(b._tls, "input_sha256", "") == ours,
-          getattr(b._tls, "input_sha256", "")[:12])
+          _ours_list == [ours],
+          ", ".join(h[:12] for h in _ours_list))
 
     def guard(view: dict):
         try:
@@ -495,7 +496,7 @@ with tempfile.TemporaryDirectory() as tmp:
           "DIFFERENT input" in str(mism), str(mism)[:90])
     # An http(s) URL is fetched by the gateway — we hold no bytes, so there is
     # nothing to compare and nothing to warn about.
-    b._tls.input_sha256 = ""
+    b._tls.input_sha256s = []
     check("no local bytes (URL input) -> no check",
           guard({"input_images": [{"sha256": "d" * 64}]}) is None)
 

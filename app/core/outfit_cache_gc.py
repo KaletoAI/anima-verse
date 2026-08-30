@@ -3,7 +3,9 @@
 Two caches key on the SAME signature (``model_refs.current_outfit_state``):
 
 * ``characters/<name>/model_refs/`` — ``<kind>_<sig>.png`` plus a ``.json``
-  sidecar, kinds ``tpose`` / ``pose`` (legacy: ``tpose_animal``);
+  sidecar, kinds ``tpose`` / ``pose`` plus the optional extra mesh views
+  ``tpose_back`` / ``tpose_left`` / ``tpose_right`` (legacy:
+  ``tpose_animal``);
 * ``characters/<name>/model3d/`` — ``<sig>.glb|fbx`` plus ``<sig>.json`` and,
   for FBX, ``<sig>.png``.
 
@@ -42,8 +44,10 @@ logger = get_logger(__name__)
 #: Enumerating the reachable set is lazy but not free. Above this many
 #: combinations we refuse instead of hanging for minutes.
 MAX_REACHABLE_COMBOS = 5_000_000
-#: Longest first — otherwise "tpose_animal_<sig>" parses as kind "tpose".
-REF_PREFIXES = ("tpose_animal_", "tpose_", "pose_")
+#: Longest first — otherwise "tpose_animal_<sig>" or "tpose_back_<sig>"
+#: parses as kind "tpose" with a mangled signature.
+REF_PREFIXES = ("tpose_animal_", "tpose_back_", "tpose_left_", "tpose_right_",
+                "tpose_", "pose_")
 
 
 def reachable_signatures(character_name: str) -> Set[str]:

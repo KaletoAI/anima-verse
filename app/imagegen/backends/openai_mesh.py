@@ -2,8 +2,8 @@
 
 3D counterpart of ``OpenAIVideoBackend``: the gateway hosts an image-to-3D
 workflow under a generation alias (e.g. ``Trellis2-Humanoid-Low``). Same async
-API, but ONE input image, NO prompt and alias-specific params. Per the client
-spec (``llm-gateway/docs/mesh-client-spec.md``, 2026-08-03) and the alias
+API, but input IMAGES instead of a prompt, plus alias-specific params. Per the
+client spec (``llm-gateway/docs/mesh-client-spec.md``, 2026-08-03) and the alias
 schema (``GET /v1/generations/{alias}/schema``, which always wins):
 
     POST {api_url}/v1/generations            JSON:
@@ -15,6 +15,12 @@ schema (``GET /v1/generations/{alias}/schema``, which always wins):
         → 202 {"job_id": …}   (429/503 carry Retry-After)
     GET  {api_url}/v1/jobs/{job_id}           queued|running|done|failed
     POST {api_url}/v1/jobs/{job_id}/cancel
+
+How MANY images go out is the alias' decision, read from its schema: a
+multi-view workflow declares ``input_image_front``/``_back``/``_left``/
+``_right`` and gets every view we rendered, a classic alias declares one
+``input_image`` and gets the front view alone. Front is the only mandatory
+view — a missing extra view is skipped, not an error.
 
 The SAME class also drives the mesh→mesh aliases (``mesh-shrink``, spec § 3.4,
 config ``category: "mesh2mesh"``): there the input is not an image but an
@@ -160,9 +166,11 @@ class OpenAIMeshBackend(ImageBackend):
         # family name in code: Hunyuan3D FREEZES above 40000 — the job never
         # errors, it hangs until the timeout.
         self.face_num_max = int(os.environ.get(f"{env_prefix}FACE_NUM_MAX", "") or 0)
-        # Alias self-discovery (image slot name, file slot name, declared param
-        # names); safe fallback without schema.
-        self._image_slot: str = ""
+        # Alias self-discovery (image slot names, file slot name, declared
+        # param names); safe fallback without schema. A multi-view alias
+        # declares SEVERAL image slots (input_image_front/_back/_left/_right);
+        # the classic single-view alias declares one (input_image).
+        self._image_slots: List[str] = []
         self._file_slot: str = ""
         self._alias_param_names: set = set()
         self._tls = threading.local()
@@ -193,21 +201,24 @@ class OpenAIMeshBackend(ImageBackend):
     INPUT_LIST_KEYS = ("input_images", "inputs", "input_files")
 
     def _remember_input(self, raw: bytes) -> str:
-        """sha256 of the bytes we are about to upload (thread-local, one input
-        per run). Returns the digest for the job-start log."""
+        """sha256 of the bytes we are about to upload, appended to the run's
+        list (thread-local — a multi-view run uploads several images).
+        Returns the digest for the job-start log."""
         digest = hashlib.sha256(raw).hexdigest()
-        self._tls.input_sha256 = digest
+        if not isinstance(getattr(self._tls, "input_sha256s", None), list):
+            self._tls.input_sha256s = []
+        self._tls.input_sha256s.append(digest)
         return digest
 
     def _check_input_identity(self, sd: Dict[str, Any], job_id: str) -> None:
-        """Compare our uploaded input against the job view's input list.
+        """Compare our uploaded inputs against the job view's input list.
 
         Raises ``GatewayInputMismatchError`` when the gateway reports inputs
-        and OURS is not among them. No list (old gateway), no digest (an http
-        URL the gateway fetched itself) or a list without any sha256 → no
-        check, no warning.
+        and any of OURS is missing from them. No list (old gateway), no digest
+        (http URLs the gateway fetched itself) or a list without any sha256 →
+        no check, no warning.
         """
-        want = getattr(self._tls, "input_sha256", "") or ""
+        want = list(getattr(self._tls, "input_sha256s", None) or [])
         if not want:
             return
         entries: List[Any] = []
@@ -221,13 +232,15 @@ class OpenAIMeshBackend(ImageBackend):
         got = [h for h in got if h]
         if not got:
             return
-        if want in got:
-            logger.debug("%s: Job %s Eingang bestaetigt (sha256 %s)",
-                         self.name, job_id, want[:12])
+        missing = [h for h in want if h not in got]
+        if not missing:
+            logger.debug("%s: Job %s Eingang bestaetigt (%d sha256, erster %s)",
+                         self.name, job_id, len(want), want[0][:12])
             return
         raise GatewayInputMismatchError(
             f"{self.name}: job {job_id} ran on a DIFFERENT input than we "
-            f"uploaded (ours sha256 {want[:12]}, the gateway stored "
+            f"uploaded (ours sha256 "
+            f"{', '.join(h[:12] for h in missing)} missing, the gateway stored "
             f"{', '.join(h[:12] for h in got)}) — result discarded")
 
     def _headers(self) -> Dict[str, str]:
@@ -258,7 +271,11 @@ class OpenAIMeshBackend(ImageBackend):
 
     def _fetch_alias_schema(self) -> None:
         """Reads the input slots + declared param names from the alias schema
-        (e.g. ``input_image`` for img2mesh, ``input_mesh_path`` for shrink)."""
+        (e.g. ``input_image`` for img2mesh, ``input_mesh_path`` for shrink).
+
+        ALL image slots are kept, in declaration order: a multi-view alias
+        declares ``input_image_front``/``_back``/``_left``/``_right``, the
+        classic one a single ``input_image``."""
         try:
             r = requests.get(f"{self.api_url}/v1/generations/{self.model}/schema",
                              headers=self._headers(), timeout=10)
@@ -266,13 +283,17 @@ class OpenAIMeshBackend(ImageBackend):
                 return
             sd = r.json() if r.content else {}
             images = sd.get("images") or []
-            if isinstance(images, list) and images:
-                first = images[0]
-                slot = (first.get("name") if isinstance(first, dict) else str(first)) or ""
-                if slot:
-                    self._image_slot = slot
-            elif isinstance(images, dict) and images:
-                self._image_slot = next(iter(images))
+            slots: List[str] = []
+            if isinstance(images, list):
+                for entry in images:
+                    slot = (entry.get("name") if isinstance(entry, dict)
+                            else str(entry)) or ""
+                    if slot:
+                        slots.append(str(slot))
+            elif isinstance(images, dict):
+                slots = [str(k) for k in images if str(k)]
+            if slots:
+                self._image_slots = slots
             # Non-image input slots (mesh→mesh: input_mesh_path). Same shape as
             # the image slots; absent on every img2mesh alias.
             files = sd.get("files") or []
@@ -296,22 +317,70 @@ class OpenAIMeshBackend(ImageBackend):
                     if n:
                         names.add(str(n).strip().lower())
             self._alias_param_names = names
-            logger.info("%s: Alias-Schema gelesen (image_slot=%s, file_slot=%s, "
+            logger.info("%s: Alias-Schema gelesen (image_slots=%s, file_slot=%s, "
                         "params=%s)", self.name,
-                        self._image_slot or "input_image",
+                        self._image_slots or ["input_image"],
                         self._file_slot or "-", sorted(names) or "?")
         except Exception as e:
             logger.debug("%s: Alias-Schema nicht lesbar: %s", self.name, e)
 
     @staticmethod
-    def _input_image(params: Dict[str, Any]) -> str:
-        """Local path / URL of the single input image (reference slot first)."""
+    def _slot_view(slot: str) -> str:
+        """The VIEW a slot name asks for: ``back`` / ``left`` / ``right`` when
+        the name carries that token, otherwise ``front``.
+
+        So ``input_image_back`` is the back view and the classic single slot
+        ``input_image`` is the front view — the same rule maps our reference
+        keys and the alias' slot names onto one another."""
+        low = str(slot or "").lower()
+        for view in ("back", "left", "right"):
+            if view in low:
+                return view
+        return "front"
+
+    @classmethod
+    def _input_images(cls, params: Dict[str, Any]) -> Dict[str, str]:
+        """The input images of this run as ``{view: local path | URL}``.
+
+        ``reference_images`` is keyed by view (``front``/``back``/…); the token
+        rule of ``_slot_view`` also catches the legacy key ``input_image``,
+        which lands on ``front``. The first entry per view wins. Only when the
+        refs carry no front view does ``source_image_path`` fill it in."""
+        views: Dict[str, str] = {}
         refs = params.get("reference_images") or {}
         if isinstance(refs, dict):
-            for path in refs.values():
+            for key, path in refs.items():
                 if path:
-                    return str(path)
-        return str(params.get("source_image_path") or "")
+                    views.setdefault(cls._slot_view(key), str(path))
+        src = str(params.get("source_image_path") or "")
+        if src:
+            views.setdefault("front", src)
+        return views
+
+    @classmethod
+    def select_slot_images(cls, slots: List[str],
+                           view_paths: Dict[str, str]) -> Dict[str, str]:
+        """Maps the alias' image slots onto the views we hold: ``{slot: path}``.
+
+        A slot whose view we have no image for is LEFT OUT — a single-slot
+        alias thus gets the front view only, a multi-view alias as many views
+        as were rendered. The first slot per view wins (a schema declaring two
+        slots of the same view would otherwise upload the image twice).
+
+        Public/classmethod so the mapping can be checked without a backend
+        instance or a gateway (scripts/smoke_mesh_multiview.py)."""
+        out: Dict[str, str] = {}
+        used: set = set()
+        for slot in (slots or ["input_image"]):
+            view = cls._slot_view(slot)
+            if view in used:
+                continue
+            path = view_paths.get(view)
+            if not path:
+                continue
+            out[str(slot)] = str(path)
+            used.add(view)
+        return out
 
     def build_input_files(self, params: Dict[str, Any]) -> Dict[str, str]:
         """The ``files`` block of a mesh→mesh request, or ``{}`` when this run
@@ -442,7 +511,7 @@ class OpenAIMeshBackend(ImageBackend):
     def _generate(self, prompt: str, negative_prompt: str,
                   params: Dict[str, Any]) -> List[bytes]:
         self._tls.result_files = []
-        self._tls.input_sha256 = ""
+        self._tls.input_sha256s = []
         # mesh→mesh (shrink) or img2mesh — mutually exclusive: a run either
         # carries a source MESH in `files` or an input IMAGE in `images`.
         try:
@@ -458,23 +527,33 @@ class OpenAIMeshBackend(ImageBackend):
         if input_files:
             payload["files"] = input_files
         else:
-            src = self._input_image(params)
-            image_val = ""
-            if src.startswith(("http://", "https://")):
-                image_val = src
-            elif src:
+            # One slot per view the alias declares: a multi-view alias gets
+            # front/back/left/right, the classic single-slot alias only front.
+            views = self._input_images(params)
+            slot_paths = self.select_slot_images(self._image_slots, views)
+            images: Dict[str, str] = {}
+            for slot, src in slot_paths.items():
+                is_front = self._slot_view(slot) == "front"
+                if src.startswith(("http://", "https://")):
+                    images[slot] = src
+                    continue
                 p = Path(src)
                 if not p.exists():
-                    logger.error("%s: Eingangsbild fehlt: %s", self.name, src)
-                    return []
+                    if is_front:
+                        logger.error("%s: Eingangsbild fehlt: %s", self.name, src)
+                        return []
+                    # An extra view is a bonus, never a reason to fail the run.
+                    logger.warning("%s: Zusatz-Ansicht %s fehlt (%s) — "
+                                   "uebersprungen", self.name, slot, src)
+                    continue
                 raw = p.read_bytes()
                 self._remember_input(raw)
-                image_val = base64.b64encode(raw).decode("utf-8")
-            if not image_val:
+                images[slot] = base64.b64encode(raw).decode("utf-8")
+            if not any(self._slot_view(s) == "front" for s in images):
                 logger.error("%s: kein Eingangsbild fuer die Mesh-Generierung",
                              self.name)
                 return []
-            payload["images"] = {self._image_slot or "input_image": image_val}
+            payload["images"] = images
 
         alias_params = self.build_alias_params(params)
         payload["params"] = alias_params
@@ -487,12 +566,16 @@ class OpenAIMeshBackend(ImageBackend):
         faces = (alias_params.get("input_face_num")
                  or alias_params.get("input_num_gaussians")
                  or "alias default")
-        sha = getattr(self._tls, "input_sha256", "") or ""
+        # Count of what we send vs. the FIRST hash: an http URL counts as an
+        # input but carries no hash of ours (the gateway fetches it itself).
+        shas = list(getattr(self._tls, "input_sha256s", None) or [])
+        n_inputs = len(input_files) if input_files else len(payload.get("images") or {})
         lod = alias_params.get(LOD_FACES_PARAM) or "-"
         logger.info("%s: starte Mesh-Job (Alias=%s, faces=%s, lod=%s, "
-                    "name='%s', Eingang=%s sha256=%s)", self.name,
+                    "name='%s', Eingang=%s images=%d sha256=%s)", self.name,
                     payload["model"], faces, lod, alias_params["input_name"],
-                    "mesh" if input_files else "image", sha[:12] or "-")
+                    "mesh" if input_files else "image", n_inputs,
+                    shas[0][:12] if shas else "-")
         job_id = submit_job(self, url, payload, "Mesh")
         if not job_id:
             return []

@@ -573,8 +573,17 @@ class ImageService:
                       backend_glob: str = "", character_name: str = "",
                       mesh_name: str = "", face_num=None, texture_size=None,
                       no_fingers=None, rig: str = "",
+                      view_images: Optional[Dict[str, str]] = None,
                       lod_faces=None) -> Dict[str, Any]:
-        """Generates a 3D model from ONE image via a MEDIA_TYPE=="mesh" backend.
+        """Generates a 3D model from one or more views via a MEDIA_TYPE=="mesh"
+        backend.
+
+        ``source_image_path`` is the FRONT view and always required.
+        ``view_images`` may add the optional ``back`` / ``left`` / ``right``
+        views (local paths). Which of them actually travel is the ALIAS'
+        decision: the backend maps our views onto the image slots the alias
+        schema declares, so an alias with a single ``input_image`` slot gets
+        the front view only, a multi-view alias every view we hold.
 
         ``rig`` ("mixamo" for humanoids, "generic" for everything else) narrows
         the candidates: a humanoid must not be meshed by a generic alias and
@@ -599,9 +608,20 @@ class ImageService:
         "backend", "stages"}.
         """
         from pathlib import Path as _P
+        # Keyed by VIEW, not by slot name: the backend does the slot mapping
+        # from the alias schema.
+        refs: Dict[str, str] = {"front": source_image_path}
+        for view in ("back", "left", "right"):
+            path = str((view_images or {}).get(view) or "").strip()
+            if path:
+                refs[view] = path
+        if len(refs) > 1:
+            logger.info("generate_mesh: %d Zusatz-Ansicht(en) dabei (%s)",
+                        len(refs) - 1,
+                        ", ".join(v for v in refs if v != "front"))
         params: Dict[str, Any] = {
             "source_image_path": source_image_path,
-            "reference_images": {"input_image": source_image_path},
+            "reference_images": refs,
             # NEVER the bare subject id: the stages of a run live under this
             # name on the backend and a repeat would drag the older ones along
             # (§ 3.2). The subject stays the prefix, so the delivered file

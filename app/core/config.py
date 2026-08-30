@@ -85,6 +85,15 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 _NEG_TPOSE = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, fingers overlapping, hands hidden")
 _NEG_TPOSE_ANIMAL = ("illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up")
 
+# Negatives of the OPTIONAL extra mesh views (back / left+right profile).
+# Both build on _NEG_TPOSE and add what actually goes wrong there: the model
+# turns the character back toward the camera, or lets it look over its
+# shoulder, so the render ends up as yet another front-ish view. The profile
+# text additionally pushes away the two arm failures a side view invites —
+# both arms drawn to the same side, or the far arm simply left out.
+_NEG_TPOSE_BACK = _NEG_TPOSE + ", front view, face visible, eyes, facial features, looking at the camera, looking over the shoulder, head turned, three-quarter view"
+_NEG_TPOSE_SIDE = _NEG_TPOSE + ", front view, back view, facing the camera, looking at the camera, three-quarter view, both arms on one side, missing arm"
+
 # Negative of the building-exterior render (source of the location 3D model —
 # shared by both families). Like _NEG_TPOSE it is NOT _NEG_PHOTO (no skin
 # terms); it keeps the WHOLE building in frame and free of people/interior.
@@ -355,6 +364,40 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_style": "a full-body photo of the animal from nose to tail against a plain neutral background, seen from a three-quarter side angle with all four legs and the tail entirely inside the frame and margin around it, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_ANIMAL,
             "prompt_instruction": "Describe the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
+        },
+    },
+    # Optional EXTRA views of the humanoid mesh-input render (admin config
+    # image_generation.tpose_view_back/left/right, default off) — the input
+    # for multi-view img2mesh backends. Framing/lighting stay identical to
+    # "tpose" so the views compose into one consistent set; only the
+    # negatives differ, because a back or profile render fails in its own way.
+    # _seed_default_use_cases backfills both into existing worlds
+    # automatically — no migration needed.
+    "tpose_back": {
+        "keywords": {
+            "prompt_style": "full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_negative": _NEG_TPOSE_BACK,
+            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+        "natural": {
+            "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_negative": _NEG_TPOSE_BACK,
+            "prompt_instruction": "Describe the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+    },
+    # Shared by the left and the right profile. No arm-span clause here: in a
+    # profile one arm points AT the camera and hides the other, so demanding a
+    # visible span would only fight the view.
+    "tpose_side": {
+        "keywords": {
+            "prompt_style": "full body view, head to toe, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_negative": _NEG_TPOSE_SIDE,
+            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
+        },
+        "natural": {
+            "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_negative": _NEG_TPOSE_SIDE,
+            "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
     },
     "expression": {

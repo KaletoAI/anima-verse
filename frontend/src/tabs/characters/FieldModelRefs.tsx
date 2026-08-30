@@ -24,11 +24,18 @@ interface RefInfo {
 interface RefsInfo {
   tpose?: RefInfo | null
   pose?: RefInfo | null
+  // Extra T-pose views for multi-view img2mesh (back/left/right) — only the
+  // views enabled in the admin config appear here, null = not rendered yet.
+  // They have no own auto toggle or pending lane; they ride with `tpose`.
+  views?: Record<string, RefInfo | null>
   auto?: { tpose?: boolean; pose?: boolean }
   // Per image — a running default-pose render must not lock the 3D tab's
   // T-pose button (and vice versa): with several backends they run in parallel.
   pending?: { tpose?: boolean; pose?: boolean }
 }
+
+// Display order of the extra views; the backend only reports enabled ones.
+const VIEW_ORDER = ['back', 'left', 'right'] as const
 
 type RefKind = 'pose' | 'tpose'
 
@@ -202,6 +209,45 @@ export function FieldModelRefs({
               )}
               {ri?.created_at ? (
                 <div className="ga-hint">{new Date(ri.created_at).toLocaleString()}</div>
+              ) : null}
+              {kind === 'tpose' &&
+              VIEW_ORDER.some((v) => info.views && v in info.views) ? (
+                // Extra T-pose views (multi-view img2mesh input). Rendered as
+                // part of the T-pose pass — no own buttons, just visibility.
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  {VIEW_ORDER.filter((v) => info.views && v in info.views).map(
+                    (view) => {
+                      const vi = info.views?.[view]
+                      const viewLabel =
+                        view === 'back' ? t('Back') : view === 'left' ? t('Left') : t('Right')
+                      return (
+                        <div key={view} style={{ flex: 1, minWidth: 0 }}>
+                          <div className="ga-hint">{viewLabel}</div>
+                          {vi ? (
+                            <img
+                              key={`${view}-${bust}`}
+                              src={`/characters/${enc}/model-refs/tpose_${view}?v=${bust}`}
+                              alt=""
+                              style={{
+                                width: '100%',
+                                height: 110,
+                                objectFit: 'contain',
+                                borderRadius: 6,
+                                border: '1px solid var(--border, #30363d)',
+                                background: 'rgba(255, 255, 255, 0.04)',
+                              }}
+                              onError={(e) => {
+                                ;(e.target as HTMLImageElement).style.visibility = 'hidden'
+                              }}
+                            />
+                          ) : (
+                            <div className="ga-hint">{t('No render yet')}</div>
+                          )}
+                        </div>
+                      )
+                    },
+                  )}
+                </div>
               ) : null}
             </div>
           )

@@ -1000,6 +1000,20 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                        character_name, signature)
         return {"ok": False, "error": "no_tpose_input"}
 
+    # Optional extra views of the SAME outfit combination (admin config, off
+    # by default): a multi-view mesh backend reconstructs the back and the
+    # body depth from them instead of guessing. Only what actually exists is
+    # passed on — a view that failed to render must not block the mesh.
+    from app.core.model_refs import enabled_tpose_views
+    view_images = {}
+    for _view in enabled_tpose_views():
+        _vp = find_ref_image(character_name, f"tpose_{_view}", signature)
+        if _vp:
+            view_images[_view] = str(_vp)
+    if view_images:
+        logger.info("Model3D %s: Zusatz-Ansichten fuer %s: %s",
+                    character_name, signature, ", ".join(sorted(view_images)))
+
     out_dir = get_model3d_dir(character_name)
     task_id = ""
     try:
@@ -1024,7 +1038,8 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             rig=rig,
             face_num=face_num,
             texture_size=texture_size,
-            no_fingers=no_fingers)
+            no_fingers=no_fingers,
+            view_images=view_images or None)
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
             logger.error("Model3D %s fehlgeschlagen: %s", character_name, error)
@@ -1054,6 +1069,10 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             "character": character_name,
             "no_fingers": no_fingers,
         }
+        if view_images:
+            # Which extra views went into this mesh — same shape as
+            # "source_image": file names, not absolute paths.
+            meta["view_images"] = {v: Path(p).name for v, p in view_images.items()}
         # Manifest (outfit_cache_gc): WHICH pieces this signature stands for.
         # The md5 cannot be read back, so without this a cache entry can only
         # be judged by "could it still be produced" — with it, exactly. The

@@ -72,6 +72,65 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
     "away from the body, mouth closed"
 )
 
+# OPTIONAL extra views of the T-pose reference render (admin config, default
+# off, humanoid characters only). They exist for multi-view img2mesh backends:
+# a single front image leaves the mesher to HALLUCINATE the back of the head,
+# the back of the outfit and the body depth — a back view replaces that guess
+# with a rendered surface, the two profiles pin the depth.
+#
+# Like the front pose these are PURE POSE text; framing, lighting and
+# background come from the use-case styles ("tpose_back" / "tpose_side").
+#
+# The back view deliberately carries NO face token (and gets an EMPTY
+# expression layer): every facial word pulls a face into the render, and the
+# model then turns the character back toward the camera or paints a face onto
+# the back of the head. Hair goes in FRONT of the shoulders here for the same
+# reason the front view puts it behind them — it must not cover the surface
+# the mesher is supposed to read.
+TPOSE_BACK_PROMPT_DEFAULT = (
+    "back view, seen directly from behind, the back of the head and the heels "
+    "toward the camera, face not visible, standing upright in T-pose, arms "
+    "raised straight out to the sides at exact shoulder height, fully extended "
+    "and parallel to the floor, palms facing down toward the floor, fingers "
+    "straight and slightly spread apart, legs straight and slightly apart, "
+    "hair tucked in front of the shoulders so the back stays visible, all "
+    "garments worn closed"
+)
+
+# Both profiles share one text — the side is the only difference, so they
+# cannot drift apart. In a profile ONE arm points at the camera and one away
+# from it; saying so keeps the model from folding both arms to one side or
+# dropping the far one entirely.
+TPOSE_SIDE_PROMPT_TEMPLATE = (
+    "strict {side} side profile view, seen exactly from the character's "
+    "{side} side, facing to the {side} of the frame, standing upright in "
+    "T-pose with both arms raised straight out to the sides at exact shoulder "
+    "height, one arm extended toward the camera and one arm extended away "
+    "from the camera, palms facing down toward the floor, fingers straight, "
+    "legs straight and slightly apart, hair tucked behind the shoulders, all "
+    "garments worn closed"
+)
+TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
+TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
+
+TPOSE_VIEW_PROMPT_DEFAULTS = {
+    "back": TPOSE_BACK_PROMPT_DEFAULT,
+    "left": TPOSE_LEFT_PROMPT_DEFAULT,
+    "right": TPOSE_RIGHT_PROMPT_DEFAULT,
+}
+TPOSE_VIEWS = ("back", "left", "right")
+# File kinds of the extra views. They are NOT part of REF_KINDS: there is no
+# own auto-toggle, no own UI tile and no own debounce lane for them — they are
+# rendered inside the "tpose" pass and stand or fall with it.
+VIEW_KINDS = tuple(f"tpose_{v}" for v in TPOSE_VIEWS)
+# Framing/lighting/negatives per view. Both profiles share one use case: the
+# framing question ("does the arm span fit") is identical for left and right.
+TPOSE_VIEW_USE_CASES = {
+    "back": "tpose_back",
+    "left": "tpose_side",
+    "right": "tpose_side",
+}
+
 # Expression layer of both reference renders: deliberately neutral (the
 # character presets default to expressive looks, which would bake into 3D
 # textures). Verbatim expression content, no style fragments.
@@ -111,6 +170,20 @@ def get_animal_pose_prompt() -> str:
     (image_generation.animal_pose_prompt) or built-in."""
     override = str(_cfg("animal_pose_prompt", "") or "").strip()
     return override or ANIMAL_POSE_PROMPT_DEFAULT
+
+
+def get_tpose_view_prompt(view: str) -> str:
+    """Pose prompt of one extra T-pose view: admin override
+    (image_generation.tpose_<view>_prompt) or built-in."""
+    override = str(_cfg(f"tpose_{view}_prompt", "") or "").strip()
+    return override or TPOSE_VIEW_PROMPT_DEFAULTS.get(view, "")
+
+
+def enabled_tpose_views() -> tuple:
+    """The extra T-pose views switched on in the admin config
+    (image_generation.tpose_view_<view>), in TPOSE_VIEWS order. All off by
+    default — one extra view is one extra render per outfit combination."""
+    return tuple(v for v in TPOSE_VIEWS if bool(_cfg(f"tpose_view_{v}", False)))
 
 
 def is_humanoid(character_name: str) -> bool:
@@ -299,7 +372,7 @@ def find_ref_image(character_name: str, kind: str,
     not rendered yet. An EXPLICIT signature is matched exactly — the
     generation skip-check must not mistake the neutral render for the
     state variant it is about to produce."""
-    if kind not in REF_KINDS:
+    if kind not in REF_KINDS and kind not in VIEW_KINDS:
         return None
     candidates = [signature]
     if signature is None:
@@ -328,10 +401,31 @@ def _cleanup_legacy(refs_dir: Path, kind: str) -> None:
             legacy.unlink()
 
 
+def _ref_info(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """UI info for one stored render: filename plus what its sidecar knows."""
+    import json
+    if not path:
+        return None
+    info: Dict[str, Any] = {"filename": path.name}
+    meta_path = path.with_suffix(".json")
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            info["created_at"] = meta.get("created_at", "")
+            info["prompt"] = meta.get("prompt", "")
+            info["backend"] = meta.get("service", "")
+        except (OSError, ValueError):
+            pass
+    return info
+
+
 def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     """Per-kind info for the UI — always for the CURRENTLY worn outfit
-    combination (filename + sidecar meta, or None if not rendered yet)."""
-    import json
+    combination (filename + sidecar meta, or None if not rendered yet).
+
+    ``views`` carries the same info format for the extra T-pose views that
+    are switched on (empty for a non-humanoid character or with every view
+    off) — they have no own tile or toggle, they ride along with "tpose"."""
     try:
         _, _, signature = current_outfit_state(character_name)
     except Exception:
@@ -339,20 +433,14 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {"signature": signature}
     for kind in REF_KINDS:
         path = find_ref_image(character_name, kind, signature) if signature else None
-        if not path:
-            out[kind] = None
-            continue
-        info: Dict[str, Any] = {"filename": path.name}
-        meta_path = path.with_suffix(".json")
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                info["created_at"] = meta.get("created_at", "")
-                info["prompt"] = meta.get("prompt", "")
-                info["backend"] = meta.get("service", "")
-            except (OSError, ValueError):
-                pass
-        out[kind] = info
+        out[kind] = _ref_info(path)
+    views: Dict[str, Any] = {}
+    if is_humanoid(character_name):
+        for view in enabled_tpose_views():
+            path = (find_ref_image(character_name, f"tpose_{view}", signature)
+                    if signature else None)
+            views[view] = _ref_info(path)
+    out["views"] = views
     auto = get_auto_kinds(character_name)
     out["auto"] = auto
     # Pending PER KIND: a running render of one image must not lock the other
@@ -389,7 +477,15 @@ def generate_model_ref_images(character_name: str,
     the character). All three or none — a partial override would key the
     cache on a signature that does not describe the rendered pieces.
     Everything downstream (cache skip, output stem, prompt chain) is
-    identical, so an overridden run is indistinguishable from a worn one."""
+    identical, so an overridden run is indistinguishable from a worn one.
+
+    The "tpose" kind additionally renders the extra views switched on in the
+    admin config (back/left/right, humanoid characters only) as
+    ``tpose_<view>_<signature>``: input for multi-view img2mesh backends.
+    They ride along with the front render — the kind counts as cached only
+    once every enabled view exists too, and an already rendered front image
+    is then reused instead of being generated again. A failing view is
+    logged and skipped; only the front render is essential."""
     from app.core.expression_regen import generate_expression_image
     from app.core.expression_pose_maps import default_pose_prompt
 
@@ -414,9 +510,20 @@ def generate_model_ref_images(character_name: str,
 
     if signature is None:
         pieces, items, signature = current_outfit_state(character_name)
+    # Non-humanoid characters get their own mesh-input pose (a T-pose makes no
+    # sense on four legs) and their own framing use case. Their default-pose
+    # ref carries NO human pose template either — the empty override lets the
+    # renderer fall back to the animal's own anatomy. Read BEFORE the cache
+    # skip: it decides whether the extra views count into it.
+    humanoid = is_humanoid(character_name)
+    views = enabled_tpose_views() if humanoid else ()
     if not force:
         cached = tuple(k for k in kinds
-                       if find_ref_image(character_name, k, signature))
+                       if find_ref_image(character_name, k, signature)
+                       and (k != "tpose"
+                            or all(find_ref_image(character_name,
+                                                  f"tpose_{v}", signature)
+                                   for v in views)))
         if cached:
             logger.info("Model-Refs fuer %s: Kombination %s bereits gerendert (%s)",
                         character_name, signature, ", ".join(cached))
@@ -425,11 +532,6 @@ def generate_model_ref_images(character_name: str,
         return {}
 
     refs_dir = get_model_refs_dir(character_name)
-    # Non-humanoid characters get their own mesh-input pose (a T-pose makes no
-    # sense on four legs) and their own framing use case. Their default-pose
-    # ref carries NO human pose template either — the empty override lets the
-    # renderer fall back to the animal's own anatomy.
-    humanoid = is_humanoid(character_name)
     prompts = {
         "tpose": get_tpose_prompt() if humanoid else get_animal_pose_prompt(),
         "pose": default_pose_prompt() if humanoid else "",
@@ -447,27 +549,67 @@ def generate_model_ref_images(character_name: str,
             # default-pose ref keeps the canonical content order.
             _tpose = kind == "tpose"
             _w, _h = _tpose_size() if _tpose else (None, None)
-            path = generate_expression_image(
-                character_name, mood="", pose_key="",
-                equipped_pieces=pieces, equipped_items=items,
-                prompt_prefix=prompts[kind] if _tpose else "",
-                pose_prompt_override="" if _tpose else prompts[kind],
-                expression_prompt_override=REF_EXPRESSION_PROMPT,
-                # The mesh-input render has its own style (flat shadowless
-                # light, full-body framing) — humanoid vs animal framing
-                # differ; the default-pose ref shares "outfit".
-                image_use_case=("tpose" if humanoid else "tpose_animal") if _tpose else "outfit",
-                # ... and its own aspect: the portrait outfit format cuts the
-                # outstretched hands off at the edges.
-                override_width=_w, override_height=_h,
-                output_stem=refs_dir / f"{kind}_{signature}",
-                apply_state_modifiers=not prewarm)
+            # A kind only reaches this loop when something is missing — for
+            # "tpose" that may be an extra view alone, and then the existing
+            # front render is reused instead of burning a second GPU run.
+            path: Optional[Path] = (
+                None if force else find_ref_image(character_name, kind, signature))
+            if path is None:
+                path = generate_expression_image(
+                    character_name, mood="", pose_key="",
+                    equipped_pieces=pieces, equipped_items=items,
+                    prompt_prefix=prompts[kind] if _tpose else "",
+                    pose_prompt_override="" if _tpose else prompts[kind],
+                    expression_prompt_override=REF_EXPRESSION_PROMPT,
+                    # The mesh-input render has its own style (flat shadowless
+                    # light, full-body framing) — humanoid vs animal framing
+                    # differ; the default-pose ref shares "outfit".
+                    image_use_case=("tpose" if humanoid else "tpose_animal") if _tpose else "outfit",
+                    # ... and its own aspect: the portrait outfit format cuts the
+                    # outstretched hands off at the edges.
+                    override_width=_w, override_height=_h,
+                    output_stem=refs_dir / f"{kind}_{signature}",
+                    apply_state_modifiers=not prewarm)
             results[kind] = str(path) if path else None
             if path is None:
                 logger.warning("Model-Ref %s fuer %s (%s): Render fehlgeschlagen",
                                kind, character_name, signature)
             else:
                 _cleanup_legacy(refs_dir, kind)
+            # Extra views for multi-view img2mesh — same outfit, same size,
+            # same signature, only the pose/use-case layer differs. Missing
+            # views are never fatal: the mesh runs off the front render.
+            if _tpose and humanoid and path is not None:
+                for view in views:
+                    view_kind = f"tpose_{view}"
+                    if not force and find_ref_image(character_name, view_kind,
+                                                    signature):
+                        continue
+                    try:
+                        view_path = generate_expression_image(
+                            character_name, mood="", pose_key="",
+                            equipped_pieces=pieces, equipped_items=items,
+                            prompt_prefix=get_tpose_view_prompt(view),
+                            pose_prompt_override="",
+                            # No face is visible from behind — an expression
+                            # layer there only tempts the model to turn the
+                            # character around or paint a face on the back.
+                            expression_prompt_override=(
+                                "" if view == "back" else REF_EXPRESSION_PROMPT),
+                            image_use_case=TPOSE_VIEW_USE_CASES[view],
+                            override_width=_w, override_height=_h,
+                            output_stem=refs_dir / f"{view_kind}_{signature}",
+                            apply_state_modifiers=not prewarm)
+                    except Exception as e:
+                        view_path = None
+                        logger.warning(
+                            "Model-Ref %s fuer %s (%s) fehlgeschlagen: %s",
+                            view_kind, character_name, signature, e)
+                    results[view_kind] = str(view_path) if view_path else None
+                    if view_path is None:
+                        logger.warning(
+                            "Model-Ref %s fuer %s (%s): Render fehlgeschlagen",
+                            view_kind, character_name, signature)
     finally:
         logger.info("Model-Refs fuer %s (%s): %s", character_name, signature,
                     {k: bool(v) for k, v in results.items()})
