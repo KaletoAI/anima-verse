@@ -34,6 +34,7 @@ import { listPlayableCharacters, switchCharacter } from '../api';
 import { markResume } from '../main';
 import { checkScatterPrefs, DEFAULT_SCATTER_PREFS, SCATTER_PREF_MAX_M,
   SCATTER_PREF_MIN_M } from '../game/prefs';
+import { CHAT_ALPHA_MIN } from './chatPanel';
 import type { Prefs, ScatterPrefs, TtsMode } from '../game/prefs';
 
 /** The prefs fields that are a volume — the sliders below are one per entry,
@@ -52,6 +53,12 @@ export interface GameMenuProps {
    *  `perfOn`, with its own storage key — see `Hud.tsx`. */
   minimapOn: boolean;
   onMinimapChange: (on: boolean) => void;
+  /** how solid the chat window is drawn over the world, 0..1. A view setting
+   *  with its own storage key like the two above — `Hud.tsx` owns the store,
+   *  and the value reaches the panel as a CSS custom property, never as
+   *  `opacity` (that would fade the transcript text with the background). */
+  chatAlpha: number;
+  onChatAlphaChange: (v: number) => void;
   /** the three scatter detail distances of this browser (per-object scatter
    *  LOD). A view setting with its own storage key, like the two above — see
    *  `Hud.tsx`, which owns the store and the action into the running world. */
@@ -73,18 +80,21 @@ export interface GameMenuProps {
   onBackToTitle: () => void;
 }
 
-/** One volume, as a percentage. The stored value is 0..1; percent is what a
+/** One share, as a percentage. The stored value is 0..1; percent is what a
  *  player can read and compare, so the slider works in whole percent and the
- *  number next to it is the same value, not a second rounding. */
-function Slider({ label, value, onPick }: {
-  label: string; value: number; onPick: (v: number) => void;
+ *  number next to it is the same value, not a second rounding.
+ *  `minPercent` is for the settings that have a FLOOR: a volume may be zero
+ *  (that is silence, a perfectly good setting), a window's opacity may not —
+ *  a chat one cannot read is not a setting but a lost panel. */
+function Slider({ label, value, onPick, minPercent = 0 }: {
+  label: string; value: number; onPick: (v: number) => void; minPercent?: number;
 }) {
   const percent = Math.round(value * 100);
   return (
     <label className="hud-menu-slider">
       <span className="hud-menu-label">{label}</span>
       <span className="hud-menu-value">{percent}%</span>
-      <input type="range" min={0} max={100} step={1} value={percent}
+      <input type="range" min={minPercent} max={100} step={1} value={percent}
         onChange={(e) => onPick(Number(e.target.value) / 100)} />
     </label>
   );
@@ -133,6 +143,7 @@ function Metres({ label, value, onType }: {
 
 export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
                            minimapOn, onMinimapChange,
+                           chatAlpha, onChatAlphaChange,
                            scatterPrefs, onScatterChange,
                            isAdmin, showAll, onShowAllChange,
                            onBackToTitle }: GameMenuProps) {
@@ -272,6 +283,16 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
           onPick={onPerfChange} />
         <p className="hud-menu-hint">
           {t('Frame rate, draw calls and how many models stand on the full or the low resolution.')}
+        </p>
+        {/* The chat window's own surface. It is a SHARE, not a switch, which
+            is why it is a slider and not one of the pills above: how much of
+            the world one wants to keep seeing behind the transcript is a
+            matter of degree, and the panel behind this menu is the preview. */}
+        <Slider label={t('Chat opacity')} value={chatAlpha}
+          minPercent={Math.round(CHAT_ALPHA_MIN * 100)}
+          onPick={onChatAlphaChange} />
+        <p className="hud-menu-hint">
+          {t('How solid the chat window is drawn over the world. Lower values let the scene show through the transcript.')}
         </p>
       </section>
 

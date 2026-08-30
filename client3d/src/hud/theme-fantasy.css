@@ -59,6 +59,26 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(242, 205, 110, 0.14), inset 0 0 26px rgba(0, 0, 0, 0.45), 0 12px 34px rgba(0, 0, 0, 0.55);
 }
 
+/* The chat window's own surface (chat portraits, 2d). Same vellum as every
+ * other panel, but the BASE layer's alpha comes from a custom property, so the
+ * scene shows through the transcript without a drop of `opacity` — that would
+ * fade the text with it. The two tints stay as they are: at 16 % they are an
+ * ornament laid on the surface, not the surface. */
+#hud .hud-chat-backdrop {
+  background:
+    radial-gradient(115% 80% at 18% 0%, rgba(140, 110, 66, 0.16), transparent 62%),
+    radial-gradient(95% 70% at 88% 100%, rgba(96, 70, 38, 0.16), transparent 66%),
+    linear-gradient(163deg,
+      rgba(42, 35, 25, var(--hud-chat-alpha, 1)) 0%,
+      rgba(34, 28, 20, var(--hud-chat-alpha, 1)) 46%,
+      rgba(25, 20, 16, var(--hud-chat-alpha, 1)) 100%);
+  /* The two INSET halves of the panel shadow move here with the surface: an
+   * inset shadow is painted on the box it belongs to, under its children, so
+   * left on the panel it would disappear behind this layer. The outer halves
+   * (the hairline and the drop shadow) stay where they are. */
+  box-shadow: inset 0 1px 0 rgba(242, 205, 110, 0.14), inset 0 0 26px rgba(0, 0, 0, 0.45);
+}
+
 /* Header: gold small-caps over a darker band, closed by a gradient rule that
  * fades out at both ends (border-image from a CSS gradient — the ornament). */
 #hud .hud-panel-head,

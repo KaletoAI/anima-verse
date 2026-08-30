@@ -188,6 +188,230 @@
   #hud .hud-panel.hud-chat.hud-flash { animation-duration: 0.01s, 0.01s; }
 }
 
+/* ---- The chat window is the user's size (plan-hud-chat-portraits.md 2a) ----
+   840 x 680 is one guess at a screen, and the picture column below makes the
+   width a matter of taste rather than of layout. Three handles drag it: the
+   TOP edge and the RIGHT edge — the two directions a panel anchored
+   bottom-left can grow in — and the corner between them for both at once.
+
+   Everything about them follows the dock handle above: absolutely positioned
+   so they eat no share of the flex column, `pointer-events: auto` and
+   `touch-action: none` (the drag is pointer-captured; without it a touch drag
+   scrolls instead), invisible until the pointer is on them, and then a short
+   grip line. `Hud.tsx` writes the dragged size as an INLINE style, so it beats
+   the `width`/`height` above while the `max-*` rules still cap it against the
+   window.
+
+   NO `min-width`/`min-height` here, deliberately: a CSS floor would override
+   those viewport caps, and the width cap is what keeps the panel off the
+   character plaque on a narrow window. The floor lives in `clampChatSize`,
+   where the drag is.
+
+   They lie INSIDE the panel (the dock handle lies outside its column): this
+   one clips its children (`.hud-panel { overflow: hidden }`) so the composer's
+   square corners stay inside the rounded frame, and anything outside would
+   simply be cut away. Hence 9px strips over the head's own padding, an 18px
+   corner, and the head's extra right padding below, which keeps the close
+   button clear of both. */
+#hud .hud-chat-grip {
+  position: absolute;
+  z-index: 3;
+  pointer-events: auto;
+  touch-action: none;
+}
+#hud .hud-chat-grip-top {
+  top: 0;
+  left: 0;
+  right: 18px; /* the corner handle owns that square */
+  height: 9px;
+  cursor: ns-resize;
+}
+#hud .hud-chat-grip-right {
+  top: 18px;
+  right: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: ew-resize;
+}
+#hud .hud-chat-grip-corner {
+  top: 0;
+  right: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nesw-resize;
+}
+#hud .hud-chat-grip::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 2px;
+  background: var(--text-muted, #8b949e);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+#hud .hud-chat-grip-top::before {
+  width: 44px;
+  height: 3px;
+  margin: -1.5px 0 0 -22px;
+}
+#hud .hud-chat-grip-right::before {
+  width: 3px;
+  height: 44px;
+  margin: -22px 0 0 -1.5px;
+}
+#hud .hud-chat-grip-corner::before {
+  width: 14px;
+  height: 3px;
+  margin: -1.5px 0 0 -7px;
+  transform: rotate(-45deg);
+}
+#hud .hud-chat-grip:hover::before,
+#hud .hud-chat-grip:active::before {
+  opacity: 0.85;
+}
+/* Room for the two handles at the top right: without it the corner square
+   would lie on the right half of the close button. */
+#hud .hud-chat > .hud-panel-head {
+  position: relative; /* over the backdrop layer below */
+  padding: 9px 22px 6px 10px;
+}
+
+/* ---- Two columns: pictures left, transcript right (2b, decision E2) ----
+   The transcript keeps ITS width and every extra pixel of the window goes to
+   the pictures — widening the panel is what asks for more faces, not for
+   longer lines. So the chat column is `flex: 0 0 auto` at a fixed width
+   (`CHAT_COL_W` in chatPanel.ts — the two numbers must stay equal) and the
+   picture column takes the rest.
+
+   `max-width: 100%` is the escape hatch for a narrow window: the panel's own
+   `max-width` can fall to 420px, below the column's 520, and without it the
+   composer would simply be clipped away. The picture column is then squeezed
+   to nothing, which is the panel exactly as it was before this feature. */
+#hud .hud-chat-split {
+  position: relative; /* over the backdrop layer below */
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+#hud .hud-chat-main {
+  flex: 0 0 auto;
+  width: 520px;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Nobody to show: the transcript takes the whole window back. */
+#hud .hud-chat-split-solo .hud-chat-main {
+  flex: 1 1 auto;
+  width: auto;
+}
+#hud .hud-chat-portraits {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  padding: 8px 2px 8px 8px;
+  overflow: hidden;
+}
+/* Height-filling, with no assumption about the picture: these renders run from
+   223x512 to 822x1216 and are cut-out RGBA, so the box is fixed and the image
+   fits itself into it (SelfPanel's pattern). */
+#hud .hud-chat-portrait {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+#hud .hud-chat-portrait img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+/* The transcript's scrollbar sits at the window's right edge — precisely where
+   the width handle lies. Nine pixels of margin move it clear of the strip, so
+   the bar stays draggable. */
+#hud .hud-chat .player-scene-scroll {
+  margin-right: 9px;
+}
+
+/* ---- The window's own surface, and how see-through it is (2d) ----
+   The panel background of every other HUD panel is OPAQUE and multi-layered,
+   and `.player-scene-scroll` brings none of its own — so a transparency
+   setting has nowhere to act until the chat window gets a surface of its own.
+   That is this layer: it replaces the panel's background (switched off right
+   below) and carries the alpha on a custom property.
+
+   NOT `opacity`. Opacity fades a box AND everything in it, so a half
+   transparent panel would be a half transparent transcript — unreadable, and
+   the very mistake /play's `panelAlpha` would make here. An alpha COLOUR
+   fades only what is painted, and the text is painted by somebody else.
+   The layer holds no text at all, and head and composer keep their own bands
+   on top of it, so those two stay the most legible parts of the window. */
+#hud .hud-panel.hud-chat {
+  background: none;
+}
+#hud .hud-chat-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: rgba(22, 27, 34, var(--hud-chat-alpha, 1));
+}
+
+/* ---- The row the picture column is following (2c) ----
+   `SCENE_ROW_ACTIVE_CLASS` from the shared package. The package ships no rule
+   for it on purpose: only a host that asks for a highlight styles it, and
+   /play does not ask. Dormant until `ScenePanel` forwards `highlightedId` to
+   `SceneView` — see the note in Hud.tsx. */
+#hud .hud-chat .scene-row-active {
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent, #6aa9ff);
+}
+
+/* ---- How many faces stand next to the transcript (2e) ----
+   A switch in the panel head, not a rule derived from the width: over 37
+   logged turns a room history carried a median of two distinct speakers and at
+   most four, one of them the narrator — so the choice is small, and it is the
+   player's. */
+#hud .hud-chat-count {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 3px;
+  margin-left: 6px;
+}
+#hud .hud-chat-count button {
+  min-width: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8em;
+  line-height: 1.6;
+  opacity: 0.7;
+  cursor: pointer;
+}
+#hud .hud-chat-count button:hover {
+  border-color: var(--accent, #6aa9ff);
+  opacity: 1;
+}
+#hud .hud-chat-count button.on {
+  border-color: var(--accent, #6aa9ff);
+  background: color-mix(in srgb, var(--accent, #6aa9ff) 24%, transparent);
+  opacity: 1;
+}
+
 /* ---- Bottom centre: talk prompt above the character plaque (E3-T1/T5) ----
    ONE stack instead of two independently positioned boxes: the plaque grows
    and shrinks with the selected figure's rows, and a separately anchored

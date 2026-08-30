@@ -2444,6 +2444,10 @@
     "— neutral —": "— neutral —",
     "Pair animation — needs a partner": "Paar-Animation — braucht ein Gegenüber",
     "free library (tracked in git)": "freie Bibliothek (in git verwaltet)",
-    "licensed library (local only)": "lizenzierte Bibliothek (nur lokal)"
+    "licensed library (local only)": "lizenzierte Bibliothek (nur lokal)",
+    "Chat opacity": "Chat-Deckkraft",
+    "How solid the chat window is drawn over the world. Lower values let the scene show through the transcript.": "Wie deckend das Chat-Fenster über der Welt liegt. Niedrigere Werte lassen die Szene durch den Verlauf scheinen.",
+    "Portraits": "Porträts",
+    "Portrait count: {n}": "Porträt-Anzahl: {n}"
   }
 }

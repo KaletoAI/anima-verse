@@ -32,10 +32,11 @@ import {
   ScenePanel, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
   GalleryPanel, InstagramPanel,
-  PlayerPhotoDialog,
+  PlayerPhotoDialog, SCENE_ROW_ID_ATTR,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
+import { ChatPortraits } from './ChatPortraits';
 import { GameMenu } from './GameMenu';
 import { Minimap } from './Minimap';
 import { PerfOverlay } from './PerfOverlay';
@@ -52,6 +53,13 @@ import {
   speakableLines, type SceneSnapshot, type Voiceover,
 } from '../game/voiceover';
 import { isTypingTarget } from '../scene/engine';
+import {
+  CHAT_ALPHA_DEFAULT, CHAT_ALPHA_KEY, CHAT_MIN_H, CHAT_MIN_W,
+  CHAT_PORTRAITS_KEY, CHAT_SIZE_KEY, PORTRAITS_DEFAULT, PORTRAITS_MAX,
+  PORTRAITS_MIN, chatFocusId, clampChatSize, pickPortraitSpeakers,
+  readChatAlpha, readChatSize, readPortraitCount, rowAtCenter, writeChatSize,
+  type ChatSize, type RowExtent,
+} from './chatPanel';
 import { gameActions, getGameState, setGameState, setPerfEnabled, subscribeGameState, uiActions } from './bus';
 import '@anima/player-ui/panels.css';
 import './hud.css';
@@ -146,6 +154,18 @@ const PERF_KEY = 'av3d.perf.v1';
 /** The idle timeout ran out while the panel was still in use (focus inside it,
  *  or one of its picker modals open) — look again after this. */
 const CHAT_BUSY_RECHECK_MS = 5000;
+
+/** The positions the portrait-count switch in the chat head offers. Derived
+ *  from the range, so the switch cannot drift from the stored value's check. */
+const PORTRAIT_CHOICES = Array.from(
+  { length: PORTRAITS_MAX - PORTRAITS_MIN + 1 }, (_, i) => PORTRAITS_MIN + i);
+
+/** How close to the bottom still counts as "the transcript sticks to the end".
+ *  The SAME slack `ScenePanel` uses for its own auto-scroll — the two must
+ *  agree, or the picture column would show a resting state the transcript is
+ *  no longer in. Written down here rather than imported because the package
+ *  keeps it private; if it ever moves, this comment is where to look. */
+const SCENE_STICK_SLACK_PX = 48;
 
 export function Hud({ avatar, username, role }: {
   avatar: string; username: string; role: string;
@@ -393,6 +413,120 @@ export function Hud({ avatar, username, role }: {
     widthRef.current = null;
     setDockWidth(null);
     localStorage.removeItem(DOCK_WIDTH_KEY);
+  }, []);
+
+  /**
+   * --- The chat window's own size (plan-hud-chat-portraits.md 2a) ----------
+   *
+   * The chat is the ONE HUD surface outside the dock, so it carries handles of
+   * its own: the top edge, the right edge and the corner between them — the
+   * two directions a panel anchored bottom-left can grow in.
+   *
+   * The GESTURE is the dock handle's, down to the details that make it usable:
+   * pointer capture (at any real speed the cursor leaves a 9px strip at once),
+   * the start size MEASURED rather than read from the store (with nothing
+   * stored the drag has to continue from whatever the stylesheet is giving, or
+   * the first pixel of movement jumps), a `moved` flag so a plain click stores
+   * nothing, the write on pointer-up only instead of one per frame, and a
+   * double-click that FORGETS the size rather than setting a number — with the
+   * entry gone the stylesheet decides again, which is what somebody who never
+   * touched a handle has.
+   *
+   * What is NOT taken from the dock is the inverted delta: the dock hangs on
+   * the RIGHT edge and widens when dragged left. This panel hangs bottom-left
+   * and grows up and to the right, so the top edge is -Δy and the right edge
+   * +Δx, neither of them reversed.
+   *
+   * The dragged size is an INLINE style and therefore beats the stylesheet's
+   * `width`/`height`; the `max-width`/`max-height` there still cap it against
+   * a narrow window, exactly as they cap the dock. The lower bounds are new
+   * and live in `clampChatSize` — as JS and not as CSS `min-*`, because a CSS
+   * floor would override those viewport caps and push the panel back over the
+   * character plaque on a narrow window, which is what they exist to prevent.
+   */
+  const [chatSize, setChatSize] = useState<ChatSize | null>(
+    () => readChatSize(localStorage.getItem(CHAT_SIZE_KEY)));
+  const chatSizeRef = useRef<ChatSize | null>(chatSize);
+  /** The running drag: where it started, how big the panel was then, WHICH
+   *  handle is being pulled, and whether it has actually moved yet. */
+  const chatDragRef = useRef<
+    { x: number; y: number; w: number; h: number; edge: string; moved: boolean }
+    | null>(null);
+
+  const onChatGripDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const box = chatRef.current?.getBoundingClientRect();
+    chatDragRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      w: box?.width ?? CHAT_MIN_W,
+      h: box?.height ?? CHAT_MIN_H,
+      // The handle says which axes it moves; the corner moves both.
+      edge: e.currentTarget.dataset.edge || 'corner',
+      moved: false,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }, []);
+
+  const onChatGripMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = chatDragRef.current;
+    if (!drag) return;
+    const next = clampChatSize(
+      drag.edge === 'top' ? drag.w : drag.w + (e.clientX - drag.x),
+      drag.edge === 'right' ? drag.h : drag.h - (e.clientY - drag.y));
+    drag.moved = true;
+    chatSizeRef.current = next;
+    setChatSize(next);
+  }, []);
+
+  const onChatGripUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = chatDragRef.current;
+    chatDragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    if (!drag?.moved || !chatSizeRef.current) return;
+    localStorage.setItem(CHAT_SIZE_KEY, writeChatSize(chatSizeRef.current));
+  }, []);
+
+  /** Double-click on a handle = forget the size, not "back to 840 x 680". */
+  const onChatGripReset = useCallback(() => {
+    chatDragRef.current = null;
+    chatSizeRef.current = null;
+    setChatSize(null);
+    localStorage.removeItem(CHAT_SIZE_KEY);
+  }, []);
+
+  /**
+   * How solid the chat window is drawn over the world (2d) and how many
+   * portraits stand next to the transcript (2e). Two LOCAL view settings like
+   * the minimap and the performance readout, each with its own key and its own
+   * range check — a hand-edited store must never leave the window invisible or
+   * the column empty.
+   *
+   * Both are CLICKED, not dragged, so they are written straight away; the ref
+   * next to each is what keeps a repeated value from writing again.
+   */
+  const [chatAlpha, setChatAlphaState] = useState(
+    () => readChatAlpha(localStorage.getItem(CHAT_ALPHA_KEY)) ?? CHAT_ALPHA_DEFAULT);
+  const chatAlphaRef = useRef(chatAlpha);
+  const setChatAlpha = useCallback((v: number) => {
+    if (v === chatAlphaRef.current) return;
+    chatAlphaRef.current = v;
+    localStorage.setItem(CHAT_ALPHA_KEY, String(v));
+    setChatAlphaState(v);
+  }, []);
+
+  const [chatPortraits, setChatPortraitsState] = useState(
+    () => readPortraitCount(localStorage.getItem(CHAT_PORTRAITS_KEY))
+      ?? PORTRAITS_DEFAULT);
+  const chatPortraitsRef = useRef(chatPortraits);
+  const setChatPortraits = useCallback((n: number) => {
+    if (n === chatPortraitsRef.current) return;
+    chatPortraitsRef.current = n;
+    localStorage.setItem(CHAT_PORTRAITS_KEY, String(n));
+    setChatPortraitsState(n);
   }, []);
 
   const { data, refresh: refreshScene } = usePoll<SceneData>(
@@ -652,6 +786,75 @@ export function Hud({ avatar, username, role }: {
     return () => window.clearTimeout(timer);
   }, [open.chat, chatPinned, chatHail, game.talkTarget, game.elevatorOpen]);
 
+  // --- Which row the picture column follows (2c, decision E4) --------------
+  //
+  // Two things decide it, and both are MEASURED on the transcript rather than
+  // remembered: whether it still sticks to its end, and which row crosses the
+  // vertical middle of the scroll window. The rule that turns the two into an
+  // answer is `chatFocusId`, and it is pure — this block only reads the DOM.
+  //
+  // Reading it is all it does. `ScenePanel` owns the "stick to bottom"
+  // behaviour and must keep owning it, so this LISTENS ALONG on the same
+  // element with a second `addEventListener` instead of taking the handler
+  // over; the rows are found by the id attribute the package writes on every
+  // row for exactly this purpose (`SCENE_ROW_ID_ATTR`).
+  const [chatScroll, setChatScroll] = useState<
+    { stuck: boolean; centeredId: number | null }>({ stuck: true, centeredId: null });
+  const measureChat = useCallback(() => {
+    const el = chatRef.current?.querySelector<HTMLElement>('.player-scene-scroll');
+    if (!el) return;
+    const stuck = el.scrollHeight - el.scrollTop - el.clientHeight < SCENE_STICK_SLACK_PX;
+    const box = el.getBoundingClientRect();
+    const rows: RowExtent[] = [];
+    el.querySelectorAll<HTMLElement>(`[${SCENE_ROW_ID_ATTR}]`).forEach((node) => {
+      const raw = node.getAttribute(SCENE_ROW_ID_ATTR);
+      if (raw === null || raw === '') return;
+      const id = Number(raw);
+      if (!Number.isFinite(id)) return;
+      const r = node.getBoundingClientRect();
+      rows.push({ id, top: r.top, bottom: r.bottom });
+    });
+    const centeredId = rowAtCenter(rows, box.top + box.height / 2);
+    // Published only on a real change: a scroll fires dozens of times a second
+    // and an unchanged answer must not re-render the whole HUD island.
+    setChatScroll((prev) => (prev.stuck === stuck && prev.centeredId === centeredId
+      ? prev : { stuck, centeredId }));
+  }, []);
+  useEffect(() => {
+    if (!open.chat) return;
+    const el = chatRef.current?.querySelector<HTMLElement>('.player-scene-scroll');
+    if (!el) return;
+    measureChat();
+    el.addEventListener('scroll', measureChat, { passive: true });
+    const ro = new ResizeObserver(measureChat);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener('scroll', measureChat);
+      ro.disconnect();
+    };
+  }, [open.chat, measureChat]);
+  // A new line moves every row, and so does a dragged size. Measuring again
+  // here is safe AFTER the transcript has been redrawn and scrolled: a child's
+  // effects run before its parent's, so ScenePanel's auto-scroll has already
+  // happened by the time this does.
+  useEffect(() => { measureChat(); }, [sceneStamp, chatSize, measureChat]);
+
+  // WHOSE faces the column shows. `hoveredId` is a hard `null` and not an
+  // oversight: `ScenePanel` does not forward `highlightedId`/`onRowHover` to
+  // `SceneView` (task 1 added the two props to `SceneView`/`SceneRow` only),
+  // so the HUD has no way to be told about the pointer or to have a row
+  // marked. The rule already covers that case — without a pointer it is the
+  // resting state and the middle row that decide — and the moment the package
+  // forwards the two props this is where they get wired in.
+  const chatFocus = chatFocusId({
+    hoveredId: null,
+    centeredId: chatScroll.centeredId,
+    stuck: chatScroll.stuck,
+  });
+  const speakerVersions = data?.speaker_expr_versions || {};
+  const portraitNames = pickPortraitSpeakers(
+    data?.scene || [], speakerVersions, chatPortraits, chatFocus);
+
   const panelHead = (id: PanelId, icon: IconName, title: string) => (
     <header className="hud-panel-head">
       <Icon name={icon} size={14} />
@@ -659,6 +862,22 @@ export function Hud({ avatar, username, role }: {
       {id === 'chat' && (
         <span className="hud-panel-sub">
           {present.length ? `· ${present.join(', ')}` : `· ${t('You are alone here.')}`}
+        </span>
+      )}
+      {/* How many faces stand next to the transcript (2e). A SWITCH and not a
+          rule derived from the window width (user ruling): how much of the
+          conversation one wants to see is a decision, and a width that quietly
+          added a third portrait would be taking it away. */}
+      {id === 'chat' && (
+        <span className="hud-chat-count" role="group" aria-label={t('Portraits')}>
+          {PORTRAIT_CHOICES.map((n) => (
+            <button key={n} type="button" aria-pressed={n === chatPortraits}
+              className={n === chatPortraits ? 'on' : ''}
+              title={t('Portrait count: {n}').replace('{n}', String(n))}
+              onClick={() => setChatPortraits(n)}>
+              {n}
+            </button>
+          ))}
         </span>
       )}
       {/* Taking control lives in the panel CHROME, not in the shared SelfPanel
@@ -735,17 +954,62 @@ export function Hud({ avatar, username, role }: {
 
       {open.chat && (
         <section ref={chatRef}
-          className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}>
+          className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}
+          style={{
+            ...(chatSize ? { width: chatSize.w, height: chatSize.h } : null),
+            '--hud-chat-alpha': String(chatAlpha),
+          } as React.CSSProperties}>
+          {/* The window's own surface (2d). The panel's opaque vellum is
+              switched off for this one panel in hud.css and this layer stands
+              in for it, with its ALPHA on a custom property — never `opacity`,
+              which would fade the transcript text along with the background.
+              It holds no text of its own, so nothing here can be dimmed. */}
+          <div className="hud-chat-backdrop" aria-hidden="true" />
+          {/* Three handles (2a): top edge, right edge, and the corner between
+              them. Absolutely positioned OUT of the flex column, or each would
+              eat a share of the height the head and the transcript divide
+              between them — the same reason the dock handle gives. */}
+          <div className="hud-chat-grip hud-chat-grip-top" data-edge="top"
+            role="separator" aria-orientation="horizontal"
+            title={t('Drag to resize · double-click to reset')}
+            aria-label={t('Drag to resize · double-click to reset')}
+            onPointerDown={onChatGripDown} onPointerMove={onChatGripMove}
+            onPointerUp={onChatGripUp} onPointerCancel={onChatGripUp}
+            onDoubleClick={onChatGripReset} />
+          <div className="hud-chat-grip hud-chat-grip-right" data-edge="right"
+            role="separator" aria-orientation="vertical"
+            title={t('Drag to resize · double-click to reset')}
+            aria-label={t('Drag to resize · double-click to reset')}
+            onPointerDown={onChatGripDown} onPointerMove={onChatGripMove}
+            onPointerUp={onChatGripUp} onPointerCancel={onChatGripUp}
+            onDoubleClick={onChatGripReset} />
+          <div className="hud-chat-grip hud-chat-grip-corner" data-edge="corner"
+            role="separator"
+            title={t('Drag to resize · double-click to reset')}
+            aria-label={t('Drag to resize · double-click to reset')}
+            onPointerDown={onChatGripDown} onPointerMove={onChatGripMove}
+            onPointerUp={onChatGripUp} onPointerCancel={onChatGripUp}
+            onDoubleClick={onChatGripReset} />
           {panelHead('chat', 'chat', avatarName || '—')}
-          <ErrorBoundary inline label="Chat">
-            {/* photoDialog `key`: a second prepared payload is a NEW dialog,
-                not the old one with new props — without the key the edited
-                prompt and the chip selection of the previous 📷 press would
-                survive into it. */}
-            <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
-              hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
-              photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.prompt} {...ctl} />} />
-          </ErrorBoundary>
+          {/* Two columns (2b, decision E2): the transcript keeps its width and
+              every extra pixel of the window goes LEFT, to the pictures. With
+              nobody to show, the chat takes the whole window back — an empty
+              column would be a hole with nothing to say. */}
+          <div className={'hud-chat-split'
+            + (portraitNames.length ? '' : ' hud-chat-split-solo')}>
+            <ChatPortraits names={portraitNames} versions={speakerVersions} />
+            <div className="hud-chat-main">
+              <ErrorBoundary inline label="Chat">
+                {/* photoDialog `key`: a second prepared payload is a NEW dialog,
+                    not the old one with new props — without the key the edited
+                    prompt and the chip selection of the previous 📷 press would
+                    survive into it. */}
+                <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
+                  hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
+                  photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.prompt} {...ctl} />} />
+              </ErrorBoundary>
+            </div>
+          </div>
         </section>
       )}
 
@@ -793,6 +1057,7 @@ export function Hud({ avatar, username, role }: {
                   <GameMenu prefs={prefs} onChange={setPrefs}
                     perfOn={perfOn} onPerfChange={setPerfOn}
                     minimapOn={minimapOn} onMinimapChange={setMinimapOn}
+                    chatAlpha={chatAlpha} onChatAlphaChange={setChatAlpha}
                     scatterPrefs={scatterPrefs} onScatterChange={setScatterPrefs}
                     isAdmin={role === 'admin'} showAll={showAll} onShowAllChange={setShowAll}
                     onBackToTitle={() => gameActions.backToTitle?.()} />
