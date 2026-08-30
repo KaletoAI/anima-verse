@@ -314,6 +314,11 @@ def test_validation() -> None:
     raises("the pair separator in the kind -> ClipLibraryError",
            ac.ClipLibraryError,
            lambda: ac.rename_clip("free", "walk.fbx", kind="walk__a"))
+    # ``walk_02`` as a KIND would be written as walk_02.fbx and read back as
+    # the second variant of "walk" — the numbering is not nameable.
+    raises("a _<number> suffix in the kind -> ClipLibraryError",
+           ac.ClipLibraryError,
+           lambda: ac.rename_clip("free", "walk.fbx", kind="walk_02"))
     raises("a slash in the kind -> ClipLibraryError", ac.ClipLibraryError,
            lambda: ac.rename_clip("free", "walk.fbx", kind="a/b"))
     raises("an empty kind -> ClipLibraryError", ac.ClipLibraryError,

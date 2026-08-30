@@ -61,6 +61,8 @@ KIND_RE = re.compile(r"^[a-z0-9][a-z0-9 _-]*$")
 SET_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 # ``<kind>__<role>[_<n>]`` — the parts a rename has to keep apart.
 _STEM_RE = re.compile(r"^(?P<kind>.*?)(?:__(?P<role>[ab]))?(?P<num>_\d+)?$")
+# The variant numbering — cut from a file stem, refused inside a kind.
+_NUM_SUFFIX_RE = re.compile(r"_\d+$")
 
 
 class ClipLibraryError(Exception):
@@ -102,7 +104,7 @@ def parse_clip_role(filename: str) -> Tuple[str, str]:
     The numbering suffix is cut BEFORE the role is read, so ``hug__a_02.fbx``
     is a second take of the A half."""
     stem = Path(filename).stem.strip().lower()
-    stem = re.sub(r"_\d+$", "", stem) or stem
+    stem = _NUM_SUFFIX_RE.sub("", stem) or stem
     head, sep, tail = stem.rpartition(ROLE_SEPARATOR)
     if sep and head and tail in PAIR_ROLES:
         return head, tail
@@ -314,6 +316,13 @@ def _validate_kind(raw: Any) -> str:
     if ROLE_SEPARATOR in kind:
         raise ClipLibraryError(
             f"kind must not contain '{ROLE_SEPARATOR}' (the pair role separator)")
+    if _NUM_SUFFIX_RE.search(kind):
+        # A kind ending in _<n> would be parsed back as the kind without it:
+        # renaming to "walk_02" produces "walk_02.fbx", which the layout reads
+        # as the second variant of "walk". The numbering is not nameable.
+        raise ClipLibraryError(
+            "kind must not end in '_<number>' — that suffix is the numbering "
+            "of several clips of one kind, not part of the kind itself")
     if not KIND_RE.match(kind):
         raise ClipLibraryError(
             "kind must be lowercase letters, digits, space, '-' or '_'")
