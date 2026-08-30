@@ -10,6 +10,10 @@ import type { ReactNode } from 'react'
 import { useI18n } from './I18nProvider'
 
 export interface SceneLine {
+  /** Perception row id — stable across polls, unique within one history.
+   *  Only the `/play/scene` payload carries it; the objective observer view
+   *  does not, so nothing may depend on it being there. */
+  id?: number
   ts: string
   speaker?: string
   content?: string
@@ -45,12 +49,30 @@ export interface ThinkingInfo {
   responding?: boolean
 }
 
-export function SceneView({ lines, emptyHint, thinking, onOpenImage }: {
+/** The class a highlighted row carries IN ADDITION to `ga-list-row`. It is set
+ *  only when `highlightedId` names the row — nobody who leaves that prop out
+ *  ever sees it, and the package ships no rule for it: the host that asks for
+ *  a highlight styles it (the 3D HUD does, `/play` does not use it). */
+export const SCENE_ROW_ACTIVE_CLASS = 'scene-row-active'
+
+/** The attribute a row's id is written to, so a host can measure/address rows
+ *  in the DOM (`[data-scene-id="…"]`) without a ref per line. Always set when
+ *  the line has an id — an attribute is invisible. */
+export const SCENE_ROW_ID_ATTR = 'data-scene-id'
+
+export function SceneView({ lines, emptyHint, thinking, onOpenImage,
+                            highlightedId, onRowHover }: {
   lines: SceneLine[]
   emptyHint?: string
   thinking?: ThinkingInfo[]
   /** Optional: open an attached scene image (e.g. in a Lightbox). */
   onOpenImage?: (url: string) => void
+  /** Optional: id of the row to mark as highlighted (see
+   *  `SCENE_ROW_ACTIVE_CLASS`). Left out = no row is ever marked. */
+  highlightedId?: number | null
+  /** Optional: the pointer entered a row (its id) or left it (`null`).
+   *  Left out = no pointer handlers are attached at all. */
+  onRowHover?: (id: number | null) => void
 }) {
   const { t } = useI18n()
   const thinkers = thinking || []
@@ -60,7 +82,11 @@ export function SceneView({ lines, emptyHint, thinking, onOpenImage }: {
   return (
     <div className="ga-list" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {lines.map((line, i) => (
-        <SceneRow key={i} line={line} onOpenImage={onOpenImage} />
+        // Key on the row id where there is one (stable across polls); the
+        // objective observer view has none and keeps the index.
+        <SceneRow key={line.id ?? i} line={line} onOpenImage={onOpenImage}
+          highlighted={highlightedId != null && line.id === highlightedId}
+          onRowHover={onRowHover} />
       ))}
       {thinkers.map((info) => (
         <div key={`thinking-${info.name}`} className="ga-list-row" style={{ display: 'flex', gap: 8, alignItems: 'baseline', opacity: 0.75 }}>
@@ -82,8 +108,24 @@ export function SceneView({ lines, emptyHint, thinking, onOpenImage }: {
   )
 }
 
-function SceneRow({ line, onOpenImage }: { line: SceneLine; onOpenImage?: (url: string) => void }) {
+function SceneRow({ line, onOpenImage, highlighted, onRowHover }: {
+  line: SceneLine
+  onOpenImage?: (url: string) => void
+  /** Adds `SCENE_ROW_ACTIVE_CLASS`; false/absent leaves the markup as it was. */
+  highlighted?: boolean
+  onRowHover?: (id: number | null) => void
+}) {
   const { t } = useI18n()
+  // Row hooks for a host that wants a highlight. Without `onRowHover` no
+  // handler is attached, without `highlighted` no class is added — a caller
+  // that passes neither gets exactly the markup of before.
+  const rowProps = {
+    [SCENE_ROW_ID_ATTR]: line.id,
+    onMouseEnter: onRowHover && line.id != null
+      ? () => onRowHover(line.id as number) : undefined,
+    onMouseLeave: onRowHover ? () => onRowHover(null) : undefined,
+  }
+  const rowClass = 'ga-list-row' + (highlighted ? ` ${SCENE_ROW_ACTIVE_CLASS}` : '')
   const speaker = speakerOf(line)
   const addr = addresseesOf(line)
   const time = clockOf(line.ts)
@@ -96,7 +138,7 @@ function SceneRow({ line, onOpenImage }: { line: SceneLine; onOpenImage?: (url: 
   if (verdict === 'resolved' || verdict === 'unresolved') {
     const resolved = verdict === 'resolved'
     return (
-      <div className="ga-list-row" style={{
+      <div className={rowClass} {...rowProps} style={{
         display: 'flex', gap: 8, alignItems: 'baseline', padding: '4px 8px',
         margin: '2px 0', borderRadius: 6,
         borderLeft: `4px solid ${resolved ? '#3fa45a' : '#e0843c'}`,
@@ -161,7 +203,7 @@ function SceneRow({ line, onOpenImage }: { line: SceneLine; onOpenImage?: (url: 
   }
 
   return (
-    <div className="ga-list-row" style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+    <div className={rowClass} {...rowProps} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
       <span className="ga-list-row-sub" style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.5, fontSize: '0.75em' }}>
         {time}
       </span>

@@ -83,7 +83,11 @@ export interface SceneData {
   room_name: string
   present: string[]
   present_detail: Array<{ name: string; avatar_url: string; expr_version?: string }>
-  scene: Array<{ ts: string; content: string; kind: string; meta?: Record<string, unknown> }>
+  scene: Array<{ id?: number; ts: string; content: string; kind: string; meta?: Record<string, unknown> }>
+  /** Expression cache-buster per renderable SPEAKER of `scene[]` — including
+   *  speakers who have left the room since (they stay in the history). The
+   *  present and the avatar keep their own fields above/below. */
+  speaker_expr_versions?: Record<string, string>
   follow_suggestions?: Array<{ character: string; room_id: string; room_name: string }>
   party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
   party_invites?: Array<{ invite_id: string; inviter: string }>
@@ -402,8 +406,12 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     catch { /* ignore */ }
   }, [refreshScene, toast, t])
 
+  // `id` is carried through: it is the stable key of a row and what a host
+  // addresses a row by (`data-scene-id`). `volume` stays dropped on purpose —
+  // handing it over would switch on SceneView's whisper/shout formatting for
+  // /play, which is a change of its own and not asked for here.
   const lines: SceneLine[] = (data?.scene || []).map((p) => ({
-    ts: p.ts, content: p.content, kind: p.kind, meta: p.meta,
+    id: p.id, ts: p.ts, content: p.content, kind: p.kind, meta: p.meta,
   }))
   const present = data?.present || []
   // Scene indicator: ONLY replies ("X is responding …"), no background

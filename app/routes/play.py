@@ -59,6 +59,35 @@ def _expr_version(name: str) -> str:
     return hashlib.md5(f"{mood}|{pose_key}|{eq_sig}|{mtime}".encode("utf-8")).hexdigest()[:10]
 
 
+def _renderable_speakers(scene: List[Dict[str, Any]]) -> List[str]:
+    """The speakers of ``scene`` that HAVE a face to show, deduplicated, in
+    order of first appearance.
+
+    ``meta.speaker`` is always set — ``perception.record_utterance`` is the
+    only write path. Three kinds of line have no portrait: narrator prose,
+    display-only meta lines (relationship notes) and event verdicts — and all
+    three are written with the canonical ``STORYTELLER_SPEAKER``, so one
+    comparison drops all three.
+
+    Compared against the CANONICAL constant on purpose: ``play_scene``
+    localises the storyteller label further down for display, and a localised
+    string must never decide who is renderable (it would let every narrator
+    line through in German, and in every other language too).
+    """
+    out: List[str] = []
+    seen: set = set()
+    for line in scene or []:
+        meta = line.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        name = (meta.get("speaker") or "").strip()
+        if not name or name == STORYTELLER_SPEAKER or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
 def _bg_version(location_id: str, room: str) -> str:
     """Cache-buster token for the background image: it changes when an event
     image becomes active / finishes generating (or the regular background file
@@ -147,6 +176,16 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     """The avatar's PERCEIVED room scene plus its movement context (rooms,
     who is around).
 
+    ``speaker_expr_versions`` maps every renderable SPEAKER of the returned
+    ``scene[]`` to its expression cache-buster (``{name: version}``, storyteller
+    lines excluded — see :func:`_renderable_speakers`). It exists because the
+    two older fields only cover the present: ``present_detail[].expr_version``
+    and ``avatar_expr_version``. A speaker who has left the room since is still
+    in the history, and without a version its portrait would be served
+    unversioned — the expression route caches a hit for an hour
+    (``Cache-Control: public, max-age=3600``). Every version is computed once
+    per NAME per request, whichever of the three fields needs it.
+
     A PLAIN ``def`` on purpose: nothing here is awaited — it is perception
     reads, character profiles and the journey block, all synchronous SQLite —
     and FastAPI runs a plain handler in the threadpool. As a coroutine it held
@@ -163,6 +202,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     empty = {"avatar": "", "location_id": "", "location_name": "",
              "room_id": "", "room_name": "", "present": [], "present_detail": [],
              "scene": [], "rooms": [], "travel": None,
+             "speaker_expr_versions": {},
              "avatar_expr_version": "", "bg_version": "",
              "bg_id": "", "capabilities": []}
     avatar = (get_active_character() or "").strip()
@@ -188,16 +228,34 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     scene = perception_store.get_character_room_stream(
         avatar, loc, room, limit, include_meta_lines=True)
 
-    # Porträts der Anwesenden fürs Umgebungs-Fenster
+    # Portraits of the present for the environment window
     from app.models.character import get_character_profile_image
 
     def _portrait(name: str) -> str:
         img = get_character_profile_image(name) or ""
         return f"/characters/{name}/images/{img}" if img else ""
-    present_detail = [{"name": c, "avatar_url": _portrait(c),
-                       "expr_version": _expr_version(c)} for c in present]
 
-    # Bewegungs-Kontext: Räume des Orts + aktueller Raumname
+    _expr_seen: Dict[str, str] = {}
+
+    def _expr_v(name: str) -> str:
+        """``_expr_version`` memoised for THIS request. It is a pure function
+        of the character's state, but not a cheap one (profile, pose, equipped
+        items, mtime of the cached variant), and the same name shows up in up
+        to three payload fields — present, speaker, avatar."""
+        version = _expr_seen.get(name)
+        if version is None:
+            version = _expr_seen[name] = _expr_version(name)
+        return version
+
+    present_detail = [{"name": c, "avatar_url": _portrait(c),
+                       "expr_version": _expr_v(c)} for c in present]
+    # Every speaker of the returned history, not just the present (see the
+    # docstring). Computed BEFORE the storyteller label is localised below —
+    # the selection reads the canonical speaker value.
+    speaker_expr_versions = {name: _expr_v(name)
+                             for name in _renderable_speakers(scene)}
+
+    # Movement context: the rooms of the location + the current room's name
     loc_obj = get_location_by_id(loc) if loc else None
     location_name = (loc_obj.get("name", "") if loc_obj else "")
     from app.core.world_ops import build_avatar_rooms
@@ -212,9 +270,10 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         if room and (r["id"] == room or r["name"] == room):
             room_name = r["name"]
 
-    # C2a: Folgen-Vorschläge — kürzlich aktive Gesprächspartner, die den Raum
-    # gerade verlassen haben (gleiche Location, anderer Raum). Avatar folgt per
-    # Klick (/play/enter-room). So bricht das Gespräch beim Raumwechsel nicht ab.
+    # C2a: follow suggestions — recently active conversation partners that have
+    # just left the room (same location, other room). The avatar follows with
+    # one click (/play/enter-room), so a room change does not break off the
+    # conversation.
     follow_suggestions = []
     try:
         from datetime import timedelta
@@ -240,8 +299,8 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     except Exception as _fe:
         logger.debug("follow_suggestions failed: %s", _fe)
 
-    # Party-Status (Kompass ausblenden wenn Follower) + offene Einladungen an den
-    # Avatar (Ja/Nein-Frage im Chat-Fenster).
+    # Party state (hide the compass for a follower) + the invitations pending
+    # for the avatar (a yes/no question in the chat window).
     party = _party_block(avatar)
     try:
         from app.core.party_engine import get_pending_invites_for
@@ -271,7 +330,8 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         "present": present, "present_detail": present_detail, "scene": scene,
         "follow_suggestions": follow_suggestions,
         "party": party, "party_invites": party_invites,
-        "avatar_expr_version": _expr_version(avatar),
+        "speaker_expr_versions": speaker_expr_versions,
+        "avatar_expr_version": _expr_v(avatar),
         "bg_version": _bg_version(loc, room) if loc else "",
         "bg_id": _bg_id(loc, room) if loc else "",
         "rooms": rooms_out,
