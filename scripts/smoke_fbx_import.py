@@ -388,7 +388,7 @@ def test_real() -> None:
     female = [n for n in files if n.lower().startswith("female_")]
     male = [n for n in files if n.lower().startswith("male_")]
     rest = [n for n in files if fbx_import.is_rest_name(n)]
-    rig = paths.get_shared_dir() / "models" / "clips-licensed" / "idle.fbx"
+    rig = paths.get_rig_file()
     if not (st["executable"] and female and male and rest and rig.is_file()):
         print(f"  – skipped (blender={bool(st['executable'])}, pair={bool(female and male)}, "
               f"reference pose={bool(rest)}, rig={rig.is_file()})")
@@ -397,9 +397,9 @@ def test_real() -> None:
     os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(live)
     fbx_import._probe_cache.clear()
     try:
-        # The throwaway library holds a FAKE idle.fbx, so the rig is named
-        # explicitly — the real library's own skeleton, which is what an
-        # import in production picks.
+        # The project's reference skeleton — the same file an import in
+        # production picks (``cmu_import.default_rig()``); it lives outside
+        # the libraries, so the throwaway target does not hide it.
         res = fbx_import.import_fbx("smoketest-pair", [female[0], male[0]],
                                     rest_file=rest[0], target="licensed",
                                     out_dir=LICENSED / "real", rig=rig,
