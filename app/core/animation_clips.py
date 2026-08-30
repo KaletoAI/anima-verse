@@ -17,9 +17,11 @@ ROLE as a ``__a`` / ``__b`` suffix of the stem: ``handshake__a.fbx`` and
 ``handshake__b.fbx`` are the two halves of the kind ``handshake``. The double
 underscore is the role separator and nothing else (a single ``_`` stays part
 of the kind). A pair kind has no solo file; it is played by two figures at a
-shared anchor, in lockstep. Next to the files a ``<kind>.json`` SIDECAR
-(written by ``scripts/clip_import_cmu.py``) holds duration, frame rate and
-the anchor geometry; ``clip_meta()`` reads it.
+shared anchor, in lockstep. Next to the files a JSON SIDECAR (written by
+``scripts/clip_import_cmu.py``) holds duration, frame rate and the anchor
+geometry: for a file ``<stem>.fbx`` it is ``<stem>.json`` when that exists —
+so a numbered variant may carry its own numbers — and the shared
+``<kind>.json`` otherwise; ``clip_meta()`` reads it.
 
 Both vocabularies are OPEN — a new kind is just a new file, a new set just a
 new directory, nothing is hardcoded. Which set a character uses (and the
@@ -167,15 +169,27 @@ def pair_kinds() -> List[str]:
     return sorted({k for (_s, k), roles in halves.items() if roles >= set(PAIR_ROLES)})
 
 
-def clip_meta(kind: str, cset: str = "") -> Optional[Dict[str, Any]]:
-    """The ``<kind>.json`` sidecar of a clip (duration, fps, pair geometry),
-    None when there is none. Looked up in the set directory, then the root."""
+def clip_meta(kind: str, cset: str = "",
+              stem: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The sidecar of a clip (duration, fps, pair geometry), None when there is
+    none. Looked up in the set directory, then the root.
+
+    THE SIDECAR RULE: for a file ``<stem>.fbx`` the sidecar is ``<stem>.json``
+    when that file exists, else the shared ``<kind>.json``. So a numbered
+    variant may carry its OWN numbers (``idle_02.fbx`` + ``idle_02.json``) and
+    only falls back to the numbers of its kind when it does not. Callers that
+    know only a kind (the pair geometry of the listing, the interaction
+    engine) pass no ``stem`` and get exactly the old behaviour.
+    """
+    names = [stem] if stem and stem != kind else []
+    names.append(kind)
     candidates = []
-    # licensed first — the sidecar belongs to the file that wins
-    for root, _source in reversed(get_animation_clips_dirs()):
-        if cset:
-            candidates.append(root / cset / f"{kind}.json")
-        candidates.append(root / f"{kind}.json")
+    for name in names:
+        # licensed first — the sidecar belongs to the file that wins
+        for root, _source in reversed(get_animation_clips_dirs()):
+            if cset:
+                candidates.append(root / cset / f"{name}.json")
+            candidates.append(root / f"{name}.json")
     for path in candidates:
         if path.is_file():
             try:
@@ -208,16 +222,17 @@ def _origin(meta: Optional[Dict[str, Any]]) -> str:
 
 def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
     """One ``clip_entries()`` entry as the API delivers it — the file facts
-    plus what its ``<kind>.json`` sidecar knows.
+    plus what its sidecar knows.
 
     The sidecar is looked up exactly the way playback looks it up
-    (``clip_meta``: set directory first, then the library root, licensed
-    before free), so a numbered variant reports the numbers of the kind it
-    belongs to. Without a sidecar the numeric fields are ``None`` — that is a
-    normal state, not an error.
+    (``clip_meta``: ``<stem>.json`` before the shared ``<kind>.json``, set
+    directory before the library root, licensed before free), so a numbered
+    variant reports its OWN numbers when it has a sidecar and those of its
+    kind otherwise. Without any sidecar the numeric fields are ``None`` —
+    that is a normal state, not an error.
     """
     path: Path = entry["path"]
-    meta = clip_meta(entry["kind"], entry["set"])
+    meta = clip_meta(entry["kind"], entry["set"], stem=path.stem)
     geometry = meta.get("geometry") if isinstance(meta, dict) else None
     loop = bool(meta and (meta.get("loop")
                           or (isinstance(geometry, dict) and geometry.get("loop"))))
@@ -311,6 +326,16 @@ def _kind_files(directory: Path, kind: str) -> List[Path]:
             and parse_clip_role(p.name)[0] == kind]
 
 
+def _own_sidecar(path: Path) -> Optional[Path]:
+    """The sidecar belonging to THIS file alone — ``walk_02.json`` next to
+    ``walk_02.fbx``. None when the stem IS the kind (then the sidecar is the
+    shared ``<kind>.json``, which the kind rules own) or when there is none."""
+    if path.stem.strip().lower() == parse_clip_role(path.name)[0]:
+        return None
+    sidecar = path.with_suffix(".json")
+    return sidecar if sidecar.is_file() else None
+
+
 def _validate_kind(raw: Any) -> str:
     kind = str(raw or "").strip().lower()
     if ROLE_SEPARATOR in kind:
@@ -359,9 +384,12 @@ def reload_clip_caches() -> None:
 def delete_clip(library: str, rel: str) -> Dict[str, Any]:
     """Removes one clip from one library — both halves when it is a pair.
 
-    The ``<kind>.json`` sidecar goes with it only when NO file of that kind is
-    left in the same directory: numbered variants (``walk.fbx`` +
-    ``walk_02.fbx``) share one sidecar, and the last one takes it along.
+    A sidecar that belongs to THIS file alone (``walk_02.json`` next to
+    ``walk_02.fbx``) goes with it. The shared ``<kind>.json`` goes only when NO
+    file of that kind is left in the same directory: numbered variants without
+    an own sidecar share it, and the last one takes it along. A set directory
+    that lost its last file is no set any more and is removed with it (never a
+    library root).
     """
     path = resolve_clip(library, rel)
     if not path.is_file():
@@ -374,20 +402,30 @@ def delete_clip(library: str, rel: str) -> Dict[str, Any]:
     partner = _pair_partner(path)
     if partner is not None:
         targets.append(partner)
+    sidecars_removed = []
     for p in targets:
+        own = _own_sidecar(p)
         p.unlink(missing_ok=True)
+        if own is not None:
+            own.unlink(missing_ok=True)
+            sidecars_removed.append(own.name)
 
     sidecar = path.parent / f"{kind}.json"
     sidecar_removed = False
     if sidecar.is_file() and not _kind_files(path.parent, kind):
         sidecar.unlink(missing_ok=True)
         sidecar_removed = True
+        sidecars_removed.append(sidecar.name)
+
+    if cset and path.parent.is_dir() and not any(path.parent.iterdir()):
+        path.parent.rmdir()
 
     reload_clip_caches()
     deleted = sorted(f"{cset}/{p.name}" if cset else p.name for p in targets)
     logger.info("clip deleted: %s (%s library)", ", ".join(deleted), library)
     return {"deleted": deleted, "kind": kind, "set": cset, "library": library,
-            "sidecar_removed": sidecar_removed}
+            "sidecar_removed": sidecar_removed,
+            "sidecars_removed": sorted(sidecars_removed)}
 
 
 def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
@@ -396,10 +434,12 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     """Renames a clip and/or moves it to another set or library.
 
     A pair moves as a pair (both halves), a numbered variant keeps its
-    ``_<n>``. The sidecar follows: it MOVES when nothing of the old kind stays
-    behind, and is COPIED when other variants still need it. Its ``kind``
-    field is rewritten with the new name. An existing sidecar at the target is
-    left untouched — it belongs to the variants already there.
+    ``_<n>``. The sidecars follow: one belonging to a single file
+    (``walk_02.json``) travels with that file and is renamed with it, the
+    shared ``<kind>.json`` MOVES when nothing of the old kind stays behind and
+    is COPIED when other variants still need it. The ``kind`` field is
+    rewritten with the new name in both cases. An existing sidecar at the
+    target is left untouched — it belongs to the variants already there.
 
     Returns the moved clips as listing views.
     """
@@ -440,10 +480,17 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
         return [_view_of(src, new_set, new_library)]        # nothing changed
 
     dest_dir.mkdir(parents=True, exist_ok=True)
+    # Only a file WITHOUT a sidecar of its own still depends on the shared
+    # <kind>.json — one that brings its own must not drag a copy along.
+    needs_shared = False
     for source, dest in moves:
+        own = _own_sidecar(source)
+        needs_shared = needs_shared or own is None
         shutil.move(str(source), str(dest))
+        if own is not None:
+            _take_own_sidecar(own, dest.with_suffix(".json"), new_kind)
 
-    _move_sidecar(src.parent, old_kind, dest_dir, new_kind)
+    _move_sidecar(src.parent, old_kind, dest_dir, new_kind, needed=needs_shared)
 
     # A set directory that lost its last file is no set any more.
     if old_set and src.parent.is_dir() and not any(src.parent.iterdir()):
@@ -467,18 +514,24 @@ def _view_of(path: Path, cset: str, library: str) -> Dict[str, Any]:
 
 
 def _move_sidecar(src_dir: Path, old_kind: str, dest_dir: Path,
-                  new_kind: str) -> None:
-    """Takes the ``<kind>.json`` along with the files that just moved.
+                  new_kind: str, *, needed: bool = True) -> None:
+    """Takes the shared ``<kind>.json`` along with the files that just moved.
 
     It MOVES when no file of the old kind is left in the source directory and
     COPIES when there still are numbered variants sharing it. A sidecar
     already sitting at the target wins — those are the numbers of the clips
     that were there first.
+
+    ``needed`` is False when every moved file brought a sidecar of ITS OWN:
+    the shared one is then only taken along when it would otherwise dangle in
+    the source directory, and never copied to a kind nothing reads it for.
     """
     sidecar = src_dir / f"{old_kind}.json"
     if not sidecar.is_file():
         return
     orphaned = not _kind_files(src_dir, old_kind)
+    if not needed and not orphaned:
+        return
     target = dest_dir / f"{new_kind}.json"
     if target.exists() and target.resolve() != sidecar.resolve():
         if orphaned:
@@ -489,11 +542,27 @@ def _move_sidecar(src_dir: Path, old_kind: str, dest_dir: Path,
     else:
         shutil.copy2(str(sidecar), str(target))
     if new_kind != old_kind:
-        try:
-            data = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return
-        if isinstance(data, dict):
-            data["kind"] = new_kind
-            target.write_text(json.dumps(data, indent=2, ensure_ascii=False),
-                              encoding="utf-8")
+        _rewrite_sidecar_kind(target, new_kind)
+
+
+def _take_own_sidecar(sidecar: Path, target: Path, new_kind: str) -> None:
+    """Moves the sidecar of ONE file (``walk_02.json``) to the name that file
+    now has (``stroll_02.json``) and rewrites its ``kind``. A sidecar already
+    lying at the target wins — it belongs to the file that was there first."""
+    if target.exists() and target.resolve() != sidecar.resolve():
+        return
+    if target.resolve() != sidecar.resolve():
+        shutil.move(str(sidecar), str(target))
+    _rewrite_sidecar_kind(target, new_kind)
+
+
+def _rewrite_sidecar_kind(target: Path, new_kind: str) -> None:
+    """Puts the new kind into a sidecar that was just moved or copied."""
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(data, dict) and data.get("kind") != new_kind:
+        data["kind"] = new_kind
+        target.write_text(json.dumps(data, indent=2, ensure_ascii=False),
+                          encoding="utf-8")

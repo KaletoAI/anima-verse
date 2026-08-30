@@ -14,6 +14,8 @@ The fixture (dummy .fbx bytes, real JSON sidecars):
       walk.fbx                       wave.fbx      + wave.json
       walk_02.fbx                    dance.fbx     (no sidecar)
       walk.json
+      run.fbx     + run.json
+      run_02.fbx  + run_02.json    (a variant with its OWN sidecar)
       hug__a.fbx  hug__b.fbx
       hug.json
       wave.fbx                       (shadowed by the licensed twin)
@@ -22,12 +24,15 @@ The fixture (dummy .fbx bytes, real JSON sidecars):
 
 Expected values, derived by hand from that fixture and the layout rules:
 
-* SEVEN entries: the eight free+licensed files minus the ONE shadowed twin —
+* NINE entries: the ten free+licensed files minus the ONE shadowed twin —
   ``wave.fbx`` exists in both libraries and the same rel yields the licensed
   file (licensed wins), so the free wave.fbx is not an entry of its own.
 * ``walk.json`` says fps 30 / frames 90, hence duration_s = 90/30 = 3.0 s;
-  ``walk_02.fbx`` is a numbering variant of the SAME kind "walk" and therefore
-  reports the same 3.0 s / 30 / 90 from that one shared sidecar.
+  ``walk_02.fbx`` is a numbering variant of the SAME kind "walk" and has NO
+  sidecar of its own, so it reports those same 3.0 s / 30 / 90.
+* THE SIDECAR RULE the other way round: ``run_02.fbx`` DOES have its own
+  ``run_02.json`` (fps 60 / frames 120 -> 2.0 s), so it reports those numbers
+  and not the 4.0 s / 30 fps of the shared ``run.json`` its kind carries.
 * ``loop`` is true for walk (top-level ``loop: true``) and for hug (only
   ``geometry.loop`` is set), false for sit (``loop: false``) and for dance
   (no sidecar at all).
@@ -36,9 +41,13 @@ Expected values, derived by hand from that fixture and the layout rules:
   sidecar -> "unknown".
 * Deleting ``walk.fbx`` leaves 1 file of kind walk (walk_02.fbx), so walk.json
   STAYS; deleting walk_02.fbx afterwards leaves 0, so walk.json goes.
+* Deleting ``run_02.fbx`` takes its OWN run_02.json with it but leaves
+  run.json — run.fbx still needs it.
 * Deleting ``hug__a.fbx`` deletes 2 files (both halves) and hug.json with them.
 * Renaming walk -> stroll while walk_02.fbx stays behind: walk.json is COPIED
   to stroll.json (kind rewritten to "stroll"), the original keeps kind "walk".
+* Renaming run_02 -> jog: the file becomes jog_02.fbx and its own sidecar
+  travels along as jog_02.json with kind "jog"; run.json stays with run.fbx.
 * Moving female/sit.fbx to the root moves sit.json with it (nothing of kind
   sit is left in female/) and removes the then-empty female/ directory.
 
@@ -108,6 +117,19 @@ def build_tree() -> None:
         "geometry": {"in_place": True},
         "source": {"database": CMU_DB, "takes": ["07_01"]}})
 
+    # Same kind, but the variant carries a sidecar of its OWN — the numbers
+    # the listing has to prefer over the shared run.json.
+    (FREE / "run.fbx").write_bytes(b"free-run")
+    (FREE / "run_02.fbx").write_bytes(b"free-run-2")
+    write_sidecar(FREE / "run.json", {
+        "kind": "run", "pair": False, "fps": 30, "frames": 120,
+        "duration_s": 4.0, "loop": True, "geometry": {"in_place": True},
+        "source": {"format": "fbx", "bone_map": "unity-humanoid"}})
+    write_sidecar(FREE / "run_02.json", {
+        "kind": "run", "pair": False, "fps": 60, "frames": 120,
+        "duration_s": 2.0, "loop": True, "geometry": {"in_place": True},
+        "source": {"format": "fbx", "bone_map": "unity-humanoid"}})
+
     (FREE / "hug__a.fbx").write_bytes(b"free-hug-a")
     (FREE / "hug__b.fbx").write_bytes(b"free-hug-b")
     write_sidecar(FREE / "hug.json", {
@@ -141,8 +163,8 @@ def test_listing() -> None:
     print("\nListing — the fields the library view reads")
     build_tree()
     views = views_by_rel()
-    check("7 entries (8 files, the free wave.fbx shadowed by the licensed one)",
-          len(views) == 7, str(sorted(r for _s, r in views)))
+    check("9 entries (10 files, the free wave.fbx shadowed by the licensed one)",
+          len(views) == 9, str(sorted(r for _s, r in views)))
     check("licensed wins for wave.fbx",
           ("licensed", "wave.fbx") in views and ("free", "wave.fbx") not in views)
 
@@ -159,9 +181,18 @@ def test_listing() -> None:
           walk["url"])
 
     variant = views[("free", "walk_02.fbx")]
-    check("walk_02 shares the walk sidecar (kind walk, 3.0 s)",
+    check("walk_02 has no own sidecar and shares walk.json (kind walk, 3.0 s)",
           (variant["kind"], variant["duration_s"], variant["fps"])
           == ("walk", 3.0, 30), str(variant["duration_s"]))
+
+    run = views[("free", "run.fbx")]
+    own = views[("free", "run_02.fbx")]
+    check("run.fbx reads the shared run.json (4.0 s / 30 fps)",
+          (run["duration_s"], run["fps"]) == (4.0, 30), str(run["duration_s"]))
+    check("run_02 PREFERS its own run_02.json (2.0 s / 60 fps), kind stays run",
+          (own["kind"], own["duration_s"], own["fps"], own["frames"])
+          == ("run", 2.0, 60, 120),
+          str((own["duration_s"], own["fps"])))
 
     hug = views[("free", "hug__a.fbx")]
     check("hug__a: role a, loop from geometry.loop, origin unity-humanoid",
@@ -200,6 +231,13 @@ def test_delete() -> None:
     res = ac.delete_clip("free", "walk_02.fbx")
     check("deleting the last variant takes walk.json with it",
           not (FREE / "walk.json").exists() and res["sidecar_removed"] is True)
+
+    res = ac.delete_clip("free", "run_02.fbx")
+    check("deleting a variant takes its OWN sidecar and leaves the shared one",
+          not (FREE / "run_02.json").exists() and (FREE / "run.json").is_file()
+          and (FREE / "run.fbx").is_file()
+          and res["sidecars_removed"] == ["run_02.json"],
+          str(res["sidecars_removed"]))
 
     res = ac.delete_clip("free", "hug__a.fbx")
     check("deleting one pair half deletes BOTH halves + the sidecar",
@@ -256,6 +294,22 @@ def test_rename_kind() -> None:
           (FREE / "cuddle.json").is_file() and not (FREE / "hug.json").exists()
           and json.loads((FREE / "cuddle.json").read_text(
               encoding="utf-8"))["kind"] == "cuddle")
+
+    clips = ac.rename_clip("free", "run_02.fbx", kind="jog")
+    check("a variant with its own sidecar: file and sidecar are renamed",
+          [c["rel"] for c in clips] == ["jog_02.fbx"]
+          and (FREE / "jog_02.fbx").is_file()
+          and (FREE / "jog_02.json").is_file()
+          and not (FREE / "run_02.json").exists(),
+          str([c["rel"] for c in clips]))
+    check("the travelled sidecar carries the new kind and its own numbers",
+          json.loads((FREE / "jog_02.json").read_text(
+              encoding="utf-8"))["kind"] == "jog"
+          and clips[0]["duration_s"] == 2.0 and clips[0]["fps"] == 60,
+          str(clips[0]["duration_s"]))
+    check("run.json stays with run.fbx, no jog.json was invented",
+          (FREE / "run.json").is_file() and (FREE / "run.fbx").is_file()
+          and not (FREE / "jog.json").exists())
 
     clips = ac.rename_clip("free", "walk_02.fbx", kind="stroll")
     check("a numbering variant keeps its _02",

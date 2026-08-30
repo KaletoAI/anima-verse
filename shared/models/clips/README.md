@@ -39,6 +39,10 @@ files straight in — no registration, no config.
 | `treading-water.fbx` | `treading-water` | — |
 | `spell_casting.fbx` | `spell_casting` | — |
 
+**The sidecar of a file `<stem>.fbx` is `<stem>.json` when that file exists
+(so `idle_02.fbx` may carry its own duration in `idle_02.json`), otherwise the
+shared `<kind>.json` of its kind.**
+
 **`kind`** is the category an activity maps onto (`idle`, `walk`, `run`, `sit`,
 `lie`, `dance`, `wave`, …) and is the FILE NAME without its extension —
 **hyphens and underscores are part of it**. The ONLY thing cut off is a
