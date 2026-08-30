@@ -26,6 +26,12 @@
  * Distance is the plain XZ distance (a height difference does not gate a
  * conversation), the comparison is inclusive so the range itself still counts,
  * and of several candidates the NEAREST wins.
+ *
+ * That distance is HANDED OUT with the answer (bug round 2026-08-30): the F
+ * key answers the nearest of all standing offers now, not a fixed chain of
+ * them (`game/offers.ts`), and the reaches differ in size — 2.5 m here against
+ * 1.5 m at a stair landing. The comparison needs the measured metres, and they
+ * are measured here, once.
  */
 
 /** Talking distance in human metres — multiplied by the figure scale. */
@@ -48,12 +54,19 @@ export interface TalkCandidate extends TalkSelf {
   scale: number;
 }
 
+/** Who the avatar may address, and how far away that one stands (world
+ *  metres) — the distance the offer resolution compares (`game/offers.ts`). */
+export interface TalkOffer {
+  name: string;
+  dist: number;
+}
+
 /**
- * Nearest addressable character, or null. Ties are broken by name so a figure
- * cannot flicker between two equally distant neighbours from one 1 Hz tick to
- * the next.
+ * Nearest addressable character with its distance, or null. Ties are broken by
+ * name so a figure cannot flicker between two equally distant neighbours from
+ * one 1 Hz tick to the next.
  */
-export function talkTargetNear(avatar: TalkSelf, others: TalkCandidate[]): string | null {
+export function talkTargetNear(avatar: TalkSelf, others: TalkCandidate[]): TalkOffer | null {
   let best: string | null = null;
   let bestDist = Infinity;
   for (const o of others) {
@@ -69,5 +82,5 @@ export function talkTargetNear(avatar: TalkSelf, others: TalkCandidate[]): strin
       bestDist = dist;
     }
   }
-  return best;
+  return best === null ? null : { name: best, dist: bestDist };
 }

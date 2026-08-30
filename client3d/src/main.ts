@@ -20,6 +20,7 @@ import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
 } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
+import { nearestOffer, type OfferKind } from './game/offers';
 import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorSoleOption, elevatorTargetRoom,
   type ElevatorStop } from './game/elevator';
@@ -2535,6 +2536,10 @@ async function startApp(username: string, role: string) {
     updateElevator();   // standing at the lift is a second-scale event too
     updateStairs();     // …and so is standing at a flight of stairs
     updateEnterOffer(); // …and so is standing at a location entry (Etappe 3)
+    // All four offers are fresh now, so this is where "which one does F
+    // answer" can be asked — and an unfolded storey choice that has lost the
+    // key gets folded away.
+    syncElevatorPicker();
   }, 1000);
   // The very first payload of the session is never stale: no seat change of
   // our own has been made, let alone answered, so the default (`playerStale`
@@ -4713,10 +4718,9 @@ async function startApp(username: string, role: string) {
     // A party follower is carried by its leader and the server refuses the
     // room change anyway — no offer it could not honour.
     if (state.mode !== 'embodied' || state.movementLocked) return clear();
-    // Somebody walked into talk range: that prompt owns the bottom row and the
-    // F key, so an open storey choice is no longer visible — and an invisible
-    // choice must not keep Esc from leaving the mode.
-    if (state.talkTarget && state.elevatorOpen) setGameState({ elevatorOpen: false });
+    // An open storey choice that is no longer the offer F answers is folded
+    // away by `syncElevatorPicker` at the end of the tick — it takes all four
+    // offers to say that, and this function only knows its own.
     const pos = npcs.positionOf(avatarName);
     if (!pos) return clear();
     // Only inside the OPEN interior of the tile the figure stands on, exactly
@@ -4739,7 +4743,7 @@ async function startApp(username: string, role: string) {
     // Unchanged offer: no bus write, or React re-renders the chip every second
     // for nothing.
     const now = state.elevator;
-    if (now && now.current === found.current
+    if (now && now.current === found.current && now.dist === found.dist
       && now.levels.length === found.levels.length
       && now.levels.every((lv, i) => lv === found.levels[i])) return;
     setGameState({ elevator: found });
@@ -4866,7 +4870,8 @@ async function startApp(username: string, role: string) {
     // for nothing.
     const now = state.stairs;
     if (now && now.dir === found.dir && now.dest.level === found.dest.level
-      && now.dest.x === found.dest.x && now.dest.z === found.dest.z) return;
+      && now.dest.x === found.dest.x && now.dest.z === found.dest.z
+      && now.dist === found.dist) return;
     setGameState({ stairs: found });
   }
   // Leaving the mode drops the offer in the same tick the mode changes,
@@ -5025,7 +5030,11 @@ async function startApp(username: string, role: string) {
       return;
     }
     const name = tiles.get(offer.locId)?.loc.name ?? '';
-    if (state.enterOffer?.name !== name) setGameState({ enterOffer: { name } });
+    // The distance travels with the name: it is what decides this offer
+    // against the other three (`game/offers.nearestOffer`).
+    if (state.enterOffer?.name !== name || state.enterOffer?.dist !== offer.dist) {
+      setGameState({ enterOffer: { name, dist: offer.dist } });
+    }
   }
   // Leaving the mode drops the offer in the same tick, like talk and lift.
   subscribeGameState(() => {
@@ -5136,7 +5145,12 @@ async function startApp(username: string, role: string) {
         room: shownRoomOf(avatarName) },
       candidates,
     );
-    if (target !== state.talkTarget) setGameState({ talkTarget: target });
+    // The DISTANCE is part of the offer (it decides against the lift, the
+    // stairs and the location entry), so a move that only changes it is a
+    // change — an unchanged pair writes nothing, as everywhere here.
+    const now = state.talkTarget;
+    if (now?.name === target?.name && now?.dist === target?.dist) return;
+    setGameState({ talkTarget: target });
   }
   // Leaving the mode drops the prompt in the same tick the mode changes,
   // instead of leaving it standing for up to a second.
@@ -5144,47 +5158,67 @@ async function startApp(username: string, role: string) {
     if (getGameState().mode !== 'embodied') updateTalkTarget();
   });
 
+  /**
+   * Do the ONE thing an offer stands for — the shared body of the F key and of
+   * a click on the staircase or the lift itself (bug round 2026-08-30). Each
+   * kind is answered exactly once, in one place, so a click can never mean
+   * something else than the key.
+   */
+  function triggerOffer(kind: OfferKind): void {
+    const state = getGameState();
+    if (kind === 'talk') return uiActions.openChat?.();
+    if (kind === 'stairs') return gameActions.rideStairs?.();
+    if (kind === 'enter') return gameActions.enterLocation?.();
+    if (!state.elevator) return;
+    // Two served storeys leave nothing to choose: the press IS the ride, just
+    // as it is on the stairs — a picker with a single button costs a click and
+    // says nothing.
+    const sole = elevatorSoleOption(state.elevator);
+    if (sole !== null) return gameActions.rideElevator?.(sole);
+    // Pressing again closes the storey choice — the same key, both ways.
+    setGameState({ elevatorOpen: !state.elevatorOpen });
+  }
+
+  /** Fold an open storey choice away as soon as the lift is no longer the
+   *  offer F answers: an invisible choice must not keep Esc from leaving the
+   *  mode, and the next press belongs to whatever stands nearer. Run at the
+   *  end of the 1 Hz tick, when all four offers are fresh. */
+  function syncElevatorPicker(): void {
+    const state = getGameState();
+    if (state.elevatorOpen && nearestOffer(state) !== 'elevator') {
+      setGameState({ elevatorOpen: false });
+    }
+  }
+
   // F is the ONE action key: talk to whoever is in range, use the lift or the
   // stairs one is standing at, and — as the keyboard counterpart of the
   // plaque's "Take control" — enter the mode when the avatar is selected in
-  // the overview. That is also the PRIORITY, and the HUD shows only the offer
-  // that wins: a character in range beats the lift, the lift beats the
-  // stairs, so one press is never two offers.
+  // the overview.
+  //
+  // WHICH of the four offers it answers is the NEAREST one measured
+  // (`game/offers.nearestOffer`), not a fixed rank (user ruling, bug round
+  // 2026-08-30): the reaches differ in size — 2.5 m to talk against 1.5 m to a
+  // landing — so under the old chain anybody in the same room took the key
+  // away from a staircase the avatar stood right at. The HUD calls the same
+  // function on the same state and shows exactly the winner's chip, so what
+  // one sees is what F does.
   // Guarded like Esc: while the focus sits in the chat composer, F types an f.
   // Modifier combinations belong to the browser (Ctrl+F is the page search).
   window.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() !== 'f' || isTypingTarget(e)) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const state = getGameState();
-    if (state.talkTarget) {
-      uiActions.openChat?.();
+    const offer = nearestOffer(state);
+    if (offer) {
+      triggerOffer(offer);
       return;
     }
-    if (state.elevator) {
-      // Two served storeys leave nothing to choose: the press IS the ride,
-      // just as it is on the stairs below — a picker with a single button
-      // costs a click and says nothing.
-      const sole = elevatorSoleOption(state.elevator);
-      if (sole !== null) {
-        gameActions.rideElevator?.(sole);
-        return;
-      }
-      // Pressing again closes the storey choice — the same key, both ways.
-      setGameState({ elevatorOpen: !state.elevatorOpen });
-      return;
-    }
-    // The stairs sit between the lift and the location entry, exactly where
-    // the HUD draws them. There is nothing to unfold: a flight leads one
-    // storey, so the press IS the ride.
-    if (state.stairs) {
-      gameActions.rideStairs?.();
-      return;
-    }
-    // Entering an adjacent location (Etappe 3) — last in the F priority,
-    // exactly the order the HUD shows the offers in. A LOCKED neighbour shows
-    // no prompt (task C2) and is still answered here: the key explains itself
-    // with the server's refusal rather than staying silent.
-    if (state.enterOffer || enterOffer) {
+    // A LOCKED neighbour shows no prompt (task C2) and is therefore no
+    // candidate for the resolution above — it could not win a key press
+    // whose result the player cannot see. It is still answered here, when
+    // nothing else stands: the key explains itself with the server's refusal
+    // rather than staying silent.
+    if (enterOffer) {
       gameActions.enterLocation?.();
       return;
     }

@@ -88,7 +88,7 @@ export function CharacterPlaque() {
               target, so no extra guard for it. Opening the chat does NOT
               preselect an addressee (stage-3 decision 3): whom one speaks to
               stays the player's sentence. */}
-          {state.talkTarget === char.name && (
+          {state.talkTarget?.name === char.name && (
             <button className="player-chip" onClick={() => uiActions.openChat?.()}>
               {t('Talk')}
             </button>

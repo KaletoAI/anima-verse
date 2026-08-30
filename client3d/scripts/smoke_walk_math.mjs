@@ -1814,54 +1814,70 @@ async function main() {
     const npc = (name, x, z, extra = {}) =>
       ({ name, pos: { x, z }, locId: 'L1', room: null, scale: 1, ...extra });
 
+    /** WHO the rule names — the offer itself is `{name, dist}` since the F
+     *  key answers the NEAREST of the four standing offers (`game/offers.ts`)
+     *  and needs the metres to compare. The distance is checked on its own
+     *  below; every case here is about WHO, and reads better without it. */
+    const talkName = (avatar, others) => talkTargetNear(avatar, others)?.name ?? null;
+
     check('TALK_RANGE is the documented 2.5 m', TALK_RANGE, 2.5);
-    check('2.0 m away -> in range', talkTargetNear(me(0, 0), [npc('Ayla', 2, 0)]), 'Ayla');
-    check('3.0 m away -> out of range', talkTargetNear(me(0, 0), [npc('Ayla', 3, 0)]), null);
-    check('exactly 2.5 m still counts', talkTargetNear(me(0, 0), [npc('Ayla', 2.5, 0)]), 'Ayla');
+    check('2.0 m away -> in range', talkName(me(0, 0), [npc('Ayla', 2, 0)]), 'Ayla');
+    check('3.0 m away -> out of range', talkName(me(0, 0), [npc('Ayla', 3, 0)]), null);
+    check('exactly 2.5 m still counts', talkName(me(0, 0), [npc('Ayla', 2.5, 0)]), 'Ayla');
     // 3-4-5: (1.5, 2.0) is exactly 2.5 m away, (1.8, 2.4) is 3.0 m.
     check('diagonal 1.5/2.0 = 2.5 m -> in range',
-      talkTargetNear(me(0, 0), [npc('Ayla', 1.5, 2)]), 'Ayla');
+      talkName(me(0, 0), [npc('Ayla', 1.5, 2)]), 'Ayla');
     check('diagonal 1.8/2.4 = 3.0 m -> out of range',
-      talkTargetNear(me(0, 0), [npc('Ayla', 1.8, 2.4)]), null);
-    check('nobody around -> null', talkTargetNear(me(0, 0), []), null);
+      talkName(me(0, 0), [npc('Ayla', 1.8, 2.4)]), null);
+    check('nobody around -> null', talkName(me(0, 0), []), null);
 
     check('another location, same distance -> null',
-      talkTargetNear(me(0, 0), [npc('Ayla', 2, 0, { locId: 'L2' })]), null);
+      talkName(me(0, 0), [npc('Ayla', 2, 0, { locId: 'L2' })]), null);
     check('another shown room, 1 m away through the wall -> null',
-      talkTargetNear(me(0, 0, { room: 'hall' }),
+      talkName(me(0, 0, { room: 'hall' }),
         [npc('Ayla', 1, 0, { room: 'kitchen' })]), null);
     check('same shown room -> in range',
-      talkTargetNear(me(0, 0, { room: 'hall' }),
+      talkName(me(0, 0, { room: 'hall' }),
         [npc('Ayla', 1, 0, { room: 'hall' })]), 'Ayla');
     check('avatar outdoors, NPC drawn inside a room -> null',
-      talkTargetNear(me(0, 0), [npc('Ayla', 1, 0, { room: 'hall' })]), null);
+      talkName(me(0, 0), [npc('Ayla', 1, 0, { room: 'hall' })]), null);
     check('avatar inside, NPC drawn outdoors -> null',
-      talkTargetNear(me(0, 0, { room: 'hall' }), [npc('Ayla', 1, 0)]), null);
+      talkName(me(0, 0, { room: 'hall' }), [npc('Ayla', 1, 0)]), null);
 
     // Interior scale 0.3: the range shrinks with the figures, 2.5 * 0.3 = 0.75.
     check('scale 0.3: 0.7 m -> in range (radius 0.75)',
-      talkTargetNear(me(0, 0, { room: 'hall' }),
+      talkName(me(0, 0, { room: 'hall' }),
         [npc('Ayla', 0.7, 0, { room: 'hall', scale: 0.3 })]), 'Ayla');
     check('scale 0.3: 0.8 m -> out of range',
-      talkTargetNear(me(0, 0, { room: 'hall' }),
+      talkName(me(0, 0, { room: 'hall' }),
         [npc('Ayla', 0.8, 0, { room: 'hall', scale: 0.3 })]), null);
     check('scale 0.3: 2.0 m would be in range at scale 1, but is not here',
-      talkTargetNear(me(0, 0, { room: 'hall' }),
+      talkName(me(0, 0, { room: 'hall' }),
         [npc('Ayla', 2, 0, { room: 'hall', scale: 0.3 })]), null);
 
     check('the nearer of two wins',
-      talkTargetNear(me(0, 0), [npc('Ayla', 2, 0), npc('Bea', 0, 1.2)]), 'Bea');
+      talkName(me(0, 0), [npc('Ayla', 2, 0), npc('Bea', 0, 1.2)]), 'Bea');
     check('order of the list does not matter',
-      talkTargetNear(me(0, 0), [npc('Bea', 0, 1.2), npc('Ayla', 2, 0)]), 'Bea');
+      talkName(me(0, 0), [npc('Bea', 0, 1.2), npc('Ayla', 2, 0)]), 'Bea');
     check('the nearer one is out of range -> the other one is not taken either',
-      talkTargetNear(me(0, 0), [npc('Ayla', 3, 0), npc('Bea', 4, 0)]), null);
+      talkName(me(0, 0), [npc('Ayla', 3, 0), npc('Bea', 4, 0)]), null);
     check('equal distance -> the name decides (no 1 Hz flicker)',
-      talkTargetNear(me(0, 0), [npc('Bea', 2, 0), npc('Ayla', 0, 2)]), 'Ayla');
+      talkName(me(0, 0), [npc('Bea', 2, 0), npc('Ayla', 0, 2)]), 'Ayla');
 
     check('the avatar itself is never a candidate',
-      talkTargetNear(me(0, 0), [npc('Avatar', 0, 0), npc('Ayla', 2, 0)]), 'Ayla');
+      talkName(me(0, 0), [npc('Avatar', 0, 0), npc('Ayla', 2, 0)]), 'Ayla');
     check('alone with itself -> null',
-      talkTargetNear(me(0, 0), [npc('Avatar', 0, 0)]), null);
+      talkName(me(0, 0), [npc('Avatar', 0, 0)]), null);
+
+    // THE MEASURED DISTANCE, hand-derived: (1.5, 2.0) is 2.5 m by 3-4-5, and
+    // the nearer of two is 1.2 m straight along z. It is what decides this
+    // offer against the lift, the stairs and the location entry
+    // (`scripts/smoke_offer_resolve.mjs`).
+    check('the offer carries the distance it was measured at',
+      talkTargetNear(me(0, 0), [npc('Ayla', 1.5, 2)]), { name: 'Ayla', dist: 2.5 });
+    check('...of the NEAREST candidate, not of the first',
+      talkTargetNear(me(0, 0), [npc('Ayla', 2, 0), npc('Bea', 0, 1.2)]),
+      { name: 'Bea', dist: 1.2 });
   }
 
   console.log('nearestRoomSwitch — walking from room to room (task 6)');
@@ -2296,10 +2312,12 @@ async function main() {
 
     check('range is 1.5 figure metres', ELEVATOR_RANGE, 1.5);
     check('both storeys have a stop AND a room', elevatorLevels(STOPS, ROOMS), [0, 1]);
-    check('0.9 m at scale 1 is inside the range', at(2.9, 0, 1), { levels: [0, 1], current: 0 });
+    check('0.9 m at scale 1 is inside the range', at(2.9, 0, 1),
+      { levels: [0, 1], current: 0, dist: 0.9 });
     check('...1.5 m IS the range and is already out (strict)', at(3.5, 0, 1), null);
     check('...1.6 m is out', at(3.6, 0, 1), null);
-    check('0.4 m at scale 0.3 is inside 0.45', at(2.4, 0, 0.3), { levels: [0, 1], current: 0 });
+    check('0.4 m at scale 0.3 is inside 0.45', at(2.4, 0, 0.3),
+      { levels: [0, 1], current: 0, dist: 0.4 });
     check('...0.5 m is out', at(2.5, 0, 0.3), null);
     check('a stop on a storey without a room does not count',
       elevatorLevels([...STOPS, { level: 2, pos: { x: 2, z: 0 } }], ROOMS), [0, 1]);
@@ -2407,7 +2425,7 @@ async function main() {
 
     const turned = rideTo1({ rideOwnsFigure: true, pressAt: 300, interlock: false });
     check('without the interlock the standing offer names the storey just left',
-      turned.offerAtPress, { levels: [0, 1], current: 1 });
+      turned.offerAtPress, { levels: [0, 1], current: 1, dist: 0 });
     check('...and the press asks for a SECOND room', turned.requests.length, 2);
     check('...the one the ride started from', turned.requests[1], { at: 300, room: 'hall' }, 1);
     check('...so the figure sinks back to the storey it left', turned.arrivedAt?.y, 0.1984, 0.01);
@@ -2525,6 +2543,11 @@ async function main() {
   // The flight below is the § 0 hand calculation again (house storey 3.0,
   // `at = [2, −2]`, `dir_deg` 90): foot landing [1.5, 0.01, −2] on storey 0,
   // head landing [6.4, 3.09, −2] on storey 1.
+  // The offer CARRIES the distance it was measured at (bug round 2026-08-30):
+  // the F key answers the nearest of the four standing offers, and the reaches
+  // differ in size (2.5 m to talk against 1.5 m here). The `dist` in every
+  // expectation below is the plain distance to the landing STOOD AT, in world
+  // metres — never to `dest`.
   console.log('stairsAt — the nearest landing of one\'s own storey, in reach');
   {
     check('the reach is the lift\'s, in figure metres', STAIR_RANGE, 1.5);
@@ -2537,7 +2560,7 @@ async function main() {
     //     Standing at a FOOT means going UP, and the destination is the other
     //     end of that flight — the head.
     check('1.0 m from the foot offers the way up',
-      stairsAt({ x: 2.5, z: -2 }, 0, [A], 1), { dir: 'up', dest: A.head });
+      stairsAt({ x: 2.5, z: -2 }, 0, [A], 1), { dir: 'up', dest: A.head, dist: 1 });
     // (b) 3.1 − 1.5 = 1.6 m away, still scale 1: 1.6 ≥ 1.5, no offer.
     check('1.6 m away is out of reach',
       stairsAt({ x: 3.1, z: -2 }, 0, [A], 1), null);
@@ -2547,11 +2570,11 @@ async function main() {
     check('at scale 0.3 half a metre is already too far',
       stairsAt({ x: 2.0, z: -2 }, 0, [A], 0.3), null);
     check('...while 0.4 m is inside the 0.45 m reach',
-      stairsAt({ x: 1.9, z: -2 }, 0, [A], 0.3), { dir: 'up', dest: A.head });
+      stairsAt({ x: 1.9, z: -2 }, 0, [A], 0.3), { dir: 'up', dest: A.head, dist: 0.4 });
     // (d) standing ON the head landing, on storey 1: the same flight read from
     //     the other end — the way DOWN, destination the foot.
     check('at the head landing the offer goes down',
-      stairsAt({ x: 6.4, z: -2 }, 1, [A], 1), { dir: 'down', dest: A.foot });
+      stairsAt({ x: 6.4, z: -2 }, 1, [A], 1), { dir: 'down', dest: A.foot, dist: 0 });
     // Only landings of ONE'S OWN storey count: standing on the foot landing
     // while the server has the avatar upstairs is not a stair offer (the head
     // is 4.9 m away, far outside the reach).
@@ -2567,15 +2590,15 @@ async function main() {
       head: { level: 1, x: 8.4, y: 3.09, z: -2 },
     };
     check('the nearest of two landings wins',
-      stairsAt({ x: 2.6, z: -2 }, 0, [A, D], 1), { dir: 'up', dest: D.head });
+      stairsAt({ x: 2.6, z: -2 }, 0, [A, D], 1), { dir: 'up', dest: D.head, dist: 0.9 });
     check('...and that does not depend on the list order',
-      stairsAt({ x: 2.6, z: -2 }, 0, [D, A], 1), { dir: 'up', dest: D.head });
+      stairsAt({ x: 2.6, z: -2 }, 0, [D, A], 1), { dir: 'up', dest: D.head, dist: 0.9 });
     // A tie (x = 2.5 is 1.0 m from either foot) falls to the FIRST listed —
     // the payload order is arbitrary, but the pick must not flicker.
     check('a tie falls to the first flight listed',
-      stairsAt({ x: 2.5, z: -2 }, 0, [A, D], 1), { dir: 'up', dest: A.head });
+      stairsAt({ x: 2.5, z: -2 }, 0, [A, D], 1), { dir: 'up', dest: A.head, dist: 1 });
     check('...literally the first, not the geometric one',
-      stairsAt({ x: 2.5, z: -2 }, 0, [D, A], 1), { dir: 'up', dest: D.head });
+      stairsAt({ x: 2.5, z: -2 }, 0, [D, A], 1), { dir: 'up', dest: D.head, dist: 1 });
   }
 
   // --- stairY: the height ON the run (plan-treppen-v2 task 3) --------------

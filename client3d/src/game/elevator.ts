@@ -45,6 +45,11 @@ export interface ElevatorState {
   levels: number[];
   /** storey the avatar is on — never offered as a destination */
   current: number;
+  /** Distance to this storey's holding point (world metres, XZ). The F key
+   *  answers the nearest of all standing offers (`game/offers.ts`), and the
+   *  reaches differ in size, so the measured metres travel with the offer
+   *  instead of being measured a second time by the caller. */
+  dist: number;
 }
 
 /**
@@ -85,7 +90,7 @@ export function elevatorAt(
   if (!stop) return null;
   const dist = Math.hypot(stop.pos.x - pos.x, stop.pos.z - pos.z);
   if (dist >= ELEVATOR_RANGE * scale) return null;
-  return { levels, current: level };
+  return { levels, current: level, dist };
 }
 
 /** Storeys to offer as buttons: everything but the one the avatar is on. */

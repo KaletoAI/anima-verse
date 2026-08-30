@@ -41,6 +41,7 @@ import { Minimap } from './Minimap';
 import { PerfOverlay } from './PerfOverlay';
 import { ttsSpeak, ttsStatus } from '../api';
 import { elevatorOptions, elevatorSoleOption } from '../game/elevator';
+import { nearestOffer } from '../game/offers';
 import { getAudio } from '../game/audio';
 import { loadPrefs, loadScatterPrefs, savePrefs, saveScatterPrefs, PREFS_KEY,
   SCATTER_PREFS_KEY, type Prefs, type ScatterPrefs } from '../game/prefs';
@@ -681,6 +682,12 @@ export function Hud({ avatar, username, role }: {
   // direction F leads and the picker never unfolds (Treppen v2 task 4).
   const soleFloor = game.elevator ? elevatorSoleOption(game.elevator) : null;
 
+  // WHICH offer the bottom row shows: the NEAREST one standing, decided by the
+  // same function the F key asks (`game/offers.ts`, bug round 2026-08-30). All
+  // four may stand at once and exactly one is drawn — the one the key answers,
+  // so the player always sees what F does.
+  const offer = nearestOffer(game);
+
   return (
     <>
       {/* Performance readout (Etappe 5): shown while the menu switch is on,
@@ -897,20 +904,19 @@ export function Hud({ avatar, username, role }: {
           prompt out of place. The prompt is read, not operated, so it stays
           pointer-transparent (see the pointer rule in hud.css). */}
       <div className="hud-bottom">
-        {game.talkTarget && (
+        {offer === 'talk' && game.talkTarget && (
           <div className="hud-talk">
-            {t('Press F to talk to {name}').replace('{name}', game.talkTarget)}
+            {t('Press F to talk to {name}').replace('{name}', game.talkTarget.name)}
           </div>
         )}
         {/* Elevator (E3, floors on foot): the same prompt shape as the talk
-            chip, and deliberately BEHIND it — a character in range wins, so
-            one F press is never two offers at once. Unfolded (F again, or a
-            click) the prompt becomes one button per storey; the current one is
-            not among them. Unlike the prompt these are operated, so they take
-            the pointer back (hud.css). With only ONE storey to ride to there
-            is nothing to unfold: the chip says which way F leads and the press
-            is the ride (Treppen v2 task 4). */}
-        {!game.talkTarget && game.elevator && (
+            chip. Unfolded (F again, or a click) the prompt becomes one button
+            per storey; the current one is not among them. Unlike the prompt
+            these are operated, so they take the pointer back (hud.css). With
+            only ONE storey to ride to there is nothing to unfold: the chip
+            says which way F leads and the press is the ride (Treppen v2
+            task 4). */}
+        {offer === 'elevator' && game.elevator && (
           soleFloor !== null ? (
             <div className="hud-talk">
               {soleFloor > game.elevator.current
@@ -932,12 +938,10 @@ export function Hud({ avatar, username, role }: {
         )}
         {/* Stairs (stairs task 5): the storey change on foot, and unlike the
             lift there is nothing to choose — a flight leads exactly one storey
-            up or down, so the offer IS the button. Behind the talk chip AND
-            behind the lift for the same reason both of those are ordered:
-            never two offers at once. The vanilla side only publishes the offer
-            when the destination storey really has a room to enter, so a press
-            can always be honoured. */}
-        {!game.talkTarget && !game.elevator && game.stairs && (
+            up or down, so the offer IS the button. The vanilla side only
+            publishes the offer when the destination storey really has a room
+            to enter, so a press can always be honoured. */}
+        {offer === 'stairs' && game.stairs && (
           <div className="hud-elevator">
             <button className="hud-elevator-floor"
               onClick={() => gameActions.rideStairs?.()}>
@@ -946,12 +950,10 @@ export function Hud({ avatar, username, role }: {
             </button>
           </div>
         )}
-        {/* Entering an adjacent location (Etappe 3): same prompt shape, and
-            deliberately LAST in the priority — talk, elevator and stairs win,
-            so one F press is never two offers. The vanilla side owns the rule
-            of WHEN the offer stands (opening proximity / adjacent cell) and
-            performs the real server entry on F. */}
-        {!game.talkTarget && !game.elevator && !game.stairs && game.enterOffer && (
+        {/* Entering an adjacent location (Etappe 3): same prompt shape. The
+            vanilla side owns the rule of WHEN the offer stands (opening
+            proximity / free rim) and performs the real server entry on F. */}
+        {offer === 'enter' && game.enterOffer && (
           <div className="hud-talk">
             {t('Press F to enter {name}').replace('{name}', game.enterOffer.name)}
           </div>

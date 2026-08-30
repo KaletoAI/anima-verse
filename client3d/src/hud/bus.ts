@@ -30,8 +30,10 @@ export interface HudGameState {
   mode: GameMode;
   /** selected figure (worldmap snapshot, refreshed on every poll) or null */
   selected: { char: MapCharacter; isAvatar: boolean } | null;
-  /** NPC currently in talk range (embodied mode), or null */
-  talkTarget: string | null;
+  /** NPC currently in talk range (embodied mode) with its measured distance in
+   *  world metres, or null. The distance is what decides against the other
+   *  three offers — see `stairs` below. */
+  talkTarget: { name: string; dist: number } | null;
   /** avatar cannot move on its own (party follower) — HUD hint, server enforces */
   movementLocked: boolean;
   /** name of the party leader while `movementLocked` is set, else empty */
@@ -59,23 +61,31 @@ export interface HudGameState {
    *  neighbours of the avatar's own can appear here — which is exactly the
    *  range in which a locked way has to be visible before one walks to it. */
   lockedLocations: Record<string, string>;
-  /** elevator the avatar is standing at (embodied mode), or null. The talk
-   *  prompt WINS over it: with someone in range only that prompt shows, so one
-   *  F press is never two offers at once. */
+  /** elevator the avatar is standing at (embodied mode), or null. Whether it
+   *  is the offer F answers is decided by DISTANCE, not by rank — see
+   *  `stairs` below. */
   elevator: ElevatorState | null;
   /** the storey choice is unfolded (F opens and closes it, Esc closes it) */
   elevatorOpen: boolean;
   /** flight of stairs the avatar is standing at (embodied mode), or null. Like
    *  the lift this is one storey change on foot, but there is nothing to
    *  choose: a flight leads exactly one storey up or down, so the offer IS the
-   *  button. The ELEVATOR prompt wins over it — standing at both, the avatar
-   *  gets the lift's storey choice and no stair button, so the bottom row
-   *  never carries two offers at once. */
+   *  button.
+   *
+   *  THESE FOUR OFFERS COMPETE BY DISTANCE (bug round 2026-08-30). All four
+   *  may stand at once; `game/offers.nearestOffer` picks the ONE the bottom
+   *  row shows and the F key answers — the nearest one measured, since the
+   *  reaches differ in size (2.5 m to talk, 1.5 m to a landing). Both the HUD
+   *  and the key handler call that one function on this very state, so the
+   *  chip can never name something else than the key does. */
   stairs: StairPrompt | null;
   /** adjacent location the avatar could enter (standing near a boundary
    *  opening, or next to a location without authored openings) — the
-   *  "Betreten" offer of Etappe 3. Talk and elevator prompts win over it. */
-  enterOffer: { name: string } | null;
+   *  "Betreten" offer of Etappe 3, with its measured distance. A LOCKED
+   *  neighbour is deliberately not published here: it shows no chip, so it
+   *  must not be able to win the key either (main.ts answers it with the
+   *  server's refusal when nothing else stands). */
+  enterOffer: { name: string; dist: number } | null;
 }
 
 /** Actions the React side calls INTO the vanilla app; main.ts registers them. */

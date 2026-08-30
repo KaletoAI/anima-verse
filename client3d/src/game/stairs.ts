@@ -110,6 +110,11 @@ export const STAIR_RANGE = 1.5;
 export interface StairPrompt {
   dir: 'up' | 'down';
   dest: StairEndPoint;
+  /** Distance to the landing STOOD AT (world metres, XZ) — not to `dest`. The
+   *  F key answers the nearest of all standing offers (`game/offers.ts`), and
+   *  the reaches differ in size, so the measured metres travel with the
+   *  offer instead of being measured a second time by the caller. */
+  dist: number;
 }
 
 /**
@@ -150,7 +155,7 @@ export function stairsAt(
       const dist = Math.hypot(here.x - pos.x, here.z - pos.z);
       // `>= bestDist` and not `>`: a tie keeps what was found first.
       if (dist >= reach || dist >= bestDist) continue;
-      best = { dir, dest: there };
+      best = { dir, dest: there, dist };
       bestDist = dist;
     }
   }
