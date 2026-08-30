@@ -1621,6 +1621,29 @@ def _set_character_model_refs_auto_sync(character_name: str,
     return {"auto": set_auto_kinds(character_name, body)}
 
 
+@router.post("/{character_name}/model-refs/views")
+async def set_character_model_refs_views(character_name: str,
+                                         request: Request) -> Dict[str, Any]:
+    """Per-character toggles for the extra T-pose views (multi-view img2mesh
+    input; body: {back?: bool, left?: bool, right?: bool})."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_set_character_model_refs_views_sync,
+                                   character_name, body)
+
+
+def _set_character_model_refs_views_sync(character_name: str,
+                                         body: Any) -> Dict[str, Any]:
+    """The blocking body of ``set_character_model_refs_views`` — runs in the
+    threadpool."""
+    from app.core.model_refs import set_view_kinds
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    return {"views": set_view_kinds(character_name, body)}
+
+
 @router.get("/{character_name}/model-refs/{kind}")
 def get_character_model_ref_image(character_name: str, kind: str, request: Request):
     """Serves the reference render of the CURRENT outfit combination; 404

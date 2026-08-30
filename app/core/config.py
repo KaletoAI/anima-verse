@@ -366,8 +366,8 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
         },
     },
-    # Optional EXTRA views of the humanoid mesh-input render (admin config
-    # image_generation.tpose_view_back/left/right, default off) — the input
+    # Optional EXTRA views of the humanoid mesh-input render (enabled per
+    # character on the character editor's 3D tab, default off) — the input
     # for multi-view img2mesh backends. Framing/lighting stay identical to
     # "tpose" so the views compose into one consistent set; only the
     # negatives differ, because a back or profile render fails in its own way.

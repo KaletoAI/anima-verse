@@ -1000,13 +1000,13 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                        character_name, signature)
         return {"ok": False, "error": "no_tpose_input"}
 
-    # Optional extra views of the SAME outfit combination (admin config, off
+    # Optional extra views of the SAME outfit combination (per character, off
     # by default): a multi-view mesh backend reconstructs the back and the
     # body depth from them instead of guessing. Only what actually exists is
     # passed on — a view that failed to render must not block the mesh.
     from app.core.model_refs import enabled_tpose_views
     view_images = {}
-    for _view in enabled_tpose_views():
+    for _view in enabled_tpose_views(character_name):
         _vp = find_ref_image(character_name, f"tpose_{_view}", signature)
         if _vp:
             view_images[_view] = str(_vp)

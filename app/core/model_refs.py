@@ -72,7 +72,7 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
     "away from the body, mouth closed"
 )
 
-# OPTIONAL extra views of the T-pose reference render (admin config, default
+# OPTIONAL extra views of the T-pose reference render (per character, default
 # off, humanoid characters only). They exist for multi-view img2mesh backends:
 # a single front image leaves the mesher to HALLUCINATE the back of the head,
 # the back of the outfit and the body depth — a back view replaces that guess
@@ -179,11 +179,17 @@ def get_tpose_view_prompt(view: str) -> str:
     return override or TPOSE_VIEW_PROMPT_DEFAULTS.get(view, "")
 
 
-def enabled_tpose_views() -> tuple:
-    """The extra T-pose views switched on in the admin config
-    (image_generation.tpose_view_<view>), in TPOSE_VIEWS order. All off by
-    default — one extra view is one extra render per outfit combination."""
-    return tuple(v for v in TPOSE_VIEWS if bool(_cfg(f"tpose_view_{v}", False)))
+def enabled_tpose_views(character_name: str) -> tuple:
+    """The extra T-pose views switched on for THIS character (profile field
+    ``model_ref_views``), in TPOSE_VIEWS order. All off by default — one extra
+    view is one extra render per outfit combination.
+
+    A non-humanoid character never has extra views (a T-pose is meaningless on
+    four legs), so the humanoid gate lives HERE and in exactly one place."""
+    if not is_humanoid(character_name):
+        return ()
+    enabled = get_view_kinds(character_name)
+    return tuple(v for v in TPOSE_VIEWS if enabled.get(v))
 
 
 def is_humanoid(character_name: str) -> bool:
@@ -242,6 +248,33 @@ def set_auto_kinds(character_name: str, updates: Dict[str, Any]) -> Dict[str, bo
         if key in REF_KINDS:
             merged[key] = bool(val)
     profile["model_ref_auto"] = merged
+    save_character_profile(character_name, profile)
+    return merged
+
+
+def get_view_kinds(character_name: str) -> Dict[str, bool]:
+    """Per-character, per-view toggles for the extra T-pose renders that feed
+    multi-view img2mesh (profile field ``model_ref_views``; missing key =
+    off)."""
+    from app.models.character import get_character_profile
+    try:
+        raw = (get_character_profile(character_name) or {}).get("model_ref_views") or {}
+    except Exception:
+        raw = {}
+    return {k: bool(raw.get(k, False)) for k in TPOSE_VIEWS}
+
+
+def set_view_kinds(character_name: str, updates: Dict[str, Any]) -> Dict[str, bool]:
+    """Merges per-view toggles for the extra T-pose renders into the character
+    profile."""
+    from app.models.character import get_character_profile, save_character_profile
+    profile = get_character_profile(character_name) or {}
+    current = profile.get("model_ref_views") or {}
+    merged = {k: bool(current.get(k, False)) for k in TPOSE_VIEWS}
+    for key, val in (updates or {}).items():
+        if key in TPOSE_VIEWS:
+            merged[key] = bool(val)
+    profile["model_ref_views"] = merged
     save_character_profile(character_name, profile)
     return merged
 
@@ -423,9 +456,10 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     """Per-kind info for the UI — always for the CURRENTLY worn outfit
     combination (filename + sidecar meta, or None if not rendered yet).
 
-    ``views`` carries the same info format for the extra T-pose views that
-    are switched on (empty for a non-humanoid character or with every view
-    off) — they have no own tile or toggle, they ride along with "tpose"."""
+    ``views`` carries ALL extra T-pose views of a humanoid character (empty
+    for a non-humanoid one) as ``{"enabled": bool, "info": <info|None>}``: the
+    UI needs every view to render its checkbox, the switched-off ones
+    included. The views have no own pending lane — they ride with "tpose"."""
     try:
         _, _, signature = current_outfit_state(character_name)
     except Exception:
@@ -436,10 +470,11 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
         out[kind] = _ref_info(path)
     views: Dict[str, Any] = {}
     if is_humanoid(character_name):
-        for view in enabled_tpose_views():
+        enabled = set(enabled_tpose_views(character_name))
+        for view in TPOSE_VIEWS:
             path = (find_ref_image(character_name, f"tpose_{view}", signature)
                     if signature else None)
-            views[view] = _ref_info(path)
+            views[view] = {"enabled": view in enabled, "info": _ref_info(path)}
     out["views"] = views
     auto = get_auto_kinds(character_name)
     out["auto"] = auto
@@ -479,8 +514,8 @@ def generate_model_ref_images(character_name: str,
     Everything downstream (cache skip, output stem, prompt chain) is
     identical, so an overridden run is indistinguishable from a worn one.
 
-    The "tpose" kind additionally renders the extra views switched on in the
-    admin config (back/left/right, humanoid characters only) as
+    The "tpose" kind additionally renders the extra views switched on for
+    this character (back/left/right, humanoid characters only) as
     ``tpose_<view>_<signature>``: input for multi-view img2mesh backends.
     They ride along with the front render — the kind counts as cached only
     once every enabled view exists too, and an already rendered front image
@@ -516,7 +551,7 @@ def generate_model_ref_images(character_name: str,
     # renderer fall back to the animal's own anatomy. Read BEFORE the cache
     # skip: it decides whether the extra views count into it.
     humanoid = is_humanoid(character_name)
-    views = enabled_tpose_views() if humanoid else ()
+    views = enabled_tpose_views(character_name)
     if not force:
         cached = tuple(k for k in kinds
                        if find_ref_image(character_name, k, signature)

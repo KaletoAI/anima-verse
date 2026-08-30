@@ -24,17 +24,19 @@ interface RefInfo {
 interface RefsInfo {
   tpose?: RefInfo | null
   pose?: RefInfo | null
-  // Extra T-pose views for multi-view img2mesh (back/left/right) — only the
-  // views enabled in the admin config appear here, null = not rendered yet.
-  // They have no own auto toggle or pending lane; they ride with `tpose`.
-  views?: Record<string, RefInfo | null>
+  // Extra T-pose views for multi-view img2mesh (back/left/right). ALL three
+  // are reported for a humanoid character (empty for a non-humanoid one), so
+  // the checkboxes can be rendered; `enabled` is the per-character toggle,
+  // `info` the stored render (null = not rendered yet). They have no own
+  // pending lane; they ride with `tpose`.
+  views?: Record<string, { enabled: boolean; info?: RefInfo | null }>
   auto?: { tpose?: boolean; pose?: boolean }
   // Per image — a running default-pose render must not lock the 3D tab's
   // T-pose button (and vice versa): with several backends they run in parallel.
   pending?: { tpose?: boolean; pose?: boolean }
 }
 
-// Display order of the extra views; the backend only reports enabled ones.
+// Display order of the extra views (checkboxes and thumbnails alike).
 const VIEW_ORDER = ['back', 'left', 'right'] as const
 
 type RefKind = 'pose' | 'tpose'
@@ -169,6 +171,36 @@ export function FieldModelRefs({
     [enc, load, t, toast],
   )
 
+  // Per-view toggle for the extra T-pose renders (multi-view img2mesh input),
+  // persisted per character like the auto toggles. The views are rendered
+  // inside the T-pose pass — switching one on makes the next run add it.
+  const setView = useCallback(
+    async (view: string, value: boolean) => {
+      setInfo((prev) => ({
+        ...prev,
+        views: {
+          ...(prev.views || {}),
+          [view]: { ...(prev.views?.[view] || {}), enabled: value },
+        },
+      }))
+      try {
+        const d = await apiPost<{ views: Record<string, boolean> }>(
+          `/characters/${enc}/model-refs/views`, { [view]: value })
+        setInfo((prev) => {
+          const merged: NonNullable<RefsInfo['views']> = {}
+          VIEW_ORDER.forEach((v) => {
+            merged[v] = { ...(prev.views?.[v] || {}), enabled: !!d.views?.[v] }
+          })
+          return { ...prev, views: merged }
+        })
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+        load()
+      }
+    },
+    [enc, load, t, toast],
+  )
+
   const autoOn = (kind: RefKind) => info.auto?.[kind] !== false
   const anyAuto = kinds.some((k) => autoOn(k))
   // A render of OUR kinds is in flight if the backend says so (manual, auto,
@@ -176,6 +208,12 @@ export function FieldModelRefs({
   const pending = myPending(info) || busy
 
   const label = (kind: RefKind) => (kind === 'tpose' ? t('T-pose') : t('Default pose'))
+  const viewLabel = (view: string) =>
+    view === 'back' ? t('Back') : view === 'left' ? t('Left') : t('Right')
+  // The extra views only exist for humanoid characters — the backend reports
+  // an empty map for everyone else, and then there is nothing to offer.
+  const hasViews = kinds.includes('tpose') && !!info.views &&
+    Object.keys(info.views).length > 0
 
   return (
     <div className="ga-form">
@@ -211,18 +249,16 @@ export function FieldModelRefs({
                 <div className="ga-hint">{new Date(ri.created_at).toLocaleString()}</div>
               ) : null}
               {kind === 'tpose' &&
-              VIEW_ORDER.some((v) => info.views && v in info.views) ? (
+              VIEW_ORDER.some((v) => info.views?.[v]?.enabled) ? (
                 // Extra T-pose views (multi-view img2mesh input). Rendered as
                 // part of the T-pose pass — no own buttons, just visibility.
                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  {VIEW_ORDER.filter((v) => info.views && v in info.views).map(
+                  {VIEW_ORDER.filter((v) => info.views?.[v]?.enabled).map(
                     (view) => {
-                      const vi = info.views?.[view]
-                      const viewLabel =
-                        view === 'back' ? t('Back') : view === 'left' ? t('Left') : t('Right')
+                      const vi = info.views?.[view]?.info
                       return (
                         <div key={view} style={{ flex: 1, minWidth: 0 }}>
-                          <div className="ga-hint">{viewLabel}</div>
+                          <div className="ga-hint">{viewLabel(view)}</div>
                           {vi ? (
                             <img
                               key={`${view}-${bust}`}
@@ -284,6 +320,22 @@ export function FieldModelRefs({
             </span>
           </label>
         ))}
+        {hasViews
+          ? VIEW_ORDER.map((view) => (
+              <label
+                key={view}
+                style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
+                title={t('Render this extra T-pose view for multi-view 3D generation')}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!info.views?.[view]?.enabled}
+                  onChange={(e) => setView(view, e.target.checked)}
+                />
+                <span>{viewLabel(view)}</span>
+              </label>
+            ))
+          : null}
       </div>
     </div>
   )
