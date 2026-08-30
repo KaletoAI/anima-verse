@@ -21,6 +21,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ClipCatalog } from './ClipCatalog'
 import { ClipInbox } from './ClipInbox'
+import { ClipLibrary } from './ClipLibrary'
+import { clipCoverage, setLabel } from './clipSets'
+import type { ClipListing } from './clipSets'
 import { ClipPreview } from './ClipPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
@@ -30,10 +33,10 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 
 type Axis = 'pose' | 'expression'
-/** The tab has three surfaces: the catalog entries, the CMU clip pool the
- *  animation kinds themselves come from, and the inbox of foreign files
- *  waiting to be imported. */
-type View = 'entries' | 'catalog' | 'inbox'
+/** The tab has four surfaces: the catalog entries, the installed clip library
+ *  behind their animation kinds, the CMU clip pool those kinds come from, and
+ *  the inbox of foreign files waiting to be imported. */
+type View = 'entries' | 'library' | 'catalog' | 'inbox'
 
 /** One place type: the vocabulary a marker speaks. `root_drop` is a FRACTION
  *  of the figure height, so it reads back as metres against a 1.70 m figure. */
@@ -90,6 +93,9 @@ export function PosesTab() {
   const [axis, setAxis] = useState<Axis>('pose')
   const [view, setView] = useState<View>('entries')
   const [data, setData] = useState<CatalogData>({ entries: [], kinds: [], problems: [] })
+  // The installed clips — the Library view lives off this, and the entry
+  // editor reads the set coverage of the selected kind from it.
+  const [clipList, setClipList] = useState<ClipListing>({ clips: [], kinds: [] })
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [selected, setSelected] = useState<string>('')
   const [draft, setDraft] = useState<Entry | null>(null)
@@ -127,9 +133,30 @@ export function PosesTab() {
     }
   }, [axis, t, toast])
 
+  /** The clip listing does not depend on the axis — it is the file state of
+   *  the shared libraries, reloaded after every rename/move/delete. */
+  const loadClips = useCallback(async () => {
+    try {
+      setClipList(await apiGet<ClipListing>('/assets/animation-clips'))
+    } catch {
+      setClipList({ clips: [], kinds: [] })
+    }
+  }, [])
+
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    void loadClips()
+  }, [loadClips])
+
+  /** After a write in the Library view: the files AND the catalog (a renamed
+   *  kind changes which poses still have a clip). */
+  const reloadLibrary = useCallback(async () => {
+    await loadClips()
+    await load()
+  }, [load, loadClips])
 
   // Switching the axis drops the open draft — the two catalogs share no keys.
   useEffect(() => {
@@ -386,24 +413,40 @@ export function PosesTab() {
 
   const viewSwitch = (
     <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-      {(['entries', 'catalog', 'inbox'] as View[]).map((v) => (
+      {(['entries', 'library', 'catalog', 'inbox'] as View[]).map((v) => (
         <button
           key={v}
           type="button"
           className={`ga-btn ga-btn-sm${view === v ? ' ga-btn-primary' : ''}`}
           onClick={() => {
-            // Both import surfaces only ever produce POSE animations — pinning
-            // the axis here keeps "create pose entry" from landing on the
-            // expression catalog (and from being wiped by the axis-change reset).
+            // Every other surface is about POSE animations — pinning the axis
+            // here keeps "create pose entry" (and the Library's "Used by")
+            // from landing on the expression catalog, and out of reach of the
+            // axis-change reset.
             if (v !== 'entries') setAxis('pose')
             setView(v)
           }}
         >
-          {v === 'entries' ? t('Entries') : v === 'catalog' ? t('CMU clip catalog') : t('Import files')}
+          {v === 'entries'
+            ? t('Entries')
+            : v === 'library'
+              ? t('Library')
+              : v === 'catalog'
+                ? t('CMU clip catalog')
+                : t('Import files')}
         </button>
       ))}
     </div>
   )
+
+  if (view === 'library') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        {viewSwitch}
+        <ClipLibrary listing={clipList} poses={data.entries} onReload={reloadLibrary} />
+      </div>
+    )
+  }
 
   if (view === 'catalog' || view === 'inbox') {
     // Full-height column: the browser's panes scroll on their own inside it
@@ -873,6 +916,20 @@ export function PosesTab() {
                       ) : null}
                     </select>
                   </Field>
+                  {/* Which figure sets actually have a file for the selected
+                      kind — a kind that only exists as `female` leaves every
+                      other figure standing. */}
+                  {draft.animation ? (
+                    <div className="ga-form-hint">
+                      {t('Clip sets')}:{' '}
+                      {(() => {
+                        const cov = clipCoverage(clipList.clips, draft.animation)
+                        return cov.length
+                          ? cov.map((s) => setLabel(s, t)).join(' ')
+                          : t('no clip')
+                      })()}
+                    </div>
+                  ) : null}
                   {data.pair_kinds?.includes(draft.animation) ? (
                     <div className="ga-form-hint">
                       {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}

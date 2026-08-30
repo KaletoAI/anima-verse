@@ -103,9 +103,13 @@ function rootAt(path: { times: ArrayLike<number>; xyz: Float32Array }, t: number
  *  that window (or the server-computed loop cut) will write. */
 export interface PlayWindow { start: number; end: number }
 
-export function ClipPreview({ kind = '', height = 300, urls, window: win, speed = 1,
+export function ClipPreview({ kind = '', set = '', height = 300, urls, window: win, speed = 1,
   group, rootDrop = 0, yawOffset = 0, onYawOffset }:
-  { kind?: string; height?: number; urls?: ClipUrls; window?: PlayWindow; speed?: number
+  { kind?: string
+    /** which figure set to play the kind from — empty picks the neutral clip
+     *  (and falls back to any set, the way the viewers do) */
+    set?: string
+    height?: number; urls?: ClipUrls; window?: PlayWindow; speed?: number
     /** place type of the pose — a pair is seated on a virtual marker of it */
     group?: string
     /** how far the figure root sits below the marked surface, as a FRACTION
@@ -169,9 +173,15 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
         } else {
           const listing = await apiGet<{ clips?: ApiClip[] }>('/assets/animation-clips')
           const clips = listing.clips || []
-          // neutral set first, then any set of the kind (same pick as the viewers)
+          // A named set first (the library view plays exactly the file it
+          // lists), then the neutral set, then any set of the kind — the last
+          // two are the pick every viewer makes.
+          const want = (set || '').trim()
           const pick = (role: string) =>
-            clips.find((c) => c.kind === kind && (c.role || '') === role && !c.set)
+            (want
+              ? clips.find((c) => c.kind === kind && (c.role || '') === role && (c.set || '') === want)
+              : undefined)
+            || clips.find((c) => c.kind === kind && (c.role || '') === role && !c.set)
             || clips.find((c) => c.kind === kind && (c.role || '') === role)
           const isPair = !!(pick('a') && pick('b'))
           parts = isPair
@@ -365,7 +375,7 @@ export function ClipPreview({ kind = '', height = 300, urls, window: win, speed 
       cancelAnimationFrame(raf)
       disposers.forEach((d) => d())
     }
-  }, [kind, height, urlKey, group, t])
+  }, [kind, set, height, urlKey, group, t])
 
   // What the marker under (or in front of) the pair is — only while one is
   // actually seated on it.
