@@ -322,9 +322,11 @@ def test_validation() -> None:
            lambda: ac.rename_clip("free", "walk.fbx", cset="my set"))
     raises("an unknown target library -> ClipLibraryError", ac.ClipLibraryError,
            lambda: ac.rename_clip("free", "walk.fbx", to_library="trial"))
-    check("a kind with a space is legal (the shipped library has such files)",
-          ac.rename_clip("free", "walk.fbx", kind="putting on a dress"
-                         )[0]["kind"] == "putting on a dress")
+    # Spaces are part of the kind alphabet on purpose — clip files whose name
+    # is a short phrase exist, so a rename must not refuse one.
+    check("a kind with a space is legal",
+          ac.rename_clip("free", "walk.fbx", kind="climbing a ladder"
+                         )[0]["kind"] == "climbing a ladder")
     check("nothing was moved by the refused calls",
           not (FREE / "walk__a.fbx").exists()
           and (FREE / "walk_02.fbx").is_file())
