@@ -1,36 +1,26 @@
 {
- "kind": "walk-cmu",
+ "kind": "standing wash-self",
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 67,
- "duration_s": 2.233,
+ "source_fps": 120.0,
+ "frames": 662,
+ "duration_s": 22.067,
+ "loop": false,
+ "speed": 1.0,
  "geometry": {
-  "floor_shift_cm": -1.21,
+  "floor_shift_cm": -3.36,
   "in_place": true,
-  "loop": {
-   "min_s": 0.9,
-   "cut_frames": [
-    20,
-    87
-   ],
-   "cut_s": [
-    0.667,
-    2.9
-   ],
-   "seam_distance": 0.601,
-   "blend_frames": 8
-  },
   "hips_scale": [
-   1.0784
+   1.1135
   ],
-  "rig_floor_shift_cm": 1.91,
-  "rig_floor_min_cm": -1.83
+  "rig_floor_shift_cm": 3.56,
+  "rig_floor_min_cm": -0.67
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "35_01"
+   "02_10"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }

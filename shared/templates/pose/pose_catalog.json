@@ -46,7 +46,8 @@
         "sauna"
       ],
       "animation": "sit",
-      "group": "seat"
+      "group": "seat",
+      "solo": true
     },
     "reading": {
       "prompt": "sitting with book in hands, head tilted slightly down, focused posture, legs tucked",
@@ -75,8 +76,9 @@
         "schlafend",
         "pennen"
       ],
-      "animation": "lie",
-      "group": "bed"
+      "animation": "laying",
+      "group": "bed",
+      "solo": true
     },
     "walking": {
       "prompt": "mid-stride walking pose, arms naturally swinging, upright posture, looking ahead",
@@ -86,7 +88,7 @@
         "spazieren",
         "spaziergang"
       ],
-      "animation": "walk-cmu",
+      "animation": "walk",
       "solo": true,
       "group": "stand"
     },
@@ -296,13 +298,14 @@
       "group": "stand"
     },
     "bathing": {
-      "prompt": "reclining in bathtub, arms resting on edges, head tilted back, relaxed",
+      "prompt": "standing in bathtub, washing own body",
       "synonyms": [
         "baden",
         "badend"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "standing washing",
+      "group": "stand",
+      "solo": true
     },
     "yoga": {
       "prompt": "standing in tree pose, one foot on inner thigh, arms raised above head, balanced",
@@ -401,7 +404,7 @@
         "kneeling on the kitchen floor",
         "kneeling on the black carpet"
       ],
-      "animation": "kneel",
+      "animation": "kneeling",
       "group": "stand"
     },
     "celebrating": {
@@ -469,24 +472,6 @@
       "animation": "idle",
       "group": "stand"
     },
-    "chopping": {
-      "prompt": "standing with knees bent and feet wide apart, leaning forward with arms extended downward as if striking or chopping",
-      "synonyms": [
-        "hacken",
-        "hackend"
-      ],
-      "animation": "idle",
-      "group": "stand"
-    },
-    "applying_makeup": {
-      "prompt": "sitting upright with legs crossed, arms raised holding a makeup brush or sponge near the face",
-      "synonyms": [
-        "make-up auftragen",
-        "schminken"
-      ],
-      "animation": "idle",
-      "group": "stand"
-    },
     "changing_clothes": {
       "prompt": "standing with one leg slightly bent, arms reaching behind the head or holding a garment, torso slightly twisted",
       "synonyms": [
@@ -494,8 +479,9 @@
         "sich umkleiden",
         "sich_umkleiden"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "putting on a dress",
+      "group": "stand",
+      "solo": true
     },
     "freshening_up": {
       "prompt": "standing upright, leaning slightly toward a mirror, hands engaged in grooming or washing",
@@ -516,7 +502,7 @@
         "lying exhausted on the sofa",
         "lying on the training mat"
       ],
-      "animation": "lie",
+      "animation": "laying",
       "group": "floor"
     },
     "washing_dishes": {
@@ -544,8 +530,9 @@
         "erholen",
         "ausruhen"
       ],
-      "animation": "lie",
-      "group": "bed"
+      "animation": "laying",
+      "group": "bed",
+      "solo": true
     },
     "shooting": {
       "prompt": "standing with knees slightly bent and feet shoulder-width apart, firearm held with both hands extended forward at shoulder height, elbows tucked in",
@@ -612,6 +599,15 @@
       "group": "stand",
       "places": 2,
       "yaw_offset": 0
+    },
+    "sitting-cowgirl": {
+      "prompt": "woman is riding mens cock",
+      "synonyms": [],
+      "animation": "sitting-cowgirl",
+      "solo": false,
+      "group": "seat",
+      "places": 2,
+      "yaw_offset": 0.0
     }
   }
 }

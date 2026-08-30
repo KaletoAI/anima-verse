@@ -8,12 +8,19 @@ Skeletal animation clips for the 3D character models, shared across ALL worlds
 Two libraries, one layout:
 
 * **this one** — clips that may be REDISTRIBUTED with the repository (tracked
-  in git). Today: CMU Graphics Lab mocap converted by
-  `scripts/clip_import_cmu.py`, each with a `<kind>.json` sidecar naming its
-  source and the CMU credit.
-* **`../clips-licensed/`** — Mixamo downloads and bought packs: usable in the
-  game, not redistributable, gitignored, per installation. The same
-  `[<set>/]<file>` in both libraries resolves to the licensed one.
+  in git). It carries the BASE SET everything else falls back to: CMU Graphics
+  Lab mocap converted by `scripts/clip_import_cmu.py` (`idle`, `walk`, `run`,
+  `sit`, `laying`, …), each with a `<kind>.json` sidecar naming its source and
+  the CMU credit.
+* **`../clips-licensed/`** — bought packs: usable in the game, not
+  redistributable, gitignored, per installation. The same `[<set>/]<file>` in
+  both libraries resolves to the licensed one, so a pack overrides the base set
+  clip by clip.
+
+**`idle.fbx` in THIS library is the retarget reference.** Every import
+(`clip_import_cmu.py`, the Poses tab) drives its take onto that skeleton
+(`cmu_import.default_rig()`), so all clips share one rig and one standing hip
+height — the height the client normalises against.
 
 Only put a file HERE if its licence allows redistribution. Drop the `.fbx`
 files straight in — no registration, no config.
@@ -78,8 +85,8 @@ anchor moment, +X from A to B, floor at y = 0, full root motion kept. A
 sidecar `<kind>.json` next to them carries duration, fps and that geometry.
 
 The converter `scripts/clip_import_cmu.py` writes such pairs (and solo clips)
-from the CMU Graphics Lab mocap database — whose data, unlike Mixamo's, may be
-redistributed with the repository:
+from the CMU Graphics Lab mocap database — whose data, unlike a licensed pack's,
+may be redistributed with the repository:
 
     ./.venv/bin/python scripts/clip_import_cmu.py handshake 18_01 19_01
     ./.venv/bin/python scripts/clip_import_cmu.py dance 55_02 --in-place
@@ -89,28 +96,27 @@ the same skeleton — and the same standing hip height — as every other clip.
 
 ## Hard requirements for the files
 
-Violating these does not fail loudly — it produces characters that walk on their
-belly. Take them seriously:
+These hold for EVERY clip, whatever its source — a CMU conversion, a bought
+pack, a hand-authored take. Violating them does not fail loudly; it produces
+characters that walk on their belly:
 
-1. **Mixamo FBX, exported "Without Skin"** — keyframes only, no mesh, no texture.
-2. **All clips from the SAME source.** Mixed skeleton conventions tip the
-   figures over. Download fresh from mixamo.com — do NOT take FBX files from
-   model repos, and never one labelled "UE4 Skeleton".
-3. **Must match the Mixamo 52-bone rig** that the character models already use
-   (the same basis as the character GLBs and the generated meshes).
-4. **Movement clips must be exported "In Place".** The client moves the figure
-   itself (the walk, the journey, the click route); a clip that also carries
-   root motion drives the body away from the position the game holds it at.
-   Mixamo has the checkbox — `swim.fbx` was downloaded without it and travels
-   2.36 m forward per cycle (0.52 m/s), the only clip in the library that does.
-5. **Author them on the FLOOR.** A movement clip is played against a figure
+1. **FBX with keyframes only** — no mesh, no texture ("Without Skin").
+2. **The Mixamo 52-bone rig**, the same basis the character GLBs and the
+   generated meshes carry. A foreign convention (e.g. "UE4 Skeleton") tips the
+   figures over; the CMU importer retargets onto `idle.fbx` precisely so every
+   clip ends up on that one skeleton.
+3. **Movement clips must be IN PLACE.** The client moves the figure itself (the
+   walk, the journey, the click route); a clip that also carries root motion
+   drives the body away from the position the game holds it at.
+   `clip_import_cmu.py --in-place` strips it.
+4. **Author them on the FLOOR.** A movement clip is played against a figure
    whose soles stand on the ground, so a clip animated on a line of its own —
-   `swim.fbx` is authored on a water line — holds the body over that ground.
-   The client measures the offset and drops the figure onto the ground while it
-   moves (`client3d/src/scene/clipGround.ts`), which rescues the picture but not
-   the intent: the swimmer then wades at the height the clip was authored at.
-   Standing clips are exempt on purpose — `sleep.fbx` is animated on a bed and
-   is meant to be.
+   a swimmer on a water line — holds the body over that ground. The client
+   measures the offset and drops the figure onto the ground while it moves
+   (`client3d/src/scene/clipGround.ts`), which rescues the picture but not the
+   intent: the swimmer then wades at the height the clip was authored at.
+   Clips that are MEANT to sit above the floor (a sleeper on a bed) are the
+   deliberate exception.
 
 ## Why here and not under `characters/`
 

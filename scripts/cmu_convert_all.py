@@ -31,7 +31,7 @@ Options:
     --src <dir>       downloaded originals (default: shared/models/mocap-src/cmu)
     --out <dir>       clip target (default: shared/models/clips-trial)
     --rig <fbx>       skeleton to drive (default: the licensed library's
-                      idle.fbx, else the free library's idle-wait.fbx)
+                      idle.fbx, else the free library's idle.fbx)
     --only-main <n>   restrict to one main category id
     --only <list>     comma-separated take ids (e.g. 18_01,55_02)
     --jobs <n>        parallel Blender runs (default 1)
@@ -71,8 +71,7 @@ def rig_path(explicit: str) -> Path:
     if explicit:
         return Path(explicit)
     for candidate in (paths.get_licensed_clips_dir() / "idle.fbx",
-                      paths.get_animation_clips_dir() / "idle.fbx",
-                      paths.get_animation_clips_dir() / "idle-wait.fbx"):
+                      paths.get_animation_clips_dir() / "idle.fbx"):
         if candidate.is_file():
             return candidate
     return paths.get_test_figure_dir() / "x-bot.fbx"

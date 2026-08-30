@@ -1436,7 +1436,7 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   Blickrichtung, 0..180, Standard 90 = quer; Nachtrag 2026-08-29). Quer ist
   richtig für jeden, der SITZT oder STEHT: die Schultern sind die schmale
   Seite. Eine LIEGENDE Pose legt den Körper dagegen quer zur Blickrichtung
-  (am Bibliotheks-Clip `laying-back` gemessen), eine 90°-Reihe liefe also den
+  (am Bibliotheks-Clip `laying` gemessen), eine 90°-Reihe liefe also den
   Körper entlang und stapelte zwei Schlafende Kopf an Fuß — dafür ist 0
   gedacht. 180 ist 0 mit vertauschter Reihenfolge; eine Reihe ist eine Achse,
   keine Richtung. Objekt-lokal wie das `facing`, gegen das sie gemessen wird,

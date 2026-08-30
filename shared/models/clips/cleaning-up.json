@@ -1,36 +1,39 @@
 {
- "kind": "idle-cmu",
+ "kind": "cleaning-up",
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 218,
- "duration_s": 7.267,
+ "source_fps": 60.0,
+ "frames": 225,
+ "duration_s": 7.5,
+ "loop": true,
+ "speed": 1.0,
  "geometry": {
-  "floor_shift_cm": 1.38,
+  "floor_shift_cm": -3.98,
   "in_place": true,
   "loop": {
-   "min_s": 5.0,
+   "min_s": 6.0,
    "cut_frames": [
-    207,
-    425
+    0,
+    225
    ],
    "cut_s": [
-    6.9,
-    14.167
+    0.0,
+    7.5
    ],
-   "seam_distance": 2.66,
+   "seam_distance": 1.119,
    "blend_frames": 8
   },
   "hips_scale": [
-   1.0817
+   1.1053
   ],
-  "rig_floor_shift_cm": -1.74,
-  "rig_floor_min_cm": -5.81
+  "rig_floor_shift_cm": 3.87,
+  "rig_floor_min_cm": -0.68
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "40_10"
+   "62_11"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }

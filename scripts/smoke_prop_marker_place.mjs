@@ -427,14 +427,14 @@ console.log('\nE5  the real skeleton — x-bot + the served clips, headless');
   //   free     laying S − 0.0867 − 0.84033 + 0.9801 = S + 0.05307
   //   idle (a standing spot, offset 0 and drop 0) = S + 0.9801
   //
-  // Neither library is in git (Mixamo licence / the free set is large), so a
-  // missing one is a SKIP with a named reason, not a failure — the law itself
-  // is pinned above and needs no file.
+  // The licensed library is not in git (Mixamo/pack licence) and the free one
+  // may be incomplete, so a missing set is a SKIP with a named reason, not a
+  // failure — the law itself is pinned above and needs no file.
   const FIG = join(ROOT, 'shared/models/figure/x-bot.fbx');
   const SETS = [
     { name: 'free (CMU)', dir: join(ROOT, 'shared/models/clips'),
-      files: { idle: 'idle-wait.fbx', sit: 'sit-cmu.fbx',
-               laying: 'laying-back.fbx' },
+      files: { idle: 'idle.fbx', sit: 'sit.fbx',
+               laying: 'laying.fbx' },
       medians: { idle: 110.86, sit: 65.19, laying: 15.81 },
       drops: { idle: 0, sit: 0.40376, laying: 0.84033 },
       hips: { idle: 0.9801, sit: 0.04254, laying: 0.05307 } },

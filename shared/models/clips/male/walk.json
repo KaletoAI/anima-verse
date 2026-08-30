@@ -1,23 +1,36 @@
 {
- "kind": "greeting-cmu",
+ "kind": "walk",
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 180,
- "duration_s": 6.0,
+ "frames": 67,
+ "duration_s": 2.233,
  "geometry": {
-  "floor_shift_cm": 0.3,
+  "floor_shift_cm": -1.21,
   "in_place": true,
+  "loop": {
+   "min_s": 0.9,
+   "cut_frames": [
+    20,
+    87
+   ],
+   "cut_s": [
+    0.667,
+    2.9
+   ],
+   "seam_distance": 0.601,
+   "blend_frames": 8
+  },
   "hips_scale": [
-   1.0596
+   1.0784
   ],
-  "rig_floor_shift_cm": -1.42,
-  "rig_floor_min_cm": -4.08
+  "rig_floor_shift_cm": 1.91,
+  "rig_floor_min_cm": -1.83
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "13_26"
+   "35_01"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }

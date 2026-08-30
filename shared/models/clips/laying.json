@@ -1,0 +1,24 @@
+{
+ "kind": "laying",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "frames": 105,
+ "duration_s": 3.5,
+ "geometry": {
+  "floor_shift_cm": 9.7,
+  "in_place": true,
+  "hips_scale": [
+   1.1916
+  ],
+  "rig_floor_shift_cm": -13.74,
+  "rig_floor_min_cm": -2.02
+ },
+ "source": {
+  "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
+  "takes": [
+   "77_18"
+  ],
+  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+ }
+}

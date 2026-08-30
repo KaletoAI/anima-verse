@@ -244,7 +244,7 @@ async function main() {
     return e;
   };
   // the harness reference: the free library's own idle (CMU), present in git
-  shape.idle = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, 'idle-wait.fbx'))), '').animations[0];
+  shape.idle = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, 'idle.fbx'))), '').animations[0];
   for (const name of ['idle', 'handshake__a', 'salsa__b', 'dance']) {
     const e = adminApply(shape[name]);
     check(`${name} applied admin-style keeps the skeleton intact`,
