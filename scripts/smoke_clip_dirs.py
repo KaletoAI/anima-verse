@@ -4,7 +4,8 @@
 Builds a throwaway clip tree and points ANIMATION_CLIPS_DIR at it — the real
 shared/models/clips is never touched. Covers the discovery
 (app/core/animation_clips.py), the listing URLs and the serving-path
-validation (app/routes/assets.py).
+validation (app/routes/assets.py), and — part [8] — that a MISSING clip
+library breaks nothing beyond "no animations play".
 
 Usage:  ./.venv/bin/python scripts/smoke_clip_dirs.py
 """
@@ -277,6 +278,74 @@ def test_licensed() -> None:
           assets.resolve_clip_path("sit.fbx") == (CLIPS / "sit.fbx").resolve())
 
 
+def test_no_library() -> None:
+    """NO clip library at all — the folder may be emptied or deleted.
+
+    Hand-derived from the one rule "clips are content, the pipeline is not":
+    everything that LISTS clips answers with an empty result and nothing
+    raises, while everything that CONVERTS clips is unaffected, because its
+    reference skeleton lives outside the libraries (``shared/models/rig/``).
+    So, with both libraries pointed at directories that do not exist:
+
+        clip_entries / clip_kinds / pair_kinds / clip_sets   []
+        clip_meta("hug")                                     None
+        available_animation_kinds()                          []
+        GET /assets/animation-clips   kinds/pair_kinds/clip_sets [], pairs {},
+                                      sets ["animal","female","male"]
+                                      (the base sets follow from character
+                                      data, not from files)
+        resolve_clip_path("sit.fbx")  a path that is not a file (route: 404)
+        cmu_import.default_rig()      the reference skeleton, unchanged
+
+    and with the reference skeleton itself gone, ``default_rig()`` raises —
+    it never falls back onto a clip or a figure.
+    """
+    print("\n[8] no clip library at all")
+    from app.core import cmu_import, expression_pose_maps as epm
+    free, lic = os.environ["ANIMATION_CLIPS_DIR"], os.environ.get(
+        "ANIMATION_CLIPS_LICENSED_DIR", "")
+    rig = CLIPS.parent / "rig-smoke-reference.fbx"
+    # Not a real FBX: default_rig() only decides whether the file is THERE.
+    rig.write_bytes(b"reference-skeleton-stand-in")
+    os.environ["ANIMATION_CLIPS_DIR"] = str(CLIPS) + "-gone"
+    os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = str(CLIPS) + "-gone-licensed"
+    os.environ["ANIMATION_RIG_FILE"] = str(rig)
+    try:
+        check("clip_entries is empty, not an error", ac.clip_entries() == [])
+        check("no kinds, no pairs, no sets",
+              ac.clip_kinds() == [] and ac.pair_kinds() == [] and ac.clip_sets() == [])
+        check("clip_meta finds no sidecar", ac.clip_meta("hug") is None)
+        check("available_animation_kinds is empty",
+              epm.available_animation_kinds() == [])
+        data = assets.list_animation_clips()
+        check("the listing route answers empty",
+              data["clips"] == [] and data["kinds"] == []
+              and data["pair_kinds"] == [] and data["pairs"] == {}
+              and data["clip_sets"] == [], str(data["kinds"]))
+        check("the base sets survive without a single file",
+              data["sets"] == ["animal", "female", "male"], str(data["sets"]))
+        missing = assets.resolve_clip_path("sit.fbx")
+        check("a clip request resolves but is not there (404, not 500)",
+              missing is not None and not missing.is_file())
+        check("default_rig() is unaffected — it is not in a library",
+              cmu_import.default_rig() == rig, str(cmu_import.default_rig()))
+        rig.unlink()
+        try:
+            cmu_import.default_rig()
+            check("without the reference skeleton default_rig() raises", False)
+        except cmu_import.ClipImportError as e:
+            check("without the reference skeleton default_rig() raises",
+                  "reference skeleton missing" in str(e), str(e))
+    finally:
+        os.environ["ANIMATION_CLIPS_DIR"] = free
+        if lic:
+            os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = lic
+        else:
+            os.environ.pop("ANIMATION_CLIPS_LICENSED_DIR", None)
+        os.environ.pop("ANIMATION_RIG_FILE", None)
+        rig.unlink(missing_ok=True)
+
+
 def main() -> int:
     build_tree()
     check("ANIMATION_CLIPS_DIR is honoured",
@@ -287,6 +356,7 @@ def main() -> int:
     test_listing()
     test_serving()
     test_licensed()
+    test_no_library()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 
