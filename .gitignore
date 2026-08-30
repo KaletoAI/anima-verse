@@ -218,7 +218,7 @@ shared/models/clips-trial/**
 # licensed material by default, so only its README travels.
 shared/models/clips-inbox/**
 !shared/models/clips-inbox/README.md
-# Shared test figure (Mixamo standard character), provided per installation
+# The shared reference figure (default.fbx/.glb), provided per installation
 shared/models/figure/*.fbx
 shared/models/figure/*.glb
 shared/models/figure/*.gltf

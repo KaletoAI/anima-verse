@@ -102,7 +102,8 @@ Red probes, all three of them numbers that must NOT come out:
                             in place (the Mixamo hips POSITION track is
                             dropped), so the hips never move and that reading
                             is ONE constant for every clip alike: 0.9288 m at
-                            H = 1.70 m, measured on x-bot.fbx. Against the
+                            H = 1.70 m, measured on the reference figure
+                            (shared/models/figure). Against the
                             table it puts a sitter 0.395 m too low, a sleeper
                             0.144 m too high and a lying figure 0.842 m too
                             low. The renderer half is pinned in

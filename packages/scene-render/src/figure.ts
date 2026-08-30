@@ -35,8 +35,8 @@
  *     0.03 × H, read off the "posed skeleton". But every clip is played in
  *     place (the Mixamo hips POSITION track is dropped — it is in
  *     centimetres), so the hips joint never moves vertically and that
- *     reading is one constant for every clip alike: measured on x-bot.fbx,
- *     0.9288 m at H = 1.70 m, whatever is playing. Against the payload's own
+ *     reading is one constant for every clip alike: measured on the project's
+ *     reference figure, 0.9288 m at H = 1.70 m, whatever is playing. Against the payload's own
  *     numbers that put the seated figure 0.395 m too low, the sleeper
  *     0.144 m too high and a lying figure 0.842 m too low — the sit case is
  *     what the user saw as "the figure is not where I put the marker".

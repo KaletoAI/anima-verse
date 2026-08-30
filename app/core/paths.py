@@ -175,9 +175,11 @@ def get_game_audio_dir() -> Path:
 
 
 def get_test_figure_dir() -> Path:
-    """Shared neutral TEST FIGURE (a Mixamo standard character like X Bot) —
-    world-independent, used by the admin previews for marker/scale figures.
-    User-provided binary like the clips (gitignored); see the README there.
+    """The shared REFERENCE FIGURE — ``shared/models/figure/default.fbx``
+    (or ``.glb``): THE figure wherever a body stands in for a body, i.e. the
+    admin previews' marker and scale figures and the measurement smokes.
+    World-independent, rigged on the project's skeleton, user-provided binary
+    like the clips (gitignored); see the README there for the fallback chain.
 
     ``TEST_FIGURE_DIR`` overrides the location — tests must set it (same
     rule as ANIMATION_CLIPS_DIR: never touch the real user files).

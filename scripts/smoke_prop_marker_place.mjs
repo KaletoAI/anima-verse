@@ -91,7 +91,7 @@
  *                      Mixamo hips POSITION track is dropped — centimetres),
  *                      so the hips joint never moves and that reading is ONE
  *                      constant for every clip alike: 0.9288 m at H = 1.70 m,
- *                      measured on x-bot.fbx + the clips.
+ *                      measured on the reference figure + the clips.
  *
  * The drop itself now comes from the pose catalog (`groups[g].root_drop ×
  * 1.70`, the ONE source) and reaches the renderer as `root_offset`, so
@@ -107,7 +107,7 @@
  * track relative to the standing reference (the hips median of the idle
  * clip). The admin prop viewer dropped the track and never put anything back,
  * so the posed hips sat at the BIND height for every clip alike — measured
- * headless on x-bot.fbx: 0.9801 m at H = 1.70 m, for idle, sit and laying
+ * headless on the reference figure: 0.9801 m at H = 1.70 m, for idle, sit and laying
  * alike (this file's E5 is what measures it).
  *
  * Sitting is therefore drawn `hipsBind × (1 − median(sit)/median(idle))`
@@ -377,7 +377,7 @@ console.log('\nE  the figure meets the marker — ONE law for all three renderer
   }
   // The drop itself, hand-derived from the medians measured on the SERVED
   // clip library (`shared/models/clips-licensed`, headless FBXLoader.parse,
-  // Mixamo centimetres) and the bind hips of x-bot.fbx at H = 1.70 m:
+  // Mixamo centimetres) and the bind hips of the reference figure at H = 1.70 m:
   //
   //   hipsBind 0.9801   idle 110.13   walk 108.53   sit 62.18
   //                     laying 14.56  sleep 119.48  kneeling 53.30
@@ -409,7 +409,7 @@ console.log('\nE  the figure meets the marker — ONE law for all three renderer
   ]) near(`${label} = no drop`, clipHipsDrop(...args), 0, 1e-9);
 }
 
-console.log('\nE5  the real skeleton — x-bot + the served clips, headless');
+console.log('\nE5  the real skeleton — the reference figure + the served clips, headless');
 {
   // The chain of `Model3DViewer.addMarkerFigure`, replayed on the real files:
   // anchor the bind pose to 1.70 m, measure the hips, drop the hips POSITION
@@ -418,19 +418,20 @@ console.log('\nE5  the real skeleton — x-bot + the served clips, headless');
   // user aligns a seat marker by.
   //
   // Hand-derived, per set (S = the marked surface):
-  //   hipsBind = (104.275 + 0.035) / 180.923 × 1.70 = 0.98013   (x-bot raw:
-  //     hips y 104.275, box min.y −0.035, box height 180.923)
+  //   hipsBind = (104.275 + 0.035) / 180.923 × 1.70 = 0.98013   (the figure
+  //     shipped with this check, raw: hips y 104.275, box min.y −0.035,
+  //     box height 180.923)
   //   posed hips y = S − rootOffset − drop + hipsBind
-  //   licensed sit    S − 0.5338 − 0.42673 + 0.9801 = S + 0.01957
-  //   licensed laying S − 0.0867 − 0.85052 + 0.9801 = S + 0.04288
   //   free     sit    S − 0.5338 − 0.40376 + 0.9801 = S + 0.04254
   //   free     laying S − 0.0867 − 0.84033 + 0.9801 = S + 0.05307
   //   idle (a standing spot, offset 0 and drop 0) = S + 0.9801
   //
-  // The licensed library is not in git (Mixamo/pack licence) and the free one
-  // may be incomplete, so a missing set is a SKIP with a named reason, not a
-  // failure — the law itself is pinned above and needs no file.
-  const FIG = join(ROOT, 'shared/models/figure/x-bot.fbx');
+  // BOTH inputs are optional files: the reference figure is user-provided per
+  // installation (gitignored) and the clip library may be emptied, replaced or
+  // deleted — nothing outside "no animations play" depends on it. So a missing
+  // figure or a missing clip is a SKIP with a named reason, not a failure; the
+  // law itself is pinned above and needs no file at all.
+  const FIG = join(ROOT, 'shared/models/figure/default.fbx');
   const SETS = [
     { name: 'free (CMU)', dir: join(ROOT, 'shared/models/clips'),
       files: { idle: 'idle.fbx', sit: 'sit.fbx',
@@ -438,11 +439,6 @@ console.log('\nE5  the real skeleton — x-bot + the served clips, headless');
       medians: { idle: 110.86, sit: 65.19, laying: 15.81 },
       drops: { idle: 0, sit: 0.40376, laying: 0.84033 },
       hips: { idle: 0.9801, sit: 0.04254, laying: 0.05307 } },
-    { name: 'licensed (Mixamo)', dir: join(ROOT, 'shared/models/clips-licensed'),
-      files: { idle: 'idle.fbx', sit: 'sit.fbx', laying: 'laying.fbx' },
-      medians: { idle: 110.13, sit: 62.18, laying: 14.56 },
-      drops: { idle: 0, sit: 0.42673, laying: 0.85052 },
-      hips: { idle: 0.9801, sit: 0.01957, laying: 0.04288 } },
   ];
   const GROUP_OF = { idle: 'stand', sit: 'seat', laying: 'floor' };
   const OFFSET = { stand: 0, seat: 0.314 * FIGURE_HEIGHT_M,
@@ -522,8 +518,8 @@ console.log('\nE5  the real skeleton — x-bot + the served clips, headless');
       }
       // …and the bound that matters to the user: a seated or lying body meets
       // the surface it was marked on. The residual is the catalog's
-      // calibration, not the law — `seat.root_drop` 0.314 is derived on the
-      // Mixamo sit clip (2.0 cm), the CMU one sits 3 cm higher (4.3 cm). The
+      // calibration, not the law — `seat.root_drop` 0.314 was derived on a
+      // licensed sit clip (2.0 cm), the CMU one sits 3 cm higher (4.3 cm). The
       // hip-joint-versus-buttocks term of the same finding is a pending user
       // decision, so this is checked as a BOUND, like case C above.
       const worst = Math.max(Math.abs(residual.sit), Math.abs(residual.laying));

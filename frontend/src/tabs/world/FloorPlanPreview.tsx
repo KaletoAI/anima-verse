@@ -308,9 +308,9 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     figRef.current = { status: 'loading' }
     ;(async () => {
       try {
-        // Preferred: a Mixamo STANDARD character (X Bot & Co.) the admin
-        // dropped into shared/models/figure/ — FBX or GLB; fallback is the
-        // first humanoid character model. The meta names the format.
+        // Preferred: the reference figure the admin dropped into
+        // shared/models/figure/ (default.fbx or .glb); fallback is the first
+        // humanoid character model. The meta names the format.
         const meta = await apiGet<{ format?: string }>('/play/test-figure/meta')
         let obj: Object3D
         if ((meta.format || 'glb') === 'fbx') {

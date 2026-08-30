@@ -1359,18 +1359,24 @@ def play_location_model_meta(location_id: str):
 
 
 def _test_figure_file():
-    """The preview test figure, in priority order: a user-provided Mixamo
-    STANDARD character (X Bot & Co.) from shared/models/figure/ — else the
-    first humanoid character model as the fallback. Returns (path,
-    format, source) or (None, '', '')."""
+    """The preview reference figure, in priority order: ``default.*`` from
+    shared/models/figure/ (THE figure of the project — see the README there),
+    then any other model lying there alphabetically, then the first humanoid
+    character model as the fallback. Returns (path, format, source) or
+    (None, '', '')."""
     import json as _json
     from app.core.paths import get_test_figure_dir
     d = get_test_figure_dir()
     if d.is_dir():
-        for p in sorted(d.iterdir()):
-            if p.is_file() and p.suffix.lower() in (".glb", ".gltf", ".fbx"):
-                fmt = "fbx" if p.suffix.lower() == ".fbx" else "glb"
-                return p, fmt, "standard"
+        files = [p for p in sorted(d.iterdir())
+                 if p.is_file() and p.suffix.lower() in (".glb", ".gltf", ".fbx")]
+        # The named figure wins over the alphabet — dropping a second model in
+        # must not silently replace it.
+        p = next((q for q in files if q.stem.lower() == "default"), None) \
+            or (files[0] if files else None)
+        if p is not None:
+            fmt = "fbx" if p.suffix.lower() == ".fbx" else "glb"
+            return p, fmt, "standard"
     from app.models.character import list_available_characters
     from app.core.model3d import find_model3d
     for name in list_available_characters():
@@ -1389,10 +1395,10 @@ def _test_figure_file():
 
 @router.get("/play/test-figure/model")
 def play_test_figure_model(request: Request):
-    """The preview TEST FIGURE (floor-plan marker/scale figures): a
-    Mixamo standard character from shared/models/figure/ when provided,
-    else the first humanoid character model. 404 when neither exists —
-    the preview falls back to its mannequin."""
+    """The preview REFERENCE FIGURE (floor-plan marker/scale figures):
+    shared/models/figure/default.* when provided, else the first humanoid
+    character model. 404 when neither exists — the preview falls back to
+    its mannequin."""
     from fastapi.responses import Response
     from app.core.http_files import etag_file_response
     p, fmt, _src = _test_figure_file()
