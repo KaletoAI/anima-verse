@@ -9,9 +9,11 @@
  * which pose entries depend on it. A kind a pose names but no file backs is a
  * "missing" row — the one gap that silently leaves a figure standing.
  *
- * Two libraries, one winner: a kind present in BOTH is served from the
- * LICENSED one (the local, untracked library wins over the free files in git),
- * so the cell shows both and marks that one.
+ * Two libraries, one winner: a LICENSED file HIDES a free file of the same
+ * name (the local, untracked library wins over the files in git). The hidden
+ * one is not in the listing at all — the server resolves the collision before
+ * it answers, so a cell tagged "free" and "licensed" holds files of DIFFERENT
+ * names, never two versions of one.
  *
  *   GET    /assets/animation-clips
  *   PATCH  /assets/animation-clips/{library}/{rel}   {kind?, set?, library?}
@@ -235,22 +237,15 @@ export function ClipLibrary({
       return <span style={{ opacity: 0.25 }}>·</span>
     }
     const n = variants(cell.all)
-    const both = !!cell.free.length && !!cell.licensed.length
     return (
       <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center', flexWrap: 'wrap' }}>
         {cell.free.length ? (
-          <span
-            className={`ga-tag${both ? '' : ' ga-tag-tier'}`}
-            title={both ? t('Also in the free library — the licensed file is the one served.') : t('free library (tracked in git)')}
-          >
+          <span className="ga-tag ga-tag-tier" title={t('free library (tracked in git)')}>
             {t('free')}
           </span>
         ) : null}
         {cell.licensed.length ? (
-          <span
-            className="ga-tag ga-tag-tier"
-            title={both ? t('In both libraries — the licensed file wins.') : t('licensed library (local only)')}
-          >
+          <span className="ga-tag ga-tag-tier" title={t('licensed library (local only)')}>
             {t('licensed')}
           </span>
         ) : null}
@@ -320,8 +315,13 @@ export function ClipLibrary({
               {t('Cancel')}
             </button>
             <span className="ga-hint">
-              {t('Lowercase letters, digits, space, "_" and "-"; never "__" (that separates the pair halves).')}
+              {t('Lowercase letters, digits, space, "_" and "-"; never "__" (that separates the pair halves) and never a trailing "_<number>" (that is the variant numbering).')}
             </span>
+            {usage[clip.kind]?.length ? (
+              <span className="ga-hint" style={{ color: 'var(--warn, #d29922)' }}>
+                {`${t('Poses that play this kind')}: ${usage[clip.kind].join(', ')} — ${t('they are not updated automatically and will find no clip under the old name.')}`}
+              </span>
+            ) : null}
           </div>
         ) : null}
 
@@ -391,7 +391,9 @@ export function ClipLibrary({
         {open === 'delete' ? (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.82em' }}>
-              {t('Delete this file?')}
+              {clip.role
+                ? t('Delete this file? It is one half of a pair — both halves go together.')
+                : t('Delete this file?')}
               {usage[clip.kind]?.length
                 ? ` ${t('Poses that play this kind')}: ${usage[clip.kind].join(', ')}`
                 : ''}
@@ -427,7 +429,7 @@ export function ClipLibrary({
       {/* ── the matrix ── */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, minHeight: 0 }}>
         <p className="ga-sched-muted" style={{ margin: 0 }}>
-          {t('Every installed clip by kind, set and library. A kind present in both libraries is served from the licensed one. A row without any clip is named by a pose but backed by no file — figures fall back to idle there.')}
+          {t('Every installed clip by kind, set and library. A licensed file hides a free one of the same name: only the licensed one is listed and only it is played. A row without any clip is named by a pose but backed by no file — figures fall back to idle there.')}
         </p>
 
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
