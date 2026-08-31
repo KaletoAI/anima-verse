@@ -41,6 +41,67 @@ const VIEW_ORDER = ['back', 'left', 'right'] as const
 
 type RefKind = 'pose' | 'tpose'
 
+/**
+ * Preview image with the render's pixel size as a corner badge. The size is
+ * read from the loaded bitmap itself (naturalWidth/Height) — what the file
+ * actually is, not what the config asked for.
+ */
+function RefImage({
+  src,
+  height,
+  radius,
+  showSize = false,
+}: {
+  src: string
+  height: number
+  radius: number
+  showSize?: boolean
+}) {
+  const [size, setSize] = useState('')
+  const [hidden, setHidden] = useState(false)
+  return (
+    <div style={{ position: 'relative' }}>
+      <img
+        src={src}
+        alt=""
+        style={{
+          display: 'block',
+          width: '100%',
+          height,
+          objectFit: 'contain',
+          borderRadius: radius,
+          border: '1px solid var(--border, #30363d)',
+          background: 'rgba(255, 255, 255, 0.04)',
+          visibility: hidden ? 'hidden' : undefined,
+        }}
+        onLoad={(e) => {
+          const im = e.target as HTMLImageElement
+          setSize(`${im.naturalWidth}×${im.naturalHeight}`)
+        }}
+        onError={() => setHidden(true)}
+      />
+      {showSize && size && !hidden ? (
+        <span
+          style={{
+            position: 'absolute',
+            right: 6,
+            bottom: 6,
+            padding: '1px 5px',
+            borderRadius: 4,
+            background: 'rgba(0, 0, 0, 0.55)',
+            color: '#fff',
+            fontSize: 11,
+            lineHeight: '16px',
+            pointerEvents: 'none',
+          }}
+        >
+          {size}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
 export function FieldModelRefs({
   character,
   kinds = ['pose', 'tpose'],
@@ -226,23 +287,14 @@ export function FieldModelRefs({
             <div key={kind} style={{ flex: 1, minWidth: 0 }}>
               {kinds.length > 1 ? <div className="ga-hint">{label(kind)}</div> : null}
               {ri ? (
-                <img
+                <RefImage
                   // Key by bust so an outfit switch mounts a fresh element —
-                  // no stale visibility:hidden from a previous missing render.
+                  // no stale hidden/size state from a previous render.
                   key={`${kind}-${bust}`}
                   src={`/characters/${enc}/model-refs/${kind}?v=${bust}`}
-                  alt=""
-                  style={{
-                    width: '100%',
-                    height: 320,
-                    objectFit: 'contain',
-                    borderRadius: 8,
-                    border: '1px solid var(--border, #30363d)',
-                    background: 'rgba(255, 255, 255, 0.04)',
-                  }}
-                  onError={(e) => {
-                    ;(e.target as HTMLImageElement).style.visibility = 'hidden'
-                  }}
+                  height={320}
+                  radius={8}
+                  showSize={kind === 'tpose'}
                 />
               ) : (
                 <div className="ga-hint">{t('No render yet')}</div>
@@ -262,21 +314,12 @@ export function FieldModelRefs({
                         <div key={view} style={{ flex: 1, minWidth: 0 }}>
                           <div className="ga-hint">{viewLabel(view)}</div>
                           {vi ? (
-                            <img
+                            <RefImage
                               key={`${view}-${bust}`}
                               src={`/characters/${enc}/model-refs/tpose_${view}?v=${bust}`}
-                              alt=""
-                              style={{
-                                width: '100%',
-                                height: 110,
-                                objectFit: 'contain',
-                                borderRadius: 6,
-                                border: '1px solid var(--border, #30363d)',
-                                background: 'rgba(255, 255, 255, 0.04)',
-                              }}
-                              onError={(e) => {
-                                ;(e.target as HTMLImageElement).style.visibility = 'hidden'
-                              }}
+                              height={110}
+                              radius={6}
+                              showSize
                             />
                           ) : (
                             <div className="ga-hint">{t('No render yet')}</div>
