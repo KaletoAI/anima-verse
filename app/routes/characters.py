@@ -433,8 +433,16 @@ def _save_home_location_route_sync(character_name: str,
 
 
 @router.get("/outfit-lora-options")
-def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
+def get_outfit_lora_options(character_name: str = "",
+                            target: str = "render") -> Dict[str, Any]:
     """Returns the LoRA list for the outfit-piece editor.
+
+    Args:
+        character_name: whose match globs decide the backend.
+        target: "render" (default) scopes the list to the normal render match
+            (outfit_imagegen.workflow); "tpose" scopes it to the T-pose match
+            (outfit_imagegen.tpose_workflow), falling back to the render match
+            when that glob is empty — the same fallback the render chain uses.
 
     Response:
         loras: [{name, missing}] from the LoRA library, scoped to the backend
@@ -465,6 +473,10 @@ def get_outfit_lora_options(character_name: str = "") -> Dict[str, Any]:
                 from app.models.character import get_character_profile
                 _ovr = (get_character_profile(character_name) or {}).get("outfit_imagegen") or {}
                 _glob = (_ovr.get("workflow") or "").strip() if isinstance(_ovr, dict) else ""
+                if target == "tpose" and isinstance(_ovr, dict):
+                    # Empty T-pose glob falls back to the render match — same
+                    # chain expression_regen walks for the T-pose use cases.
+                    _glob = (_ovr.get("tpose_workflow") or "").strip() or _glob
                 if _glob:
                     eff = imagegen.match_backend(_glob, has_input_image=_has_ref)
             except Exception:
@@ -1181,6 +1193,9 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
         "tpose_workflow": override.get("tpose_workflow", "") or "",
         "model": override.get("model", "") or "",
         "loras": override.get("loras", []) or [],
+        # LoRAs used INSTEAD of "loras" for the T-pose reference renders;
+        # empty = the normal LoRAs apply.
+        "tpose_loras": override.get("tpose_loras", []) or [],
     }
 
 

@@ -1651,20 +1651,14 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
     return {"skills": skills, "locations": all_locations}
 
 
-def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    """Saves workflow/model/LoRA override for the outfit image service.
-    All fields empty deletes the override completely."""
-    from app.models.character import get_character_profile, save_character_profile
-    workflow = (body.get("workflow") or "").strip()
-    # Separate backend glob for the T-pose reference renders (the image->3D
-    # input), e.g. a pose-controlled alias. Empty = the normal match above.
-    tpose_workflow = (body.get("tpose_workflow") or "").strip()
-    model = (body.get("model") or "").strip()
-    loras = body.get("loras") or []
-    if not isinstance(loras, list):
-        loras = []
-    clean_loras = []
-    for l in loras:
+def _clean_lora_list(raw: Any) -> List[Dict[str, Any]]:
+    """Normalizes a submitted LoRA list to [{name, strength}] entries.
+    Drops non-dicts, empty names and the 'None' placeholder; a non-numeric
+    strength falls back to 1.0."""
+    if not isinstance(raw, list):
+        return []
+    clean: List[Dict[str, Any]] = []
+    for l in raw:
         if not isinstance(l, dict):
             continue
         nm = (l.get("name") or "").strip()
@@ -1674,22 +1668,41 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
             st = float(l.get("strength", 1.0))
         except Exception:
             st = 1.0
-        clean_loras.append({"name": nm, "strength": st})
+        clean.append({"name": nm, "strength": st})
+    return clean
+
+
+def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Saves workflow/model/LoRA override for the outfit image service.
+    All fields empty deletes the override completely."""
+    from app.models.character import get_character_profile, save_character_profile
+    workflow = (body.get("workflow") or "").strip()
+    # Separate backend glob for the T-pose reference renders (the image->3D
+    # input), e.g. a pose-controlled alias. Empty = the normal match above.
+    tpose_workflow = (body.get("tpose_workflow") or "").strip()
+    model = (body.get("model") or "").strip()
+    clean_loras = _clean_lora_list(body.get("loras"))
+    # Own LoRA list for the T-pose reference renders: it REPLACES the list
+    # above for those renders (different backend, different LoRA ecosystem —
+    # no merge). Empty = the normal LoRAs apply.
+    clean_tpose_loras = _clean_lora_list(body.get("tpose_loras"))
     prof = get_character_profile(character_name) or {}
     # Always write (even empty) -- otherwise a clear does not persist:
     # outfit_imagegen lives in config_json and is only transferred on save when
     # the key is PRESENT in the profile. A del leaves the old config value in
     # place. Empty workflow + no LoRAs = override deleted. ``model`` is dropped
     # (it comes from the workflow).
-    if workflow or tpose_workflow or clean_loras:
+    if workflow or tpose_workflow or clean_loras or clean_tpose_loras:
         prof["outfit_imagegen"] = {"workflow": workflow,
                                    "tpose_workflow": tpose_workflow,
-                                   "loras": clean_loras}
+                                   "loras": clean_loras,
+                                   "tpose_loras": clean_tpose_loras}
     else:
         prof["outfit_imagegen"] = {}
     save_character_profile(character_name, prof)
     return {"status": "ok", "workflow": workflow,
-            "tpose_workflow": tpose_workflow, "loras": clean_loras}
+            "tpose_workflow": tpose_workflow, "loras": clean_loras,
+            "tpose_loras": clean_tpose_loras}
 
 
 def apply_videogen_config(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:

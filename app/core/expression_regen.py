@@ -1003,6 +1003,14 @@ def generate_expression_image(character_name: str,
                 model_override = m
             if isinstance(l, list):
                 loras_override = l
+            # why: the T-pose match may route to a different backend with its
+            # own LoRA ecosystem (e.g. a pose/turnaround LoRA), so this list
+            # REPLACES the normal per-character one for those renders instead
+            # of merging. Empty = the normal LoRAs apply.
+            _tpose_loras = _char_override.get("tpose_loras")
+            if (isinstance(_tpose_loras, list) and _tpose_loras
+                    and image_use_case in TPOSE_USE_CASES):
+                loras_override = _tpose_loras
     except Exception as _err:
         logger.debug("Outfit-ImageGen-Override lesen fehlgeschlagen: %s", _err)
 
