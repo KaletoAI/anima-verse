@@ -98,17 +98,21 @@ TPOSE_BACK_PROMPT_DEFAULT = (
 )
 
 # Both profiles share one text — the side is the only difference, so they
-# cannot drift apart. In a profile ONE arm points at the camera and one away
-# from it; saying so keeps the model from folding both arms to one side or
-# dropping the far one entirely.
+# cannot drift apart. A profile of a T-pose is the hardest view: the arms
+# point at and away from the camera, and models resolve that by drawing the
+# arms forward or letting them hang ("toward the camera / away from the
+# camera" demonstrably was not enough). So the text says what the picture
+# actually SHOWS — a strongly foreshortened near arm that hides the far one —
+# and the forward/down failure modes are pushed away in _NEG_TPOSE_SIDE.
 TPOSE_SIDE_PROMPT_TEMPLATE = (
     "strict {side} side profile view, seen exactly from the character's "
-    "{side} side, facing to the {side} of the frame, standing upright in "
-    "T-pose with both arms raised straight out to the sides at exact shoulder "
-    "height, one arm extended toward the camera and one arm extended away "
-    "from the camera, palms facing down toward the floor, fingers straight, "
-    "legs straight and slightly apart, hair tucked behind the shoulders, all "
-    "garments worn closed"
+    "{side} side, the whole body in profile facing the {side} edge of the "
+    "frame, standing upright in T-pose, both arms raised straight out to the "
+    "sides at exact shoulder height so that in this profile the near arm "
+    "points straight at the camera and hides the far arm behind it, the "
+    "outstretched arms appear strongly foreshortened, shoulders level, palms "
+    "facing down toward the floor, legs straight and slightly apart, hair "
+    "tucked behind the shoulders, all garments worn closed"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")

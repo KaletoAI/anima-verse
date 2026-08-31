@@ -89,10 +89,13 @@ _NEG_TPOSE_ANIMAL = ("illustration, anime, cgi, 3d render, painting, cartoon, dr
 # Both build on _NEG_TPOSE and add what actually goes wrong there: the model
 # turns the character back toward the camera, or lets it look over its
 # shoulder, so the render ends up as yet another front-ish view. The profile
-# text additionally pushes away the two arm failures a side view invites —
-# both arms drawn to the same side, or the far arm simply left out.
+# text additionally pushes away the observed arm failures of a side view —
+# the raised arms drawn FORWARD along the view axis or dropped toward the
+# body ("arms going forward and down", the reported failure). Deliberately
+# NOT negated: a single visible arm — in a strict profile the near arm
+# correctly hides the far one.
 _NEG_TPOSE_BACK = _NEG_TPOSE + ", front view, face visible, eyes, facial features, looking at the camera, looking over the shoulder, head turned, three-quarter view"
-_NEG_TPOSE_SIDE = _NEG_TPOSE + ", front view, back view, facing the camera, looking at the camera, three-quarter view, both arms on one side, missing arm"
+_NEG_TPOSE_SIDE = _NEG_TPOSE + ", front view, back view, facing the camera, looking at the camera, three-quarter view, both arms on one side, arms pointing forward, arms reaching forward, arms in front of the body, arms angled forward, arm resting along the body"
 
 # Negative of the building-exterior render (source of the location 3D model —
 # shared by both families). Like _NEG_TPOSE it is NOT _NEG_PHOTO (no skin

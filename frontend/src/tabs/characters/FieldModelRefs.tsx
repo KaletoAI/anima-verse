@@ -208,8 +208,10 @@ export function FieldModelRefs({
   const pending = myPending(info) || busy
 
   const label = (kind: RefKind) => (kind === 'tpose' ? t('T-pose') : t('Default pose'))
+  // Own source strings on purpose: the bare "Back" is the navigation label
+  // elsewhere and localizes accordingly — a back VIEW does not.
   const viewLabel = (view: string) =>
-    view === 'back' ? t('Back') : view === 'left' ? t('Left') : t('Right')
+    view === 'back' ? t('Back view') : view === 'left' ? t('Left view') : t('Right view')
   // The extra views only exist for humanoid characters — the backend reports
   // an empty map for everyone else, and then there is nothing to offer.
   const hasViews = kinds.includes('tpose') && !!info.views &&
