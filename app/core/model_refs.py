@@ -31,8 +31,10 @@ logger = get_logger(__name__)
 # What stays is load-bearing:
 # - "arms straight out to the sides at shoulder height, forming the letter T":
 #   "T-pose" alone is weakly trained in photo models and drifts into an A-pose.
-# - Palms face DOWN — the Mixamo bind pose. A mesh generated with turned palms
-#   gets its hand bones bound 90° off and every clip then twists the hands.
+# - Palms face FORWARD toward the camera (user decision 2026-08-31): shows the
+#   mesher the most hand detail. Note the trade-off this reverses: the Mixamo
+#   bind pose has palms DOWN, and a mesh generated with turned palms can get
+#   its hand bones bound 90° off, twisting the hands in animation clips.
 # - Feet SHOULDER-WIDTH apart with a visible gap: "slightly apart" rendered
 #   (especially female) characters with the ankles touching, and the mesher
 #   then fuses both legs into one column.
@@ -44,8 +46,9 @@ logger = get_logger(__name__)
 # replaces this text takes the responsibility with it.
 TPOSE_PROMPT_DEFAULT = (
     "T-pose, standing upright facing the camera, arms straight out to the "
-    "sides at shoulder height, forming the letter T, palms facing down, "
-    "fingers straight, legs straight, feet planted shoulder-width apart with "
+    "sides at shoulder height, forming the letter T, palms facing forward "
+    "toward the camera, fingers straight, legs straight, feet planted "
+    "shoulder-width apart with "
     "a clear gap between the legs, hair behind the shoulders, all garments "
     "worn closed"
 )
@@ -83,7 +86,8 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
 TPOSE_BACK_PROMPT_DEFAULT = (
     "back view, seen directly from behind, face not visible, standing upright "
     "in T-pose, arms straight out to the sides at shoulder height, palms "
-    "facing down, legs straight, feet planted shoulder-width apart with a "
+    "facing away from the camera, legs straight, feet planted "
+    "shoulder-width apart with a "
     "clear gap between the legs, hair in front of the shoulders, all garments "
     "worn closed"
 )
@@ -99,7 +103,7 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "strict {side} side profile view, the whole body in profile facing the "
     "{side} edge of the frame, standing upright in T-pose, arms straight out "
     "to the sides at shoulder height so the near arm points at the camera and "
-    "hides the far arm, strongly foreshortened, palms facing down, legs "
+    "hides the far arm, strongly foreshortened, palms facing forward, legs "
     "straight, feet shoulder-width apart, hair behind the shoulders, all "
     "garments worn closed"
 )
