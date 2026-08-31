@@ -85,6 +85,145 @@ def euler(angles_deg: Sequence[float], order: str) -> Mat3:
     return m
 
 
+def normalize(v: Sequence[float]) -> Vec3:
+    n = math.sqrt(sum(c * c for c in v)) or 1.0
+    return (v[0] / n, v[1] / n, v[2] / n)
+
+
+def cross(a: Sequence[float], b: Sequence[float]) -> Vec3:
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def dot(a: Sequence[float], b: Sequence[float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def axis_angle(axis: Sequence[float], rad: float) -> Mat3:
+    x, y, z = normalize(axis)
+    c, s, t = math.cos(rad), math.sin(rad), 1.0 - math.cos(rad)
+    return [[t * x * x + c, t * x * y - s * z, t * x * z + s * y],
+            [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
+            [t * x * z - s * y, t * y * z + s * x, t * z * z + c]]
+
+
+def rot_between(a: Sequence[float], b: Sequence[float]) -> Mat3:
+    """Shortest rotation taking direction ``a`` onto direction ``b`` — the
+    stdlib twin of ``cmu_clip._rot_between`` (mathutils), so the smoke checks
+    can measure the same alignment without Blender."""
+    a, b = normalize(a), normalize(b)
+    ax = cross(a, b)
+    n = math.sqrt(dot(ax, ax))
+    if n < 1e-9:
+        return identity() if dot(a, b) > 0 else axis_angle((1.0, 0.0, 0.0), math.pi)
+    return axis_angle(ax, math.atan2(n, dot(a, b)))
+
+
+def frame(direction: Sequence[float], secondary: Sequence[float]) -> Optional[Mat3]:
+    """Orthonormal frame whose COLUMNS are ``direction``, ``secondary``
+    orthogonalised against it, and their cross product."""
+    x = normalize(direction)
+    y = [secondary[i] - x[i] * dot(secondary, x) for i in range(3)]
+    if math.sqrt(dot(y, y)) < 1e-9:
+        return None
+    y = normalize(y)
+    z = cross(x, y)
+    return [[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]]
+
+
+def _to_quat(m: Mat3) -> List[float]:
+    """(w, x, y, z) of a rotation matrix."""
+    tr = m[0][0] + m[1][1] + m[2][2]
+    if tr > 0.0:
+        s = math.sqrt(tr + 1.0) * 2.0
+        return [0.25 * s, (m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s, (m[1][0] - m[0][1]) / s]
+    if m[0][0] > m[1][1] and m[0][0] > m[2][2]:
+        s = math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2.0
+        return [(m[2][1] - m[1][2]) / s, 0.25 * s, (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s]
+    if m[1][1] > m[2][2]:
+        s = math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2.0
+        return [(m[0][2] - m[2][0]) / s, (m[0][1] + m[1][0]) / s, 0.25 * s, (m[1][2] + m[2][1]) / s]
+    s = math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2.0
+    return [(m[1][0] - m[0][1]) / s, (m[0][2] + m[2][0]) / s, (m[1][2] + m[2][1]) / s, 0.25 * s]
+
+
+def _from_quat(q: Sequence[float]) -> Mat3:
+    n = math.sqrt(sum(c * c for c in q)) or 1.0
+    w, x, y, z = (c / n for c in q)
+    return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+
+
+def _qmul(a: Sequence[float], b: Sequence[float]) -> List[float]:
+    return [a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+            a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+            a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+            a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]]
+
+
+def drop_swing(m: Mat3, axis: Sequence[float]) -> Mat3:
+    """``m`` with its rotation component ABOUT ``axis`` removed (swing/twist
+    split). A rotation purely about the axis becomes the identity, a rotation
+    purely perpendicular to it survives untouched."""
+    q = _to_quat(m)
+    a = normalize(axis)
+    d = q[1] * a[0] + q[2] * a[1] + q[3] * a[2]
+    tw = [q[0], a[0] * d, a[1] * d, a[2] * d]
+    n = math.sqrt(sum(c * c for c in tw))
+    if n < 1e-9:
+        return m
+    tw = [c / n for c in tw]
+    return _from_quat(_qmul(q, [tw[0], -tw[1], -tw[2], -tw[3]]))
+
+
+# The world up of both spaces (CMU and the Mixamo armature are Y up).
+UP: Vec3 = (0.0, 1.0, 0.0)
+
+
+def rest_align(mix_dir: Sequence[float], bone: "Bone", keep_pitch: bool = False) -> Optional[Mat3]:
+    """The fixed rest alignment ``A`` of ``P = R_cmu(t) · A · R_mix`` built on
+    the whole rest FRAME of a segment, not just on its direction.
+
+    A CMU bone's rest frame is its ``axis`` matrix ``C``, NOT the world axes:
+    ``C``'s first column is the segment's medio-lateral axis. For the feet and
+    toes every ``.asf`` of the database carries the same hard-coded template
+    ``axis -90 0 ±20``, i.e. the rest foot is modelled 20° SUPINATED, while the
+    Mixamo rest foot is flat. Driving the Mixamo bone with the CMU rotation
+    alone therefore rolls every foot onto its outer edge for the whole clip.
+    The same holds sideways for the neck and head, whose ASF rest directions
+    carry the actor's calibration offset (up to 20° off the sagittal plane).
+
+    ``keep_pitch`` divides the swing about the medio-lateral axis back out:
+    the two skeletons legitimately DRAW the same foot at different pitches
+    (Mixamo's ankle→ball bone runs 34° down, CMU's 11–34° per actor), and that
+    difference is what the floor fit is calibrated on — aligning it lifts the
+    ball off the ground.
+
+    Returns ``None`` when the bone carries no axis frame (a duck-typed take
+    from ``fbx_clip``) or the frames are degenerate: the caller then keeps the
+    identity, i.e. the behaviour of before.
+    """
+    C = getattr(bone, "C", None)
+    cmu_dir = getattr(bone, "direction", None)
+    if C is None or not cmu_dir or not any(cmu_dir):
+        return None
+    if math.sqrt(dot(mix_dir, mix_dir)) < 1e-9:
+        return None
+    mix_ml = cross(mix_dir, UP)
+    if math.sqrt(dot(mix_ml, mix_ml)) < 1e-9:
+        return None                      # a bone along the vertical has no
+    mix_ml = normalize(mix_ml)           # medio-lateral axis to speak of
+    cmu_ml = (C[0][0], C[1][0], C[2][0])
+    if dot(cmu_ml, mix_ml) < 0:
+        cmu_ml = (-cmu_ml[0], -cmu_ml[1], -cmu_ml[2])   # the axis is a line
+    f_mix = frame(mix_dir, mix_ml)
+    f_cmu = frame(cmu_dir, cmu_ml)
+    if f_mix is None or f_cmu is None:
+        return None
+    a = mat_mul(f_cmu, transpose(f_mix))
+    return drop_swing(a, mix_ml) if keep_pitch else a
+
+
 # -------------------------------------------------------------------- skeleton
 
 class Bone:

@@ -36,11 +36,21 @@ So for every mapped bone the pose matrix in armature space is
 
     P_i = R_cmu_i(t) · A_i · R_i
 
-with ``R_i`` the Mixamo rest matrix, and ``A_i`` the fixed rotation that turns
-the Mixamo rest direction of the bone onto the CMU rest direction — applied to
-the limbs only (``ALIGN_BONES``: CMU's T-pose splays the legs ~20°), identity
-everywhere else, because clavicles and feet are DIFFERENT segments on the two
-skeletons and aligning them shrugged the shoulders and kinked the feet.
+with ``R_i`` the Mixamo rest matrix and ``A_i`` a fixed rest alignment. Three
+kinds of bone, three alignments:
+
+* ``ALIGN_BONES`` — limbs, whose CMU and Mixamo rest DIRECTIONS describe the
+  same segment: ``A_i`` turns the Mixamo rest direction onto the CMU one
+  (CMU's T-pose splays the legs ~20°).
+* ``FRAME_BONES`` / ``FRAME_BONES_KEEP_PITCH`` — neck, head, feet, toes: the
+  whole rest FRAME is aligned, medio-lateral axis included
+  (``_cmu.rest_align``), because a CMU bone's rest frame is its ``axis``
+  matrix and NOT the world axes. ``KEEP_PITCH`` divides the swing about that
+  medio-lateral axis back out for the feet and toes, whose ankle pitch the two
+  skeletons draw differently and whose floor fit depends on it.
+* identity — clavicles and the hips: different segments on the two skeletons,
+  and aligning them shrugged every shoulder.
+
 Rotation deltas carry the twist with them — unlike an aim-only retarget, the
 forearm and hips keep their roll. Unmapped bones (fingers, eyes, end bones)
 get NO track at all, like in Mixamo clips, so a model keeps its own finger
@@ -104,18 +114,32 @@ DRIVEN = set()
 PREFIX = "mixamorig:"
 # Bones whose CMU and Mixamo rest DIRECTIONS describe the same segment, so the
 # fixed rest alignment A_i (Mixamo rest dir → CMU rest dir) is meaningful:
-# CMU's T-pose splays the legs ~20° and the arms match. NOT aligned:
-#  * clavicles — CMU's runs chest centre → shoulder, Mixamo's neck base →
-#    arm; a 20° difference that is anatomy, not pose (aligning it shrugged
-#    every shoulder up, 2026-08-21 finding);
-#  * feet/toes — CMU's foot is ankle → ball at 15°, Mixamo's at ~33°; aligning
-#    lifted the ball and kinked the toes up (same finding);
-#  * spine/neck/head — the differences are ~1° and the torso twist is better
-#    kept exactly as the actor's.
-# Those bones take the actor's rotation DELTA on the Mixamo rest unchanged.
+# CMU's T-pose splays the legs ~20° and the arms match.
 ALIGN_BONES = {"LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg",
                "LeftArm", "RightArm", "LeftForeArm", "RightForeArm",
                "LeftHand", "RightHand"}
+# Bones aligned on the whole rest FRAME, medio-lateral axis included
+# (``_cmu.rest_align``). A CMU bone's rest frame is its ``axis`` matrix, NOT
+# the world axes, and what the two rests differ by here is POSE, not anatomy:
+# the neck/head rest directions carry the actor's calibration lean (up to 20°
+# out of the sagittal plane, per subject), so driving the Mixamo bone with the
+# CMU rotation alone tips every head sideways for the whole clip.
+FRAME_BONES = {"Neck", "Head"}
+# The same for the feet and toes, whose axis frame carries the database's
+# hard-coded ``axis -90 0 ±20`` template — a rest foot modelled 20° SUPINATED
+# in every .asf, which put every figure on the outer edges of its feet — plus
+# the actor's stance splay, which turned the toes ~12° INWARDS.
+# The swing about the medio-lateral axis (the ankle pitch) is divided back
+# out: CMU draws the ankle→ball bone 11-34° down per actor, Mixamo a fixed
+# 34°, and the floor fit is calibrated on the Mixamo one. Aligning the pitch
+# too lifted the ball and kinked the toes up (2026-08-21 finding).
+FRAME_BONES_KEEP_PITCH = {"LeftFoot", "RightFoot", "LeftToeBase", "RightToeBase"}
+# NOT aligned at all: the clavicles — CMU's runs chest centre → shoulder,
+# Mixamo's neck base → arm, a 20° difference that is anatomy, not pose
+# (aligning it shrugged every shoulder up, 2026-08-21 finding) — and the
+# spine, whose rests differ by ~1° laterally and whose torso twist is better
+# kept exactly as the actor's. Those take the rotation DELTA unchanged.
+_ALIGNED = ALIGN_BONES | FRAME_BONES | FRAME_BONES_KEEP_PITCH
 
 
 def _m3(m):
@@ -267,22 +291,31 @@ def _solve(arm, take: _Take):
         seen.append(b)
         order = list(b.children) + order
     rest = {b.name: b.matrix_local.copy() for b in seen}
-    # Fixed rest alignment per mapped bone (Mixamo rest dir → CMU rest dir).
+    # Fixed rest alignment per mapped bone: the limbs on their direction, the
+    # neck/head/feet/toes on their whole rest FRAME (see the module docstring).
     align = {}
     for b in seen:
         short = b.name[len(PREFIX):] if b.name.startswith(PREFIX) else b.name
         cmu_name = BONE_MAP.get(short)
         if not cmu_name or cmu_name not in take.sk.bones:
             continue
-        if cmu_name == "root" or short not in ALIGN_BONES:
+        if cmu_name == "root" or short not in _ALIGNED:
             align[b.name] = (cmu_name, Matrix.Identity(3))
             continue
+        cmu_bone = take.sk.bones[cmu_name]
         mix_dir = (b.tail_local - b.head_local)
-        cmu_dir = Vector(take.sk.bones[cmu_name].direction)
-        if mix_dir.length < 1e-6 or cmu_dir.length < 1e-6:
-            align[b.name] = (cmu_name, Matrix.Identity(3))
-        else:
-            align[b.name] = (cmu_name, _rot_between(mix_dir, cmu_dir))
+        cmu_dir = Vector(cmu_bone.direction)
+        a = None
+        if mix_dir.length > 1e-6 and cmu_dir.length > 1e-6:
+            if short in ALIGN_BONES:
+                a = _rot_between(mix_dir, cmu_dir)
+            else:
+                # A duck-typed take (fbx_clip) carries no axis frame; then
+                # rest_align answers None and the bone keeps the identity.
+                m = _cmu.rest_align(tuple(mix_dir), cmu_bone,
+                                    keep_pitch=short in FRAME_BONES_KEEP_PITCH)
+                a = None if m is None else _m3(m)
+        align[b.name] = (cmu_name, Matrix.Identity(3) if a is None else a)
 
     # Standing leg length of BOTH skeletons from their rest geometry (hips
     # joint to ankle, vertical): the hips translation is scaled by the ratio.
