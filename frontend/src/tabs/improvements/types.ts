@@ -10,6 +10,11 @@ export interface ParamField {
   label: string
   /** 'mesh_backend' | 'image_backend' | 'subject_kind' | 'enum' | 'text' */
   kind: string
+  /**
+   * The choices, when the type ships them. `enum`/`subject_kind` always do;
+   * a backend field may, to narrow the global list to the backends its
+   * subject can actually use — empty means "offer the global list".
+   */
   options: Array<{ value: string; label: string }>
   required: boolean
 }

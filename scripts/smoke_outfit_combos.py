@@ -51,7 +51,7 @@ def stub(inventory=None, meshes=(), durations=None) -> None:
     data = INVENTORY if inventory is None else inventory
     import app.models.inventory as inv
     inv.get_character_inventory = lambda name, include_equipped=True: data
-    ob._mesh_signatures = lambda name: set(meshes)
+    ob.mesh_signatures = lambda name: set(meshes)
     ob._query_tasks = lambda sql, params=(): [
         {"duration_s": d} for d in (durations or [])]
 

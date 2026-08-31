@@ -95,9 +95,10 @@ export function NewImprovementDialog({
     setBusy(false)
   }, [open])
 
-  // The backend lists are only needed once the dialog is on screen, and only
-  // for the field kinds that ask for them — but they are two small calls, so
-  // they load together when the dialog first opens rather than per field.
+  // The GLOBAL backend lists — the fallback for a backend field that ships no
+  // options of its own. They are only needed once the dialog is on screen, and
+  // only for the field kinds that ask for them, but they are two small calls,
+  // so they load together when the dialog first opens rather than per field.
   useEffect(() => {
     if (!open) return
     if (imageOptions === null) {
@@ -183,22 +184,31 @@ export function NewImprovementDialog({
 
   if (!open) return null
 
+  /** A select over the options the SERVER put on the field. */
+  const renderOptions = (field: ParamField, value: string,
+                         onChange: (v: string) => void) => (
+    <select className="ga-input" value={value}
+      onChange={(e) => onChange(e.target.value)}>
+      <option value="">{t('— select —')}</option>
+      {field.options.map((o) => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+    </select>
+  )
+
   const renderField = (field: ParamField) => {
     const value = params[field.key] || ''
     const onChange = (v: string) => setParam(field.key, v)
     switch (field.kind) {
       case 'enum':
       case 'subject_kind':
-        return (
-          <select className="ga-input" value={value}
-            onChange={(e) => onChange(e.target.value)}>
-            <option value="">{t('— select —')}</option>
-            {field.options.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        )
+        return renderOptions(field, value, onChange)
       case 'mesh_backend':
+        // The TYPE's own list wins where it ships one: a field may narrow the
+        // backends to what its subject can actually use (a character mesh
+        // needs a rigging backend, and /world/props answers with the prop
+        // backends only). Without one the global list stays the answer.
+        if (field.options.length) return renderOptions(field, value, onChange)
         return (
           <select className="ga-input" value={value}
             onChange={(e) => onChange(e.target.value)}>
@@ -209,6 +219,7 @@ export function NewImprovementDialog({
           </select>
         )
       case 'image_backend':
+        if (field.options.length) return renderOptions(field, value, onChange)
         return (
           <select className="ga-input" value={value}
             onChange={(e) => onChange(e.target.value)}>

@@ -38,6 +38,7 @@ Deliberate scope:
 """
 
 import itertools
+import re
 import sqlite3
 import threading
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
@@ -209,7 +210,16 @@ def _combo_label(pieces: Dict[str, str],
 
 # ── Caches: what already exists ─────────────────────────────────────────
 
-def _mesh_signatures(character_name: str) -> set:
+#: What a stored signature looks like: the 12-hex outfit key
+#: (``model_refs.outfit_signature``), optionally forked by the 8-hex
+#: image-modifier state (``model_refs.STATE_SIG_SEP``). Public because both
+#: scans below read file names apart with it — and because the reference
+#: directory holds file names of the SAME prefix that are not signatures at
+#: all (see :func:`ref_signatures`).
+SIGNATURE_RE = re.compile(r"^[0-9a-f]{12}(?:-s[0-9a-f]{8})?$")
+
+
+def mesh_signatures(character_name: str) -> set:
     """Signatures that already HAVE a mesh — read once from the directory
     instead of stat-ing per combination (that is what makes a million-entry
     run affordable, and what makes the job restart-proof)."""
@@ -225,8 +235,15 @@ def _mesh_signatures(character_name: str) -> set:
     return out
 
 
-def _ref_signatures(character_name: str, kind: str = "tpose") -> set:
-    """Signatures that already have a reference render of this kind."""
+def ref_signatures(character_name: str, kind: str = "tpose") -> set:
+    """Signatures that already have a reference render of this kind.
+
+    The name is split at the kind PREFIX, and what follows has to be a
+    signature: the extra T-pose views live in the same directory under
+    ``tpose_<view>_<signature>`` (``model_refs.VIEW_KINDS``), so a plain
+    prefix match on "tpose" would report ``back_<sig>`` as a combination of
+    its own — one that no mesh can ever be generated for.
+    """
     from app.core.model_refs import _IMAGE_EXTS
     from app.models.character import get_character_dir
     out = set()
@@ -235,9 +252,12 @@ def _ref_signatures(character_name: str, kind: str = "tpose") -> set:
         return out
     prefix = f"{kind}_"
     for p in d.iterdir():
-        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS \
-                and p.stem.startswith(prefix):
-            out.add(p.stem[len(prefix):])
+        if not (p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+                and p.stem.startswith(prefix)):
+            continue
+        sig = p.stem[len(prefix):]
+        if SIGNATURE_RE.match(sig):
+            out.add(sig)
     return out
 
 
@@ -310,7 +330,7 @@ def combo_stats(character_name: str,
         # pieces (boxers under trousers) share one signature since the
         # visibility normalisation in _equipped_signature — they are one
         # render, so they must be one unit of "missing" too.
-        have = set() if force else _mesh_signatures(character_name)
+        have = set() if force else mesh_signatures(character_name)
         signatures = set()
         missing_sigs = set()
         for pieces in _iter_combos(choices, coherent_only):
@@ -440,7 +460,7 @@ def _handle_outfit_combos(payload: Dict[str, Any]) -> Dict[str, Any]:
     names = {p["item_id"]: p["name"]
              for pieces in options.values() for p in pieces}
     total = count_combos(choices)
-    have = _mesh_signatures(character_name)
+    have = mesh_signatures(character_name)
 
     tq = get_task_queue()
     with _lock:

@@ -293,7 +293,7 @@ def test_batch_filter() -> None:
     ]}
     import app.models.inventory as invmod
     invmod.get_character_inventory = lambda name, include_equipped=True: inv
-    ob._mesh_signatures = lambda name: set()
+    ob.mesh_signatures = lambda name: set()
 
     choices, err = ob._resolve_filter(ob.combo_options("demo"), None)
     check("no filter error", err == "", err)

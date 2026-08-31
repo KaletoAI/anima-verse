@@ -240,7 +240,7 @@ QUEUE = FakeQueue()
 
 def install_patches() -> None:
     outfit_batch._query_tasks = fake_query_tasks
-    outfit_batch._mesh_signatures = lambda name: set(HAVE_MESH)
+    outfit_batch.mesh_signatures = lambda name: set(HAVE_MESH)
     task_queue.get_task_queue = lambda: QUEUE
 
 

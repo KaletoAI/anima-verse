@@ -54,13 +54,30 @@ def character_model_pending(name: str) -> bool:
         return name in model3d._generating
 
 
-def generate_character_model(name: str, backend: str) -> None:
-    """Blocking mesh generation for the worn outfit, on ``backend``.
+def generate_character_model(name: str, backend: str,
+                             signature: str = "") -> None:
+    """Blocking mesh generation for one outfit combination, on ``backend``.
+
+    ``signature`` empty = the combination the character is WEARING, and the
+    existing mesh of that combination is replaced (``force``).  A given
+    signature addresses one stored combination instead — the T-pose render of
+    exactly that signature is the input, and the mesh is only made when it is
+    missing, because a signature candidate exists precisely because it has no
+    model yet.
+
+    ``backend`` is a wish, not a guarantee: ``generate_for_current_outfit``
+    hands it to ``service.generate_mesh`` together with the character's
+    REQUIRED rig, and a backend whose ``mesh_rig`` does not match is dropped
+    there in favour of the cheapest rig-correct one — a wrong-rig mesh binds
+    unusably.  That is the established semantics of the whole mesh chain and
+    is deliberately not second-guessed here.
 
     Takes over ``model3d``'s own double-start guard: the producer is called
     directly (not through ``trigger_generation``, which is the thread
     wrapper), so the guard has to be held here or a parallel admin action
-    would generate into the same file.
+    would generate into the same file.  The guard keys on the CHARACTER, not
+    on the combination — that is what ``model3d`` itself locks on, and two
+    meshes of one character must not be generated at once anyway.
     """
     from app.core import model3d
     with model3d._lock:
@@ -69,12 +86,39 @@ def generate_character_model(name: str, backend: str) -> None:
         model3d._generating.add(name)
     try:
         result = model3d.generate_for_current_outfit(
-            name, force=True, backend_glob=backend)
+            name, force=not signature, backend_glob=backend,
+            signature=signature or None)
     finally:
         with model3d._lock:
             model3d._generating.discard(name)
     if not result.get("ok"):
         raise RuntimeError(str(result.get("error") or "generation failed"))
+
+
+def character_tpose_signatures(name: str) -> set:
+    """Outfit signatures this character has a T-POSE RENDER for.
+
+    That render is the one input ``model3d.generate_for_current_outfit``
+    resolves (``find_ref_image(name, "tpose", signature)``) — for humanoids and
+    animals alike: "tpose_animal" is a use-case STYLE, not a file kind, so both
+    land under ``model_refs/tpose_<signature>``.
+    """
+    from app.core.outfit_batch import ref_signatures
+    return ref_signatures(name, "tpose")
+
+
+def character_model_signatures(name: str) -> set:
+    """Outfit signatures this character already has a MESH for."""
+    from app.core.outfit_batch import mesh_signatures
+    return mesh_signatures(name)
+
+
+def character_model_exists(name: str, signature: str) -> bool:
+    """Whether the mesh of exactly this combination is on disk — the exact
+    match, never the serving fallbacks (neutral/nearest): a candidate is about
+    one signature, and another combination's model does not finish it."""
+    from app.core.model3d import find_model3d
+    return find_model3d(name, signature) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -614,12 +658,34 @@ def image_backend_options() -> List[Dict[str, str]]:
 # Mesh backends
 # ---------------------------------------------------------------------------
 
-def mesh_backend_options() -> List[Dict[str, str]]:
+#: The rigs a CHARACTER mesh can be bound to (``model3d.required_rig``):
+#: humanoids need the Mixamo 52-bone rig, everything else the generic one.
+#: A prop backend ("none") produces neither and can never mesh a character.
+CHARACTER_MESH_RIGS = ("mixamo", "generic")
+
+
+def mesh_backend_options(rigs: Tuple[str, ...] = ()) -> List[Dict[str, str]]:
     """The mesh backends the admin form offers, in ``ParamField.options``
-    shape."""
+    shape, labelled ``"<name> (<rig>)"``.
+
+    ``rigs`` narrows the list to the rig kinds a subject can actually be bound
+    to — pass :data:`CHARACTER_MESH_RIGS` for character meshes, so a prop-only
+    backend is not offered for a job that could never use it.  The rig is IN
+    the label because it decides whether a pick survives: ``generate_mesh``
+    drops a backend whose rig does not match the character's.
+
+    Read live on every call — the backend list is admin config and changes
+    while the server runs, so a schema that froze it at import would keep
+    offering backends that are gone.
+    """
     from app.core import model3d
-    return [{"value": b["name"], "label": b["name"]}
-            for b in model3d.list_mesh_backends()["backends"]]
+    out: List[Dict[str, str]] = []
+    for b in model3d.list_mesh_backends()["backends"]:
+        rig = str(b.get("rig") or "")
+        if rigs and rig not in rigs:
+            continue
+        out.append({"value": b["name"], "label": f"{b['name']} ({rig})"})
+    return out
 
 
 def default_mesh_backend() -> str:

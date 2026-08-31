@@ -277,7 +277,7 @@ renders would keep the window closed forever.
 
 | Member | Semantik |
 |---|---|
-| `params_schema: List[ParamField]` | The form the admin fills in when creating an entry. `ParamField(key, label, kind, options=None, required=True)`; `kind` ∈ `mesh_backend` \| `image_backend` \| `subject_kind` \| `enum` \| `text` — the backend kinds are filled by the server, `enum`/`subject_kind` carry their own `options` (`[{"value","label"}]`) |
+| `params_schema: List[ParamField]` | The form the admin fills in when creating an entry. `ParamField(key, label, kind, options=None, required=True)`; `kind` ∈ `mesh_backend` \| `image_backend` \| `subject_kind` \| `enum` \| `text` — `enum`/`subject_kind` carry their own `options` (`[{"value","label"}]`), the backend kinds fall back to the world's full list when they carry none. A backend field that MAY not use every backend fills its own `options` (`subjects.mesh_backend_options(rigs)`) — and then `params_schema` has to be a `@property`, so the offered list is read live instead of freezing at server start |
 | `validate(params) -> params` | Normalised parameters, or `ValueError(message)`. The base class checks required fields and option membership; override it (calling `super().validate`) for rules between fields — e.g. "source and target backend must differ" |
 | `find_candidates(params) -> List[Candidate]` | Every subject NOT yet done, in a stable order (`(label.lower(), key)`). `Candidate(key, label)`: the key is unique per type and is what a step row stores (`"character:Mira"`, `"location:<id>:<file>"`). A subject that could not be worked at all (nothing to generate FROM) is not a candidate |
 | `is_done(candidate, params) -> bool` | The type's own "is this subject finished" test — read the persisted asset, never a cached answer. The engine never calls it; `find_candidates` uses it to decide what to list, and a subject that drops off that list is closed as done |
@@ -306,3 +306,11 @@ harmless. An entry whose type is not registered (a package went away) is
 skipped with a readable error instead of blocking the queue. The built-ins under `app/core/improvements/types/` are the
 worked examples; `subjects.py` there is where the "which subjects exist / how is
 one regenerated" knowledge lives, so a type stays a declaration.
+
+| Built-in | Was es tut |
+|---|---|
+| `model_replace` | Re-generates every model a given mesh backend made, on another one |
+| `fill_missing` | Generates the asset a subject has none of at all (model, expressions) |
+| `image_rerender` | Re-renders portraits/gallery images of one image backend on another |
+| `surface_bake` | Bakes the walkable-surface lattice of room and prop models |
+| `mesh_from_tpose` | Generates the character mesh of every stored outfit combination that has a T-pose render but no model |

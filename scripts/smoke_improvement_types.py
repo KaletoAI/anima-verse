@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Smoke check for the improvement types `model_replace`, `fill_missing`,
-`image_rerender` (plan-improvements-queue, tasks 3 + 4) and `surface_bake`
-(spec-surface-height § 5 no. 3).
+`image_rerender` (plan-improvements-queue, tasks 3 + 4), `surface_bake`
+(spec-surface-height § 5 no. 3) and `mesh_from_tpose`.
 
 Every expectation below is derived BY HAND from the task contract and from the
 generator anchors it builds on — nothing here records what a run happened to
@@ -13,8 +13,8 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
 `props.list_models` are the production functions, and every "is the asset there
 / which backend made it" assertion goes through them.
 
-  1. The parameter contract is the base class's.  All three types are
-     registered by importing the package.  `model_replace` declares
+  1. The parameter contract is the base class's.  Every type is registered
+     by importing the package.  `model_replace` declares
      three required fields (subject, source_backend, target_backend), so a
      complete set validates to itself and a set without `target_backend`
      raises ValueError naming that field.  `subject` carries options, so
@@ -186,6 +186,40 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      candidate labelled by its plain name, and a second active variant adds a
      second candidate labelled "(variant 1)".
 
+ 26. `mesh_from_tpose` offers the backends a CHARACTER mesh can be bound to,
+     and it reads them live.  The patched inventory holds "hy" (mixamo), "tr"
+     (generic) and "px" (none, a prop backend), so the field's options are
+     exactly [hy (mixamo), tr (generic)] — a prop-only backend could never
+     bind a character mesh and must not be offered.  The list is a property,
+     not a class attribute: adding "zz" to the inventory makes it appear
+     without a restart, which is what a config-editable backend list needs.
+     Membership is enforced from that same list, so "px" is refused with the
+     base class's message.
+
+ 27. A candidate is one (character, outfit signature) pair that HAS the T-pose
+     render the mesh producer reads and has NO mesh: demo_c gets renders for
+     "0123456789ab", its state fork "0123456789ab-s0f0f0f0f" and
+     "fedcba987654", plus the extra view "tpose_back_0123456789ab" — which is
+     a VIEW of the first signature, not a fourth combination, so it must not
+     add a candidate of its own.  Three candidates therefore, keyed
+     "<character>:<signature>" and labelled with the eight-hex stub (the state
+     fork keeping its own "-s0f0f"), sorted by label:
+
+        demo_c:0123456789ab           "demo_c · 01234567"
+        demo_c:0123456789ab-s0f0f0f0f "demo_c · 01234567-s0f0f"
+        demo_c:fedcba987654           "demo_c · fedcba98"
+
+     demo_a and demo_b have meshes but no reference renders, so they
+     contribute nothing — the render is the INPUT, not a by-product.
+
+ 28. `apply` generates exactly that combination: the producer is called with
+     `signature` = the candidate's and NOT forced (the model is missing, and
+     forcing would re-generate one that a parallel run may just have made),
+     on the backend the entry was created with.  Afterwards `is_done` finds
+     the mesh of THAT signature — an exact match, never the serving fallback
+     to a neighbouring combination — and the pair drops off the list while the
+     other two stay.
+
 The printed sections follow execution order, so expectations 9 and 10 are
 checked inside the sections whose fixtures they belong to.
 
@@ -274,10 +308,13 @@ def make_character(name, template=""):
     return name
 
 
-def write_mesh_sidecar(name, backend):
+def write_mesh_sidecar(name, backend, signature=None):
     """What the real mesh producer leaves behind: the model file plus its
-    sidecar (`model3d.get_model3d_info` reads `backend` from there)."""
-    sig = model_refs.current_outfit_state(name)[2]
+    sidecar (`model3d.get_model3d_info` reads `backend` from there).
+
+    `signature` None = the worn combination, exactly as the producer resolves
+    it; a given one is the stored combination the caller asked for."""
+    sig = signature or model_refs.current_outfit_state(name)[2]
     d = get_character_dir(name) / "model3d"
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{sig}.glb").write_bytes(b"glTF fake")
@@ -296,12 +333,13 @@ EXPRESSION_CALLS = []
 EXPRESSION_CACHED = {"value": None}   # what peek_cached_expression answers
 
 
-def fake_mesh(character_name, *, force=False, backend_glob="", **kwargs):
+def fake_mesh(character_name, *, force=False, backend_glob="", signature=None,
+              **kwargs):
     MESH_CALLS.append({"name": character_name, "force": force,
-                       "backend_glob": backend_glob})
+                       "backend_glob": backend_glob, "signature": signature})
     if MESH_RESULT["value"] is not None:
         return MESH_RESULT["value"]
-    write_mesh_sidecar(character_name, backend_glob)
+    write_mesh_sidecar(character_name, backend_glob, signature)
     return {"ok": True}
 
 
@@ -422,8 +460,15 @@ world_ops.generate_gallery_image_core = fake_gallery_generate
 # The backend INVENTORY, not an asset reader: without configured mesh
 # backends `list_mesh_backends` answers {"backends": [], "default": ""} and
 # every "which backend is the default" expectation would be vacuous.
+# The rig travels with every entry (`list_mesh_backends` reads it off the
+# alias): it decides which subjects a backend can mesh at all — "none" is a
+# prop backend and binds no character.
+MESH_INVENTORY = [{"name": "hy", "rig": "mixamo"},
+                  {"name": "tr", "rig": "generic"},
+                  {"name": "px", "rig": "none"}]
 model3d.list_mesh_backends = lambda rig="": {
-    "backends": [{"name": "hy"}, {"name": "tr"}], "default": "tr"}
+    "backends": [b for b in MESH_INVENTORY if not rig or b["rig"] == rig],
+    "default": "tr"}
 
 BAKE_CALLS = []
 BAKE_REASON = {"value": "ok"}      # the reason bake_surface_result reports back
@@ -475,6 +520,7 @@ MODEL_REPLACE = registry.get("model_replace")
 FILL_MISSING = registry.get("fill_missing")
 IMAGE_RERENDER = registry.get("image_rerender")
 SURFACE_BAKE = registry.get("surface_bake")
+MESH_FROM_TPOSE = registry.get("mesh_from_tpose")
 
 A = make_character("demo_a")
 B = make_character("demo_b")
@@ -488,9 +534,10 @@ def candidates(improvement_type, params):
 
 # ── [1] the parameter contract ──────────────────────────────────────────────
 print("[1] model_replace parameters")
-check("all four types are registered",
+check("all five types are registered",
       sorted(t.id for t in registry.list_types()),
-      ["fill_missing", "image_rerender", "model_replace", "surface_bake"])
+      ["fill_missing", "image_rerender", "mesh_from_tpose", "model_replace",
+       "surface_bake"])
 check("a complete set validates to itself",
       MODEL_REPLACE.validate({"subject": "character", "source_backend": "hy",
                               "target_backend": "tr"}),
@@ -529,7 +576,8 @@ MESH_CALLS.clear()
 CAND_A = MODEL_REPLACE.find_candidates(MODEL_REPLACE.validate(REPLACE_HY))[0]
 MODEL_REPLACE.apply(CAND_A, MODEL_REPLACE.validate(REPLACE_HY), "task-1")
 check("the producer ran once, forced, with the target backend", MESH_CALLS,
-      [{"name": "demo_a", "force": True, "backend_glob": "tr"}])
+      [{"name": "demo_a", "force": True, "backend_glob": "tr",
+        "signature": None}])
 check("is_done reads the fresh sidecar back",
       MODEL_REPLACE.is_done(CAND_A, MODEL_REPLACE.validate(REPLACE_HY)), True)
 check("and the subject has dropped out of the candidate list",
@@ -575,7 +623,8 @@ MESH_CALLS.clear()
 CAND_B = FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_CHAR))[0]
 FILL_MISSING.apply(CAND_B, FILL_MISSING.validate(FILL_CHAR), "task-4")
 check("apply generates with the admin default backend", MESH_CALLS,
-      [{"name": "demo_b", "force": True, "backend_glob": "tr"}])
+      [{"name": "demo_b", "force": True, "backend_glob": "tr",
+        "signature": None}])
 check("is_done is simply 'the asset exists now'",
       FILL_MISSING.is_done(CAND_B, FILL_MISSING.validate(FILL_CHAR)), True)
 check("nothing is missing any more", candidates(FILL_MISSING, FILL_CHAR), [])
@@ -929,6 +978,102 @@ check("a prop does not know where it stands, so the whole cache goes",
       FORGET_CALLS, [""])
 check("only the other variant is left to bake",
       candidates(SURFACE_BAKE, BAKE_PROP), [(f"prop:{PROP}/0", "Oak Chair")])
+
+# ── [16] mesh_from_tpose offers the CHARACTER-capable backends, live ────────
+print("[16] mesh_from_tpose parameters")
+
+
+def backend_options():
+    return [(f.key, f.kind, f.options, f.required)
+            for f in MESH_FROM_TPOSE.params_schema]
+
+
+check("one field, offering the rigging backends with their rig in the label — "
+      "the prop backend 'px' (rig none) can never bind a character mesh",
+      backend_options(),
+      [("backend", "mesh_backend",
+        [{"value": "hy", "label": "hy (mixamo)"},
+         {"value": "tr", "label": "tr (generic)"}], True)])
+MESH_INVENTORY.append({"name": "zz", "rig": "mixamo"})
+check("the list is read live, so a backend configured while the server runs "
+      "is offered without a restart",
+      [o["value"] for o in backend_options()[0][2]], ["hy", "tr", "zz"])
+MESH_INVENTORY.pop()
+check("a picked backend validates to itself",
+      MESH_FROM_TPOSE.validate({"backend": "hy"}), {"backend": "hy"})
+check_raises("a backend outside the offered list is refused", ValueError,
+             lambda: MESH_FROM_TPOSE.validate({"backend": "px"}),
+             "invalid value for 'backend'")
+check_raises("and so is no backend at all", ValueError,
+             lambda: MESH_FROM_TPOSE.validate({}),
+             "missing parameter 'backend'")
+
+# ── [17] one candidate per (character, stored combination) ──────────────────
+print("[17] mesh_from_tpose candidates")
+FROM_TPOSE = {"backend": "hy"}
+check("a world whose characters have meshes but no reference renders has "
+      "nothing to do here — the render is the INPUT, not a by-product",
+      candidates(MESH_FROM_TPOSE, FROM_TPOSE), [])
+C = make_character("demo_c")
+REFS = get_character_dir(C) / "model_refs"
+REFS.mkdir(parents=True, exist_ok=True)
+SIG_A = "0123456789ab"
+SIG_STATE = f"{SIG_A}{model_refs.STATE_SIG_SEP}0f0f0f0f"
+SIG_B = "fedcba987654"
+for _sig in (SIG_A, SIG_STATE, SIG_B):
+    (REFS / f"tpose_{_sig}.png").write_bytes(b"\x89PNG fake")
+# A VIEW of the first combination, not a fourth one: `find_ref_image` only
+# ever reads `tpose_<sig>`, so a mesh could never be generated for "back_…".
+(REFS / f"tpose_back_{SIG_A}.png").write_bytes(b"\x89PNG fake")
+check("the view render is not mistaken for a combination",
+      sorted(subjects.character_tpose_signatures(C)),
+      [SIG_A, SIG_STATE, SIG_B])
+check("every render without a mesh is one candidate, keyed "
+      "<character>:<signature> and labelled with the short signature",
+      candidates(MESH_FROM_TPOSE, FROM_TPOSE),
+      [(f"demo_c:{SIG_A}", "demo_c · 01234567"),
+       (f"demo_c:{SIG_STATE}", "demo_c · 01234567-s0f0f"),
+       (f"demo_c:{SIG_B}", "demo_c · fedcba98")])
+
+# ── [18] apply meshes exactly that combination ─────────────────────────────
+print("[18] mesh_from_tpose apply")
+MESH_CALLS.clear()
+CAND_S = MESH_FROM_TPOSE.find_candidates(
+    MESH_FROM_TPOSE.validate(FROM_TPOSE))[1]
+check("is_done is False while that signature has no mesh",
+      MESH_FROM_TPOSE.is_done(CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE)),
+      False)
+MESH_FROM_TPOSE.apply(CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE), "task-20")
+check("the producer ran once for THAT signature, unforced (the model is "
+      "missing) and on the chosen backend", MESH_CALLS,
+      [{"name": "demo_c", "force": False, "backend_glob": "hy",
+        "signature": SIG_STATE}])
+check("is_done reads the mesh of that exact signature back",
+      MESH_FROM_TPOSE.is_done(CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE)),
+      True)
+check("only that pair dropped off — the neutral entry of the same outfit is "
+      "its own combination and stays",
+      candidates(MESH_FROM_TPOSE, FROM_TPOSE),
+      [(f"demo_c:{SIG_A}", "demo_c · 01234567"),
+       (f"demo_c:{SIG_B}", "demo_c · fedcba98")])
+MESH_CALLS.clear()
+MESH_RESULT["value"] = {"ok": False, "error": "no_tpose_input"}
+check_raises("a producer failure names the candidate — the step log is a list "
+             "of combinations, and the bare error says nothing about which",
+             RuntimeError,
+             lambda: MESH_FROM_TPOSE.apply(
+                 CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE), "task-21"),
+             f"demo_c:{SIG_STATE}: no_tpose_input")
+MESH_RESULT["value"] = None
+with model3d._lock:
+    model3d._generating.add("demo_c")
+check_raises("a character already being meshed is LOAD, not a defect",
+             CandidateBusy,
+             lambda: MESH_FROM_TPOSE.apply(
+                 CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE), "task-22"),
+             "demo_c: model generation already running")
+with model3d._lock:
+    model3d._generating.discard("demo_c")
 
 print()
 if FAILURES:
