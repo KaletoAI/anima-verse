@@ -35,9 +35,11 @@ logger = get_logger(__name__)
 #   mesher the most hand detail. Note the trade-off this reverses: the Mixamo
 #   bind pose has palms DOWN, and a mesh generated with turned palms can get
 #   its hand bones bound 90° off, twisting the hands in animation clips.
-# - Feet SHOULDER-WIDTH apart with a visible gap: "slightly apart" rendered
-#   (especially female) characters with the ankles touching, and the mesher
-#   then fuses both legs into one column.
+# - Legs in a WIDE stance, feet wider than the shoulders, open space visible
+#   between them: models under-deliver leg separation — "slightly apart" and
+#   even "shoulder-width apart" still rendered (especially female) characters
+#   with touching ankles, and the mesher then fuses both legs into one column.
+#   Asking for wider than needed lands at roughly the needed width.
 # - Hair BEHIND the shoulders (length-neutral — the identity layer says how
 #   long it is): hair over the chest bakes into the torso geometry.
 # - Garments worn CLOSED: an open jacket is a floating surface the img2mesh
@@ -47,9 +49,9 @@ logger = get_logger(__name__)
 TPOSE_PROMPT_DEFAULT = (
     "T-pose, standing upright facing the camera, arms straight out to the "
     "sides at shoulder height, forming the letter T, palms facing forward "
-    "toward the camera, fingers straight, legs straight, feet planted "
-    "shoulder-width apart with "
-    "a clear gap between the legs, hair behind the shoulders, all garments "
+    "toward the camera, fingers straight, legs spread apart in a wide "
+    "stance, feet planted wider than the shoulders, open space clearly "
+    "visible between the legs, hair behind the shoulders, all garments "
     "worn closed"
 )
 
@@ -86,9 +88,9 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
 TPOSE_BACK_PROMPT_DEFAULT = (
     "back view, seen directly from behind, face not visible, standing upright "
     "in T-pose, arms straight out to the sides at shoulder height, palms "
-    "facing away from the camera, legs straight, feet planted "
-    "shoulder-width apart with a "
-    "clear gap between the legs, hair in front of the shoulders, all garments "
+    "facing away from the camera, legs spread apart in a wide stance, feet "
+    "planted wider than the shoulders, open space clearly visible between "
+    "the legs, hair in front of the shoulders, all garments "
     "worn closed"
 )
 
@@ -104,7 +106,7 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "{side} edge of the frame, standing upright in T-pose, arms straight out "
     "to the sides at shoulder height so the near arm points at the camera and "
     "hides the far arm, strongly foreshortened, palms facing forward, legs "
-    "straight, feet shoulder-width apart, hair behind the shoulders, all "
+    "spread apart in a wide stance, hair behind the shoulders, all "
     "garments worn closed"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
