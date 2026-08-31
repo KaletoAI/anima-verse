@@ -7,6 +7,9 @@ import {
   resolveClipName,
 } from './clipCoverage';
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
+import {
+  bindRelativeValues, normBoneName, restCorrections, restPoseOf,
+} from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
@@ -81,31 +84,28 @@ interface LibraryFit {
  *  rather than a motion — the same bar in the adapt and the retarget path. */
 const MIN_CLIP_TRACKS = 8;
 
-/** A bone / track node name reduced to what is comparable across rigs: the
- *  `mixamorig` prefix and any namespace colons are noise, case is not
- *  significant. */
-function normBoneName(name: string): string {
-  return name.replace(/^mixamorig:?/i, '').replace(/:/g, '').toLowerCase();
-}
-
 /**
  * How far a rig's bind pose may sit from the library's bone-frame convention
  * before its clips are worthless on it — mean deviation over the addressed
  * bones, in degrees.
  *
- * `adaptExternalClips` copies LOCAL quaternion tracks 1:1, which is only ever
- * right while donor and target hold their bones in the same rest frame. The
- * Mixamo library was authored with every bone pointing at its child along the
- * bone's own +Y. A rig with identity rest rotations instead carries
- * world-parallel frames (legs down −Y, arms out +X), so the same track that
- * bends a Mixamo elbow folds that rig's limb over its torso — and nothing
- * downstream notices, because acceptance counts TRACK HITS by name only.
+ * ONLY FOR THE FALLBACK PATH since 2026-08-31. The gate exists because a
+ * plain 1:1 copy of the local quaternion tracks is right only while donor and
+ * target hold their bones in the same rest frame: the library was authored
+ * with every bone pointing at its child along the bone's own +Y, and a rig
+ * with identity rest rotations carries world-parallel frames (legs down −Y,
+ * arms out +X), so the track that bends a Mixamo elbow folds that rig's limb
+ * over its torso. Measured (acceptance round 2026-08-13, finding 7):
+ * Xbot.glb 95.6° mean / 179.6° max, Soldier.glb 8.3° / 37.4°, eight
+ * server-generated character models 1.3–1.7° / 7.0°.
  *
- * Measured (acceptance round 2026-08-13, finding 7): Xbot.glb 95.6° mean /
- * 179.6° max, Soldier.glb 8.3° / 37.4°, eight server-generated character
- * models 1.3–1.7° / 7.0°. The threshold sits well above every rig that works
- * and well below the one that does not; the gap is a factor of ten, so the
- * exact value is not delicate.
+ * With the reference rig's rest pose in hand, `adaptExternalClips` no longer
+ * copies: it reads every clip value as a rotation away from THAT rest and
+ * transplants it onto the target's own bind pose (`restCorrections`), which
+ * is exactly the compensation this gate used to give up on. So the gate is
+ * skipped whenever the donor rest is available, and a rig like Xbot gets the
+ * library it was denied. It still guards the case where
+ * `/assets/animation-rig` is missing and the old copy is all we have.
  */
 export const MAX_REST_FRAME_DEV_DEG = 30;
 /** Drift (clip seconds) between the local mixer and the server's game-clock
@@ -387,16 +387,33 @@ function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
 }
 
 /**
- * Apply Mixamo animation clips (from FBX) directly to a Mixamo rig: normalise
+ * Apply library animation clips (from FBX) to a Mixamo-named rig: normalise
  * the track names to the target's actual bone names, scale the hips position
- * track to the rig's size, discard the remaining position/scale tracks. No
- * retargeting — this works because both sides use the same Mixamo bind pose.
+ * track to the rig's size, discard the remaining position/scale tracks.
+ *
+ * `corrections` (`restCorrections` of `@anima/scene-render`, built from the
+ * reference rig at `/assets/animation-rig`) makes this a BIND-RELATIVE
+ * transplant: each clip value is read as a rotation away from the donor's
+ * rest and re-expressed against the target's own bind pose, `q = c · k`. A
+ * character whose T-pose stands with its feet splayed keeps that stance
+ * instead of having it overwritten — measured on `idle`, the mesh-visible
+ * rotation of the left foot went from −18.4° (Gorvoth, 18°/side of own
+ * splay) to −0.2°, and every rig now lands within ~1° of the same number.
+ *
+ * Without corrections (empty map — no rig served, or the target IS the
+ * reference rig) every track is kept verbatim and the result is bit-identical
+ * to the plain copy this replaces.
+ *
+ * The HIPS keep their own path unchanged: their rotation is lifted into the
+ * parent space of the target hips (the armature's +90° X), and their position
+ * is a length that is rescaled, not rotated.
  *
  * Exported for `client3d/scripts/smoke_clip_ground.mjs` alone: the clip ground
  * offset is measured on the clips THIS produces, so the check has to walk the
  * real chain rather than a copy of it.
  */
-export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D): THREE.AnimationClip[] {
+export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D,
+                                   corrections?: Map<string, THREE.Quaternion>): THREE.AnimationClip[] {
   const boneByKey = new Map<string, THREE.Bone>();
   target.traverse((o) => {
     if ((o as THREE.Bone).isBone) boneByKey.set(normBoneName(o.name), o as THREE.Bone);
@@ -485,9 +502,18 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
           }
           tracks.push(new THREE.QuaternionKeyframeTrack(`${bone.name}.quaternion`, [...track.times], [...vals]));
         } else {
-          const t = track.clone();
-          t.name = `${bone.name}.quaternion`;
-          tracks.push(t);
+          // q = c · k — the clip value re-expressed against THIS rig's bind
+          // pose. No entry means the two rests agree: keep the track verbatim.
+          const vals = bindRelativeValues(THREE, track.values,
+                                          corrections?.get(normBoneName(node)));
+          if (vals) {
+            tracks.push(new THREE.QuaternionKeyframeTrack(
+              `${bone.name}.quaternion`, [...track.times], [...vals]));
+          } else {
+            const t = track.clone();
+            t.name = `${bone.name}.quaternion`;
+            tracks.push(t);
+          }
         }
       } else if (prop === 'position' && bone === hips && hips && hipsPosMatrix && sourceRest > 1e-6) {
         // Take only the VERTICAL hips motion (relative to the source's STANDING
@@ -591,6 +617,10 @@ export class FigureLibrary {
   private clipIndex = new Map<string, Map<string, THREE.AnimationClip>>();
   /** Root path of every pair-clip half (`<kind>__<role>`), clip-frame metres */
   private pairRoots = new Map<string, RootPath>();
+  /** Rest pose of the rig the library was authored on (`/assets/animation-rig`)
+   *  — the donor side of the bind-relative transplant. Empty while the rig is
+   *  not served; then the clips are copied 1:1 as before. */
+  private donorRest = new Map<string, THREE.Quaternion>();
   /** Set-Fallback-Kette pro Charakter (aus der Worldmap) */
   private charSets = new Map<string, string[]>();
   /** Körpergröße pro Charakter in Metern (aus height_cm der Worldmap) */
@@ -713,6 +743,19 @@ export class FigureLibrary {
     }
     this.defaultHeight = defaultHeight;
     this.loadFile = loadFile;
+
+    // The REST POSE the library's rotation tracks are written in. It has to
+    // come from the reference RIG, never from a clip file: an FBX carrying an
+    // animation stores its nodes at the take's first frame (measured: a mean
+    // 7.6° and up to 100° away from the rig — `idle.fbx` has the arms down).
+    // Missing rig = the pre-2026-08-31 behaviour, tracks copied 1:1.
+    try {
+      const rig = await loadFile('/assets/animation-rig', true);
+      this.donorRest = restPoseOf(THREE, rig.scene);
+    } catch {
+      console.warn('[figures] no reference rig at /assets/animation-rig —'
+        + ' library clips are copied 1:1 and overwrite each rig\'s own stance');
+    }
 
     const donor = this.models.find((m) => m.clips.length > 0);
     for (const m of this.models) {
@@ -878,17 +921,26 @@ export class FigureLibrary {
   ): LibraryFit {
     const candidates = this.clipsFor(charName);
     if (!candidates.length) return { extra: [], fits: false };
-    const dev = restFrameDeviation(candidates, template);
-    if (dev.mean > MAX_REST_FRAME_DEV_DEG) {
-      console.warn(`[figures] ${charName}: the clip library does NOT fit this`
-        + ` skeleton — its bind pose sits ${dev.mean.toFixed(1)}° off the`
-        + ` library's bone convention (mean over ${dev.bones} addressed bones,`
-        + ` max ${dev.max.toFixed(1)}°, limit ${MAX_REST_FRAME_DEV_DEG}°).`
-        + ` Copied rotation tracks would fold the limbs over the torso, so no`
-        + ` library clip is bound and this rig stays out of the random pool.`);
-      return { extra: [], fits: false };
+    // The gate below is the FALLBACK path's guard only: it asks whether a
+    // plain 1:1 copy would survive this bind pose. With the donor rest in
+    // hand the copy is not what happens — every value is re-expressed against
+    // this rig's own bind pose, which is precisely the compensation the gate
+    // used to give up on.
+    const corrections = restCorrections(THREE, this.donorRest, template);
+    if (!this.donorRest.size) {
+      const dev = restFrameDeviation(candidates, template);
+      if (dev.mean > MAX_REST_FRAME_DEV_DEG) {
+        console.warn(`[figures] ${charName}: the clip library does NOT fit this`
+          + ` skeleton — its bind pose sits ${dev.mean.toFixed(1)}° off the`
+          + ` library's bone convention (mean over ${dev.bones} addressed bones,`
+          + ` max ${dev.max.toFixed(1)}°, limit ${MAX_REST_FRAME_DEV_DEG}°).`
+          + ` Without the reference rig the tracks can only be COPIED, which`
+          + ` would fold the limbs over the torso, so no library clip is bound`
+          + ` and this rig stays out of the random pool.`);
+        return { extra: [], fits: false };
+      }
     }
-    const adapted = adaptExternalClips(candidates, template);
+    const adapted = adaptExternalClips(candidates, template, corrections);
     const have = new Set(own.map((c) => c.name.toLowerCase()));
     const missing = missingClipKinds(
       candidates.map((c) => c.name),

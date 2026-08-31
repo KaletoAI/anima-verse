@@ -33,6 +33,9 @@ export type { GroundSampler, StoreyGroundStep,
 
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
+export { normBoneName, restPoseOf, restCorrections, bindRelativeValues,
+  bindRelativeClip } from './clipRetarget'
+
 export { applyDepthCut, cutPlaneFor, disposeCutMaterials } from './depthCut'
 
 export { applySlotMaterials, disposeSlotMaterials, GLASS_PRESET,

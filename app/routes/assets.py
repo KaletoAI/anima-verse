@@ -53,7 +53,8 @@ from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError
 from app.core.http_files import etag_file_response
 from app.core.log import get_logger
-from app.core.paths import get_animation_clips_dir, get_licensed_clips_dir
+from app.core.paths import (get_animation_clips_dir, get_licensed_clips_dir,
+                            get_rig_file)
 
 logger = get_logger(__name__)
 
@@ -527,6 +528,27 @@ def resolve_clip_path(rel: str) -> Optional[Path]:
     if path.suffix.lower() not in CLIP_EXTS:
         return None
     return path
+
+
+@router.get("/animation-rig")
+def get_animation_rig(request: Request):
+    """The RETARGET REFERENCE skeleton (``shared/models/rig/reference.fbx``).
+
+    Every library clip is converted onto this rig, so its rest pose is the
+    frame the clips' rotation tracks are written in. A renderer needs it to
+    read a clip as a rotation AWAY FROM REST and transplant that onto a
+    character rig with a bind pose of its own
+    (``@anima/scene-render``'s ``restCorrections``). Without it a renderer can
+    only copy tracks 1:1, which overwrites the character's own stance.
+
+    404 while the rig is absent is a normal state — the consumer then falls
+    back to the 1:1 copy.
+    """
+    path = get_rig_file()
+    if not path.is_file():
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return etag_file_response(path, request, "application/octet-stream",
+                              cache_control="public, max-age=86400")
 
 
 @router.get("/animation-clips/{rel:path}")

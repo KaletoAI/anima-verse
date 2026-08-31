@@ -11,10 +11,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D,
-  Vector3 } from 'three'
-import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials, clipHipsDrop,
-  disposeSlotMaterials, figureRootY, hipsTrackMedian, leafPivot, markerSlots,
-  pairPoints, pairYaw } from '@anima/scene-render'
+  Quaternion, Vector3 } from 'three'
+import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
+  bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
+  hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
+  restCorrections, restPoseOf } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -105,6 +106,30 @@ const clipIndex = () => {
       .catch(() => ({ clips: [], pairs: {} }))
   }
   return _clipIndexPromise
+}
+/** The REST POSE of the rig every library clip is authored on
+ *  (`/assets/animation-rig`). One fetch per session; an empty map is the
+ *  normal state while the rig is not served, and then a clip is bound as it
+ *  comes — the behaviour of before.
+ *
+ *  Reading the rest off the CLIP file instead does not work: an FBX carrying
+ *  an animation stores its nodes at the take's first frame, a mean 7.6° and
+ *  up to 100° away from the rest. */
+let _donorRestPromise: Promise<Map<string, Quaternion>> | null = null
+const donorRest = () => {
+  if (!_donorRestPromise) {
+    _donorRestPromise = (async () => {
+      try {
+        const THREE = await import('three')
+        const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
+        const rig = await new FBXLoader().loadAsync('/assets/animation-rig')
+        return restPoseOf(THREE, rig)
+      } catch {
+        return new Map<string, Quaternion>()
+      }
+    })()
+  }
+  return _donorRestPromise
 }
 const _clipCache = new Map<string, Promise<{ clip: AnimationClip; restObj: Object3D
                                              hipsMedian: number | null } | null>>()
@@ -941,8 +966,17 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           clip.tracks = clip.tracks.filter(
             (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')),
           )
+          // BIND-RELATIVE, the same routine the 3D client uses: the clip is
+          // written in the reference rig's rest frame, so each value is read
+          // as a rotation away from THAT rest and re-expressed against this
+          // model's own bind pose. Without it the copy overwrites the
+          // character's stance — a model whose T-pose stands with the feet
+          // splayed 18° showed 18° of extra toe-in on every clip.
+          const corrections = restCorrections(THREE, await donorRest(), object)
+          if (disposed) return
+          const bound = bindRelativeClip(THREE, clip, corrections)
           mixer = new THREE.AnimationMixer(object)
-          mixer.clipAction(clip).play()
+          mixer.clipAction(bound).play()
           mixer.update(0)  // apply frame 0 so the framing below fits the pose
           disposers.push(() => mixer?.stopAllAction())
         }
@@ -1574,8 +1608,13 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
                 : null
               const hipsDrop = clipHipsDrop(hipsBindY, anim?.hipsMedian, standRef)
               if (anim) {
+                // Same bind-relative transplant as the main viewer above and
+                // as the 3D client: the marker figure keeps its own stance.
+                const bound = bindRelativeClip(
+                  THREE, anim.clip, restCorrections(THREE, await donorRest(), inst))
+                if (disposed || figTokenRef.current !== o.token) return
                 const mixer = new THREE.AnimationMixer(inst)
-                mixer.clipAction(anim.clip).play()
+                mixer.clipAction(bound).play()
                 // THE SETTLED POSE, not the approach (2026-08-29). A clip is
                 // a MOVEMENT, and its first frame is where the body starts
                 // OUT of the pose: measured on `laying-back` (hips → head
