@@ -36,7 +36,9 @@ joint per frame. So a bone's orientation is rebuilt from geometry:
                  the pelvis axis (left hip − right hip) for legs and feet,
                  the shoulder axis for the spine, neck and clavicles, the
                  elbow/knee bend normal for the limbs when they are bent
-                 (the hand's index−pinky axis / pelvis axis when straight),
+                 (the hand's index−pinky axis / pelvis axis when straight,
+                 and a ROLL BLEND of the two in between — see
+                 ``BEND_BLEND_LO_DEG``),
                  the palm (index − pinky) for the hand, the palm normal for
                  the fingers.
 
@@ -170,7 +172,71 @@ for _side in ("Left", "Right"):
         for _n in (1, 2, 3):
             CHILD[f"{_side}Hand{_f}{_n}"] = f"{_side}Hand{_f}{_n + 1}"
 
-BEND_MIN_DEG = 12.0
+# A limb's bend normal (thigh × shin, upper arm × forearm) is the secondary
+# axis that carries the real roll — but its DIRECTION is only as good as the
+# bend is large: the cross product's length goes with sin(bend), so a nearly
+# straight limb yields noise. Below the band the anatomical fallback (pelvis /
+# palm axis) is used alone, above it the bend normal alone, and IN BETWEEN the
+# two are blended as a roll around the bone (``_blend_secondary``).
+#
+# A hard switch here was the cause of per-frame leg twitching: a relaxed idle
+# holds the knee near the switch point, so the bend angle wanders across it and
+# the roll reference jumped between two axes that are 17-40 deg apart —
+# measured 20.5 deg/frame (left) and 34.7 deg/frame (right) on
+# MOB1_Stand_Relaxed_Idle_v2 while hips and spine stayed below 0.2 deg/frame.
+#
+# LO sits ABOVE the reference rig's own knee bend (5.92 deg) on purpose: the
+# Mixamo rest frames must keep using the pelvis axis exactly as before, so the
+# rest side of ``R = F_source(t) · F_mixamo_rest^T`` is unchanged.
+BEND_BLEND_LO_DEG = 8.0
+BEND_BLEND_HI_DEG = 30.0
+_DEG = 3.141592653589793 / 180.0
+
+
+def _bend_weight(upper: Vector, lower: Vector) -> float:
+    """How far the bend normal is trusted, 0..1, smoothstepped over the band.
+
+    ``upper``/``lower`` are the two limb segments (thigh/shin, upper arm/
+    forearm); the angle between them IS the bend. Smoothstep (not a linear
+    ramp) so the weight's own derivative is zero at both ends — the blend
+    enters and leaves without a kink.
+    """
+    if upper is None or lower is None:
+        return 0.0
+    if upper.length < 1e-9 or lower.length < 1e-9:
+        return 0.0
+    deg = upper.angle(lower, 0.0) / _DEG
+    t = (deg - BEND_BLEND_LO_DEG) / (BEND_BLEND_HI_DEG - BEND_BLEND_LO_DEG)
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _blend_secondary(direction: Vector, bend: Vector, fallback: Vector,
+                     w: float) -> Vector:
+    """Rotate ``fallback`` a fraction ``w`` of the way towards ``bend``.
+
+    Both candidates are projected into the plane perpendicular to the bone, so
+    the blend is a pure ROLL around the bone and never degenerates into a short
+    vector the way a straight lerp between two nearly opposite axes would.
+    """
+    if w <= 0.0 or bend is None or bend.length < 1e-9:
+        return fallback
+    if w >= 1.0 or fallback is None or fallback.length < 1e-9:
+        return bend
+    x = direction.normalized()
+    a = bend - x * bend.dot(x)
+    b = fallback - x * fallback.dot(x)
+    if a.length < 1e-6:
+        return fallback
+    if b.length < 1e-6:
+        return bend
+    a.normalize()
+    b.normalize()
+    ang = b.angle(a, 0.0)
+    if ang < 1e-6:
+        return a
+    sign = 1.0 if x.dot(b.cross(a)) >= 0.0 else -1.0
+    return Matrix.Rotation(sign * ang * w, 3, x) @ b
 
 
 def _frame(direction: Vector, secondary: Vector) -> Matrix:
@@ -185,8 +251,12 @@ def _frame(direction: Vector, secondary: Vector) -> Matrix:
     return Matrix((x, y, z)).transposed()      # columns x, y, z
 
 
-def _secondary(name: str, P: dict) -> Vector:
-    """The anatomical secondary axis of a bone from joint positions P."""
+def _secondary(name: str, P: dict, direction: Vector = None) -> Vector:
+    """The anatomical secondary axis of a bone from joint positions P.
+
+    ``direction`` is the bone's own axis (joint → child); the limb bones need
+    it to blend their two candidate axes as a roll around the bone.
+    """
     def v(a, b):
         return (P[b] - P[a]) if a in P and b in P else None
     pelvis = v("rfemur", "lfemur") or Vector((1.0, 0.0, 0.0))
@@ -203,9 +273,11 @@ def _secondary(name: str, P: dict) -> Vector:
     if name in ("lhumerus", "rhumerus"):
         up = v(name, "lradius" if side == "l" else "rradius")
         fore = v("lradius" if side == "l" else "rradius", hand)
-        if up and fore and up.angle(fore, 0.0) > BEND_MIN_DEG * 3.14159 / 180:
-            return up.cross(fore)
-        return palm_axis or shoulders
+        back = palm_axis or shoulders
+        w = _bend_weight(up, fore)
+        if w <= 0.0:
+            return back
+        return _blend_secondary(direction or up, up.cross(fore), back, w)
     if name in ("lradius", "rradius", "lhand", "rhand"):
         return palm_axis or shoulders
     if name.startswith("LeftHand") or name.startswith("RightHand"):
@@ -216,9 +288,10 @@ def _secondary(name: str, P: dict) -> Vector:
     if name in ("lfemur", "rfemur", "ltibia", "rtibia"):
         th = v("lfemur" if side == "l" else "rfemur", "ltibia" if side == "l" else "rtibia")
         sh = v("ltibia" if side == "l" else "rtibia", "lfoot" if side == "l" else "rfoot")
-        if th and sh and th.angle(sh, 0.0) > BEND_MIN_DEG * 3.14159 / 180:
-            return th.cross(sh)
-        return pelvis
+        w = _bend_weight(th, sh)
+        if w <= 0.0:
+            return pelvis
+        return _blend_secondary(direction or th, th.cross(sh), pelvis, w)
     return pelvis        # feet, toes
 
 
@@ -229,7 +302,7 @@ def _frames_of(P: dict) -> dict:
         if name in P and child in P:
             d = P[child] - P[name]
             if d.length > 1e-6:
-                out[name] = _frame(d, _secondary(name, P))
+                out[name] = _frame(d, _secondary(name, P, d))
     return out
 
 

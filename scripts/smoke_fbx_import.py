@@ -45,6 +45,34 @@ RULE 4 — "a foreign file is licensed until its owner says otherwise". The
 default target is the LICENSED library; the free (tracked, redistributable)
 one needs redistributable=True — 400 without it.
 
+RULE 5 — "a converted clip is CONTINUOUS". The positional retargeter rebuilds
+a bone's roll from an anatomical secondary axis, and the limbs have TWO
+candidates: the bend normal (thigh × shin) once the joint is bent far enough to
+define it, the pelvis/palm axis while it is straight. Those two axes are
+17–40 deg apart on a real skeleton, so any HARD switch between them makes the
+roll jump by that much from one frame to the next while the pose itself moved
+by less than a degree. The check is therefore a per-frame quaternion step on the
+four leg bones of the EXPORTED file (``clip_continuity`` below), with a
+two-part, motion-relative verdict:
+
+    a jump = a step above 3 deg/frame that is also more than 4x the clip's own
+             90th-percentile step of the same bone
+
+3 deg/frame at 30 fps is 90 deg/s — no relaxed idle moves a thigh that fast —
+and the 4x factor is what keeps a genuinely fast clip from tripping the rule:
+in a jog the thighs step ~9 deg per frame EVERY frame, so max/p90 stays near 1.
+Measured on this very pipeline (Blender 4.2.5, reference.fbx), max leg step and
+max/p90 per clip, before and after the roll blend of ``fbx_clip._secondary``:
+
+    MOB1_Stand_Relaxed_Idle_v2   34.75 deg / 163.1   ->   0.91 deg /  3.19
+    MOB1_Walk_F_Loop             41.33 deg /   5.89  ->  14.89 deg /  1.60
+    MOB1_Jog_F_Loop              29.24 deg /   1.61  ->  29.38 deg /  1.21
+    Female_Standing_Lotus_Loop0   6.61 deg /   1.99  ->   6.61 deg /  1.99
+
+The threshold sits in the gap between the two columns: everything healthy stays
+below 2.0 (the idle's 3.19 never reaches the 3 deg floor), everything broken is
+at 5.89 or above.
+
 The Blender run itself is monkeypatched here: this smoke checks the ROUTE and
 core contract (probe, suggestions, validation, target rule, what reaches the
 converter), not the retargeter. With ``--real`` it additionally runs one TRUE
@@ -59,6 +87,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -108,6 +137,101 @@ def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'✓' if ok else '✗'} {label}{f' — {detail}' if detail else ''}")
     if not ok:
         FAILURES.append(label)
+
+
+#: RULE 5 — a step below this many degrees per frame is never a jump, however
+#: quiet the rest of the clip is.
+JUMP_FLOOR_DEG = 3.0
+#: …and above the floor it still needs to stick out this far above the bone's
+#: own 90th-percentile step to count as one.
+JUMP_OVER_P90 = 4.0
+
+_CONTINUITY_SRC = '''
+import json, math, sys
+import bpy
+from mathutils import Quaternion
+
+path = sys.argv[sys.argv.index("--") + 1:][0]
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.import_scene.fbx(filepath=path, global_scale=1.0)
+arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+scene = bpy.context.scene
+f0, f1 = int(scene.frame_start), int(scene.frame_end)
+for o in bpy.data.objects:
+    if o.animation_data and o.animation_data.action:
+        r = o.animation_data.action.frame_range
+        f0, f1 = int(r[0]), int(r[1])
+        break
+names = [n for n in ("mixamorig:LeftUpLeg", "mixamorig:LeftLeg",
+                     "mixamorig:RightUpLeg", "mixamorig:RightLeg")
+         if n in arm.pose.bones]
+series = {n: [] for n in names}
+for fr in range(f0, f1 + 1):
+    scene.frame_set(fr)
+    bpy.context.view_layer.update()
+    for n in names:
+        series[n].append(arm.pose.bones[n].matrix_basis.to_quaternion().normalized())
+out = {"frames": f1 - f0 + 1, "bones": {}}
+for n, q in series.items():
+    steps = []
+    for i in range(1, len(q)):
+        a, b = q[i - 1], q[i]
+        if a.dot(b) < 0:
+            b = Quaternion((-b.w, -b.x, -b.y, -b.z))
+        d = a.inverted() @ b
+        steps.append(math.degrees(2.0 * math.acos(max(-1.0, min(1.0, abs(d.w))))))
+    if not steps:
+        continue
+    st = sorted(steps)
+    out["bones"][n] = {"max": max(steps),
+                       "p90": st[min(len(st) - 1, int(0.90 * len(st)))],
+                       "at_frame": f0 + 1 + steps.index(max(steps))}
+print("CONTINUITY_JSON " + json.dumps(out))
+'''
+
+
+def clip_continuity(fbx_path: Path) -> dict:
+    """Per-frame quaternion step of the four leg bones of an exported clip.
+
+    Returns ``{"max": deg, "over_p90": ratio, "bone": name, "at_frame": n}``
+    for the WORST bone, or ``{}`` when Blender or the file is missing. The
+    verdict itself is RULE 5 in the module docstring.
+    """
+    exe = runner.find_executable()
+    if not exe or not Path(fbx_path).is_file():
+        return {}
+    script = FIXT / "_continuity.py"
+    script.write_text(_CONTINUITY_SRC)
+    proc = subprocess.run([exe, "-b", "--factory-startup", "-P", str(script),
+                           "--", str(fbx_path)],
+                          capture_output=True, text=True, timeout=600)
+    line = next((ln for ln in proc.stdout.splitlines()
+                 if ln.startswith("CONTINUITY_JSON ")), "")
+    if not line:
+        return {}
+    data = json.loads(line.split(" ", 1)[1])
+    worst = {}
+    for name, b in (data.get("bones") or {}).items():
+        ratio = b["max"] / b["p90"] if b["p90"] > 1e-6 else float("inf")
+        # the worst bone is the one that comes CLOSEST to the verdict
+        score = (b["max"] > JUMP_FLOOR_DEG, ratio)
+        if not worst or score > (worst["max"] > JUMP_FLOOR_DEG, worst["over_p90"]):
+            worst = {"max": b["max"], "over_p90": ratio, "bone": name,
+                     "at_frame": b["at_frame"]}
+    return worst
+
+
+def check_continuity(label: str, fbx_path: Path) -> None:
+    """RULE 5 on one exported clip — skipped, not failed, without Blender."""
+    w = clip_continuity(fbx_path)
+    if not w:
+        print(f"  – {label}: continuity not measured (no Blender / no file)")
+        return
+    detail = (f"max {w['max']:.2f}°/frame on {w['bone'].split(':')[-1]} "
+              f"at frame {w['at_frame']}, {w['over_p90']:.2f}× its own p90")
+    check(f"{label}: the legs run continuously (RULE 5)",
+          not (w["max"] > JUMP_FLOOR_DEG and w["over_p90"] > JUMP_OVER_P90),
+          detail)
 
 
 def status_of(call) -> int:
@@ -486,6 +610,8 @@ def test_real() -> None:
     floor = geo.get("rig_floor_min_cm")
     check("no figure sinks through the floor (rig_floor_min_cm > -1)",
           isinstance(floor, (int, float)) and floor > -1.0, str(floor))
+    for role in ("a", "b"):
+        check_continuity(f"half {role}", LICENSED / "real" / f"smoketest-pair__{role}.fbx")
     print(f"  · {res['seconds']:.1f} s, files {res['outputs']}")
 
 
@@ -544,6 +670,7 @@ def test_real_mob1() -> None:
     check("the feet stand on the floor (|rig_floor_min_cm| < 3)",
           isinstance(floor, (int, float)) and abs(floor) < 3.0, str(floor))
     check("in_place stayed off", geo.get("in_place") is False, str(geo.get("in_place")))
+    check_continuity("the relaxed idle", LICENSED / "mob1" / "smoketest-mob1.fbx")
     print(f"  · {res['seconds']:.1f} s, hips_scale {scale}, "
           f"rig_floor_shift_cm {geo.get('rig_floor_shift_cm')}, "
           f"rig_floor_min_cm {floor}, duration {dur} s")
@@ -559,6 +686,8 @@ def test_real_mob1() -> None:
     check("…and the figure still stands on the floor",
           isinstance(rgeo.get("rig_floor_min_cm"), (int, float))
           and abs(rgeo["rig_floor_min_cm"]) < 3.0, str(rgeo.get("rig_floor_min_cm")))
+    check_continuity("the rest-delta idle",
+                     LICENSED / "mob1" / "smoketest-mob1-rest.fbx")
 
 
 def main() -> int:
