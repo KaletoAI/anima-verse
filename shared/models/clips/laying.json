@@ -21,13 +21,13 @@
     0.0,
     1.5
    ],
-   "seam_distance": null,
+   "seam_distance": 0.2,
    "blend_frames": 8
   },
   "hips_scale": [
    1.1127
   ],
-  "rig_floor_shift_cm": 11.01,
+  "rig_floor_shift_cm": 11.95,
   "rig_floor_min_cm": -0.07
  },
  "source": {

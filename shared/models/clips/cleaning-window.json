@@ -27,8 +27,8 @@
   "hips_scale": [
    1.1568
   ],
-  "rig_floor_shift_cm": 1.53,
-  "rig_floor_min_cm": -1.96
+  "rig_floor_shift_cm": 1.84,
+  "rig_floor_min_cm": -2.02
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",

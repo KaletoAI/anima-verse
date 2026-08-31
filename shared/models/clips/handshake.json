@@ -6,8 +6,11 @@
   "b"
  ],
  "fps": 30,
+ "source_fps": 120.0,
  "frames": 76,
  "duration_s": 2.533,
+ "loop": false,
+ "speed": 1.0,
  "geometry": {
   "anchor_frame": 33,
   "anchor_s": 1.1,
@@ -48,8 +51,8 @@
    "rig_distance_m": 0.299,
    "shift_m": 0.106
   },
-  "rig_floor_shift_cm": -2.8,
-  "rig_floor_min_cm": -7.65
+  "rig_floor_shift_cm": -1.24,
+  "rig_floor_min_cm": -6.92
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",

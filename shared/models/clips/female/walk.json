@@ -3,8 +3,11 @@
  "pair": false,
  "roles": [],
  "fps": 30,
+ "source_fps": 120.0,
  "frames": 33,
  "duration_s": 1.1,
+ "loop": true,
+ "speed": 1.0,
  "geometry": {
   "floor_shift_cm": -4.33,
   "in_place": true,
@@ -24,8 +27,8 @@
   "hips_scale": [
    1.1135
   ],
-  "rig_floor_shift_cm": 3.04,
-  "rig_floor_min_cm": -1.01
+  "rig_floor_shift_cm": 3.63,
+  "rig_floor_min_cm": -1.03
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
