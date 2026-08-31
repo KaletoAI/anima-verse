@@ -83,7 +83,25 @@ from current output):
   [6] THE OLD FIELDS ARE UNCHANGED. ``present_detail[].expr_version`` and
       ``avatar_expr_version`` still carry their values — this is an addition,
       not a rebuild.
+
+  [7] THE NARRATOR MARK. ``meta.narrator`` is ``True`` on exactly the three
+      storyteller lines (#2 narration, #5 display-only, #6 event verdict) and
+      on no other line of the payload. The HUD chat column gives the narrator
+      a picture slot of its own, so it has to tell that kind of line apart —
+      and nothing else in the row says so: ``kind`` is hearing range, and
+      ``display_only``/``event_verdict`` cover two of the three kinds at best.
+      The mark is written on the CANONICAL comparison, so it is there before
+      the display label is.
+
+  [8] …AND IN A LANGUAGE THAT NEEDS NO TRANSLATION. Set the avatar to "en" and
+      ``t("Storyteller", "en")`` is "Storyteller" — the same string as the
+      canonical value. That is the case in which nothing has to be rewritten,
+      and it must not become the case in which nothing is MARKED either: the
+      mark is the speaker KIND, not a translation. So the same three lines
+      carry it, and their label stands unchanged as "Storyteller" (hand count:
+      3 marked, 5 unmarked, of 8 lines).
 """
+import copy
 import os
 import sys
 import tempfile
@@ -177,8 +195,11 @@ def _counting_expr_version(name: str) -> str:
 
 play._expr_version = _counting_expr_version
 perception.addressable_for = lambda name: [PRESENT]
+# A DEEP copy per call — the real store builds fresh rows out of SQLite every
+# request, and the route writes into ``meta``. A shallow copy would let the
+# first request's display label leak into the second one's expectations.
 perception_store.get_character_room_stream = (
-    lambda *a, **kw: [dict(ln) for ln in SCENE])
+    lambda *a, **kw: copy.deepcopy(SCENE))
 
 payload = play.play_scene(user=None)
 
@@ -205,6 +226,38 @@ check("present_detail keeps its expr_version",
       [(PRESENT, f"v-{PRESENT}")])
 check("avatar_expr_version keeps its value", payload["avatar_expr_version"],
       f"v-{AVATAR}")
+
+
+# --- [7] the narrator mark sits on the storyteller lines, and only there -----
+def _marked(pl):
+    return [ln["id"] for ln in pl["scene"]
+            if (ln.get("meta") or {}).get("narrator") is True]
+
+
+def _labels(pl):
+    return sorted({(ln.get("meta") or {}).get("speaker") for ln in pl["scene"]
+                   if (ln.get("meta") or {}).get("speaker")})
+
+
+check("the three storyteller lines carry meta.narrator", _marked(payload),
+      [2, 5, 6])
+check("…and no other line does",
+      [ln["id"] for ln in payload["scene"]
+       if "narrator" in (ln.get("meta") or {}) and ln["id"] not in (2, 5, 6)],
+      [])
+
+# --- [8] the same in a language whose label needs no rewrite ----------------
+check("t('Storyteller', 'en') is the canonical value itself",
+      _t("Storyteller", "en"), STORYTELLER_SPEAKER)
+save_character_profile(AVATAR, {"name": AVATAR, "language": "en"})
+payload_en = play.play_scene(user=None)
+check("an English world marks the very same lines", _marked(payload_en),
+      [2, 5, 6])
+check("…and leaves their label standing as the canonical value",
+      _labels(payload_en), sorted({AVATAR, PRESENT, GONE, STORYTELLER_SPEAKER}))
+check("still no storyteller in the version map",
+      [k for k in payload_en["speaker_expr_versions"]
+       if k in (STORYTELLER_SPEAKER, "Erzähler")], [])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

@@ -47,13 +47,50 @@
  *     K = 2  → [Bea, Ayla]
  *     K = 3  → [Bea, Ayla]           only two distinct faces up to there
  *
+ * ── THE NARRATOR HAS A PLACE OF ITS OWN ─────────────────────────────────
+ * The rows above are named "Storyteller" but carry NO mark, and that is the
+ * point: a name never decides. The server marks its narrator rows with
+ * `meta.narrator === true` (`app/routes/play.py`), because the name it puts on
+ * them is a LOCALIZED label — in an English world it is the canonical value
+ * itself, in a German one it is "Erzähler", and neither is a speaker kind.
+ *
+ * A marked row is a picture slot like any other, with one difference: it is
+ * PICTURELESS. There is no narrator portrait to fetch, so the slot carries no
+ * name and no version and the column draws the silhouette for it directly —
+ * never an <img> that has to fail first.
+ *
+ * A second history, marked the way the server now marks:
+ *
+ *     id 20  Ayla        versioned
+ *     id 21  narrator    marked
+ *     id 22  narrator    marked
+ *     id 23  Bea         versioned
+ *     id 24  Ghost       not versioned  → skipped
+ *
+ * Walking BACKWARDS and keeping the first sighting of each: Ghost (24) is not
+ * drawable, Bea (23), then the narrator (22) — and 21 is the narrator again,
+ * so it adds nothing, exactly as a speaker who says two things in a row adds
+ * one face — then Ayla (20). Reversed for the column, youngest last:
+ *
+ *     K = 1  → [Bea]                  the youngest drawable row is 23
+ *     K = 2  → [narrator, Bea]
+ *     K = 3  → [Ayla, narrator, Bea]  the narrator keeps its place in between
+ *     K = 4  → [Ayla, narrator, Bea]  three distinct places exist
+ *
+ * The narrator COUNTS: at K = 2 it takes the place Ayla would have had.
+ *
+ * With the focus on row 22 the history is cut after it — 20 Ayla, 21 and 22
+ * narrator — so backwards: narrator (22), 21 is the same place again, Ayla
+ * (20), i.e. `[Ayla, narrator]`.
+ *
  * ── THE SLOTS THE COLUMN DRAWS ──────────────────────────────────────────
  * One slot per picked name, in that order, each carrying the version the
- * server sent for it. The one rule on top: an EMPTY selection is still one
- * slot — a nameless one, drawn as a silhouette. That is what keeps the
- * column's width constant, and the transcript's with it: a history in which
- * only the narrator has spoken used to hand over no column at all, and the
- * chat jumped wider the moment it did.
+ * server sent for it. The narrator's place becomes a slot with neither: it is
+ * `{ name: '', version: '', narrator: true }`. The one rule on top: an EMPTY
+ * selection is still one slot — a nameless one, drawn as a silhouette. That is
+ * what keeps the column's width constant, and the transcript's with it: a
+ * history in which nothing drawable has been said used to hand over no column
+ * at all, and the chat jumped wider the moment it did.
  *
  * ── THE SIZE BOUNDS ─────────────────────────────────────────────────────
  * 520 x 260 minimum, 2400 x 2000 maximum (`chatPanel.ts` explains both ends).
@@ -117,7 +154,7 @@ async function main() {
   }
 
   const {
-    pickPortraitSpeakers, portraitSlots,
+    pickPortraitSpeakers, portraitSlots, NARRATOR_SLOT,
     clampChatSize, readChatSize, writeChatSize,
     readChatAlpha, readPortraitCount, chatFocusId, rowAtCenter,
     CHAT_MIN_W, CHAT_MAX_W, CHAT_MIN_H, CHAT_MAX_H, CHAT_COL_W,
@@ -145,6 +182,15 @@ async function main() {
   ]
   const VERSIONS = { Ayla: 'a1', Bea: 'b1', Cara: 'c1' }
 
+  // The second history: the narrator rows the server MARKED. The label on them
+  // is the German one on purpose — the mark decides, the name never does.
+  const nar = (id) => ({ id, ts: '', content: '', kind: 'in_room',
+                         meta: { speaker: 'Erzähler', narrator: true } })
+  const NARRATED = [
+    say(20, 'Ayla'), nar(21), nar(22), say(23, 'Bea'), say(24, 'Ghost'),
+  ]
+  const N = NARRATOR_SLOT
+
   console.log('\n[0] the bounds the cases below are derived from')
   check('the window floor is 520 x 260', [CHAT_MIN_W, CHAT_MIN_H], [520, 260])
   check('the window ceiling is 2400 x 2000', [CHAT_MAX_W, CHAT_MAX_H], [2400, 2000])
@@ -168,8 +214,8 @@ async function main() {
         pickPortraitSpeakers(HISTORY, {}, 3), [])
   // Walking back from 17 with the narrator versioned: Ghost (17) is still not,
   // then Bea (16), Cara (15), Storyteller (14) — reversed for the column.
-  check('the narrator is skipped by the VERSION LIST, not by his name: '
-    + 'version him and he is drawn',
+  check('a row merely NAMED "Storyteller" is an ordinary speaker — version him '
+    + 'and he is drawn like anybody else',
         pickPortraitSpeakers(HISTORY, { ...VERSIONS, Storyteller: 's1' }, 3),
         ['Storyteller', 'Cara', 'Bea'])
   check('an objective row carries the name in `speaker`, not in `meta`',
@@ -178,18 +224,50 @@ async function main() {
         pickPortraitSpeakers([{ id: 1 }, { id: 2, meta: { speaker: 'Bea' } }],
                              VERSIONS, 2), ['Bea'])
 
+  console.log('\n[1b] the narrator gets a place of its own — by the MARK, and'
+    + ' pictureless')
+  check('K=1 → Bea: the youngest drawable row is hers, Ghost has no version',
+        pickPortraitSpeakers(NARRATED, VERSIONS, 1), ['Bea'])
+  check('K=2 → THE NARRATOR COUNTS: it takes the place Ayla would have had',
+        pickPortraitSpeakers(NARRATED, VERSIONS, 2), [N, 'Bea'])
+  check('K=3 → the narrator keeps its place in the middle, history order',
+        pickPortraitSpeakers(NARRATED, VERSIONS, 3), ['Ayla', N, 'Bea'])
+  check('K=4 → still three: rows 21 and 22 are ONE place, like one speaker '
+    + 'saying two things in a row',
+        pickPortraitSpeakers(NARRATED, VERSIONS, 4), ['Ayla', N, 'Bea'])
+  check('a narrator-only history is a narrator place, not an empty column',
+        pickPortraitSpeakers([nar(1), nar(2)], VERSIONS, 3), [N])
+  check('THE MARK DECIDES, NOT THE VERSION MAP: versioning the label changes '
+    + 'nothing', pickPortraitSpeakers(NARRATED, { ...VERSIONS, 'Erzähler': 'e1' }, 3),
+        ['Ayla', N, 'Bea'])
+  check('an unversioned REAL speaker still stays out (Ghost at 24)',
+        pickPortraitSpeakers(NARRATED, VERSIONS, 4).includes('Ghost'), false)
+  check('focus 22 cuts after the second narrator row → [Ayla, narrator]',
+        pickPortraitSpeakers(NARRATED, VERSIONS, 3, 22), ['Ayla', N])
+
   console.log('\n[1a] the column ALWAYS has a slot — a face, or the silhouette')
   check('the drawn slots carry the version the server sent',
         portraitSlots(['Cara', 'Bea'], VERSIONS),
-        [{ name: 'Cara', version: 'c1' }, { name: 'Bea', version: 'b1' }])
+        [{ name: 'Cara', version: 'c1', narrator: false },
+         { name: 'Bea', version: 'b1', narrator: false }])
   check('NOBODY TO SHOW IS STILL ONE SLOT — the silhouette, so the column '
     + 'keeps its width and the transcript never widens',
-        portraitSlots([], VERSIONS), [{ name: '', version: '' }])
-  check('a narrator-only history therefore draws the silhouette',
+        portraitSlots([], VERSIONS), [{ name: '', version: '', narrator: false }])
+  check('a history with nothing drawable in it therefore draws the silhouette',
         portraitSlots(pickPortraitSpeakers(HISTORY, VERSIONS, 3, 10), VERSIONS),
-        [{ name: '', version: '' }])
+        [{ name: '', version: '', narrator: false }])
+  check('THE NARRATOR PLACE IS PICTURELESS: no name to fetch, no version',
+        portraitSlots(pickPortraitSpeakers(NARRATED, VERSIONS, 3), VERSIONS),
+        [{ name: 'Ayla', version: 'a1', narrator: false },
+         { name: '', version: '', narrator: true },
+         { name: 'Bea', version: 'b1', narrator: false }])
+  check('…even when the version map does carry the narrator label',
+        portraitSlots(pickPortraitSpeakers([nar(1)], { ...VERSIONS, 'Erzähler': 'e1' }, 1),
+                      { ...VERSIONS, 'Erzähler': 'e1' }),
+        [{ name: '', version: '', narrator: true }])
   check('a name the version map does not carry keeps its slot, versionless',
-        portraitSlots(['Ghost'], VERSIONS), [{ name: 'Ghost', version: '' }])
+        portraitSlots(['Ghost'], VERSIONS),
+        [{ name: 'Ghost', version: '', narrator: false }])
   check('the slot count follows the names, not K: one speaker, one slot',
         portraitSlots(pickPortraitSpeakers(HISTORY, VERSIONS, 3, 12), VERSIONS)
           .length, 2)
@@ -202,9 +280,9 @@ async function main() {
         pickPortraitSpeakers(HISTORY, VERSIONS, 2, 13), ['Bea', 'Ayla'])
   check('focus 13, K=3 → still two: only Ayla and Bea have spoken by then',
         pickPortraitSpeakers(HISTORY, VERSIONS, 3, 13), ['Bea', 'Ayla'])
-  check('focus 14 (a narrator row) answers with the faces behind it',
+  check('focus 14 (an unmarked "Storyteller" row) answers with the faces behind it',
         pickPortraitSpeakers(HISTORY, VERSIONS, 2, 14), ['Bea', 'Ayla'])
-  check('focus 10 (the first row, a narrator) → nothing has been said yet',
+  check('focus 10 (the first row, unversioned) → nothing drawable yet',
         pickPortraitSpeakers(HISTORY, VERSIONS, 3, 10), [])
   check('a focus id no longer in the history cuts nothing (= the resting state)',
         pickPortraitSpeakers(HISTORY, VERSIONS, 2, 999), ['Cara', 'Bea'])

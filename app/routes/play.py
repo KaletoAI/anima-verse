@@ -186,6 +186,20 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     (``Cache-Control: public, max-age=3600``). Every version is computed once
     per NAME per request, whichever of the three fields needs it.
 
+    ``scene[].meta.narrator`` is ``True`` on every storyteller line and on no
+    other one — narration, movement traces, direct actions, display-only
+    relationship notes and event verdicts alike. It is the SPEAKER KIND, and
+    it is the only field that says so: ``kind`` is hearing range, and
+    ``meta.display_only`` / ``meta.event_verdict`` cover two of those kinds at
+    best. It is written next to ``meta.speaker``, which is a LOCALIZED display
+    label (``t("Storyteller", lang)``) and in an English world is the canonical
+    value itself — so a client that recognises the narrator by the name reads
+    a rendering and gets it wrong in at least one language. The HUD chat column
+    needs the mark because the narrator has a picture slot of its own, drawn as
+    a silhouette: it has no portrait, which is exactly why it is absent from
+    ``speaker_expr_versions`` and cannot be told from a speaker the server
+    simply failed to version.
+
     A PLAIN ``def`` on purpose: nothing here is awaited — it is perception
     reads, character profiles and the journey block, all synchronous SQLite —
     and FastAPI runs a plain handler in the threadpool. As a coroutine it held
@@ -309,17 +323,26 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     except Exception:
         party_invites = []
 
-    # Localise the storyteller speaker label for the player's UI — the stored
-    # value stays the canonical STORYTELLER_SPEAKER; only the display shows the
-    # translated name (the localized German label). SceneView renders meta.speaker.
+    # MARK the storyteller lines, then localise their label — in that order,
+    # and the mark UNCONDITIONALLY.
+    #
+    # ``meta.narrator`` is the speaker KIND; ``meta.speaker`` is a display
+    # string. Hanging the mark off the rewrite would mean no line is ever
+    # marked in a world that speaks English, because there the translation IS
+    # the canonical value and nothing needs rewriting — the same reason a
+    # client must never recognise the narrator by its name.
+    #
+    # The stored value stays the canonical STORYTELLER_SPEAKER; only the
+    # display shows the translated name. SceneView renders meta.speaker.
     try:
         from app.core.i18n import t as _t
         _st_label = _t("Storyteller", lang)
-        if _st_label != STORYTELLER_SPEAKER:
-            for _ln in scene:
-                _m = _ln.get("meta")
-                if isinstance(_m, dict) and _m.get("speaker") == STORYTELLER_SPEAKER:
-                    _m["speaker"] = _st_label
+        for _ln in scene:
+            _m = _ln.get("meta")
+            if not isinstance(_m, dict) or _m.get("speaker") != STORYTELLER_SPEAKER:
+                continue
+            _m["narrator"] = True
+            _m["speaker"] = _st_label
     except Exception as _le:
         logger.debug("storyteller label localisation failed: %s", _le)
 

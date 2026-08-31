@@ -89,7 +89,8 @@ export const CHAT_ALPHA_DEFAULT = 1;
 
 /** How many portraits the picture column shows. The upper end is a MEASURED
  *  one: over 37 logged turns a room history carried a median of 2 and at most
- *  4 distinct speakers, one of them the narrator, who is never drawn. */
+ *  4 distinct speakers, one of them the narrator — which has a place of its
+ *  own here, drawn as a silhouette. */
 export const PORTRAITS_MIN = 1;
 export const PORTRAITS_MAX = 3;
 export const PORTRAITS_DEFAULT = 1;
@@ -195,6 +196,29 @@ function speakerOf(line: PortraitLine): string {
 }
 
 /**
+ * THE NARRATOR'S PLACE in the picked list. It is not a name and never reaches
+ * a URL: `portraitSlots` turns it into the nameless, versionless slot the
+ * column draws as a silhouette. A NUL is in it so no character name can ever
+ * collide with it, and the empty string is deliberately not reused — that one
+ * already means "no slot at all".
+ */
+export const NARRATOR_SLOT = '\u0000narrator';
+
+/**
+ * Whether a transcript row is the NARRATOR's, decided by the server's mark and
+ * by nothing else (`app/routes/play.py` sets `meta.narrator` on every
+ * storyteller line, in every language).
+ *
+ * `meta.speaker` carries a LOCALIZED label on those rows — "Storyteller" in an
+ * English world, "Erzähler" in a German one — so a name test would be a test
+ * against a rendering, right in a place where the two languages disagree. That
+ * is the bug `SceneView` and `game/voiceover.ts` still carry.
+ */
+function isNarrator(line: PortraitLine): boolean {
+  return line.meta?.narrator === true;
+}
+
+/**
  * WHICH FACES THE PICTURE COLUMN SHOWS: the last `count` DISTINCT renderable
  * speakers of the history, in the order they spoke, the youngest LAST — that
  * is, right next to the chat column (E3).
@@ -202,9 +226,16 @@ function speakerOf(line: PortraitLine): string {
  * "Renderable" is not decided here and is deliberately not re-derived: the
  * server says so by listing a name in `speaker_expr_versions`, which it fills
  * for every speaker of the returned history except the narrator, the
- * display-only rows and the event verdicts. Testing for the narrator in the
- * client would mean testing a localized display string, which is exactly the
- * bug `SceneView` still carries.
+ * display-only rows and the event verdicts.
+ *
+ * THE NARRATOR IS THE ONE EXCEPTION, and it is one by the server's MARK, never
+ * by its name (see `isNarrator`). It has a place in the column like anybody
+ * else — same K, same order, same "two rows in a row are one place" — but a
+ * PICTURELESS one: `NARRATOR_SLOT` stands in for the name it does not have,
+ * and the column draws the silhouette. It is absent from
+ * `speaker_expr_versions` because it has no portrait, which is exactly why the
+ * version list alone cannot tell it from a speaker the server failed to
+ * version — that one still stays out.
  *
  * `focusId` cuts the history short: the column then describes the transcript
  * UP TO AND INCLUDING that row, which is what makes hovering a line answer
@@ -228,9 +259,10 @@ export function pickPortraitSpeakers(
   }
   const newestFirst: string[] = [];
   for (let i = end - 1; i >= 0 && newestFirst.length < k; i--) {
-    const name = speakerOf(lines[i]);
+    const narrator = isNarrator(lines[i]);
+    const name = narrator ? NARRATOR_SLOT : speakerOf(lines[i]);
     if (!name) continue;
-    if (!Object.prototype.hasOwnProperty.call(versions, name)) continue;
+    if (!narrator && !Object.prototype.hasOwnProperty.call(versions, name)) continue;
     if (newestFirst.includes(name)) continue;
     newestFirst.push(name);
   }
@@ -244,6 +276,8 @@ export interface PortraitSlot {
   name: string;
   /** cache-buster out of `speaker_expr_versions`; `''` when there is none */
   version: string;
+  /** the narrator's own box: a silhouette by nature, not for want of a file */
+  narrator: boolean;
 }
 
 /**
@@ -257,13 +291,20 @@ export interface PortraitSlot {
  * the jump the user sees the moment the narrator is all that has been said.
  * So the column is always handed over and always has something to draw — a
  * face where there is one, the silhouette where there is not.
+ *
+ * The narrator's place is emptied out here rather than in the drawing: it
+ * carries neither a name nor a version, so no <img> is ever built for it and
+ * no request has to fail before the silhouette appears. `narrator` survives
+ * only so the column can label that box for what it is.
  */
 export function portraitSlots(
   names: readonly string[],
   versions: Readonly<Record<string, string>>,
 ): PortraitSlot[] {
-  if (!names.length) return [{ name: '', version: '' }];
-  return names.map((name) => ({ name, version: versions[name] || '' }));
+  if (!names.length) return [{ name: '', version: '', narrator: false }];
+  return names.map((name) => (name === NARRATOR_SLOT
+    ? { name: '', version: '', narrator: true }
+    : { name, version: versions[name] || '', narrator: false }));
 }
 
 /** Where the transcript stands and what the pointer is on — everything the

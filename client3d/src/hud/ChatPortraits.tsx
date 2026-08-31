@@ -18,10 +18,16 @@
  * `max-height/max-width: 100%` + `object-fit: contain` — so a portrait fills
  * whatever box it is given without ever pushing the column open.
  *
- * NOTHING HERE EVER DRAWS EMPTY. A slot without a name (nobody with a face has
- * spoken yet — the narrator alone has) and a render that fails to load both
- * fall back to the SILHOUETTE below. The column therefore keeps its width
- * whatever the transcript does, and the chat beside it never jumps wider.
+ * NOTHING HERE EVER DRAWS EMPTY. A slot without a name and a render that fails
+ * to load both fall back to the SILHOUETTE below. The column therefore keeps
+ * its width whatever the transcript does, and the chat beside it never jumps
+ * wider.
+ *
+ * Two DIFFERENT boxes end up nameless, and they are told apart by the slot's
+ * `narrator` flag alone — never by a name, which on those rows is a localized
+ * label: the narrator's own place (it has no portrait and never will, so it is
+ * titled as the narrator) and the placeholder for "nothing drawable has been
+ * said yet" (titled "No portrait").
  */
 import { useState } from 'react';
 import { useI18n } from '@anima/player-ui';
@@ -58,6 +64,7 @@ export function ChatPortraits({ names, versions }: {
   // new version is a new file and deserves a fresh attempt.
   const [failed, setFailed] = useState<Record<string, true>>({});
   const blankTitle = t('No portrait');
+  const narratorTitle = t('Storyteller');
   return (
     <div className="hud-chat-portraits" aria-hidden="true">
       {portraitSlots(names, versions).map((slot, i) => {
@@ -69,7 +76,7 @@ export function ChatPortraits({ names, versions }: {
             {slot.name && !failed[key]
               ? <img src={url} alt={slot.name}
                   onError={() => setFailed((f) => ({ ...f, [key]: true }))} />
-              : <Silhouette title={blankTitle} />}
+              : <Silhouette title={slot.narrator ? narratorTitle : blankTitle} />}
           </div>
         );
       })}
