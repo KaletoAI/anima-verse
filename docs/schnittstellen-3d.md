@@ -1640,8 +1640,12 @@ Slots (`slot` = Index; `"pair"` bei einem Paar, dann die Platzmitte = Anker —
 ein Platz trägt höchstens EIN Paar), `facing` das Marker-Facing in
 Kompassgrad (fehlt am Marker → `null`). **Der Server hat gestellt; ein Client
 zeichnet die Figur auf dem Slot und wählt nicht mehr selbst.** `null`, wenn die
-Figur keinen Platz hält (Pose ohne Marker im Raum, verschwundener Marker), unter
-Nebel ausgedünnt. Das SSE-Ereignis `activity_changed` trägt dasselbe Profilfeld
+Figur keinen Platz hält (Pose ohne Marker im Raum, verschwundener Marker).
+**Nie ausgedünnt** — die Ausdünnung (`_thin`, § A11) schützt Reise-ROUTEN;
+ein Platz (und eine Paar-Interaktion, § A8a) liegt in einem Raum, den die
+Fog-Tore bereits durchgelassen haben (Befund Steinbank 2026-08-31: das Gate
+nahm jedem NPC in der Spielersicht den Platz, der Client fiel auf seine
+Sitz-Heuristik zurück). Das SSE-Ereignis `activity_changed` trägt dasselbe Profilfeld
 `place` (`{id, slot, room_id}` oder `null`) neben `activity`/`animation`; der
 Avatar setzt über `POST /play/self/activity` (`{"activity": ""}` = Pose und
 Platz löschen, `{"place_id", "pose"}` = angeklickter Platz — 400 Pose passt

@@ -642,13 +642,19 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # Running pair interaction (§ A8a): kind/role/partner/anchor and
             # the GAME-clock start, so both figures play their halves in
             # lockstep at one anchor; null when the character has none.
-            "interaction": (None if _thin else
-                            _interaction_payload(name, _prof, _now_game, _factor)),
+            # NOT behind _thin: that flag redacts a journey's ROUTE (see
+            # above); a seat or a pair anchor sits inside a room the three
+            # fog gates above already let through, so hiding it only broke
+            # the rendering (the 2026-08-31 stone-bench finding: every NPC
+            # lost its place in the fogged view and fell back to the
+            # client's seat heuristic).
+            "interaction": _interaction_payload(name, _prof, _now_game,
+                                                _factor),
             # The place the server seated the character on (plan-posen-
             # plaetze.md § 4): the slot's metre point, so a client draws the
             # figure THERE and never picks a seat itself; null when it holds
             # none (or the marker vanished — place_of validates).
-            "place": (None if _thin else _place_payload(name, _prof)),
+            "place": _place_payload(name, _prof),
             "avatar_url": (f"/characters/{name}/images/{prof}" if prof else ""),
         })
 

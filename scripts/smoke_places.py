@@ -50,10 +50,12 @@ Hand-derived expectations:
       set_pose_intent("Eve", "standing") releases (group stand has no
       marker here): place None, the SSE carries place None. Seated again
       and cleared with clear_pose_intent: place None. The worldmap row
-      (show_all — a fogged row is thinned to null) of the seated Eve
-      carries place {id s1, slot 0, x −3, z −3, facing 0.0 (rotation 0
-      in an unrotated room), room_id lounge}; Ann's row (nothing held)
-      carries null, and so does Eve's row in a fogged payload.
+      of the seated Eve carries place {id s1, slot 0, x −3, z −3,
+      facing 0.0 (rotation 0 in an unrotated room), room_id lounge};
+      Ann's row (nothing held) carries null. The FOGGED payload carries
+      the same place: _thin redacts a journey's ROUTE, and a seat inside
+      an already-visible room is no route (2026-08-31 stone-bench
+      finding — the gate broke every NPC seat in the player view).
   [4b] Hardening. A profile place {id s1, room_id "kitchen"} neither
       counts in the lounge's occupancy nor resolves — marker ids are per
       room, s1 in the kitchen is another chair. {id s2, slot 5} on the
@@ -454,8 +456,10 @@ check("payload place", row.get("place") == {"id": "s1", "slot": 0, "x": -3.0, "z
 check("an unseated row carries place null",
       next(c for c in wm["characters"] if c["name"] == "Ann").get("place") is None)
 fog = build_worldmap_payload("Ann", show_all=False)
-check("a fogged (thinned) row carries place null",
-      next((c.get("place") for c in fog["characters"] if c["name"] == "Eve"), None) is None)
+_fog_place = next((c.get("place") for c in fog["characters"] if c["name"] == "Eve"), None)
+check("a fogged row carries the same place (a seat is not a route)",
+      isinstance(_fog_place, dict) and _fog_place.get("id") == "s1"
+      and _fog_place.get("slot") == 0, str(_fog_place))
 set_pose_intent("Eve", "standing")
 check("group without marker releases", get_character_profile("Eve").get("place") is None)
 check("… and the SSE says place None", (last_event("Eve") or {}).get("place", "missing") is None
