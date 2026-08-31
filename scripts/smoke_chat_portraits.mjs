@@ -47,6 +47,14 @@
  *     K = 2  → [Bea, Ayla]
  *     K = 3  → [Bea, Ayla]           only two distinct faces up to there
  *
+ * ── THE SLOTS THE COLUMN DRAWS ──────────────────────────────────────────
+ * One slot per picked name, in that order, each carrying the version the
+ * server sent for it. The one rule on top: an EMPTY selection is still one
+ * slot — a nameless one, drawn as a silhouette. That is what keeps the
+ * column's width constant, and the transcript's with it: a history in which
+ * only the narrator has spoken used to hand over no column at all, and the
+ * chat jumped wider the moment it did.
+ *
  * ── THE SIZE BOUNDS ─────────────────────────────────────────────────────
  * 520 x 260 minimum, 2400 x 2000 maximum (`chatPanel.ts` explains both ends).
  * Clamping is per axis; a stored value OUTSIDE the range is dropped, not
@@ -109,7 +117,8 @@ async function main() {
   }
 
   const {
-    pickPortraitSpeakers, clampChatSize, readChatSize, writeChatSize,
+    pickPortraitSpeakers, portraitSlots,
+    clampChatSize, readChatSize, writeChatSize,
     readChatAlpha, readPortraitCount, chatFocusId, rowAtCenter,
     CHAT_MIN_W, CHAT_MAX_W, CHAT_MIN_H, CHAT_MAX_H, CHAT_COL_W,
     CHAT_ALPHA_MIN, CHAT_ALPHA_MAX, PORTRAITS_MIN, PORTRAITS_MAX,
@@ -168,6 +177,22 @@ async function main() {
   check('a row without any speaker is skipped',
         pickPortraitSpeakers([{ id: 1 }, { id: 2, meta: { speaker: 'Bea' } }],
                              VERSIONS, 2), ['Bea'])
+
+  console.log('\n[1a] the column ALWAYS has a slot — a face, or the silhouette')
+  check('the drawn slots carry the version the server sent',
+        portraitSlots(['Cara', 'Bea'], VERSIONS),
+        [{ name: 'Cara', version: 'c1' }, { name: 'Bea', version: 'b1' }])
+  check('NOBODY TO SHOW IS STILL ONE SLOT — the silhouette, so the column '
+    + 'keeps its width and the transcript never widens',
+        portraitSlots([], VERSIONS), [{ name: '', version: '' }])
+  check('a narrator-only history therefore draws the silhouette',
+        portraitSlots(pickPortraitSpeakers(HISTORY, VERSIONS, 3, 10), VERSIONS),
+        [{ name: '', version: '' }])
+  check('a name the version map does not carry keeps its slot, versionless',
+        portraitSlots(['Ghost'], VERSIONS), [{ name: 'Ghost', version: '' }])
+  check('the slot count follows the names, not K: one speaker, one slot',
+        portraitSlots(pickPortraitSpeakers(HISTORY, VERSIONS, 3, 12), VERSIONS)
+          .length, 2)
 
   console.log('\n[2] the focus cuts the history short (hovering a line answers'
     + ' with the faces up to it)')

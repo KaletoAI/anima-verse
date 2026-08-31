@@ -237,6 +237,35 @@ export function pickPortraitSpeakers(
   return newestFirst.reverse();
 }
 
+/** One box of the picture column. A slot without a `name` has no face to
+ *  show and is drawn as a silhouette. */
+export interface PortraitSlot {
+  /** the speaker whose portrait fills the slot; `''` = nobody */
+  name: string;
+  /** cache-buster out of `speaker_expr_versions`; `''` when there is none */
+  version: string;
+}
+
+/**
+ * WHAT THE COLUMN DRAWS: one slot per picked name, in that order, plus the one
+ * rule that keeps the panel still — AN EMPTY SELECTION IS STILL ONE SLOT.
+ *
+ * The column takes all the width the chat column leaves (`hud.css`,
+ * `.hud-chat-portraits` is `flex: 1 1 0`), so how many slots it holds never
+ * moves the transcript. Whether it EXISTS does: without a column the flex row
+ * has a single child and the transcript widens to the whole window, which is
+ * the jump the user sees the moment the narrator is all that has been said.
+ * So the column is always handed over and always has something to draw — a
+ * face where there is one, the silhouette where there is not.
+ */
+export function portraitSlots(
+  names: readonly string[],
+  versions: Readonly<Record<string, string>>,
+): PortraitSlot[] {
+  if (!names.length) return [{ name: '', version: '' }];
+  return names.map((name) => ({ name, version: versions[name] || '' }));
+}
+
 /** Where the transcript stands and what the pointer is on — everything the
  *  focus rule below needs, and nothing else. */
 export interface ChatFocusInput {

@@ -1021,16 +1021,18 @@ export function Hud({ avatar, username, role }: {
             {/* Two columns (2b, decision E2), and only around the TRANSCRIPT:
                 it keeps its width and every extra pixel of the window goes
                 LEFT, to the pictures, while the composer below stays as wide
-                as the window. With nobody to show, no column is handed over
-                at all — the panel is then exactly what it was before this
-                feature, down to the markup. */}
+                as the window. The column is handed over ALWAYS, faces or not:
+                it used to be left out when nobody had a portrait, and the
+                transcript then widened to the whole window — the panel jumped
+                the moment the narrator was all that had been said. What the
+                column draws with nobody to show is `portraitSlots`' business,
+                not this line's. */}
             <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
               hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
               photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.prompt} {...ctl} />}
               highlightedId={chatFocus} onRowHover={setHoveredRowId}
-              transcriptAside={portraitNames.length
-                ? <ChatPortraits names={portraitNames} versions={speakerVersions} />
-                : undefined} />
+              transcriptAside={
+                <ChatPortraits names={portraitNames} versions={speakerVersions} />} />
           </ErrorBoundary>
         </section>
       )}

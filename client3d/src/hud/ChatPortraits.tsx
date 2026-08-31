@@ -2,8 +2,8 @@
  * The picture column of the HUD chat window (plan-hud-chat-portraits.md, 2b).
  *
  * Purely presentational: WHICH faces it shows and in what order is decided by
- * `pickPortraitSpeakers` in `chatPanel.ts` and handed down as a plain list of
- * names — this file only draws them.
+ * `pickPortraitSpeakers` in `chatPanel.ts`, and how many boxes that becomes by
+ * `portraitSlots` right next to it — this file only draws them.
  *
  * The images are the same expression renders /play's Others panel uses
  * (`/characters/<name>/outfit-expression`), with the cache-buster taken from
@@ -16,10 +16,36 @@
  * carry no fixed aspect ratio at all (223x512 up to 822x1216, cut-out RGBA
  * PNGs). Container `flex/min-*: 0` + `overflow: hidden` + centred grid, image
  * `max-height/max-width: 100%` + `object-fit: contain` — so a portrait fills
- * whatever box it is given without ever pushing the column open. A missing
- * render (404, a character without one) hides the image instead of leaving the
- * browser's broken-image glyph standing in the column.
+ * whatever box it is given without ever pushing the column open.
+ *
+ * NOTHING HERE EVER DRAWS EMPTY. A slot without a name (nobody with a face has
+ * spoken yet — the narrator alone has) and a render that fails to load both
+ * fall back to the SILHOUETTE below. The column therefore keeps its width
+ * whatever the transcript does, and the chat beside it never jumps wider.
  */
+import { useState } from 'react';
+import { useI18n } from '@anima/player-ui';
+
+import { portraitSlots } from './chatPanel';
+
+/**
+ * The stand-in for a face: head and shoulders, no features, filled with the
+ * text colour at low opacity so it reads as "no picture here" rather than as a
+ * broken one — and so it works in a light theme as well as a dark one. Inline
+ * on purpose: a column that exists to stop layout jumping must not wait for a
+ * network round trip to have something to draw.
+ */
+function Silhouette({ title }: { title: string }) {
+  return (
+    <svg className="hud-chat-portrait-blank" viewBox="0 0 64 96"
+      role="img" aria-label={title}
+      preserveAspectRatio="xMidYMax meet" focusable="false">
+      <title>{title}</title>
+      <circle cx="32" cy="30" r="15" fill="currentColor" />
+      <path d="M4 96c0-17 12.5-28 28-28s28 11 28 28z" fill="currentColor" />
+    </svg>
+  );
+}
 
 export function ChatPortraits({ names, versions }: {
   /** in the order they spoke, YOUNGEST LAST — i.e. next to the chat column */
@@ -27,19 +53,23 @@ export function ChatPortraits({ names, versions }: {
   /** name → expression version, straight out of `speaker_expr_versions` */
   versions: Record<string, string>;
 }) {
-  if (!names.length) return null;
+  const { t } = useI18n();
+  // The renders whose <img> reported an error, keyed by name AND version: a
+  // new version is a new file and deserves a fresh attempt.
+  const [failed, setFailed] = useState<Record<string, true>>({});
+  const blankTitle = t('No portrait');
   return (
     <div className="hud-chat-portraits" aria-hidden="true">
-      {names.map((name) => {
-        const v = versions[name] || '';
-        const url = `/characters/${encodeURIComponent(name)}/outfit-expression`
-          + `?fallback=default${v ? `&v=${encodeURIComponent(v)}` : ''}`;
+      {portraitSlots(names, versions).map((slot, i) => {
+        const key = `${slot.name}|${slot.version}`;
+        const url = `/characters/${encodeURIComponent(slot.name)}/outfit-expression`
+          + `?fallback=default${slot.version ? `&v=${encodeURIComponent(slot.version)}` : ''}`;
         return (
-          <div key={name} className="hud-chat-portrait">
-            <img src={url} alt={name}
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.visibility = 'hidden';
-              }} />
+          <div key={slot.name || `blank-${i}`} className="hud-chat-portrait">
+            {slot.name && !failed[key]
+              ? <img src={url} alt={slot.name}
+                  onError={() => setFailed((f) => ({ ...f, [key]: true }))} />
+              : <Silhouette title={blankTitle} />}
           </div>
         );
       })}

@@ -300,9 +300,9 @@
    `max-width: 100%` is the escape hatch for a narrow window: the panel's own
    `max-width` can fall to 420px, below the column's 520. The picture column is
    then squeezed to nothing, which is the panel exactly as it was before this
-   feature. With nobody to show, `Hud.tsx` hands over no column at all and the
-   row element is not rendered either — the transcript is then the full-width
-   child it always was, and none of these rules apply.
+   feature. Whether it holds a face changes nothing: the column is always
+   handed over and always drawn (a silhouette stands in for a missing render),
+   because a column that comes and goes takes the transcript's width with it.
 
    `position: relative` on the panel body, not on the row: the body is the
    chat's direct child now and has to stand OVER the backdrop layer below,
@@ -339,6 +339,18 @@
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  display: block;
+}
+/* The stand-in for a missing face. It inherits the panel's text colour through
+   `currentColor` (so it holds up in a light theme too) and is dimmed far
+   enough to read as an empty place rather than as an error — it stands next to
+   real portraits. Bottom-aligned like the figures it replaces. */
+#hud .hud-chat-portrait-blank {
+  width: 100%;
+  height: 100%;
+  align-self: end;
+  color: currentColor;
+  opacity: 0.16;
   display: block;
 }
 /* The transcript's scrollbar sits at the window's right edge — precisely where
