@@ -1,36 +1,39 @@
 {
- "kind": "idle",
+ "kind": "crawling",
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 211,
- "duration_s": 7.033,
+ "source_fps": 120.0,
+ "frames": 91,
+ "duration_s": 3.033,
+ "loop": true,
+ "speed": 1.0,
  "geometry": {
-  "floor_shift_cm": 0.85,
+  "floor_shift_cm": 8.29,
   "in_place": true,
   "loop": {
-   "min_s": 4.0,
+   "min_s": 3.0,
    "cut_frames": [
-    4,
-    215
+    0,
+    91
    ],
    "cut_s": [
-    0.133,
-    7.167
+    0.0,
+    3.033
    ],
-   "seam_distance": 0.541,
+   "seam_distance": 4.077,
    "blend_frames": 8
   },
   "hips_scale": [
-   1.1954
+   1.1914
   ],
-  "rig_floor_shift_cm": 2.15,
-  "rig_floor_min_cm": -0.86
+  "rig_floor_shift_cm": -4.79,
+  "rig_floor_min_cm": -6.37
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "82_08"
+   "111_03"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }

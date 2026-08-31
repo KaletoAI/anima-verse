@@ -1,23 +1,26 @@
 {
- "kind": "drink",
+ "kind": "picking-up",
  "pair": false,
  "roles": [],
  "fps": 30,
- "frames": 276,
- "duration_s": 9.2,
+ "source_fps": 120.0,
+ "frames": 100,
+ "duration_s": 3.333,
+ "loop": false,
+ "speed": 1.0,
  "geometry": {
-  "floor_shift_cm": -4.98,
+  "floor_shift_cm": -2.02,
   "in_place": true,
   "hips_scale": [
-   1.0596
+   1.0782
   ],
-  "rig_floor_shift_cm": 3.87,
-  "rig_floor_min_cm": -0.19
+  "rig_floor_shift_cm": 3.85,
+  "rig_floor_min_cm": -6.22
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "13_09"
+   "115_09"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }
