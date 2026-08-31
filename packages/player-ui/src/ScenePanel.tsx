@@ -164,6 +164,18 @@ export interface ScenePanelProps {
    */
   highlightedId?: number | null
   onRowHover?: (id: number | null) => void
+  /**
+   * Something to stand BESIDE THE TRANSCRIPT, and beside nothing else: the
+   * blocks under it (follow suggestions, party invites) and the composer keep
+   * the panel's full width, because address chips, input and buttons are a row
+   * that must not be squeezed into a column.
+   *
+   * OPTIONAL and inert when left out — no wrapper element is rendered at all
+   * then, so `/play` produces the markup it always has. Sizing belongs to the
+   * host: the row is a plain flex line (`.player-scene-row`), the two children
+   * divide it. The 3D HUD puts its portrait column here.
+   */
+  transcriptAside?: ReactNode
 }
 
 /** Chat image attachment (#5 upload / #6 gallery). Exactly one source is set:
@@ -216,7 +228,7 @@ function resetDraft(avatar: string) {
 }
 
 export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, onEnterRoom,
-  photoDialog, highlightedId, onRowHover }: ScenePanelProps) {
+  photoDialog, highlightedId, onRowHover, transcriptAside }: ScenePanelProps) {
   const { t } = useI18n()
   // Different avatar than the cached draft (incl. the '' of a fresh PlayerApp
   // mount) → drop the cache BEFORE the initializers below read it.
@@ -460,15 +472,29 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presentKey])
 
+  // The transcript, and only the transcript, is what an aside stands next to.
+  // Without one it is rendered exactly where it always was — no row element in
+  // between — so a host that asks for nothing gets the markup of before.
+  const transcript = (
+    <div className="player-scene-scroll" ref={sceneScrollRef} onScroll={onSceneScroll}>
+      <SceneView lines={lines} emptyHint={t('Nothing here yet.')} thinking={thinkingHere}
+        onOpenImage={(u) => lightbox.open({ src: u })}
+        highlightedId={highlightedId} onRowHover={onRowHover} />
+    </div>
+  )
+
   return (
     <>
       <div className="player-scene-body">
         <ScenesRecap />
-        <div className="player-scene-scroll" ref={sceneScrollRef} onScroll={onSceneScroll}>
-          <SceneView lines={lines} emptyHint={t('Nothing here yet.')} thinking={thinkingHere}
-            onOpenImage={(u) => lightbox.open({ src: u })}
-            highlightedId={highlightedId} onRowHover={onRowHover} />
-        </div>
+        {transcriptAside
+          ? (
+            <div className="player-scene-row">
+              {transcriptAside}
+              {transcript}
+            </div>
+          )
+          : transcript}
 
         {(data?.follow_suggestions?.length ?? 0) > 0 && (
           <div style={{

@@ -55,7 +55,8 @@ import {
 import { isTypingTarget } from '../scene/engine';
 import {
   CHAT_ALPHA_DEFAULT, CHAT_ALPHA_KEY, CHAT_MIN_H, CHAT_MIN_W,
-  CHAT_PORTRAITS_KEY, CHAT_SIZE_KEY, PORTRAITS_DEFAULT, PORTRAITS_MAX,
+  CHAT_PORTRAITS_KEY, CHAT_SIZE_KEY, CHAT_VIEWPORT_MARGIN_W,
+  PORTRAITS_DEFAULT, PORTRAITS_MAX,
   PORTRAITS_MIN, chatFocusId, clampChatSize, pickPortraitSpeakers,
   readChatAlpha, readChatSize, readPortraitCount, rowAtCenter, writeChatSize,
   type ChatSize, type RowExtent,
@@ -438,11 +439,12 @@ export function Hud({ avatar, username, role }: {
    * +Δx, neither of them reversed.
    *
    * The dragged size is an INLINE style and therefore beats the stylesheet's
-   * `width`/`height`; the `max-width`/`max-height` there still cap it against
-   * a narrow window, exactly as they cap the dock. The lower bounds are new
-   * and live in `clampChatSize` — as JS and not as CSS `min-*`, because a CSS
-   * floor would override those viewport caps and push the panel back over the
-   * character plaque on a narrow window, which is what they exist to prevent.
+   * `width`/`height`. It also lifts the stylesheet's DEFAULT width cap: that
+   * one stops short of the bottom-centre plaque, which is right for a panel
+   * nobody has touched and wrong for one the user is pulling wider on purpose.
+   * So a dragged size writes its own `max-width` of "the window", and the
+   * clamp keeps the same ceiling in JS (`clampChatSize`, window handed in).
+   * `max-height` is untouched — the plaque question is a width question.
    */
   const [chatSize, setChatSize] = useState<ChatSize | null>(
     () => readChatSize(localStorage.getItem(CHAT_SIZE_KEY)));
@@ -472,9 +474,12 @@ export function Hud({ avatar, username, role }: {
   const onChatGripMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = chatDragRef.current;
     if (!drag) return;
+    // The window is MEASURED here and handed over; the rule itself reads
+    // nothing, which is what keeps it checkable outside a browser.
     const next = clampChatSize(
       drag.edge === 'top' ? drag.w : drag.w + (e.clientX - drag.x),
-      drag.edge === 'right' ? drag.h : drag.h - (e.clientY - drag.y));
+      drag.edge === 'right' ? drag.h : drag.h - (e.clientY - drag.y),
+      { w: window.innerWidth, h: window.innerHeight });
     drag.moved = true;
     chatSizeRef.current = next;
     setChatSize(next);
@@ -958,7 +963,18 @@ export function Hud({ avatar, username, role }: {
         <section ref={chatRef}
           className={`hud-panel hud-chat${chatFlash ? ' hud-flash' : ''}`}
           style={{
-            ...(chatSize ? { width: chatSize.w, height: chatSize.h } : null),
+            // A DRAGGED size also lifts the stylesheet's default width cap
+            // (which stops short of the bottom-centre plaque) down to the
+            // window itself — whoever pulls the edge has decided, and sees the
+            // overlap while doing it. Untouched, nothing is written here and
+            // the stylesheet's cap stands.
+            ...(chatSize
+              ? {
+                width: chatSize.w,
+                height: chatSize.h,
+                maxWidth: `calc(100vw - ${CHAT_VIEWPORT_MARGIN_W}px)`,
+              }
+              : null),
             '--hud-chat-alpha': String(chatAlpha),
           } as React.CSSProperties}>
           {/* The window's own surface (2d). The panel's opaque vellum is
@@ -993,30 +1009,29 @@ export function Hud({ avatar, username, role }: {
             onPointerUp={onChatGripUp} onPointerCancel={onChatGripUp}
             onDoubleClick={onChatGripReset} />
           {panelHead('chat', 'chat', avatarName || '—')}
-          {/* Two columns (2b, decision E2): the transcript keeps its width and
-              every extra pixel of the window goes LEFT, to the pictures. With
-              nobody to show, the chat takes the whole window back — an empty
-              column would be a hole with nothing to say. */}
-          <div className={'hud-chat-split'
-            + (portraitNames.length ? '' : ' hud-chat-split-solo')}>
-            <ChatPortraits names={portraitNames} versions={speakerVersions} />
-            <div className="hud-chat-main">
-              <ErrorBoundary inline label="Chat">
-                {/* photoDialog `key`: a second prepared payload is a NEW dialog,
-                    not the old one with new props — without the key the edited
-                    prompt and the chip selection of the previous 📷 press would
-                    survive into it. */}
-                {/* `highlightedId` is the SAME answer the portrait column
-                    follows: the row the faces belong to is the row the
-                    transcript marks. Resting (`null`) marks nothing — the
-                    column then simply shows the last speakers. */}
-                <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
-                  hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
-                  photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.prompt} {...ctl} />}
-                  highlightedId={chatFocus} onRowHover={setHoveredRowId} />
-              </ErrorBoundary>
-            </div>
-          </div>
+          <ErrorBoundary inline label="Chat">
+            {/* photoDialog `key`: a second prepared payload is a NEW dialog,
+                not the old one with new props — without the key the edited
+                prompt and the chip selection of the previous 📷 press would
+                survive into it. */}
+            {/* `highlightedId` is the SAME answer the portrait column
+                follows: the row the faces belong to is the row the
+                transcript marks. Resting (`null`) marks nothing — the
+                column then simply shows the last speakers. */}
+            {/* Two columns (2b, decision E2), and only around the TRANSCRIPT:
+                it keeps its width and every extra pixel of the window goes
+                LEFT, to the pictures, while the composer below stays as wide
+                as the window. With nobody to show, no column is handed over
+                at all — the panel is then exactly what it was before this
+                feature, down to the markup. */}
+            <ScenePanel data={data} refreshScene={refreshScene} avatar={avatarName}
+              hasCapability={hasCapability} moving={moving} onEnterRoom={handleEnterRoom}
+              photoDialog={(ctl) => <PlayerPhotoDialog key={ctl.prompt} {...ctl} />}
+              highlightedId={chatFocus} onRowHover={setHoveredRowId}
+              transcriptAside={portraitNames.length
+                ? <ChatPortraits names={portraitNames} versions={speakerVersions} />
+                : undefined} />
+          </ErrorBoundary>
         </section>
       )}
 

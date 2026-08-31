@@ -26,6 +26,17 @@
   overflow-y: auto;
   padding: 10px 12px;
 }
+/* Only present when a host hands `transcriptAside` in (the 3D HUD's portrait
+   column): the aside and the transcript share one line, everything under it
+   keeps the panel's full width. Nothing but the line is decided here — how the
+   two divide it is the host's business, and /play never renders this at all. */
+.player-scene-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
 .player-composer {
   flex: 0 0 auto;
   border-top: 1px solid var(--border, #30363d);

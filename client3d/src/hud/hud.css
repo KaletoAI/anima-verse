@@ -150,12 +150,20 @@
    and reaches at most 220px to the left of it (.hud-plaque, max-width 440px,
    centred). A panel of the full 840px would cross that line on any window
    narrower than ~2170px and the plaque would sit on the composer's send
-   button. So the width also stops 12px short of the plaque's left edge —
-   `50vw - 232px` — with a floor of the OLD 420px, so no window is ever made
+   button. So the DEFAULT width also stops 12px short of the plaque's left edge
+   — `50vw - 232px` — with a floor of the OLD 420px, so no window is ever made
    narrower than it already was:
      >= 2168px  the full 840px
      1304..2168 as wide as the centre stack leaves room for (728px at 1920)
      <  1304px  the old 420px, capped by the viewport as before
+
+   That second term binds the DEFAULT only. A width the user DRAGGED is capped
+   by the window alone (`100vw - 90px`): Hud.tsx writes that as an inline
+   `max-width` whenever a stored size exists, and `clampChatSize` keeps the
+   same ceiling in JS. Pulling the edge past the plaque is a decision, taken
+   with the overlap in plain sight — the cap is there for the panel nobody has
+   touched, not to overrule the one somebody is sizing.
+
    The height needs no such rule: the stack is one row tall at the bottom edge
    and the panel grows upwards. */
 #hud .hud-chat {
@@ -278,38 +286,35 @@
 }
 
 /* ---- Two columns: pictures left, transcript right (2b, decision E2) ----
+   The split holds the TRANSCRIPT ONLY (`.player-scene-row` from the shared
+   package). Address chips, input and buttons run the full width of the window
+   under it — squeezing a row of controls into a 520px column is how a wide
+   window ended up with a narrow composer.
+
    The transcript keeps ITS width and every extra pixel of the window goes to
    the pictures — widening the panel is what asks for more faces, not for
-   longer lines. So the chat column is `flex: 0 0 auto` at a fixed width
+   longer lines. So the transcript is `flex: 0 0 auto` at a fixed width
    (`CHAT_COL_W` in chatPanel.ts — the two numbers must stay equal) and the
    picture column takes the rest.
 
    `max-width: 100%` is the escape hatch for a narrow window: the panel's own
-   `max-width` can fall to 420px, below the column's 520, and without it the
-   composer would simply be clipped away. The picture column is then squeezed
-   to nothing, which is the panel exactly as it was before this feature. */
-#hud .hud-chat-split {
-  position: relative; /* over the backdrop layer below */
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  align-items: stretch;
+   `max-width` can fall to 420px, below the column's 520. The picture column is
+   then squeezed to nothing, which is the panel exactly as it was before this
+   feature. With nobody to show, `Hud.tsx` hands over no column at all and the
+   row element is not rendered either — the transcript is then the full-width
+   child it always was, and none of these rules apply.
+
+   `position: relative` on the panel body, not on the row: the body is the
+   chat's direct child now and has to stand OVER the backdrop layer below,
+   which is positioned and would otherwise paint on top of it. */
+#hud .hud-chat .player-scene-body {
+  position: relative;
 }
-#hud .hud-chat-main {
+#hud .hud-chat .player-scene-row > .player-scene-scroll {
   flex: 0 0 auto;
   width: 520px;
   max-width: 100%;
   min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-/* Nobody to show: the transcript takes the whole window back. */
-#hud .hud-chat-split-solo .hud-chat-main {
-  flex: 1 1 auto;
-  width: auto;
 }
 #hud .hud-chat-portraits {
   flex: 1 1 0;

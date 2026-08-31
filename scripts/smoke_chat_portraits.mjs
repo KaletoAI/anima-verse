@@ -52,6 +52,27 @@
  * Clamping is per axis; a stored value OUTSIDE the range is dropped, not
  * clamped — "nothing stored" is the only honest reading of noise.
  *
+ * The VIEWPORT is the second ceiling, and it is handed in rather than read, so
+ * the rule stays a pure function. It is the same margin the stylesheet keeps:
+ * 90px of window width and 70px of window height. Derived by hand for a
+ * 1920 x 1080 window:
+ *
+ *     width  ceiling  min(2400, 1920 - 90)  = 1830
+ *     height ceiling  min(2000, 1080 - 70)  = 1010
+ *
+ * That ceiling is DELIBERATELY wider than the stylesheet's DEFAULT cap. Until
+ * a handle is touched the panel also stops short of the bottom-centre plaque
+ * (`max(420px, 50vw - 232px)`, i.e. 728px on a 1920 window); a size the user
+ * dragged is only capped by the window, because whoever pulls the edge has
+ * decided and sees the overlap. So a dragged 900 survives at 1920 — 900 is
+ * past 728 and well inside 1830 — and `Hud.tsx` lifts the stylesheet cap for
+ * exactly the case where a stored size exists.
+ *
+ * On a window too small for the FLOOR the window still wins (500px wide →
+ * 410px of ceiling, under the 520 floor): the stylesheet has always been able
+ * to squeeze the panel below it, and a floor that pushed the panel off-screen
+ * would be the worse answer.
+ *
  * ── THE FOCUS RULE (E4) ─────────────────────────────────────────────────
  * pointer → that row; else stuck to the end → null (the resting state, i.e.
  * the whole history); else the row in the middle. So the mouse beats "middle",
@@ -164,19 +185,39 @@ async function main() {
         pickPortraitSpeakers(HISTORY, VERSIONS, 2, 999), ['Cara', 'Bea'])
 
   console.log('\n[3] size clamping: the drag stops at the bounds, per axis')
-  check('dragged below the floor → the floor', clampChatSize(300, 100),
+  // A window big enough that only the fixed bounds can speak: 2400 + 90 wide,
+  // 2000 + 70 tall, so both viewport ceilings land exactly on the maxima.
+  const HUGE = { w: 2490, h: 2070 }
+  check('dragged below the floor → the floor', clampChatSize(300, 100, HUGE),
         { w: 520, h: 260 })
-  check('dragged past the ceiling → the ceiling', clampChatSize(9999, 9999),
+  check('dragged past the ceiling → the ceiling', clampChatSize(9999, 9999, HUGE),
         { w: 2400, h: 2000 })
   check('inside the range it is kept, rounded to whole pixels',
-        clampChatSize(700.4, 400.6), { w: 700, h: 401 })
+        clampChatSize(700.4, 400.6, HUGE), { w: 700, h: 401 })
   check('the axes are independent: narrow AND far too tall',
-        clampChatSize(10, 5000), { w: 520, h: 2000 })
+        clampChatSize(10, 5000, HUGE), { w: 520, h: 2000 })
   check('exactly on the bounds is inside them',
-        [clampChatSize(520, 260), clampChatSize(2400, 2000)],
+        [clampChatSize(520, 260, HUGE), clampChatSize(2400, 2000, HUGE)],
         [{ w: 520, h: 260 }, { w: 2400, h: 2000 }])
   check('a drag that produced no number falls to the floor',
-        clampChatSize(NaN, NaN), { w: 520, h: 260 })
+        clampChatSize(NaN, NaN, HUGE), { w: 520, h: 260 })
+
+  console.log('\n[3a] …and the window is the other ceiling, handed in, not read')
+  const FHD = { w: 1920, h: 1080 }
+  check('a 1920 x 1080 window caps at 1830 x 1010, not at 2400 x 2000',
+        clampChatSize(9999, 9999, FHD), { w: 1830, h: 1010 })
+  check('A DRAGGED WIDTH MAY PASS THE PLAQUE CAP: 900 > 728 and stays 900',
+        clampChatSize(900, 600, FHD), { w: 900, h: 600 })
+  check('one pixel short of the window ceiling is kept',
+        clampChatSize(1829, 1009, FHD), { w: 1829, h: 1009 })
+  check('one pixel past it is the ceiling',
+        clampChatSize(1831, 1011, FHD), { w: 1830, h: 1010 })
+  check('the floor still holds on a roomy window',
+        clampChatSize(300, 100, FHD), { w: 520, h: 260 })
+  check('a window too small for the floor wins anyway (500 - 90, 300 - 70)',
+        clampChatSize(800, 600, { w: 500, h: 300 }), { w: 410, h: 230 })
+  check('a window measure that is no number falls back to the fixed maxima',
+        clampChatSize(9999, 9999, { w: NaN, h: NaN }), { w: 2400, h: 2000 })
 
   console.log('\n[4] a stored size that is nonsense counts as NOTHING stored')
   check('nothing in the store', readChatSize(null), null)

@@ -27,10 +27,10 @@ export const CHAT_PORTRAITS_KEY = 'av3d.chat.portraits';
 /**
  * THE SIZE BOUNDS, and what each end is for.
  *
- * The stylesheet has always had `max-width`/`max-height` against the VIEWPORT
- * (`hud.css`, `.hud-chat`) and those stay the real ceiling — a dragged size is
- * an inline style and the cap still applies to it. What was missing is a
- * FLOOR, and the two numbers here are it:
+ * The real ceiling is the VIEWPORT, and since the drag lifts the stylesheet's
+ * default width cap (see `CHAT_VIEWPORT_MARGIN_W`) the clamp has to keep that
+ * ceiling itself — it is handed in, never read here, so this stays a pure
+ * function. The two numbers below are the FLOOR and a garbage filter:
  *
  * - `CHAT_MIN_W` is the chat column's own width (`CHAT_COL_W` below): at the
  *   minimum the picture column is squeezed to nothing and the transcript is
@@ -42,15 +42,37 @@ export const CHAT_PORTRAITS_KEY = 'av3d.chat.portraits';
  *   Under that the window is a text field with a title, and the transcript —
  *   the reason the panel exists — says nothing.
  *
- * The MAXIMA are garbage filters, not layout: the stylesheet's cap is at most
- * `50vw - 232px` wide and `100vh - 70px` tall, so 2400 x 2000 needs a window
- * of 5264 x 2070 px to be reachable at all. Anything beyond them in the store
- * was hand-edited or belongs to another client, and is dropped.
+ * The MAXIMA are garbage filters, not layout: 2400 x 2000 needs a window of
+ * 2490 x 2070 px to be reachable at all. Anything beyond them in the store was
+ * hand-edited or belongs to another client, and is dropped.
  */
 export const CHAT_MIN_W = 520;
 export const CHAT_MAX_W = 2400;
 export const CHAT_MIN_H = 260;
 export const CHAT_MAX_H = 2000;
+
+/**
+ * How much of the window the panel leaves standing — the same margins the
+ * stylesheet keeps (`hud.css`, `.hud-chat`): the rail and the panel's own
+ * offset on the width, the header band on the height.
+ *
+ * The width is the one that matters here. Its DEFAULT cap in the stylesheet is
+ * tighter still (`max(420px, 50vw - 232px)`), because the bottom-centre stack
+ * — talk prompt, character plaque, storey choice — reaches 220px to the left
+ * of the viewport's middle and an untouched panel must not sit on it. A size
+ * the user DRAGGED is not capped that way: pulling the edge is a decision, the
+ * overlap is visible while it happens, and `Hud.tsx` therefore writes an inline
+ * `max-width` of this margin alone whenever a dragged size exists.
+ */
+export const CHAT_VIEWPORT_MARGIN_W = 90;
+export const CHAT_VIEWPORT_MARGIN_H = 70;
+
+/** The window the panel has to fit into, in CSS pixels. Handed to the clamp
+ *  instead of read inside it — that is what keeps the rule checkable. */
+export interface ChatViewport {
+  w: number;
+  h: number;
+}
 
 /** Width of the chat column inside the split (E2): the chat keeps this and
  *  every extra pixel of the window goes LEFT, to the pictures. Same number as
@@ -84,12 +106,27 @@ function clampNumber(v: number, min: number, max: number): number {
   return Math.round(Math.min(max, Math.max(min, v)));
 }
 
-/** The size a drag may actually set. Both axes are clamped independently —
- *  pulling the top edge does not touch the width and vice versa. */
-export function clampChatSize(w: number, h: number): ChatSize {
+/** The ceiling of one axis: the garbage filter, or the window if that is the
+ *  narrower of the two. A window measure that is not a number (no caller in
+ *  this client produces one) leaves the fixed maximum standing. */
+function ceilingFor(max: number, view: number, margin: number): number {
+  if (!Number.isFinite(view)) return max;
+  return Math.min(max, view - margin);
+}
+
+/**
+ * The size a drag may actually set. Both axes are clamped independently —
+ * pulling the top edge does not touch the width and vice versa.
+ *
+ * On a window smaller than the FLOOR the ceiling wins and the panel is made
+ * narrower than `CHAT_MIN_W`: the stylesheet's viewport caps could always do
+ * that, and a floor that pushed the panel off-screen would be the worse of the
+ * two answers.
+ */
+export function clampChatSize(w: number, h: number, view: ChatViewport): ChatSize {
   return {
-    w: clampNumber(w, CHAT_MIN_W, CHAT_MAX_W),
-    h: clampNumber(h, CHAT_MIN_H, CHAT_MAX_H),
+    w: clampNumber(w, CHAT_MIN_W, ceilingFor(CHAT_MAX_W, view.w, CHAT_VIEWPORT_MARGIN_W)),
+    h: clampNumber(h, CHAT_MIN_H, ceilingFor(CHAT_MAX_H, view.h, CHAT_VIEWPORT_MARGIN_H)),
   };
 }
 
