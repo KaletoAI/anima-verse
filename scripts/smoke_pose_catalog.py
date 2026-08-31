@@ -3,15 +3,15 @@
 
 Usage: ./.venv/bin/python scripts/smoke_pose_catalog.py
 
-Expected values, derived BY HAND from plan-pose-katalog.md:
-- pose catalog: 53 entries (50 transferred 1:1 from the 51 curated presets
-  + the three partner poses "shaking hands" / "dancing together" (2026-08-20)
-  and "comforting" (2026-08-21),
-  minus `bending_to_fridge`, removed by the user on 2026-08-17; the set still
-  includes the `sleeping` entry Task 3 needs), every entry has
-  a non-empty animation kind, exactly one _default (standing).
-- expression catalog: 8 entries, exactly one _default (neutral).
-- no alias (key or synonym) maps to two different entries.
+Stage 1 - structure of the shipped files. The catalog is CURATED LIVE DATA:
+the Poses tab adds, renames and removes entries, so no entry COUNT is pinned
+here (a pinned count broke on every legitimate curation). What must hold is
+structure, and that is `validate_catalog()`: non-empty prompts, a non-empty
+animation kind on every pose, the pair rule, alias uniqueness, exactly one
+_default per axis, sound group defaults - plus the identity of the defaults
+(pose `standing`, expression `neutral`), which code falls back to by name.
+The stages that WRITE run against a private copy; that the real file came
+through untouched is checked against a key snapshot taken at start.
 
 Stage 2 - resolution rules, derived BY HAND from the catalog files:
 - "sitzen" is listed as a synonym of `sitting` -> ("sitting", "exact").
@@ -43,7 +43,7 @@ Stage 4 - the consumers (task 4), derived BY HAND from the catalog files:
 - get_pose_prompt("gardening") -> the `gardening` entry's prompt verbatim;
   an unknown key -> the `standing` (=_default) prompt.
 - resolve_pose_animation("sitting") == "sit", is_partner_activity("sitting")
-  is False (every curated entry is solo:true today).
+  is False (`sitting` is a solo entry).
 - resolve_expression_key("happy") == "positive" ("happy" is a listed synonym),
   resolve_expression_key("") == "neutral" (the _default entry). With the
   embedding backend unavailable, unknown text falls back to "neutral" too and
@@ -185,11 +185,13 @@ from app.core.pose_catalog import (  # noqa: E402
 )
 
 failures = []
-for axis, expected_count, expected_default in (
-        ("pose", 53, "standing"), ("expression", 8, "neutral")):
+# The shipped keys, taken BEFORE any stage runs - the "real file untouched"
+# guards after the copy-harness stages compare against this snapshot.
+_shipped_pose_keys = frozenset(get_catalog("pose"))
+for axis, expected_default in (("pose", "standing"), ("expression", "neutral")):
     catalog = get_catalog(axis)
-    if len(catalog) != expected_count:
-        failures.append(f"{axis}: {len(catalog)} entries, expected {expected_count}")
+    if not catalog:
+        failures.append(f"{axis}: catalog is empty")
     if get_default_key(axis) != expected_default:
         failures.append(f"{axis}: default {get_default_key(axis)!r}, expected {expected_default!r}")
     failures.extend(validate_catalog(axis))
@@ -552,9 +554,10 @@ try:
     finally:
         _pc.catalog_path = _real_path
         _reload()
-    # the real catalog file is untouched: back to the 50 curated entries
-    assert len(get_catalog("pose")) == 53, len(get_catalog("pose"))
-    assert "kneading" not in get_catalog("pose")
+    # the real catalog file is untouched: exactly the shipped keys again -
+    # nothing the copy-harness wrote (e.g. "kneading") leaked through.
+    assert frozenset(get_catalog("pose")) == _shipped_pose_keys, \
+        sorted(frozenset(get_catalog("pose")) ^ _shipped_pose_keys)
 
     print("OK smoke_pose_catalog stage 5")
 
@@ -854,8 +857,8 @@ try:
         pc.catalog_path = _g_real
         pc.reload_catalogs()
     check("the real catalog file is untouched",
-          len(pc.get_catalog("pose")) == 53 and "roosting" not in pc.get_catalog("pose"),
-          str(len(pc.get_catalog("pose"))))
+          frozenset(pc.get_catalog("pose")) == _shipped_pose_keys,
+          str(sorted(frozenset(pc.get_catalog("pose")) ^ _shipped_pose_keys)))
 
     if _FAILURES:
         raise AssertionError(f"stage 9: {len(_FAILURES)} failed check(s): {_FAILURES}")
