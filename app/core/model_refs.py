@@ -27,34 +27,27 @@ logger = get_logger(__name__)
 # background come from the use-case style ("tpose" / "tpose_animal"), the
 # face from the expression layer (REF_EXPRESSION_PROMPT below).
 #
-# Redundant arm phrasing on purpose: "T-pose" alone is weakly trained in
-# photo models and drifts into an A-pose (arms angled downward).
-#
-# Palms face DOWN — the Mixamo bind pose. Palms toward the camera would show
-# image-to-3D more hand detail, but the rig is bound to THIS pose: a mesh
-# generated with turned palms gets its hand bones bound 90° off, and every
-# animation clip then twists the hands. A correct bind pose beats a slightly
-# better hand reconstruction.
-#
-# Hair goes BEHIND the shoulders: hair falling over shoulders or chest bakes
-# into the torso geometry and confuses the mesher's silhouette segmentation.
-# Length-NEUTRAL on purpose — the identity layer says how long the hair is;
-# "hanging down the back" here gave short-haired characters long hair.
-#
-# Upper-body garments are worn CLOSED: an open jacket or a loose layer
-# hanging in front of the body is a separate surface floating next to the
-# torso, and the img2mesh bake fuses it with the arms and chest instead of
-# reconstructing it (D8 / P13, a documented case in the session plan).
+# Kept deliberately SHORT — every extra clause dilutes the load-bearing ones.
+# What stays is load-bearing:
+# - "arms straight out to the sides at shoulder height, forming the letter T":
+#   "T-pose" alone is weakly trained in photo models and drifts into an A-pose.
+# - Palms face DOWN — the Mixamo bind pose. A mesh generated with turned palms
+#   gets its hand bones bound 90° off and every clip then twists the hands.
+# - Feet SHOULDER-WIDTH apart with a visible gap: "slightly apart" rendered
+#   (especially female) characters with the ankles touching, and the mesher
+#   then fuses both legs into one column.
+# - Hair BEHIND the shoulders (length-neutral — the identity layer says how
+#   long it is): hair over the chest bakes into the torso geometry.
+# - Garments worn CLOSED: an open jacket is a floating surface the img2mesh
+#   bake fuses with arms and chest (D8 / P13).
 # The admin override image_generation.tpose_prompt stays untouched — whoever
 # replaces this text takes the responsibility with it.
 TPOSE_PROMPT_DEFAULT = (
-    "T-pose, standing upright facing the camera, arms raised straight out "
-    "to the sides at exact shoulder height, fully extended and parallel to "
-    "the floor, body and arms forming the letter T, palms facing down toward "
-    "the floor, fingers straight, extended and slightly spread apart, thumbs "
-    "pointing forward, legs straight and slightly apart, hair tucked behind "
-    "the shoulders, all upper-body garments worn closed, no open jacket and "
-    "no loose fabric layers hanging in front of the body"
+    "T-pose, standing upright facing the camera, arms straight out to the "
+    "sides at shoulder height, forming the letter T, palms facing down, "
+    "fingers straight, legs straight, feet planted shoulder-width apart with "
+    "a clear gap between the legs, hair behind the shoulders, all garments "
+    "worn closed"
 )
 
 # Non-humanoid characters (animals): a T-pose is meaningless on four legs.
@@ -88,13 +81,11 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
 # reason the front view puts it behind them — it must not cover the surface
 # the mesher is supposed to read.
 TPOSE_BACK_PROMPT_DEFAULT = (
-    "back view, seen directly from behind, the back of the head and the heels "
-    "toward the camera, face not visible, standing upright in T-pose, arms "
-    "raised straight out to the sides at exact shoulder height, fully extended "
-    "and parallel to the floor, palms facing down toward the floor, fingers "
-    "straight and slightly spread apart, legs straight and slightly apart, "
-    "hair tucked in front of the shoulders so the back stays visible, all "
-    "garments worn closed"
+    "back view, seen directly from behind, face not visible, standing upright "
+    "in T-pose, arms straight out to the sides at shoulder height, palms "
+    "facing down, legs straight, feet planted shoulder-width apart with a "
+    "clear gap between the legs, hair in front of the shoulders, all garments "
+    "worn closed"
 )
 
 # Both profiles share one text — the side is the only difference, so they
@@ -105,14 +96,12 @@ TPOSE_BACK_PROMPT_DEFAULT = (
 # actually SHOWS — a strongly foreshortened near arm that hides the far one —
 # and the forward/down failure modes are pushed away in _NEG_TPOSE_SIDE.
 TPOSE_SIDE_PROMPT_TEMPLATE = (
-    "strict {side} side profile view, seen exactly from the character's "
-    "{side} side, the whole body in profile facing the {side} edge of the "
-    "frame, standing upright in T-pose, both arms raised straight out to the "
-    "sides at exact shoulder height so that in this profile the near arm "
-    "points straight at the camera and hides the far arm behind it, the "
-    "outstretched arms appear strongly foreshortened, shoulders level, palms "
-    "facing down toward the floor, legs straight and slightly apart, hair "
-    "tucked behind the shoulders, all garments worn closed"
+    "strict {side} side profile view, the whole body in profile facing the "
+    "{side} edge of the frame, standing upright in T-pose, arms straight out "
+    "to the sides at shoulder height so the near arm points at the camera and "
+    "hides the far arm, strongly foreshortened, palms facing down, legs "
+    "straight, feet shoulder-width apart, hair behind the shoulders, all "
+    "garments worn closed"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
