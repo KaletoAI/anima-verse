@@ -14,8 +14,9 @@ Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
                             reconstruction below
     params   kind, fps, start_s, end_s, anchor_s, in_place, loop_s — as in
              cmu_clip; plus
-             bone_map       name of the skeleton family ("unity-humanoid";
-                            "auto" detects it from the node names)
+             bone_map       name of the skeleton family ("unity-humanoid",
+                            "mixamo-noprefix"; "auto" detects it from the
+                            node names)
              offset_b_m     [side, up, forward] metres added to every joint of
                             half B before the pair is framed — for packs whose
                             halves are NOT in one world space ("set the male
@@ -110,11 +111,41 @@ def _unity_humanoid():
     return m
 
 
-BONE_MAPS = {"unity-humanoid": _unity_humanoid}
+def _mixamo_noprefix():
+    """The Mixamo bone names WITHOUT the ``mixamorig:`` prefix — what
+    MocapOnline's MotusMan rig (the MOB1/Mobility packs) exports, and what
+    every FBX carries that was baked out of a Mixamo skeleton with the
+    namespace stripped.
+
+    ``cmu_clip.BONE_MAP`` already IS that table (Mixamo short name → CMU
+    intermediate name, fingers 1–3 as themselves); only the fourth finger
+    joint and the toe end sites are added here. Everything the rig carries on
+    top is DISCARDED by omission — MotusMan's ``Root`` above the hips, the
+    ``hand_l_wep``/``hand_r_wep`` weapon sockets and the ``Leaf*Roll1`` twist
+    helpers. The root is not lost with it: ``_load_source`` reads
+    ``matrix_world``, so an animated parent is already folded into the hips.
+    """
+    m = dict(cmu_clip.BONE_MAP)
+    for side in ("Left", "Right"):
+        for mix in _FINGER_SRC.values():
+            m[f"{side}Hand{mix}4"] = f"{side}Hand{mix}4"
+    m["LeftToe_End"] = "ltoes_end"
+    m["RightToe_End"] = "rtoes_end"
+    return m
+
+
+BONE_MAPS = {"unity-humanoid": _unity_humanoid,
+             "mixamo-noprefix": _mixamo_noprefix}
 
 # Signature node names per family — "auto" picks the first family whose
 # signature is fully present.
-SIGNATURES = {"unity-humanoid": ("Hips", "Left_UpperLeg", "Left_UpperArm", "Chest")}
+SIGNATURES = {"unity-humanoid": ("Hips", "Left_UpperLeg", "Left_UpperArm", "Chest"),
+              "mixamo-noprefix": ("Hips", "LeftUpLeg", "LeftForeArm", "Spine2")}
+
+# Node-name prefixes that DISQUALIFY a family. The unprefixed Mixamo names are
+# a substring of the prefixed ones, so a plain Mixamo export must never be read
+# as "mixamo-noprefix" — it has its own path through the library.
+EXCLUDE_PREFIXES = {"mixamo-noprefix": ("mixamorig:",)}
 
 # Mixamo rig: intermediate name → rig bone (short) — the 22 core bones plus
 # the end sites the direction targets need.
@@ -206,8 +237,11 @@ def _frames_of(P: dict) -> dict:
 
 def _detect_family(names) -> str:
     for fam, sig in SIGNATURES.items():
-        if all(n in names for n in sig):
-            return fam
+        if not all(n in names for n in sig):
+            continue
+        if any(n.startswith(p) for p in EXCLUDE_PREFIXES.get(fam, ()) for n in names):
+            continue
+        return fam
     raise ValueError("unknown skeleton — no bone map matches these node names: "
                      + ", ".join(sorted(names)[:20]))
 
@@ -227,17 +261,47 @@ def _rot_to_clip(m: Matrix) -> Matrix:
     return _C @ m.to_3x3().normalized() @ _C.transposed()
 
 
+class _BoneNode:
+    """A pose bone dressed as an object — only ``matrix_world`` is ever read.
+
+    A file WITHOUT a bind pose (Unity/UMotion) imports as a hierarchy of plain
+    objects; a file WITH one (a skinned character export, e.g. MocapOnline's
+    MotusMan) imports as ONE armature object whose joints are bones. Both are
+    the same thing here: a named node with a world transform per frame.
+    """
+    __slots__ = ("_arm", "_pb")
+
+    def __init__(self, arm, pb):
+        self._arm, self._pb = arm, pb
+
+    @property
+    def matrix_world(self):
+        return self._arm.matrix_world @ self._pb.matrix
+
+
+def _scene_nodes() -> dict:
+    """Every named node of the imported scene: the objects first, then the
+    pose bones of every armature (an object name wins on a collision)."""
+    out = {o.name: o for o in bpy.data.objects}
+    for o in bpy.data.objects:
+        if o.type == "ARMATURE":
+            for pb in o.pose.bones:
+                out.setdefault(pb.name, _BoneNode(o, pb))
+    return out
+
+
 def _load_source(path: str, family: str):
     """Imports the FBX and returns ``(fps, frame_range, positions_by_frame)``
     with positions as ``{intermediate name: Vector(cm, Y up)}`` per frame,
     plus the family actually used."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.fbx(filepath=path, global_scale=1.0)
-    names = {o.name for o in bpy.data.objects}
+    scene_nodes = _scene_nodes()
+    names = set(scene_nodes)
     if family == "auto":
         family = _detect_family(names)
     bone_map = BONE_MAPS[family]()
-    nodes = {inter: bpy.data.objects[src] for src, inter in bone_map.items() if src in names}
+    nodes = {inter: scene_nodes[src] for src, inter in bone_map.items() if src in names}
     missing = [c for c in ("root", "lfemur", "ltibia", "lfoot", "lhumerus", "lradius", "lhand")
                if c not in nodes]
     if missing:

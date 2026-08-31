@@ -14,6 +14,7 @@ keeps its node names as printable ASCII, so a file that contains the four
 signature names of a family IS that family:
 
     contains Hips + Left_UpperLeg + Left_UpperArm + Chest -> unity-humanoid
+    contains Hips + LeftUpLeg + LeftForeArm + Spine2      -> mixamo-noprefix
     contains only Hips/Bone_01/…                          -> "" (unknown rig)
     + Left_IndexProximal                                  -> has_fingers True
     file name contains tpose/t-pose/rest/bind             -> reference pose
@@ -21,6 +22,13 @@ signature names of a family IS that family:
   bone_count counts the family's OWN names found: the synthetic file below
   carries 6 of them (Hips, Chest, Left_UpperLeg, Left_UpperArm, Left_Hand,
   Left_IndexProximal), so bone_count == 6 exactly.
+
+  RULE 1b — the unprefixed Mixamo names are a SUBSTRING of the prefixed ones,
+  so "mixamo-noprefix" carries an exclusion: a file whose tokens contain
+  "mixamorig:" is never that family, even when the bare signature names are
+  in the byte stream too. And what the map does not know is simply not
+  counted — MotusMan's Root, hand_*_wep sockets and Leaf*Roll1 twist helpers
+  are discarded, not an obstacle to recognition.
 
 RULE 2 — "a pair is two files whose NAMES say so". Female_/Male_, _A/_B,
 __a/__b, _L/_R — and only when the partner really lies in the inbox:
@@ -58,6 +66,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 INBOX = Path(tempfile.mkdtemp(prefix="fbx-import-inbox-"))
+FIXT = Path(tempfile.mkdtemp(prefix="fbx-import-fixtures-"))
 FREE = Path(tempfile.mkdtemp(prefix="fbx-import-free-"))
 LICENSED = Path(tempfile.mkdtemp(prefix="fbx-import-licensed-"))
 WORLD = Path(tempfile.mkdtemp(prefix="fbx-import-world-"))
@@ -83,6 +92,16 @@ FAILURES = []
 #: count and the finger flag have something to find.
 UNITY_NAMES = ("Hips", "Chest", "Left_UpperLeg", "Left_UpperArm",
                "Left_Hand", "Left_IndexProximal")
+
+#: A MocapOnline/MotusMan skeleton: the Mixamo names WITHOUT the prefix. 14
+#: core bones + 2 finger roots are in the map (bone_count 16); the four names
+#: after them are the rig's extras, which the map discards.
+MOB_NAMES = ("Hips", "Spine", "Spine1", "Spine2", "Neck", "Head",
+             "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
+             "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase",
+             "LeftHandIndex1", "RightHandIndex1",
+             "Root", "hand_l_wep", "hand_r_wep", "LeafLeftForeArmRoll1")
+MOB_MAPPED = 16
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -194,6 +213,48 @@ def test_probe() -> None:
           route["rest_suggestion"] == "Tpose.fbx", str(route["rest_suggestion"]))
     check("the inbox directory is the throwaway one",
           route["dir"] == str(INBOX), route["dir"])
+
+
+def test_families() -> None:
+    """Family recognition on throwaway fixtures OUTSIDE the inbox — the probe
+    reads a path, so nothing here disturbs the listing above."""
+    print("\n[2b] skeleton families (RULE 1 + RULE 1b)")
+
+    def probe(stem, names):
+        p = FIXT / f"{stem}.fbx"
+        p.write_bytes(fake_fbx(names))
+        return fbx_import.probe_fbx(p)
+
+    p = probe("mob1_idle", MOB_NAMES)
+    check("the unprefixed Mixamo names are recognised",
+          p["skeleton_family"] == "mixamo-noprefix", str(p))
+    check(f"bone_count counts only the mapped names ({MOB_MAPPED} planted)",
+          p["bone_count"] == MOB_MAPPED, str(p["bone_count"]))
+    check("Root / hand_*_wep / Leaf*Roll1 are neither counted nor an obstacle",
+          p["bone_count"] == MOB_MAPPED and p["skeleton_family"] == "mixamo-noprefix")
+    check("its fingers are seen", p["has_fingers"] is True, str(p))
+
+    q = probe("mixamo_prefixed", tuple("mixamorig:" + n for n in MOB_NAMES))
+    check("a PREFIXED Mixamo file is not the unprefixed family",
+          q["skeleton_family"] != "mixamo-noprefix", str(q))
+    check("…and matches nothing else either", q["skeleton_family"] == "", str(q))
+
+    r = probe("mixed", MOB_NAMES + ("mixamorig:Hips",))
+    check("one 'mixamorig:' token disqualifies the family even with the bare "
+          "signature present", r["skeleton_family"] == "", str(r))
+
+    u = probe("unity_still_wins", UNITY_NAMES)
+    check("the unity-humanoid family is untouched by the new one",
+          u["skeleton_family"] == "unity-humanoid" and u["bone_count"] == 6, str(u))
+
+    live = paths.get_shared_dir() / "models" / "clips-inbox" / "MOB1_Stand_Relaxed_Idle_v2.fbx"
+    if live.is_file():
+        real = fbx_import.probe_fbx(live)
+        check("the real MOB1 file probes as mixamo-noprefix with fingers",
+              real["skeleton_family"] == "mixamo-noprefix"
+              and real["has_fingers"] is True, str(real))
+    else:
+        print("  – the real MOB1 file is not in the live inbox, skipped")
 
 
 def test_pairs() -> None:
@@ -428,6 +489,78 @@ def test_real() -> None:
     print(f"  · {res['seconds']:.1f} s, files {res['outputs']}")
 
 
+def test_real_mob1() -> None:
+    """One TRUE solo conversion of the MocapOnline idle out of the REAL inbox.
+    Expectations from the measurement of 2026-08-31 (Blender 4.2.5 LTS,
+    reference.fbx): bone_map ``mixamo-noprefix``, fingers, 185 frames /
+    6.167 s at 30 fps, ``hips_scale`` 1.1905 (the source rig is shorter than
+    the reference: 113.03 cm hip height in the bind pose, 112.2 cm standing
+    after the retarget), ``rig_floor_shift_cm`` 0.23, ``rig_floor_min_cm``
+    -0.02 — the feet stand ON the floor, nothing is crouching or sunken.
+
+    If the pack's rig/T-pose file (``MotusMan_v55.fbx``) lies beside it, the
+    same conversion is run again WITH it as the reference pose, which must put
+    the converter into rest-delta mode without changing the geometry numbers:
+    positions come from the animation either way, only the roll changes —
+    measured 0.23–0.26 cm at the hands, 0.00 cm at head and feet.
+    """
+    print("\n[13] real solo conversion — MocapOnline / MotusMan")
+    st = runner.status()
+    live = paths.get_shared_dir() / "models" / "clips-inbox"
+    src = "MOB1_Stand_Relaxed_Idle_v2.fbx"
+    rig = paths.get_rig_file()
+    if not (st["executable"] and (live / src).is_file() and rig.is_file()):
+        print(f"  – skipped (blender={bool(st['executable'])}, "
+              f"file={(live / src).is_file()}, rig={rig.is_file()})")
+        return
+    rest = "MotusMan_v55.fbx" if (live / "MotusMan_v55.fbx").is_file() else None
+    os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(live)
+    fbx_import._probe_cache.clear()
+    try:
+        res = fbx_import.import_fbx("smoketest-mob1", [src], target="licensed",
+                                    out_dir=LICENSED / "mob1", rig=rig,
+                                    overwrite=True)
+        res_rest = (fbx_import.import_fbx("smoketest-mob1-rest", [src],
+                                          rest_file=rest, target="licensed",
+                                          out_dir=LICENSED / "mob1", rig=rig,
+                                          overwrite=True) if rest else None)
+    finally:
+        os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(INBOX)
+        fbx_import._probe_cache.clear()
+    side = res["sidecar"]
+    source, geo = side.get("source") or {}, side.get("geometry") or {}
+    check("the clip was written",
+          (LICENSED / "mob1" / "smoketest-mob1.fbx").is_file())
+    check("the new bone map was detected",
+          source.get("bone_map") == "mixamo-noprefix", str(source.get("bone_map")))
+    check("fingers came along", source.get("fingers") is True, str(source.get("fingers")))
+    dur = side.get("duration_s")
+    check("the idle is 5–8 s long (measured 6.167)",
+          isinstance(dur, (int, float)) and 5.0 <= dur <= 8.0, str(dur))
+    scale = (geo.get("hips_scale") or [None])[0]
+    check("the hips are scaled 1.0–1.3 (measured 1.1905) — no belly-walking",
+          isinstance(scale, (int, float)) and 1.0 <= scale <= 1.3, str(scale))
+    floor = geo.get("rig_floor_min_cm")
+    check("the feet stand on the floor (|rig_floor_min_cm| < 3)",
+          isinstance(floor, (int, float)) and abs(floor) < 3.0, str(floor))
+    check("in_place stayed off", geo.get("in_place") is False, str(geo.get("in_place")))
+    print(f"  · {res['seconds']:.1f} s, hips_scale {scale}, "
+          f"rig_floor_shift_cm {geo.get('rig_floor_shift_cm')}, "
+          f"rig_floor_min_cm {floor}, duration {dur} s")
+    if res_rest is None:
+        print("  – no MotusMan_v55.fbx beside it, reference-pose lane skipped")
+        return
+    rsrc = (res_rest["sidecar"].get("source") or {})
+    rgeo = (res_rest["sidecar"].get("geometry") or {})
+    check("with the pack's rig file as reference pose it runs in rest-delta mode",
+          rsrc.get("rotation_mode") == "rest-delta", str(rsrc.get("rotation_mode")))
+    check("…on the same family", rsrc.get("bone_map") == "mixamo-noprefix",
+          str(rsrc.get("bone_map")))
+    check("…and the figure still stands on the floor",
+          isinstance(rgeo.get("rig_floor_min_cm"), (int, float))
+          and abs(rgeo["rig_floor_min_cm"]) < 3.0, str(rgeo.get("rig_floor_min_cm")))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--real", action="store_true",
@@ -440,12 +573,14 @@ def main() -> int:
           paths.get_animation_clips_dir() == FREE
           and paths.get_licensed_clips_dir() == LICENSED)
     test_probe()
+    test_families()
     test_pairs()
     test_path_limits()
     test_import()
     test_delete()
     if a.real:
         test_real()
+        test_real_mob1()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 
@@ -455,6 +590,7 @@ if __name__ == "__main__":
         sys.exit(main())
     finally:
         shutil.rmtree(INBOX, ignore_errors=True)
+        shutil.rmtree(FIXT, ignore_errors=True)
         shutil.rmtree(FREE, ignore_errors=True)
         shutil.rmtree(LICENSED, ignore_errors=True)
         shutil.rmtree(WORLD, ignore_errors=True)

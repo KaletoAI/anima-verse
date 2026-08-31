@@ -76,21 +76,52 @@ def _unity_humanoid_bones() -> Tuple[str, ...]:
     return tuple(names)
 
 
+def _mixamo_noprefix_bones() -> Tuple[str, ...]:
+    """The node names ``fbx_clip._mixamo_noprefix()`` maps — the Mixamo bone
+    names without the ``mixamorig:`` prefix (MocapOnline / MotusMan). The
+    rig's ``Root``, ``hand_*_wep`` sockets and ``Leaf*Roll1`` twist helpers are
+    deliberately absent: the converter discards them."""
+    names = [
+        "Hips", "Spine", "Spine1", "Spine2", "Neck", "Head",
+        "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
+        "RightShoulder", "RightArm", "RightForeArm", "RightHand",
+        "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase",
+        "RightUpLeg", "RightLeg", "RightFoot", "RightToeBase",
+        "LeftToe_End", "RightToe_End",
+    ]
+    for side in ("Left", "Right"):
+        for finger in ("Thumb", "Index", "Middle", "Ring", "Pinky"):
+            for n in (1, 2, 3, 4):
+                names.append(f"{side}Hand{finger}{n}")
+    return tuple(names)
+
+
 #: family → the node names that must ALL be present (mirror of
 #: ``fbx_clip.SIGNATURES``; "auto" picks the first family that matches).
 SIGNATURES: Dict[str, Tuple[str, ...]] = {
     "unity-humanoid": ("Hips", "Left_UpperLeg", "Left_UpperArm", "Chest"),
+    "mixamo-noprefix": ("Hips", "LeftUpLeg", "LeftForeArm", "Spine2"),
+}
+
+#: family → token fragments that DISQUALIFY it (mirror of
+#: ``fbx_clip.EXCLUDE_PREFIXES``). The unprefixed Mixamo names are a substring
+#: of the prefixed ones, so a plain Mixamo export must not be read as
+#: "mixamo-noprefix".
+EXCLUDE_FRAGMENTS: Dict[str, Tuple[str, ...]] = {
+    "mixamo-noprefix": ("mixamorig:",),
 }
 
 #: family → every node name the bone map knows (mirror of ``fbx_clip.BONE_MAPS``),
 #: used for the bone count and the finger check.
 BONE_NAMES: Dict[str, Tuple[str, ...]] = {
     "unity-humanoid": _unity_humanoid_bones(),
+    "mixamo-noprefix": _mixamo_noprefix_bones(),
 }
 
 #: family → node names that only exist when the rig has fingers.
 FINGER_NAMES: Dict[str, Tuple[str, ...]] = {
     "unity-humanoid": ("Left_IndexProximal", "Right_IndexProximal"),
+    "mixamo-noprefix": ("LeftHandIndex1", "RightHandIndex1"),
 }
 
 #: name → (mtime_ns, size, probe); a probe is pure file content, so the mtime
@@ -124,11 +155,14 @@ def probe_fbx(path: Path) -> Dict[str, Any]:
         return out
     tokens = {m.group().decode("ascii", "ignore") for m in _TOKEN_RE.finditer(data)}
     for family, signature in SIGNATURES.items():
-        if all(name in tokens for name in signature):
-            out["skeleton_family"] = family
-            out["bone_count"] = sum(1 for n in BONE_NAMES.get(family, ()) if n in tokens)
-            out["has_fingers"] = any(n in tokens for n in FINGER_NAMES.get(family, ()))
-            break
+        if not all(name in tokens for name in signature):
+            continue
+        if any(frag in tok for frag in EXCLUDE_FRAGMENTS.get(family, ()) for tok in tokens):
+            continue
+        out["skeleton_family"] = family
+        out["bone_count"] = sum(1 for n in BONE_NAMES.get(family, ()) if n in tokens)
+        out["has_fingers"] = any(n in tokens for n in FINGER_NAMES.get(family, ()))
+        break
     return out
 
 

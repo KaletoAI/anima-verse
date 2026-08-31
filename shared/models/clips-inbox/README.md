@@ -20,6 +20,12 @@ unless you explicitly mark it as redistributable.
   family without Blender, by reading the node names out of the bytes:
   * `unity-humanoid` (Unity Humanoid / UMotion exports: `Hips`,
     `Left_UpperLeg`, `Left_UpperArm`, `Chest`) — importable.
+  * `mixamo-noprefix` (the Mixamo bone names WITHOUT the `mixamorig:`
+    prefix — MocapOnline's MotusMan rig, the `MOB1_*` Mobility packs:
+    `Hips`, `LeftUpLeg`, `LeftForeArm`, `Spine2`) — importable. The rig's
+    `Root` above the hips, the `hand_l_wep`/`hand_r_wep` weapon sockets and
+    the `Leaf*Roll1` twist helpers are discarded; root motion is not lost
+    with them, it is already part of the hips' world transform.
   * anything else is reported as "unknown rig" and refused: the retargeter
     (`app/blender/scripts/fbx_clip.py`) has no bone map for it.
 
