@@ -42,12 +42,12 @@ kinds of bone, three alignments:
 * ``ALIGN_BONES`` — limbs, whose CMU and Mixamo rest DIRECTIONS describe the
   same segment: ``A_i`` turns the Mixamo rest direction onto the CMU one
   (CMU's T-pose splays the legs ~20°).
-* ``FRAME_BONES`` / ``FRAME_BONES_KEEP_PITCH`` — neck, head, feet, toes: the
-  whole rest FRAME is aligned, medio-lateral axis included
-  (``_cmu.rest_align``), because a CMU bone's rest frame is its ``axis``
-  matrix and NOT the world axes. ``KEEP_PITCH`` divides the swing about that
-  medio-lateral axis back out for the feet and toes, whose ankle pitch the two
-  skeletons draw differently and whose floor fit depends on it.
+* ``FRAME_BONES`` — neck, head, feet, toes: the whole rest FRAME is aligned,
+  medio-lateral axis included (``_cmu.rest_align``), because a CMU bone's rest
+  frame is its ``axis`` matrix and NOT the world axes. The swing about that
+  medio-lateral axis — the SAGITTAL pitch — is divided straight back out for
+  all four: the two skeletons draw those segments at different pitches, which
+  is anatomy of the rig, not the actor's pose.
 * identity — clavicles and the hips: different segments on the two skeletons,
   and aligning them shrugged every shoulder.
 
@@ -120,20 +120,33 @@ ALIGN_BONES = {"LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg",
                "LeftHand", "RightHand"}
 # Bones aligned on the whole rest FRAME, medio-lateral axis included
 # (``_cmu.rest_align``). A CMU bone's rest frame is its ``axis`` matrix, NOT
-# the world axes, and what the two rests differ by here is POSE, not anatomy:
-# the neck/head rest directions carry the actor's calibration lean (up to 20°
-# out of the sagittal plane, per subject), so driving the Mixamo bone with the
-# CMU rotation alone tips every head sideways for the whole clip.
-FRAME_BONES = {"Neck", "Head"}
-# The same for the feet and toes, whose axis frame carries the database's
-# hard-coded ``axis -90 0 ±20`` template — a rest foot modelled 20° SUPINATED
-# in every .asf, which put every figure on the outer edges of its feet — plus
-# the actor's stance splay, which turned the toes ~12° INWARDS.
-# The swing about the medio-lateral axis (the ankle pitch) is divided back
-# out: CMU draws the ankle→ball bone 11-34° down per actor, Mixamo a fixed
-# 34°, and the floor fit is calibrated on the Mixamo one. Aligning the pitch
-# too lifted the ball and kinked the toes up (2026-08-21 finding).
-FRAME_BONES_KEEP_PITCH = {"LeftFoot", "RightFoot", "LeftToeBase", "RightToeBase"}
+# the world axes, and what the two rests differ by ACROSS that frame is POSE,
+# not anatomy:
+#  * feet/toes — the database's hard-coded ``axis -90 0 ±20`` template models
+#    the rest foot 20° SUPINATED in every .asf, which put every figure on the
+#    outer edges of its feet, plus the actor's stance splay, which turned the
+#    toes ~12° INWARDS;
+#  * neck/head — their rest directions carry the actor's calibration lean out
+#    of the sagittal plane (up to 20° on subject 113), which tipped every head
+#    sideways for the whole clip.
+#
+# The SAGITTAL pitch is never aligned (``keep_pitch``): the swing about the
+# medio-lateral axis is divided straight back out, because for every bone in
+# this set the two skeletons DRAW the same segment at different pitches, and
+# that is anatomy of the rig, not the actor's pose. Measured rest difference
+# (CMU − Mixamo) over the 109 subjects mirrored locally:
+#
+#     ankle→ball   +20.8 / +18.5 median   (CMU 11-34° down per actor,
+#                                          Mixamo a fixed 34°)
+#     Neck          +9.7 mean, ±4.3, never below −0.2
+#     Head         +14.3 mean, ±5.7, never below +0.8
+#
+# — one-sided every time, i.e. systematic. Aligning the ankle lifted the ball
+# off the floor (2026-08-21 finding); aligning the neck and head tipped every
+# figure's gaze UP by +19.4° while walking (2026-08-31 regression, subject 07;
+# +17.2 on 14, +19.3 on 79, +22.6 on 114).
+FRAME_BONES = {"Neck", "Head",
+               "LeftFoot", "RightFoot", "LeftToeBase", "RightToeBase"}
 # The child whose rest head gives a frame-aligned bone its DIRECTION.
 # ``tail_local`` cannot serve here: the reference rig draws Neck and Head
 # straight UP (their tails do not sit on their children), and a bone parallel
@@ -148,7 +161,7 @@ FRAME_CHILD = {"Neck": "Head", "Head": "HeadTop_End",
 # (aligning it shrugged every shoulder up, 2026-08-21 finding) — and the
 # spine, whose rests differ by ~1° laterally and whose torso twist is better
 # kept exactly as the actor's. Those take the rotation DELTA unchanged.
-_ALIGNED = ALIGN_BONES | FRAME_BONES | FRAME_BONES_KEEP_PITCH
+_ALIGNED = ALIGN_BONES | FRAME_BONES
 
 
 def _m3(m):
@@ -324,7 +337,7 @@ def _solve(arm, take: _Take):
                 # A duck-typed take (fbx_clip) carries no axis frame; then
                 # rest_align answers None and the bone keeps the identity.
                 m = _cmu.rest_align(tuple(frame_dir), cmu_bone,
-                                    keep_pitch=short in FRAME_BONES_KEEP_PITCH)
+                                    keep_pitch=True)
                 a = None if m is None else _m3(m)
         align[b.name] = (cmu_name, Matrix.Identity(3) if a is None else a)
 

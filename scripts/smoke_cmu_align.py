@@ -301,5 +301,50 @@ else:
               abs(m["nokeep"]["LeftFoot.pitch"] - m["none"]["LeftFoot.pitch"]) > 8.0,
               f"{m['nokeep']['LeftFoot.pitch'] - m['none']['LeftFoot.pitch']:+.1f}°")
 
+print("\n[4] the SAGITTAL pitch must never be aligned (regression 2026-08-31)")
+# Aligning the neck/head pitch as well tipped every figure's gaze UP while
+# walking. The rest difference is a DRAWING difference, one-sided over all 109
+# mirrored subjects: ankle +20.8/+18.5 median, Neck +9.7 mean ±4.3 (never
+# below -0.2), Head +14.3 mean ±5.7 (never below +0.8). Hand values for the
+# head shift the pitch-aligning variant would produce, measured per take:
+#     07_01 walk +19.4째   14_30 sit +17.2째   79_69 victory +19.3째
+#     114_11 laying +22.6째   137_28 waiting +7.0째
+PITCH_CASES = [("walk", "07", "07_01", 19.4), ("sit", "14", "14_30", 17.2),
+               ("victory", "79", "79_69", 19.3), ("waiting", "137", "137_28", 7.0)]
+
+
+def head_sagittal(subject, take, keep_pitch):
+    """Median sagittal angle of the Mixamo head direction in the chest frame;
+    positive = the head tips BACK. keep_pitch=None means no alignment."""
+    sk = _cmu.parse_asf((MOCAP / subject / f"{subject}.asf").read_text(errors="replace"))
+    frames = _cmu.parse_amc((MOCAP / subject / f"{take}.amc").read_text(errors="replace"))
+    b = sk.bones["upperneck"]
+    a = (_cmu.identity() if keep_pitch is None
+         else _cmu.rest_align(MIX["Head"], b, keep_pitch=keep_pitch))
+    out = []
+    for f in frames[::8]:
+        pose = _cmu.solve_frame(sk, f)
+        v = _cmu.normalize(_cmu.mat_vec(_cmu.transpose(pose.rot["thorax"]),
+                                        _cmu.mat_vec(_cmu.mat_mul(pose.rot["upperneck"], a),
+                                                     MIX["Head"])))
+        out.append(-math.atan2(v[2], v[1]) * DEG)
+    return statistics.median(out)
+
+
+if not (MOCAP / "07" / "07_01.amc").is_file():
+    print(f"  SKIP the CMU mirror is not present under {MOCAP}")
+else:
+    for name, subject, take, shift in PITCH_CASES:
+        if not (MOCAP / subject / f"{take}.amc").is_file():
+            print(f"  SKIP {name}")
+            continue
+        base = head_sagittal(subject, take, None)
+        kept = head_sagittal(subject, take, True)
+        aligned = head_sagittal(subject, take, False)
+        at_most(f"{name}: keep_pitch leaves the head's sagittal pitch alone",
+                kept - base, 1.0)
+        near(f"{name}: RED COUNTER-PROBE — aligning it tips the gaze up",
+             aligned - base, shift, 1.5)
+
 print(f"\n{passed} ok, {failed} failed")
 sys.exit(1 if failed else 0)
