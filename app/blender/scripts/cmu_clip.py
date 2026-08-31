@@ -134,6 +134,15 @@ FRAME_BONES = {"Neck", "Head"}
 # 34°, and the floor fit is calibrated on the Mixamo one. Aligning the pitch
 # too lifted the ball and kinked the toes up (2026-08-21 finding).
 FRAME_BONES_KEEP_PITCH = {"LeftFoot", "RightFoot", "LeftToeBase", "RightToeBase"}
+# The child whose rest head gives a frame-aligned bone its DIRECTION.
+# ``tail_local`` cannot serve here: the reference rig draws Neck and Head
+# straight UP (their tails do not sit on their children), and a bone parallel
+# to the vertical has no medio-lateral axis to build a frame on — the neck
+# alignment silently fell back to the identity and the head's came out of a
+# near-degenerate cross product.
+FRAME_CHILD = {"Neck": "Head", "Head": "HeadTop_End",
+               "LeftFoot": "LeftToeBase", "RightFoot": "RightToeBase",
+               "LeftToeBase": "LeftToe_End", "RightToeBase": "RightToe_End"}
 # NOT aligned at all: the clavicles — CMU's runs chest centre → shoulder,
 # Mixamo's neck base → arm, a 20° difference that is anatomy, not pose
 # (aligning it shrugged every shoulder up, 2026-08-21 finding) — and the
@@ -310,9 +319,11 @@ def _solve(arm, take: _Take):
             if short in ALIGN_BONES:
                 a = _rot_between(mix_dir, cmu_dir)
             else:
+                child = bones.get(PREFIX + FRAME_CHILD.get(short, ""))
+                frame_dir = (child.head_local - b.head_local) if child else mix_dir
                 # A duck-typed take (fbx_clip) carries no axis frame; then
                 # rest_align answers None and the bone keeps the identity.
-                m = _cmu.rest_align(tuple(mix_dir), cmu_bone,
+                m = _cmu.rest_align(tuple(frame_dir), cmu_bone,
                                     keep_pitch=short in FRAME_BONES_KEEP_PITCH)
                 a = None if m is None else _m3(m)
         align[b.name] = (cmu_name, Matrix.Identity(3) if a is None else a)

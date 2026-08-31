@@ -210,9 +210,12 @@ def rest_align(mix_dir: Sequence[float], bone: "Bone", keep_pitch: bool = False)
     if math.sqrt(dot(mix_dir, mix_dir)) < 1e-9:
         return None
     mix_ml = cross(mix_dir, UP)
-    if math.sqrt(dot(mix_ml, mix_ml)) < 1e-9:
-        return None                      # a bone along the vertical has no
-    mix_ml = normalize(mix_ml)           # medio-lateral axis to speak of
+    # A bone within ~3° of the vertical has no medio-lateral axis worth
+    # building a frame on — the cross product is then noise, and its SIGN
+    # flips with it. Answer None and let the caller keep the identity.
+    if math.sqrt(dot(mix_ml, mix_ml)) < 0.05:
+        return None
+    mix_ml = normalize(mix_ml)
     cmu_ml = (C[0][0], C[1][0], C[2][0])
     if dot(cmu_ml, mix_ml) < 0:
         cmu_ml = (-cmu_ml[0], -cmu_ml[1], -cmu_ml[2])   # the axis is a line

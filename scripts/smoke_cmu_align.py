@@ -183,6 +183,17 @@ near("cross(direction, up) reproduces the LeftFoot medio-lateral axis",
 near("cross(direction, up) reproduces the Neck medio-lateral axis",
      max(abs(a - b) for a, b in zip(_cmu.normalize(_cmu.cross(MIX["Neck"], _cmu.UP)),
                                     (-1.0, 0.0, 0.0))), 0.0, 1e-3)
+# The direction has to come from the mapped CHILD's rest head, never from the
+# Blender bone's tail: the reference rig draws Neck and Head straight up, and
+# for a vertical bone the cross product above is noise whose SIGN flips.
+check("a bone along the vertical is refused rather than aligned",
+      _cmu.rest_align((0.0, 1.0, 0.0), _FakeBone((0.345, 0.935, -0.085), (0.0, 0.0, 0.0))) is None,
+      "rest_align((0,1,0), …) is None")
+check("...and one 2° off the vertical too (the cross product is still noise)",
+      _cmu.rest_align((0.0, 0.9994, 0.035), _FakeBone((0.345, 0.935, -0.085), (0.0, 0.0, 0.0))) is None,
+      "rest_align((0,0.9994,0.035), …) is None")
+check("the real Neck direction (15° forward) is aligned",
+      _cmu.rest_align(MIX["Neck"], _FakeBone((-0.175, 0.982, -0.076), (0.0, 0.0, 0.0))) is not None)
 
 foot = _FakeBone((0.084, -0.232, 0.969), (-90.0, 0.0, 20.0))     # subject 113, lfoot
 a_keep = _cmu.rest_align(MIX["LeftFoot"], foot, keep_pitch=True)
