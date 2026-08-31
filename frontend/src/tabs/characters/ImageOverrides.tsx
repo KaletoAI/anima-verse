@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPut } from '../../lib/api'
+import { apiGet } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 
@@ -17,12 +17,41 @@ import { Field } from '../../components/Field'
  *    (different backend, different LoRA ecosystem — no merge).
  * Backed by /characters/{name}/outfit-imagegen (GET/PUT) plus the backend
  * list (/world/imagegen-options) and available LoRAs (/outfit-lora-options).
+ *
+ * THIS PANEL DOES NOT WRITE. Every edit goes into the character sheet's change
+ * buffer (`queueImagegen`) and leaves with the toolbar's one Save.
+ *
+ * WHY EVERY EDIT QUEUES ALL FOUR KEYS: the store behind this panel is
+ * `PUT /characters/{name}/outfit-imagegen`, and that route takes the WHOLE
+ * record — a body carrying only `loras` would blank the two match patterns.
+ * The buffer hands its patch to that route unchanged, so the patch has to BE
+ * the whole record: `{workflow, tpose_workflow, loras, tpose_loras}`, every
+ * time, with the edited value taken from the event (the state behind it is one
+ * render old) and the other three from the current render. The visible cost is
+ * that one keystroke here counts as four pending fields in "Save (n)".
+ *
+ * The "Add LoRA" choices are the one thing the SAVED values decide: the server
+ * resolves them from the stored backend match, so a match still sitting in the
+ * buffer suggests LoRAs for the previous backend. They are refetched when the
+ * container reports a successful Save (`savedSignal`) — the hint under the
+ * match field says so. The "Currently matches" previews are computed here and
+ * follow the typed pattern immediately.
  */
 
 interface Lora {
   name: string
   strength: number
 }
+
+/** The override record as this panel holds it. */
+interface Override {
+  pattern: string
+  tposePattern: string
+  loras: Lora[]
+  tposeLoras: Lora[]
+}
+
+const EMPTY_OVERRIDE: Override = { pattern: '', tposePattern: '', loras: [], tposeLoras: [] }
 
 // Convert a shell-style glob (only '*' wildcard) to a case-insensitive regex.
 function globToRegex(glob: string): RegExp {
@@ -37,7 +66,35 @@ function formatMatchSpec(spec: string): string {
   return s
 }
 
-export function ImageOverrides({ character }: { character: string }) {
+/** The buffered record laid OVER the stored one, key by key — what the panel
+ *  shows when it is re-opened while the sheet still holds unsaved edits. */
+function withDraft(stored: Override, draft: Record<string, unknown>): Override {
+  return {
+    pattern: typeof draft.workflow === 'string' ? draft.workflow : stored.pattern,
+    tposePattern: typeof draft.tpose_workflow === 'string' ? draft.tpose_workflow : stored.tposePattern,
+    loras: Array.isArray(draft.loras) ? (draft.loras as Lora[]) : stored.loras,
+    tposeLoras: Array.isArray(draft.tpose_loras) ? (draft.tpose_loras as Lora[]) : stored.tposeLoras,
+  }
+}
+
+export function ImageOverrides({
+  character,
+  queueImagegen,
+  draft,
+  discardSignal,
+  savedSignal,
+}: {
+  character: string
+  /** Remember the whole override record — see the module note on why all four
+   *  keys travel together. */
+  queueImagegen: (patch: Record<string, unknown>) => void
+  /** The container's buffered record, laid over what the GET returned. */
+  draft: Record<string, unknown>
+  /** Bumped by the container's Discard — back to the stored values. */
+  discardSignal: number
+  /** Bumped by a successful Save — the LoRA suggestions are re-resolved. */
+  savedSignal: number
+}) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [pattern, setPattern] = useState('')
@@ -49,13 +106,25 @@ export function ImageOverrides({ character }: { character: string }) {
   const [availableLoras, setAvailableLoras] = useState<Array<{ name: string; missing?: boolean }>>([])
   const [tposeLoraOptions, setTposeLoraOptions] = useState<Array<{ name: string; missing?: boolean }>>([])
   const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
   const [addName, setAddName] = useState('')
   const [addTposeName, setAddTposeName] = useState('')
 
+  /** What the server last handed us — where a Discard goes back to. */
+  const storedRef = useRef<Override>(EMPTY_OVERRIDE)
+  /** Read inside the loaders without making them depend on the draft. */
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+
+  const show = useCallback((rec: Override) => {
+    setPattern(rec.pattern)
+    setTposePattern(rec.tposePattern)
+    setLoras(rec.loras)
+    setTposeLoras(rec.tposeLoras)
+  }, [])
+
   // The server resolves the LoRA list from the SAVED match pattern (backend
   // lora_filter + library, endpoint-filtered) — so the "Add LoRA" choices
-  // must be refetched after every pattern save, not loaded just once.
+  // must be refetched after every Save, not loaded just once.
   const refreshLoraOptions = useCallback(async () => {
     try {
       const loraOpts = await apiGet<{ loras?: Array<{ name: string; missing?: boolean }> }>(
@@ -72,31 +141,6 @@ export function ImageOverrides({ character }: { character: string }) {
       setTposeLoraOptions((tposeOpts.loras || []).filter((l) => l.name && l.name !== 'None'))
     } catch { /* keep the previous list */ }
   }, [character])
-
-  // Persist the full override ({backend match pattern, loras}); model is dropped.
-  // The server field for the match pattern is still named "workflow".
-  const persist = useCallback(
-    async (next: { pattern: string; tposePattern: string; loras: Lora[]; tposeLoras: Lora[] }) => {
-      setSaving(true)
-      try {
-        await apiPut(`/characters/${encodeURIComponent(character)}/outfit-imagegen`, {
-          workflow: next.pattern.trim(),
-          tpose_workflow: next.tposePattern.trim(),
-          loras: next.loras,
-          tpose_loras: next.tposeLoras,
-        })
-        toast(t('Saved'))
-        // A changed match may resolve to another backend → reload the
-        // available LoRAs for the Add-LoRA select.
-        void refreshLoraOptions()
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      } finally {
-        setSaving(false)
-      }
-    },
-    [character, t, toast, refreshLoraOptions],
-  )
 
   useEffect(() => {
     let cancelled = false
@@ -116,10 +160,15 @@ export function ImageOverrides({ character }: { character: string }) {
           )
         ])
         if (cancelled) return
-        setPattern(ovr.workflow || '')
-        setTposePattern(ovr.tpose_workflow || '')
-        setLoras(Array.isArray(ovr.loras) ? ovr.loras : [])
-        setTposeLoras(Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [])
+        const stored: Override = {
+          pattern: ovr.workflow || '',
+          tposePattern: ovr.tpose_workflow || '',
+          loras: Array.isArray(ovr.loras) ? ovr.loras : [],
+          tposeLoras: Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [],
+        }
+        storedRef.current = stored
+        // Unsaved edits survive a trip to another sub-tab and back.
+        show(withDraft(stored, draftRef.current))
         // Inpaint targets (category=inpaint) are only for Map-Fit/Match-Edges,
         // not for a character's normal render matching.
         setBackends(
@@ -139,7 +188,58 @@ export function ImageOverrides({ character }: { character: string }) {
     return () => {
       cancelled = true
     }
-  }, [character, t, toast])
+  }, [character, show, t, toast])
+
+  // A Discard empties the buffer — the fields go back to what is stored.
+  // The last seen value, not a "first run" flag: StrictMode runs an effect
+  // twice on mount, and a flag would let the second run wipe the fields.
+  const seenDiscard = useRef(discardSignal)
+  useEffect(() => {
+    if (seenDiscard.current === discardSignal) return
+    seenDiscard.current = discardSignal
+    show(storedRef.current)
+  }, [discardSignal, show])
+
+  // A Save made the buffered record the stored one: re-read it (the server may
+  // normalise) and re-resolve the LoRA suggestions for the now-saved match.
+  const seenSaved = useRef(savedSignal)
+  useEffect(() => {
+    if (seenSaved.current === savedSignal) return
+    seenSaved.current = savedSignal
+    let cancelled = false
+    ;(async () => {
+      try {
+        const ovr = await apiGet<{ workflow?: string; tpose_workflow?: string; loras?: Lora[]; tpose_loras?: Lora[] }>(
+          `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
+        )
+        if (cancelled) return
+        const stored: Override = {
+          pattern: ovr.workflow || '',
+          tposePattern: ovr.tpose_workflow || '',
+          loras: Array.isArray(ovr.loras) ? ovr.loras : [],
+          tposeLoras: Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [],
+        }
+        storedRef.current = stored
+        show(stored)
+      } catch { /* keep what is on screen */ }
+    })()
+    void refreshLoraOptions()
+    return () => { cancelled = true }
+  }, [savedSignal, character, refreshLoraOptions, show])
+
+  /** Put the WHOLE record into the buffer. Callers pass the value they just
+   *  changed explicitly, because their state is still one render behind. */
+  const queueRecord = useCallback(
+    (next: Partial<Override>) => {
+      queueImagegen({
+        workflow: (next.pattern ?? pattern).trim(),
+        tpose_workflow: (next.tposePattern ?? tposePattern).trim(),
+        loras: next.loras ?? loras,
+        tpose_loras: next.tposeLoras ?? tposeLoras,
+      })
+    },
+    [queueImagegen, pattern, tposePattern, loras, tposeLoras],
+  )
 
   const matching = useMemo(() => {
     const p = pattern.trim()
@@ -158,21 +258,25 @@ export function ImageOverrides({ character }: { character: string }) {
     return backends.filter((b) => re.test(b))
   }, [tposePattern, backends])
 
-  const setLorasAndSave = useCallback(
+  /** A LoRA list edit: on screen and in the buffer in the same breath, so a
+   *  picked-and-added LoRA is part of the sheet without a second click. */
+  const editLoras = useCallback(
     (next: Lora[]) => {
       setLoras(next)
-      persist({ pattern, tposePattern, loras: next, tposeLoras })
+      queueRecord({ loras: next })
     },
-    [pattern, tposePattern, tposeLoras, persist],
+    [queueRecord],
   )
 
-  const setTposeLorasAndSave = useCallback(
+  const editTposeLoras = useCallback(
     (next: Lora[]) => {
       setTposeLoras(next)
-      persist({ pattern, tposePattern, loras, tposeLoras: next })
+      queueRecord({ tposeLoras: next })
     },
-    [pattern, tposePattern, loras, persist],
+    [queueRecord],
   )
+
+  const savedHint = t('LoRA suggestions follow the SAVED match — they are re-read after Save.')
 
   if (loading) return <div className="ga-loading">{t('Loading…')}</div>
 
@@ -184,15 +288,16 @@ export function ImageOverrides({ character }: { character: string }) {
           <Field
             label={t('Backend match (glob)')}
             help="imagegen_target"
-            hint={t('e.g. "Flux*" or an exact backend name. Matched against image-backend names; the server picks an available match at render time. Empty = global default.')}
+            hint={t('e.g. "Flux*" or an exact backend name. Matched against image-backend names; the server picks an available match at render time. Empty = global default.') + ' ' + savedHint}
           >
             <input
               className="ga-input"
               value={pattern}
               placeholder="Flux*"
-              disabled={saving}
-              onChange={(e) => setPattern(e.target.value)}
-              onBlur={() => persist({ pattern, tposePattern, loras, tposeLoras })}
+              onChange={(e) => {
+                setPattern(e.target.value)
+                queueRecord({ pattern: e.target.value })
+              }}
             />
           </Field>
           <Field label={t('Currently matches')} hint={t('Backends matching the pattern right now.')}>
@@ -219,15 +324,16 @@ export function ImageOverrides({ character }: { character: string }) {
         <div className="ga-form-row">
           <Field
             label={t('T-pose backend match (glob)')}
-            hint={t('Backend for the T-pose reference renders only (front and the extra 3D views) — e.g. a pose-controlled alias. Empty = the render match above / global default.')}
+            hint={t('Backend for the T-pose reference renders only (front and the extra 3D views) — e.g. a pose-controlled alias. Empty = the render match above / global default.') + ' ' + savedHint}
           >
             <input
               className="ga-input"
               value={tposePattern}
               placeholder="TPose*"
-              disabled={saving}
-              onChange={(e) => setTposePattern(e.target.value)}
-              onBlur={() => persist({ pattern, tposePattern, loras, tposeLoras })}
+              onChange={(e) => {
+                setTposePattern(e.target.value)
+                queueRecord({ tposePattern: e.target.value })
+              }}
             />
           </Field>
           <Field label={t('Currently matches')} hint={t('Backends matching the T-pose pattern right now.')}>
@@ -272,18 +378,17 @@ export function ImageOverrides({ character }: { character: string }) {
                   value={l.strength}
                   onChange={(e) => {
                     const strength = parseFloat(e.target.value)
-                    setLoras((prev) =>
-                      prev.map((x, j) => (j === i ? { ...x, strength: isNaN(strength) ? 1 : strength } : x)),
+                    editLoras(
+                      loras.map((x, j) => (j === i ? { ...x, strength: isNaN(strength) ? 1 : strength } : x)),
                     )
                   }}
-                  onBlur={() => persist({ pattern, tposePattern, loras, tposeLoras })}
                 />
               </Field>
               <Field label={i === 0 ? '' : ''} compact>
                 <button
                   type="button"
                   className="ga-btn ga-btn-sm ga-btn-danger"
-                  onClick={() => setLorasAndSave(loras.filter((_, j) => j !== i))}
+                  onClick={() => editLoras(loras.filter((_, j) => j !== i))}
                 >
                   {t('Remove')}
                 </button>
@@ -311,7 +416,7 @@ export function ImageOverrides({ character }: { character: string }) {
               disabled={!addName}
               onClick={() => {
                 if (!addName) return
-                setLorasAndSave([...loras, { name: addName, strength: 1 }])
+                editLoras([...loras, { name: addName, strength: 1 }])
                 setAddName('')
               }}
             >
@@ -343,18 +448,17 @@ export function ImageOverrides({ character }: { character: string }) {
                   value={l.strength}
                   onChange={(e) => {
                     const strength = parseFloat(e.target.value)
-                    setTposeLoras((prev) =>
-                      prev.map((x, j) => (j === i ? { ...x, strength: isNaN(strength) ? 1 : strength } : x)),
+                    editTposeLoras(
+                      tposeLoras.map((x, j) => (j === i ? { ...x, strength: isNaN(strength) ? 1 : strength } : x)),
                     )
                   }}
-                  onBlur={() => persist({ pattern, tposePattern, loras, tposeLoras })}
                 />
               </Field>
               <Field label={i === 0 ? '' : ''} compact>
                 <button
                   type="button"
                   className="ga-btn ga-btn-sm ga-btn-danger"
-                  onClick={() => setTposeLorasAndSave(tposeLoras.filter((_, j) => j !== i))}
+                  onClick={() => editTposeLoras(tposeLoras.filter((_, j) => j !== i))}
                 >
                   {t('Remove')}
                 </button>
@@ -382,7 +486,7 @@ export function ImageOverrides({ character }: { character: string }) {
               disabled={!addTposeName}
               onClick={() => {
                 if (!addTposeName) return
-                setTposeLorasAndSave([...tposeLoras, { name: addTposeName, strength: 1 }])
+                editTposeLoras([...tposeLoras, { name: addTposeName, strength: 1 }])
                 setAddTposeName('')
               }}
             >

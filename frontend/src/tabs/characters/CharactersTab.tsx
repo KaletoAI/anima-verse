@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost, apiDelete } from '../../lib/api'
+import { apiGet, apiPost, apiPut, apiDelete } from '../../lib/api'
+import { setUnsavedGuard } from '../../lib/unsavedGuard'
 import { useToast } from '../../lib/Toast'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
@@ -32,6 +33,18 @@ import { FieldSet } from './FieldSet'
 import { PlacementEditor } from './PlacementEditor'
 import { ActivityHomeTab } from './ActivityHomeTab'
 import { CharacterListPanel } from './CharacterListPanel'
+import {
+  CONFIG_TARGET,
+  IMAGEGEN_TARGET,
+  PROFILE_TARGET,
+  bodyTarget,
+  emptyFields,
+  pendingFieldCount,
+  queueFields,
+  targetPatch,
+  toSaveBody,
+  type PendingFields,
+} from './pendingFields'
 
 /**
  * Game-Admin "Characters" tab — list-detail like Activities / Rules /
@@ -127,8 +140,31 @@ export function CharactersTab() {
   const [currentFeeling, setCurrentFeeling] = useState<string>('')
   const [draft, setDraft] = useState<DraftPlacement | null>(null)
   const [saving, setSaving] = useState(false)
+  // ── THE DRAFT (2026-08-30) ───────────────────────────────────────────────
+  // Every template-field edit of this character, waiting for one explicit
+  // Save. Keyed by STORE ("profile" / "config" / "imagegen" / "body:<slot>")
+  // and merged field by field — see `pendingFields` for the rules. The
+  // placement below (`draft`) is the same idea, older and shaped by its three
+  // routes; both feed the one Save and the one dirty count.
+  const [buf, setBuf] = useState<PendingFields>(emptyFields)
+  /** The Discard button's second click (no `window.confirm` in this UI). */
+  const [discardArmed, setDiscardArmed] = useState(false)
+  /** Bumped by a Discard. The field tab remounts on it, so text a user typed
+   *  but never blurred — it never reached the buffer — goes back to the
+   *  server's value as well. */
+  const [discardSignal, setDiscardSignal] = useState(0)
+  /** Bumped by a SUCCESSFUL Save. Panels whose choices are computed by the
+   *  server from STORED values — the LoRA suggestions behind the image
+   *  overrides are resolved from the saved backend match — reload on it,
+   *  because until the Save those choices answered the previous match. */
+  const [savedSignal, setSavedSignal] = useState(0)
+  /** The character the selection wants to move to while the draft is full.
+   *  Answered with real UI, never with window.confirm. */
+  const [leaveTo, setLeaveTo] = useState<string | null>(null)
+  /** How much is unsaved, readable from an event handler without making every
+   *  handler depend on the count (the guards below are registered once). */
+  const dirtyRef = useRef(0)
   // Per-character config (chat_mode, behavior toggles, …).
-  // Config fields save immediately on change via /config.
   const [cfg, setCfg] = useState<Record<string, unknown>>({})
   const [savingField, setSavingField] = useState<string>('')
   const [subTab, setSubTab] = useState<string>('general')
@@ -257,13 +293,29 @@ export function CharactersTab() {
     [t, toast],
   )
 
-  const onSelect = useCallback(
+  const goTo = useCallback(
     (name: string) => {
+      setLeaveTo(null)
       setConfirmDel(false)
       setSelected(name)
       reloadCurrent(name)
     },
     [reloadCurrent],
+  )
+
+  /** Open another character — asking first when the sheet still holds a draft.
+   *  A character switch never leaves this tab, so the shell's guard
+   *  (`lib/unsavedGuard`) never sees it: that question has to be ours.
+   *  Selecting the character that is already open is not a navigation. */
+  const onSelect = useCallback(
+    (name: string) => {
+      if (dirtyRef.current > 0 && name !== selected) {
+        setLeaveTo(name)
+        return
+      }
+      goTo(name)
+    },
+    [goTo, selected],
   )
 
   // Character vollständig löschen (DELETE /characters/{name}). In-App-Bestätigung.
@@ -331,19 +383,28 @@ export function CharactersTab() {
 
   const rooms: RoomRef[] = selectedLocation?.rooms || []
 
-  const dirty = useMemo(() => {
-    if (!current || !draft) return false
-    const curLoc = current.current_location_id || ''
-    const curRoom = current.current_room || ''
-    const curAct = current.current_activity || ''
-    const curFeel = currentFeeling || ''
-    return (
-      draft.locationId !== curLoc ||
-      (draft.roomId || '') !== curRoom ||
-      (draft.activity || '') !== curAct ||
-      (draft.feeling || '') !== curFeel
-    )
+  // The placement's share of the dirty count, as FIELDS — one per statement
+  // the admin made, which is also one per request the Save will send.
+  // Location and room count as ONE ("where they are"): they travel in one
+  // request, and picking a location always resets the room with it.
+  const placementDirty = useMemo(() => {
+    if (!current || !draft) return 0
+    let n = 0
+    if (
+      draft.locationId !== (current.current_location_id || '') ||
+      (draft.roomId || '') !== (current.current_room || '')
+    ) n += 1
+    if ((draft.activity || '') !== (current.current_activity || '')) n += 1
+    if ((draft.feeling || '') !== (currentFeeling || '')) n += 1
+    return n
   }, [current, currentFeeling, draft])
+
+  /** Everything unsaved on this sheet — the number in the Save button. */
+  const dirtyCount = pendingFieldCount(buf) + placementDirty
+  dirtyRef.current = dirtyCount
+  // A Discard that is armed while nothing is left to throw away would fire on
+  // the next unrelated click.
+  useEffect(() => { if (!dirtyCount) setDiscardArmed(false) }, [dirtyCount])
 
   const save = useCallback(async () => {
     if (!selected || !draft || !current) return
@@ -380,14 +441,128 @@ export function CharactersTab() {
         )
       }
       await Promise.all(tasks)
+
+      // The template fields, one request per STORE — not per field. Both
+      // stores take many fields at once, which is exactly what a sheet full
+      // of edits is; a store nobody touched is not addressed at all.
+      const enc = encodeURIComponent(selected)
+      const body = toSaveBody(buf)
+      const fieldTasks: Promise<unknown>[] = []
+      if (body.profile) fieldTasks.push(apiPost(`/characters/${enc}/profile`, { fields: body.profile }))
+      if (body.config) fieldTasks.push(apiPost(`/characters/${enc}/config`, { fields: body.config }))
+      // The image override is ONE record — its route takes the whole thing,
+      // so the patch IS the body. The body slots are one request each.
+      if (body.imagegen) fieldTasks.push(apiPut(`/characters/${enc}/outfit-imagegen`, body.imagegen))
+      for (const [slotId, values] of Object.entries(body.body || {})) {
+        fieldTasks.push(
+          apiPost(`/characters/${enc}/body-slots/${encodeURIComponent(slotId)}`, { values }),
+        )
+      }
+      await Promise.all(fieldTasks)
+
+      setBuf(emptyFields())
+      setSavedSignal((n) => n + 1)
       toast(t('Saved'))
+      // Re-reading is not politeness here: fields flagged `reload_after_save`
+      // make the server derive SIBLING keys the form never sent (the
+      // temporary-NPC lifetime recomputes `expires_at`). `reloadCurrent`
+      // drops the template, so the field tab remounts and refetches
+      // profile/config — one reload covers those, the placement view and the
+      // now-empty draft alike.
       await reloadCurrent(selected)
     } catch (e) {
+      // Nothing here writes partially per field, so the draft stays exactly
+      // as it is and Save can simply be pressed again.
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
       setSaving(false)
     }
-  }, [current, currentFeeling, draft, reloadCurrent, selected, t, toast])
+  }, [buf, current, currentFeeling, draft, reloadCurrent, selected, t, toast])
+
+  /** Throw the whole draft away — the buffered fields AND the placement — and
+   *  take what the server has. Two clicks, no window.confirm. */
+  const discard = useCallback(() => {
+    setBuf(emptyFields())
+    setDiscardArmed(false)
+    setDiscardSignal((n) => n + 1)
+    if (current) {
+      setDraft({
+        locationId: current.current_location_id || '',
+        roomId: current.current_room || '',
+        activity: current.current_activity || '',
+        feeling: currentFeeling || '',
+      })
+    }
+  }, [current, currentFeeling])
+
+  // Leaving with a full buffer must not happen silently: the browser's own
+  // question for a reload or a closed tab, the shell's for a tab switch (the
+  // tab is unmounted then, and the draft would die with it), ours for a
+  // switch to another character (see `onSelect`).
+  useEffect(() => {
+    if (!dirtyCount) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // The browser shows its own generic wording; the value only needs to be
+      // non-null for legacy engines.
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirtyCount])
+  useEffect(() => {
+    setUnsavedGuard(() => dirtyRef.current > 0)
+    return () => setUnsavedGuard(null)
+  }, [])
+
+  // A character switch (and a deletion) starts a fresh sheet — a draft of the
+  // previous one would write its fields onto this character.
+  useEffect(() => {
+    setBuf(emptyFields())
+    setDiscardArmed(false)
+  }, [selected])
+
+  /** Remember one template field's new value instead of POSTing it.
+   *  `TemplateTab` calls this in place of its immediate save; the fourth
+   *  argument (`reload_after_save`) needs no handling here, because `save`
+   *  reloads the stores in every case. */
+  const queueField = useCallback(
+    (scope: 'profile' | 'config', key: string, value: unknown) => {
+      setBuf((b) => queueFields(b, scope === 'config' ? CONFIG_TARGET : PROFILE_TARGET, { [key]: value }))
+    },
+    [],
+  )
+
+  /** The draft as the field tab reads it — laid OVER the server's values so a
+   *  refetch beside it cannot eat unsaved work. */
+  const templateDraft = useMemo(
+    () => ({ profile: targetPatch(buf, PROFILE_TARGET), config: targetPatch(buf, CONFIG_TARGET) }),
+    [buf],
+  )
+
+  /** Remember the image-override record instead of PUTting it. Its route
+   *  stores the record AS A WHOLE, so `ImageOverrides` hands over all four of
+   *  its keys on every edit and this only merges them under the one target. */
+  const queueImagegen = useCallback((patch: Record<string, unknown>) => {
+    setBuf((b) => queueFields(b, IMAGEGEN_TARGET, patch))
+  }, [])
+
+  /** Remember one body slot's attributes instead of POSTing them. Each slot
+   *  is its own request at Save time, hence its own target. */
+  const queueBody = useCallback((slotId: string, patch: Record<string, unknown>) => {
+    setBuf((b) => queueFields(b, bodyTarget(slotId), patch))
+  }, [])
+
+  /** The image-override draft as its panel reads it — laid OVER what the GET
+   *  returned, so re-opening the sub-tab shows the unsaved edits. */
+  const imagegenDraft = useMemo(() => targetPatch(buf, IMAGEGEN_TARGET), [buf])
+
+  /** The same for one body slot. A function rather than a map, because only
+   *  the slot editor knows which slots the species package declares. */
+  const bodyDraftFor = useCallback(
+    (slotId: string) => targetPatch(buf, bodyTarget(slotId)),
+    [buf],
+  )
 
   // Home/sleep location — saved immediately via /home-location.
   const saveHome = useCallback(
@@ -579,12 +754,40 @@ export function CharactersTab() {
           <>
             <DetailToolbar
               title={selected}
-              onSave={dirty ? save : undefined}
-              onCancel={dirty ? () => reloadCurrent(selected) : undefined}
-              cancelLabel={t('Revert')}
+              // THE DRAFT. Save exists only while there IS one — a permanently
+              // greyed-out button teaches nothing about when it would do
+              // something — and its number is the only place the size of the
+              // unsaved work is visible. `disabled` gates the bar while the
+              // requests are in flight.
+              onSave={dirtyCount > 0 ? () => { void save() } : undefined}
+              saveLabel={saving
+                ? t('Saving…')
+                : t('Save ({n})').replace('{n}', String(dirtyCount))}
               disabled={saving}
               extra={
                 <>
+                  {dirtyCount > 0 ? (
+                    <>
+                      <button type="button"
+                        className={'ga-btn ga-btn-sm' + (discardArmed ? ' ga-btn-danger' : '')}
+                        disabled={saving}
+                        title={t('Throw the unsaved field changes away and take what the server has')}
+                        onClick={() => {
+                          if (discardArmed) discard()
+                          else setDiscardArmed(true)
+                        }}>
+                        {discardArmed
+                          ? t('Really discard {n}').replace('{n}', String(dirtyCount))
+                          : t('Discard')}
+                      </button>
+                      {discardArmed ? (
+                        <button type="button" className="ga-btn ga-btn-sm"
+                          onClick={() => setDiscardArmed(false)}>
+                          {t('Cancel')}
+                        </button>
+                      ) : null}
+                    </>
+                  ) : null}
                   <ExportButton
                     endpoint={`/characters/${encodeURIComponent(selected)}/export`}
                     filename={`${selected}_export.zip`}
@@ -675,9 +878,21 @@ export function CharactersTab() {
                     tab={ft.tab}
                     sections={visibleSections}
                     dynamicData={dynamicData}
+                    // With these three the field tab stops writing through on
+                    // blur and collects into the toolbar's draft instead.
+                    queueField={queueField}
+                    draft={templateDraft}
+                    discardSignal={discardSignal}
                     specialSlots={{
                       placement: placementUI,
-                      body_editor: <BodyEditor character={selected} />,
+                      body_editor: (
+                        <BodyEditor
+                          character={selected}
+                          queueBody={queueBody}
+                          draftFor={bodyDraftFor}
+                          discardSignal={discardSignal}
+                        />
+                      ),
                       model_refs: <FieldModelRefs character={selected} kinds={['tpose']} />,
                       model3d_gen: <FieldModel3D character={selected} />,
                     }}
@@ -704,7 +919,13 @@ export function CharactersTab() {
             ) : subTab === 'locations' ? (
               <KnownLocationsEditor character={selected} />
             ) : subTab === 'image' ? (
-              <ImageOverrides character={selected} />
+              <ImageOverrides
+                character={selected}
+                queueImagegen={queueImagegen}
+                draft={imagegenDraft}
+                discardSignal={discardSignal}
+                savedSignal={savedSignal}
+              />
             ) : subTab === 'gallery' ? (
               <GalleryTab character={selected} />
             ) : subTab === 'expressions' ? (
@@ -727,6 +948,32 @@ export function CharactersTab() {
             )}
           </>
         )}
+        {/* The character-switch guard. The same question the shell asks
+            before a tab switch, asked here because a character switch stays
+            inside the tab — and asked as UI, never as window.confirm. */}
+        {leaveTo !== null ? (
+          <div className="ga-modal-backdrop" role="presentation">
+            <div className="ga-modal" role="dialog" aria-modal="true"
+              aria-label={t('Unsaved changes')} style={{ maxWidth: 460 }}>
+              <div className="ga-modal-header">
+                <h3>{t('Unsaved changes')}</h3>
+              </div>
+              <div className="ga-modal-body">
+                {t('This character holds {n} field changes that were never saved. Opening another character discards them.')
+                  .replace('{n}', String(dirtyCount))}
+              </div>
+              <div className="ga-modal-footer">
+                <button className="ga-btn" onClick={() => setLeaveTo(null)}>
+                  {t('Stay')}
+                </button>
+                <button className="ga-btn ga-btn-danger"
+                  onClick={() => goTo(leaveTo)}>
+                  {t('Leave and discard')}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </section>
       {creating && (
         <NewCharacterDialog

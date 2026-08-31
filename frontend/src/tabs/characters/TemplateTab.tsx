@@ -12,7 +12,7 @@
  * replacements** from the backend (POST /characters/{name}/resolve-tokens) —
  * never a frontend re-implementation.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useHelp } from '../../help/HelpContext'
@@ -185,6 +185,9 @@ export function TemplateTab({
   specialSlots,
   excludeKeys,
   imageBeside,
+  queueField,
+  draft,
+  discardSignal,
 }: {
   character: string
   tab: TmplTabDef
@@ -197,6 +200,32 @@ export function TemplateTab({
   /** Render prompt fields that have an image in two columns (prompt left,
    *  image right) instead of the image below — used by the /play avatar panel. */
   imageBeside?: boolean
+  /**
+   * THE DRAFT, when the container owns one (Game-Admin characters tab).
+   *
+   * Given `queueField`, a committed field is REMEMBERED instead of POSTed:
+   * the container collects everything into one buffer and writes it in one
+   * Save per store. Without it this tab behaves exactly as it always did —
+   * every blur is its own request — which is what the /play avatar panel
+   * still wants, since it has no toolbar to put a Save button in.
+   *
+   * `opts.reloadAfterSave` forwards the field's `reload_after_save` flag: the
+   * container, not this tab, knows when the stores are re-read after its own
+   * batch.
+   */
+  queueField?: (
+    scope: 'profile' | 'config',
+    key: string,
+    value: unknown,
+    opts?: { reloadAfterSave?: boolean },
+  ) => void
+  /** The container's buffered values per store, laid OVER the loaded ones so
+   *  a refetch beside the draft cannot eat unsaved work. */
+  draft?: { profile?: Record<string, unknown>; config?: Record<string, unknown> }
+  /** Bumped by the container's Discard. The fields remount on it, so text
+   *  typed but never blurred — it never reached the buffer — falls back to
+   *  the server's value too. */
+  discardSignal?: number
 }) {
   const { t, lang } = useI18n()
   const { toast } = useToast()
@@ -238,12 +267,30 @@ export function TemplateTab({
     load()
   }, [load])
 
+  // DRAFT OVER SERVER — the one layer every reader below goes through. A
+  // field typed away and back must show what is on screen, and `visible_when`
+  // must react to the draft too: switching a species in the draft has to
+  // reveal that species' fields before the Save, not after it.
+  const draftProfile = draft?.profile || {}
+  const draftConfig = draft?.config || {}
+  const effProfile = draft?.profile ? { ...profile, ...draftProfile } : profile
+  const effConfig = draft?.config ? { ...config, ...draftConfig } : config
+  // `status_effects` is ONE profile field holding the whole map, so the
+  // draft's version of it replaces the loaded one key by key. Memoised
+  // because `commit` closes over it: a fresh object per render would rebuild
+  // the callback — and with it every field's onCommit — on every keystroke.
+  const draftStatus = draftProfile.status_effects as Record<string, unknown> | undefined
+  const effStatus = useMemo(
+    () => (draftStatus ? { ...status, ...draftStatus } : status),
+    [status, draftStatus],
+  )
+
   const lookup = (key: string): unknown =>
-    key in config ? config[key] : key in status ? status[key] : profile[key]
+    key in effConfig ? effConfig[key] : key in effStatus ? effStatus[key] : effProfile[key]
 
   const getVal = (f: TmplFieldDef): unknown => {
     const s = asBoolStore(f)
-    let v = s === 'config' ? config[f.key] : s === 'status_effects' ? status[f.key] : profile[f.key]
+    let v = s === 'config' ? effConfig[f.key] : s === 'status_effects' ? effStatus[f.key] : effProfile[f.key]
     if ((v === '' || v === null || v === undefined) && f.default !== undefined) v = f.default
     return v ?? ''
   }
@@ -257,6 +304,19 @@ export function TemplateTab({
     async (f: TmplFieldDef, raw: string) => {
       const s = asBoolStore(f)
       const value: unknown = f.type === 'number' ? (raw === '' ? '' : Number(raw)) : raw
+      // With a container draft the value is only REMEMBERED — same
+      // normalisation, same payload shape (`status_effects` as the one merged
+      // object it is stored as), just no request and no per-field toast.
+      if (queueField) {
+        if (s === 'status_effects') {
+          queueField('profile', 'status_effects', { ...effStatus, [f.key]: value },
+            { reloadAfterSave: !!f.reload_after_save })
+        } else {
+          queueField(s === 'config' ? 'config' : 'profile', f.key, value,
+            { reloadAfterSave: !!f.reload_after_save })
+        }
+        return
+      }
       setSavingKey(f.key)
       try {
         if (s === 'config') {
@@ -283,7 +343,7 @@ export function TemplateTab({
         setSavingKey('')
       }
     },
-    [character, status, t, toast, load],
+    [character, status, effStatus, queueField, t, toast, load],
   )
 
   const ex = new Set(excludeKeys || [])
@@ -298,6 +358,11 @@ export function TemplateTab({
 
   const renderField = (f: TmplFieldDef) => {
     const ro = !!f.readonly || FORCE_READONLY.has(f.key)
+    // A Discard has to reach the text a user typed and never blurred: that
+    // never became a value, so no prop of the input changes and its own
+    // `local` state would keep it on screen. Remounting is what throws it
+    // away — the inputs then start from the server's value again.
+    const fkey = `${f.key}:${discardSignal ?? 0}`
     const label = (tmplText(f, 'label', lang) || f.key) + (f.required ? ' *' : '')
     const hint = tmplText(f, 'hint', lang)
     const isPrompt = f.type === 'text' && f.multiline
@@ -324,7 +389,7 @@ export function TemplateTab({
     // Side-by-side (Avatar-Panel): Prompt + Chips + Preview links, Bild rechts.
     if (imageBeside && isPrompt && imagePreview) {
       return (
-        <div key={f.key} className="tpl-prompt-beside">
+        <div key={fkey} className="tpl-prompt-beside">
           <div className="tpl-prompt-beside-text">
             <Field label={label} hint={hint || undefined} help={typeof f.help === 'string' ? f.help : undefined}>
               {input}
@@ -337,7 +402,7 @@ export function TemplateTab({
       )
     }
     return (
-      <div key={f.key}>
+      <div key={fkey}>
         <Field label={label} hint={hint || undefined} help={typeof f.help === 'string' ? f.help : undefined}>
           {input}
         </Field>
