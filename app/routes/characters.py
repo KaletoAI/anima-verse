@@ -1167,8 +1167,8 @@ def delete_expression_route(character_name: str, filename: str) -> Dict[str, Any
 
 @router.get("/{character_name}/outfit-imagegen")
 def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
-    """Liefert die per-Character Overrides fuer den Outfit-/Variant-Image-
-    Service (Workflow + Model + LoRAs). Leere Werte = Defaults."""
+    """Returns the per-character overrides for the outfit/variant image
+    service (match globs + model + LoRAs). Empty values = defaults."""
     from app.models.character import get_character_profile
     prof = get_character_profile(character_name) or {}
     override = prof.get("outfit_imagegen") or {}
@@ -1176,6 +1176,9 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
         override = {}
     return {
         "workflow": override.get("workflow", "") or "",
+        # Backend glob for the T-pose reference renders only; empty = the
+        # normal render match.
+        "tpose_workflow": override.get("tpose_workflow", "") or "",
         "model": override.get("model", "") or "",
         "loras": override.get("loras", []) or [],
     }
@@ -1183,8 +1186,8 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
 
 @router.put("/{character_name}/outfit-imagegen")
 async def set_outfit_imagegen_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Speichert Workflow/Model/LoRA-Override fuer den Outfit-Image-Service.
-    Alle Felder leer loescht den Override komplett."""
+    """Saves the match/model/LoRA override for the outfit image service.
+    All fields empty deletes the override completely."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_set_outfit_imagegen_route_sync,

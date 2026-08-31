@@ -27,6 +27,12 @@ from app.core.expression_pose_maps import (
 
 logger = get_logger(__name__)
 
+# The use cases of the reference renders that feed the image->3D chain: front
+# T-pose (humanoid / animal) plus the extra back and profile views. They are
+# the ones a per-character T-pose backend match applies to; every other use
+# case keeps the normal render match. Set in ``app/core/model_refs.py``.
+TPOSE_USE_CASES = ("tpose", "tpose_animal", "tpose_back", "tpose_side")
+
 # In-flight generation tracking (character:cache_key)
 _generating: Set[str] = set()
 _failed: Set[str] = set()  # tracks recently failed generations to avoid retry loops
@@ -984,6 +990,13 @@ def generate_expression_image(character_name: str,
         if isinstance(_char_override, dict):
             # Legacy field name "workflow" — now a backend glob.
             char_render_override = (_char_override.get("workflow") or "").strip()
+            # why: the T-pose reference renders feed the image->3D chain, so a
+            # character may route them to a pose-controlled alias of its own
+            # while every other render stays on the normal match. Empty = the
+            # normal render match.
+            _tpose_override = (_char_override.get("tpose_workflow") or "").strip()
+            if _tpose_override and image_use_case in TPOSE_USE_CASES:
+                char_render_override = _tpose_override
             m = (_char_override.get("model") or "").strip()
             l = _char_override.get("loras")
             if m:

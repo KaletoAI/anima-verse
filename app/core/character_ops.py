@@ -1656,6 +1656,9 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
     All fields empty deletes the override completely."""
     from app.models.character import get_character_profile, save_character_profile
     workflow = (body.get("workflow") or "").strip()
+    # Separate backend glob for the T-pose reference renders (the image->3D
+    # input), e.g. a pose-controlled alias. Empty = the normal match above.
+    tpose_workflow = (body.get("tpose_workflow") or "").strip()
     model = (body.get("model") or "").strip()
     loras = body.get("loras") or []
     if not isinstance(loras, list):
@@ -1678,12 +1681,15 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
     # the key is PRESENT in the profile. A del leaves the old config value in
     # place. Empty workflow + no LoRAs = override deleted. ``model`` is dropped
     # (it comes from the workflow).
-    if workflow or clean_loras:
-        prof["outfit_imagegen"] = {"workflow": workflow, "loras": clean_loras}
+    if workflow or tpose_workflow or clean_loras:
+        prof["outfit_imagegen"] = {"workflow": workflow,
+                                   "tpose_workflow": tpose_workflow,
+                                   "loras": clean_loras}
     else:
         prof["outfit_imagegen"] = {}
     save_character_profile(character_name, prof)
-    return {"status": "ok", "workflow": workflow, "loras": clean_loras}
+    return {"status": "ok", "workflow": workflow,
+            "tpose_workflow": tpose_workflow, "loras": clean_loras}
 
 
 def apply_videogen_config(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:

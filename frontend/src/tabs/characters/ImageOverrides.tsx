@@ -10,6 +10,8 @@ import { Field } from '../../components/Field'
  *    resolves it to a concrete backend at render time, picking among matches by
  *    availability — independent of the global fallback. A model picker is
  *    intentionally absent (the model comes from the backend).
+ *  - T-pose backend match: a second glob used ONLY for the T-pose reference
+ *    renders (the image->3D input), e.g. a pose-controlled backend alias.
  *  - LoRA override: LoRAs always applied for this character.
  * Backed by /characters/{name}/outfit-imagegen (GET/PUT) plus the backend
  * list (/world/imagegen-options) and available LoRAs (/outfit-lora-options).
@@ -37,6 +39,7 @@ export function ImageOverrides({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [pattern, setPattern] = useState('')
+  const [tposePattern, setTposePattern] = useState('')
   const [loras, setLoras] = useState<Lora[]>([])
   const [backends, setBackends] = useState<string[]>([])  // image-backend names (match target)
   const [outfitDefault, setOutfitDefault] = useState('')  // global outfit default (match spec)
@@ -60,11 +63,12 @@ export function ImageOverrides({ character }: { character: string }) {
   // Persist the full override ({backend match pattern, loras}); model is dropped.
   // The server field for the match pattern is still named "workflow".
   const persist = useCallback(
-    async (next: { pattern: string; loras: Lora[] }) => {
+    async (next: { pattern: string; tposePattern: string; loras: Lora[] }) => {
       setSaving(true)
       try {
         await apiPut(`/characters/${encodeURIComponent(character)}/outfit-imagegen`, {
           workflow: next.pattern.trim(),
+          tpose_workflow: next.tposePattern.trim(),
           loras: next.loras,
         })
         toast(t('Saved'))
@@ -86,7 +90,7 @@ export function ImageOverrides({ character }: { character: string }) {
     ;(async () => {
       try {
         const [ovr, opts, loraOpts] = await Promise.all([
-          apiGet<{ workflow?: string; loras?: Lora[] }>(
+          apiGet<{ workflow?: string; tpose_workflow?: string; loras?: Lora[] }>(
             `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
           ),
           apiGet<{ options?: Array<{ name?: string; category?: string }>; outfit_imagegen_default?: string }>('/world/imagegen-options'),
@@ -96,6 +100,7 @@ export function ImageOverrides({ character }: { character: string }) {
         ])
         if (cancelled) return
         setPattern(ovr.workflow || '')
+        setTposePattern(ovr.tpose_workflow || '')
         setLoras(Array.isArray(ovr.loras) ? ovr.loras : [])
         // Inpaint targets (category=inpaint) are only for Map-Fit/Match-Edges,
         // not for a character's normal render matching.
@@ -117,9 +122,6 @@ export function ImageOverrides({ character }: { character: string }) {
     }
   }, [character, t, toast])
 
-  // Appearance-Tokens des Characters laden (Template → replacement.target ==
-  // character_appearance), damit die Slot-Fragmente dieselben {…}-Platzhalter
-  // anbieten wie der Appearance-Prompt. Rein optional (Bequemlichkeit).
   const matching = useMemo(() => {
     const p = pattern.trim()
     if (!p) return []
@@ -129,16 +131,21 @@ export function ImageOverrides({ character }: { character: string }) {
     return backends.filter((b) => re.test(b))
   }, [pattern, backends])
 
+  // Same glob resolution for the T-pose-only match.
+  const tposeMatching = useMemo(() => {
+    const p = tposePattern.trim()
+    if (!p) return []
+    const re = globToRegex(p.replace(/^backend:/i, '').trim())
+    return backends.filter((b) => re.test(b))
+  }, [tposePattern, backends])
+
   const setLorasAndSave = useCallback(
     (next: Lora[]) => {
       setLoras(next)
-      persist({ pattern, loras: next })
+      persist({ pattern, tposePattern, loras: next })
     },
-    [pattern, persist],
+    [pattern, tposePattern, persist],
   )
-
-  // Beim Fokus eines Slot-Fragments: Topic + Appearance-Tokens (mit Insert) ans
-  // Help-Panel melden — Parität zum Appearance-Prompt.
 
   if (loading) return <div className="ga-loading">{t('Loading…')}</div>
 
@@ -158,7 +165,7 @@ export function ImageOverrides({ character }: { character: string }) {
               placeholder="Flux*"
               disabled={saving}
               onChange={(e) => setPattern(e.target.value)}
-              onBlur={() => persist({ pattern, loras })}
+              onBlur={() => persist({ pattern, tposePattern, loras })}
             />
           </Field>
           <Field label={t('Currently matches')} hint={t('Backends matching the pattern right now.')}>
@@ -174,6 +181,36 @@ export function ImageOverrides({ character }: { character: string }) {
                 <span className="ga-img-nomatch">{t('no match')}</span>
               ) : (
                 matching.map((w) => (
+                  <span key={w} className="ga-img-match-chip">
+                    {w}
+                  </span>
+                ))
+              )}
+            </div>
+          </Field>
+        </div>
+        <div className="ga-form-row">
+          <Field
+            label={t('T-pose backend match (glob)')}
+            hint={t('Backend for the T-pose reference renders only (front and the extra 3D views) — e.g. a pose-controlled alias. Empty = the render match above / global default.')}
+          >
+            <input
+              className="ga-input"
+              value={tposePattern}
+              placeholder="TPose*"
+              disabled={saving}
+              onChange={(e) => setTposePattern(e.target.value)}
+              onBlur={() => persist({ pattern, tposePattern, loras })}
+            />
+          </Field>
+          <Field label={t('Currently matches')} hint={t('Backends matching the T-pose pattern right now.')}>
+            <div className="ga-img-matches">
+              {tposePattern.trim() === '' ? (
+                <span className="ga-sched-muted">{t('— render match above —')}</span>
+              ) : tposeMatching.length === 0 ? (
+                <span className="ga-img-nomatch">{t('no match')}</span>
+              ) : (
+                tposeMatching.map((w) => (
                   <span key={w} className="ga-img-match-chip">
                     {w}
                   </span>
@@ -212,7 +249,7 @@ export function ImageOverrides({ character }: { character: string }) {
                       prev.map((x, j) => (j === i ? { ...x, strength: isNaN(strength) ? 1 : strength } : x)),
                     )
                   }}
-                  onBlur={() => persist({ pattern, loras })}
+                  onBlur={() => persist({ pattern, tposePattern, loras })}
                 />
               </Field>
               <Field label={i === 0 ? '' : ''} compact>
