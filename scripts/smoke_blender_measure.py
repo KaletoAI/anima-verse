@@ -38,6 +38,23 @@ The expected numbers are DERIVED BY HAND here, not recorded from a run:
     This is the Triposplat signature the pipeline has to recognise:
         uv_layers = 0  AND  vertex_colors >= 1
 
+  Fixture D — a "no fingers" hand: an armature of THREE bones named the Mixamo
+  way (LeftHand, LeftHandThumb1, LeftHandIndex1) skinning a cube of size 0.2,
+  every corner weighted 1.0 to the HAND bone only.
+    Two bone names carry a finger token (Thumb, Index), so finger_bones = 2 —
+    yet no finger bone owns a vertex, which is exactly what a "No fingers"
+    bake looks like: the bones are there, the hand moves as one block.
+        bones = 3, mixamo_bones = 3
+        finger_bones = 2, finger_bones_weighted = 0, finger_verts = 0
+
+  Fixture E — the same hand with four of the eight corners re-weighted 1.0 to
+  the THUMB bone instead.
+    One finger bone now drives mesh -> finger_bones_weighted = 1 (the index
+    bone still owns nothing). The driven vertices are counted AS STORED, and
+    glTF splits every cube corner into 3 (see fixture A), so the four thumb
+    corners read 4 * 3 = 12:
+        finger_bones = 2, finger_bones_weighted = 1, finger_verts = 12
+
 Tolerance is 1e-4 m — the measurement rounds to four decimals, and a glTF
 round-trip stores floats, so exact equality would be a test of float32.
 """
@@ -77,6 +94,37 @@ while me.uv_layers:
     me.uv_layers.remove(me.uv_layers[0])
 me.color_attributes.new(name="Col", type="BYTE_COLOR", domain="CORNER")
 bpy.ops.export_scene.gltf(filepath=out + "/c.glb", export_format="GLB")
+
+# A three-bone "hand" skinning a small cube. thumb_corners: which of the 8
+# cube corners belong to the thumb bone; the rest belong to the hand bone.
+def hand(path, thumb_corners):
+    fresh()
+    arm = bpy.data.armatures.new("Armature")
+    arm_obj = bpy.data.objects.new("Armature", arm)
+    bpy.context.collection.objects.link(arm_obj)
+    bpy.context.view_layer.objects.active = arm_obj
+    bpy.ops.object.mode_set(mode="EDIT")
+    hand_b = arm.edit_bones.new("mixamorig:LeftHand")
+    hand_b.head, hand_b.tail = (0, 0, 0), (0, 0, 0.1)
+    for name, tip in (("mixamorig:LeftHandThumb1", 0.15),
+                      ("mixamorig:LeftHandIndex1", 0.16)):
+        b = arm.edit_bones.new(name)
+        b.head, b.tail = (0, 0, 0.1), (0, 0, tip)
+        b.parent = hand_b
+    bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.mesh.primitive_cube_add(size=0.2)
+    cube = bpy.context.object
+    cube.parent = arm_obj
+    cube.modifiers.new("Armature", "ARMATURE").object = arm_obj
+    hand_vg = cube.vertex_groups.new(name="mixamorig:LeftHand")
+    hand_vg.add([i for i in range(8) if i not in thumb_corners], 1.0, "REPLACE")
+    if thumb_corners:
+        thumb_vg = cube.vertex_groups.new(name="mixamorig:LeftHandThumb1")
+        thumb_vg.add(list(thumb_corners), 1.0, "REPLACE")
+    bpy.ops.export_scene.gltf(filepath=path, export_format="GLB")
+
+hand(out + "/d.glb", [])
+hand(out + "/e.glb", [0, 1, 2, 3])
 print("FIXTURES_OK")
 '''
 
@@ -151,6 +199,28 @@ def main():
               f"vertex_colors: got {d['vertex_colors']}, want >= 1")
         if d["vertex_colors"] < 1:
             failures.append("vertex_colors")
+
+        print("\nFixture D — 'no fingers' hand: finger bones present, none drives mesh")
+        dd = runner.run("measure", inputs={"model": Path(tmp) / "d.glb"})
+        if not dd["ok"]:
+            print(f"FAIL: {dd['error']}")
+            return 1
+        d = dd["data"]
+        check("bones", d["bones"], 3)
+        check("mixamo_bones", d["mixamo_bones"], 3)
+        check("finger_bones", d["finger_bones"], 2)
+        check("finger_bones_weighted", d["finger_bones_weighted"], 0)
+        check("finger_verts", d["finger_verts"], 0)
+
+        print("\nFixture E — rigged thumb: 4 corners on the thumb bone")
+        e = runner.run("measure", inputs={"model": Path(tmp) / "e.glb"})
+        if not e["ok"]:
+            print(f"FAIL: {e['error']}")
+            return 1
+        d = e["data"]
+        check("finger_bones", d["finger_bones"], 2)
+        check("finger_bones_weighted", d["finger_bones_weighted"], 1)
+        check("finger_verts", d["finger_verts"], 12)
 
         print("\nRunner contract")
         miss = runner.run("measure", inputs={"model": Path(tmp) / "nope.glb"})

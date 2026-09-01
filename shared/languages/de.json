@@ -2462,6 +2462,14 @@
     "Chat opacity": "Chat-Deckkraft",
     "How solid the chat window is drawn over the world. Lower values let the scene show through the transcript.": "Wie deckend das Chat-Fenster über der Welt liegt. Niedrigere Werte lassen die Szene durch den Verlauf scheinen.",
     "Portraits": "Porträts",
-    "Portrait count: {n}": "Porträt-Anzahl: {n}"
+    "Portrait count: {n}": "Porträt-Anzahl: {n}",
+    "fingers: measure again to see": "Finger: erneut messen, um es zu sehen",
+    "generated with \"No fingers\"": "generiert mit „Keine Finger“",
+    "generated with fingers": "generiert mit Fingern",
+    "no finger bones": "keine Fingerknochen",
+    "fingers not rigged — bones without mesh, the hand moves as one block": "Finger nicht geriggt — Knochen ohne Mesh, die Hand bewegt sich als Block",
+    "fingers rigged": "Finger geriggt",
+    "finger bones drive mesh": "Fingerknochen treiben Mesh",
+    "Finger bones that own at least one vertex with weight ≥ 0.5. A \"No fingers\" bake keeps the bones but skins the whole hand to the hand bone.": "Fingerknochen, die mindestens einen Vertex mit Gewicht ≥ 0,5 besitzen. Ein „Keine Finger“-Bake behält die Knochen, skinnt aber die ganze Hand auf den Handknochen."
   }
 }

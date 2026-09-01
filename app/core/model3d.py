@@ -418,6 +418,11 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 info["backend"] = meta.get("backend", "")
                 info["source_filename"] = meta.get("source_filename", "")
                 info["face_num"] = meta.get("face_num")
+                # What the rig stage was ASKED for (a generated model records
+                # it; an upload has no such wish). Whether the fingers really
+                # drive mesh is the measurement's answer, not this one.
+                if meta.get("no_fingers") is not None:
+                    info["no_fingers"] = bool(meta["no_fingers"])
                 # Measured geometry, if this model has been through Blender.
                 # Read from the sidecar only — the info route is polled, and
                 # measuring costs a subprocess.

@@ -28,6 +28,14 @@ interface Model3DMeasured {
   verts?: number
   bones?: number
   mixamo_bones?: number
+  /** bones named as fingers — the Mixamo rig always carries its 30, so the
+   *  count alone never says whether they were skinned */
+  finger_bones?: number
+  /** finger bones that actually drive mesh (own a vertex with weight >= 0.5);
+   *  0 with finger_bones > 0 = the hands were rigged as one block */
+  finger_bones_weighted?: number
+  /** vertices driven by a finger bone, as stored */
+  finger_verts?: number
   /** 0 with vertex_colors > 0 = colour lives in the vertices, no UVs */
   uv_layers?: number
   vertex_colors?: number
@@ -65,6 +73,9 @@ interface Model3DInfo {
   backend?: string
   source?: string
   source_filename?: string
+  /** what the rig stage was asked for when this model was generated; absent
+   *  for uploads. The measurement says what it actually delivered. */
+  no_fingers?: boolean
   measured?: Model3DMeasured
   diagnosis?: Model3DDiagnosis
   /** Resolutions that exist for this file: always 'full', plus 'low' once a
@@ -410,6 +421,31 @@ export function FieldModel3D({ character }: { character: string }) {
   const sizeMb = model?.size ? (model.size / (1024 * 1024)).toFixed(1) : ''
   const measured = model?.measured
   const canMeasure = !!st.blender?.usable
+  // Finger verdict from the measurement: bones alone say nothing (the Mixamo
+  // rig always carries its 30), so it is the WEIGHTED finger bones that
+  // decide. A measurement from before this field asks for a re-measure.
+  const fingers = ((): { label: string; mismatch: boolean } => {
+    if (!measured || typeof measured.finger_bones !== 'number') {
+      return { label: t('fingers: measure again to see'), mismatch: false }
+    }
+    const requested = model?.no_fingers === undefined
+      ? ''
+      : ` (${model.no_fingers ? t('generated with "No fingers"') : t('generated with fingers')})`
+    if (measured.finger_bones === 0) {
+      return { label: `${t('no finger bones')}${requested}`, mismatch: model?.no_fingers === false }
+    }
+    const weighted = measured.finger_bones_weighted ?? 0
+    if (weighted === 0) {
+      return {
+        label: `${t('fingers not rigged — bones without mesh, the hand moves as one block')}${requested}`,
+        mismatch: model?.no_fingers === false,
+      }
+    }
+    return {
+      label: `${t('fingers rigged')} (${weighted}/${measured.finger_bones} ${t('finger bones drive mesh')})${requested}`,
+      mismatch: model?.no_fingers === true,
+    }
+  })()
   // Only a Mixamo rig can play the shared clips (humanoid characters).
   const mixamo = (model?.rig || st.rig) !== 'generic'
   const bust = model?.created_at || st.signature || ''
@@ -572,6 +608,18 @@ export function FieldModel3D({ character }: { character: string }) {
               {measured.bones
                 ? ` · ${measured.bones} ${t('bones')}${measured.mixamo_bones ? ' (mixamo)' : ''}`
                 : ''}
+              {/* Are the fingers rigged? Not a bone count — the Mixamo rig
+                  always ships its finger bones — but whether those bones own
+                  vertices. Coloured when the file contradicts what the rig
+                  stage was asked for. */}
+              {measured.bones ? (
+                <span
+                  style={fingers.mismatch ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}
+                  title={t('Finger bones that own at least one vertex with weight ≥ 0.5. A "No fingers" bake keeps the bones but skins the whole hand to the hand bone.')}
+                >
+                  {` · ${fingers.label}`}
+                </span>
+              ) : null}
               {measured.uv_layers === 0 && (measured.vertex_colors || 0) > 0
                 ? ` · ${t('no UVs, colour in the vertices')}`
                 : ''}

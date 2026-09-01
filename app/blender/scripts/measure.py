@@ -23,6 +23,16 @@ Reported under ``data``:
     bones         armature bone count
     bone_names    first bones, for spotting a foreign rig by name
     mixamo_bones  how many carry the mixamorig prefix
+    finger_bones  bones named as a finger (thumb/index/middle/ring/pinky/
+                  finger) — the Mixamo rig ALWAYS carries its 30 finger
+                  bones, whether or not the rig stage skinned them
+    finger_bones_weighted
+                  finger bones that actually DRIVE mesh (own at least one
+                  vertex with weight >= 0.5). A "no fingers" bake keeps the
+                  bones but skins the whole hand to the hand bone, so this
+                  reads 0 — and is the honest answer to "are the fingers
+                  rigged", which the bone count alone cannot give
+    finger_verts  vertices driven by a finger bone (weight >= 0.5), as stored
     uv_layers     UV set count — 0 with vertex_colors > 0 is the Triposplat
                   signature (no UVs, colour in the vertices, not shrinkable)
     vertex_colors colour attribute count
@@ -50,6 +60,44 @@ from mathutils import Vector                                  # noqa: E402
 # How many bone names travel back — enough to recognise a rig, short enough to
 # keep the result readable in a log line.
 BONE_NAME_SAMPLE = 8
+# A bone is a finger by its name: Mixamo names them LeftHandThumb1..Pinky3,
+# other rigs say "finger"; a hand bone itself never carries these tokens.
+FINGER_TOKENS = ("thumb", "index", "middle", "ring", "pinky", "finger")
+# The weight above which a bone is the one that DRIVES a vertex — the same
+# threshold the diagnose script uses, so both scripts agree on ownership.
+DRIVE_WEIGHT = 0.5
+
+
+def _is_finger(name):
+    low = name.lower()
+    return any(tok in low for tok in FINGER_TOKENS)
+
+
+def _finger_skinning(meshes, finger_names):
+    """(finger bones that drive mesh, vertices driven by any finger bone).
+
+    Reads the vertex groups — the skin weights as stored — not the bones: a
+    finger bone with no group, or a group no vertex reaches the drive weight
+    in, is a bone that moves nothing.
+    """
+    weighted = set()
+    verts = 0
+    for obj in meshes:
+        groups = {g.index: g.name for g in obj.vertex_groups
+                  if g.name in finger_names}
+        if not groups:
+            continue
+        for v in obj.data.vertices:
+            hit = False
+            for g in v.groups:
+                name = groups.get(g.group)
+                if name is None or g.weight < DRIVE_WEIGHT:
+                    continue
+                weighted.add(name)
+                hit = True
+            if hit:
+                verts += 1
+    return len(weighted), verts
 
 
 def _mesh_objects():
@@ -107,6 +155,8 @@ def inspect(args):
     for arm in armatures:
         bone_names.extend(b.name for b in arm.data.bones)
     mixamo = sum(1 for n in bone_names if "mixamorig" in n.lower())
+    finger_names = {n for n in bone_names if _is_finger(n)}
+    finger_weighted, finger_verts = _finger_skinning(meshes, finger_names)
 
     images = []
     for img in bpy.data.images:
@@ -129,6 +179,9 @@ def inspect(args):
         "bones": len(bone_names),
         "bone_names": bone_names[:BONE_NAME_SAMPLE],
         "mixamo_bones": mixamo,
+        "finger_bones": len(finger_names),
+        "finger_bones_weighted": finger_weighted,
+        "finger_verts": finger_verts,
         "uv_layers": uv_layers,
         "vertex_colors": vcols,
         "actions": len(bpy.data.actions),
