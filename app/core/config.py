@@ -81,9 +81,12 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 
 # Negatives of the mesh-input renders — ONE text per use case, shared by both
 # style families (deliberately NOT _NEG_PHOTO: "posed"/"studio lighting" would
-# fight the T-pose / flat-light goal).
-_NEG_TPOSE = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, fingers overlapping, hands hidden")
-_NEG_TPOSE_ANIMAL = ("illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up")
+# fight the T-pose / flat-light goal). Unlike _NEG_PHOTO they do NOT negate
+# "cgi"/"3d render" either: the render IS the image-to-3D input and is asked
+# for as a realistic 3D figure (user decision 2026-09-01) — the skin terms
+# (airbrushed/plastic/flawless) stay so the textures remain lifelike.
+_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, fingers overlapping, hands hidden")
+_NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up")
 
 # Negatives of the OPTIONAL extra mesh views (back / left+right profile).
 # Both build on _NEG_TPOSE and add what actually goes wrong there: the model
@@ -342,14 +345,17 @@ _DEFAULT_IMAGE_USE_CASES = {
     # input): flat shadowless light — shadows would bake into the 3D
     # texture. Deliberately NOT _NEG_PHOTO ("posed", "studio lighting"
     # would fight the T-pose / flat-light goal). Pose-free like all styles.
+    # The medium is a REALISTIC 3D FIGURE, not a photo (user decision
+    # 2026-09-01): the render feeds a mesher, and a clean 3D-character look
+    # with lifelike textures reconstructs better than photographic depth.
     "tpose": {
         "keywords": {
-            "prompt_style": "full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin and fabric textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin and fabric textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -359,12 +365,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # the negatives push away from anthropomorphism.
     "tpose_animal": {
         "keywords": {
-            "prompt_style": "full body view of the animal, nose to tail, all four legs and the tail fully inside the frame, three-quarter side view, margin around the animal, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D animal model, lifelike fur and skin textures, full body view of the animal, nose to tail, all four legs and the tail fully inside the frame, three-quarter side view, margin around the animal, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_ANIMAL,
             "prompt_instruction": "Write comma-separated tags describing the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
         },
         "natural": {
-            "prompt_style": "a full-body photo of the animal from nose to tail against a plain neutral background, seen from a three-quarter side angle with all four legs and the tail entirely inside the frame and margin around it, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the animal as a realistic 3D creature figure with lifelike fur and skin textures, shown from nose to tail against a plain neutral background, seen from a three-quarter side angle with all four legs and the tail entirely inside the frame and margin around it, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_ANIMAL,
             "prompt_instruction": "Describe the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
         },
@@ -378,12 +384,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # automatically — no migration needed.
     "tpose_back": {
         "keywords": {
-            "prompt_style": "full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin and fabric textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_BACK,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin and fabric textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_BACK,
             "prompt_instruction": "Describe the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -393,12 +399,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # visible span would only fight the view.
     "tpose_side": {
         "keywords": {
-            "prompt_style": "full body view, head to toe, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin and fabric textures, full body view, head to toe, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body photo of the character from head to toe against a plain neutral background, margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin and fabric textures, shown from head to toe against a plain neutral background, margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
