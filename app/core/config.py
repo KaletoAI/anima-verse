@@ -85,7 +85,12 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 # "cgi"/"3d render" either: the render IS the image-to-3D input and is asked
 # for as a realistic 3D figure (user decision 2026-09-01) — the skin terms
 # (airbrushed/plastic/flawless) stay so the textures remain lifelike.
-_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, fingers overlapping, hands hidden")
+# The finger terms push toward a CLOSED hand (pose text: "fingers straight
+# and held together"): a fanned hand is a thin splayed surface the img2mesh
+# bake inflates into an oversized paddle. "fingers overlapping" used to sit
+# here and forced the fan — it was replaced by its opposite, and "curled
+# fingers"/"clenched fists" stay so closed does not become a fist.
+_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, spread fingers, splayed fingers, fanned fingers, oversized hands, hands hidden")
 _NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up")
 
 # Negatives of the OPTIONAL extra mesh views (back / left+right profile).
