@@ -153,6 +153,16 @@ async def lifespan(app: FastAPI):
     except Exception as _sfe:
         logger.warning("scale-frame migration failed: %s", _sfe)
 
+    # Location model sources carry a VIEW since 2026-09-02: the bare
+    # "building" gallery image type becomes "building-front" once.
+    try:
+        from app.models.world import migrate_building_image_type_once
+        _bt = migrate_building_image_type_once()
+        if _bt:
+            logger.info("Building image types migrated: %s", _bt)
+    except Exception as _bte:
+        logger.warning("building image-type migration failed: %s", _bte)
+
     # Surface textures are shared across all worlds, not per world: leftover
     # world folders hand their files to shared/surface_textures/ once, on boot
     # (E5 Task 4, 2026-08-12). The sweep covers EVERY world under the worlds

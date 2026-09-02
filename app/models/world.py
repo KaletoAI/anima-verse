@@ -2558,13 +2558,54 @@ def get_gallery_image_types(location_name: str) -> Dict[str, str]:
 
 
 def remove_gallery_image_type(location_name: str, image_name: str):
-    """Entfernt die Typ-Zuordnung eines geloeschten Bildes."""
+    """Removes the type assignment of a deleted image."""
     meta = _load_gallery_meta(location_name)
     types = meta.get("image_types", {})
     if image_name in types:
         del types[image_name]
         meta["image_types"] = types
         _save_gallery_meta(location_name, meta)
+
+
+def rewrite_building_types(meta: dict) -> bool:
+    """Rename the retired bare ``building`` image type to ``building-front``
+    IN PLACE (2026-09-02: the location model source got four view types).
+    Returns whether anything changed. Pure — the migration below and the
+    smoke check call it on a dict."""
+    types = meta.get("image_types")
+    if not isinstance(types, dict):
+        return False
+    changed = False
+    for name, value in list(types.items()):
+        if value == "building":
+            types[name] = "building-front"
+            changed = True
+    return changed
+
+
+def migrate_building_image_type_once() -> Dict[str, int]:
+    """Walk every gallery's ``gallery_meta.json`` and rename the bare
+    ``building`` image type to ``building-front``. Idempotent by construction
+    (a migrated file holds no ``building`` value any more), so it needs no
+    marker; touches only files that change. Returns ``{galleries, images}``
+    counts for the boot log, ``{}`` when nothing changed."""
+    root = get_storage_dir() / "world_gallery"
+    if not root.is_dir():
+        return {}
+    galleries = images = 0
+    for meta_file in root.glob("*/gallery_meta.json"):
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        before = dict(meta.get("image_types") or {})
+        if not rewrite_building_types(meta):
+            continue
+        meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+        galleries += 1
+        images += sum(1 for v in before.values() if v == "building")
+    return {"galleries": galleries, "images": images} if galleries else {}
 
 
 def set_gallery_image_meta(location_name: str, image_name: str, meta_info: dict):
