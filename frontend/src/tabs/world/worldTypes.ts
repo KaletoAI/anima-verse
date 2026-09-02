@@ -472,7 +472,11 @@ export interface GalleryResponse {
   image_metas?: Record<string, { backend?: string; model?: string; loras?: string[] }>
 }
 
-export const IMAGE_TYPES = ['', 'day', 'night', 'map_2d', 'building'] as const
+export const BUILDING_TYPES = ['building-front', 'building-back', 'building-left', 'building-right'] as const
+export type BuildingType = typeof BUILDING_TYPES[number]
+export const IMAGE_TYPES = ['', 'day', 'night', 'map_2d', ...BUILDING_TYPES] as const
+export const isBuildingType = (t: string | undefined): boolean =>
+  (BUILDING_TYPES as readonly string[]).includes(t || '')
 
 export type Selection =
   | { kind: 'location'; locationId: string }

@@ -62,6 +62,9 @@ interface ComposePreview {
   negative_folded?: string[]
 }
 
+/** Which side of a building/room the render shows (design 2026-09-02). */
+export type ImageView = 'front' | 'back' | 'left' | 'right'
+
 export interface ImageGenSubmit {
   prompt: string
   backend?: string
@@ -86,6 +89,8 @@ export interface ImageGenSubmit {
   // render path logs it, so a dialog render is traceable in the JSONL.
   llm_composed?: boolean
   cache_hit?: boolean
+  // Gallery file used as the appearance reference of a back/side view (view renders only).
+  front_reference?: string
 }
 
 interface Props {
@@ -182,6 +187,14 @@ interface Props {
   hideNegative?: boolean
   /** Show character checkboxes (detected pre-selected) to pin who is in the image. */
   characterOptions?: { detected: CharOpt[]; available: CharOpt[] }
+  /** View selector for the building/room model source (design 2026-09-02):
+   *  the caller owns the value (it sets prompt_type) and re-runs the compose
+   *  preview on change. */
+  viewChoice?: { value: ImageView; onChange: (v: ImageView) => void }
+  /** Front images the chosen view may reference (newest first); shown only
+   *  for back/left/right and when non-empty. The pick is emitted as
+   *  `front_reference`. */
+  frontReferences?: string[]
 }
 
 // Charakter-Eintrag: manche Endpunkte liefern Strings, andere {name, type}-Objekte
@@ -192,6 +205,12 @@ const charName = (c: CharOpt): string => (typeof c === 'string' ? c : c?.name ||
 
 const LORA_SLOTS = 4
 
+// Source strings for the view selector — 'Back view' etc., never a bare
+// 'Back' (which collides with the navigation label in the translations).
+const VIEW_LABEL: Record<ImageView, string> = {
+  front: 'Front view', back: 'Back view', left: 'Left view', right: 'Right view',
+}
+
 export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
   styleUseCase, composeRequest,
@@ -200,6 +219,7 @@ export function ImageGenDialog({
   showCreateNew, defaultCreateNew,
   enhanceEndpoint = '/world/imagegen-enhance-prompt', onSubmit, onClose,
   mode = 'create', hideNegative, characterOptions,
+  viewChoice, frontReferences,
 }: Props) {
   const isRegen = mode === 'regenerate'
   const { t } = useI18n()
@@ -212,6 +232,9 @@ export function ImageGenDialog({
   // Reference-slot toggles (managed against the backend's ref_slot_count budget).
   const [useRoom, setUseRoom] = useState(true)
   const [useSource, setUseSource] = useState(!!defaultUseSource)
+  // Front image that a back/side render uses as its appearance reference.
+  const [frontRef, setFrontRef] = useState('')
+  const [useFrontRef, setUseFrontRef] = useState(true)
   const [improvement, setImprovement] = useState('')
   const [negative, setNegative] = useState('')
   const [selectedChars, setSelectedChars] = useState<string[]>([])
@@ -267,9 +290,17 @@ export function ImageGenDialog({
   useEffect(() => {
     if (open) setSuffixText(settingsSuffix?.text || '')
   }, [open, settingsSuffix?.text])
+  // Statically checkable dependency (the array itself is a fresh literal on
+  // every render of the caller — only its newest entry may reset the pick).
+  const firstFrontRef = frontReferences?.[0] || ''
   useEffect(() => {
-    if (open) { setUseRoom(true); setUseSource(!!defaultUseSource) }
-  }, [open, defaultUseSource])
+    if (open) {
+      setUseRoom(true)
+      setUseSource(!!defaultUseSource)
+      setFrontRef(firstFrontRef)
+      setUseFrontRef(true)
+    }
+  }, [open, defaultUseSource, firstFrontRef])
   useEffect(() => {
     if (!open) return
     setWidthText(defaultResolution?.width ? String(defaultResolution.width) : '')
@@ -466,6 +497,10 @@ export function ImageGenDialog({
       if (w) payload.width = w
       if (h) payload.height = h
     }
+    if (viewChoice && viewChoice.value !== 'front' && useFrontRef && frontRef
+        && (currentOption.ref_slot_count || 0) > 0) {
+      payload.front_reference = frontRef
+    }
     setSubmitting(true)
     try {
       await onSubmit(payload)
@@ -479,7 +514,8 @@ export function ImageGenDialog({
       isRegen, showCreateNew, createNew,
       improvement, hideNegative, noNegative, negative, characterOptions, selectedChars,
       showRoomReference, useRoom, sourceImageUrl, useSource,
-      showResolution, widthText, heightText])
+      showResolution, widthText, heightText,
+      viewChoice, useFrontRef, frontRef])
 
   // Reference-slot budget: how many ref images may be used (backend ref_slot_count).
   // Persons + room + current-image each consume one slot.
@@ -487,6 +523,7 @@ export function ImageGenDialog({
   const usedSlots = selectedChars.length
     + (showRoomReference && useRoom ? 1 : 0)
     + (sourceImageUrl && useSource ? 1 : 0)
+    + (viewChoice && viewChoice.value !== 'front' && useFrontRef && frontRef ? 1 : 0)
   const atBudget = slotBudget > 0 && usedSlots >= slotBudget
   // Regenerate-as-edit: the source image MUST land in a reference slot. Block
   // submit (and explain) when the chosen backend has no slot or the toggle is off.
@@ -529,6 +566,42 @@ export function ImageGenDialog({
             // Dialog via flex-wrap auf eine Spalte um.
             <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {viewChoice ? (
+                <>
+                  <label className="ga-imagegen-label">{t('View')}</label>
+                  <select className="ga-input" value={viewChoice.value}
+                    disabled={submitting}
+                    onChange={(e) => viewChoice.onChange(e.target.value as ImageView)}>
+                    {(['front', 'back', 'left', 'right'] as ImageView[]).map((v) => (
+                      <option key={v} value={v}>{t(VIEW_LABEL[v])}</option>
+                    ))}
+                  </select>
+                  {viewChoice.value !== 'front' && (frontReferences || []).length ? (
+                    <>
+                      <label className="ga-check-row"
+                        title={t('The front image goes into the backend’s first reference slot so the view keeps the same appearance. Text still decides the view.')}>
+                        <input type="checkbox"
+                          checked={useFrontRef && slotBudget > 0}
+                          disabled={submitting || slotBudget === 0}
+                          onChange={(e) => setUseFrontRef(e.target.checked)} />
+                        <span>
+                          {t('Use front image as reference')}
+                          {slotBudget === 0 ? ` — ${t('this backend has no reference slot')}` : ''}
+                        </span>
+                      </label>
+                      {useFrontRef && slotBudget > 0 ? (
+                        <select className="ga-input" value={frontRef}
+                          disabled={submitting}
+                          onChange={(e) => setFrontRef(e.target.value)}>
+                          {(frontReferences || []).map((f) => (
+                            <option key={f} value={f}>{f}</option>
+                          ))}
+                        </select>
+                      ) : null}
+                    </>
+                  ) : null}
+                </>
+              ) : null}
               <label className="ga-imagegen-label">{t('Backend')}</label>
               <select
                 className="ga-input"

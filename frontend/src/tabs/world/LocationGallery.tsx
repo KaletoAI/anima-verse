@@ -2,9 +2,9 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
+import { ImageGenDialog, type ImageGenSubmit, type ImageView } from '../../components/ImageGenDialog'
 import { snapResolution } from '../../lib/imageSize'
-import { IMAGE_TYPES, type GalleryResponse, type Location, type Room } from './worldTypes'
+import { IMAGE_TYPES, isBuildingType, type GalleryResponse, type Location, type Room } from './worldTypes'
 import { ImageSetDialog } from './ImageSetDialog'
 
 // ── Gallery — list, type-change, night-variant, delete, enlarge. ───────────
@@ -28,8 +28,6 @@ interface GalleryCardProps {
   onRemove: (image: string) => void
   /** Two-step delete: the first click arms THIS tile, the second deletes. */
   removeArmed?: boolean
-  /** Turn a building image into the location's 3D model (building tiles only). */
-  onGenerateModel?: (image: string) => void
 }
 
 const GalleryCard = memo(function GalleryCard({
@@ -49,7 +47,6 @@ const GalleryCard = memo(function GalleryCard({
   onMove,
   onRemove,
   removeArmed,
-  onGenerateModel,
 }: GalleryCardProps) {
   const { t } = useI18n()
   return (
@@ -115,7 +112,7 @@ const GalleryCard = memo(function GalleryCard({
               </option>
             ))}
           </select>
-          {type !== 'building' ? (
+          {!isBuildingType(type) ? (
             <button
               className="ga-btn ga-btn-sm"
               disabled={isBusy}
@@ -141,16 +138,6 @@ const GalleryCard = memo(function GalleryCard({
           >
             ⇄
           </button>
-          {type === 'building' && onGenerateModel ? (
-            <button
-              className="ga-btn ga-btn-sm"
-              disabled={isBusy}
-              onClick={() => onGenerateModel(filename)}
-              title={t('Generate the 3D building model from this image')}
-            >
-              🧊
-            </button>
-          ) : null}
           <button
             className="ga-btn ga-btn-sm ga-btn-danger"
             disabled={isBusy}
@@ -173,7 +160,6 @@ export function LocationGallery({
   allLocations,
   placements,
   mode,
-  onGenerateModel,
 }: {
   locationId: string
   location: Location
@@ -188,17 +174,17 @@ export function LocationGallery({
    *  images (day/night/map icons), '3d' shows only the building images that
    *  feed the 3D model. Follows the location editor's tab split. */
   mode: '2d' | '3d'
-  /** Turn a building-type image into a 3D model (🧊 per tile): the location's
-   *  building model (3D tab) or — with roomFilter — the room's model. The
-   *  caller owns the model panel + backend picker. */
-  onGenerateModel?: (image: string) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [data, setData] = useState<GalleryResponse | null>(null)
   const [zoom, setZoom] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  // `dialogType` is the DIALOG KIND (which button was pressed); for the
+  // building kind the VIEW picks the wire type `building-<view>`.
   const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | 'building' | null>(null)
+  const [buildingView, setBuildingView] = useState<ImageView>('front')
+  const promptType = dialogType === 'building' ? `building-${buildingView}` : dialogType
   const [imageSetOpen, setImageSetOpen] = useState(false)
   // "Regenerate" target: recreate an existing map image using it as a reference.
   const [regenTarget, setRegenTarget] = useState<{ filename: string; type: string } | null>(null)
@@ -226,9 +212,9 @@ export function LocationGallery({
     reload()
   }, [reload])
 
-  // The 3D building model itself (status/viewer/placement) lives in
-  // BuildingModelPanel — this gallery only surfaces the 🧊 per building tile
-  // via onGenerateModel (3D mode).
+  // The 3D building model itself (status/viewer/placement, including the
+  // "Generate 3D model" button that meshes these views) lives in
+  // BuildingModelPanel — this gallery only produces the source images.
 
   // Move an image to another location (file + prompt/type/meta).
   const submitMove = useCallback(async () => {
@@ -276,13 +262,22 @@ export function LocationGallery({
     const byRoom = roomFilter
       ? all.filter((f) => (rms[f] || '') === roomFilter)
       : all.filter((f) => !rms[f] || rms[f] === '')
-    if (mode === '3d') return byRoom.filter((f) => (tps[f] || '') === 'building')
-    // A room view shows ALL its images incl. its building-type model source
-    // (the 🧊 lives there); the location-level 2D tab excludes building
-    // images — those belong to the 3D tab.
+    if (mode === '3d') return byRoom.filter((f) => isBuildingType(tps[f]))
+    // A room view shows ALL its images incl. its building-type model sources;
+    // the location-level 2D tab excludes building images — those belong to
+    // the 3D tab.
     if (roomFilter) return byRoom
-    return byRoom.filter((f) => (tps[f] || '') !== 'building')
+    return byRoom.filter((f) => !isBuildingType(tps[f]))
   }, [data, roomFilter, mode])
+
+  // Front views of THIS scope (room or location level), newest first — the
+  // appearance reference a back/side render may point at.
+  const frontImages = useMemo(() => {
+    const tps = data?.image_types || {}
+    const rooms = data?.image_rooms || {}
+    return (data?.images || []).filter((f) => tps[f] === 'building-front'
+      && (roomFilter ? rooms[f] === roomFilter : !rooms[f]))
+  }, [data, roomFilter])
 
   const setType = useCallback(
     async (image: string, type: string) => {
@@ -345,11 +340,11 @@ export function LocationGallery({
     async (payload: ImageGenSubmit) => {
       if (!dialogType) return
       const body: Record<string, unknown> = {
-        prompt_type: dialogType,
+        prompt_type: promptType,
         prompt: payload.prompt,
       }
-      // Room context: assign the image to the room — including 'building'
-      // (the room's model-source image). Map types have no room dimension.
+      // Room context: assign the image to the room — including the building
+      // views (the room's model-source images). Map types have no room dimension.
       if (roomFilter && dialogType !== 'map_2d') body.room_id = roomFilter
       if (payload.backend) body.backend = payload.backend
       if (payload.loras) body.loras = payload.loras
@@ -367,6 +362,8 @@ export function LocationGallery({
       // Output size (empty fields = the server's use-case default).
       if (payload.width) body.width = payload.width
       if (payload.height) body.height = payload.height
+      // Back/side view rendered with the front image in reference slot 1.
+      if (payload.front_reference) body.front_reference = payload.front_reference
 
       // Detached: do NOT await. handleSubmit will see a resolved Promise
       // immediately and trigger onClose() in the next microtask.
@@ -381,7 +378,7 @@ export function LocationGallery({
           toast(t('Error') + ': ' + (e as Error).message, 'error')
         })
     },
-    [dialogType, locationId, roomFilter, t, toast],
+    [dialogType, promptType, locationId, roomFilter, t, toast],
   )
 
   // Regenerate an existing map image — using itself as the reference.
@@ -536,8 +533,8 @@ export function LocationGallery({
             <button
               className="ga-btn ga-btn-sm"
               disabled={!!busy}
-              onClick={() => setDialogType('building')}
-              title={t('Generate the room’s model source image (open-top interior — feeds the 3D room model via 🧊).')}
+              onClick={() => { setBuildingView('front'); setDialogType('building') }}
+              title={t('Generate the room’s model source image (open-top interior, front or an extra view — feeds the 3D room model).')}
             >
               🏛 {t('Generate model image')}
             </button>
@@ -557,8 +554,8 @@ export function LocationGallery({
         <button
           className="ga-btn ga-btn-sm"
           disabled={!!busy}
-          onClick={() => setDialogType('building')}
-          title={t('Open the image generation dialog for the building exterior (source of the 3D building model).')}
+          onClick={() => { setBuildingView('front'); setDialogType('building') }}
+          title={t('Open the image generation dialog for the building exterior (front, back, left or right view — the sources of the 3D building model).')}
         >
           🏛 {t('Generate building')}
         </button>
@@ -636,10 +633,10 @@ export function LocationGallery({
           location_id: locationId,
           // Map tiles belong to the location, never to a room.
           room_id: (roomFilter && dialogType !== 'map_2d') ? roomFilter : '',
-          prompt_type: dialogType,
+          prompt_type: promptType,
         }
       : undefined),
-    [dialogType, locationId, roomFilter],
+    [dialogType, promptType, locationId, roomFilter],
   )
   // Same for the regenerate dialog — but its prompt is a literal adjustment
   // order, so it asks for the bare SUBJECT (no style, no hint, no guard).
@@ -677,6 +674,9 @@ export function LocationGallery({
       // arrives prefilled from the floor plan.
       showResolution={dialogType === 'day' || dialogType === 'night' || dialogType === 'building'}
       defaultResolution={dialogType === 'building' ? roomResolution : null}
+      viewChoice={dialogType === 'building'
+        ? { value: buildingView, onChange: setBuildingView } : undefined}
+      frontReferences={dialogType === 'building' ? frontImages : undefined}
       onSubmit={submitGenerate}
       onClose={() => setDialogType(null)}
     />
@@ -750,7 +750,6 @@ export function LocationGallery({
               onMove={startMove}
               onRemove={remove}
               removeArmed={armedRemove === filename}
-              onGenerateModel={onGenerateModel}
             />
           )
         })}
