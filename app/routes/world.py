@@ -1896,12 +1896,22 @@ def props_admin() -> Dict[str, Any]:
     try:
         for b in svc.list_available_backends(media="image"):
             style = compose_prompt("", b)
+            # The three prop use cases the image dialog may render into (front
+            # keeps "prop", the extra views their own siblings) — RAW styles
+            # with the {subject} slot, the dialog weaves per view.
+            styles = {uc: compose_prompt("", b, use_case=uc)["style"]
+                      for uc in ("prop", "prop_back", "prop_side")}
             # False = no negative input (auto/yes/no resolved in
             # negation_fold): the form hides the field, and the handoff folds
             # whatever negative is submitted into the prompt as negations.
             image_backends.append({"name": b.name,
                                    "prompt_style": style["style"],
+                                   "prompt_styles": styles,
                                    "prompt_negative": style["negative"],
+                                   # Reference slots: the view dialog offers
+                                   # "front as reference" only where one exists.
+                                   "ref_slot_count": int(
+                                       getattr(b, "ref_slot_count", 0) or 0),
                                    "supports_negative_prompt": bool(
                                        getattr(b, "supports_negative_prompt",
                                                True))})

@@ -2174,7 +2174,11 @@ def build_imagegen_options() -> Dict[str, Any]:
         from app.core.config import resolve_use_case_style as _rucs
         _styles = {}
         for _uc in ("location", "map", "building", "building_outdoor",
-                    "room_model", "room_model_outdoor"):
+                    "room_model", "room_model_outdoor",
+                    "building_back", "building_side",
+                    "building_outdoor_back", "building_outdoor_side",
+                    "room_model_back", "room_model_side",
+                    "room_model_outdoor_back", "room_model_outdoor_side"):
             try:
                 _styles[_uc] = _rucs(
                     _uc, opt["image_family"],

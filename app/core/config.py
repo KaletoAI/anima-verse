@@ -121,6 +121,14 @@ _NEG_ROOM = ("illustration, anime, cartoon, drawing, sketch, painting, watermark
 # shadows and off-base surroundings are pushed away.
 _NEG_OUTDOOR_SCENE = ("illustration, anime, cartoon, drawing, sketch, painting, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood")
 
+# View-specific additions for the back and side renders of the mesh-input
+# use cases (props, buildings, rooms). A rear render must not turn the
+# subject back toward the camera; a profile must not fall back into the
+# familiar three-quarter view. Appended to the base negative of each family.
+_NEG_VIEW_BACK = ", front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera"
+_NEG_VIEW_SIDE = ", front view, back view, three-quarter view, facing the camera, mirrored"
+_NEG_PROP = "scene, environment, floor shadow, people, hands, text, watermark"
+
 # Eingebaute Defaults pro use_case × Familie. Diese Werte werden NICHT in die
 # config.json geseedet — sie sind Resolver-Default UND grauer Placeholder in der
 # Admin-UI (leeres Feld = dieser Default greift). Ohne Backend-Fallback braucht
@@ -242,6 +250,106 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
         },
     },
+    # Extra VIEWS of the location model sources (building exterior, outdoor
+    # scene diorama, room diorama, open-air room) — multi-view img2mesh
+    # inputs. Framing/isolation/light identical to the base use case; only
+    # the camera clause and the negative differ. Left/right share "_side".
+    "building_back": {
+        "keywords": {
+            "prompt_style": "{subject}, exterior view of a single building seen from directly behind, the rear facade facing the camera, slightly elevated eye level, the entire structure from ground to rooftop in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_BUILDING + _NEG_VIEW_BACK,
+            "prompt_instruction": "Write comma-separated tags for the REAR view of the WHOLE building — back facade, roof, storeys, materials. Entire structure in frame with a margin, neutral background, no people, no interior.",
+        },
+        "natural": {
+            "prompt_style": "an exterior photo of {subject} as a single building seen from directly behind with its rear facade facing the camera, at a slightly elevated eye level, the entire structure from ground to rooftop inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_BUILDING + _NEG_VIEW_BACK,
+            "prompt_instruction": "Describe the rear view of the WHOLE building — back facade, roof, storeys, materials. The entire structure is in frame with a margin, neutral background, no people, no interior.",
+        },
+    },
+    "building_side": {
+        "keywords": {
+            "prompt_style": "{subject}, exterior view of a single building in strict side elevation, one side wall facing the camera, slightly elevated eye level, the entire structure from ground to rooftop in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_BUILDING + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Write comma-separated tags for a strict SIDE elevation of the WHOLE building — side wall, roof, storeys, materials. Entire structure in frame with a margin, neutral background, no people, no interior.",
+        },
+        "natural": {
+            "prompt_style": "an exterior photo of {subject} as a single building in strict side elevation with one side wall facing the camera, at a slightly elevated eye level, the entire structure from ground to rooftop inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_BUILDING + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Describe a strict side elevation of the WHOLE building — side wall, roof, storeys, materials. The entire structure is in frame with a margin, neutral background, no people, no interior.",
+        },
+    },
+    "building_outdoor_back": {
+        "keywords": {
+            "prompt_style": "{subject}, outdoor scene diorama on a square ground base seen from directly behind, elevated eye level, the entire scene from ground to treetops in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_OUTDOOR_SCENE + _NEG_VIEW_BACK,
+            "prompt_instruction": "Write comma-separated tags for the REAR view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. Entire scene in frame with a margin, neutral background, no people.",
+        },
+        "natural": {
+            "prompt_style": "a photo of {subject} as a single outdoor scene diorama on a square ground base seen from directly behind at an elevated eye level, the entire scene from ground to treetops inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_OUTDOOR_SCENE + _NEG_VIEW_BACK,
+            "prompt_instruction": "Describe the rear view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. The entire scene is in frame with a margin, neutral background, no people.",
+        },
+    },
+    "building_outdoor_side": {
+        "keywords": {
+            "prompt_style": "{subject}, outdoor scene diorama on a square ground base in strict side view, elevated eye level, the entire scene from ground to treetops in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_OUTDOOR_SCENE + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Write comma-separated tags for a strict SIDE view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. Entire scene in frame with a margin, neutral background, no people.",
+        },
+        "natural": {
+            "prompt_style": "a photo of {subject} as a single outdoor scene diorama on a square ground base in strict side view at an elevated eye level, the entire scene from ground to treetops inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_OUTDOOR_SCENE + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Describe a strict side view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. The entire scene is in frame with a margin, neutral background, no people.",
+        },
+    },
+    "room_model_back": {
+        "keywords": {
+            "prompt_style": "{subject}, arranged on a bare floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high camera angle from directly behind the set piece, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM + _NEG_VIEW_BACK,
+            "prompt_instruction": "Write comma-separated tags for the furniture, decor, floor and style ONLY, seen from BEHIND the set piece on its bare floor slab. Never mention walls, ceilings or the building. Neutral background, no people.",
+        },
+        "natural": {
+            "prompt_style": "a product render of {subject}, staged on a bare floor slab and photographed from directly behind the set piece — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furnishings. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM + _NEG_VIEW_BACK,
+            "prompt_instruction": "Describe the furniture, decor, floor and style ONLY, seen from behind the set piece on its bare floor slab. Never mention walls, ceilings or the building. Neutral background, no people.",
+        },
+    },
+    "room_model_side": {
+        "keywords": {
+            "prompt_style": "{subject}, arranged on a bare floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high camera angle in strict side view, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Write comma-separated tags for the furniture, decor, floor and style ONLY, in strict SIDE view of the set piece on its bare floor slab. Never mention walls, ceilings or the building. Neutral background, no people.",
+        },
+        "natural": {
+            "prompt_style": "a product render of {subject}, staged on a bare floor slab and photographed in strict side view — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furnishings. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Describe the furniture, decor, floor and style ONLY, in strict side view of the set piece on its bare floor slab. Never mention walls, ceilings or the building. Neutral background, no people.",
+        },
+    },
+    "room_model_outdoor_back": {
+        "keywords": {
+            "prompt_style": "{subject}, open-air area diorama on a bare ground base, no walls, no ceiling, seen from directly behind, elevated eye level, the entire area in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM + _NEG_VIEW_BACK,
+            "prompt_instruction": "Write comma-separated tags for the REAR view of the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
+        },
+        "natural": {
+            "prompt_style": "a photo of {subject} as a single open-air area diorama on a bare ground base with no walls and no ceiling, seen from directly behind at an elevated eye level, the entire area inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM + _NEG_VIEW_BACK,
+            "prompt_instruction": "Describe the rear view of the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
+        },
+    },
+    "room_model_outdoor_side": {
+        "keywords": {
+            "prompt_style": "{subject}, open-air area diorama on a bare ground base, no walls, no ceiling, strict side view, elevated eye level, the entire area in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Write comma-separated tags for a strict SIDE view of the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
+        },
+        "natural": {
+            "prompt_style": "a photo of {subject} as a single open-air area diorama on a bare ground base with no walls and no ceiling, in strict side view at an elevated eye level, the entire area inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed",
+            "prompt_negative": _NEG_ROOM + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Describe a strict side view of the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people.",
+        },
+    },
     # Terrain surface texture (AV3D-13): seamless tileable top-down ground
     # material for the 3D map (road, water, grass, …). Must tile without
     # visible seams and carry NO baked lighting — objects, shadows and
@@ -297,13 +405,42 @@ _DEFAULT_IMAGE_USE_CASES = {
     "prop": {
         "keywords": {
             "prompt_style": "A high-quality 3D model of {subject}, designed for 3D asset generation, 8k resolution, single object, isolated, centered, plain light gray background, product photography, soft studio lighting, full view, no scene",
-            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark",
+            "prompt_negative": _NEG_PROP,
             "prompt_instruction": "Write comma-separated keywords for the single object only, isolated on a plain light gray background. No people, no scene.",
         },
         "natural": {
             "prompt_style": "A high-quality 3D model of {subject}, designed for 3D asset generation, 8k resolution, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
-            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark",
+            "prompt_negative": _NEG_PROP,
             "prompt_instruction": "Describe the single object only, isolated on a plain light gray background. No people, no scene.",
+        },
+    },
+    # Extra VIEWS of the prop product shot (back / left+right) — the inputs of
+    # a multi-view img2mesh alias. Same isolation, background and light as
+    # "prop" so the views compose into one set; only the camera clause and
+    # the negative differ. Left/right share "_side": the side itself comes
+    # from view_prompts.view_prefix, prepended to the subject.
+    "prop_back": {
+        "keywords": {
+            "prompt_style": "A high-quality 3D model of {subject}, designed for 3D asset generation, 8k resolution, rear view, the back of the object facing the camera, single object, isolated, centered, plain light gray background, product photography, soft studio lighting, full view, no scene",
+            "prompt_negative": _NEG_PROP + _NEG_VIEW_BACK,
+            "prompt_instruction": "Write comma-separated keywords for the single object seen from BEHIND, isolated on a plain light gray background. No people, no scene.",
+        },
+        "natural": {
+            "prompt_style": "A high-quality 3D model of {subject}, designed for 3D asset generation, 8k resolution, photographed from directly behind so the back of the object faces the camera, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
+            "prompt_negative": _NEG_PROP + _NEG_VIEW_BACK,
+            "prompt_instruction": "Describe the single object seen from behind, isolated on a plain light gray background. No people, no scene.",
+        },
+    },
+    "prop_side": {
+        "keywords": {
+            "prompt_style": "A high-quality 3D model of {subject}, designed for 3D asset generation, 8k resolution, side view, strict profile, single object, isolated, centered, plain light gray background, product photography, soft studio lighting, full view, no scene",
+            "prompt_negative": _NEG_PROP + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Write comma-separated keywords for the single object in strict side profile, isolated on a plain light gray background. No people, no scene.",
+        },
+        "natural": {
+            "prompt_style": "A high-quality 3D model of {subject}, designed for 3D asset generation, 8k resolution, photographed in strict side profile, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
+            "prompt_negative": _NEG_PROP + _NEG_VIEW_SIDE,
+            "prompt_instruction": "Describe the single object in strict side profile, isolated on a plain light gray background. No people, no scene.",
         },
     },
     "character": {

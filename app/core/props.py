@@ -5620,8 +5620,8 @@ def apply_key_areas(prompt: str, negative: str,
     return prompt, negative
 
 
-def compose_prompt(subject: str, backend,
-                   key_areas: Any = None) -> Dict[str, str]:
+def compose_prompt(subject: str, backend, key_areas: Any = None,
+                   use_case: str = "prop") -> Dict[str, str]:
     """Final source-render prompt + negative for a prop on a backend — the
     ``prop`` use-case style (per image family) with the object subject woven
     into its ``{subject}`` slot. The dialog shows exactly this and may edit it
@@ -5637,18 +5637,21 @@ def compose_prompt(subject: str, backend,
     ``key_areas`` (``["picture", "glass"]``) appends the chroma-key fragment
     per kind to the composed prompt and its negative addition to the negative
     (:func:`apply_key_areas`) — the one thing this prompt gets beyond the
-    style, and only on request. ``style`` stays raw either way."""
+    style, and only on request. ``style`` stays raw either way.
+
+    ``use_case`` picks the style of an extra VIEW (``prop_back`` /
+    ``prop_side``); the front is ``prop``."""
     from app.core import config as _cfg
     from app.core.prompt_compose import compose as _compose
     ucp = _cfg.resolve_use_case_style(
-        "prop",
+        use_case,
         backend_model=getattr(backend, "model", "") or "",
         backend_family=getattr(backend, "image_family", ""))
     subject = (subject or "").strip() or "a single object"
     # The composition itself (slot/append, negation guard, negative merge)
     # belongs to prompt_compose; only the return SHAPE is this module's, the
     # dialog recomposes per object from `style` + its own subject field.
-    composed = _compose(use_case="prop", subject=subject, backend=backend)
+    composed = _compose(use_case=use_case, subject=subject, backend=backend)
     prompt, negative = apply_key_areas(composed.prompt, composed.negative,
                                        key_areas)
     return {
