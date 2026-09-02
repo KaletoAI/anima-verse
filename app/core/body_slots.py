@@ -395,14 +395,22 @@ def being_for_character(character_name: str) -> str:
 
 
 def appearance_suffix(character_name: str, face_only: bool = False,
-                      profile: Optional[Dict[str, Any]] = None) -> str:
+                      profile: Optional[Dict[str, Any]] = None,
+                      include_exposed: bool = True) -> str:
     """Combined fragment text appended to the character's appearance
     (PromptBuilder; face_only for portrait/expression prompts; ``profile``
     overrides the stored profile for dry-run previews). Empty without
-    species packages — safe no-op."""
+    species packages — safe no-op.
+
+    ``include_exposed=False`` keeps only the general fragments: a render
+    that cannot show uncovered anatomy at all (the T-pose BACK view) must
+    not carry its description either — the words pull the figure around
+    toward the camera."""
     frags = prompt_fragments(character_name, face_only=face_only,
                              profile=profile)
-    parts = frags["general"] + frags["exposed"]
+    parts = list(frags["general"])
+    if include_exposed:
+        parts += frags["exposed"]
     return ", ".join(parts)
 
 

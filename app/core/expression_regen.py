@@ -813,7 +813,8 @@ def generate_expression_image(character_name: str,
                               output_stem: Optional[Path] = None,
                               override_width: Optional[int] = None,
                               override_height: Optional[int] = None,
-                              apply_state_modifiers: bool = True) -> Optional[Path]:
+                              apply_state_modifiers: bool = True,
+                              include_exposed: bool = True) -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -839,6 +840,10 @@ def generate_expression_image(character_name: str,
     - ``apply_state_modifiers=False`` renders the NEUTRAL appearance (no
       triggered image_modifier rewrites) — for cache entries whose key
       deliberately carries no state (outfit-batch pre-warm).
+    - ``include_exposed=False`` drops the exposed body-slot fragments AND
+      the LoRAs bound to those slots — for a view that cannot show
+      uncovered anatomy anyway (the T-pose back view), where the words and
+      the LoRA only drag the figure back toward the camera.
 
     Returns the path to the generated image, or None on failure.
     """
@@ -935,7 +940,8 @@ def generate_expression_image(character_name: str,
     # condition-triggered alike.
 
     _expr_builder = PromptBuilder(character_name,
-                                  apply_state_modifiers=apply_state_modifiers)
+                                  apply_state_modifiers=apply_state_modifiers,
+                                  include_exposed=include_exposed)
     persons = _expr_builder.detect_persons("", character_names=[character_name])
     appearance = persons[0].appearance if persons else get_character_appearance(character_name)
     actor_label = persons[0].actor_label if persons else character_name
@@ -1083,7 +1089,9 @@ def generate_expression_image(character_name: str,
     # the unequipped underwear slot. Character override first, dedup by name.
     _merged_loras = list(loras_override or [])
     _have = {str(l.get("name")) for l in _merged_loras if isinstance(l, dict)}
-    for _sl in (_rendered.get("loras") or []):
+    # Without the exposed fragments their LoRAs go too: an anatomy LoRA
+    # renders what the prompt no longer asks for.
+    for _sl in ((_rendered.get("loras") or []) if include_exposed else []):
         if str(_sl.get("name")) not in _have:
             _merged_loras.append(_sl)
             _have.add(str(_sl.get("name")))
