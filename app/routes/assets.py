@@ -687,7 +687,8 @@ def get_prop_model(prop_id: str, request: Request, tier: str = "",
 
 
 @router.get("/props/{prop_id}/source")
-def get_prop_source(prop_id: str, request: Request, variant: str = ""):
+def get_prop_source(prop_id: str, request: Request, variant: str = "",
+                    view: str = "front"):
     """Serves the product-shot render a prop's mesh was made from (the
     library thumbnail). 404 when the prop was uploaded without a source.
 
@@ -696,12 +697,16 @@ def get_prop_source(prop_id: str, request: Request, variant: str = ""):
     object and its mesh was made from THIS picture. Absent = the PRIMARY
     variant, which is the historic ``source.png`` and therefore exactly the
     file this URL has always served. An index the prop has no variant for is
-    a 404, never another variant's image."""
+    a 404, never another variant's image.
+
+    ``view`` serves one of the extra views (``back``/``left``/``right``);
+    default front."""
     from app.core.props import source_path
+    from app.core.view_prompts import is_view
     idx = _variant_index(variant)
-    if idx is _BAD_VARIANT:
+    if idx is _BAD_VARIANT or not is_view(view):
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    path = source_path(prop_id, variant=idx)
+    path = source_path(prop_id, variant=idx, view=view)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return etag_file_response(path, request, "image/png",

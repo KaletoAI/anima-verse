@@ -567,13 +567,31 @@ async def prop_variant_upload(prop_id: str, index: int,
 
 @router.post("/props/{prop_id}/variants/{index}/source")
 async def prop_variant_source_upload(prop_id: str, index: int,
-                                     file: UploadFile = File(...)
-                                     ) -> Dict[str, Any]:
-    """Upload THIS variant's product-shot image — the picture its re-mesh
-    works from. The image belongs to the variant like its meshes do, so an
-    upload here can never overwrite another version's picture."""
+                                     file: UploadFile = File(...),
+                                     view: str = "front") -> Dict[str, Any]:
+    """Upload THIS variant's product-shot image (``?view=`` picks one of the
+    four views; default front) — the picture its re-mesh works from. The
+    image belongs to the variant like its meshes do, so an upload here can
+    never overwrite another version's picture."""
     from app.routes.world import _prop_source_upload
-    return await _prop_source_upload(prop_id, file, _variant(prop_id, index))
+    return await _prop_source_upload(prop_id, file, _variant(prop_id, index),
+                                     view=view)
+
+
+@router.delete("/props/{prop_id}/variants/{index}/source")
+def prop_variant_source_delete(prop_id: str, index: int,
+                               view: str = "") -> Dict[str, Any]:
+    """Remove ONE extra view image (``?view=back|left|right``) of this
+    variant. The front is not deletable — it is the variant's picture."""
+    from app.core.props import delete_source_image
+    from app.core.view_prompts import EXTRA_VIEWS
+    _variant(prop_id, index)
+    if view not in EXTRA_VIEWS:
+        raise HTTPException(status_code=400,
+                            detail="view must be back, left or right")
+    if not delete_source_image(prop_id, index, view):
+        raise HTTPException(status_code=404, detail="No such view image")
+    return {"status": "ok"}
 
 
 @router.post("/props/{prop_id}/variants/{index}/generate")

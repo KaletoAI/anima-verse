@@ -226,6 +226,10 @@ IMAGE_META_KEYS = ("backend", "prompt", "negative", "generated_at")
 _IMAGE_META_MASTER = {"backend": "backend_image", "prompt": "prompt",
                       "negative": "negative",
                       "generated_at": "source_generated_at"}
+#: Variant-entry / master-record key holding the provenance of the EXTRA
+#: views (``{"back": {...}, "left": {...}, "right": {...}}``); the front
+#: stays in ``image`` / the master fields.
+IMAGE_VIEWS_KEY = "image_views"
 #: SEASON TAGS of a variant (E2c, 2026-08-20). Optional list of season names
 #: from the world's ``game_seasons``; stored only when non-empty, because
 #: absence IS the default "no dependency" and an empty list beside a missing
@@ -693,6 +697,15 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             img = entry.get("image")
             if isinstance(img, dict):
                 rec["image"] = {k: str(img.get(k) or "") for k in IMAGE_META_KEYS}
+            # Provenance of the EXTRA views (design 2026-09-02) — same shape
+            # as `image`, one record per view that has one.
+            views = entry.get(IMAGE_VIEWS_KEY)
+            if isinstance(views, dict):
+                kept = {v: {k: str((r or {}).get(k) or "") for k in IMAGE_META_KEYS}
+                        for v, r in views.items()
+                        if v in ("back", "left", "right") and isinstance(r, dict)}
+                if kept:
+                    rec[IMAGE_VIEWS_KEY] = kept
             seasons = sanitize_season_tags(entry.get(SEASONS_KEY))
             if seasons:
                 rec[SEASONS_KEY] = seasons
@@ -3231,7 +3244,7 @@ def _variant_stale(prop_id: str, index: int, primary_file: str,
 def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     """The prop's variants for the admin strip: ``[{index, stem, active,
     seasons, in_season, tiers, has_model, model_file, model_url, signature,
-    has_source, source_url, image, dims, dims_estimated, description,
+    has_source, source_url, image, images, dims, dims_estimated, description,
     ground_offset_m, markers, slot_values, label, target_faces_high,
     target_faces_low, stale, surface_status}]`` — every variant, active or
     not, in order.
@@ -3265,7 +3278,9 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
     ``variant`` parameter (the primary one keeps the bare URL, which is the
     very string stored on scatter entries). ``image`` is what THIS variant's
     source image was rendered with — the panel shows the provenance of the
-    picture it is displaying, not of some other variant's."""
+    picture it is displaying, not of some other variant's. ``images`` is
+    ``{view: provenance}`` for every view file that exists (front, back, left,
+    right), so the panel knows which of the four tiles it can show."""
     meta = read_sidecar(prop_id)
     entries = _variant_list(meta)
     primary = _effective_indices(entries)[0]
@@ -3299,6 +3314,7 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "source_url": ((src_base if i == primary else f"{src_base}?variant={i}")
                            if has_source else ""),
             "image": _image_meta(meta, entry["stem"]),
+            "images": variant_images(prop_id, i),
             "dims": {k: entry[k] for k in DIM_KEYS},
             "dims_estimated": bool(entry.get(DIMS_ESTIMATED_KEY)),
             "description": entry.get(DESCRIPTION_KEY, ""),
@@ -4069,9 +4085,11 @@ def delete_variant(prop_id: str, variant: int) -> bool:
         # re-points what is left), and a freed stem may be handed out again —
         # so it goes with the variant.
         g.forget()
-    img = _source_file(pid, i)
-    if img and img.exists():
-        img.unlink()
+    from app.core.view_prompts import VIEWS
+    for view in VIEWS:
+        img = _source_file(pid, i, view=view)
+        if img and img.exists():
+            img.unlink()
     entries.pop(i)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
@@ -4533,29 +4551,56 @@ def source_name(stem: str) -> str:
     return f"source-{stem.split('-', 1)[1]}.png"
 
 
-def _source_file(prop_id: str, variant: Any = None, *,
+def view_source_name(stem: str, view: str) -> str:
+    """File name of ONE view of a variant's source image: the front keeps
+    :func:`source_name`, every extra view hangs ``_<view>`` off that stem
+    (``source_back.png``, ``source-v2_left.png``). ``''`` for a stem this
+    store would not hand out or an unknown view."""
+    from app.core.view_prompts import is_view
+    base = source_name(stem)
+    if not base or not is_view(view):
+        return ""
+    if view == "front":
+        return base
+    return f"{base[:-len('.png')]}_{view}.png"
+
+
+def _source_file(prop_id: str, variant: Any = None, *, view: str = "front",
                  create: bool = False) -> Optional[Path]:
-    """Where ONE variant's source image LIVES, whether or not it exists yet.
-    ``None`` for an unknown prop or an index this prop has no variant for."""
+    """Where ONE view of a variant's source image LIVES, whether or not it
+    exists yet. ``None`` for an unknown prop, an index this prop has no
+    variant for, or an unknown view."""
     d = _prop_dir(prop_id, create=create)
     if not d:
         return None
-    name = source_name(_stem_of(prop_id, variant))
+    name = view_source_name(_stem_of(prop_id, variant), view)
     return (d / name) if name else None
 
 
-def source_path(prop_id: str, variant: Any = None) -> Optional[Path]:
-    """The EXISTING source image of one variant — ``None`` (or a negative
-    index) means the PRIMARY variant, i.e. the same file every unqualified
-    read has always served. ``None`` when this variant has no image yet."""
-    p = _source_file(prop_id, variant)
+def source_path(prop_id: str, variant: Any = None,
+                view: str = "front") -> Optional[Path]:
+    """The EXISTING source image of one variant and view — ``None`` (or a
+    negative index) means the PRIMARY variant, i.e. the same file every
+    unqualified read has always served. ``None`` when this variant has no
+    such image yet."""
+    p = _source_file(prop_id, variant, view=view)
     return p if p and p.exists() else None
 
 
-def _image_meta(meta: Dict[str, Any], stem: str) -> Dict[str, str]:
-    """What is recorded about ONE variant's source image: backend, prompt,
-    negative, generated_at (empty strings when nothing is recorded)."""
+def _image_meta(meta: Dict[str, Any], stem: str,
+                view: str = "front") -> Dict[str, str]:
+    """What is recorded about ONE view of a variant's source image: backend,
+    prompt, negative, generated_at (empty strings when nothing is recorded)."""
     keys = IMAGE_META_KEYS
+    if view != "front":
+        if stem == MODEL_STEM:
+            rec = (meta.get(IMAGE_VIEWS_KEY) or {}).get(view) or {}
+        else:
+            rec = {}
+            for entry in _variant_list(meta):
+                if entry["stem"] == stem:
+                    rec = (entry.get(IMAGE_VIEWS_KEY) or {}).get(view) or {}
+        return {k: str(rec.get(k) or "") for k in keys}
     if stem == MODEL_STEM:
         return {k: str(meta.get(_IMAGE_META_MASTER[k]) or "") for k in keys}
     for entry in _variant_list(meta):
@@ -4565,12 +4610,23 @@ def _image_meta(meta: Dict[str, Any], stem: str) -> Dict[str, str]:
     return {k: "" for k in keys}
 
 
-def _set_image_meta(meta: Dict[str, Any], stem: str, *, backend: str = "",
-                    prompt: str = "", negative: str = "") -> None:
-    """Record what a freshly written source image was made with, IN PLACE.
-    The caller writes the sidecar."""
+def _set_image_meta(meta: Dict[str, Any], stem: str, *, view: str = "front",
+                    backend: str = "", prompt: str = "",
+                    negative: str = "") -> None:
+    """Record what a freshly written source image (of one view) was made
+    with, IN PLACE. The caller writes the sidecar."""
     rec = {"backend": backend, "prompt": prompt, "negative": negative,
            "generated_at": utc_now_iso()}
+    if view != "front":
+        if stem == MODEL_STEM:
+            meta.setdefault(IMAGE_VIEWS_KEY, {})[view] = rec
+            return
+        entries = _variant_list(meta)
+        for entry in entries:
+            if entry["stem"] == stem:
+                entry.setdefault(IMAGE_VIEWS_KEY, {})[view] = rec
+        meta[VARIANTS_KEY] = entries
+        return
     if stem == MODEL_STEM:
         for k, m in _IMAGE_META_MASTER.items():
             meta[m] = rec[k]
@@ -4582,11 +4638,24 @@ def _set_image_meta(meta: Dict[str, Any], stem: str, *, backend: str = "",
     meta[VARIANTS_KEY] = entries
 
 
+def _drop_image_meta(meta: Dict[str, Any], stem: str, view: str) -> None:
+    """Forget the provenance of a deleted EXTRA view, in place."""
+    if stem == MODEL_STEM:
+        (meta.get(IMAGE_VIEWS_KEY) or {}).pop(view, None)
+        return
+    entries = _variant_list(meta)
+    for entry in entries:
+        if entry["stem"] == stem:
+            (entry.get(IMAGE_VIEWS_KEY) or {}).pop(view, None)
+    meta[VARIANTS_KEY] = entries
+
+
 def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
-                      backend: str = "", prompt: str = "",
+                      view: str = "front", backend: str = "", prompt: str = "",
                       negative: str = "") -> bool:
-    """Store image bytes as ONE variant's source image. False when the
-    prop/variant is unknown or the bytes are not a readable image.
+    """Store image bytes as ONE view of a variant's source image (default
+    front). False when the prop/variant/view is unknown or the bytes are not
+    a readable image.
 
     The picture is normalised exactly like a rendered one — at most 1024 px on
     the long edge, PNG — but an ALPHA channel survives: a cut-out upload is
@@ -4600,7 +4669,7 @@ def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
     # the folder of a KNOWN prop, never conjure a ghost one from a typo'd id.
     if not read_sidecar(prop_id):
         return False
-    target = _source_file(prop_id, variant, create=True)
+    target = _source_file(prop_id, variant, view=view, create=True)
     if not target:
         return False
     try:
@@ -4613,12 +4682,39 @@ def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
         img.thumbnail((1024, 1024))
     img.save(target, "PNG")
     meta = read_sidecar(prop_id)
-    _set_image_meta(meta, _stem_of(prop_id, variant), backend=backend,
-                    prompt=prompt, negative=negative)
+    _set_image_meta(meta, _stem_of(prop_id, variant), view=view,
+                    backend=backend, prompt=prompt, negative=negative)
     _write_sidecar(prop_id, meta)
-    logger.info("Prop %s: source image stored for variant %s (%s, %d bytes)",
-                safe_prop_id(prop_id), variant, target.name, len(contents))
+    logger.info("Prop %s: %s source image stored for variant %s (%s, %d bytes)",
+                safe_prop_id(prop_id), view, variant, target.name,
+                len(contents))
     return True
+
+
+def delete_source_image(prop_id: str, variant: Any, view: str) -> bool:
+    """Remove ONE extra view image of a variant (never the front — that is
+    the variant's identity picture). False when nothing was there."""
+    from app.core.view_prompts import EXTRA_VIEWS
+    if view not in EXTRA_VIEWS:
+        return False
+    p = source_path(prop_id, variant, view=view)
+    if not p:
+        return False
+    p.unlink()
+    meta = read_sidecar(prop_id)
+    _drop_image_meta(meta, _stem_of(prop_id, variant), view)
+    _write_sidecar(prop_id, meta)
+    return True
+
+
+def variant_images(prop_id: str, variant: Any = None) -> Dict[str, Dict[str, str]]:
+    """``{view: provenance}`` for every view whose file exists on this
+    variant — what the detail's source panel renders its four tiles from."""
+    from app.core.view_prompts import VIEWS
+    meta = read_sidecar(prop_id)
+    stem = _stem_of(prop_id, variant)
+    return {v: _image_meta(meta, stem, v) for v in VIEWS
+            if source_path(prop_id, variant, view=v)}
 
 
 def save_uploaded_glb(prop_id: str, contents: bytes,
