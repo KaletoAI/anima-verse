@@ -959,13 +959,37 @@ def _tier(val) -> str:
 async def location_model3d_generate(location_id: str, request: Request) -> Dict[str, Any]:
     """Generate the location's 3D building model from a gallery image
     (body: {source_image, backend?, face_num?, texture_size?, tier?,
-    lod_faces?}). ``tier`` says which resolution slot the result fills
+    lod_faces?, view_images?: {back?, left?, right?}}). The view images are
+    further gallery files of the location, handed to a multi-view alias
+    beside the front. ``tier`` says which resolution slot the result fills
     (default ``full``); ``lod_faces`` additionally asks the alias to bake a
     reduced stage in the SAME job, which lands as the ``low`` variant.
     Background job — poll status for pending."""
     data = await request.json()
     return await asyncio.to_thread(_location_model3d_generate_sync,
                                    location_id, data)
+
+
+def _view_images_body(location_id: str, data: Dict[str, Any]) -> Dict[str, str]:
+    """``view_images`` of a mesh request: ``{back|left|right: <gallery file>}``,
+    each checked for path escapes and existence (400 otherwise). ``{}``
+    when the body names none."""
+    raw_views = data.get("view_images") or {}
+    if not isinstance(raw_views, dict):
+        raise HTTPException(status_code=400, detail="view_images must be an object")
+    from app.core.view_prompts import EXTRA_VIEWS
+    view_images: Dict[str, str] = {}
+    for view in EXTRA_VIEWS:
+        name = str(raw_views.get(view) or "").strip()
+        if not name:
+            continue
+        if "/" in name or ".." in name:
+            raise HTTPException(status_code=400, detail=f"bad view image name for {view}")
+        if not (get_gallery_dir(location_id) / name).exists():
+            raise HTTPException(status_code=400,
+                                detail=f"view image for {view} not found: {name}")
+        view_images[view] = name
+    return view_images
 
 
 def _location_model3d_generate_sync(location_id: str,
@@ -987,7 +1011,8 @@ def _location_model3d_generate_sync(location_id: str,
                               face_num=_mesh_int(data.get("face_num")) or None,
                               texture_size=_mesh_int(data.get("texture_size")) or None,
                               tier=_tier(data.get("tier")),
-                              lod_faces=_mesh_int(data.get("lod_faces")) or None):
+                              lod_faces=_mesh_int(data.get("lod_faces")) or None,
+                              view_images=_view_images_body(location_id, data) or None):
         return {"status": "already_running"}
     return {"status": "generating"}
 
@@ -1183,7 +1208,7 @@ def _location_roof_generate_sync(location_id: str,
 # ONE step, unlike the roof: nothing is decided here that the user would want
 # to edit first — the volume IS the location's own geometry and the roof form
 # follows a stated heuristic. What comes out is an ordinary gallery image of
-# type "building", so the existing img2mesh path takes it from there.
+# type "building-front", so the existing img2mesh path takes it from there.
 
 @router.post("/locations/{location_id}/exterior/render")
 async def location_exterior_render(location_id: str) -> Dict[str, Any]:
@@ -1408,7 +1433,8 @@ async def room_model3d_generate(location_id: str, room_id: str,
                                 request: Request) -> Dict[str, Any]:
     """Generate the room's 3D model from a gallery image assigned to the room
     (body: {source_image, backend?, face_num?, texture_size?, tier?,
-    lod_faces?}). Same tier contract as the building model. Background job —
+    lod_faces?, view_images?: {back?, left?, right?}}). Same tier and
+    view-image contract as the building model. Background job —
     poll status."""
     data = await request.json()
     return await asyncio.to_thread(_room_model3d_generate_sync, location_id,
@@ -1433,7 +1459,8 @@ def _room_model3d_generate_sync(location_id: str, room_id: str,
                               face_num=_mesh_int(data.get("face_num")) or None,
                               texture_size=_mesh_int(data.get("texture_size")) or None,
                               tier=_tier(data.get("tier")),
-                              lod_faces=_mesh_int(data.get("lod_faces")) or None):
+                              lod_faces=_mesh_int(data.get("lod_faces")) or None,
+                              view_images=_view_images_body(location_id, data) or None):
         return {"status": "already_running"}
     return {"status": "generating"}
 

@@ -50,6 +50,9 @@ export interface GalleryModel {
   source?: string
   /** Building/room only: the gallery image the mesh was generated from. */
   source_image?: string
+  /** The extra views that went into the mesh, keyed by view (back/left/
+   *  right) — gallery file names, like `source_image`. */
+  view_images?: Record<string, string>
   /** Low variants: the stored model file this one was reduced FROM. */
   source_file?: string
   /** The tier the file was MADE for (sidecar; default `full`). */
@@ -253,6 +256,8 @@ function runHint(m: GalleryModel, t: (s: string) => string): string {
   if (m.face_target_note) parts.push(m.face_target_note)
   if (m.texture_size) parts.push(`${m.texture_size}²`)
   if (m.source_image) parts.push(`${t('from')} ${m.source_image}`)
+  const views = Object.keys(m.view_images || {})
+  if (views.length) parts.push(`+ ${views.join('/')}`)
   // A variant copy already NAMED its source above; every other file that
   // records one gets it here (a split names its origin, a low mesh its full).
   if (m.source_file && (m.label_parts?.source || m.source) !== 'variant-copy') {

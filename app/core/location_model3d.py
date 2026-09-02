@@ -197,6 +197,7 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             "backend": meta.get("backend", ""),
             "source": meta.get("source", ""),
             "source_image": meta.get("source_image", ""),
+            "view_images": dict(meta.get("view_images") or {}),
             "source_file": meta.get("source_file", ""),
             "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},
             "offset_y": float(meta.get("offset_y") or 0.0),
@@ -1208,7 +1209,8 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
               room_id: str = "", face_num: Any = None,
               texture_size: Any = None,
               tier: str = DEFAULT_TIER,
-              lod_faces: Any = None) -> Dict[str, Any]:
+              lod_faces: Any = None,
+              view_images: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Blocking mesh generation from a gallery image of the location. Runs on a
     worker thread (see trigger_generation). Adds a NEW model and selects it for
     ``tier`` — existing models stay (pick any of them in the admin panel).
@@ -1216,7 +1218,10 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
     ``lod_faces`` asks the alias for reduced stages of the same bake
     (mesh-client-spec § 3.2); each becomes its own gallery file and the
     smallest is selected as the ``low`` variant, so ONE run leaves a complete
-    full+low pair."""
+    full+low pair.
+
+    ``view_images`` adds back/left/right gallery files for a multi-view
+    alias (single-slot aliases get the front only)."""
     from app.models.world import get_gallery_dir
     from app.imagegen.service import get_image_service
     owner = _owner_id(location_id)
@@ -1230,6 +1235,26 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
     if not src.exists():
         logger.warning("Location model %s: source image missing (%s)", owner, source_image)
         return {"ok": False, "error": "source_image_missing"}
+
+    # Optional extra views (design 2026-09-02): gallery files of the same
+    # scope, keyed by view. Resolved like the front; a missing one is skipped
+    # with a log line — the mesh runs off what exists.
+    from app.core.view_prompts import EXTRA_VIEWS
+    view_paths: Dict[str, str] = {}
+    for view in EXTRA_VIEWS:
+        name = str((view_images or {}).get(view) or "").strip()
+        if not name:
+            continue
+        if "/" in name or ".." in name:
+            logger.warning("Location model %s: view %s rejected (path): %s",
+                           owner, view, name)
+            continue
+        p = get_gallery_dir(location_id) / name
+        if p.exists():
+            view_paths[view] = str(p)
+        else:
+            logger.warning("Location model %s: view %s missing (%s)", owner,
+                           view, name)
 
     # Header visibility, like the character mesh ("model3d_generation"): this
     # wrapper is the ONE tracked header task — the queue-channel entry of the
@@ -1265,7 +1290,8 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
             rig="none",
             face_num=face_num,
             texture_size=texture_size,
-            lod_faces=lod_faces)
+            lod_faces=lod_faces,
+            view_images=view_paths or None)
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
             logger.error("Location model %s failed: %s", owner, error)
@@ -1282,6 +1308,10 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
             "backend": res.get("backend", ""),
             "location": owner,
         }
+        if view_paths:
+            # Which extra views went into this mesh — file names, like
+            # "source_image".
+            meta["view_images"] = {v: Path(p).name for v, p in view_paths.items()}
         # What this run was made WITH — the numbers that separate a full from
         # a low variant. They belong to the FILE, not to the subject.
         if face_num:
@@ -1317,12 +1347,13 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
 def _run(location_id: str, source_image: str, backend_glob: str,
          room_id: str = "", face_num: Any = None,
          texture_size: Any = None, tier: str = DEFAULT_TIER,
-         lod_faces: Any = None) -> None:
+         lod_faces: Any = None,
+         view_images: Optional[Dict[str, str]] = None) -> None:
     owner = _owner_id(location_id)
     try:
         _generate(location_id, source_image, backend_glob, room_id,
                   face_num=face_num, texture_size=texture_size, tier=tier,
-                  lod_faces=lod_faces)
+                  lod_faces=lod_faces, view_images=view_images)
     except Exception as e:
         logger.error("Location model generation for %s failed: %s", owner, e)
     finally:
@@ -1335,7 +1366,8 @@ def trigger_generation(location_id: str, *, source_image: str,
                        backend_glob: str = "", room_id: str = "",
                        face_num: Any = None, texture_size: Any = None,
                        tier: str = DEFAULT_TIER,
-                       lod_faces: Any = None) -> bool:
+                       lod_faces: Any = None,
+                       view_images: Optional[Dict[str, str]] = None) -> bool:
     """Start a building/room-model generation in the background. Generations
     from different source images run concurrently as far as the backend GPU
     channel allows (it serializes per backend); False only when THIS image
@@ -1346,7 +1378,10 @@ def trigger_generation(location_id: str, *, source_image: str,
     chain with a smaller face_num/texture_size).
 
     ``lod_faces`` asks the alias for reduced stages of the SAME bake — with it
-    a single run fills both tiers instead of needing a second job."""
+    a single run fills both tiers instead of needing a second job.
+
+    ``view_images`` adds back/left/right gallery files for a multi-view alias
+    (single-slot aliases get the front only)."""
     owner = _owner_id(location_id)
     if not owner:
         return False
@@ -1357,7 +1392,8 @@ def trigger_generation(location_id: str, *, source_image: str,
         _generating.add(key)
     threading.Thread(target=_run,
                      args=[location_id, source_image, backend_glob, room_id,
-                           face_num, texture_size, tier, lod_faces],
+                           face_num, texture_size, tier, lod_faces,
+                           view_images],
                      daemon=True).start()
     return True
 
