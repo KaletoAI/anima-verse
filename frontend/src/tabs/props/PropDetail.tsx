@@ -89,7 +89,7 @@ const SCALE_FIGURE_KEY = 'ga.props.scaleFigure'
 /** Human name of each view — the tile captions of the source panel. Same
  *  wording as `MeshBackendDialog` and `PropImageDialog`. */
 const VIEW_LABEL: Record<PropView, string> = {
-  front: 'Front', back: 'Back', left: 'Left', right: 'Right',
+  front: 'Front view', back: 'Back view', left: 'Left view', right: 'Right view',
 }
 
 /** Storage can throw (private mode, site data off) and can hold anything —

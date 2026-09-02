@@ -41,7 +41,7 @@ import { composePropPrompt, PROP_PROMPT_CONTEXT, type ImageBackendInfo,
 /** Human name of each view — the dialog title and nothing else; the
  *  wording that reaches the RENDER is `VIEW_PHRASE` below. */
 const VIEW_LABEL: Record<PropView, string> = {
-  front: 'Front', back: 'Back', left: 'Left', right: 'Right',
+  front: 'Front view', back: 'Back view', left: 'Left view', right: 'Right view',
 }
 
 /** Which prop use case a view composes from — `view_prompts.view_use_case`:

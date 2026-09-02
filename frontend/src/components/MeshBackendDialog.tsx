@@ -28,8 +28,10 @@ export interface MeshViewChoice {
   required?: boolean
 }
 
+/** Human name of each view — 'Back view', never a bare 'Back', which already
+ *  translates as the navigation "Zurück". Same wording as `ImageGenDialog`. */
 const VIEW_LABELS: Record<MeshView, string> = {
-  front: 'Front', back: 'Back', left: 'Left', right: 'Right',
+  front: 'Front view', back: 'Back view', left: 'Left view', right: 'Right view',
 }
 
 /** Per-run overrides next to the backend pick — empty = backend default. */
