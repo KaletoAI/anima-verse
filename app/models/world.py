@@ -26,6 +26,7 @@ logger = get_logger("world")
 
 from app.core.paths import get_storage_dir
 from app.core.timeutils import utc_now_iso
+from app.core.view_prompts import building_view
 
 
 def _get_world_file() -> Path:
@@ -2204,7 +2205,7 @@ def get_background_path(location_identifier: str, room: str = "",
       (not room-tagged, day/night preferred) — except with ``strict_room=True``
       and except for the ground room (see below)
     - ground room without its own images → the location's EXTERIOR images
-      (gallery type "building"), never the untagged interior default
+      (gallery types "building-<view>"), never the untagged interior default
     - location unset OR location has no images → None
 
     Args:
@@ -2259,9 +2260,11 @@ def get_background_path(location_identifier: str, room: str = "",
         if not candidates and room == GROUND_ROOM_ID:
             # The ground room is the outdoors. The untagged location images are
             # the inside, so it must not fall back to them — it falls back to
-            # the location's EXTERIOR renders instead: gallery images of type
-            # "building", the same marker location_model3d.py reads for the 3D
-            # building. Two details make this its own lookup:
+            # the location's EXTERIOR renders instead: gallery images of a
+            # building VIEW type ("building-front" and its three siblings, the
+            # same marker location_model3d.py reads for the 3D building; the
+            # bare "building" was migrated away on 2026-09-02). Two details
+            # make this its own lookup:
             #   * building renders are deliberately never flagged as background
             #     images (world_ops skips the flag for them), so they are not
             #     in `valid` — they come straight from the gallery type map.
@@ -2270,7 +2273,7 @@ def get_background_path(location_identifier: str, room: str = "",
             # The pick itself (day/night, stable/random) is the shared tail
             # below — the ground uses the very same mechanism as every room.
             candidates = [img for img, tp in image_types.items()
-                          if tp == "building" and not image_rooms.get(img, "")
+                          if building_view(tp) and not image_rooms.get(img, "")
                           and (gallery_base / img).exists()]
             if not candidates:
                 # No exterior at all: None is the ground's normal state and the
@@ -2594,17 +2597,24 @@ def migrate_building_image_type_once() -> Dict[str, int]:
         return {}
     galleries = images = 0
     for meta_file in root.glob("*/gallery_meta.json"):
+        # Read, count, rewrite and write under ONE guard: a gallery whose file
+        # is corrupt, whose image_types is not a dict, or that cannot be
+        # written is skipped — it must never strand the galleries after it.
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        except Exception:
+            types = meta.get("image_types")
+            renamed = (sum(1 for v in types.values() if v == "building")
+                       if isinstance(types, dict) else 0)
+            if not rewrite_building_types(meta):
+                continue
+            meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                                 encoding="utf-8")
+        except Exception as exc:
+            logger.warning("building image-type migration skipped %s: %s",
+                           meta_file, exc)
             continue
-        before = dict(meta.get("image_types") or {})
-        if not rewrite_building_types(meta):
-            continue
-        meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
-                             encoding="utf-8")
         galleries += 1
-        images += sum(1 for v in before.values() if v == "building")
+        images += renamed
     return {"galleries": galleries, "images": images} if galleries else {}
 
 
