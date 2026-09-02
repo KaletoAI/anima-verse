@@ -1306,6 +1306,14 @@ class ImageService:
             "to_avatar_gallery": ctx.get("to_avatar_gallery", False),
             "gallery_character": ctx.get("gallery_character", ""),
             "image_use_case": ctx.get("image_use_case", ""),
+            # Whether any fabric is on the figure (`{fabric}` in the use-case
+            # style). THIS DICT IS A WHITELIST: a key the caller sends and
+            # this list does not name is dropped without a word, which is
+            # what silently defeated the flag when it was introduced — the
+            # reader in `generate` saw its `True` default on every render,
+            # undressed ones included. Anything a caller passes has to be
+            # picked up here.
+            "clothed": ctx.get("clothed", True),
         }
 
         if isinstance(data.get("prompt"), str):
