@@ -916,20 +916,32 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     # The file is copied verbatim and still references the OLD room ids; without
     # this the imported room images stay orphaned (each room falls back to the
     # location default), which reads as "room images were not imported".
+    # The image TYPES are carried verbatim too, so the same block renames the
+    # retired bare ``building`` type: a pack exported before 2026-09-02 (or from
+    # another install) still carries it, and the boot migration only runs at the
+    # next start — until then the imported building image would belong to no
+    # view at all.
     meta_path = gallery_dir / "gallery_meta.json"
-    if meta_path.exists() and room_id_map:
+    if meta_path.exists():
         try:
+            from app.models.world import rewrite_building_types
             gmeta = json.loads(meta_path.read_text(encoding="utf-8"))
             rooms_map = gmeta.get("rooms")
-            if isinstance(rooms_map, dict) and rooms_map:
+            changed = False
+            if room_id_map and isinstance(rooms_map, dict) and rooms_map:
                 gmeta["rooms"] = {
                     img: room_id_map.get(rid, rid) for img, rid in rooms_map.items()
                 }
+                changed = True
+            # Written when EITHER half changed — the two are independent.
+            if rewrite_building_types(gmeta):
+                changed = True
+            if changed:
                 meta_path.write_text(
                     json.dumps(gmeta, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
         except Exception as e:
-            logger.warning("Location import: remap gallery_meta rooms failed: %s", e)
+            logger.warning("Location import: gallery_meta remap/rewrite failed: %s", e)
 
     # 3D models. The import is always a standalone copy, so the model store's
     # owner is the new location id itself. The files are named after the OLD

@@ -41,6 +41,12 @@ Expected results:
       "c.png": "building-back"}}) -> True and the dict becomes
       {"a.png": "building-front", "b.png": "day", "c.png": "building-back"};
       a second call returns False; a meta without image_types returns False.
+      The content-pack location import calls it too: a pack exported before
+      2026-09-02 carries the bare type in its `gallery_meta.json`, and the boot
+      migration only runs at the NEXT start — so `import_location_from_zip` in
+      `app/core/content_io.py` must name `rewrite_building_types` in the same
+      block that remaps the rooms. That one is a SOURCE check: the import needs
+      a world DB and a ZIP, which this smoke deliberately has neither of.
   (e) view_source_name("model", "back") == "source_back.png"
       view_source_name("model-v2", "left") == "source-v2_left.png"
       view_source_name("model", "front") == "source.png"
@@ -121,6 +127,20 @@ try:
           rewrite_building_types({"rooms": {}}) is False)
 except ImportError as e:
     check("rewrite_building_types importable", False, str(e))
+
+# The content-pack import is the second caller and cannot be reached without a
+# world DB and a ZIP, so it is checked at the SOURCE: the gallery_meta block of
+# `import_location_from_zip` has to name the rewrite. Without it an imported
+# pack keeps the bare `building` type until the next server start.
+src = (Path(__file__).resolve().parents[1]
+       / "app/core/content_io.py").read_text(encoding="utf-8")
+i = src.find("def import_location_from_zip(")
+block = src[i:] if i >= 0 else ""
+j = block.find("gallery_meta.json")
+block = block[j:j + 2000] if j >= 0 else ""
+wired = bool(block) and "rewrite_building_types(" in block
+check("the content-pack import rewrites the bare building type", wired,
+      "" if wired else "not named in the gallery_meta block")
 
 print("\n(e) prop view file names")
 try:

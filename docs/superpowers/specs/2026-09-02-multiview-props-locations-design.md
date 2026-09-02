@@ -283,8 +283,9 @@ single-option views; the caller maps `opts.views` onto its own body shape
   gateway configuration, not code.
 * The character path (`model_refs.py`, `model3d.py`, `FieldModelRefs.tsx`).
 * Regenerate/adjust of gallery images (`use_source_as_reference`).
-* Content packs: `content_io.py` does not carry gallery image types today
-  and does not start to.
+* Content packs: `content_io.py` carries `gallery_meta.json` (and its image
+  types) verbatim; the import rewrites the retired bare `building` type to
+  `building-front` via `rewrite_building_types`.
 
 ## 9. Verification
 
