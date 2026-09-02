@@ -20,6 +20,18 @@ export interface MeshBackend {
   lod_stages?: boolean
 }
 
+export type MeshView = 'front' | 'back' | 'left' | 'right'
+
+export interface MeshViewChoice {
+  view: MeshView
+  options: { value: string; label: string }[]
+  required?: boolean
+}
+
+const VIEW_LABELS: Record<MeshView, string> = {
+  front: 'Front', back: 'Back', left: 'Left', right: 'Right',
+}
+
 /** Per-run overrides next to the backend pick — empty = backend default. */
 export interface MeshGenerateOpts {
   face_num?: number
@@ -32,6 +44,8 @@ export interface MeshGenerateOpts {
    *  subject's own low budget may still apply; an EMPTY ARRAY = the control is
    *  there and switched OFF, and nothing is baked; a number = that stage. */
   lod_faces?: number | number[]
+  /** Chosen image per view (file name), only views that were picked. */
+  views?: Partial<Record<MeshView, string>>
 }
 
 const TEXTURE_SIZES = [512, 1024, 2048]
@@ -70,6 +84,7 @@ export function MeshBackendDialog({
   showTier = false,
   hint = '',
   faceTargets = {},
+  views,
   onGenerate,
   onClose,
 }: {
@@ -90,6 +105,11 @@ export function MeshBackendDialog({
   /** What the subject STATES it should cost — prefilled over the backend
    *  default, and editable per run like everything else here. */
   faceTargets?: FaceTargets
+  /** The VIEWS a multi-view alias may take (design 2026-09-02): per view the
+   *  candidate images. 0 options -> not rendered (a required one blocks
+   *  Generate), 1 option -> a checkbox (on by default), more -> a select with
+   *  "- none -" for optional views and the first entry preselected. */
+  views?: MeshViewChoice[]
   onGenerate: (backend: string, opts: MeshGenerateOpts) => void
   onClose: () => void
 }) {
@@ -108,6 +128,7 @@ export function MeshBackendDialog({
   // switchable off: some subjects only ever get looked at from up close.
   const [lodOn, setLodOn] = useState(true)
   const [lodDraft, setLodDraft] = useState(String(LOD_STAGE_DEFAULT))
+  const [viewPick, setViewPick] = useState<Partial<Record<MeshView, string>>>({})
   // Reset the selection to the default each time the dialog opens (the
   // backends and default may have loaded/changed between opens). Keyed on
   // the backends' CONTENT, not the array identity — the callers refresh
@@ -132,6 +153,12 @@ export function MeshBackendDialog({
     setTier(DEFAULT_MODEL_TIER)
     setLodOn(true)
     setLodDraft(String(statedLow || LOD_STAGE_DEFAULT))
+    const initial: Partial<Record<MeshView, string>> = {}
+    for (const v of views || []) {
+      if (v.options.length) initial[v.view] = v.options[0].value
+    }
+    setViewPick(initial)
+    // ... and `views`, whose array identity the eslint-disable line covers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaultBackend, defaultTextureSize, backendsKey, statedHigh, statedLow])
 
@@ -145,6 +172,10 @@ export function MeshBackendDialog({
   // run that fills the FULL tier — a low run IS the reduced mesh already.
   const canLod = !!selectedBackend?.lod_stages
     && (!showTier || tier === DEFAULT_MODEL_TIER)
+  // A view the caller marked required but has NO candidate image for cannot be
+  // filled by this dialog — the run would silently lose it, so Generate stops.
+  const missingRequired = (views || []).filter((v) => v.required && !v.options.length)
+  const viewBlocked = missingRequired.length > 0
 
   const pick = (name: string) => {
     setPicked(name)
@@ -190,6 +221,14 @@ export function MeshBackendDialog({
       const lod = parseInt(lodDraft, 10)
       opts.lod_faces = lodOn && Number.isFinite(lod) && lod > 0 ? lod : []
     }
+    if (views && views.length) {
+      const chosen: Partial<Record<MeshView, string>> = {}
+      for (const v of views) {
+        const val = viewPick[v.view]
+        if (val) chosen[v.view] = val
+      }
+      opts.views = chosen
+    }
     onGenerate(picked, opts)
   }
 
@@ -216,6 +255,50 @@ export function MeshBackendDialog({
           ) : (
             <div className="ga-form">
               {hint ? <div className="ga-hint">{hint}</div> : null}
+              {views && views.length ? (
+                <>
+                  <label className="ga-hint">{t('Views')}</label>
+                  {views.map((v) => {
+                    if (!v.options.length) return null
+                    const label = t(VIEW_LABELS[v.view])
+                    if (v.options.length === 1) {
+                      const only = v.options[0]
+                      return (
+                        <label key={v.view} className="ga-check-row">
+                          <input type="checkbox"
+                            checked={!!viewPick[v.view]}
+                            disabled={!!v.required}
+                            onChange={(e) => setViewPick((p) => ({
+                              ...p, [v.view]: e.target.checked ? only.value : '' }))} />
+                          <span>{label} · {only.label}</span>
+                        </label>
+                      )
+                    }
+                    return (
+                      <label key={v.view} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <span className="ga-hint">{label}{v.required ? '' : ` (${t('optional')})`}</span>
+                        <select className="ga-input" value={viewPick[v.view] || ''}
+                          onChange={(e) => setViewPick((p) => ({ ...p, [v.view]: e.target.value }))}>
+                          {!v.required ? <option value="">{t('— none —')}</option> : null}
+                          {v.options.map((o) => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )
+                  })}
+                  {viewBlocked ? (
+                    <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>
+                      {t('No image for the required view: {views}').replace('{views}',
+                        missingRequired.map((v) => t(VIEW_LABELS[v.view])).join(', '))}
+                    </div>
+                  ) : (
+                    <div className="ga-hint">
+                      {t('A single-slot alias uses the front only; a multi-view alias takes every view picked here.')}
+                    </div>
+                  )}
+                </>
+              ) : null}
               {showTier ? (
                 <>
                   <label className="ga-hint">{t('Target resolution tier')}</label>
@@ -324,7 +407,7 @@ export function MeshBackendDialog({
           <button
             type="button"
             className="ga-btn ga-btn-sm ga-btn-primary"
-            disabled={none}
+            disabled={none || viewBlocked}
             onClick={start}
           >
             {generateLabel || t('Generate')}
