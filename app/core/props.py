@@ -191,6 +191,7 @@ from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
                                      shrink_capability)
 from app.core.picture_areas import KINDS as COLOUR_KINDS
 from app.core.timeutils import utc_now_iso
+from app.core.view_prompts import EXTRA_VIEWS, VIEWS, is_view
 from app.core.world_ops import _capacity, _place_id, _slot_axis, _spacing
 
 logger = get_logger(__name__)
@@ -703,7 +704,7 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             if isinstance(views, dict):
                 kept = {v: {k: str((r or {}).get(k) or "") for k in IMAGE_META_KEYS}
                         for v, r in views.items()
-                        if v in ("back", "left", "right") and isinstance(r, dict)}
+                        if v in EXTRA_VIEWS and isinstance(r, dict)}
                 if kept:
                     rec[IMAGE_VIEWS_KEY] = kept
             seasons = sanitize_season_tags(entry.get(SEASONS_KEY))
@@ -3804,8 +3805,9 @@ def _copy_variant_mesh(prop_id: str, target: int, source: Any = None) -> Path:
     its sidecar (``areas``, ``leaf_bbox``, ``rotation``, the run stamps; v2
     E1: the copy is the same mesh, so it carries the same reading), the
     ``.areas.json`` companion (the outline edges the Areas tab draws) and the
-    variant's source image, which the source-image law makes the variant's
-    own.
+    variant's source image WITH ITS EXTRA VIEWS, which the source-image law
+    makes the variant's own — all of the source's views, and never a stale
+    view the target happened to keep.
 
     The copy lands as a NEW gallery file, so a re-copy keeps the old one as
     history, and its model sidecar records :data:`COPIED_FROM_KEY`: the file
@@ -3845,22 +3847,49 @@ def _copy_variant_mesh(prop_id: str, target: int, source: Any = None) -> Path:
     target_companion = areas_sidecar_path(dst)
     if companion and target_companion and companion.exists():
         shutil.copyfile(companion, target_companion)
+    meta = read_sidecar(pid)
+    src_stem = _stem_of(pid, source, meta=meta)
+    dst_stem = _stem_of(pid, target, meta=meta)
+    dirty = False
     src_img = source_path(pid, source)
     dst_img = _source_file(pid, target, create=True)
     if src_img and dst_img and src_img != dst_img:
         shutil.copyfile(src_img, dst_img)
         # …and what that picture was made with, so the panel shows the
         # provenance of the image it is displaying.
-        meta = read_sidecar(pid)
-        entries = _variant_list(meta)
-        rec = _image_meta(meta, _stem_of(pid, source, meta=meta))
-        dst_stem = _stem_of(pid, target, meta=meta)
+        rec = _image_meta(meta, src_stem)
         if any(rec.values()) and dst_stem and dst_stem != MODEL_STEM:
+            entries = _variant_list(meta)
             for entry in entries:
                 if entry["stem"] == dst_stem:
                     entry["image"] = rec
             meta[VARIANTS_KEY] = entries
-            _write_sidecar(pid, meta)
+            dirty = True
+    # THE EXTRA VIEWS GO WITH IT: a copy is ONE version of the object, so it
+    # takes all of the source's views — and where the source has none, the
+    # target's own is REMOVED. A mixed set (front from this subject, a back
+    # left over from what the target used to be) carries no marker saying so,
+    # and the multi-view mesher would bake the two into one object.
+    if src_stem and dst_stem and src_stem != dst_stem:
+        for view in EXTRA_VIEWS:
+            src_view = source_path(pid, source, view=view)
+            dst_view = _source_file(pid, target, view=view, create=True)
+            if not dst_view:
+                continue
+            if src_view:
+                shutil.copyfile(src_view, dst_view)
+                rec = _image_meta(meta, src_stem, view)
+                if any(rec.values()):
+                    _set_image_meta(meta, dst_stem, view=view, **rec)
+                else:
+                    _drop_image_meta(meta, dst_stem, view)
+                dirty = True
+            elif dst_view.exists():
+                dst_view.unlink()
+                _drop_image_meta(meta, dst_stem, view)
+                dirty = True
+    if dirty:
+        _write_sidecar(pid, meta)
     return dst
 
 
@@ -4085,7 +4114,6 @@ def delete_variant(prop_id: str, variant: int) -> bool:
         # re-points what is left), and a freed stem may be handed out again —
         # so it goes with the variant.
         g.forget()
-    from app.core.view_prompts import VIEWS
     for view in VIEWS:
         img = _source_file(pid, i, view=view)
         if img and img.exists():
@@ -4556,7 +4584,6 @@ def view_source_name(stem: str, view: str) -> str:
     :func:`source_name`, every extra view hangs ``_<view>`` off that stem
     (``source_back.png``, ``source-v2_left.png``). ``''`` for a stem this
     store would not hand out or an unknown view."""
-    from app.core.view_prompts import is_view
     base = source_name(stem)
     if not base or not is_view(view):
         return ""
@@ -4611,12 +4638,16 @@ def _image_meta(meta: Dict[str, Any], stem: str,
 
 
 def _set_image_meta(meta: Dict[str, Any], stem: str, *, view: str = "front",
-                    backend: str = "", prompt: str = "",
-                    negative: str = "") -> None:
+                    backend: str = "", prompt: str = "", negative: str = "",
+                    generated_at: str = "") -> None:
     """Record what a freshly written source image (of one view) was made
-    with, IN PLACE. The caller writes the sidecar."""
+    with, IN PLACE. The caller writes the sidecar.
+
+    ``generated_at`` defaults to NOW, which is what a fresh write means; a
+    COPY passes the original stamp through, because the copy displays the
+    very same picture and inventing a new date for it would be a lie."""
     rec = {"backend": backend, "prompt": prompt, "negative": negative,
-           "generated_at": utc_now_iso()}
+           "generated_at": generated_at or utc_now_iso()}
     if view != "front":
         if stem == MODEL_STEM:
             meta.setdefault(IMAGE_VIEWS_KEY, {})[view] = rec
@@ -4694,7 +4725,6 @@ def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
 def delete_source_image(prop_id: str, variant: Any, view: str) -> bool:
     """Remove ONE extra view image of a variant (never the front — that is
     the variant's identity picture). False when nothing was there."""
-    from app.core.view_prompts import EXTRA_VIEWS
     if view not in EXTRA_VIEWS:
         return False
     p = source_path(prop_id, variant, view=view)
@@ -4710,7 +4740,6 @@ def delete_source_image(prop_id: str, variant: Any, view: str) -> bool:
 def variant_images(prop_id: str, variant: Any = None) -> Dict[str, Dict[str, str]]:
     """``{view: provenance}`` for every view whose file exists on this
     variant — what the detail's source panel renders its four tiles from."""
-    from app.core.view_prompts import VIEWS
     meta = read_sidecar(prop_id)
     stem = _stem_of(prop_id, variant)
     return {v: _image_meta(meta, stem, v) for v in VIEWS
