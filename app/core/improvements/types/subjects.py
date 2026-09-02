@@ -153,8 +153,14 @@ def building_source_image(location_id: str) -> str:
 
     The active model's own source image first — regenerating a building means
     re-meshing the very picture it was made from.  Without one (or when that
-    file is gone) the newest gallery image typed ``"building-<view>"`` takes
-    over; those types are the marker ``location_model3d`` itself reads.
+    file is gone) a gallery image typed ``"building-<view>"`` takes over;
+    those types are the marker ``location_model3d`` itself reads.
+
+    Among those the FRONT wins: this feeds a single-image mesher, which
+    reconstructs the hidden sides from the one picture it gets, and a rear or
+    flank shot makes it guess the face.  Only when no front exists does the
+    newest of the other views stand in — newest within each group, so a
+    re-rendered front still beats an older one.
     """
     from app.core.view_prompts import building_view
     from app.models.world import get_gallery_dir, get_gallery_image_types
@@ -163,17 +169,22 @@ def building_source_image(location_id: str) -> str:
                  or "").strip()
     if stored and (gallery / stored).exists():
         return stored
-    newest, newest_mtime = "", -1.0
+    front, front_mtime = "", -1.0
+    other, other_mtime = "", -1.0
     for name, image_type in (get_gallery_image_types(location_id) or {}).items():
-        if not building_view(image_type):
+        view = building_view(image_type)
+        if not view:
             continue
         path = gallery / name
         if not path.exists():
             continue
         mtime = path.stat().st_mtime
-        if mtime > newest_mtime:
-            newest, newest_mtime = name, mtime
-    return newest
+        if view == "front":
+            if mtime > front_mtime:
+                front, front_mtime = name, mtime
+        elif mtime > other_mtime:
+            other, other_mtime = name, mtime
+    return front or other
 
 
 #: Job kind this module claims a building's in-flight slot under.  ``_generate``
