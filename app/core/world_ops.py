@@ -2271,9 +2271,14 @@ def assign_gallery_image_room(location_name: str, image_name: str,
 
 def assign_gallery_image_type(location_name: str, image_name: str,
                               image_type: str) -> Dict[str, Any]:
-    """Set the type of a gallery image (day/night/map_2d/building or empty)."""
-    if image_type and image_type not in ("day", "night", "map_2d", "building"):
-        raise HTTPException(status_code=400, detail="Type must be 'day', 'night', 'map_2d', 'building' or empty")
+    """Set the type of a gallery image (day/night/map_2d/building-<view> or
+    empty)."""
+    from app.core.view_prompts import BUILDING_TYPES
+    if image_type and image_type not in ("day", "night", "map_2d", *BUILDING_TYPES):
+        raise HTTPException(
+            status_code=400,
+            detail="Type must be 'day', 'night', 'map_2d', one of "
+                   + ", ".join(f"'{t}'" for t in BUILDING_TYPES) + " or empty")
 
     loc = resolve_location(location_name)
     loc_id = loc["id"] if loc and loc.get("id") else location_name
@@ -2636,6 +2641,7 @@ def resolve_gallery_subject(location: Dict[str, Any], room_id: str,
     > location description. One chain, used by the generate path and by the
     compose preview, so the dialog never has to guess it client-side.
     """
+    from app.core.view_prompts import building_view
     description = ""
     if room_id:
         room = get_room_by_id(location, room_id)
@@ -2645,7 +2651,7 @@ def resolve_gallery_subject(location: Dict[str, Any], room_id: str,
                 description = (room.get("image_prompt_day", "") or "").strip()
             elif prompt_type == "night":
                 description = (room.get("image_prompt_night", "") or "").strip()
-            elif prompt_type == "building":
+            elif building_view(prompt_type):
                 # Room-model source image: dedicated per-room prompt,
                 # else the room text (mirrors the gallery dialog).
                 description = ((room.get("image_prompt_building", "") or "").strip()
@@ -2658,7 +2664,7 @@ def resolve_gallery_subject(location: Dict[str, Any], room_id: str,
         description = location.get("image_prompt_night", "").strip()
     elif not description and prompt_type == "map_2d":
         description = location.get("image_prompt_map_2d", "").strip()
-    elif not description and prompt_type == "building":
+    elif not description and building_view(prompt_type):
         description = location.get("image_prompt_building", "").strip()
     if not description:
         description = location.get("description", location.get("name", fallback))
@@ -2669,21 +2675,23 @@ def gallery_use_case(location: Dict[str, Any], room_id: str,
                      prompt_type: str) -> str:
     """The use case a gallery render belongs to.
 
-    A building-type render FOR A ROOM is the room-model source — its own use
+    A building-view render FOR A ROOM is the room-model source — its own use
     case (open cutaway); the building exterior style would demand a "single
     building" even for a park room. Both split further on the indoor/outdoor
-    flag (room overrides location): an outdoor location's "building" is a
-    scene diorama, an outdoor room an open-air area.
+    flag (room overrides location): an outdoor location's building is a
+    scene diorama, an outdoor room an open-air area. The VIEW the type names
+    (``building-back`` …) then picks the base's back/side sibling
+    (``view_prompts.view_use_case``); the front keeps the base.
     """
-    model_uc = ""
-    if prompt_type == "building":
-        model_uc = (("room_model_outdoor" if is_outdoor_room(location, room_id)
-                     else "room_model") if room_id
-                    else ("building_outdoor" if is_outdoor_room(location, "")
-                          else "building"))
-    return ("map" if prompt_type == "map_2d"
-            else model_uc if model_uc
-            else "location")
+    from app.core.view_prompts import building_view, view_use_case
+    view = building_view(prompt_type)
+    if view:
+        base = (("room_model_outdoor" if is_outdoor_room(location, room_id)
+                 else "room_model") if room_id
+                else ("building_outdoor" if is_outdoor_room(location, "")
+                      else "building"))
+        return view_use_case(base, view)
+    return "map" if prompt_type == "map_2d" else "location"
 
 
 def is_outdoor_room(location: Dict[str, Any], room_id: str) -> bool:
@@ -2722,11 +2730,18 @@ def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=404,
                             detail=f"Ort '{location_id}' nicht gefunden")
     room_id = (data.get("room_id") or "").strip()
-    prompt_type = (data.get("prompt_type") or "building").strip()
+    prompt_type = (data.get("prompt_type") or "building-front").strip()
     use_case = ((data.get("use_case") or "").strip()
                 or gallery_use_case(location, room_id, prompt_type))
     subject = (data.get("subject") or "").strip() or resolve_gallery_subject(
         location, room_id, prompt_type, location_id)
+
+    # A back/side view says so at the head of the subject (the use case only
+    # knows "back" or "side"; left vs right is this phrase).
+    from app.core.view_prompts import building_view, view_subject
+    _view = building_view(prompt_type)
+    if _view:
+        subject = view_subject(_view, subject)
 
     # The regenerate dialog needs the bare SUBJECT: its prompt is a literal
     # adjustment order, so it gets no style, no hint and no guard — but the
@@ -2829,6 +2844,12 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # Subject only — framing/style come from the use case (map/location).
         prompt = custom_prompt or resolve_gallery_subject(
             location, room_id, prompt_type, location_name)
+        from app.core.view_prompts import building_view, view_subject
+        _view = building_view(prompt_type)
+        # Composed subjects get the view phrase; a dialog prompt arrives final
+        # (settings_applied) and already carries it from the preview.
+        if _view and not custom_prompt:
+            prompt = view_subject(_view, prompt)
 
         # The map/location style now comes from the use case (applied below
         # via resolve_use_case_style) — no separate suffix anymore.
@@ -2963,11 +2984,11 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             # the 16:9 location format — fills the tile. Otherwise landscape.
             params["width"] = 1024
             params["height"] = 1024
-        elif prompt_type == "building":
-            # Square so the whole building fits with a margin — this image also
-            # feeds the image-to-3D pass (like the T-pose reference), which needs
-            # the full silhouette in frame, not a 16:9 crop.
-            params["image_use_case"] = "building"
+        elif _view:
+            # Square so the whole subject fits with a margin — every building
+            # view feeds the image-to-3D pass (like the T-pose reference), which
+            # needs the full silhouette in frame, not a 16:9 crop.
+            params["image_use_case"] = _uc_name
             params["width"] = 1024
             params["height"] = 1024
         # Caller-picked resolution beats every use-case default (2026-07-25):
@@ -3026,6 +3047,27 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 if _ref_path.exists():
                     params["reference_images"] = {"input_reference_image_1": str(_ref_path)}
                     logger.info("Map-Selbst-Referenz in Slot 1: %s", _ref_name)
+
+        # A back/side view may take the FRONT render as its appearance
+        # reference (design 2026-09-02) — style stays, unlike the regenerate
+        # self-reference above. Only where the backend has a slot and the
+        # file exists; otherwise the view renders from text alone.
+        _front_ref = (data.get("front_reference") or "").strip()
+        if _view and _view != "front" and _front_ref:
+            if "/" in _front_ref or ".." in _front_ref:
+                logger.warning("front_reference rejected (path): %s", _front_ref)
+            elif int(getattr(backend, "ref_slot_count", 0) or 0) < 1:
+                logger.info("front_reference ignored: backend %s has no "
+                            "reference slot", backend.name)
+            else:
+                _front_path = get_gallery_dir(location_name) / _front_ref
+                if _front_path.exists():
+                    params["reference_images"] = {
+                        "input_reference_image_1": str(_front_path)}
+                    logger.info("Front reference in slot 1 for %s view: %s",
+                                _view, _front_ref)
+                else:
+                    logger.warning("front_reference missing: %s", _front_ref)
 
         from app.core.task_queue import get_task_queue
         _tq = get_task_queue()
@@ -3102,7 +3144,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             # NOT for map tiles (map_2d) or building renders: those are map/mesh
             # art, never a room background — flagged tiles used to leak into the
             # room-reference slot of chat images.
-            if not _is_replace and prompt_type not in ("map_2d", "building"):
+            if not _is_replace and prompt_type != "map_2d" and not _view:
                 toggle_background_image(loc_id, image_name)
 
             # Set the room assignment when room_id is given
@@ -3131,8 +3173,9 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 "loras": _loras_used,
             })
 
-            # Set the image type when prompt_type is given (day/night/map_2d/building)
-            if prompt_type in ("day", "night", "map_2d", "building"):
+            # Set the image type when prompt_type is given
+            # (day/night/map_2d/building-<view>)
+            if prompt_type in ("day", "night", "map_2d") or _view:
                 set_gallery_image_type(loc_id, image_name, prompt_type)
             # Set the newly created map tile as the displayed map item right away
             # (fit/neighbor + normal map_2d gen) — otherwise the old tile would stay active.

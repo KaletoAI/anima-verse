@@ -1,16 +1,16 @@
 """THE EXTERIOR RENDER — a location's own geometry, photographed by Blender.
 
 WHY THIS EXISTS. The building model of a location is meshed from a gallery
-image of ``image_type "building"`` (``location_model3d``). A location that
-never got such an image — drawn on the map, walls and storeys and all, but
-never rendered — therefore has no model and no diorama, and the only ways to
-get one were "generate a picture with an image backend" or "upload one". Yet
+image of ``image_type "building-front"`` (``location_model3d``). A location
+that never got such an image — drawn on the map, walls and storeys and all,
+but never rendered — therefore has no model and no diorama, and the only ways
+to get one were "generate a picture with an image backend" or "upload one". Yet
 the building is already FULLY DESCRIBED: the scene recipe knows its walls, its
 storeys and its floor plan, in metres. So Blender builds that volume and takes
 a picture of it, and the picture goes into the gallery like any other.
 
     scene recipe  ->  volume model  ->  3/4 render  ->  gallery image
-                                                        (image_type building)
+                                                        (image_type building-front)
                                                              |
                                           the EXISTING img2mesh pipeline
 
@@ -531,7 +531,7 @@ def generate_exterior(location_id: str,
         image_name = f"{int(time.time())}.png"
         (gallery_dir / image_name).write_bytes(png.read_bytes())
 
-    set_gallery_image_type(loc_id, image_name, "building")
+    set_gallery_image_type(loc_id, image_name, "building-front")
     set_gallery_image_meta(loc_id, image_name, {
         "backend": "blender",
         "backend_type": "blender",
