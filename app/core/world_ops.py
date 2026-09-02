@@ -2738,6 +2738,13 @@ def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
 
     # A back/side view says so at the head of the subject (the use case only
     # knows "back" or "side"; left vs right is this phrase).
+    #
+    # DELIBERATELY BEFORE the `subject_only` early return: a regenerate of a
+    # building-view image asks for the BARE subject, and that bare subject has
+    # to keep saying which view it is — the self-reference (the image itself,
+    # slotted as reference) plus this phrase are the only two things that hold
+    # the view there. No double prefix can result: the regenerate sends its
+    # text back as `custom_prompt`, which never runs through this chain again.
     from app.core.view_prompts import building_view, view_subject
     _view = building_view(prompt_type)
     if _view:
