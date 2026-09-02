@@ -43,8 +43,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const { toast } = useToast()
   const [draft, setDraft] = useState<Location>(() => ({ ...location }))
   const [tab, setTab] = useState<LocTab>('general')
-  // Building image picked via 🧊 in the 3D gallery — consumed by the model panel.
-  const [modelGenSrc, setModelGenSrc] = useState<string | null>(null)
   // Floor-plan tab: selected room, for the model adjustment strip.
   const [floorRoomSel, setFloorRoomSel] = useState('')
   // Inline "+ Room" input — no browser prompt dialogs in this UI.
@@ -99,9 +97,8 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   }, [dirty])
 
   useEffect(() => {
-    // A picked source image / floor-plan selection belongs to the previous
-    // location — never carry them over.
-    setModelGenSrc(null)
+    // A floor-plan selection belongs to the previous location — never carry
+    // it over.
     setFloorRoomSel('')
   }, [location.id])
 
@@ -566,7 +563,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             room={null}
             allLocations={allLocations}
             placements={placements}
-            onGenerateModel={setModelGenSrc}
           />
         </div>
         <BuildingModelPanel
@@ -575,8 +571,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           map3d={draft.map3d}
           scene={scene}
           onPreviewFileChange={setPreviewModelFile}
-          generateSource={modelGenSrc}
-          onGenerateSourceConsumed={() => setModelGenSrc(null)}
         />
       </div>
     </div>

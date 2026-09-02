@@ -14,7 +14,10 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { MeshBackendDialog, type MeshBackend, type MeshGenerateOpts } from '../../components/MeshBackendDialog'
+import {
+  MeshBackendDialog,
+  type MeshBackend, type MeshGenerateOpts, type MeshView, type MeshViewChoice,
+} from '../../components/MeshBackendDialog'
 import { SliderInput } from '../../components/SliderInput'
 import {
   BuildDistanceMeshButton, DEFAULT_MODEL_TIER, ModelGalleryRow, NoModelRow,
@@ -23,7 +26,7 @@ import {
 } from '../../components/ModelGallery'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { notifyModel3dChanged } from './topDownSnapshot'
-import type { Map3D, ScenePayload } from './worldTypes'
+import type { GalleryResponse, Map3D, ScenePayload } from './worldTypes'
 import { useActiveMeasure } from './measureKit'
 
 export interface ModelEntry extends GalleryModel {
@@ -109,9 +112,6 @@ interface BuildingModelPanelProps {
   /** Tells the owner which stored model is previewed ('' = the active one)
    *  so the scene recipe is computed for that file. */
   onPreviewFileChange?: (filename: string) => void
-  /** Source image picked via 🧊 in the gallery — opens the backend picker. */
-  generateSource: string | null
-  onGenerateSourceConsumed: () => void
 }
 
 export function BuildingModelPanel({
@@ -121,8 +121,6 @@ export function BuildingModelPanel({
   map3d,
   scene,
   onPreviewFileChange,
-  generateSource,
-  onGenerateSourceConsumed,
 }: BuildingModelPanelProps) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -195,17 +193,51 @@ export function BuildingModelPanel({
     }
   }, [load, startPoll])
 
-  // Fire the generation from the chosen backend + the gallery image picked via 🧊.
+  // The central "Generate 3D model" dialog (design 2026-09-02): opened from
+  // the panel head, fed with the gallery's building-view images of THIS
+  // scope (location = images without a room, room = its own), newest first.
+  const [genViews, setGenViews] = useState<MeshViewChoice[] | null>(null)
+  const openGenerate = useCallback(async () => {
+    try {
+      // `encLoc`, not `enc`: the gallery is the LOCATION's (enc carries the
+      // room path for a room panel); the room filter is applied below.
+      const g = await apiGet<GalleryResponse>(`/world/locations/${encLoc}/gallery`)
+      const types = g.image_types || {}
+      const rooms = g.image_rooms || {}
+      const inScope = (f: string) => (roomId ? rooms[f] === roomId : !rooms[f])
+      const forView = (view: MeshView) => (g.images || [])
+        .filter((f) => types[f] === `building-${view}` && inScope(f))
+        .map((f) => ({ value: f, label: f }))
+      setGenViews([
+        { view: 'front', options: forView('front'), required: true },
+        { view: 'back', options: forView('back') },
+        { view: 'left', options: forView('left') },
+        { view: 'right', options: forView('right') },
+      ])
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [encLoc, roomId, t, toast])
+
+  // Fire the generation: the front view is the source image, the other picked
+  // views ride along as `view_images`.
   const generate = useCallback(
     (backend: string, opts?: MeshGenerateOpts) => {
-      const src = generateSource
-      onGenerateSourceConsumed()
+      const views = opts?.views || {}
+      const src = views.front
+      setGenViews(null)
       if (!src) return
+      // Everything but the front rides along as `view_images`.
+      const extra: Partial<Record<MeshView, string>> = {}
+      for (const [view, file] of Object.entries(views)) {
+        if (view !== 'front' && file) extra[view as MeshView] = file
+      }
       void apiPost<{ status?: string }>(`/world/locations/${enc}/model3d/generate`,
         { source_image: src, backend,
+          ...(Object.keys(extra).length ? { view_images: extra } : {}),
           ...(opts?.face_num ? { face_num: opts.face_num } : {}),
           ...(opts?.texture_size ? { texture_size: opts.texture_size } : {}),
-          ...(opts?.lod_faces ? { lod_faces: opts.lod_faces } : {}),
+          ...(opts?.lod_faces !== undefined ? { lod_faces: opts.lod_faces } : {}),
           ...(opts?.tier ? { tier: opts.tier } : {}) })
         .then((d) => {
           // already_running = double-click guard for the SAME image with the
@@ -219,7 +251,7 @@ export function BuildingModelPanel({
         })
         .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
     },
-    [generateSource, onGenerateSourceConsumed, enc, startPoll, t, toast],
+    [enc, startPoll, t, toast],
   )
 
   // Stored file waiting in the low-variant dialog (mesh→mesh reduction of
@@ -441,6 +473,19 @@ export function BuildingModelPanel({
   // width — the boundary's bounding box (scene.extent_m = plan_width_m).
   const boundaryWidthM = scene?.extent_m || map3d?.plan_width_m || 0
 
+  const generateButton = (
+    <button
+      className="ga-btn ga-btn-sm"
+      disabled={!!model3d?.pending}
+      onClick={() => { void openGenerate() }}
+      title={roomId
+        ? t('Mesh the room’s model source images (front, plus back/left/right when present) into a 3D room model.')
+        : t('Mesh the building images (front, plus back/left/right when present) into the 3D building model.')}
+    >
+      🧊 {t('Generate 3D model')}
+    </button>
+  )
+
   const uploadButton = (
     <>
       <button
@@ -485,16 +530,17 @@ export function BuildingModelPanel({
 
   const picker = (
     <MeshBackendDialog
-      open={generateSource !== null}
+      open={genViews !== null}
       title={roomId ? t('Generate 3D room model') : t('Generate 3D building model')}
       backends={model3d?.backends || []}
+      views={genViews || undefined}
       defaultBackend={
         model3d?.default
           || ((model3d?.backends || []).length === 1 ? (model3d?.backends || [])[0].name : '')
       }
       showTier
       onGenerate={generate}
-      onClose={onGenerateSourceConsumed}
+      onClose={() => setGenViews(null)}
     />
   )
 
@@ -528,9 +574,10 @@ export function BuildingModelPanel({
                 two ways to get one are still named, as an offer. */}
             <span className="ga-hint">
               {roomId
-                ? t('No room model (optional). A room renders from its floor plan and its props; a diorama is polish — generate one from a gallery image assigned to this room (🧊 on a tile) or upload a GLB.')
-                : t('No building model (optional). The location renders from its outline and its props; a model is polish — generate one from a building image (🧊 on a gallery tile below) or upload a GLB.')}
+                ? t('No room model (optional). A room renders from its floor plan and its props; a diorama is polish — generate one from this room’s gallery images or upload a GLB.')
+                : t('No building model (optional). The location renders from its outline and its props; a model is polish — generate one from the building images below or upload a GLB.')}
             </span>
+            {generateButton}
             {uploadButton}
           </div>
         )}
@@ -741,9 +788,10 @@ export function BuildingModelPanel({
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        {generateButton}
         {uploadButton}
         <span className="ga-hint">
-          {t('Generate more models via 🧊 on a gallery tile — new ones become the active model of their target tier.')}
+          {t('“Generate 3D model” meshes the building views again — new ones become the active model of their target tier.')}
         </span>
       </div>
       {blenderTools}

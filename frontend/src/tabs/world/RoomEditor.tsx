@@ -15,14 +15,11 @@ interface RoomEditorProps {
   location: Location
   room: Room
   items: ItemRef[]
-  /** Gallery image picked via 🧊 for the room model — wired through WorldTab. */
-  modelGenSource: string | null
-  onModelGenConsumed: () => void
   onChanged: () => void
   onDeleted: () => void
 }
 
-export function RoomEditor({ location, room, items, modelGenSource, onModelGenConsumed, onChanged, onDeleted }: RoomEditorProps) {
+export function RoomEditor({ location, room, items, onChanged, onDeleted }: RoomEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [draft, setDraft] = useState<Room>(() => ({ ...room }))
@@ -33,12 +30,6 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
   useEffect(() => {
     setDraft({ ...room })
   }, [room])
-
-  // 🧊 in the room gallery picks a source image — the backend picker lives in
-  // the model panel on the 3D tab, so switch there or the dialog stays unseen.
-  useEffect(() => {
-    if (modelGenSource && room.id !== GROUND_ROOM_ID) setTab('3d')
-  }, [modelGenSource, room.id])
 
   const upd = useCallback(<K extends keyof Room>(k: K, v: Room[K]) => {
     setDraft((prev) => ({ ...prev, [k]: v }))
@@ -108,8 +99,6 @@ export function RoomEditor({ location, room, items, modelGenSource, onModelGenCo
           <BuildingModelPanel
             locationId={location.id}
             roomId={room.id || ''}
-            generateSource={modelGenSource}
-            onGenerateSourceConsumed={onModelGenConsumed}
           />
         </div>
       ) : (
