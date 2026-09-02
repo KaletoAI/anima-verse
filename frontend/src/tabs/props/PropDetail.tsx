@@ -1517,18 +1517,29 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                         title={t('Render this view (optionally with the front image as reference).')}>
                         🖼
                       </button>
+                      {/* Upload and delete are locked while the variant runs
+                          for the same reason the front's 🖼 is: a mesh run
+                          READS the view files when it starts, so swapping or
+                          dropping one mid-run would bake a picture nobody
+                          asked for. */}
                       <button type="button" className="ga-btn ga-btn-sm"
+                        disabled={variantBusy}
                         onClick={() => { setUploadView(view); viewUploadRef.current?.click() }}
-                        title={t('Upload a picture as this view.')}>
+                        title={variantBusy
+                          ? t('This variant is generating right now.')
+                          : t('Upload a picture as this view.')}>
                         ⬆
                       </button>
                       {rec ? (
                         <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+                          disabled={variantBusy}
                           onClick={() => {
                             if (armedView === view) { setArmedView(null); void deleteView(view) }
                             else setArmedView(view)
                           }}
-                          title={armedView === view ? t('Click again to delete this view') : t('Delete this view image')}>
+                          title={variantBusy
+                            ? t('This variant is generating right now.')
+                            : armedView === view ? t('Click again to delete this view') : t('Delete this view image')}>
                           {armedView === view ? t('Sure?') : '×'}
                         </button>
                       ) : null}

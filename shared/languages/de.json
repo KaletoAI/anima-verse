@@ -2490,6 +2490,7 @@
     "optional": "optional",
     "stored": "gespeichert",
     "this backend has no reference slot": "dieses Backend hat keinen Referenz-Slot",
-    "“Generate 3D model” meshes the building views again — new ones become the active model of their target tier.": "„3D-Modell erzeugen“ vermesht die Gebäudeansichten erneut — neue werden das aktive Modell ihrer Ziel-Stufe."
+    "“Generate 3D model” meshes the building views again — new ones become the active model of their target tier.": "„3D-Modell erzeugen“ vermesht die Gebäudeansichten erneut — neue werden das aktive Modell ihrer Ziel-Stufe.",
+    "The picture belongs to this variant — only its image is replaced, and its 3D model stays until you re-mesh it with “3D from this image”.": "Das Bild gehört zu dieser Variante — nur ihr Bild wird ersetzt, ihr 3D-Modell bleibt, bis du es mit „3D aus diesem Bild“ neu vermeshst."
   }
 }

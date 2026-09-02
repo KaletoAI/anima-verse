@@ -807,8 +807,8 @@ export function BuildingModelPanel({
  * ONE step, unlike the roof next to it: there is nothing to propose. The
  * volume is the scene recipe's walls and storeys, and the roof form follows a
  * stated heuristic over the footprint — no dialog, no numbers to edit. What
- * comes out is an ordinary gallery image of type "building", which is exactly
- * what the existing image-to-3D path already eats.
+ * comes out is an ordinary gallery image of type "building-front", which is
+ * exactly what the existing image-to-3D path already eats.
  */
 function ExteriorRenderButton({ apiBase, blender, pending, onStarted }: {
   apiBase: string
