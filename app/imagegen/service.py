@@ -1474,7 +1474,12 @@ class ImageService:
         from app.core import config as _cfg_mod
         _uc_name = (input_data.get("image_use_case") or "character").strip()
         _uc_img_model = getattr(backend, "image_family", "") if backend else ""
-        _ucp = _cfg_mod.get_use_case_prompts(_uc_name, _uc_img_model)
+        # "clothed": the caller that BUILT the outfit text says whether any
+        # fabric is on the figure — it is the only place that knows. Absent
+        # (every path that never asked) keeps the style's fabric clause.
+        _ucp = _cfg_mod.get_use_case_prompts(
+            _uc_name, _uc_img_model,
+            clothed=bool(input_data.get("clothed", True)))
         prompt_style = _ucp.get("prompt_style", "")
         negative_prompt = _ucp.get("prompt_negative", "")
 

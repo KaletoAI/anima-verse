@@ -228,8 +228,11 @@ function renderUseCasesMasterDetail(path) {
     if (ucs.indexOf(sel) === -1) sel = ucs.length ? ucs[0] : null;
     SELECTED_ITEM[path] = sel;
     let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
-          + 'Style / Negative / Instruction pro Use-Case × Familie. Leeres Feld = eingebauter Default (grau). '
-          + 'Which family applies is determined by the <b>Image Family</b> of the backend.</p>';
+          + 'Style / Negative / Instruction per use case × family. An empty field means the built-in default (grey). '
+          + 'Which family applies is determined by the <b>Image Family</b> of the backend. '
+          + 'Placeholders in a style: <code>{subject}</code> (what the picture shows) and '
+          + '<code>{fabric}</code>, which fills in for a dressed character and drops out for an '
+          + 'undressed one — so a bare figure is not rendered against a style asking for fabric textures.</p>';
     html += '<div class="md-grid"><div class="md-list"><table class="md-table"><thead><tr><th>Use-Case</th></tr></thead><tbody>';
     for (const uc of ucs) {
         const active = (uc === sel) ? ' active' : '';

@@ -1097,6 +1097,11 @@ def generate_expression_image(character_name: str,
     if _merged_loras:
         payload["loras"] = _merged_loras
     payload["image_use_case"] = image_use_case
+    # Fabric only exists in the picture when something is actually worn —
+    # pieces or the free-text wardrobe, both of which land in outfit_desc.
+    # An undressed character would otherwise be rendered against a style
+    # that asks for fabric textures, and the model duly invents cloth.
+    payload["clothed"] = bool(outfit_desc)
 
     try:
         img_result = image_skill.generate_from_input(json.dumps(payload))

@@ -355,12 +355,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # with lifelike textures reconstructs better than photographic depth.
     "tpose": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin and fabric textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin and fabric textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -389,12 +389,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # automatically — no migration needed.
     "tpose_back": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin and fabric textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_BACK,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin and fabric textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_BACK,
             "prompt_instruction": "Describe the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -404,12 +404,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # visible span would only fight the view.
     "tpose_side": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin and fabric textures, full body view, head to toe, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin and fabric textures, shown from head to toe against a plain neutral background, margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -493,22 +493,39 @@ def image_model_to_family(image_model: str) -> str:
     return _IMAGE_MODEL_FAMILY.get((image_model or "").strip(), "keywords")
 
 
-def get_use_case_prompts(use_case: str, image_model: str = "") -> dict:
+#: What ``{fabric}`` becomes for a DRESSED character. A style names the
+#: materials the render should show, and on a figure wearing nothing there is
+#: no fabric to show — the words alone are enough to make a model drape cloth
+#: over it. Undressed the slot collapses to nothing, so the sentence still
+#: reads ("lifelike skin textures"). A style WITHOUT the placeholder is left
+#: exactly as written — an admin who edits the text keeps what they typed.
+FABRIC_CLAUSE = " and fabric"
+
+
+def get_use_case_prompts(use_case: str, image_model: str = "",
+                         clothed: bool = True) -> dict:
     """Resolves style / negative / instruction for a use case + target style.
 
     Priority per field: admin override (config) -> built-in default
     (_DEFAULT_IMAGE_USE_CASES[use_case][family]) -> "" (the caller then falls
     back to the workflow style). Always returns a dict with the three keys
     (values may be empty).
+
+    ``clothed=False`` renders the ``{fabric}`` slot empty (see FABRIC_CLAUSE).
+    THE one place every style passes through, so no caller can leak a raw
+    placeholder into a prompt; the default keeps the clause for every path
+    that does not know the character's state.
     """
     uc = (use_case or "").strip() or "character"
     family = image_model_to_family(image_model)
     fields = ("prompt_style", "prompt_negative", "prompt_instruction")
     builtin = (_DEFAULT_IMAGE_USE_CASES.get(uc, {}) or {}).get(family, {}) or {}
+    fabric = FABRIC_CLAUSE if clothed else ""
     out = {}
     for f in fields:
         override = get(f"image_generation.use_cases.{uc}.styles.{family}.{f}", "")
-        out[f] = (override or "").strip() or (builtin.get(f, "") or "")
+        text = (override or "").strip() or (builtin.get(f, "") or "")
+        out[f] = text.replace("{fabric}", fabric)
     return out
 
 
@@ -599,16 +616,18 @@ def use_case_llm_compose(use_case: str) -> bool:
 
 def resolve_use_case_style(use_case: str, image_family: str = "",
                            backend_model: str = "",
-                           backend_family: str = "") -> dict:
+                           backend_family: str = "",
+                           clothed: bool = True) -> dict:
     """Convenience wrapper for all generate paths. Family priority:
     explicit ``image_family`` → backend ``image_family`` → heuristic from
     the backend model name (get_target_model). Returns
     {prompt_style, prompt_negative, prompt_instruction} for the use case.
+    ``clothed`` is handed straight to get_use_case_prompts.
     """
     from app.core.prompt_adapters import get_target_model
     fam = (image_family or "").strip() or (backend_family or "").strip()
     target = get_target_model(fam, backend_model or "")
-    return get_use_case_prompts(use_case, target)
+    return get_use_case_prompts(use_case, target, clothed=clothed)
 
 
 _DEFAULT_MARKETPLACE_CATALOGS = [
