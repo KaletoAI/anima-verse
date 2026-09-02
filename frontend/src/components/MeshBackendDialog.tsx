@@ -135,6 +135,9 @@ export function MeshBackendDialog({
   // their lists on every job poll, and a fresh (but identical) array must
   // not wipe a selection the admin just made.
   const backendsKey = backends.map((b) => `${b.name}:${b.face_num || 0}`).join('|')
+  const viewsKey = (views || [])
+    .map((v) => `${v.view}:${v.options.map((o) => o.value).join(',')}`)
+    .join('|')
   const statedHigh = faceTargets.high || 0
   const statedLow = faceTargets.low || 0
   /** Fill the face field AND remember what it was filled with — the two are
@@ -158,9 +161,13 @@ export function MeshBackendDialog({
       if (v.options.length) initial[v.view] = v.options[0].value
     }
     setViewPick(initial)
-    // ... and `views`, whose array identity the eslint-disable line covers.
+    // The view seeding must re-run when the CANDIDATE IMAGES change, not just
+    // on open — a caller that fills `views` after opening would otherwise keep
+    // an empty pick. Keyed on the views' CONTENT for the same reason as
+    // `backendsKey`: the callers rebuild the array on every job poll, and a
+    // fresh (but identical) array must not wipe a pick the admin just made.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, defaultBackend, defaultTextureSize, backendsKey, statedHigh, statedLow])
+  }, [open, defaultBackend, defaultTextureSize, backendsKey, viewsKey, statedHigh, statedLow])
 
   if (!open) return null
   const none = backends.length === 0
@@ -227,6 +234,9 @@ export function MeshBackendDialog({
         const val = viewPick[v.view]
         if (val) chosen[v.view] = val
       }
+      // Sent AS-IS even when empty: `{}` means "views were offered, nothing
+      // picked", which the server treats like an absent key — the callers map
+      // it (props: `views: []`, locations: no `view_images`).
       opts.views = chosen
     }
     onGenerate(picked, opts)
@@ -289,7 +299,7 @@ export function MeshBackendDialog({
                   })}
                   {viewBlocked ? (
                     <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>
-                      {t('No image for the required view: {views}').replace('{views}',
+                      {t('No image for the required view(s): {views}').replace('{views}',
                         missingRequired.map((v) => t(VIEW_LABELS[v.view])).join(', '))}
                     </div>
                   ) : (
