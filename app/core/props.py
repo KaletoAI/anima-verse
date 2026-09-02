@@ -5641,10 +5641,14 @@ def get_prop(prop_id: str) -> Optional[Dict[str, Any]]:
 
 # ── Generation state (populated by the generation chain, A2) ─────────────
 
-def _gen_key(prop_id: str, variant: Any, backend_glob: str) -> str:
+def _gen_key(prop_id: str, variant: Any, backend_glob: str,
+             view: str = "") -> str:
     """Double-start key: prop, STORE VARIANT INDEX and backend. Two variants of
     the same prop may generate side by side — they are two objects to the GPU —
     while the same variant on the same backend stays one job.
+
+    A view render carries its VIEW so a back and a left render of one variant
+    run side by side while the same view stays one job.
 
     ``None`` is not a key of its own: an unqualified run works on the PRIMARY
     variant, so it resolves to that variant's index here. Otherwise the same
@@ -5653,7 +5657,7 @@ def _gen_key(prop_id: str, variant: Any, backend_glob: str) -> str:
     file. Resolving also makes the middle field always an integer, which is
     what :func:`pending_variants` reports back to the admin."""
     idx = primary_variant(prop_id) if variant is None else int(variant)
-    return f"{prop_id}|{idx}|{(backend_glob or '').strip().lower()}"
+    return f"{prop_id}|{idx}|{(backend_glob or '').strip().lower()}|{view}"
 
 
 def _split_gen_key(key: str) -> Tuple[str, int]:
@@ -5787,7 +5791,9 @@ def compose_prompt(subject: str, backend, key_areas: Any = None,
 
 
 def _render_source(prop_id: str, backend_glob: str,
-                   prompt: str, negative: str, variant: Any = None) -> bool:
+                   prompt: str, negative: str, variant: Any = None, *,
+                   view: str = "front",
+                   front_reference: bool = False) -> bool:
     """txt2img render of the product shot → THIS VARIANT's source image. Runs
     the GPU job on the backend queue channel (like every render). Records the
     image backend + final prompt with the variant. Returns True on success.
@@ -5795,7 +5801,13 @@ def _render_source(prop_id: str, backend_glob: str,
     ``variant`` None is the primary one, whose image keeps the historic
     ``source.png``; every further variant renders into its own
     ``source-v<n>.png``, so a second version of the object cannot overwrite
-    the picture the first one was meshed from."""
+    the picture the first one was meshed from.
+
+    ``view`` names which of the four views is rendered — the front composes
+    from the ``prop`` use case, an extra view from its own (``prop_back`` /
+    ``prop_side``) and says the direction in the subject. ``front_reference``
+    additionally slots THIS variant's front image as the appearance reference
+    of an extra view."""
     from app.imagegen.service import get_image_service
     svc = get_image_service()
     backend = None
@@ -5813,6 +5825,8 @@ def _render_source(prop_id: str, backend_glob: str,
         logger.warning("Prop %s: no image backend available", prop_id)
         return False
 
+    from app.core.view_prompts import view_subject, view_use_case
+    use_case = view_use_case("prop", view)
     meta0 = read_sidecar(prop_id)
     key_areas = meta0.get(KEY_AREAS_KEY) or []
     if not prompt.strip():
@@ -5822,8 +5836,9 @@ def _render_source(prop_id: str, backend_glob: str,
         # rendered from its own sentence where it has one, and only a variant
         # without one falls back to the prop's.
         composed = compose_prompt(
-            variant_description(meta0, variant) or meta0.get("name", ""),
-            backend, key_areas=key_areas)
+            view_subject(view, variant_description(meta0, variant)
+                         or meta0.get("name", "")),
+            backend, key_areas=key_areas, use_case=use_case)
         prompt = composed["prompt"]
         if not negative.strip():
             negative = composed["negative"]
@@ -5838,20 +5853,34 @@ def _render_source(prop_id: str, backend_glob: str,
         "width": 1024, "height": 1024,
         "seed": random.randint(1, 2**31 - 1),
     }
+    # A back/side view may take the variant's FRONT image as its appearance
+    # reference (design 2026-09-02) — only where a front exists and the
+    # backend has a slot; otherwise the view renders from text alone.
+    if view != "front" and front_reference:
+        front = source_path(prop_id, variant)
+        if not front:
+            logger.info("Prop %s: no front image, %s view renders without "
+                        "reference", prop_id, view)
+        elif int(getattr(backend, "ref_slot_count", 0) or 0) < 1:
+            logger.info("Prop %s: backend %s has no reference slot, %s view "
+                        "renders without reference", prop_id, backend.name, view)
+        else:
+            params["reference_images"] = {"input_reference_image_1": str(front)}
     # The prompt arrives already composed (compose_prompt above, or edited in
     # the dialog) — the metablock records the use case, not a fresh compose.
     _log_meta = {"agent_name": f"Prop {prop_id}", "original_prompt": prompt,
                  "auto_enhance": False,
-                 "compose": {"use_case": "prop", "settings_applied": True}}
+                 "compose": {"use_case": use_case, "settings_applied": True}}
     from app.core.llm_queue import get_llm_queue, Priority
     images = get_llm_queue().submit_gpu_task(
         provider_name=backend.name,
-        task_type="prop_source",
+        task_type="prop_source" if view == "front" else f"prop_source_{view}",
         priority=Priority.IMAGE_GEN,
         callable_fn=lambda: backend.generate(prompt, negative, params,
                                              log_meta=_log_meta),
         agent_name="system",
-        label=f"Prop source: {prop_id}",
+        label=(f"Prop source: {prop_id}" if view == "front"
+               else f"Prop source ({view}): {prop_id}"),
         gpu_type=backend.api_type)
     if not images:
         logger.warning("Prop %s: empty source render", prop_id)
@@ -5860,7 +5889,7 @@ def _render_source(prop_id: str, backend_glob: str,
     # One writer for every source image (upload, cutout, render): it norms the
     # picture and records the provenance the panel shows for THIS variant
     # (backend + when; prompt/negative in the tooltip).
-    return save_source_image(prop_id, images[0], variant,
+    return save_source_image(prop_id, images[0], variant, view=view,
                              backend=backend.name, prompt=prompt,
                              negative=negative)
 
@@ -5915,10 +5944,17 @@ def _generate(prop_id: str, prompt: str, negative: str,
               image_only: bool = False,
               tier: str = DEFAULT_TIER,
               lod_faces: Any = None,
-              variant: Any = None) -> Dict[str, Any]:
+              variant: Any = None,
+              view: str = "front",
+              front_reference: bool = False,
+              views: Optional[List[str]] = None) -> Dict[str, Any]:
     """Blocking chain on a worker thread — source render then img2mesh. ONE
     tracked header task wraps the whole chain (the actual GPU jobs show in the
-    queue panel via their channel entries)."""
+    queue panel via their channel entries).
+
+    ``view``/``front_reference`` steer the source render (which view, and
+    whether the front is slotted as its reference); ``views`` names the extra
+    views the MESH step should send along beside the front image."""
     from app.core.task_queue import get_task_queue
     name = read_sidecar(prop_id).get("name") or prop_id
     task_id = ""
@@ -5934,8 +5970,9 @@ def _generate(prop_id: str, prompt: str, negative: str,
         # count / texture size) without burning an image render; image_only
         # renders a NEW source image and stops — re-meshing is its own,
         # separately triggered step ("3D from this image").
-        if not mesh_only and not _render_source(prop_id, image_backend_glob,
-                                                prompt, negative, variant):
+        if not mesh_only and not _render_source(
+                prop_id, image_backend_glob, prompt, negative, variant,
+                view=view, front_reference=front_reference):
             error = "source render failed"
             return {"ok": False, "error": error}
         if image_only:
@@ -5983,6 +6020,19 @@ def _generate(prop_id: str, prompt: str, negative: str,
         # (v2 E1; same rule as the upload) — read BEFORE the new file lands.
         previous = g.find(DEFAULT_TIER, fallback=False)
         inherited = file_areas(previous)[ROTATION_KEY] if previous else None
+        # Extra views for a multi-view alias — the files this variant holds
+        # among the requested ones; a requested view without a file is
+        # skipped, never fatal.
+        view_paths: Dict[str, str] = {}
+        for v in (views or []):
+            if v not in EXTRA_VIEWS:
+                continue
+            vp = source_path(prop_id, variant, view=v)
+            if vp:
+                view_paths[v] = str(vp)
+            else:
+                logger.info("Prop %s: requested %s view has no image, skipped",
+                            prop_id, v)
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
             output_path=str(g.new_path()),
@@ -5991,6 +6041,7 @@ def _generate(prop_id: str, prompt: str, negative: str,
             rig="none",
             face_num=face_num,
             texture_size=texture_size,
+            view_images=view_paths or None,
             lod_faces=lod_faces)
         if not res.get("ok"):
             error = str(res.get("error") or "mesh generation failed")
@@ -6017,6 +6068,9 @@ def _generate(prop_id: str, prompt: str, negative: str,
                else {}),
             **({ROTATION_KEY: inherited}
                if inherited and any(inherited.values()) else {}),
+            **({"view_images": {v: Path(p).name
+                                for v, p in view_paths.items()}}
+               if view_paths else {}),
         })
         g.select(path.name, tier)
         # LOD stages of the SAME job (§ 3.2): each becomes its own gallery
@@ -6226,7 +6280,10 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        image_only: bool = False,
                        tier: str = DEFAULT_TIER,
                        lod_faces: Any = None,
-                       variant: Any = None) -> bool:
+                       variant: Any = None,
+                       view: str = "front",
+                       front_reference: bool = False,
+                       views: Optional[List[str]] = None) -> bool:
     """Start the source→mesh chain in the background. Different mesh backends
     for the same prop run concurrently (each queues on its own GPU channel);
     False only while THIS prop+variant+backend combination is already
@@ -6244,13 +6301,17 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
     same bake; the smallest one lands as that variant's ``low`` tier. It is
     THREE-VALUED (ruling V9): ``None`` lets the variant's ``target_faces_low``
     decide, an EMPTY LIST switches the stage off explicitly, a number asks for
-    that stage."""
+    that stage.
+
+    ``view``/``front_reference`` belong to an ``image_only`` run (which view is
+    rendered, and whether the front is slotted as reference); ``views`` names
+    the extra views a MESH run should send along."""
     pid = safe_prop_id(prop_id)
     if not pid or not read_sidecar(pid):
         return False
     if variant is None and not image_only:
         variant = target_variant(pid)
-    key = _gen_key(pid, variant, mesh_backend_glob)
+    key = _gen_key(pid, variant, mesh_backend_glob, view if image_only else "")
     with _lock:
         if key in _generating:
             return False
@@ -6262,7 +6323,8 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                       mesh_backend_glob, face_num=face_num,
                       texture_size=texture_size, mesh_only=mesh_only,
                       image_only=image_only, tier=tier, lod_faces=lod_faces,
-                      variant=variant)
+                      variant=variant, view=view,
+                      front_reference=front_reference, views=views)
         except Exception as e:
             logger.error("Prop generation for %s failed: %s", pid, e)
         finally:

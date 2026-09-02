@@ -1912,7 +1912,9 @@ def props_admin() -> Dict[str, Any]:
     prompt (final-prompt rule); ``mesh_backends`` are the rig-'none' img2mesh
     aliases and ``mesh_default`` the admin's configured one among them ('' =
     none) — the tab shows THAT backend's face count as the placeholder behind
-    a variant's face budget, i.e. the number a run would really start on."""
+    a variant's face budget, i.e. the number a run would really start on.
+    ``prompt_styles``/``prompt_negatives`` carry the same three prop use cases
+    (front, back, side) so the view dialog can prefill both fields per view."""
     from app.core.props import (compose_prompt, is_pending, list_props,
                                 pending_variants)
     from app.core.model3d import list_mesh_backends
@@ -1922,12 +1924,16 @@ def props_admin() -> Dict[str, Any]:
     image_backends = []
     try:
         for b in svc.list_available_backends(media="image"):
-            style = compose_prompt("", b)
             # The three prop use cases the image dialog may render into (front
             # keeps "prop", the extra views their own siblings) — RAW styles
-            # with the {subject} slot, the dialog weaves per view.
-            styles = {uc: compose_prompt("", b, use_case=uc)["style"]
-                      for uc in ("prop", "prop_back", "prop_side")}
+            # with the {subject} slot, the dialog weaves per view. Each use
+            # case composes ONCE; style and negative come out of that one run,
+            # and the flat front fields are that same "prop" result.
+            composed = {uc: compose_prompt("", b, use_case=uc)
+                        for uc in ("prop", "prop_back", "prop_side")}
+            style = composed["prop"]
+            styles = {uc: c["style"] for uc, c in composed.items()}
+            negatives = {uc: c["negative"] for uc, c in composed.items()}
             # False = no negative input (auto/yes/no resolved in
             # negation_fold): the form hides the field, and the handoff folds
             # whatever negative is submitted into the prompt as negations.
@@ -1935,6 +1941,7 @@ def props_admin() -> Dict[str, Any]:
                                    "prompt_style": style["style"],
                                    "prompt_styles": styles,
                                    "prompt_negative": style["negative"],
+                                   "prompt_negatives": negatives,
                                    # Reference slots: the view dialog offers
                                    # "front as reference" only where one exists.
                                    "ref_slot_count": int(
@@ -2198,16 +2205,21 @@ def _prop_bulk_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
 async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     """Re-run the source→mesh chain for an EXISTING prop (body:
     {prompt?, negative?, image_backend?, mesh_backend?, face_num?,
-    texture_size?, tier?, lod_faces?} — empty prompt = composed from the
-    stored description/name). ``lod_faces`` asks the mesh alias for a reduced
+    texture_size?, tier?, lod_faces?, view?, front_reference?, views?} — empty
+    prompt = composed from the stored description/name).
+    ``lod_faces`` asks the mesh alias for a reduced
     stage of the same bake, which lands as the ``low`` variant; it is
     three-valued (ruling V9, :func:`_mesh_lod`) — absent lets the target
     variant's own ``target_faces_low`` decide, ``[]`` is the caller's explicit
     "no stage". ``mesh_only`` re-meshes the
     existing source image; ``image_only`` renders a new source image and
-    stops (re-meshing is its own step). Background job — poll /world/props
-    for pending."""
+    stops (re-meshing is its own step). ``view`` names which of the four views
+    an ``image_only`` run renders (default the front), ``front_reference``
+    slots that variant's front image as its appearance reference, and ``views``
+    lists the extra views a MESH run sends along to the mesh alias. Background
+    job — poll /world/props for pending."""
     from app.core.props import get_prop, trigger_generation
+    from app.core.view_prompts import EXTRA_VIEWS, is_view
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
     data = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
@@ -2216,6 +2228,14 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     if bool(data.get("mesh_only")) and bool(data.get("image_only")):
         raise HTTPException(status_code=400,
                             detail="mesh_only and image_only are exclusive")
+    view = str(data.get("view") or "front").strip()
+    if not is_view(view):
+        raise HTTPException(status_code=400,
+                            detail="view must be front, back, left or right")
+    raw_views = data.get("views") or []
+    if not isinstance(raw_views, list) or any(v not in EXTRA_VIEWS for v in raw_views):
+        raise HTTPException(status_code=400,
+                            detail="views must be a list of back/left/right")
     if not trigger_generation(prop_id,
                               prompt=str(data.get("prompt") or ""),
                               negative=str(data.get("negative") or ""),
@@ -2226,7 +2246,10 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               mesh_only=bool(data.get("mesh_only")),
                               image_only=bool(data.get("image_only")),
                               tier=_tier(data.get("tier")),
-                              lod_faces=_mesh_lod(data)):
+                              lod_faces=_mesh_lod(data),
+                              view=view,
+                              front_reference=bool(data.get("front_reference")),
+                              views=list(raw_views)):
         return {"status": "already_running"}
     return {"status": "generating"}
 
