@@ -614,21 +614,13 @@ async def prop_variant_generate(prop_id: str, index: int,
     MESH run sends along to the mesh alias.
     """
     from app.core.props import trigger_generation
-    from app.core.view_prompts import EXTRA_VIEWS, is_view
-    from app.routes.world import _mesh_int, _mesh_lod, _tier
+    from app.routes.world import _mesh_int, _mesh_lod, _tier, _view_args
     _variant(prop_id, index)
     data = await _body(request)
     if bool(data.get("mesh_only")) and bool(data.get("image_only")):
         raise HTTPException(status_code=400,
                             detail="mesh_only and image_only are exclusive")
-    view = str(data.get("view") or "front").strip()
-    if not is_view(view):
-        raise HTTPException(status_code=400,
-                            detail="view must be front, back, left or right")
-    raw_views = data.get("views") or []
-    if not isinstance(raw_views, list) or any(v not in EXTRA_VIEWS for v in raw_views):
-        raise HTTPException(status_code=400,
-                            detail="views must be a list of back/left/right")
+    view, front_reference, views = _view_args(data)
     started = trigger_generation(
         prop_id,
         prompt=str(data.get("prompt") or ""),
@@ -645,6 +637,6 @@ async def prop_variant_generate(prop_id: str, index: int,
         lod_faces=_mesh_lod(data),
         variant=index,
         view=view,
-        front_reference=bool(data.get("front_reference")),
-        views=list(raw_views))
+        front_reference=front_reference,
+        views=views)
     return {"status": "generating" if started else "already_running"}

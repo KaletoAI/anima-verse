@@ -6,7 +6,7 @@ from fastapi import (APIRouter, Request, HTTPException, Query, UploadFile,
                      File, Form, Depends)
 from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from app.core.log import get_logger
 from app.core.auth_dependency import require_admin
 
@@ -953,6 +953,32 @@ def _tier(val) -> str:
     has (plan-3d-lod-und-betreten.md)."""
     from app.core.model_store import DEFAULT_TIER, normalize_tier
     return normalize_tier(val) or DEFAULT_TIER
+
+
+def _view_args(data: Dict[str, Any]) -> Tuple[str, bool, List[str]]:
+    """The VIEW fields of a prop generate body: ``(view, front_reference,
+    views)``. Shared by both generate routes so the two can never disagree
+    about what a view request means.
+
+    ``view`` names which of the four views an IMAGE run renders and
+    ``front_reference`` whether that variant's front image is slotted as its
+    appearance reference; ``views`` names the extra views a MESH run sends
+    along to the mesh alias. An extra view belongs to an ``image_only`` run
+    only — a full run meshes from the FRONT image, so rendering a back view in
+    the same breath would mesh a picture nobody made."""
+    from app.core.view_prompts import EXTRA_VIEWS, is_view
+    view = str(data.get("view") or "front").strip()
+    if not is_view(view):
+        raise HTTPException(status_code=400,
+                            detail="view must be front, back, left or right")
+    if view != "front" and not bool(data.get("image_only")):
+        raise HTTPException(status_code=400, detail="view requires image_only")
+    raw_views = data.get("views") or []
+    if not isinstance(raw_views, list) or any(v not in EXTRA_VIEWS
+                                              for v in raw_views):
+        raise HTTPException(status_code=400,
+                            detail="views must be a list of back/left/right")
+    return view, bool(data.get("front_reference")), list(raw_views)
 
 
 @router.post("/locations/{location_id}/model3d/generate")
@@ -2219,7 +2245,6 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     lists the extra views a MESH run sends along to the mesh alias. Background
     job — poll /world/props for pending."""
     from app.core.props import get_prop, trigger_generation
-    from app.core.view_prompts import EXTRA_VIEWS, is_view
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
     data = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
@@ -2228,14 +2253,7 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     if bool(data.get("mesh_only")) and bool(data.get("image_only")):
         raise HTTPException(status_code=400,
                             detail="mesh_only and image_only are exclusive")
-    view = str(data.get("view") or "front").strip()
-    if not is_view(view):
-        raise HTTPException(status_code=400,
-                            detail="view must be front, back, left or right")
-    raw_views = data.get("views") or []
-    if not isinstance(raw_views, list) or any(v not in EXTRA_VIEWS for v in raw_views):
-        raise HTTPException(status_code=400,
-                            detail="views must be a list of back/left/right")
+    view, front_reference, views = _view_args(data)
     if not trigger_generation(prop_id,
                               prompt=str(data.get("prompt") or ""),
                               negative=str(data.get("negative") or ""),
@@ -2248,8 +2266,8 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               tier=_tier(data.get("tier")),
                               lod_faces=_mesh_lod(data),
                               view=view,
-                              front_reference=bool(data.get("front_reference")),
-                              views=list(raw_views)):
+                              front_reference=front_reference,
+                              views=views):
         return {"status": "already_running"}
     return {"status": "generating"}
 

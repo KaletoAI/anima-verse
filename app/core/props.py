@@ -191,7 +191,8 @@ from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
                                      shrink_capability)
 from app.core.picture_areas import KINDS as COLOUR_KINDS
 from app.core.timeutils import utc_now_iso
-from app.core.view_prompts import EXTRA_VIEWS, VIEWS, is_view
+from app.core.view_prompts import (EXTRA_VIEWS, VIEWS, is_view,
+                                   view_subject, view_use_case)
 from app.core.world_ops import _capacity, _place_id, _slot_axis, _spacing
 
 logger = get_logger(__name__)
@@ -5722,7 +5723,7 @@ def variant_generating(prop_id: str, variant: Any) -> bool:
 # (source.png for the base stem, source-v<n>.png beyond it), then
 # ``service.generate_mesh(rig="none")`` turns it into model.glb (NEVER a
 # mesh-backend fallback — the existing rule). Runs on a worker thread with the
-# per-job double-start guard (prop_id|mesh backend).
+# per-job double-start guard (prop_id|variant|mesh backend|view).
 
 def apply_key_areas(prompt: str, negative: str,
                     key_areas: Any) -> Tuple[str, str]:
@@ -5825,7 +5826,6 @@ def _render_source(prop_id: str, backend_glob: str,
         logger.warning("Prop %s: no image backend available", prop_id)
         return False
 
-    from app.core.view_prompts import view_subject, view_use_case
     use_case = view_use_case("prop", view)
     meta0 = read_sidecar(prop_id)
     key_areas = meta0.get(KEY_AREAS_KEY) or []
@@ -6311,7 +6311,13 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
         return False
     if variant is None and not image_only:
         variant = target_variant(pid)
-    key = _gen_key(pid, variant, mesh_backend_glob, view if image_only else "")
+    # The VIEW separates the extra-view renders from each other — back, left
+    # and right write their own files, so they may run side by side. The FRONT
+    # deliberately keeps the historic collision with a mesh/full run: both
+    # touch the very same source.png, so a front render must not start while a
+    # mesh run of that variant is reading it.
+    key = _gen_key(pid, variant, mesh_backend_glob,
+                   view if (image_only and view != "front") else "")
     with _lock:
         if key in _generating:
             return False
