@@ -153,9 +153,10 @@ def building_source_image(location_id: str) -> str:
 
     The active model's own source image first — regenerating a building means
     re-meshing the very picture it was made from.  Without one (or when that
-    file is gone) the newest gallery image typed ``"building"`` takes over;
-    that type is the marker ``location_model3d`` itself reads.
+    file is gone) the newest gallery image typed ``"building-<view>"`` takes
+    over; those types are the marker ``location_model3d`` itself reads.
     """
+    from app.core.view_prompts import building_view
     from app.models.world import get_gallery_dir, get_gallery_image_types
     gallery = get_gallery_dir(location_id)
     stored = str((building_model(location_id) or {}).get("source_image")
@@ -164,7 +165,7 @@ def building_source_image(location_id: str) -> str:
         return stored
     newest, newest_mtime = "", -1.0
     for name, image_type in (get_gallery_image_types(location_id) or {}).items():
-        if image_type != "building":
+        if not building_view(image_type):
             continue
         path = gallery / name
         if not path.exists():

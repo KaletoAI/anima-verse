@@ -479,7 +479,7 @@ def _timeout_s() -> int:
 def generate_exterior(location_id: str,
                       location: Optional[Dict[str, Any]] = None,
                       ) -> Dict[str, Any]:
-    """Render the exterior and file it as a ``building`` gallery image.
+    """Render the exterior and file it as a ``building-front`` gallery image.
 
     Blocking (see :func:`trigger_exterior_render` for the background call).
     The image is stored on the ORDINARY gallery path — the same three calls

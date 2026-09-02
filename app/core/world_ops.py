@@ -3051,9 +3051,11 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # A back/side view may take the FRONT render as its appearance
         # reference (design 2026-09-02) — style stays, unlike the regenerate
         # self-reference above. Only where the backend has a slot and the
-        # file exists; otherwise the view renders from text alone.
+        # file exists; otherwise the view renders from text alone. A
+        # regenerate keeps ITS slot: the self-reference above wins, so the
+        # two can never overwrite each other's slot 1.
         _front_ref = (data.get("front_reference") or "").strip()
-        if _view and _view != "front" and _front_ref:
+        if _view and _view != "front" and _front_ref and not _is_regen:
             if "/" in _front_ref or ".." in _front_ref:
                 logger.warning("front_reference rejected (path): %s", _front_ref)
             elif int(getattr(backend, "ref_slot_count", 0) or 0) < 1:

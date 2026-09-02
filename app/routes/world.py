@@ -892,8 +892,8 @@ def delete_location_route(
 
 # ── Location 3D building model (AV3D-9) ──
 # ONE unrigged GLB per location, keyed by the gallery owner (clones share it).
-# Source is a gallery image of type "building"; generation goes through the
-# mesh backend (rig "none") on the queue channel. Auth matches the other
+# Source is a gallery image of type "building-<view>"; generation goes through
+# the mesh backend (rig "none") on the queue channel. Auth matches the other
 # location-content routes (create/update/delete) — no separate admin gate.
 
 _LOCATION_MODEL_MAX_BYTES = 100 * 1024 * 1024

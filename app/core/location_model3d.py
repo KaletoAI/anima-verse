@@ -26,11 +26,12 @@ store ``rooms: []`` and inherit the template's room list on merge, so room
 ids are template-identical — a room model automatically serves every placed
 clone. Every function takes an optional ``room_id``; empty = building.
 
-The source image is a gallery image of the location (an ``image_type="building"``
-render — for rooms one assigned to the room, picked by the caller); generation
-goes through ``service.generate_mesh(rig="none")`` on the backend queue
-channel, as a background job with a pending flag — the same busy/serialization
-contract as the character mesh.
+The source image is a gallery image of the location (an
+``image_type="building-<view>"`` render — for rooms one assigned to the room,
+picked by the caller); generation goes through
+``service.generate_mesh(rig="none")`` on the backend queue channel, as a
+background job with a pending flag — the same busy/serialization contract as
+the character mesh.
 
 The ``low`` variant has a second, cheaper path: ``trigger_shrink`` reduces an
 ALREADY STORED file mesh→mesh (``service.generate_mesh_variant``, gateway alias
