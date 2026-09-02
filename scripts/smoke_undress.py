@@ -35,11 +35,13 @@ current output:
       go. Tool names come from the package templates
       (`templates/llm/skills/<id>.md`): "Undress" / "GetDressed".
 
-  [3] Undress empties the outfit line and flips the offer. `render_outfit`
+  [3] Undress replaces the outfit line and flips the offer. `render_outfit`
       appends `"wearing: " + outfit_description` only while the character is
-      dressed (`outfit_renderer.py`, free-text branch), so after the call
-      `full` must be exactly "" — the SAME empty string the manual UI switch
-      produces, no "naked" text is invented (plan, "not touched"). And the
+      dressed and puts `NO_CLOTHES_TEXT` in its place otherwise
+      (`outfit_renderer.py`, free-text branch), so after the call `full` must
+      be exactly "no clothes" — the SAME text the manual UI switch produces.
+      Undressed is a statement, not a gap: an image prompt with no clothing
+      line at all lets the model dress the figure as it pleases. And the
       offer swaps: GetDressed appears, Undress goes. That swap is the only way
       the character learns its own state, because `outfit_worn` has
       `in_prompt: false`.
@@ -162,13 +164,13 @@ check("the NPC starts dressed",
       render_outfit(character_name=NPC).get("full", ""), f"wearing: {OUTFIT}")
 
 # ---------------------------------------------------------------------------
-print("\n[3] Undress empties the outfit line and flips the offer")
+print("\n[3] Undress replaces the outfit line and flips the offer")
 result = run_verb("undress", NPC)
 print(f"       undress() -> {result!r}")
 check("outfit_worn is falsy now",
       is_outfit_worn(get_character_profile(NPC) or {}), False)
-check("the outfit line is empty, not a naked description",
-      render_outfit(character_name=NPC).get("full", ""), "")
+check("the outfit line names the undressed state",
+      render_outfit(character_name=NPC).get("full", ""), "no clothes")
 check("the description itself survives",
       (get_character_profile(NPC) or {}).get("outfit_description"), OUTFIT)
 tools = offered(NPC)
@@ -217,8 +219,8 @@ check("True = dressed", is_outfit_worn({"outfit_worn": True}), True)
 profile = get_character_profile(NPC) or {}
 profile["outfit_worn"] = "false"
 save_character_profile(NPC, profile)
-check('a "false" string empties the outfit line',
-      render_outfit(character_name=NPC).get("full", ""), "")
+check('a "false" string replaces the outfit line',
+      render_outfit(character_name=NPC).get("full", ""), "no clothes")
 tools = offered(NPC)
 check('a "false" string offers GetDressed', "GetDressed" in tools, True)
 check('a "false" string hides Undress', "Undress" in tools, False)

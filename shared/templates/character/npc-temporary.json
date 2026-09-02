@@ -378,8 +378,8 @@
           ],
           "default": "true",
           "in_prompt": false,
-          "hint": "Binary dressed state — unchecked drops the outfit description from every prompt.",
-          "hint_de": "Binärer Bekleidungs-Zustand — abgewählt fällt die Outfit-Beschreibung aus allen Prompts."
+          "hint": "Binary dressed state — set to No and every prompt says \"no clothes\" in place of the outfit description.",
+          "hint_de": "Binärer Bekleidungs-Zustand — auf Nein steht in allen Prompts \"no clothes\" statt der Outfit-Beschreibung."
         }
       ]
     },

@@ -317,7 +317,8 @@ check("NPC outfit text",
 
 npc_profile["outfit_worn"] = "false"
 save_character_profile(NPC, npc_profile)
-check("undressed NPC outfit text", render_outfit(character_name=NPC).get("full", ""), "")
+check("undressed NPC outfit text",
+      render_outfit(character_name=NPC).get("full", ""), "no clothes")
 npc_profile["outfit_worn"] = "true"
 save_character_profile(NPC, npc_profile)
 check("dressed again", render_outfit(character_name=NPC).get("full", ""),
@@ -427,10 +428,13 @@ print("\n[5b] The render-cache signature follows the free text")
 #     `expression_regen._equipped_signature`) whenever anything structured is
 #     worn — unchanged, so no existing model of any wardrobe character moves;
 #   * otherwise `render_outfit(...)["full"]`, i.e. exactly the string the
-#     prompt above is built from ("wearing: <outfit_description>", and ""
-#     when `outfit_worn` is false or no text is set).
+#     prompt above is built from ("wearing: <outfit_description>", "no
+#     clothes" when `outfit_worn` is false, and "" when no text is set at
+#     all). Undressed renders a different picture than dressed, so it earns
+#     a signature of its own instead of sharing the empty one.
 # Derived values (md5 hex, first 12):
 #   md5("")                                             = d41d8cd98f00
+#   md5("no clothes")                                   = 2866c0d455bc
 #   md5("wearing: grey linen apron, rolled-up white shirt")
 #                                                       = 7fb02bc56061
 #   md5("wearing: a patched brown cloak")               = e6c864211db0
@@ -456,8 +460,11 @@ check("...and the two really differ", sig_apron == sig_cloak, False)
 
 npc_profile["outfit_worn"] = "false"
 save_character_profile(NPC, npc_profile)
-check("an undressed NPC falls back on the empty signature — its prompt has "
-      "no outfit either", current_outfit_state(NPC)[2], EMPTY_SIG)
+check("an undressed NPC hashes its own 'no clothes' line — its prompt "
+      "carries that text, not an empty one",
+      current_outfit_state(NPC)[2], hashlib.md5(b"no clothes").hexdigest()[:12])
+check("...which is neither the empty nor the dressed signature",
+      current_outfit_state(NPC)[2] in (EMPTY_SIG, sig_cloak), False)
 npc_profile["outfit_worn"] = "true"
 npc_profile["outfit_description"] = "grey linen apron, rolled-up white shirt"
 save_character_profile(NPC, npc_profile)

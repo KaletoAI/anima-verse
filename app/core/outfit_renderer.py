@@ -30,6 +30,11 @@ def _get_item(iid: str) -> Optional[Dict[str, Any]]:
     return get_item(iid)
 
 
+#: What an undressed character wears — the text that REPLACES the wardrobe
+#: description once `outfit_worn` is off (see render_outfit step 5).
+NO_CLOTHES_TEXT = "no clothes"
+
+
 def is_outfit_worn(profile: Optional[Dict[str, Any]]) -> bool:
     """The binary dressed state of a free-text wardrobe (``outfit_worn``).
 
@@ -184,7 +189,10 @@ def render_outfit(
 
     Wenn weder Pieces noch Items noch Fallback befuellt sind, ist `full=""`.
     Aufrufer behandeln das als "outfit-frei" und greifen ggf. auf Freitext-
-    Fallback zurueck.
+    Fallback zurueck. Ein ausgezogener Character (`outfit_worn` aus) ist
+    dagegen KEIN leerer Fall: `fallback` und `full` tragen dann
+    NO_CLOTHES_TEXT, damit jeder Prompt den Zustand ausspricht statt ihn
+    wegzulassen.
     """
     from app.models.inventory import VALID_PIECE_SLOTS
     if profile is None and character_name:
@@ -307,7 +315,14 @@ def render_outfit(
     #    image prompts, 3D) inherits it from this one place.
     if not full:
         described = str(profile.get("outfit_description") or "").strip()
-        if described and is_outfit_worn(profile):
+        if not is_outfit_worn(profile):
+            # Undressed is a STATEMENT, not the absence of one. Dropping the
+            # wardrobe text used to leave nothing in its place, and an image
+            # prompt with no clothing line at all renders whatever the model
+            # feels like putting on. It goes through `fallback` as well, so
+            # the image path phrases it WITHOUT an "is wearing".
+            fallback_text = full = NO_CLOTHES_TEXT
+        elif described:
             full = "wearing: " + described
 
     return {
