@@ -3,19 +3,16 @@ import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
 import { setFogVeilSky } from './fogVeil';
+import {
+  basePitchDeg, MAX_DIST, MIN_DIST, OVERVIEW_NEAR_PITCH_DEG,
+} from './cameraFraming';
 import { SHADOW_HALF_M, SHADOW_MAP_PX, snapShadowCentre } from './shadowSnap';
 
-/**
- * Closest the camera may get to its target. Derived from the smallest figure
- * that has to be able to fill the frame: with the 45° vertical FOV a height h
- * fills the picture at dist = h / (2·tan(22.5°)) ≈ 1.21·h. Indoors figures are
- * drawn at scale ~0.3, so a 1.70 m character is ~0.5 m tall and fills the frame
- * at ~0.61 m — 0.8 m keeps that reachable and still leaves a little air
- * (visible height 2·0.8·tan(22.5°) ≈ 0.66 m, the figure covers ~76% of it).
- * The old 2.5 m could not do this: indoors it framed 2 m of empty room.
- */
-export const MIN_DIST = 0.8;
-const MAX_DIST = 150;
+/** The framing arithmetic lives in `scene/cameraFraming.ts` — pure numbers, so
+ *  the distances and the pitch curve can be checked without a GL context
+ *  (`scripts/smoke_embodied_camera.mjs`). Re-exported here because `MIN_DIST`
+ *  is a fact about this camera and `main.ts` frames the world with it. */
+export { MIN_DIST } from './cameraFraming';
 
 /**
  * How far the pointer may travel during an orbit gesture and still count as a
@@ -122,6 +119,18 @@ export class Engine {
    *  deliberate camera move by the app and stays free, which is what lets the
    *  mode fly back out to the overview while leaving. */
   zoomCap: number | null = null;
+  /** Floor of the USER's zoom-in, in metres; `null` = the engine's own
+   *  `MIN_DIST`. The embodied mode sets it (`EMBODY_MIN_DIST`): the camera
+   *  aims at the avatar's EYES there, and 0.8 m from the eyes is inside the
+   *  head. Unlike `zoomCap` this one also binds `flyTo` — a fly that lands
+   *  inside the head is exactly what the floor exists to prevent, and no
+   *  caller has a reason to want it. */
+  zoomFloor: number | null = null;
+  /** Pitch at the near end of the zoom, in degrees — see
+   *  `cameraFraming.basePitchDeg`. The embodied mode flattens it
+   *  (`EMBODY_NEAR_PITCH_DEG`) so a close view looks along the avatar's line
+   *  of sight instead of down at the ground in front of it. */
+  nearPitchDeg = OVERVIEW_NEAR_PITCH_DEG;
   /** Fired when a zoom-out was STOPPED by `zoomCap` — the hint hangs off this,
    *  not off a distance the HUD would have to watch itself. */
   onZoomCapped: (() => void) | null = null;
@@ -248,13 +257,15 @@ export class Engine {
    *  engine's own `MIN_DIST`/`MAX_DIST` are silent: they are the lens, not a
    *  rule of the game. */
   private clampZoom(dist: number): number {
-    const ceiling = this.zoomCap === null ? MAX_DIST : Math.min(this.zoomCap, MAX_DIST);
+    const floor = this.zoomFloor === null ? MIN_DIST : Math.max(this.zoomFloor, MIN_DIST);
+    const ceiling = Math.max(floor,
+      this.zoomCap === null ? MAX_DIST : Math.min(this.zoomCap, MAX_DIST));
     // Every notch beyond the ceiling reports — how OFTEN the player is told is
     // the listener's business (main.ts shows it once per embodied session),
     // and a "first time only" rule down here could not tell one session from
     // the next.
     if (this.zoomCap !== null && dist > ceiling + 1e-6) this.onZoomCapped?.();
-    return THREE.MathUtils.clamp(dist, MIN_DIST, ceiling);
+    return THREE.MathUtils.clamp(dist, floor, ceiling);
   }
 
   /** Ease the camera onto a point + distance. */
@@ -262,7 +273,8 @@ export class Engine {
     this.flyFrom = this.target.clone();
     this.flyToPoint = point.clone();
     this.flyT = 0;
-    this.targetDist = THREE.MathUtils.clamp(dist, MIN_DIST, MAX_DIST);
+    this.targetDist = THREE.MathUtils.clamp(
+      dist, this.zoomFloor === null ? MIN_DIST : Math.max(this.zoomFloor, MIN_DIST), MAX_DIST);
   }
   private flyFrom: THREE.Vector3 | null = null;
   private flyToPoint: THREE.Vector3 | null = null;
@@ -481,14 +493,17 @@ export class Engine {
     this.dist = THREE.MathUtils.lerp(this.dist, this.targetDist, 1 - Math.exp(-8 * dt));
     this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, 1 - Math.exp(-8 * dt));
 
-    // Pitch: nearly eye level up close (18°), steep when far out (62°); the
-    // right mouse button shifts the angle on top of that. zoomK is normalised
-    // against MIN_DIST, so lowering MIN_DIST keeps the near end at exactly 18°
-    // (dist = MIN_DIST ⇒ zoomK = 0) and the divisor MAX_DIST − MIN_DIST = 149.2
-    // can never be zero.
-    const zoomK = THREE.MathUtils.clamp((this.dist - MIN_DIST) / (MAX_DIST - MIN_DIST), 0, 1);
-    const basePitch = THREE.MathUtils.lerp(18, 62, Math.sqrt(zoomK));
-    const pitch = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(basePitch + this.pitchOffset, 8, 85));
+    // Pitch: shallow up close, steep when far out (62°) — the curve and both
+    // near ends live in `cameraFraming.basePitchDeg` (18° overview, 8° while
+    // embodied). The right mouse button shifts the angle on top of that; the
+    // 8° floor of the clamp is what keeps the camera from lying down flat on
+    // the ground plane in the OVERVIEW, where the target sits at ground level
+    // and a horizontal view would look straight through the terrain. It is
+    // never the binding limit for the embodied near end, whose base pitch at
+    // the zoom floor is 12.84°.
+    const basePitch = basePitchDeg(this.dist, this.nearPitchDeg);
+    const pitch = THREE.MathUtils.degToRad(
+      THREE.MathUtils.clamp(basePitch + this.pitchOffset, 8, 85));
 
     const off = new THREE.Vector3(
       Math.sin(this.yaw) * Math.cos(pitch),

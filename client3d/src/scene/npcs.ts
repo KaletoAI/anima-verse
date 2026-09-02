@@ -7,7 +7,8 @@ import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   terrainPace, wadeGate,
   type GroundScope, type GroundSink } from '../game/walk';
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
-import { Figure, FigureLibrary } from './figures';
+import { eyeHeight } from './cameraFraming';
+import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import type { PlaceEntry } from './placeSlot';
 import { seededRandom } from './textures';
@@ -357,6 +358,22 @@ export class NpcManager {
   /** World position of a figure, or null when it is not on the map (E3-T1). */
   positionOf(name: string): THREE.Vector3 | null {
     return this.npcs.get(name)?.root.position.clone() ?? null;
+  }
+
+  /** The point a camera should AIM at to look at a figure rather than at the
+   *  ground it stands on: its eyes, in world coordinates, or null when it is
+   *  not on the map. `positionOf` answers the ROOT, and a root is at the feet
+   *  — aiming there makes the feet the centre of the picture, which is what
+   *  the embodied camera used to zoom into. A figure whose model has not
+   *  loaded yet is measured at the world's base height; it is a fallback of
+   *  centimetres, and the alternative is a camera that drops to the ankles for
+   *  as long as the model takes to arrive. */
+  eyeOf(name: string): THREE.Vector3 | null {
+    const npc = this.npcs.get(name);
+    if (!npc) return null;
+    const p = npc.root.position.clone();
+    p.y += eyeHeight(npc.figure?.height ?? BASE_FIGURE_HEIGHT_M);
+    return p;
   }
 
   /** Scale a figure is DRAWN at, or null when it is not on the map (E3-T5).

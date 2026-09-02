@@ -1797,6 +1797,7 @@ async function startApp(username: string, role: string) {
     // `firstMap` on purpose: the deps object is built before `lastMap` exists,
     // and the avatar of a session does not change under us.
     avatarPos: () => npcs.positionOf(firstMap.avatar),
+    avatarEye: () => npcs.eyeOf(firstMap.avatar),
   };
   /** Has the player been told, THIS time in the mode, what the zoom wall is?
    *  One sentence per session in control: the wall itself is the answer from
