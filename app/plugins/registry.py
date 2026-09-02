@@ -87,6 +87,7 @@ class BodySlotSpec:
     attributes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     prompt: Dict[str, str] = field(default_factory=dict)  # always | covered | exposed
     face: bool = False  # fragment also belongs into face/portrait prompts
+    back: bool = False  # anatomy is visible from BEHIND too (back-view renders)
 
 
 @dataclass

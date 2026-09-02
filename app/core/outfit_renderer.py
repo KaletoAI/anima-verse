@@ -161,6 +161,7 @@ def render_outfit(
     character_name: str = "",
     equipped_pieces: Optional[Dict[str, str]] = None,
     equipped_items: Optional[List[str]] = None,
+    back_view: bool = False,
 ) -> Dict[str, str]:
     """Baut Outfit-Beschreibung — Pieces + Items + Fallback fuer leere Slots.
 
@@ -170,6 +171,8 @@ def render_outfit(
         equipped_pieces / equipped_items: Overrides — fuer Set-Vorschauen
             oder andere Stelle, die NICHT den aktuellen Status zeigen sollen.
             None → aus dem Profil.
+        back_view: Render aus der Rueckansicht — nur LoRAs von Body-Slots,
+            die `back: true` deklarieren (siehe app/core/body_slots.py).
 
     Returns:
         {
@@ -261,7 +264,8 @@ def render_outfit(
         # (outfit-set previews) — exposure must follow what is RENDERED.
         slot_loras = exposed_slot_loras(character_name or "",
                                         profile=profile,
-                                        equipped_pieces=dict(pieces or {}))
+                                        equipped_pieces=dict(pieces or {}),
+                                        back_view=back_view)
     except Exception:
         slot_loras = []
 

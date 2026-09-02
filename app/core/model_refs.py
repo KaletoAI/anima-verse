@@ -638,13 +638,12 @@ def generate_model_ref_images(character_name: str,
                             override_width=_w, override_height=_h,
                             output_stem=refs_dir / f"{view_kind}_{signature}",
                             apply_state_modifiers=not prewarm,
-                            # Nothing uncovered is visible from behind, so
-                            # the exposed body-slot fragments (and the
-                            # LoRAs bound to them) are dropped for this
-                            # view: they describe the FRONT and drag the
-                            # figure around toward the camera, which is
-                            # exactly what this view must not do.
-                            include_exposed=view != "back")
+                            # Seen from behind, the species package decides
+                            # which exposed anatomy still shows (body slot
+                            # `back: true`); front-only fragments and their
+                            # LoRAs drag the figure around toward the
+                            # camera, which is what this view must not do.
+                            back_view=view == "back")
                     except Exception as e:
                         view_path = None
                         logger.warning(

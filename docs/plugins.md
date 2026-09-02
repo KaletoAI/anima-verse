@@ -189,6 +189,7 @@ body_slots:
   - id: breast
     covered_by: [top, underwear_top]      # verdeckende Kleidungs-Slots; ohne = immer sichtbar
     applies_to: {gender: [female, girl]}  # Profil-Feld-Bedingungen
+    back: false                           # von hinten sichtbar? (Default false)
     attributes:
       size: {type: select, options: [small, medium, large], interest_aliases: {...}}
       lora: {type: lora_select}           # Mechanismus; das konkrete LoRA bleibt per-NPC-Config
@@ -201,6 +202,13 @@ body_slots:
 Werte pro Charakter liegen im Profil (`body_slots: {breast: {size: large}}`).
 Fragmente mit fehlenden Attribut-Werten entfallen komplett (kein halb gerendertes
 `{size}`). Die Fragmente gehen auch mit Referenzbild mit (F3).
+
+`back: true` sagt, dass die Anatomie des Slots auch von HINTEN zu sehen ist.
+Renders aus der Rückansicht — die T-Pose-Back-Referenz für die Bild→3D-Kette —
+behalten nur `exposed`-Fragmente solcher Slots und deren LoRAs; alles andere
+beschreibt die Vorderseite und zieht die Figur zur Kamera herum. Die
+`always`/`covered`-Fragmente sind nicht betroffen: sie beschreiben die ganze
+Person, nicht eine Seite. Default ist `false`.
 
 ### State-Flags
 

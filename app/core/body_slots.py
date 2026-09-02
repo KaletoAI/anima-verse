@@ -18,6 +18,11 @@ Decisions wired in (dialog 2026-07-08):
   ``VALID_PIECE_SLOTS`` is only the fallback without a species package).
 - F3: slot fragments are sent along even when a reference image is
   attached (callers do not filter them out).
+
+A slot may declare ``back: true`` — its anatomy is visible from BEHIND as
+well. A render that shows the character's back (the T-pose back view) keeps
+only those exposed fragments and their LoRAs; the rest describe the front
+and would drag the figure around toward the camera.
 """
 from string import Formatter
 from typing import Any, Dict, List, Optional, Tuple
@@ -161,7 +166,8 @@ def _format_if_complete(text: str, values: Dict[str, str]) -> str:
 
 def prompt_fragments(character_name: str,
                      face_only: bool = False,
-                     profile: Optional[Dict[str, Any]] = None) -> Dict[str, List[str]]:
+                     profile: Optional[Dict[str, Any]] = None,
+                     back_view: bool = False) -> Dict[str, List[str]]:
     """Prompt fragments for all applicable slots.
 
     Returns ``{"general": [...], "exposed": [...]}`` — general carries
@@ -169,6 +175,9 @@ def prompt_fragments(character_name: str,
     the person description (F1); exposed renders only while uncovered.
     ``face_only`` keeps only slots declared ``face: true`` (portrait/
     expression prompts — hair/eyes/skin, never body or NSFW slots).
+    ``back_view`` keeps only EXPOSED fragments of slots declared
+    ``back: true`` (a render seen from behind); the general fragments are
+    unaffected — they describe the whole person, not one side of it.
     """
     specs = slots_for_character(character_name)
     if face_only:
@@ -228,7 +237,7 @@ def prompt_fragments(character_name: str,
         frag = _render(spec.prompt.get("always", ""), vals)
         if frag:
             general.append(frag)
-        if _is_exposed(spec, profile):
+        if _is_exposed(spec, profile) and not (back_view and not spec.back):
             # Per-character override of the exposed fragment (stored under
             # the reserved 'exposed_prompt' slot value); the manifest text
             # is only the default. Placeholders resolve in both.
@@ -247,13 +256,16 @@ def prompt_fragments(character_name: str,
 
 def exposed_slot_loras(character_name: str,
                        profile: Optional[Dict[str, Any]] = None,
-                       equipped_pieces: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+                       equipped_pieces: Optional[Dict[str, str]] = None,
+                       back_view: bool = False) -> List[Dict[str, Any]]:
     """LoRAs of currently EXPOSED body slots (lora_select attribute values,
     e.g. the NSFW anatomy LoRAs) — merged into image-generation inputs by
     the variant/expression path. Replaces the former per-clothing-slot
     override LoRAs. Works purely from ``profile`` when no name is given
     (outfit renderer's variant path); ``equipped_pieces`` overrides the
-    profile's equipped state (outfit-set previews)."""
+    profile's equipped state (outfit-set previews). ``back_view`` follows the
+    fragments: a LoRA whose slot is not visible from behind would render what
+    the prompt no longer asks for."""
     if profile is None:
         try:
             from app.models.character import get_character_profile
@@ -272,6 +284,8 @@ def exposed_slot_loras(character_name: str,
     seen = set()
     for spec in specs:
         if not _is_exposed(spec, profile):
+            continue
+        if back_view and not spec.back:
             continue
         for attr, decl in spec.attributes.items():
             if str(decl.get("type", "")) != "lora_select":
@@ -396,21 +410,17 @@ def being_for_character(character_name: str) -> str:
 
 def appearance_suffix(character_name: str, face_only: bool = False,
                       profile: Optional[Dict[str, Any]] = None,
-                      include_exposed: bool = True) -> str:
+                      back_view: bool = False) -> str:
     """Combined fragment text appended to the character's appearance
     (PromptBuilder; face_only for portrait/expression prompts; ``profile``
     overrides the stored profile for dry-run previews). Empty without
     species packages — safe no-op.
 
-    ``include_exposed=False`` keeps only the general fragments: a render
-    that cannot show uncovered anatomy at all (the T-pose BACK view) must
-    not carry its description either — the words pull the figure around
-    toward the camera."""
+    ``back_view=True`` is a render seen from behind: only exposed fragments
+    of slots declared ``back: true`` survive."""
     frags = prompt_fragments(character_name, face_only=face_only,
-                             profile=profile)
-    parts = list(frags["general"])
-    if include_exposed:
-        parts += frags["exposed"]
+                             profile=profile, back_view=back_view)
+    parts = frags["general"] + frags["exposed"]
     return ", ".join(parts)
 
 

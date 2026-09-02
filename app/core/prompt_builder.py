@@ -225,7 +225,7 @@ _PERSON_KEYWORDS = (
 def person_description(name: str, *,
                        include_outfit: bool = False,
                        apply_state_modifiers: bool = True,
-                       include_exposed: bool = True) -> str:
+                       back_view: bool = False) -> str:
     """THE text description of a person for image prompts.
 
     Every path that describes a person — PromptBuilder (chat images,
@@ -235,8 +235,8 @@ def person_description(name: str, *,
 
     Layers: appearance (profile tokens resolved, whitespace collapsed)
     → body-slot suffix (species packages; exposed fragments only while
-    uncovered, and only with ``include_exposed``) → optionally the
-    worn-outfit line → triggered
+    uncovered, and in a ``back_view`` render only from slots visible from
+    behind) → optionally the worn-outfit line → triggered
     image_modifier directives over the composed text (with the outfit
     included, a replacement may rewrite outfit text too — scene-render
     semantics)."""
@@ -259,7 +259,7 @@ def person_description(name: str, *,
     # Empty without species packages — safe no-op.
     try:
         from app.core.body_slots import appearance_suffix
-        suffix = appearance_suffix(name, include_exposed=include_exposed)
+        suffix = appearance_suffix(name, back_view=back_view)
     except Exception:
         suffix = ""
     if suffix:
@@ -293,16 +293,16 @@ class PromptBuilder:
 
     def __init__(self, character_name: str, *,
                  apply_state_modifiers: bool = True,
-                 include_exposed: bool = True):
+                 back_view: bool = False):
         self.user_id = ""
         self.character_name = character_name
         # State-triggered image_modifier directives rewrite the person
         # description. Neutral cache renders (outfit-batch pre-warm) turn
         # this off — their cache key deliberately carries no state.
         self.apply_state_modifiers = apply_state_modifiers
-        # Exposed body-slot fragments. Off for renders that cannot show
-        # uncovered anatomy at all (the T-pose back view).
-        self.include_exposed = include_exposed
+        # A render seen from behind (the T-pose back view) keeps only the
+        # exposed body-slot fragments of slots declared visible from behind.
+        self.back_view = back_view
 
     # ------------------------------------------------------------------
     # Schritt 1: Personen erkennen
@@ -481,7 +481,7 @@ class PromptBuilder:
         person_description so previews and renders cannot drift."""
         return person_description(
             name, apply_state_modifiers=self.apply_state_modifiers,
-            include_exposed=self.include_exposed)
+            back_view=self.back_view)
 
     def _assign_actor_labels(self, persons: List[Person]) -> None:
         """Setzt actor_label auf den echten Character-Namen."""

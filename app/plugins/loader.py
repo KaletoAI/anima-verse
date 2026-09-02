@@ -218,6 +218,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
                         if isinstance(v, dict)},
             prompt={str(k): str(v) for k, v in (bdef.get("prompt") or {}).items()},
             face=bool(bdef.get("face", False)),
+            back=bool(bdef.get("back", False)),
         ))
     # piece_slots entries: plain string OR {id, label}
     for pdef in meta.get("piece_slots") or []:

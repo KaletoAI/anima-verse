@@ -814,7 +814,7 @@ def generate_expression_image(character_name: str,
                               override_width: Optional[int] = None,
                               override_height: Optional[int] = None,
                               apply_state_modifiers: bool = True,
-                              include_exposed: bool = True) -> Optional[Path]:
+                              back_view: bool = False) -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -840,10 +840,10 @@ def generate_expression_image(character_name: str,
     - ``apply_state_modifiers=False`` renders the NEUTRAL appearance (no
       triggered image_modifier rewrites) — for cache entries whose key
       deliberately carries no state (outfit-batch pre-warm).
-    - ``include_exposed=False`` drops the exposed body-slot fragments AND
-      the LoRAs bound to those slots — for a view that cannot show
-      uncovered anatomy anyway (the T-pose back view), where the words and
-      the LoRA only drag the figure back toward the camera.
+    - ``back_view=True`` renders the character from behind (the T-pose
+      back view): exposed body-slot fragments and their LoRAs survive only
+      for slots the species package declares visible from behind — the
+      others describe the front and drag the figure toward the camera.
 
     Returns the path to the generated image, or None on failure.
     """
@@ -874,6 +874,7 @@ def generate_expression_image(character_name: str,
         profile=_render_profile,
         equipped_pieces=equipped_pieces,
         equipped_items=equipped_items,
+        back_view=back_view,
     )
     outfit_desc = _rendered.get("pieces", "")
     items_desc = _rendered.get("items", "")
@@ -941,7 +942,7 @@ def generate_expression_image(character_name: str,
 
     _expr_builder = PromptBuilder(character_name,
                                   apply_state_modifiers=apply_state_modifiers,
-                                  include_exposed=include_exposed)
+                                  back_view=back_view)
     persons = _expr_builder.detect_persons("", character_names=[character_name])
     appearance = persons[0].appearance if persons else get_character_appearance(character_name)
     actor_label = persons[0].actor_label if persons else character_name
@@ -1089,9 +1090,7 @@ def generate_expression_image(character_name: str,
     # the unequipped underwear slot. Character override first, dedup by name.
     _merged_loras = list(loras_override or [])
     _have = {str(l.get("name")) for l in _merged_loras if isinstance(l, dict)}
-    # Without the exposed fragments their LoRAs go too: an anatomy LoRA
-    # renders what the prompt no longer asks for.
-    for _sl in ((_rendered.get("loras") or []) if include_exposed else []):
+    for _sl in (_rendered.get("loras") or []):
         if str(_sl.get("name")) not in _have:
             _merged_loras.append(_sl)
             _have.add(str(_sl.get("name")))
