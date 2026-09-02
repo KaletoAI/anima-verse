@@ -68,14 +68,14 @@ import { PropVariantStrip } from './PropVariantStrip'
 import {
   groupKeys, groupLabel, newId, posesInGroup, previewEntry, usePoseCatalog,
 } from '../world/placeTypes'
-import { CATEGORY_DATALIST_ID } from './propTypes'
+import { CATEGORY_DATALIST_ID, PROP_EXTRA_VIEWS } from './propTypes'
 import {
   DESC_ROWS_OPEN, DESC_ROWS_REST, DIM_FIELDS, SINK_LIMIT_M, descPatch,
   dimRatios, dimsPatch, facePatch, sinkPatch,
 } from './variantFields'
 import type { DimKey } from './dims'
 import type {
-  PropAreasInfo, PropFull, PropMarker, PropSourceImage, PropVariant,
+  PropAreasInfo, PropFull, PropMarker, PropSourceImage, PropVariant, PropView,
 } from './propTypes'
 
 /**
@@ -85,6 +85,12 @@ import type {
  * nothing about its size, so the first look should already carry the scale.
  */
 const SCALE_FIGURE_KEY = 'ga.props.scaleFigure'
+
+/** Human name of each view — the tile captions of the source panel. Same
+ *  wording as `MeshBackendDialog` and `PropImageDialog`. */
+const VIEW_LABEL: Record<PropView, string> = {
+  front: 'Front', back: 'Back', left: 'Left', right: 'Right',
+}
 
 /** Storage can throw (private mode, site data off) and can hold anything —
  *  every path ends at the default rather than at a broken panel. */
@@ -132,17 +138,21 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   armedDelete: boolean
   /** Re-mesh the EXISTING source image (skips the image render) INTO the
    *  variant the admin currently has open — the index travels with the call,
-   *  because the dialog that runs it lives in the container. */
-  onRegenerateMesh: (variant: number) => void
+   *  because the dialog that runs it lives in the container. `existingViews`
+   *  are the extra views this variant holds a file for, so the dialog can
+   *  offer exactly those to the multi-view alias: `PropFull` has no variant
+   *  list, the detail owns it. */
+  onRegenerateMesh: (variant: number, existingViews: PropView[]) => void
   /** Re-run the source→mesh chain with the stored description/name — this
    *  APPENDS another model variant. */
   onRegenerate: () => void
   /** Render a NEW source image for the SELECTED variant only — its mesh stays
-   *  until re-meshed, and no other variant's image is touched. The variant's
-   *  current image record travels along so the dialog opens on the backend
-   *  THIS picture was made with. */
-  onRegenerateImage: (variant: number, image?: PropSourceImage,
-    subject?: string) => void
+   *  until re-meshed, and no other variant's image is touched. `view` says
+   *  WHICH of the four pictures is being rendered, `image` is that view's own
+   *  record (so the dialog opens on the backend THIS picture was made with)
+   *  and `hasFront` whether a front exists to slot as the reference. */
+  onRegenerateImage: (variant: number, view: PropView, image?: PropSourceImage,
+    subject?: string, hasFront?: boolean) => void
   /** Reload the prop + bust the image cache — generations run in the
    *  background, this fetches the current state on demand. */
   onRefresh: () => void
@@ -604,11 +614,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   // ⚙ re-mesh below then works from. Variant-scoped route, so it can never
   // overwrite another version's picture.
   const sourceUploadRef = useRef<HTMLInputElement>(null)
-  const uploadSource = useCallback(async (file: File) => {
+  const uploadSource = useCallback(async (file: File, view: PropView = 'front') => {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await fetch(`/world/props/${enc}/variants/${variant}/source`,
+      const res = await fetch(
+        `/world/props/${enc}/variants/${variant}/source${view === 'front' ? '' : `?view=${view}`}`,
         { method: 'POST', body: fd, credentials: 'same-origin' })
       const body = await res.json().catch(() => null)
       if (!res.ok) throw new Error(body?.detail?.toString?.() || `HTTP ${res.status}`)
@@ -618,6 +629,28 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [enc, variant, meshesChanged, t, toast])
+
+  // Drop ONE extra view's picture. The front is not deletable here — it is
+  // the variant's source image, and a variant without one cannot be meshed
+  // at all; an extra view is an addition and goes back to "none".
+  const deleteView = useCallback(async (view: PropView) => {
+    try {
+      await apiDelete(`/world/props/${enc}/variants/${variant}/source?view=${view}`)
+      await meshesChanged()
+      toast(t('Deleted'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [enc, variant, meshesChanged, t, toast])
+  // Which tile's × is armed (the two-click delete of this admin, never a
+  // window.confirm), and which view the shared file input is filling.
+  const [armedView, setArmedView] = useState<PropView | null>(null)
+  const viewUploadRef = useRef<HTMLInputElement>(null)
+  const [uploadView, setUploadView] = useState<PropView>('back')
+  // An armed × belongs to the tile it was clicked on — switching the variant
+  // (or the prop) shows OTHER pictures, and a still-armed button would delete
+  // one of those on a single click.
+  useEffect(() => { setArmedView(null) }, [prop.id, variant])
 
   // An empty or unreadable field is not a factor: it commits the default 1,
   // and the server answers by dropping the key. Clamped here as well so the
@@ -1418,8 +1451,10 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 // VARIANT renders from — its own, and the prop's NAME when it
                 // has none (the server resolves it the same way for an empty
                 // prompt, `props.variant_description`).
-                onClick={() => onRegenerateImage(variant, shownImage || undefined,
-                  shownVariant?.description || prop.name)}
+                onClick={() => onRegenerateImage(variant, 'front',
+                  shownImage || undefined,
+                  shownVariant?.description || prop.name,
+                  !!shownVariant?.has_source)}
                 title={variantBusy
                   ? t('This variant is generating right now.')
                   : t('Render a NEW source image FOR THIS VARIANT (backend and prompt in the dialog). Its 3D model stays until you re-mesh from the new image; the other variants keep their own images.')}>
@@ -1434,7 +1469,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 style={{ display: 'none' }}
                 onChange={(e) => {
                   const f = e.target.files?.[0]
-                  if (f) void uploadSource(f)
+                  if (f) void uploadSource(f, 'front')
                   e.target.value = ''
                 }} />
               <button type="button" className="ga-btn ga-btn-sm"
@@ -1443,12 +1478,78 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 🔄
               </button>
             </div>
+            {/* THE EXTRA VIEWS (design 2026-09-02). Beside the front picture
+                a variant may hold a back and two side shots — mesh input for
+                a multi-view img2mesh alias, one tile each: render it (the
+                dialog offers the front as the appearance reference), upload
+                one, or drop it again. They replace nothing: the front stays
+                the source image, and a view reaches the mesh only when the
+                re-mesh dialog below has it picked. */}
+            <div className="ga-form-section-label" style={{ margin: '6px 0 0' }}>
+              {t('Extra views (multi-view mesh)')}
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {PROP_EXTRA_VIEWS.map((view) => {
+                const rec = shownVariant?.images?.[view]
+                return (
+                  <div key={view} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span className="ga-hint">{t(VIEW_LABEL[view])}</span>
+                    {rec ? (
+                      <img
+                        src={`/assets/props/${enc}/source?variant=${variant}&view=${view}&v=${reloadKey}`}
+                        alt={t(VIEW_LABEL[view])}
+                        title={rec.backend ? `🖼 ${rec.backend}${rec.generated_at ? ` · ${rec.generated_at.slice(0, 10)}` : ''}` : t('Uploaded')}
+                        style={{ width: '100%', aspectRatio: '1', objectFit: 'contain', borderRadius: 6,
+                          border: '1px solid var(--border, #30363d)', background: 'rgba(255,255,255,0.04)' }} />
+                    ) : (
+                      <div style={{ width: '100%', aspectRatio: '1', borderRadius: 6,
+                        border: '1px dashed var(--border, #30363d)', display: 'flex',
+                        alignItems: 'center', justifyContent: 'center' }}>
+                        <span className="ga-hint">{t('none')}</span>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 3 }}>
+                      <button type="button" className="ga-btn ga-btn-sm" style={{ flex: 1 }}
+                        disabled={variantBusy}
+                        onClick={() => onRegenerateImage(variant, view, rec,
+                          shownVariant?.description || prop.name,
+                          !!shownVariant?.has_source)}
+                        title={t('Render this view (optionally with the front image as reference).')}>
+                        🖼
+                      </button>
+                      <button type="button" className="ga-btn ga-btn-sm"
+                        onClick={() => { setUploadView(view); viewUploadRef.current?.click() }}
+                        title={t('Upload a picture as this view.')}>
+                        ⬆
+                      </button>
+                      {rec ? (
+                        <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+                          onClick={() => {
+                            if (armedView === view) { setArmedView(null); void deleteView(view) }
+                            else setArmedView(view)
+                          }}
+                          title={armedView === view ? t('Click again to delete this view') : t('Delete this view image')}>
+                          {armedView === view ? t('Sure?') : '×'}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                )
+              })}
+              <input ref={viewUploadRef} type="file" accept="image/*" style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void uploadSource(f, uploadView)
+                  e.target.value = ''
+                }} />
+            </div>
             {/* The re-mesh targets the SELECTED variant — that is the whole
                 difference to 🧊 above, which appends another one. It reads
                 the image shown here, which is that variant's own. */}
             <button type="button" className="ga-btn ga-btn-sm"
               disabled={variantBusy || !shownImage || !srcOk}
-              onClick={() => onRegenerateMesh(variant)}
+              onClick={() => onRegenerateMesh(variant,
+                PROP_EXTRA_VIEWS.filter((v) => !!shownVariant?.images?.[v]))}
               title={variantBusy
                 ? t('This variant is generating right now.')
                 : t('Mesh THIS image again into the SELECTED variant — no new render, no new variant; backend, face count and texture size come from the dialog. Dims and markers stay.')}>

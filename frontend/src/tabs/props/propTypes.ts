@@ -225,6 +225,16 @@ export interface PropVariantTier {
  * serves without a `variant` parameter, i.e. what every consumer that knows
  * nothing about variants keeps getting.
  */
+/** The four sides a mesh input can be rendered from — the same vocabulary
+ *  as `app/core/view_prompts.py` (`VIEWS`). The FRONT is the historic single
+ *  source image; the other three exist only where they were rendered or
+ *  uploaded. */
+export type PropView = 'front' | 'back' | 'left' | 'right'
+
+/** The views BESIDE the front — mirrors `view_prompts.EXTRA_VIEWS`. The
+ *  source panel shows one tile per entry, in this order. */
+export const PROP_EXTRA_VIEWS: PropView[] = ['back', 'left', 'right']
+
 /**
  * What ONE variant's source image was made with — the provenance the image
  * panel shows beside the picture it is displaying.
@@ -267,6 +277,10 @@ export interface PropVariant {
   source_url: string
   /** What that image was rendered/uploaded with. */
   image: PropSourceImage
+  /** Provenance per view whose file exists — the source panel's tiles. The
+   *  front's entry is the same record as `image`; a view without a file is
+   *  simply absent. */
+  images: Partial<Record<PropView, PropSourceImage>>
   /** The three real metres THIS variant renders at — always complete, because
    *  the size belongs to the variant and there is nothing to inherit. */
   dims: PropDims
@@ -319,6 +333,17 @@ export interface ImageBackendInfo {
   name: string
   prompt_style: string
   prompt_negative: string
+  /** The RAW style per prop use case — `prop` (front), `prop_back`,
+   *  `prop_side` (left and right share it). The view dialog composes the
+   *  final prompt out of the one its view names; `prompt_style` is the
+   *  `prop` entry repeated for the callers that only ever render a front. */
+  prompt_styles?: Record<string, string>
+  /** The negative per prop use case, same three keys — a rear render fails
+   *  in its own way, so it carries its own negations. */
+  prompt_negatives?: Record<string, string>
+  /** How many reference images this backend consumes per generation. 0 = the
+   *  view dialog cannot slot the front image as an appearance reference. */
+  ref_slot_count?: number
   /** false = this backend has no negative input (distilled / guidance-free
    *  model); the server folds the negations into the prompt, so the forms
    *  hide the negative field. Resolved server-side from auto/yes/no. */

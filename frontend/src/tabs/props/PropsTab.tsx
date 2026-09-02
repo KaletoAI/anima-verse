@@ -22,7 +22,7 @@ import { PropDetail } from './PropDetail'
 import { PropImageDialog } from './PropImageDialog'
 import { CATEGORY_DATALIST_ID } from './propTypes'
 import type {
-  ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage,
+  ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage, PropView,
 } from './propTypes'
 
 export type { ImageBackendInfo, MeshBackendInfo, PropFull, PropMarker } from './propTypes'
@@ -52,8 +52,12 @@ export function PropsTab() {
   // generate button goes through the dialog — face count / texture size
   // are per-run overrides). `variant` is the model variant a RE-MESH refines;
   // the plain regenerate has none, because it appends one.
+  // `views` are the extra views that variant HAS a picture for — the dialog
+  // offers exactly those to the multi-view alias, and the ones the admin
+  // ticks travel with the mesh call.
   const [regen, setRegen] = useState<
-    { id: string; meshOnly: boolean; variant?: number } | null>(null)
+    { id: string; meshOnly: boolean; variant?: number
+      views?: PropView[] } | null>(null)
   // Prop whose 🖼 image-only regenerate waits in the image dialog (backend +
   // final prompt; the mesh stays until re-meshed from the new image). The
   // VARIANT travels with it: the source image belongs to the variant, so the
@@ -62,9 +66,12 @@ export function PropsTab() {
   // was made with, not on the primary variant's. `subject` is the text THAT
   // variant renders from (its own description, else the prop's) — the dialog
   // composes the final prompt, so it must compose from the variant's sentence.
+  // `view` names WHICH of the four pictures is rendered (the front is the
+  // variant's source image, the other three are mesh input beside it) and
+  // `hasFront` whether there is a front to slot as the appearance reference.
   const [imgRegen, setImgRegen] = useState<
-    { prop: PropFull; variant: number; image?: PropSourceImage
-      subject?: string } | null>(null)
+    { prop: PropFull; variant: number; view: PropView; hasFront: boolean
+      image?: PropSourceImage; subject?: string } | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
   // How many unsaved FIELD edits the open detail holds (its change buffer,
@@ -288,10 +295,11 @@ export function PropsTab() {
             onDelete={() => remove(selectedProp.id)}
             armedDelete={armedDel === selectedProp.id}
             onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
-            onRegenerateMesh={(variant) =>
-              setRegen({ id: selectedProp.id, meshOnly: true, variant })}
-            onRegenerateImage={(variant, image, subject) =>
-              setImgRegen({ prop: selectedProp, variant, image, subject })}
+            onRegenerateMesh={(variant, views) =>
+              setRegen({ id: selectedProp.id, meshOnly: true, variant, views })}
+            onRegenerateImage={(variant, view, image, subject, hasFront) =>
+              setImgRegen({ prop: selectedProp, variant, view,
+                hasFront: !!hasFront, image, subject })}
             onGenerating={startPoll}
             // The face count a run would really start on — the PLACEHOLDER
             // behind the variants' budget fields (v2 E5). The admin's
@@ -331,6 +339,12 @@ export function PropsTab() {
               low: tier?.target_faces_low }
           })()}
           showTier
+          // Only a RE-MESH offers views, and only the ones this variant
+          // really holds a file for — a stored picture has no alternatives,
+          // so each is a single-option checkbox the admin ticks off.
+          views={regen?.meshOnly && regen.views?.length
+            ? regen.views.map((view) => ({ view, options: [{ value: view, label: t('stored') }] }))
+            : undefined}
           onGenerate={(backend, opts) => {
             const target = regen
             setRegen(null)
@@ -352,7 +366,10 @@ export function PropsTab() {
                 // see it or it falls back to the variant's low budget.
                 ...(opts.lod_faces !== undefined
                   ? { lod_faces: opts.lod_faces } : {}),
-                ...(opts.tier ? { tier: opts.tier } : {}) })
+                ...(opts.tier ? { tier: opts.tier } : {}),
+                // The views the dialog had ticked — `{}` (nothing picked)
+                // becomes `[]`, which is the front alone.
+                ...(opts.views ? { views: Object.keys(opts.views) } : {}) })
               .then((d) => {
                 toast(d?.status === 'already_running'
                   // The refusal is per (variant, backend) — a re-mesh names
@@ -373,19 +390,24 @@ export function PropsTab() {
         <PropImageDialog
           prop={imgRegen?.prop || null}
           variant={imgRegen?.variant || 0}
+          view={imgRegen?.view || 'front'}
+          hasFront={!!imgRegen?.hasFront}
           subject={imgRegen?.subject}
           image={imgRegen?.image}
           backends={imageBackends}
-          onGenerate={(imageBackend, prompt, negative) => {
+          onGenerate={(imageBackend, prompt, negative, frontReference) => {
             const target = imgRegen
             setImgRegen(null)
             if (!target) return
             // The variant-scoped route: the image belongs to the variant, so
             // the render lands in ITS file and leaves every other one alone.
+            // `view` says which of its four pictures — an extra view never
+            // touches the front.
             void apiPost<{ status?: string }>(
               `/world/props/${encodeURIComponent(target.prop.id)}/variants/${target.variant}/generate`,
               { image_only: true, image_backend: imageBackend,
-                prompt, negative })
+                prompt, negative, view: target.view,
+                front_reference: frontReference })
               .then((d) => {
                 toast(d?.status === 'already_running'
                   ? t('This variant is already generating.')
