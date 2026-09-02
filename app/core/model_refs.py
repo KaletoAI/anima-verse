@@ -48,8 +48,6 @@ logger = get_logger(__name__)
 #   Asking for wider than needed lands at roughly the needed width.
 # - Hair BEHIND the shoulders (length-neutral — the identity layer says how
 #   long it is): hair over the chest bakes into the torso geometry.
-# - Garments worn CLOSED: an open jacket is a floating surface the img2mesh
-#   bake fuses with arms and chest (D8 / P13).
 # The admin override image_generation.tpose_prompt stays untouched — whoever
 # replaces this text takes the responsibility with it.
 TPOSE_PROMPT_DEFAULT = (
@@ -58,8 +56,7 @@ TPOSE_PROMPT_DEFAULT = (
     "toward the camera, fingers straight and held together, legs spread "
     "apart in a wide "
     "stance, feet planted wider than the shoulders, open space clearly "
-    "visible between the legs, hair behind the shoulders, all garments "
-    "worn closed"
+    "visible between the legs, hair behind the shoulders"
 )
 
 # Non-humanoid characters (animals): a T-pose is meaningless on four legs.
@@ -98,8 +95,7 @@ TPOSE_BACK_PROMPT_DEFAULT = (
     "facing away from the camera, fingers straight and held together, legs "
     "spread apart in a wide stance, feet "
     "planted wider than the shoulders, open space clearly visible between "
-    "the legs, hair in front of the shoulders, all garments "
-    "worn closed"
+    "the legs, hair in front of the shoulders"
 )
 
 # Both profiles share one text — the side is the only difference, so they
@@ -115,8 +111,7 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "to the sides at shoulder height so the near arm points at the camera and "
     "hides the far arm, strongly foreshortened, palms facing forward, fingers "
     "straight and held together, legs spread apart in a wide stance, hair "
-    "behind the shoulders, all "
-    "garments worn closed"
+    "behind the shoulders"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
