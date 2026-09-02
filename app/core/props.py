@@ -4468,6 +4468,10 @@ def list_models(prop_id: str, variant: Any = None) -> List[Dict[str, Any]]:
             "backend": meta.get("backend", ""),
             "source": meta.get("source", ""),
             "source_file": meta.get("source_file", ""),
+            # The extra views this bake was fed, by file name — the shared
+            # gallery row appends them as "+ back/left" (the location rows
+            # already published it; without this the prop rows never could).
+            "view_images": dict(meta.get("view_images") or {}),
             # What THIS file carries (v2 E1): its orientation fix, the ids of
             # its areas, and — for a distance mesh — the full file it
             # inherits them from (pattern `location_model3d.list_models`).
@@ -5664,7 +5668,12 @@ def _gen_key(prop_id: str, variant: Any, backend_glob: str,
 def _split_gen_key(key: str) -> Tuple[str, int]:
     """``(prop id, store variant index)`` of an in-flight key. ``-1`` for a key
     whose middle field is not an index — nothing writes such a key today, and a
-    malformed one must not take a whole listing down."""
+    malformed one must not take a whole listing down.
+
+    The key has FOUR fields since the extra views landed
+    (``prop|index|backend|view``); the fourth is the rendered view of an
+    image run (empty for a mesh run and for the front). Only the first two are
+    read here — a variant is busy whichever of its views is rendering."""
     pid, _, rest = key.partition("|")
     idx, _, _ = rest.partition("|")
     try:

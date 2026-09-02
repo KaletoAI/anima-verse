@@ -1449,6 +1449,79 @@ def face_targets_section() -> None:
           str(row.get("face_target_note")))
 
 
+# ── [22] The extra views reach the mesher (2026-09-02, multi-view) ──────
+# A variant may hold a back/left/right picture next to its front one, and a
+# MESH run may ask for them: `views=[...]` names which of them ride along.
+# Everything below is derived by hand from that one law, not from output:
+#
+#   * the file names follow the variant's STEM, exactly like the front does —
+#     variant 1 is stem `model-v2`, so its back view is `source-v2_back.png`;
+#   * the store hands the mesher ABSOLUTE PATHS keyed by view
+#     (`view_images={"back": <path to source-v2_back.png>}`), and the front
+#     keeps travelling as `source_image_path` — it is not a "view" in the
+#     call, it is the subject;
+#   * a REQUESTED view the variant does not hold is SKIPPED, never fatal: the
+#     run asks for back AND left, only back exists, so the mesher sees exactly
+#     one entry and the run still succeeds. (A four-slot alias then fills two
+#     of its slots; deciding that is the alias' job, not the caller's.)
+#   * what the mesh was made from is recorded on the FILE, by name, so the
+#     gallery row can say "+ back" later: the sidecar — and with it the
+#     `list_models` row — carries `view_images == {"back":
+#     "source-v2_back.png"}`, names, never the temp path of this machine;
+#   * a run that asks for NO views records nothing — absence is the default,
+#     and an empty dict on the sidecar would be a statement nobody made.
+
+
+def views_section() -> None:
+    print("\n[22] extra views reach the mesher (multi-view mesh input)")
+    install_fakes()
+    crate = store.create_prop(name="Crate")["id"]
+    idx = store.add_variant(crate)
+    check("the second variant is index 1", idx == 1, str(idx))
+    check("...and its stem is model-v2",
+          store.list_variants(crate)[1]["stem"] == "model-v2",
+          store.list_variants(crate)[1]["stem"])
+
+    store.save_source_image(crate, png_bytes((90, 60, 30)), 1,
+                            backend="fake-image", prompt="a crate")
+    store.save_source_image(crate, png_bytes((30, 60, 90)), 1, view="back",
+                            backend="fake-image", prompt="a crate from behind")
+    check("the variant holds front and back, nothing else",
+          sorted(store.variant_images(crate, 1)) == ["back", "front"],
+          str(sorted(store.variant_images(crate, 1))))
+    back_path = store.source_path(crate, 1, view="back")
+    check("...and the back file is named after the stem",
+          back_path is not None and back_path.name == "source-v2_back.png",
+          str(back_path and back_path.name))
+
+    MESH_INPUTS.clear()
+    MESH_KWARGS.clear()
+    res = store._generate(crate, "", "", "", "fake-mesh", mesh_only=True,
+                          variant=1, views=["back", "left"])
+    check("the run went through although `left` has no picture",
+          res.get("ok"), str(res))
+    check("the mesher was handed the variant's OWN front as the subject",
+          MESH_INPUTS == ["source-v2.png"], str(MESH_INPUTS))
+    check("...and exactly the one view it holds, by absolute path",
+          MESH_KWARGS and MESH_KWARGS[-1].get("view_images")
+          == {"back": str(back_path)},
+          str(MESH_KWARGS[-1:] and MESH_KWARGS[-1].get("view_images")))
+
+    row = next((r for r in store.list_models(crate, 1) if r["active"]), {})
+    check("the landed mesh records what it was made from, by NAME",
+          row.get("view_images") == {"back": "source-v2_back.png"},
+          str(row.get("view_images")))
+
+    MESH_KWARGS.clear()
+    store._generate(crate, "", "", "", "fake-mesh", mesh_only=True, variant=1)
+    check("a run without `views` sends the mesher none",
+          MESH_KWARGS and MESH_KWARGS[-1].get("view_images") is None,
+          str(MESH_KWARGS[-1:] and MESH_KWARGS[-1].get("view_images")))
+    row = next((r for r in store.list_models(crate, 1) if r["active"]), {})
+    check("...and its file states nothing either",
+          not row.get("view_images"), str(row.get("view_images")))
+
+
 def main() -> int:
     print("\n[1] a prop without the key has ONE variant — the primary one")
     pine = store.create_prop(name="Pine")["id"]
@@ -1877,6 +1950,7 @@ def main() -> int:
     variant_fields_section()
     season_section()
     face_targets_section()
+    views_section()
 
     print()
     if FAILURES:
