@@ -108,7 +108,11 @@ _NEG_TPOSE_SIDE = _NEG_TPOSE + ", front view, back view, facing the camera, look
 # Negative of the building-exterior render (source of the location 3D model —
 # shared by both families). Like _NEG_TPOSE it is NOT _NEG_PHOTO (no skin
 # terms); it keeps the WHOLE building in frame and free of people/interior.
-_NEG_BUILDING = ("illustration, anime, cgi, 3d render, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, street, road, cars, trees, plants, garden, landscape, sky, clouds, surrounding buildings, neighborhood, scenery")
+# And like every other mesh-input negative it does NOT negate "cgi"/"3d
+# render": the render IS the image-to-3D input (user decision 2026-09-01) —
+# negating the asset look pushed the render toward photographic depth of
+# field and environment cues, which bake badly into the mesh texture.
+_NEG_BUILDING = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, street, road, cars, trees, plants, garden, landscape, sky, clouds, surrounding buildings, neighborhood, scenery")
 
 # Negative of the ROOM model-source renders: must NOT fight the subject —
 # furniture (indoor) and plants (outdoor room) ARE the content, unlike
