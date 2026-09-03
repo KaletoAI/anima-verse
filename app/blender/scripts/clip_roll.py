@@ -380,6 +380,11 @@ def _process(slot: str, src: str, rig_rest: dict, args: dict, ref_path):
             "upper_twist_after": _stats(up_after),
             "moved": _stats(moved),
             "target_twist_deg": target,
+            # per-frame series (deg) — a caller can pick a balanced target
+            # from them: rolls about one axis add, so with target τ the upper
+            # arm ends at upper + forearm − τ
+            "series": {"upper": [round(v, 2) for v in up_before],
+                       "forearm": [round(v, 2) for v in tw_before]},
             "solve_residual_max_deg": round(max(resid), 6) if resid else 0.0,
         }
         if not dry:

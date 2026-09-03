@@ -27,8 +27,15 @@ Options:
     --threshold <deg>   a clip is flagged when the forearm's roll against the
                         upper arm exceeds this anywhere (default 10; the
                         CMU clips sit at 0.1, the MOB1 clips at 51 … 114).
+    --min-cos <x>       ALSO flag a clip whose smaller cos(θ/2) (shoulder or
+                        elbow) lies below x — the selection for the balanced
+                        re-split of clips whose forearm is not rolled at all
+                        (CMU: 23 of 33 lie below 0.90).
     --target <deg>      the forearm roll that is to remain (default 0.0):
-                        one number, or ``L:<deg>,R:<deg>`` per arm. Rolls
+                        one number, ``L:<deg>,R:<deg>`` per arm, or
+                        ``balance`` — per clip and per arm the value that
+                        makes cos(shoulder/2) and cos(elbow/2) equal
+                        (searched on the per-frame series, 0.25 deg grid). Rolls
                         about one axis add, so a target τ leaves the upper
                         arm with (upper + forearm − τ); the τ that makes the
                         shoulder's and the elbow's cos(θ/2) equal maximises
@@ -44,6 +51,11 @@ Options:
                         joint-position deviation the WRITTEN file may show
                         against the original once it is re-imported (default
                         0.01, see below)
+
+The rule that gates every repair, checked PER ARM on the dry-run numbers: the
+smaller of the two cos(θ/2) (shoulder, elbow) must be larger afterwards, and a
+shoulder that stood at or above 0.80 may not fall below it. A clip that fails
+the rule on either arm is reported and left alone.
 
 Two position limits, because the check measures two different things. IN
 THE SCENE — the pose before the keys were rewritten against the pose after,
@@ -77,6 +89,16 @@ joints within 0.01 cm — see the two limits above), the original is copied to
 ``<name>.fbx.bak`` next to it, and only then replaced. The sidecar gets ``source.roll_repaired`` with
 the date and the moved angles. An existing ``.bak`` is never overwritten —
 such a clip is skipped and reported.
+
+The CMU clips (``shared/models/clips``, tracked in git) get the same
+balanced split, for a different reason: their forearm carries EXACTLY 0 roll
+against the upper arm in every clip, because the ASF skeleton gives the radius
+no twist degree of freedom — the whole pronation is folded into the humerus
+by the format, not by the actor (a person pronates the forearm). Measured
+`putting on a dress`: upper arm 122 deg, forearm 0, shoulder cos 0.481. Giving
+the split back is anatomically truer, not less true, and the world pose stays
+untouched as always. The sidecar records the reason per family
+(``source.roll_repair_reason``).
 
 Needs Blender (auto-discovered, or image_generation.blender_executable). No
 server, no world DB.
@@ -157,6 +179,8 @@ def measure(rig: Path, clips: List[Path], target, timeout: int) -> Dict[Path, di
 def parse_target(text: str):
     """``"12.5"`` → 12.5; ``"L:33.25,R:-47.75"`` → {"L": 33.25, "R": -47.75}."""
     text = str(text or "0").strip()
+    if text.lower() == "balance":
+        return "balance"
     if ":" not in text:
         return float(text)
     out = {}
@@ -169,30 +193,83 @@ def parse_target(text: str):
     return {"L": out.get("L", 0.0), "R": out.get("R", 0.0)}
 
 
+def wrap(deg: float) -> float:
+    while deg > 180.0:
+        deg -= 360.0
+    while deg <= -180.0:
+        deg += 360.0
+    return deg
+
+
+def balanced_target(series: dict) -> float:
+    """The forearm roll τ (deg) that maximises min(cos(shoulder/2), cos(elbow/2))
+    on one arm — rolls about one axis add, so the upper arm ends at
+    upper + forearm − τ per frame."""
+    up, fo = series["upper"], series["forearm"]
+
+    def score(tau):
+        sh = max(abs(wrap(u + f - tau)) for u, f in zip(up, fo))
+        return min(pinch(sh), pinch(tau))
+    best, best_s = 0.0, score(0.0)
+    t = -180.0
+    while t <= 180.0:
+        sc = score(t)
+        if sc > best_s + 1e-9:
+            best, best_s = t, sc
+        t += 0.25
+    return best
+
+
+def predicted(d: dict, target) -> dict:
+    """Per arm the shoulder/elbow cos before and after a repair to ``target``,
+    from the dry-run series (exact up to the FBX round trip)."""
+    out = {}
+    for S in ("L", "R"):
+        a = d["arms"][S]
+        tau = target[S] if isinstance(target, dict) else float(target)
+        up, fo = a["series"]["upper"], a["series"]["forearm"]
+        sh_before = max(abs(u) for u in up)
+        el_before = max(abs(f) for f in fo)
+        sh_after = max(abs(wrap(u + f - tau)) for u, f in zip(up, fo))
+        out[S] = {"tau": tau, "shoulder_before": pinch(sh_before), "elbow_before": pinch(el_before),
+                  "shoulder_after": pinch(sh_after), "elbow_after": pinch(tau)}
+    return out
+
+
+def rule_holds(pred: dict) -> Tuple[bool, str]:
+    """Per arm: the smaller cos must grow, and a shoulder at/above 0.80 must
+    stay there."""
+    for S, p in pred.items():
+        before = min(p["shoulder_before"], p["elbow_before"])
+        after = min(p["shoulder_after"], p["elbow_after"])
+        if after <= before + 1e-9:
+            return False, f"{S}: min cos {before:.3f} -> {after:.3f} does not improve"
+        if p["shoulder_before"] >= 0.80 and p["shoulder_after"] < 0.80:
+            return False, f"{S}: shoulder {p['shoulder_before']:.3f} -> {p['shoulder_after']:.3f} falls below 0.80"
+    return True, ""
+
+
 def side_max(d: dict, key: str) -> Tuple[float, float]:
     return (d["arms"]["L"][key]["max_abs"], d["arms"]["R"][key]["max_abs"])
 
 
-def print_table(rows: List[Tuple[Path, dict, str]], root: Path) -> None:
-    head = (f"{'clip':<44} | {'FA/UA L':>8} {'R':>7} | {'UA/clav L':>9} {'R':>7} -> {'L':>6} {'R':>6} "
-            f"| {'moved L':>8} {'R':>8} | {'shoulder':>15} | {'elbow':>15} | status")
+def print_table(rows: List[Tuple[Path, dict, str, object]], root: Path) -> None:
+    head = (f"{'clip':<44} | {'FA/UA L':>8} {'R':>7} | {'UA/clav L':>9} {'R':>7} | {'target L':>8} {'R':>7} "
+            f"| {'shoulder L':>14} {'R':>14} | {'elbow L':>14} {'R':>14} | status")
     print(head)
     print("-" * len(head))
-    for clip, d, status in rows:
+    for clip, d, status, target in rows:
         name = str(clip.relative_to(root)) if root in clip.parents else clip.name
         if d is None:
-            print(f"{name:<44} | {'':>8} {'':>7} | {'':>9} {'':>7}    {'':>6} {'':>6} | {'':>8} {'':>8} | {'':>15} | {'':>15} | {status}")
+            print(f"{name:<44} | {'':>16} | {'':>17} | {'':>16} | {'':>29} | {'':>29} | {status}")
             continue
         L, R = d["arms"]["L"], d["arms"]["R"]
         fa_b = (L["forearm_twist_before"]["max_abs"], R["forearm_twist_before"]["max_abs"])
         ua_b = (L["upper_twist_before"]["max_abs"], R["upper_twist_before"]["max_abs"])
-        ua_a = (L["upper_twist_after"]["max_abs"], R["upper_twist_after"]["max_abs"])
-        fa_a = (L["forearm_twist_after"]["max_abs"], R["forearm_twist_after"]["max_abs"])
-        mv = (L["moved"]["mean"], R["moved"]["mean"])
-        sh = f"{min(pinch(ua_b[0]), pinch(ua_b[1])):.3f} -> {min(pinch(ua_a[0]), pinch(ua_a[1])):.3f}"
-        el = f"{min(pinch(fa_b[0]), pinch(fa_b[1])):.3f} -> {min(pinch(fa_a[0]), pinch(fa_a[1])):.3f}"
-        print(f"{name:<44} | {fa_b[0]:8.1f} {fa_b[1]:7.1f} | {ua_b[0]:9.1f} {ua_b[1]:7.1f} -> {ua_a[0]:6.1f} {ua_a[1]:6.1f} "
-              f"| {mv[0]:8.1f} {mv[1]:8.1f} | {sh:>15} | {el:>15} | {status}")
+        p = predicted(d, target)
+        cell = lambda S, k: f"{p[S][k + '_before']:.3f} -> {p[S][k + '_after']:.3f}"   # noqa: E731
+        print(f"{name:<44} | {fa_b[0]:8.1f} {fa_b[1]:7.1f} | {ua_b[0]:9.1f} {ua_b[1]:7.1f} | {p['L']['tau']:8.2f} {p['R']['tau']:7.2f} "
+              f"| {cell('L', 'shoulder'):>14} {cell('R', 'shoulder'):>14} | {cell('L', 'elbow'):>14} {cell('R', 'elbow'):>14} | {status}")
 
 
 def apply_one(rig: Path, clip: Path, side: dict, target, timeout: int,
@@ -248,6 +325,22 @@ def apply_one(rig: Path, clip: Path, side: dict, target, timeout: int,
     return None
 
 
+REASONS = {
+    "cmu": "CMU/ASF gives the radius no twist dof, so the source folds all pronation into "
+           "the humerus (forearm roll exactly 0); the balanced split hands it back",
+    "mixamo-noprefix": "positional FBX retarget before _elbow_axis (2026-09-04) rolled the "
+                       "upper arm by the palm/bend-normal angle and the forearm back",
+    "unity-humanoid": "rest-delta against Tpose.fbx (elbow 43.9 deg, palms 50 deg pronated) "
+                      "baked constant per-arm roll offsets",
+}
+
+
+def _reason(src: dict) -> str:
+    if src.get("database"):
+        return REASONS["cmu"]
+    return REASONS.get(str(src.get("bone_map") or ""), "roll redistributed between upper arm and forearm")
+
+
 def _mark_sidecar(clip: Path, moved: Dict[str, float], target) -> None:
     p = sidecar_of(clip)
     side = read_sidecar(clip)
@@ -255,6 +348,7 @@ def _mark_sidecar(clip: Path, moved: Dict[str, float], target) -> None:
         print(f"    (no sidecar at {p.name} — nothing marked)")
         return
     src = side.setdefault("source", {})
+    src["roll_repair_reason"] = _reason(src)
     files = list(src.get("roll_repaired_files") or [])
     if clip.name not in files:
         files.append(clip.name)
@@ -276,6 +370,7 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--again", action="store_true", help="roll a file the sidecar marks as repaired once more")
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD_DEG)
+    ap.add_argument("--min-cos", type=float, default=None)
     ap.add_argument("--target", default="0", help="deg, or L:<deg>,R:<deg>")
     ap.add_argument("--rig", default="")
     ap.add_argument("--timeout", type=int, default=900)
@@ -299,7 +394,7 @@ def main() -> int:
             print(f"no such file: {f}")
             return 1
     candidates = explicit or library_clips()
-    rows: List[Tuple[Path, Optional[dict], str]] = []
+    rows: List[Tuple[Path, Optional[dict], str, object]] = []
     to_measure: List[Path] = []
     sidecars: Dict[Path, dict] = {}
     for clip in candidates:
@@ -307,41 +402,52 @@ def main() -> int:
         sidecars[clip] = side
         src = side.get("source") or {}
         if not explicit and src.get("bone_map") == "unity-humanoid":
-            rows.append((clip, None, "skipped: Unity pair — repair only by naming the file"))
+            rows.append((clip, None, "skipped: Unity pair — repair only by naming the file", None))
             continue
         if clip.name in (src.get("roll_repaired_files") or []) and not (explicit and a.again):
             rows.append((clip, None, f"skipped: already repaired {src.get('roll_repaired_at', '')}"
-                         + (" — name it with --again to re-split" if explicit else "")))
+                         + (" — name it with --again to re-split" if explicit else ""), None))
             continue
         to_measure.append(clip)
 
     print(f"{'APPLY' if a.apply else 'DRY RUN'}: measuring {len(to_measure)} clip(s) "
-          f"(Blender {st.get('version', '')}, threshold {a.threshold} deg, target {a.target} deg)")
-    data = measure(rig, to_measure, a.target, a.timeout * max(1, len(to_measure) // 10 + 1))
-    flagged: List[Path] = []
+          f"(Blender {st.get('version', '')}, threshold {a.threshold} deg"
+          f"{f', min cos {a.min_cos}' if a.min_cos is not None else ''}, target {a.target})")
+    data = measure(rig, to_measure, 0.0, a.timeout * max(1, len(to_measure) // 10 + 1))
+    flagged: List[Tuple[Path, object]] = []
     for clip in to_measure:
         d = data.get(clip)
         if d is None:
-            rows.append((clip, None, "not measured"))
+            rows.append((clip, None, "not measured", None))
             continue
-        worst = max(side_max(d, "forearm_twist_before"))
-        if worst > a.threshold:
-            flagged.append(clip)
-            rows.append((clip, d, "REPAIR" if a.apply else "would repair"))
-        else:
-            rows.append((clip, d, "ok"))
+        target = a.target
+        if target == "balance":
+            target = {S: balanced_target(d["arms"][S]["series"]) for S in ("L", "R")}
+        pred = predicted(d, target)
+        worst_twist = max(side_max(d, "forearm_twist_before"))
+        min_cos = min(min(p["shoulder_before"], p["elbow_before"]) for p in pred.values())
+        selected = worst_twist > a.threshold or (a.min_cos is not None and min_cos < a.min_cos)
+        if not selected:
+            rows.append((clip, d, "ok", target))
+            continue
+        ok, why = rule_holds(pred)
+        if not ok:
+            rows.append((clip, d, f"RULE FAILS, left alone — {why}", target))
+            continue
+        flagged.append((clip, target))
+        rows.append((clip, d, "REPAIR" if a.apply else "would repair", target))
     rows.sort(key=lambda r: -(max(side_max(r[1], "forearm_twist_before")) if r[1] else -1))
     print_table(rows, root)
-    print(f"\n{len(flagged)} clip(s) flagged (forearm roll against the upper arm > {a.threshold} deg)")
+    print(f"\n{len(flagged)} clip(s) flagged")
     if not a.apply:
         if flagged:
             print("dry run — nothing written. Re-run with --apply to repair them.")
         return 0
 
     failures = 0
-    for clip in flagged:
-        print(f"\n== {clip.relative_to(root) if root in clip.parents else clip}")
-        err = apply_one(rig, clip, sidecars.get(clip) or {}, a.target, a.timeout, a.file_pos_limit)
+    for clip, target in flagged:
+        print(f"\n== {clip.relative_to(root) if root in clip.parents else clip}  target {target}")
+        err = apply_one(rig, clip, sidecars.get(clip) or {}, target, a.timeout, a.file_pos_limit)
         if err:
             failures += 1
             print(f"    NOT replaced — {err}")

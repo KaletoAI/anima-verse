@@ -35,6 +35,24 @@
   "takes": [
    "09_01"
   ],
-  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217.",
+  "roll_repair_reason": "CMU/ASF gives the radius no twist dof, so the source folds all pronation into the humerus (forearm roll exactly 0); the balanced split hands it back",
+  "roll_repaired": true,
+  "roll_repaired_at": "2026-09-03",
+  "roll_repaired_files": [
+   "run.fbx"
+  ],
+  "roll_moved_deg": {
+   "run.fbx": {
+    "L": -32.75,
+    "R": 29.25
+   }
+  },
+  "roll_target_deg": {
+   "run.fbx": {
+    "L": 32.75,
+    "R": -29.25
+   }
+  }
  }
 }
