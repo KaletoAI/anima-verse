@@ -90,7 +90,12 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 # bake inflates into an oversized paddle. "fingers overlapping" used to sit
 # here and forced the fan — it was replaced by its opposite, and "curled
 # fingers"/"clenched fists" stay so closed does not become a fist.
-_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, spread fingers, splayed fingers, fanned fingers, oversized hands, hands hidden")
+# The leg terms carry what the pose text no longer over-asks for: it wants a
+# clear separation instead of a straddle (user decision 2026-09-03), so the
+# failure it must not fall back into — legs touching, ankles together — is
+# named here. Deliberately NOT negated: a wide stance, which would fight the
+# separation the positive text asks for.
+_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, spread fingers, splayed fingers, fanned fingers, oversized hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance")
 _NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up")
 
 # Negatives of the OPTIONAL extra mesh views (back / left+right profile).
