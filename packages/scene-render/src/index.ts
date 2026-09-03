@@ -35,6 +35,7 @@ export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
 export { normBoneName, restPoseOf, restCorrections, bindRelativeValues,
   bindRelativeClip } from './clipRetarget'
+export type { RestPose, RestCorrection } from './clipRetarget'
 
 export { applyDepthCut, cutPlaneFor, disposeCutMaterials } from './depthCut'
 

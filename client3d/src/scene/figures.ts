@@ -10,6 +10,7 @@ import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
   bindRelativeValues, normBoneName, restCorrections, restPoseOf,
 } from '@anima/scene-render';
+import type { RestCorrection, RestPose } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
@@ -394,7 +395,8 @@ function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
  * `corrections` (`restCorrections` of `@anima/scene-render`, built from the
  * reference rig at `/assets/animation-rig`) makes this a BIND-RELATIVE
  * transplant: each clip value is read as a rotation away from the donor's
- * rest and re-expressed against the target's own bind pose, `q = c · k`. A
+ * rest and re-expressed against the target's own bind pose,
+ * `q = K_p⁻¹ · c · K_b`, both factors from the ACCUMULATED world rests. A
  * character whose T-pose stands with its feet splayed keeps that stance
  * instead of having it overwritten — measured on `idle`, the mesh-visible
  * rotation of the left foot went from −18.4° (Gorvoth, 18°/side of own
@@ -404,16 +406,18 @@ function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
  * reference rig) every track is kept verbatim and the result is bit-identical
  * to the plain copy this replaces.
  *
- * The HIPS keep their own path unchanged: their rotation is lifted into the
- * parent space of the target hips (the armature's +90° X), and their position
- * is a length that is rescaled, not rotated.
+ * The HIPS go through the same transplant as every other bone — the root
+ * bone's left factor is `A_t⁻¹·A_d` and so already contains the armature
+ * lift. Only WITHOUT corrections does the old hips path run: rotation lifted
+ * into the parent space of the target hips (the armature's +90° X). Their
+ * POSITION is a length that is rescaled, not rotated, either way.
  *
  * Exported for `client3d/scripts/smoke_clip_ground.mjs` alone: the clip ground
  * offset is measured on the clips THIS produces, so the check has to walk the
  * real chain rather than a copy of it.
  */
 export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D,
-                                   corrections?: Map<string, THREE.Quaternion>): THREE.AnimationClip[] {
+                                   corrections?: Map<string, RestCorrection>): THREE.AnimationClip[] {
   const boneByKey = new Map<string, THREE.Bone>();
   target.traverse((o) => {
     if ((o as THREE.Bone).isBone) boneByKey.set(normBoneName(o.name), o as THREE.Bone);
@@ -426,6 +430,14 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
   // the hips' rest rotation — copying straight over would overwrite that
   // compensation and tip the figure onto its belly. Hence: lift the clip values
   // into the PARENT SPACE of the target hips (rotation AND position).
+  //
+  // The ROTATION half of that is the FALLBACK only. With a donor rest in hand
+  // the shared transplant owns the hips: it compares the two rests in the ROOT
+  // BONE's frame, so the rig's global attitude — a mean 4.7° and up to 10.4°
+  // of forward pitch on the generated rigs — divides out and the figure is
+  // stood up as a piece, exactly as here. The root's left factor is then
+  // `A_t⁻¹·A_d`, which IS this fix for an upright donor. The POSITION half
+  // stays either way — a length is rescaled, not rotated.
   target.updateMatrixWorld(true);
   let hipsRotFix = new THREE.Quaternion();
   let hipsPosMatrix: THREE.Matrix4 | null = null;
@@ -494,7 +506,7 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
       const bone = boneByKey.get(normBoneName(node));
       if (!bone) continue;
       if (prop === 'quaternion') {
-        if (bone === hips) {
+        if (bone === hips && !corrections?.size) {
           const vals = new Float32Array(track.values.length);
           for (let i = 0; i < track.values.length; i += 4) {
             q.fromArray(track.values, i).premultiply(hipsRotFix);
@@ -502,8 +514,9 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
           }
           tracks.push(new THREE.QuaternionKeyframeTrack(`${bone.name}.quaternion`, [...track.times], [...vals]));
         } else {
-          // q = c · k — the clip value re-expressed against THIS rig's bind
-          // pose. No entry means the two rests agree: keep the track verbatim.
+          // q = K_p⁻¹ · c · K_b — the clip value re-expressed against THIS
+          // rig's bind pose. No entry means the two rests agree: keep the
+          // track verbatim.
           const vals = bindRelativeValues(THREE, track.values,
                                           corrections?.get(normBoneName(node)));
           if (vals) {
@@ -620,7 +633,11 @@ export class FigureLibrary {
   /** Rest pose of the rig the library was authored on (`/assets/animation-rig`)
    *  — the donor side of the bind-relative transplant. Empty while the rig is
    *  not served; then the clips are copied 1:1 as before. */
-  private donorRest = new Map<string, THREE.Quaternion>();
+  private donorRest: RestPose = {
+    world: new Map<string, THREE.Quaternion>(),
+    parent: new Map<string, THREE.Quaternion>(),
+    parentBone: new Map<string, string | null>(),
+  };
   /** Set-Fallback-Kette pro Charakter (aus der Worldmap) */
   private charSets = new Map<string, string[]>();
   /** Körpergröße pro Charakter in Metern (aus height_cm der Worldmap) */
@@ -927,7 +944,7 @@ export class FigureLibrary {
     // this rig's own bind pose, which is precisely the compensation the gate
     // used to give up on.
     const corrections = restCorrections(THREE, this.donorRest, template);
-    if (!this.donorRest.size) {
+    if (!this.donorRest.world.size) {
       const dev = restFrameDeviation(candidates, template);
       if (dev.mean > MAX_REST_FRAME_DEV_DEG) {
         console.warn(`[figures] ${charName}: the clip library does NOT fit this`

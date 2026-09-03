@@ -16,6 +16,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
   restCorrections, restPoseOf } from '@anima/scene-render'
+import type { RestPose } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -115,7 +116,7 @@ const clipIndex = () => {
  *  Reading the rest off the CLIP file instead does not work: an FBX carrying
  *  an animation stores its nodes at the take's first frame, a mean 7.6° and
  *  up to 100° away from the rest. */
-let _donorRestPromise: Promise<Map<string, Quaternion>> | null = null
+let _donorRestPromise: Promise<RestPose> | null = null
 const donorRest = () => {
   if (!_donorRestPromise) {
     _donorRestPromise = (async () => {
@@ -125,7 +126,9 @@ const donorRest = () => {
         const rig = await new FBXLoader().loadAsync('/assets/animation-rig')
         return restPoseOf(THREE, rig)
       } catch {
-        return new Map<string, Quaternion>()
+        return { world: new Map<string, Quaternion>(),
+                 parent: new Map<string, Quaternion>(),
+                 parentBone: new Map<string, string | null>() }
       }
     })()
   }
