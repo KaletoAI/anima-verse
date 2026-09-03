@@ -73,6 +73,13 @@ mirrors with -60 deg of roll.
 
 [6] FRAMES SURVIVE THE ROUND TRIP: 5 keys in, 5 keys out, in every run.
 
+[7] A PER-ARM TARGET SPLITS THE TWIST WHERE IT IS TOLD TO. Rolls about one
+    axis add, so with ``target_twist_deg`` {"L": 20, "R": -20} on the fixture
+    the forearm keeps 20 / -20, the angle moved is 60 - 20 = 40 (left) and
+    -60 + 20 = -40 (right), and the upper arm carries 40 / -40. This is the
+    knob the Unity pairs need, whose two arms carry different constant
+    offsets (-22.3 / -174.3 deg).
+
 Tolerances: 1e-3 deg on angles (the FBX round trip goes through Euler
 degrees in double precision; observed ~1e-5) and the script's own limits for
 the deviations.
@@ -191,6 +198,10 @@ out["run2"] = d2["clips"]["src"]
 d3, _ = clip_roll.run({{"inputs": {{"rig": TMP + "/rig.fbx", "src": o1["src"], "ref": TMP + "/fixture.fbx"}},
                        "params": {{"fps": 30, "dry_run": True}}, "out_dir": TMP}})
 out["verify"] = d3["clips"]["src"]
+(Path(TMP) / "run4").mkdir()
+d4, _ = clip_roll.run({{"inputs": {{"rig": TMP + "/rig.fbx", "src": TMP + "/fixture.fbx"}},
+                       "params": {{"fps": 30, "target_twist_deg": {{"L": 20.0, "R": -20.0}}}}, "out_dir": TMP + "/run4"}})
+out["split"] = d4["clips"]["src"]
 print("SMOKE_JSON " + json.dumps(out))
 '''
 
@@ -269,6 +280,17 @@ def main() -> int:
     check_le("vs original: other bones' world orientation", v["vs_ref"]["max_other_rot_deg"], 0.05)
     check_le("vs original: joint positions (cm)", v["vs_ref"]["max_pos_cm"], 0.001)
     check("vs original: upper arms differ by the 60 moved", v["vs_ref"]["max_arm_rot_deg"], 60.0)
+
+    print("\n[7] a per-arm target splits the twist where it is told to")
+    sp = d["split"]
+    for side, keep, mv in (("L", 20.0, 40.0), ("R", -20.0, -40.0)):
+        a = sp["arms"][side]
+        check(f"{side}: forearm keeps the target (min)", a["forearm_twist_after"]["min"], keep)
+        check(f"{side}: forearm keeps the target (max)", a["forearm_twist_after"]["max"], keep)
+        check(f"{side}: moved mean", a["moved"]["mean"], mv)
+        check(f"{side}: upper arm after (min)", a["upper_twist_after"]["min"], mv)
+        check(f"{side}: upper arm after (max)", a["upper_twist_after"]["max"], mv)
+    check_le("split run: other bones' deviation", sp["verify"]["max_other_rot_deg"], 0.05)
 
     print("\n[6] five keys in, five keys out")
     for label, r in (("run 1", r1), ("run 2", r2), ("verify", v)):

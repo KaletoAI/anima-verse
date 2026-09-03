@@ -13,7 +13,14 @@ out_dir=…)``:
                             frame by frame and bone by bone — the CLI hands
                             the ORIGINAL here when it verifies a written file
     params   target_twist_deg   the forearm's roll against the upper arm that
-                            is to remain, degrees (default 0.0)
+                            is to remain, degrees (default 0.0) — one number
+                            for both arms, or ``{"L": x, "R": y}`` per arm
+                            (rolls about one axis add, so a target τ leaves
+                            the upper arm with u + f − τ: the τ that makes
+                            cos(shoulder/2) and cos(elbow/2) equal maximises
+                            the smaller of the two, and the two arms of a
+                            Unity pair need different ones — measured
+                            resting-cowgir__b: L +46.5, R −70.5)
              dry_run        measure and report only, write nothing (default
                             False)
              fps            the library's frame rate (default 30)
@@ -316,7 +323,11 @@ def _deviation(P_a: dict, P_b: dict, frames, skip=()) -> dict:
 def _process(slot: str, src: str, rig_rest: dict, args: dict, ref_path):
     p = args.get("params") or {}
     fps = int(p.get("fps", 30) or 30)
-    target = float(p.get("target_twist_deg", 0.0) or 0.0)
+    raw_target = p.get("target_twist_deg", 0.0)
+    if isinstance(raw_target, dict):
+        targets = {s_: float(raw_target.get(s_, 0.0) or 0.0) for s_ in ARMS}
+    else:
+        targets = {s_: float(raw_target or 0.0) for s_ in ARMS}
     dry = bool(p.get("dry_run", False))
     max_other = float(p.get("max_other_dev_deg", 0.05) or 0.05)
     max_pos = float(p.get("max_pos_dev_cm", 0.001) or 0.001)
@@ -343,6 +354,7 @@ def _process(slot: str, src: str, rig_rest: dict, args: dict, ref_path):
     arm_bone_names = set()
     for side, names in ARMS.items():
         fr = _ArmFrames(rig_rest, names)
+        target = targets[side]
         arm_bone_names.update((fr.arm, fr.fore))
         tw_before, tw_after, up_before, up_after, moved, resid = [], [], [], [], [], []
         new_arm_keys, new_fore_keys = {}, {}
@@ -367,13 +379,14 @@ def _process(slot: str, src: str, rig_rest: dict, args: dict, ref_path):
             "upper_twist_before": _stats(up_before),
             "upper_twist_after": _stats(up_after),
             "moved": _stats(moved),
+            "target_twist_deg": target,
             "solve_residual_max_deg": round(max(resid), 6) if resid else 0.0,
         }
         if not dry:
             _write_keys(arm, action, fr.arm, new_arm_keys)
             _write_keys(arm, action, fr.fore, new_fore_keys)
 
-    data = {"frames": len(frames), "fps": fps, "target_twist_deg": target,
+    data = {"frames": len(frames), "fps": fps, "target_twist_deg": targets,
             "dry_run": dry, "arms": arms_data}
     reasons = []
     if not dry:

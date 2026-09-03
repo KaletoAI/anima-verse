@@ -27,7 +27,16 @@ Options:
     --threshold <deg>   a clip is flagged when the forearm's roll against the
                         upper arm exceeds this anywhere (default 10; the
                         CMU clips sit at 0.1, the MOB1 clips at 51 … 114).
-    --target <deg>      the forearm roll that is to remain (default 0.0)
+    --target <deg>      the forearm roll that is to remain (default 0.0):
+                        one number, or ``L:<deg>,R:<deg>`` per arm. Rolls
+                        about one axis add, so a target τ leaves the upper
+                        arm with (upper + forearm − τ); the τ that makes the
+                        shoulder's and the elbow's cos(θ/2) equal maximises
+                        the smaller of the two. Measured on the Unity pairs
+                        (constant offsets from a bent-elbow Tpose.fbx): with
+                        τ = 0 `resting-cowgir__b` would trade an elbow of
+                        0.050 for a shoulder of 0.335; with L:46.5,R:-70.5
+                        both sides sit at 0.918 / 0.817.
     --rig <fbx>         the T-pose reference skeleton (default
                         shared/models/rig/reference.fbx)
     --timeout <s>       Blender timeout per run (default 900)
@@ -56,9 +65,10 @@ and a clip is chosen by its numbers, never by name. Two data-driven
 exceptions: a clip whose sidecar names ``bone_map`` ``unity-humanoid`` (the
 Unity pairs) is never chosen automatically — the correct split there is only
 proven for `standing-lotus` — and a clip the sidecar marks as
-``roll_repaired`` is not rolled a second time. Naming a file lifts both
-exceptions; the threshold still applies, so a repaired file measures 0 and
-stays untouched.
+``roll_repaired`` is not rolled a second time. Naming a file lifts the Unity
+exception; a repaired file is only rolled again with ``--again`` (a re-split
+to another target is legitimate, an accidental second pass with the default
+target 0 would undo a balanced split).
 
 Applying: the repaired clip is written to a temporary file, that file is
 re-imported and verified with the same measurement (forearm roll at the
@@ -125,7 +135,7 @@ def pinch(deg: float) -> float:
     return math.cos(math.radians(abs(deg)) / 2.0)
 
 
-def measure(rig: Path, clips: List[Path], target: float, timeout: int) -> Dict[Path, dict]:
+def measure(rig: Path, clips: List[Path], target, timeout: int) -> Dict[Path, dict]:
     """One Blender start for all clips: ``{clip: data}`` (dry run)."""
     if not clips:
         return {}
@@ -142,6 +152,21 @@ def measure(rig: Path, clips: List[Path], target: float, timeout: int) -> Dict[P
         raise SystemExit(f"measurement failed: {res.get('error')}")
     data = res["data"].get("clips") or {}
     return {slots[s]: data[s] for s in slots if s in data}
+
+
+def parse_target(text: str):
+    """``"12.5"`` → 12.5; ``"L:33.25,R:-47.75"`` → {"L": 33.25, "R": -47.75}."""
+    text = str(text or "0").strip()
+    if ":" not in text:
+        return float(text)
+    out = {}
+    for part in text.split(","):
+        k, v = part.split(":", 1)
+        k = k.strip().upper()
+        if k not in ("L", "R"):
+            raise SystemExit(f"--target: expected L:<deg>,R:<deg>, got {text!r}")
+        out[k] = float(v)
+    return {"L": out.get("L", 0.0), "R": out.get("R", 0.0)}
 
 
 def side_max(d: dict, key: str) -> Tuple[float, float]:
@@ -170,7 +195,7 @@ def print_table(rows: List[Tuple[Path, dict, str]], root: Path) -> None:
               f"| {mv[0]:8.1f} {mv[1]:8.1f} | {sh:>15} | {el:>15} | {status}")
 
 
-def apply_one(rig: Path, clip: Path, side: dict, target: float, timeout: int,
+def apply_one(rig: Path, clip: Path, side: dict, target, timeout: int,
               file_pos_limit: float = FILE_POS_DEV_CM) -> Optional[str]:
     """Repairs one clip in place; returns an error text, None on success."""
     bak = clip.with_name(clip.name + ".bak")
@@ -198,11 +223,13 @@ def apply_one(rig: Path, clip: Path, side: dict, target: float, timeout: int,
         if not ver["ok"]:
             return f"verification of the written file failed: {ver.get('error')}"
         v = (ver["data"].get("clips") or {}).get("src") or {}
-        resid = max(side_max(v, "forearm_twist_before")) if v else float("inf")
+        # what a second pass would still move = the written file's forearm roll
+        # against the target, per arm (a per-arm target is not 0)
+        resid = max(side_max(v, "moved")) if v else float("inf")
         vs = v.get("vs_ref") or {}
         problems = []
         if resid > VERIFY_TWIST_DEG:
-            problems.append(f"forearm roll in the written file still {resid:.3f} deg")
+            problems.append(f"forearm roll in the written file still {resid:.3f} deg off the target")
         if vs.get("max_other_rot_deg", float("inf")) > MAX_OTHER_DEV_DEG:
             problems.append(f"{vs.get('worst_other_bone')} differs {vs.get('max_other_rot_deg')} deg from the original")
         if vs.get("max_pos_cm", float("inf")) > file_pos_limit:
@@ -214,14 +241,14 @@ def apply_one(rig: Path, clip: Path, side: dict, target: float, timeout: int,
         shutil.copy2(clip, bak)
         shutil.move(str(written), str(clip))
         moved = {s: (res["data"]["clips"]["src"]["arms"][s]["moved"]["mean"]) for s in ("L", "R")}
-        _mark_sidecar(clip, moved)
+        _mark_sidecar(clip, moved, target)
         print(f"    written: {clip}\n    backup:  {bak}\n    moved: L {moved['L']:+.1f} deg, R {moved['R']:+.1f} deg;"
               f" residual forearm roll {resid:.3f} deg; other bones within {vs.get('max_other_rot_deg')} deg,"
               f" joints within {vs.get('max_pos_cm')} cm")
     return None
 
 
-def _mark_sidecar(clip: Path, moved: Dict[str, float]) -> None:
+def _mark_sidecar(clip: Path, moved: Dict[str, float], target) -> None:
     p = sidecar_of(clip)
     side = read_sidecar(clip)
     if not side:
@@ -237,6 +264,9 @@ def _mark_sidecar(clip: Path, moved: Dict[str, float]) -> None:
     per = dict(src.get("roll_moved_deg") or {})
     per[clip.name] = {"L": round(moved["L"], 2), "R": round(moved["R"], 2)}
     src["roll_moved_deg"] = per
+    tg = dict(src.get("roll_target_deg") or {})
+    tg[clip.name] = target if isinstance(target, dict) else {"L": target, "R": target}
+    src["roll_target_deg"] = tg
     p.write_text(json.dumps(side, indent=1), encoding="utf-8")
 
 
@@ -244,12 +274,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("files", nargs="*", help="clip files (default: measure both libraries)")
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--again", action="store_true", help="roll a file the sidecar marks as repaired once more")
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD_DEG)
-    ap.add_argument("--target", type=float, default=0.0)
+    ap.add_argument("--target", default="0", help="deg, or L:<deg>,R:<deg>")
     ap.add_argument("--rig", default="")
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--file-pos-limit", type=float, default=FILE_POS_DEV_CM)
     a = ap.parse_args()
+    a.target = parse_target(a.target)
 
     st = runner.status()
     if not st["executable"]:
@@ -277,8 +309,9 @@ def main() -> int:
         if not explicit and src.get("bone_map") == "unity-humanoid":
             rows.append((clip, None, "skipped: Unity pair — repair only by naming the file"))
             continue
-        if not explicit and clip.name in (src.get("roll_repaired_files") or []):
-            rows.append((clip, None, f"skipped: already repaired {src.get('roll_repaired_at', '')}"))
+        if clip.name in (src.get("roll_repaired_files") or []) and not (explicit and a.again):
+            rows.append((clip, None, f"skipped: already repaired {src.get('roll_repaired_at', '')}"
+                         + (" — name it with --again to re-split" if explicit else "")))
             continue
         to_measure.append(clip)
 
