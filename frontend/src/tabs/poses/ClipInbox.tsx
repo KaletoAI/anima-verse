@@ -138,6 +138,17 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   const entries = useMemo(() => data?.entries || [], [data])
   const entry = useMemo(() => entries.find((e) => e.name === selected) || null, [entries, selected])
 
+  /** The inbox files that may join THIS one: same rig family, and not itself.
+   *  A pair half or a reference pose from another rig carries different bones
+   *  in different places — the retarget cannot notice and produces a constant
+   *  offset in every frame (measured up to -174° on the forearm when a Unity
+   *  `Tpose.fbx` was offered for the Mixamo-named MOB1 packs). */
+  const kin = useMemo(
+    () => entries.filter((e) => e.name !== entry?.name && !!e.probe.skeleton_family
+      && e.probe.skeleton_family === entry?.probe.skeleton_family),
+    [entries, entry],
+  )
+
   /** Picking a file resets the form to that file's own defaults: the pair the
    *  names suggest, the reference pose the inbox offers, the kind slug. */
   const pick = useCallback(
@@ -145,7 +156,9 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
       const e = entries.find((x) => x.name === name) || null
       setSelected(name)
       setSecond(e?.pair || '')
-      setRestFile(data?.rest_suggestion || '')
+      const rest = entries.find((x) => x.name === data?.rest_suggestion)
+      setRestFile(rest && rest.name !== name
+        && rest.probe.skeleton_family === e?.probe.skeleton_family ? rest.name : '')
       setKind(slugFromFile(name))
       setStartS('0')
       setEndS('')
@@ -400,11 +413,9 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
               <span className="ga-hint">{t('Second file (a pair — both halves become one kind)')}</span>
               <select className="ga-input" value={second} onChange={(e) => setSecond(e.target.value)}>
                 <option value="">{t('— solo —')}</option>
-                {entries
-                  .filter((e) => e.name !== entry.name && !!e.probe.skeleton_family)
-                  .map((e) => (
-                    <option key={e.name} value={e.name}>{e.name}</option>
-                  ))}
+                {kin.map((e) => (
+                  <option key={e.name} value={e.name}>{e.name}</option>
+                ))}
               </select>
             </label>
 
@@ -412,12 +423,13 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
               <span className="ga-hint">{t('Reference pose (optional)')}</span>
               <select className="ga-input" value={restFile} onChange={(e) => setRestFile(e.target.value)}>
                 <option value="">{t('— none —')}</option>
-                {entries.map((e) => (
+                {kin.map((e) => (
                   <option key={e.name} value={e.name}>{e.name}</option>
                 ))}
               </select>
               <span className="ga-hint">
-                {t('Same rig, T-/A-pose — gives the bones their real twist.')}
+                {t('The bind pose of THIS rig — gives the bones their real twist.'
+                   + ' Only files of the same rig family are offered.')}
               </span>
             </label>
 

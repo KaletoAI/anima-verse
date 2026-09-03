@@ -344,6 +344,7 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
     if len(names) == 2 and names[0].lower() == names[1].lower():
         raise ClipImportError("a pair needs two DIFFERENT files")
     paths_in: List[Path] = []
+    src_family = ""
     for name in names:
         p = inbox_path(name)
         if not p.is_file():
@@ -353,6 +354,12 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
             raise ClipImportError(
                 f"{name}: unknown rig — no bone map matches its node names "
                 f"(known: {', '.join(sorted(SIGNATURES))})")
+        if src_family and family != src_family:
+            raise ClipImportError(
+                f"{name} carries a {family} rig, the other half is "
+                f"{src_family} — both halves of a pair have to come from the "
+                "same rig")
+        src_family = src_family or family
         paths_in.append(p)
 
     rest_path: Optional[Path] = None
@@ -360,6 +367,19 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
         rest_path = inbox_path(rest_file)
         if not rest_path.is_file():
             raise ClipImportError(f"no such reference pose in the inbox: {rest_file}")
+        # The reference pose is read on the SOURCE rig — a file from another
+        # rig family carries different bones in different places, and the
+        # delta it produces is nonsense that no later stage can notice.
+        # `is_rest_name` is a NAME heuristic, so the picker happily offered a
+        # Unity `Tpose.fbx` for the Mixamo-named MOB1 packs; measured, that put
+        # a constant offset of up to -174 deg into every frame of the affected
+        # clips.
+        rest_family = _cached_probe(rest_path).get("skeleton_family")
+        if rest_family and src_family and rest_family != src_family:
+            raise ClipImportError(
+                f"{rest_file} carries a {rest_family} rig, but the clip is "
+                f"{src_family} — a reference pose has to come from the SAME "
+                "rig as the animation")
 
     cset = str(clip_set or "").strip().lower()
     if cset and ("/" in cset or "\\" in cset or cset in (".", "..")):

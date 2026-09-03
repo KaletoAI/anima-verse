@@ -188,6 +188,22 @@ for _side in ("Left", "Right"):
 # LO sits ABOVE the reference rig's own knee bend (5.92 deg) on purpose: the
 # Mixamo rest frames must keep using the pelvis axis exactly as before, so the
 # rest side of ``R = F_source(t) · F_mixamo_rest^T`` is unchanged.
+#
+# THE FALLBACK HAS TO POINT WHERE THE BEND NORMAL POINTS, or the blend is not
+# a blend but a 90 deg step. For the LEGS the two agree by luck: in a T-pose
+# thigh × shin runs along the pelvis axis, so a knee crossing the band changes
+# nothing. For the ARMS they did NOT — the raw palm axis (pinky → index) runs
+# FORWARD while upper arm × forearm runs UP/DOWN, 96.9 deg (left) and 77.0 deg
+# (right) apart on MOB1. The reference rig's elbow is straight (0.0 deg, w = 0)
+# and so took the palm axis, while any bent source frame took the bend normal,
+# and the difference landed in ``R`` as a ROLL of the upper arm that the
+# forearm then undid: measured on MOB1_Stand_Relaxed_Idle_v2, upper arm
+# +90.9/+35.7 deg and forearm -60.7/-57.6 deg against a source that holds
+# +31.8/-23.0 and -0.4/+0.3. Invisible on a rigid skeleton — the hand lands
+# within 1.0 deg either way — and ruinous on skin: linear blend skinning
+# pinches a joint to cos(twist/2) of its radius, so a 100 deg elbow collapsed
+# to 0.64 and a 111 deg shoulder to 0.57. ``_elbow_axis`` removes the step by
+# deriving the fallback FROM the palm so that it lands on the bend normal.
 BEND_BLEND_LO_DEG = 8.0
 BEND_BLEND_HI_DEG = 30.0
 _DEG = 3.141592653589793 / 180.0
@@ -239,6 +255,28 @@ def _blend_secondary(direction: Vector, bend: Vector, fallback: Vector,
     return Matrix.Rotation(sign * ang * w, 3, x) @ b
 
 
+def _elbow_axis(axis: Vector, palm: Vector) -> Vector:
+    """The elbow's hinge direction, synthesised from the palm — a straight
+    arm's stand-in for ``upper × forearm``.
+
+    Bending the elbow swings the forearm in the plane spanned by the upper arm
+    and the palm NORMAL, so the hinge is perpendicular to both the bone and the
+    palm axis, which is exactly where ``upper × forearm`` points once there is
+    a bend to measure. In the Mixamo rest (arms along ±X, palms down, palm axis
+    forward) it gives ∓Y on the two sides, the same signs the bend normal takes
+    there — so rest and pose read the same axis and the blend adds no roll.
+
+    ``None`` when the two are parallel or missing; the caller falls back to the
+    shoulder axis as before.
+    """
+    if axis is None or palm is None:
+        return None
+    if axis.length < 1e-9 or palm.length < 1e-9:
+        return None
+    out = axis.cross(palm)
+    return out if out.length > 1e-6 else None
+
+
 def _frame(direction: Vector, secondary: Vector) -> Matrix:
     x = direction.normalized()
     y = secondary - x * secondary.dot(x)
@@ -273,11 +311,12 @@ def _secondary(name: str, P: dict, direction: Vector = None) -> Vector:
     if name in ("lhumerus", "rhumerus"):
         up = v(name, "lradius" if side == "l" else "rradius")
         fore = v("lradius" if side == "l" else "rradius", hand)
-        back = palm_axis or shoulders
+        axis = direction or up
+        back = _elbow_axis(axis, palm_axis) or shoulders
         w = _bend_weight(up, fore)
         if w <= 0.0:
             return back
-        return _blend_secondary(direction or up, up.cross(fore), back, w)
+        return _blend_secondary(axis, up.cross(fore), back, w)
     if name in ("lradius", "rradius", "lhand", "rhand"):
         return palm_axis or shoulders
     if name.startswith("LeftHand") or name.startswith("RightHand"):

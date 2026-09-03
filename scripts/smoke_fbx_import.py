@@ -45,6 +45,14 @@ RULE 4 — "a foreign file is licensed until its owner says otherwise". The
 default target is the LICENSED library; the free (tracked, redistributable)
 one needs redistributable=True — 400 without it.
 
+RULE 6 — "a reference pose belongs to the rig it is read on". The rest file
+is measured on the SOURCE skeleton, so a file from another family puts a
+constant offset into every frame that nothing downstream can notice — measured
+up to -174 deg on the forearm when the picker offered the Unity `Tpose.fbx`
+for the Mixamo-named MOB1 packs. Same for the two halves of a pair. The probe
+already knows both families, so both are refused with 422, and the Poses tab
+only offers files of the picked file's own family.
+
 RULE 5 — "a converted clip is CONTINUOUS". The positional retargeter rebuilds
 a bone's roll from an anatomical secondary axis, and the limbs have TWO
 candidates: the bend normal (thigh × shin) once the joint is bent far enough to
@@ -253,12 +261,15 @@ def fake_fbx(names, extra: bytes = b"") -> bytes:
 
 
 def build_inbox() -> None:
-    """Six files: a pair (Female_/Male_), an _A/_B pair, a lone Female_ file,
-    an unknown rig and a reference pose."""
+    """Six Unity files: a pair (Female_/Male_), an _A/_B pair, a lone Female_
+    file, an unknown rig and a reference pose — plus two files of the OTHER
+    family, which RULE 6 needs to have something to refuse."""
     for name in ("Female_Dance.fbx", "Male_Dance.fbx", "take_A.fbx",
                  "take_B.fbx", "Female_Solo.fbx"):
         (INBOX / name).write_bytes(fake_fbx(UNITY_NAMES))
     (INBOX / "Tpose.fbx").write_bytes(fake_fbx(UNITY_NAMES))
+    for name in ("MOB1_Walk.fbx", "MOB1_Jog.fbx"):
+        (INBOX / name).write_bytes(fake_fbx(MOB_NAMES))
     (INBOX / "strange.fbx").write_bytes(fake_fbx(("Bone_01", "Bone_02", "Root")))
     (INBOX / "notes.txt").write_text("not a clip", encoding="utf-8")
     # a library the import can collide with
@@ -326,7 +337,8 @@ def test_probe() -> None:
     names = [e["name"] for e in entries]
     check("only the FBX files are listed, sorted",
           names == ["Female_Dance.fbx", "Female_Solo.fbx", "Male_Dance.fbx",
-                    "strange.fbx", "take_A.fbx", "take_B.fbx", "Tpose.fbx"],
+                    "MOB1_Jog.fbx", "MOB1_Walk.fbx", "strange.fbx",
+                    "take_A.fbx", "take_B.fbx", "Tpose.fbx"],
           str(names))
     check("each entry carries size, mtime and the probe",
           all({"name", "size", "mtime", "probe"} <= set(e) for e in entries))
@@ -502,6 +514,20 @@ def test_import() -> None:
         check("422 for a reference pose that is not in the inbox",
               status_of(lambda: imp({"kind": "resting3", "files": ["Female_Dance.fbx"],
                                      "rest_file": "nope.fbx"})) == 422)
+
+        print("\n[8b] a reference pose has to be the SAME RIG (RULE 6)")
+        check("422 for a Unity reference pose under a Mixamo clip",
+              status_of(lambda: imp({"kind": "mob-rest", "files": ["MOB1_Walk.fbx"],
+                                     "rest_file": "Tpose.fbx"})) == 422)
+        check("422 for two pair halves of different rigs",
+              status_of(lambda: imp({"kind": "mob-pair",
+                                     "files": ["MOB1_Walk.fbx",
+                                               "Female_Dance.fbx"]})) == 422)
+        res = imp({"kind": "mob-ok", "files": ["MOB1_Walk.fbx"],
+                   "rest_file": "MOB1_Jog.fbx"})
+        check("but the same family goes through",
+              res["sidecar"]["rest_name"] == "MOB1_Jog.fbx",
+              res["sidecar"]["rest_name"])
 
         print("\n[9] a pair import — both halves, one kind")
         res = imp({"kind": "resting-pair", "files": ["Female_Dance.fbx", "Male_Dance.fbx"],
