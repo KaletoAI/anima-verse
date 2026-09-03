@@ -18,8 +18,10 @@ material belongs to no single world (E5 Task 4).
 ``kind`` (idle / walk / run / sit / dance / wave / …) is derived from the file
 name, ``set`` from the subdirectory the clip lies in; both vocabularies are
 OPEN — no list exists in the code, a new kind is just a new file and a new set
-just a new directory. Clips practically never change → served with an ETag and
-a long max-age.
+just a new directory. Clips are served with an ETag and ``no-cache``, i.e.
+stored but revalidated — they are rewritten in place by
+``scripts/repair_clip_roll.py``, so a long ``max-age`` would hide the change
+for a day.
 
 On top of the two libraries sits the CMU TRIAL archive (``clip_catalog``):
 ``/assets/clip-catalog`` hands out the measured catalog of the whole database
@@ -554,8 +556,14 @@ def get_animation_rig(request: Request):
 @router.get("/animation-clips/{rel:path}")
 def get_animation_clip(rel: str, request: Request):
     """Serves a clip file — ``<file>`` for a neutral clip, ``<set>/<file>`` for
-    a set clip, ``licensed/…`` for one out of the licensed library. ETag + If-None-Match; clips are immutable in practice, so they
-    may be cached hard."""
+    a set clip, ``licensed/…`` for one out of the licensed library.
+
+    ``no-cache`` is not "do not store" — it stores and REVALIDATES, so the
+    ETag still saves the transfer while a rewritten file is picked up at once.
+    A clip used to be treated as immutable and was served with a day of
+    ``max-age``, during which a browser does not ask at all; that stopped
+    being true with `scripts/repair_clip_roll.py`, which rewrites clips in
+    place, and cost an afternoon of "nothing changed" on a file that had."""
     path = resolve_clip_path(rel)
     if path is None:
         raise HTTPException(status_code=400, detail="Invalid clip path")
@@ -564,7 +572,7 @@ def get_animation_clip(rel: str, request: Request):
     media_type, _ = mimetypes.guess_type(str(path))
     return etag_file_response(path, request,
                               media_type or "application/octet-stream",
-                              cache_control="public, max-age=86400")
+                              cache_control="no-cache")
 
 
 @router.get("/surface-textures")
