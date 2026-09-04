@@ -18,7 +18,7 @@
  *   never reaches a player payload;
  * - not the avatar itself: reading one's own message back is uncanny and takes
  *   the seconds in which the answer arrives;
- * - not the narrator (see `NARRATOR_SPEAKERS`) — narration is written, not
+ * - not the narrator (see `isNarratorLine`) — narration is written, not
  *   said, and scene photos and movement traces are narrator lines too;
  * - nothing empty, and none of the display-only meta rows the scene view
  *   renders as notes (relationship changes, event verdicts).
@@ -37,17 +37,19 @@
 import type { SceneLine } from '@anima/player-ui';
 
 /**
- * Speaker values that mean "the narrator", never a voice in the room.
+ * Is this row the NARRATOR's? Decided by the server's MARK and by nothing else.
  *
- * The canonical, persisted one is `STORYTELLER_SPEAKER` in
- * `app/core/perception.py:41`. `/play/scene` substitutes the LOCALISED label
- * for display before it sends the payload (`app/routes/play.py:239`), so the
- * client sees the translated name in a German world — which is why this is a
- * list and not one constant. The translations live in
- * `shared/languages/<lang>.json` under the key "Storyteller" (today only
- * `de.json`: "Erzähler").
+ * `/play/scene` sets `meta.narrator` on every storyteller line and on no other
+ * one, unconditionally and in every language (`app/routes/play.py`). The
+ * `speaker` of those rows is a LOCALISED display label — "Storyteller" in an
+ * English world, "Erzähler" in a German one, whatever
+ * `shared/languages/<lang>.json` says under the key "Storyteller" — so testing
+ * the name tests a rendering and goes silent-wrong in every language nobody
+ * hardcoded. `hud/chatPanel.ts` decides the picture column the same way.
  */
-export const NARRATOR_SPEAKERS: readonly string[] = ['Storyteller', 'Erzähler'];
+export function isNarratorLine(line: SceneLine): boolean {
+  return line.meta?.narrator === true;
+}
 
 /** One line ready to be spoken: who said it (the server picks the voice by
  *  character) and the words. */
@@ -178,16 +180,15 @@ const NOTE_KEYS = ['display_only', 'relationship', 'event_verdict'];
  * `app/core/perception.py`, and a stream fetched for anyone else would carry
  * that kind meaningfully.
  */
-export function speakableLines(lines: readonly SceneLine[], avatar: string,
-                               narrators: readonly string[] = NARRATOR_SPEAKERS
-): SpokenLine[] {
+export function speakableLines(lines: readonly SceneLine[], avatar: string): SpokenLine[] {
   const out: SpokenLine[] = [];
   for (const line of lines) {
     if (!line.kind || !SPOKEN_KINDS.has(line.kind)) continue;
+    if (isNarratorLine(line)) continue;
     const meta = line.meta;
     if (meta && NOTE_KEYS.some((k) => meta[k])) continue;
     const speaker = speakerOf(line);
-    if (!speaker || speaker === avatar || narrators.includes(speaker)) continue;
+    if (!speaker || speaker === avatar) continue;
     const text = (line.content || '').trim();
     if (!text) continue;
     out.push({ speaker, text });

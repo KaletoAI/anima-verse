@@ -163,9 +163,16 @@ function SceneRow({ line, onOpenImage, highlighted, onRowHover }: {
         {line.content}
       </em>
     )
-  } else if (speaker === 'Erzähler') {
+  } else if (line.meta?.narrator === true) {
     // Narrator prose (Act/Storyteller): set apart by colour — gold + italic, so
     // it is clearly distinct from character dialogue.
+    //
+    // The narrator is recognised by the SERVER'S MARK and by nothing else:
+    // `/play/scene` sets `meta.narrator` on every storyteller line, in every
+    // language (`app/routes/play.py`). `speaker` on those rows is a LOCALIZED
+    // label — "Storyteller" in an English world, "Erzähler" in a German one —
+    // so a name test is a test against a rendering and misses every world
+    // whose language is not the one hardcoded.
     body = (
       <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
         <strong style={{ opacity: 0.85 }}>{speaker}</strong>: {line.content}
