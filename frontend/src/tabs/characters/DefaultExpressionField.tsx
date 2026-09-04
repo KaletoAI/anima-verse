@@ -46,6 +46,9 @@ import { openLightbox } from '../../components/Lightbox'
 /** How long the re-render is polled for before the view gives up (4 s steps). */
 const POLL_LIMIT = 45
 
+/** Floor for the picture in a column that has little height to give. */
+const MIN_H = 320
+
 export function DefaultExpressionField({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -94,17 +97,23 @@ export function DefaultExpressionField({ character }: { character: string }) {
     }
   }
 
-  // Compact layout for the narrow template column: the picture above, the
-  // button and its status text below it.
+  // The section declares `grow` in the template, so this column hands its
+  // leftover height down to here: hint and button keep their natural size, the
+  // picture takes the rest. MIN_H is the floor for a short column — below it
+  // the picture stops shrinking and the column simply grows instead.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 8,
+      alignItems: 'stretch', height: '100%', minHeight: 0,
+    }}>
       <div style={{ fontSize: '0.78em', opacity: 0.7 }}>
         {t('This character kind has no mood or pose variants — it is shown by this one default expression.')}
       </div>
       {/* The image stays MOUNTED even while it 404s: the poll works by
           changing its src, and an unmounted img would never re-fetch. */}
       <div style={{
-        position: 'relative', width: '100%', maxWidth: 160, aspectRatio: '3 / 4', borderRadius: 8,
+        position: 'relative', flex: '1 1 auto', minHeight: MIN_H, width: '100%',
+        borderRadius: 8,
         overflow: 'hidden', border: '1px solid var(--border, #30363d)',
         background: 'var(--bg, #0d1117)',
       }}>
@@ -113,7 +122,8 @@ export function DefaultExpressionField({ character }: { character: string }) {
           onError={() => setReady(false)}
           onClick={() => { if (ready === true) openLightbox({ src, alt: t('Default expression') }) }}
           style={{
-            width: '100%', height: '100%', objectFit: 'cover',
+            position: 'absolute', inset: 0,
+            width: '100%', height: '100%', objectFit: 'contain',
             display: ready === true ? 'block' : 'none', cursor: 'zoom-in',
           }} />
         {ready !== true && (
@@ -128,7 +138,8 @@ export function DefaultExpressionField({ character }: { character: string }) {
           </div>
         )}
       </div>
-      <button type="button" className="ga-btn ga-btn-sm" disabled={rendering} onClick={rerender}>
+      <button type="button" className="ga-btn ga-btn-sm" style={{ alignSelf: 'flex-start' }}
+        disabled={rendering} onClick={rerender}>
         {rendering ? t('Rendering…') : t('Re-render default expression')}
       </button>
       {rendering && (

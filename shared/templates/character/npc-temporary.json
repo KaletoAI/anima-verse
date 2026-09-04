@@ -318,7 +318,8 @@
       "column": 4,
       "row": 1,
       "special": "default_expression",
-      "fields": []
+      "fields": [],
+      "grow": true
     },
     {
       "id": "appearance",

@@ -948,10 +948,13 @@ a.ga-btn {
    Sections gestapelt, Felder untereinander. */
 .tpl-tab-cols {
   display: flex;
-  flex-direction: row;   /* überschreibt .ga-form (column) — Spalten nebeneinander */
+  flex-direction: row;   /* overrides .ga-form (column) — columns side by side */
   flex-wrap: nowrap;
   gap: 22px;
-  align-items: flex-start;
+  /* Stretch, so a column HAS a height a section can claim (see
+     .tpl-tab-section--grow). The sections themselves stay top-aligned, so a
+     column without a growing section looks exactly as it did. */
+  align-items: stretch;
 }
 .tpl-tab-col {
   flex: 1 1 0;
@@ -962,6 +965,18 @@ a.ga-btn {
 }
 .tpl-tab-section .ga-field {
   margin-bottom: 8px;
+}
+/* A section that declares `grow` in its template takes the height its column
+   has left over, and hands it to its single slot child. */
+.tpl-tab-section--grow {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tpl-tab-section--grow > :not(.ga-fieldset-title) {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 /* Avatar-Panel (Aussehen/Physique): erste Spalte (Felder) schmal = 25%, der
    Rest geht an die Prompt-Spalte (Prompt → Preview → Bild untereinander). */

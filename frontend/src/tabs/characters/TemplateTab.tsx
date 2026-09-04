@@ -34,6 +34,9 @@ export interface TmplSectionRaw extends TmplSection {
   special?: unknown
   column?: number
   row?: number
+  /** The section takes whatever height its column has left over — for slots
+   *  whose content scales (a picture), not for stacked fields. */
+  grow?: boolean
 }
 
 function asBoolStore(f: TmplFieldDef) {
@@ -426,7 +429,8 @@ export function TemplateTab({
         return (
           <div key={col} className="tpl-tab-col">
             {colSections.map((s) => (
-              <div key={s.id} className="tpl-tab-section">
+              <div key={s.id}
+                className={`tpl-tab-section${s.grow ? ' tpl-tab-section--grow' : ''}`}>
                 <div className="ga-fieldset-title">{tmplText(s, 'label', lang) || s.id}</div>
                 {s.special ? specialSlots?.[String(s.special)] : editableFields(s).map(renderField)}
               </div>
