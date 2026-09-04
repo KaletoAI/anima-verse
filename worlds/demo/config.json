@@ -80,15 +80,7 @@
           "order": 1
         },
         {
-          "task": "expression_map",
-          "order": 1
-        },
-        {
           "task": "extraction",
-          "order": 1
-        },
-        {
-          "task": "pose_normalize",
           "order": 1
         },
         {
