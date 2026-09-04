@@ -57,6 +57,17 @@ function clockTime(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString()
 }
 
+/** The same stamp WITH its date, in the locale's short form and without
+ *  seconds — for a list that spans days, where a bare clock time cannot say
+ *  which day it belongs to. The running queue keeps `clockTime`: there every
+ *  stamp is from now, and the compact row must not widen. */
+function clockDateTime(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? '' : d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+}
+
 export function QueueView() {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -342,7 +353,7 @@ export function QueueView() {
                 </span>
                 <span className={row.status === 'done'
                   ? 'ga-status-ok' : 'ga-status-paused'}>
-                  {statusLabel(row.status)} {clockTime(row.finished_at)}
+                  {statusLabel(row.status)} {clockDateTime(row.finished_at)}
                 </span>
               </li>
             ))}

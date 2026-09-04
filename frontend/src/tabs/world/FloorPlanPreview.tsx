@@ -403,6 +403,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // Exclusive level view: everything level-bound derives from the
     // filtered list (plates and walls follow via usedLevels).
     const solo = soloLevelRef.current
+    // The UNFILTERED list survives for lookups that must still answer for a
+    // room on another storey — a marker's room is the only thing that says
+    // which level the marker is on.
+    const allRooms = current
     if (solo !== null) {
       current = current.filter((r) => (r.layout?.level || 0) === solo)
     }
@@ -963,9 +967,18 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     })
 
     // ── Markers (payload, world coordinates) ──────────────────────────
+    // Built from ALL rooms, not the solo-filtered list: a marker carries no
+    // level of its own, only its `room_id`. Looked up in the filtered list, a
+    // room on another storey was simply absent — and an absent level used to
+    // pass the visibility check, so the solo view showed every storey's
+    // figures anyway.
     const levelOfRoom = new Map<string, number>(
-      current.filter((r) => r.id && r.layout)
+      allRooms.filter((r) => r.id && r.layout)
         .map((r) => [r.id as string, r.layout!.level || 0]))
+    // A marker whose room cannot be placed on a level does not belong to the
+    // soloed storey either — with a solo active it stays hidden.
+    const visibleMarkerLevel = (lv: number | undefined) =>
+      lv === undefined ? solo === null : visibleLevel(lv)
     // Calibration figure (§ B2a): the FIXED 1.70 m reference INSIDE the room
     // — the admin dials width_m until the furniture matches it, and walk_y
     // until it stands on the visible floor. It never scales with either.
@@ -1007,8 +1020,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     const markerNo = new Map<string, number>()
     const pairs = clipListRef.current.pairs
     for (const marker of sc?.markers || []) {
-      const lv = levelOfRoom.get(marker.room_id)
-      if (lv !== undefined && !visibleLevel(lv)) continue
+      if (!visibleMarkerLevel(levelOfRoom.get(marker.room_id))) continue
       const n = (markerNo.get(marker.room_id) || 0) + 1
       markerNo.set(marker.room_id, n)
       const entry = previewEntry(poseCatalogRef.current, marker.group,

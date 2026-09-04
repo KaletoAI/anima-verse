@@ -474,6 +474,102 @@ a.ga-btn {
   overflow-y: auto;
 }
 
+/* Collapsible list column (components/ListPane.tsx). Expanded, the grip is
+   a thin vertical sash living in the 14px gutter between the columns, so
+   the list keeps its full width. Collapsed, the column shrinks to a strip
+   that is nothing but the grip (plus a vertical label); the flex sibling
+   takes the freed width on its own, the grid hosts switch their first
+   track below. */
+.ga-listpane {
+  position: relative;
+  /* The grip sits in the gutter but INSIDE the box (padding area), so a
+     host that clips its list column (`overflow: hidden`) does not cut it
+     off. content-box keeps the 18% / 200px of the base rule for the
+     content, the negative margin hands the padding back to the gutter. */
+  box-sizing: content-box;
+  padding-right: 14px;
+  margin-right: -14px;
+}
+
+.ga-listpane-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 14px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted, #8b949e);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  opacity: 0.55;
+  transition: opacity 0.12s, background-color 0.12s;
+}
+
+.ga-listpane-grip:hover,
+.ga-listpane-grip:focus-visible {
+  opacity: 1;
+  background: var(--bg-hover, #1c2128);
+  color: var(--text, #c9d1d9);
+}
+
+.ga-listpane-grip:focus-visible {
+  outline: 2px solid var(--accent, #1f6feb);
+  outline-offset: -2px;
+}
+
+.ga-listpane-grip-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ga-listpane-grip-label {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Collapsed: overrides the 18% / 200px of .ga-twocol-left; the grip is the
+   whole column now, back in flow. */
+.ga-listpane.is-collapsed {
+  flex: 0 0 28px;
+  width: 28px;
+  min-width: 0;
+  padding-right: 0;
+  margin-right: 0;
+  overflow: hidden;
+}
+
+.ga-listpane.is-collapsed .ga-listpane-grip {
+  position: static;
+  width: 100%;
+  height: 100%;
+  flex: 1;
+  opacity: 0.85;
+  justify-content: flex-start;
+  padding-top: 8px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: var(--radius, 6px);
+  background: var(--bg-container, #161b22);
+}
+
+/* Detail pane whose columns scroll on their own (the prop detail, see
+   .ga-detail-cols--panes): the pane itself no longer scrolls, the sticky
+   toolbar stays put and the column grid below it takes the rest of the
+   height. Reverts to the scrolling pane at the narrow breakpoints, where
+   the grid collapses and separate scrolling would be a nuisance. */
+.ga-twocol-right--panes {
+  overflow-y: hidden;
+}
+
 .ga-twocol-header {
   display: flex;
   align-items: center;
@@ -752,13 +848,6 @@ a.ga-btn {
   align-items: start;
 }
 
-/* Keeps the preview in view while the input column scrolls — offset by the
-   sticky detail toolbar above it. */
-.ga-detail-cols-sticky {
-  position: sticky;
-  top: 48px;
-}
-
 /* Three columns for a detail that carries a viewer AND a long settings
    stack (the prop detail): fields 30%, the variant's settings 30%, the 3D
    preview 40% — the preview is the widest because it is the thing being
@@ -767,14 +856,45 @@ a.ga-btn {
   grid-template-columns: minmax(0, 30fr) minmax(0, 30fr) minmax(0, 40fr);
 }
 
+/* Independent panes: the grid fills the pane below the toolbar (it is a
+   flex child of .ga-twocol-right--panes) and every column becomes its own
+   scroll container. A column grows with its content and is only capped at
+   the pane height — a short column keeps its natural size instead of
+   showing an empty scroll area. `min-height: 0` lets the column shrink
+   below its content, the definite row track gives `max-height: 100%` a
+   height to resolve against. */
+.ga-detail-cols--panes {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.ga-detail-cols--panes > .ga-form {
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
 @media (max-width: 1400px) {
   .ga-detail-cols-3 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+
+  /* Two columns or one: back to the page scrolling as a whole — the grid
+     takes its content height, the columns grow, the pane scrolls. */
+  .ga-twocol-right--panes { overflow-y: auto; }
+  .ga-detail-cols--panes {
+    flex: none;
+    min-height: auto;
+    grid-template-rows: none;
+  }
+  .ga-detail-cols--panes > .ga-form {
+    max-height: none;
+    overflow-y: visible;
+  }
 }
 
 @media (max-width: 900px) {
   .ga-detail-cols,
   .ga-detail-cols-3 { grid-template-columns: 1fr; }
-  .ga-detail-cols-sticky { position: static; }
 }
 
 .ga-form-row {
@@ -1420,6 +1540,16 @@ a.ga-btn {
     "list form    silhouette side";
 }
 
+/* Collapsed list pane (components/ListPane.tsx): the list track shrinks to
+   the grip strip, the form takes the width. */
+.ga-items-grid:has(> .ga-listpane.is-collapsed) {
+  grid-template-columns: 28px 1fr 28%;
+}
+
+.ga-items-grid.has-silhouette:has(> .ga-listpane.is-collapsed) {
+  grid-template-columns: 28px 1fr 140px 22%;
+}
+
 .ga-items-list-col       { grid-area: list; }
 .ga-items-toolbar-row    { grid-area: toolbar; }
 .ga-items-form-col       { grid-area: form; }
@@ -1602,6 +1732,11 @@ a.ga-btn {
   gap: 14px;
   flex: 1;
   min-height: 0;
+}
+
+/* Collapsed list pane (components/ListPane.tsx): see .ga-items-grid. */
+.ga-world-grid:has(> .ga-listpane.is-collapsed) {
+  grid-template-columns: 28px 1fr 30%;
 }
 
 .ga-world-list-col,
@@ -3222,3 +3357,10 @@ a.ga-btn {
   letter-spacing: -2px;
 }
 .ga-sortable-handle:active { cursor: grabbing; }
+
+/* ---- Shared-lightbox hookup (2026-09-04) ----------------------------------
+   The corner magnifier itself (.lb-zoom-corner) is styled in
+   packages/player-ui/src/Lightbox.css so it travels with the Lightbox. A list
+   row reveals the magnifier on its thumbnail when the ROW is hovered, not only
+   the 28px thumb itself. */
+.ga-list-row:hover .lb-zoom-corner { opacity: 1; }

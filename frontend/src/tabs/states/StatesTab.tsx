@@ -5,6 +5,7 @@ import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
+import { ListPane } from '../../components/ListPane'
 import { IconPicker } from '../../components/IconPicker'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 
@@ -203,7 +204,7 @@ export function StatesTab() {
 
   return (
     <div className="ga-twocol">
-      <aside className="ga-twocol-left">
+      <ListPane id="states" label={t('States')}>
         <ListHeader
           title={t('States')}
           onNew={newFilter}
@@ -276,7 +277,7 @@ export function StatesTab() {
             })
           )}
         </ul>
-      </aside>
+      </ListPane>
       <section className="ga-twocol-right">
         {draft ? (
           <>

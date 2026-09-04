@@ -14,6 +14,7 @@ import type { RestCorrection, RestPose } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
+import { locomotionClip, setLocomotionClips } from '../game/walk';
 
 /**
  * Animierte 3D-Figuren für NPCs (AV3D-5): Modelle kommen vom Server
@@ -726,7 +727,15 @@ export class FigureLibrary {
     // done with them is the loop below — every rig gets the kinds it does not
     // carry itself, and a rig the library does not fit borrows from another
     // model (bone names rewritten, mixamorig prefix mapping).
-    const serverClips = await getAnimationClips();
+    const library = await getAnimationClips();
+    // The admin's locomotion roles ride on the same listing — taken over
+    // BEFORE the first figure is built, so its first `play` already asks the
+    // configured idle kind. A listing without the field keeps the defaults.
+    if (library.locomotion) {
+      const roles = setLocomotionClips(library.locomotion);
+      console.info(`[figures] locomotion roles: walk=${roles.walk}, run=${roles.run}, idle=${roles.idle}`);
+    }
+    const serverClips = library.clips;
     // A PAIR clip's half is indexed under `<kind>__<role>` (§ A8a) — the name
     // an interaction asks for; a solo clip keeps its plain kind.
     const sources: Array<{ kind: string; set: string; url: string }> = serverClips.map((c) => ({
@@ -1324,12 +1333,15 @@ export class Figure {
       this.legs = findLegChains(inst, box);
       if (this.legs.length) console.info(`[figures] prozeduraler Gang: ${this.legs.length} Beinketten erkannt`);
     }
-    this.play('idle');
+    // A fresh figure stands: the `idle` ROLE's clip (the admin's choice,
+    // `game/walk.locomotionClip`), not the literal kind.
+    this.play(locomotionClip('idle'));
   }
 
-  /** Clip mit Crossfade wechseln; fehlt der Clip: Ersatz-Clip, dann idle.
-   *  `kind` kommt server-authoritativ aus `activity_animation` — deshalb hier
-   *  normalisieren, die Actions liegen unter kleingeschriebenen Kinds.
+  /** Switches the clip with a crossfade; a missing clip plays its stand-in,
+   *  then idle. `kind` is server-authoritative (`activity_animation`), hence
+   *  the normalisation here — the actions are indexed by lowercase kinds. An
+   *  EMPTY kind means "stand" and plays the `idle` role's clip.
    *
    *  `terrainClip` says the kind comes from the GROUND the figure is on
    *  (`walk.moveClip` while it moves, `walk.idleClip` while it stands) — the
@@ -1349,7 +1361,7 @@ export class Figure {
    *  caller's decision (`walk.sinkForState`); the two are different numbers
    *  because a swimmer lies flat and a treader hangs upright. */
   play(rawKind: ClipKind, terrainClip = false, sink = 0) {
-    const kind = (rawKind || 'idle').toLowerCase();
+    const kind = (rawKind || locomotionClip('idle')).toLowerCase();
     // Junk is no depth, and never NaN: one NaN in the drop and the figure
     // hangs at no height for the rest of the session.
     const sinkM = terrainClip && Number.isFinite(sink) && sink > 0 ? sink : 0;

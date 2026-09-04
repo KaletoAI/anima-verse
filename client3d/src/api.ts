@@ -548,15 +548,27 @@ export interface ApiClip {
   url: string;
 }
 
-/** Globale Animations-Bibliothek des Servers; leer, wenn nicht verfügbar. */
-export async function getAnimationClips(): Promise<ApiClip[]> {
+/** The server's global clip library plus the LOCOMOTION mapping — which clip
+ *  kind every figure plays for `walk` / `run` / `idle` when neither the ground
+ *  nor the server names one (`game/walk.setLocomotionClips`). */
+export interface ApiClipLibrary {
+  clips: ApiClip[];
+  /** `{walk, run, idle} → kind`, every role filled by the server; `null` when
+   *  the listing could not be read — the roles then keep their own names. */
+  locomotion: Record<string, string> | null;
+}
+
+/** The server's global animation library; empty when it is not reachable. */
+export async function getAnimationClips(): Promise<ApiClipLibrary> {
   try {
     const res = await fetch('/assets/animation-clips');
-    if (!res.ok) return [];
+    if (!res.ok) return { clips: [], locomotion: null };
     const data = await res.json();
-    return (data.clips ?? []) as ApiClip[];
+    const locomotion = data.locomotion && typeof data.locomotion === 'object'
+      ? (data.locomotion as Record<string, string>) : null;
+    return { clips: (data.clips ?? []) as ApiClip[], locomotion };
   } catch {
-    return [];
+    return { clips: [], locomotion: null };
   }
 }
 

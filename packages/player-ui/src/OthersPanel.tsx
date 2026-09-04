@@ -8,6 +8,7 @@ import { useI18n } from './I18nProvider'
 import { apiGet } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
+import { useEnlarge } from './ZoomButton'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 /** The avatar's relationship TO this character, as `/play/others` sends it.
@@ -115,6 +116,7 @@ function StatBars({ c }: { c: CharState }) {
 
 export function OthersPanel() {
   const { t } = useI18n()
+  const enlarge = useEnlarge()
   const { data } = usePoll<Others>(
     'play-others', () => apiGet<Others>('/play/others'), { intervalMs: 5000 })
 
@@ -136,7 +138,8 @@ export function OthersPanel() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <img src={portraitUrl(c)} alt={c.name}
               onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
-              style={{ width: 44, height: 44, borderRadius: 6, objectFit: 'cover', flex: '0 0 auto', background: 'rgba(255,255,255,0.08)' }} />
+              {...enlarge({ src: portraitUrl(c), alt: c.name },
+                { width: 44, height: 44, borderRadius: 6, objectFit: 'cover', flex: '0 0 auto', background: 'rgba(255,255,255,0.08)' })} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {c.name}{c.in_party ? <span title={t('In your party')} style={{ marginLeft: 4 }}>👥</span> : null}

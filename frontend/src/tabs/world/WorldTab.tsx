@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ListHeader } from '../../components/ListHeader'
+import { ListPane } from '../../components/ListPane'
 import { ImportButton } from '../../components/ImportExport'
 import { loadItems, type ItemRef } from '../../lib/refs'
 import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
@@ -160,7 +161,7 @@ export function WorldTab() {
           <option key={v} value={v} />
         ))}
       </datalist>
-      <aside className="ga-world-list-col">
+      <ListPane id="locations" className="ga-world-list-col" label={t('Places')}>
         <ListHeader
           title={t('Places')}
           onNew={newLocation}
@@ -197,7 +198,7 @@ export function WorldTab() {
             return out
           })()}
         </ul>
-      </aside>
+      </ListPane>
       {selection?.kind === 'location' && selectedLocation ? (
         /* Location view: the tabbed editor (General / 2D / 3D) owns the
            gallery inside its tabs, so it spans the form + gallery columns. */

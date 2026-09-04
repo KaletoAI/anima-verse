@@ -17,7 +17,13 @@ import { Icon } from './icons'
 import { useI18n } from './I18nProvider'
 import './Lightbox.css'
 
-export interface LightboxItem { src?: string; video?: string; alt?: string }
+export interface LightboxItem {
+  src?: string
+  video?: string
+  alt?: string
+  /** Optional one-line note under the media (e.g. provenance of a texture). */
+  caption?: string
+}
 
 // Module singleton: the mounted host registers its setter here.
 let _setItem: ((it: LightboxItem | null) => void) | null = null
@@ -86,7 +92,7 @@ function LightboxOverlay({ item, onClose }: { item: LightboxItem; onClose: () =>
     setTy((my - cy) - s1 * py)
   }, [])
 
-  // Mausrad-Zoom (non-passiv → preventDefault verhindert Seiten-Scroll).
+  // Mouse-wheel zoom (non-passive so preventDefault stops the page scroll).
   useEffect(() => {
     if (isVideo) return
     const el = overlayRef.current
@@ -154,6 +160,10 @@ function LightboxOverlay({ item, onClose }: { item: LightboxItem; onClose: () =>
           onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
           onDoubleClick={onDoubleClick} />
       )}
+
+      {item.caption ? (
+        <span className="player-hint-pill lb-caption" title={item.caption}>{item.caption}</span>
+      ) : null}
 
       {!isVideo && (
         <div className="lb-zoombar" onClick={(e) => e.stopPropagation()}>

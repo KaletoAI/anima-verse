@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ImportButton } from '../../components/ImportExport'
+import { ListPane } from '../../components/ListPane'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import type { CharacterRef } from '../../lib/refs'
 
@@ -190,7 +191,7 @@ export function CharacterListPanel({
   }
 
   return (
-    <aside className="ga-twocol-left">
+    <ListPane id="characters" label={t('Characters')}>
       <div className="ga-twocol-header">
         <h3>{t('Characters')}</h3>
         <div className="ga-twocol-header-actions">
@@ -347,6 +348,6 @@ export function CharacterListPanel({
         </div>,
         document.body,
       )}
-    </aside>
+    </ListPane>
   )
 }

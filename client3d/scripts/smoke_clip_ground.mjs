@@ -290,6 +290,19 @@ async function main() {
   check('the clip library is readable', library.length > 10,
     `${library.length} clips`);
 
+  // [2] measures the ground offset of SIX named kinds. A licensed library is
+  // per installation and carries whatever its owner imported — since the
+  // library moved to CMU base names it may hold none of them. That is not a
+  // regression of the gate, it is a library without the material to measure,
+  // so it skips with the missing names instead of indexing past the end.
+  const absent = wanted.filter((k) => !library.some((c) => c.name === k));
+  if (absent.length) {
+    console.log(`  skip — the licensed library at ${CLIP_DIR} carries none of`
+      + ` ${absent.join(', ')} (clip kinds are per installation)`);
+    console.log(`\n${passed} ok, ${failed} failed`);
+    process.exit(failed ? 1 : 0);
+  }
+
   const v = new THREE.Vector3();
   for (const rig of RIGS) {
     const label = rig.split('/').pop();

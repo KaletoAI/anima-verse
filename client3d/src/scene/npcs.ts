@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
-  ghostCutY, groundWaterLevel, idleClip, moveClip, sinkForState, standingClipFor,
+  ghostCutY, groundWaterLevel, idleClip, locomotionClip, moveClip, sinkForState, standingClipFor,
   terrainPace, wadeGate,
   type GroundScope, type GroundSink } from '../game/walk';
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
@@ -1183,7 +1183,7 @@ export class NpcManager {
           // placed with above, which is what makes the pair meet: root − sink
           // is the surface the body rests on.
           npc.figure.play(travelling ? moveClip(gm.anim, false, raw.scope)
-            : (groundIdle || 'idle'), travelling || !!groundIdle, sinkM);
+            : (groundIdle || locomotionClip('idle')), travelling || !!groundIdle, sinkM);
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {

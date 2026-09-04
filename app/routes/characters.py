@@ -1586,7 +1586,12 @@ def get_character_model_texture_file(character_name: str, request: Request):
 
 @router.get("/{character_name}/model-refs")
 def get_character_model_refs(character_name: str) -> Dict[str, Any]:
-    """Info about the stored reference renders ({tpose, pose, pending})."""
+    """Info about the stored reference renders.
+
+    ``{tpose, pose, status, now}`` — ``status`` carries per kind whether a
+    render is ``running`` and whether one is only ``scheduled`` (debounce
+    timer armed), with the matching system stamps; ``now`` is the server
+    clock, so a client measures a state's age without its own clock skew."""
     from app.core.model_refs import get_model_refs_info
     return get_model_refs_info(character_name)
 

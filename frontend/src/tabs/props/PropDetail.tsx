@@ -52,6 +52,7 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { SliderInput } from '../../components/SliderInput'
+import { useEnlarge } from '../../components/ZoomButton'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -168,6 +169,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   onDirtyChange: (count: number) => void
 }) {
   const { t } = useI18n()
+  const enlarge = useEnlarge()
   const { toast } = useToast()
   const enc = encodeURIComponent(prop.id)
   // Which stored mesh the viewer shows ('' = the active one the clients get).
@@ -992,7 +994,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
           </>
         }
       />
-      <div className="ga-detail-cols ga-detail-cols-3">
+      <div className="ga-detail-cols ga-detail-cols-3 ga-detail-cols--panes">
         {/* Inputs: everything the sidecar stores. */}
         <div className="ga-form">
           {/* Editable sidecar fields. */}
@@ -1414,10 +1416,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 src={`/assets/props/${enc}/source?variant=${variant}&v=${reloadKey}`}
                 alt={t('Source image')}
                 onError={() => setSrcOk(false)}
-                style={{ width: '100%', maxHeight: 300,
-                  objectFit: 'contain', borderRadius: 8,
-                  border: '1px solid var(--border, #30363d)',
-                  background: 'rgba(255,255,255,0.04)' }}
+                {...enlarge(
+                  { src: `/assets/props/${enc}/source?variant=${variant}&v=${reloadKey}`, alt: `${prop.name} — ${t('Source image')}` },
+                  { width: '100%', maxHeight: 300,
+                    objectFit: 'contain', borderRadius: 8,
+                    border: '1px solid var(--border, #30363d)',
+                    background: 'rgba(255,255,255,0.04)' })}
               />
             ) : (
               <div className="ga-empty">
@@ -1498,9 +1502,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                       <img
                         src={`/assets/props/${enc}/source?variant=${variant}&view=${view}&v=${reloadKey}`}
                         alt={t(VIEW_LABEL[view])}
-                        title={rec.backend ? `🖼 ${rec.backend}${rec.generated_at ? ` · ${rec.generated_at.slice(0, 10)}` : ''}` : t('Uploaded')}
-                        style={{ width: '100%', aspectRatio: '1', objectFit: 'contain', borderRadius: 6,
-                          border: '1px solid var(--border, #30363d)', background: 'rgba(255,255,255,0.04)' }} />
+                        {...enlarge(
+                          { src: `/assets/props/${enc}/source?variant=${variant}&view=${view}&v=${reloadKey}`,
+                            alt: `${prop.name} — ${t(VIEW_LABEL[view])}`,
+                            caption: rec.backend ? `${rec.backend}${rec.generated_at ? ` · ${rec.generated_at.slice(0, 10)}` : ''}` : t('Uploaded') },
+                          { width: '100%', aspectRatio: '1', objectFit: 'contain', borderRadius: 6,
+                            border: '1px solid var(--border, #30363d)', background: 'rgba(255,255,255,0.04)' })}
+                        title={`${rec.backend ? `🖼 ${rec.backend}${rec.generated_at ? ` · ${rec.generated_at.slice(0, 10)}` : ''}` : t('Uploaded')} — ${t('Click to enlarge')}`} />
                     ) : (
                       <div style={{ width: '100%', aspectRatio: '1', borderRadius: 6,
                         border: '1px dashed var(--border, #30363d)', display: 'flex',
@@ -1785,9 +1793,10 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             thing being judged: the mesh of the SELECTED variant, and
             directly under it the resolution tiers, which are nothing but
             "which file of it do the clients get at which distance".
-            Sticky, so it stays in view while the two columns to its left
-            scroll through places, settings and areas. */}
-        <div className="ga-form ga-detail-cols-sticky">
+            Each column is its own scroll pane (.ga-detail-cols--panes), so
+            it stays in view while the two columns to its left scroll
+            through places, settings and areas. */}
+        <div className="ga-form">
           <div className="ga-form-section-label" style={{ marginTop: 0 }}>
             {t('3D preview')}
           </div>

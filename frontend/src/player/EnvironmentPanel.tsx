@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../lib/api'
+import { ZoomButton } from '../components/ZoomButton'
 
 interface PresentChar { name: string; avatar_url: string; expr_version?: string }
 interface Pos { x: number; y: number; scale: number }
@@ -288,6 +289,18 @@ export function EnvironmentPanel({
             {m === 'live' ? t('Live') : t('Rendered')}
           </button>
         ))}
+        {/* Enlarge the scene image: the room background in Live, the composed
+            render in Rendered. A toolbar button rather than a clickable stage —
+            the stage is where figures are dragged and resized. */}
+        {(mode === 'live' ? (bgUrl && bgOk) : !!renderSig) && (
+          <ZoomButton
+            item={() => (mode === 'live'
+              ? { src: bgUrl, alt: roomName || locationName || '' }
+              : { src: `/play/scene-render/image?sig=${encodeURIComponent(renderSig)}&n=${renderNonce}`,
+                  alt: roomName || locationName || '' })}
+            style={{ position: 'static', opacity: 1, height: 'auto', width: 'auto', padding: '2px 6px', borderRadius: 6 }}
+          />
+        )}
         {mode === 'rendered' && (
           <button onClick={() => requestRender(true)} disabled={rendering}
             title={t('Re-render scene')} aria-label={t('Re-render scene')}

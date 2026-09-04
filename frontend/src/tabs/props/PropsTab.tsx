@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ImportButton } from '../../components/ImportExport'
 import { ListHeader } from '../../components/ListHeader'
+import { ListPane } from '../../components/ListPane'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
@@ -179,7 +180,7 @@ export function PropsTab() {
 
   return (
     <div className="ga-twocol">
-      <aside className="ga-twocol-left">
+      <ListPane id="props" label={t('Props')}>
         <ListHeader
           title={t('Props')}
           onNew={() => navigate('', true)}
@@ -275,8 +276,10 @@ export function PropsTab() {
             })
           )}
         </ul>
-      </aside>
-      <section className="ga-twocol-right">
+      </ListPane>
+      {/* The detail lays its three columns out as independent scroll panes;
+          the create form and the empty state keep the plain scrolling pane. */}
+      <section className={`ga-twocol-right${!creating && selectedProp ? ' ga-twocol-right--panes' : ''}`}>
         {creating ? (
           <PropCreateForm
             imageBackends={imageBackends}

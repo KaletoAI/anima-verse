@@ -1,16 +1,15 @@
 /**
- * GalleryTab — Bilder-Galerie eines Characters im Game-Admin.
- * Bewusst minimal: Thumbnail-Grid · Bild löschen (mit Inline-Bestätigung) ·
- * vergrößert in der Lightbox ansehen. Keine weiteren Features.
+ * GalleryTab — a character's image gallery in the Game-Admin.
+ * Deliberately minimal: thumbnail grid · delete image (with inline confirmation) ·
+ * view enlarged in the lightbox. No further features.
  *
- * Quelle: GET /characters/{name}/images · Löschen: DELETE …/images/{file}.
- * Lightbox ist der geteilte Singleton aus dem Player-UI (eigener Host hier via
- * LightboxProvider, damit er auch im Game-Admin gemountet ist).
+ * Source: GET /characters/{name}/images · delete: DELETE …/images/{file}.
+ * The lightbox is the shared singleton; its ONE host is mounted in main.tsx.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiDelete } from '../../lib/api'
-import { LightboxProvider, openLightbox } from '../../player/Lightbox'
+import { openLightbox } from '../../components/Lightbox'
 import { GalleryAccess } from './GalleryAccess'
 
 interface ImagesResp {
@@ -64,7 +63,7 @@ export function GalleryTab({ character }: { character: string }) {
   const files = data?.images || []
 
   return (
-    <LightboxProvider>
+    <>
       <div style={{ marginBottom: 12 }}>
         <GalleryAccess character={character} />
       </div>
@@ -132,6 +131,6 @@ export function GalleryTab({ character }: { character: string }) {
           </div>
         )}
       </div>
-    </LightboxProvider>
+    </>
   )
 }

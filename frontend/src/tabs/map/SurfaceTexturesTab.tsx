@@ -17,6 +17,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '../../components/Field'
 import { ListHeader } from '../../components/ListHeader'
+import { ListPane } from '../../components/ListPane'
+import { openLightbox } from '../../components/Lightbox'
+import { ZoomButton } from '../../components/ZoomButton'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -50,7 +53,6 @@ export function SurfaceTexturesTab() {
   const [negative, setNegative] = useState('')
   const [promptTouched, setPromptTouched] = useState(false)
   const [armedDel, setArmedDel] = useState('')
-  const [zoom, setZoom] = useState<{ kind: string; v: TexVersion } | null>(null)
   // New-kind drafts. The NAME is what you type; the id is derived from it by
   // the server (the `kind` field above stays empty unless you override it),
   // and the description is the only text that reaches the prompt.
@@ -58,6 +60,15 @@ export function SurfaceTexturesTab() {
   const [descDraft, setDescDraft] = useState('')
   const [cacheBump, setCacheBump] = useState(0)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Provenance caption for the shared lightbox — kind, how it was made, date,
+  // size, and the full prompt (the pill clips; its tooltip carries it all).
+  const zoomItem = useCallback((kind: string, v: TexVersion) => {
+    const head = [kind, madeWith(v, t), dateShort(v.created_at), `${v.size_m} m`].filter(Boolean).join(' · ')
+    const tail = [v.prompt, v.negative ? `${t('Negative prompt')}: ${v.negative}` : ''].filter(Boolean).join(' — ')
+    return { src: `${v.url}?v=${cacheBump}`, alt: kind, caption: tail ? `${head} — ${tail}` : head }
+  }, [cacheBump, t])
+  const zoomVersion = useCallback((kind: string, v: TexVersion) => openLightbox(zoomItem(kind, v)), [zoomItem])
   const uploadRef = useRef<HTMLInputElement>(null)
   const uploadKindRef = useRef('')
 
@@ -291,7 +302,7 @@ export function SurfaceTexturesTab() {
 
   return (
     <div className="ga-twocol">
-      <aside className="ga-twocol-left">
+      <ListPane id="surface-textures" label={t('Surface textures')}>
         <ListHeader title={t('Surface textures')} onNew={startCreate} />
         <ul className="ga-list">
           {!loaded ? (
@@ -311,8 +322,12 @@ export function SurfaceTexturesTab() {
                     >
                       <span className="ga-list-row-main">
                         {active ? (
-                          <img className="ga-list-thumb" alt=""
-                            src={`${active.url}?v=${cacheBump}`} />
+                          <span style={{ position: 'relative', display: 'inline-flex', flex: '0 0 auto' }}>
+                            <img className="ga-list-thumb" alt=""
+                              src={`${active.url}?v=${cacheBump}`} />
+                            <ZoomButton item={() => zoomItem(tx.kind, active)}
+                              size={11} style={{ top: -3, right: -3, width: 16, height: 16 }} />
+                          </span>
                         ) : (
                           <span style={{ fontSize: 18 }}>🧱</span>
                         )}
@@ -350,7 +365,7 @@ export function SurfaceTexturesTab() {
             </>
           )}
         </ul>
-      </aside>
+      </ListPane>
 
       <section className="ga-twocol-right">
         {blendEdit ? (
@@ -455,7 +470,7 @@ export function SurfaceTexturesTab() {
             worldSeasons={worldSeasons}
             currentSeason={currentSeason}
             onRemove={(filename) => remove(selectedGroup.kind, filename)}
-            onZoom={(v) => setZoom({ kind: selectedGroup.kind, v })}
+            onZoom={(v) => zoomVersion(selectedGroup.kind, v)}
             onUpload={() => pickUpload(selectedGroup.kind)}
             onMeta={(meta) => {
               void saveKindMeta(selectedGroup.kind, meta).then(() => load())
@@ -485,41 +500,6 @@ export function SurfaceTexturesTab() {
         }}
       />
 
-      {zoom ? (
-        <div className="ga-gallery-lightbox" onClick={() => setZoom(null)} role="dialog">
-          <img src={`${zoom.v.url}?v=${cacheBump}`} alt={zoom.kind} />
-          {/* Provenance caption — kind, how it was made, date, full prompt. */}
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: 'absolute', left: '50%', bottom: 16, transform: 'translateX(-50%)',
-              maxWidth: '84vw', maxHeight: '30vh', overflow: 'auto', cursor: 'auto',
-              background: 'rgba(0,0,0,0.75)', color: '#e6edf3', borderRadius: 6,
-              padding: '8px 12px', fontSize: '0.85em', lineHeight: 1.4,
-            }}
-          >
-            <div style={{ fontWeight: 600 }}>
-              {zoom.kind} · {madeWith(zoom.v, t)}
-              {dateShort(zoom.v.created_at) ? ` · ${dateShort(zoom.v.created_at)}` : ''}
-              {` · ${zoom.v.size_m} m`}
-            </div>
-            {zoom.v.prompt ? (
-              <div style={{ opacity: 0.85, marginTop: 4 }}>{zoom.v.prompt}</div>
-            ) : null}
-            {zoom.v.negative ? (
-              <div style={{ opacity: 0.6, marginTop: 2 }}>{t('Negative prompt')}: {zoom.v.negative}</div>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            className="ga-gallery-lightbox-close"
-            onClick={() => setZoom(null)}
-            aria-label={t('Close')}
-          >
-            ×
-          </button>
-        </div>
-      ) : null}
     </div>
   )
 }

@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
 import { useLightbox } from './Lightbox'
+import { useEnlarge } from './ZoomButton'
 
 interface Conversation {
   partner: string; avatar_url: string; last: string; last_ts: string
@@ -31,6 +32,7 @@ function fmtTime(ts: string): string {
 export function PhonePanel() {
   const { t } = useI18n()
   const lightbox = useLightbox()
+  const enlarge = useEnlarge()
   const [convs, setConvs] = useState<Conversation[]>([])
   const [available, setAvailable] = useState<string[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -115,7 +117,7 @@ export function PhonePanel() {
         <div style={HEAD}>
           <button onClick={() => setSelected(null)} style={BACK_BTN} title={t('Back')}>‹</button>
           {conv?.avatar_url
-            ? <img src={conv.avatar_url} alt="" style={AVATAR} />
+            ? <img src={conv.avatar_url} alt="" {...enlarge({ src: conv.avatar_url, alt: selected }, AVATAR)} />
             : <span style={AVATAR_FB}>{selected[0]}</span>}
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{selected}</div>

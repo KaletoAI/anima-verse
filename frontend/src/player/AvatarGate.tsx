@@ -12,6 +12,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { ZoomButton } from '../components/ZoomButton'
 
 interface AvatarSwitchValue { chooseAvatar: () => void }
 const AvatarSwitchContext = createContext<AvatarSwitchValue | null>(null)
@@ -73,13 +74,14 @@ export function AvatarGate({ children }: { children: ReactNode }) {
               {characters.map((name) => (
                 <button key={name} onClick={() => pick(name)} disabled={!!busy} title={name}
                   style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: 12,
-                    borderRadius: 12, cursor: 'pointer', color: 'inherit',
+                    borderRadius: 12, cursor: 'pointer', color: 'inherit', position: 'relative',
                     border: name === active ? '2px solid var(--accent,#2f81f7)' : '1px solid var(--border,#30363d)',
                     background: 'var(--bg-container,#161b22)', opacity: busy && busy !== name ? 0.5 : 1 }}>
                   <img src={`/characters/${encodeURIComponent(name)}/images/profile`} alt=""
                     onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden' }}
                     style={{ width: 96, height: 96, borderRadius: '50%', objectFit: 'cover',
                       background: 'rgba(255,255,255,0.05)' }} />
+                  <ZoomButton item={{ src: `/characters/${encodeURIComponent(name)}/images/profile`, alt: name }} />
                   <span style={{ fontWeight: 600, fontSize: '0.9em', textAlign: 'center' }}>
                     {busy === name ? '…' : name}
                   </span>

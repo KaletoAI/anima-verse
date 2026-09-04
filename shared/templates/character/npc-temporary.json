@@ -312,6 +312,15 @@
       ]
     },
     {
+      "id": "default_expression",
+      "label": "Default expression",
+      "label_de": "Standard-Ausdruck",
+      "column": 4,
+      "row": 1,
+      "special": "default_expression",
+      "fields": []
+    },
+    {
       "id": "appearance",
       "label": "Appearance",
       "label_de": "Aussehen",

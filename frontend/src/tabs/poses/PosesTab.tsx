@@ -31,6 +31,7 @@ import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
+import { ListPane } from '../../components/ListPane'
 
 type Axis = 'pose' | 'expression'
 /** The tab has four surfaces: the catalog entries, the installed clip library
@@ -463,578 +464,592 @@ export function PosesTab() {
   }
 
   return (
-    <div className="ga-twocol">
-      <aside className="ga-twocol-left">
-        {viewSwitch}
-        <ListHeader
-          title={t('Catalog')}
-          onNew={addNew}
-          extra={
-            confirmClear ? (
-              <>
+    // The view switch sits ABOVE the two columns, not inside the list pane:
+    // collapsing the pane must not take the way back to Library/Import with it.
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {viewSwitch}
+      <div className="ga-twocol">
+        <ListPane id="poses" label={t('Catalog')}>
+            <ListHeader
+            title={t('Catalog')}
+            onNew={addNew}
+            extra={
+              confirmClear ? (
+                <>
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm ga-btn-danger"
+                    disabled={busy}
+                    onClick={clearExpressionImages}
+                  >
+                    {busy ? t('Clearing…') : t('Really clear?')}
+                  </button>
+                  <button
+                    type="button"
+                    className="ga-btn ga-btn-sm"
+                    onClick={() => setConfirmClear(false)}
+                  >
+                    {t('Cancel')}
+                  </button>
+                </>
+              ) : (
                 <button
                   type="button"
                   className="ga-btn ga-btn-sm ga-btn-danger"
-                  disabled={busy}
-                  onClick={clearExpressionImages}
+                  title={t('Deletes every rendered expression image of every character. The image cache is keyed by the catalog key, not by the prompt text — use this after editing a prompt, otherwise the old images stay.')}
+                  onClick={() => setConfirmClear(true)}
                 >
-                  {busy ? t('Clearing…') : t('Really clear?')}
+                  {t('Clear rendered expression images')}
                 </button>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm"
-                  onClick={() => setConfirmClear(false)}
-                >
-                  {t('Cancel')}
-                </button>
-              </>
-            ) : (
+              )
+            }
+          />
+          <p className="ga-sched-muted">
+            {t('The catalog is the closed set of render keys: a pose key carries the body-posture prompt and the animation kind, an expression key the facial prompt. Free text is matched onto a key — it never creates one.')}
+          </p>
+
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            {(['pose', 'expression'] as Axis[]).map((a) => (
               <button
+                key={a}
                 type="button"
-                className="ga-btn ga-btn-sm ga-btn-danger"
-                title={t('Deletes every rendered expression image of every character. The image cache is keyed by the catalog key, not by the prompt text — use this after editing a prompt, otherwise the old images stay.')}
-                onClick={() => setConfirmClear(true)}
+                className={`ga-btn ga-btn-sm${axis === a ? ' ga-btn-primary' : ''}`}
+                onClick={() => setAxis(a)}
               >
-                {t('Clear rendered expression images')}
+                {a === 'pose' ? t('Poses') : t('Expressions')}
               </button>
-            )
-          }
-        />
-        <p className="ga-sched-muted">
-          {t('The catalog is the closed set of render keys: a pose key carries the body-posture prompt and the animation kind, an expression key the facial prompt. Free text is matched onto a key — it never creates one.')}
-        </p>
-
-        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-          {(['pose', 'expression'] as Axis[]).map((a) => (
-            <button
-              key={a}
-              type="button"
-              className={`ga-btn ga-btn-sm${axis === a ? ' ga-btn-primary' : ''}`}
-              onClick={() => setAxis(a)}
-            >
-              {a === 'pose' ? t('Poses') : t('Expressions')}
-            </button>
-          ))}
-        </div>
-
-        {data.problems.length ? (
-          <div className="ga-form-hint" style={{ color: 'var(--warn, #d29922)' }}>
-            {data.problems.map((p) => (
-              <div key={p}>⚠ {p}</div>
             ))}
           </div>
-        ) : null}
 
-        {/* Place types — the finite vocabulary a marker speaks. Collapsed by
-            default so it does not eat the catalog list's height. */}
-        {isPose ? (
-          <div style={{ marginBottom: 8 }}>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              style={{ width: '100%' }}
-              onClick={() => setShowGroups((v) => !v)}
-            >
-              {showGroups ? '▾' : '▸'} {t('Place types')} ({Object.keys(groupsDraft).length})
-            </button>
-            {showGroups ? (
-              <div style={{ marginTop: 6 }}>
-                <p className="ga-form-hint" style={{ margin: '0 0 6px' }}>
-                  {t('A marker names a place type; every pose belongs to exactly one. Root drop × 1.70 m is how far a figure’s root sinks below the marked surface.')}
-                </p>
-                {Object.entries(groupsDraft).map(([key, g]) => {
-                  const used = groupUsage[key] || 0
-                  const poses = data.entries.filter((p) => (p.group || '') === key)
-                  return (
-                    <div key={key} className="ga-fieldset">
-                      <div
-                        className="ga-fieldset-title"
-                        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          {data.problems.length ? (
+            <div className="ga-form-hint" style={{ color: 'var(--warn, #d29922)' }}>
+              {data.problems.map((p) => (
+                <div key={p}>⚠ {p}</div>
+              ))}
+            </div>
+          ) : null}
+
+          {/* Place types — the finite vocabulary a marker speaks. Collapsed by
+              default so it does not eat the catalog list's height; opened, it
+              scrolls INSIDE a capped box (the column has no scrollbar of its
+              own, so a full-height block would push the two lists below it out
+              of view). */}
+          {isPose ? (
+            <div style={{ marginBottom: 8, flex: '0 0 auto' }}>
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                style={{ width: '100%' }}
+                onClick={() => setShowGroups((v) => !v)}
+              >
+                {showGroups ? '▾' : '▸'} {t('Place types')} ({Object.keys(groupsDraft).length})
+              </button>
+              {showGroups ? (
+                <div style={{ marginTop: 6, maxHeight: '40vh', overflowY: 'auto', paddingRight: 4 }}>
+                  <p className="ga-form-hint" style={{ margin: '0 0 6px' }}>
+                    {t('A marker names a place type; every pose belongs to exactly one. Root drop × 1.70 m is how far a figure’s root sinks below the marked surface.')}
+                  </p>
+                  {Object.entries(groupsDraft).map(([key, g]) => {
+                    const used = groupUsage[key] || 0
+                    const poses = data.entries.filter((p) => (p.group || '') === key)
+                    return (
+                      <div key={key} className="ga-fieldset">
+                        <div
+                          className="ga-fieldset-title"
+                          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                        >
+                          <code style={{ flex: 1 }}>{key}</code>
+                          <button
+                            type="button"
+                            className="ga-btn ga-btn-sm ga-btn-danger"
+                            disabled={used > 0}
+                            title={
+                              used
+                                ? `${t('Still in use — reassign these poses first')} (${used})`
+                                : t('Remove this place type')
+                            }
+                            onClick={() => removeGroup(key)}
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <Field label={t('Label')}>
+                          <input
+                            className="ga-input"
+                            value={g.label}
+                            onChange={(e) => patchGroup(key, { label: e.target.value })}
+                          />
+                        </Field>
+                        <Field
+                          label={t('Root drop')}
+                          hint={`× 1.70 m = ${(g.root_drop * REFERENCE_HEIGHT_M).toFixed(2)} m`}
+                        >
+                          <input
+                            className="ga-input"
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.001}
+                            value={g.root_drop}
+                            onChange={(e) =>
+                              patchGroup(key, { root_drop: Number(e.target.value) })
+                            }
+                          />
+                        </Field>
+                        <Field
+                          label={t('Default pose')}
+                          hint={t('The pose a click on such a marker sets. It has to be a pose of this place type — only a place type without poses may stay empty.')}
+                        >
+                          <select
+                            className="ga-input"
+                            value={g.default}
+                            onChange={(e) => patchGroup(key, { default: e.target.value })}
+                          >
+                            {!poses.length ? (
+                              // A place type only just added has no poses yet: a
+                              // pose can only name a type that already exists, so
+                              // the default arrives with the first pose.
+                              <option value="">{t('— none —')}</option>
+                            ) : !g.default ? (
+                              // With poses the server demands a real default —
+                              // show the gap instead of silently rendering the
+                              // first pose while the value is still empty.
+                              <option value="" disabled>
+                                {t('— pick a default pose —')}
+                              </option>
+                            ) : null}
+                            {poses.map((p) => (
+                              <option key={p.key} value={p.key}>
+                                {p.key}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                      </div>
+                    )
+                  })}
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <input
+                      className="ga-input"
+                      style={{ flex: 1, minWidth: 90 }}
+                      placeholder={t('new key')}
+                      value={newGroupKey}
+                      onChange={(e) => setNewGroupKey(e.target.value)}
+                    />
+                    <button type="button" className="ga-btn ga-btn-sm" onClick={addGroup}>
+                      + {t('Place type')}
+                    </button>
+                    <button
+                      type="button"
+                      className="ga-btn ga-btn-sm ga-btn-primary"
+                      onClick={saveGroups}
+                    >
+                      {t('Save place types')}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+            <input
+              className="ga-input"
+              placeholder={t('Search…')}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {isPose ? (
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.8em' }}>
+                <input
+                  type="checkbox"
+                  checked={onlyMissing}
+                  onChange={(e) => setOnlyMissing(e.target.checked)}
+                />
+                <span>
+                  {t('Without animation')} ({missingCount})
+                </span>
+              </label>
+            ) : null}
+            {isPose && Object.keys(data.groups || {}).length ? (
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {Object.entries(data.groups || {}).map(([key, g]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`ga-btn ga-btn-sm${groupFilter === key ? ' ga-btn-primary' : ''}`}
+                    title={`${g.label} (${groupUsage[key] || 0})`}
+                    // clicking the active chip clears the filter again
+                    onClick={() => setGroupFilter((prev) => (prev === key ? '' : key))}
+                  >
+                    {g.label || key}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <ul className="ga-list">
+            {!list.length ? <li className="ga-list-empty">{t('No entries')}</li> : null}
+            {list.map((p) => (
+              <li key={p.key}>
+                <button
+                  type="button"
+                  className={`ga-list-row${selected === p.key ? ' is-active' : ''}`}
+                  onClick={() => select(p.key)}
+                >
+                  <span className="ga-list-row-main">
+                    <code>{p.key}</code>
+                    {isPose ? (
+                      <span
+                        className="ga-list-row-sub"
+                        style={{ opacity: p.animation && p.group ? 1 : 0.4 }}
                       >
-                        <code style={{ flex: 1 }}>{key}</code>
+                        — {p.animation || t('no animation')} ·{' '}
+                        {p.group || t('no place type')}
+                      </span>
+                    ) : null}
+                  </span>
+                  {isPose && data.pair_kinds?.includes(p.animation) ? (
+                    <span className="ga-source" title={t('Pair animation — needs a partner')}>
+                      {t('pair')}
+                    </span>
+                  ) : null}
+                  {p.is_default ? <span className="ga-source">{t('default')}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          {/* Candidates: free text the resolver could not absorb. A capped flex
+              column so a long candidate list scrolls by itself and leaves the
+              catalog list above its share of the column. */}
+          <div
+            style={{
+              marginTop: 16, display: 'flex', flexDirection: 'column',
+              flex: '0 1 auto', minHeight: 0, maxHeight: '35vh',
+            }}
+          >
+            <h4 style={{ margin: '0 0 4px' }}>
+              {t('Candidates')} ({candidates.length})
+            </h4>
+            <p className="ga-sched-muted" style={{ marginTop: 0 }}>
+              {t('Free text that landed on the default key. Approve it as its own entry, attach it as a synonym, or dismiss it. "Seen" counts first sightings per server run.')}
+            </p>
+            {!candidates.length ? (
+              <div className="ga-list-empty">{t('No open candidates')}</div>
+            ) : (
+              <ul className="ga-list">
+                {candidates.map((c) => (
+                  <li
+                    key={c.raw_text}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                      padding: '6px 0',
+                      borderBottom: '1px solid var(--border, #30363d)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <code style={{ wordBreak: 'break-word' }}>{c.raw_text}</code>
+                      <span style={{ fontSize: '0.75em', opacity: 0.6, whiteSpace: 'nowrap' }}>
+                        {t('seen')} {c.count}× · {t('nearest')}: {c.nearest_key || '–'}
+                      </span>
+                    </div>
+                    {confirmDismiss === c.raw_text ? (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.82em' }}>{t('Dismiss this candidate?')}</span>
                         <button
                           type="button"
                           className="ga-btn ga-btn-sm ga-btn-danger"
-                          disabled={used > 0}
-                          title={
-                            used
-                              ? `${t('Still in use — reassign these poses first')} (${used})`
-                              : t('Remove this place type')
-                          }
-                          onClick={() => removeGroup(key)}
+                          disabled={busy}
+                          onClick={() => dismiss(c)}
                         >
-                          ×
+                          {t('Dismiss')}
+                        </button>
+                        <button
+                          type="button"
+                          className="ga-btn ga-btn-sm"
+                          onClick={() => setConfirmDismiss(null)}
+                        >
+                          {t('Cancel')}
                         </button>
                       </div>
-                      <Field label={t('Label')}>
-                        <input
-                          className="ga-input"
-                          value={g.label}
-                          onChange={(e) => patchGroup(key, { label: e.target.value })}
-                        />
-                      </Field>
-                      <Field
-                        label={t('Root drop')}
-                        hint={`× 1.70 m = ${(g.root_drop * REFERENCE_HEIGHT_M).toFixed(2)} m`}
-                      >
-                        <input
-                          className="ga-input"
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.001}
-                          value={g.root_drop}
-                          onChange={(e) =>
-                            patchGroup(key, { root_drop: Number(e.target.value) })
-                          }
-                        />
-                      </Field>
-                      <Field
-                        label={t('Default pose')}
-                        hint={t('The pose a click on such a marker sets. It has to be a pose of this place type — only a place type without poses may stay empty.')}
-                      >
+                    ) : (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="ga-btn ga-btn-sm"
+                          onClick={() => startApprove(c)}
+                        >
+                          {t('Approve')}
+                        </button>
                         <select
                           className="ga-input"
-                          value={g.default}
-                          onChange={(e) => patchGroup(key, { default: e.target.value })}
+                          style={{ maxWidth: 180 }}
+                          value=""
+                          disabled={busy}
+                          onChange={(e) => asSynonym(c, e.target.value)}
                         >
-                          {!poses.length ? (
-                            // A place type only just added has no poses yet: a
-                            // pose can only name a type that already exists, so
-                            // the default arrives with the first pose.
-                            <option value="">{t('— none —')}</option>
-                          ) : !g.default ? (
-                            // With poses the server demands a real default —
-                            // show the gap instead of silently rendering the
-                            // first pose while the value is still empty.
-                            <option value="" disabled>
-                              {t('— pick a default pose —')}
-                            </option>
-                          ) : null}
-                          {poses.map((p) => (
+                          <option value="">{t('As synonym of…')}</option>
+                          {data.entries.map((p) => (
                             <option key={p.key} value={p.key}>
                               {p.key}
                             </option>
                           ))}
                         </select>
-                      </Field>
-                    </div>
-                  )
-                })}
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <input
-                    className="ga-input"
-                    style={{ flex: 1, minWidth: 90 }}
-                    placeholder={t('new key')}
-                    value={newGroupKey}
-                    onChange={(e) => setNewGroupKey(e.target.value)}
-                  />
-                  <button type="button" className="ga-btn ga-btn-sm" onClick={addGroup}>
-                    + {t('Place type')}
-                  </button>
-                  <button
-                    type="button"
-                    className="ga-btn ga-btn-sm ga-btn-primary"
-                    onClick={saveGroups}
-                  >
-                    {t('Save place types')}
-                  </button>
-                </div>
-              </div>
-            ) : null}
+                        <button
+                          type="button"
+                          className="ga-btn ga-btn-sm"
+                          onClick={() => setConfirmDismiss(c.raw_text)}
+                        >
+                          {t('Dismiss')}
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-        ) : null}
+        </ListPane>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
-          <input
-            className="ga-input"
-            placeholder={t('Search…')}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          {isPose ? (
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.8em' }}>
-              <input
-                type="checkbox"
-                checked={onlyMissing}
-                onChange={(e) => setOnlyMissing(e.target.checked)}
-              />
-              <span>
-                {t('Without animation')} ({missingCount})
-              </span>
-            </label>
-          ) : null}
-          {isPose && Object.keys(data.groups || {}).length ? (
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-              {Object.entries(data.groups || {}).map(([key, g]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={`ga-btn ga-btn-sm${groupFilter === key ? ' ga-btn-primary' : ''}`}
-                  title={`${g.label} (${groupUsage[key] || 0})`}
-                  // clicking the active chip clears the filter again
-                  onClick={() => setGroupFilter((prev) => (prev === key ? '' : key))}
-                >
-                  {g.label || key}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <ul className="ga-list">
-          {!list.length ? <li className="ga-list-empty">{t('No entries')}</li> : null}
-          {list.map((p) => (
-            <li key={p.key}>
-              <button
-                type="button"
-                className={`ga-list-row${selected === p.key ? ' is-active' : ''}`}
-                onClick={() => select(p.key)}
-              >
-                <span className="ga-list-row-main">
-                  <code>{p.key}</code>
-                  {isPose ? (
-                    <span
-                      className="ga-list-row-sub"
-                      style={{ opacity: p.animation && p.group ? 1 : 0.4 }}
-                    >
-                      — {p.animation || t('no animation')} ·{' '}
-                      {p.group || t('no place type')}
-                    </span>
-                  ) : null}
-                </span>
-                {isPose && data.pair_kinds?.includes(p.animation) ? (
-                  <span className="ga-source" title={t('Pair animation — needs a partner')}>
-                    {t('pair')}
-                  </span>
-                ) : null}
-                {p.is_default ? <span className="ga-source">{t('default')}</span> : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-
-        {/* Candidates: free text the resolver could not absorb */}
-        <div style={{ marginTop: 16 }}>
-          <h4 style={{ margin: '0 0 4px' }}>
-            {t('Candidates')} ({candidates.length})
-          </h4>
-          <p className="ga-sched-muted" style={{ marginTop: 0 }}>
-            {t('Free text that landed on the default key. Approve it as its own entry, attach it as a synonym, or dismiss it. "Seen" counts first sightings per server run.')}
-          </p>
-          {!candidates.length ? (
-            <div className="ga-list-empty">{t('No open candidates')}</div>
+        <section className="ga-twocol-right">
+          {!draft ? (
+            <div className="ga-placeholder">{t('Pick an entry or create a new one.')}</div>
           ) : (
-            <ul className="ga-list">
-              {candidates.map((c) => (
-                <li
-                  key={c.raw_text}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                    padding: '6px 0',
-                    borderBottom: '1px solid var(--border, #30363d)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                    <code style={{ wordBreak: 'break-word' }}>{c.raw_text}</code>
-                    <span style={{ fontSize: '0.75em', opacity: 0.6, whiteSpace: 'nowrap' }}>
-                      {t('seen')} {c.count}× · {t('nearest')}: {c.nearest_key || '–'}
-                    </span>
-                  </div>
-                  {confirmDismiss === c.raw_text ? (
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.82em' }}>{t('Dismiss this candidate?')}</span>
-                      <button
-                        type="button"
-                        className="ga-btn ga-btn-sm ga-btn-danger"
-                        disabled={busy}
-                        onClick={() => dismiss(c)}
-                      >
-                        {t('Dismiss')}
-                      </button>
-                      <button
-                        type="button"
-                        className="ga-btn ga-btn-sm"
-                        onClick={() => setConfirmDismiss(null)}
-                      >
-                        {t('Cancel')}
-                      </button>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        className="ga-btn ga-btn-sm"
-                        onClick={() => startApprove(c)}
-                      >
-                        {t('Approve')}
-                      </button>
-                      <select
-                        className="ga-input"
-                        style={{ maxWidth: 180 }}
-                        value=""
-                        disabled={busy}
-                        onChange={(e) => asSynonym(c, e.target.value)}
-                      >
-                        <option value="">{t('As synonym of…')}</option>
-                        {data.entries.map((p) => (
-                          <option key={p.key} value={p.key}>
-                            {p.key}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="ga-btn ga-btn-sm"
-                        onClick={() => setConfirmDismiss(c.raw_text)}
-                      >
-                        {t('Dismiss')}
-                      </button>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </aside>
-
-      <section className="ga-twocol-right">
-        {!draft ? (
-          <div className="ga-placeholder">{t('Pick an entry or create a new one.')}</div>
-        ) : (
-          <>
-            <DetailToolbar
-              title={
-                approveOf
-                  ? `${t('Approve candidate')}: ${approveOf}`
-                  : isNew
-                    ? isPose
-                      ? t('New pose')
-                      : t('New expression')
-                    : draft.key
-              }
-              onSave={save}
-              onDelete={isNew ? undefined : remove}
-            />
-            {/* Two columns: the catalog text on the left, the 3D animation
-                with its preview on the right — the preview needs the room. */}
-            <div className="ga-form" style={{ display: 'grid',
-              gridTemplateColumns: isPose ? 'minmax(260px, 1fr) minmax(320px, 1.2fr)' : '1fr',
-              gap: 16, alignItems: 'start' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Field
-                  label={t('Key')}
-                  hint={t('Canonical name, lowercase (e.g. sitting). This is the render and cache key.')}
-                >
-                  <input
-                    className="ga-input"
-                    value={draft.key}
-                    disabled={!isNew}
-                    onChange={(e) => upd('key', e.target.value)}
-                  />
-                </Field>
-
-              <Field
-                label={isPose ? t('Pose text') : t('Expression text')}
-                hint={
-                  isPose
-                    ? t('Body posture for the image generation — arms, legs, posture. Third person, no names.')
-                    : t('Facial expression for the image generation — brow, eyes, mouth. Third person, no names.')
+            <>
+              <DetailToolbar
+                title={
+                  approveOf
+                    ? `${t('Approve candidate')}: ${approveOf}`
+                    : isNew
+                      ? isPose
+                        ? t('New pose')
+                        : t('New expression')
+                      : draft.key
                 }
-              >
-                <textarea
-                  className="ga-textarea"
-                  rows={3}
-                  value={draft.prompt}
-                  onChange={(e) => upd('prompt', e.target.value)}
-                />
-              </Field>
-
-              <Field
-                label={t('Synonyms')}
-                hint={t('Comma-separated. Free text matching one of these lands on this key directly, without an embedding lookup.')}
-              >
-                <input
-                  className="ga-input"
-                  value={draft.synonyms.join(', ')}
-                  onChange={(e) =>
-                    upd(
-                      'synonyms',
-                      e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
-                    )
-                  }
-                />
-              </Field>
-
-              {isPose ? (
-                <Field
-                  label={t('Solo')}
-                  hint={t('Off = the pose needs a second person (kissing, embracing). Those keys are skipped when a single-character image is rendered.')}
-                >
-                  <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <input
-                      type="checkbox"
-                      checked={draft.solo !== false}
-                      onChange={(e) => upd('solo', e.target.checked)}
-                    />
-                    <span>{t('Works with one character alone')}</span>
-                  </label>
-                </Field>
-              ) : null}
-
-              </div>
-              {isPose ? (
+                onSave={save}
+                onDelete={isNew ? undefined : remove}
+              />
+              {/* Two columns: the catalog text on the left, the 3D animation
+                  with its preview on the right — the preview needs the room. */}
+              <div className="ga-form" style={{ display: 'grid',
+                gridTemplateColumns: isPose ? 'minmax(260px, 1fr) minmax(320px, 1.2fr)' : '1fr',
+                gap: 16, alignItems: 'start' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <Field
-                    label={t('Animation')}
-                    hint={t('Clip kind a 3D figure plays. Options come from the clips present in shared/models/clips.')}
+                    label={t('Key')}
+                    hint={t('Canonical name, lowercase (e.g. sitting). This is the render and cache key.')}
                   >
-                    <select
+                    <input
                       className="ga-input"
-                      value={draft.animation}
-                      onChange={(e) => {
-                        const kind = e.target.value
-                        // a pair clip has no solo half: the pose becomes a two-person one
-                        setDraft((d) => (d ? { ...d, animation: kind,
-                          solo: data.pair_kinds?.includes(kind) ? false : d.solo } : d))
-                      }}
-                    >
-                      <option value="">{t('— pick a kind —')}</option>
-                      {data.kinds.map((k) => (
-                        <option key={k} value={k}>
-                          {data.pair_kinds?.includes(k) ? `${k} — ${t('pair')}` : k}
-                        </option>
-                      ))}
-                      {/* keep an animation whose clip has since been removed */}
-                      {draft.animation && !data.kinds.includes(draft.animation) ? (
-                        <option value={draft.animation}>
-                          {draft.animation} ({t('no clip')})
-                        </option>
-                      ) : null}
-                    </select>
-                  </Field>
-                  {/* Which figure sets actually have a file for the selected
-                      kind — a kind that only exists as `female` leaves every
-                      other figure standing. */}
-                  {draft.animation ? (
-                    <div className="ga-form-hint">
-                      {t('Clip sets')}:{' '}
-                      {(() => {
-                        const cov = clipCoverage(clipList.clips, draft.animation)
-                        return cov.length
-                          ? cov.map((s) => setLabel(s, t)).join(' ')
-                          : t('no clip')
-                      })()}
-                    </div>
-                  ) : null}
-                  {data.pair_kinds?.includes(draft.animation) ? (
-                    <div className="ga-form-hint">
-                      {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
-                    </div>
-                  ) : null}
-                  <Field
-                    label={t('Place type')}
-                    hint={t('The kind of marker this pose can be played on. Every pose belongs to exactly one place type.')}
-                  >
-                    <select
-                      className="ga-input"
-                      value={draft.group || ''}
-                      onChange={(e) => upd('group', e.target.value)}
-                    >
-                      <option value="">{t('— pick a place type —')}</option>
-                      {Object.entries(data.groups || {}).map(([key, g]) => (
-                        <option key={key} value={key}>
-                          {g.label ? `${g.label} (${key})` : key}
-                        </option>
-                      ))}
-                      {/* keep a place type that has since been removed visible */}
-                      {draft.group && !(data.groups || {})[draft.group] ? (
-                        <option value={draft.group}>
-                          {draft.group} ({t('unknown')})
-                        </option>
-                      ) : null}
-                    </select>
-                  </Field>
-
-                  {draft.solo === false ? (
-                    <div className="ga-form-row">
-                      <Field
-                        label={t('Places')}
-                        hint={t('How many slots of the anchor marker the pair uses: 2 = both on the bench, 1 = one on the bed edge, the other beside it')}
-                      >
-                        <div style={{ display: 'flex', gap: 12 }}>
-                          {([1, 2] as const).map((n) => (
-                            <label
-                              key={n}
-                              style={{ display: 'flex', gap: 4, alignItems: 'center' }}
-                            >
-                              <input
-                                type="radio"
-                                name="pose-places"
-                                checked={(draft.places ?? 2) === n}
-                                onChange={() => upd('places', n)}
-                              />
-                              <span>{n}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </Field>
-                      {/* The yaw offset is dialled UNDER THE PREVIEW, against
-                          the virtual marker the pair sits on — one control,
-                          where the effect is visible. Only a pose without an
-                          animation (and so without a preview) keeps the plain
-                          field here, so the value stays editable. */}
-                      {draft.animation ? null : (
-                        <Field
-                          label={t('Yaw offset')}
-                          hint={t('Degrees the pair clip’s frame turns against the marker facing.')}
-                        >
-                          <input
-                            className="ga-input"
-                            type="number"
-                            min={-180}
-                            max={180}
-                            step={1}
-                            value={draft.yaw_offset ?? 0}
-                            onChange={(e) => upd('yaw_offset', Number(e.target.value))}
-                          />
-                          <span style={{ alignSelf: 'center' }}>°</span>
-                        </Field>
-                      )}
-                    </div>
-                  ) : null}
-
-                  {/* Below the select, not inside the Field: .ga-field-control
-                      is a flex ROW and would put the canvas beside the select.
-                      A PAIR is previewed on a virtual marker of its place type
-                      and carries the yaw dial; a solo pose never turns against
-                      a marker, so it gets no `onYawOffset`. */}
-                  {draft.animation ? (
-                    <ClipPreview
-                      kind={draft.animation}
-                      height={360}
-                      group={draft.group}
-                      rootDrop={(data.groups || {})[draft.group || '']?.root_drop ?? 0}
-                      yawOffset={draft.yaw_offset ?? 0}
-                      onYawOffset={draft.solo === false
-                        ? (deg) => upd('yaw_offset', deg)
-                        : undefined}
+                      value={draft.key}
+                      disabled={!isNew}
+                      onChange={(e) => upd('key', e.target.value)}
                     />
-                  ) : null}
+                  </Field>
+
+                <Field
+                  label={isPose ? t('Pose text') : t('Expression text')}
+                  hint={
+                    isPose
+                      ? t('Body posture for the image generation — arms, legs, posture. Third person, no names.')
+                      : t('Facial expression for the image generation — brow, eyes, mouth. Third person, no names.')
+                  }
+                >
+                  <textarea
+                    className="ga-textarea"
+                    rows={3}
+                    value={draft.prompt}
+                    onChange={(e) => upd('prompt', e.target.value)}
+                  />
+                </Field>
+
+                <Field
+                  label={t('Synonyms')}
+                  hint={t('Comma-separated. Free text matching one of these lands on this key directly, without an embedding lookup.')}
+                >
+                  <input
+                    className="ga-input"
+                    value={draft.synonyms.join(', ')}
+                    onChange={(e) =>
+                      upd(
+                        'synonyms',
+                        e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
+                      )
+                    }
+                  />
+                </Field>
+
+                {isPose ? (
+                  <Field
+                    label={t('Solo')}
+                    hint={t('Off = the pose needs a second person (kissing, embracing). Those keys are skipped when a single-character image is rendered.')}
+                  >
+                    <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={draft.solo !== false}
+                        onChange={(e) => upd('solo', e.target.checked)}
+                      />
+                      <span>{t('Works with one character alone')}</span>
+                    </label>
+                  </Field>
+                ) : null}
+
                 </div>
-              ) : null}
-              {draft.is_default ? (
-                <div className="ga-form-hint">
-                  {t('Default entry: every free text the catalog cannot absorb falls back to this key. It cannot be deleted.')}
-                </div>
-              ) : null}
-            </div>
-          </>
-        )}
-      </section>
+                {isPose ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Field
+                      label={t('Animation')}
+                      hint={t('Clip kind a 3D figure plays. Options come from the clips present in shared/models/clips.')}
+                    >
+                      <select
+                        className="ga-input"
+                        value={draft.animation}
+                        onChange={(e) => {
+                          const kind = e.target.value
+                          // a pair clip has no solo half: the pose becomes a two-person one
+                          setDraft((d) => (d ? { ...d, animation: kind,
+                            solo: data.pair_kinds?.includes(kind) ? false : d.solo } : d))
+                        }}
+                      >
+                        <option value="">{t('— pick a kind —')}</option>
+                        {data.kinds.map((k) => (
+                          <option key={k} value={k}>
+                            {data.pair_kinds?.includes(k) ? `${k} — ${t('pair')}` : k}
+                          </option>
+                        ))}
+                        {/* keep an animation whose clip has since been removed */}
+                        {draft.animation && !data.kinds.includes(draft.animation) ? (
+                          <option value={draft.animation}>
+                            {draft.animation} ({t('no clip')})
+                          </option>
+                        ) : null}
+                      </select>
+                    </Field>
+                    {/* Which figure sets actually have a file for the selected
+                        kind — a kind that only exists as `female` leaves every
+                        other figure standing. */}
+                    {draft.animation ? (
+                      <div className="ga-form-hint">
+                        {t('Clip sets')}:{' '}
+                        {(() => {
+                          const cov = clipCoverage(clipList.clips, draft.animation)
+                          return cov.length
+                            ? cov.map((s) => setLabel(s, t)).join(' ')
+                            : t('no clip')
+                        })()}
+                      </div>
+                    ) : null}
+                    {data.pair_kinds?.includes(draft.animation) ? (
+                      <div className="ga-form-hint">
+                        {t('Pair clip: two figures play its two halves together at one anchor — this pose needs a partner (Solo is off).')}
+                      </div>
+                    ) : null}
+                    <Field
+                      label={t('Place type')}
+                      hint={t('The kind of marker this pose can be played on. Every pose belongs to exactly one place type.')}
+                    >
+                      <select
+                        className="ga-input"
+                        value={draft.group || ''}
+                        onChange={(e) => upd('group', e.target.value)}
+                      >
+                        <option value="">{t('— pick a place type —')}</option>
+                        {Object.entries(data.groups || {}).map(([key, g]) => (
+                          <option key={key} value={key}>
+                            {g.label ? `${g.label} (${key})` : key}
+                          </option>
+                        ))}
+                        {/* keep a place type that has since been removed visible */}
+                        {draft.group && !(data.groups || {})[draft.group] ? (
+                          <option value={draft.group}>
+                            {draft.group} ({t('unknown')})
+                          </option>
+                        ) : null}
+                      </select>
+                    </Field>
+
+                    {draft.solo === false ? (
+                      <div className="ga-form-row">
+                        <Field
+                          label={t('Places')}
+                          hint={t('How many slots of the anchor marker the pair uses: 2 = both on the bench, 1 = one on the bed edge, the other beside it')}
+                        >
+                          <div style={{ display: 'flex', gap: 12 }}>
+                            {([1, 2] as const).map((n) => (
+                              <label
+                                key={n}
+                                style={{ display: 'flex', gap: 4, alignItems: 'center' }}
+                              >
+                                <input
+                                  type="radio"
+                                  name="pose-places"
+                                  checked={(draft.places ?? 2) === n}
+                                  onChange={() => upd('places', n)}
+                                />
+                                <span>{n}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </Field>
+                        {/* The yaw offset is dialled UNDER THE PREVIEW, against
+                            the virtual marker the pair sits on — one control,
+                            where the effect is visible. Only a pose without an
+                            animation (and so without a preview) keeps the plain
+                            field here, so the value stays editable. */}
+                        {draft.animation ? null : (
+                          <Field
+                            label={t('Yaw offset')}
+                            hint={t('Degrees the pair clip’s frame turns against the marker facing.')}
+                          >
+                            <input
+                              className="ga-input"
+                              type="number"
+                              min={-180}
+                              max={180}
+                              step={1}
+                              value={draft.yaw_offset ?? 0}
+                              onChange={(e) => upd('yaw_offset', Number(e.target.value))}
+                            />
+                            <span style={{ alignSelf: 'center' }}>°</span>
+                          </Field>
+                        )}
+                      </div>
+                    ) : null}
+
+                    {/* Below the select, not inside the Field: .ga-field-control
+                        is a flex ROW and would put the canvas beside the select.
+                        A PAIR is previewed on a virtual marker of its place type
+                        and carries the yaw dial; a solo pose never turns against
+                        a marker, so it gets no `onYawOffset`. */}
+                    {draft.animation ? (
+                      <ClipPreview
+                        kind={draft.animation}
+                        height={360}
+                        group={draft.group}
+                        rootDrop={(data.groups || {})[draft.group || '']?.root_drop ?? 0}
+                        yawOffset={draft.yaw_offset ?? 0}
+                        onYawOffset={draft.solo === false
+                          ? (deg) => upd('yaw_offset', deg)
+                          : undefined}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+                {draft.is_default ? (
+                  <div className="ga-form-hint">
+                    {t('Default entry: every free text the catalog cannot absorb falls back to this key. It cannot be deleted.')}
+                  </div>
+                ) : null}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
     </div>
   )
 }

@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
+import { ZoomButton } from '../../components/ZoomButton'
 import type { PropFull } from '../props/propTypes'
 
 interface PropsPaletteProps {
@@ -101,13 +102,17 @@ export function PropsPalette({ onPick, armedPropId }: PropsPaletteProps) {
               className={`ga-props-palette-card${p.id === armedPropId ? ' is-armed' : ''}${p.has_model ? '' : ' is-modelless'}`}
               onClick={() => onPick(p)}
               title={`${p.name}${p.category ? ` · ${p.category}` : ''}\n${p.width_m}×${p.depth_m}×${p.height_m} m`}
+              style={{ position: 'relative' }}
             >
               {p.has_source ? (
-                <img
-                  className="ga-props-palette-thumb"
-                  alt=""
-                  src={`/assets/props/${encodeURIComponent(p.id)}/source?v=${cacheBump}`}
-                />
+                <>
+                  <img
+                    className="ga-props-palette-thumb"
+                    alt=""
+                    src={`/assets/props/${encodeURIComponent(p.id)}/source?v=${cacheBump}`}
+                  />
+                  <ZoomButton item={{ src: `/assets/props/${encodeURIComponent(p.id)}/source?v=${cacheBump}`, alt: p.name }} />
+                </>
               ) : (
                 <span className="ga-props-palette-thumb" style={{ fontSize: 22 }}>📦</span>
               )}

@@ -4,6 +4,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
 import { RES_GRID, RES_MAX, RES_MIN, ratioLabel, snapResolution } from '../lib/imageSize'
 import { useHelp } from '../help/HelpContext'
+import { useEnlarge } from './ZoomButton'
 
 /**
  * Modal dialog for image-generation overrides — backend, LoRAs, prompt.
@@ -223,6 +224,7 @@ export function ImageGenDialog({
 }: Props) {
   const isRegen = mode === 'regenerate'
   const { t } = useI18n()
+  const enlarge = useEnlarge()
   const { setTopic } = useHelp()
   const [prompt, setPrompt] = useState(defaultPrompt)
   // Editierbare, markierte unabhaengige Config-Teile (Prefix/Suffix).
@@ -717,7 +719,9 @@ export function ImageGenDialog({
 
               <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {sourceImageUrl ? (
-                <img src={sourceImageUrl} alt="" style={{ maxHeight: 150, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 }} />
+                <img src={sourceImageUrl} alt=""
+                  {...enlarge({ src: sourceImageUrl, alt: t('Reference image') },
+                    { maxHeight: 150, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 })} />
               ) : null}
 
               {styleUseCase ? (

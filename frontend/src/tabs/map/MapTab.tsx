@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
+import { ZoomButton } from '../../components/ZoomButton'
 import { CLOSE_TOL_PX, fmtM } from '../world/planGeometry'
 import {
   BOUNDARY_SEED_M, boundaryComplaint, putLocationBoundary, seedSquare,
@@ -2870,9 +2871,14 @@ export function MapTab() {
         title={kind === 'clone'
           ? t('Click, then click the map to place a copy')
           : t('Click, then click the map to place it')}
+        style={{ position: 'relative' }}
       >
         <MapIcon locId={loc.id} className="ga-map-tray-icon"
           cacheKey={String(iconVer[loc.id] || 0)} />
+        <ZoomButton
+          item={{ src: `/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d?v=${encodeURIComponent(String(iconVer[loc.id] || 0))}`, alt: loc.name }}
+          style={{ top: 'auto', bottom: 4, right: 4 }}
+        />
         <span className="ga-map-tray-name">{loc.name}</span>
         <span className="ga-map-tray-stamp">
           {anchor ? fmtM(anchor) + ' m' : '?'}
@@ -3576,6 +3582,11 @@ export function MapTab() {
                                 alt=""
                               />
                             </button>
+                            {/* Top-left: the top-right corner belongs to the delete button. */}
+                            <ZoomButton
+                              item={{ src: `/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(f)}`, alt: f }}
+                              style={{ right: 'auto', left: 3, top: 3 }}
+                            />
                             {delConfirm === f ? (
                               <div className="ga-map-imgpicker-confirm">
                                 <span>{t('Delete?')}</span>

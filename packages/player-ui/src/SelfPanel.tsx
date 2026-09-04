@@ -10,6 +10,7 @@ import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
+import { useEnlarge } from './ZoomButton'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 interface SelfData {
@@ -24,6 +25,7 @@ interface SelfData {
 
 export function SelfPanel() {
   const { t } = useI18n()
+  const enlarge = useEnlarge()
   const { data, refresh } = usePoll<SelfData>(
     'play-self', () => apiGet<SelfData>('/play/self'), { intervalMs: 5000 })
   const [moodDraft, setMoodDraft] = useState('')
@@ -86,7 +88,8 @@ export function SelfPanel() {
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'grid', placeItems: 'center', overflow: 'hidden', borderRadius: 8, background: 'rgba(255,255,255,0.04)' }}>
         <img src={portraitUrl} alt={data.avatar}
           onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
-          style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain', display: 'block' }} />
+          {...enlarge({ src: portraitUrl, alt: data.avatar },
+            { maxHeight: '100%', maxWidth: '100%', objectFit: 'contain', display: 'block' })} />
 
         {/* Conditions across the top of the image */}
         {data.conditions.length > 0 && (

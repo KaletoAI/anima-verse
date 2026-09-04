@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { ModelPicker, type PickerOption } from './ModelPicker'
 import { apiGet } from '../lib/api'
+import { useEnlarge } from './ZoomButton'
 
 /**
  * AnimateDialog — image→video dialog (separate from ImageGenDialog, since the
@@ -52,6 +53,7 @@ export function AnimateDialog({
   onSuggest, onSubmit, onClose,
 }: Props) {
   const { t } = useI18n()
+  const enlarge = useEnlarge()
   const [services, setServices] = useState<AnimateService[] | null>(null)
   const [serviceId, setServiceId] = useState('')
   const [prompt, setPrompt] = useState(defaultPrompt)
@@ -213,7 +215,9 @@ export function AnimateDialog({
                   onChange={(e) => setSeconds(e.target.value)} />
               </div>
               {sourceImageUrl ? (
-                <img src={sourceImageUrl} alt="" style={{ maxHeight: 170, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 }} />
+                <img src={sourceImageUrl} alt=""
+                  {...enlarge({ src: sourceImageUrl, alt: t('Source image') },
+                    { maxHeight: 170, maxWidth: '100%', objectFit: 'contain', alignSelf: 'center', borderRadius: 6 })} />
               ) : null}
               <label className="ga-imagegen-label">{t('Animation prompt')}</label>
               <textarea className="ga-textarea" rows={5} value={prompt} disabled={submitting}

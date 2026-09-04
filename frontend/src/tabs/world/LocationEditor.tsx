@@ -10,7 +10,7 @@ import { DANGER_LEVELS, GROUND_ROOM_ID, MAP3D_STYLES, TERRAIN_TYPES, groundRoomL
 import { RandomEventsEditor } from './RandomEventsEditor'
 import { NpcSlotsEditor } from './NpcSlotsEditor'
 import { LocationGallery } from './LocationGallery'
-import { BuildingModelPanel } from './BuildingModelPanel'
+import { BuildingModelPanel, GenerateModelButton, type GenerateModelAction } from './BuildingModelPanel'
 import { RoomLayoutEditor } from './RoomLayoutEditor'
 import { FloorPlanPreview } from './FloorPlanPreview'
 import { RoomModelAdjust } from './RoomModelAdjust'
@@ -411,6 +411,11 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
   const { scene, error: sceneError } = useScenePreview(
     location.id, draft.rooms || [], draft.map3d,
     draft.terrain || '', previewModelFile)
+  // The building model panel owns the mesh generation (dialog, pending state,
+  // reload); its button sits in the "Building images" action row — with the
+  // images it meshes — so the panel hands the action up and the gallery
+  // renders it.
+  const [generateModel, setGenerateModel] = useState<GenerateModelAction | null>(null)
 
   const tab3d = (
     <div className="ga-form">
@@ -563,6 +568,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             room={null}
             allLocations={allLocations}
             placements={placements}
+            extraActions={generateModel ? <GenerateModelButton action={generateModel} /> : null}
           />
         </div>
         <BuildingModelPanel
@@ -571,6 +577,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           map3d={draft.map3d}
           scene={scene}
           onPreviewFileChange={setPreviewModelFile}
+          onGenerateAction={setGenerateModel}
         />
       </div>
     </div>

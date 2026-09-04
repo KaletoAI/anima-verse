@@ -473,8 +473,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   roomsRef.current = rooms
 
   // The contract's reference surface is a fixed 8×8 m SQUARE — the canvas
-  // is square too, whatever the building footprint says.
-  const canvasH = CANVAS_W
+  // is square too, whatever the building footprint says. Its height is
+  // therefore whatever width the browser really gave it (`canvasPx`), never
+  // the nominal CANVAS_W — see the zoom viewport below.
   // 2D-plan zoom (1x..3x): the canvas renders LARGER inside a scroll
   // container — children are %-positioned and every handler works on
   // getBoundingClientRect fractions, so zooming needs no interaction math.
@@ -2265,13 +2266,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onSuggest={suggestOpenings}
         onProps={() => setPropsOpen((v) => !v)}
       />
-      {/* Zoom viewport: the canvas grows with the zoom, this box keeps the
-          layout footprint and scrolls (Ctrl+wheel zooms on the canvas). The
-          frame around it carries the scale bar — inside the viewport a
+      {/* Zoom viewport: the canvas grows with the zoom, this box scrolls it
+          in BOTH axes (wheel zooms on the canvas). Its height follows the
+          measured canvas width — the canvas is 1:1, so a fixed cap at the
+          nominal CANVAS_W clipped every zoom step (and every wide pane)
+          vertically while the width grew. The viewport-relative cap keeps a
+          3x plan from pushing the rest of the editor off the page; past it
+          the box scrolls vertically like it always scrolled horizontally.
+          The frame around it carries the scale bar — inside the viewport a
           zoomed-in plan would scroll its own scale out of sight. */}
       <div style={{ position: 'relative', flex: '0 1 auto', maxWidth: '100%' }}>
       <div ref={zoomViewportRef} style={{ overflow: 'auto', maxWidth: '100%',
-        maxHeight: canvasH + 14 }}>
+        maxHeight: `min(${canvasPx + 14}px, 85vh)` }}>
       <div
         ref={canvasRef}
         style={{

@@ -22,6 +22,7 @@
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { SliderInput } from '../../components/SliderInput'
+import { useEnlarge } from '../../components/ZoomButton'
 import { PropsPalette } from './PropsPalette'
 import type { PropFull } from '../props/propTypes'
 import type { MapWaterRef, Room, RoomLayout, SurfaceKind } from './worldTypes'
@@ -125,6 +126,7 @@ export function PlanSidePanel({
   propsOpen, onPickProp, armedPropId,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
+  const enlarge = useEnlarge()
   const layout = room?.layout
   const markers = layout?.markers || []
 
@@ -284,7 +286,7 @@ export function PlanSidePanel({
             <span style={{ width: 32, flex: '0 0 auto' }}>{t(label)}</span>
             {thumb ? (
               <img className="ga-list-thumb" alt="" src={thumb}
-                style={{ width: 20, height: 20 }} />
+                {...enlarge({ src: thumb, alt: cur, caption: cur }, { width: 20, height: 20 })} />
             ) : null}
             <select
               className="ga-input"

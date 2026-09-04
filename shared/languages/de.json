@@ -2491,6 +2491,25 @@
     "stored": "gespeichert",
     "this backend has no reference slot": "dieses Backend hat keinen Referenz-Slot",
     "“Generate 3D model” meshes the building views again — new ones become the active model of their target tier.": "„3D-Modell erzeugen“ vermesht die Gebäudeansichten erneut — neue werden das aktive Modell ihrer Ziel-Stufe.",
-    "The picture belongs to this variant — only its image is replaced, and its 3D model stays until you re-mesh it with “3D from this image”.": "Das Bild gehört zu dieser Variante — nur ihr Bild wird ersetzt, ihr 3D-Modell bleibt, bis du es mit „3D aus diesem Bild“ neu vermeshst."
+    "The picture belongs to this variant — only its image is replaced, and its 3D model stays until you re-mesh it with “3D from this image”.": "Das Bild gehört zu dieser Variante — nur ihr Bild wird ersetzt, ihr 3D-Modell bleibt, bis du es mit „3D aus diesem Bild“ neu vermeshst.",
+    "Collapse list": "Liste einklappen",
+    "Expand list": "Liste ausklappen",
+    "Locomotion clips": "Fortbewegungs-Clips",
+    "Walk clip": "Geh-Clip",
+    "Run clip": "Lauf-Clip",
+    "Idle clip": "Ruhe-Clip",
+    "What every figure — NPC and avatar alike — plays while walking, running and standing, in every world. A ground with its own clip (water: swim) still wins.": "Was jede Figur — NPC wie Avatar — beim Gehen, Laufen und Stehen spielt, in jeder Welt. Ein Boden mit eigenem Clip (Wasser: Schwimmen) hat weiterhin Vorrang.",
+    "Re-read the clip libraries from disk": "Clip-Bibliotheken neu von der Platte lesen",
+    "Re-read the inbox directory": "Inbox-Verzeichnis neu einlesen",
+    "subfolders are read too": "Unterordner werden mitgelesen",
+    "files": "Dateien",
+    "folders": "Ordner",
+    "Render queued": "Render eingeplant",
+    "Render queued · starts in {s} s": "Render eingeplant · startet in {s} s",
+    "Reference image": "Referenzbild",
+    "Source image": "Quellbild",
+    "Attached image": "Angehängtes Bild",
+    "No building model (optional). The location renders from its outline and its props; a model is polish — mesh one via “Generate 3D model” under “Building images” or upload a GLB.": "Kein Gebäudemodell (optional). Der Ort rendert aus seinem Umriss und seinen Props; ein Modell ist Feinschliff — erzeuge eines über „3D-Modell generieren“ unter „Gebäude-Bilder“ oder lade ein GLB hoch.",
+    "“Generate 3D model” under “Building images” meshes the building views again — new ones become the active model of their target tier.": "„3D-Modell generieren“ unter „Gebäude-Bilder“ vermesht die Gebäudeansichten erneut — neue werden das aktive Modell ihrer Ziel-Stufe."
   }
 }

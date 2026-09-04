@@ -19,6 +19,7 @@ import { ExpressionsTab } from './ExpressionsTab'
 import { type TmplSection } from './TemplateSectionForm'
 import { TemplateTab } from './TemplateTab'
 import { BodyEditor } from './BodyEditor'
+import { DefaultExpressionField } from './DefaultExpressionField'
 import { FieldModel3D } from './FieldModel3D'
 import { FieldModelRefs } from './FieldModelRefs'
 import { TemplateSelector } from './TemplateSelector'
@@ -77,12 +78,12 @@ export interface ScheduleSlot {
   sleep: boolean
 }
 
-// Spezial-Tabs mit dedizierter UI (keine reinen Template-Feld-Sektionen). Die
-// Feld-Tabs (General/Aussehen/Config/…) kommen generisch aus `template.tabs`
-// (Spalten-Layout) und werden davor eingehängt — siehe fieldTabs.
-// „Image" wird im subTabs-Build direkt hinter den „Aussehen"-Feld-Tab gesetzt
-// (siehe subTabs). „Current state"/„Preferences" sind keine eigenen Tabs mehr:
-// die Platzierung lebt in General col3, die Dressing-Preference in „Eigenschaften".
+// Special tabs with a dedicated UI (not plain template field sections). The
+// field tabs (General/Appearance/Config/…) come generically from `template.tabs`
+// (column layout) and are hooked in before these — see fieldTabs.
+// "Image" is placed directly behind the "Appearance" field tab in the subTabs
+// build (see subTabs). "Current state"/"Preferences" are no longer tabs of their
+// own: the placement lives in General col3, the dressing preference in "Properties".
 const SPECIAL_TABS: Array<{ id: string; label: string }> = [
   { id: 'soul', label: 'Soul' },
   { id: 'gallery', label: 'Gallery' },
@@ -108,9 +109,9 @@ interface TmplTabRaw {
   special?: unknown
 }
 
-// Eine Sektion ist generisch renderbar, wenn sie KEIN Spezial-Panel ist und
-// mindestens ein editierbares Feld hat (kein Soul-`source_file`, nicht nur
-// readonly wie die „Current state"-Sektion).
+// A section is generically renderable when it is NOT a special panel and has
+// at least one editable field (no soul `source_file`, not readonly-only like
+// the "Current state" section).
 function sectionIsGeneric(s: TmplSectionRaw): boolean {
   if (s.special) return false
   const fs = (s.fields || []).filter((f) => f.editor_visible !== false && !f.source_file)
@@ -122,7 +123,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'model_refs', 'model3d_gen',
+  'placement', 'body_editor', 'default_expression', 'model_refs', 'model3d_gen',
 ])
 
 function sectionIsRenderable(s: TmplSectionRaw): boolean {
@@ -168,8 +169,8 @@ export function CharactersTab() {
   const [cfg, setCfg] = useState<Record<string, unknown>>({})
   const [savingField, setSavingField] = useState<string>('')
   const [subTab, setSubTab] = useState<string>('general')
-  // Aufgelöstes Template des gewählten Characters — Quelle der generischen
-  // Feld-Sektionen (Identity/Appearance/Behavior/…).
+  // Resolved template of the selected character — the source of the generic
+  // field sections (Identity/Appearance/Behavior/…).
   const [template, setTemplate] = useState<{ sections?: TmplSectionRaw[]; tabs?: TmplTabRaw[]; features?: Record<string, boolean> } | null>(null)
   const [templateId, setTemplateId] = useState<string>('')
   // Dynamic TTS option lists (Others tab) — loaded once on mount.
@@ -272,7 +273,7 @@ export function CharactersTab() {
         setCurrentFeeling(feel.current_feeling || '')
         const config = cfgResp.config || {}
         setCfg(config)
-        // Template laden (generische Feld-Sektionen)
+        // Load the template (generic field sections)
         const tmplId = String(profResp.profile?.template || '')
         setTemplateId(tmplId)
         if (tmplId) {
@@ -318,7 +319,7 @@ export function CharactersTab() {
     [goTo, selected],
   )
 
-  // Character vollständig löschen (DELETE /characters/{name}). In-App-Bestätigung.
+  // Delete the character completely (DELETE /characters/{name}). In-app confirmation.
   // Run the full memory consolidation for this character right now (test the
   // per-NPC amount caps without waiting for the 6h background cycle).
   const consolidateNow = useCallback(async () => {
@@ -587,16 +588,16 @@ export function CharactersTab() {
     [characters],
   )
 
-  // Feld-Tabs aus dem Template: jeder Tab besitzt einen Spalten-Bereich
-  // (`columns`); ein Tab erscheint, wenn er KEIN Spezial-Tab ist und in seinen
-  // Spalten mindestens eine generisch renderbare Section liegt. Reihenfolge =
-  // Tab-Reihenfolge im Template.
+  // Field tabs from the template: every tab owns a column range (`columns`);
+  // a tab appears when it is NOT a special tab and at least one generically
+  // renderable section lies in its columns. Order = tab order in the template.
   // Template features are the truth about what a character KIND has —
   // npc-temporary switches memory/thoughts/telegram/… off. A section whose
   // `visible_when.feature` names a disabled feature is dropped here, ONCE,
   // before tabs and forms ever see it; a tab left without sections vanishes.
   // A temporary NPC is a different KIND of character sheet, not a stripped
-  // one — a few surfaces read differently for it (see the Expressions gate).
+  // one — its template selector is locked, and its ONE default expression
+  // lives on the Appearance tab (`default_expression` slot), not in a grid.
   const isTempNpc = ((template?.features || {}) as Record<string, boolean>).temporary_npc === true
 
   const visibleSections = useMemo(() => {
@@ -617,9 +618,9 @@ export function CharactersTab() {
       .map((tb) => ({ id: `tab:${tb.id}`, label: tmplText(tb, 'label', lang) || tb.id, tab: tb }))
   }, [template, visibleSections, lang])
 
-  // Reihenfolge: Feld-Tabs (General/Aussehen), dann direkt Image · Wardrobe ·
-  // Secrets, dann die restlichen Feld-Tabs (Configuration) und Spezial-Tabs.
-  // Wunsch: Bild hinter Aussehen, Garderobe+Secrets zwischen Bild und Config.
+  // Order: field tabs (General/Appearance), then directly Image · Wardrobe ·
+  // Secrets, then the remaining field tabs (Configuration) and special tabs.
+  // Requested: Image behind Appearance, Wardrobe+Secrets between Image and Config.
   const subTabs = useMemo(() => {
     // Special tabs whose whole subject a template can switch off — same
     // truth as the section gates above. No entry = always visible.
@@ -632,12 +633,6 @@ export function CharactersTab() {
     }
     const features = (template?.features || {}) as Record<string, boolean>
     const gateOk = (id: string) => {
-      // The ONE exception: a temporary NPC has `expression_variants_enabled`
-      // false — no moods, no poses, no grid — and yet exactly ONE variant,
-      // the default one the 2D client shows it by (npc_assets' fourth finish
-      // criterion). Hiding the tab hid the only picture the NPC has, with no
-      // way to look at it or ask for it again, so the tab stays — read-only.
-      if (id === 'expressions' && isTempNpc) return true
       const f = specialGate[id]
       return !f || features[f] !== false
     }
@@ -659,12 +654,12 @@ export function CharactersTab() {
     if (!inserted) out.push(...afterAussehen)
     out.push(...SPECIAL_TABS.filter((s) => !placed.has(s.id) && gateOk(s.id)))
     return out
-  }, [fieldTabs, template, isTempNpc])
+  }, [fieldTabs, template])
 
-  // Den gewählten Reiter beim Character-Wechsel BEHALTEN. Nur dann auf den
-  // ersten Feld-Tab springen, wenn der aktuelle Reiter für diesen Character
-  // gar nicht existiert (z.B. Erst-Laden mit Default 'general', oder das neue
-  // Template hat diesen Tab nicht).
+  // KEEP the selected tab across a character switch. Jump to the first field
+  // tab only when the current tab does not exist for this character at all
+  // (e.g. first load with the default 'general', or the new template lacks
+  // this tab).
   useEffect(() => {
     if (fieldTabs.length && !subTabs.some((s) => s.id === subTab)) {
       setSubTab(fieldTabs[0].id)
@@ -854,7 +849,7 @@ export function CharactersTab() {
               character={selected}
               templateId={templateId}
               onSwitched={() => reloadCurrent(selected)}
-              locked={(template?.features || {}).temporary_npc === true}
+              locked={isTempNpc}
             />
             <nav className="ga-subtabs">
               {subTabs.map((tab) => (
@@ -893,6 +888,7 @@ export function CharactersTab() {
                           discardSignal={discardSignal}
                         />
                       ),
+                      default_expression: <DefaultExpressionField character={selected} />,
                       model_refs: <FieldModelRefs character={selected} kinds={['tpose']} />,
                       model3d_gen: <FieldModel3D character={selected} />,
                     }}
@@ -929,7 +925,7 @@ export function CharactersTab() {
             ) : subTab === 'gallery' ? (
               <GalleryTab character={selected} />
             ) : subTab === 'expressions' ? (
-              <ExpressionsTab character={selected} readOnly={isTempNpc} />
+              <ExpressionsTab character={selected} />
             ) : subTab === 'skills' ? (
               <SkillsTab character={selected} />
             ) : subTab === 'wardrobe' ? (

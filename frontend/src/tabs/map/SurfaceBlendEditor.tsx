@@ -5,6 +5,7 @@
  */
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { useI18n } from '../../i18n/I18nProvider'
+import { useEnlarge } from '../../components/ZoomButton'
 import type { Blend } from './surfaceTypes'
 
 interface SurfaceBlendEditorProps {
@@ -28,6 +29,7 @@ export function SurfaceBlendEditor({
   value, onChange, onSave, onCancel, onDelete, armedDelete, kindThumb, kinds,
 }: SurfaceBlendEditorProps) {
   const { t } = useI18n()
+  const enlarge = useEnlarge()
   const { kind, blend } = value
   const setBlend = (patch: Partial<Blend>) => onChange({ kind, blend: { ...blend, ...patch } })
   // 'neighbor' is the special zone kind (no texture of its own).
@@ -96,7 +98,8 @@ export function SurfaceBlendEditor({
           <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {zoneThumb(z.kind) ? (
               <img className="ga-list-thumb" alt="" src={zoneThumb(z.kind)!}
-                title={z.kind} />
+                {...enlarge({ src: zoneThumb(z.kind)!, alt: z.kind, caption: z.kind })}
+                title={`${z.kind} — ${t('Click to enlarge')}`} />
             ) : (
               <span className="ga-list-thumb" style={{
                 display: 'inline-flex', alignItems: 'center',

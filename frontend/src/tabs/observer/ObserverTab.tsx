@@ -11,6 +11,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
 import { apiGet, apiPost } from '../../lib/api'
 import { SceneView, type SceneLine } from '../../components/SceneView'
+import { openLightbox } from '../../components/Lightbox'
+import { ListPane } from '../../components/ListPane'
 
 interface RoomInfo { room_id: string; name: string; present: string[] }
 interface LocInfo { location_id: string; name: string; rooms: RoomInfo[]; present_no_room: string[] }
@@ -112,7 +114,7 @@ export function ObserverTab() {
 
   return (
     <div className="ga-twocol">
-      <div className="ga-twocol-left">
+      <ListPane id="observer" label={t('Observer')}>
         <div className="ga-form-row">
           <button className={mode === 'room' ? 'active' : ''} onClick={() => setMode('room')}>
             {t('Room view')}
@@ -186,11 +188,13 @@ export function ObserverTab() {
           <textarea className="ga-textarea" rows={2} value={inContent} onChange={(e) => setInContent(e.target.value)} />
         </label>
         <button onClick={submitInject}>{t('Inject')}</button>
-      </div>
+      </ListPane>
 
       <div className="ga-twocol-right">
         {loading ? <div className="ga-loading">{t('Loading…')}</div>
-          : <SceneView lines={lines} emptyHint={t('Nothing perceived yet — inject something or pick a populated room/character.')} />}
+          : <SceneView lines={lines}
+              onOpenImage={(url) => openLightbox({ src: url, alt: t('Attached image') })}
+              emptyHint={t('Nothing perceived yet — inject something or pick a populated room/character.')} />}
       </div>
     </div>
   )

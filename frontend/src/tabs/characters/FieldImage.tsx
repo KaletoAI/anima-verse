@@ -1,22 +1,25 @@
 /**
- * FieldImage — Bild + „Generieren"-Button unter einem Aussehen-Prompt-Feld.
- * Template-getrieben über das Feld-Flag `image_preview`:
- *   - "appearance" → Aussehen-Bild ohne Outfit (Default-Pose/Expression):
- *     GET /outfit-expression?override=1&pieces=&items= (leerer Equipped-State).
- *   - "outfit"     → Wardrobe-Preview MIT dem real angezogenen Outfit:
- *     GET /outfit-expression?trigger=1 (kein override -> Real-State aus Profil).
- *   - "profile"    → Profilbild: POST /generate-profile-image.
- * Kein neues Backend — nutzt die vorhandenen Endpoints.
+ * FieldImage — image + "Generate" button under an appearance prompt field.
+ * Template-driven via the field flag `image_preview`:
+ *   - "appearance" → appearance image without outfit (default pose/expression):
+ *     GET /outfit-expression?override=1&pieces=&items= (empty equipped state).
+ *   - "outfit"     → wardrobe preview WITH the actually worn outfit:
+ *     GET /outfit-expression?trigger=1 (no override -> real state from the profile).
+ *   - "profile"    → profile image: POST /generate-profile-image.
+ * No new backend — uses the existing endpoints. The preview opens in the
+ * shared Lightbox on click.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
+import { useEnlarge } from '../../components/ZoomButton'
 
 export function FieldImage({ character, kind }: { character: string; kind: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
+  const enlarge = useEnlarge()
   const enc = encodeURIComponent(character)
   const [bust, setBust] = useState(1)
   const [busy, setBusy] = useState(false)
@@ -150,6 +153,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
         <img
           src={src}
           alt=""
+          {...enlarge({ src, alt: t('Preview') })}
           onError={(e) => {
             ;(e.target as HTMLImageElement).style.visibility = 'hidden'
           }}

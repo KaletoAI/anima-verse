@@ -1,8 +1,9 @@
 """Shared 3D assets — animation clips + surface textures.
 
 Reading is public, editing is not: everything a client plays is served
-unauthenticated, while the import sources and the two library edit routes
-(``DELETE`` / ``PATCH /assets/animation-clips/{library}/{rel}``) are
+unauthenticated, while the import sources, the two library edit routes
+(``DELETE`` / ``PATCH /assets/animation-clips/{library}/{rel}``) and the
+locomotion mapping (``PUT /assets/animation-clips/locomotion``) are
 admin-only.
 
 Clips live in ``shared/models/clips`` (see the README there for the hard file
@@ -49,8 +50,9 @@ from fastapi.responses import Response
 from app.core import clip_catalog, fbx_import
 from app.core.animation_clips import (CLIP_EXTS, ClipExists, ClipLibraryError,
                                       ClipNotFound, clip_entries, clip_meta,
-                                      clip_view, delete_clip, pair_kinds,
-                                      rename_clip)
+                                      clip_view, delete_clip,
+                                      load_locomotion_clips, pair_kinds,
+                                      rename_clip, save_locomotion_clips)
 from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError
 from app.core.http_files import etag_file_response
@@ -83,6 +85,12 @@ def list_animation_clips() -> Dict[str, Any]:
 
     A set clip's ``url`` carries its directory segment. Clients take the URL
     from this listing opaquely — they never build it from name + set.
+
+    ``locomotion`` is the resolved role → kind mapping (``{walk, run, idle}``,
+    every role filled) every figure plays without a server-named clip — the
+    admin's choice from ``shared/config/locomotion_clips.json``, edited via
+    ``PUT /assets/animation-clips/locomotion``. A ground's own move/idle clip
+    still takes precedence on the client.
     """
     clips = [clip_view(entry) for entry in clip_entries()]
     from app.core.animation_sets import available_sets
@@ -104,7 +112,8 @@ def list_animation_clips() -> Dict[str, Any]:
             # … and everything selectable on a character: the base sets
             # (female/male/animal, which follow from gender + the humanoid
             # feature) plus any further set found in the files.
-            "sets": available_sets()}
+            "sets": available_sets(),
+            "locomotion": load_locomotion_clips()}
 
 
 # ── Editing the libraries (the Poses tab's "Library" view) ───────────────
@@ -168,6 +177,28 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips}
+
+
+@router.put("/animation-clips/locomotion")
+async def put_locomotion_clips(request: Request,
+                               _: Dict[str, Any] = Depends(require_admin)
+                               ) -> Dict[str, Any]:
+    """Sets the locomotion clips — the kinds every figure plays for
+    ``walk`` / ``run`` / ``idle`` (world-independent, like the clips).
+
+    Body ``{walk?, run?, idle?}``: only the roles present are touched. A kind
+    must exist as a solo clip in a library (400 otherwise); ``""`` resets a
+    role to its default, the kind of the same name. Answers the resolved
+    mapping, in the shape the listing carries under ``locomotion``.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    try:
+        return {"locomotion": save_locomotion_clips(body)}
+    except ClipLibraryError as e:
+        raise _clip_edit_error(e)
 
 
 # ── The CMU trial archive (plan-clip-import.md step 1) ───────────────────
@@ -329,8 +360,9 @@ def _post_clip_catalog_import_sync(take_id: str, _: Dict[str, Any],
 # Same separation as the trial archive: the inbox is NOT a library. Nothing in
 # it is listed by /assets/animation-clips and no character can play it; a file
 # becomes a clip only through the import below, which retargets it onto the
-# library rig. Admin-only, and every route talks in BARE FILE NAMES — the path
-# gate is fbx_import.safe_inbox_name.
+# library rig. Admin-only, and every route talks in RELATIVE INBOX PATHS
+# (``walk.fbx``, ``pack/female/walk.fbx``) — the path gate is
+# fbx_import.safe_inbox_name; subfolders are listed, dot-entries never.
 
 #: One uploaded file may be this large. A mocap FBX is a few MB; 200 MB is
 #: generous enough for a long, finger-carrying take and small enough that a
@@ -346,11 +378,13 @@ _UPLOAD_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 def get_clips_inbox(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """What is waiting to be imported.
 
-    Per file: name/size/mtime, the ``probe`` (skeleton family, bone count,
-    fingers, reference-pose candidate — read from the bytes, no Blender) and
-    the ``pair`` partner suggested by the file names. ``rest_suggestion`` is
-    the reference-pose file the whole inbox agrees on. An empty inbox (or none
-    at all) is the normal state, not an error.
+    Per file: ``name`` (the path relative to the inbox — ``walk.fbx`` or
+    ``pack/female/walk.fbx``; subfolders are read recursively, root files
+    first), size/mtime, the ``probe`` (skeleton family, bone count, fingers,
+    reference-pose candidate — read from the bytes, no Blender) and the
+    ``pair`` partner suggested by the file names within the same folder.
+    ``rest_suggestion`` is the reference-pose file the whole inbox agrees on.
+    An empty inbox (or none at all) is the normal state, not an error.
     """
     entries = fbx_import.inbox_entries()
     for entry in entries:
@@ -407,10 +441,11 @@ async def post_clips_inbox_upload(files: List[UploadFile] = File(...),
     return {"stored": stored, **get_clips_inbox(None)}
 
 
-@router.delete("/clips-inbox/{name}")
+@router.delete("/clips-inbox/{name:path}")
 def delete_clips_inbox(name: str,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Removes one inbox file. Deleting a file that is already gone is fine."""
+    """Removes one inbox file by its relative path (``pack/walk.fbx``).
+    Deleting a file that is already gone is fine."""
     try:
         removed = fbx_import.delete_inbox(name)
     except ClipImportError as e:
@@ -451,8 +486,9 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
     """Imports one inbox file — or a pair — into a clip library, synchronously.
 
     Body: ``{kind, files: [name] | [a, b], rest_file?, set?, start_s?, end_s?,
-    loop_s?, in_place?, overwrite?, target?, redistributable?}``. The Blender
-    run takes a second or two, so the answer carries the finished clip.
+    loop_s?, in_place?, overwrite?, target?, redistributable?}`` — every file
+    is a path relative to the inbox (``pack/walk.fbx``). The Blender run takes
+    a second or two, so the answer carries the finished clip.
 
     ``target`` defaults to ``licensed``: a foreign file is licensed material
     until its owner says otherwise. ``free`` (the tracked, redistributable

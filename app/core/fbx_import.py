@@ -124,8 +124,9 @@ FINGER_NAMES: Dict[str, Tuple[str, ...]] = {
     "mixamo-noprefix": ("LeftHandIndex1", "RightHandIndex1"),
 }
 
-#: name → (mtime_ns, size, probe); a probe is pure file content, so the mtime
-#: pair is a complete cache key.
+#: absolute path → (mtime_ns, size, probe); a probe is pure file content, so
+#: the mtime pair is a complete cache key. Keyed by the full path, not the
+#: file name: two subfolders of the inbox may well hold a ``walk.fbx`` each.
 _probe_cache: Dict[str, Tuple[int, int, Dict[str, Any]]] = {}
 
 
@@ -172,56 +173,107 @@ def _cached_probe(path: Path) -> Dict[str, Any]:
     except OSError as e:
         return {"skeleton_family": "", "bone_count": 0, "has_fingers": False,
                 "is_rest_candidate": is_rest_name(path.name), "error": str(e)}
-    hit = _probe_cache.get(path.name)
+    key = str(path)
+    hit = _probe_cache.get(key)
     if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
         return hit[2]
     probe = probe_fbx(path)
-    _probe_cache[path.name] = (st.st_mtime_ns, st.st_size, probe)
+    _probe_cache[key] = (st.st_mtime_ns, st.st_size, probe)
     return probe
 
 
 def safe_inbox_name(raw: Any) -> str:
-    """A plain file name inside the inbox — no directory, no traversal, only a
-    clip extension. Raises ``ClipImportError`` on anything else.
+    """A file INSIDE the inbox as a relative POSIX path (``walk.fbx`` or
+    ``pack/female/walk.fbx``) — no traversal, no absolute path, no hidden
+    segment, only a clip extension. Raises ``ClipImportError`` on anything
+    else and returns the normalised form (forward slashes, no empty segments).
 
     This is the ONE gate between a request and the file system here: the whole
-    API talks in bare names, never in paths.
+    API talks in these relative paths and nothing else. Beyond the segment
+    rules, the resolved path has to lie under the resolved inbox root — a
+    symlink pointing out of the inbox is refused the same way ``..`` is.
     """
     name = str(raw or "").strip()
     if not name:
         raise ClipImportError("file name must not be empty")
-    if "/" in name or "\\" in name or name in (".", "..") or name.startswith("."):
-        raise ClipImportError(f"not a plain file name: {name!r}")
-    if Path(name).name != name:
-        raise ClipImportError(f"not a plain file name: {name!r}")
-    if Path(name).suffix.lower() not in INBOX_EXTS:
+    if "\\" in name or name.startswith("/"):
+        raise ClipImportError(f"not a path inside the inbox: {name!r}")
+    segments = [seg for seg in name.split("/") if seg]
+    if not segments:
+        raise ClipImportError(f"not a path inside the inbox: {name!r}")
+    for seg in segments:
+        # "." and ".." fall under "starts with a dot" — hidden segments (and
+        # the `.preview` scratch folder) are never addressable.
+        if seg.startswith(".") or Path(seg).name != seg:
+            raise ClipImportError(f"not a path inside the inbox: {name!r}")
+    if Path(segments[-1]).suffix.lower() not in INBOX_EXTS:
         raise ClipImportError(f"only {', '.join(INBOX_EXTS)} files can be imported")
-    return name
+    rel = "/".join(segments)
+    root = get_clips_inbox_dir().resolve()
+    resolved = (root / rel).resolve()
+    if root not in resolved.parents:
+        raise ClipImportError(f"not a path inside the inbox: {name!r}")
+    return rel
 
 
 def inbox_path(name: str) -> Path:
-    """The file behind a validated inbox name — existence is NOT checked."""
+    """The file behind a validated inbox path — existence is NOT checked."""
     return get_clips_inbox_dir() / safe_inbox_name(name)
 
 
+def inbox_rel(path: Path) -> str:
+    """The relative POSIX path the API speaks for an inbox file."""
+    return path.relative_to(get_clips_inbox_dir()).as_posix()
+
+
+def _walk_inbox(directory: Path, root: Path) -> List[Path]:
+    """Importable files under ``directory``, recursively; hidden files and
+    hidden folders (``.preview`` among them) are skipped, and so is anything
+    that resolves outside ``root`` (the resolved inbox) — a symlink pointing
+    out would be listed but refused by the gate, a useless entry. Within one
+    folder the files come first, then the subfolders — each sorted by name."""
+    files: List[Path] = []
+    subdirs: List[Path] = []
+    try:
+        children = list(directory.iterdir())
+    except OSError:
+        return []
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        try:
+            if root not in child.resolve().parents:
+                continue
+        except OSError:
+            continue
+        if child.is_dir():
+            subdirs.append(child)
+        elif child.is_file() and child.suffix.lower() in INBOX_EXTS:
+            files.append(child)
+    files.sort(key=lambda p: p.name.lower())
+    subdirs.sort(key=lambda p: p.name.lower())
+    for sub in subdirs:
+        files.extend(_walk_inbox(sub, root))
+    return files
+
+
 def inbox_files() -> List[Path]:
-    """Every importable file lying in the inbox, flat and sorted. A missing
-    directory is the normal empty state."""
+    """Every importable file lying in the inbox or one of its subfolders:
+    the root's files first, then folder by folder. A missing directory is the
+    normal empty state."""
     root = get_clips_inbox_dir()
     if not root.is_dir():
         return []
-    return sorted((p for p in root.iterdir()
-                   if p.is_file() and not p.name.startswith(".")
-                   and p.suffix.lower() in INBOX_EXTS),
-                  key=lambda p: p.name.lower())
+    return _walk_inbox(root, root.resolve())
 
 
 def inbox_entries() -> List[Dict[str, Any]]:
-    """The inbox as the admin sees it: ``{name, size, mtime, probe}`` per file."""
+    """The inbox as the admin sees it: ``{name, size, mtime, probe}`` per
+    file, ``name`` being the relative path (``pack/walk.fbx``)."""
     out = []
     for p in inbox_files():
         st = p.stat()
-        out.append({"name": p.name, "size": st.st_size,
+        out.append({"name": inbox_rel(p), "size": st.st_size,
                     "mtime": st.st_mtime, "probe": _cached_probe(p)})
     return out
 
@@ -252,31 +304,36 @@ def partner_names(name: str) -> List[str]:
 
 
 def pair_suggestion(name: str) -> str:
-    """The partner file of ``name`` — but only when it really lies in the
-    inbox. ``""`` when nothing matches; a suggestion that names a missing file
-    would be a broken import waiting to happen."""
-    have = {p.name.lower(): p.name for p in inbox_files()}
-    for candidate in partner_names(name):
-        hit = have.get(candidate)
+    """The partner file of ``name`` (a relative inbox path) — but only when it
+    really lies in the SAME folder of the inbox. ``""`` when nothing matches;
+    a suggestion that names a missing file would be a broken import waiting to
+    happen."""
+    have = {inbox_rel(p).lower(): inbox_rel(p) for p in inbox_files()}
+    folder, _, base = name.rpartition("/")
+    prefix = folder.lower() + "/" if folder else ""
+    for candidate in partner_names(base):
+        hit = have.get(prefix + candidate)
         if hit and hit.lower() != name.lower():
             return hit
     return ""
 
 
 def rest_suggestion() -> str:
-    """The first file in the inbox that looks like a reference pose, ``""``
-    when there is none."""
+    """The first file in the inbox (root first, then the subfolders) that
+    looks like a reference pose, as a relative path; ``""`` when there is
+    none."""
     for p in inbox_files():
         if is_rest_name(p.name):
-            return p.name
+            return inbox_rel(p)
     return ""
 
 
 def delete_inbox(name: str) -> bool:
     """Removes one inbox file. False when it was not there — deleting twice is
-    not an error, the file is gone either way."""
+    not an error, the file is gone either way. An emptied subfolder is left
+    in place: the user made it, the user removes it."""
     path = inbox_path(name)
-    _probe_cache.pop(path.name, None)
+    _probe_cache.pop(str(path), None)
     if not path.is_file():
         return False
     path.unlink()
@@ -315,7 +372,8 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
     """Retargets one inbox file (or a pair) onto the library rig and writes the
     clip into the chosen library.
 
-    ``files`` is one name, or two — the A half first; ``rest_file`` is an
+    ``files`` is one relative inbox path, or two — the A half first (see
+    :func:`safe_inbox_name` for the form); ``rest_file`` is an
     optional reference-pose export of the SAME rig, which gives the bones their
     real twist instead of a positional reconstruction. ``in_place`` is
     meaningless for a pair (the two roots carry the contact geometry) and is
@@ -462,7 +520,7 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
         "target": target,
         "pair": len(paths_in) == 2,
         "files": names,
-        "rest_file": rest_path.name if rest_path is not None else "",
+        "rest_file": inbox_rel(rest_path) if rest_path is not None else "",
         "sidecar": res.get("data") or {},
         "outputs": [Path(p).name for p in (res.get("outputs") or {}).values()],
         "seconds": res.get("seconds") or 0.0,

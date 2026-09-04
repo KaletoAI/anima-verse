@@ -200,9 +200,10 @@ export function terrainPace(speedFactor: number, scope: GroundScope): number {
  * A ground may name the clip one moves over it with (`meta.move_anim`, § A9 —
  * `swim` on water). It replaces walk AND run: a figure crossing a lake does
  * not sprint through it, and there is no second speed of swimming to choose
- * from. Without one the old pair stands, run past `RUN_DISTANCE` and walk
- * below it. INSIDE A BUILT PLACE the ground names nothing at all: one does
- * not swim across a tiled hall standing in a lake.
+ * from. Without one the old pair stands, the `run` role past `RUN_DISTANCE`
+ * and the `walk` role below it (`locomotionClip` — the admin's kinds, `run` /
+ * `walk` themselves by default). INSIDE A BUILT PLACE the ground names
+ * nothing at all: one does not swim across a tiled hall standing in a lake.
  *
  * The clip kind goes into the open vocabulary of `Figure.play` unchecked —
  * a kind no model carries falls back through `clipCoverage.resolveClipKind` —
@@ -214,7 +215,48 @@ export function moveClip(moveAnim: string, running: boolean,
                          scope: GroundScope): string {
   const kind = groundClip(moveAnim, scope);
   if (kind) return kind;
-  return running ? 'run' : 'walk';
+  return locomotionClip(running ? 'run' : 'walk');
+}
+
+/**
+ * THE LOCOMOTION ROLES — what a figure plays when neither the ground nor the
+ * server names a clip: `walk` and `run` while it moves, `idle` while it
+ * stands. WHICH clip kind each role means is the admin's choice (Poses →
+ * Library, `shared/config/locomotion_clips.json`), delivered as `locomotion`
+ * of `GET /assets/animation-clips` and set here once by the clip loader
+ * (`figures.FigureFactory.init`). Until then — and for a listing without the
+ * field — each role plays the kind of its own name, which is what every
+ * figure played before the mapping existed.
+ *
+ * The order of the three words stays: a GROUND clip (`move_anim` /
+ * `idle_anim`) beats the role, the role beats the fallback chain of
+ * `clipCoverage.clipKindChain`, which is the last resort when the chosen kind
+ * is bound on no rig. This module is import-free on purpose (the smoke
+ * scripts transpile it alone), so the state lives here and not in a store.
+ */
+export type LocomotionRole = 'walk' | 'run' | 'idle';
+export const LOCOMOTION_ROLES: readonly LocomotionRole[] = ['walk', 'run', 'idle'];
+
+const locomotionKinds: Record<LocomotionRole, string> = { walk: 'walk', run: 'run', idle: 'idle' };
+
+/** The clip kind a locomotion role plays — never empty. */
+export function locomotionClip(role: LocomotionRole): string {
+  return locomotionKinds[role] || role;
+}
+
+/**
+ * Takes the server's mapping over. A role that is missing, empty or not a
+ * string keeps its own name — junk in the payload must not leave a figure
+ * without a walk. Returns the mapping now in force (for the smoke checks).
+ */
+export function setLocomotionClips(config: unknown): Readonly<Record<LocomotionRole, string>> {
+  const src = (config && typeof config === 'object' ? config : {}) as Record<string, unknown>;
+  for (const role of LOCOMOTION_ROLES) {
+    const raw = src[role];
+    const kind = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    locomotionKinds[role] = kind || role;
+  }
+  return { ...locomotionKinds };
 }
 
 /**
@@ -240,8 +282,10 @@ export function idleClip(idleAnim: string, scope: GroundScope): string {
  * Three words in one order: the GROUND first (`idleClip` above, `''` where it
  * says nothing), then the server's activity clip (§ A8/AV3D-6, the worldmap's
  * `activity_animation`), and where neither names one the figure simply
- * stands. There is no keyword guessing over the activity text any more — a
- * pose comes from the catalog or not at all (plan-posen-plaetze.md, Task 13).
+ * stands — with the `idle` ROLE's clip (`locomotionClip`, the admin's
+ * choice; `idle` itself until a mapping arrives). There is no keyword
+ * guessing over the activity text any more — a pose comes from the catalog
+ * or not at all (plan-posen-plaetze.md, Task 13).
  *
  * @param animation the figure's server clip, `undefined` for none.
  * @param groundIdle what the ground named, `''` for nothing.
@@ -254,7 +298,7 @@ export function idleClip(idleAnim: string, scope: GroundScope): string {
  */
 export function standingClipFor(animation: string | undefined,
                                 groundIdle: string | undefined): string {
-  return groundIdle || animation || 'idle';
+  return groundIdle || animation || locomotionClip('idle');
 }
 
 /**

@@ -19,6 +19,7 @@ import { apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 import { useToast } from './Toast'
+import { useEnlarge } from './ZoomButton'
 
 // Anker-Positionen (x%, y%) im KOORDINATENSYSTEM DES BILDES (silhouette.svg ist
 // 896×1216, die Figur liegt zentral). Hier werden die Symbole der getragenen
@@ -107,6 +108,7 @@ function ItemDetailModal({ itemId, slotLabels, onClose, onChanged }: {
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
+  const enlarge = useEnlarge()
   const [item, setItem] = useState<ItemDetail | null>(null)
   const [present, setPresent] = useState<string[]>([])
   const [recipient, setRecipient] = useState('')
@@ -165,10 +167,10 @@ function ItemDetailModal({ itemId, slotLabels, onClose, onChanged }: {
           <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', gap: 12 }}>
               {item.image_url && (
-                <img src={item.image_url} alt="" style={{
+                <img src={item.image_url} alt="" {...enlarge({ src: item.image_url, alt: item.name }, {
                   width: 110, height: 110, objectFit: 'cover', borderRadius: 8,
                   flex: '0 0 auto', background: 'rgba(255,255,255,0.06)',
-                }} />
+                })} />
               )}
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.86em' }}>
                 <Fact label={t('Category')} value={item.category} />

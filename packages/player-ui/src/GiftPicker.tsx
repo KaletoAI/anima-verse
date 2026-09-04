@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
+import { ZoomButton } from './ZoomButton'
 
 interface InventoryEntry {
   item_id: string
@@ -165,14 +166,18 @@ export function GiftPicker({
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
+                        position: 'relative',
                       }}
                     >
                       {it.item_image ? (
-                        <img
-                          src={`/inventory/items/${encodeURIComponent(it.item_id)}/image`}
-                          alt={it.item_name || it.item_id}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                        />
+                        <>
+                          <img
+                            src={`/inventory/items/${encodeURIComponent(it.item_id)}/image`}
+                            alt={it.item_name || it.item_id}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          />
+                          <ZoomButton item={{ src: `/inventory/items/${encodeURIComponent(it.item_id)}/image`, alt: it.item_name || it.item_id }} />
+                        </>
                       ) : (
                         <span style={{ fontSize: 28, opacity: 0.5 }}>🎁</span>
                       )}

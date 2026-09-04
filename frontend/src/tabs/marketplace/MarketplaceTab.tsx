@@ -3,6 +3,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { CollectionBuilder } from './CollectionBuilder'
+import { useEnlarge } from '../../components/ZoomButton'
+import { ListPane } from '../../components/ListPane'
 
 /**
  * Marketplace — browse an online catalog of content packs and install them
@@ -87,6 +89,7 @@ function formatBytes(n?: number): string {
 
 export function MarketplaceTab() {
   const { t } = useI18n()
+  const enlarge = useEnlarge()
   const { toast } = useToast()
   const [catalogs, setCatalogs] = useState<CatalogRef[]>([])
   const [activeId, setActiveId] = useState<string>('')
@@ -240,7 +243,7 @@ export function MarketplaceTab() {
 
   return (
     <div className="ga-twocol">
-      <aside className="ga-twocol-left">
+      <ListPane id="marketplace" label={t('Marketplace')}>
         <div className="ga-twocol-header">
           <h3>{t('Marketplace')}</h3>
           <div className="ga-twocol-header-actions">
@@ -363,7 +366,7 @@ export function MarketplaceTab() {
             })
           )}
         </ul>
-      </aside>
+      </ListPane>
       <section className="ga-twocol-right">
         {!selected ? (
           <div className="ga-placeholder">{t('Pick a pack to see its details.')}</div>
@@ -373,13 +376,13 @@ export function MarketplaceTab() {
               <img
                 src={selected.preview_image}
                 alt=""
-                style={{
+                {...enlarge({ src: selected.preview_image, alt: selected.name || selected.id }, {
                   maxWidth: '100%',
                   maxHeight: 240,
                   objectFit: 'contain',
                   borderRadius: 6,
                   marginBottom: 12,
-                }}
+                })}
                 onError={(e) => {
                   ;(e.target as HTMLImageElement).style.display = 'none'
                 }}

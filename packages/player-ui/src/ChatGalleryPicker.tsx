@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
 import { apiGet } from './api'
+import { ZoomButton } from './ZoomButton'
 
 interface LibImage {
   filename: string
@@ -89,6 +90,7 @@ export function ChatGalleryPicker({
                         cursor: 'pointer',
                         background: 'none',
                         aspectRatio: '1 / 1',
+                        position: 'relative',
                       }}
                     >
                       <img
@@ -96,6 +98,7 @@ export function ChatGalleryPicker({
                         alt={img.filename}
                         style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                       />
+                      <ZoomButton item={{ src: img.url, alt: img.filename }} />
                     </button>
                   ))}
                 </div>

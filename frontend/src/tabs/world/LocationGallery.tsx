@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -6,6 +6,8 @@ import { ImageGenDialog, type ImageGenSubmit, type ImageView } from '../../compo
 import { snapResolution } from '../../lib/imageSize'
 import { IMAGE_TYPES, isBuildingType, type GalleryResponse, type Location, type Room } from './worldTypes'
 import { ImageSetDialog } from './ImageSetDialog'
+import { openLightbox } from '../../components/Lightbox'
+import { useEnlarge } from '../../components/ZoomButton'
 
 // ── Gallery — list, type-change, night-variant, delete, enlarge. ───────────
 
@@ -20,7 +22,6 @@ interface GalleryCardProps {
   selectMode?: boolean
   isSelected?: boolean
   onToggleSelect?: (image: string) => void
-  onZoom: (url: string) => void
   onSetType: (image: string, type: string) => void
   onGenerateNight: (image: string) => void
   onRegen: (target: { filename: string; type: string }) => void
@@ -40,7 +41,6 @@ const GalleryCard = memo(function GalleryCard({
   selectMode,
   isSelected,
   onToggleSelect,
-  onZoom,
   onSetType,
   onGenerateNight,
   onRegen,
@@ -56,7 +56,7 @@ const GalleryCard = memo(function GalleryCard({
       <button
         type="button"
         className="ga-gallery-thumb"
-        onClick={() => (selectMode ? onToggleSelect?.(filename) : onZoom(url))}
+        onClick={() => (selectMode ? onToggleSelect?.(filename) : openLightbox({ src: url, alt: filename }))}
         title={selectMode ? t('Toggle selection') : t('Click to enlarge')}
         style={{ position: 'relative' }}
       >
@@ -160,6 +160,7 @@ export function LocationGallery({
   allLocations,
   placements,
   mode,
+  extraActions,
 }: {
   locationId: string
   location: Location
@@ -174,11 +175,15 @@ export function LocationGallery({
    *  images (day/night/map icons), '3d' shows only the building images that
    *  feed the 3D model. Follows the location editor's tab split. */
   mode: '2d' | '3d'
+  /** Owner-supplied actions rendered in the generate row right after the
+   *  mode's own generate button(s) — the location editor puts the building
+   *  model panel's "Generate 3D model" there, next to the images it meshes. */
+  extraActions?: ReactNode
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [data, setData] = useState<GalleryResponse | null>(null)
-  const [zoom, setZoom] = useState<string | null>(null)
+  const enlarge = useEnlarge()
   const [busy, setBusy] = useState<string | null>(null)
   // `dialogType` is the DIALOG KIND (which button was pressed); for the
   // building kind the VIEW picks the wire type `building-<view>`.
@@ -212,9 +217,10 @@ export function LocationGallery({
     reload()
   }, [reload])
 
-  // The 3D building model itself (status/viewer/placement, including the
-  // "Generate 3D model" button that meshes these views) lives in
-  // BuildingModelPanel — this gallery only produces the source images.
+  // The 3D building model itself (status/viewer/placement and the mesh
+  // generation) lives in BuildingModelPanel — this gallery only produces the
+  // source images; the "Generate 3D model" button reaches the row through
+  // `extraActions`.
 
   // Move an image to another location (file + prompt/type/meta).
   const submitMove = useCallback(async () => {
@@ -560,6 +566,7 @@ export function LocationGallery({
           🏛 {t('Generate building')}
         </button>
       )}
+      {extraActions}
       {!selectMode ? (
         <button
           className="ga-btn ga-btn-sm"
@@ -743,7 +750,6 @@ export function LocationGallery({
               selectMode={selectMode}
               isSelected={selected.has(filename)}
               onToggleSelect={toggleSelect}
-              onZoom={setZoom}
               onSetType={setType}
               onGenerateNight={generateNight}
               onRegen={setRegenTarget}
@@ -754,20 +760,6 @@ export function LocationGallery({
           )
         })}
       </div>
-
-      {zoom ? (
-        <div className="ga-gallery-lightbox" onClick={() => setZoom(null)} role="dialog">
-          <img src={zoom} alt="" />
-          <button
-            type="button"
-            className="ga-gallery-lightbox-close"
-            onClick={() => setZoom(null)}
-            aria-label={t('Close')}
-          >
-            ×
-          </button>
-        </div>
-      ) : null}
 
       {moveImage ? (
         <div className="ga-modal-backdrop" onMouseDown={() => setMoveImage(null)}>
@@ -780,7 +772,9 @@ export function LocationGallery({
               <img
                 src={`/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(moveImage)}`}
                 alt=""
-                style={{ display: 'block', width: '100%', maxHeight: 220, objectFit: 'contain', borderRadius: 6, background: 'var(--bg, #0d1117)' }}
+                {...enlarge(
+                  { src: `/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(moveImage)}`, alt: moveImage },
+                  { display: 'block', width: '100%', maxHeight: 220, objectFit: 'contain', borderRadius: 6, background: 'var(--bg, #0d1117)' })}
               />
               <label style={{ fontSize: '0.85em' }}>
                 {t('Target location')}

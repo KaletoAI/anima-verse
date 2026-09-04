@@ -7,15 +7,21 @@ and one in the default pose. Both live under characters/<name>/model_refs/,
 deliberately separate from the expression-variant cache.
 
 Debounce: getting fully dressed equips several pieces in quick succession —
-each mutation resets a per-character timer (trailing edge, latest state
-wins), so one render pair fires at the end instead of one per piece. The
-window and the on/off switch are admin config (image_generation.*), read
-fresh on every call. Rendering itself reuses generate_expression_image()
+each mutation resets a timer per (character, kind) (trailing edge, latest
+state wins), so one render per kind fires at the end instead of one per
+piece. The window and the on/off switch are admin config (image_generation.*),
+read fresh on every call. Rendering itself reuses generate_expression_image()
 (appearance + current outfit composer, profile-image identity reference,
 image queue with per-backend serialization).
+
+Status for the UI (``get_model_refs_info()["status"]``) keeps "is rendering
+right now" and "is merely scheduled" apart — a scheduled debounce timer is
+NOT a render in progress, and the UI must not claim one.
 """
 
 import threading
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -143,18 +149,37 @@ REF_KINDS = ("tpose", "pose")
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 _lock = threading.Lock()
-_pending_timers: Dict[str, threading.Timer] = {}
+
+
+@dataclass
+class _Scheduled:
+    """One armed debounce timer: when it was (re)armed and when it fires.
+    Both are SYSTEM time (technical stamps) — the UI measures how long the
+    state has persisted against them."""
+    timer: threading.Timer
+    scheduled_at: datetime
+    due_at: datetime
+
+
+# Debounce timers PER (character, kind): a kind whose auto toggle is off never
+# gets a timer, and a manual trigger of one kind cancels exactly that kind's
+# timer — so "scheduled" in the status is exact per image.
+_pending_timers: Dict[tuple, _Scheduled] = {}
 # Serialization and progress tracking are PER (character, kind): the wardrobe
 # tab (default pose) and the 3D tab (T-pose) generate independently — with
 # several backends the two renders genuinely run in parallel (the same backend
 # still serializes in the provider queue). A second trigger for the SAME image
 # queues on its lock; the equipped state is read at run time, latest wins.
 _char_locks: Dict[tuple, threading.Lock] = {}
-# (character, kind) pairs with a render thread currently running. Together with
-# a scheduled debounce timer this makes ``pending`` a true per-image
-# "generation in progress" signal — the UI polls until it clears instead of
-# holding the button for a fixed timeout.
-_running: set = set()
+# (character, kind) -> start stamp of the render thread currently running
+# (a thread queued on its kind lock counts as running: it WILL render). This
+# is the ONE source of "generation in progress" — the UI polls until it
+# clears instead of holding the button for a fixed timeout.
+_running: Dict[tuple, datetime] = {}
+
+
+def _iso(dt: Optional[datetime]) -> Optional[str]:
+    return dt.isoformat(timespec="seconds") if dt else None
 
 
 def _cfg(key: str, default: Any = None) -> Any:
@@ -462,7 +487,7 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     ``views`` carries ALL extra T-pose views of a humanoid character (empty
     for a non-humanoid one) as ``{"enabled": bool, "info": <info|None>}``: the
     UI needs every view to render its checkbox, the switched-off ones
-    included. The views have no own pending lane — they ride with "tpose"."""
+    included. The views have no own status lane — they ride with "tpose"."""
     try:
         _, _, signature = current_outfit_state(character_name)
     except Exception:
@@ -479,19 +504,41 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
                     if signature else None)
             views[view] = {"enabled": view in enabled, "info": _ref_info(path)}
     out["views"] = views
-    auto = get_auto_kinds(character_name)
-    out["auto"] = auto
-    # Pending PER KIND: a running render of one image must not lock the other
-    # tab's button. A scheduled debounce timer counts for exactly the kinds it
-    # will render (the auto-checked ones).
-    with _lock:
-        timer_scheduled = character_name in _pending_timers
-        out["pending"] = {
-            kind: ((character_name, kind) in _running
-                   or (timer_scheduled and auto.get(kind, True)))
-            for kind in REF_KINDS
-        }
+    out["auto"] = get_auto_kinds(character_name)
+    out["status"] = get_render_status(character_name)
+    # The server clock the stamps in ``status`` were taken on — the UI
+    # measures state ages against THIS, not against the browser's clock.
+    from app.core.timeutils import utc_now
+    out["now"] = _iso(utc_now())
     return out
+
+
+def get_render_status(character_name: str) -> Dict[str, Dict[str, Any]]:
+    """Per kind, what is happening to its render RIGHT NOW::
+
+        {"running": bool,      # a render thread exists for this kind
+         "started_at": iso,    # ... since when (None when not running)
+         "scheduled": bool,    # a debounce timer is armed for this kind
+         "scheduled_at": iso,  # ... since when (re-armed by every mutation)
+         "due_at": iso}        # ... and when it fires
+
+    Running and scheduled may both be true (outfit changed during a render).
+    All stamps are SYSTEM time via ``utc_now``. A running render of one image
+    must not lock the other tab's button, hence per kind."""
+    status: Dict[str, Dict[str, Any]] = {}
+    with _lock:
+        for kind in REF_KINDS:
+            key = (character_name, kind)
+            started = _running.get(key)
+            sched = _pending_timers.get(key)
+            status[kind] = {
+                "running": started is not None,
+                "started_at": _iso(started),
+                "scheduled": sched is not None,
+                "scheduled_at": _iso(sched.scheduled_at) if sched else None,
+                "due_at": _iso(sched.due_at) if sched else None,
+            }
+    return status
 
 
 def generate_model_ref_images(character_name: str,
@@ -578,7 +625,7 @@ def generate_model_ref_images(character_name: str,
 
     # No own task tracking here: the image service tracks every render as its
     # own queue task already — a wrapper would show a SECOND header task for
-    # one image. Progress for the UI comes from the per-kind pending signal.
+    # one image. Progress for the UI comes from the per-kind running stamp.
     try:
         for kind in kinds:
             # T-pose: the pose leads the prompt (prompt_prefix) instead of
@@ -668,9 +715,10 @@ def _kind_lock(key: tuple) -> threading.Lock:
 def _run_generation(character_name: str, kind: str, force: bool = False) -> None:
     # Serial per (character, kind); the equipped state is read at run time,
     # so the latest outfit always wins.
+    from app.core.timeutils import utc_now
     key = (character_name, kind)
     with _lock:
-        _running.add(key)
+        _running[key] = utc_now()
     try:
         with _kind_lock(key):
             generate_model_ref_images(character_name, kinds=(kind,), force=force)
@@ -679,7 +727,7 @@ def _run_generation(character_name: str, kind: str, force: bool = False) -> None
                      character_name, kind, e)
     finally:
         with _lock:
-            _running.discard(key)
+            _running.pop(key, None)
     # Auto-mesh (opt-in per character): ONLY after the T-pose pass, and the
     # hook itself verifies the T-pose file exists for the current
     # combination — a mesh run never starts before its input succeeded.
@@ -703,31 +751,58 @@ def _fire_kinds(character_name: str, kinds: tuple, force: bool = False) -> None:
                          daemon=True).start()
 
 
-def _fire(character_name: str) -> None:
+def _cancel_timers(character_name: str, kinds: tuple) -> None:
+    """Disarms the debounce timers of these kinds (caller holds no lock)."""
     with _lock:
-        _pending_timers.pop(character_name, None)
-    auto = get_auto_kinds(character_name)
-    _fire_kinds(character_name,
-                tuple(k for k in REF_KINDS if auto.get(k)))
+        for kind in kinds:
+            old = _pending_timers.pop((character_name, kind), None)
+            if old:
+                old.timer.cancel()
+
+
+def _fire_kind(character_name: str, kind: str) -> None:
+    """Timer body. Fires only if THIS timer is still the armed one: a timer
+    cancelled a moment too late (its body already started) must not render —
+    the newer timer, or the manual trigger that cancelled it, covers the
+    latest state. The auto toggle is re-read: switched off since arming means
+    nothing to render."""
+    key = (character_name, kind)
+    with _lock:
+        entry = _pending_timers.get(key)
+        if entry is None or entry.timer is not threading.current_thread():
+            return
+        _pending_timers.pop(key, None)
+    if not get_auto_kinds(character_name).get(kind):
+        return
+    _fire_kinds(character_name, (kind,))
 
 
 def schedule_outfit_render(character_name: str) -> None:
     """Debounced trigger after an outfit mutation (trailing edge, latest
-    state wins). No-op when disabled in config or when every per-image
-    toggle of this character is off."""
+    state wins): one timer per auto-enabled kind, re-armed by every
+    mutation. No-op when disabled in config or when every per-image toggle
+    of this character is off."""
     if not _enabled():
         return
-    if not any(get_auto_kinds(character_name).values()):
+    auto = get_auto_kinds(character_name)
+    kinds = tuple(k for k in REF_KINDS if auto.get(k))
+    if not kinds:
         return
+    from app.core.timeutils import utc_now
     delay = _debounce_seconds()
+    now = utc_now()
     with _lock:
-        old = _pending_timers.pop(character_name, None)
-        if old:
-            old.cancel()
-        timer = threading.Timer(delay, _fire, args=[character_name])
-        timer.daemon = True
-        _pending_timers[character_name] = timer
-        timer.start()
+        for kind in kinds:
+            key = (character_name, kind)
+            old = _pending_timers.pop(key, None)
+            if old:
+                old.timer.cancel()
+            timer = threading.Timer(delay, _fire_kind, args=[character_name, kind])
+            timer.daemon = True
+            _pending_timers[key] = _Scheduled(
+                timer=timer, scheduled_at=now,
+                due_at=now + timedelta(seconds=delay))
+            timer.start()
 
 
 def trigger_now(character_name: str, kinds: Optional[tuple] = None) -> None:
@@ -744,11 +819,7 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None) -> None:
         kinds = tuple(k for k in kinds if k in REF_KINDS)
     if not kinds:
         return
-    # A pending debounce timer would re-render the auto kinds right after the
-    # manual run — only cancel it when this trigger covers those kinds anyway.
-    if set(auto_kinds).issubset(set(kinds)):
-        with _lock:
-            old = _pending_timers.pop(character_name, None)
-            if old:
-                old.cancel()
+    # An armed debounce timer would re-render the same kind right after the
+    # manual run — the manual run supersedes it, for exactly these kinds.
+    _cancel_timers(character_name, kinds)
     _fire_kinds(character_name, kinds, force=True)

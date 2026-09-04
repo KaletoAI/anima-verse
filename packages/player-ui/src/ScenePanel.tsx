@@ -27,6 +27,7 @@ import { SceneView, type SceneLine } from './SceneView'
 import { ScenesRecap } from './ScenesRecap'
 import { useQueue } from './useQueue'
 import { useLightbox } from './Lightbox'
+import { useEnlarge } from './ZoomButton'
 
 export type { SceneLine }
 
@@ -261,6 +262,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   draft.giftOpen = giftOpen
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lightbox = useLightbox()
+  const enlarge = useEnlarge()
   const { toast } = useToast()
 
   const toggleAddressee = useCallback((name: string) => {
@@ -561,11 +563,11 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <div style={{ position: 'relative', flex: '0 0 auto' }}>
                 <img src={attach.preview} alt={t('Attached image')}
-                  style={{
+                  {...enlarge({ src: attach.preview, alt: t('Attached image') }, {
                     width: 56, height: 56, objectFit: 'cover', borderRadius: 6,
                     border: '1px solid var(--border, #30363d)',
                     opacity: attach.uploading ? 0.5 : 1,
-                  }} />
+                  })} />
                 <button type="button" onClick={() => setAttach(null)} title={t('Remove')}
                   style={{
                     position: 'absolute', top: -6, right: -6, width: 18, height: 18,

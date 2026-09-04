@@ -18,7 +18,7 @@
   white-space: nowrap;
 }
 
-/* ---- Gemeinsame Lightbox (Vollbild-Overlay) ---- */
+/* ---- Shared lightbox (full-screen overlay) ---- */
 .lb-overlay {
   position: fixed;
   inset: 0;
@@ -88,3 +88,42 @@
 }
 .lb-zoom-btn:hover { background: rgba(255, 255, 255, 0.14); }
 .lb-zoom-reset { font-variant-numeric: tabular-nums; opacity: 0.85; }
+/* Optional caption under the media (LightboxItem.caption): same pill look as
+   the control hint, pinned above the zoom bar, clipped instead of wrapping. */
+.lb-caption {
+  position: fixed;
+  bottom: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 80vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+  user-select: text;
+}
+
+/* ---- Corner magnifier (ZoomButton) on tiles whose own click does something
+   else. The tile supplies `position: relative`; the button stays quiet until
+   the tile is hovered or the button itself is focused. ---- */
+.lb-zoom-corner {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(20, 22, 28, 0.72);
+  color: #fff;
+  cursor: zoom-in;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s;
+}
+*:hover > .lb-zoom-corner,
+.lb-zoom-corner:focus-visible,
+.lb-zoom-corner:hover { opacity: 1; }
+.lb-zoom-corner:hover { background: rgba(31, 111, 235, 0.85); }

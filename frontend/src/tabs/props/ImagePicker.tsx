@@ -16,6 +16,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { loadLocations, type LocationRef } from '../../lib/refs'
+import { ZoomButton } from '../../components/ZoomButton'
 import { charUrl, fileOf, locUrl, sourceOf, useCharacterImages,
   useCharacterNames, useLocationImages } from './imagePicker'
 
@@ -114,7 +115,7 @@ export function ImagePicker({ value, onChange, height = 150 }: {
                 title={f}
                 style={{
                   flex: '0 0 auto', padding: 0, cursor: 'pointer',
-                  borderRadius: 6, background: 'transparent',
+                  borderRadius: 6, background: 'transparent', position: 'relative',
                   border: on ? '2px solid var(--accent, #58a6ff)'
                     : '2px solid transparent',
                 }}
@@ -124,6 +125,7 @@ export function ImagePicker({ value, onChange, height = 150 }: {
                   style={{ height: height - 12, width: 'auto', borderRadius: 4,
                     display: 'block', objectFit: 'cover' }}
                 />
+                <ZoomButton item={{ src: urlOf(f), alt: f }} />
               </button>
             )
           }) : (

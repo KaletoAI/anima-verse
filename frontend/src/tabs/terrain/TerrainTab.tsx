@@ -32,6 +32,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ListHeader } from '../../components/ListHeader'
+import { ListPane } from '../../components/ListPane'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -148,7 +149,7 @@ export function TerrainTab() {
 
   return (
     <div className="ga-twocol">
-      <aside className="ga-twocol-left">
+      <ListPane id="terrain" label={t('Terrain types')}>
         <ListHeader
           title={t('Terrain types')}
           onNew={() => { setCreating(true); setSelected('') }}
@@ -199,7 +200,7 @@ export function TerrainTab() {
             })
           )}
         </ul>
-      </aside>
+      </ListPane>
       <section className="ga-twocol-right">
         {creating ? (
           <TerrainDetail

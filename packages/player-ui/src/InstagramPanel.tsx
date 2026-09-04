@@ -19,6 +19,7 @@ import { apiGet, apiPost, apiDelete } from './api'
 import { usePoll } from './usePolling'
 import { useToast } from './Toast'
 import { useLightbox } from './Lightbox'
+import { useEnlarge } from './ZoomButton'
 import { Icon } from './icons'
 
 interface Reaction {
@@ -173,6 +174,7 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
   const [avatarFail, setAvatarFail] = useState<Record<string, boolean>>({})
   const [liked, setLiked] = useState<Record<string, boolean>>({})
   const lightbox = useLightbox()
+  const enlarge = useEnlarge()
   // Open an image/video from the feed in the shared lightbox (video detected
   // by file extension → the lightbox shows video controls instead of zoom).
   const openMedia = useCallback((url: string) => {
@@ -401,6 +403,7 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
                   className="ig-avatar"
                   src={`/characters/${encodeURIComponent(agent)}/images/profile`}
                   alt={agent}
+                  {...enlarge({ src: `/characters/${encodeURIComponent(agent)}/images/profile`, alt: agent })}
                   onError={() => setAvatarFail((m) => ({ ...m, [agent]: true }))}
                 />
               )}

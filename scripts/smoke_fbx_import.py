@@ -418,13 +418,16 @@ def test_pairs() -> None:
 
 
 def test_path_limits() -> None:
-    print("\n[4] path limits — the inbox talks in bare names")
+    print("\n[4] path limits — the inbox talks in relative POSIX paths")
     for bad, why in [
         ("../secrets.json", "parent traversal"),
-        ("sub/walk.fbx", "a directory"),
+        ("sub/../../x.fbx", "traversal hidden mid-path"),
+        ("/etc/walk.fbx", "an absolute path"),
         ("sub\\walk.fbx", "a backslash"),
         ("", "empty"),
         (".hidden.fbx", "a dotfile"),
+        (".preview/walk.fbx", "the probe scratch directory"),
+        ("sub/.hid/walk.fbx", "a dot segment further in"),
         ("notes.txt", "not a clip extension"),
         ("..", "the parent itself"),
     ]:
@@ -435,6 +438,12 @@ def test_path_limits() -> None:
             check(f"rejected: {why}", True, repr(bad))
     check("a plain name passes",
           fbx_import.safe_inbox_name("Female_Dance.fbx") == "Female_Dance.fbx")
+    check("a subdirectory passes",
+          fbx_import.safe_inbox_name("pack/female/walk.fbx")
+          == "pack/female/walk.fbx")
+    check("an empty segment collapses",
+          fbx_import.safe_inbox_name("pack//female/walk.fbx")
+          == "pack/female/walk.fbx")
     check("the DELETE route answers 400 on a path, not a traversal",
           status_of(lambda: assets.delete_clips_inbox("../x.fbx", None)) == 400)
 

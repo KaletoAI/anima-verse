@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { ZoomButton } from '../../components/ZoomButton'
 
 /**
  * Known-locations editor (Characters → Locations): every placed location as a
@@ -186,6 +187,15 @@ function MapCell({ loc, isKnown, onClick, t }: {
       {/* Marker */}
       {loc.is_current && (
         <div style={{ position: 'absolute', top: 1, right: 2, fontSize: '0.85em', zIndex: 2 }}>📍</div>
+      )}
+      {/* Enlarge without toggling known/unknown; sits above the name bar,
+          clear of the 📍 marker in the top corner. */}
+      {!imgFail && (
+        <ZoomButton
+          item={{ src: `/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d`, alt: loc.name }}
+          style={{ top: 'auto', bottom: 16, right: 2, width: 18, height: 18 }}
+          size={12}
+        />
       )}
       {isKnown && loc.visit_count > 0 && (
         <span style={{ position: 'absolute', top: 1, left: 3, fontSize: '0.6em', color: '#fff',

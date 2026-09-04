@@ -7,6 +7,11 @@
  * rig is refused before Blender is ever started — the retargeter has no bone
  * map for it.
  *
+ * The inbox is read RECURSIVELY: every entry's `name` is its path relative to
+ * the inbox (`walk.fbx`, `pack/female/walk.fbx`), and the list shows the root
+ * files first, then one collapsible group per subfolder — a dropped-in pack
+ * keeps its structure instead of flattening into one long list.
+ *
  * Three things the form exists for:
  *   * a PAIR is two files, the selected one first; the partner is suggested
  *     from the file names and can be dropped again;
@@ -17,7 +22,7 @@
  *
  *   GET    /assets/clips-inbox
  *   POST   /assets/clips-inbox/upload    (multipart, field "files")
- *   DELETE /assets/clips-inbox/{name}
+ *   DELETE /assets/clips-inbox/{name}   (name = the relative path)
  *   POST   /assets/clips-inbox/import    {kind, files, rest_file, set, …}
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -53,10 +58,17 @@ interface ClipEntry { kind: string; set: string; source: string }
 
 type Target = 'licensed' | 'free'
 
-/** A kind proposal from the file name: role prefixes and take suffixes off,
- *  the rest slugged. `Female_Resting_Loop0.fbx` → `resting`. */
+/** `pack/female/walk.fbx` → `['pack/female', 'walk.fbx']`; a root file has
+ *  the empty folder. */
+function splitInboxName(name: string): [string, string] {
+  const i = name.lastIndexOf('/')
+  return i < 0 ? ['', name] : [name.slice(0, i), name.slice(i + 1)]
+}
+
+/** A kind proposal from the file name: folder and role prefixes and take
+ *  suffixes off, the rest slugged. `Female_Resting_Loop0.fbx` → `resting`. */
 function slugFromFile(name: string): string {
-  let stem = name.replace(/\.[^.]+$/, '')
+  let stem = splitInboxName(name)[1].replace(/\.[^.]+$/, '')
   stem = stem.replace(/^(female|male)[_-]/i, '')
   stem = stem.replace(/[_-](loop|pose|take|clip)\d*$/i, '')
   stem = stem.replace(/[_-]?(a|b|l|r)$/i, '')
@@ -84,6 +96,8 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   const [sets, setSets] = useState<string[]>([])
 
   const [selected, setSelected] = useState('')
+  /** the subfolder groups the user has opened (the root files are never folded) */
+  const [openGroups, setOpenGroups] = useState<string[]>([])
   const [second, setSecond] = useState('')
   const [restFile, setRestFile] = useState('')
 
@@ -138,6 +152,20 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   const entries = useMemo(() => data?.entries || [], [data])
   const entry = useMemo(() => entries.find((e) => e.name === selected) || null, [entries, selected])
 
+  /** The list as folders: the root's files first, then one group per
+   *  subfolder in the server's order (a folder's files, then its subfolders). */
+  const groups = useMemo(() => {
+    const byDir = new Map<string, InboxEntry[]>()
+    for (const e of entries) {
+      const dir = splitInboxName(e.name)[0]
+      const list = byDir.get(dir)
+      if (list) list.push(e)
+      else byDir.set(dir, [e])
+    }
+    const out = Array.from(byDir.entries()).map(([dir, list]) => ({ dir, entries: list }))
+    return [...out.filter((g) => !g.dir), ...out.filter((g) => !!g.dir)]
+  }, [entries])
+
   /** The inbox files that may join THIS one: same rig family, and not itself.
    *  A pair half or a reference pose from another rig carries different bones
    *  in different places — the retarget cannot notice and produces a constant
@@ -156,6 +184,10 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
       const e = entries.find((x) => x.name === name) || null
       setSelected(name)
       setSecond(e?.pair || '')
+      // the pair select lists the partner by its relative path; keep it
+      // reachable in the list too
+      const dir = splitInboxName(name)[0]
+      if (dir) setOpenGroups((prev) => (prev.includes(dir) ? prev : [...prev, dir]))
       const rest = entries.find((x) => x.name === data?.rest_suggestion)
       setRestFile(rest && rest.name !== name
         && rest.probe.skeleton_family === e?.probe.skeleton_family ? rest.name : '')
@@ -245,7 +277,7 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
       redistributable: target === 'free' ? redistributable : false,
     }
   }, [clipSet, endS, entry, inPlace, isPair, kind, loopOn, loopS, offFwd, offSide, offUp, speed,
-      overwrite, redistributable, restFile, second, speed, startS, target])
+      overwrite, redistributable, restFile, second, startS, target])
 
   const runProbe = useCallback(async () => {
     const body = formBody()
@@ -301,7 +333,9 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   }, [clipSet, endS, entry, importing, inPlace, isPair, kind, loadClips, loopOn, loopS, offFwd, offSide, offUp, speed,
       overwrite, redistributable, restFile, second, startS, t, target, toast])
 
-  if (loading) return <div className="ga-placeholder">{t('Loading…')}</div>
+  // Only the FIRST load blanks the view; a refresh keeps the list (and the
+  // selection, the form, the preview) in place while the answer is on its way.
+  if (loading && !data) return <div className="ga-placeholder">{t('Loading…')}</div>
 
   return (
     <div
@@ -342,7 +376,26 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
 
         <div className="ga-hint" style={{ wordBreak: 'break-all' }}>
           {t('Inbox directory')}: <code>{data?.dir || ''}</code>
+          {' — '}{t('subfolders are read too')}
           {error ? ` — ${error}` : ''}
+        </div>
+
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="ga-hint" style={{ flex: 1 }}>
+            {entries.length} {t('files')}
+            {groups.filter((g) => g.dir).length
+              ? ` · ${groups.filter((g) => g.dir).length} ${t('folders')}`
+              : ''}
+          </span>
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={loading}
+            title={t('Re-read the inbox directory')}
+            onClick={() => { void load(); void loadClips() }}
+          >
+            ⟳ {t('Refresh')}
+          </button>
         </div>
 
         <ul className="ga-list" style={{ minWidth: 0 }}>
@@ -351,42 +404,71 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
               {t('Nothing waiting — drop files in the directory above or upload them.')}
             </li>
           ) : null}
-          {entries.map((e) => {
-            const badges = [
-              e.probe.skeleton_family || t('unknown rig'),
-              e.probe.has_fingers ? t('fingers') : '',
-              e.probe.is_rest_candidate ? t('reference pose') : '',
-              e.pair ? `${t('pair with')} ${e.pair}` : '',
-              mb(e.size),
-            ].filter(Boolean)
+          {groups.map((g) => {
+            const open = !g.dir || openGroups.includes(g.dir)
             return (
-              <li key={e.name} style={{ minWidth: 0 }}>
-                <button
-                  type="button"
-                  className={`ga-list-row${e.name === selected ? ' is-active' : ''}`}
-                  style={{ alignItems: 'flex-start' }}
-                  onClick={() => pick(e.name)}
-                >
-                  <span className="ga-list-row-main" style={{ minWidth: 0 }}>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {e.name}
-                    </div>
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', fontSize: '0.72em', opacity: 0.75, marginTop: 2 }}>
-                      {badges.map((b) => (
-                        <span
-                          key={b}
-                          style={{
-                            border: '1px solid var(--border, #30363d)', borderRadius: 3,
-                            padding: '0 4px',
-                            color: b === t('unknown rig') ? 'var(--warn, #d29922)' : undefined,
-                          }}
+              <li key={g.dir || '/'} style={{ minWidth: 0 }}>
+                {g.dir ? (
+                  <button
+                    type="button"
+                    className="ga-list-row"
+                    onClick={() =>
+                      setOpenGroups((prev) =>
+                        prev.includes(g.dir) ? prev.filter((d) => d !== g.dir) : [...prev, g.dir],
+                      )
+                    }
+                  >
+                    <span className="ga-list-row-main" style={{ minWidth: 0 }}>
+                      <span style={{ opacity: 0.6, marginRight: 6 }}>{open ? '▾' : '▸'}</span>
+                      <code>{g.dir}/</code>
+                    </span>
+                    <span className="ga-source">×{g.entries.length}</span>
+                  </button>
+                ) : null}
+                {open ? (
+                  <div style={{ paddingLeft: g.dir ? 14 : 0 }}>
+                    {g.entries.map((e) => {
+                      const file = splitInboxName(e.name)[1]
+                      const badges = [
+                        e.probe.skeleton_family || t('unknown rig'),
+                        e.probe.has_fingers ? t('fingers') : '',
+                        e.probe.is_rest_candidate ? t('reference pose') : '',
+                        e.pair ? `${t('pair with')} ${splitInboxName(e.pair)[1]}` : '',
+                        mb(e.size),
+                      ].filter(Boolean)
+                      return (
+                        <button
+                          key={e.name}
+                          type="button"
+                          className={`ga-list-row${e.name === selected ? ' is-active' : ''}`}
+                          style={{ alignItems: 'flex-start' }}
+                          title={e.name}
+                          onClick={() => pick(e.name)}
                         >
-                          {b}
-                        </span>
-                      ))}
-                    </div>
-                  </span>
-                </button>
+                          <span className="ga-list-row-main" style={{ minWidth: 0 }}>
+                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {file}
+                            </div>
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', fontSize: '0.72em', opacity: 0.75, marginTop: 2 }}>
+                              {badges.map((b) => (
+                                <span
+                                  key={b}
+                                  style={{
+                                    border: '1px solid var(--border, #30363d)', borderRadius: 3,
+                                    padding: '0 4px',
+                                    color: b === t('unknown rig') ? 'var(--warn, #d29922)' : undefined,
+                                  }}
+                                >
+                                  {b}
+                                </span>
+                              ))}
+                            </div>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null}
               </li>
             )
           })}

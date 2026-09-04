@@ -4,6 +4,7 @@ import App from './App.tsx'
 import { I18nProvider } from './i18n/I18nProvider.tsx'
 import { ToastProvider } from './lib/Toast.tsx'
 import { AuthGate } from './lib/AuthGate.tsx'
+import { LightboxProvider } from './components/Lightbox.tsx'
 import './styles/game-admin.css'
 
 createRoot(document.getElementById('root')!).render(
@@ -11,7 +12,9 @@ createRoot(document.getElementById('root')!).render(
     <I18nProvider>
       <ToastProvider>
         <AuthGate>
-          <App />
+          <LightboxProvider>
+            <App />
+          </LightboxProvider>
         </AuthGate>
       </ToastProvider>
     </I18nProvider>

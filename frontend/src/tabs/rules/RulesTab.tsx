@@ -6,6 +6,7 @@ import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } fr
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
+import { ListPane } from '../../components/ListPane'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 
 type RuleType = 'block' | 'force' | 'discover'
@@ -283,7 +284,7 @@ export function RulesTab() {
 
   return (
     <div className="ga-twocol">
-      <aside className="ga-twocol-left">
+      <ListPane id="rules" label={t('Rules')}>
         <ListHeader
           title={t('Rules')}
           onNew={newRule}
@@ -323,7 +324,7 @@ export function RulesTab() {
             })
           )}
         </ul>
-      </aside>
+      </ListPane>
       <section className="ga-twocol-right">
         {draft ? (
           <>

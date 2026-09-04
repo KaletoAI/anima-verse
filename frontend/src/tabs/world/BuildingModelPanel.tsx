@@ -112,6 +112,41 @@ interface BuildingModelPanelProps {
   /** Tells the owner which stored model is previewed ('' = the active one)
    *  so the scene recipe is computed for that file. */
   onPreviewFileChange?: (filename: string) => void
+  /** Hands the "Generate 3D model" action to the owner, which renders the
+   *  button where the source images are (`GenerateModelButton` in the
+   *  gallery's action row). When set, the panel renders NO generate button
+   *  of its own — the action exists once, the button exists once. `null`
+   *  on unmount. */
+  onGenerateAction?: (action: GenerateModelAction | null) => void
+}
+
+/** The panel's generate action as the owner receives it: open the mesh
+ *  backend dialog; `pending` while a generation runs (the button disables). */
+export interface GenerateModelAction {
+  open: () => void
+  pending: boolean
+}
+
+/** THE "Generate 3D model" button — label, icon, tooltip and disabled state
+ *  in one place, whether the panel renders it (room editor) or the owner
+ *  places it next to the source images (location editor, 3D-world tab). */
+export function GenerateModelButton({ action, roomId = '' }: {
+  action: GenerateModelAction
+  roomId?: string
+}) {
+  const { t } = useI18n()
+  return (
+    <button
+      className="ga-btn ga-btn-sm"
+      disabled={action.pending}
+      onClick={() => { action.open() }}
+      title={roomId
+        ? t('Mesh the room’s model source images (front, plus back/left/right when present) into a 3D room model.')
+        : t('Mesh the building images (front, plus back/left/right when present) into the 3D building model.')}
+    >
+      🧊 {t('Generate 3D model')}
+    </button>
+  )
 }
 
 export function BuildingModelPanel({
@@ -121,6 +156,7 @@ export function BuildingModelPanel({
   map3d,
   scene,
   onPreviewFileChange,
+  onGenerateAction,
 }: BuildingModelPanelProps) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -473,17 +509,20 @@ export function BuildingModelPanel({
   // width — the boundary's bounding box (scene.extent_m = plan_width_m).
   const boundaryWidthM = scene?.extent_m || map3d?.plan_width_m || 0
 
-  const generateButton = (
-    <button
-      className="ga-btn ga-btn-sm"
-      disabled={!!model3d?.pending}
-      onClick={() => { void openGenerate() }}
-      title={roomId
-        ? t('Mesh the room’s model source images (front, plus back/left/right when present) into a 3D room model.')
-        : t('Mesh the building images (front, plus back/left/right when present) into the 3D building model.')}
-    >
-      🧊 {t('Generate 3D model')}
-    </button>
+  // The generate action either goes up to the owner (who places the button
+  // next to the source images) or stays here as the panel's own button —
+  // never both. `openGenerate` is a stable callback, so the effect only
+  // re-registers when the pending state flips.
+  const pending = !!model3d?.pending
+  const generateExternal = !!onGenerateAction
+  const openGenerateSync = useCallback(() => { void openGenerate() }, [openGenerate])
+  useEffect(() => {
+    if (!onGenerateAction) return
+    onGenerateAction({ open: openGenerateSync, pending })
+    return () => { onGenerateAction(null) }
+  }, [onGenerateAction, openGenerateSync, pending])
+  const generateButton = generateExternal ? null : (
+    <GenerateModelButton action={{ open: openGenerateSync, pending }} roomId={roomId} />
   )
 
   const uploadButton = (
@@ -575,7 +614,9 @@ export function BuildingModelPanel({
             <span className="ga-hint">
               {roomId
                 ? t('No room model (optional). A room renders from its floor plan and its props; a diorama is polish — generate one from this room’s gallery images or upload a GLB.')
-                : t('No building model (optional). The location renders from its outline and its props; a model is polish — generate one from the building images below or upload a GLB.')}
+                : generateExternal
+                  ? t('No building model (optional). The location renders from its outline and its props; a model is polish — mesh one via “Generate 3D model” under “Building images” or upload a GLB.')
+                  : t('No building model (optional). The location renders from its outline and its props; a model is polish — generate one from the building images below or upload a GLB.')}
             </span>
             {generateButton}
             {uploadButton}
@@ -791,7 +832,9 @@ export function BuildingModelPanel({
         {generateButton}
         {uploadButton}
         <span className="ga-hint">
-          {t('“Generate 3D model” meshes the building views again — new ones become the active model of their target tier.')}
+          {generateExternal
+            ? t('“Generate 3D model” under “Building images” meshes the building views again — new ones become the active model of their target tier.')
+            : t('“Generate 3D model” meshes the building views again — new ones become the active model of their target tier.')}
         </span>
       </div>
       {blenderTools}

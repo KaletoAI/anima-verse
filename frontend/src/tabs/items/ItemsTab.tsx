@@ -6,10 +6,12 @@ import { loadCharacters, type CharacterRef } from '../../lib/refs'
 import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
+import { ListPane } from '../../components/ListPane'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import { Silhouette } from '../../components/Silhouette'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
+import { useEnlarge } from '../../components/ZoomButton'
 import { ItemForm } from './ItemForm'
 import {
   CATEGORIES,
@@ -54,6 +56,7 @@ const ItemRow = memo(function ItemRow({ item, isActive, onSelect }: ItemRowProps
 
 export function ItemsTab() {
   const { t } = useI18n()
+  const enlarge = useEnlarge()
   const { toast } = useToast()
   const [items, setItems] = useState<Item[] | null>(null)
   const [draft, setDraft] = useState<DraftItem | null>(null)
@@ -389,7 +392,7 @@ export function ItemsTab() {
 
   return (
     <div className={`ga-items-grid${isOutfit ? ' has-silhouette' : ''}`}>
-      <aside className="ga-items-list-col">
+      <ListPane id="items" className="ga-items-list-col" label={t('Item library')}>
         <ListHeader
           title={t('Item library')}
           onNew={newItem}
@@ -502,7 +505,7 @@ export function ItemsTab() {
             ))
           )}
         </ul>
-      </aside>
+      </ListPane>
 
       {draft ? (
         <div className="ga-items-toolbar-row">
@@ -568,7 +571,8 @@ export function ItemsTab() {
             <div className="ga-items-image-panel">
               <div className="ga-form-section-label">{t('Image')}</div>
               <div className="ga-items-image-preview">
-                <img src={`/inventory/items/${encodeURIComponent(draft.id)}/image?t=${Date.now()}`} alt="" />
+                <img src={`/inventory/items/${encodeURIComponent(draft.id)}/image?t=${Date.now()}`} alt=""
+                  {...enlarge({ src: `/inventory/items/${encodeURIComponent(draft.id)}/image?t=${Date.now()}`, alt: draft.name || draft.id })} />
               </div>
               {(() => {
                 const meta = items?.find((it) => it.id === draft.id)?.image_meta

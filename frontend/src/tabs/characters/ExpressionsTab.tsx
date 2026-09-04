@@ -7,16 +7,12 @@
  * Image:   GET    /characters/{name}/expressions/{file}
  * Delete:  DELETE /characters/{name}/expressions/{file}
  * Cache:   POST   /characters/{name}/clear-expression-cache
- *
- * `readOnly` is the temporary-NPC mode (see DefaultExpressionOnly): that
- * character kind has no variants at all, only the ONE default one it is
- * shown by, so the grid would be the wrong picture of the subject.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { LightboxProvider, openLightbox } from '../../player/Lightbox'
+import { openLightbox } from '../../components/Lightbox'
 
 interface Expression {
   file: string
@@ -39,141 +35,7 @@ interface ExpressionsResp {
   expressions: Expression[]
 }
 
-/** How long the re-render is polled for before the view gives up (4 s steps). */
-const POLL_LIMIT = 45
-
-/**
- * The read-only Expressions tab of a temporary NPC: its ONE default variant
- * and a button that renders it again.
- *
- * WHY `override=1`: without it the route fills an empty `mood` from the
- * character's current feeling and an empty `pose_key` from its effective pose
- * key, i.e. it asks for the variant of the current MOMENT. A temporary NPC has
- * exactly one variant — mood "" and pose "" (`npc_assets._render_default_
- * expression`) — and asking for any other one would answer 404 forever,
- * because its template's `expression_variants_enabled` gate refuses to
- * generate. `override=1` pins both axes to empty; the equipped state it
- * implies (no pieces, no items) is this NPC's real one, since its template has
- * no outfit system, so the key resolves to the very file the finishing job
- * wrote.
- *
- * WHY NO `fallback=default`: it would make this view LIE. While a render runs,
- * the route answers the fallback chain instead of 202
- * (`routes/characters.py:1022-1024`), and step 1 of that chain is
- * `find_nearest_expression` — which scores sidecars by outfit similarity, and
- * "empty vs empty is 1.0" (`outfit_match.outfit_similarity`). A temporary NPC
- * has an EMPTY equipped state in every sidecar it ever wrote, so every
- * leftover variant ties at the top and the newest one is served with 200. That
- * is exactly the picture of the OLD outfit, orphaned by the very edit that
- * queued this render and still on disk until `outfit_cache_gc` reaps it — and
- * a 200 fires `onLoad`, which stops the polling and presents it as the result.
- * Without the parameter a cache miss is 202 or 404, both of which keep the
- * "Rendering…" overlay up and the poll running until the real file lands.
- *
- * The button adds `trigger=1&force=1`: `force` deletes the cached file, and
- * `trigger` is what makes the route pass `ignore_feature_gate=True` — the one
- * documented way past the closed variant gate, the same one the finishing job
- * takes. The answer is 202 ("generating"), so the image is polled afterwards.
- */
-function DefaultExpressionOnly({ character }: { character: string }) {
-  const { t } = useI18n()
-  const { toast } = useToast()
-  const [nonce, setNonce] = useState(1)
-  const [polls, setPolls] = useState(0)
-  const [rendering, setRendering] = useState(false)
-  const [ready, setReady] = useState<boolean | null>(null)
-
-  const base = `/characters/${encodeURIComponent(character)}/outfit-expression`
-  const src = `${base}?override=1&_=${nonce}`
-
-  useEffect(() => {
-    setRendering(false)
-    setPolls(0)
-    setReady(null)
-    setNonce((n) => n + 1)
-  }, [character])
-
-  // Poll while a render is running — the generator is a background thread, so
-  // nothing tells this view when the file lands.
-  useEffect(() => {
-    if (!rendering) return
-    if (polls >= POLL_LIMIT) {
-      setRendering(false)
-      return
-    }
-    const id = window.setTimeout(() => {
-      setPolls((p) => p + 1)
-      setNonce((n) => n + 1)
-    }, 4000)
-    return () => window.clearTimeout(id)
-  }, [rendering, polls])
-
-  const rerender = async () => {
-    if (rendering) return
-    setRendering(true)
-    setPolls(0)
-    try {
-      await apiGet(`${base}?override=1&trigger=1&force=1`)
-      toast(t('Rendering the default expression — this takes a moment.'))
-      setReady(null)
-      setNonce((n) => n + 1)
-    } catch (e) {
-      setRendering(false)
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }
-
-  return (
-    <LightboxProvider>
-      <div className="ga-form" style={{ padding: 0 }}>
-        <div style={{ fontSize: '0.82em', opacity: 0.7, marginBottom: 12 }}>
-          {t('This character kind has no mood or pose variants — it is shown by this one default expression.')}
-        </div>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          {/* The image stays MOUNTED even while it 404s: the poll works by
-              changing its src, and an unmounted img would never re-fetch. */}
-          <div style={{
-            position: 'relative', width: 220, aspectRatio: '3 / 4', borderRadius: 8,
-            overflow: 'hidden', border: '1px solid var(--border, #30363d)',
-            background: 'var(--bg, #0d1117)',
-          }}>
-            <img src={src} alt={t('Default expression')}
-              onLoad={() => { setReady(true); setRendering(false) }}
-              onError={() => setReady(false)}
-              onClick={() => { if (ready === true) openLightbox({ src, alt: t('Default expression') }) }}
-              style={{
-                width: '100%', height: '100%', objectFit: 'cover',
-                display: ready === true ? 'block' : 'none', cursor: 'zoom-in',
-              }} />
-            {ready !== true && (
-              <div style={{
-                position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-                justifyContent: 'center', padding: 10, textAlign: 'center',
-                fontSize: '0.8em', opacity: 0.6,
-              }}>
-                {/* `null` = the first load has not answered yet: say nothing
-                    rather than claim there is no picture. */}
-                {rendering ? t('Rendering…') : ready === false ? t('No default expression yet') : ''}
-              </div>
-            )}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button type="button" className="ga-btn ga-btn-sm" disabled={rendering} onClick={rerender}>
-              {rendering ? t('Rendering…') : t('Re-render default expression')}
-            </button>
-            {rendering && (
-              <span style={{ fontSize: '0.76em', opacity: 0.6 }}>
-                {t('The picture appears here as soon as the backend delivers it.')}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    </LightboxProvider>
-  )
-}
-
-export function ExpressionsTab({ character, readOnly = false }: { character: string; readOnly?: boolean }) {
+export function ExpressionsTab({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [items, setItems] = useState<Expression[] | null>(null)
@@ -192,10 +54,10 @@ export function ExpressionsTab({ character, readOnly = false }: { character: str
   }
 
   const load = useCallback(async () => {
-    if (!character || readOnly) { setItems(null); return }
+    if (!character) { setItems(null); return }
     try { setItems((await apiGet<ExpressionsResp>(`/characters/${encodeURIComponent(character)}/expressions`)).expressions) }
     catch { setItems([]) }
-  }, [character, readOnly])
+  }, [character])
   useEffect(() => { load(); setConfirmDel(null); setConfirmClear(false) }, [load])
 
   const imgUrl = (f: string) => `/characters/${encodeURIComponent(character)}/expressions/${encodeURIComponent(f)}`
@@ -224,16 +86,12 @@ export function ExpressionsTab({ character, readOnly = false }: { character: str
   }
 
   if (!character) return <div className="ga-form"><div className="ga-placeholder">{t('No character selected')}</div></div>
-  // A temporary NPC: the grid would render a cache that structurally holds a
-  // single entry, next to a delete button for the only picture the NPC has.
-  if (readOnly) return <DefaultExpressionOnly character={character} />
-
   const files = items || []
   const fmtDate = (iso: string) => (iso ? iso.replace('T', ' ').replace(/(\+\d\d:\d\d|Z)$/, '').slice(0, 16) : '')
   const piecesText = (p: Record<string, string>) => Object.values(p || {}).filter(Boolean).join(', ')
 
   return (
-    <LightboxProvider>
+    <>
       <div className="ga-form" style={{ padding: 0 }}>
         {/* Header: Clear expression cache */}
         <div style={{
@@ -306,7 +164,7 @@ export function ExpressionsTab({ character, readOnly = false }: { character: str
                         }}>🗑</button>
                     )}
                   </div>
-                  {/* Parameter-Caption */}
+                  {/* Parameter caption */}
                   <div style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <div style={{ fontSize: '0.82em', fontWeight: 600 }} title={e.mood}>
                       😊 {e.mood || <span style={{ opacity: 0.5 }}>{t('neutral')}</span>}
@@ -326,7 +184,7 @@ export function ExpressionsTab({ character, readOnly = false }: { character: str
                       </div>
                     )}
                     {e.created_at && <div style={{ fontSize: '0.68em', opacity: 0.45 }}>{fmtDate(e.created_at)}</div>}
-                    {/* Final prompt: ansehen + kopieren */}
+                    {/* Final prompt: view + copy */}
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                       <button type="button" className="ga-btn ga-btn-sm" style={{ fontSize: '0.7em', padding: '2px 6px' }}
                         disabled={!e.prompt} onClick={() => setPromptOf(e)}>
@@ -344,7 +202,7 @@ export function ExpressionsTab({ character, readOnly = false }: { character: str
           </div>
         )}
 
-        {/* Prompt-Viewer (ansehbar + kopierbar) */}
+        {/* Prompt viewer (viewable + copyable) */}
         {promptOf && (
           <div onClick={() => setPromptOf(null)}
             style={{
@@ -380,6 +238,6 @@ export function ExpressionsTab({ character, readOnly = false }: { character: str
           </div>
         )}
       </div>
-    </LightboxProvider>
+    </>
   )
 }
