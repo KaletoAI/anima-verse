@@ -451,6 +451,41 @@ def _scene_nodes() -> dict:
     return out
 
 
+def _synth_hand_targets(P: dict, nodes: dict) -> None:
+    """Give a FINGERLESS hand its direction target, from its own axis, IN PLACE.
+
+    A bone is oriented here by where its CHILD lies, and the hand's child is
+    the middle-finger root (``CHILD["lhand"]``). A source rig without fingers
+    therefore drops out of :func:`_frames_of` at both hands: they get no frame,
+    are never driven, and keep the TARGET rig's rest wrist for the whole take
+    however the source's hand was held. Measured on a Meshy take, the hand sat
+    at exactly the rig's rest — [0.2, 0.0, -0.1] deg against the forearm — in
+    all 92 frames while every other bone carried the motion faithfully.
+
+    The information is not missing, only the JOINT is: the hand node has a full
+    orientation of its own. So the absent finger root is placed along the
+    node's own bone axis, a third of the forearm ahead of the wrist — the same
+    move :func:`_load_source` already makes for ``head_end``, which has no node
+    either. The length is arbitrary (a frame normalises its direction) and only
+    kept plausible so a dump of ``P`` stays readable.
+
+    A source WITH fingers never reaches this: its real joint is already in
+    ``P`` and is left alone. Which is also why the assumption behind it — that
+    the node's local Y runs along the bone, true for an armature bone and for
+    every FBX joint written by a rigger — is only ever leaned on where there is
+    nothing else at all.
+    """
+    for hand, fore in (("lhand", "lradius"), ("rhand", "rradius")):
+        child = CHILD[hand]
+        if child in P or hand not in P or hand not in nodes:
+            continue
+        axis = _blender_to_clip(nodes[hand].matrix_world.col[1].to_3d())
+        if axis.length < 1e-6:
+            continue
+        reach = (P[hand] - P[fore]).length / 3.0 if fore in P else 5.0
+        P[child] = P[hand] + axis.normalized() * max(reach, 1.0)
+
+
 def _load_source(path: str, family: str):
     """Imports the FBX and returns ``(fps, frame_range, positions_by_frame)``
     with positions as ``{intermediate name: Vector(cm, Y up)}`` per frame,
@@ -485,6 +520,7 @@ def _load_source(path: str, family: str):
         # neck's own length
         if "upperneck" in P and "lowerneck" in P:
             P["head_end"] = P["upperneck"] + (P["upperneck"] - P["lowerneck"])
+        _synth_hand_targets(P, nodes)
         by_frame.append(P)
         rot_frame.append({inter: _rot_to_clip(o.matrix_world) for inter, o in nodes.items()})
     return fps, (f0, f1), by_frame, family, rot_frame
