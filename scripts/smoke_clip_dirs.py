@@ -186,7 +186,11 @@ def test_listing() -> None:
     check("the lowercased set is used in the URL, not the directory case",
           "/assets/animation-clips/lady/dance_02.fbx" in urls)
     check("the payload shape",
-          set(data) == {"clips", "kinds", "pair_kinds", "pairs", "clip_sets", "sets"},
+          # `locomotion` joined the payload with the role→kind mapping
+          # (`animation_clips.load_locomotion_clips`); this literal list had
+          # been left behind and failed on every run since.
+          set(data) == {"clips", "kinds", "pair_kinds", "pairs", "clip_sets",
+                        "sets", "locomotion"},
           str(sorted(data)))
     check("per-clip fields",
           set(data["clips"][0]) == {"kind", "role", "set", "source", "library",

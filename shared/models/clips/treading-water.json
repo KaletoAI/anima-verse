@@ -1,0 +1,40 @@
+{
+ "kind": "treading-water",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 60.0,
+ "frames": 63,
+ "duration_s": 2.1,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": -5.21,
+  "in_place": true,
+  "loop": {
+   "min_s": 2.0,
+   "cut_frames": [
+    436,
+    499
+   ],
+   "cut_s": [
+    14.533,
+    16.633
+   ],
+   "seam_distance": 0.807,
+   "blend_frames": 8
+  },
+  "hips_scale": [
+   1.1568
+  ],
+  "rig_floor_shift_cm": 2.52,
+  "rig_floor_min_cm": -1.62
+ },
+ "source": {
+  "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
+  "takes": [
+   "80_72"
+  ],
+  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+ }
+}
