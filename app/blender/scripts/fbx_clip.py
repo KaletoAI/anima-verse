@@ -69,6 +69,7 @@ node's 0.01 scale applied); positions are converted back to the clip space
 (Y up, centimetres) before any frame is built.
 """
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -451,7 +452,124 @@ def _scene_nodes() -> dict:
     return out
 
 
-def _synth_hand_targets(P: dict, nodes: dict) -> None:
+#: Weight above which a vertex counts as "on this bone" for the palm plane. A
+#: knuckle vertex shared with a neighbour must not tilt the fit.
+_PALM_WEIGHT_MIN = 0.5
+#: Fewest vertices a hand has to contribute before its plane is believed.
+_PALM_MIN_VERTS = 50
+
+
+def _pca_smallest(points) -> Vector:
+    """The axis of SMALLEST spread of a point cloud — a flat slab's normal.
+
+    Jacobi on the 3x3 covariance, written out rather than pulled in: the
+    Blender side has mathutils and nothing else, and three dimensions do not
+    justify a dependency.
+    """
+    n = len(points)
+    c = [sum(p[i] for p in points) / n for i in range(3)]
+    A = [[sum((p[i] - c[i]) * (p[j] - c[j]) for p in points) / n
+          for j in range(3)] for i in range(3)]
+    V = [[1.0 if i == j else 0.0 for j in range(3)] for i in range(3)]
+    for _ in range(60):
+        p_, q_, best = 0, 1, 0.0
+        for i in range(3):
+            for j in range(i + 1, 3):
+                if abs(A[i][j]) > best:
+                    best, p_, q_ = abs(A[i][j]), i, j
+        if best < 1e-14:
+            break
+        th = 0.5 * math.atan2(2 * A[p_][q_], A[q_][q_] - A[p_][p_])
+        cs, sn = math.cos(th), math.sin(th)
+        for M in (A, V):
+            for k in range(3):
+                u, w = M[k][p_], M[k][q_]
+                M[k][p_], M[k][q_] = cs * u - sn * w, sn * u + cs * w
+        for k in range(3):
+            u, w = A[p_][k], A[q_][k]
+            A[p_][k], A[q_][k] = cs * u - sn * w, sn * u + cs * w
+    lo = min(range(3), key=lambda i: A[i][i])
+    return Vector((V[0][lo], V[1][lo], V[2][lo])).normalized()
+
+
+def _palm_axes(bone_map: dict) -> dict:
+    """``{"lhand"/"rhand": palm axis in that hand's OWN rest frame}`` measured
+    off the SKINNED HAND MESH — ``{}`` when the file carries none.
+
+    WHY THIS EXISTS. A forearm's roll — and with it where the palm faces —
+    comes from the palm axis, which :func:`_secondary` reads as "pinky knuckle
+    to index knuckle". A rig without finger joints has neither, and the axis
+    falls back to the SHOULDER LINE. Measured on a Meshy take of someone
+    wiping a table, that fallback stands 69 deg away from the real palm axis,
+    and the imported clip wiped with the hand on edge instead of flat.
+
+    The hand's own bone axes are not a way out: they are not the palm's. On
+    the target rig the knuckle line runs along the hand's local X (measured:
+    -0.978, +0.210, +0.007 on the left), but a Meshy hand's axes sit about 38
+    deg rotated about the bone, so reading local X as the palm axis would trade
+    a 69 deg error for a 38 deg one.
+
+    The palm itself is the only honest source, and it is right there in the
+    rest file: a hand is a FLAT SLAB, so the axis of smallest spread of the
+    vertices weighted to the hand IS the palm normal, and the palm axis is
+    perpendicular to it and to the bone. Both come out in the hand's own rest
+    frame, which is what makes the number reusable on the animation file — a
+    ``_without_skin`` export has no mesh to measure.
+
+    THE SIGN is the one thing the plane cannot say: a normal has two
+    directions, and picking the wrong one turns the palm over. It is resolved
+    against the very fallback this replaces — of the two directions the one
+    nearer the shoulder line wins. That is only ever a 180 deg question, and
+    the fallback is wrong by well under 90 deg (69.2 / 68.7 on the two hands of
+    the rig measured here, against 110.8 / 111.3 for the flipped choice), so it
+    decides with room to spare. The two hands answering as mirror images of
+    each other is the check that it decided at all.
+    """
+    src_of = {inter: src for src, inter in bone_map.items()}
+    arms = [o for o in bpy.data.objects if o.type == "ARMATURE"]
+    meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+    if not arms or not meshes:
+        return {}
+    arm = arms[0]
+    bones = arm.data.bones
+    lh, rh = src_of.get("lhumerus"), src_of.get("rhumerus")
+    if not lh or not rh or lh not in bones or rh not in bones:
+        return {}
+    shoulders = (bones[lh].matrix_local.translation
+                 - bones[rh].matrix_local.translation)
+    if shoulders.length < 1e-6:
+        return {}
+    out = {}
+    for inter in ("lhand", "rhand"):
+        name = src_of.get(inter)
+        if not name or name not in bones:
+            continue
+        bone = bones[name]
+        inv = bone.matrix_local.to_3x3().inverted()
+        head = bone.matrix_local.translation
+        pts = []
+        for ob in meshes:
+            group = ob.vertex_groups.get(name)
+            if group is None:
+                continue
+            for v in ob.data.vertices:
+                w = next((g.weight for g in v.groups if g.group == group.index), 0.0)
+                if w > _PALM_WEIGHT_MIN:
+                    pts.append(inv @ (ob.matrix_world @ v.co - head))
+        if len(pts) < _PALM_MIN_VERTS:
+            continue
+        # The bone runs along local Y, so the palm axis is what is left of the
+        # palm plane once the bone direction is taken out of it.
+        axis = _pca_smallest(pts).cross(Vector((0.0, 1.0, 0.0)))
+        if axis.length < 1e-6:
+            continue
+        axis.normalize()
+        world = (bone.matrix_local.to_3x3() @ axis)
+        out[inter] = axis if world.dot(shoulders) >= 0.0 else -axis
+    return out
+
+
+def _synth_hand_targets(P: dict, nodes: dict, palm: dict = None) -> None:
     """Give a FINGERLESS hand its direction target, from its own axis, IN PLACE.
 
     A bone is oriented here by where its CHILD lies, and the hand's child is
@@ -474,22 +592,47 @@ def _synth_hand_targets(P: dict, nodes: dict) -> None:
     the node's local Y runs along the bone, true for an armature bone and for
     every FBX joint written by a rigger — is only ever leaned on where there is
     nothing else at all.
+
+    ``palm`` (:func:`_palm_axes`) adds the two KNUCKLES beside it, and they
+    matter more than the middle one: ``_secondary`` reads the index and pinky
+    roots as the palm axis, for the FOREARM as much as for the hand, and
+    without them the forearm's roll is taken from the shoulder line. Only their
+    difference is ever read, so they are placed symmetrically about the wrist
+    and their distance is a readability choice, not a measurement.
     """
+    palm = palm or {}
     for hand, fore in (("lhand", "lradius"), ("rhand", "rradius")):
         child = CHILD[hand]
         if child in P or hand not in P or hand not in nodes:
             continue
-        axis = _blender_to_clip(nodes[hand].matrix_world.col[1].to_3d())
+        rot = nodes[hand].matrix_world.to_3x3()
+        axis = _blender_to_clip(rot.col[1].to_3d())
         if axis.length < 1e-6:
             continue
         reach = (P[hand] - P[fore]).length / 3.0 if fore in P else 5.0
-        P[child] = P[hand] + axis.normalized() * max(reach, 1.0)
+        reach = max(reach, 1.0)
+        P[child] = P[hand] + axis.normalized() * reach
+        across = palm.get(hand)
+        if across is None:
+            continue
+        side = "Left" if hand == "lhand" else "Right"
+        wide = _blender_to_clip(rot @ across)
+        if wide.length < 1e-6:
+            continue
+        wide = wide.normalized() * (reach / 2.0)
+        P[f"{side}HandIndex1"] = P[hand] + wide
+        P[f"{side}HandPinky1"] = P[hand] - wide
 
 
-def _load_source(path: str, family: str):
-    """Imports the FBX and returns ``(fps, frame_range, positions_by_frame)``
-    with positions as ``{intermediate name: Vector(cm, Y up)}`` per frame,
-    plus the family actually used."""
+def _load_source(path: str, family: str, palm: dict = None):
+    """Imports the FBX and returns ``(fps, frame_range, positions_by_frame,
+    family, rotations_by_frame, palm_axes)`` with positions as
+    ``{intermediate name: Vector(cm, Y up)}`` per frame.
+
+    ``palm`` is a palm-axis table measured elsewhere (:func:`_palm_axes`) —
+    the animation file of a fingerless rig carries no mesh, so its axes come
+    from the REST file, which does. Absent, this file is measured itself; the
+    result travels back out so the caller can hand it on."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.fbx(filepath=path, global_scale=1.0)
     scene_nodes = _scene_nodes()
@@ -498,6 +641,8 @@ def _load_source(path: str, family: str):
         family = _detect_family(names)
     bone_map = BONE_MAPS[family]()
     nodes = {inter: scene_nodes[src] for src, inter in bone_map.items() if src in names}
+    # Measured HERE, while this file's mesh is still in the scene.
+    palm = palm if palm is not None else _palm_axes(bone_map)
     missing = [c for c in ("root", "lfemur", "ltibia", "lfoot", "lhumerus", "lradius", "lhand")
                if c not in nodes]
     if missing:
@@ -520,10 +665,10 @@ def _load_source(path: str, family: str):
         # neck's own length
         if "upperneck" in P and "lowerneck" in P:
             P["head_end"] = P["upperneck"] + (P["upperneck"] - P["lowerneck"])
-        _synth_hand_targets(P, nodes)
+        _synth_hand_targets(P, nodes, palm)
         by_frame.append(P)
         rot_frame.append({inter: _rot_to_clip(o.matrix_world) for inter, o in nodes.items()})
-    return fps, (f0, f1), by_frame, family, rot_frame
+    return fps, (f0, f1), by_frame, family, rot_frame, palm
 
 
 class _FakeBone:
@@ -577,11 +722,11 @@ def _rest_reference(path: str, family: str, mix_frames: dict):
     carries the Mixamo rest onto the source's reference pose
     (``A_rest = F_src_rest · F_mix_restᵀ``) and the node's world rotation in
     that pose — what the delta mode needs."""
-    _fps, _rng, by_frame, _fam, rot_frame = _load_source(path, family)
+    _fps, _rng, by_frame, _fam, rot_frame, palm = _load_source(path, family)
     P, R = by_frame[0], rot_frame[0]
     fr = _frames_of(P)
-    return {name: (fr[name] @ mix_frames[name].transposed(), R[name])
-            for name in fr if name in mix_frames and name in R}
+    return ({name: (fr[name] @ mix_frames[name].transposed(), R[name])
+             for name in fr if name in mix_frames and name in R}, palm)
 
 
 def _build_take(role, fps, src_fps, by_frame, mix_pos, mix_frames, args,
@@ -634,13 +779,18 @@ def run(job):
     entries = ([("", inputs["src"])] if "src" in inputs
                else [("a", inputs["src_a"]), ("b", inputs["src_b"])])
     mix_pos, mix_frames = _mixamo_rest(args["rig"])
-    rest = _rest_reference(inputs["rest"], family, mix_frames) if inputs.get("rest") else None
+    # The rest file is the one with the skinned mesh, so the palm axes of a
+    # fingerless rig are measured there and handed to the animation files,
+    # which carry no mesh of their own.
+    rest, palm = (_rest_reference(inputs["rest"], family, mix_frames)
+                  if inputs.get("rest") else (None, None))
     takes = []
     src_fps = None
     used = family
     off = [float(v) for v in (args.get("offset_b_m") or (0, 0, 0))]
     for role, path in entries:
-        sfps, (f0, f1), by_frame, used, rot_frame = _load_source(path, family)
+        sfps, (f0, f1), by_frame, used, rot_frame, palm = _load_source(
+            path, family, palm)
         src_fps = src_fps or sfps
         if role == "b" and any(off):
             shift = Vector((off[0] * 100.0, off[1] * 100.0, off[2] * 100.0))
