@@ -1664,7 +1664,18 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   instead of written from nothing. Cleared = the render
                   composes from the prop's name. Five lines at rest — enough to
                   READ the sentence without opening it — and twelve while it is
-                  being written. */}
+                  being written.
+
+                  IT CARRIES A CAPTION, not just a placeholder (user
+                  2026-09-05, who went looking for the prop's description and
+                  could not find it). A placeholder is gone the moment the
+                  field is filled — and a filled field is the normal state
+                  here, since every variant starts as a copy. What was left
+                  was an unlabelled block of prose in the middle of a column
+                  of numbers. */}
+              <span className="ga-hint" style={{ marginTop: 4 }}>
+                {t('Description (generation subject)')}
+              </span>
               <textarea
                 className="ga-textarea"
                 rows={descOpen ? DESC_ROWS_OPEN : DESC_ROWS_REST}

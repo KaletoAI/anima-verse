@@ -231,6 +231,27 @@ a.ga-btn {
   font-family: inherit;
 }
 
+/* A TEXTAREA KEEPS THE HEIGHT ITS `rows` ASK FOR.
+
+   `.ga-form` and `.ga-modal-body` are flex COLUMNS with a bounded height, and
+   a flex item's automatic minimum size is ZERO whenever the item is a scroll
+   container — which a textarea always is. So a full column does not scroll,
+   it CRUSHES the textarea: the prop variant's description field was squeezed
+   to less than one visible line, and read as missing (user 2026-09-05).
+   Nothing in this admin ever wants a shrunken textarea — a text field that
+   cannot show its first line is not a text field.
+
+   Direct children only. Inside `.ga-field-control` the flex runs SIDEWAYS,
+   where `flex-shrink: 0` would stop the field from narrowing with its column
+   instead of helping. The `[data-prompt-context]` step is the prompt-help
+   wrapper: it is `display: contents`, so its textarea is the flex item while
+   the selector still has to walk through it. */
+.ga-form > .ga-textarea,
+.ga-form > [data-prompt-context] > .ga-textarea,
+.ga-modal-body > .ga-textarea {
+  flex-shrink: 0;
+}
+
 /* Outfit-Rules — single-row layout: type name + inline description input,
    default radio, slot checkboxes, actions. The verbose description hint
    from the legacy page is collapsed into a tooltip on the ⓘ glyph. The
