@@ -1987,7 +1987,6 @@
     "Measured: {w} × {d} × {h} m.": "Gemessen: {w} × {d} × {h} m.",
     "Description (generation subject)": "Beschreibung (Bildmotiv)",
     "What THIS variant’s source image is rendered from — the subject of its prompt. Empty = the render composes from the prop’s name. A new variant starts as a copy of the one it was added from, so a version differs by an edit: “…as a sapling”, “…broken”, “…covered in snow”.": "Woraus das Quellbild DIESER Variante gerendert wird — das Motiv ihres Prompts. Leer = das Rendern setzt aus dem Namen des Props zusammen. Eine neue Variante startet als Kopie derjenigen, aus der sie angelegt wurde, eine Version unterscheidet sich also durch eine Bearbeitung: „…als Setzling“, „…zerbrochen“, „…verschneit“.",
-    "Add a variant slot — size, description, sink and markers are copied from the selected chip AS IT IS SAVED (unsaved edits stay behind, so save them first if they should travel); the next generation fills its mesh, or you upload a GLB into it.": "Einen Variantenplatz anlegen — Größe, Beschreibung, Einsinken und Marker werden aus der ausgewählten Kachel SO KOPIERT, WIE SIE GESPEICHERT IST (ungespeicherte Änderungen bleiben zurück, also vorher speichern, wenn sie mitkommen sollen); die nächste Generierung füllt ihr Mesh, oder Du lädst ein GLB hinein.",
     "Throw the unsaved field changes away and take what the server has": "Die ungespeicherten Feldänderungen verwerfen und nehmen, was der Server hat",
     "This prop holds {n} field changes that were never saved. Opening another prop discards them.": "Dieses Prop hat {n} Feldänderungen, die nie gespeichert wurden. Ein anderes Prop zu öffnen verwirft sie.",
     "This character holds {n} field changes that were never saved. Opening another character discards them.": "Dieser Charakter hat {n} Feldänderungen, die nie gespeichert wurden. Einen anderen Charakter zu öffnen verwirft sie.",
@@ -2477,16 +2476,12 @@
     "No room model (optional). A room renders from its floor plan and its props; a diorama is polish — generate one from this room’s gallery images or upload a GLB.": "Kein Raummodell (optional). Ein Raum rendert aus seinem Grundriss und seinen Props; ein Diorama ist Feinschliff — eines aus den Galeriebildern dieses Raums erzeugen oder eine GLB hochladen.",
     "Open the image generation dialog for the building exterior (front, back, left or right view — the sources of the 3D building model).": "Bildgenerierungs-Dialog für die Gebäudeaußenansicht öffnen (Vorne, Hinten, Links oder Rechts — die Quellen des 3D-Gebäudemodells).",
     "Render source image": "Quellbild rendern",
-    "Render this view (optionally with the front image as reference).": "Diese Ansicht rendern (optional mit dem Frontbild als Referenz).",
     "The front image goes into the backend’s first reference slot so the view keeps the same appearance. Text still decides the view.": "Das Frontbild geht in den ersten Referenz-Slot des Backends, damit die Ansicht dasselbe Aussehen behält. Die Ansicht selbst bestimmt der Text.",
-    "The variant’s front image goes into the backend’s first reference slot so the view keeps the same appearance. Text still decides the view.": "Das Frontbild der Variante geht in den ersten Referenz-Slot des Backends, damit die Ansicht dasselbe Aussehen behält. Die Ansicht selbst bestimmt der Text.",
     "This view is a mesh input beside the front image — it replaces nothing else, and it reaches the model only when you re-mesh with this view picked.": "Diese Ansicht ist ein Mesh-Eingang neben dem Frontbild — sie ersetzt nichts anderes und erreicht das Modell erst, wenn du mit dieser Ansicht neu vermeshst.",
     "Upload a picture as this view.": "Ein Bild als diese Ansicht hochladen.",
     "Use front image as reference": "Frontbild als Referenz",
-    "Use the front image as reference": "Frontbild als Referenz verwenden",
     "View": "Ansicht",
     "Views": "Ansichten",
-    "no front image yet": "noch kein Frontbild",
     "optional": "optional",
     "stored": "gespeichert",
     "this backend has no reference slot": "dieses Backend hat keinen Referenz-Slot",
@@ -2510,6 +2505,12 @@
     "Source image": "Quellbild",
     "Attached image": "Angehängtes Bild",
     "No building model (optional). The location renders from its outline and its props; a model is polish — mesh one via “Generate 3D model” under “Building images” or upload a GLB.": "Kein Gebäudemodell (optional). Der Ort rendert aus seinem Umriss und seinen Props; ein Modell ist Feinschliff — erzeuge eines über „3D-Modell generieren“ unter „Gebäude-Bilder“ oder lade ein GLB hoch.",
-    "“Generate 3D model” under “Building images” meshes the building views again — new ones become the active model of their target tier.": "„3D-Modell generieren“ unter „Gebäude-Bilder“ vermesht die Gebäudeansichten erneut — neue werden das aktive Modell ihrer Ziel-Stufe."
+    "“Generate 3D model” under “Building images” meshes the building views again — new ones become the active model of their target tier.": "„3D-Modell generieren“ unter „Gebäude-Bilder“ vermesht die Gebäudeansichten erneut — neue werden das aktive Modell ihrer Ziel-Stufe.",
+    "Render this view (optionally with a front image as reference).": "Diese Ansicht rendern (optional mit einem Frontbild als Referenz).",
+    "Base it on an existing image": "Auf einem vorhandenen Bild aufbauen",
+    "The picked picture goes into the backend’s first reference slot, so this render keeps its appearance. The prompt above decides what is DIFFERENT.": "Das gewählte Bild geht in den ersten Referenz-Slot des Backends, damit dieser Render sein Aussehen behält. Was ANDERS wird, bestimmt der Prompt darüber.",
+    "this variant’s front": "Frontbild dieser Variante",
+    "The picked image supplies the appearance — write into the prompt above what should be DIFFERENT, e.g. “winter version of this object”. What comes out is THIS variant’s own image, and from there it is independent.": "Das gewählte Bild liefert das Aussehen — schreib in den Prompt darüber, was ANDERS sein soll, z. B. „Wintervariante dieses Objekts“. Heraus kommt das eigene Bild DIESER Variante, ab da ist sie eigenständig.",
+    "Add a variant slot — size, description, sink and markers are copied from the selected chip AS IT IS SAVED (unsaved edits stay behind, so save them first if they should travel). Then render its picture with “New image” and base it on this variant’s image to author a version of it — a winter one, say.": "Einen Variantenplatz anlegen — Größe, Beschreibung, Einsinken und Marker werden aus der ausgewählten Kachel SO KOPIERT, WIE SIE GESPEICHERT IST (ungespeicherte Änderungen bleiben zurück, also vorher speichern, wenn sie mitkommen sollen). Danach ihr Bild mit „Neues Bild“ rendern und dabei auf dem Bild dieser Variante aufbauen, um eine Version davon zu erzeugen — etwa eine Winterversion."
   }
 }

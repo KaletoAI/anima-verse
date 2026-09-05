@@ -69,9 +69,11 @@ export function PropsTab() {
   // composes the final prompt, so it must compose from the variant's sentence.
   // `view` names WHICH of the four pictures is rendered (the front is the
   // variant's source image, the other three are mesh input beside it) and
-  // `hasFront` whether there is a front to slot as the appearance reference.
+  // `refVariants` lists every variant holding a front image — the pictures
+  // this render may take as its appearance reference, which is how a new
+  // version of the object is authored from the one before it.
   const [imgRegen, setImgRegen] = useState<
-    { prop: PropFull; variant: number; view: PropView; hasFront: boolean
+    { prop: PropFull; variant: number; view: PropView; refVariants: number[]
       image?: PropSourceImage; subject?: string } | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
@@ -300,9 +302,9 @@ export function PropsTab() {
             onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
             onRegenerateMesh={(variant, views) =>
               setRegen({ id: selectedProp.id, meshOnly: true, variant, views })}
-            onRegenerateImage={(variant, view, image, subject, hasFront) =>
+            onRegenerateImage={(variant, view, image, subject, refVariants) =>
               setImgRegen({ prop: selectedProp, variant, view,
-                hasFront: !!hasFront, image, subject })}
+                refVariants: refVariants || [], image, subject })}
             onGenerating={startPoll}
             // The face count a run would really start on — the PLACEHOLDER
             // behind the variants' budget fields (v2 E5). The admin's
@@ -394,11 +396,11 @@ export function PropsTab() {
           prop={imgRegen?.prop || null}
           variant={imgRegen?.variant || 0}
           view={imgRegen?.view || 'front'}
-          hasFront={!!imgRegen?.hasFront}
+          refVariants={imgRegen?.refVariants || []}
           subject={imgRegen?.subject}
           image={imgRegen?.image}
           backends={imageBackends}
-          onGenerate={(imageBackend, prompt, negative, frontReference) => {
+          onGenerate={(imageBackend, prompt, negative, referenceVariant) => {
             const target = imgRegen
             setImgRegen(null)
             if (!target) return
@@ -410,7 +412,12 @@ export function PropsTab() {
               `/world/props/${encodeURIComponent(target.prop.id)}/variants/${target.variant}/generate`,
               { image_only: true, image_backend: imageBackend,
                 prompt, negative, view: target.view,
-                front_reference: frontReference })
+                // `front_reference` is the SWITCH, `reference_variant` says
+                // whose front image — the pair the two generate routes read
+                // (`_view_args`).
+                front_reference: referenceVariant !== null,
+                ...(referenceVariant !== null
+                  ? { reference_variant: referenceVariant } : {}) })
               .then((d) => {
                 toast(d?.status === 'already_running'
                   ? t('This variant is already generating.')

@@ -609,9 +609,11 @@ async def prop_variant_generate(prop_id: str, index: int,
     ``mesh_only`` meshes this variant's picture, and the full chain does both.
 
     ``view`` names which of the four views an ``image_only`` run renders
-    (default the front), ``front_reference`` slots this variant's front image
-    as that view's appearance reference, and ``views`` lists the extra views a
-    MESH run sends along to the mesh alias.
+    (default the front), ``front_reference`` slots a front image as that
+    render's appearance reference — ``reference_variant`` says whose, this
+    variant's own by default and ANOTHER variant's when a new version of the
+    object is authored from the one before it — and ``views`` lists the extra
+    views a MESH run sends along to the mesh alias.
     """
     from app.core.props import trigger_generation
     from app.routes.world import _mesh_int, _mesh_lod, _tier, _view_args
@@ -620,7 +622,7 @@ async def prop_variant_generate(prop_id: str, index: int,
     if bool(data.get("mesh_only")) and bool(data.get("image_only")):
         raise HTTPException(status_code=400,
                             detail="mesh_only and image_only are exclusive")
-    view, front_reference, views = _view_args(data)
+    view, front_reference, reference_variant, views = _view_args(data)
     started = trigger_generation(
         prop_id,
         prompt=str(data.get("prompt") or ""),
@@ -638,5 +640,6 @@ async def prop_variant_generate(prop_id: str, index: int,
         variant=index,
         view=view,
         front_reference=front_reference,
+        reference_variant=reference_variant,
         views=views)
     return {"status": "generating" if started else "already_running"}

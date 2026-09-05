@@ -955,17 +955,25 @@ def _tier(val) -> str:
     return normalize_tier(val) or DEFAULT_TIER
 
 
-def _view_args(data: Dict[str, Any]) -> Tuple[str, bool, List[str]]:
+def _view_args(data: Dict[str, Any]) -> Tuple[str, bool, Optional[int], List[str]]:
     """The VIEW fields of a prop generate body: ``(view, front_reference,
-    views)``. Shared by both generate routes so the two can never disagree
-    about what a view request means.
+    reference_variant, views)``. Shared by both generate routes so the two can
+    never disagree about what a view request means.
 
     ``view`` names which of the four views an IMAGE run renders and
-    ``front_reference`` whether that variant's front image is slotted as its
-    appearance reference; ``views`` names the extra views a MESH run sends
-    along to the mesh alias. An extra view belongs to an ``image_only`` run
-    only — a full run meshes from the FRONT image, so rendering a back view in
-    the same breath would mesh a picture nobody made."""
+    ``front_reference`` whether a front image is slotted as its appearance
+    reference; ``reference_variant`` says WHOSE front that is — absent means
+    the rendering variant's own (an extra view keeping the appearance of the
+    picture beside it), an index means another variant's, which is how a new
+    version of the object is authored from the one before it. ``views`` names
+    the extra views a MESH run sends along to the mesh alias. An extra view
+    belongs to an ``image_only`` run only — a full run meshes from the FRONT
+    image, so rendering a back view in the same breath would mesh a picture
+    nobody made.
+
+    An index this prop has no variant for is NOT rejected here: a missing
+    reference image has always meant "render from text alone, and say so in
+    the log", and a stale index is the same kind of miss."""
     from app.core.view_prompts import EXTRA_VIEWS, is_view
     view = str(data.get("view") or "front").strip()
     if not is_view(view):
@@ -978,7 +986,16 @@ def _view_args(data: Dict[str, Any]) -> Tuple[str, bool, List[str]]:
                                               for v in raw_views):
         raise HTTPException(status_code=400,
                             detail="views must be a list of back/left/right")
-    return view, bool(data.get("front_reference")), list(raw_views)
+    raw_ref = data.get("reference_variant")
+    ref_variant: Optional[int] = None
+    if raw_ref is not None and raw_ref != "":
+        try:
+            ref_variant = int(raw_ref)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400,
+                                detail="reference_variant must be an index")
+    return (view, bool(data.get("front_reference")), ref_variant,
+            list(raw_views))
 
 
 @router.post("/locations/{location_id}/model3d/generate")
@@ -2253,7 +2270,7 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     if bool(data.get("mesh_only")) and bool(data.get("image_only")):
         raise HTTPException(status_code=400,
                             detail="mesh_only and image_only are exclusive")
-    view, front_reference, views = _view_args(data)
+    view, front_reference, reference_variant, views = _view_args(data)
     if not trigger_generation(prop_id,
                               prompt=str(data.get("prompt") or ""),
                               negative=str(data.get("negative") or ""),
@@ -2267,6 +2284,7 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                               lod_faces=_mesh_lod(data),
                               view=view,
                               front_reference=front_reference,
+                              reference_variant=reference_variant,
                               views=views):
         return {"status": "already_running"}
     return {"status": "generating"}

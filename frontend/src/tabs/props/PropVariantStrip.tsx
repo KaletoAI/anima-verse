@@ -314,7 +314,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
           onClick={add}
           title={capReached
             ? t('The limit of active variants is reached — switch one off or delete it first.')
-            : t('Add a variant slot — size, description, sink and markers are copied from the selected chip AS IT IS SAVED (unsaved edits stay behind, so save them first if they should travel); the next generation fills its mesh, or you upload a GLB into it.')}
+            : t('Add a variant slot — size, description, sink and markers are copied from the selected chip AS IT IS SAVED (unsaved edits stay behind, so save them first if they should travel). Then render its picture with “New image” and base it on this variant’s image to author a version of it — a winter one, say.')}
         >
           + {t('Add variant')}
         </button>

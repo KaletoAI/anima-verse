@@ -151,9 +151,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
    *  until re-meshed, and no other variant's image is touched. `view` says
    *  WHICH of the four pictures is being rendered, `image` is that view's own
    *  record (so the dialog opens on the backend THIS picture was made with)
-   *  and `hasFront` whether a front exists to slot as the reference. */
+   *  and `refVariants` names every variant that holds a front image — the
+   *  pictures the dialog may offer as this render's appearance reference.
+   *  `PropFull` has no variant list, the detail owns it. */
   onRegenerateImage: (variant: number, view: PropView, image?: PropSourceImage,
-    subject?: string, hasFront?: boolean) => void
+    subject?: string, refVariants?: number[]) => void
   /** Reload the prop + bust the image cache — generations run in the
    *  background, this fetches the current state on demand. */
   onRefresh: () => void
@@ -255,6 +257,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const variants = useMemo(() => applyVariantDraft(serverVariants, buf),
     [serverVariants, buf])
   const shownVariant = variants.find((v) => v.index === variant) || null
+  // Every variant that HAS a front image — the pictures a render may take as
+  // its appearance reference (the image dialog drops the target itself for a
+  // front render). Read off the SERVER list, not the draft: a reference is a
+  // file, and an unsaved field edit does not create or remove one.
+  const refVariants = useMemo(
+    () => serverVariants.filter((v) => v.has_source).map((v) => v.index),
+    [serverVariants])
   // Is the variant the detail has OPEN the one that is generating? Every
   // variant-scoped action below reads this instead of the prop-level flag —
   // rendering variant 3's image must not put "Generating…" on variant 1.
@@ -1458,7 +1467,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 onClick={() => onRegenerateImage(variant, 'front',
                   shownImage || undefined,
                   shownVariant?.description || prop.name,
-                  !!shownVariant?.has_source)}
+                  refVariants)}
                 title={variantBusy
                   ? t('This variant is generating right now.')
                   : t('Render a NEW source image FOR THIS VARIANT (backend and prompt in the dialog). Its 3D model stays until you re-mesh from the new image; the other variants keep their own images.')}>
@@ -1521,8 +1530,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                         disabled={variantBusy}
                         onClick={() => onRegenerateImage(variant, view, rec,
                           shownVariant?.description || prop.name,
-                          !!shownVariant?.has_source)}
-                        title={t('Render this view (optionally with the front image as reference).')}>
+                          refVariants)}
+                        title={t('Render this view (optionally with a front image as reference).')}>
                         🖼
                       </button>
                       {/* Upload and delete are locked while the variant runs

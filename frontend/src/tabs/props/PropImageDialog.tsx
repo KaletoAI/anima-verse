@@ -21,6 +21,17 @@
  * variant's front image as its appearance reference, where the variant has
  * one and the backend has a reference slot.
  *
+ * SINCE 2026-09-05 the reference is a CHOICE, not a fixed slot: the picture
+ * that goes into the backend's reference slot may be ANY variant's front
+ * image, and the FRONT view may take one too. That is how a new version of an
+ * object is authored — add a variant (it copies size, description and markers
+ * from the one beside it), render its front image with the OLD variant's
+ * picture as the reference, and say in the prompt what changes ("winter
+ * version of this object"). What comes out is this variant's OWN image; from
+ * there it is independent, with its own mesh. Referencing the very picture
+ * this render overwrites is not a version of anything, so the target variant
+ * is not offered to its own front render.
+ *
  * IT DOES NOT CLOSE ON AN OUTSIDE CLICK (2026-08-24). The prompt in here is
  * written, not confirmed, and the Prompt Help panel it is meant to be written
  * with sits OUTSIDE the dialog — a backdrop that closes on any stray click
@@ -73,6 +84,38 @@ const VIEW_PHRASE: Record<PropView, string> = {
   right: 'seen from the right side, the right flank facing the camera',
 }
 
+/** The variants this render may take as its reference. A FRONT render never
+ *  offers the target itself: that file is the one being overwritten, so
+ *  referencing it would be a version of nothing (the server drops such a
+ *  reference too). An extra view keeps its own front in the list — that is
+ *  exactly the slot it was built for. */
+const refChoices = (refVariants: number[], variant: number,
+                    view: PropView): number[] =>
+  (view === 'front' ? refVariants.filter((i) => i !== variant) : refVariants)
+
+/** The best candidate to reference: the target's OWN front for an extra view
+ *  (what keeps back and side looking like the front), and for a FRONT render
+ *  the nearest variant BEFORE it that has an image — in the usual flow the
+ *  one the new variant was copied from. `null` when there is nothing to
+ *  reference. */
+const preferredRef = (refVariants: number[], variant: number,
+                      view: PropView): number | null => {
+  const choices = refChoices(refVariants, variant, view)
+  if (!choices.length) return null
+  if (view !== 'front') return choices.includes(variant) ? variant : choices[0]
+  const before = choices.filter((i) => i < variant)
+  return before.length ? before[before.length - 1] : choices[0]
+}
+
+/** What the reference is set to when the dialog OPENS. An extra view keeps
+ *  its historic default of "yes, the front beside me". A FRONT render starts
+ *  OFF: pulling another picture into a plain re-render unasked would change
+ *  what that button has always done — the pick behind the checkbox is
+ *  pre-aimed, one click away. */
+const initialRef = (refVariants: number[], variant: number,
+                    view: PropView): number | null =>
+  (view === 'front' ? null : preferredRef(refVariants, variant, view))
+
 /** Same composition rule as the create form — one shared weaver
  *  (`composePropPrompt`), so the text this dialog SENDS is the text the server
  *  would have composed for the same style and subject. The 3D-asset framing
@@ -90,7 +133,7 @@ const composePrompt = (prop: PropFull, backend: ImageBackendInfo | undefined,
                            phrase ? `${phrase}, ${subject}` : subject)
 }
 
-export function PropImageDialog({ prop, variant, view, hasFront, subject,
+export function PropImageDialog({ prop, variant, view, refVariants, subject,
   image, backends, onGenerate, onClose }: {
   /** null = closed. */
   prop: PropFull | null
@@ -101,9 +144,12 @@ export function PropImageDialog({ prop, variant, view, hasFront, subject,
    *  source image; an extra view is a mesh input beside it and never replaces
    *  it. It decides the use-case style, the negative and the view phrase. */
   view: PropView
-  /** Does the target variant HAVE a front image? Only then can it be slotted
-   *  as the appearance reference of an extra view. */
-  hasFront: boolean
+  /** STORE indices of every variant that HAS a front image — the pictures
+   *  this render may take as its appearance reference. The target variant is
+   *  among them for an extra view (keep the look of the picture beside it)
+   *  and dropped for a FRONT render (that file is what is being overwritten).
+   *  Empty = nothing to reference, and the row is not drawn. */
+  refVariants: number[]
   /** What THIS variant renders from: its own description where it has one,
    *  the prop's otherwise. Absent = the prop's text stands in. */
   subject?: string
@@ -112,10 +158,11 @@ export function PropImageDialog({ prop, variant, view, hasFront, subject,
    *  from. */
   image?: PropSourceImage
   backends: ImageBackendInfo[]
-  /** `frontReference` = slot the variant's front image as the appearance
-   *  reference of this render (extra views only). */
+  /** `referenceVariant` = the STORE INDEX of the variant whose front image
+   *  goes into the backend's first reference slot, or `null` for a render
+   *  from text alone. */
   onGenerate: (imageBackend: string, prompt: string, negative: string,
-    frontReference: boolean) => void
+    referenceVariant: number | null) => void
   onClose: () => void
 }) {
   const { t } = useI18n()
@@ -124,9 +171,9 @@ export function PropImageDialog({ prop, variant, view, hasFront, subject,
   const [prompt, setPrompt] = useState('')
   const [touched, setTouched] = useState(false)
   const [negative, setNegative] = useState('')
-  // Extra views default to "keep the front's appearance" — that is what the
-  // reference slot is for, and the text still decides which side is shown.
-  const [useFront, setUseFront] = useState(true)
+  // Which variant's front image goes into the reference slot — `null` is a
+  // render from text alone.
+  const [refVariant, setRefVariant] = useState<number | null>(null)
 
   // Re-arm per open: THIS VARIANT's current image keeps its backend
   // preselected, but the prompt composes fresh from the (possibly just
@@ -140,7 +187,7 @@ export function PropImageDialog({ prop, variant, view, hasFront, subject,
     setPrompt(composePrompt(prop, initial, view, subject))
     setTouched(false)
     setNegative(image?.negative || negativeFor(initial, view))
-    setUseFront(true)
+    setRefVariant(initialRef(refVariants, variant, view))
     // The VIEW is part of the identity of an open: the same variant's back
     // tile must not inherit the front's composed prompt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -156,6 +203,11 @@ export function PropImageDialog({ prop, variant, view, hasFront, subject,
   }, [prop, onClose])
 
   if (!prop) return null
+
+  // The two things the reference row is drawn from: what may be referenced,
+  // and whether the picked backend has a slot to put it in at all.
+  const choices = refChoices(refVariants, variant, view)
+  const slots = backends.find((b) => b.name === picked)?.ref_slot_count || 0
 
   return createPortal(
     // No onClick on the backdrop: an outside click must NOT discard a prompt
@@ -223,33 +275,60 @@ export function PropImageDialog({ prop, variant, view, hasFront, subject,
                     onChange={(e) => setNegative(e.target.value)} />
                 </>
               )}
-              {/* An extra view is meant to be the SAME object from another
-                  side — the front goes into the backend's first reference
-                  slot so the appearance carries over, while the text above
-                  keeps deciding which side is rendered. Impossible without a
-                  front image or without a slot, and then said so. */}
-              {view !== 'front' ? (
-                (() => {
-                  const slots = backends.find((b) => b.name === picked)?.ref_slot_count || 0
-                  return (
-                    <label className="ga-check-row"
-                      title={t('The variant’s front image goes into the backend’s first reference slot so the view keeps the same appearance. Text still decides the view.')}>
-                      <input type="checkbox" checked={useFront && hasFront && slots > 0}
-                        disabled={!hasFront || slots === 0}
-                        onChange={(e) => setUseFront(e.target.checked)} />
-                      <span>
-                        {t('Use the front image as reference')}
-                        {!hasFront ? ` — ${t('no front image yet')}`
-                          : slots === 0 ? ` — ${t('this backend has no reference slot')}` : ''}
-                      </span>
-                    </label>
-                  )
-                })()
+              {/* THE REFERENCE. A picture goes into the backend's first
+                  reference slot and supplies the APPEARANCE; the text above
+                  keeps deciding what is rendered — which side for an extra
+                  view, what changes for a new version of the object. The
+                  choice is a variant's front image: its own for an extra
+                  view, another variant's when this render is meant to be a
+                  version of that one. Impossible without a candidate or
+                  without a slot, and then said so instead of silently doing
+                  nothing. */}
+              {choices.length ? (
+                <>
+                  <label className="ga-check-row"
+                    title={t('The picked picture goes into the backend’s first reference slot, so this render keeps its appearance. The prompt above decides what is DIFFERENT.')}>
+                    <input type="checkbox" checked={refVariant !== null && slots > 0}
+                      disabled={slots === 0}
+                      onChange={(e) => setRefVariant(
+                        e.target.checked
+                          ? preferredRef(refVariants, variant, view)
+                          : null)} />
+                    <span>
+                      {t('Base it on an existing image')}
+                      {slots === 0 ? ` — ${t('this backend has no reference slot')}` : ''}
+                    </span>
+                  </label>
+                  {refVariant !== null && slots > 0 ? (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <select className="ga-input" style={{ flex: 1 }}
+                        value={String(refVariant)}
+                        onChange={(e) => setRefVariant(Number(e.target.value))}>
+                        {choices.map((i) => (
+                          <option key={i} value={i}>
+                            {t('Variant')} {i + 1}
+                            {i === variant ? ` — ${t('this variant’s front')}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      {/* The picture itself, not just its number: which image
+                          is being referenced is the whole decision here. */}
+                      <img
+                        src={`/assets/props/${encodeURIComponent(prop.id)}/source?variant=${refVariant}`}
+                        alt={`${t('Variant')} ${refVariant + 1}`}
+                        style={{ width: 64, height: 64, objectFit: 'contain',
+                          borderRadius: 6, background: 'rgba(255,255,255,0.04)',
+                          border: '1px solid var(--border, #30363d)' }} />
+                    </div>
+                  ) : null}
+                </>
               ) : null}
               <span className="ga-hint">
-                {view === 'front'
-                  ? t('The picture belongs to this variant — only its image is replaced, and its 3D model stays until you re-mesh it with “3D from this image”.')
-                  : t('This view is a mesh input beside the front image — it replaces nothing else, and it reaches the model only when you re-mesh with this view picked.')}
+                {refVariant !== null && refVariant !== variant && slots > 0
+                  ? t('The picked image supplies the appearance — write into the prompt above what should be DIFFERENT, e.g. “winter version of this object”. What comes out is THIS variant’s own image, and from there it is independent.')
+                  : view === 'front'
+                    ? t('The picture belongs to this variant — only its image is replaced, and its 3D model stays until you re-mesh it with “3D from this image”.')
+                    : t('This view is a mesh input beside the front image — it replaces nothing else, and it reaches the model only when you re-mesh with this view picked.')}
               </span>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                 <button type="button" className="ga-btn ga-btn-sm" onClick={onClose}>
@@ -257,7 +336,7 @@ export function PropImageDialog({ prop, variant, view, hasFront, subject,
                 </button>
                 <button type="button" className="ga-btn ga-btn-sm ga-btn-primary"
                   onClick={() => onGenerate(picked, prompt, negative,
-                    view !== 'front' && useFront && hasFront)}>
+                    slots > 0 ? refVariant : null)}>
                   🖼 {t('Render')}
                 </button>
               </div>

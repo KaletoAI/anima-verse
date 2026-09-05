@@ -5800,10 +5800,42 @@ def compose_prompt(subject: str, backend, key_areas: Any = None,
     }
 
 
+def reference_front(prop_id: str, variant: Any = None, view: str = "front",
+                    reference_variant: Any = None) -> Optional[Path]:
+    """WHICH front image a source render slots as its appearance reference —
+    ``None`` for a render from text alone.
+
+    ``reference_variant`` names whose front that is; absent means the
+    rendering variant's OWN, which is what an extra view has always taken (the
+    back keeps the look of the front beside it). Another index is how a NEW
+    VERSION of the object is authored: add a variant, render its front with
+    the previous variant's picture as the reference and say in the prompt what
+    changes — the result is a picture of its own.
+
+    Two ways to end up with nothing, both deliberate and both silent to the
+    caller:
+
+    * the named variant has no front image (yet) — a missing reference has
+      always meant "render from text", never an error, and a stale index from
+      an old client is the same kind of miss;
+    * the reference would be THE VERY FILE this render overwrites. Identity is
+      decided on the file, not on the index: ``None`` and a negative index
+      both mean the primary variant, so two different numbers can name one
+      picture. Feeding a render its own output is not a version of anything.
+    """
+    ref_variant = variant if reference_variant is None else reference_variant
+    front = source_path(prop_id, ref_variant)
+    if not front:
+        return None
+    target = _source_file(prop_id, variant, view=view)
+    return None if target and target == front else front
+
+
 def _render_source(prop_id: str, backend_glob: str,
                    prompt: str, negative: str, variant: Any = None, *,
                    view: str = "front",
-                   front_reference: bool = False) -> bool:
+                   front_reference: bool = False,
+                   reference_variant: Any = None) -> bool:
     """txt2img render of the product shot → THIS VARIANT's source image. Runs
     the GPU job on the backend queue channel (like every render). Records the
     image backend + final prompt with the variant. Returns True on success.
@@ -5816,8 +5848,12 @@ def _render_source(prop_id: str, backend_glob: str,
     ``view`` names which of the four views is rendered — the front composes
     from the ``prop`` use case, an extra view from its own (``prop_back`` /
     ``prop_side``) and says the direction in the subject. ``front_reference``
-    additionally slots THIS variant's front image as the appearance reference
-    of an extra view."""
+    additionally slots a FRONT image as the appearance reference of this
+    render, and ``reference_variant`` says whose: its own front by default (an
+    extra view keeping the appearance of the picture beside it), or ANOTHER
+    variant's front when a new version of the object is authored from the one
+    before it — the prompt then says what changes ("winter version of this
+    object") and the result is a picture of its own."""
     from app.imagegen.service import get_image_service
     svc = get_image_service()
     backend = None
@@ -5862,14 +5898,16 @@ def _render_source(prop_id: str, backend_glob: str,
         "width": 1024, "height": 1024,
         "seed": random.randint(1, 2**31 - 1),
     }
-    # A back/side view may take the variant's FRONT image as its appearance
-    # reference (design 2026-09-02) — only where a front exists and the
-    # backend has a slot; otherwise the view renders from text alone.
-    if view != "front" and front_reference:
-        front = source_path(prop_id, variant)
+    # A render may take a FRONT image as its appearance reference — which one
+    # is `reference_front`'s decision, whether the backend can hold it is this
+    # one's. A backend without a slot renders from text alone and says so:
+    # "log it, do not fail", the rule this reference has had from the start.
+    if front_reference:
+        front = reference_front(prop_id, variant, view, reference_variant)
         if not front:
-            logger.info("Prop %s: no front image, %s view renders without "
-                        "reference", prop_id, view)
+            logger.info("Prop %s: no usable reference image for the %s view of "
+                        "variant %s, rendering from text alone",
+                        prop_id, view, variant)
         elif int(getattr(backend, "ref_slot_count", 0) or 0) < 1:
             logger.info("Prop %s: backend %s has no reference slot, %s view "
                         "renders without reference", prop_id, backend.name, view)
@@ -5956,14 +5994,16 @@ def _generate(prop_id: str, prompt: str, negative: str,
               variant: Any = None,
               view: str = "front",
               front_reference: bool = False,
+              reference_variant: Any = None,
               views: Optional[List[str]] = None) -> Dict[str, Any]:
     """Blocking chain on a worker thread — source render then img2mesh. ONE
     tracked header task wraps the whole chain (the actual GPU jobs show in the
     queue panel via their channel entries).
 
-    ``view``/``front_reference`` steer the source render (which view, and
-    whether the front is slotted as its reference); ``views`` names the extra
-    views the MESH step should send along beside the front image."""
+    ``view``/``front_reference``/``reference_variant`` steer the source render
+    (which view, whether a front image is slotted as its reference and whose);
+    ``views`` names the extra views the MESH step should send along beside the
+    front image."""
     from app.core.task_queue import get_task_queue
     name = read_sidecar(prop_id).get("name") or prop_id
     task_id = ""
@@ -5981,7 +6021,8 @@ def _generate(prop_id: str, prompt: str, negative: str,
         # separately triggered step ("3D from this image").
         if not mesh_only and not _render_source(
                 prop_id, image_backend_glob, prompt, negative, variant,
-                view=view, front_reference=front_reference):
+                view=view, front_reference=front_reference,
+                reference_variant=reference_variant):
             error = "source render failed"
             return {"ok": False, "error": error}
         if image_only:
@@ -6292,6 +6333,7 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        variant: Any = None,
                        view: str = "front",
                        front_reference: bool = False,
+                       reference_variant: Any = None,
                        views: Optional[List[str]] = None) -> bool:
     """Start the source→mesh chain in the background. Different mesh backends
     for the same prop run concurrently (each queues on its own GPU channel);
@@ -6312,9 +6354,12 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
     decide, an EMPTY LIST switches the stage off explicitly, a number asks for
     that stage.
 
-    ``view``/``front_reference`` belong to an ``image_only`` run (which view is
-    rendered, and whether the front is slotted as reference); ``views`` names
-    the extra views a MESH run should send along."""
+    ``view``/``front_reference``/``reference_variant`` belong to an
+    ``image_only`` run: which view is rendered, whether a front image is
+    slotted as its appearance reference, and WHOSE front that is — its own by
+    default, another variant's when a new version of the object is authored
+    from the one before it. ``views`` names the extra views a MESH run should
+    send along."""
     pid = safe_prop_id(prop_id)
     if not pid or not read_sidecar(pid):
         return False
@@ -6339,7 +6384,8 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                       texture_size=texture_size, mesh_only=mesh_only,
                       image_only=image_only, tier=tier, lod_faces=lod_faces,
                       variant=variant, view=view,
-                      front_reference=front_reference, views=views)
+                      front_reference=front_reference,
+                      reference_variant=reference_variant, views=views)
         except Exception as e:
             logger.error("Prop generation for %s failed: %s", pid, e)
         finally:
