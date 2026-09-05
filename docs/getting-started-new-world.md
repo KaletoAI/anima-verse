@@ -50,7 +50,7 @@ Infermatic) in the [README](../README.md#getting-started).
    1. Pick a template — e.g. **Human (Roleplay)** for a typical chat partner. Others:
       `Human (Default)` (pure NPC), `Animal (Default)`, `Human (Roleplay NSFW)`, plus anything you
       add under `shared/templates/character/`.
-   2. Enter a name (e.g. `Damian Demo`).
+   2. Enter a name (e.g. `Rowan Kell`).
    3. The template-driven editor opens on the new character — fill in appearance, personality
       (soul), outfits, etc. The character is auto-added to your access list.
 

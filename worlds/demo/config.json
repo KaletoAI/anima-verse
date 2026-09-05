@@ -164,46 +164,16 @@
     "expression_imagegen_default": "LocalAI-Flux",
     "location_imagegen_default": "LocalAI-Flux",
     "use_cases": {
-      "map": {
-        "styles": {
-          "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          },
-          "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          }
-        },
-        "llm_compose": false
-      },
-      "item": {
-        "styles": {
-          "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          },
-          "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          }
-        },
-        "llm_compose": false
-      },
       "character": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "a gouache painting of the character, warm natural light, visible brushwork on textured paper, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "gouache painting, character illustration, warm natural light, visible brushwork, textured paper, muted terracotta and teal palette, high detail",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           }
         },
@@ -212,13 +182,13 @@
       "outfit": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "a full-body gouache painting of the character from head to toe against a plain neutral background, even light, clear readable silhouette, visible brushwork",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "gouache painting, full body view, head to toe, plain neutral background, even lighting, clear silhouette, visible brushwork, high detail",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           }
         },
@@ -227,58 +197,13 @@
       "expression": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "a close gouache painting emphasising the character's facial expression and pose, warm natural light, visible brushwork",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          }
-        },
-        "llm_compose": false
-      },
-      "instagram": {
-        "styles": {
-          "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          },
-          "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          }
-        },
-        "llm_compose": false
-      },
-      "event": {
-        "styles": {
-          "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          },
-          "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          }
-        },
-        "llm_compose": false
-      },
-      "story": {
-        "styles": {
-          "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          },
-          "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "gouache painting, expressive face, natural light, visible brushwork, muted palette, high detail",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           }
         },
@@ -287,13 +212,13 @@
       "profile": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "a gouache head-and-shoulders portrait looking at the viewer, plain neutral background, soft edges, visible brushwork",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "gouache portrait, head and shoulders, only head, looking at viewer, neutral background, visible brushwork, high detail",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           }
         },
@@ -302,167 +227,422 @@
       "location": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "a wide painted establishing view of {subject}, soft gouache on textured paper, warm low sunlight and cool sea-green shadows, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette, no people",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "{subject}, wide establishing view, gouache painting, storybook illustration, warm sunlight, sea-green shadows, muted terracotta and teal palette, atmospheric, no people",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           }
         },
-        "llm_compose": false
-      },
-      "mapfit": {
-        "styles": {
-          "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          },
-          "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
-          }
-        },
-        "llm_compose": false
+        "llm_compose": true
       },
       "scene": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "a painted storybook scene in soft gouache, warm natural light, visible brushwork on textured paper, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "gouache painting, storybook scene, warm natural light, visible brushwork, textured paper, muted terracotta and teal palette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           }
         },
         "llm_compose": false
       },
-      "tpose": {
+      "event": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "a painted storybook scene of the event, soft gouache, dramatic but warm light, visible brushwork, detailed surroundings",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "gouache painting, storybook scene, dramatic warm light, visible brushwork, detailed environment, muted palette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           }
         },
         "llm_compose": false
       },
-      "tpose_animal": {
+      "story": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "a painted story illustration with a clear composition and detailed surroundings, soft gouache, visible brushwork",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
+            "prompt_style": "gouache story illustration, clear composition, detailed environment, visible brushwork, muted palette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
             "prompt_instruction": ""
           }
         },
         "llm_compose": false
+      },
+      "instagram": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a warm painted snapshot as if shared on a feed, soft gouache, natural light, casual framing",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "gouache painting, casual snapshot, natural light, lifestyle, visible brushwork, muted palette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
+            "prompt_instruction": ""
+          }
+        },
+        "llm_compose": false
+      },
+      "item": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a painted study of a single object isolated on a plain neutral background, soft gouache, even light, clear readable silhouette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "gouache painting, single object, isolated, plain neutral background, even lighting, clear silhouette, high detail",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed",
+            "prompt_instruction": ""
+          }
+        },
+        "llm_compose": false
+      },
+      "map": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a single hand-painted map tile of {subject} seen from an oblique top-down angle with a slight tilt for depth, soft gouache, the subject closely framed and filling the entire frame edge to edge with no border or frame around it, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed, frame, border, framed, vignette, grid lines, map pins, icons, straight-down view, blueprint, schematic, side view, horizon, sky, zoomed out",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "{subject}, hand-painted map tile, gouache, oblique top-down angle with a slight tilt, subject fills the entire frame edge to edge, muted terracotta and teal palette, full-bleed, no border, no frame",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed, frame, border, framed, vignette, grid lines, map pins, icons, straight-down view, blueprint, schematic, side view, horizon, sky, zoomed out",
+            "prompt_instruction": ""
+          }
+        },
+        "llm_compose": true
+      },
+      "mapfit": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a hand-painted map tile in soft gouache that continues the surrounding terrain seamlessly, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed, frame, border, framed, vignette, grid lines, map pins, icons, straight-down view, blueprint, schematic, side view, horizon, sky, zoomed out",
+            "prompt_instruction": ""
+          },
+          "keywords": {
+            "prompt_style": "hand-painted map tile, gouache, seamless continuation of the surrounding terrain, muted terracotta and teal palette",
+            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed, frame, border, framed, vignette, grid lines, map pins, icons, straight-down view, blueprint, schematic, side view, horizon, sky, zoomed out",
+            "prompt_instruction": ""
+          }
+        },
+        "llm_compose": true
       },
       "building": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "an exterior illustration of {subject} as a single building seen from a three-quarter angle at a slightly elevated eye level, the entire structure from ground to rooftop inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, street, road, cars, trees, plants, garden, landscape, sky, clouds, surrounding buildings, neighborhood, scenery",
+            "prompt_instruction": "Describe a three-quarter exterior view of the WHOLE building — architecture, materials, roof, storeys, style. The entire structure is in frame with a margin, neutral background, no people, no interior."
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "{subject}, exterior view of a single building, three-quarter view, slightly elevated eye level, the entire structure from ground to rooftop in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, street, road, cars, trees, plants, garden, landscape, sky, clouds, surrounding buildings, neighborhood, scenery",
+            "prompt_instruction": "Write comma-separated tags for a three-quarter exterior view of the WHOLE building — architecture, materials, roof, storeys, style. The entire structure is in frame with a margin, neutral background, no people, no interior."
           }
         },
-        "llm_compose": false
+        "llm_compose": true
       },
       "building_outdoor": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "an illustration of {subject} as a single outdoor scene diorama on a square ground base seen from a three-quarter angle at an elevated eye level, the entire scene from ground to treetops inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood",
+            "prompt_instruction": "Describe a three-quarter view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. The entire scene is in frame with a margin, neutral background, no people."
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "{subject}, outdoor scene diorama on a square ground base, three-quarter view, elevated eye level, the entire scene from ground to treetops in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood",
+            "prompt_instruction": "Write comma-separated tags for a three-quarter view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. Entire scene in frame with a margin, neutral background, no people."
           }
         },
-        "llm_compose": false
+        "llm_compose": true
       },
       "room_model": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "a product render of {subject}, staged on a bare floor slab — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furnishings. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery",
+            "prompt_instruction": "Describe the furniture, decor, floor and style ONLY — the interior as a set piece on a bare floor slab. Never mention walls, ceilings or the building; describe just what stands on the floor. Neutral background, no people."
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "{subject}, arranged on a bare floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high three-quarter camera angle, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery",
+            "prompt_instruction": "Write comma-separated tags for the furniture, decor, floor and style ONLY — the interior as a set piece on a bare floor slab. Never mention walls, ceilings or the building; describe just what stands on the floor. Neutral background, no people."
           }
         },
-        "llm_compose": false
+        "llm_compose": true
       },
       "room_model_outdoor": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "an illustration of {subject} as a single open-air area diorama on a bare ground base with no walls and no ceiling, seen from a three-quarter angle at an elevated eye level, the entire area inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery",
+            "prompt_instruction": "Describe the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people."
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "{subject}, open-air area diorama on a bare ground base, no walls, no ceiling, three-quarter view, elevated eye level, the entire area in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery",
+            "prompt_instruction": "Write comma-separated tags for the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people."
           }
         },
-        "llm_compose": false
+        "llm_compose": true
+      },
+      "building_back": {
+        "styles": {
+          "natural": {
+            "prompt_style": "an exterior illustration of {subject} as a single building seen from directly behind with its rear facade facing the camera, at a slightly elevated eye level, the entire structure from ground to rooftop inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, street, road, cars, trees, plants, garden, landscape, sky, clouds, surrounding buildings, neighborhood, scenery, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Describe the rear view of the WHOLE building — back facade, roof, storeys, materials. The entire structure is in frame with a margin, neutral background, no people, no interior."
+          },
+          "keywords": {
+            "prompt_style": "{subject}, exterior view of a single building seen from directly behind, the rear facade facing the camera, slightly elevated eye level, the entire structure from ground to rooftop in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, street, road, cars, trees, plants, garden, landscape, sky, clouds, surrounding buildings, neighborhood, scenery, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Write comma-separated tags for the REAR view of the WHOLE building — back facade, roof, storeys, materials. Entire structure in frame with a margin, neutral background, no people, no interior."
+          }
+        },
+        "llm_compose": true
+      },
+      "building_side": {
+        "styles": {
+          "natural": {
+            "prompt_style": "an exterior illustration of {subject} as a single building in strict side elevation with one side wall facing the camera, at a slightly elevated eye level, the entire structure from ground to rooftop inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, street, road, cars, trees, plants, garden, landscape, sky, clouds, surrounding buildings, neighborhood, scenery, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Describe a strict side elevation of the WHOLE building — side wall, roof, storeys, materials. The entire structure is in frame with a margin, neutral background, no people, no interior."
+          },
+          "keywords": {
+            "prompt_style": "{subject}, exterior view of a single building in strict side elevation, one side wall facing the camera, slightly elevated eye level, the entire structure from ground to rooftop in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, inside, room, furniture, close-up, cropped, out of frame, partial building, only part of the building, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, street, road, cars, trees, plants, garden, landscape, sky, clouds, surrounding buildings, neighborhood, scenery, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Write comma-separated tags for a strict SIDE elevation of the WHOLE building — side wall, roof, storeys, materials. Entire structure in frame with a margin, neutral background, no people, no interior."
+          }
+        },
+        "llm_compose": true
+      },
+      "building_outdoor_back": {
+        "styles": {
+          "natural": {
+            "prompt_style": "an illustration of {subject} as a single outdoor scene diorama on a square ground base seen from directly behind at an elevated eye level, the entire scene from ground to treetops inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Describe the rear view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. The entire scene is in frame with a margin, neutral background, no people."
+          },
+          "keywords": {
+            "prompt_style": "{subject}, outdoor scene diorama on a square ground base seen from directly behind, elevated eye level, the entire scene from ground to treetops in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Write comma-separated tags for the REAR view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. Entire scene in frame with a margin, neutral background, no people."
+          }
+        },
+        "llm_compose": true
+      },
+      "building_outdoor_side": {
+        "styles": {
+          "natural": {
+            "prompt_style": "an illustration of {subject} as a single outdoor scene diorama on a square ground base in strict side view at an elevated eye level, the entire scene from ground to treetops inside the frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Describe a strict side view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. The entire scene is in frame with a margin, neutral background, no people."
+          },
+          "keywords": {
+            "prompt_style": "{subject}, outdoor scene diorama on a square ground base in strict side view, elevated eye level, the entire scene from ground to treetops in frame with a margin around it, completely isolated on an empty plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, interior, indoor, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Write comma-separated tags for a strict SIDE view of the WHOLE outdoor scene on its ground base — terrain, plants, water, paths, props. Entire scene in frame with a margin, neutral background, no people."
+          }
+        },
+        "llm_compose": true
+      },
+      "room_model_back": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a product render of {subject}, staged on a bare floor slab and seen from directly behind the set piece — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furnishings. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Describe the furniture, decor, floor and style ONLY, seen from behind the set piece on its bare floor slab. Never mention walls, ceilings or the building. Neutral background, no people."
+          },
+          "keywords": {
+            "prompt_style": "{subject}, arranged on a bare floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high camera angle from directly behind the set piece, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Write comma-separated tags for the furniture, decor, floor and style ONLY, seen from BEHIND the set piece on its bare floor slab. Never mention walls, ceilings or the building. Neutral background, no people."
+          }
+        },
+        "llm_compose": true
+      },
+      "room_model_side": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a product render of {subject}, staged on a bare floor slab and seen in strict side view — the architecture is completely stripped away, open on every side and from above, nothing stands behind or around the furnishings. The slab floats isolated on a plain neutral background like a 3D game asset, under flat, even, shadowless studio lighting, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Describe the furniture, decor, floor and style ONLY, in strict side view of the set piece on its bare floor slab. Never mention walls, ceilings or the building. Neutral background, no people."
+          },
+          "keywords": {
+            "prompt_style": "{subject}, arranged on a bare floor slab, interior set piece with the architecture stripped away, open on every side and from above, nothing behind or around the furniture, floor slab floating on a plain neutral background, 3D game asset product render, high camera angle in strict side view, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Write comma-separated tags for the furniture, decor, floor and style ONLY, in strict SIDE view of the set piece on its bare floor slab. Never mention walls, ceilings or the building. Neutral background, no people."
+          }
+        },
+        "llm_compose": true
+      },
+      "room_model_outdoor_back": {
+        "styles": {
+          "natural": {
+            "prompt_style": "an illustration of {subject} as a single open-air area diorama on a bare ground base with no walls and no ceiling, seen from directly behind at an elevated eye level, the entire area inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Describe the rear view of the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people."
+          },
+          "keywords": {
+            "prompt_style": "{subject}, open-air area diorama on a bare ground base, no walls, no ceiling, seen from directly behind, elevated eye level, the entire area in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Write comma-separated tags for the REAR view of the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people."
+          }
+        },
+        "llm_compose": true
+      },
+      "room_model_outdoor_side": {
+        "styles": {
+          "natural": {
+            "prompt_style": "an illustration of {subject} as a single open-air area diorama on a bare ground base with no walls and no ceiling, in strict side view at an elevated eye level, the entire area inside the frame with a margin around it, isolated on a plain neutral background with no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Describe a strict side view of the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people."
+          },
+          "keywords": {
+            "prompt_style": "{subject}, open-air area diorama on a bare ground base, no walls, no ceiling, strict side view, elevated eye level, the entire area in frame with a margin around it, isolated on a plain neutral background, no surroundings, flat even shadowless lighting, uniform illumination, sharp focus, highly detailed, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, people, person, characters, crowd, walls, wall, ceiling, roof, enclosed room, closed room, building exterior, facade, close-up, cropped, out of frame, partial view, tilted horizon, dutch angle, fisheye, harsh shadows, cast shadows, ground shadow, dramatic lighting, side lighting, rim light, backlighting, golden hour, sunset, night, sky, clouds, street, road, cars, surrounding buildings, neighborhood, scenery, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Write comma-separated tags for a strict SIDE view of the WHOLE open-air area on its ground base — terrain, plants, water, paths, props. No walls, no ceiling, neutral background, no people."
+          }
+        },
+        "llm_compose": true
       },
       "surface_texture": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "a seamless tileable texture painted straight from above in macro detail: the surface fills the entire frame edge to edge with its rich natural color and fine structure, lit by soft even diffuse daylight, crisp sharp focus, stylized illustrated, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, gray, monochrome, flat color, blurry, low quality",
+            "prompt_instruction": "Describe a seamless tileable top-down texture of the surface only — its color, structure and fine detail under soft even daylight. Nothing but the surface itself."
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "seamless tileable texture photographed straight from above, macro surface detail, rich natural color, the surface fills the entire frame edge to edge, soft even diffuse daylight, crisp sharp focus, stylized illustration, high detail, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, gray, monochrome, flat color, blurry, low quality",
+            "prompt_instruction": "Write comma-separated tags for a seamless tileable top-down texture of the surface only — its color, structure and fine detail under soft even daylight. Nothing but the surface itself."
           }
         },
-        "llm_compose": false
+        "llm_compose": true
       },
       "prop": {
         "styles": {
           "natural": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "A high-quality stylized 3D model of {subject}, designed for 3D asset generation, 8k resolution, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark",
+            "prompt_instruction": "Describe the single object only, isolated on a plain light gray background. No people, no scene."
           },
           "keywords": {
-            "prompt_style": "",
-            "prompt_negative": "",
-            "prompt_instruction": ""
+            "prompt_style": "A high-quality stylized 3D model of {subject}, designed for 3D asset generation, 8k resolution, single object, isolated, centered, plain light gray background, product illustration, soft studio lighting, full view, no scene, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark",
+            "prompt_instruction": "Write comma-separated keywords for the single object only, isolated on a plain light gray background. No people, no scene."
           }
         },
-        "llm_compose": false
+        "llm_compose": true
+      },
+      "prop_back": {
+        "styles": {
+          "natural": {
+            "prompt_style": "A high-quality stylized 3D model of {subject}, designed for 3D asset generation, 8k resolution, seen from directly behind so the back of the object faces the camera, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Describe the single object seen from behind, isolated on a plain light gray background. No people, no scene."
+          },
+          "keywords": {
+            "prompt_style": "A high-quality stylized 3D model of {subject}, designed for 3D asset generation, 8k resolution, rear view, the back of the object facing the camera, single object, isolated, centered, plain light gray background, product illustration, soft studio lighting, full view, no scene, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark, front view, front side, facade with the entrance facing the camera, three-quarter view, mirrored, turned toward the camera",
+            "prompt_instruction": "Write comma-separated keywords for the single object seen from BEHIND, isolated on a plain light gray background. No people, no scene."
+          }
+        },
+        "llm_compose": true
+      },
+      "prop_side": {
+        "styles": {
+          "natural": {
+            "prompt_style": "A high-quality stylized 3D model of {subject}, designed for 3D asset generation, 8k resolution, photographed in strict side profile, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Describe the single object in strict side profile, isolated on a plain light gray background. No people, no scene."
+          },
+          "keywords": {
+            "prompt_style": "A high-quality stylized 3D model of {subject}, designed for 3D asset generation, 8k resolution, side view, strict profile, single object, isolated, centered, plain light gray background, product illustration, soft studio lighting, full view, no scene, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "scene, environment, floor shadow, people, hands, text, watermark, front view, back view, three-quarter view, facing the camera, mirrored",
+            "prompt_instruction": "Write comma-separated keywords for the single object in strict side profile, isolated on a plain light gray background. No people, no scene."
+          }
+        },
+        "llm_compose": true
+      },
+      "tpose": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a full-body render of the character as a stylized 3D character figure with clean matte skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, spread fingers, splayed fingers, fanned fingers, oversized hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance",
+            "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression."
+          },
+          "keywords": {
+            "prompt_style": "render of a stylized 3D character model, clean matte skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, spread fingers, splayed fingers, fanned fingers, oversized hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance",
+            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression."
+          }
+        },
+        "llm_compose": true
+      },
+      "tpose_animal": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a full-body render of the animal as a stylized 3D creature figure with clean matte fur and skin textures, shown from nose to tail against a plain neutral background, seen from a three-quarter side angle with all four legs and the tail entirely inside the frame and margin around it, flat even shadowless lighting, uniform illumination, sharp focus, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up",
+            "prompt_instruction": "Describe the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression."
+          },
+          "keywords": {
+            "prompt_style": "render of a stylized 3D animal model, clean matte fur and skin textures, full body view of the animal, nose to tail, all four legs and the tail fully inside the frame, three-quarter side view, margin around the animal, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up",
+            "prompt_instruction": "Write comma-separated tags describing the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression."
+          }
+        },
+        "llm_compose": true
+      },
+      "tpose_back": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a full-body render of the character as a stylized 3D character figure with clean matte skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, spread fingers, splayed fingers, fanned fingers, oversized hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance, front view, face visible, eyes, facial features, looking at the camera, looking over the shoulder, head turned, three-quarter view",
+            "prompt_instruction": "Describe the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression."
+          },
+          "keywords": {
+            "prompt_style": "render of a stylized 3D character model, clean matte skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, spread fingers, splayed fingers, fanned fingers, oversized hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance, front view, face visible, eyes, facial features, looking at the camera, looking over the shoulder, head turned, three-quarter view",
+            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression."
+          }
+        },
+        "llm_compose": true
+      },
+      "tpose_side": {
+        "styles": {
+          "natural": {
+            "prompt_style": "a full-body render of the character as a stylized 3D character figure with clean matte skin{fabric} textures, shown from head to toe against a plain neutral background, margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus, clean matte surfaces, simplified illustrative forms, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
+            "prompt_negative": "anime, cel shading, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, spread fingers, splayed fingers, fanned fingers, oversized hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance, front view, back view, facing the camera, looking at the camera, three-quarter view, both arms on one side, arms pointing forward, arms reaching forward, arms in front of the body, arms angled forward, arm resting along the body",
+            "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression."
+          },
+          "keywords": {
+            "prompt_style": "render of a stylized 3D character model, clean matte skin{fabric} textures, full body view, head to toe, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail, stylized illustration, clean matte surfaces, simplified forms, muted terracotta and teal palette",
+            "prompt_negative": "anime, cel shading, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, clenched fists, curled fingers, spread fingers, splayed fingers, fanned fingers, oversized hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance, front view, back view, facing the camera, looking at the camera, three-quarter view, both arms on one side, arms pointing forward, arms reaching forward, arms in front of the body, arms angled forward, arm resting along the body",
+            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression."
+          }
+        },
+        "llm_compose": true
       }
     },
     "postprocess_enabled": false,
@@ -544,6 +724,14 @@
   "skills": {
     "instagram": {
       "enabled": true
+    },
+    "knowledge_extract": {
+      "enabled": true,
+      "folder_path": "worlds/demo/knowledge",
+      "file_pattern": "*.md",
+      "include_subdirs": false,
+      "max_age_days": 0,
+      "extraction_prompt": "Collect facts about the town, its places, its people and what happened this season."
     }
   },
   "random_events": {
@@ -631,7 +819,7 @@
     "enabled": true
   },
   "story_engine": {
-    "enabled": false,
+    "enabled": true,
     "max_active_arcs": 2,
     "cooldown_hours": 6,
     "max_beats": 5,

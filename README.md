@@ -319,6 +319,28 @@ The repository ships a pre-populated `demo/` world as a starter; `worlds/demo/` 
 git. Pass `--world <new-name>` to begin from a clean slate — the directory is created on first
 start.
 
+### The bundled world: Tidehaven
+
+A small terraced town on a west-facing shore, a few decades from now, after people stopped throwing
+things away. Four places — **Salt Quay** at the water, **Market Terrace** above it, **The Terrace
+House** on the second terrace and **Wend Light** out on the headland, a 637 m walk along the coast
+path. Seven characters live there: five people, a harbour dog and one visitor off the noon ferry.
+
+It is built to exercise the system rather than to look pretty in a screenshot. Between them the
+seven cover both chat modes (`single` and `rp_first`), all three importance levels, an
+avatar-playable character, a non-humanoid on the second mesh contract, and the temporary-NPC
+template. The town carries a story arc, a danger event with its own temporary access rule, two
+different kinds of locked room (one by rule, one by item), a travelling party, a group chat, daily
+schedules, scheduler jobs and a knowledge source of local files. The map is painted in metres with
+two terraces and a raised headland; every room has a floor plan, so the 3D client and the floor-plan
+preview have real geometry to render.
+
+**No images or 3D models ship with it** — those need your own backends. Every prompt field is
+filled in, so generating them is a matter of pressing the buttons in the admin UI. The visual style
+is set per use case in `config.json`: a painterly gouache look for everything on screen, while the
+mesh-source renders keep their neutral, shadowless framing, because image-to-3D needs that more than
+it needs the style.
+
 ---
 
 ## Getting started

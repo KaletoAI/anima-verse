@@ -1,6 +1,6 @@
 {
   "comment": "Fallback-Modelle für den Dev-/Offline-Betrieb (Demo-Welt). Charakter-Modelle und Animations-Clips kommen im Normalfall vom Server (AV3D-5: /characters/{name}/model3d, /assets/animation-clips); dieses Manifest greift nur, wenn der Server nichts liefert.",
-  "defaultHeight": 1.70,
+  "defaultHeight": 1.7,
   "models": [
     {
       "name": "Soldier",
@@ -23,9 +23,11 @@
     }
   ],
   "assignments": {
-    "Damian Demo": "Soldier",
-    "Amelia Lane": "Soldier",
-    "Marcus Hale": "Soldier"
+    "Noor Halvorsen": "Xbot",
+    "Isa Fenwick": "Xbot",
+    "Baz Okonkwo": "Soldier",
+    "Mira Sol": "Xbot",
+    "Teodor Lind": "Soldier"
   },
   "clipFiles": {
     "walk": "/models/Walking.fbx",
