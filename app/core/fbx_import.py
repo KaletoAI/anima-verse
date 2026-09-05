@@ -49,8 +49,16 @@ INBOX_EXTS = (".fbx",)
 #: Printable ASCII runs of at least three characters — an FBX node name.
 _TOKEN_RE = re.compile(rb"[\x20-\x7e]{3,}")
 
-#: How much of a file is scanned for node names. The skeleton is written long
-#: before the animation curves, so a cap keeps a 300 MB export cheap.
+#: How much of a file is scanned for node names BEFORE the cheap answer is
+#: given up on. In an animation export the skeleton stands long before the
+#: curves, so this cap classifies almost every file for the price of its first
+#: chunk. A SKINNED character export is the exception — its mesh comes first
+#: and the armature can sit past any cap — so a file the capped scan cannot
+#: classify is read to the end rather than declared unknown (2026-09-05). That
+#: is not cosmetic: `import_fbx` compares the rig family of the reference pose
+#: against the clip's ONLY when it knows one, so a silently unclassified rest
+#: file walks straight through the guard that exists to stop a foreign
+#: reference pose.
 MAX_PROBE_BYTES = 32 * 1024 * 1024
 
 #: A file whose name says "this is a pose, not a movement" — the reference
@@ -96,11 +104,30 @@ def _mixamo_noprefix_bones() -> Tuple[str, ...]:
     return tuple(names)
 
 
+def _meshy_biped_bones() -> Tuple[str, ...]:
+    """The node names ``fbx_clip._meshy_biped()`` maps — Meshy AI's rigged
+    biped. Mixamo's names except for the spine (numbered DOWNWARDS from the
+    chest there, so ``Spine`` is the TOP segment) and a lowercase ``neck``.
+    The rig's ``head_end`` and ``headfront`` are absent here for the same
+    reason MotusMan's sockets are: the converter discards them."""
+    return (
+        "Hips", "Spine", "Spine01", "Spine02", "neck", "Head",
+        "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
+        "RightShoulder", "RightArm", "RightForeArm", "RightHand",
+        "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase",
+        "RightUpLeg", "RightLeg", "RightFoot", "RightToeBase",
+    )
+
+
 #: family → the node names that must ALL be present (mirror of
 #: ``fbx_clip.SIGNATURES``; "auto" picks the first family that matches).
 SIGNATURES: Dict[str, Tuple[str, ...]] = {
     "unity-humanoid": ("Hips", "Left_UpperLeg", "Left_UpperArm", "Chest"),
     "mixamo-noprefix": ("Hips", "LeftUpLeg", "LeftForeArm", "Spine2"),
+    # ``Spine02`` vs ``Spine2`` is the whole difference between the two
+    # Mixamo-shaped families — neither spelling appears in the other rig, so
+    # the order these are tried in does not matter.
+    "meshy-biped": ("Hips", "LeftUpLeg", "LeftForeArm", "Spine02"),
 }
 
 #: family → token fragments that DISQUALIFY it (mirror of
@@ -116,12 +143,16 @@ EXCLUDE_FRAGMENTS: Dict[str, Tuple[str, ...]] = {
 BONE_NAMES: Dict[str, Tuple[str, ...]] = {
     "unity-humanoid": _unity_humanoid_bones(),
     "mixamo-noprefix": _mixamo_noprefix_bones(),
+    "meshy-biped": _meshy_biped_bones(),
 }
 
 #: family → node names that only exist when the rig has fingers.
 FINGER_NAMES: Dict[str, Tuple[str, ...]] = {
     "unity-humanoid": ("Left_IndexProximal", "Right_IndexProximal"),
     "mixamo-noprefix": ("LeftHandIndex1", "RightHandIndex1"),
+    # The Meshy biped has no finger joints at all — listed explicitly so the
+    # empty answer reads as "checked", not as "family forgotten".
+    "meshy-biped": (),
 }
 
 #: absolute path → (mtime_ns, size, probe); a probe is pure file content, so
@@ -134,6 +165,30 @@ def is_rest_name(name: str) -> bool:
     """Does the FILE NAME say "reference pose"? (tpose / t-pose / rest / bind)"""
     low = Path(name).stem.lower()
     return any(marker in low for marker in REST_MARKERS)
+
+
+#: Bytes of the previous chunk re-scanned with the next one, so a node name
+#: cut in half by the read boundary is still seen whole. Any FBX node name is
+#: far shorter than this.
+_TOKEN_OVERLAP = 256
+
+
+def _tokens(data: bytes) -> set:
+    """The printable ASCII runs of a byte block — an FBX keeps its node names
+    in the clear, so these are the candidate rig names."""
+    return {m.group().decode("ascii", "ignore") for m in _TOKEN_RE.finditer(data)}
+
+
+def _match_family(tokens: set) -> str:
+    """The first signature fully present in ``tokens`` and not disqualified by
+    a fragment, ``""`` when none matches."""
+    for family, signature in SIGNATURES.items():
+        if not all(name in tokens for name in signature):
+            continue
+        if any(frag in tok for frag in EXCLUDE_FRAGMENTS.get(family, ()) for tok in tokens):
+            continue
+        return family
+    return ""
 
 
 def probe_fbx(path: Path) -> Dict[str, Any]:
@@ -151,19 +206,27 @@ def probe_fbx(path: Path) -> Dict[str, Any]:
     try:
         with path.open("rb") as fh:
             data = fh.read(MAX_PROBE_BYTES)
+            tokens = _tokens(data)
+            family = _match_family(tokens)
+            if not family:
+                # The cheap scan found no rig. Before calling the file
+                # unknown, read what is left: a skinned character export
+                # writes its mesh first and its armature last, and that file
+                # is exactly what an admin reaches for as the reference pose.
+                rest = fh.read()
+                if rest:
+                    # A node name can straddle the boundary; the tail of the
+                    # first chunk is re-scanned with the head of the second so
+                    # the split cannot swallow one.
+                    tokens |= _tokens(data[-_TOKEN_OVERLAP:] + rest)
+                    family = _match_family(tokens)
     except OSError as e:
         out["error"] = str(e)
         return out
-    tokens = {m.group().decode("ascii", "ignore") for m in _TOKEN_RE.finditer(data)}
-    for family, signature in SIGNATURES.items():
-        if not all(name in tokens for name in signature):
-            continue
-        if any(frag in tok for frag in EXCLUDE_FRAGMENTS.get(family, ()) for tok in tokens):
-            continue
+    if family:
         out["skeleton_family"] = family
         out["bone_count"] = sum(1 for n in BONE_NAMES.get(family, ()) if n in tokens)
         out["has_fingers"] = any(n in tokens for n in FINGER_NAMES.get(family, ()))
-        break
     return out
 
 

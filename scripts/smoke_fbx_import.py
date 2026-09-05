@@ -15,6 +15,7 @@ signature names of a family IS that family:
 
     contains Hips + Left_UpperLeg + Left_UpperArm + Chest -> unity-humanoid
     contains Hips + LeftUpLeg + LeftForeArm + Spine2      -> mixamo-noprefix
+    contains Hips + LeftUpLeg + LeftForeArm + Spine02     -> meshy-biped
     contains only Hips/Bone_01/…                          -> "" (unknown rig)
     + Left_IndexProximal                                  -> has_fingers True
     file name contains tpose/t-pose/rest/bind             -> reference pose
@@ -29,6 +30,21 @@ signature names of a family IS that family:
   in the byte stream too. And what the map does not know is simply not
   counted — MotusMan's Root, hand_*_wep sockets and Leaf*Roll1 twist helpers
   are discarded, not an obstacle to recognition.
+
+  RULE 1c — the SPINE tells the two Mixamo-shaped families apart. Meshy AI
+  numbers its spine downwards from the chest (``Spine02`` is the child of the
+  hips, ``Spine`` the topmost segment), Mixamo upwards. One token — Spine2 vs
+  Spine02 — decides, and neither spelling appears in the other rig, so the
+  order the signatures are tried in cannot matter.
+
+  RULE 1d — the probe's byte cap is a shortcut, not a verdict. An ANIMATION
+  export writes its skeleton first, so the cap classifies it for the price of
+  one chunk; a SKINNED character export writes its mesh first and its
+  armature last. A file the capped scan cannot place is therefore read to the
+  end instead of being called unknown — and that matters beyond tidiness,
+  because ``import_fbx`` only compares the reference pose's rig family
+  against the clip's WHEN IT KNOWS ONE (RULE 6). An unclassified rest file
+  walks straight through that guard.
 
 RULE 2 — "a pair is two files whose NAMES say so". Female_/Male_, _A/_B,
 __a/__b, _L/_R — and only when the partner really lies in the inbox:
@@ -139,6 +155,17 @@ MOB_NAMES = ("Hips", "Spine", "Spine1", "Spine2", "Neck", "Head",
              "LeftHandIndex1", "RightHandIndex1",
              "Root", "hand_l_wep", "hand_r_wep", "LeafLeftForeArmRoll1")
 MOB_MAPPED = 16
+
+#: A Meshy AI biped: Mixamo's names except for the spine, which Meshy numbers
+#: DOWNWARDS from the chest, and a lowercase ``neck``. 12 of these are in the
+#: map (bone_count 12); ``head_end`` and ``headfront`` are the rig's extras,
+#: which the map discards exactly like MotusMan's sockets. No finger joints
+#: exist on this rig at all.
+MESHY_NAMES = ("Hips", "Spine", "Spine01", "Spine02", "neck", "Head",
+               "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
+               "LeftUpLeg", "LeftLeg",
+               "head_end", "headfront")
+MESHY_MAPPED = 12
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -382,6 +409,74 @@ def test_families() -> None:
     u = probe("unity_still_wins", UNITY_NAMES)
     check("the unity-humanoid family is untouched by the new one",
           u["skeleton_family"] == "unity-humanoid" and u["bone_count"] == 6, str(u))
+
+    # RULE 1c — one token separates the two Mixamo-shaped families.
+    m = probe("meshy_adventurer", MESHY_NAMES)
+    check("a Meshy biped is recognised",
+          m["skeleton_family"] == "meshy-biped", str(m))
+    check(f"bone_count counts only the mapped names ({MESHY_MAPPED} planted)",
+          m["bone_count"] == MESHY_MAPPED, str(m["bone_count"]))
+    check("head_end / headfront are neither counted nor an obstacle",
+          m["bone_count"] == MESHY_MAPPED and m["skeleton_family"] == "meshy-biped")
+    check("a rig without finger joints reports none",
+          m["has_fingers"] is False, str(m))
+    check("a Meshy file is NOT read as unprefixed Mixamo (Spine02 vs Spine2)",
+          m["skeleton_family"] != "mixamo-noprefix", str(m))
+    check("…and a MotusMan file is not read as Meshy either",
+          probe("mob1_again", MOB_NAMES)["skeleton_family"] == "mixamo-noprefix")
+
+    # RULE 1d — the byte cap is a shortcut, not a verdict. Rather than write a
+    # 33 MB fixture, the cap is moved to a handful of bytes: what is tested is
+    # the MECHANISM (read on past the cap, and re-scan across the boundary),
+    # and that is the same mechanism at 32 MB. A signature name is planted so
+    # that it STRADDLES the cap — the case a naive second read would swallow.
+    pad_stem = FIXT / "big_character.fbx"
+    body = fake_fbx(MESHY_NAMES)
+    cut = body.index(b"Spine02") + 3          # the cap falls INSIDE the token
+    real_cap = fbx_import.MAX_PROBE_BYTES
+    try:
+        pad_stem.write_bytes(body)
+        fbx_import.MAX_PROBE_BYTES = cut
+        # The cached probe would answer from the earlier full-file read.
+        fbx_import._probe_cache.pop(str(pad_stem), None)
+        big = fbx_import.probe_fbx(pad_stem)
+        check("a rig beyond the byte cap is still recognised, not called "
+              "unknown", big["skeleton_family"] == "meshy-biped", str(big))
+        check("…including a name cut in half by the cap",
+              big["bone_count"] == MESHY_MAPPED, str(big["bone_count"]))
+        fbx_import.MAX_PROBE_BYTES = len(body) + 1000
+        fbx_import._probe_cache.pop(str(pad_stem), None)
+        whole = fbx_import.probe_fbx(pad_stem)
+        check("…and the answer is the same one the uncapped scan gives",
+              whole == big, f"{whole} vs {big}")
+    finally:
+        fbx_import.MAX_PROBE_BYTES = real_cap
+        fbx_import._probe_cache.pop(str(pad_stem), None)
+
+    # The two tables MUST agree — `fbx_clip` imports bpy and cannot be
+    # imported here, so its families are read out of the source. A family
+    # added there and forgotten here probes as "unknown"; one added here and
+    # forgotten there fails inside Blender, halfway through an import.
+    import ast
+    clip_src = (Path(__file__).resolve().parents[1] / "app" / "blender"
+                / "scripts" / "fbx_clip.py").read_text(encoding="utf-8")
+    tree = ast.parse(clip_src)
+    tables = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id in ("BONE_MAPS", "SIGNATURES"):
+                    tables[tgt.id] = [k.value for k in node.value.keys
+                                      if isinstance(k, ast.Constant)]
+    check("fbx_clip.BONE_MAPS and fbx_import.SIGNATURES name the same families",
+          sorted(tables.get("BONE_MAPS", [])) == sorted(fbx_import.SIGNATURES),
+          f"{sorted(tables.get('BONE_MAPS', []))} vs {sorted(fbx_import.SIGNATURES)}")
+    check("…and so do the two SIGNATURES tables",
+          sorted(tables.get("SIGNATURES", [])) == sorted(fbx_import.SIGNATURES),
+          f"{sorted(tables.get('SIGNATURES', []))} vs {sorted(fbx_import.SIGNATURES)}")
+    check("every family with a signature has a bone-name mirror",
+          all(f in fbx_import.BONE_NAMES for f in fbx_import.SIGNATURES),
+          str(sorted(set(fbx_import.SIGNATURES) - set(fbx_import.BONE_NAMES))))
 
     live = paths.get_shared_dir() / "models" / "clips-inbox" / "MOB1_Stand_Relaxed_Idle_v2.fbx"
     if live.is_file():

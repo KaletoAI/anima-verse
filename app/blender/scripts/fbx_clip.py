@@ -136,13 +136,62 @@ def _mixamo_noprefix():
     return m
 
 
+def _meshy_biped():
+    """Meshy AI's rigged biped export — 24 nodes, no fingers.
+
+    Twenty-one names are Mixamo's own (``Hips``, both leg chains down to
+    ``ToeBase``, both arm chains including ``Shoulder`` and ``Hand``), so this
+    map differs from :func:`_mixamo_noprefix` in exactly four places, and one
+    of them is a trap:
+
+    * THE SPINE IS NUMBERED THE OTHER WAY ROUND. Meshy counts DOWNWARDS from
+      the chest — ``Spine`` is the top segment (it carries the shoulders and
+      the neck), ``Spine01`` sits below it and ``Spine02`` is the child of the
+      hips. Mixamo counts upwards, so ``Spine`` is its LOWEST. Read off the
+      rest pose of a Meshy export, the three heads sit at 0.917 / 1.011 /
+      1.107 m for Spine02 / Spine01 / Spine. Mapping ``Spine01`` to
+      ``upperback`` because the digits line up would twist the torso; the
+      mapping below follows the anatomy, not the name.
+    * ``neck`` is lowercase.
+    * No toe end sites. ``ltoes``/``rtoes`` therefore get no direction target
+      and stay unanimated (``_frames_of`` skips a bone whose child is absent)
+      — the toes keep the rig's rest, which is what a source without that
+      joint can honestly deliver.
+    * No fingers at all, exactly like a CMU take: the hands keep the model's
+      own pose instead of being overwritten at rest.
+
+    ``head_end`` and ``headfront`` are discarded by omission, like MotusMan's
+    ``Root`` and weapon sockets — the head end site is reconstructed from the
+    neck direction in ``_load_source`` regardless of what the file carries.
+    """
+    return {
+        "Hips": "root",
+        # anatomy, not digits — see the docstring
+        "Spine02": "lowerback", "Spine01": "upperback", "Spine": "thorax",
+        "neck": "lowerneck", "Head": "upperneck",
+        "LeftShoulder": "lclavicle", "LeftArm": "lhumerus",
+        "LeftForeArm": "lradius", "LeftHand": "lhand",
+        "RightShoulder": "rclavicle", "RightArm": "rhumerus",
+        "RightForeArm": "rradius", "RightHand": "rhand",
+        "LeftUpLeg": "lfemur", "LeftLeg": "ltibia",
+        "LeftFoot": "lfoot", "LeftToeBase": "ltoes",
+        "RightUpLeg": "rfemur", "RightLeg": "rtibia",
+        "RightFoot": "rfoot", "RightToeBase": "rtoes",
+    }
+
+
 BONE_MAPS = {"unity-humanoid": _unity_humanoid,
-             "mixamo-noprefix": _mixamo_noprefix}
+             "mixamo-noprefix": _mixamo_noprefix,
+             "meshy-biped": _meshy_biped}
 
 # Signature node names per family — "auto" picks the first family whose
 # signature is fully present.
+# ``Spine02``/``Spine2`` is what keeps the two Mixamo-shaped families apart:
+# the three tokens before it are common to both, and neither spelling ever
+# appears in the other rig.
 SIGNATURES = {"unity-humanoid": ("Hips", "Left_UpperLeg", "Left_UpperArm", "Chest"),
-              "mixamo-noprefix": ("Hips", "LeftUpLeg", "LeftForeArm", "Spine2")}
+              "mixamo-noprefix": ("Hips", "LeftUpLeg", "LeftForeArm", "Spine2"),
+              "meshy-biped": ("Hips", "LeftUpLeg", "LeftForeArm", "Spine02")}
 
 # Node-name prefixes that DISQUALIFY a family. The unprefixed Mixamo names are
 # a substring of the prefixed ones, so a plain Mixamo export must never be read
