@@ -638,6 +638,7 @@ export function LocationGallery({
       //
       // Every render may pick its own size; only the room-model source
       // arrives prefilled from the floor plan.
+      showResolution
       defaultResolution={dialogType === 'building' ? roomResolution : null}
       viewChoice={dialogType === 'building'
         ? { value: buildingView, onChange: setBuildingView } : undefined}

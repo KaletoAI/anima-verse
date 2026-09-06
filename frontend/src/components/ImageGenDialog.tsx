@@ -82,8 +82,8 @@ export interface ImageGenSubmit {
   // Reference-slot toggles (managed against the backend's ref_slot_count budget).
   use_room?: boolean
   use_source_as_reference?: boolean
-  // Output resolution in pixels — only emitted when the field carries a
-  // value; otherwise the server keeps its use-case default.
+  // Output resolution in pixels — only emitted when `showResolution` is on and
+  // the field carries a value; otherwise the server keeps its use-case default.
   width?: number
   height?: number
   // Where the shown prompt came from (server-composed dialogs only) — the
@@ -131,6 +131,15 @@ interface Props {
    * literal adjustment order) — the "Compose with AI" button stays hidden.
    */
   composeRequest?: Record<string, unknown>
+  /**
+   * Show the optional output-resolution fields (width × height plus a live
+   * aspect display). Empty fields = the server keeps its use-case/backend
+   * default. Only for callers whose endpoint honours the values — today the
+   * location gallery's generate dialog (day/night/room-model renders). Every
+   * other caller drops width/height on submit, so it leaves the fields hidden
+   * rather than offering a setting that goes nowhere.
+   */
+  showResolution?: boolean
   /**
    * Prefill for the resolution fields — e.g. the aspect of a room's
    * floor-plan rectangle, so a 2 × 5 room is not rendered as a square box.
@@ -207,7 +216,7 @@ const VIEW_LABEL: Record<ImageView, string> = {
 export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
   styleUseCase, composeRequest,
-  defaultResolution,
+  showResolution, defaultResolution,
   showRoomReference, defaultUseSource, requireSourceReference,
   showCreateNew, defaultCreateNew,
   enhanceEndpoint = '/world/imagegen-enhance-prompt', onSubmit, onClose,
@@ -248,9 +257,10 @@ export function ImageGenDialog({
     () => ratioLabel(parseFloat(widthText), parseFloat(heightText)),
     [widthText, heightText])
 
-  // "Improve": laesst den Prompt per LLM aus dem Aenderungswunsch umschreiben
-  // und schreibt das Ergebnis ins Prompt-Feld (sichtbar/editierbar vor dem
-  // Generieren). Danach ist das Improvement-Feld leer -> Generierung woertlich.
+  // "Improve": has the LLM rewrite the prompt from the change request and
+  // writes the result into the prompt field (visible/editable before
+  // generating). The improvement field is empty afterwards -> the generation
+  // takes the prompt literally.
   const applyImprovement = useCallback(async () => {
     const base = prompt.trim()
     const wish = improvement.trim()
@@ -485,10 +495,12 @@ export function ImageGenDialog({
     if (characterOptions) payload.character_names = selectedChars
     if (showRoomReference) payload.use_room = useRoom
     if (sourceImageUrl) payload.use_source_as_reference = useSource
-    const resW = snapResolution(parseFloat(widthText))
-    const resH = snapResolution(parseFloat(heightText))
-    if (resW) payload.width = resW
-    if (resH) payload.height = resH
+    if (showResolution) {
+      const w = snapResolution(parseFloat(widthText))
+      const h = snapResolution(parseFloat(heightText))
+      if (w) payload.width = w
+      if (h) payload.height = h
+    }
     if (viewChoice && viewChoice.value !== 'front' && useFrontRef && frontRef
         && (currentOption.ref_slot_count || 0) > 0) {
       payload.front_reference = frontRef
@@ -506,7 +518,7 @@ export function ImageGenDialog({
       isRegen, showCreateNew, createNew,
       improvement, hideNegative, noNegative, negative, characterOptions, selectedChars,
       showRoomReference, useRoom, sourceImageUrl, useSource,
-      widthText, heightText,
+      showResolution, widthText, heightText,
       viewChoice, useFrontRef, frontRef])
 
   // Reference-slot budget: how many ref images may be used (backend ref_slot_count).
@@ -553,9 +565,9 @@ export function ImageGenDialog({
           ) : !options.length ? (
             <div className="ga-form-hint">{t('No image generation backends available.')}</div>
           ) : (
-            // Zwei Spalten (wie der Animate-Dialog): links Service + LoRAs,
-            // rechts (aktuelles) Bild + Prompt + Optionen. Bricht auf schmalem
-            // Dialog via flex-wrap auf eine Spalte um.
+            // Two columns (like the animate dialog): service + LoRAs on the
+            // left, the (current) image + prompt + options on the right. On a
+            // narrow dialog flex-wrap folds them into one column.
             <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {viewChoice ? (
@@ -606,50 +618,54 @@ export function ImageGenDialog({
                 ))}
               </select>
 
-              <label className="ga-imagegen-label">{t('Output size (px)')}</label>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <input
-                  className="ga-input"
-                  type="number"
-                  min={RES_MIN}
-                  max={RES_MAX}
-                  step={RES_GRID}
-                  style={{ width: 84 }}
-                  value={widthText}
-                  placeholder={t('auto')}
-                  disabled={submitting}
-                  aria-label={t('Width in pixels')}
-                  onChange={(e) => setWidthText(e.target.value)}
-                  onBlur={() => setWidthText((cur) => {
-                    const v = snapResolution(parseFloat(cur))
-                    return v ? String(v) : ''
-                  })}
-                />
-                <span aria-hidden>×</span>
-                <input
-                  className="ga-input"
-                  type="number"
-                  min={RES_MIN}
-                  max={RES_MAX}
-                  step={RES_GRID}
-                  style={{ width: 84 }}
-                  value={heightText}
-                  placeholder={t('auto')}
-                  disabled={submitting}
-                  aria-label={t('Height in pixels')}
-                  onChange={(e) => setHeightText(e.target.value)}
-                  onBlur={() => setHeightText((cur) => {
-                    const v = snapResolution(parseFloat(cur))
-                    return v ? String(v) : ''
-                  })}
-                />
-                {resRatio ? (
-                  <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{resRatio}</span>
-                ) : null}
-              </div>
-              <div className="ga-form-hint">
-                {t('Empty = the backend default. Snaps to 64-pixel steps, 256–2048. A long narrow room needs an image of the same shape — a square one turns it into a box.')}
-              </div>
+              {showResolution ? (
+                <>
+                  <label className="ga-imagegen-label">{t('Output size (px)')}</label>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input
+                      className="ga-input"
+                      type="number"
+                      min={RES_MIN}
+                      max={RES_MAX}
+                      step={RES_GRID}
+                      style={{ width: 84 }}
+                      value={widthText}
+                      placeholder={t('auto')}
+                      disabled={submitting}
+                      aria-label={t('Width in pixels')}
+                      onChange={(e) => setWidthText(e.target.value)}
+                      onBlur={() => setWidthText((cur) => {
+                        const v = snapResolution(parseFloat(cur))
+                        return v ? String(v) : ''
+                      })}
+                    />
+                    <span aria-hidden>×</span>
+                    <input
+                      className="ga-input"
+                      type="number"
+                      min={RES_MIN}
+                      max={RES_MAX}
+                      step={RES_GRID}
+                      style={{ width: 84 }}
+                      value={heightText}
+                      placeholder={t('auto')}
+                      disabled={submitting}
+                      aria-label={t('Height in pixels')}
+                      onChange={(e) => setHeightText(e.target.value)}
+                      onBlur={() => setHeightText((cur) => {
+                        const v = snapResolution(parseFloat(cur))
+                        return v ? String(v) : ''
+                      })}
+                    />
+                    {resRatio ? (
+                      <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{resRatio}</span>
+                    ) : null}
+                  </div>
+                  <div className="ga-form-hint">
+                    {t('Empty = the backend default. Snaps to 64-pixel steps, 256–2048. A long narrow room needs an image of the same shape — a square one turns it into a box.')}
+                  </div>
+                </>
+              ) : null}
 
               {currentOption?.has_loras ? (
                 <>
