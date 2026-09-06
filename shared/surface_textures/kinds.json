@@ -36,7 +36,17 @@
   },
   "deep_water": {
     "name": "deep water",
-    "description": "the surface of deep water seen straight from above"
+    "description": "the surface of deep water seen straight from above",
+    "material": {
+      "class": "water",
+      "tint": "#3f7fb8",
+      "map_strength": 0.75,
+      "wave_m": 1.6,
+      "speed": 0.25,
+      "flow_speed": 0.5,
+      "sky_mix": 0.55,
+      "roughness": 0.08
+    }
   },
   "forest": {
     "name": "forest",
@@ -68,7 +78,17 @@
   },
   "water": {
     "name": "water",
-    "description": "calm water surface with gentle ripples and small waves, natural blue-green tones"
+    "description": "calm water surface with gentle ripples and small waves, natural blue-green tones",
+    "material": {
+      "class": "water",
+      "tint": "#3f7fb8",
+      "map_strength": 0.75,
+      "wave_m": 1.6,
+      "speed": 0.25,
+      "flow_speed": 0.5,
+      "sky_mix": 0.55,
+      "roughness": 0.08
+    }
   },
   "woodchip_wallpaper": {
     "name": "woodchip wallpaper",
@@ -77,5 +97,17 @@
   "wooden_floor": {
     "name": "wooden floor",
     "description": "the surface of wooden floor seen straight from above"
+  },
+  "indoor_old_house": {
+    "name": "indoor - old house wall",
+    "description": "Interior texture of an old rustic inn, featuring a combination of weathered aged wood beams and rough natural stone walls, tactile surfaces, historical atmosphere, high detail."
+  },
+  "indoor_old_house_floor": {
+    "name": "indoor - old house floor",
+    "description": "Seamless tileable surface texture seen straight from above: a rustic inn floor featuring long weathered aged wood planks and rough natural stone tiles, tactile surfaces, historical atmosphere, high detail, flat even lighting, no perspective, no vignette, no drop shadows, no horizon, no objects or subjects, no border."
+  },
+  "indoor_kitchen_wall": {
+    "name": "indoor - kitchen - wall",
+    "description": "A seamless tileable surface texture of kitchen tiles, viewed straight from above, flat even lighting, no perspective, no vignette, no drop shadows, no horizon, no objects or subjects, no border, material only."
   }
 }
