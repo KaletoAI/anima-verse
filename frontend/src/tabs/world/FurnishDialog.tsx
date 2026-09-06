@@ -20,7 +20,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import type { RoomPropPlacement } from './worldTypes'
-import { groupLabel, usePoseCatalog } from './placeTypes'
+import { groupLabel, newId, usePoseCatalog } from './placeTypes'
 
 export type FurnishState = 'selecting' | 'proposal_ready' | 'generating'
   | 'placing' | 'review_ready' | 'error'
@@ -117,7 +117,13 @@ export function useFurnishJob(roomId: string, open: boolean): FurnishJob {
       const key = `${status.room_id}:${status.updated_at || ''}`
       if (seededRef.current !== key) {
         seededRef.current = key
-        setGhosts(status.placements?.placed || [])
+        // EVERY GHOST GETS AN ID before it is drawn (decision E1): a pending
+        // piece may stand ON another one, and a support can only be named
+        // once it has a name. The server mints the same 8-char base32 shape
+        // on save and keeps a client-sent id verbatim, so minting here costs
+        // nothing and makes the relation editable before Accept.
+        setGhosts((status.placements?.placed || [])
+          .map((p) => (p.id ? p : { ...p, id: newId() })))
       }
       return
     }

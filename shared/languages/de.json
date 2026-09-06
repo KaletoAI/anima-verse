@@ -1394,7 +1394,6 @@
     "Session totals — accumulated across all turns of this conversation": "Session-Summen — kumuliert über alle Turns dieser Konversation",
     "Set": "Set",
     "Set elevator": "Fahrstuhl setzen",
-    "Set this prop down on the top surface of the prop underneath it (the topmost one, if several).": "Dieses Prop auf die Oberfläche des Props darunter stellen (bei mehreren auf das oberste).",
     "Setup": "Setup",
     "Setup (unsaved)": "Setup (ungespeichert)",
     "Several versions per kind can be stored — the ⭐ active one is what the client gets; click a thumbnail to enlarge.": "Pro Art können mehrere Versionen gespeichert werden — die mit ⭐ aktive bekommt der Client; Klick auf ein Vorschaubild vergrößert.",
@@ -2514,6 +2513,16 @@
     "Suggestion": "Vorschlag",
     "Confirm": "Bestätigen",
     "Known": "Bekannt",
-    "Unknown (fog of war)": "Unbekannt (Nebel des Krieges)"
+    "Unknown (fog of war)": "Unbekannt (Nebel des Krieges)",
+    "on: {name}": "auf: {name}",
+    "This piece stands on another one: its position, yaw and height are measured from that piece, and it moves along when the support moves.": "Dieses Stück steht auf einem anderen: Position, Drehung und Höhe werden von jenem Stück aus gemessen, und es wandert mit, wenn der Träger sich bewegt.",
+    "Metres from the support’s centre, along the support’s width axis (negative = the other way).": "Meter von der Mitte des Trägers, entlang seiner Breitenachse (negativ = in die andere Richtung).",
+    "Metres from the support’s centre, along the support’s depth axis (negative = the other way).": "Meter von der Mitte des Trägers, entlang seiner Tiefenachse (negativ = in die andere Richtung).",
+    "Yaw in degrees, RELATIVE to the support’s heading — 0 = the same way it faces.": "Drehung in Grad, RELATIV zur Ausrichtung des Trägers — 0 = in dieselbe Richtung.",
+    "Trim above the support’s top — 0 means exactly on it. The surface height itself is the server’s stacking rule.": "Feinversatz über der Oberkante des Trägers — 0 heißt genau darauf. Die Höhe der Fläche selbst kommt aus der Stapelregel des Servers.",
+    "Set this prop down on the prop underneath it (the topmost one, if several) — it then moves and turns with that piece.": "Dieses Prop auf das Prop darunter stellen (bei mehreren auf das oberste) — es bewegt und dreht sich dann mit jenem Stück.",
+    "Off the support and back onto the floor — the prop stays where it is drawn.": "Vom Träger herunter auf den Boden — das Prop bleibt, wo es gezeichnet ist.",
+    "Also removes {n} pieces standing on it.": "Entfernt auch {n} Stücke, die darauf stehen.",
+    "Remove all": "Alle entfernen"
   }
 }
