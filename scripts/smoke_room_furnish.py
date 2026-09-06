@@ -55,7 +55,10 @@ Every expected number is derived by hand from the rule:
     the orchestrator frozen and then attaching the GLB from outside.
   * a layout write that fails must not cost the created props: accept persists
     their ids on the row BEFORE the write, so the refused accept leaves 8 props
-    and the retry still leaves 8.
+    and the retry still leaves 8 — AND the retry's layout entry names that very
+    prop id. The retry re-reads the placements from the row, where they still
+    say "need:n1", so the rewrite map has to cover every built need that has a
+    prop, not only the props this call made.
   * the repair loop (canned solver results, section 2c): run 1 places
     floor 1/2 and wall 1/1 and fails one floor and one surface piece, so two
     passes have errors and exactly two re-plan calls follow. The floor
@@ -807,11 +810,29 @@ def main() -> int:
           and all(n.get("prop_id") for n in
                   room_furnish.get_status("smokeroom")["proposal"]["needs"]),
           str(props_after_fail))
+    stuck_pid = next(
+        n["prop_id"] for n in
+        room_furnish.get_status("smokeroom")["proposal"]["needs"]
+        if n.get("build"))
     world_module.append_room_props = real_append
-    room_furnish.accept("smokeroom")
+    retry_accept = room_furnish.accept("smokeroom")
     check("the retry reuses that prop instead of making a second one",
-          len(props.list_props()) == props_after_fail,
-          str(len(props.list_props())))
+          len(props.list_props()) == props_after_fail
+          and retry_accept["placed"] == 1,
+          f'{len(props.list_props())} / {json.dumps(retry_accept)}')
+    # THE PLACEMENT MUST NAME THE REAL PROP. The retry re-reads the entries
+    # from the row, so they still say "need:n1"; a rewrite map built only from
+    # the props created in THIS call would leave that id standing, the layout
+    # sanitizer would drop the placement (props.safe_prop_id rejects the
+    # colon) and a mesh would be baked for an empty room.
+    room = get_room_by_id(
+        next(entry for entry in _load_world_data()["locations"]
+             if entry["id"] == loc["id"]), "smokeroom")
+    check("…and the layout entry names the real prop, not the placeholder",
+          any(p.get("prop_id") == stuck_pid
+              for p in room["layout"].get("props") or []),
+          json.dumps([p.get("prop_id")
+                      for p in room["layout"].get("props") or []][-3:]))
     wait_for(("error",), tries=100)
 
     # ── a job stranded in generating closes itself ──────────────────────

@@ -1161,13 +1161,22 @@ def confirm(room_id: str, proposal: Any) -> Dict[str, Any]:
     return get_status(room_id) or {}
 
 
-def _create_built_props(needs: List[Dict[str, Any]], placed_ids: set
-                        ) -> Tuple[Dict[str, str], List[str]]:
+def _create_built_props(needs: List[Dict[str, Any]], placed_ids: set,
+                        persist: Optional[Any] = None
+                        ) -> Tuple[Dict[str, str], List[str], int]:
     """Turn every PLACED need that has to be built into a real library prop.
 
-    Answers ``({"need:<key>": "<prop id>"}, [skipped kind, ...])`` — the
-    rewrite map for the accepted placements (E6) and the kinds that got no
-    piece.
+    Answers ``({"need:<key>": "<prop id>"}, [skipped kind, ...], created)`` —
+    the rewrite map for the accepted placements (E6), the kinds that got no
+    piece, and how many props this call actually made.
+
+    THE MAP COVERS EVERY BUILT NEED THAT HAS A PROP, not only the ones made
+    here. The placements always name a built piece by its temporary id — they
+    are re-read from the row on every accept — so a need whose prop an EARLIER
+    accept created (one whose layout write then failed) has to be in the map
+    too. Without it the retry would store ``need:<key>`` as a prop id, the
+    layout sanitizer would silently drop the placement (``props.safe_prop_id``
+    rejects the colon) and a mesh would be baked for an empty room.
 
     BUILD ONLY WHAT WAS PLACED (controller ruling 2026-09-07). A need the
     solver could not fit, or one the admin dragged out of the review, is a
@@ -1186,10 +1195,14 @@ def _create_built_props(needs: List[Dict[str, Any]], placed_ids: set
 
     rewrite: Dict[str, str] = {}
     skipped: List[str] = []
+    created = 0
     for need in needs:
-        if not need.get("build") or need.get("prop_id"):
+        if not need.get("build"):
             continue
         temp_id = f"{NEED_ID_PREFIX}{need.get('key') or ''}"
+        if need.get("prop_id"):
+            rewrite[temp_id] = str(need["prop_id"])
+            continue
         if temp_id not in placed_ids:
             skipped.append(str(need.get("kind") or temp_id))
             continue
@@ -1207,12 +1220,18 @@ def _create_built_props(needs: List[Dict[str, Any]], placed_ids: set
             key_areas=need.get("key_areas") or None)
         need["prop_id"] = prop["id"]
         rewrite[temp_id] = prop["id"]
+        created += 1
         if need.get("marker"):
             # Onto the freshly created prop's FIRST variant — the marker
             # describes the mesh this run is about to bake, and markers belong
             # to the variant since 2026-08-25.
             set_variant_markers(prop["id"], 0, [need["marker"]])
-    return rewrite, skipped
+        # PERSIST AFTER EVERY PIECE, not after the loop: a create_prop that
+        # raises halfway would otherwise leave the props already made without
+        # an id on the row, and the next accept would make them a second time.
+        if persist is not None and not persist():
+            raise FurnishError("No furnishing job for this room.", 404)
+    return rewrite, skipped, created
 
 
 def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
@@ -1220,15 +1239,17 @@ def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
     then generate what is still missing (E6).
 
     Four steps, in this order: the pieces that were PLACED and had to be built
-    become props, those ids are persisted on the row, the placements that
-    named them by their temporary id are rewritten, and the whole list is
-    appended to the room. Only then does the job switch to ``generating`` —
-    the room is already furnished with placeholder boxes, and the meshes drop
-    in one by one.
+    become props (each id persisted the moment it exists), the placements that
+    name them by their temporary id are rewritten to the real one, the whole
+    list is appended to the room, and only then does the job switch to
+    ``generating`` — the room is already furnished with placeholder boxes, and
+    the meshes drop in one by one.
 
     THE IDS ARE PERSISTED BEFORE THE LAYOUT WRITE, not after: a layout write
     that fails leaves the job in ``review_ready``, and without that row update
-    a second accept would create every prop a second time.
+    a second accept would create every prop a second time. The rewrite map is
+    rebuilt from the row on every accept for the same reason — see
+    :func:`_create_built_props`.
 
     ``on`` is untouched by the rewrite: it names a PLACEMENT, not a prop.
     """
@@ -1245,9 +1266,9 @@ def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
     needs = _needs(proposal)
     placed_ids = {str(e.get("prop_id") or "") for e in entries}
 
-    rewrite, skipped = _create_built_props(needs, placed_ids)
-    if rewrite and not _update_row(room_id, proposal=proposal):
-        raise FurnishError("No furnishing job for this room.", 404)
+    rewrite, skipped, created = _create_built_props(
+        needs, placed_ids, persist=lambda: _update_row(room_id,
+                                                       proposal=proposal))
     for entry in entries:
         if entry.get("prop_id") in rewrite:
             entry["prop_id"] = rewrite[entry["prop_id"]]
@@ -1259,7 +1280,7 @@ def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
                                          entries):
         raise FurnishError("The room layout could not be updated.", 409)
     logger.info("room_furnish %s: %d placements accepted, %d prop(s) created, "
-                "%d not built (%s)", room_id, len(entries), len(rewrite),
+                "%d not built (%s)", room_id, len(entries), created,
                 len(skipped), ", ".join(skipped) or "-")
     if skipped:
         _skipped_notification(room_id, str(row.get("location_id") or ""),
