@@ -53,7 +53,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import {
   CLOSE_TOL_PX, MIN_ROOM_M, MIN_WINDOW_EDGE_M, OPENING_DEFAULT,
@@ -91,10 +91,9 @@ import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
-import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, RoomPropPlacement, SceneProblem, SceneRoom, ScenePayload, SceneStairs, SurfaceKind } from './worldTypes'
+import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SceneStairs, SurfaceKind } from './worldTypes'
 import { GROUND_ROOM_ID, groundRoomLabel, hasRect, readMapWater } from './worldTypes'
 import { groupKeys, newId, usePoseCatalog } from './placeTypes'
-import { composePlacements, dependentIndices, toSupportFrame } from './placementCompose'
 import { pointInPolygon } from '../map/mapMath'
 import { isWaterKind } from '../map/mapTypes'
 import type { TerrainTypesResp } from '../map/mapTypes'
@@ -288,14 +287,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // One hook for dialog AND ghost layer — a single poll, one ghost list.
   const [furnishOpen, setFurnishOpen] = useState(false)
   const [ghostSel, setGhostSel] = useState<number | null>(null)
-  /** A ghost delete waiting for confirmation, because pieces stand on it. */
-  const [ghostDrop, setGhostDrop] =
-    useState<{ index: number; dependents: number } | null>(null)
-  // The key handler is bound once; the selection it acts on must be the
-  // current one, not the one that existed when it was bound.
-  const ghostSelRef = useRef<number | null>(null)
-  ghostSelRef.current = ghostSel
-
   // WHICH job the ✨ Furnish button drives. The yard's reserved id repeats in
   // every location, so its job is keyed by the composite `__ground__@<loc>`
   // (server contract, § A13a); an ordinary room is its own id.
@@ -1041,54 +1032,32 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     setPropGhost(null)
   }, [])
 
-  /** Drop ONE ghost and everything standing on it (decision E1). Returns how
-   *  many pieces went — the caller turns 0 into "nothing selected". */
-  const dropGhost = useCallback((sel: number): number => {
-    const job = furnishRef.current
-    const doomed = new Set(dependentIndices(job.ghosts, sel))
-    job.setGhosts(job.ghosts.filter((_, i) => !doomed.has(i)))
-    setGhostSel(null)
-    return doomed.size
-  }, [])
-
   // Esc cancels any armed mode and the current draft; R steps the placement
   // ghost's yaw by 90°; Del/Backspace drops the selected furnishing ghost
-  // (never while typing in a field). A ghost that CARRIES others asks first —
-  // the confirmation bar below the plan, never a browser dialog.
+  // (never while typing in a field).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-      if (e.key === 'Escape') {
-        setGhostDrop(null)
-        cancelDraw()
-      } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        const sel = ghostSelRef.current
-        if (sel === null) return
-        const job = furnishRef.current
-        const n = dependentIndices(job.ghosts, sel).length - 1
-        if (n > 0) setGhostDrop({ index: sel, dependents: n })
-        else dropGhost(sel)
+      if (e.key === 'Escape') cancelDraw()
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        setGhostSel((sel) => {
+          if (sel === null) return sel
+          const job = furnishRef.current
+          job.setGhosts(job.ghosts.filter((_, i) => i !== sel))
+          return null
+        })
       } else if ((e.key === 'r' || e.key === 'R')) setGhostYaw((y) => (y + 90) % 360)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [cancelDraw, dropGhost])
+  }, [cancelDraw])
 
   // Selecting another room closes the dialog and drops the ghost selection —
   // both belong to the room that was selected before.
-  useEffect(() => {
-    setGhostSel(null)
-    setGhostDrop(null)
-    setFurnishOpen(false)
-  }, [selected])
+  useEffect(() => { setGhostSel(null); setFurnishOpen(false) }, [selected])
   // Leaving the review state invalidates the ghost indices.
-  useEffect(() => {
-    if (!reviewing) {
-      setGhostSel(null)
-      setGhostDrop(null)
-    }
-  }, [reviewing])
+  useEffect(() => { if (!reviewing) setGhostSel(null) }, [reviewing])
 
   // The room rectangle a diorama model asks for, IN METRES: its declared real
   // width is the long side, the mesh's own footprint aspect gives the short
@@ -1416,38 +1385,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           updateLayout(drag.roomId, { model_at: at })
           return
         }
-        // A CHILD MOVES IN ITS SUPPORT'S FRAME (decision E1). Dragging a
-        // SUPPORT costs nothing extra — its children are stored relative and
-        // come along by themselves; dragging a CHILD writes back the relative
-        // pair, or the piece would jump the next time the support turns.
-        // `stored` is the placements' real home: the yard's `lay` is a
-        // DERIVED shape and carries none (§ A13a).
-        const stored = room.layout?.props || []
-        const childAt = (list: RoomPropPlacement[], idx: number,
-                         point: [number, number]): [number, number] => {
-          const child = list[idx]
-          if (!child?.on) return point
-          const support = list.findIndex((q) => q.id === child.on)
-          if (support < 0) return point
-          const rel = toSupportFrame(point, child.yaw || 0,
-                                     composePlacements(list)[support])
-          return [rM(rel.at[0]), rM(rel.at[1])]
-        }
         if (drag.kind === 'ghost') {
           // Pending placements live in FE state only — nothing is stored
-          // until Accept. A ghost may stand on another ghost OR on a piece
-          // that is already in the room, so it composes over both lists.
+          // until Accept.
           const job = furnishRef.current
-          const next = childAt([...stored, ...job.ghosts],
-                               stored.length + drag.index, at)
           job.setGhosts(job.ghosts.map((p, idx) =>
-            idx === drag.index ? { ...p, at: next } : p))
+            idx === drag.index ? { ...p, at } : p))
           return
         }
-        const moved = childAt(stored, drag.index, at)
         updateLayout(drag.roomId, {
-          props: stored.map((p, idx) =>
-            idx === drag.index ? { ...p, at: moved } : p),
+          props: (lay.props || []).map((p, idx) =>
+            idx === drag.index ? { ...p, at } : p),
         })
       }
     }
@@ -1570,22 +1518,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const propsAtPoint = useCallback((lay: NonNullable<Room['layout']>, o: Pt,
       px: number, py: number): number[] => {
     const hits: number[] = []
-    // COMPOSED poses (decision E1): a piece standing on another one is drawn
-    // where its support carries it, so that is where it is clicked too.
-    const composed = composePlacements(lay.props || [])
     ;(lay.props || []).forEach((p, i) => {
       const dims = propDims[p.prop_id]
-      const pose = composed[i]
       // Metres from the placement's own anchor — the prop's dims are metres
       // too, so nothing converts.
-      const cx = px - (pose.at[0] - o[0])
-      const cy = py - (pose.at[1] - o[1])
+      const cx = px - (p.at[0] - o[0])
+      const cy = py - (p.at[1] - o[1])
       // The hit test undoes exactly the rotation the footprint is DRAWN with,
       // and that one is rotate(−yaw) on a y-down screen (see the prop layer
       // below / PlacementLayer.tsx:105). With +yaw here the test was the
       // inverse of the wrong turn — a 90°-turned prop could only be clicked
       // where it is not.
-      const rad = (-pose.yaw * Math.PI) / 180
+      const rad = (-(p.yaw || 0) * Math.PI) / 180
       const cos = Math.cos(rad)
       const sin = Math.sin(rad)
       const lx = cx * cos + cy * sin
@@ -1723,12 +1667,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // Place the armed prop at the clicked spot. REAL-size rule: only
       // position + yaw are stored — the prop's own dims scale it. The tool
       // stays armed for multiple placements; Esc or re-picking ends it.
-      // The id is minted HERE, in the same 8-char base32 shape the server
-      // uses (`places_migration.new_place_id`): a piece can only be named as
-      // the SUPPORT of another one once it has an id, and waiting for the
-      // save would make "place the candle on this table" a two-step gesture.
       const placements = [...(stored?.props || []),
-        { id: newId(), prop_id: armedProp, at: [px, py] as [number, number],
+        { prop_id: armedProp, at: [px, py] as [number, number],
           ...(ghostYaw ? { yaw: ghostYaw } : {}) }]
       updateLayout(room.id, { props: placements })
       setSelected(room.id)
@@ -2599,53 +2539,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         />
       ) : null}
 
-      {/* A GHOST DELETE THAT TAKES OTHERS WITH IT asks here (decision E1):
-          Del on a pending piece that carries others states how many go before
-          the click that drops them. In-app, never `window.confirm`. */}
-      {ghostDrop ? (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center',
-                      flexWrap: 'wrap' }}>
-          <span className="ga-hint">
-            {t('Also removes {n} pieces standing on it.')
-              .replace('{n}', String(ghostDrop.dependents))}
-          </span>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            onClick={() => { dropGhost(ghostDrop.index); setGhostDrop(null) }}
-          >
-            × {t('Remove all')}
-          </button>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            onClick={() => setGhostDrop(null)}
-          >
-            {t('Cancel')}
-          </button>
-        </div>
-      ) : null}
-
       {selectedRoom && propSel !== null
         && selectedRoom.layout?.props?.[propSel] ? (() => {
-        const list = selectedRoom.layout?.props || []
-        const placement = list[propSel]
-        // COMPOSED poses (decision E1): everything below asks WHERE the pieces
-        // really stand, which for a child is not what it stores.
-        const composed = composePlacements(list)
-        const pose = composed[propSel]
+        const placement = selectedRoom.layout!.props![propSel]
         const patchProp = (patch: Partial<typeof placement> | null) => {
-          // A delete takes the whole subtree: a piece whose support is gone
-          // has no frame left to be positioned in (`dependentIndices`).
-          const doomed = patch === null
-            ? new Set(dependentIndices(list, propSel))
-            : new Set<number>()
-          const next = list
-            .map((p, i) => (i === propSel && patch ? { ...p, ...patch } : p))
-            .filter((_, i) => !doomed.has(i))
+          const list = (selectedRoom.layout?.props || [])
+            .map((p, i) => (i === propSel ? { ...p, ...patch } : p))
+            .filter((_, i) => !(patch === null && i === propSel))
           if (patch === null) setPropSel(null)
           updateLayout(selectedRoom.id || '',
-                       { props: next.length ? next : undefined })
+                       { props: list.length ? list : undefined })
         }
         // Everything standing on this exact spot — the same turned-box test
         // that cycles the selection through a stack, asked at the placement's
@@ -2655,54 +2558,26 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         // footprint, hence it is always in here.
         const stackHits = propsAtPoint(
           selectedRoom.layout || {}, selOrigin,
-          pose.at[0] - selOrigin[0], pose.at[1] - selOrigin[1],
+          placement.at[0] - selOrigin[0], placement.at[1] - selOrigin[1],
         )
-        // WHICH of them carries the piece: the TOPMOST one under its anchor,
-        // ties to the later placement — the server's rule
-        // (`props.stack_offset_y`), read with the numbers a top view has. A
-        // piece further up a chain is above its own support by construction,
-        // so the depth decides first and the height of the surface second.
-        // The plan never computes the resulting HEIGHT: what is stored is the
-        // relation, and the metres are composed server-side.
-        let support = -1
-        let bestTop: [number, number] = [-1, -Infinity]
-        for (const i of stackHits) {
-          if (i === propSel) continue
-          const top: [number, number] = [composed[i].depth,
-            (list[i].offset_y || 0) + (propDims[list[i].prop_id]?.height_m || 0)]
-          if (top[0] > bestTop[0]
-              || (top[0] === bestTop[0] && top[1] >= bestTop[1])) {
-            support = i
-            bestTop = top
+        // WHERE the top surface underneath is, is the SERVER's answer — the
+        // plan, the preview and the 3D client must not each arrive at their
+        // own. The button is only offered when something IS underneath.
+        const placeOnTop = async () => {
+          try {
+            const res = await apiPost<{ offset_y?: number | null }>(
+              '/world/props/stack-y',
+              { props: selectedRoom.layout?.props || [], index: propSel })
+            if (res?.offset_y === null || res?.offset_y === undefined) {
+              toast(t('Nothing underneath: move the prop over another one first.'),
+                    'error')
+              return
+            }
+            patchProp({ offset_y: res.offset_y || undefined })
+          } catch (e) {
+            toast(t('Error') + ': ' + (e as Error).message, 'error')
           }
         }
-        // SET IT DOWN ON THAT PIECE. What is written is the parent link plus
-        // the pose in the support's frame — no height at all: the server
-        // composes it from the support's top surface, so plan, preview and 3D
-        // client cannot each arrive at their own answer.
-        const placeOnTop = () => {
-          if (support < 0) return
-          const supportId = list[support].id || newId()
-          const rel = toSupportFrame(pose.at, pose.yaw, composed[support])
-          const next = list.map((p, i) => {
-            if (i === support) return { ...p, id: supportId }
-            if (i !== propSel) return p
-            return { ...p, on: supportId,
-                     at: [rM(rel.at[0]), rM(rel.at[1])] as [number, number],
-                     yaw: rel.yaw ? rM(rel.yaw) : undefined,
-                     offset_y: undefined }
-          })
-          updateLayout(selectedRoom.id || '', { props: next })
-        }
-        // BACK ONTO THE FLOOR: the link goes and the composed pose becomes the
-        // stored one, so the piece does not move while it is set down.
-        const placeOnFloor = () => {
-          patchProp({ on: undefined, offset_y: undefined,
-                      at: [rM(pose.at[0]), rM(pose.at[1])],
-                      yaw: pose.yaw ? rM(pose.yaw) : undefined })
-        }
-        const supportIdx = placement.on
-          ? list.findIndex((p) => p.id === placement.on) : -1
         return (
           <PlanPropStrip
             placement={placement}
@@ -2712,16 +2587,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             size={{ w: selLay?.w || 0, d: selLay?.d || 0 }}
             ground={groundSel}
             stackHits={stackHits}
-            support={supportIdx >= 0 ? {
-              label: list[supportIdx].label
-                || propDims[list[supportIdx].prop_id]?.name
-                || list[supportIdx].prop_id,
-              width_m: propDims[list[supportIdx].prop_id]?.width_m || 1,
-              depth_m: propDims[list[supportIdx].prop_id]?.depth_m || 1,
-            } : undefined}
-            dependents={dependentIndices(list, propSel).length - 1}
-            onPlaceOnTop={support >= 0 ? placeOnTop : undefined}
-            onPlaceOnFloor={placeOnFloor}
+            onPlaceOnTop={stackHits.some((i) => i !== propSel)
+              ? () => { void placeOnTop() } : undefined}
             onPatch={patchProp}
           />
         )

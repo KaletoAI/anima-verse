@@ -6,25 +6,17 @@
  * (the LABEL, which is what the LLM and the marker chips say — "armchair by
  * the window"). WHERE it stands (X/Y in metres from the shape's min corner, or
  * location-local metres on the yard; § A13a) and which way it faces. HOW HIGH
- * it sits — a free offset, or "place on top", which makes the piece a CHILD of
- * the one underneath it (decision E1) so the server composes the surface
- * height and plan, preview and 3D client cannot each arrive at their own
- * answer. WHETHER IT IS CUT: half a table against a wall is this table
+ * it sits — a free offset, or "place on top", which asks the SERVER for the
+ * surface height so plan, preview and 3D client cannot each arrive at their
+ * own answer. WHETHER IT IS CUT: half a table against a wall is this table
  * with a plane through it, not a second library entry. And SCATTER, which
  * turns one placement into an anchor that throws copies over the area.
- *
- * A CHILD READS DIFFERENTLY. Once a placement stands ON another one, its
- * three pose fields are in the SUPPORT's frame: X/Y run from the support's
- * centre along its own axes, the yaw is relative to its heading, and the
- * height field is a trim above its top surface. The chip says which piece
- * that is, and the sliders span the support instead of the room.
  *
  * THE STACK COUNTER IS NOT DECORATION. A stack is invisible on the plan — the
  * top footprint covers the rest — so "2/3 here" is the only thing that says
  * there is anything else under the cursor, and it makes the cycling click
  * discoverable instead of a secret.
  */
-import { useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { SliderInput } from '../../components/SliderInput'
 import { PropVariantPicker } from './PropVariantPicker'
@@ -46,36 +38,18 @@ interface Props {
   /** Indices of everything standing on this exact spot, ascending (later
    *  placement = topmost), the selection included. Length 1 = no stack. */
   stackHits: number[]
-  /** The piece this one STANDS ON, when it does: its name for the chip and
-   *  its footprint, which is what the position sliders span for a child. */
-  support?: { label: string; width_m: number; depth_m: number }
-  /** How many pieces stand on THIS one — they go with it when it is removed,
-   *  so the button asks first. */
-  dependents: number
-  /** Make this placement a child of the piece underneath it. Absent = nothing
-   *  underneath, and the button says so. */
+  /** Ask the server where the top surface underneath is, and sit on it.
+   *  Absent = nothing underneath, and the button says so. */
   onPlaceOnTop?: () => void
-  /** Drop the parent link and keep the piece where it is drawn. */
-  onPlaceOnFloor: () => void
-  /** Merge a patch into this placement, or remove it (with everything
-   *  standing on it) when null is passed. */
+  /** Merge a patch into this placement, or remove it when null is passed. */
   onPatch: (patch: Partial<RoomPropPlacement> | null) => void
 }
 
 export function PlanPropStrip({
-  placement, index, name, origin, size, ground, stackHits, support,
-  dependents, onPlaceOnTop, onPlaceOnFloor, onPatch,
+  placement, index, name, origin, size, ground, stackHits, onPlaceOnTop,
+  onPatch,
 }: Props) {
   const { t } = useI18n()
-  // Removing a support takes its subtree with it, so the button asks once
-  // before it does — in the strip itself, never through a browser dialog.
-  const [confirmRemove, setConfirmRemove] = useState(false)
-  // A CHILD's sliders span its SUPPORT, not the room: its `at` runs from the
-  // support's centre, so the room's 0…w would clamp away every value west or
-  // north of it. Half a metre of overhang on each side is room enough for a
-  // book sticking out over an edge.
-  const spanX = support ? support.width_m / 2 + 0.5 : 0
-  const spanY = support ? support.depth_m / 2 + 0.5 : 0
   return (
     <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
       <span className="ga-hint" style={{ fontWeight: 600 }}>
@@ -108,33 +82,17 @@ export function PlanPropStrip({
             .replace('{N}', String(stackHits.length))}
         </span>
       ) : null}
-      {/* WHAT IT STANDS ON (decision E1). The chip is the only place the
-          relation is visible at all — on the plan a child looks like any
-          other footprint, because that is exactly where it is drawn. */}
-      {support ? (
-        <span
-          className="ga-hint"
-          title={t('This piece stands on another one: its position, yaw and height are measured from that piece, and it moves along when the support moves.')}
-          style={{ border: '1px solid #444c56', borderRadius: 10,
-                   padding: '1px 7px', cursor: 'help' }}
-        >
-          {t('on: {name}').replace('{name}', support.label)}
-        </span>
-      ) : null}
       {/* Position in METRES from the shape's min corner (v6 Nr. 2), so the
           slider runs over its own box and the readback is a length one can
-          measure against the 1.70 m figure on the plan. A CHILD measures from
-          its support's centre instead, along the support's own axes. */}
+          measure against the 1.70 m figure on the plan. */}
       <SliderInput
         label="X"
         ariaLabel={t('Prop position X (m)')}
-        title={support
-          ? t('Metres from the support’s centre, along the support’s width axis (negative = the other way).')
-          : ground
-            ? t('Fine-tune the position: metres east of the anchor pin (negative = west).')
-            : t('Fine-tune the position: metres from the room’s west edge.')}
-        min={support ? -spanX : origin[0]}
-        max={support ? spanX : origin[0] + size.w}
+        title={ground
+          ? t('Fine-tune the position: metres east of the anchor pin (negative = west).')
+          : t('Fine-tune the position: metres from the room’s west edge.')}
+        min={origin[0]}
+        max={origin[0] + size.w}
         step={0.01}
         value={placement.at[0]}
         onChange={(v) => onPatch({ at: [rM(v), placement.at[1]] })}
@@ -145,13 +103,11 @@ export function PlanPropStrip({
       <SliderInput
         label="Y"
         ariaLabel={t('Prop position Y (m)')}
-        title={support
-          ? t('Metres from the support’s centre, along the support’s depth axis (negative = the other way).')
-          : ground
-            ? t('Fine-tune the position: metres south of the anchor pin (negative = north).')
-            : t('Fine-tune the position: metres from the room’s north edge.')}
-        min={support ? -spanY : origin[1]}
-        max={support ? spanY : origin[1] + size.d}
+        title={ground
+          ? t('Fine-tune the position: metres south of the anchor pin (negative = north).')
+          : t('Fine-tune the position: metres from the room’s north edge.')}
+        min={origin[1]}
+        max={origin[1] + size.d}
         step={0.01}
         value={placement.at[1]}
         onChange={(v) => onPatch({ at: [placement.at[0], rM(v)] })}
@@ -162,9 +118,7 @@ export function PlanPropStrip({
       <SliderInput
         label="↻"
         ariaLabel={t('Prop yaw (°)')}
-        title={support
-          ? t('Yaw in degrees, RELATIVE to the support’s heading — 0 = the same way it faces.')
-          : t('Yaw in degrees — free values; R while placing steps 90°.')}
+        title={t('Yaw in degrees — free values; R while placing steps 90°.')}
         min={0}
         max={359.5}
         step={0.5}
@@ -176,9 +130,7 @@ export function PlanPropStrip({
         inputWidth={68}
       />
       <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-        title={support
-          ? t('Trim above the support’s top — 0 means exactly on it. The surface height itself is the server’s stacking rule.')
-          : t('Vertical offset in metres, additive to the floor (e.g. a picture on the wall).')}>
+        title={t('Vertical offset in metres, additive to the floor (e.g. a picture on the wall).')}>
         ↕ m
         <input
           type="number" min={-5} max={5} step={0.05}
@@ -193,15 +145,14 @@ export function PlanPropStrip({
       </label>
       {/* Set it down ON the piece it stands over — the teapot onto the table.
           The button is OFFERED by the same footprint test that picks a prop
-          out of a stack here; what it WRITES is the parent link, and the
-          height comes out of the server's stacking rule at compose time
-          (`props.stack_on_support`, decision E1). */}
+          out of a stack here; the height itself is the SERVER's answer
+          (`POST /world/props/stack-y`, `props.stack_offset_y`). */}
       <button
         type="button"
         className="ga-btn ga-btn-sm"
         disabled={!onPlaceOnTop}
         title={onPlaceOnTop
-          ? t('Set this prop down on the prop underneath it (the topmost one, if several) — it then moves and turns with that piece.')
+          ? t('Set this prop down on the top surface of the prop underneath it (the topmost one, if several).')
           : t('Nothing underneath: move the prop over another one first.')}
         onClick={() => onPlaceOnTop?.()}
       >
@@ -210,11 +161,9 @@ export function PlanPropStrip({
       <button
         type="button"
         className="ga-btn ga-btn-sm"
-        disabled={!placement.offset_y && !placement.on}
-        title={placement.on
-          ? t('Off the support and back onto the floor — the prop stays where it is drawn.')
-          : t('Back down onto the floor — clears the vertical offset.')}
-        onClick={() => onPlaceOnFloor()}
+        disabled={!placement.offset_y}
+        title={t('Back down onto the floor — clears the vertical offset.')}
+        onClick={() => onPatch({ offset_y: undefined })}
       >
         ⬓ {t('Place on floor')}
       </button>
@@ -309,39 +258,13 @@ export function PlanPropStrip({
           </button>
         </>
       ) : null}
-      {/* REMOVE — and with it everything standing on this piece: a child has
-          no frame left once its support is gone. The count is stated before
-          the click that does it, in the strip; no browser dialog. */}
-      {confirmRemove ? (
-        <>
-          <span className="ga-hint">
-            {t('Also removes {n} pieces standing on it.')
-              .replace('{n}', String(dependents))}
-          </span>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            onClick={() => { setConfirmRemove(false); onPatch(null) }}
-          >
-            × {t('Remove all')}
-          </button>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            onClick={() => setConfirmRemove(false)}
-          >
-            {t('Cancel')}
-          </button>
-        </>
-      ) : (
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          onClick={() => (dependents > 0 ? setConfirmRemove(true) : onPatch(null))}
-        >
-          × {t('Remove')}
-        </button>
-      )}
+      <button
+        type="button"
+        className="ga-btn ga-btn-sm"
+        onClick={() => onPatch(null)}
+      >
+        × {t('Remove')}
+      </button>
       {/* Which model variant THIS placement shows — a dial like the others
           beside it, so it belongs in the same strip. */}
       <PropVariantPicker

@@ -118,28 +118,13 @@ export interface RoomPropPlacement {
   /** What the LLM calls this place ("armchair by the window") — names the
    *  placement's markers in chips and prompts. ≤ 60 characters. */
   label?: string
-  /** WHAT THIS PIECE STANDS ON (plan-furnish-v2.md, decision E1): the `id` of
-   *  another placement of the SAME list — "the candle on the table" as a
-   *  relation, not as a height. With it the three fields below switch into
-   *  the SUPPORT's frame, so moving or turning the support moves the piece
-   *  along and the height is the stacking rule. Chains are allowed up to
-   *  `ON_MAX_DEPTH`; a link that does not hold costs only itself, never the
-   *  placement. Composed server-side in `room_recipe.compose_on_chain` and on
-   *  the plan by `placementCompose.composePlacements` — the scene payload
-   *  stays flat and carries this id informatively. */
-  on?: string
   /** Room-local position: METRES from the room's min corner (0…w / 0…d).
    *  ON THE YARD (§ A13a) the same field is LOCATION-LOCAL metres — the
-   *  ground has no min corner, its frame IS the location frame.
-   *  WITH `on`: metres from the SUPPORT's placement point in its UNTURNED
-   *  frame (+x = its width axis, +z = its depth axis). */
+   *  ground has no min corner, its frame IS the location frame. */
   at: [number, number]
-  /** Yaw in degrees, free values at 0.1° resolution. Absent = 0.
-   *  WITH `on`: degrees RELATIVE to the support's heading. */
+  /** Yaw in degrees, free values at 0.1° resolution. Absent = 0. */
   yaw?: number
-  /** Vertical offset in metres (clamped ±5), additive to the floor.
-   *  WITH `on`: the trim ABOVE the support's top surface (0 = exactly on it —
-   *  the height itself is the server's stacking rule). */
+  /** Vertical offset in metres (clamped ±5), additive to the floor. */
   offset_y?: number
   /** WHICH model variant of the prop this placement shows (E2.3) — a POSITION
    *  in the prop's ACTIVE meshes, not a store index; out of range wraps, so a
