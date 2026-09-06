@@ -50,9 +50,9 @@ export interface HudGameState {
    *  at render/interaction time — it is per avatar and per moment, so it never
    *  goes into a cached scene payload (§ 3 decision 2). */
   lockedRooms: Record<string, string>;
-  /** The location `lockedRooms` was answered for. Room ids are NOT unique
-   *  across locations — a clone inherits its template's rooms with their ids —
-   *  so a lock may only ever be bound to the rooms of THIS location. Published
+  /** The location `lockedRooms` was answered for. A room id is unique only
+   *  WITHIN its location — two places may name a room alike — so a lock may
+   *  only ever be bound to the rooms of THIS location. Published
    *  together with the map, never derived from another poll, or the two could
    *  disagree for a moment and paint a lock onto a stranger's door. */
   lockedLoc: string;

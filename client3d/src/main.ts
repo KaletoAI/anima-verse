@@ -611,21 +611,20 @@ async function startApp(username: string, role: string) {
   mountHud({ username, avatar: firstMap.avatar, role });   // React HUD island (E2-T5)
   npcs.setAvatar(firstMap.avatar);
 
-  // Worldmap ist autoritativ für Grid/Passable/Template; /world/locations liefert
-  // Räume, Beschreibung, entry_room. Templates (Vorlagen für Klone) nicht rendern.
+  // Two sources, one rule: the WORLDMAP row is authoritative for placement and
+  // geometry (position, rotation, footprint), `/world/locations` supplies rooms,
+  // description and entry_room. Nothing else is merged in either direction.
   const detailById = new Map(allLocs.map((l) => [l.id, l]));
   /**
    * The placeable locations of a worldmap snapshot. ONE function, because
-   * since the knowledge filter (Etappe 5) locations arrive not only at boot: a place
-   * the avatar discovers appears in a later poll and has to become a tile the
-   * very same way — same template filter, same merge of map entry and detail.
+   * since the knowledge filter (Etappe 5) locations arrive not only at boot: a
+   * place the avatar discovers appears in a later poll and has to become a tile
+   * the very same way — same test, same merge of map entry and detail.
    */
   function placeableOf(map: WorldMap, details: Map<string, WorldLocation>): WorldLocation[] {
-    // PLACED = it has a point (§ A1.1). That one test replaces both v1 filters:
-    // the grid keys are gone, and a template stands on no map at all — the
-    // server leaves its `pos_x`/`pos_z` null, which is exactly what "not
-    // placeable" means. The worldmap row no longer carries a template id
-    // either (§ A1.9), so nothing is looked up through one any more.
+    // PLACED = it has a point (§ A1.1), and that is the ONLY filter: a location
+    // the server leaves without `pos_x`/`pos_z` stands on no map, which is
+    // exactly what "not placeable" means.
     return map.locations
       .filter((l) => !!footprintCentre(l))
       .map((l) => {
@@ -1136,10 +1135,10 @@ async function startApp(username: string, role: string) {
   const boundaryMarks = new Map<string, THREE.Group>();
   /** What the locked look was last painted for: the published lock map, the
    *  location it was answered for and the avatar's room. Starts as "nothing",
-   *  so the first frame paints once. The LOCATION belongs in here — walking
-   *  from one clone into another can leave both the map and the room id
-   *  unchanged (clones share their template's room ids), and without it the
-   *  place left behind would keep the red doors. */
+   *  so the first frame paints once. The LOCATION belongs in here — a room id
+   *  is unique only WITHIN its location, so two places can name their rooms
+   *  alike and leave both the map and the room id unchanged on a move; without
+   *  the location the place left behind would keep the red doors. */
   let lockPainted: { locks: Record<string, string> | null; loc: string; room: string } = {
     locks: null, loc: '', room: '',
   };
@@ -1248,9 +1247,9 @@ async function startApp(username: string, role: string) {
    *
    * ONLY the avatar's own location is painted locked. The lock state is per
    * avatar and answered for exactly one place (`lockedLoc`, published with the
-   * map), and room ids do NOT identify a room across the map: a clone inherits
-   * its template's rooms WITH their ids, so binding by id alone would paint the
-   * same doorway red in every other clone of that template — a lie about
+   * map), and a room id identifies a room only WITHIN its location: two places
+   * may name a room alike, so binding by id alone would paint the same doorway
+   * red in every other place that happens to share the name — a lie about
    * places the avatar is not in. Every other tile is painted open.
    */
   function applyDoorLocks(locId: string) {
@@ -1672,9 +1671,9 @@ async function startApp(username: string, role: string) {
         const sig = sigOf(detail);
         if (locSig.get(id) === sig) continue;
         locSig.set(id, sig);
-        // map3d aus dem Detail, aber ohne die abgeleiteten floors zu
-        // verlieren: die trägt nur die Worldmap-Variante (Kachel vom Boot) —
-        // sonst schrumpfte die prozedurale Hülle beim ersten echten Rebuild.
+        // map3d from the detail record, but without losing the DERIVED floors:
+        // only the worldmap variant carries those (the tile came from boot) —
+        // otherwise the procedural shell shrank on the first real rebuild.
         const m3 = detail.map3d ?? tile.loc.map3d;
         const floors = detail.map3d?.floors ?? tile.loc.map3d?.floors;
         dirty.push([tile, {
@@ -2159,10 +2158,9 @@ async function startApp(username: string, role: string) {
     // to cut a hole into, only a location that was not there before.
     //
     // The trigger asks the SAME question the reveal answers — `placeableOf`,
-    // not a hand-written filter next to it. A cheaper test that forgot the
-    // template rule would fire on every single poll in a world whose template
-    // location is itself placed, and each shot would refetch all of
-    // /world/locations to build nothing.
+    // not a hand-written filter next to it. A cheaper test that drifted from
+    // it would fire on polls that reveal nothing, and each shot would refetch
+    // all of /world/locations to build nothing.
     if (placeableOf(map, detailById).some((l) => !tiles.has(l.id))) {
       // Deliberately not awaited: the reveal fetches and mounts, and the poll
       // must not be held up by it (it guards itself against a second run).

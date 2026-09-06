@@ -43,9 +43,8 @@ export interface MapGeometry {
 
 /**
  * A location row of `GET /play/worldmap` — EXACTLY the fields § A1.3 lists,
- * nothing else. The gameplay payload knows no templates and no descriptions;
- * a filter on them here would silently match nothing. Use `EditorLocation`
- * when you need them.
+ * nothing else. The gameplay payload knows no descriptions; a filter on them
+ * here would silently match nothing. Use `EditorLocation` when you need them.
  */
 export interface WorldmapLocationRow extends MapGeometry {
   /** The DRAWN footprint (contract v6 Nr. 1), hoisted out of `map3d`: the

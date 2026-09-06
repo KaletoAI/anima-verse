@@ -57,24 +57,24 @@ export function PlayerApp() {
   const [data, setData] = useState<SceneData | null>(null)
   const { toast } = useToast()
   const [layout, setLayout] = useState<Layout[]>(DEFAULT_LAYOUT)
-  const [open, setOpen] = useState<string[]>(INITIAL_OPEN)  // Dialoge starten geschlossen
-  const [autosize, setAutosize] = useState<string[]>([])  // Panels mit Höhen-Autosize
-  const [panelAlpha, setPanelAlpha] = useState<Record<string, number>>({})  // Panel-Transparenz (1 = deckend)
-  const [iconMode, setIconMode] = useState<IconMode>('iconText')      // Launcher: nur Icon vs Icon+Text (Default aus gespeichertem Layout)
-  const [toolbarAlign, setToolbarAlign] = useState<ToolbarAlign>('left')  // Launcher links/rechts (Default aus gespeichertem Layout)
-  const [appearanceOpen, setAppearanceOpen] = useState(false)    // Zahnrad-Popover
-  const [frozen, setFrozen] = useState(false)                    // Layout einfrieren + mitskalieren
-  const [frozenWidth, setFrozenWidth] = useState(0)              // Referenzbreite beim Einfrieren
+  const [open, setOpen] = useState<string[]>(INITIAL_OPEN)  // dialogs start closed
+  const [autosize, setAutosize] = useState<string[]>([])  // panels with height autosize
+  const [panelAlpha, setPanelAlpha] = useState<Record<string, number>>({})  // panel transparency (1 = opaque)
+  const [iconMode, setIconMode] = useState<IconMode>('iconText')      // launcher: icon only vs icon+text (default from the saved layout)
+  const [toolbarAlign, setToolbarAlign] = useState<ToolbarAlign>('left')  // launcher left/right (default from the saved layout)
+  const [appearanceOpen, setAppearanceOpen] = useState(false)    // gear popover
+  const [frozen, setFrozen] = useState(false)                    // freeze the layout and scale it with the window
+  const [frozenWidth, setFrozenWidth] = useState(0)              // reference width at the moment of freezing
   const [width, setWidth] = useState(1200)
-  // Badges „offene Themen": ungelesene Telefon-Nachrichten + neue IG-Posts.
+  // "Open topics" badges: unread phone messages + new IG posts.
   const [phoneUnread, setPhoneUnread] = useState(0)
   const [igNew, setIgNew] = useState(0)
-  const [expanded, setExpanded] = useState<string | null>(null)  // Panel im View-only-Overlay vergrößert
-  const [expandSeq, setExpandSeq] = useState(0)  // erzwingt frischen Remount des Overlay-Inhalts je Öffnen (Zoom-Reset)
+  const [expanded, setExpanded] = useState<string | null>(null)  // panel enlarged in the view-only overlay
+  const [expandSeq, setExpandSeq] = useState(0)  // forces a fresh remount of the overlay content on every open (zoom reset)
   const openExpanded = useCallback((id: string) => { setExpanded(id); setExpandSeq((s) => s + 1) }, [])
-  const [bgPanel, setBgPanel] = useState<string>('')             // Panel-id, die als Vollbild-Hintergrund dient ('' = keine)
+  const [bgPanel, setBgPanel] = useState<string>('')             // panel id serving as the full-screen background ('' = none)
   const [mapLabelMode, setMapLabelMode] = useState<LabelMode>(loadLabelMode)  // Map labels: all/none
-  const igSeenRef = useRef<string | null>(null)  // zuletzt gesehene IG-Post-id
+  const igSeenRef = useRef<string | null>(null)  // id of the last IG post seen
   const rootRef = useRef<HTMLDivElement | null>(null)
   const layoutLoaded = useRef(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)

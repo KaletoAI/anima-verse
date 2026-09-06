@@ -600,8 +600,8 @@ export function Hud({ avatar, username, role }: {
   // Published only on a real CHANGE, keyed by the serialised maps: `usePoll`
   // hands out a fresh object every five seconds, and pushing that through the
   // bus would re-render the whole HUD island for an unchanged answer.
-  // The location travels WITH the room locks: room ids repeat across clones of
-  // one template, so the receiver may only bind these locks to the rooms of
+  // The location travels WITH the room locks: a room id is unique only within
+  // its location, so the receiver may only bind these locks to the rooms of
   // this very location. Deriving that location from another poll would let the
   // two disagree for a moment; here they are one answer.
   const lockedKey = JSON.stringify([

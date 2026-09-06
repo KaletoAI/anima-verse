@@ -301,7 +301,7 @@ function Footprints({ locations, currentId, events, labelMode }: {
             </polygon>
             {labelMode === 'all' ? (
               <text x={cx} y={maxY + 11} fontSize={10} textAnchor="middle"
-                fill={COL_TEXT} pointerEvents="none" opacity={0.95}>
+                fill={COL_TEXT} pointerEvents="none">
                 {loc.name}
               </text>
             ) : null}
