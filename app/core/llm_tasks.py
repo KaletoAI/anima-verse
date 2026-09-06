@@ -72,6 +72,11 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "furnish_needs":      {"label": "Furnish: Room Needs",         "priority": Priority.NORMAL, "category": "tool"},
     "furnish_match":      {"label": "Furnish: Match Library",      "priority": Priority.NORMAL, "category": "tool"},
     "furnish_place":      {"label": "Furnish: Placement Plan",     "priority": Priority.NORMAL, "category": "tool"},
+    # The fourth step of the same feature, but the only one that answers PROSE:
+    # after the furnishing has landed, the room's description is rewritten so it
+    # names what really stands there (E8, B14b). Button with a preview — the
+    # admin reads the text before anything is stored.
+    "room_description_sync": {"label": "Furnish: Sync Room Description", "priority": Priority.NORMAL, "category": "tool"},
     # Which surface a prop may be set down on (floor / wall / ceiling / on
     # another prop) — a one-off classification of the LIBRARY, run from the
     # Props tab, that the furnish solver then reads. Same class of work as the
@@ -411,6 +416,22 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": True, "min_context": 4096,
         "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": False, "language_de": False, "latency_sensitive": False,
+    },
+    "room_description_sync": {
+        # The one furnish task that answers PROSE, so json False — the room's
+        # description in the author's own language (language_de True: the text
+        # is written for the user, not for an image backend) and creative True
+        # (tone, atmosphere and voice are the point; only the objects are
+        # dictated). hallucination_risk medium: the model is handed the
+        # inventory and told to name nothing else, but nothing CHECKS the
+        # sentences it writes — the admin reads the proposal in the dialog and
+        # decides, which is exactly why E8 made this a button with a preview.
+        # latency_sensitive True: one call between the button and the textarea
+        # the admin is waiting in front of. min_context 4096 with no
+        # measurement (n=0): the current description plus one line per prop.
+        "tools": False, "vision": False, "json": False, "min_context": 4096,
+        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
+        "creative": True, "language_de": True, "latency_sensitive": True,
     },
     "prop_mount_classify": {
         # hallucination_risk low: every answer is matched back against the

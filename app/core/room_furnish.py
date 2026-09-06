@@ -1234,6 +1234,61 @@ def _create_built_props(needs: List[Dict[str, Any]], placed_ids: set,
     return rewrite, skipped, created
 
 
+def _apply_surfaces(location_id: str, room_id: str,
+                    surfaces: Dict[str, str]) -> bool:
+    """Skin the room's bare floor/wall with the confirmed kinds (E9, B15).
+
+    ONLY A SLOT THE ROOM DOES NOT ALREADY NAME is filled — the proposal is
+    made for a room with no kinds of its own (``_phase_needs``), and between
+    the proposal and the accept the admin may have picked one by hand; that
+    pick wins. The merged layout runs through the room sanitizer, so a kind
+    that may not be a floor (water, W1) is dropped here exactly as it is on
+    every other write path.
+
+    The traversal is this module's own rather than a second
+    ``append_room_props``-shaped helper in the world model: it writes ONE
+    field of ONE room and belongs to the job that proposed it.
+    """
+    if not surfaces:
+        return False
+    from app.core.world_ops import _sanitize_room_layout
+    from app.models.world import (GROUND_ROOM_ID, _load_world_data,
+                                  _save_world_data)
+    if room_id == GROUND_ROOM_ID:
+        # The yard's layout stores placements and nothing else (§ A13a); a
+        # surface there would be a promise this path cannot keep — and stage 1
+        # never proposes one for it.
+        return False
+    data = _load_world_data()
+    for loc in data.get("locations", []):
+        if loc.get("id") != location_id:
+            continue
+        for room in loc.get("rooms", []):
+            if room.get("id") != room_id:
+                continue
+            layout = room.get("layout")
+            if not isinstance(layout, dict):
+                return False
+            stored = layout.get("surfaces") if isinstance(
+                layout.get("surfaces"), dict) else {}
+            merged = dict(stored)
+            for slot in ("floor", "wall"):
+                kind = str(surfaces.get(slot) or "").strip()
+                if kind and not str(stored.get(slot) or "").strip():
+                    merged[slot] = kind
+            if merged == stored:
+                return False
+            clean = _sanitize_room_layout({**layout, "surfaces": merged})
+            if not clean:
+                return False
+            room["layout"] = clean
+            _save_world_data(data)
+            logger.info("room_furnish %s: surfaces applied (%s)", room_id,
+                        json.dumps(clean.get("surfaces") or {}))
+            return True
+    return False
+
+
 def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
     """Write the (possibly hand-adjusted) placements into ``layout.props``,
     then generate what is still missing (E6).
@@ -1241,9 +1296,10 @@ def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
     Four steps, in this order: the pieces that were PLACED and had to be built
     become props (each id persisted the moment it exists), the placements that
     name them by their temporary id are rewritten to the real one, the whole
-    list is appended to the room, and only then does the job switch to
-    ``generating`` — the room is already furnished with placeholder boxes, and
-    the meshes drop in one by one.
+    list is appended to the room, the confirmed floor/wall textures skin its
+    bare surfaces (E9), and only then does the job switch to ``generating`` —
+    the room is already furnished with placeholder boxes, and the meshes drop
+    in one by one.
 
     THE IDS ARE PERSISTED BEFORE THE LAYOUT WRITE, not after: a layout write
     that fails leaves the job in ``review_ready``, and without that row update
@@ -1279,6 +1335,12 @@ def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
     if entries and not append_room_props(row["location_id"], target_room,
                                          entries):
         raise FurnishError("The room layout could not be updated.", 409)
+    # THE TEXTURES COME WITH THE FURNITURE (E9). The confirmed proposal carries
+    # them or it does not — the dialog's "apply on accept" checkbox is what
+    # decides that, and it decided at confirm time.
+    _apply_surfaces(row["location_id"], target_room,
+                    proposal.get("surfaces") if isinstance(
+                        proposal.get("surfaces"), dict) else {})
     logger.info("room_furnish %s: %d placements accepted, %d prop(s) created, "
                 "%d not built (%s)", room_id, len(entries), created,
                 len(skipped), ", ".join(skipped) or "-")

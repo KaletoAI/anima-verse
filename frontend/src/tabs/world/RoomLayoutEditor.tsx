@@ -2595,6 +2595,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           job={furnish}
           propInfo={propDims}
           placements={selectedRoom.layout?.props || []}
+          surfaceKinds={surfaceKinds}
+          waterKinds={waterKinds}
+          onDescriptionApplied={(description) => {
+            // The sync panel (E8) stored the text SERVER-SIDE; the draft here
+            // still carries the old one and would write it back on the next
+            // location save.
+            onChange(rooms.map((r) => (r.id === selectedRoom.id
+              ? { ...r, description } : r)))
+          }}
           onClearRoom={() => {
             updateLayout(selectedRoom.id || '', { props: undefined })
             setPropSel(null)

@@ -3054,6 +3054,22 @@ a.ga-btn {
   flex-wrap: wrap;
 }
 
+/* One fact about a need — "from description", the place marker it offers, a
+   warning about its match. Inline, wraps with the row it belongs to. */
+.ga-furnish-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 999px;
+}
+
+.ga-furnish-chip--warn {
+  border-color: #d29922;
+  background: rgba(210, 153, 34, 0.14);
+}
+
 .ga-furnish-error {
   padding: 6px 8px;
   border: 1px solid var(--danger, #da3633);

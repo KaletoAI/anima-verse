@@ -1,5 +1,5 @@
 /**
- * FurnishDialog — the "✨ Furnish" workflow of one room (plan-room-furnish.md).
+ * FurnishDialog — the "✨ Furnish" workflow of one room (plan-furnish-v2.md).
  *
  * The dialog is only a VIEW on the persisted job behind
  * /world/rooms/{id}/furnish: it may be closed and reopened at any time, the
@@ -8,75 +8,43 @@
  * and canvas never poll twice — the editor holds the hook and passes it in.
  *
  *   no job        → current furnishing + "Suggest furnishing" / "Clear room"
+ *                   / "Sync description with inventory" (E8)
  *   selecting     → spinner (the dialog may be closed)
- *   proposal_ready→ two editable lists + "Generate & place" / "Reset"
- *   generating    → n/m progress · placing → spinner
- *   review_ready  → placed/unplaced summary + Accept / Discard
+ *   proposal_ready→ ONE editable need list + the surfaces row + "Place"
+ *   placing       → spinner · review_ready → per-pass summary + Accept/Discard
+ *   generating    → meshes n/m, the room already carries placeholder boxes
  *   error         → message + Retry / Reset; stalled → Continue
+ *
+ * PLACING COMES BEFORE GENERATING (decision E6): the ghosts are there within
+ * minutes, the meshes arrive after Accept while the room is already usable.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import type { RoomPropPlacement } from './worldTypes'
-import { groupLabel, newId, usePoseCatalog } from './placeTypes'
+import { SurfaceKindSelect } from './SurfaceKindSelect'
+import type { RoomPropPlacement, SurfaceKind } from './worldTypes'
+import { newId, usePoseCatalog } from './placeTypes'
+import { DescriptionSyncPanel } from './DescriptionSyncPanel'
+import { FurnishNeedsList } from './FurnishNeedsList'
+import { MOUNT_GROUPS, NEED_ID_PREFIX, propMount, type FurnishJob,
+  type FurnishLibProp, type FurnishNeed, type FurnishProposal,
+  type FurnishStatus, type FurnishSurfaces } from './furnishTypes'
 
-export type FurnishState = 'selecting' | 'proposal_ready' | 'generating'
-  | 'placing' | 'review_ready' | 'error'
+export type { FurnishJob, FurnishState, FurnishStatus } from './furnishTypes'
 
+/** One library pick of the direct mode — `start_direct` takes these, not a
+ *  proposal (the server turns each into a need that is already served). */
 export interface FurnishPick { prop_id: string; count: number }
-
-export interface FurnishNewPiece {
-  name: string
-  description: string
-  category?: string
-  width_m: number
-  depth_m: number
-  height_m: number
-  /** The PLACE the piece offers (plan-posen-plaetze.md § 4): a place type
-   *  of the pose catalog, never a clip — as `room_furnish._valid_marker`
-   *  answers it. */
-  marker?: { group: string; at: [number, number, number] } | null
-  count: number
-  prop_id?: string | null
-}
-
-export interface FurnishProposal {
-  existing: FurnishPick[]
-  new: FurnishNewPiece[]
-}
-
-export interface FurnishStatus {
-  room_id: string
-  location_id: string
-  state: FurnishState
-  proposal?: FurnishProposal | null
-  placements?: { placed: RoomPropPlacement[]
-    unplaced: Array<{ name: string; reason: string }> } | null
-  error?: string
-  progress?: { done: number; total: number }
-  running?: boolean
-  stalled?: boolean
-  updated_at?: string
-}
-
-export interface FurnishJob {
-  status: FurnishStatus | null
-  busy: boolean
-  /** Pending placements while the job waits for review — FE state only, the
-   *  ghost layer edits them and Accept sends them back. Their `at` is METRES
-   *  from the room's min corner, exactly like a stored placement (contract v6
-   *  Nr. 2; the solver emits metres since the server wave), so a ghost and the
-   *  prop it becomes on Accept are drawn by the same arithmetic. */
-  ghosts: RoomPropPlacement[]
-  setGhosts: (next: RoomPropPlacement[]) => void
-  refresh: () => Promise<void>
-  act: (action: string, body?: unknown) => Promise<void>
-}
 
 const POLL_OPEN_MS = 3000
 const POLL_IDLE_MS = 15000
+
+/** Words that make a piece a SEAT, a bed or a counter — something a character
+ *  uses by standing/sitting/lying at it. Without a place marker such a prop is
+ *  furniture nobody can use (plan-furnish-v2.md § 2b B18). */
+const PLACE_WORDS = ['chair', 'sofa', 'bench', 'stool', 'bed', 'counter', 'bar']
 
 /**
  * The single source of truth for one target's furnishing job. `open` = the
@@ -171,25 +139,37 @@ interface FurnishDialogProps {
     width_m?: number; depth_m?: number; height_m?: number }>
   /** The room's CURRENT placements (editor draft). */
   placements: RoomPropPlacement[]
+  /** Surface-texture kinds, loaded once by the editor — the same list its own
+   *  floor/wall pickers offer (E9: what the LLM may propose is what the admin
+   *  could have picked). */
+  surfaceKinds: SurfaceKind[]
+  /** Kinds the terrain catalog calls water: never offered as a room floor —
+   *  the server strips such a pick at the write path (W1). */
+  waterKinds: Set<string>
   /** Empties layout.props in the editor draft — Save stays with the admin. */
   onClearRoom: () => void
   /** Accept the CURRENT ghost positions (the editor owns the merge into the
    *  draft, so the dialog does not call the route itself). */
   onAccept: () => void | Promise<void>
+  /** A description stored by the sync panel (E8) — the editor draft carries
+   *  the room objects and would write the old text back on its next save. */
+  onDescriptionApplied?: (description: string) => void
   onClose: () => void
 }
 
 export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
-  onClearRoom, onAccept, onClose }: FurnishDialogProps) {
+  surfaceKinds, waterKinds, onClearRoom, onAccept, onDescriptionApplied,
+  onClose }: FurnishDialogProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   // Place-type labels for the proposal's markers (a group key is stored).
   const poseCatalog = usePoseCatalog()
   const { status, busy, ghosts, act } = job
   const state = status?.state
-  // Editable copy of the proposal — seeded once per job revision.
-  const [draft, setDraft] = useState<FurnishProposal | null>(null)
-  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  // Editable copy of the need list — seeded once per job revision.
+  const [needs, setNeeds] = useState<FurnishNeed[]>([])
+  const [surfaces, setSurfaces] = useState<FurnishSurfaces>({})
+  const [applySurfaces, setApplySurfaces] = useState(true)
   const seededRef = useRef('')
   const [confirmClear, setConfirmClear] = useState(false)
   // Direct mode (skip LLM proposal + generation, user requirement
@@ -202,27 +182,42 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
   const [exCats, setExCats] = useState<Record<string, boolean>>({})
   const [exProps, setExProps] = useState<Record<string, boolean>>({})
   const [exKeywords, setExKeywords] = useState('')
-  const [libProps, setLibProps] = useState<Array<{ id: string; name: string
-    category?: string; width_m?: number; depth_m?: number; height_m?: number
-    has_model?: boolean }> | null>(null)
+  const [libProps, setLibProps] = useState<FurnishLibProp[] | null>(null)
   const [pickCounts, setPickCounts] = useState<Record<string, number>>({})
 
+  // THE LIBRARY IS NEEDED BY MORE THAN THE PICKER NOW: the match select of a
+  // need offers it, and the review's marker warning reads `marker_count` off
+  // it. One fetch per open dialog, refreshed whenever a new job state could
+  // have created props (the job builds its own).
+  const wantsLib = pickMode || filterOpen || state === 'proposal_ready'
+    || state === 'review_ready'
   useEffect(() => {
-    if ((!pickMode && !filterOpen) || libProps !== null) return
+    if (!wantsLib || libProps !== null) return
     let stale = false
     apiGet<{ props?: Array<{ id: string; name?: string; category?: string
-      width_m?: number; depth_m?: number; height_m?: number
-      has_model?: boolean }> }>('/world/props')
+      mount?: string; width_m?: number; depth_m?: number; height_m?: number
+      has_model?: boolean; dims_estimated?: boolean
+      marker_count?: number }> }>('/world/props')
       .then((d) => {
         if (stale) return
         setLibProps((d.props || []).map((p) => ({
           id: p.id, name: p.name || p.id, category: p.category,
-          width_m: p.width_m, depth_m: p.depth_m, height_m: p.height_m,
-          has_model: p.has_model })))
+          mount: p.mount, width_m: p.width_m, depth_m: p.depth_m,
+          height_m: p.height_m, has_model: p.has_model,
+          dims_estimated: p.dims_estimated,
+          marker_count: p.marker_count })))
       })
       .catch(() => { if (!stale) setLibProps([]) })
     return () => { stale = true }
-  }, [pickMode, filterOpen, libProps])
+  }, [wantsLib, libProps])
+
+  const run = useCallback(async (action: string, body?: unknown) => {
+    try {
+      await act(action, body)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [act, t, toast])
 
   const startDirect = () => {
     const existing = Object.entries(pickCounts)
@@ -241,23 +236,10 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
     const key = `${status.room_id}:${status.updated_at || ''}`
     if (seededRef.current === key) return
     seededRef.current = key
-    setDraft({
-      existing: status.proposal.existing.map((e) => ({ ...e })),
-      new: status.proposal.new.map((n) => ({ ...n })),
-    })
-    const on: Record<string, boolean> = {}
-    status.proposal.existing.forEach((e) => { on[`e:${e.prop_id}`] = true })
-    status.proposal.new.forEach((_, i) => { on[`n:${i}`] = true })
-    setPicked(on)
+    setNeeds((status.proposal.needs || []).map((n) => ({ ...n })))
+    setSurfaces({ ...(status.proposal.surfaces || {}) })
+    setApplySurfaces(true)
   }, [state, status])
-
-  const run = useCallback(async (action: string, body?: unknown) => {
-    try {
-      await act(action, body)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [act, t, toast])
 
   // Aggregated "what stands in the room right now" (name × count).
   const current = new Map<string, number>()
@@ -266,36 +248,44 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
     current.set(name, (current.get(name) || 0) + 1)
   }
 
-  const setNew = (index: number, patch: Partial<FurnishNewPiece>) => {
-    setDraft((prev) => prev && ({
-      ...prev,
-      new: prev.new.map((n, i) => (i === index ? { ...n, ...patch } : n)),
-    }))
-  }
-
   const confirmProposal = () => {
-    if (!draft) return
-    const proposal: FurnishProposal = {
-      existing: draft.existing.filter((e) => picked[`e:${e.prop_id}`]),
-      new: draft.new.filter((_, i) => picked[`n:${i}`]),
-    }
-    if (!proposal.existing.length && !proposal.new.length) {
-      toast(t('Pick at least one piece.'), 'error')
+    if (!needs.length) {
+      toast(t('Add at least one piece.'), 'error')
       return
+    }
+    const clean = needs
+      .map((n) => ({ ...n,
+        kind: (n.kind || '').trim(),
+        // The server drops a need without a generation subject — a row the
+        // admin only typed a kind into is meant, not a mistake.
+        description: (n.description || '').trim() || (n.kind || '').trim() }))
+      .filter((n) => n.kind)
+    if (!clean.length) {
+      toast(t('Every need has to say what kind of piece it is.'), 'error')
+      return
+    }
+    const proposal: FurnishProposal = {
+      needs: clean,
+      surfaces: applySurfaces && (surfaces.floor || surfaces.wall)
+        ? surfaces : null,
     }
     void run('confirm', { proposal })
   }
 
-  const numField = (label: string, value: number,
-    onValue: (v: number) => void) => (
-    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-      title={label}>
-      <span className="ga-hint">{label}</span>
-      <input className="ga-input" type="number" step={0.05} min={0.05} max={5}
-        style={{ width: 74 }}
-        value={value} onChange={(e) => onValue(Number(e.target.value))} />
-    </label>
-  )
+  /** The pass a piece failed in, as the group heading calls it — the server
+   *  answers the mount token ("floor", "wall", "surface"). */
+  const passLabel = (pass: string): string => {
+    const group = MOUNT_GROUPS.find((g) => g.mount === pass)
+    return group ? t(group.label) : pass
+  }
+
+  /** The kind a placeholder placement stands for — a `need:<key>` prop id
+   *  names the need it was planned from, and only the proposal knows it. */
+  const needKind = (propId: string): string => {
+    const key = propId.slice(NEED_ID_PREFIX.length)
+    const need = (status?.proposal?.needs || []).find((n) => n.key === key)
+    return need?.kind || key
+  }
 
   let body: ReactNode
   if (!status && pickMode) {
@@ -357,8 +347,12 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
           <div className="ga-form-hint">{t('The room is empty.')}</div>
         )}
         <div className="ga-form-hint">
-          {t('The LLM picks library props and proposes the missing pieces; a solver places them. Nothing is removed — furnishing is additive.')}
+          {t('The LLM writes what the room needs, matches the library against it and a solver places the result. Nothing is removed — furnishing is additive.')}
         </div>
+        {/* THE DESCRIPTION IS WHAT THE WORLD READS (E8). After a furnishing
+            run it and the inventory have drifted apart; this button closes
+            that gap with a preview the admin confirms. */}
+        <DescriptionSyncPanel roomId={roomId} onApplied={onDescriptionApplied} />
         {/* Library pre-filter: what is EXCLUDED here is not offered to the
             LLM as available — the room gets fresh proposals instead of the
             same library piece every time. */}
@@ -465,71 +459,45 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
         </div>
       </>
     )
-  } else if (state === 'proposal_ready' && draft) {
+  } else if (state === 'proposal_ready') {
+    const floorKinds = surfaceKinds.filter((s) => !waterKinds.has(s.kind))
     body = (
       <>
-        <div className="ga-plan-panel-title">{t('From the library')}</div>
-        {draft.existing.length ? draft.existing.map((e, i) => (
-          <div key={e.prop_id} className="ga-furnish-row">
-            <input type="checkbox" checked={!!picked[`e:${e.prop_id}`]}
-              onChange={(ev) => setPicked((p) => ({ ...p, [`e:${e.prop_id}`]: ev.target.checked }))} />
-            <span style={{ flex: 1 }}>
-              {propInfo[e.prop_id]?.name || e.prop_id}
-              {propInfo[e.prop_id]?.width_m ? (
-                <span className="ga-hint" style={{ marginLeft: 8 }}>
-                  {propInfo[e.prop_id]!.width_m}×{propInfo[e.prop_id]!.depth_m}×{propInfo[e.prop_id]!.height_m} m
-                  {' · '}{t('from the library — placed as-is')}
-                </span>
-              ) : null}
-            </span>
-            <input className="ga-input" type="number" min={1} max={12} value={e.count}
-              style={{ width: 56 }}
-              onChange={(ev) => setDraft((prev) => prev && ({
-                ...prev,
-                existing: prev.existing.map((x, j) => (j === i
-                  ? { ...x, count: Math.max(1, Math.min(12, Number(ev.target.value) || 1)) }
-                  : x)),
-              }))} />
-          </div>
-        )) : <div className="ga-form-hint">{t('Nothing suitable in the library.')}</div>}
-
-        <div className="ga-plan-panel-title">{t('New pieces (will be generated)')}</div>
-        {draft.new.length ? draft.new.map((n, i) => (
-          <div key={i} className="ga-furnish-new">
-            {/* Row 1: everything scalar — name, count, the three dims. The
-                generation subject gets the full second row (it is the field
-                that actually needs width). */}
-            <div className="ga-furnish-row" style={{ flexWrap: 'wrap' }}>
-              <input type="checkbox" checked={!!picked[`n:${i}`]}
-                onChange={(ev) => setPicked((p) => ({ ...p, [`n:${i}`]: ev.target.checked }))} />
-              <input className="ga-input" style={{ flex: '2 1 160px' }} value={n.name}
-                title={t('Name')}
-                onChange={(ev) => setNew(i, { name: ev.target.value })} />
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                title={t('Count')}>
-                <span className="ga-hint">×</span>
-                <input className="ga-input" type="number" min={1} max={12} value={n.count}
-                  style={{ width: 56 }}
-                  onChange={(ev) => setNew(i, { count: Math.max(1, Math.min(12, Number(ev.target.value) || 1)) })} />
-              </label>
-              {numField(t('W (m)'), n.width_m, (v) => setNew(i, { width_m: v }))}
-              {numField(t('D (m)'), n.depth_m, (v) => setNew(i, { depth_m: v }))}
-              {numField(t('H (m)'), n.height_m, (v) => setNew(i, { height_m: v }))}
+        <div className="ga-form-hint">
+          {t('What the room needs. Each row is served by a library piece or built — the choice in the right-hand select decides. Nothing is generated before you accept the placement.')}
+        </div>
+        <FurnishNeedsList
+          needs={needs}
+          onChange={setNeeds}
+          lib={libProps}
+          dropped={status.proposal?.dropped}
+          poseGroups={poseCatalog.groups}
+          onLeave={onClose}
+        />
+        {/* THE BARE ROOM GETS ITS SKIN (E9). Proposed only for a room that
+            names no kinds of its own; the accept writes the two slots. */}
+        {status.proposal?.surfaces ? (
+          <div className="ga-form" style={{ gap: 6, border: '1px solid var(--border, #30363d)',
+            borderRadius: 8, padding: 8 }}>
+            <label className="ga-check-row" style={{ display: 'flex', gap: 6 }}>
+              <input type="checkbox" checked={applySurfaces}
+                onChange={(e) => setApplySurfaces(e.target.checked)} />
+              <span>{t('Apply these textures on accept')}</span>
+            </label>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <SurfaceKindSelect label="Floor" value={surfaces.floor || ''}
+                kinds={floorKinds}
+                emptyLabel="— none —"
+                title={t('Floor texture of this room.')}
+                onChange={(kind) => setSurfaces((s) => ({ ...s, floor: kind }))} />
+              <SurfaceKindSelect label="Wall" value={surfaces.wall || ''}
+                kinds={surfaceKinds}
+                emptyLabel="— none —"
+                title={t('Wall texture of this room.')}
+                onChange={(kind) => setSurfaces((s) => ({ ...s, wall: kind }))} />
             </div>
-            <textarea className="ga-input" rows={3} style={{ width: '100%' }}
-              value={n.description}
-              title={t('The generation subject — describe the isolated object, never a scene.')}
-              onChange={(ev) => setNew(i, { description: ev.target.value })} />
-            <span className="ga-hint">
-              {n.marker
-                ? t('Place: {label} (adjust the marker by hand on the prop later)')
-                  .replace('{label}', groupLabel(poseCatalog.groups, n.marker.group))
-                : t('No place')}
-              {n.prop_id ? ` · ${t('already generated')}` : ''}
-            </span>
           </div>
-        )) : <div className="ga-form-hint">{t('No new pieces proposed.')}</div>}
-
+        ) : null}
         <div className="ga-furnish-actions">
           <button className="ga-btn ga-btn-sm" disabled={busy}
             onClick={() => { void run('reset') }}>
@@ -537,24 +505,17 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
           </button>
           <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy}
             onClick={confirmProposal}>
-            {t('Generate & place')}
+            {t('Place')}
           </button>
         </div>
       </>
     )
-  } else if (state === 'generating' || state === 'placing') {
-    const done = status.progress?.done || 0
-    const total = status.progress?.total || 0
+  } else if (state === 'placing') {
     body = (
       <>
-        <div className="ga-loading">
-          {state === 'generating'
-            ? t('Generating pieces {done}/{total}…')
-              .replace('{done}', String(done)).replace('{total}', String(total))
-            : t('Placing the furniture…')}
-        </div>
+        <div className="ga-loading">{t('Planning the placement…')}</div>
         <div className="ga-form-hint">
-          {t('Every new piece runs the normal image → mesh chain; this takes minutes. The dialog may be closed.')}
+          {t('The LLM arranges the pieces relationally and a solver turns that into geometry. Nothing is generated yet — this runs in the background and the dialog may be closed.')}
         </div>
         {status.stalled ? (
           <div className="ga-furnish-actions">
@@ -569,19 +530,89 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
     )
   } else if (state === 'review_ready') {
     const unplaced = status.placements?.unplaced || []
-    const total = ghosts.length + unplaced.length
+    const counts = status.phase_counts || {}
+    const byId = new Map((libProps || []).map((p) => [p.id, p]))
+    // B18: a seat/bed/counter WITHOUT a place marker is furniture nobody can
+    // use. One warning per prop, not per copy.
+    const seen = new Set<string>()
+    const markerWarnings: Array<{ id: string; name: string }> = []
+    for (const g of ghosts) {
+      const prop = byId.get(g.prop_id)
+      if (!prop || seen.has(g.prop_id)) continue
+      seen.add(g.prop_id)
+      if (propMount(prop) !== 'floor' || (prop.marker_count || 0) > 0) continue
+      const hay = `${prop.category || ''} ${prop.name || ''}`.toLowerCase()
+      if (PLACE_WORDS.some((w) => hay.includes(w))) {
+        markerWarnings.push({ id: prop.id, name: prop.name })
+      }
+    }
+    // One row per PIECE that has yet to be built, not per copy of it — six
+    // chairs of one need are one thing being made.
+    const placeholders = Array.from(new Set(ghosts
+      .map((g) => g.prop_id)
+      .filter((id) => id.startsWith(NEED_ID_PREFIX))))
     body = (
       <>
         <div className="ga-plan-panel-title">
-          {t('{done} of {total} placed').replace('{done}', String(ghosts.length))
-            .replace('{total}', String(total))}
+          {t('{done} of {total} placed')
+            .replace('{done}', String(ghosts.length))
+            .replace('{total}', String(ghosts.length + unplaced.length))}
         </div>
+        <div className="ga-hint">
+          {MOUNT_GROUPS.map(({ mount, label }) => {
+            const c = counts[mount]
+            if (!c || (!c.placed && !c.unplaced)) return null
+            return `${t(label)} ${c.placed}/${c.placed + c.unplaced}`
+          }).filter(Boolean).join(' · ')}
+        </div>
+        {/* What did NOT fit, grouped by the pass it failed in — the reason
+            names one concrete alternative (repair rule, constraint 5). */}
         {unplaced.length ? (
+          <>
+            {[...MOUNT_GROUPS.map((g) => g.mount as string), ''].map((pass) => {
+              const rows = unplaced.filter(
+                (u) => (u.pass || '') === pass
+                  // A pass this client does not know still has to be shown,
+                  // and it belongs nowhere else than the trailing group.
+                  || (pass === '' && !MOUNT_GROUPS.some(
+                    (g) => g.mount === u.pass)))
+              if (!rows.length) return null
+              return (
+                <div key={pass || 'other'}>
+                  <span className="ga-hint">
+                    {pass ? passLabel(pass) : t('Not placed')}
+                  </span>
+                  <ul className="ga-furnish-list">
+                    {rows.map((u, i) => (
+                      <li key={i}>{u.name} — {u.reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )
+            })}
+          </>
+        ) : null}
+        {placeholders.length ? (
           <ul className="ga-furnish-list">
-            {unplaced.map((u, i) => (
-              <li key={i}>{propInfo[u.name]?.name || u.name} — {u.reason}</li>
+            {placeholders.map((propId) => (
+              <li key={propId}>
+                {t('{kind} (new — built after accept)')
+                  .replace('{kind}', needKind(propId))}
+              </li>
             ))}
           </ul>
+        ) : null}
+        {markerWarnings.length ? (
+          <div className="ga-furnish-banner" style={{ flexDirection: 'column',
+            alignItems: 'flex-start' }}>
+            {markerWarnings.map((w) => (
+              <span key={w.id}>
+                ⚠ {t('{name}: no place marker — characters cannot use it.')
+                  .replace('{name}', w.name)}{' '}
+                <a href="#/props" onClick={() => onClose()}>{t('Props tab')}</a>
+              </span>
+            ))}
+          </div>
         ) : null}
         <div className="ga-form-hint">
           {t('The proposal is drawn as amber ghosts on the floor plan — drag or delete them there before accepting.')}
@@ -598,10 +629,42 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
         </div>
       </>
     )
+  } else if (state === 'generating') {
+    const done = status.progress?.done || 0
+    const total = status.progress?.total || 0
+    body = (
+      <>
+        <div className="ga-loading">
+          {t('Building meshes {done}/{total} — the room already shows placeholder boxes; the job closes itself when done.')
+            .replace('{done}', String(done)).replace('{total}', String(total))}
+        </div>
+        <div className="ga-form-hint">
+          {t('Every new piece runs the normal image → mesh chain; this takes minutes and can be watched in the queue panel. The dialog may be closed.')}
+        </div>
+        <div className="ga-furnish-actions">
+          {status.stalled ? (
+            <>
+              <span className="ga-hint">{t('The job is not running — the server was restarted.')}</span>
+              <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy}
+                onClick={() => { void run('continue') }}>
+                {t('Continue')}
+              </button>
+            </>
+          ) : null}
+          <button className="ga-btn ga-btn-sm" disabled
+            title={t('meshes are being generated')}>
+            {t('Discard')}
+          </button>
+        </div>
+      </>
+    )
   } else if (state === 'error') {
     body = (
       <>
         <div className="ga-furnish-error">{status.error || t('Unknown error')}</div>
+        <div className="ga-form-hint">
+          {t('The job kept its state — Retry re-enters the failed step, Reset throws the whole run away.')}
+        </div>
         <div className="ga-furnish-actions">
           <button className="ga-btn ga-btn-sm" disabled={busy}
             onClick={() => { void run('reset') }}>

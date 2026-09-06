@@ -48,6 +48,10 @@ Every expected number is derived by hand from the rule:
     of two built needs creates exactly ONE prop — 6 props before, 7 after —
     and the accept's notification names the other kind. The empty-accept case
     is the same rule with an empty placement set: 0 props, 0 generating.
+  * E9, the surfaces row: stage 1 proposed floor "oak_planks" and wall
+    "does_not_exist"; the validator keeps only kinds the library has, so the
+    confirmed proposal carries ONE slot and the accept writes exactly that one
+    — layout.surfaces == {"floor": "oak_planks"}, no wall kind invented.
   * a job stranded in `generating` (accepted, its mesh delivered by the
     persistent queue while no thread watched) is FINISHED, not stuck: nothing
     is pending, so continue/discard/a plain status read each close the row and
@@ -604,6 +608,13 @@ def main() -> int:
           not any(str(p.get("prop_id") or "").startswith("need:")
                   for p in stored),
           json.dumps([p.get("prop_id") for p in stored]))
+    # E9: the confirmed floor/wall kinds skin the bare room ON ACCEPT. The
+    # proposal above named "oak_planks" and "does_not_exist"; the validator
+    # already dropped the second, so exactly one slot is written and the wall
+    # stays unset — the room keeps no kind nobody chose.
+    check("accept applies the confirmed surface kinds",
+          room["layout"].get("surfaces") == {"floor": "oak_planks"},
+          json.dumps(room["layout"].get("surfaces")))
     check("the child still names its support by PLACEMENT id",
           next(p for p in stored if p.get("on"))["on"] == table_place["id"],
           json.dumps([p.get("on") for p in stored]))

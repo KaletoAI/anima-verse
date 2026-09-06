@@ -2809,6 +2809,38 @@ def furnish_continue(room_id: str,
     return _furnish_call(resume, room_id)
 
 
+# ── Room description ↔ inventory (E8, plan-furnish-v2.md § 2b B14b) ──
+# Two steps on purpose: PROPOSE hands the admin a text, APPLY stores the one
+# they read. Nothing rewrites a description on its own. ``room_id`` is the
+# furnish target id, so the yard's composite ``__ground__@<location>`` works
+# here exactly as it does on every furnish route.
+
+
+@router.post("/rooms/{room_id}/description-sync")
+async def room_description_sync(room_id: str, request: Request,
+                                _: Dict[str, Any] = Depends(require_admin)
+                                ) -> Dict[str, Any]:
+    """Propose a room description that names what really stands in the room —
+    body (optional): {lang: "de"} for the answer's language. Answers
+    {proposal, inventory}; NOTHING is written. 404 = no such room."""
+    body = await _furnish_body(request)
+    from app.core.room_description_sync import propose
+    return _furnish_call(propose, room_id, str(body.get("lang") or ""))
+
+
+@router.put("/rooms/{room_id}/description")
+async def room_description_write(room_id: str, request: Request,
+                                 _: Dict[str, Any] = Depends(require_admin)
+                                 ) -> Dict[str, Any]:
+    """Store a room description — body: {description: "..."}. The ordinary
+    update path (``world.update_room_description``), reachable for the yard's
+    composite job id too; the furnish dialog's "Apply" uses it."""
+    body = await _furnish_body(request)
+    from app.core.room_description_sync import apply as apply_description
+    return _furnish_call(apply_description, room_id,
+                         str(body.get("description") or ""))
+
+
 # ── Map Layout Import / Export ──
 
 @router.get("/map/export")
