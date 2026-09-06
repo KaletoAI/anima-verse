@@ -223,7 +223,7 @@ export function PlanMarkerStrip({
         ariaLabel={t('Marker height offset (m)')}
         title={t('Additive to the seat height the client samples under the marker.')}
         min={-1}
-        max={1}
+        max={2}
         step={0.01}
         value={marker.offset_y ?? 0}
         onChange={(v) => onPatch({ offset_y: v === 0 ? undefined : v })}
