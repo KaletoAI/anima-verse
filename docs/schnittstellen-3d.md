@@ -176,9 +176,10 @@
 >     Gelöscht sind der Sanitizer-Zweig (`world_ops._sanitize_map3d`), der
 >     Editor-Regler, der Typ in beiden Clients und `scene_recipe._building_yaw`
 >     — kein Alias, kein Fallback-Leser, keine Migration. `map_rotation_2d`
->     bleibt ausschließlich die 90°-Anzeigedrehung des flachen KARTEN-ICONS
->     und ist damit auch aus der Szenen-Signatur und dem
->     `POST /play/scene-preview`-Body raus. Räume, Props, Extras und Marker
+>     blieb damals ausschließlich die 90°-Anzeigedrehung des flachen
+>     KARTEN-ICONS und war damit auch aus der Szenen-Signatur und dem
+>     `POST /play/scene-preview`-Body raus (gelöscht 2026-09,
+>     plan-rueckbau-2d-karte.md). Räume, Props, Extras und Marker
 >     behalten ihren eigenen Platzierungs-Yaw.
 >
 > 11. **`layout.rotation` dreht den GANZEN Raum — um seine Rechteck-Mitte**
@@ -460,16 +461,14 @@
 >     2026-08-02). Versuchsbudget `count × 30`, Unterbelegung erlaubt.
 >     Identischer Seed ⇒ identische Szene in Admin-Vorschau und Client;
 >     § B5a prüft exakte Positionen gegen die von Hand gerechnete Folge.
->     **Der wirksame Seed ist nicht immer der gespeicherte:** trägt die
->     Location ein `variant_seed` ≠ 0 — die EINE Zahl, die ein auf die Karte
->     gesetzter Klon besitzt —, dann leitet sich JEDER Seed dieser Location
->     (Scatter hier wie Relief-`seed` in Nr. 14) aus
->     `variant_mix(gespeicherter Seed, variant_seed)` ab: EIN xorshift32-Zug
->     auf `gespeicherter Seed ⊕ (variant_seed · 0x9E3779B1 & 0xFFFFFFFF)`.
->     Ohne `variant_seed` (fehlend oder 0) gilt der gespeicherte Seed
->     unverändert. Grund: ein Klon erbt seine Seeds mitsamt der Vorlage und
->     sähe ihr sonst bis zum letzten Grashalm gleich. Die Handrechnung nach
->     § B5a rechnet mit dem wirksamen Seed.
+>     **Der wirksame Seed IST der gespeicherte:** es gibt keine zweite Zahl
+>     mehr, die ihn verbiegt. `variant_seed` und der Mischer `variant_mix`
+>     sind mit dem Rückbau 2026-09 (plan-rueckbau-2d-karte.md) gestrichen —
+>     sie existierten nur, damit ein auf die Karte gesetzter Klon seiner
+>     Vorlage nicht bis zum letzten Grashalm gleicht, und Klone gibt es
+>     nicht mehr. JEDER Seed dieser Location (Scatter hier wie Relief-`seed`
+>     in Nr. 14) gilt unverändert, so wie er gespeichert ist; die
+>     Handrechnung nach § B5a rechnet mit genau diesem Seed.
 > 13. **`scene.boundary_openings`** — Durchgänge an der LOCATION-Grenze
 >     (Straße quert die Zelle): `[{edge: <Kanten-Index>, at_world: [x, z],
 >     width_m, type: "passage", room_id?, inward: [nx, nz]}]`, Punkt in
@@ -914,7 +913,7 @@ immer sichtbar, nur Locations verstecken sich.
   | Wo die Figur steht | Gilt das Gelände? |
   |---|---|
   | **In einem RAUM** | nur wenn er ein **Outdoor-Raum** ist (`always_visible`, § A5) — ein Innenraum hat einen Fußboden |
-  | Sonst **in einem Fußabdruck** | nur wenn es eine **Flächen-Location** ist (`passable` oder `map3d.area_model`) — ein Gebäude bringt seine eigene Platte mit |
+  | Sonst **in einem Fußabdruck** | nur wenn es eine **Flächen-Location** ist (`map3d.area_model`) — ein Gebäude bringt seine eigene Platte mit |
   | Sonst: **Wildnis** | immer |
 
   Ein Dorf auf einem See wird durchwatet, die Halle daneben nicht; die
@@ -1163,9 +1162,10 @@ E1 unberührt:
   `map3d.rotation` → `map_rotation_2d` war ein ZWEITER Regler auf derselben
   Achse und damit nur eine Fehlerquelle. `map3d.rotation` ist gelöscht
   (Sanitizer-Zweig, Editor-Regler, Typ, `_building_yaw`), ohne Migration und
-  ohne Alias-Leser; `map_rotation_2d` bleibt ausschließlich die Anzeige-
-  Drehung des flachen KARTEN-ICONS (§ A1.9) und erreicht keinen 3D-Renderer
-  mehr. Räume, Props und Extras behalten ihren eigenen Platzierungs-Yaw.
+  ohne Alias-Leser; `map_rotation_2d` war ausschließlich die Anzeige-
+  Drehung des flachen KARTEN-ICONS (§ A1.9) und erreichte keinen
+  3D-Renderer — gelöscht 2026-09 (plan-rueckbau-2d-karte.md). Räume, Props
+  und Extras behalten ihren eigenen Platzierungs-Yaw.
   Die Renderformel bleibt three.js **`rotation.y = +rad(yaw)`**.
   **Erledigt mit E4 (2026-08-09, Task 3):** das frühere Minus ist weg,
   verbindlicher Drehsinn ist die Weltkarten-Konvention `yaw_deg` (§ A1.1) —
@@ -1214,11 +1214,13 @@ E1 unberührt:
   Zellen-Nachbarschaft.
 - `grid_x`, `grid_y` an der Location; `grid_bounds` im Payload (→
   `world_bounds`).
-- `template_location_id` im Weltkarten-Eintrag. (`passable` stand hier
-  auch — es ist mit **E3/Task 5** zurückgekommen: eine Ziel-Liste muss
-  Durchgangs-Kacheln fallen lassen können, und die Karte darf eine Straße
-  anders zeichnen als einen Ort. Der Weltkarten-Eintrag trägt es also
-  wieder.)
+- `template_location_id` **und** `passable` im Weltkarten-Eintrag. Beide
+  sind mit dem Rückbau 2026-09 (plan-rueckbau-2d-karte.md) endgültig weg:
+  es gibt keine Vorlagen und keine Kopien mehr und keinen Ortstyp
+  „Durchgangsort", also auch kein Weltkarten-Feld dafür. (`passable` war
+  mit **E3/Task 5** einmal zurückgekommen, damit eine Ziel-Liste
+  Durchgangs-Kacheln fallen lassen kann — das ist Historie. Ob eine
+  Location Fläche ist, sagt jetzt allein `map3d.area_model`.)
 - `terrain` und `surface_kind` **im Weltkarten-Eintrag** (das gemalte
   Gelände kommt aus `GET /play/terrain`; § A9 gilt weiter für die
   Detailszene und `/world/locations`).
@@ -1634,8 +1636,6 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
 - `floors` ist float (2,5 = Dach/Attika zählt halb); `height_m` =
   geschätzte Gesamthöhe; `width_m` = geschätzte reale Raumbreite (macht
   den Inhalts-Maßstab explizit). `offset_*` ±25 Welt-Meter.
-- Template-Kacheln (`template_location_id`) fragen das Modell der
-  Template-ID an; Klone teilen die Geometrie.
 - Rig-Typen: `mixamo` (humanoid, EIN GLB, Skelett 52 Joints
   `mixamorig:`, Textur eingebettet) · `generic` (FBX + separates
   basecolor-Bild, keine Bibliotheks-Clips → prozedurales Idle) ·
@@ -2698,8 +2698,8 @@ soll, bekommt keinen Zugang — nicht bloß Nebel.
 mehr.** Jede Location trägt einen **reservierten Raum** mit fester Id
 `__ground__` (`world.GROUND_ROOM_ID`) — die Fläche, die kein anderer Raum
 einnimmt. Der Server bringt ihn mit (Einmal-Migration, danach
-`ensure_ground_room` bei jedem Schreiben; Klone erben ihn von ihrer Vorlage);
-der Autor legt ihn nie an und kann ihn nicht löschen, nur benennen.
+`ensure_ground_room` bei jedem Schreiben); der Autor legt ihn nie an und
+kann ihn nicht löschen, nur benennen.
 
 - **Keine Geometrie.** Die Grundfläche trägt kein `layout` und damit kein
   Rezept (`compose_recipe` liefert ohne Layout `None`). Sie taucht in
@@ -2966,7 +2966,7 @@ Sonst:
   autorisierte Öffnung** hat eine freie Grenze: sie hat nie gesagt, wo ihr Weg
   hinein ist — das Spiegelbild von `may_leave`s „kein Eintrittsraum = überall
   hinaus". Ohne diese Regel wäre ein gemalter Platz, eine Wiese oder jeder
-  `passable` Transitort eine Wand, und man KANN um sie herum nicht für jede
+  Flächenort eine Wand, und man KANN um sie herum nicht für jede
   Anlaufrichtung eine Öffnung zeichnen. **Hat** eine Location Öffnungen, sind
   genau die ihre Wege hinein und alles andere ist Wand (Strenge-Entscheidung
   2026-08-04). Die Regel-Gates gelten in beiden Fällen — die freie Grenze
@@ -8316,7 +8316,7 @@ für `animation` — nirgends.
 
 **Raum-Rezept** (§ B1): `placements[]` zusätzlich `id`, `label`, `prop_name`;
 `prop_markers[]` = `{placement, id, group, capacity, spacing_m, offset_m,
-height_m, facing}`. Das LLM-Einrichten (`furnish_new`) schlägt je Möbel einen
+height_m, facing}`. Das LLM-Einrichten (`furnish_needs`) schlägt je Möbel einen
 Marker mit `group` aus dieser Liste vor, keinen Clip-Kind mehr.
 
 ## Nachtrag 2026-08-29 (§ A6/B1): TREPPEN v2 — der Lauf ist DATEN, der Boden bekommt ein Loch

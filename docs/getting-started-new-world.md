@@ -96,7 +96,7 @@ Infermatic) in the [README](../README.md#getting-started).
        it to the character(s) who may enter.
     2. **Rules → `+ New`** — Scope `All characters`, Subject `Location / Room`, Action `Enter`,
        pick the gated room, Condition `NOT has_item:key_room_506`.
-    3. Save. The set-location skill, map movement and any LLM-driven location change all consult
+    3. Save. The set-location skill and any LLM-driven location change all consult
        these rules.
 
 12. **Pick the right chat mode.** The character's `chat_mode` controls how skills are invoked and

@@ -16,7 +16,6 @@ Meter-Ebene ohne Zellen-Nachbarschaft, in der ein Schritt nichts mehr bedeutet.
 | Ziel | benannter, eindeutiger Ort |
 | Ablauf (NPC, Cross-Location) | startet eine **zeitgebundene Reise** (`start_journey`, Route über das Nav-Raster) |
 | Ablauf (innerhalb des Orts) | sofortiger Raumwechsel |
-| Passable Terrain | **abgelehnt** (`skill_set_location.py`: „Durchgangsort, kein Ziel") |
 | Default-Verfügbarkeit | an (kein `ALWAYS_LOAD`) |
 
 Dazu kommt `CancelTravel` (dieselbe Datei), der eine laufende Reise abbricht.
@@ -51,27 +50,25 @@ NPCs wie für den Spieler-Avatar — der Avatar reist allerdings über die
 `/play/travel`-Route, nicht über den Skill (`is_player_controlled` überspringt
 den Skill-Zweig).
 
-## Terrain: gemalte Flächen und passable Klone
+## Terrain: gemalte Flächen
 
-Gelände ist seit E2 primär **gemalte Fläche** (`GET /play/terrain`): ein
+Gelände ist seit E2 **gemalte Fläche** (`GET /play/terrain`): ein
 Terrain-Typ bringt Passierbarkeit und einen `speed_factor` mit, den das
 Nav-Raster als Hindernis bzw. als Zeitgewicht der Route liest. Auf gemaltes
 Gelände „geht" niemand — es wird durchquert.
 
-Daneben existieren Geländetypen weiterhin als **Location-Template** (ohne
-Position) plus beliebig viele **Klone** auf der Karte. Ein Klon speichert
-minimal `id`, `template_location_id`, `pos_x/pos_z` und erbt Name + Rest vom
-Template (`_resolve_clones` in `app/models/world.py`). Beim Lesen mergen
-`list_locations()` Template und Klone.
+Ein **Flächenort** (See, Hof, Dorfplatz) ist dagegen eine ganz normale
+Location; dass sie Fläche ist und kein Gebäude, sagt allein `map3d.area_model`
+(die eine Auskunft dazu geben `world_geometry.is_area_location` serverseitig
+und `tiles.isAreaLocation` im 3D-Client). Es gibt keinen zweiten Ortstyp und
+kein Flag „Durchgangsort" mehr.
 
-Konsequenz: Es gibt typischerweise **mehrere gleichnamige Orte** (z.B. 5×
-„Küste"). Eine reine Namens-Suche in der `locations`-Tabelle findet sie nicht —
-Klone haben den Namen leer und erben ihn erst beim Merge.
-
-**Wichtig:** Alle Terrain-Klone sind `passable`. SetLocation lehnt passable
-grundsätzlich ab → **ein Durchgangsort ist kein Reiseziel.** Wer einen NPC an
-ein Geländeziel führen will, legt dort eine richtige Location an; die Route
-läuft ohnehin frei über die Fläche, nicht von Kachel zu Kachel.
+**Vorlagen und Klone sind mit dem Rückbau 2026-09 ersatzlos gestrichen**
+(`plan-rueckbau-2d-karte.md`): keine Template-Location, keine Kopien auf der
+Karte, kein `template_location_id`. Jeder Ort steht genau einmal in der
+`locations`-Tabelle, unter seinem eigenen Namen — eine Namens-Suche findet ihn
+also wieder. SetLocation lehnt keinen Ort mehr wegen seines Geländes ab; die
+Route läuft ohnehin frei über die Fläche, nicht von Kachel zu Kachel.
 
 ## Skills pro Character aktivieren
 
