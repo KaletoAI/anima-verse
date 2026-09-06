@@ -10,6 +10,7 @@ import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
 import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
 import type { SubmergedGhost } from './submergedGhost';
 import type { PlaceEntry } from './placeSlot';
+import { storeyPieceOpacity } from './storeyDisplay';
 
 // --- The FOOTPRINT of a location (contract v6 "Gebiete", § A1.1) -------------
 //
@@ -516,6 +517,15 @@ export interface VerticalTarget {
   group: THREE.Group;
 }
 
+/** One room floor plate's material and the opacity the PAYLOAD composed it
+ *  with — the value it falls back to whenever the view shows another storey
+ *  (`storeyDisplay.storeyPieceOpacity`). Carried rather than re-derived: the
+ *  style value lives in the payload, and the tile is what outlives the mount. */
+export interface StoreyPlateMat {
+  mat: THREE.MeshStandardMaterial;
+  ghost: number;
+}
+
 export interface Tile {
   loc: WorldLocation;
   /** Fassaden mit Fensterraster — leuchten nachts (emissive) */
@@ -653,6 +663,13 @@ export interface Tile {
    *  textured walls need one material with its own repeat per piece (scene
    *  recipe) — the legacy floor plan carries exactly one. */
   levelWallMats: Map<number, THREE.MeshStandardMaterial[]>;
+  /** ROOM floor plates per storey, each with the opacity the payload composed
+   *  it with (`storeyDisplay.ts`). Its own list beside `levelSlabs` because a
+   *  room plate is not the storey's contour plate and cannot be found through
+   *  it — and beside `levelWallMats` because it needs the composed value back:
+   *  an `always_visible` zone stays visible when the switch leaves its storey,
+   *  where a wall is simply hidden. */
+  levelRoomPlateMats: Map<number, StoreyPlateMat[]>;
   /** Currently chosen storey of the interior view (switch; default ground) */
   levelFilter: number;
   /** Pull the in-world storey switch's display state out of `levelFilter`
@@ -878,7 +895,8 @@ export function buildTile(loc: WorldLocation): Tile {
     roomFloors: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
-    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(), walkPlates: [],
+    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(),
+    levelRoomPlateMats: new Map(), walkPlates: [],
     declaredFloors: [], surfaces: [],
     levelFilter: 0, roomOutdoor: new Set(),
     fade: 0, fadeTarget: 0, occl: 0,
@@ -1236,6 +1254,18 @@ export function applyLevelDisplay(tile: Tile) {
   // misleading busywork — an opaque material ignores it.
   for (const mat of tile.levelWallMats.get(tile.levelFilter) ?? []) {
     mat.opacity = 1;
+  }
+  // …AND THE ROOMS' OWN FLOOR PLATES (user finding 2026-09-06). They were the
+  // one family of storey pieces nobody took the payload's ghosting back off
+  // for, so a room on a declared storey stood on a 40 % floor while its walls
+  // and the storey plate around it were solid. Both directions, unlike the
+  // walls: a plate of another storey is not always hidden (an `always_visible`
+  // zone stays visible across the switch), so it has to fall back to the value
+  // the payload composed it with.
+  for (const [lv, plates] of tile.levelRoomPlateMats) {
+    for (const p of plates) {
+      p.mat.opacity = storeyPieceOpacity(lv, tile.levelFilter, p.ghost);
+    }
   }
 }
 

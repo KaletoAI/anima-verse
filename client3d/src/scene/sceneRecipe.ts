@@ -839,7 +839,8 @@ function roomProps(placements: readonly PlacedSceneModel[], roomId: string
  *
  * Füllt die Tile-Felder der Innenansicht
  * (roomGroups/-Centers/-Exits/-Levels/-Rects/-Slots/-Markers, outlineWalls,
- * levelSlabs, levelWallMats, elevatorStops, stairs, alwaysVisibleRooms, interior,
+ * levelSlabs, levelWallMats, levelRoomPlateMats, elevatorStops, stairs,
+ * alwaysVisibleRooms, interior,
  * interiorLabels) — der ganze Sicht- und Interaktionscode
  * darüber (LOD, Crossfade, Fokus, Culling, NPCs) bleibt unberührt.
  *
@@ -1016,6 +1017,17 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       tile.levelSlabs.set(plate.level, mesh);
       continue;
     }
+    // A ROOM's floor plate joins the storey switch too (user finding
+    // 2026-09-06). Without this list `applyLevelDisplay` had no way to take
+    // the payload's ghosting back off the floor one is standing on — the
+    // storey plate and the walls were solid, the room's own floor stayed at
+    // `upper_floor_opacity`. The composed value rides along so the switch can
+    // put it back when the view leaves this storey.
+    const plateMat = mesh.material as THREE.MeshStandardMaterial;
+    const forLevel = tile.levelRoomPlateMats.get(plate.level);
+    const entry = { mat: plateMat, ghost: plateMat.opacity };
+    if (forLevel) forLevel.push(entry);
+    else tile.levelRoomPlateMats.set(plate.level, [entry]);
     roomPlateTop.set(plate.room_id, plate.top_y);
   }
 
@@ -2069,6 +2081,7 @@ export function unmountScene(tile: Tile): void {
   tile.outlineWalls = [];
   tile.levelSlabs.clear();
   tile.levelWallMats.clear();
+  tile.levelRoomPlateMats.clear();
   tile.elevatorStops = undefined;
   tile.stairs = undefined;
   // The click targets point at groups that just left the graph — the next
