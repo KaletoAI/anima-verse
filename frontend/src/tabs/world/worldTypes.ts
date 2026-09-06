@@ -132,7 +132,10 @@ export interface RoomPropPlacement {
    *  ON THE YARD (§ A13a) the same field is LOCATION-LOCAL metres — the
    *  ground has no min corner, its frame IS the location frame.
    *  WITH `on`: metres from the SUPPORT's placement point in its UNTURNED
-   *  frame (+x = its width axis, +z = its depth axis). */
+   *  frame (+x = its width axis, +z = its depth axis), composed with the
+   *  RENDERER's turn `R_y(+yaw)` — the same matrix `compose_prop_marker`
+   *  applies to a marker of that support (§ B2 step 4, E4), because the child
+   *  stands on the support's mesh. */
   at: [number, number]
   /** Yaw in degrees, free values at 0.1° resolution. Absent = 0.
    *  WITH `on`: degrees RELATIVE to the support's heading. */

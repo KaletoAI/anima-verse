@@ -593,14 +593,23 @@ def compose_on_chain(
     * ``yaw`` — degrees RELATIVE to the support's heading,
     * ``offset_y`` — trim ABOVE the support's top surface.
 
-    and composes with the support's own finished pose (the clockwise turn
-    ``furnish_solver._rect_corners`` uses)::
+    and composes with the support's own finished pose. THE TURN IS THE
+    RENDERER'S — ``R_y(+yaw)``, the very matrix :func:`compose_prop_marker`
+    applies to a marker of the same support (§ B2 step 4, E4). It has to be:
+    a child stands on the support's MESH, and the mesh turns with
+    ``rotation.y = +rad(yaw)``, so anything else would slide the piece off the
+    table the moment the table is turned::
 
         r = radians(yaw_support)
-        x = x_support + dx·cos r − dz·sin r
-        z = z_support + dx·sin r + dz·cos r
+        x = x_support + dx·cos r + dz·sin r
+        z = z_support − dx·sin r + dz·cos r
         yaw       = (yaw_support + yaw_child) mod 360
         offset_y  = props.stack_on_support(support, child) + offset_y_child
+
+    The yaw is ADDED for the same reason the marker facing is (both render as
+    ``rotation.y = +rad(…)`` since E4), and the inverse — a piece dropped at a
+    room point, expressed in the support's frame — is the transpose, which is
+    exactly ``props._footprint_contains``' turned-box test.
 
     Supports compose BEFORE their children (topological order), because the
     support's finished ``offset_y`` is what its top surface is measured from.
@@ -719,8 +728,8 @@ def compose_on_chain(
         r = math.radians(sup["yaw"])
         cos, sin = math.cos(r), math.sin(r)
         dx, dz = child["at"][0], child["at"][1]
-        child["at"] = [sup["at"][0] + dx * cos - dz * sin,
-                       sup["at"][1] + dx * sin + dz * cos]
+        child["at"] = [sup["at"][0] + dx * cos + dz * sin,
+                       sup["at"][1] - dx * sin + dz * cos]
         child["yaw"] = (sup["yaw"] + child["yaw"]) % 360
         if child["reason"] == "depth":
             # Composed into room metres, but no longer a child: the trim it

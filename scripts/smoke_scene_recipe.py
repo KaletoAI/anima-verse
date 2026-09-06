@@ -3922,11 +3922,16 @@ def test_prop_on_support() -> None:
     support's placement point in its UNTURNED frame, ``yaw`` relative to the
     support's heading, ``offset_y`` as a trim above the support's top — and
     ``room_recipe.compose_on_chain`` turns them into the flat room values the
-    payload has always carried::
+    payload has always carried.
+
+    THE TURN IS THE RENDERER'S, ``R_y(+yaw)`` — the very matrix
+    ``compose_prop_marker`` applies to a marker of the same support (§ B2
+    step 4, E4). It has to be: a child stands on the support's MESH, and the
+    mesh turns with ``rotation.y = +rad(yaw)``::
 
         r = radians(yaw_support)
-        x = x_support + dx·cos r − dz·sin r
-        z = z_support + dx·sin r + dz·cos r
+        x = x_support + dx·cos r + dz·sin r
+        z = z_support − dx·sin r + dz·cos r
         yaw      = (yaw_support + yaw_child) mod 360
         offset_y = props.stack_on_support(support, child) + offset_y_child
 
@@ -3934,10 +3939,12 @@ def test_prop_on_support() -> None:
     the candle 0.1 × 0.1 × 0.3 m stored at ``[0.3, 0]`` on it:
 
       a) cos 90 = 0, sin 90 = 1, so
-             x = 3.0 + 0.3·0 − 0.0·1 = 3.0
-             z = 2.0 + 0.3·1 + 0.0·0 = 2.3
-         yaw = 90 + 0 = 90, and the height is the stacking rule with both
-         sinks 0: offset_y = (0 + 0 + 0.75) − 0 = 0.75.
+             x = 3.0 + 0.3·0 + 0.0·1 = 3.0
+             z = 2.0 − 0.3·1 + 0.0·0 = 1.7
+         The candle stood 0.3 m along the table's WIDTH axis, and at yaw 90
+         that axis points north (−z) — the same way a marker at the same spot
+         travels. yaw = 90 + 0 = 90, and the height is the stacking rule with
+         both sinks 0: offset_y = (0 + 0 + 0.75) − 0 = 0.75.
       b) the same candle authored with ``yaw 45`` and ``offset_y 0.02``:
          yaw = 90 + 45 = 135, offset_y = 0.75 + 0.02 = 0.77. The position does
          not move — the child's own yaw turns the candle, not its spot.
@@ -3945,15 +3952,18 @@ def test_prop_on_support() -> None:
          table's own point (``[0, 0]``) → (3.0, 2.0), yaw 90,
          offset_y = 0.75. The mug at ``[0.1, 0]`` on the TRAY composes against
          the tray's FINISHED pose:
-             x = 3.0 + 0.1·0 = 3.0,   z = 2.0 + 0.1·1 = 2.1
+             x = 3.0 + 0.1·0 + 0.0·1 = 3.0
+             z = 2.0 − 0.1·1 + 0.0·0 = 1.9
              yaw = 90 + 0 = 90
              offset_y = (0 + 0.75 + 0.05) − 0 = 0.80
          — the tray's own offset is in the support's top, which is why
          supports compose before their children.
       d) A CHAIN ONE STOREY TOO DEEP. Five pieces, each on the one before,
-         every ``at`` ``[0.1, 0]`` and every yaw 0, the root at (1, 1):
+         every ``at`` ``[0.1, 0]`` and every yaw 0, the root at (1, 1). At
+         yaw 0 the turn is the identity (cos 0 = 1, sin 0 = 0), so only x
+         grows:
              depth  0     1     2     3     4
-             x      1.0   1.1   1.2   1.3   1.4
+             x      1.0   1.1   1.2   1.3   1.4     (z stays 1.0)
          ``ON_MAX_DEPTH`` is 3, so the fifth piece loses its link — and it
          loses ONLY the link: the SANITIZER writes it back at the composed
          (1.4, 1.0) in plain room metres, so nothing moves on screen.
@@ -3986,8 +3996,8 @@ def test_prop_on_support() -> None:
     table = {"id": "tbl", "prop_id": "table", "at": [3.0, 2.0], "yaw": 90}
     a = chain(table, {"id": "cnd", "prop_id": "candle", "at": [0.3, 0.0],
                       "on": "tbl"})[1]
-    check("a) candle at [0.3, 0] on the 90°-turned table: (3.0, 2.3)",
-          near(a["at"][0], 3.0) and near(a["at"][1], 2.3), str(a["at"]))
+    check("a) candle at [0.3, 0] on the 90°-turned table: (3.0, 1.7)",
+          near(a["at"][0], 3.0) and near(a["at"][1], 1.7), str(a["at"]))
     check("   ...its yaw is the table's 90°",
           near(a["yaw"], 90.0), str(a["yaw"]))
     check("   ...and it sits on the 0.75 m table top",
@@ -3999,16 +4009,16 @@ def test_prop_on_support() -> None:
           near(b["yaw"], 135.0), str(b["yaw"]))
     check("   ...and a 2 cm trim lands it at 0.77",
           near(b["offset_y"], 0.77), str(b["offset_y"]))
-    check("   ...while the spot is unchanged at (3.0, 2.3)",
-          near(b["at"][0], 3.0) and near(b["at"][1], 2.3), str(b["at"]))
+    check("   ...while the spot is unchanged at (3.0, 1.7)",
+          near(b["at"][0], 3.0) and near(b["at"][1], 1.7), str(b["at"]))
     c = chain(table,
               {"id": "try", "prop_id": "tray", "at": [0.0, 0.0], "on": "tbl"},
               {"id": "mug", "prop_id": "mug", "at": [0.1, 0.0], "on": "try"})
     check("c) the tray lands on the table top: (3.0, 2.0), 0.75",
           near(c[1]["at"][0], 3.0) and near(c[1]["at"][1], 2.0)
           and near(c[1]["offset_y"], 0.75), str(c[1]))
-    check("   ...and the mug on the TRAY: (3.0, 2.1), 0.75 + 0.05 = 0.80",
-          near(c[2]["at"][0], 3.0) and near(c[2]["at"][1], 2.1)
+    check("   ...and the mug on the TRAY: (3.0, 1.9), 0.75 + 0.05 = 0.80",
+          near(c[2]["at"][0], 3.0) and near(c[2]["at"][1], 1.9)
           and near(c[2]["offset_y"], 0.80), str(c[2]))
     check("   ...at depth 2, the tray at 1",
           [e["depth"] for e in c] == [0, 1, 2], str([e["depth"] for e in c]))

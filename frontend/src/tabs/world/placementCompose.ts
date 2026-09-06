@@ -47,12 +47,14 @@ export interface ComposedPlacement {
 /**
  * Compose every placement of one list into room metres.
  *
- * The child frame, and the turn that leaves it (the same clockwise turn the
- * server's `_rect_corners` uses):
+ * The child frame, and the turn that leaves it — the RENDERER's `R_y(+yaw)`,
+ * the same matrix `room_recipe.compose_prop_marker` applies to a marker of the
+ * same support (§ B2 step 4, E4). A child stands on the support's MESH, and
+ * the mesh turns with `rotation.y = +rad(yaw)`:
  *
  *     r = radians(yaw_support)
- *     x = x_support + dx·cos r − dz·sin r
- *     z = z_support + dx·sin r + dz·cos r
+ *     x = x_support + dx·cos r + dz·sin r
+ *     z = z_support − dx·sin r + dz·cos r
  *     yaw = (yaw_support + yaw_child) mod 360
  *
  * Order in the list does not matter — supports are composed before their
@@ -138,8 +140,8 @@ export function composePlacements(
     const cos = Math.cos(r)
     const sin = Math.sin(r)
     const [dx, dz] = child.at
-    child.at = [sup.at[0] + dx * cos - dz * sin,
-                sup.at[1] + dx * sin + dz * cos]
+    child.at = [sup.at[0] + dx * cos + dz * sin,
+                sup.at[1] - dx * sin + dz * cos]
     child.yaw = (sup.yaw + child.yaw) % 360
     if (tooDeep) continue       // composed into room metres, no longer a child
     child.depth = sup.depth + 1
@@ -151,6 +153,10 @@ export function composePlacements(
 /**
  * The inverse of one composition step: where a piece that is dropped at
  * `(x, z)` facing `yaw` stands in the SUPPORT's frame.
+ *
+ * The transpose of the turn above — and therefore the very transform
+ * `propsAtPoint` already runs to hit-test a turned footprint (`lx = X·cos θ −
+ * Z·sin θ`, `lz = X·sin θ + Z·cos θ`).
  *
  * Used when a child is dragged (only its own relative `at` may move) and when
  * "Place on top" turns a free placement into a child.
@@ -166,7 +172,7 @@ export function toSupportFrame(
   const dx = at[0] - support.at[0]
   const dz = at[1] - support.at[1]
   return {
-    at: [dx * cos + dz * sin, -dx * sin + dz * cos],
+    at: [dx * cos - dz * sin, dx * sin + dz * cos],
     yaw: ((yaw - support.yaw) % 360 + 360) % 360,
   }
 }

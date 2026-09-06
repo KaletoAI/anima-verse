@@ -1423,7 +1423,7 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   **Facing-Default (2026-07-25):** `prop_markers` tragen IMMER ein
   `facing` — fehlt es am Objekt-Marker, gilt Prop-Front = Süd im
   Objektraum und der Sitzende erbt die Platzierungs-Drehung
-  (`facing = (0 − yaw) mod 360`); zeigt die Front eines Props nicht nach
+  (`facing = (0 + yaw) mod 360`, seit E4); zeigt die Front eines Props nicht nach
   Süden, einmal am Objekt-Marker korrigieren. (Befund Café-Terrasse:
   gedrehte Stühle, alle Sitzenden schauten in dieselbe Richtung.)
   Raum-Marker (`markers`) = unverändert `layout.markers` (raumlokal:
@@ -1464,15 +1464,23 @@ offset_y: <m>             # Trimm ÜBER der Oberkante des Trägers
                           # (fehlt = 0 = genau darauf)
 ```
 
-Komposition (dieselbe Drehung, mit der ein Rechteck-Fußabdruck gedreht wird):
+Komposition — **dieselbe Drehung wie `compose_prop_marker`** (`R_y(+yaw)`,
+§ B2 Schritt 4, seit E4). Sie muss es sein: das Kind steht auf dem MESH des
+Trägers, und das Mesh dreht sich mit `rotation.y = +rad(yaw)`.
 
 ```
 r  = radians(yaw_Träger)
-x  = x_Träger + dx·cos r − dz·sin r
-z  = z_Träger + dx·sin r + dz·cos r
+x  = x_Träger + dx·cos r + dz·sin r
+z  = z_Träger − dx·sin r + dz·cos r
 yaw      = (yaw_Träger + yaw_Kind) mod 360
 offset_y = props.stack_on_support(Träger, Kind) + offset_y_Kind
 ```
+
+Die Umkehrung (ein Stück wird an einem Raumpunkt abgelegt und im
+Träger-Rahmen ausgedrückt) ist die Transponierte — genau der gedrehte
+Fußabdruck-Test aus `props._footprint_contains`. Der Yaw wird ADDIERT, aus
+demselben Grund wie das Marker-`facing`: beides rendert als
+`rotation.y = +rad(…)`.
 
 `stack_on_support` ist die Stapelregel ohne Fußtest — dieselbe Formel, die
 `props.stack_offset_y` benutzt, nachdem sie ihren Träger gesucht hat:

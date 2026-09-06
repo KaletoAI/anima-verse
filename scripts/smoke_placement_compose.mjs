@@ -26,18 +26,23 @@
  *                   +z = its depth axis),
  *   yaw = degrees RELATIVE to the support's heading,
  *
- * and composes with the support's finished pose:
+ * and composes with the support's finished pose. THE TURN IS THE RENDERER'S,
+ * `R_y(+yaw)` — the same matrix `room_recipe.compose_prop_marker` applies to a
+ * marker of the same support (§ B2 step 4, E4). A child stands on the
+ * support's MESH, and the mesh turns with `rotation.y = +rad(yaw)`:
  *
  *   r = radians(yaw_support)
- *   x = x_support + dx·cos r − dz·sin r
- *   z = z_support + dx·sin r + dz·cos r
+ *   x = x_support + dx·cos r + dz·sin r
+ *   z = z_support − dx·sin r + dz·cos r
  *   yaw = (yaw_support + yaw_child) mod 360
  *
  * HAND DERIVATION — the [7j] fixture, a table at (3, 2) turned 90° and a
  * candle stored at [0.3, 0] on it (cos 90 = 0, sin 90 = 1):
  *
- *   x = 3.0 + 0.3·0 − 0.0·1 = 3.0
- *   z = 2.0 + 0.3·1 + 0.0·0 = 2.3        →  (3.0, 2.3), yaw 90
+ *   x = 3.0 + 0.3·0 + 0.0·1 = 3.0
+ *   z = 2.0 − 0.3·1 + 0.0·0 = 1.7        →  (3.0, 1.7), yaw 90
+ *
+ * i.e. 0.3 m along the table's WIDTH axis, which at yaw 90 points north.
  *
  * with the candle's own yaw 45 the heading is 90 + 45 = 135 and the spot is
  * unchanged — the child's yaw turns the candle, not its place.
@@ -45,7 +50,8 @@
  * A CHAIN, tray at [0, 0] on the table and mug at [0.1, 0] on the tray:
  *
  *   tray  →  (3.0, 2.0), yaw 90, depth 1
- *   mug   →  x = 3.0 + 0.1·0 = 3.0,  z = 2.0 + 0.1·1 = 2.1, yaw 90, depth 2
+ *   mug   →  x = 3.0 + 0.1·0 + 0.0·1 = 3.0
+ *            z = 2.0 − 0.1·1 + 0.0·0 = 1.9,  yaw 90, depth 2
  *
  * ORDER DOES NOT MATTER. The same three entries listed child-first compose to
  * the same three poses: supports are resolved before their children.
@@ -58,18 +64,21 @@
  *   circle          both pieces keep their spots, both lose the link
  *   depth > 3       the support IS valid, so the piece composes through it and
  *                   only loses the link — five pieces at [0.1, 0] on each
- *                   other, root at (1, 1), give x = 1.0 1.1 1.2 1.3 1.4 and
+ *                   other, root at (1, 1) and every yaw 0 (the turn is the
+ *                   identity), give x = 1.0 1.1 1.2 1.3 1.4 at z = 1.0, and
  *                   the fifth stands at 1.4 as a root of its own
  *
  * ============================================================================
  * toSupportFrame — THE INVERSE (dragging a child, "Place on top")
  * ============================================================================
- * Dropping the candle at the room point (3.0, 2.3) facing 135° onto the same
- * 90°-turned table has to give back exactly what the forward step consumed:
+ * The inverse is the TRANSPOSE of the turn above — and therefore the very
+ * transform `RoomLayoutEditor.propsAtPoint` runs to hit-test a turned
+ * footprint. Dropping the candle at the room point (3.0, 1.7) facing 135° onto
+ * the same 90°-turned table has to give back what the forward step consumed:
  *
- *   dx_world = 0.0, dz_world = 0.3
- *   dx =  0.0·cos 90 + 0.3·sin 90 = 0.3
- *   dz = −0.0·sin 90 + 0.3·cos 90 = 0.0
+ *   dx_world = 0.0, dz_world = −0.3
+ *   dx = 0.0·cos 90 − (−0.3)·sin 90 = 0.3
+ *   dz = 0.0·sin 90 + (−0.3)·cos 90 = 0.0
  *   yaw = 135 − 90 = 45                  →  at [0.3, 0], yaw 45
  *
  * ============================================================================
@@ -148,11 +157,11 @@ console.log('\nA  the candle on the turned table');
 let out = composePlacements([TABLE, { id: 'cnd', at: [0.3, 0.0], on: 'tbl' }]);
 check('the table itself does not move', out[0],
   { at: [3, 2], yaw: 90, on: '', depth: 0 });
-check('the candle lands at (3.0, 2.3), yaw 90, depth 1', out[1],
-  { at: [3, 2.3], yaw: 90, on: 'tbl', depth: 1 });
+check('the candle lands at (3.0, 1.7), yaw 90, depth 1', out[1],
+  { at: [3, 1.7], yaw: 90, on: 'tbl', depth: 1 });
 out = composePlacements([TABLE, { id: 'cnd', at: [0.3, 0.0], yaw: 45, on: 'tbl' }]);
 check('its own yaw 45 adds up to 135 and the spot stays', out[1],
-  { at: [3, 2.3], yaw: 135, on: 'tbl', depth: 1 });
+  { at: [3, 1.7], yaw: 135, on: 'tbl', depth: 1 });
 check('a placement on the floor composes to itself',
   composePlacements([{ id: 'x', at: [1.5, -2.25], yaw: 30 }])[0],
   { at: [1.5, -2.25], yaw: 30, on: '', depth: 0 });
@@ -164,11 +173,11 @@ const CHAIN = [TABLE,
 out = composePlacements(CHAIN);
 check('the tray sits on the table point', out[1],
   { at: [3, 2], yaw: 90, on: 'tbl', depth: 1 });
-check('the mug composes against the TRAY: (3.0, 2.1), depth 2', out[2],
-  { at: [3, 2.1], yaw: 90, on: 'try', depth: 2 });
+check('the mug composes against the TRAY: (3.0, 1.9), depth 2', out[2],
+  { at: [3, 1.9], yaw: 90, on: 'try', depth: 2 });
 const reversed = composePlacements([CHAIN[2], CHAIN[1], CHAIN[0]]);
 check('listed child-first the mug lands in the same place', reversed[0],
-  { at: [3, 2.1], yaw: 90, on: 'try', depth: 2 });
+  { at: [3, 1.9], yaw: 90, on: 'try', depth: 2 });
 check('...and the answer stays in INPUT order', reversed[2],
   { at: [3, 2], yaw: 90, on: '', depth: 0 });
 
@@ -204,8 +213,8 @@ check('the fifth is composed but linkless, a root of its own', out[4],
 
 console.log('\nE  toSupportFrame — the inverse');
 const sup = composePlacements([TABLE])[0];
-check('dropping the candle at (3.0, 2.3) facing 135 gives [0.3, 0] / 45',
-  toSupportFrame([3.0, 2.3], 135, sup), { at: [0.3, 0], yaw: 45 });
+check('dropping the candle at (3.0, 1.7) facing 135 gives [0.3, 0] / 45',
+  toSupportFrame([3.0, 1.7], 135, sup), { at: [0.3, 0], yaw: 45 });
 check('the support point itself is the origin of the child frame',
   toSupportFrame([3.0, 2.0], 90, sup), { at: [0, 0], yaw: 0 });
 check('and it undoes the forward step for an arbitrary pair',

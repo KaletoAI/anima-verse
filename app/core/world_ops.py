@@ -1514,10 +1514,14 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
     * ``offset_y`` = trim ABOVE the support's top surface (0 = exactly on it),
 
     — so moving the support moves everything on it and the height is the
-    stacking rule (``props.stack_on_support``). Chains are allowed (mug on tray
-    on table) up to ``room_recipe.ON_MAX_DEPTH``. The composition into room
-    metres happens ONCE, in ``room_recipe.compose_on_chain``; what is stored
-    here stays relative.
+    stacking rule (``props.stack_on_support``). The turn that leaves the child
+    frame is the RENDERER's ``R_y(+yaw)``, the same matrix
+    ``room_recipe.compose_prop_marker`` applies to a marker of that support
+    (§ B2 step 4, E4): the child stands on the support's MESH, and the mesh
+    turns with ``rotation.y = +rad(yaw)``. Chains are allowed (mug on tray on
+    table) up to ``room_recipe.ON_MAX_DEPTH``. The composition into room metres
+    happens ONCE, in ``room_recipe.compose_on_chain``; what is stored here
+    stays relative.
 
     A LINK THAT DOES NOT HOLD never costs the placement: an unknown id, a
     self-reference, a circle or a chain that runs too deep loses only the
