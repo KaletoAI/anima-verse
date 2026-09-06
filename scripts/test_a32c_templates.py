@@ -247,36 +247,81 @@ def t_furnish_match() -> None:
 
 def t_furnish_place() -> None:
     print("furnish_place")
-    items = [{"id": "oak-table-1", "name": "Oak Table", "count": 1,
+    # The four groups of the v2 template (furnish_place.group_items).
+    floor = [{"id": "oak-table-1", "name": "Oak Table", "count": 1,
               "width_m": 1.4, "depth_m": 0.8, "height_m": 0.75}]
+    wall = [{"id": "need:n2", "name": "Framed Painting", "count": 2,
+             "width_m": 0.5, "depth_m": 0.05, "height_m": 0.6}]
+    ceiling = [{"id": "need:n3", "name": "Pendant Lamp", "count": 1,
+                "width_m": 0.3, "depth_m": 0.3, "height_m": 0.8}]
+    surface = [{"id": "need:n4", "name": "Candle", "count": 3,
+                "width_m": 0.08, "depth_m": 0.08, "height_m": 0.2}]
     sys_p, user_p = try_render_task(
         "prod", "furnish_place", room_name="Workshop",
         room_description="A cluttered workbench room.",
-        room_w_m=5.2, room_d_m=4.0, is_rect=True,
-        openings=[{"type": "door", "wall": "N", "at_frac": 0.5,
-                   "width_m": 0.9, "sill_m": 0}],
-        existing=[{"prop_id": "stool-2", "name": "Wooden Stool",
-                   "x_m": 1.0, "y_m": 2.0}],
-        items=items, errors=[])
+        room_w_m=5.2, room_d_m=4.0, is_rect=True, storey_height_m=3.0,
+        openings=[{"index": 0, "type": "door", "wall": "N", "at_frac": 0.5,
+                   "width_m": 0.9, "sill_m": 0, "height_m": 2.1}],
+        existing=[{"id": "aa11bb22", "name": "Wooden Stool", "mount": "floor",
+                   "x_m": 1.0, "y_m": 2.0, "yaw": 90.0, "on": ""}],
+        floor_items=floor, wall_items=wall, ceiling_items=ceiling,
+        surface_items=surface, errors=[], repass=None)
     if sys_p:
         check("prod: no repair block on the first attempt",
-              "previous attempt" not in sys_p)
+              "PREVIOUS plan failed" not in sys_p)
+        check("prod: all four anchor groups are offered",
+              all(word in sys_p for word in ("FLOOR pieces", "WALL pieces",
+                                             "CEILING pieces",
+                                             "SURFACE pieces")))
+    if user_p:
+        # The trim_blocks trap: a loop row ending in a block tag loses its
+        # newline. Four groups of one/two lines each must stay four blocks.
+        check("prod: every item group is its own line",
+              len([ln for ln in user_p.splitlines()
+                   if ln.startswith("- id: ")]) == 4,
+              f"| got: {[ln for ln in user_p.splitlines() if ln.startswith('- id: ')]}")
+        check("prod: the opening carries its index",
+              "index 0: door on wall N" in user_p, f"| got: {user_p[:400]!r}")
+        check("prod: the standing piece carries id, mount and yaw",
+              "(id aa11bb22), mount floor" in user_p and "yaw 90.0°" in user_p,
+              f"| got: {user_p[:600]!r}")
 
-    # Repair round — room_furnish._phase_place calls _run(errors) with the
-    # solver's reasons (room_furnish.py:733-737).
+    # Repair round — furnish_place.run re-plans ONE pass with that pass's
+    # errors and the other groups listed as already standing.
     sys_p, user_p = try_render_task(
         "repair", "furnish_place", room_name="Village Square",
         room_description="", room_w_m=12.38, room_d_m=11.845, is_rect=False,
-        openings=[], existing=[], items=items,
-        errors=["oak-table-1: no free spot"])
+        storey_height_m=3.0, openings=[],
+        existing=[{"id": "cc33", "name": "Oak Table", "mount": "floor",
+                   "x_m": 2.0, "y_m": 0.45, "yaw": 0.0, "on": ""},
+                  {"id": "dd44", "name": "Candle", "mount": "surface",
+                   "x_m": 2.0, "y_m": 0.45, "yaw": 0.0, "on": "Oak Table"}],
+        floor_items=floor, wall_items=wall, ceiling_items=ceiling,
+        surface_items=surface,
+        errors=[{"pass": "wall", "text": "Framed Painting (need:n2): no free "
+                                         "wall spot on wall_n — try wall_e"},
+                {"pass": "ceiling", "text": "Pendant Lamp (need:n3): the "
+                                            "ceiling above 'x' is taken"}],
+        repass="wall")
     if sys_p:
-        check("repair: errors rendered", "no free spot" in sys_p)
+        check("repair: errors rendered with their pass",
+              "[wall pass]" in sys_p and "[ceiling pass]" in sys_p,
+              f"| got: {sys_p[-800:]!r}")
+        check("repair: every error is its own line",
+              len([ln for ln in sys_p.splitlines()
+                   if ln.startswith("- [")]) == 2)
+        check("repair: only the named group is re-planned",
+              "Re-plan ONLY the wall group" in sys_p)
         check("repair: demands a CHANGED plan",
-              "same plan" in sys_p.lower() or "change" in sys_p.lower(),
+              "same anchor again" in sys_p,
               "| the repair round must forbid repeating the failed plan")
     if user_p:
         check("repair: non-rect hint present",
               "non-rectangular" in user_p)
+        check("repair: the child names its support",
+              "stands on Oak Table" in user_p, f"| got: {user_p[:600]!r}")
+        check("repair: the closing instruction names the group",
+              "plan for the wall group" in user_p, f"| got: {user_p[-200:]!r}")
 
 
 # ── 4. spell_detect ─────────────────────────────────────────────────────

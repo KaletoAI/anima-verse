@@ -14,20 +14,29 @@ row per room, one in-process orchestrator thread (pattern:
 be closed at any time; a server restart kills the thread but not the state,
 which is why every phase re-enters idempotently (``resume``/``retry``).
 
+PLACING COMES BEFORE GENERATING (decision E6, B12). Waiting for every mesh
+before the first placement meant hours of an empty dialog; now the plan is
+made from the need list's own dimensions, so the admin sees the finished room
+as ghosts within minutes and the meshes arrive afterwards — the recipe already
+renders a prop without a model as a placeholder box, so an accepted room is
+usable while it fills itself in.
+
 States and their transitions::
 
-    selecting ──▶ proposal_ready ──confirm──▶ generating ──▶ placing
-                                                                │
-                        error ◀── any phase failing             ▼
-                                                          review_ready
-                                                       (accept | discard)
+    selecting ──▶ proposal_ready ──confirm──▶ placing ──▶ review_ready
+                                                               │
+                        error ◀── any phase failing          accept
+                                                               ▼
+                                        (row deleted) ◀── generating
 
-``accept``/``discard``/``reset`` DELETE the row — there is no history; the
-provenance of a run lives in the job log / queue panel (the layout sanitizer
-strips foreign fields, so per-placement provenance is impossible anyway).
+``accept`` hands the placements to ``layout.props`` and keeps the row only as
+long as meshes are still missing; ``discard``/``reset`` delete it outright.
+There is no history: the provenance of a run lives in the job log / queue
+panel (the layout sanitizer strips foreign fields, so per-placement provenance
+is impossible anyway).
 
-Everything the job writes outside its own row is normal world data: new
-props are ordinary library entries (they survive a discarded proposal) and
+Everything the job writes outside its own row is normal world data: the props
+``accept`` creates are ordinary library entries (they survive the job) and the
 accepted placements are appended to ``layout.props`` via
 ``world.append_room_props``.
 
@@ -61,7 +70,7 @@ STATE_GENERATING = "generating"
 STATE_PLACING = "placing"
 STATE_REVIEW_READY = "review_ready"
 STATE_ERROR = "error"
-_ACTIVE_STATES = (STATE_SELECTING, STATE_GENERATING, STATE_PLACING)
+_ACTIVE_STATES = (STATE_SELECTING, STATE_PLACING, STATE_GENERATING)
 
 # Share of the FLOOR area the summed footprints of floor pieces may occupy —
 # the same hard limit the solver enforces; here it only sizes the prompt's
@@ -186,6 +195,33 @@ def _progress(proposal: Any) -> Dict[str, int]:
             "total": len(build)}
 
 
+def _accepted(placements: Any) -> bool:
+    """Whether the placements of this job are already IN the room's layout.
+
+    Written by ``accept`` before the generation phase starts, because from
+    that moment the row is only a progress bar: a restart mid-generation must
+    not append the same placements a second time.
+    """
+    return bool(isinstance(placements, dict) and placements.get("accepted"))
+
+
+def _phase_counts(placements: Any) -> Dict[str, Dict[str, int]]:
+    """``{mount: {placed, unplaced}}`` of the placement run — stored with the
+    result, because the dialog polls this status and re-deriving it would read
+    the whole prop library on every poll."""
+    from app.core.furnish_place import MOUNTS
+    stored = placements.get("phase_counts") if isinstance(placements, dict) else None
+    empty = {m: {"placed": 0, "unplaced": 0} for m in MOUNTS}
+    if not isinstance(stored, dict):
+        return empty
+    for mount in MOUNTS:
+        entry = stored.get(mount)
+        if isinstance(entry, dict):
+            empty[mount] = {"placed": int(entry.get("placed") or 0),
+                            "unplaced": int(entry.get("unplaced") or 0)}
+    return empty
+
+
 def get_status(room_id: str) -> Optional[Dict[str, Any]]:
     """The job's full status payload, or None when there is no job."""
     row = _get_row(room_id)
@@ -197,7 +233,13 @@ def get_status(room_id: str) -> Optional[Dict[str, Any]]:
     # After a restart the state survives but the thread does not — the dialog
     # offers "Continue" exactly for this.
     row["stalled"] = row["state"] in _ACTIVE_STATES and not running
-    row["progress"] = _progress(row.get("proposal"))
+    # Mesh generation only starts at accept (E6), so before that there is
+    # nothing to be n/m of — a progress bar during review would count props
+    # nobody has ordered yet.
+    row["progress"] = (_progress(row.get("proposal"))
+                       if _accepted(row.get("placements"))
+                       else {"done": 0, "total": 0})
+    row["phase_counts"] = _phase_counts(row.get("placements"))
     return row
 
 
@@ -607,71 +649,7 @@ def _phase_needs(room_id: str) -> None:
                 "%d dropped)", room_id, len(needs), len(matches), len(dropped))
 
 
-# ── Phase 2: generating ─────────────────────────────────────────────────
-
-def _phase_generate(room_id: str) -> None:
-    from app.core.props import (create_prop, set_variant_markers,
-                                trigger_generation)
-
-    row = _get_row(room_id)
-    proposal = (row or {}).get("proposal") or {}
-    for item in _needs(proposal):
-        if not item.get("build") or _prop_ready(item.get("prop_id")):
-            continue
-        if not item.get("prop_id"):
-            prop = create_prop(
-                name=str(item.get("kind") or "Prop").title(),
-                category=item.get("category") or "",
-                width_m=item.get("width_m"), depth_m=item.get("depth_m"),
-                height_m=item.get("height_m"),
-                description=item.get("description") or "", source="generated",
-                # What the piece IS, from the need list: how it is mounted
-                # (the solver's pass) and which panels its generation has to
-                # key out — a new picture frame without a `picture` area would
-                # never show a picture (B13).
-                mount=item.get("mount") or "",
-                key_areas=item.get("key_areas") or None)
-            item["prop_id"] = prop["id"]
-            if item.get("marker"):
-                # Onto the freshly created prop's FIRST variant — the marker
-                # describes the mesh this run is about to bake, and markers
-                # belong to the variant since 2026-08-25.
-                set_variant_markers(prop["id"], 0, [item["marker"]])
-            # Persist the id BEFORE the long generation — a restart must not
-            # create the same prop twice.
-            if not _update_row(room_id, proposal=proposal):
-                return
-        pid = str(item["prop_id"])
-        from app.core.props import is_pending
-        # Automatic path = nobody clicks a dialog, so face count and texture
-        # size derive from the piece's REAL size (the 3D client's asset-sizing
-        # recommendation): faces ~6000 x largest edge clamped to 2k..20k,
-        # texture 512 (<=0.5 m) / 1024 (<1.5 m) / 2048.
-        max_dim = max(float(item.get("width_m") or 0),
-                      float(item.get("depth_m") or 0),
-                      float(item.get("height_m") or 0)) or 1.0
-        face_num = max(2000, min(20000, int(round(6000 * max_dim))))
-        texture_size = 512 if max_dim <= 0.5 else (1024 if max_dim < 1.5 else 2048)
-        trigger_generation(pid, face_num=face_num, texture_size=texture_size)
-        deadline = time.monotonic() + MODEL_TIMEOUT_SECONDS
-        while not _prop_ready(pid):
-            if not _get_row(room_id):
-                return  # job discarded mid-generation
-            if not is_pending(pid):
-                # The chain ended WITHOUT a model (source render or mesh
-                # failed) — fail fast instead of burning the full timeout.
-                raise FurnishError(
-                    f"Model generation for '{item.get('kind')}' failed — see "
-                    "the queue panel / server log, then Retry.")
-            if time.monotonic() > deadline:
-                raise FurnishError(
-                    f"Model generation for '{item.get('kind')}' timed out.")
-            time.sleep(MODEL_POLL_SECONDS)
-        _update_row(room_id, state=STATE_GENERATING)  # bump updated_at (n/m)
-        logger.info("room_furnish %s: prop %s ready", room_id, pid)
-
-
-# ── Phase 3: placing ────────────────────────────────────────────────────
+# ── Phase 2: placing (before generating, E6) ────────────────────────────
 
 def _edge_wall(outline_m: List[List[float]], idx: int) -> str:
     """Compass class N/E/S/W of a polygon edge — from its OUTWARD normal
@@ -699,57 +677,6 @@ def _openings(lay: Dict[str, Any]) -> List[Dict[str, Any]]:
             if isinstance(op, dict)]
 
 
-def _place_items(proposal: Dict[str, Any],
-                 library: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The confirmed furnishing as ``{id, name, count, mount, dims}`` — one
-    entry per PROP, read off the need list. A need without a prop id has no
-    piece yet (its generation failed or never ran) and is skipped; two needs
-    served by the SAME library piece become one entry with the counts added,
-    because the plan speaks about props, not about needs."""
-    items: List[Dict[str, Any]] = []
-    by_id: Dict[str, Dict[str, Any]] = {}
-    for need in _needs(proposal):
-        pid = str(need.get("prop_id") or "")
-        if not pid:
-            continue
-        prop = library.get(pid) or {}
-        count = furnish_needs.count(need.get("count"))
-        if pid in by_id:
-            by_id[pid]["count"] = furnish_needs.count(
-                by_id[pid]["count"] + count)
-            continue
-        entry = {"id": pid, "name": prop.get("name") or need.get("kind") or pid,
-                 "count": count,
-                 "mount": _mount_of(prop) if prop else (need.get("mount")
-                                                        or "floor"),
-                 "width_m": prop.get("width_m") or need.get("width_m"),
-                 "depth_m": prop.get("depth_m") or need.get("depth_m"),
-                 "height_m": prop.get("height_m") or need.get("height_m")}
-        by_id[pid] = entry
-        items.append(entry)
-    return items
-
-
-def _solver_props(items: List[Dict[str, Any]],
-                  library: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """What the solver needs to know per prop id — for every id it may see:
-    the items to place AND the props already standing in the room.
-
-    Beside the three metres that is ``mount`` (which pass a piece belongs to)
-    and ``variants`` (how many meshes it may alternate between, B17): both
-    ride on the library record, so nothing has to be asked twice."""
-    props = {pid: {"width_m": p.get("width_m"), "depth_m": p.get("depth_m"),
-                   "height_m": p.get("height_m"), "mount": _mount_of(p),
-                   "variants": len(p.get("variant_tiers") or []) or 1}
-             for pid, p in library.items()}
-    for item in items:
-        entry = dict(props.get(item["id"]) or {"variants": 1})
-        entry.update({"width_m": item["width_m"], "depth_m": item["depth_m"],
-                      "height_m": item["height_m"], "mount": item["mount"]})
-        props[item["id"]] = entry
-    return props
-
-
 def _stack_facts(library: Dict[str, Dict[str, Any]]):
     """The ``facts`` callable ``compose_on_chain`` asks for: height and sink
     of the VARIANT a placement draws, out of the library listing this phase
@@ -763,9 +690,22 @@ def _stack_facts(library: Dict[str, Dict[str, Any]]):
     return facts
 
 
+def _empty_placements() -> Dict[str, Any]:
+    from app.core.furnish_place import MOUNTS
+    return {"placed": [], "unplaced": [],
+            "phase_counts": {m: {"placed": 0, "unplaced": 0} for m in MOUNTS}}
+
+
 def _phase_place(room_id: str) -> None:
-    from app.core import furnish_solver
-    from app.core.prompt_templates import render_task
+    """Plan and solve the whole room — one ``furnish_place`` call plus up to
+    three per-pass repair rounds (``app.core.furnish_place``).
+
+    Nothing here is generated: since E6 a need that has no library piece is
+    placed under its temporary id with its own dimensions, and ``accept``
+    turns those ids into props. What this phase owns is the WORLD side of the
+    plan — the room's geometry, the library and what already stands in it.
+    """
+    from app.core import furnish_place
     from app.core.room_recipe import compose_on_chain
     from app.models.notifications import create_notification
 
@@ -777,16 +717,15 @@ def _phase_place(room_id: str) -> None:
     geom = _geometry(loc, room)
     library = _library()
     lay = geom["layout"]
-    items = _place_items(row.get("proposal") or {}, library)
+    items = furnish_place.build_items(_needs(row.get("proposal")), library)
     room_name = _room_label(room)
     storey_height_m = _storey_height_m(loc)
 
     if not items:
         _update_row(room_id, state=STATE_REVIEW_READY, error="",
-                    placements={"placed": [], "unplaced": []})
+                    placements=_empty_placements())
         return
 
-    openings = geom["openings"]
     placed_props = _placements(lay)
     # THE SOLVER WORKS FROM THE POLYGON'S MIN CORNER. For a room that IS the
     # stored frame; on the ground the stored frame is the location's, so
@@ -805,90 +744,161 @@ def _phase_place(room_id: str) -> None:
                         "yaw": c["yaw"], "offset_y": c["offset_y"],
                         "on": c["on"]}
                        for p, c in zip(placed_props, composed)]
-    solver_props = _solver_props(items, library)
+
+    def _name_of(prop_id: Any) -> str:
+        pid = str(prop_id or "")
+        return str((library.get(pid) or {}).get("name") or pid)
+
+    by_place_id = {str(p.get("id") or ""): p for p in placed_props}
     template_existing = [
-        {"prop_id": p.get("prop_id"),
-         "name": (library.get(str(p.get("prop_id") or "")) or {}).get("name")
-         or str(p.get("prop_id") or ""),
+        {"id": str(p.get("id") or ""),
+         "name": _name_of(p.get("prop_id")),
+         "mount": _mount_of(library.get(str(p.get("prop_id") or "")) or {}),
          # Told in the SOLVER's frame, so the model's "beside the table"
          # refers to the same numbers the solver reasons about.
          "x_m": round(c["at"][0] - ox, 2),
-         "y_m": round(c["at"][1] - oy, 2)}
+         "y_m": round(c["at"][1] - oy, 2),
+         "yaw": round(float(c["yaw"] or 0.0), 1),
+         "on": _name_of((by_place_id.get(c["on"]) or {}).get("prop_id"))
+         if c["on"] else ""}
         for p, c in zip(placed_props, composed)]
     template_openings = [
-        {"type": op.get("type") or "door",
+        {"index": i,
+         "type": op.get("type") or "door",
          "wall": _edge_wall(geom["outline_m"], int(op.get("edge") or 0)),
          "at_frac": round(float(op.get("at") or 0.5), 2),
-         "width_m": op.get("width_m"), "sill_m": op.get("sill_m") or 0}
-        for op in openings]
+         "width_m": op.get("width_m"), "sill_m": op.get("sill_m") or 0,
+         "height_m": op.get("height_m") or 2.1}
+        for i, op in enumerate(geom["openings"])]
 
-    def _run(errors: List[str]) -> Dict[str, Any]:
-        sys_p, user_p = render_task(
-            "furnish_place", room_name=room_name,
-            room_description=str(room.get("description") or ""),
-            room_w_m=geom["w_m"], room_d_m=geom["d_m"], is_rect=geom["is_rect"],
-            openings=template_openings, existing=template_existing,
-            items=items, errors=errors)
-        # The re-plan round carries its own label — otherwise it is
-        # indistinguishable from the first attempt in the LLM log and reads
-        # as a duplicate submit.
-        plan = _llm_json("furnish_place", sys_p, user_p,
-                         f"Furnish place: {room_name}"
-                         + (" (re-plan)" if errors else ""))
-        solved = furnish_solver.solve(
-            outline_m=geom["outline_m"], openings=openings,
-            existing=existing_solver, plan=_list_field(plan, "plan"),
-            props=solver_props, storey_height_m=storey_height_m)
-        for entry in solved.get("placed") or []:
-            # A piece standing ON another one is stored in its SUPPORT's
-            # frame (E1) — those metres are relative and must not be moved
-            # with the yard's origin, or the candle would leave the table.
-            if entry.get("on"):
-                continue
-            at = entry.get("at") or [0, 0]
-            entry["at"] = [round(float(at[0]) + ox, 2),
-                           round(float(at[1]) + oy, 2)]
-        return solved
+    def _ask(system_prompt: str, user_prompt: str, suffix: str) -> Dict[str, Any]:
+        # The re-plan rounds carry their own label — otherwise they are
+        # indistinguishable from the first attempt in the LLM log and read
+        # as duplicate submits.
+        return _llm_json("furnish_place", system_prompt, user_prompt,
+                         f"Furnish place: {room_name}{suffix}")
 
-    result = _run([])
-    if result.get("unplaced"):
-        # ONE repair round: the model sees why pieces did not fit and replans.
-        errors = [f"{u.get('name')}: {u.get('reason')}"
-                  for u in result["unplaced"]][:20]
-        try:
-            retry_result = _run(errors)
-            if len(retry_result.get("placed") or []) > len(result.get("placed") or []):
-                result = retry_result
-        except FurnishError as e:
-            logger.info("room_furnish %s: repair run failed (%s) — keeping the "
-                        "first result", room_id, e.message)
+    result = furnish_place.run(
+        room_name=room_name, room_description=str(room.get("description") or ""),
+        geom=geom, storey_height_m=storey_height_m, items=items,
+        props=furnish_place.solver_props(items, library),
+        existing=existing_solver, template_existing=template_existing,
+        template_openings=template_openings, ask=_ask,
+        alive=lambda: _get_row(room_id) is not None)
+
+    for entry in result.get("placed") or []:
+        # A piece standing ON another one is stored in its SUPPORT's frame
+        # (E1) — those metres are relative and must not be moved with the
+        # yard's origin, or the candle would leave the table.
+        if entry.get("on"):
+            continue
+        at = entry.get("at") or [0, 0]
+        entry["at"] = [round(float(at[0]) + ox, 2),
+                       round(float(at[1]) + oy, 2)]
 
     if not _get_row(room_id):
         return
     _update_row(room_id, state=STATE_REVIEW_READY, error="", placements=result)
+    counts = furnish_place.pass_summary(result.get("phase_counts") or {})
+    total_placed = len(result.get("placed") or [])
+    total = total_placed + len(result.get("unplaced") or [])
+    per_pass = ", ".join(
+        f"{name} {counts[name]['placed']}/"
+        f"{counts[name]['placed'] + counts[name]['unplaced']}"
+        for name in furnish_place.PASSES)
     create_notification(
         room_name,
-        f"Furnishing ready for review — {len(result.get('placed') or [])} of "
-        f"{len(result.get('placed') or []) + len(result.get('unplaced') or [])} "
-        f"pieces placed in {room_name}.",
+        f"Furnishing ready for review — {total_placed} of {total} pieces "
+        f"placed in {room_name} ({per_pass}).",
         notification_type="room_furnish",
         metadata={"room_id": room_id, "location_id": row.get("location_id")})
-    logger.info("room_furnish %s: review ready (%d placed, %d unplaced)",
-                room_id, len(result.get("placed") or []),
-                len(result.get("unplaced") or []))
+    logger.info("room_furnish %s: review ready (%d placed, %d unplaced — %s)",
+                room_id, total_placed, total - total_placed, per_pass)
 
+# ── Phase 3: generating (after accept, E6) ──────────────────────────────
+
+def _phase_generate(room_id: str) -> None:
+    """Bake a mesh for every need that had to be built — the LAST phase since
+    E6, entered by ``accept``.
+
+    The props themselves already exist: ``accept`` created them so the layout
+    could name them, which is also what makes this phase re-enterable. A prop
+    that already carries a model is skipped, so a restart mid-generation picks
+    up exactly where the thread died and never orders the same mesh twice.
+    """
+    from app.core.props import is_pending, trigger_generation
+
+    row = _get_row(room_id)
+    proposal = (row or {}).get("proposal") or {}
+    room_name = _room_label(_load_room(room_id)[1])
+    for item in _needs(proposal):
+        if not item.get("build") or _prop_ready(item.get("prop_id")):
+            continue
+        if not item.get("prop_id"):
+            continue  # never placed, never created — nothing to generate
+        pid = str(item["prop_id"])
+        # Automatic path = nobody clicks a dialog, so face count and texture
+        # size derive from the piece's REAL size (the 3D client's asset-sizing
+        # recommendation): faces ~6000 x largest edge clamped to 2k..20k,
+        # texture 512 (<=0.5 m) / 1024 (<1.5 m) / 2048.
+        max_dim = max(float(item.get("width_m") or 0),
+                      float(item.get("depth_m") or 0),
+                      float(item.get("height_m") or 0)) or 1.0
+        face_num = max(2000, min(20000, int(round(6000 * max_dim))))
+        texture_size = 512 if max_dim <= 0.5 else (1024 if max_dim < 1.5 else 2048)
+        # A chain that is still running after a restart is waited for, not
+        # ordered a second time — the queue would run the same mesh twice.
+        if not is_pending(pid):
+            trigger_generation(pid, face_num=face_num,
+                               texture_size=texture_size)
+        deadline = time.monotonic() + MODEL_TIMEOUT_SECONDS
+        while not _prop_ready(pid):
+            if not _get_row(room_id):
+                return  # job discarded mid-generation
+            if not is_pending(pid):
+                # The chain ended WITHOUT a model (source render or mesh
+                # failed) — fail fast instead of burning the full timeout.
+                raise FurnishError(
+                    f"Model generation for '{item.get('kind')}' failed — see "
+                    "the queue panel / server log, then Retry.")
+            if time.monotonic() > deadline:
+                raise FurnishError(
+                    f"Model generation for '{item.get('kind')}' timed out.")
+            time.sleep(MODEL_POLL_SECONDS)
+        _update_row(room_id, state=STATE_GENERATING)  # bump updated_at (n/m)
+        logger.info("room_furnish %s: prop %s ready", room_id, pid)
+
+    # Everything is baked — the placements have been in the room since accept,
+    # so the job has nothing left to be and goes away.
+    row = _get_row(room_id)
+    if not row:
+        return
+    built = len([n for n in _needs(proposal) if n.get("build")])
+    _delete_row(room_id)
+    if built:
+        from app.models.notifications import create_notification
+        create_notification(
+            room_name,
+            f"Meshes ready — {built} model{'s' if built != 1 else ''} "
+            f"generated for {room_name}.",
+            notification_type="room_furnish",
+            metadata={"room_id": room_id,
+                      "location_id": row.get("location_id")})
+    logger.info("room_furnish %s: %d model(s) generated, job closed",
+                room_id, built)
 
 # ── Orchestrator thread ─────────────────────────────────────────────────
 
 def _pipeline(room_id: str, phase: str) -> None:
+    """One phase per thread. Since E6 the three phases no longer chain into
+    each other: placing waits for the admin's ``accept``, and generating is
+    what ``accept`` starts."""
     if phase == "needs":
         _phase_needs(room_id)
-        return
-    if phase == "generate":
-        _phase_generate(room_id)
-        phase = "place"
-    if phase == "place":
+    elif phase == "place":
         _phase_place(room_id)
+    elif phase == "generate":
+        _phase_generate(room_id)
 
 
 def _spawn(room_id: str, phase: str, label: str) -> bool:
@@ -931,16 +941,23 @@ def _spawn(room_id: str, phase: str, label: str) -> bool:
 
 def _resume_phase(row: Dict[str, Any]) -> str:
     """Which phase a persisted job has to re-enter — derived from its DATA,
-    not from the state it died in, so retry and continue share one path."""
+    not from the state it died in, so retry and continue share one path.
+
+    The ``accepted`` flag is what makes the split unambiguous since E6: a job
+    that has written its placements into the room is past placing forever and
+    can only still owe meshes, whichever state its thread died in.
+    """
     needs = _needs(row.get("proposal"))
     if not needs:
         return "needs"
-    if row.get("state") == STATE_PROPOSAL_READY:
+    state = row.get("state")
+    if state in (STATE_PROPOSAL_READY, STATE_REVIEW_READY):
         return ""  # waiting for the admin, nothing to resume
-    if any(not _prop_ready(n.get("prop_id"))
-           for n in needs if n.get("build")):
-        return "generate"
-    if not (row.get("placements") or {}).get("placed"):
+    placements = row.get("placements") or {}
+    if _accepted(placements) or state == STATE_GENERATING:
+        return "generate" if any(not _prop_ready(n.get("prop_id"))
+                                 for n in needs if n.get("build")) else ""
+    if not placements.get("placed"):
         return "place"
     return ""
 
@@ -998,11 +1015,11 @@ def start(room_id: str, exclude: Any = None) -> Dict[str, Any]:
 
 
 def start_direct(room_id: str, proposal: Any) -> Dict[str, Any]:
-    """Skip stage 1 and 2 entirely: place ONLY admin-picked library props
-    (user requirement 2026-07-23). The picks BECOME needs — each one already
-    served by its prop, so nothing is built — and the job enters at the
-    generation phase with nothing to generate, falling straight through to
-    placement; review/accept work exactly like the LLM path.
+    """Skip stage 1 entirely: place ONLY admin-picked library props (user
+    requirement 2026-07-23). The picks BECOME needs — each one already served
+    by its prop, so nothing is ever built — and the job enters straight at the
+    placement phase; review/accept work exactly like the LLM path, and accept
+    finds nothing to generate.
 
     ``proposal`` is the picker's ``{existing: [{prop_id, count}]}`` — a list
     of library pieces, not a proposal shape."""
@@ -1031,19 +1048,19 @@ def start_direct(room_id: str, proposal: Any) -> Dict[str, Any]:
             "marker": None, "key_areas": [], "from_description": False,
             "prop_id": pick["prop_id"], "build": False})
     _insert_row(room_id, str(loc.get("id") or ""))
-    _update_row(room_id, state=STATE_GENERATING,
+    _update_row(room_id, state=STATE_PLACING,
                 proposal={"needs": needs, "surfaces": None, "dropped": []})
-    _spawn(room_id, "generate", _room_label(room))
+    _spawn(room_id, "place", _room_label(room))
     return get_status(room_id) or {}
 
 
 def confirm(room_id: str, proposal: Any) -> Dict[str, Any]:
-    """Persist the admin-edited need list and start generation + placement.
+    """Persist the admin-edited need list and place the room (E6).
 
     The EDITED list is validated exactly like the model's own: same shape,
     same limits, keys re-minted. ``build`` is never taken from the client —
     it is derived from ``prop_id``, so a dialog cannot declare a piece
-    "already built" and skip its generation.
+    "already built" and skip the prop that has to be made for it.
     """
     row = _get_row(room_id)
     if not row:
@@ -1068,34 +1085,117 @@ def confirm(room_id: str, proposal: Any) -> Dict[str, Any]:
     }
     if stored.get("exclude"):
         clean["exclude"] = _valid_exclude(stored.get("exclude"))
-    _update_row(room_id, state=STATE_GENERATING, error="", proposal=clean)
-    _spawn(room_id, "generate", _room_label(room))
+    _update_row(room_id, state=STATE_PLACING, error="", proposal=clean)
+    _spawn(room_id, "place", _room_label(room))
     return get_status(room_id) or {}
 
 
+def _create_built_props(needs: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Turn every need that has to be BUILT into a real library prop and
+    answer ``{"need:<key>": "<prop id>"}`` — the rewrite map for the accepted
+    placements (E6).
+
+    This is the moment the placeholder becomes a piece: until now the plan
+    named the need by a temporary id and the solver placed its bare
+    dimensions. The prop is created here rather than in the generation phase
+    so the layout can name it the instant it is written, and so a restart
+    mid-generation finds it instead of creating it twice.
+    """
+    from app.core.furnish_place import NEED_ID_PREFIX
+    from app.core.props import create_prop, set_variant_markers
+
+    rewrite: Dict[str, str] = {}
+    for need in needs:
+        if not need.get("build") or need.get("prop_id"):
+            continue
+        prop = create_prop(
+            name=str(need.get("kind") or "Prop").title(),
+            category=need.get("category") or "",
+            width_m=need.get("width_m"), depth_m=need.get("depth_m"),
+            height_m=need.get("height_m"),
+            description=need.get("description") or "", source="generated",
+            # What the piece IS, from the need list: how it is mounted (the
+            # solver's pass) and which panels its generation has to key out —
+            # a new picture frame without a `picture` area would never show a
+            # picture (B13).
+            mount=need.get("mount") or "",
+            key_areas=need.get("key_areas") or None)
+        need["prop_id"] = prop["id"]
+        rewrite[f"{NEED_ID_PREFIX}{need.get('key') or ''}"] = prop["id"]
+        if need.get("marker"):
+            # Onto the freshly created prop's FIRST variant — the marker
+            # describes the mesh this run is about to bake, and markers belong
+            # to the variant since 2026-08-25.
+            set_variant_markers(prop["id"], 0, [need["marker"]])
+    return rewrite
+
+
 def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
-    """Append the (possibly hand-adjusted) placements to ``layout.props`` and
-    close the job."""
+    """Write the (possibly hand-adjusted) placements into ``layout.props``,
+    then generate what is still missing (E6).
+
+    Three steps, in this order: the pieces that had to be built become props,
+    the placements that named them by their temporary id are rewritten, and
+    the whole list is appended to the room. Only then does the job switch to
+    ``generating`` — the room is already furnished with placeholder boxes, and
+    the meshes drop in one by one.
+
+    ``on`` is untouched by the rewrite: it names a PLACEMENT, not a prop.
+    """
     row = _get_row(room_id)
     if not row:
         raise FurnishError("No furnishing job for this room.", 404)
     if row["state"] != STATE_REVIEW_READY:
         raise FurnishError(f"Cannot accept in state '{row['state']}'.", 409)
+    stored = row.get("placements") or {}
     entries = placements if isinstance(placements, list) \
-        else (row.get("placements") or {}).get("placed") or []
+        else stored.get("placed") or []
+    proposal = row.get("proposal") or {}
+    needs = _needs(proposal)
+    if not entries:
+        # Nothing was placed, so nothing may be built: a prop nobody put in a
+        # room is a library entry the admin never asked for.
+        _delete_row(room_id)
+        logger.info("room_furnish %s: accepted with no placements", room_id)
+        return {"status": "accepted", "placed": 0, "generating": 0}
+
+    rewrite = _create_built_props(needs)
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("prop_id") in rewrite:
+            entry["prop_id"] = rewrite[entry["prop_id"]]
+
     from app.models.world import append_room_props
     # The job id may be the composite yard one — what gets written is the ROOM.
     target_room, _loc_id = _target(room_id)
-    if entries and not append_room_props(row["location_id"], target_room,
-                                         entries):
+    if not append_room_props(row["location_id"], target_room, entries):
         raise FurnishError("The room layout could not be updated.", 409)
-    _delete_row(room_id)
     logger.info("room_furnish %s: %d placements accepted", room_id, len(entries))
-    return {"status": "accepted", "placed": len(entries)}
+
+    pending = [n for n in needs
+               if n.get("build") and not _prop_ready(n.get("prop_id"))]
+    if not pending:
+        _delete_row(room_id)
+        return {"status": "accepted", "placed": len(entries), "generating": 0}
+    # The layout write has happened — the flag says so, so a restart during
+    # the generation resumes into the mesh phase instead of appending again.
+    _update_row(room_id, state=STATE_GENERATING, error="", proposal=proposal,
+                placements={**stored, "placed": entries, "accepted": True})
+    _spawn(room_id, "generate", _room_label(_load_room(room_id)[1]))
+    return {"status": "accepted", "placed": len(entries),
+            "generating": len(pending)}
 
 
 def discard(room_id: str) -> Dict[str, Any]:
     """Drop the job (the generated props stay in the library)."""
+    row = _get_row(room_id)
+    if not row:
+        raise FurnishError("No furnishing job for this room.", 404)
+    if row["state"] == STATE_GENERATING:
+        # The placements are already in the room and the meshes are on their
+        # way — dropping the row here would only orphan the progress display.
+        raise FurnishError(
+            "The meshes for this room are being generated — wait for them or "
+            "cancel the jobs in the queue panel.", 409)
     if not _delete_row(room_id):
         raise FurnishError("No furnishing job for this room.", 404)
     return {"status": "discarded"}

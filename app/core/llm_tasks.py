@@ -362,12 +362,13 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     # False: the job is a daemon thread tracked in the TaskQueue, it survives a
     # restart (_resume_phase), it ends in a notification, and the admin UI polls
     # at 3 s while the dialog is open and 15 s while it is CLOSED, precisely so
-    # the dialog may be closed while it runs (FurnishDialog.tsx:70-125). Between
-    # the LLM stages the chain waits up to 30 min on mesh generation, so seconds
-    # of LLM latency are not what anyone waits on. (2) hallucination_risk is low
+    # the dialog may be closed while it runs (FurnishDialog.tsx:70-125). After
+    # the review the job waits up to 30 min per mesh (E6 moved that wait behind
+    # accept), so seconds of LLM latency are not what anyone waits on.
+    # (2) hallucination_risk is low
     # wherever the output is checked against a catalog AND against the admin —
     # nothing reaches the room without passing a validator and the review gate
-    # (confirm/accept, room_furnish.py:869/888).
+    # (``room_furnish.confirm`` / ``room_furnish.accept``).
     "furnish_needs": {
         # The room's whole furnishing, invented from its purpose alone — the
         # one furnish task whose main output is checked against NOTHING: kind,
@@ -399,12 +400,15 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     "furnish_place": {
         # A3: hallucination_risk medium -> low. No invented value can place a
         # piece: unknown prop, unknown anchor and an unresolved ref all come
-        # back as `unplaced` with a reason, feed the ONE re-plan round and end
-        # in the review UI; count is clamped to 1..12 and an unknown `facing`
-        # is not rejected but simply falls through to the room-facing branch
-        # (furnish_solver.solve :390-423). Measured 509/541 input tokens including the re-plan errors
-        # block; 2048 is the bottom rung and holds even for a 20-piece plan.
-        "tools": False, "vision": False, "json": True, "min_context": 2048,
+        # back as `unplaced` with a reason, feed the per-pass re-plan rounds
+        # (one call per failing pass, at most three) and end in the review UI;
+        # count is clamped to 1..64 and an unknown `facing` is not rejected but
+        # simply falls through to the room-facing branch
+        # (furnish_solver.solve). min_context 4096 since v2: the system prompt
+        # alone doubled to ~3.9 k characters when the anchor vocabulary grew
+        # from one group to four, and the user half carries four item lists
+        # plus the openings and everything already standing.
+        "tools": False, "vision": False, "json": True, "min_context": 4096,
         "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": False, "language_de": False, "latency_sensitive": False,
     },

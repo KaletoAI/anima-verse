@@ -2714,7 +2714,8 @@ async def _furnish_body(request: Request) -> Dict[str, Any]:
 def furnish_status(room_id: str,
                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Status of the room's furnishing job: state, proposal, placements,
-    error, progress (n/m over the new pieces), running/stalled. 404 = no job."""
+    error, phase_counts (placed/unplaced per mount group), progress (n/m over
+    the meshes, only after accept), running/stalled. 404 = no job."""
     from app.core.room_furnish import get_status
     status = get_status(room_id)
     if not status:
@@ -2738,9 +2739,9 @@ async def furnish_start(room_id: str, request: Request,
 @router.post("/rooms/{room_id}/furnish/direct")
 async def furnish_direct(room_id: str, request: Request,
                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Skip the LLM proposal and the generation: place ONLY admin-picked
-    library props — body: {proposal: {existing: [{prop_id, count}]}}, the
-    picker's list of library pieces. The job enters at placement;
+    """Skip the LLM proposal: place ONLY admin-picked library props — body:
+    {proposal: {existing: [{prop_id, count}]}}, the picker's list of library
+    pieces. The job enters at placement and has nothing to generate;
     review/accept as usual."""
     body = await _furnish_body(request)
     from app.core.room_furnish import start_direct
@@ -2751,8 +2752,8 @@ async def furnish_direct(room_id: str, request: Request,
 async def furnish_confirm(room_id: str, request: Request,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Confirm the (edited) proposal — body: {proposal: {needs: [...],
-    surfaces: {...}|null}}, absent = the stored one. Starts generation +
-    placement."""
+    surfaces: {...}|null}}, absent = the stored one. Starts the placement run;
+    meshes are generated after accept (E6)."""
     body = await _furnish_body(request)
     from app.core.room_furnish import confirm
     return _furnish_call(confirm, room_id, body.get("proposal"))
@@ -2762,8 +2763,10 @@ async def furnish_confirm(room_id: str, request: Request,
 async def furnish_accept(room_id: str, request: Request,
                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Accept the proposed furnishing — body: {placements: [...]} (the ghost
-    layer's CURRENT positions), absent = the solver's result. Appends to
-    layout.props and closes the job."""
+    layer's CURRENT positions), absent = the solver's result. Creates the
+    props that still had to be built, appends everything to layout.props and
+    starts the mesh generation in the background. Answers {status, placed,
+    generating}; the job row survives only while ``generating`` > 0."""
     body = await _furnish_body(request)
     from app.core.room_furnish import accept
     return _furnish_call(accept, room_id, body.get("placements"))
@@ -2772,7 +2775,9 @@ async def furnish_accept(room_id: str, request: Request,
 @router.post("/rooms/{room_id}/furnish/discard")
 def furnish_discard(room_id: str,
                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Drop the job. Generated props stay in the library."""
+    """Drop the job. Generated props stay in the library. 409 while the
+    meshes of an accepted room are being generated — the placements are in the
+    room already, so there is nothing left to discard."""
     from app.core.room_furnish import discard
     return _furnish_call(discard, room_id)
 

@@ -1,34 +1,55 @@
 #!/usr/bin/env python3
-"""Smoke run for the room-furnish state machine (plan-furnish-v2.md § 2 B3).
+"""Smoke run for the room-furnish state machine (plan-furnish-v2.md § 2, § 6 E6).
 
 No test framework, no LLM, no GPU: the three ``furnish_*`` tasks are
 monkeypatched with canned answers, so one run ticks the whole machine
 
-    start → proposal_ready → confirm → generating → placing → review_ready
-          → accept → the placements land in ``layout.props``
+    start → proposal_ready → confirm → placing → review_ready
+          → accept (the placements land in ``layout.props``) → generating
+          → the row is gone
 
 against a throwaway world in a temp directory. Everything else is the real
 code path (templates, validation, solver, DB, layout sanitizer). The mesh
 generation is stubbed at ``props.trigger_generation`` (a GLB is attached
-instantly) — the phase around it, which creates the prop with its ``mount``
-and its ``key_areas``, is the real one.
+instantly) — the phase around it is the real one.
 
-STAGE 1 IS INVERTED SINCE v2: ``furnish_needs`` writes what the room needs
-without seeing the library, ``furnish_match`` maps at most one library piece
-onto each need, and everything unmatched is built. The rows below check that
-inversion end to end, with every expected number derived by hand:
+PLACING COMES BEFORE GENERATING (E6). A need without a library piece is
+placed under the temporary id ``need:<key>`` with its own dimensions; only
+``accept`` turns it into a prop, rewrites that id in the placements and
+starts the meshes. The rows below walk exactly that order.
 
-  * needs 4 × 4 m room, table 1.2 × 0.8 m, anchor ``wall_n`` facing the room
-    → the centre of the usable stretch, x = 1.2/2 + 0.5 × (4 − 1.2) = 2.0 m,
-    pushed off the wall by depth/2 + WALL_GAP_M = 0.4 + 0.05 = 0.45 m.
-  * a wall piece 0.6 m high with no ``base_m`` takes the solver's default
-    base 1.5 − h/2 = 1.5 − 0.3 = 1.2 m, which is its stored ``offset_y``.
+Every expected number is derived by hand from the rule:
+
+  * 4 × 4 m room, table 1.2 × 0.8 m, anchor ``wall_n`` facing the room → the
+    centre of the usable stretch, x = 1.2/2 + 0.5 × (4 − 1.2) = 2.0 m, pushed
+    off the wall by depth/2 + FLOOR_GAP_M = 0.4 + 0.05 = 0.45 m.
+  * a wall piece 0.6 m high whose kind says "painting" gets the E2 fallback
+    base BEFORE the call: centre 1.5 − h/2 = 1.5 − 0.3 = 1.2 m, and the
+    solver stores that as its ``offset_y``. A shelf hangs at a flat 1.3, an
+    unclassified 0.4 m piece centres at 1.5 too → 1.5 − 0.2 = 1.3, and a
+    1.0 m mirror centres at 1.6 → 1.6 − 0.5 = 1.1.
+  * the candle stands ON the table: the child frame's raster starts at the
+    support's middle, inset by half the candle — 0.08/2 = 0.04 ≤ the 0.15 m
+    step, so the first cell is (0, 0) and the candle is stored ``at [0, 0]``,
+    ``on`` the table's placement id, with NO ``offset_y``. A child's
+    ``offset_y`` is a TRIM above its support's top (§ 4), and the top itself
+    (0 + 0.75 m) is composed by ``room_recipe`` out of
+    ``props.stack_on_support`` — storing it would be that formula's second
+    copy.
   * the yard's boundary (−6,−6)…(4,4) is a 10 × 10 m square, so the solver
     frame is 0…10 and the same wall arithmetic gives x = 0.6 + 0.5 × 8.8 =
     5.0, y = 0.4 + 0.05 = 0.45 → stored [5.0 − 6, 0.45 − 6] = [−1.0, −5.55].
+    The candle on it keeps [0, 0]: a child's metres are its SUPPORT's, and
+    the origin shift must not touch them (task 2 note).
   * a match is refused when the mount differs or when the largest dimension
     is more than DIM_TOLERANCE = 40 % of the need's away from it: a need of
     0.5 m against a 1.2 m table is 0.7 m off, and 0.7 > 0.4 × 0.5 = 0.2.
+  * the repair loop (canned solver results, section 2c): run 1 places
+    floor 1/2 and wall 1/1 and fails one floor and one surface piece, so two
+    passes have errors and exactly two re-plan calls follow. The floor
+    re-plan places 0 of 2 — 0 < 1, so it is discarded; the surface re-plan
+    places 1 of 1 — 1 ≥ 0 and 0 ≤ 1, so it is kept. Final: 3 placed, 1
+    unplaced, phase counts floor 1/1, wall 1/0, ceiling 0/0, surface 1/0.
 
 Usage:  ./.venv/bin/python scripts/smoke_room_furnish.py
 """
@@ -49,9 +70,10 @@ from app.core import paths  # noqa: E402
 
 paths.init(WORLD)
 
-from app.core import (db, furnish_needs, props, room_furnish,  # noqa: E402
-                      surface_textures)
+from app.core import (db, furnish_needs, furnish_place,  # noqa: E402
+                      furnish_solver, props, room_furnish, surface_textures)
 from app.core.timeutils import utc_now_iso  # noqa: E402
+from app.models.notifications import get_notifications  # noqa: E402
 from app.models.world import (  # noqa: E402
     _load_world_data, _save_world_data, add_location, get_room_by_id,
 )
@@ -141,6 +163,19 @@ def ref_for(prompt: str, name: str) -> str:
         if line.startswith("#") and f"| {name} |" in line:
             return line.split(" |")[0].strip()
     return ""
+
+
+def suppress_spawn():
+    """Freeze the orchestrator: the phase function is never started, so a
+    state the job only passes through can be inspected. Answers the real
+    ``_spawn`` for the caller to put back."""
+    real = room_furnish._spawn
+    room_furnish._spawn = lambda room_id, phase, label: True
+    return real
+
+
+def notification_texts():
+    return [n.get("content") or "" for n in get_notifications(limit=20)]
 
 
 def wait_for(states, tries=80, job="smokeroom"):
@@ -250,6 +285,120 @@ def main() -> int:
                                        ["oak_planks", "plaster_wall"])
           == {"floor": "oak_planks"})
 
+    # ── 2b. Wall base defaults (pure, E2) ───────────────────────────────
+    # Fallback BEFORE the LLM call: the keyword table over kind/category/name.
+    # picture-like → centre 1.5, mirror → centre 1.6, shelf-like → flat 1.3,
+    # lamp-like → flat 1.6, anything else → centre 1.5. `base = centre − h/2`.
+    print("\n  wall base defaults")
+    check("a 0.6 m painting hangs at 1.5 − 0.3 = 1.2",
+          furnish_place.wall_base_default(kind="framed painting",
+                                          category="decor", height_m=0.6) == 1.2,
+          str(furnish_place.wall_base_default(kind="framed painting",
+                                              category="decor", height_m=0.6)))
+    check("a wall shelf hangs at a flat 1.3",
+          furnish_place.wall_base_default(kind="wall shelf",
+                                          category="storage",
+                                          height_m=0.3) == 1.3)
+    check("an unclassified 0.4 m piece centres at 1.5 → 1.3",
+          furnish_place.wall_base_default(kind="odd thing",
+                                          height_m=0.4) == 1.3)
+    check("a sconce hangs at a flat 1.6",
+          furnish_place.wall_base_default(kind="iron sconce", category="lamp",
+                                          height_m=0.4) == 1.6)
+    check("a 1.0 m mirror centres at 1.6 → 1.1",
+          furnish_place.wall_base_default(kind="mirror", category="decor",
+                                          height_m=1.0) == 1.1)
+    base_items = furnish_place.build_items(
+        [need("n1", "framed painting", mount="wall", width_m=0.5, depth_m=0.05,
+              height_m=0.6),
+         need("n2", "oak table", mount="floor", width_m=1.2, depth_m=0.8,
+              height_m=0.75)], {})
+    check("build_items gives the wall piece its base, the floor piece none",
+          [it["base_m"] for it in base_items] == [1.2, None],
+          json.dumps([it["base_m"] for it in base_items]))
+    check("an unbuilt need travels under its temporary id",
+          [it["id"] for it in base_items] == ["need:n1", "need:n2"],
+          json.dumps([it["id"] for it in base_items]))
+
+    # ── 2c. The repair loop, one call per pass (pure, B6) ───────────────
+    # Canned solver results (derivation in the module docstring): run 1 fails
+    # one floor and one surface piece → two re-plan calls; the floor re-plan
+    # is worse and is discarded, the surface re-plan is better and is kept.
+    print("\n  per-pass repair")
+    repair_needs = [
+        need("n1", "oak table", category="table", count=2, mount="floor",
+             width_m=1.2, depth_m=0.8, height_m=0.75),
+        need("n2", "framed painting", category="decor", count=1, mount="wall",
+             width_m=0.5, depth_m=0.05, height_m=0.6),
+        need("n3", "candle", category="tableware", count=1, mount="surface",
+             width_m=0.08, depth_m=0.08, height_m=0.2)]
+    repair_items = furnish_place.build_items(repair_needs, {})
+    p_floor = {"prop_id": "need:n1", "id": "p1", "at": [2.0, 0.45], "yaw": 0.0}
+    p_wall = {"prop_id": "need:n2", "id": "p2", "at": [2.0, 0.03],
+              "yaw": 0.0, "offset_y": 1.2}
+    p_surface = {"prop_id": "need:n3", "id": "p3", "at": [0.0, 0.0],
+                 "yaw": 0.0, "offset_y": 0.75, "on": "p1"}
+    e_floor = {"name": "need:n1", "pass": "floor",
+               "reason": "no free spot on wall_n — try wall_e or another wall"}
+    e_surface = {"name": "need:n3", "pass": "surface",
+                 "reason": "surface of 'need:n1' is full — use another support"}
+    canned = [
+        {"placed": [p_floor, p_wall], "unplaced": [e_floor, e_surface]},
+        {"placed": [p_wall], "unplaced": [e_floor, e_floor, e_surface]},
+        {"placed": [p_floor, p_wall, p_surface], "unplaced": [e_floor]},
+    ]
+    solver_calls = []
+
+    def _canned_solve(**kw):
+        solver_calls.append(kw)
+        return json.loads(json.dumps(canned[min(len(solver_calls) - 1,
+                                                len(canned) - 1)]))
+
+    ask_calls = []
+
+    def _ask(system_prompt, user_prompt, suffix):
+        ask_calls.append((suffix, system_prompt, user_prompt))
+        return {"plan": [{"prop": it["id"], "count": it["count"],
+                          "anchor": "center", "ref": None, "facing": "room"}
+                         for it in repair_items]}
+
+    real_solve = furnish_solver.solve
+    furnish_solver.solve = _canned_solve
+    try:
+        repaired = furnish_place.run(
+            room_name="Repair Room", room_description="",
+            geom={"outline_m": [[0, 0], [4, 0], [4, 4], [0, 4]], "w_m": 4.0,
+                  "d_m": 4.0, "is_rect": True, "openings": []},
+            storey_height_m=3.0, items=repair_items,
+            props=furnish_place.solver_props(repair_items, {}),
+            existing=[], template_existing=[], template_openings=[],
+            ask=_ask)
+    finally:
+        furnish_solver.solve = real_solve
+    check("one plan call plus one re-plan per failing pass",
+          [c[0] for c in ask_calls]
+          == ["", " (re-plan floor)", " (re-plan surface)"],
+          json.dumps([c[0] for c in ask_calls]))
+    check("a re-plan prompt shows only its own pass's errors",
+          "[floor pass]" in ask_calls[1][1]
+          and "[surface pass]" not in ask_calls[1][1])
+    check("…and says which group is re-planned",
+          "Re-plan ONLY the floor group" in ask_calls[1][1])
+    check("the other groups reach the re-plan as already standing",
+          "(id p1)" in ask_calls[2][2] and "(id p2)" in ask_calls[2][2],
+          ask_calls[2][2][:400])
+    check("the worse floor re-plan is discarded, the better surface one kept",
+          [p["id"] for p in repaired["placed"]] == ["p1", "p2", "p3"],
+          json.dumps([p["id"] for p in repaired["placed"]]))
+    check("phase_counts are per mount, ceiling separate",
+          repaired["phase_counts"] == {"floor": {"placed": 1, "unplaced": 1},
+                                       "wall": {"placed": 1, "unplaced": 0},
+                                       "ceiling": {"placed": 0, "unplaced": 0},
+                                       "surface": {"placed": 1, "unplaced": 0}},
+          json.dumps(repaired["phase_counts"]))
+    check("three solver runs — one per plan, none extra",
+          len(solver_calls) == 3, str(len(solver_calls)))
+
     # ── 3. A room with a floor plan and a door ──────────────────────────
     # METRIC FIXTURE (contract v6 Nr. 2): a 4 × 4 m room in the NW quadrant of
     # the location, one door in the middle of the south wall.
@@ -269,15 +418,6 @@ def main() -> int:
     _save_world_data(data)
     print("\n  room 4.0 × 4.0 m (metres in the layout), one south door")
 
-    def place_plan(_prompt):
-        """The placement plan, built when it is asked for: the ids of the
-        pieces that were BUILT only exist by then."""
-        status = room_furnish.get_status("smokeroom") or {}
-        ids = [n["prop_id"] for n in (status.get("proposal") or {}).get("needs")
-               or [] if n.get("prop_id")]
-        return {"plan": [{"prop": pid, "count": 1, "anchor": "wall_n",
-                          "ref": None, "facing": "room"} for pid in ids]}
-
     answers = {
         "furnish_needs": {
             "needs": [
@@ -289,13 +429,24 @@ def main() -> int:
                      description="a framed landscape painting",
                      key_areas=["picture"], from_description=True,
                      marker={"group": "nonsense", "at": [0.5, 0.5, 0.5]}),
+                need("c", "candle", category="tableware", count=1,
+                     mount="surface", width_m=0.08, depth_m=0.08,
+                     height_m=0.2, description="a beeswax candle"),
             ],
             "surfaces": {"floor": "oak_planks", "wall": "does_not_exist"},
         },
         "furnish_match": lambda prompt: {"matches": [
             {"need": "n1", "ref": ref_for(prompt, "Table")},
             {"need": "n2", "ref": None}]},
-        "furnish_place": place_plan,
+        # The plan names the two unbuilt pieces by their TEMPORARY ids — no
+        # prop exists for them yet (E6), and none has to.
+        "furnish_place": {"plan": [
+            {"prop": table, "count": 1, "anchor": "wall_n", "ref": None,
+             "facing": "room"},
+            {"prop": "need:n2", "count": 1, "anchor": "wall_n", "ref": None,
+             "facing": "room", "base_m": None},
+            {"prop": "need:n3", "count": 1, "anchor": "on", "ref": table,
+             "facing": "ref"}]},
     }
     calls = fake_llm(answers)
 
@@ -340,28 +491,31 @@ def main() -> int:
     except room_furnish.FurnishError as e:
         check("second start refused", e.status == 409, e.message)
 
-    # ── confirm → generating → placing → review_ready ───────────────────
+    # ── confirm → placing → review_ready (NOTHING generated yet, E6) ────
+    props_before_confirm = len(props.list_props())
     room_furnish.confirm("smokeroom", proposal)
     status = wait_for(("review_ready", "error"))
     check("state review_ready", status["state"] == "review_ready",
           status.get("error") or "")
-    built = [n for n in status["proposal"]["needs"] if n["build"]]
-    check("the built need got a prop", bool(built and built[0].get("prop_id")),
-          json.dumps(built))
-    new_prop = props.get_prop(built[0]["prop_id"]) if built else {}
-    check("the new prop carries the need's mount",
-          new_prop.get("mount") == "wall", json.dumps(new_prop.get("mount")))
-    check("…and its key areas",
-          list(new_prop.get("key_areas") or []) == ["picture"],
-          json.dumps(new_prop.get("key_areas")))
-    check("…and is named after the kind",
-          new_prop.get("name") == "Wall Painting", new_prop.get("name") or "")
-    check("progress counts the built needs only",
-          status["progress"] == {"done": 1, "total": 1},
+    check("placing created no props — that is accept's job",
+          len(props.list_props()) == props_before_confirm,
+          str(len(props.list_props())))
+    check("progress stays 0/0 until the meshes are ordered",
+          status["progress"] == {"done": 0, "total": 0},
           json.dumps(status["progress"]))
+    check("the built needs still carry no prop id",
+          [n["prop_id"] for n in status["proposal"]["needs"]]
+          == [table, None, None],
+          json.dumps([n["prop_id"] for n in status["proposal"]["needs"]]))
     placed = status["placements"]["placed"]
-    check("solver placed both pieces", len(placed) == 2,
+    check("solver placed all three pieces", len(placed) == 3,
           json.dumps(status["placements"]))
+    check("phase counts are grouped by mount",
+          status["phase_counts"] == {"floor": {"placed": 1, "unplaced": 0},
+                                     "wall": {"placed": 1, "unplaced": 0},
+                                     "ceiling": {"placed": 0, "unplaced": 0},
+                                     "surface": {"placed": 1, "unplaced": 0}},
+          json.dumps(status["phase_counts"]))
     check("placements are layout.props entries",
           all(set(p) <= {"prop_id", "id", "at", "yaw", "offset_y", "on",
                          "variant"} and len(p["at"]) == 2
@@ -370,34 +524,106 @@ def main() -> int:
           len({p["id"] for p in placed}) == len(placed),
           json.dumps([p.get("id") for p in placed]))
     check("door zone kept free",
-          all(p["at"][1] < 3.4 for p in placed),
+          all(p["at"][1] < 3.4 for p in placed if not p.get("on")),
           json.dumps([p["at"] for p in placed]))
     # Hand-derived (see the module docstring): the table centres on its wall
     # at [2.0, 0.45]; nothing pushes it off — the only zone is the south
     # door's, at y ≥ 3.4 m.
-    table_at = next(p["at"] for p in placed if p["prop_id"] == table)
+    table_place = next(p for p in placed if p["prop_id"] == table)
     check("the table stands centred on its wall",
-          table_at == [2.0, 0.45], json.dumps(table_at))
-    # The painting is a WALL piece — that is the whole point of `mount`
-    # reaching the solver: base 1.5 − 0.6/2 = 1.2 m above the floor.
-    painting = next(p for p in placed if p["prop_id"] != table)
-    check("the wall piece hangs at its default base",
+          table_place["at"] == [2.0, 0.45], json.dumps(table_place["at"]))
+    # The painting is a WALL piece placed under its PLACEHOLDER id, hanging
+    # at the base the keyword table handed the plan: 1.5 − 0.6/2 = 1.2 m.
+    painting = next(p for p in placed if p["prop_id"] == "need:n2")
+    check("the unbuilt wall piece is placed under its temporary id",
           painting.get("offset_y") == 1.2, json.dumps(painting))
+    # The candle is a CHILD: stored in the table's frame, first raster cell.
+    candle = next(p for p in placed if p["prop_id"] == "need:n3")
+    check("the surface piece is stored in its support's frame, trim 0",
+          candle.get("on") == table_place["id"] and candle["at"] == [0.0, 0.0]
+          and "offset_y" not in candle, json.dumps(candle))
+    place_prompt = last_prompt(calls, "furnish_place")
     check("place prompt lists the door on wall S",
-          "on wall S" in last_prompt(calls, "furnish_place"),
-          last_prompt(calls, "furnish_place")[:200])
+          "on wall S" in place_prompt, place_prompt[:300])
+    check("place prompt groups the pieces by mount",
+          all(head in place_prompt for head in (
+              "Floor pieces to place:", "Wall pieces to place",
+              "Ceiling pieces to place:", "Surface pieces to place")),
+          place_prompt[:300])
+    check("a review notification names the pass split",
+          any("floor 1/1, wall 1/1, surface 1/1" in t
+              for t in notification_texts()),
+          json.dumps(notification_texts()[:3]))
 
-    # ── accept → the props land in layout.props, the job is gone ────────
-    room_furnish.accept("smokeroom")
-    check("job row deleted", room_furnish.get_status("smokeroom") is None)
+    # ── accept → props are created, ids rewritten, meshes ordered ───────
+    # The orchestrator is frozen here so the `generating` state can be looked
+    # at — a restart in exactly that state is what the rows below simulate.
+    real_spawn = suppress_spawn()
+    accepted = room_furnish.accept("smokeroom")
+    check("accept reports what it placed and what it now generates",
+          accepted == {"status": "accepted", "placed": 3, "generating": 2},
+          json.dumps(accepted))
+    status = room_furnish.get_status("smokeroom")
+    check("the job waits in generating", status["state"] == "generating",
+          json.dumps(status["state"]))
+    check("the row remembers that the layout write happened",
+          status["placements"].get("accepted") is True)
+    built = [n for n in status["proposal"]["needs"] if n["build"]]
+    check("both built needs got a prop", len(built) == 2
+          and all(n.get("prop_id") for n in built), json.dumps(built))
+    new_prop = props.get_prop(built[0]["prop_id"])
+    check("the new prop carries the need's mount",
+          new_prop.get("mount") == "wall", json.dumps(new_prop.get("mount")))
+    check("…and its key areas",
+          list(new_prop.get("key_areas") or []) == ["picture"],
+          json.dumps(new_prop.get("key_areas")))
+    check("…and is named after the kind",
+          new_prop.get("name") == "Wall Painting", new_prop.get("name") or "")
     room = get_room_by_id(
         next(entry for entry in _load_world_data()["locations"]
              if entry["id"] == loc["id"]), "smokeroom")
     stored = room["layout"].get("props") or []
     check("layout.props holds the accepted placements",
-          len(stored) == len(placed), json.dumps(stored))
+          len(stored) == 3, json.dumps(stored))
+    check("no placeholder id survived into the layout",
+          not any(str(p.get("prop_id") or "").startswith("need:")
+                  for p in stored),
+          json.dumps([p.get("prop_id") for p in stored]))
+    check("the child still names its support by PLACEMENT id",
+          next(p for p in stored if p.get("on"))["on"] == table_place["id"],
+          json.dumps([p.get("on") for p in stored]))
+    check("progress counts the built needs once they are ordered",
+          room_furnish.get_status("smokeroom")["progress"]
+          == {"done": 0, "total": 2},
+          json.dumps(room_furnish.get_status("smokeroom")["progress"]))
+    check("discarding a room whose meshes are running is refused",
+          _refused_with(room_furnish.discard, 409, "smokeroom"))
+    check("a restart resumes into the mesh phase",
+          room_furnish._resume_phase(
+              room_furnish._get_row("smokeroom")) == "generate")
+
+    # ── generating → the row is gone, nothing was created twice ─────────
+    props_before_resume = len(props.list_props())
+    room_furnish._spawn = real_spawn
+    room_furnish.resume("smokeroom")
+    status = wait_for(("error",), tries=100)
+    check("the job closes itself when every mesh is there", status is None,
+          json.dumps(status))
+    check("the resume created no second prop",
+          len(props.list_props()) == props_before_resume,
+          str(len(props.list_props())))
+    room = get_room_by_id(
+        next(entry for entry in _load_world_data()["locations"]
+             if entry["id"] == loc["id"]), "smokeroom")
+    check("and appended the placements only once",
+          len(room["layout"].get("props") or []) == 3,
+          json.dumps(room["layout"].get("props")))
     check("sanitizer kept prop_id/at/yaw",
-          all(p.get("prop_id") and len(p.get("at") or []) == 2 for p in stored))
+          all(p.get("prop_id") and len(p.get("at") or []) == 2
+              for p in room["layout"]["props"]))
+    check("a mesh notification closes the run",
+          any("Meshes ready — 2 models" in t for t in notification_texts()),
+          json.dumps(notification_texts()[:3]))
 
     # ── error → retry → reset, and the surfaces gate ────────────────────
     print("\n  error, retry and the surfaces gate")
@@ -436,6 +662,34 @@ def main() -> int:
     room_furnish.reset("smokeroom")
     check("reset drops the job", room_furnish.get_status("smokeroom") is None)
 
+    # ── accept with nothing placed builds nothing (E6 edge case) ────────
+    # A prop nobody put in a room is a library entry the admin never asked
+    # for, so an empty placement list must not create one.
+    print("\n  accepting an empty result")
+    answers["furnish_needs"] = {
+        "needs": [need("a", "iron kettle", count=1, mount="floor",
+                       width_m=0.3, depth_m=0.3, height_m=0.3,
+                       description="a black iron kettle")],
+        "surfaces": None}
+    answers["furnish_match"] = {"matches": []}
+    answers["furnish_place"] = {"plan": []}
+    props_before_empty = len(props.list_props())
+    room_furnish.start("smokeroom")
+    status = wait_for(("proposal_ready", "error"))
+    room_furnish.confirm("smokeroom", status["proposal"])
+    status = wait_for(("review_ready", "error"))
+    check("an empty plan still reaches review_ready",
+          status["state"] == "review_ready" and not status["placements"]["placed"],
+          json.dumps(status.get("placements")))
+    empty_accept = room_furnish.accept("smokeroom")
+    check("accepting nothing places nothing and generates nothing",
+          empty_accept == {"status": "accepted", "placed": 0, "generating": 0},
+          json.dumps(empty_accept))
+    check("…and creates no prop for the unplaced need",
+          len(props.list_props()) == props_before_empty
+          and room_furnish.get_status("smokeroom") is None,
+          str(len(props.list_props())))
+
     # ── start_direct: admin picks become needs ──────────────────────────
     print("\n  start_direct (admin picks, no LLM)")
     answers["furnish_place"] = {"plan": [
@@ -455,7 +709,12 @@ def main() -> int:
     check("two chairs were placed",
           len(status["placements"]["placed"]) == 2,
           json.dumps(status["placements"]))
-    room_furnish.discard("smokeroom")
+    direct_accept = room_furnish.accept("smokeroom")
+    check("a job with nothing to build closes at accept",
+          direct_accept == {"status": "accepted", "placed": 2,
+                            "generating": 0}
+          and room_furnish.get_status("smokeroom") is None,
+          json.dumps(direct_accept))
 
     # ── legacy job rows ─────────────────────────────────────────────────
     print("\n  the boot-time cleanup of v1 job rows")
@@ -505,13 +764,19 @@ def main() -> int:
                        width_m=1.2, depth_m=0.8, height_m=0.75,
                        description="a plain oak table"),
                   need("b", "wall torch", mount="wall", width_m=0.2,
-                       depth_m=0.2, height_m=0.5, description="an iron torch")],
+                       depth_m=0.2, height_m=0.5, description="an iron torch"),
+                  need("c", "candle", category="tableware", count=1,
+                       mount="surface", width_m=0.08, depth_m=0.08,
+                       height_m=0.2, description="a beeswax candle")],
         "surfaces": {"floor": "oak_planks", "wall": "plaster_wall"}}
     answers["furnish_match"] = lambda prompt: {"matches": [
         {"need": "n1", "ref": ref_for(prompt, "Table")}]}
+    # The wall torch is dropped, so the candle is need n2 after re-minting.
     answers["furnish_place"] = {"plan": [
         {"prop": table, "count": 1, "anchor": "wall_n", "ref": None,
-         "facing": "room"}]}
+         "facing": "room"},
+        {"prop": "need:n2", "count": 1, "anchor": "on", "ref": table,
+         "facing": "ref"}]}
     room_furnish.start(yard_job)
     status = wait_for(("proposal_ready", "error"), job=yard_job)
     check("the yard reaches proposal_ready",
@@ -537,9 +802,16 @@ def main() -> int:
           status and status["state"] == "review_ready",
           (status or {}).get("error") or "")
     yard_placed = status["placements"]["placed"]
+    yard_table = next(p for p in yard_placed if p["prop_id"] == table)
+    yard_candle = next(p for p in yard_placed if p.get("on"))
     check("the placement is shifted back into LOCATION-local metres",
-          [p["at"] for p in yard_placed] == [[-1.0, -5.55]],
-          json.dumps([p["at"] for p in yard_placed]))
+          yard_table["at"] == [-1.0, -5.55], json.dumps(yard_table["at"]))
+    # THE ORIGIN SHIFT SKIPS A CHILD (task 2 note): the candle's metres are
+    # its support's, not the yard's, so they stay [0, 0] while the table
+    # underneath moves by (−6, −6).
+    check("the child on it is NOT shifted with the origin",
+          yard_candle["at"] == [0.0, 0.0]
+          and yard_candle["on"] == yard_table["id"], json.dumps(yard_candle))
     room_furnish.accept(yard_job)
     yard_room = get_room_by_id(
         next(entry for entry in _load_world_data()["locations"]
@@ -548,7 +820,12 @@ def main() -> int:
           sorted(yard_room.get("layout") or {}) == ["props"]
           and (yard_room["layout"]["props"] or [{}])[0].get("at") == [-1.0, -5.55],
           json.dumps(yard_room.get("layout")))
-    check("the yard job row is gone", room_furnish.get_status(yard_job) is None)
+    check("the yard job stays open while its candle is baked",
+          (room_furnish.get_status(yard_job) or {}).get("state") == "generating"
+          or room_furnish.get_status(yard_job) is None,
+          json.dumps(room_furnish.get_status(yard_job)))
+    status = wait_for(("error",), job=yard_job, tries=100)
+    check("the yard job row is gone", status is None, json.dumps(status))
     # A boundary pass-through IS the yard's doorway: with the opening moved
     # onto the north edge the very same plan cannot use the wall's centre.
     data = _load_world_data()
@@ -572,7 +849,8 @@ def main() -> int:
     # wall centre would be x 4.4…5.6 / y 0.05…0.85 — an overlap, so the
     # centre spot is out and the piece has to slide sideways (or fail).
     check("the boundary opening keeps its own stretch of the yard free",
-          all(not (3.8 - 0.6 < p["at"][0] + 6 < 6.2 + 0.6) for p in blocked),
+          all(not (3.8 - 0.6 < p["at"][0] + 6 < 6.2 + 0.6)
+              for p in blocked if not p.get("on")),
           json.dumps([p["at"] for p in blocked]))
     room_furnish.discard(yard_job)
     check("discarding the yard job leaves the accepted placement alone",
@@ -588,6 +866,15 @@ def _refused(fn, *args) -> bool:
         fn(*args)
     except room_furnish.FurnishError:
         return True
+    return False
+
+
+def _refused_with(fn, status: int, *args) -> bool:
+    """True when the call was refused with exactly that HTTP status."""
+    try:
+        fn(*args)
+    except room_furnish.FurnishError as e:
+        return e.status == status
     return False
 
 
