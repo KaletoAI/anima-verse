@@ -402,7 +402,7 @@ def delete_rules_by_event(event_id: str) -> int:
 
 
 def get_rule(rule_id: str) -> Optional[Dict[str, Any]]:
-    """Gibt eine einzelne Regel zurueck."""
+    """Return a single rule by id."""
     for r in load_rules():
         if r.get("id") == rule_id:
             return r
@@ -410,7 +410,7 @@ def get_rule(rule_id: str) -> Optional[Dict[str, Any]]:
 
 
 # ============================================================
-# BLOCKADE-REGELN: Zugang pruefen
+# BLOCK RULES: check access
 # ============================================================
 
 def check_access(character_name: str,

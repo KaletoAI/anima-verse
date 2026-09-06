@@ -1914,6 +1914,15 @@ def migrate_transit_places_once() -> Dict[str, int]:
         else:
             survivors.append(l)
     victim_ids = {l.get("id") for l in victims if l.get("id")}
+    # Name every victim before it goes: a deleted record leaves no trace an
+    # admin could read afterwards, so the log is the only record of what the
+    # boot threw away.
+    for l in victims:
+        lid = l.get("id") or ""
+        has_gallery = bool(lid) and (get_storage_dir() / "world_gallery" / lid).is_dir()
+        logger.warning("transit place deleted: id=%s name=%r gallery=%s",
+                       lid or "-", l.get("name") or "",
+                       "yes" if has_gallery else "no")
     deleted_galleries = 0
     for vid in victim_ids:
         gdir = get_storage_dir() / "world_gallery" / vid
@@ -2379,8 +2388,9 @@ def migrate_map_images_once() -> Dict[str, int]:
     """Delete the map-icon era from a world (plan-rueckbau-2d-karte.md E3).
 
     Every gallery image typed ``map`` (isometric) or ``map_2d`` (flat icon)
-    is deleted from disk and from ``gallery_meta.json`` (image_types,
-    prompts, image_metas, image_rooms, background list), and the five
+    is deleted from disk, from the ``gallery_meta.json`` sections
+    ``image_types``, ``image_metas`` and ``rooms``, from the sibling
+    ``prompts.json`` and from the location's background list; the five
     map-icon keys are stripped from every location record. Idempotent by
     content: a world that carries nothing of it reports zeros. Runs at
     every boot — an old content ZIP may re-import the keys, and this is the
@@ -2398,6 +2408,11 @@ def migrate_map_images_once() -> Dict[str, int]:
                 changed = True
         lid = loc.get("id") or ""
         if not lid:
+            continue
+        # The cheap file check comes first: _load_gallery_meta resolves the id
+        # through a full world load, so a location without a gallery must not
+        # pay for one.
+        if not (get_storage_dir() / "world_gallery" / lid / "gallery_meta.json").exists():
             continue
         meta = _load_gallery_meta(lid)
         types = meta.get("image_types") or {}

@@ -466,8 +466,8 @@
 >     sind mit dem Rückbau 2026-09 (plan-rueckbau-2d-karte.md) gestrichen —
 >     sie existierten nur, damit ein auf die Karte gesetzter Klon seiner
 >     Vorlage nicht bis zum letzten Grashalm gleicht, und Klone gibt es
->     nicht mehr. JEDER Seed dieser Location (Scatter hier wie Relief-`seed`
->     in Nr. 14) gilt unverändert, so wie er gespeichert ist; die
+>     nicht mehr. Der Seed gilt für den Scatter-Seed dieser Platzierung
+>     unverändert, so wie er gespeichert ist; die
 >     Handrechnung nach § B5a rechnet mit genau diesem Seed.
 > 13. **`scene.boundary_openings`** — Durchgänge an der LOCATION-Grenze
 >     (Straße quert die Zelle): `[{edge: <Kanten-Index>, at_world: [x, z],
@@ -4913,7 +4913,7 @@ gleich zu (Nachtrag „Oberflächen-Raster (v6)").
 | 1 | Figuren-Basishöhe Client 1,75 m vs. Vertrag 1,70 m | **Historisch, erledigt (E1/E4):** 1,70 m in Welt-Metern gilt überall (§ A1.1/§ A3), das `× k` ist mit E4 weg — und der Client steht auf 1,70 (`client3d/src/scene/figures.ts BASE_FIGURE_HEIGHT_M`, Payload-Default `1.7`) |
 | 2 | „0,12 × k" in §2e der Rezept-Note | **Historisch, erledigt:** zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
 | 3 | `activityToClipKind`-Keyword-Heuristik im Client | **Erledigt — gelöscht 2026-08-28, Task 13 (plan-posen-plaetze.md):** die Funktion ist aus `figures.ts` raus, `npcs.ts` steht bei leerem `activity_animation` auf `idle`; die Pose kommt aus dem Katalog, ein Marker nennt seit v7 keinen Clip mehr |
-| 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | **Erledigt — aber die Diagnose war FALSCH (E7-Korrektur):** `mapIconUrl()` lebt und liefert das Footprint-Icon der Karte (`frontend/src/tabs/map/PlacementLayer.tsx:78`, Konsumenten `MapTab`, `KnownLocationsEditor`, `LocationEditor`). Nichts daran ist Dead Code, `map_image_2d`/`map_rotation_2d` bleiben ausdrücklich (§ A1.9). Weg ist nur die README-Zeile des Clients |
+| 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | **Erledigt — aber die Diagnose war FALSCH (E7-Korrektur):** `mapIconUrl()` lebt und liefert das Footprint-Icon der Karte (`frontend/src/tabs/map/PlacementLayer.tsx:78`, Konsumenten `MapTab`, `KnownLocationsEditor`, `LocationEditor`). Nichts daran ist Dead Code, `map_image_2d`/`map_rotation_2d` bleiben ausdrücklich (§ A1.9) (beide gelöscht 2026-09, plan-rueckbau-2d-karte.md). Weg ist nur die README-Zeile des Clients |
 | 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | **Erledigt:** `client3d/docs/implementierung-3d-pipeline.md:80` sagt heute selbst, dass es diese Routen NICHT gibt, und nennt `GET /characters/{name}/model3d` (JSON) |
 | 6 | `placements[].model_url` | **Erledigt:** im Szenen-Payload existiert das Feld nicht mehr (`model_tiers`/`variants` statt dessen, v5-Kopf). `model_url` gibt es nur noch als Feld der Prop-BIBLIOTHEK (`app/core/props.py`) — anderer Namensraum, kein Rest |
 | 7 | Diorama-Böden mit Löchern — begehbare Höhe nicht messbar | **Erledigt:** `walk_y` (Meter über Modell-Unterkante) ist Sidecar-Anker mit Admin-Regler; das Rezept rechnet ihn zu `walk_y_world` aus (`app/core/scene_recipe.py`) |

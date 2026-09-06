@@ -98,8 +98,9 @@ export function TravelPanel({
   //
   // The lookup runs against the FOGGED payload. An admin playing with the
   // map's "Show all locations" switch on can therefore pick an outline this
-  // panel cannot resolve; then the bar keeps showing the hint instead of a
-  // name. Accepted: the switch is an admin tool, and one plays with it off.
+  // panel cannot resolve; the reset effect below drops such a pick right
+  // away — the outline loses its selection and the bar falls back to the
+  // hint. Accepted: the switch is an admin tool, and one plays with it off.
   const [pickedId, setPickedId] = useState('')
   const picked = useMemo<Picked | null>(() => {
     const l = (world?.locations || []).find((x) => x.id === pickedId)

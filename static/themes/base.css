@@ -1485,7 +1485,6 @@ body[data-worlddev="1"] .worlddev-container { padding-top: 10px; }
 @keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @keyframes story-spin { to { transform: rotate(360deg); } }
 @keyframes queuePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-@keyframes worldmapPulse { 0%, 100% { box-shadow: 0 0 0 2px var(--worldmap-active-glow); } 50% { box-shadow: 0 0 0 5px rgba(67,160,71,0.1); } }
 
 /* ── Editor Checkboxes ── */
 .editor-checkboxes { display: flex; flex-wrap: wrap; gap: 4px 12px; }

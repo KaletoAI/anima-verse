@@ -67,7 +67,7 @@ kein Flag „Durchgangsort" mehr.
 (`plan-rueckbau-2d-karte.md`): keine Template-Location, keine Kopien auf der
 Karte, kein `template_location_id`. Jeder Ort steht genau einmal in der
 `locations`-Tabelle, unter seinem eigenen Namen — eine Namens-Suche findet ihn
-also wieder. SetLocation lehnt keinen Ort mehr wegen seines Geländes ab; die
+also wieder. SetLocation lehnt keinen Ort mehr wegen seines eigenen Flags ab; die
 Route läuft ohnehin frei über die Fläche, nicht von Kachel zu Kachel.
 
 ## Skills pro Character aktivieren

@@ -61,8 +61,7 @@
     --badge-done-bg: rgba(46,160,67,0.15); --badge-done-color: #3fb950;
     --badge-failed-bg: rgba(248,81,73,0.15); --badge-failed-color: #f85149;
     --vram-bar-bg: rgba(255,255,255,0.08); --vram-fill-color: #58a6ff;
-    --worldmap-active-color: #4caf50; --worldmap-active-glow: rgba(76,175,80,0.3);
-    --worldmap-active-tile-bg: linear-gradient(135deg, rgba(76,175,80,0.25), rgba(76,175,80,0.1));
+    --worldmap-active-color: #4caf50;
     --story-start-bg: #388E3C; --story-start-hover: #2E7D32;
     --story-continue-bg: #1565C0; --story-continue-hover: #0D47A1;
     --story-card-hover-shadow: 0 4px 16px rgba(0,0,0,0.4);

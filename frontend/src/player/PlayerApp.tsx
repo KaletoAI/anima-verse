@@ -556,8 +556,9 @@ export function PlayerApp() {
   const sendToBack = useCallback((id: string) => {
     setOrder((o) => (o[0] === id ? o : [id, ...o.filter((x) => x !== id)]))
   }, [])
-  // RGL positioniert das Panel-Div selbst (position:absolute) → z-index greift
-  // direkt hier. Zuletzt angefasstes Panel (Ende von order) = höchster z-index.
+  // RGL positions the panel div itself (position:absolute), so z-index takes
+  // effect right here. The panel touched last (end of `order`) gets the
+  // highest z-index.
   const zOf = (id: string) => 10 + Math.max(0, order.indexOf(id))
 
   const scenePanel = (

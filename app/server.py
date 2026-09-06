@@ -319,10 +319,13 @@ async def lifespan(app: FastAPI):
 
     # Transit places are gone (plan-rueckbau-2d-karte.md E5): every record
     # flagged passable or bound to a template is deleted with its gallery.
-    from app.models.world import migrate_transit_places_once
-    _cleanup_stats = migrate_transit_places_once()
-    if _cleanup_stats.get("deleted_locations") or _cleanup_stats.get("fields_stripped"):
-        logger.info("Transit-place migration at startup: %s", _cleanup_stats)
+    try:
+        from app.models.world import migrate_transit_places_once
+        _cleanup_stats = migrate_transit_places_once()
+        if _cleanup_stats.get("deleted_locations") or _cleanup_stats.get("fields_stripped"):
+            logger.info("Transit-place migration at startup: %s", _cleanup_stats)
+    except Exception as _tpe:
+        logger.warning("transit-place migration failed: %s", _tpe)
 
     # Background hygiene: prune dead file references in background_images +
     # gallery_meta.json + prompts.json. Deletes no files.

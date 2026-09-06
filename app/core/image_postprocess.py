@@ -178,8 +178,10 @@ def migrate_tree(
 ) -> Dict:
     """Walk shared/items and the per-world items dirs and downscale.
 
-    ``world_scope`` is ``"current"`` (default) or ``"all"``. For items the
-    scope is irrelevant (items live under shared/).
+    ``world_scope`` is ``"current"`` (default) or ``"all"``. The
+    cross-world library ``shared/items/`` is always walked; the scope only
+    decides which world items come on top — the active world's ``items/``
+    for ``"current"``, every ``worlds/*/items/`` for ``"all"``.
 
     Returns a summary dict with totals and per-bucket breakdown.
     """
