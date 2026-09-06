@@ -29,9 +29,9 @@ Hand-derived expectations:
   [1] show_all=True: locations = inn + farm + post + ghost (unplaced
       passes); inn entry has pos_x 50.0, yaw_deg 90.0, plan_width_m 10.0
       (DERIVED from its boundary's 10 × 10 bounding box) and NO
-      grid_x/surface_kind/map_rotation_2d keys. ``passable``
-      came BACK with the avatar journey (E3, Task 5): a destination list
-      drops transit tiles by it, so the inn carries it as False. post is
+      grid_x/surface_kind/map_rotation_2d keys. ``passable`` is gone as
+      well (2026-09-06, plan-rueckbau-2d-karte.md E4/E5: transit places
+      fell with the 2D map), so the row has TEN keys, not eleven. post is
       placed but BOUNDARY-LESS: pos_x 70.0, boundary null AND
       plan_width_m null — it has no area anywhere. The inn also
       carries a ``layout_sig`` although it has no room at all — the
@@ -261,7 +261,7 @@ def main() -> int:
     check("inn.plan_width_m", inn.get("plan_width_m"), 10.0)
     check("inn keys", sorted(inn),
           sorted(["id", "name", "pos_x", "pos_z", "yaw_deg", "plan_width_m",
-                  "passable", "map3d", "layout_sig", "boundary", "openings"]))
+                  "map3d", "layout_sig", "boundary", "openings"]))
     # v6 "Gebiete": a location travels as a polygon and as nothing else —
     # the inn's drawn square in LOCAL metres (edge 10 -> half 5), clockwise.
     check("inn.boundary (the drawn square, CW)", inn.get("boundary"),
@@ -269,10 +269,9 @@ def main() -> int:
     # The inn has NO room — its signature comes from map3d alone (E5 B11).
     check("inn.layout_sig without any room", len(inn.get("layout_sig") or ""),
           10)
-    check("inn.passable (a house is walked INTO, not through)",
-          inn.get("passable"), False)
     for gone in ("grid_x", "grid_y", "surface_kind", "terrain",
-                 "map_rotation_2d", "template_location_id", "map_image_off",
+                 "map_rotation_2d", "template_location_id", "passable",
+                 "variant_seed", "map_image_off",
                  "map_patch_2d", "map_patch_span"):
         check(f"inn has no {gone}", gone in inn, False)
     ghost = entry(allv, GHOST)

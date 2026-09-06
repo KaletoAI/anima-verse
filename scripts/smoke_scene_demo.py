@@ -51,8 +51,7 @@ def main() -> int:
         rooms = [r for r in (loc.get("rooms") or []) if r.get("layout")]
         return (len(rooms), len(((loc.get("map3d") or {}).get("outline") or [])))
 
-    locations = [l for l in list_locations()
-                 if not (l.get("template_location_id") or "").strip()]
+    locations = list_locations()
     best = max(locations, key=score) if locations else None
     if not best or score(best)[0] == 0:
         print(f"[skip] {world} has no location with a room layout")

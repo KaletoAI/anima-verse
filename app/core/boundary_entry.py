@@ -10,9 +10,9 @@ change accepts an opening as a legitimate crossing point —
   and anything else is a wall. A location that draws NO opening at all is the
   other case and has a FREE boundary (decision E4 task 5, ``POST /play/pos``):
   it never said where its way in is, the mirror of ``may_leave``'s "no entry
-  room = leave anywhere", and a painted square or a passable transit place
-  cannot author an opening for every direction a walker may arrive from. The
-  rule gates (``accessible_when``, access rules) apply either way — the free
+  room = leave anywhere", and a painted square or a meadow cannot author an
+  opening for every direction a walker may arrive from. The rule gates
+  (``accessible_when``, access rules) apply either way — the free
   boundary drops the GEOMETRIC half of the gate, never the rules. The
   opening's room link routes the avatar; WITHOUT one the opening says nothing
   about the room and the arrival rule decides (``world.get_arrival_room_id``:

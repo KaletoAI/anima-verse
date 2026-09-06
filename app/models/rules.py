@@ -426,18 +426,6 @@ def check_access(character_name: str,
     # Danger-Level des Ziels ermitteln
     target_danger = _get_target_danger_level(location_id, room_id)
 
-    # Template-ID des Ziels: bei geklontem Terrain (z.B. "Meer", als Template
-    # auf viele Tiles geklont) soll eine Regel auf das TEMPLATE alle Klone
-    # treffen. Wir matchen scope=location daher auch gegen die template_location_id.
-    target_template_id = ""
-    try:
-        from app.models.world import get_location_by_id
-        _tl = get_location_by_id(location_id)
-        if _tl:
-            target_template_id = (_tl.get("template_location_id") or "").strip()
-    except Exception:
-        target_template_id = ""
-
     for rule in load_rules():
         if rule.get("type") != "block":
             continue
@@ -459,7 +447,7 @@ def check_access(character_name: str,
         t_rooms = target.get("room_ids") or target.get("rooms") or []
 
         matched = False
-        if scope == "location" and t_loc and t_loc in (location_id, target_template_id):
+        if scope == "location" and t_loc and t_loc == location_id:
             matched = True
         elif scope == "room" and t_loc == location_id and room_id in t_rooms:
             matched = True

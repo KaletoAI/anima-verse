@@ -3557,10 +3557,6 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     ground_kind = resolve_terrain_kind(location.get("terrain"),
                                        surface_kinds or ())
     rooms = [r for r in (location.get("rooms") or []) if isinstance(r, dict)]
-    # A copy placed on the map owns ONE number; it is mixed into every seed
-    # this location inherits from its template, so two copies stop looking
-    # identical. 0 = not a copy, and then every seed stays untouched.
-    variant = int(location.get("variant_seed") or 0)
     building_meta = building_meta or {}
     room_metas = room_metas or {}
     extent, k, storey = derive_scalars(map3d, plan_width_m)
@@ -3569,7 +3565,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     by_room: Dict[str, Dict[str, Any]] = {}
     for room in rooms:
         recipe = compose_recipe(room, [r for r in rooms if r is not room],
-                                variant_seed=variant, map3d=map3d)
+                                map3d=map3d)
         if not recipe:
             continue
         recipes.append(recipe)

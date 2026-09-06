@@ -325,11 +325,6 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # cannot drift. Empty list = this location has no authored way in,
             # which IS the free-boundary statement (E4 task 5).
             "openings": opening_world_frames(loc),
-            # A transit tile (a road cell) is walked THROUGH, never travelled
-            # TO — the flag lets a client's destination list drop them, the
-            # way the LLM's target list does (movement/blocks.py). Same field
-            # for the map itself: a road may be drawn differently to a place.
-            "passable": bool(loc.get("passable")),
         }
         map3d = loc.get("map3d")
         if isinstance(map3d, dict) and map3d:
@@ -1849,7 +1844,6 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     swim_allowed = data.get("swim_allowed")
     activity_hint = data.get("activity_hint")
     knowledge_item_id = data.get("knowledge_item_id")
-    passable = data.get("passable")
     entry_room = data.get("entry_room")
     default_door_prop_id = data.get("default_door_prop_id")
     indoor = data.get("indoor")
@@ -1874,7 +1868,6 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     # Set extra fields directly in the location
     _has_extra = (danger_level is not None or event_settings is not None
                   or outfit_type is not None or knowledge_item_id is not None
-                  or passable is not None
                   or entry_room is not None or indoor is not None
                   or default_door_prop_id is not None
                   or decency is not None or style_hint is not None
@@ -1906,8 +1899,6 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                     _l["activity_hint"] = (activity_hint or "").strip()
                 if knowledge_item_id is not None:
                     _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
-                if passable is not None:
-                    _l["passable"] = bool(passable)
                 if entry_room is not None:
                     _l["entry_room"] = (entry_room or "").strip()
                 if default_door_prop_id is not None:
@@ -1968,7 +1959,6 @@ def update_location_with_extras(location_id: str,
     swim_allowed = data.get("swim_allowed")
     activity_hint = data.get("activity_hint")
     knowledge_item_id = data.get("knowledge_item_id")
-    passable = data.get("passable")
     entry_room = data.get("entry_room")
     default_door_prop_id = data.get("default_door_prop_id")
     indoor = data.get("indoor")
@@ -2001,7 +1991,6 @@ def update_location_with_extras(location_id: str,
     # Set extra fields (incl. knowledge_item_id) directly in the location
     _has_extra = (danger_level is not None or event_settings is not None
                   or outfit_type is not None or knowledge_item_id is not None
-                  or passable is not None
                   or entry_room is not None or indoor is not None
                   or default_door_prop_id is not None
                   or decency is not None or style_hint is not None
@@ -2033,8 +2022,6 @@ def update_location_with_extras(location_id: str,
                     _l["activity_hint"] = (activity_hint or "").strip()
                 if knowledge_item_id is not None:
                     _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
-                if passable is not None:
-                    _l["passable"] = bool(passable)
                 if entry_room is not None:
                     _l["entry_room"] = (entry_room or "").strip()
                 if default_door_prop_id is not None:

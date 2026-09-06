@@ -294,7 +294,7 @@ def _placement_sig(regions: Sequence[Region],
     the stale answer this signature exists to prevent.
 
     The AREA FLAG of every place rides along, so flipping a location between
-    "open ground" and "building" (``passable``, ``map3d.area_model``) hands out
+    "open ground" and "building" (``map3d.area_model``) hands out
     a new context — it decides how far the terrain pace reaches into that place
     and therefore what a route costs.
 

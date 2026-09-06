@@ -652,11 +652,10 @@ def is_area_location(loc: Dict[str, Any]) -> bool:
 
     The one server answer to "is that an area location" (user decision
     2026-08-13, round 2 of the E8 acceptance — the reach of the terrain pace
-    and move-animation rule, ``terrain_query.ground_scope``). Two AUTHORED
-    flags say it, and nothing else:
+    and move-animation rule, ``terrain_query.ground_scope``). ONE AUTHORED
+    flag says it, and nothing else (user decision 2026-09-06, the transit
+    flag fell with the 2D map):
 
-    * ``passable`` — a transit location one walks THROUGH (the road and
-      forest clones of the terrain templates). It never had a building.
     * ``map3d.area_model`` — "the location model IS the ground of this
       place" (plan-area-locations.md; ``area_detail`` is only ever set on
       top of it, so it is covered).
@@ -669,8 +668,6 @@ def is_area_location(loc: Dict[str, Any]) -> bool:
     Pure math on a location dict, like everything else here — the client
     twin is ``client3d/src/scene/tiles.isAreaLocation``.
     """
-    if bool(loc.get("passable")):
-        return True
     map3d = loc.get("map3d")
     return bool(isinstance(map3d, dict) and map3d.get("area_model"))
 

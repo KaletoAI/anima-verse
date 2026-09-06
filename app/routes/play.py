@@ -511,10 +511,8 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
 
       1. a party FOLLOWER owns no movement at all (the hard backstop behind
          the panel's hint — the leader drags it along),
-      2. transit tiles are no destinations (the skill refuses them too; the
-         pathfinder still walks THROUGH them),
-      3. ``rules.check_leave`` — may the avatar leave where it stands,
-      4. ``accessible_when`` at the target — the condition the world map
+      2. ``rules.check_leave`` — may the avatar leave where it stands,
+      3. ``accessible_when`` at the target — the condition the world map
          greys a place out with. A WALL, not a hint (backend-status-3d.md,
          commit bdd8598): no rule engine reads that field, so it is only ever
          as strong as the paths that ask for it, and there are FOUR of them —
@@ -525,7 +523,7 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
          ``world_ops.conditions_pass``.
          The SetLocation skill still does not ask before it sets off; the
          arrival gate refuses at the door (ledgered separately),
-      5. ``danger_system.check_location_access`` — may it enter the target.
+      4. ``danger_system.check_location_access`` — may it enter the target.
          The skill asks ``rules.check_access`` a second time right after;
          that is the very predicate the danger façade delegates to, so it is
          asked ONCE here.
@@ -570,8 +568,6 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
         # "there is no such place" and "you were never told about it" are the
         # same statement, and the UI has one sentence for both.
         return {"journey": None, "reason": "unknown_target"}
-    if target.get("passable"):
-        return {"journey": None, "reason": "passable_target"}
 
     from app.models.rules import check_leave
     leave_ok, leave_reason = check_leave(avatar, target_location_id=target_id)
@@ -1144,10 +1140,10 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                 # third rule: a location that declares no entry room lets one
                 # out anywhere, and a location that draws no opening has not
                 # said where its way in is either. Without this a painted
-                # square, a meadow or any ``passable`` transit place would be
-                # a wall to a free walker, which is the opposite of what those
-                # places are for — and one CANNOT author an opening around
-                # them for every direction a walker may come from.
+                # square or a meadow would be a wall to a free walker,
+                # which is the opposite of what those places are for — and one
+                # CANNOT author an opening around them for every direction a
+                # walker may come from.
                 # The rule gates below are untouched: an openingless place is
                 # still subject to ``accessible_when`` and the access rules.
                 # ``opening_entry_room(None)`` answers '' and the ordinary

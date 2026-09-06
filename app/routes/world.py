@@ -112,49 +112,6 @@ def _update_location_route_sync(location_id: str, data: Any) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/locations/{template_id}/clone")
-async def clone_location_route(template_id: str, request: Request) -> Dict[str, Any]:
-    """Create a clone instance of a (passable) template at a metre position.
-
-    Called by the worldmap drag&drop when the user pulls a passable template
-    out of the tray onto the map.
-    """
-    data = await request.json()
-    return await asyncio.to_thread(_clone_location_route_sync,
-                                   template_id, data)
-
-
-def _clone_location_route_sync(template_id: str, data: Any) -> Dict[str, Any]:
-    """The blocking body of ``clone_location_route`` — runs in the
-    threadpool."""
-    try:
-        pos_x = data.get("pos_x")
-        pos_z = data.get("pos_z")
-        if pos_x is None or pos_z is None:
-            raise HTTPException(status_code=400,
-                detail="pos_x/pos_z missing")
-        try:
-            pos_x = float(pos_x)
-            pos_z = float(pos_z)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400,
-                detail="pos_x/pos_z must be numbers")
-        from app.models.world import clone_location as _clone
-        clone = _clone(template_id, pos_x, pos_z)
-        if not clone:
-            raise HTTPException(status_code=404,
-                detail="Template not found")
-        return {"status": "success", "location": clone}
-    except HTTPException:
-        raise
-    except ValueError as e:
-        # Rejected position (NaN/Infinity — json.loads accepts both literals).
-        # Nothing was written; a bad body is the client's fault, not a 500.
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 # --- World-Level Settings (Schritt 7, May 2026) ---------------------------
 # Temperature/weather settings live in world_kv. Own endpoint so the setup tab
 # can render a compact form without going through the generic admin-config

@@ -292,11 +292,12 @@ async def lifespan(app: FastAPI):
     except Exception as _ie:
         logger.debug("intents migration failed: %s", _ie)
 
-    # Clone hygiene: remove off-map clones, duplicates and orphans.
-    from app.models.world import cleanup_orphan_clones
-    _cleanup_stats = cleanup_orphan_clones()
-    if _cleanup_stats.get("removed"):
-        logger.info("Clone cleanup at startup: %s", _cleanup_stats)
+    # Transit places are gone (plan-rueckbau-2d-karte.md E5): every record
+    # flagged passable or bound to a template is deleted with its gallery.
+    from app.models.world import migrate_transit_places_once
+    _cleanup_stats = migrate_transit_places_once()
+    if _cleanup_stats.get("deleted_locations") or _cleanup_stats.get("fields_stripped"):
+        logger.info("Transit-place migration at startup: %s", _cleanup_stats)
 
     # Background hygiene: prune dead file references in background_images +
     # gallery_meta.json + prompts.json. Deletes no files.

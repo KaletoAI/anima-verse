@@ -287,15 +287,6 @@ class SetLocationSkill(PluginSkill):
                                            cond_reason)
             return cond_reason
 
-        # Passable tiles (transit places) are no destinations — the LLM must
-        # not walk there directly. The pathfinder may still use them as an
-        # intermediate step when the character knows them.
-        if matched_location.get("passable"):
-            logger.info("SetLocation onto a transit place refused: %s -> %s",
-                        character_name, location_name)
-            return (f"{location_name} is a place to pass THROUGH, not a "
-                    f"destination. Pick a real place to travel to.")
-
         # Journey mode: a cross-location move starts a timed journey
         # (start_journey; the travel ticker advances it as game time
         # passes). Same-location moves (room change only) stay instant.

@@ -490,16 +490,12 @@ def get_room_by_id(location: Dict[str, Any], room_id: str) -> Optional[Dict[str,
 
 
 def find_location_by_room(room_id: str) -> Optional[Dict[str, Any]]:
-    """The location OWNING a room id (templates/originals only — clone records
-    store ``rooms: []`` and inherit the template's rooms on merge, so their
-    room ids are template-identical). Used by the per-room model routes
+    """The location OWNING a room id. Used by the per-room model routes
     (AV3D-2), where only the owner's store matters. None when unknown."""
     if not room_id:
         return None
     data = _load_world_data()
     for loc in data.get("locations", []):
-        if (loc.get("template_location_id") or "").strip():
-            continue
         for room in loc.get("rooms", []) or []:
             if room.get("id") == room_id:
                 return loc
@@ -729,60 +725,9 @@ def clear_location_prompt_changed(location_id: str) -> bool:
     return False
 
 
-_CLONE_TEMPLATE_ONLY_KEYS = ("background_images",)
-
-
-def _resolve_clones(locations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Merge passable clones with their template.
-
-    A clone stores the bare minimum: id, template_location_id, pos_x, pos_z
-    (plus yaw_deg) and optionally a name. On read every remaining field is
-    inherited from the template, so template edits apply to all its clones
-    automatically. template_location_id stays in the output so the frontend
-    can filter clones out of the world tree.
-    """
-    by_id = {l.get("id"): l for l in locations if l.get("id")}
-    resolved: List[Dict[str, Any]] = []
-    for loc in locations:
-        tmpl_id = (loc.get("template_location_id") or "").strip()
-        if not tmpl_id:
-            resolved.append(loc)
-            continue
-        tmpl = by_id.get(tmpl_id)
-        if not tmpl:
-            # Template deleted — the clone becomes an orphan; let the next
-            # save clean it up, but render it now.
-            resolved.append(loc)
-            continue
-        merged = {**tmpl, **{
-            k: v for k, v in loc.items()
-            if k in ("id", "pos_x", "pos_z", "yaw_deg", "template_location_id")
-            or (k not in _CLONE_TEMPLATE_ONLY_KEYS and v not in (None, "", [], {}))
-        }}
-        # Forget the template identity, or the clone would take on the
-        # template's id. Override with the REAL clone identifier:
-        merged["id"] = loc.get("id")
-        merged["template_location_id"] = tmpl_id
-        # The placement is the clone's OWN — never the template's, or an
-        # unplaced clone would silently sit on top of its template.
-        merged["pos_x"] = loc.get("pos_x")
-        merged["pos_z"] = loc.get("pos_z")
-        merged["yaw_deg"] = float(loc.get("yaw_deg") or 0.0)
-        # Gallery-related fields ALWAYS come from the template — the gallery
-        # path goes through _gallery_owner_id (= template id) anyway, and
-        # clones would otherwise keep stale lists when the template gains or
-        # loses images.
-        for k in _CLONE_TEMPLATE_ONLY_KEYS:
-            if k in tmpl:
-                merged[k] = tmpl[k]
-        resolved.append(merged)
-    return resolved
-
-
 def list_locations() -> List[Dict[str, Any]]:
-    """Gibt alle Orte eines Users zurueck (Klone gemerged mit Template)."""
-    raw = _load_world_data().get("locations", [])
-    return _resolve_clones(raw)
+    """All locations of the world, exactly as stored — no merge of any kind."""
+    return _load_world_data().get("locations", [])
 
 
 def resolve_location(identifier: str) -> Optional[Dict[str, Any]]:
@@ -1019,15 +964,11 @@ def ground_room_action(location: Dict[str, Any]) -> str:
     - ``"add"`` — the location carries no room with the reserved id and gets
       one. The normal case, with or without rooms of its own: the ground
       exists in every location.
-    - ``"skip"`` — a CLONE. It stores ``rooms: []`` and inherits its
-      template's rooms on read, so its ground comes from the template.
     - ``"present"`` — a room already carries the reserved id. Nothing is
       touched: on a repeated run that is this migration's own room, and when
       an author assigned the id by hand, overwriting would destroy their
       room. Both are the same case here — the caller reports it and moves on.
     """
-    if str(location.get("template_location_id") or "").strip():
-        return "skip"
     for room in (location.get("rooms") or []):
         if str(room.get("id") or "") == GROUND_ROOM_ID:
             return "present"
@@ -1141,8 +1082,7 @@ def migrate_ground_rooms_once() -> Dict[str, int]:
         if changed:
             _save_world_data(data)
 
-        # Which locations have a usable ground now — clones included, they
-        # inherit it, collisions excluded.
+        # Which locations have a usable ground now — collisions excluded.
         rooms_by_loc: Dict[str, List[str]] = {}
         for loc in list_locations():
             lid = str(loc.get("id") or "")
@@ -1436,9 +1376,9 @@ def add_location(name: str, description: str,
             LocationEditor writes via PUT.
         danger_level: 0-5, clamped; only written when given (same rule as the
             LocationEditor PUT path in world_ops).
-        location_id: Wenn gesetzt, wird der zu aktualisierende Ort per ID
-            gefunden (eindeutig) statt per Name. NOETIG bei doppelten Namen —
-            sonst trifft die Name-Suche den falschen Ort (z.B. einen Klon).
+        location_id: When set, the location to update is found by ID
+            (unambiguous) instead of by name. NEEDED with duplicate names —
+            otherwise the name search hits the wrong place.
         create_new: Always create, never update. Without it a name that already
             exists is read as an EDIT of that place, which is right for an
             author typing a name into a form and wrong for anything generating
@@ -1690,25 +1630,18 @@ def update_location_position(location_id: str, pos_x: Optional[float],
 
 
 def cleanup_orphan_backgrounds() -> Dict[str, int]:
-    """Entfernt tote Eintraege aus ``background_images`` und den Galerie-
-    Meta-Dicts (``image_types``, ``image_rooms``, ``image_metas``,
+    """Remove dead entries from ``background_images`` and the gallery meta
+    dicts (``image_types``, ``image_rooms``, ``image_metas``,
     ``image_prompts``).
 
-    "Tot" heisst: in der DB / Meta-JSON referenziert, aber die zugehoerige
-    PNG existiert nicht mehr auf der Disk (oft Folge von:
-    Bild-Loesch-Round-Trip nicht sauber, Klon teilt Galerie mit Template
-    und der eine sah eine Datei die der andere schon weg hat, alte
-    Galerien manuell aufgeraeumt, etc.).
+    "Dead" means: referenced in the DB / meta JSON, but the PNG behind it no
+    longer exists on disk (often the aftermath of an unclean image-delete
+    round trip or a gallery tidied up by hand).
 
-    Loescht KEINE Dateien — pruned nur Referenzen.
+    Deletes NO files — it only prunes references. Every location is checked
+    against its OWN gallery directory (the location id).
 
-    Klon-Hinweis: Klone teilen die Galerie mit ihrem Template
-    (``_gallery_owner_id``). Wir pruefen pro Location gegen den
-    jeweiligen Owner-Dir. Da Klone ihre ``background_images``-Liste seit
-    dem letzten Refactor ohnehin vom Template erben, raeumen wir hier
-    primaer Template-Daten auf.
-
-    Idempotent. Returns Stats.
+    Idempotent. Returns stats.
     """
     data = _load_world_data()
     locations = data.get("locations", [])
@@ -1724,8 +1657,7 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
         loc_id = loc.get("id") or ""
         if not loc_id:
             continue
-        owner_id = (loc.get("template_location_id") or "").strip() or loc_id
-        gallery_dir = gallery_root / owner_id
+        gallery_dir = gallery_root / loc_id
         bgs = loc.get("background_images", [])
         if bgs:
             valid = [img for img in bgs if (gallery_dir / img).exists()]
@@ -1807,9 +1739,9 @@ def move_orphan_gallery_files() -> Dict[str, int]:
     Backup-Ordner.
 
     "Orphan" heisst: PNG/JPG/WEBP-Datei liegt in ``world_gallery/<owner>/``,
-    aber ist weder in der ``background_images``-Liste einer Location
-    (Template oder Klon) noch in ``gallery_meta.json`` (image_types /
-    image_rooms / image_metas) noch in ``prompts.json``.
+    aber ist weder in der ``background_images``-Liste einer Location noch in
+    ``gallery_meta.json`` (image_types / image_rooms / image_metas) noch in
+    ``prompts.json``.
 
     Loescht die Datei NICHT. Verschiebt sie nach
     ``world_gallery_backup/<owner>/<filename>``. Bei Konflikt mit
@@ -1833,16 +1765,13 @@ def move_orphan_gallery_files() -> Dict[str, int]:
     if not gallery_root.exists():
         return {"moved": 0, "owners_touched": 0, "backup_dir": str(backup_root)}
 
-    # Pro Owner-Dir: Set aller referenzierten Dateinamen sammeln.
-    # Klone teilen die Galerie mit ihrem Template — alle Klon-bg-Listen
-    # gelten als Referenz fuer die Template-Owner-ID.
+    # Per owner dir: collect the set of every referenced file name.
     referenced: Dict[str, set] = {}
     for loc in locations:
         loc_id = (loc.get("id") or "").strip()
         if not loc_id:
             continue
-        owner_id = (loc.get("template_location_id") or "").strip() or loc_id
-        bucket = referenced.setdefault(owner_id, set())
+        bucket = referenced.setdefault(loc_id, set())
         for img in (loc.get("background_images") or []):
             if isinstance(img, str) and img:
                 bucket.add(img)
@@ -1918,167 +1847,14 @@ def move_orphan_gallery_files() -> Dict[str, int]:
     }
 
 
-def cleanup_orphan_clones() -> Dict[str, int]:
-    """Clean up clone records:
-
-    - Clones without a position (off-map) -> delete.
-    - Clones with a non-existent template_location_id -> delete.
-    - Several clones of the same template on the exact same spot -> keep only
-      the first, delete the rest.
-
-    Idempotent. Returns a stats dict.
-    """
-    data = _load_world_data()
-    locations = data.get("locations", [])
-    existing_ids = {l.get("id") for l in locations if l.get("id")}
-
-    delete_ids: set = set()
-    seen_spots: set = set()  # (template_id, pos_x, pos_z)
-
-    # First pass: mark off-map clones and orphans
-    for loc in locations:
-        tid = (loc.get("template_location_id") or "").strip()
-        if not tid:
-            continue
-        # Orphan: the template no longer exists
-        if tid not in existing_ids:
-            delete_ids.add(loc.get("id"))
-            continue
-        # Off-map: no metre position. A clone that still carries the legacy
-        # grid keys predates the metre model (no data was migrated, by
-        # decision) — it is stale, not off-map, and boot must never delete
-        # it. Only clones born on the metre model are cleaned up here.
-        if loc.get("pos_x") is None or loc.get("pos_z") is None:
-            if "grid_x" in loc or "grid_y" in loc:
-                continue
-            delete_ids.add(loc.get("id"))
-            continue
-
-    # Second pass: duplicates per (template, position). Unplaced survivors of
-    # the first pass (legacy grid clones) share the spot key (None, None) —
-    # they are not duplicates of each other and stay out of this.
-    for loc in locations:
-        tid = (loc.get("template_location_id") or "").strip()
-        if not tid or loc.get("id") in delete_ids:
-            continue
-        if loc.get("pos_x") is None or loc.get("pos_z") is None:
-            continue
-        spot = (tid, loc.get("pos_x"), loc.get("pos_z"))
-        if spot in seen_spots:
-            delete_ids.add(loc.get("id"))
-        else:
-            seen_spots.add(spot)
-
-    if not delete_ids:
-        return {"removed": 0, "off_map": 0, "duplicates": 0,
-                "orphan_template": 0, "kept": len(locations)}
-
-    new_locations = [l for l in locations if l.get("id") not in delete_ids]
-    data["locations"] = new_locations
-    _save_world_data(data)
-
-    # Break the removals down by reason
-    off_map = duplicates = orphan = 0
-    for loc in locations:
-        if loc.get("id") not in delete_ids:
-            continue
-        tid = (loc.get("template_location_id") or "").strip()
-        if tid not in existing_ids:
-            orphan += 1
-        elif loc.get("pos_x") is None or loc.get("pos_z") is None:
-            off_map += 1
-        else:
-            duplicates += 1
-
-    logger.info("cleanup_orphan_clones: removed=%d (off_map=%d, duplicates=%d, orphan=%d)",
-                len(delete_ids), off_map, duplicates, orphan)
-    return {"removed": len(delete_ids),
-            "off_map": off_map,
-            "duplicates": duplicates,
-            "orphan_template": orphan,
-            "kept": len(new_locations)}
-
-
-def clone_location(template_id: str, pos_x: float,
-                   pos_z: float) -> Optional[Dict[str, Any]]:
-    """Create a new clone instance of a (passable) template at a metre position.
-
-    A clone stores the bare minimum: id, template_location_id, pos_x, pos_z
-    plus its own ``variant_seed``. Every other field is merged in from the
-    template at read time.
-    Returns the resolved dict of the clone, or None when there is no such
-    template. Raises ValueError on a non-numeric/non-finite position — a
-    clone dropped at NaN would poison every later worldmap response.
-    """
-    if not template_id:
-        return None
-    # Guard: clones without a valid position never reach the DB.
-    px = round(_finite_number(pos_x, "pos_x"), 2)
-    pz = round(_finite_number(pos_z, "pos_z"), 2)
-    data = _load_world_data()
-    template = None
-    for loc in data.get("locations", []):
-        if loc.get("id") == template_id:
-            template = loc
-            break
-    if not template:
-        return None
-    # Avoid duplicate clones of the same template at the very same spot — the
-    # first clone wins, a second drop on the identical position is discarded.
-    for loc in data.get("locations", []):
-        if (loc.get("template_location_id") or "") == template_id \
-                and loc.get("pos_x") == px and loc.get("pos_z") == pz:
-            logger.info("clone_location: existing clone at (%.2f,%.2f) for "
-                        "template %s, no new entry", px, pz, template_id)
-            return loc
-    new_id = _generate_location_id()
-    clone = {
-        "id": new_id,
-        "template_location_id": template_id,
-        "pos_x": px,
-        "pos_z": pz,
-        "rooms": [],
-        # The one number this copy owns. Every seed it inherits from the
-        # template (prop scattering, ground relief) is mixed with it, so two
-        # copies of one template stop looking identical. Drawn once, here:
-        # it is stored, never re-drawn, so the copy keeps its look. Never 0 —
-        # that value is reserved for "no variant", which is what every
-        # location predating this carries.
-        "variant_seed": _random.randint(1, 0xFFFFFFFF),
-    }
-    data["locations"].append(clone)
-    _save_world_data(data)
-    # Return it resolved — the frontend gets the merge-ready instance.
-    for loc in _resolve_clones(data["locations"]):
-        if loc.get("id") == new_id:
-            return loc
-    return clone
-
-
 def delete_location(identifier: str) -> bool:
-    """Loescht einen Ort per ID oder Name. Wenn ein Template geloescht wird,
-    werden alle Klone (Locations mit template_location_id == template_id)
-    kaskadierend mitentfernt.
-    """
+    """Delete a location by id or name. True when something was removed."""
     data = _load_world_data()
     locations = data.get("locations", [])
-    # Ziel-IDs ermitteln: das Original und ggf. abhaengige Klone
-    target_ids = set()
-    for loc in locations:
-        if loc.get("id") == identifier or loc.get("name") == identifier:
-            target_ids.add(loc.get("id"))
+    target_ids = {loc.get("id") for loc in locations
+                  if loc.get("id") == identifier or loc.get("name") == identifier}
     if not target_ids:
         return False
-    # Cascade: alle Klone deren template in target_ids ist
-    cascade = True
-    while cascade:
-        cascade = False
-        for loc in locations:
-            tid = (loc.get("template_location_id") or "").strip()
-            lid = loc.get("id")
-            if tid and tid in target_ids and lid and lid not in target_ids:
-                target_ids.add(lid)
-                cascade = True
 
     new_locations = [loc for loc in locations if loc.get("id") not in target_ids]
     if len(new_locations) < len(locations):
@@ -2086,6 +1862,71 @@ def delete_location(identifier: str) -> bool:
         _save_world_data(data)
         return True
     return False
+
+
+_TRANSIT_KEYS = ("passable", "template_location_id", "variant_seed")
+
+
+def _log_characters_at(location_ids: Set[str]) -> None:
+    """Name every character whose ``current_location`` points at a deleted id.
+
+    The migration removes places; a character standing there would silently
+    hang in nowhere. It is not moved automatically — where it belongs is an
+    authoring decision — but it is named, so an admin can place it anew.
+    """
+    try:
+        from app.models.character import (get_character_profile,
+                                          list_available_characters)
+        for name in list_available_characters(include_pooled=True) or []:
+            try:
+                lid = (get_character_profile(name) or {}).get("current_location")
+            except Exception:
+                continue
+            if lid and lid in location_ids:
+                logger.warning("character %s stood at deleted transit place %s",
+                               name, lid)
+    except Exception as e:  # never let hygiene break the boot
+        logger.debug("transit-place character report failed: %s", e)
+
+
+def migrate_transit_places_once() -> Dict[str, int]:
+    """Delete transit places and template copies (plan-rueckbau-2d-karte.md E5).
+
+    A record flagged ``passable`` or carrying ``template_location_id`` is
+    deleted together with its gallery directory; ``variant_seed`` (the copy's
+    only own number) is stripped from every survivor. Idempotent by content,
+    runs at every boot. Characters whose ``current_location`` pointed at a
+    deleted id are logged by name — an admin places them anew.
+    """
+    import shutil
+    data = _load_world_data()
+    locations = data.get("locations", [])
+    victims = [l for l in locations
+               if bool(l.get("passable")) or (l.get("template_location_id") or "").strip()]
+    victim_ids = {l.get("id") for l in victims if l.get("id")}
+    deleted_galleries = 0
+    for vid in victim_ids:
+        gdir = get_storage_dir() / "world_gallery" / vid
+        if gdir.is_dir():
+            shutil.rmtree(gdir)
+            deleted_galleries += 1
+    survivors = [l for l in locations if l.get("id") not in victim_ids]
+    fields_stripped = 0
+    for l in survivors:
+        for k in _TRANSIT_KEYS:
+            if k in l:
+                l.pop(k)
+                fields_stripped += 1
+    if victims or fields_stripped:
+        data["locations"] = survivors
+        _save_world_data(data)
+        if victim_ids:
+            _log_characters_at(victim_ids)
+        logger.info("transit places removed: %d locations, %d galleries, %d fields",
+                    len(victims), deleted_galleries, fields_stripped)
+    return {"deleted_locations": len(victims),
+            "deleted_galleries": deleted_galleries,
+            "fields_stripped": fields_stripped}
 
 
 # === Hintergrundbilder ===
@@ -2128,9 +1969,7 @@ def get_background_path(location_identifier: str, room: str = "",
     if not bg_images and loc.get("background_image"):
         bg_images = [loc["background_image"]]
 
-    # Clones share the template's image material — lookups run over the owner
-    # ID (the template ID for clones, the own ID otherwise).
-    owner_id = _gallery_owner_id(location_identifier) or loc_id
+    owner_id = _location_id_of(location_identifier) or loc_id
     gallery_base = get_storage_dir() / "world_gallery" / owner_id
 
     # Only consider images that exist on disk
@@ -2223,7 +2062,7 @@ def get_background_file_path(location_identifier: str, file: str) -> Optional[Pa
     match = next((img for img in bg_images if Path(img).name == file or img == file), None)
     if not match:
         return None
-    owner_id = _gallery_owner_id(location_identifier) or loc_id
+    owner_id = _location_id_of(location_identifier) or loc_id
     p = get_storage_dir() / "world_gallery" / owner_id / match
     return p if p.exists() else None
 
@@ -2279,33 +2118,23 @@ def remove_background_image(location_id: str, image_name: str) -> None:
                 _save_world_data(data)
 
 
-def _gallery_owner_id(location_identifier: str) -> str:
-    """Liefert die ID, unter der die Galerie-Bilder eines Ortes liegen.
+def _location_id_of(location_identifier: str) -> str:
+    """The id of the location addressed by id, name or substring, or "".
 
-    Fuer Klone (template_location_id gesetzt) gibt sie die Template-ID
-    zurueck — Klone teilen sich das Bildmaterial mit ihrem Template.
-    Fuer eigenstaendige Locations die eigene ID. Wird von Galerie- und
-    Hintergrund-Lookups genutzt.
+    The gallery and background lookups take an identifier the caller happens
+    to hold; this is the one place that turns it into the id their file paths
+    are keyed by.
     """
     loc = resolve_location(location_identifier)
-    if not loc:
-        return ""
-    tmpl_id = (loc.get("template_location_id") or "").strip()
-    if tmpl_id:
-        return tmpl_id
-    return loc.get("id", "") or ""
+    return (loc or {}).get("id", "") or ""
 
 
 def get_gallery_dir(location_identifier: str) -> Path:
-    """Gibt den Pfad zum Galerie-Verzeichnis eines Ortes zurueck.
-
-    Akzeptiert ID oder Name. Verwendet die Location-ID fuer den Dateipfad
-    — Klone werden auf ihre Template-ID umgeleitet, damit alle Klone das
-    gleiche Bildmaterial sehen.
-    """
-    owner_id = _gallery_owner_id(location_identifier)
-    if owner_id:
-        dir_name = owner_id
+    """The gallery directory of a location. Accepts id or name; the directory
+    is named by the location id."""
+    loc_id = _location_id_of(location_identifier)
+    if loc_id:
+        dir_name = loc_id
     else:
         dir_name = re.sub(r'[^\w\-]', '_', location_identifier)
     return get_storage_dir() / "world_gallery" / dir_name
@@ -2630,7 +2459,7 @@ def move_gallery_image(src_location: str, target_location: str, image_name: str)
     remove_background_image(src_id, image_name)
     remove_gallery_image_room(src_id, image_name)
 
-    # Geteilte Galerie (Klone desselben Templates) -> Datei bleibt, nichts zu tun.
+    # Source and target are the same directory -> the file stays put.
     if src_dir.resolve() == target_dir.resolve():
         return image_name
 

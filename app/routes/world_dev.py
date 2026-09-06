@@ -907,7 +907,7 @@ async def world_dev_chat(request: Request):
                 if loc:
                     # Strip fields not relevant for editing
                     edit_data = {k: v for k, v in loc.items()
-                                 if k not in ("id", "background_images", "grid_x", "grid_y")}
+                                 if k not in ("id", "background_images")}
                     edit_context = (
                         "\n\n## Aktuell zu bearbeitender Ort\n\n"
                         "Der Benutzer moechte folgenden bestehenden Ort bearbeiten. "

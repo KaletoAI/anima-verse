@@ -17,7 +17,12 @@ Part 1 — which location gets the room (ground_room_action):
     no rooms at all          -> "add"      the ground exists in every location
     rooms of its own         -> "add"      same rule, the ground is extra
     already has the id       -> "present"  report, never overwrite
-    a clone (rooms: [])      -> "skip"     it inherits the template's rooms
+
+  There is no third answer any more: template copies fell with the 2D map
+  (2026-09-06, plan-rueckbau-2d-karte.md E5), so no location inherits its
+  rooms from another one and the former "skip" has nobody left to describe.
+  A record with `rooms: []` is an ORDINARY roomless location and therefore
+  the very first case, "add".
 
   "already has the id" is one case, not two: nothing tells this migration
   apart an id it wrote itself on an earlier run from one an author assigned
@@ -135,10 +140,12 @@ def main():
           ground_room_action(occupied) == "present",
           ground_room_action(occupied))
 
-    clone = {"id": "loc5", "template_location_id": "loc2", "rooms": []}
-    check("a clone skips it — it inherits the template's rooms",
-          ground_room_action(clone) == "skip",
-          ground_room_action(clone))
+    # No inheritance exists any more: a roomless record is a roomless
+    # LOCATION and gets its own ground, whatever else it carries.
+    bare = {"id": "loc5", "name": "Bare", "rooms": []}
+    check("a roomless record gets its own ground, it inherits nothing",
+          ground_room_action(bare) == "add",
+          ground_room_action(bare))
 
     # Idempotency: apply the decision to the result of a first run.
     migrated = {"id": "loc1", "name": "Clearing",

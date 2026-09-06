@@ -180,16 +180,13 @@ class GoToCharacterSkill(PluginSkill):
         """(ids, display names) of the places the actor may travel to.
 
         Same source as the 'Places you can go' prompt block
-        (``known_locations_section``): visibility-filtered, transit tiles
-        dropped, so the refusal never lists a place the character could not
-        walk to anyway.
+        (``known_locations_section``): visibility-filtered, so the refusal
+        never lists a place the character could not walk to anyway.
         """
         ids: List[str] = []
         names: List[str] = []
         try:
             for loc in list_locations_for_character(character_name) or []:
-                if loc.get("passable"):
-                    continue
                 lid = (loc.get("id") or "").strip()
                 if not lid:
                     continue

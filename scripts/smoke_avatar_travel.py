@@ -92,8 +92,10 @@ Hand-derived expectations:
       none — the player UI's poll channel.
 
   [8] The destination list's data source: ``GET /play/worldmap`` (fogged)
-      carries every location entry's ``passable`` flag, so the panel can
-      drop transit tiles the way the LLM's target list does.
+      carries the KNOWN locations and nothing else. No row carries a
+      ``passable`` flag any more — transit places fell with the 2D map
+      (2026-09-06, plan-rueckbau-2d-karte.md E4/E5), so every place on the
+      map is a destination and the panel has nothing left to filter by.
 
   [9] The compass deletion test (see above).
 
@@ -424,10 +426,8 @@ def main() -> int:
     check_true("the known target is on the map", MARKET in entries)
     check_true("the UNKNOWN location is not", SECRET not in entries,
                sorted(entries))
-    check("every entry carries a passable flag",
-          sorted({("passable" in e) for e in wm.get("locations", [])}), [True])
-    check("a normal location is no transit tile",
-          entries.get(MARKET, {}).get("passable"), False)
+    check("no entry carries a passable flag any more",
+          [e["id"] for e in wm.get("locations", []) if "passable" in e], [])
 
     print("\n[9] the grid compass is gone without replacement")
     grep = subprocess.run(

@@ -74,8 +74,6 @@ def known_locations_section(character_name: str) -> str:
     """Visibility-filtered location list the character can travel to.
 
     Uses ``list_locations_for_character`` (respects knowledge-item gating).
-    Filters out passable tiles (transit cells) — the LLM never picks them
-    as travel targets, but the pathfinder traverses them when known.
     Marks the current location with a chevron so the LLM doesn't propose
     "moving" there. Cap at 12 locations to keep the prompt slim.
     """
@@ -88,8 +86,6 @@ def known_locations_section(character_name: str) -> str:
         lines: List[str] = []
         count = 0
         for loc in locs:
-            if loc.get("passable"):
-                continue
             if count >= 12:
                 break
             lid = (loc.get("id") or "").strip()

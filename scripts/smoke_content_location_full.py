@@ -101,19 +101,19 @@ already owns the prop:
       installed under that name, and the placement referencing it lands in
       props_missing.
 
- [10] A CLONE export (db/location.json carrying template_location_id, which
-      an export writes verbatim) becomes a STANDALONE copy. The marker is
-      dropped, so:
+ [10] A SECOND import of the very same ZIP becomes an INDEPENDENT copy, not
+      a second view of the first one. Templates and their copies are gone
+      (2026-09-06, plan-rueckbau-2d-karte.md E5), so "standalone" is the only
+      shape an import can have and this is what carries it:
+        location_id != loc_id            a fresh id, so the copy does not
+                                         overwrite the location it came from
         _owner_id(new_id) == new_id      the model3d files written under the
-                                         new id are the ones actually served;
-                                         with the marker they would be looked
-                                         up under the SOURCE world's template
-        cleanup_orphan_clones() keeps it — a clone without a position counts
-                                         as off-map and is deleted, and this
-                                         import is unplaced by design
-      The template id used here is the seeded location, so it really exists
-      in this storage — that is the case where _resolve_clones would merge a
-      foreign template over the fresh rooms.
+                                         new id are the ones actually served
+        room ids remapped                the copy's rooms are its own; only
+                                         the reserved ground id maps to itself
+      Derived by hand from ``content_io.import_location_from_zip``: it draws
+      a fresh uuid for the location and one per room, maps the ground id to
+      itself and writes every model file under the new ids.
 
  [11] The RESPONSE SHAPE the UI reads. POST /api/content/import answers
       {status, result: <importer dict>} — props_missing sits under `result`,
@@ -489,31 +489,18 @@ check("verworfene Platzierung wird gemeldet",
 check("kein Verzeichnis unter dem rohen Namen angelegt",
       (STORAGE / "props" / bad_pid).exists(), False)
 
-print("\n[10] Klon-Export wird zu einer eigenstaendigen Kopie")
-csrc = zipfile.ZipFile(io.BytesIO(blob))
-clone_loc = json.loads(csrc.read("db/location.json"))
-clone_loc["template_location_id"] = loc_id       # Template existiert hier wirklich
-clone_buf = io.BytesIO()
-with zipfile.ZipFile(clone_buf, "w", zipfile.ZIP_DEFLATED) as out:
-    for m in csrc.namelist():
-        out.writestr(m, json.dumps(clone_loc, ensure_ascii=False)
-                     if m == "db/location.json" else csrc.read(m))
-csrc.close()
-res6 = import_location_from_zip(clone_buf.getvalue())
+print("\n[10] a second import is an independent copy")
+res6 = import_location_from_zip(blob)
 cid = res6["location_id"]
 loc6 = get_location_by_id(cid)
-check("Klon-Marker ist weg", "template_location_id" in loc6, False)
-check("Modelle werden unter der NEUEN id gesucht", _owner_id(cid), cid)
+check("the copy owns a fresh location id", cid != loc_id, True)
+check("models are looked up under the NEW id", _owner_id(cid), cid)
 c_r1 = loc6["rooms"][0]["id"]
-check("Raum-Remap ueberlebt", c_r1 not in (room1_id, ""), True)
-check("Raum-Modell liegt unter der neuen Raum-id",
+check("room ids are remapped", c_r1 not in (room1_id, ""), True)
+check("the room model sits under the new room id",
       read_bytes(_model_dir(_owner_id(cid)) / f"room_{c_r1}_1.glb"), b"GLB-room")
-check("Ground-Room auch hier reserviert",
+check("the ground room is reserved here too",
       any(r.get("id") == GROUND_ROOM_ID for r in loc6["rooms"]), True)
-from app.models.world import cleanup_orphan_clones  # noqa: E402
-cleanup_orphan_clones()
-check("Klon-Aufraeumer loescht den Import NICHT",
-      (get_location_by_id(cid) or {}).get("id"), cid)
 
 print("\n[11] Antwort-Shape von POST /api/content/import")
 check("prop fuer den Shape-Test geloescht", delete_prop(prop_id), True)

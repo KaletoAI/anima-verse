@@ -620,7 +620,6 @@ def build_memory_locations(character_name: str) -> Dict[str, Any]:
             "name": loc.get("name", ""),
             "pos_x": loc.get("pos_x"),
             "pos_z": loc.get("pos_z"),
-            "passable": bool(loc.get("passable")),
             "danger_level": loc.get("danger_level"),
             "is_known": is_known,
             "is_current": (lid == current_id),

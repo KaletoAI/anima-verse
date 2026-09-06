@@ -344,9 +344,10 @@ Hand-derived expectations:
           (0.4,  built)      -> 1.0     (2.0, built)      -> 1.0  <- round 2
 
       What makes a location OPEN is `world_geometry.is_area_location`: the
-      AUTHORED `passable` or `map3d.area_model`, never a style/name guess —
-      a location with `map3d.style: "water"` and `terrain: "lake"` is a
-      building (red probe).
+      ONE authored flag `map3d.area_model`, never a style/name guess — a
+      location with `map3d.style: "water"` and `terrain: "lake"` is a
+      building (red probe), and so is one carrying the dead grid-era
+      `passable` key (the transit flag fell with the 2D map, 2026-09-06).
 
       a) A VILLAGE ON A LAKE. Area location at (900,0), plan_width_m 20 ->
          footprint x [890,910], z [-10,10], with WATER painted
@@ -1220,12 +1221,13 @@ check("a fast 2.0 keeps its pace in an open place",
       terrain_query.effective_speed_factor(2.0, "open"), 2.0)
 check("...and loses it under a roof",
       terrain_query.effective_speed_factor(2.0, "built"), 1.0)
-# What makes a location OPEN: two authored flags, never a style guess.
+# What makes a location OPEN: ONE authored flag, never a style guess.
 check("a plain location is not an area", is_area_location({"name": "Hall"}),
       False)
-check("a transit location is", is_area_location({"passable": True}), True)
-check("...and so is one whose model IS the ground",
+check("only one whose model IS the ground is",
       is_area_location({"map3d": {"area_model": True}}), True)
+check("RED: the dead transit flag decides nothing any more",
+      is_area_location({"passable": True}), False)
 check("RED: a lake-STYLE building is still a building",
       is_area_location({"map3d": {"style": "water"}, "terrain": "lake"}), False)
 

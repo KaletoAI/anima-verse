@@ -53,7 +53,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from app.core.log import get_logger
 from app.core.scatter_curves import scatter as _scatter_props
 from app.core.scatter_curves import tessellate
-from app.core.scatter_curves import variant_mix
 
 logger = get_logger(__name__)
 
@@ -919,8 +918,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
 def _scatter_into(placements: List[Dict[str, Any]],
                   scatter_sources: List[Dict[str, Any]],
                   keep_in: List[List[float]],
-                  keepouts: List[List[List[float]]],
-                  variant_seed: int) -> None:
+                  keepouts: List[List[List[float]]]) -> None:
     """Append the scattered copies of every scattering placement, in place.
 
     Prop scatter (plan-area-detail-scenes.md, 2026-08-02 redesign) is a
@@ -945,8 +943,7 @@ def _scatter_into(placements: List[Dict[str, Any]],
         pid = str(source.get("prop_id") or "")
         try:
             count = int(source.get("scatter_count") or 0)
-            seed = variant_mix(int(source.get("scatter_seed") or 0),
-                               variant_seed)
+            seed = int(source.get("scatter_seed") or 0)
         except (TypeError, ValueError):
             continue
         try:
@@ -1006,8 +1003,7 @@ def boundary_points(map3d: Any) -> List[List[float]]:
 
 
 def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
-                          map3d: Any = None, variant_seed: int = 0,
-                          ) -> Optional[Dict[str, Any]]:
+                          map3d: Any = None) -> Optional[Dict[str, Any]]:
     """The REDUCED recipe of the ground room (§ A13a), or None when the yard
     carries nothing.
 
@@ -1061,8 +1057,7 @@ def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
             if isinstance(mat, (list, tuple)) and len(mat) == 2:
                 keepouts.append(_square(float(mat[0]), float(mat[1]),
                                         SCATTER_POINT_CLEAR_M))
-        _scatter_into(placements, scatter_sources, boundary, keepouts,
-                      variant_seed)
+        _scatter_into(placements, scatter_sources, boundary, keepouts)
 
     payload: Dict[str, Any] = {
         "room_id": room.get("id") or "",
@@ -1082,23 +1077,19 @@ def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
 
 def compose_recipe(room: Dict[str, Any],
                    siblings: Any = (),
-                   variant_seed: int = 0,
                    map3d: Any = None) -> Optional[Dict[str, Any]]:
     """The full recipe of ONE room, or None when it has no layout.
 
     ``siblings`` are the OTHER rooms of the same location; those on the same
     level contribute their openings on shared walls (see
     ``_mirrored_openings``).
-    ``variant_seed`` is the one number a copy placed on the map owns; it is
-    mixed into every stored scatter seed so two copies of one template stop
-    looking identical. 0 means "not a copy" and leaves every seed untouched.
     ``map3d`` is the location's map data; the GROUND room needs it, because
     its frame and its scatter area are the drawn boundary (§ A13a). Every
     other room ignores it.
     """
     from app.models.world import GROUND_ROOM_ID
     if str(room.get("id") or "") == GROUND_ROOM_ID:
-        return compose_ground_recipe(room, siblings, map3d, variant_seed)
+        return compose_ground_recipe(room, siblings, map3d)
     lay = room.get("layout")
     rect = _layout_rect(lay)
     if not rect:
@@ -1176,8 +1167,7 @@ def compose_recipe(room: Dict[str, Any],
             if isinstance(mat, (list, tuple)) and len(mat) == 2:
                 mx, my = place(float(mat[0]), float(mat[1]))
                 keepouts.append(_square(mx, my, SCATTER_POINT_CLEAR_M))
-        _scatter_into(placements, scatter_sources, outline, keepouts,
-                      variant_seed)
+        _scatter_into(placements, scatter_sources, outline, keepouts)
 
     payload: Dict[str, Any] = {
         "room_id": room.get("id") or "",

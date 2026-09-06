@@ -208,13 +208,12 @@ def _room_union_points(location: Dict[str, Any]) -> List[Vec2]:
     from app.core.room_recipe import compose_recipe
     rooms = [r for r in (location.get("rooms") or []) if isinstance(r, dict)]
     map3d = location.get("map3d") or {}
-    seed = int(_num(location.get("variant_seed")))
     pts: List[Vec2] = []
     for room in rooms:
         if not room.get("layout"):
             continue
         recipe = compose_recipe(room, [r for r in rooms if r is not room],
-                                variant_seed=seed, map3d=map3d)
+                                map3d=map3d)
         if not recipe:
             continue
         for p in recipe.get("outline") or []:

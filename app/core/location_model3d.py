@@ -89,9 +89,9 @@ def _stem(room_id: str = "") -> str:
 
 
 def _owner_id(location_id: str) -> str:
-    """The gallery owner id (clones redirect to their template) — the store key."""
-    from app.models.world import _gallery_owner_id
-    return _gallery_owner_id(location_id) or ""
+    """The resolved location id — the store key of the model directory."""
+    from app.models.world import _location_id_of
+    return _location_id_of(location_id) or ""
 
 
 def _model_dir(owner_id: str, *, create: bool = False) -> Path:
