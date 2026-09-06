@@ -49,16 +49,22 @@ INBOX_EXTS = (".fbx",)
 #: Printable ASCII runs of at least three characters — an FBX node name.
 _TOKEN_RE = re.compile(rb"[\x20-\x7e]{3,}")
 
-#: How much of a file is scanned for node names BEFORE the cheap answer is
-#: given up on. In an animation export the skeleton stands long before the
-#: curves, so this cap classifies almost every file for the price of its first
-#: chunk. A SKINNED character export is the exception — its mesh comes first
-#: and the armature can sit past any cap — so a file the capped scan cannot
-#: classify is read to the end rather than declared unknown (2026-09-05). That
-#: is not cosmetic: `import_fbx` compares the rig family of the reference pose
-#: against the clip's ONLY when it knows one, so a silently unclassified rest
-#: file walks straight through the guard that exists to stop a foreign
-#: reference pose.
+#: How much of a file is read AT A TIME while it is scanned for node names. In
+#: an animation export the skeleton stands long before the curves, so the FIRST
+#: chunk classifies almost every file and the scan stops there. A SKINNED
+#: character export is the exception — its mesh comes first and its armature
+#: can sit past any cap — so a file the first chunk cannot classify is read on,
+#: chunk by chunk, rather than declared unknown (2026-09-05). That is not
+#: cosmetic: `import_fbx` refuses a reference pose whose rig family it does not
+#: know, and a skinned T-pose export is exactly the file an admin reaches for.
+#:
+#: Reading in chunks is what keeps the price of that: an inbox file has no size
+#: cap (a 300 MB export is normal), and the scan never holds more than a
+#: handful of these chunks (the one just read plus the copy that carries the
+#: overlap into it) and the bounded name set of :func:`_tokens` — the peak does
+#: not grow with the file. Measured at a 64 KiB window in
+#: ``scripts/smoke_fbx_import.py``: 262 KiB for a 2 MiB file, against 21 MiB
+#: for the same file read in one remainder.
 MAX_PROBE_BYTES = 32 * 1024 * 1024
 
 #: A file whose name says "this is a pose, not a movement" — the reference
@@ -173,10 +179,39 @@ def is_rest_name(name: str) -> bool:
 _TOKEN_OVERLAP = 256
 
 
+#: Every node name any table asks about — a signature name, a mapped bone or a
+#: finger root. Nothing else can change an answer, so nothing else is kept.
+_KNOWN_NAMES = frozenset(
+    name
+    for table in (SIGNATURES, BONE_NAMES, FINGER_NAMES)
+    for names in table.values()
+    for name in names)
+
+#: Every fragment that DISQUALIFIES a family, flattened. A token carrying one
+#: is remembered as the bare fragment: :func:`_match_family` looks for the
+#: fragment INSIDE a token, and a fragment is inside itself.
+_KNOWN_FRAGMENTS: Tuple[str, ...] = tuple(sorted(
+    {frag for frags in EXCLUDE_FRAGMENTS.values() for frag in frags}))
+
+
 def _tokens(data: bytes) -> set:
-    """The printable ASCII runs of a byte block — an FBX keeps its node names
-    in the clear, so these are the candidate rig names."""
-    return {m.group().decode("ascii", "ignore") for m in _TOKEN_RE.finditer(data)}
+    """The printable ASCII runs of a byte block that CAN matter — an FBX keeps
+    its node names in the clear, so these are the candidate rig names.
+
+    Everything no table mentions is dropped on the spot. That is what makes a
+    chunked scan bounded: what survives a block is at most one entry per known
+    name, never one per printable run in the file (a 300 MB binary carries
+    millions of those, and the set alone would dwarf the file).
+    """
+    out = set()
+    for m in _TOKEN_RE.finditer(data):
+        token = m.group().decode("ascii", "ignore")
+        if token in _KNOWN_NAMES:
+            out.add(token)
+        for frag in _KNOWN_FRAGMENTS:
+            if frag in token:
+                out.add(frag)
+    return out
 
 
 def _match_family(tokens: set) -> str:
@@ -198,28 +233,36 @@ def probe_fbx(path: Path) -> Dict[str, Any]:
 
     ``skeleton_family`` is ``""`` when no signature matches: an unknown rig,
     which the importer refuses (the retargeter has no bone map for it).
+
+    The file is walked in ``MAX_PROBE_BYTES`` chunks and the walk STOPS at the
+    chunk that identifies the family — an animation export is answered by its
+    first chunk, a skinned character export (mesh first, armature last) is
+    followed to wherever its armature sits, and neither costs more memory than
+    the other. ``bone_count`` therefore counts the mapped names seen UP TO that
+    chunk; the names of one armature are written as one block, so in practice
+    that is all of them.
     """
     path = Path(path)
     out: Dict[str, Any] = {"skeleton_family": "", "bone_count": 0,
                            "has_fingers": False,
                            "is_rest_candidate": is_rest_name(path.name)}
+    tokens: set = set()
+    family = ""
     try:
         with path.open("rb") as fh:
-            data = fh.read(MAX_PROBE_BYTES)
-            tokens = _tokens(data)
-            family = _match_family(tokens)
-            if not family:
-                # The cheap scan found no rig. Before calling the file
-                # unknown, read what is left: a skinned character export
-                # writes its mesh first and its armature last, and that file
-                # is exactly what an admin reaches for as the reference pose.
-                rest = fh.read()
-                if rest:
-                    # A node name can straddle the boundary; the tail of the
-                    # first chunk is re-scanned with the head of the second so
-                    # the split cannot swallow one.
-                    tokens |= _tokens(data[-_TOKEN_OVERLAP:] + rest)
-                    family = _match_family(tokens)
+            carry = b""
+            while True:
+                chunk = fh.read(MAX_PROBE_BYTES)
+                if not chunk:
+                    break
+                # A node name can straddle the read boundary; the tail of the
+                # previous chunk is re-scanned with this one so the split
+                # cannot swallow one.
+                tokens |= _tokens(carry + chunk if carry else chunk)
+                family = _match_family(tokens)
+                if family:
+                    break
+                carry = chunk[-_TOKEN_OVERLAP:]
     except OSError as e:
         out["error"] = str(e)
         return out
@@ -496,7 +539,17 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
         # a constant offset of up to -174 deg into every frame of the affected
         # clips.
         rest_family = _cached_probe(rest_path).get("skeleton_family")
-        if rest_family and src_family and rest_family != src_family:
+        if not rest_family:
+            # Fail CLOSED, exactly as an unclassifiable clip file does above: a
+            # rest file the probe cannot place would otherwise slip past the
+            # comparison below, and `bone_map: "auto"` would then have to place
+            # it inside Blender — a late, ugly failure at best, and a silent
+            # retarget against the wrong family at worst.
+            raise ClipImportError(
+                f"{rest_file}: unknown rig — the reference pose's rig family "
+                f"could not be identified from its node names "
+                f"(known: {', '.join(sorted(SIGNATURES))})")
+        if rest_family != src_family:
             raise ClipImportError(
                 f"{rest_file} carries a {rest_family} rig, but the clip is "
                 f"{src_family} — a reference pose has to come from the SAME "

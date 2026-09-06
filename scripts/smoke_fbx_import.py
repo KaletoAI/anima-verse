@@ -42,9 +42,30 @@ signature names of a family IS that family:
   one chunk; a SKINNED character export writes its mesh first and its
   armature last. A file the capped scan cannot place is therefore read to the
   end instead of being called unknown — and that matters beyond tidiness,
-  because ``import_fbx`` only compares the reference pose's rig family
-  against the clip's WHEN IT KNOWS ONE (RULE 6). An unclassified rest file
-  walks straight through that guard.
+  because that file is exactly the one an admin reaches for as a reference
+  pose, and a reference pose whose family is unknown is REFUSED (RULE 6).
+
+  RULE 1e — and it is read in CHUNKS, because an inbox file has no size cap.
+  ``MAX_PROBE_BYTES`` is the size of one chunk, not a window followed by a
+  single read of the remainder: the scan keeps only the node names some table
+  actually asks about, carries a 256-byte overlap into the next chunk, and
+  stops at the chunk that identifies the family. Its peak is therefore a
+  function of the CHUNK, not of the file. Counting every chunk-sized buffer
+  that can be alive at once — the chunk just read, the buffer it was read
+  through, the previous chunk (still referenced until that read returns) and
+  the copy that prepends the overlap:
+
+      peak <= 4 x MAX_PROBE_BYTES + the known-name set (~130 short strings)
+
+  With the 64 KiB window this check installs, that is at most 4 x 65,536 plus
+  a few KB of names — a quarter of a megabyte, whatever the file weighs. The
+  fixture below is a 2 MiB file (32 chunks) whose padding is one DISTINCT
+  printable token per 16 bytes, so 131,072 of them: reading the remainder in
+  one piece would cost 2 x ~2 MiB for the bytes alone, and remembering every
+  printable run of the file another ~11 MB for the set. The bound asserted is
+  512 KiB — a quarter of the file, twice the derived need, and an order of
+  magnitude below either of those. It is a bound on the chunk: it must not
+  move when the file grows.
 
 RULE 2 — "a pair is two files whose NAMES say so". Female_/Male_, _A/_B,
 __a/__b, _L/_R — and only when the partner really lies in the inbox:
@@ -68,6 +89,12 @@ up to -174 deg on the forearm when the picker offered the Unity `Tpose.fbx`
 for the Mixamo-named MOB1 packs. Same for the two halves of a pair. The probe
 already knows both families, so both are refused with 422, and the Poses tab
 only offers files of the picked file's own family.
+
+  The guard fails CLOSED: a rest file whose family the probe cannot name is
+  refused too, exactly like an unclassifiable CLIP file, and BEFORE Blender is
+  started. Letting it through would leave the family to ``bone_map: "auto"``
+  inside Blender — a late error at best, and at worst a silent retarget
+  against the wrong family where the byte probe and Blender disagree.
 
 RULE 5 — "a converted clip is CONTINUOUS". The positional retargeter rebuilds
 a bone's roll from an anatomical secondary axis, and the limbs have TWO
@@ -108,12 +135,14 @@ Usage:
 """
 import argparse
 import asyncio
+import gc
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import tracemalloc
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -287,6 +316,50 @@ def fake_fbx(names, extra: bytes = b"") -> bytes:
     return body + extra
 
 
+#: RULE 1e — the chunked-scan fixture. The probe window is shrunk to
+#: ``BIG_CHUNK`` for the check, so a file of ``BIG_SIZE`` is 32 windows wide;
+#: the rig signature sits in the MIDDLE of it, on the boundary of chunk
+#: ``BIG_BOUNDARY``, with one signature name cut in half by it.
+BIG_CHUNK = 64 * 1024
+BIG_SIZE = 2 * 1024 * 1024
+BIG_BOUNDARY = 16
+#: The memory bound derived in RULE 1e: at most four chunk-sized buffers plus
+#: the known-name set, so 4 x 64 KiB and a little — twice that is a quarter of
+#: the file, and far below the ~4 MiB of bytes (plus ~11 MB of token set) that
+#: reading the remainder in one piece would take.
+BIG_PEAK_LIMIT = BIG_SIZE // 4
+
+
+def _pad(n: int, seed: int) -> bytes:
+    """Exactly ``n`` bytes of padding, one DISTINCT printable token per 16
+    bytes: a scan that remembered every printable run of a file instead of the
+    node names it knows would be caught doing it here."""
+    buf = bytearray()
+    i = seed
+    while len(buf) < n:
+        buf += b"N%014d\x00" % i
+        i += 1
+    del buf[n:]
+    if buf:
+        buf[-1] = 0            # the padding never merges into what follows
+    return bytes(buf)
+
+
+def write_big_fixture(path: Path) -> tuple:
+    """Writes the RULE 1e fixture and reports ``(boundary, 7 bytes around
+    it)`` so the check can see that the signature name really is cut."""
+    body = fake_fbx(MESHY_NAMES)
+    cut = body.index(b"Spine02") + 3          # 3 bytes of the name, then the cut
+    boundary = BIG_BOUNDARY * BIG_CHUNK
+    head = _pad(boundary - cut, 0)
+    tail = _pad(BIG_SIZE - len(head) - len(body), 10 ** 6)
+    path.write_bytes(head + body + tail)
+    with path.open("rb") as fh:
+        fh.seek(boundary - 3)
+        straddle = fh.read(7)
+    return boundary, straddle
+
+
 def build_inbox() -> None:
     """Six Unity files: a pair (Female_/Male_), an _A/_B pair, a lone Female_
     file, an unknown rig and a reference pose — plus two files of the OTHER
@@ -303,12 +376,18 @@ def build_inbox() -> None:
     (LICENSED / "idle.fbx").write_bytes(b"library-idle")
 
 
+#: One entry per stand-in Blender run — the kind it was given. A refusal that
+#: is supposed to happen BEFORE the converter starts is checked against this.
+RUNS: list = []
+
+
 def fake_run(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
     """Stands in for the Blender retargeter: writes the files the real script
     writes (``<kind>.fbx`` or the two halves, plus ``<kind>.json``) and reports
     the same result shape. The sidecar echoes what it was handed, so the
     checks can see WHAT reached the converter."""
     kind = (params or {}).get("kind", "x")
+    RUNS.append(kind)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     pair = "src_b" in (inputs or {})
@@ -452,6 +531,40 @@ def test_families() -> None:
     finally:
         fbx_import.MAX_PROBE_BYTES = real_cap
         fbx_import._probe_cache.pop(str(pad_stem), None)
+
+    # RULE 1e — the same mechanism on a file that is REALLY bigger than the
+    # window (32 of them), with the signature in the middle and one of its
+    # names cut by a chunk boundary. What is measured besides the answer is
+    # the memory: the scan must not grow with the file.
+    big_file = FIXT / "big_unknown_head.fbx"
+    boundary, straddle = write_big_fixture(big_file)
+    check("the fixture is bigger than the probe window it is scanned with",
+          big_file.stat().st_size == BIG_SIZE and BIG_SIZE > BIG_CHUNK,
+          f"{big_file.stat().st_size} bytes / {BIG_CHUNK} per chunk")
+    check("…and a signature name really lies across a chunk boundary",
+          straddle == b"Spine02" and boundary % BIG_CHUNK == 0,
+          f"{straddle!r} at {boundary}")
+    tracemalloc.start()
+    try:
+        fbx_import.MAX_PROBE_BYTES = BIG_CHUNK
+        fbx_import._probe_cache.pop(str(big_file), None)
+        gc.collect()
+        tracemalloc.reset_peak()
+        base, _ = tracemalloc.get_traced_memory()
+        big2 = fbx_import.probe_fbx(big_file)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+        fbx_import.MAX_PROBE_BYTES = real_cap
+        fbx_import._probe_cache.pop(str(big_file), None)
+    used = peak - base
+    check("a rig 16 chunks into a file is found, not called unknown",
+          big2["skeleton_family"] == "meshy-biped", str(big2))
+    check("…including the name the boundary cuts in half",
+          big2["bone_count"] == MESHY_MAPPED, str(big2["bone_count"]))
+    check(f"…and the scan peaks under {BIG_PEAK_LIMIT // 1024} KiB on a "
+          f"{BIG_SIZE // 1024} KiB file (RULE 1e)", used < BIG_PEAK_LIMIT,
+          f"peak {used / 1024:.1f} KiB")
 
     # The two tables MUST agree — `fbx_clip` imports bpy and cannot be
     # imported here, so its families are read out of the source. A family
@@ -627,6 +740,14 @@ def test_import() -> None:
               status_of(lambda: imp({"kind": "mob-pair",
                                      "files": ["MOB1_Walk.fbx",
                                                "Female_Dance.fbx"]})) == 422)
+        before = len(RUNS)
+        code = status_of(lambda: imp({"kind": "rest-unknown",
+                                      "files": ["Female_Dance.fbx"],
+                                      "rest_file": "strange.fbx"}))
+        check("422 for a reference pose whose rig cannot be named at all "
+              "— the guard fails CLOSED", code == 422, str(code))
+        check("…and Blender was never started for it",
+              len(RUNS) == before, f"{len(RUNS) - before} run(s)")
         res = imp({"kind": "mob-ok", "files": ["MOB1_Walk.fbx"],
                    "rest_file": "MOB1_Jog.fbx"})
         check("but the same family goes through",
