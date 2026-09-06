@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render check for the A3.2c templates (furnish_*, spell_detect, perceive_action).
+"""Render check for the furnish_*, spell_detect and perceive_action templates.
 
 Renders each of the five templates with EXACTLY the kwargs its production
 call site passes, under the real StrictUndefined Jinja environment. A missing
@@ -64,8 +64,7 @@ def try_render(case: str, path: str, **kw):
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 
-# room_furnish._phase_select builds this dict once and passes it to both
-# stage-1 templates (room_furnish.py:497-506).
+# What room_furnish._phase_needs passes to the stage-1 templates.
 FURNISH_COMMON = {
     "setting": "indoor room inside a building",
     "room_name": "Workshop",
@@ -87,12 +86,29 @@ FURNISH_COMMON_EMPTY = {
     "area_m2": 9.0,
 }
 
+# The MATCH catalog: short refs, never slugs (plan-furnish-v2.md § 2 B3).
 CATALOG = [
-    {"id": "oak-table-1", "name": "Oak Table", "category": "table",
-     "width_m": 1.4, "depth_m": 0.8, "height_m": 0.75, "tags": ["wood", "sturdy"]},
-    {"id": "stool-2", "name": "Wooden Stool", "category": "chair",
-     "width_m": 0.4, "depth_m": 0.4, "height_m": 0.5, "tags": []},
+    {"ref": "#1", "name": "Oak Table", "category": "table", "mount": "floor",
+     "width_m": 1.4, "depth_m": 0.8, "height_m": 0.75,
+     "style": "heavy oak, dark waxed", "size_estimated": False,
+     "tags": ["wood", "sturdy"]},
+    {"ref": "#2", "name": "Wooden Stool", "category": "chair",
+     "mount": "unclassified", "width_m": 0.4, "depth_m": 0.4, "height_m": 0.5,
+     "style": "", "size_estimated": True, "tags": []},
 ]
+NEEDS = [
+    {"key": "n1", "kind": "dining table", "category": "table", "count": 1,
+     "mount": "floor", "width_m": 1.4, "depth_m": 0.8, "height_m": 0.75,
+     "style": "rustic oak"},
+    {"key": "n2", "kind": "wall painting", "category": "decor", "count": 2,
+     "mount": "wall", "width_m": 0.5, "depth_m": 0.05, "height_m": 0.6,
+     "style": "rustic oak"},
+]
+MARKER_GROUPS = [{"key": "seat", "label": "Seat"}, {"key": "bed", "label": "Bed"}]
+KEY_AREA_KINDS = [{"key": "picture", "meaning": "a flat face showing an image"},
+                  {"key": "glass", "meaning": "a transparent pane"}]
+SURFACE_KINDS = [{"key": "oak_planks", "label": "Oak planks"},
+                 {"key": "plaster", "label": "Plaster"}]
 
 # thought_context.build_thought_context() key set (app/core/thought_context.py:89-135
 # plus action_instruction at :150 and _skill_block_parts at :164). Values are
@@ -155,56 +171,76 @@ PERCEPTION_VARS_EMPTY = {
 }
 
 
-# ── 1. furnish_select ───────────────────────────────────────────────────
+# ── 1. furnish_needs ────────────────────────────────────────────────────
 
-def t_furnish_select() -> None:
-    print("furnish_select")
+def t_furnish_needs() -> None:
+    print("furnish_needs")
     sys_p, user_p = try_render_task(
-        "prod", "furnish_select", budget_m2=7.5, max_items=20,
-        existing=[{"name": "Oak Table", "count": 1, "width_m": 1.4, "depth_m": 0.8}],
-        catalog=CATALOG, **FURNISH_COMMON)
+        "prod", "furnish_needs", budget_m2=7.5, max_needs=16,
+        storey_height_m=3.0,
+        openings=[{"type": "door", "count": 1}, {"type": "window", "count": 2}],
+        existing=[{"name": "Oak Table", "count": 1, "mount": "floor"}],
+        marker_groups=MARKER_GROUPS, key_area_kinds=KEY_AREA_KINDS,
+        surfaces_missing=True, surface_kinds=SURFACE_KINDS, **FURNISH_COMMON)
     if user_p:
-        check("prod: catalog listed", "id: oak-table-1" in user_p)
-        check("prod: existing listed", "1× Oak Table" in user_p)
+        check("prod: existing listed with its mount",
+              "1× Oak Table (mount: floor)" in user_p)
+        check("prod: openings summarised", "- 2× window" in user_p)
+        check("prod: the library is NOT in the prompt",
+              "Wooden Stool" not in user_p and "#1" not in user_p)
+        check("prod: the surface kinds are offered",
+              "- oak_planks — Oak planks" in user_p)
+        check("prod: marker place types listed", "- seat — Seat" in user_p)
 
-    # Degenerate: the exclude filter can leave the catalog EMPTY — then the
-    # "pick from the library" instruction has nothing to pick from.
+    # Degenerate: a room that already has its surfaces, nothing standing in
+    # it and no opening at all — no dangling headings, no empty lists.
     sys_p, user_p = try_render_task(
-        "empty", "furnish_select", budget_m2=0.0, max_items=20,
-        existing=[], catalog=[], **FURNISH_COMMON_EMPTY)
+        "empty", "furnish_needs", budget_m2=0.0, max_needs=16,
+        storey_height_m=3.0, openings=[], existing=[],
+        marker_groups=MARKER_GROUPS, key_area_kinds=KEY_AREA_KINDS,
+        surfaces_missing=False, surface_kinds=[], **FURNISH_COMMON_EMPTY)
     if user_p is not None:
-        check("empty: no dangling 'Furniture library:' heading",
-              "Furniture library:" not in user_p,
+        check("empty: no surface list without a proposal",
+              "oak_planks" not in user_p and 'answer "surfaces": null' in user_p,
               f"| got: {user_p[-200:]!r}")
-        check("empty: says the library is empty",
-              "no library items" in user_p.lower(),
-              f"| got: {user_p[-200:]!r}")
+        check("empty: says the room holds nothing", "- nothing" in user_p)
+        check("empty: says there is no opening", "- none" in user_p)
+        check("empty: a full floor is stated as such",
+              "0 m²" in user_p, f"| got: {user_p[-260:]!r}")
 
 
-# ── 2. furnish_new ──────────────────────────────────────────────────────
+# ── 2. furnish_match ────────────────────────────────────────────────────
 
-def t_furnish_new() -> None:
-    print("furnish_new")
+def t_furnish_match() -> None:
+    print("furnish_match")
     sys_p, user_p = try_render_task(
-        "prod", "furnish_new", budget_m2=5.0, max_new=8,
-        existing=[{"name": "Oak Table", "count": 1}],
-        catalog_names=["Oak Table", "Wooden Stool"],
-        marker_kinds=["sit", "lie"], **FURNISH_COMMON)
+        "prod", "furnish_match", setting=FURNISH_COMMON["setting"],
+        room_name=FURNISH_COMMON["room_name"],
+        style_hint=FURNISH_COMMON["style_hint"], needs=NEEDS, catalog=CATALOG)
     if user_p:
-        check("prod: library names listed", "- Oak Table" in user_p)
-        check("prod: marker kinds listed", "sit, lie" in user_p)
+        # THE trim_blocks TRAP: a loop row that ends with a block tag loses
+        # its newline and the whole catalog collapses into ONE line.
+        catalog_lines = [ln for ln in user_p.splitlines() if ln.startswith("#")]
+        check("prod: one catalog entry per line", len(catalog_lines) == 2,
+              f"| got: {catalog_lines!r}")
+        check("prod: the ref is the id the answer may use",
+              catalog_lines and catalog_lines[0].startswith("#1 | Oak Table"),
+              f"| got: {catalog_lines[:1]!r}")
+        check("prod: an estimated size is flagged",
+              "size estimated" in catalog_lines[-1], f"| got: {catalog_lines[-1]!r}")
+        check("prod: the tags ride along", "tags: wood, sturdy" in user_p)
+        check("prod: every need is listed",
+              len([ln for ln in user_p.splitlines() if ln.startswith("n")]) == 2)
 
     sys_p, user_p = try_render_task(
-        "empty", "furnish_new", budget_m2=0.0, max_new=8,
-        existing=[], catalog_names=[], marker_kinds=[],
-        **FURNISH_COMMON_EMPTY)
+        "empty", "furnish_match", setting=FURNISH_COMMON_EMPTY["setting"],
+        room_name=FURNISH_COMMON_EMPTY["room_name"], style_hint="",
+        needs=NEEDS, catalog=[])
     if user_p is not None:
-        check("empty: no dangling 'Library names' heading",
-              "Library names (do not duplicate these):" not in user_p,
-              f"| got: {user_p[-260:]!r}")
-        check("empty: no empty marker-kind list",
-              "Allowed marker animation kinds:" not in user_p,
-              f"| got: {user_p[-260:]!r}")
+        check("empty: no dangling 'The library holds:' heading",
+              "The library holds:" not in user_p, f"| got: {user_p[-200:]!r}")
+        check("empty: asks for null everywhere",
+              "null for every need" in user_p, f"| got: {user_p[-200:]!r}")
 
 
 # ── 3. furnish_place ────────────────────────────────────────────────────
@@ -336,7 +372,7 @@ def t_perceive_action() -> None:
 
 
 def main() -> int:
-    for fn in (t_furnish_select, t_furnish_new, t_furnish_place,
+    for fn in (t_furnish_needs, t_furnish_match, t_furnish_place,
                t_spell_detect, t_perceive_action):
         fn()
         print()

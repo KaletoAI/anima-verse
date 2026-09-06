@@ -2725,7 +2725,7 @@ def furnish_status(room_id: str,
 @router.post("/rooms/{room_id}/furnish/start")
 async def furnish_start(room_id: str, request: Request,
                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Open a job and run stage 1 (furnish_select + furnish_new) in the
+    """Open a job and run stage 1 (furnish_needs + furnish_match) in the
     background — body (optional): {exclude: {prop_ids, categories, keywords}}
     pre-filters what the LLM gets offered as available. 409 when the room has
     no layout (the yard: the location no drawn boundary) or a job is already
@@ -2739,8 +2739,9 @@ async def furnish_start(room_id: str, request: Request,
 async def furnish_direct(room_id: str, request: Request,
                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Skip the LLM proposal and the generation: place ONLY admin-picked
-    library props — body: {proposal: {existing: [{prop_id, count}]}}. The
-    job enters at placement; review/accept as usual."""
+    library props — body: {proposal: {existing: [{prop_id, count}]}}, the
+    picker's list of library pieces. The job enters at placement;
+    review/accept as usual."""
     body = await _furnish_body(request)
     from app.core.room_furnish import start_direct
     return _furnish_call(start_direct, room_id, body.get("proposal") or body)
@@ -2749,8 +2750,9 @@ async def furnish_direct(room_id: str, request: Request,
 @router.post("/rooms/{room_id}/furnish/confirm")
 async def furnish_confirm(room_id: str, request: Request,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Confirm the (edited) proposal — body: {proposal: {existing: [...],
-    new: [...]}}, absent = the stored one. Starts generation + placement."""
+    """Confirm the (edited) proposal — body: {proposal: {needs: [...],
+    surfaces: {...}|null}}, absent = the stored one. Starts generation +
+    placement."""
     body = await _furnish_body(request)
     from app.core.room_furnish import confirm
     return _furnish_call(confirm, room_id, body.get("proposal"))

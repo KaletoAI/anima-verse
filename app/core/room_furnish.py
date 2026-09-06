@@ -1,9 +1,12 @@
 """Room furnishing job (plan-room-furnish.md) — the "✨ Furnish" workflow.
 
-The LLM delivers SEMANTICS, never coordinates: it picks library props
-(``furnish_select``), proposes the missing pieces (``furnish_new``) and
-arranges them RELATIONALLY (``furnish_place``); the deterministic
-``furnish_solver`` turns that plan into ``layout.props`` geometry.
+The LLM delivers SEMANTICS, never coordinates: it writes what the room NEEDS
+without ever seeing the library (``furnish_needs``), maps the library onto
+that need list (``furnish_match``) and arranges the result RELATIONALLY
+(``furnish_place``); the deterministic ``furnish_solver`` turns that plan into
+``layout.props`` geometry. The need list is the ONE list the whole job carries
+— a need either names the library piece that serves it or is built
+(plan-furnish-v2.md § 4).
 
 Because generation takes minutes, the whole thing is a PERSISTED job — one
 row per room, one in-process orchestrator thread (pattern:
@@ -42,6 +45,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core import furnish_needs
 from app.core.db import get_connection, transaction
 from app.core.llm_json import llm_json
 from app.core.log import get_logger
@@ -59,14 +63,14 @@ STATE_REVIEW_READY = "review_ready"
 STATE_ERROR = "error"
 _ACTIVE_STATES = (STATE_SELECTING, STATE_GENERATING, STATE_PLACING)
 
-# Share of the floor area the summed footprints may occupy — the same hard
-# limit the solver enforces; here it only sizes the prompt's budget.
+# Share of the FLOOR area the summed footprints of floor pieces may occupy —
+# the same hard limit the solver enforces; here it only sizes the prompt's
+# budget. Wall, ceiling and surface pieces have budgets of their own (in the
+# solver) and never touch this one.
 BUDGET_FRACTION = 0.45
-MAX_ITEMS = 20            # cap on the total pieces furnish_select may pick
-MAX_NEW_KINDS = 8         # cap on the piece KINDS furnish_new may invent
-MAX_COUNT = 12            # per entry
-MIN_DIM_M = 0.05
-MAX_DIM_M = 5.0
+# What a need may say, how many of them there may be and how far a library
+# piece may differ from one lives with the validators that enforce it
+# (``app.core.furnish_needs``); this module only spends those numbers.
 MODEL_POLL_SECONDS = 5
 MODEL_TIMEOUT_SECONDS = 30 * 60
 
@@ -168,13 +172,18 @@ def _prop_ready(prop_id: Any) -> bool:
     return bool(prop and prop.get("has_model"))
 
 
+def _needs(proposal: Any) -> List[Dict[str, Any]]:
+    """The job's need list — the only list a proposal carries (§ 4)."""
+    raw = (proposal or {}).get("needs") if isinstance(proposal, dict) else None
+    return [n for n in (raw or []) if isinstance(n, dict)]
+
+
 def _progress(proposal: Any) -> Dict[str, int]:
-    """Generation progress n/m over the NEW pieces — derived, not stored:
-    a piece counts as done when its prop exists and has a model."""
-    new = (proposal or {}).get("new") if isinstance(proposal, dict) else None
-    new = new if isinstance(new, list) else []
-    return {"done": sum(1 for n in new if _prop_ready((n or {}).get("prop_id"))),
-            "total": len(new)}
+    """Generation progress n/m over the needs that have to be BUILT — derived,
+    not stored: a need counts as done when its prop exists and has a model."""
+    build = [n for n in _needs(proposal) if n.get("build")]
+    return {"done": sum(1 for n in build if _prop_ready(n.get("prop_id"))),
+            "total": len(build)}
 
 
 def get_status(room_id: str) -> Optional[Dict[str, Any]]:
@@ -311,10 +320,16 @@ def _placements(lay: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [p for p in (lay.get("props") or []) if isinstance(p, dict)]
 
 
+def _mount_of(prop: Dict[str, Any]) -> str:
+    """How a library piece is mounted — an unclassified prop stands on the
+    floor, which is what the solver assumes for it too."""
+    return str(prop.get("mount") or "") or "floor"
+
+
 def _aggregate(placements: List[Dict[str, Any]],
                library: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Placed props as ``{prop_id, name, count, width_m, depth_m}`` — one
-    entry per prop id, unknown ids skipped (they render as placeholders in
+    """Placed props as ``{prop_id, name, count, mount, width_m, depth_m}`` —
+    one entry per prop id, unknown ids skipped (they render as placeholders in
     the client but carry no dims to reason about)."""
     counts: Dict[str, int] = {}
     for p in placements:
@@ -325,18 +340,28 @@ def _aggregate(placements: List[Dict[str, Any]],
     for pid, count in counts.items():
         prop = library[pid]
         out.append({"prop_id": pid, "name": prop.get("name") or pid,
-                    "count": count, "width_m": prop.get("width_m"),
+                    "count": count, "mount": _mount_of(prop),
+                    "width_m": prop.get("width_m"),
                     "depth_m": prop.get("depth_m")})
     return sorted(out, key=lambda e: e["name"].lower())
 
 
-def _used_area(placements: List[Dict[str, Any]],
-               library: Dict[str, Dict[str, Any]]) -> float:
+def _floor_used_area(placements: List[Dict[str, Any]],
+                     library: Dict[str, Dict[str, Any]]) -> float:
+    """Footprint of what already stands ON THE FLOOR. A picture on the wall
+    and a candle on the table cost no floor, so counting them would shrink
+    the budget of the very pieces that need it — and a rug (an UNDERLAY,
+    B10) is walked over, so it costs nothing either. The threshold for that
+    is the solver's own, imported, never re-typed."""
+    from app.core.furnish_solver import UNDERLAY_MAX_H
     total = 0.0
     for p in placements:
         prop = library.get(str(p.get("prop_id") or ""))
-        if prop:
-            total += float(prop.get("width_m") or 0) * float(prop.get("depth_m") or 0)
+        if not prop or _mount_of(prop) != "floor":
+            continue
+        if float(prop.get("height_m") or 0) <= UNDERLAY_MAX_H:
+            continue
+        total += float(prop.get("width_m") or 0) * float(prop.get("depth_m") or 0)
     return total
 
 
@@ -359,116 +384,50 @@ def _llm_json(task: str, system_prompt: str, user_prompt: str,
     return llm_json(task, system_prompt, user_prompt, label, error=FurnishError)
 
 
-def _num(value: Any, lo: float, hi: float) -> Optional[float]:
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return None
-    return round(v, 3) if lo <= v <= hi else None
-
-
-def _count(value: Any) -> int:
-    try:
-        return max(1, min(MAX_COUNT, int(float(value))))
-    except (TypeError, ValueError):
-        return 1
-
-
 # ── Proposal validation ─────────────────────────────────────────────────
+#
+# The need list and its match are validated in ``app.core.furnish_needs`` —
+# pure functions with no DB and no world lookups. What stays here is what
+# needs the JOB: the library pre-filter of a run and the admin's direct picks.
 
-def _valid_existing(raw: Any, library: Dict[str, Dict[str, Any]],
-                    limit: int = MAX_ITEMS) -> List[Dict[str, Any]]:
-    """Library picks: only ids the library really has, counts 1..12, total
-    pieces capped. Unknown entries are dropped silently."""
+def _valid_picks(raw: Any, library: Dict[str, Dict[str, Any]]
+                 ) -> List[Dict[str, Any]]:
+    """The ADMIN's own picks (``start_direct``): only ids the library really
+    has, counts 1..12, one entry per prop, at most as many entries as a need
+    list may hold. This is a pick list, not a proposal — it becomes one."""
     out: List[Dict[str, Any]] = []
     seen: set = set()
-    total = 0
     for entry in raw if isinstance(raw, list) else []:
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or len(out) >= furnish_needs.MAX_NEEDS:
             continue
         pid = str(entry.get("prop_id") or "").strip()
         if pid not in library or pid in seen:
             continue
-        count = _count(entry.get("count"))
-        if total + count > limit:
-            count = limit - total
-            if count <= 0:
-                break
         seen.add(pid)
-        total += count
-        out.append({"prop_id": pid, "count": count})
+        out.append({"prop_id": pid, "count": furnish_needs.count(entry.get("count"))})
     return out
 
 
-def _valid_marker(raw: Any, groups: List[str]) -> Optional[Dict[str, Any]]:
-    """The LLM's marker suggestion for a new piece: a PLACE TYPE of the pose
-    catalog (``group``) plus box fractions. The id is minted where the marker
-    is stored (``props.sanitize_markers``)."""
-    from app.core.props import MARKER_AT_MAX, MARKER_AT_MIN, MARKER_AT_Y_MIN
-    if not isinstance(raw, dict):
-        return None
-    group = str(raw.get("group") or "").strip().lower()
-    if not group or group not in groups:
-        return None
-    at = raw.get("at")
-    if not isinstance(at, (list, tuple)) or len(at) != 3:
-        at = [0.5, 0.5, 0.5]
-    try:
-        # Same range as props.sanitize_markers — fractions may leave the box.
-        at3 = [round(min(max(float(at[i]),
-                             MARKER_AT_Y_MIN if i == 1 else MARKER_AT_MIN),
-                         MARKER_AT_MAX), 4)
-               for i in range(3)]
-    except (TypeError, ValueError):
-        at3 = [0.5, 0.5, 0.5]
-    return {"group": group, "at": at3}
-
-
-def _valid_new(raw: Any, groups: List[str],
-               limit: int = MAX_NEW_KINDS) -> List[Dict[str, Any]]:
-    """New pieces: name/description non-empty, dims 0.05..5 m, counts 1..12,
-    marker optional. ``prop_id`` is carried over when present (idempotent
-    re-entry after a restart)."""
-    out: List[Dict[str, Any]] = []
-    for entry in raw if isinstance(raw, list) else []:
-        if not isinstance(entry, dict) or len(out) >= limit:
+def _surface_kinds() -> List[Dict[str, str]]:
+    """The surface-texture library as ``{key, label}`` — the very list the
+    room editor's floor/wall pickers offer (``GET /assets/surface-textures``),
+    so a kind the LLM may propose is a kind the admin could have picked."""
+    from app.core.surface_textures import list_textures
+    out: List[Dict[str, str]] = []
+    seen: set = set()
+    for entry in list_textures():
+        kind = str(entry.get("kind") or "").strip()
+        if not kind or kind in seen:
             continue
-        name = str(entry.get("name") or "").strip()
-        description = str(entry.get("description") or "").strip()
-        if not name or not description:
-            continue
-        dims = {}
-        for key in ("width_m", "depth_m", "height_m"):
-            v = _num(entry.get(key), MIN_DIM_M, MAX_DIM_M)
-            if v is None:
-                break
-            dims[key] = v
-        if len(dims) != 3:
-            continue
-        item: Dict[str, Any] = {
-            "name": name[:80],
-            "description": description[:600],
-            "category": str(entry.get("category") or "").strip()[:40],
-            "count": _count(entry.get("count")),
-            "marker": _valid_marker(entry.get("marker"), groups),
-            "prop_id": str(entry.get("prop_id") or "").strip() or None,
-            **dims,
-        }
-        out.append(item)
+        seen.add(kind)
+        out.append({"key": kind, "label": str(entry.get("name") or "") or kind})
     return out
-
-
-def _validate_proposal(raw: Any, library: Dict[str, Dict[str, Any]],
-                       groups: List[str]) -> Dict[str, Any]:
-    raw = raw if isinstance(raw, dict) else {}
-    return {"existing": _valid_existing(raw.get("existing"), library),
-            "new": _valid_new(raw.get("new"), groups)}
 
 
 def _valid_exclude(raw: Any) -> Dict[str, List[str]]:
     """Library pre-filter for stage 1: excluded props/categories/keywords
     are NOT offered to the LLM as available — so a room does not always get
-    THE one bed the library has; furnish_new proposes a fresh one instead.
+    THE one bed the library has; the need list then asks for a fresh one.
     Kept small: exact ids, exact categories, substring keywords."""
     out: Dict[str, List[str]] = {"prop_ids": [], "categories": [], "keywords": []}
     if not isinstance(raw, dict):
@@ -507,9 +466,58 @@ def _apply_exclude(library: Dict[str, Dict[str, Any]],
     return out
 
 
-# ── Phase 1: selecting ──────────────────────────────────────────────────
+# ── Phase 1: the room's need, then the library ──────────────────────────
 
-def _phase_select(room_id: str) -> None:
+def _setting(loc: Dict[str, Any], room: Dict[str, Any]) -> Tuple[str, bool, bool]:
+    """``(setting sentence, is_yard, indoor)``.
+
+    The setting is BINDING context for every stage (user finding 2026-08-20: a
+    tree-only library got picked into a living room because the LLM never
+    learned the room was indoors). The yard is open-air by nature — its record
+    has no indoor flag, and falling back to the LOCATION's flag would call a
+    house's yard "indoor".
+    """
+    from app.models.world import GROUND_ROOM_ID, resolve_indoor_flag
+    is_yard = str(room.get("id") or "") == GROUND_ROOM_ID
+    # ``resolve_indoor_flag`` answers "indoor" | "outdoor" | "" — a STRING, so
+    # asking it for its truth called an explicitly OUTDOOR room indoor (v1
+    # bug). Anything that is not "indoor" is open air, unset included, which
+    # is the reading v1 had for the unset case.
+    indoor = (not is_yard) and resolve_indoor_flag(loc, room) == "indoor"
+    setting = ("open-air yard of the location" if is_yard
+               else ("indoor room inside a building" if indoor
+                     else "open-air area"))
+    return setting, is_yard, indoor
+
+
+def _opening_summary(openings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The room's openings as ``{type, count}`` — how many doors and how many
+    windows, which is all the need list reasons about (one curtain per
+    window). Where they sit is the placement stage's business."""
+    counts: Dict[str, int] = {}
+    for op in openings:
+        kind = str((op or {}).get("type") or "door").strip().lower() or "door"
+        counts[kind] = counts.get(kind, 0) + 1
+    return [{"type": kind, "count": counts[kind]} for kind in sorted(counts)]
+
+
+def _storey_height_m(loc: Dict[str, Any]) -> float:
+    """The storey height the wall pass measures against (default 3 m)."""
+    try:
+        v = float((loc.get("map3d") or {}).get("storey_height_m") or 0)
+    except (TypeError, ValueError):
+        v = 0.0
+    return round(v, 2) if v > 0 else 3.0
+
+
+def _phase_needs(room_id: str) -> None:
+    """Stage 1, inverted (plan-furnish-v2.md § 2 B3): ``furnish_needs`` writes
+    the room's complete need WITHOUT the library, ``furnish_match`` then maps
+    at most one library piece onto each need. Everything unmatched is built.
+
+    The two calls are one phase: a match without a need list has nothing to
+    match, and the admin is shown the joined result, not the halves.
+    """
     from app.core.pose_catalog import get_groups
     from app.core.prompt_templates import render_task
     from app.models.world import get_room_activity_hint
@@ -521,79 +529,82 @@ def _phase_select(room_id: str) -> None:
     # library stays in use for resolving what already stands in the room.
     exclude = ((_get_row(room_id) or {}).get("proposal") or {}).get("exclude")
     catalog_lib = _apply_exclude(library, exclude)
-    placed = _placements(geom["layout"])
+    lay = geom["layout"]
+    placed = _placements(lay)
     existing = _aggregate(placed, library)
+    # The floor budget belongs to the FLOOR pieces alone (B3): what hangs on a
+    # wall or stands on a table never took floor away in the first place.
     budget = max(0.0, geom["area_m2"] * BUDGET_FRACTION
-                 - _used_area(placed, library))
+                 - _floor_used_area(placed, library))
     room_name = _room_label(room)
     style_hint = str(room.get("style_hint") or loc.get("style_hint") or "")
-    # The setting is BINDING context for both stages (user finding 2026-08-20:
-    # a tree-only library got picked into a living room because the LLM never
-    # learned the room was indoors). The yard is open-air by nature — its
-    # record has no indoor flag, and falling back to the LOCATION's flag would
-    # call a house's yard "indoor".
-    from app.models.world import GROUND_ROOM_ID, resolve_indoor_flag
-    is_yard = str(room.get("id") or "") == GROUND_ROOM_ID
-    setting = ("open-air yard of the location" if is_yard
-               else ("indoor room inside a building"
-                     if resolve_indoor_flag(loc, room) else "open-air area"))
-    common = {
-        "setting": setting,
-        "room_name": room_name,
-        "room_description": str(room.get("description") or ""),
-        "activity_hint": get_room_activity_hint(str(loc.get("id") or ""),
-                                                str(room.get("id") or "")),
-        "style_hint": style_hint,
-        "room_w_m": geom["w_m"],
-        "room_d_m": geom["d_m"],
-        "area_m2": geom["area_m2"],
-    }
-
-    sys_p, user_p = render_task(
-        "furnish_select", budget_m2=round(budget, 2), max_items=MAX_ITEMS,
-        existing=[{"name": e["name"], "count": e["count"],
-                   "width_m": e["width_m"], "depth_m": e["depth_m"]}
-                  for e in existing],
-        catalog=[{"id": p["id"], "name": p.get("name") or p["id"],
-                  "category": p.get("category") or "",
-                  "width_m": p.get("width_m"), "depth_m": p.get("depth_m"),
-                  "height_m": p.get("height_m"), "tags": p.get("tags") or []}
-                 for p in catalog_lib.values()],
-        **common)
-    picks = _valid_existing(_list_field(
-        _llm_json("furnish_select", sys_p, user_p, f"Furnish select: {room_name}"),
-        "existing"), catalog_lib)
-    if not _get_row(room_id):
-        return  # discarded while the LLM was busy
-    picks_area = sum(float(catalog_lib[p["prop_id"]].get("width_m") or 0)
-                     * float(catalog_lib[p["prop_id"]].get("depth_m") or 0)
-                     * p["count"] for p in picks)
-
-    covered = [{"name": e["name"], "count": e["count"]} for e in existing]
-    covered += [{"name": catalog_lib[p["prop_id"]].get("name") or p["prop_id"],
-                 "count": p["count"]} for p in picks]
+    setting, is_yard, indoor = _setting(loc, room)
+    # WHICH SURFACES ARE STILL BARE (E9/B15). Only a room whose layout names
+    # neither a floor nor a wall kind gets a proposal — a room the admin has
+    # dressed keeps what it has. The yard is out: its ground layout stores
+    # props and nothing else (``world_ops.sanitize_ground_layout``), so a
+    # surface row there would be a promise the accept path cannot keep.
+    surfaces_stored = lay.get("surfaces") if isinstance(lay.get("surfaces"), dict) else {}
+    surfaces_missing = (not is_yard
+                        and not (surfaces_stored or {}).get("floor")
+                        and not (surfaces_stored or {}).get("wall"))
+    surface_kinds = _surface_kinds() if surfaces_missing else []
     # The place types a marker may name — the LLM sees key + label.
     groups = get_groups()
+
     sys_p, user_p = render_task(
-        "furnish_new", budget_m2=round(max(0.0, budget - picks_area), 2),
-        max_new=MAX_NEW_KINDS, existing=covered,
-        # Duplicate guard over the FILTERED names — an excluded bed must not
-        # stop furnish_new from proposing a different-looking bed.
-        catalog_names=sorted(p.get("name") or p["id"] for p in catalog_lib.values()),
+        "furnish_needs", setting=setting, room_name=room_name,
+        room_description=str(room.get("description") or ""),
+        activity_hint=get_room_activity_hint(str(loc.get("id") or ""),
+                                             str(room.get("id") or "")),
+        style_hint=style_hint,
+        room_w_m=geom["w_m"], room_d_m=geom["d_m"], area_m2=geom["area_m2"],
+        budget_m2=round(budget, 2), max_needs=furnish_needs.MAX_NEEDS,
+        storey_height_m=_storey_height_m(loc),
+        openings=_opening_summary(geom["openings"]),
+        existing=[{"name": e["name"], "count": e["count"], "mount": e["mount"]}
+                  for e in existing],
         marker_groups=[{"key": k, "label": g.get("label") or k}
                        for k, g in groups.items()],
-        **common)
-    new_items = _valid_new(_list_field(
-        _llm_json("furnish_new", sys_p, user_p, f"Furnish new: {room_name}"),
-        "new"), list(groups))
+        key_area_kinds=furnish_needs.key_area_kinds(),
+        surfaces_missing=surfaces_missing, surface_kinds=surface_kinds)
+    answer = _llm_json("furnish_needs", sys_p, user_p,
+                       f"Furnish needs: {room_name}")
+    needs, dropped = furnish_needs.valid_needs(
+        _list_field(answer, "needs"), list(groups), is_yard=is_yard)
+    surfaces = (furnish_needs.valid_surfaces(
+        answer.get("surfaces"), [k["key"] for k in surface_kinds])
+        if surfaces_missing else None)
+    if not _get_row(room_id):
+        return  # discarded while the LLM was busy
+
+    # ── the library, second ─────────────────────────────────────────────
+    catalog, by_ref = furnish_needs.build_catalog(catalog_lib, indoor=indoor)
+    matches: Dict[str, str] = {}
+    if needs and catalog:
+        sys_p, user_p = render_task(
+            "furnish_match", setting=setting, room_name=room_name,
+            style_hint=style_hint,
+            needs=[{k: n[k] for k in ("key", "kind", "category", "count",
+                                      "mount", "width_m", "depth_m",
+                                      "height_m", "style")} for n in needs],
+            catalog=catalog)
+        matches = furnish_needs.valid_matches(
+            _list_field(_llm_json("furnish_match", sys_p, user_p,
+                                  f"Furnish match: {room_name}"), "matches"),
+            needs, by_ref, catalog_lib)
+    # An empty catalog needs no call: with nothing to choose from every
+    # answer is null, and asking a model to say so costs a minute of GPU.
+    furnish_needs.attach_matches(needs, matches)
 
     if not _get_row(room_id):
         return
     _update_row(room_id, state=STATE_PROPOSAL_READY, error="",
-                proposal={"existing": picks, "new": new_items,
+                proposal={"needs": needs, "surfaces": surfaces,
+                          "dropped": dropped,
                           **({"exclude": _valid_exclude(exclude)} if exclude else {})})
-    logger.info("room_furnish %s: proposal ready (%d library picks, %d new)",
-                room_id, len(picks), len(new_items))
+    logger.info("room_furnish %s: proposal ready (%d needs, %d matched, "
+                "%d dropped)", room_id, len(needs), len(matches), len(dropped))
 
 
 # ── Phase 2: generating ─────────────────────────────────────────────────
@@ -604,16 +615,22 @@ def _phase_generate(room_id: str) -> None:
 
     row = _get_row(room_id)
     proposal = (row or {}).get("proposal") or {}
-    new_items = proposal.get("new") or []
-    for item in new_items:
-        if _prop_ready(item.get("prop_id")):
+    for item in _needs(proposal):
+        if not item.get("build") or _prop_ready(item.get("prop_id")):
             continue
         if not item.get("prop_id"):
             prop = create_prop(
-                name=item["name"], category=item.get("category") or "",
+                name=str(item.get("kind") or "Prop").title(),
+                category=item.get("category") or "",
                 width_m=item.get("width_m"), depth_m=item.get("depth_m"),
                 height_m=item.get("height_m"),
-                description=item.get("description") or "", source="generated")
+                description=item.get("description") or "", source="generated",
+                # What the piece IS, from the need list: how it is mounted
+                # (the solver's pass) and which panels its generation has to
+                # key out — a new picture frame without a `picture` area would
+                # never show a picture (B13).
+                mount=item.get("mount") or "",
+                key_areas=item.get("key_areas") or None)
             item["prop_id"] = prop["id"]
             if item.get("marker"):
                 # Onto the freshly created prop's FIRST variant — the marker
@@ -644,11 +661,11 @@ def _phase_generate(room_id: str) -> None:
                 # The chain ended WITHOUT a model (source render or mesh
                 # failed) — fail fast instead of burning the full timeout.
                 raise FurnishError(
-                    f"Model generation for '{item['name']}' failed — see the "
-                    "queue panel / server log, then Retry.")
+                    f"Model generation for '{item.get('kind')}' failed — see "
+                    "the queue panel / server log, then Retry.")
             if time.monotonic() > deadline:
                 raise FurnishError(
-                    f"Model generation for '{item['name']}' timed out.")
+                    f"Model generation for '{item.get('kind')}' timed out.")
             time.sleep(MODEL_POLL_SECONDS)
         _update_row(room_id, state=STATE_GENERATING)  # bump updated_at (n/m)
         logger.info("room_furnish %s: prop %s ready", room_id, pid)
@@ -684,48 +701,72 @@ def _openings(lay: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _place_items(proposal: Dict[str, Any],
                  library: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The confirmed furnishing as ``{id, name, count, dims}`` — library picks
-    plus the generated new pieces (a piece without a prop id never made it
-    through generation and is skipped)."""
+    """The confirmed furnishing as ``{id, name, count, mount, dims}`` — one
+    entry per PROP, read off the need list. A need without a prop id has no
+    piece yet (its generation failed or never ran) and is skipped; two needs
+    served by the SAME library piece become one entry with the counts added,
+    because the plan speaks about props, not about needs."""
     items: List[Dict[str, Any]] = []
-    for pick in proposal.get("existing") or []:
-        prop = library.get(str(pick.get("prop_id") or ""))
-        if prop:
-            items.append({"id": prop["id"], "name": prop.get("name") or prop["id"],
-                          "count": _count(pick.get("count")),
-                          "width_m": prop.get("width_m"),
-                          "depth_m": prop.get("depth_m"),
-                          "height_m": prop.get("height_m")})
-    for item in proposal.get("new") or []:
-        pid = str(item.get("prop_id") or "")
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for need in _needs(proposal):
+        pid = str(need.get("prop_id") or "")
         if not pid:
             continue
         prop = library.get(pid) or {}
-        items.append({"id": pid, "name": item.get("name") or pid,
-                      "count": _count(item.get("count")),
-                      "width_m": prop.get("width_m") or item.get("width_m"),
-                      "depth_m": prop.get("depth_m") or item.get("depth_m"),
-                      "height_m": prop.get("height_m") or item.get("height_m")})
+        count = furnish_needs.count(need.get("count"))
+        if pid in by_id:
+            by_id[pid]["count"] = furnish_needs.count(
+                by_id[pid]["count"] + count)
+            continue
+        entry = {"id": pid, "name": prop.get("name") or need.get("kind") or pid,
+                 "count": count,
+                 "mount": _mount_of(prop) if prop else (need.get("mount")
+                                                        or "floor"),
+                 "width_m": prop.get("width_m") or need.get("width_m"),
+                 "depth_m": prop.get("depth_m") or need.get("depth_m"),
+                 "height_m": prop.get("height_m") or need.get("height_m")}
+        by_id[pid] = entry
+        items.append(entry)
     return items
 
 
 def _solver_props(items: List[Dict[str, Any]],
                   library: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Dims per prop id for the solver — every id it may see: the items to
-    place AND the props already standing in the room."""
+    """What the solver needs to know per prop id — for every id it may see:
+    the items to place AND the props already standing in the room.
+
+    Beside the three metres that is ``mount`` (which pass a piece belongs to)
+    and ``variants`` (how many meshes it may alternate between, B17): both
+    ride on the library record, so nothing has to be asked twice."""
     props = {pid: {"width_m": p.get("width_m"), "depth_m": p.get("depth_m"),
-                   "height_m": p.get("height_m")}
+                   "height_m": p.get("height_m"), "mount": _mount_of(p),
+                   "variants": len(p.get("variant_tiers") or []) or 1}
              for pid, p in library.items()}
     for item in items:
-        props[item["id"]] = {"width_m": item["width_m"],
-                             "depth_m": item["depth_m"],
-                             "height_m": item["height_m"]}
+        entry = dict(props.get(item["id"]) or {"variants": 1})
+        entry.update({"width_m": item["width_m"], "depth_m": item["depth_m"],
+                      "height_m": item["height_m"], "mount": item["mount"]})
+        props[item["id"]] = entry
     return props
+
+
+def _stack_facts(library: Dict[str, Dict[str, Any]]):
+    """The ``facts`` callable ``compose_on_chain`` asks for: height and sink
+    of the VARIANT a placement draws, out of the library listing this phase
+    already holds. The resolution rule itself is the recipe's
+    (``room_recipe.placement_stack_facts``) — a second one would be a second
+    answer to "how tall is this piece"."""
+    from app.core.room_recipe import placement_stack_facts
+
+    def facts(prop_id: str, variant: Any) -> Dict[str, Any]:
+        return placement_stack_facts(library.get(str(prop_id or "")), variant)
+    return facts
 
 
 def _phase_place(room_id: str) -> None:
     from app.core import furnish_solver
     from app.core.prompt_templates import render_task
+    from app.core.room_recipe import compose_on_chain
     from app.models.notifications import create_notification
 
     row = _get_row(room_id)
@@ -738,6 +779,7 @@ def _phase_place(room_id: str) -> None:
     lay = geom["layout"]
     items = _place_items(row.get("proposal") or {}, library)
     room_name = _room_label(room)
+    storey_height_m = _storey_height_m(loc)
 
     if not items:
         _update_row(room_id, state=STATE_REVIEW_READY, error="",
@@ -751,10 +793,18 @@ def _phase_place(room_id: str) -> None:
     # everything handed in is shifted by the origin and every result is
     # shifted back (see `_geometry`). For a room both shifts are 0.
     ox, oy = geom["origin"]
+    # WHAT ALREADY STANDS THERE, COMPOSED. A placement may sit ON another one
+    # (decision E1) and then stores its pose in the SUPPORT's frame; the
+    # solver wants boxes in room metres, so the parent link is resolved by the
+    # one function that resolves it (``room_recipe.compose_on_chain``) before
+    # the yard's origin shift moves the whole room into the solver's frame.
+    composed = compose_on_chain(placed_props, _stack_facts(library))
     existing_solver = [{"prop_id": p.get("prop_id"),
-                        "at": [float((p.get("at") or [0, 0])[0]) - ox,
-                               float((p.get("at") or [0, 0])[1]) - oy],
-                        "yaw": p.get("yaw") or 0} for p in placed_props]
+                        "id": p.get("id") or "",
+                        "at": [c["at"][0] - ox, c["at"][1] - oy],
+                        "yaw": c["yaw"], "offset_y": c["offset_y"],
+                        "on": c["on"]}
+                       for p, c in zip(placed_props, composed)]
     solver_props = _solver_props(items, library)
     template_existing = [
         {"prop_id": p.get("prop_id"),
@@ -762,9 +812,9 @@ def _phase_place(room_id: str) -> None:
          or str(p.get("prop_id") or ""),
          # Told in the SOLVER's frame, so the model's "beside the table"
          # refers to the same numbers the solver reasons about.
-         "x_m": round(float((p.get("at") or [0, 0])[0]) - ox, 2),
-         "y_m": round(float((p.get("at") or [0, 0])[1]) - oy, 2)}
-        for p in placed_props]
+         "x_m": round(c["at"][0] - ox, 2),
+         "y_m": round(c["at"][1] - oy, 2)}
+        for p, c in zip(placed_props, composed)]
     template_openings = [
         {"type": op.get("type") or "door",
          "wall": _edge_wall(geom["outline_m"], int(op.get("edge") or 0)),
@@ -788,8 +838,13 @@ def _phase_place(room_id: str) -> None:
         solved = furnish_solver.solve(
             outline_m=geom["outline_m"], openings=openings,
             existing=existing_solver, plan=_list_field(plan, "plan"),
-            props=solver_props)
+            props=solver_props, storey_height_m=storey_height_m)
         for entry in solved.get("placed") or []:
+            # A piece standing ON another one is stored in its SUPPORT's
+            # frame (E1) — those metres are relative and must not be moved
+            # with the yard's origin, or the candle would leave the table.
+            if entry.get("on"):
+                continue
             at = entry.get("at") or [0, 0]
             entry["at"] = [round(float(at[0]) + ox, 2),
                            round(float(at[1]) + oy, 2)]
@@ -826,8 +881,8 @@ def _phase_place(room_id: str) -> None:
 # ── Orchestrator thread ─────────────────────────────────────────────────
 
 def _pipeline(room_id: str, phase: str) -> None:
-    if phase == "select":
-        _phase_select(room_id)
+    if phase == "needs":
+        _phase_needs(room_id)
         return
     if phase == "generate":
         _phase_generate(room_id)
@@ -877,17 +932,51 @@ def _spawn(room_id: str, phase: str, label: str) -> bool:
 def _resume_phase(row: Dict[str, Any]) -> str:
     """Which phase a persisted job has to re-enter — derived from its DATA,
     not from the state it died in, so retry and continue share one path."""
-    proposal = row.get("proposal") or {}
-    if not proposal.get("existing") and not proposal.get("new"):
-        return "select"
+    needs = _needs(row.get("proposal"))
+    if not needs:
+        return "needs"
     if row.get("state") == STATE_PROPOSAL_READY:
         return ""  # waiting for the admin, nothing to resume
-    if any(not _prop_ready((n or {}).get("prop_id"))
-           for n in proposal.get("new") or []):
+    if any(not _prop_ready(n.get("prop_id"))
+           for n in needs if n.get("build")):
         return "generate"
     if not (row.get("placements") or {}).get("placed"):
         return "place"
     return ""
+
+
+# ── One-time cleanup ────────────────────────────────────────────────────
+
+def drop_legacy_jobs() -> int:
+    """Delete every furnish job still carrying the v1 proposal (``existing`` /
+    ``new`` instead of ``needs``), called once at boot.
+
+    There is no fallback reader for that shape (plan-furnish-v2.md § 4,
+    decision E4) and there is no history to preserve: a job is a proposal
+    waiting for the admin, and the admin starts a new one in seconds. Deleting
+    it is what keeps the dialog from showing a list nothing can confirm.
+    Idempotent by construction — a row of the new shape is never touched, so
+    no flag is needed.
+    """
+    try:
+        rows = get_connection().execute(
+            "SELECT room_id, proposal FROM room_furnish").fetchall()
+    except Exception as e:
+        logger.error("room_furnish legacy scan failed: %s", e)
+        return 0
+    stale = []
+    for room_id, raw in rows:
+        proposal = _loads(raw)
+        if not isinstance(proposal, dict) or "needs" in proposal:
+            continue
+        if "existing" in proposal or "new" in proposal:
+            stale.append(room_id)
+    for room_id in stale:
+        _delete_row(room_id)
+    if stale:
+        logger.info("room_furnish: %d legacy job(s) dropped (%s)",
+                    len(stale), ", ".join(stale))
+    return len(stale)
 
 
 # ── Public job API ──────────────────────────────────────────────────────
@@ -904,42 +993,81 @@ def start(room_id: str, exclude: Any = None) -> Dict[str, Any]:
     ex = _valid_exclude(exclude)
     if ex["prop_ids"] or ex["categories"] or ex["keywords"]:
         _update_row(room_id, proposal={"exclude": ex})
-    _spawn(room_id, "select", _room_label(room))
+    _spawn(room_id, "needs", _room_label(room))
     return get_status(room_id) or {}
 
 
 def start_direct(room_id: str, proposal: Any) -> Dict[str, Any]:
     """Skip stage 1 and 2 entirely: place ONLY admin-picked library props
-    (user requirement 2026-07-23). The job enters at the generation phase
-    with nothing to generate and falls straight through to placement —
-    review/accept work exactly like the LLM path."""
+    (user requirement 2026-07-23). The picks BECOME needs — each one already
+    served by its prop, so nothing is built — and the job enters at the
+    generation phase with nothing to generate, falling straight through to
+    placement; review/accept work exactly like the LLM path.
+
+    ``proposal`` is the picker's ``{existing: [{prop_id, count}]}`` — a list
+    of library pieces, not a proposal shape."""
     loc, room = _load_room(room_id)
     _geometry(loc, room)  # a drawn plan (yard: a drawn boundary) is the start here too
     if _get_row(room_id):
         raise FurnishError("A furnishing job for this room is already open.", 409)
-    raw = proposal.get("existing") if isinstance(proposal, dict) else None
-    clean = {"existing": _valid_existing(raw, _library()), "new": []}
-    if not clean["existing"]:
+    library = _library()
+    picks = _valid_picks(
+        proposal.get("existing") if isinstance(proposal, dict) else None,
+        library)
+    if not picks:
         raise FurnishError("Pick at least one library prop.", 400)
+    needs = []
+    for i, pick in enumerate(picks, 1):
+        prop = library[pick["prop_id"]]
+        needs.append({
+            "key": f"n{i}",
+            "kind": str(prop.get("name") or pick["prop_id"]),
+            "category": str(prop.get("category") or ""),
+            "count": pick["count"],
+            "mount": _mount_of(prop),
+            "width_m": prop.get("width_m"), "depth_m": prop.get("depth_m"),
+            "height_m": prop.get("height_m"),
+            "style": "", "description": str(prop.get("description") or ""),
+            "marker": None, "key_areas": [], "from_description": False,
+            "prop_id": pick["prop_id"], "build": False})
     _insert_row(room_id, str(loc.get("id") or ""))
-    _update_row(room_id, state=STATE_GENERATING, proposal=clean)
+    _update_row(room_id, state=STATE_GENERATING,
+                proposal={"needs": needs, "surfaces": None, "dropped": []})
     _spawn(room_id, "generate", _room_label(room))
     return get_status(room_id) or {}
 
 
 def confirm(room_id: str, proposal: Any) -> Dict[str, Any]:
-    """Persist the admin-edited proposal and start generation + placement."""
+    """Persist the admin-edited need list and start generation + placement.
+
+    The EDITED list is validated exactly like the model's own: same shape,
+    same limits, keys re-minted. ``build`` is never taken from the client —
+    it is derived from ``prop_id``, so a dialog cannot declare a piece
+    "already built" and skip its generation.
+    """
     row = _get_row(room_id)
     if not row:
         raise FurnishError("No furnishing job for this room.", 404)
     if row["state"] != STATE_PROPOSAL_READY:
         raise FurnishError(f"Cannot confirm in state '{row['state']}'.", 409)
     from app.core.pose_catalog import get_groups
-    _, room = _load_room(room_id)
-    clean = _validate_proposal(proposal if proposal is not None else row["proposal"],
-                               _library(), list(get_groups()))
-    if not clean["existing"] and not clean["new"]:
+    loc, room = _load_room(room_id)
+    raw = proposal if isinstance(proposal, dict) else (row["proposal"] or {})
+    stored = row["proposal"] or {}
+    _setting_text, is_yard, _indoor = _setting(loc, room)
+    needs, dropped = furnish_needs.valid_needs(
+        raw.get("needs"), list(get_groups()), is_yard=is_yard,
+        library=_library())
+    if not needs:
         raise FurnishError("The confirmed list is empty.", 400)
+    clean: Dict[str, Any] = {
+        "needs": needs,
+        "surfaces": furnish_needs.valid_surfaces(
+            raw.get("surfaces"), [k["key"] for k in _surface_kinds()]),
+        "dropped": dropped,
+    }
+    if stored.get("exclude"):
+        clean["exclude"] = _valid_exclude(stored.get("exclude"))
     _update_row(room_id, state=STATE_GENERATING, error="", proposal=clean)
     _spawn(room_id, "generate", _room_label(room))
     return get_status(room_id) or {}
@@ -1013,7 +1141,7 @@ def _resume(row: Dict[str, Any]) -> Dict[str, Any]:
     if not phase:
         raise FurnishError("This job has nothing left to do.", 409)
     _, room = _load_room(room_id)
-    state = {"select": STATE_SELECTING, "generate": STATE_GENERATING,
+    state = {"needs": STATE_SELECTING, "generate": STATE_GENERATING,
              "place": STATE_PLACING}[phase]
     _update_row(room_id, state=state, error="")
     if not _spawn(room_id, phase, _room_label(room)):

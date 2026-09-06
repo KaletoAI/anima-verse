@@ -542,6 +542,26 @@ def _placement_dims(prop: Dict[str, Any], variant: Any) -> Dict[str, float]:
     return {k: float(prop[k]) for k in ("width_m", "depth_m", "height_m")}
 
 
+def placement_stack_facts(prop: Optional[Dict[str, Any]],
+                          variant: Any) -> Dict[str, Any]:
+    """Height and sink of the VARIANT a placement draws — the very numbers the
+    payload sizes it with, so a child lands on the mesh that is really there.
+    ``{}`` for a prop the library does not know (``None`` or empty record).
+
+    This is the ``facts`` callable :func:`compose_on_chain` asks its callers
+    for. It lives here, next to the composition itself, because everyone who
+    resolves a parent link has to read the SAME height — the recipe when it
+    composes a room, the furnish job when it hands the solver what already
+    stands in one.
+    """
+    if not prop:
+        return {}
+    published = _variant_entry(prop, variant)
+    source = published if published is not None else prop
+    return {"height_m": _placement_dims(prop, variant)["height_m"],
+            "ground_offset_m": float(source.get("ground_offset_m") or 0.0)}
+
+
 def _placement_markers(prop: Dict[str, Any], variant: Any) -> List[Dict[str, Any]]:
     """The OBJECT-LOCAL markers of the VARIANT this placement draws
     (2026-08-25).
@@ -787,16 +807,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         return records[prop_id]
 
     def _stack_facts(prop_id: str, variant: Any) -> Dict[str, Any]:
-        """Height and sink of the VARIANT a placement draws — the very numbers
-        the payload sizes it with, so a child lands on the mesh that is really
-        there. ``{}`` for a prop the library does not know."""
-        prop = _record(prop_id)
-        if not prop:
-            return {}
-        published = _variant_entry(prop, variant)
-        source = published if published is not None else prop
-        return {"height_m": _placement_dims(prop, variant)["height_m"],
-                "ground_offset_m": float(source.get("ground_offset_m") or 0.0)}
+        return placement_stack_facts(_record(prop_id), variant)
 
     chain = compose_on_chain(
         [dict(p, at=(p.get("at") or [default_u, default_v])) for p in entries],

@@ -64,6 +64,17 @@ try:
 except Exception as _mce:
     logger.warning("model capabilities migration failed: %s", _mce)
 
+# One-time cleanup: furnish jobs written before the need list existed
+# (plan-furnish-v2.md § 4, decision E4). Their proposal shape has no reader any
+# more and a job holds no history worth keeping — the admin starts a new one.
+try:
+    from app.core.room_furnish import drop_legacy_jobs
+    _fj = drop_legacy_jobs()
+    if _fj:
+        logger.info("Furnish jobs of the old proposal shape dropped: %d", _fj)
+except Exception as _fje:
+    logger.warning("furnish legacy job cleanup failed: %s", _fje)
+
 # Import routers
 from app.routes import auth, store, characters, chat, group_chat, scheduler, instagram, world, telegram, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, intents, diary
 from app.routes import admin_settings

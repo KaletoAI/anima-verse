@@ -64,13 +64,13 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # dynamically in the World Dev UI right next to the chat model — no
     # separate task entry to maintain in /admin/settings → LLM Routing.
 
-    # Room furnishing ("✨ Furnish", plan-room-furnish.md): three strict-JSON
-    # steps of one job — pick library props, propose the missing pieces,
-    # arrange them relationally (the solver turns that into geometry).
-    # No thinking: the answers must be a bare JSON object — a reasoning pass
-    # only adds prose around it.
-    "furnish_select":     {"label": "Furnish: Pick Library Props", "priority": Priority.NORMAL, "category": "tool"},
-    "furnish_new":        {"label": "Furnish: Propose New Pieces", "priority": Priority.NORMAL, "category": "tool"},
+    # Room furnishing ("✨ Furnish", plan-furnish-v2.md): three strict-JSON
+    # steps of one job — write the room's need WITHOUT the library, map the
+    # library onto that need list, arrange the result relationally (the solver
+    # turns that into geometry). No thinking: the answers must be a bare JSON
+    # object — a reasoning pass only adds prose around it.
+    "furnish_needs":      {"label": "Furnish: Room Needs",         "priority": Priority.NORMAL, "category": "tool"},
+    "furnish_match":      {"label": "Furnish: Match Library",      "priority": Priority.NORMAL, "category": "tool"},
     "furnish_place":      {"label": "Furnish: Placement Plan",     "priority": Priority.NORMAL, "category": "tool"},
     # Which surface a prop may be set down on (floor / wall / ceiling / on
     # another prop) — a one-off classification of the LIBRARY, run from the
@@ -368,30 +368,33 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     # wherever the output is checked against a catalog AND against the admin —
     # nothing reaches the room without passing a validator and the review gate
     # (confirm/accept, room_furnish.py:869/888).
-    "furnish_select": {
-        # A3: hallucination_risk high -> low. An invented prop_id is dropped by
-        # _valid_existing against the filtered library (:522-525) — it reaches
-        # neither the admin nor the room; the cost is a missing pick. medium
-        # stays because the footprint budget is NOT enforced at select time
-        # (the solver only catches the overflow later as "area budget
-        # exhausted"), so the arithmetic is the model's job. min_context stays
-        # 4096 with no measurement (n=0): the user prompt carries the WHOLE
-        # filtered library, one line per prop, and the library only grows —
-        # furnish_new writes its inventions back into it (create_prop, :567).
-        "tools": False, "vision": False, "json": True, "min_context": 4096,
-        "model_class": "medium", "arch": "any", "hallucination_risk": "low",
-        "creative": False, "language_de": False, "latency_sensitive": False,
-    },
-    "furnish_new": {
-        # A3: the only one of the three whose main output is checked against
-        # NOTHING — name/description are free text, and after the confirm gate
-        # the description becomes the prop's image prompt (props.py:1061-1067)
-        # and a mesh in the shared library, so hallucination_risk stays medium.
-        # creative True confirmed (inventing pieces is the job); language_de
-        # False for the same reason every image prompt is English.
+    "furnish_needs": {
+        # The room's whole furnishing, invented from its purpose alone — the
+        # one furnish task whose main output is checked against NOTHING: kind,
+        # style and description are free text, and after the confirm gate the
+        # description becomes the prop's image prompt and a mesh in the shared
+        # library, so hallucination_risk stays medium. creative True (writing
+        # what a lived-in room holds is the job); language_de False for the
+        # same reason every image prompt is English. min_context 4096 with no
+        # measurement (n=0): the prompt is the room plus the marker groups,
+        # never the library — that is the point of this stage.
         "tools": False, "vision": False, "json": True, "min_context": 4096,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": False, "latency_sensitive": False,
+    },
+    "furnish_match": {
+        # Needs in, catalog refs out. hallucination_risk low: an invented ref
+        # resolves to nothing and a match that survives it is still re-checked
+        # in code (same mount, largest dimension within ±40 %,
+        # furnish_needs.match_fits) — a wrong answer costs a freshly built
+        # piece, never a wrong one in the room. creative False: this is a
+        # comparison, not an invention. min_context 8192 (n=0): the prompt
+        # carries the WHOLE filtered catalog, one line per prop with its style
+        # snippet, plus the need list — more than the v1 catalog prompt sent,
+        # and the library only grows.
+        "tools": False, "vision": False, "json": True, "min_context": 8192,
+        "model_class": "medium", "arch": "any", "hallucination_risk": "low",
+        "creative": False, "language_de": False, "latency_sensitive": False,
     },
     "furnish_place": {
         # A3: hallucination_risk medium -> low. No invented value can place a

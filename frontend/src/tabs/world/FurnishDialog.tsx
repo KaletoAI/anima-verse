@@ -197,7 +197,7 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
   const [pickMode, setPickMode] = useState(false)
   // Library pre-filter for the LLM proposal (start view): excluded props /
   // categories / keywords are not offered as "available", so rooms stop
-  // all picking THE one bed — furnish_new proposes a fresh piece instead.
+  // all picking THE one bed — the need list then asks for a fresh piece.
   const [filterOpen, setFilterOpen] = useState(false)
   const [exCats, setExCats] = useState<Record<string, boolean>>({})
   const [exProps, setExProps] = useState<Record<string, boolean>>({})

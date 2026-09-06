@@ -5539,6 +5539,16 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         MOUNT_KEY: (meta.get(MOUNT_KEY)
                     if meta.get(MOUNT_KEY) in MOUNT_KINDS else ""),
         MOUNT_SUGGESTED_KEY: bool(meta.get(MOUNT_SUGGESTED_KEY)),
+        # WHAT THIS PIECE IS MADE OF, and whether its size is still a guess —
+        # the PRIMARY variant's generation subject and its estimate flag. Both
+        # are on the LEAN record because the furnishing match reads them off
+        # the same listing everything else does: the subject's first words are
+        # the catalog's style hint ("a modern fridge never matches a medieval
+        # kitchen"), and a guessed cube may be matched but not blindly
+        # (plan-furnish-v2.md § 2 B3). Neither costs a file read — the sidecar
+        # is open either way.
+        "description": variant_description(meta, primary),
+        "dims_estimated": variant_dims_estimated(meta, primary),
         "marker_count": len(variant_markers(meta, primary)),
         "has_model": has_model,
         "model_tiers": tiers,
@@ -5578,10 +5588,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         active_file = gallery.find() if gallery else None
         run = read_model_sidecar(active_file) if active_file else {}
         rec.update({
-            # The PRIMARY variant's subject and markers — the record has no
-            # variant in hand, and this is the same answer every other
-            # unqualified read gives (2026-08-25).
-            "description": variant_description(meta, primary),
+            # The PRIMARY variant's markers — the record has no variant in
+            # hand, and this is the same answer every other unqualified read
+            # gives (2026-08-25). Its subject is on the lean record above.
             "markers": variant_markers(meta, primary),
             "has_source": has_source,
             "created_at": meta.get("created_at") or "",
@@ -5642,14 +5651,14 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]
-        rec["dims_estimated"] = variant_dims_estimated(meta, primary)
     return rec
 
 
 def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
     """All props. ``full`` adds the sidecar detail + file urls (admin);
     otherwise the lean client shape (id, name, category, width_m, depth_m,
-    height_m, tags, mount, mount_suggested, marker_count, has_model).
+    height_m, tags, mount, mount_suggested, description, dims_estimated,
+    marker_count, has_model).
 
     The marker LISTS ride only on the full record — the lean client library
     gets the count, exactly as before the markers became per-variant."""

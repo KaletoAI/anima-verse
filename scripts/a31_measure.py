@@ -241,7 +241,7 @@ def m1b():
 
 
 def m2():
-    rows = load(task_filter={"spell_detect", "furnish_select", "furnish_new",
+    rows = load(task_filter={"spell_detect", "furnish_needs", "furnish_match",
                              "furnish_place"})
     print(f"\n{'='*70}\nM2 — spell_detect + furnish_*  (n={len(rows)})\n{'='*70}")
     for d in rows:
