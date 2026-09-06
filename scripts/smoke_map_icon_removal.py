@@ -19,7 +19,7 @@ Runs against a THROWAWAY storage directory — it never touches a real world.
 
 Usage: ./.venv/bin/python scripts/smoke_map_icon_removal.py
 """
-import json, os, sys, sqlite3, tempfile
+import sys, tempfile
 from pathlib import Path
 _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
