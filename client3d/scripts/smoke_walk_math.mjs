@@ -625,35 +625,44 @@
  *     for any already-valid `p` (the round trip the settings UI of task 4 does).
  *
  * --- Boot progress (stage 4, task 3; `client3d/src/game/boot.ts`) ----------
- * The loading screen shows how far the start has come. `startApp` reports four
+ * The loading screen shows how far the start has come. `startApp` reports five
  * stages, in the order it actually reaches them:
  *
  *     world   world data fetched (locations + worldmap + surface textures)
  *     figures the figure library finished loading
  *     scenes  the scene recipes are primed
  *     tiles   every tile is built and pickable
+ *     arrival the avatar's OWN location is mounted, its interior is up, the
+ *             figure stands on its room's floor and the steering is handed
+ *             over (user finding 2026-09-06 — the bar used to hit 100 % at
+ *             `tiles`, while the building models the avatar's height comes
+ *             out of were still streaming in behind the fade)
  *
  * `bootProgress(done)` turns the set of finished stages into what the screen
  * draws. Two rules, and they are deliberately independent of each other:
- *   - percent counts stages, four of them, 25 % each:
- *         percent = 25 * |done ∩ {world, figures, scenes, tiles}|
+ *   - percent counts stages, and the step is 100 / (number of stages) —
+ *     DERIVED, never written out, so adding a stage cannot leave a bar that
+ *     stops at 80 %. With five stages the step is 20:
+ *         percent = round(100 * |done ∩ STAGES| / 5)
  *     Anything else in the set is not a stage and contributes nothing — the
  *     bar can never read more than 100 % because a caller mistyped.
  *   - the label names the FIRST stage of the order above that is still
- *     missing, i.e. what the client is working on right now; with all four
+ *     missing, i.e. what the client is working on right now; with all five
  *     done it is 'ready'.
- * So percent and label can disagree about "how far": a set {figures} is 25 %
+ * So percent and label can disagree about "how far": a set {figures} is 20 %
  * done and still waiting for 'world'. That is correct — the stages complete in
  * their own time and only the first hole says what is being waited FOR.
  * Hand-computed:
- *   {}                          -> 25*0 = 0,   first hole = world    -> 'world'
- *   {world}                     -> 25*1 = 25,  first hole = figures  -> 'figures'
- *   {world,figures}             -> 25*2 = 50,  first hole = scenes   -> 'scenes'
- *   {world,figures,scenes}      -> 25*3 = 75,  first hole = tiles    -> 'tiles'
- *   {world,figures,scenes,tiles}-> 25*4 = 100, no hole               -> 'ready'
- *   {figures}                   -> 25*1 = 25,  first hole = world    -> 'world'
- *   {world,figures,tiles}       -> 25*3 = 75,  first hole = scenes   -> 'scenes'
- *   {world,'bogus'}             -> 25*1 = 25   ('bogus' is not a stage)
+ *   {}                                  -> 20*0 = 0,   hole = world   -> 'world'
+ *   {world}                             -> 20*1 = 20,  hole = figures -> 'figures'
+ *   {world,figures}                     -> 20*2 = 40,  hole = scenes  -> 'scenes'
+ *   {world,figures,scenes}              -> 20*3 = 60,  hole = tiles   -> 'tiles'
+ *   {world,figures,scenes,tiles}        -> 20*4 = 80,  hole = arrival -> 'arrival'
+ *   {world,figures,scenes,tiles,arrival}-> 20*5 = 100, no hole        -> 'ready'
+ *   {figures}                           -> 20*1 = 20,  hole = world   -> 'world'
+ *   {world,figures,tiles}               -> 20*3 = 60,  hole = scenes  -> 'scenes'
+ *   {world,figures,scenes,arrival}      -> 20*4 = 80,  hole = tiles   -> 'tiles'
+ *   {world,'bogus'}                     -> 20*1 = 20  ('bogus' is not a stage)
  * The label is a STAGE NAME, not a sentence: the React side maps it to a
  * translated string via t(), so the pure module stays language-free. The store
  * on top of it (`reportBootStage` / `setBootNote` / `getBootState` /
@@ -978,7 +987,7 @@ async function main() {
     ambientTerrainFor, newTerrainSwitch, terrainSwitch, NIGHT_ON, NIGHT_OFF,
     AMBIENT_HOLD_MS } = soundtrack;
   const { sceneStampOf, newSceneLines, roomChanged, speakerOf, speakableLines,
-    afterOwnLine, enqueueSpeech, createVoiceover, NARRATOR_SPEAKERS,
+    afterOwnLine, enqueueSpeech, createVoiceover, isNarratorLine,
     MAX_PENDING } = voiceover;
   const { minimapLayout, worldToPx, yawToCompassDeg, terrainColor,
     locationsSignature, footprintSignature, MINIMAP_PREF_KEY } = minimap;
@@ -3489,39 +3498,60 @@ async function main() {
     { ...DEFAULTS, master: 1, music: 0 });
 
   // ── Boot progress (stage 4, task 3) ──────────────────────────────────────
-  // The four stages are spelled out here BY HAND, in the order the loading
+  // The five stages are spelled out here BY HAND, in the order the loading
   // screen walks them — the module must not be the source of its own test.
-  const STAGES = ['world', 'figures', 'scenes', 'tiles'];
-  console.log('\nboot — the four stages and their order');
+  const STAGES = ['world', 'figures', 'scenes', 'tiles', 'arrival'];
+  console.log('\nboot — the five stages and their order');
   check('BOOT_STAGES is exactly the brief, in order',
     [...BOOT_STAGES], STAGES);
 
-  console.log('boot — 25 % per stage, label = first missing stage');
+  console.log('boot — 20 % per stage, label = first missing stage');
   check('nothing done yet', bootProgress(new Set()),
     { percent: 0, label: 'world' });
   check('world done', bootProgress(new Set(['world'])),
-    { percent: 25, label: 'figures' });
+    { percent: 20, label: 'figures' });
   check('world + figures done', bootProgress(new Set(['world', 'figures'])),
-    { percent: 50, label: 'scenes' });
-  check('three of four done',
+    { percent: 40, label: 'scenes' });
+  check('three of five done',
     bootProgress(new Set(['world', 'figures', 'scenes'])),
-    { percent: 75, label: 'tiles' });
-  check('all four done -> 100 % and ready',
+    { percent: 60, label: 'tiles' });
+  // THE CASE THE NEW STAGE EXISTS FOR: every tile is built, so the map is on
+  // screen — and the bar deliberately stops short, because the avatar's own
+  // location has not finished mounting and its figure has nowhere to stand.
+  check('the tiles stand but nobody has arrived -> 80 %, waiting for arrival',
+    bootProgress(new Set(['world', 'figures', 'scenes', 'tiles'])),
+    { percent: 80, label: 'arrival' });
+  check('all five done -> 100 % and ready',
     bootProgress(new Set(STAGES)), { percent: 100, label: 'ready' });
 
   console.log('boot — out-of-order and unknown stages');
   check('a later stage alone still counts, label names the first hole',
-    bootProgress(new Set(['figures'])), { percent: 25, label: 'world' });
+    bootProgress(new Set(['figures'])), { percent: 20, label: 'world' });
   check('a hole in the middle is what is waited for',
     bootProgress(new Set(['world', 'figures', 'tiles'])),
-    { percent: 75, label: 'scenes' });
+    { percent: 60, label: 'scenes' });
+  check('the last stage cannot fill a hole before it',
+    bootProgress(new Set(['world', 'figures', 'scenes', 'arrival'])),
+    { percent: 80, label: 'tiles' });
   check('an unknown entry is not a stage',
-    bootProgress(new Set(['world', 'bogus'])), { percent: 25, label: 'figures' });
+    bootProgress(new Set(['world', 'bogus'])), { percent: 20, label: 'figures' });
   check('only unknown entries -> nothing done',
     bootProgress(new Set(['bogus', 'other'])), { percent: 0, label: 'world' });
   check('insertion order of the set does not matter',
-    bootProgress(new Set(['tiles', 'scenes', 'figures', 'world'])),
+    bootProgress(new Set(['arrival', 'tiles', 'scenes', 'figures', 'world'])),
     { percent: 100, label: 'ready' });
+
+  // The step is DERIVED from the stage count: walking the stages in order has
+  // to give five equal steps that end on exactly 100 — 0, 20, 40, 60, 80, 100.
+  console.log('boot — one equal step per stage, ending on exactly 100');
+  const bootWalk = [];
+  const bootDone = new Set();
+  bootWalk.push(bootProgress(bootDone).percent);
+  for (const stage of STAGES) {
+    bootDone.add(stage);
+    bootWalk.push(bootProgress(bootDone).percent);
+  }
+  check('walking the stages in order', bootWalk, [0, 20, 40, 60, 80, 100]);
 
   console.log('boot — the store the title screen subscribes to');
   check('a fresh store is at zero',
@@ -3533,11 +3563,11 @@ async function main() {
   reportBootStage('world');
   check('reporting a stage moves the store',
     { percent: getBootState().percent, label: getBootState().label },
-    { percent: 25, label: 'figures' });
+    { percent: 20, label: 'figures' });
   check('the subscriber was notified once', bootTicks, 1);
   reportBootStage('world');
   check('reporting the same stage twice does not count twice',
-    getBootState().percent, 25);
+    getBootState().percent, 20);
   check('reporting it twice does not notify twice', bootTicks, 1);
   setBootNote({ kind: 'retry', seconds: 4 });
   check('the note rides along', getBootState().note, { kind: 'retry', seconds: 4 });
@@ -3803,10 +3833,14 @@ async function main() {
     newSceneLines({ room: 'hall', lines: [l1, dup, dup] },
       { room: 'hall', lines: [dup, l3] }), [l3]);
 
-  console.log('voiceover — the sentinel and who is read aloud');
-  check('the canonical narrator value is the first sentinel',
-    NARRATOR_SPEAKERS[0], 'Storyteller');
-  check('the localised label is one too', NARRATOR_SPEAKERS.includes('Erzähler'), true);
+  console.log("voiceover — the server's narrator mark and who is read aloud");
+  // The narrator is whoever the server MARKS (`meta.narrator`), never a name:
+  // the speaker label is localised per world and would go silent-wrong in
+  // every language nobody hardcoded.
+  check('a line the server marks is the narrator, whatever its label',
+    isNarratorLine(line({ speaker: 'Chronicler', meta: { narrator: true } })), true);
+  check('a line without the mark is not, even when it is called Storyteller',
+    isNarratorLine(line({ speaker: 'Storyteller' })), false);
   check('the speaker is read like SceneView reads it',
     speakerOf(line({ speaker: '', meta: { speaker: 'Toran' } })), 'Toran');
   check('a top-level speaker wins over the meta one',
@@ -3821,12 +3855,16 @@ async function main() {
     speakableLines([line({ speaker: AVATAR })], AVATAR), []);
   check("one's own line is spoken_self, and that is not read back either",
     speakableLines([line({ kind: 'spoken_self', speaker: AVATAR })], AVATAR), []);
-  check('the canonical narrator stays silent',
-    speakableLines([line({ speaker: 'Storyteller' })], AVATAR), []);
-  check('the localised narrator stays silent too',
-    speakableLines([line({ speaker: 'Erzähler' })], AVATAR), []);
-  check('a narrator in meta.speaker is caught as well',
-    speakableLines([line({ speaker: '', meta: { speaker: 'Erzähler' } })], AVATAR), []);
+  check('the marked narrator stays silent',
+    speakableLines([line({ speaker: 'Storyteller', meta: { narrator: true } })], AVATAR), []);
+  check('the marked narrator stays silent under a localised label too',
+    speakableLines([line({ speaker: 'Erzähler', meta: { narrator: true } })], AVATAR), []);
+  check('a marked narrator that only names itself in meta.speaker is caught as well',
+    speakableLines([line({ speaker: '', meta: { speaker: 'Erzähler', narrator: true } })],
+      AVATAR), []);
+  check('an unmarked "Storyteller" is a character and is read',
+    speakableLines([line({ speaker: 'Storyteller' })], AVATAR),
+    [{ speaker: 'Storyteller', text: 'Good evening.' }]);
   check('a whisper THIRD PARTIES only hear about has nothing to say',
     speakableLines([line({ kind: 'whisper_meta', content: '' })], AVATAR), []);
   check('a shout from another room is not in the room',
@@ -3855,8 +3893,6 @@ async function main() {
   check('a whisper meant for the avatar is read',
     speakableLines([line({ volume: 'whisper', content: 'Psst.' })], AVATAR),
     [{ speaker: 'Mira', text: 'Psst.' }]);
-  check('a different narrator list is respected',
-    speakableLines([line({ speaker: 'Chronicler' })], AVATAR, ['Chronicler']), []);
 
   console.log("voiceover — one's own message ends the backlog");
   const own = line({ ts: '2026-08-01T10:00:04.000000+00:00', speaker: AVATAR,

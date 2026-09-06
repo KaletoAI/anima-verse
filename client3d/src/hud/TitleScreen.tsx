@@ -10,7 +10,7 @@
  * accepted" and "the map appears".
  *
  *   gate     login form (`needsLogin`) or the "Enter world" button
- *   loading  the four boot stages of `game/boot.ts` as a bar plus a line
+ *   loading  the boot stages of `game/boot.ts` as a bar plus a line
  *   leaving  faded out, then unmounted by `onDone`
  *
  * THE BUTTON IS THE AUTOPLAY GESTURE. A browser only lets an `AudioContext`
@@ -21,7 +21,9 @@
  *
  * THE SCREEN STAYS UP DURING `startApp`. The engine builds its canvas
  * underneath while this is on top, so the player never sees a half-built
- * world; the fade only starts once the last stage is reported. With
+ * world; the fade only starts once the last stage is reported — which since
+ * the `arrival` stage means the avatar stands where it belongs and the
+ * steering is live, not merely that the tiles are drawn. With
  * `prefers-reduced-motion` there is no fade — the screen is simply gone.
  *
  * Look: `hud.css` carries the structure, `theme-fantasy.css` the fantasy look,
@@ -100,6 +102,7 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
       case 'figures': return t('Waking the inhabitants…');
       case 'scenes': return t('Raising the buildings…');
       case 'tiles': return t('Laying out the land…');
+      case 'arrival': return t('Finding your place…');
       default: return t('Ready');
     }
   };

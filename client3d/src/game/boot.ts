@@ -2,11 +2,13 @@
  * How far the start has come — the data behind the loading screen (stage 4,
  * task 3).
  *
- * `startApp` in `main.ts` does four things that take real time, and until they
- * are through there is nothing on screen but an empty canvas. This module is
- * the channel between "the app is loading X" and the title screen that draws
- * it: `main.ts` calls `reportBootStage` at the four points it actually reaches,
- * `TitleScreen` subscribes and renders.
+ * `startApp` in `main.ts` does a handful of things that take real time, and
+ * until they are through there is nothing on screen but an empty canvas — or,
+ * worse, a world the player may already walk in while the ground under their
+ * avatar is still being loaded. This module is the channel between "the app is
+ * loading X" and the title screen that draws it: `main.ts` calls
+ * `reportBootStage` at the points it actually reaches, `TitleScreen`
+ * subscribes and renders.
  *
  * DELIBERATELY NOT ON THE HUD BUS (`hud/bus.ts`): that bus carries GAME state
  * of a running world (selection, mode, elevator) and is written by three known
@@ -20,16 +22,26 @@
  */
 
 /** One thing `startApp` waits for, in the order it reaches them. */
-export type BootStage = 'world' | 'figures' | 'scenes' | 'tiles';
+export type BootStage = 'world' | 'figures' | 'scenes' | 'tiles' | 'arrival';
 
 /** The stages in progress order. The order is what the LABEL is derived from —
- *  the first one still missing is what the client is working on. */
-export const BOOT_STAGES: readonly BootStage[] = ['world', 'figures', 'scenes', 'tiles'];
+ *  the first one still missing is what the client is working on.
+ *
+ *  `arrival` is the LAST one and it is the one the avatar depends on: the
+ *  scene of the location the player wakes up in is mounted, its interior is
+ *  open, the figure stands on its room's floor and only then is the mode —
+ *  and with it the steering — handed over. Before it existed the bar hit
+ *  100 % at `tiles`, while every building model was still streaming in, and
+ *  the avatar was placed against a tile that had no rooms yet: it stood on the
+ *  plot instead of in its room, and walking in those seconds reported that
+ *  wrong point to the server. */
+export const BOOT_STAGES: readonly BootStage[] =
+  ['world', 'figures', 'scenes', 'tiles', 'arrival'];
 
 export interface BootProgress {
-  /** 0…100, in steps of 25 — one step per finished stage. */
+  /** 0…100, one equal step per finished stage (`100 / BOOT_STAGES.length`). */
   percent: number;
-  /** the first stage still missing, or `'ready'` when all four are through */
+  /** the first stage still missing, or `'ready'` when all of them are through */
   label: BootStage | 'ready';
 }
 
@@ -37,12 +49,16 @@ export interface BootProgress {
  * Turn the set of finished stages into what the loading screen draws.
  *
  * Counting and labelling are independent on purpose: `percent` counts how many
- * of the four are through (anything that is not a stage counts for nothing, so
- * a typo can never push the bar past 100 %), while `label` names the first
+ * of the stages are through (anything that is not a stage counts for nothing,
+ * so a typo can never push the bar past 100 %), while `label` names the first
  * stage of `BOOT_STAGES` that is still missing. A set of `{figures}` is
- * therefore 25 % done and still waiting for `world` — which is exactly right,
- * because the stages finish in their own time and only the first hole says
- * what is being waited FOR.
+ * therefore one step done and still waiting for `world` — which is exactly
+ * right, because the stages finish in their own time and only the first hole
+ * says what is being waited FOR.
+ *
+ * The step is DERIVED from the stage count, never a written-out number: adding
+ * a stage must not leave a bar that stops at 80 % or runs past 100 %. Rounded,
+ * so the last stage lands on exactly 100 whatever the count is.
  */
 export function bootProgress(done: ReadonlySet<string>): BootProgress {
   let count = 0;
@@ -51,7 +67,7 @@ export function bootProgress(done: ReadonlySet<string>): BootProgress {
     if (done.has(stage)) count += 1;
     else if (label === 'ready') label = stage;
   }
-  return { percent: count * 25, label };
+  return { percent: Math.round((count * 100) / BOOT_STAGES.length), label };
 }
 
 /**

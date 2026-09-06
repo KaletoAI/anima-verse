@@ -816,6 +816,10 @@ async function startApp(username: string, role: string) {
   reportBootStage('scenes');
 
   const tiles = new Map<string, Tile>();
+  /** The running `mountScene` of each location, settled or not — see
+   *  `mountWithDoors`. Only ever awaited by the boot's arrival step; a later
+   *  remount simply overwrites the entry. */
+  const scenePending = new Map<string, Promise<unknown>>();
   // Numeric on-screen probe for remote diagnosis — inert without ?debug3d=1.
   initDebug3d(engine, tiles);
   // …and its live sibling: the ISOLATION panel (Shift+I), which switches each
@@ -1391,17 +1395,31 @@ async function startApp(username: string, role: string) {
    *  (a model that would not load) still gets its doors — and the rejection
    *  stays unhandled exactly as it was before. The mount loads the tiers the
    *  view wants RIGHT NOW (and pins the tier maps to them, so the 1 Hz tick
-   *  issues no redundant swap straight after). */
-  function mountWithDoors(tile: Tile, scene: ScenePayload) {
+   *  issues no redundant swap straight after).
+   *
+   *  IT HANDS THE MOUNT BACK, and `scenePending` remembers it per location:
+   *  a mount is where a tile gets its rooms — `roomCenters`, `roomFloors`,
+   *  the baked `surfaces`, the `declaredFloors` — and until it is through,
+   *  every height question about that location has the wrong answer. The boot
+   *  waits on exactly ONE of them (the avatar's own, see the arrival at the
+   *  end of `startApp`); nobody waits on the rest, which keeps the streaming
+   *  of the other locations exactly as it was. */
+  function mountWithDoors(tile: Tile, scene: ScenePayload): Promise<unknown> {
     const building = wantedBuildingTier(tile);
     const interior = wantedInteriorTier(tile.loc.id, scene);
     buildingTierByLoc.set(tile.loc.id, building);
     interiorTierByLoc.set(tile.loc.id, interior);
-    void mountScene(tile, scene, { building, interior }).finally(() => {
+    const mounted = mountScene(tile, scene, { building, interior }).finally(() => {
       if (tiles.get(tile.loc.id) !== tile) return;
       buildDoorMarks(tile, scene);
       buildBoundaryMarks(tile, scene);
     });
+    // Never rejects for the WAITER: a model that would not load must not turn
+    // the boot's one await into an unhandled rejection — the mount reports its
+    // own gaps in the console and a half-mounted tile still has its rooms.
+    // The original promise keeps its unhandled rejection exactly as before.
+    scenePending.set(tile.loc.id, mounted.catch(() => undefined));
+    return mounted;
   }
 
   /** Build a location's tile and hang it in the scene. Boot walks every
@@ -1422,9 +1440,32 @@ async function startApp(username: string, role: string) {
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
     const scene = scenes.get(loc.id);
-    if (scene) mountWithDoors(tile, scene);
+    if (scene) void mountWithDoors(tile, scene);
   }
+  // THE LOCATION THE PLAYER WAKES UP IN IS OPEN FROM THE FIRST MOUNT ON (user
+  // finding 2026-09-06). Written straight to the singleton and not through
+  // `openLocation`, which refuses a tile that has no interior yet — and none
+  // has one before the loop below. It has to be set BEFORE the mounts because
+  // `wantedInteriorTier` reads it: an area-detail location that is not open
+  // mounts its interior at the `low` tier, and the swap to `full` that
+  // opening it triggers is a SECOND asynchronous load of the very props the
+  // room's stands are measured on. Set here, the one location the avatar
+  // stands in mounts at `full` right away and the arrival at the end of this
+  // function has a single load to wait for.
+  const arrivalLocId = firstMap.avatar
+    ? firstMap.characters.find((c) => c.name === firstMap.avatar)?.location_id ?? ''
+    : '';
+  if (arrivalLocId) openLocationId = arrivalLocId;
   for (const loc of placeable) addTile(loc);
+  // …AND ITS MODELS ARE LOADED FIRST. The GLB queue picks the job nearest to
+  // its focus (`propAssets.pump`), and the focus is the camera target — which
+  // at boot is the centre of the WORLD, so an avatar living at the edge of the
+  // map would have its own location's models pulled last and the arrival below
+  // would wait for nearly the whole queue. The focus goes back to the camera
+  // as soon as the arrival is settled; a live vector either way, so the
+  // reordering keeps following whatever it points at.
+  const arrivalTile = arrivalLocId ? tiles.get(arrivalLocId) : undefined;
+  if (arrivalTile) setPropLoadFocus(arrivalTile.center);
   engine.setPickables([...tiles.values()].map((t) => t.group));
 
   // --- THE VEIL (plan-fog-schleier-v2.md, § A12) -----------------------------
@@ -1519,11 +1560,16 @@ async function startApp(username: string, role: string) {
     backdrop.sync(map.backdrop ?? null);
   }
   takeBackdrop(firstMap);
-  // Last stage: the map stands and can be clicked. The title screen fades on
-  // this one — the scene models behind the tiles keep streaming in afterwards
-  // (`mountWithDoors` is deliberately not awaited), and holding the screen
-  // until the last GLB is decoded would mean staring at a bar over a world
-  // that is already finished enough to look at.
+  // The map stands and can be clicked. The scene models behind the tiles keep
+  // streaming in afterwards (`mountWithDoors` is deliberately not awaited),
+  // and holding the screen until the LAST GLB of the LAST location is decoded
+  // would mean staring at a bar over a world that is already finished enough
+  // to look at.
+  //
+  // NOT the last stage any more, and that is the point (user finding
+  // 2026-09-06): the ONE location whose models the player's own avatar stands
+  // on may not stream in behind the fade. `arrival` at the end of this
+  // function waits for exactly that one and nothing else.
   reportBootStage('tiles');
 
   let firstSweep = true;
@@ -1589,7 +1635,7 @@ async function startApp(username: string, role: string) {
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
     const scene = scenes.get(loc.id);
-    if (scene) mountWithDoors(tile, scene);
+    if (scene) void mountWithDoors(tile, scene);
     engine.setPickables([...tiles.values()].map((t) => t.group));
   }
   // Szenen-Signatur bewegt sich (Layout, map3d, Modell-Meta, Prop-Sidecar) →
@@ -5577,6 +5623,108 @@ async function startApp(username: string, role: string) {
     }
   });
 
+  /**
+   * EVERYTHING THE AVATAR'S FIRST PLACEMENT DEPENDS ON, awaited before the
+   * figure is put down and before the steering is handed over (user finding
+   * 2026-09-06: "the avatar stands on the plot instead of in the room and is
+   * put back into it if one is lucky").
+   *
+   * WHAT WENT WRONG. `addTile` mounts a location's scene without awaiting it
+   * (`mountWithDoors`), and a mount is where a tile gets its rooms: the room
+   * CENTRES, the baked surfaces, the declared floors. The boot placed the
+   * avatar right after building the tiles, so `computeNpcPlacements` found a
+   * tile with no rooms — no `roomCenters` entry, `tile.fade` still 0 — took
+   * its outdoor branch and lined the figure up on the plot at `tileGroundY`.
+   * A moment later the mode was handed over, `setPlayerDriven` stopped every
+   * further placement of that figure, and the only thing left to repair it was
+   * `reconcileAvatarPos` on the next worldmap poll — which is exactly the
+   * "if one is lucky": it gives up as soon as the client has reported the
+   * wrong point itself (the `reportedPos` echo check), and the point it
+   * corrects to is a metre reading with no room floor in it.
+   *
+   * THE THREE THINGS WAITED FOR, and nothing else:
+   *  1. the MOUNT of the avatar's own location — the one load its position,
+   *     its height and its room assignment come out of. The other locations
+   *     keep streaming in behind the fade exactly as before; holding the
+   *     screen for the last GLB of the whole map is what the `tiles` stage
+   *     deliberately does not do.
+   *  2. the INTERIOR being up. A figure is placed into its room only while
+   *     the room is drawn (`tile.fade > 0.5` in `computeNpcPlacements`);
+   *     below that the same code lines it up outside. The fade is a per-frame
+   *     lerp, so it is SNAPPED here instead of waited for — at the end of the
+   *     boot there is no crossfade to preserve, the title screen is still
+   *     covering the picture and the world it uncovers is the finished one.
+   *  3. the displayed STOREY, or a figure whose room is upstairs is filtered
+   *     out of the storey the tile shows (`wrongStorey`).
+   *
+   * NOT waited for, on purpose: the 2 m height tiles of the terrain. They
+   * stream by camera LOD and have no "finished" to wait on; what a moved
+   * relief does to a mounted scene is `tickModelTiers`' re-datum plus
+   * `reliftScene`, which is the safety net that already exists.
+   *
+   * `reconcileAvatarPos` STAYS as it was. It is redundant for this one moment
+   * now, but it is not here for it: it is what answers a teleport, a party
+   * pull and an admin move at any point in the session.
+   */
+  async function settleArrival(): Promise<void> {
+    // The GLB queue goes back to following the CAMERA whichever way this ends
+    // — an early return included, or it would prioritise the arrival tile for
+    // the rest of the session (see the focus swap at the tile loop).
+    try {
+      await placeAvatarOnArrival();
+    } finally {
+      setPropLoadFocus(engine.target);
+    }
+  }
+
+  async function placeAvatarOnArrival(): Promise<void> {
+    const locId = (lastMap ?? firstMap).characters
+      .find((c) => c.name === avatarName)?.location_id ?? '';
+    // No location = the wilderness (§ A11) or no avatar at all: the figure
+    // stands on the world relief, which the boot already awaited.
+    if (!locId) return;
+    // The mount, and any remount that replaced it while we waited — the map
+    // poll may rebuild a tile under us. Settling, not polling: the loop ends
+    // as soon as the entry stops changing.
+    let pending = scenePending.get(locId);
+    while (pending) {
+      await pending;
+      const next = scenePending.get(locId);
+      if (next === pending) break;
+      pending = next;
+    }
+    const tile = tiles.get(locId);
+    // No tile (an unplaced location): the pre-opened id names nothing, so it
+    // must not stay the open one — the badge would offer to close a place
+    // that is not on the map.
+    if (!tile) {
+      if (openLocationId === locId) openLocationId = null;
+      refreshOpenBadge();
+      return;
+    }
+    // The storey FIRST: the fade below draws whichever one `levelFilter`
+    // names, and that has to be the avatar's before anything is drawn at all.
+    followAvatarStorey(tile, roomOf.get(avatarName) ?? null);
+    if (openable(tile)) {
+      // Already the open one (set before the mounts, see `arrivalLocId`), so
+      // this only makes the crossfade a snap: `applyTileFade` is a lerp
+      // towards the target, and at dt = 0 it simply applies the state that
+      // was written into `fade` here.
+      tile.fadeTarget = 1;
+      tile.fade = 1;
+      applyTileFade(tile, 0);
+      applyLevelDisplay(tile);
+      if (tile.roomGroups.size) applyRoomVisibility(tile);
+    } else if (openLocationId === locId) {
+      // Nothing to reveal here after all — the id was only pre-set so the
+      // mount would load the full interior tier.
+      openLocationId = null;
+    }
+    refreshOpenBadge();
+    // Now the placement has everything it reads.
+    npcs.update(computeNpcStates(lastMap ?? firstMap));
+  }
+
   // --- Arriving IN the avatar (finding B15) ---------------------------------
   // "Enter world" ends where the player actually is, not on the overview. The
   // camera used to stop at `fitDistance(world_bounds)` — the whole map from
@@ -5596,9 +5744,15 @@ async function startApp(username: string, role: string) {
   //    boot asks first and stays on the overview in silence.
   // Last in `startApp` on purpose: everything it touches (figures, tiles, the
   // registered action) stands by now.
+  await settleArrival();
   if (firstMap.avatar && npcs.positionOf(firstMap.avatar)) {
     gameActions.takeControl?.();
   }
+  // The bar reaches 100 % HERE and not at `tiles`: the player's figure stands
+  // on the floor it belongs on and the steering is live, so the title screen
+  // uncovers a world one can walk in rather than one that is still arranging
+  // itself under one's feet.
+  reportBootStage('arrival');
 }
 
 boot();
