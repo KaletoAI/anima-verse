@@ -708,12 +708,15 @@ export interface Tile {
 // is needed, in `sceneRecipe.ts`, out of the payload itself.
 
 function detectStyle(loc: WorldLocation): TileStyle {
-  // Priorität: map3d.style (AV3D-1) > terrain (AV3D-7) > Namens-Heuristik
+  // Priority: map3d.style (AV3D-1) > terrain (AV3D-7) > name heuristic. The
+  // area vocabulary (forest/road/grass) is only ever guessed for an AREA
+  // location — a built place never wears a ground look because its name says
+  // "park".
   const explicit = styleKind(loc.map3d?.style) ?? terrainKind(loc.terrain);
   if (explicit) return explicit;
 
   const n = (loc.name || '').toLowerCase();
-  if (loc.passable || loc.template_location_id) {
+  if (isAreaLocation(loc)) {
     if (/forest|wald|park|wood/.test(n)) return 'forest';
     if (/street|stra|road|weg|alley/.test(n)) return 'road';
     return 'grass';
@@ -726,21 +729,20 @@ function detectStyle(loc: WorldLocation): TileStyle {
 
 /**
  * Is this location OPEN GROUND rather than a built plate? The client twin of
- * `world_geometry.is_area_location` (user decision 2026-08-13, round 2 of the
- * E8 acceptance) — it decides how far the terrain pace and move-animation
- * rule reaches into the footprint (`game/walk.groundScope`).
+ * `world_geometry.is_area_location` (user decision 2026-09-06) — it decides
+ * how far the terrain pace and move-animation rule reaches into the footprint
+ * (`game/walk.groundScope`).
  *
- * Two AUTHORED flags off the worldmap entry say it, and nothing else:
- *  - `passable` — a transit location one walks THROUGH (road/forest clones);
- *  - `map3d.area_model` — "the model IS the ground of this place"
- *    (`area_detail` is only ever set on top of it, so it is covered).
+ * ONE authored flag off the worldmap entry says it, and nothing else:
+ * `map3d.area_model` — "the model IS the ground of this place" (`area_detail`
+ * is only ever set on top of it, so it is covered).
  *
  * Deliberately NOT `detectStyle`: that vocabulary guesses a procedural
  * fallback TEXTURE from a name, and a guess from a word must not decide how
  * fast a character walks. A lake meant to be waded says so with the flag.
  */
 export function isAreaLocation(loc: WorldLocation): boolean {
-  return !!loc.passable || !!loc.map3d?.area_model;
+  return !!loc.map3d?.area_model;
 }
 
 const loader = new THREE.TextureLoader();
@@ -864,8 +866,8 @@ export function surfaceFor(
  *  there is simply nothing to unfold. */
 export function buildTile(loc: WorldLocation): Tile {
   const style = detectStyle(loc);
-  const isBuilding = !(loc.passable || loc.template_location_id);
   const isArea = isAreaLocation(loc);
+  const isBuilding = !isArea;
   // THE footprint (contract v6, § A1.1): the drawn polygon `boundary` in local
   // metres, pinned at (pos_x, pos_z) and turned by `yaw_deg`. Position AND
   // rotation sit on the group, so every child is placed in tile-local metres —
@@ -1139,7 +1141,7 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
  *     stand-in for the measurement that did not exist; a crate above the
  *     declared floor forces the order anyway. No `plateCeiling` cap: the head
  *     room is baked in. STOREY 0 ONLY, because this is the GROUND ladder —
- *     outdoors, on a passable tile, in an always-visible zone; a figure on an
+ *     outdoors, on an area location, in an always-visible zone; a figure on an
  *     upper floor must never be pulled down onto the diorama below it (the
  *     avatar indoors asks its own room instead, `main.roomFloorY`). The mesh
  *     ray of E5b is NOT back — this is DATA the server baked, not a

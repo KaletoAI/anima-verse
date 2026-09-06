@@ -1591,12 +1591,12 @@ async function startApp(username: string, role: string) {
     l.map3d, l.entry_room, l.terrain || '', l.surface_kind || '',
     (l.rooms ?? []).map((r) => [r.id, r.name, r.layout]),
   ]);
-  // Signaturen aus DERSELBEN Quelle wie der Poll (/world/locations): die
-  // Worldmap reichert map3d um abgeleitete floors an — mit der gemergten
-  // Boot-Variante als Startwert wich die Signatur beim ersten Poll ab und
-  // jede Kachel mit Raum-Layouts wurde einmal grundlos neu gebaut.
+  // Signatures from the SAME source as the poll (/world/locations): the
+  // worldmap enriches map3d with derived floors — seeded from the merged boot
+  // variant the signature differed on the first poll, and every tile with room
+  // layouts was rebuilt once for nothing.
   const locSig = new Map(placeable.map((l) => {
-    const detail = detailById.get(l.id) ?? detailById.get(l.template_location_id || '');
+    const detail = detailById.get(l.id);
     return [l.id, sigOf(detail ?? l)];
   }));
   /** The GEOMETRY each tile stands on (`footprintSignature`) — centre,
@@ -1667,7 +1667,7 @@ async function startApp(username: string, role: string) {
       // tile it belongs to, through the ordinary signature rebuild.
       const dirty: [Tile, WorldLocation][] = [];
       for (const [id, tile] of tiles) {
-        const detail = freshById.get(id) ?? freshById.get(tile.loc.template_location_id || '');
+        const detail = freshById.get(id);
         if (!detail) continue;
         const sig = sigOf(detail);
         if (locSig.get(id) === sig) continue;
@@ -3114,12 +3114,10 @@ async function startApp(username: string, role: string) {
     if (rev !== viewRev) return;
     for (const loc of fresh) {
       addTile(loc);
-      // Seeded from the SAME source the boot path seeds from, template
-      // fallback included: a revealed clone has no detail entry of its own,
-      // and a signature taken from the merged location would differ from the
-      // first poll's and rebuild the fresh tile for nothing.
-      locSig.set(loc.id, sigOf(
-        details.get(loc.id) ?? details.get(loc.template_location_id || '') ?? loc));
+      // Seeded from the SAME source the boot path seeds from: a signature
+      // taken from the merged location would differ from the first poll's and
+      // rebuild the fresh tile for nothing.
+      locSig.set(loc.id, sigOf(details.get(loc.id) ?? loc));
     }
     // The geometry of the payload these tiles were just built from (B13) —
     // without it the next poll would read every fresh tile as "moved".
@@ -4468,7 +4466,7 @@ async function startApp(username: string, role: string) {
    * in, on every storey, taken from the same source the NPC placement uses
    * (`roomCenters`, put on the room's data floor by `deriveRoomSpots`).
    * Null — the ground skin answers — everywhere else, and that is three cases:
-   * a passable tile (street, park), a tile whose rooms the avatar is not in,
+   * an area location (street, park), a tile whose rooms the avatar is not in,
    * and an ALWAYS-VISIBLE outdoor zone. The last one is not a room with a
    * floor but a piece of ground: the payload gives it ONE height (its
    * `overlay.y`), while the skin samples the model under the figure's feet and
@@ -4689,10 +4687,10 @@ async function startApp(username: string, role: string) {
     //
     // T5 (backend-status-3d.md, "Raumwechsel greift nur in Gebäuden"): on an
     // AREA location that is not the whole story. Its rooms are outdoor zones,
-    // drawn at every zoom level, and its cell is passable — the avatar walks
-    // in from the map instead of being placed inside. Tying the switch to the
-    // interior alone meant the room there never changed on foot, which left
-    // the prompt scoped to a room the player cannot reach.
+    // drawn at every zoom level and walked into from the map instead of being
+    // placed inside. Tying the switch to the interior alone meant the room
+    // there never changed on foot, which left the prompt scoped to a room the
+    // player cannot reach.
     const interiorUp = !!tile && tile.fadeTarget === 1;
     if (!tile || !(interiorUp || tile.modelIsShellArea) || state.movementLocked) {
       roomWalk = idleRoomWalk();

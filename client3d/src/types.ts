@@ -140,9 +140,7 @@ export interface WorldLocation {
    *  unplaced location, which has no way in to speak of). */
   openings?: MapOpening[];
   rooms: Room[];
-  passable?: boolean;
   entry_room?: string;
-  template_location_id?: string;
   indoor?: string;
   background_images?: string[];
   terrain?: string;   // AV3D-7: grass | forest | road | water | ...
@@ -157,8 +155,8 @@ export interface WorldLocation {
  *
  *  Deliberately SLIM: the map builds a footprint from it and nothing else.
  *  Everything the detail scene needs comes from the scene recipe, and the
- *  fields the grid world carried here (terrain/surface_kind,
- *  template_location_id) are not in the payload any more. */
+ *  fields the grid world carried here (terrain/surface_kind) are not in the
+ *  payload any more. */
 export interface MapLocation {
   id: string;
   name: string;
@@ -178,8 +176,6 @@ export interface MapLocation {
    *  present; the EMPTY list is the free-boundary statement ("this place never
    *  said where its way in is"), and a non-empty one names the only ways in. */
   openings: MapOpening[];
-  /** A transit place (a road) is walked THROUGH, never travelled TO. */
-  passable?: boolean;
   map3d?: Map3dMeta;  // AV3D-1 (only emitted when set)
   /** Bumps when a room layout of this location changes — a running client
    *  loads `/world/locations` once and refetches on this. */

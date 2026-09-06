@@ -19,9 +19,6 @@ export interface LocationRef {
   id: string
   name?: string
   rooms?: RoomRef[]
-  /** Passable / transit locations are pass-through nodes (corridors,
-   *  doorways) — useful for routing but not as roleplay contexts. */
-  passable?: boolean
 }
 
 export interface CharacterRef {

@@ -53,9 +53,7 @@ export function ActivityHomeTab({
           >
             <option value="">— {t('none')} —</option>
             <option value={OFFMAP_SLEEP}>{t('Off-map (sleeps away)')}</option>
-            {/* Only real living locations — passable transit/terrain locations
-                are not homes/sleeping spots. */}
-            {locations.filter((l) => !l.passable).map((l) => (
+            {locations.map((l) => (
               <option key={l.id} value={l.id}>
                 {l.name || l.id}
               </option>

@@ -95,11 +95,11 @@ export class InfoPanel {
 
   show(loc: WorldLocation, chars: MapCharacter[], events: MapEvent[], roomOf: Map<string, string>,
        view?: { openable: boolean; open: boolean }) {
-    // Flächen-/Gelände-Locations (Wald, See, Straße): ihre Räume sind Zonen
-    // mit generischen Namen — die Liste ist dort Rauschen und bleibt weg,
-    // wie die Raum-Labels in der Szene (User-Vorgabe 2026-08-02). Erkennung
-    // wie beim Kachelbau: Flächen-Flag, passierbares Gelände oder Natur-Art.
-    const area = !!loc.map3d?.area_model || !!loc.passable
+    // Area/terrain locations (wood, lake, road): their rooms are zones with
+    // generic names — the list is noise there and stays away, like the room
+    // labels in the scene (user directive 2026-08-02). Detected as in the tile
+    // build: the area flag or a nature kind.
+    const area = !!loc.map3d?.area_model
       || ['water', 'forest', 'grass', 'road', 'sand', 'rock']
         .includes((loc.terrain || '').toLowerCase());
     const roomsHtml = !area && loc.rooms.length

@@ -404,12 +404,10 @@ export interface Location {
   swim_allowed?: boolean
   activity_hint?: string
   knowledge_item_id?: string
-  passable?: boolean
   image_prompt_day?: string
   image_prompt_night?: string
   image_prompt_building?: string
   image_count?: number
-  template_location_id?: string
   /** World position in METRES, `null` when the location is unplaced. */
   pos_x?: number | null
   pos_z?: number | null

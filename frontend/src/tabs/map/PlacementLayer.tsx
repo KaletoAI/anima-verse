@@ -518,8 +518,6 @@ function FootPin({ p, yaw, stroke, strokeWidth }: {
 }
 
 export interface GhostSpec {
-  /** What the click will do: place an existing location or clone a template. */
-  kind: 'place' | 'clone'
   id: string
   name: string
   /** Edge in metres — the placeholder when the source has no anchor. */

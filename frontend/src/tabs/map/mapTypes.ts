@@ -9,7 +9,7 @@
  * ONE TYPE PER ENDPOINT. The two location sources look alike and are not:
  * `GET /play/worldmap` rows carry only the § A1.3 fields, `GET /world/locations`
  * dicts carry the full record. Blending them into one optional-everything
- * interface would let a filter on `template_location_id` compile against
+ * interface would let a filter on an editor-only field compile against
  * worldmap rows and silently return nothing. They share their geometry through
  * `MapGeometry` and part ways after it.
  */
@@ -55,11 +55,6 @@ export interface WorldmapLocationRow extends MapGeometry {
   boundary?: Array<[number, number]> | null
   /** Present only when at least one room carries a layout (AV3D-2⁺). */
   layout_sig?: string
-  /** A transit place (a road, a district) is walked THROUGH, never travelled
-   *  TO (§ A1.9). The player map draws it differently, the destination list
-   *  drops it — it is NOT the terrain passability, which lives on
-   *  `TerrainType`. */
-  passable?: boolean
 }
 
 /** The running journey of a character (§ A11) — the metre polyline plus how
@@ -88,17 +83,10 @@ export interface WorldmapTravel {
 
 /**
  * A location dict of `GET /world/locations` — the editor's read side. It has
- * the full record, so it is the ONLY shape that may be asked about templates
- * or clone origins, and it carries the raw scale anchor of UNPLACED locations
+ * the full record, so it carries the raw scale anchor of UNPLACED locations
  * too (in `map3d.plan_width_m`, which the worldmap row would report as null).
- *
- * `passable` here means "may be walked into as a place" — it is NOT the
- * terrain flag. Ground passability lives on `TerrainType` (§ A1.5) and nowhere
- * else.
  */
 export interface EditorLocation extends MapGeometry {
-  passable?: boolean
-  template_location_id?: string
   description?: string
   /** Server findings about the DRAWN boundary (contract v6 Nr. 1), today only
    *  `boundary_self_intersection`. Absent = nothing to report. The scene

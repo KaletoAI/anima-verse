@@ -146,7 +146,6 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
         swim_allowed: draft.swim_allowed,
         activity_hint: draft.activity_hint,
         knowledge_item_id: draft.knowledge_item_id,
-        passable: draft.passable,
         terrain: draft.terrain,
         map3d: draft.map3d,
         image_prompt_day: draft.image_prompt_day,
@@ -216,13 +215,6 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
       </div>
 
       <div className="ga-form-row">
-        <Field label={t('Passable')} inline>
-          <input
-            type="checkbox"
-            checked={draft.passable !== false}
-            onChange={(e) => upd('passable', e.target.checked)}
-          />
-        </Field>
         <Field label={t('Danger level')}
           hint={t('Drives stamina/stat drain per GAME hour (game clock) and danger-based rules; higher = more dangerous.')}>
           <select

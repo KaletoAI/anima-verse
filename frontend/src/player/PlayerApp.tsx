@@ -73,7 +73,7 @@ export function PlayerApp() {
   const [expandSeq, setExpandSeq] = useState(0)  // erzwingt frischen Remount des Overlay-Inhalts je Öffnen (Zoom-Reset)
   const openExpanded = useCallback((id: string) => { setExpanded(id); setExpandSeq((s) => s + 1) }, [])
   const [bgPanel, setBgPanel] = useState<string>('')             // Panel-id, die als Vollbild-Hintergrund dient ('' = keine)
-  const [mapLabelMode, setMapLabelMode] = useState<LabelMode>(loadLabelMode)  // Map-Beschriftungen: all/unique/none
+  const [mapLabelMode, setMapLabelMode] = useState<LabelMode>(loadLabelMode)  // Map labels: all/none
   const igSeenRef = useRef<string | null>(null)  // zuletzt gesehene IG-Post-id
   const rootRef = useRef<HTMLDivElement | null>(null)
   const layoutLoaded = useRef(false)
@@ -384,7 +384,7 @@ export function PlayerApp() {
       {id === 'worldmap' && (
         <button className={`player-ctrl-btn${mapLabelMode !== 'all' ? ' on' : ''}`}
           onClick={cycleMapLabel} onMouseDown={(e) => e.stopPropagation()}
-          title={`${t('Map labels')}: ${mapLabelMode === 'all' ? t('all') : mapLabelMode === 'unique' ? t('unique') : t('off')}`}
+          title={`${t('Map labels')}: ${mapLabelMode === 'all' ? t('all') : t('off')}`}
           aria-label={t('Map labels')}>
           <Icon name="tag" size={14} />
         </button>
@@ -452,8 +452,6 @@ export function PlayerApp() {
         return t('You do not know the way there.')
       case 'no_route':
         return t('There is no passable route — water, cliffs or walls block every way.')
-      case 'passable_target':
-        return t('That is a place you pass through, not a destination.')
       default:
         return t('You cannot travel there right now.')
     }
@@ -1078,7 +1076,7 @@ export function PlayerApp() {
               {expanded === 'worldmap' && (
                 <button className={`player-ctrl-btn${mapLabelMode !== 'all' ? ' on' : ''}`}
                   onClick={cycleMapLabel}
-                  title={`${t('Map labels')}: ${mapLabelMode === 'all' ? t('all') : mapLabelMode === 'unique' ? t('unique') : t('off')}`}
+                  title={`${t('Map labels')}: ${mapLabelMode === 'all' ? t('all') : t('off')}`}
                   aria-label={t('Map labels')}>
                   <Icon name="tag" size={14} />
                 </button>

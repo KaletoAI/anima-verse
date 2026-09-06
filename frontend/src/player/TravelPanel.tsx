@@ -15,8 +15,6 @@
  * avatar has never heard of cannot even be offered, and no second endpoint
  * has to reproduce the same fog rule. Polled under the very key MapPanel
  * uses, so both panels share ONE request, and only while a panel is mounted.
- * Transit tiles (`passable`) are dropped: a road is walked THROUGH, never
- * travelled TO — the same rule the LLM's target list applies.
  *
  * The actions live in PlayerApp (onTravel/onCancelTravel/onEnterRoom); this
  * component decides nothing the server has not already decided. Locks are the
@@ -42,7 +40,6 @@ interface WorldMapLocation {
   pos_x: number | null; pos_z: number | null
   /** The location's edge in metres — null when it has no scale anchor. */
   plan_width_m: number | null
-  passable?: boolean
 }
 interface WorldMapLite {
   avatar: string
@@ -87,7 +84,7 @@ export function TravelPanel({
       // that is exactly position + scale anchor (`plan_width_m`). A location
       // with a point but no anchor stands on no walkable map — offering it
       // would only ever produce an `unplaced_target` refusal.
-      .filter((l) => l.id && l.id !== here && !l.passable
+      .filter((l) => l.id && l.id !== here
         && l.pos_x !== null && l.pos_z !== null && l.plan_width_m !== null)
       .map((l) => ({
         id: l.id,

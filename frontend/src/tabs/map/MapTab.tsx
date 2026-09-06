@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
+import { apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { CLOSE_TOL_PX, fmtM } from '../world/planGeometry'
 import {
@@ -69,16 +69,14 @@ import type {
  * Two reads, both one-shot (an editor that polls fights the hand that edits):
  *   - `GET /world/locations` — the full dicts. The tray lives off them: an
  *     unplaced location still carries its scale anchor in `map3d`, which the
- *     worldmap payload would report as `null`, and only these dicts know
- *     about templates and clones.
+ *     worldmap payload would report as `null`.
  *   - `GET /play/worldmap?all=1` — for `world_bounds` alone, to frame the
  *     first view. The reload button refetches both.
  *
- * Writing goes through three routes only: `PATCH .../position` (place, move,
- * turn, and — with null coordinates — unplace), `POST .../clone` (a template
- * instance at a point) and `DELETE /world/locations/{id}` (clones only, as
- * before). Re-placing shifts the occupants server-side, so the editor moves a
- * location without thinking about who stands inside it.
+ * Writing a placement goes through one route only: `PATCH .../position`
+ * (place, move, turn, and — with null coordinates — unplace). Re-placing
+ * shifts the occupants server-side, so the editor moves a location without
+ * thinking about who stands inside it.
  *
  * Placing is click-arm-click, never HTML5 drag&drop: a tray entry arms a
  * ghost footprint that follows the cursor, the next click on the map commits
@@ -90,7 +88,7 @@ import type {
  * painted ground and the world relief use — the conversion world ↔ local sits
  * in `PlacementLayer` and nowhere else. Every newly placed location is seeded
  * with a centred square, and an old one gets the same square from "Draw
- * boundary"; from there the vertices are dragged. The write is a fifth route,
+ * boundary"; from there the vertices are dragged. The write is a second route,
  * `PUT /world/locations/{id}` with the whole `map3d` (the field is replaced,
  * not merged) — WITHOUT `plan_width_m`, which is not an input at all any more:
  * the server derives it from the outline's bounding box (v6 Nr. 2) and ignores
@@ -594,7 +592,6 @@ export function MapTab() {
   const [ghost, setGhost] = useState<GhostSpec | null>(null)
   const [ghostPt, setGhostPt] = useState<{ x: number; z: number } | null>(null)
   const [yawDraft, setYawDraft] = useState('')
-  const [delArmed, setDelArmed] = useState('')
 
   // Terrain: the mode of the canvas, the catalog, the painted areas, the
   // running draft and the selected area.
@@ -1283,19 +1280,14 @@ export function MapTab() {
     else if (draftRef.current.length) setDraftCursor({ x, z })
   }, [snapV])
 
-  const { placed, unplaced, templates } = useMemo(() => {
+  const { placed, unplaced } = useMemo(() => {
     const pl: EditorLocation[] = []
     const un: EditorLocation[] = []
-    const tm: EditorLocation[] = []
     for (const loc of locations || []) {
-      const isClone = !!(loc.template_location_id || '').trim()
-      // A template is a stamp, never a place on the map: a passable location
-      // that is not itself a clone — its clones are what gets placed.
-      if (!!loc.passable && !isClone) { tm.push(loc); continue }
       if (isPlaced(loc)) pl.push(loc)
       else un.push(loc)
     }
-    return { placed: pl, unplaced: un, templates: tm }
+    return { placed: pl, unplaced: un }
   }, [locations])
 
   const selected = useMemo(
@@ -1304,7 +1296,6 @@ export function MapTab() {
   )
   useEffect(() => {
     setYawDraft(selected ? String(normYaw(selected.yaw_deg || 0)) : '')
-    setDelArmed('')
   }, [selected])
 
   /** The drawn footprint of the selection, read through the ONE checker. */
@@ -1640,18 +1631,8 @@ export function MapTab() {
     }
   }, [reload, t, toast])
 
-  const removeClone = useCallback(async (loc: EditorLocation) => {
-    try {
-      await apiDelete(`/world/locations/${encodeURIComponent(loc.id)}`)
-      setSelId('')
-      await reload()
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [reload, t, toast])
-
-  /** The armed tray entry lands here: place the location itself, or stamp a
-   *  clone of the template at the clicked point. */
+  /** The armed tray entry lands here: place the location at the clicked
+   *  point. */
   const placeGhost = useCallback(async (wx: number, wz: number) => {
     const g = ghostRef.current
     if (!g) return
@@ -1660,37 +1641,15 @@ export function MapTab() {
     const x = snapV(wx)
     const z = snapV(wz)
     try {
-      if (g.kind === 'clone') {
-        // The server refuses a second clone of the same template on the very
-        // same point and answers 200 with the EXISTING one — with the 10 m
-        // snap two clicks land there easily, and without this the placement
-        // would look like it simply did nothing. An id we already knew means
-        // no new copy was made; say so and show which one is in the way.
-        const knownBefore = new Set(locationsRef.current.map((l) => l.id))
-        const r = await apiPost<{ location?: EditorLocation }>(
-          `/world/locations/${encodeURIComponent(g.id)}/clone`, { pos_x: x, pos_z: z })
-        const newId = r?.location?.id || ''
-        // Straight from the answer, not from the list: the reload below has
-        // not run yet, and a copy of a template that carries a boundary
-        // already brings the drawn shape with it — only a copy without one
-        // gets the seed square (v6 Nr. 1).
-        if (r?.location) await seedBoundary(r.location)
-        await reload()
-        setSelId(newId)
-        if (newId && knownBefore.has(newId)) {
-          toast(t('A copy already stands here'), 'error')
-        }
-      } else {
-        await apiPatch(`/world/locations/${encodeURIComponent(g.id)}/position`,
-          { pos_x: x, pos_z: z })
-        // Newly on the map = it needs an area. The record is the one the tray
-        // armed, and only its `map3d` matters here (the position is already
-        // written), so the pre-reload copy is the right one to read.
-        const src = locationsRef.current.find((l) => l.id === g.id)
-        if (src) await seedBoundary(src)
-        await reload()
-        setSelId(g.id)
-      }
+      await apiPatch(`/world/locations/${encodeURIComponent(g.id)}/position`,
+        { pos_x: x, pos_z: z })
+      // Newly on the map = it needs an area. The record is the one the tray
+      // armed, and only its `map3d` matters here (the position is already
+      // written), so the pre-reload copy is the right one to read.
+      const src = locationsRef.current.find((l) => l.id === g.id)
+      if (src) await seedBoundary(src)
+      await reload()
+      setSelId(g.id)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
@@ -2576,18 +2535,18 @@ export function MapTab() {
    *  for the ground, would place by accident. For the same reason it brings
    *  the locations BACK into view: placing an invisible square, next to
    *  invisible neighbours, is a gesture nobody can aim. */
-  const armGhost = useCallback((loc: EditorLocation, kind: 'place' | 'clone') => {
+  const armGhost = useCallback((loc: EditorLocation) => {
     switchMode('select')
     setLocsOn(true)
     const anchor = anchorWidthM(loc)
     setGhost({
-      kind, id: loc.id, name: loc.name,
+      id: loc.id, name: loc.name,
       widthM: anchor ?? NO_ANCHOR_WIDTH_M, anchored: anchor != null,
       // A location that ALREADY carries an outline is previewed as that
       // outline — the click places exactly this shape, and a square ghost
       // over a long polygon promises ground the place does not cover. Only a
-      // boundary-less entry (a template, a clone of one) keeps the square:
-      // there the square IS what the seed will write.
+      // boundary-less entry keeps the square: there the square IS what the
+      // seed will write.
       boundary: boundaryLocal(loc) || undefined,
       yawDeg: typeof loc.yaw_deg === 'number' && Number.isFinite(loc.yaw_deg)
         ? loc.yaw_deg : 0,
@@ -2595,12 +2554,10 @@ export function MapTab() {
     setGhostPt(null)
   }, [switchMode])
 
-  /** Open the location in the World tab. A clone has no editable data of its
-   *  own — everything lives on its template, so that is what gets opened. */
+  /** Open the location in the World tab. */
   const editLocation = useCallback((loc: EditorLocation) => {
-    const target = (loc.template_location_id || '').trim() || loc.id
     sessionStorage.setItem('ga:world:select',
-      JSON.stringify({ kind: 'location', locationId: target }))
+      JSON.stringify({ kind: 'location', locationId: loc.id }))
     window.location.hash = '#/world'
   }, [])
 
@@ -2620,7 +2577,6 @@ export function MapTab() {
   const drawnLocView: LocationView | null = roomsZoomedOut ? null : locView
 
   const selAnchor = selected ? anchorWidthM(selected) : null
-  const selIsClone = !!(selected && (selected.template_location_id || '').trim())
 
   // The unpainted ground: the default kind's colour, and nothing at all until
   // both the payload and the catalog have answered.
@@ -2691,18 +2647,15 @@ export function MapTab() {
     footprints: scatterFootprints,
   }
 
-  const trayEntry = (loc: EditorLocation, kind: 'place' | 'clone') => {
+  const trayEntry = (loc: EditorLocation) => {
     const anchor = anchorWidthM(loc)
     return (
       <button
         key={loc.id}
         type="button"
-        className={'ga-map-tray-item' + (ghost && ghost.id === loc.id ? ' armed' : '')
-          + (kind === 'clone' ? ' ga-map-tray-template' : '')}
-        onClick={() => armGhost(loc, kind)}
-        title={kind === 'clone'
-          ? t('Click, then click the map to place a copy')
-          : t('Click, then click the map to place it')}
+        className={'ga-map-tray-item' + (ghost && ghost.id === loc.id ? ' armed' : '')}
+        onClick={() => armGhost(loc)}
+        title={t('Click, then click the map to place it')}
       >
         <span className="ga-map-tray-name">{loc.name}</span>
         <span className="ga-map-tray-stamp">
@@ -2729,28 +2682,16 @@ export function MapTab() {
             maxSlopeDeg={maxSlopeDeg} maxStepM={maxStepM} />
         ) : null}
         {primary === 'location' ? (
-          <>
-            <div className="ga-map-tray-section">
-              <div className="ga-map-tray-title">{t('Unplaced')}</div>
-              {unplaced.length === 0 ? (
-                <div className="ga-map-tray-empty">{t('None')}</div>
-              ) : (
-                <div className="ga-map-tray-items">
-                  {unplaced.map((loc) => trayEntry(loc, 'place'))}
-                </div>
-              )}
-            </div>
-            <div className="ga-map-tray-section">
-              <div className="ga-map-tray-title">{t('Templates')}</div>
-              {templates.length === 0 ? (
-                <div className="ga-map-tray-empty">{t('None')}</div>
-              ) : (
-                <div className="ga-map-tray-items">
-                  {templates.map((loc) => trayEntry(loc, 'clone'))}
-                </div>
-              )}
-            </div>
-          </>
+          <div className="ga-map-tray-section">
+            <div className="ga-map-tray-title">{t('Unplaced')}</div>
+            {unplaced.length === 0 ? (
+              <div className="ga-map-tray-empty">{t('None')}</div>
+            ) : (
+              <div className="ga-map-tray-items">
+                {unplaced.map((loc) => trayEntry(loc))}
+              </div>
+            )}
+          </div>
         ) : null}
         {/* The prop library IS the tray of the props subject (§ A9a): pick a
             card, then click the map. The same palette the floor-plan editor
@@ -2929,9 +2870,7 @@ export function MapTab() {
           ) : null}
           {ghost ? (
             <span className={'ga-map-arm' + (ghost.anchored ? '' : ' warn')}>
-              {(ghost.kind === 'clone'
-                ? t('Placing a copy of “{name}” — click the map')
-                : t('Placing “{name}” — click the map')).replace('{name}', ghost.name)}
+              {t('Placing “{name}” — click the map').replace('{name}', ghost.name)}
               {ghost.anchored
                 ? ' · ' + fmtM(ghost.widthM) + ' m'
                 : ' · ' + t('no scale anchor, {n} m placeholder')
@@ -3235,7 +3174,6 @@ export function MapTab() {
             <div className="ga-map-chip">
               <div className="ga-map-chip-head">
                 <strong>{selected.name}</strong>
-                {selIsClone ? <span className="ga-map-chip-tag">{t('copy')}</span> : null}
                 <button type="button" className="ga-modal-close"
                   title={t('Clear selection')} onClick={() => setSelId('')}>×</button>
               </div>
@@ -3331,20 +3269,6 @@ export function MapTab() {
                   onClick={() => { void unplace(selected) }}>
                   {t('Unplace')}
                 </button>
-                {selIsClone ? (
-                  delArmed === selected.id ? (
-                    <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
-                      onClick={() => { void removeClone(selected) }}>
-                      {t('Really delete')}
-                    </button>
-                  ) : (
-                    <button type="button" className="ga-btn ga-btn-sm"
-                      title={t('Delete this copy')}
-                      onClick={() => setDelArmed(selected.id)}>
-                      {t('Delete copy')}
-                    </button>
-                  )
-                ) : null}
               </div>
             </div>
           ) : null}

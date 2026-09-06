@@ -120,16 +120,15 @@ const COL_DARK = '#0d1117'
 // Size of the panel's own header row (admin checkbox + fit button).
 const HEAD_H = 24
 
-// Label display: all / only unique / none. "Unique" = not passable, i.e. named
-// single places; transit elements (a road, a district) drop out. The mode is
-// held in PlayerApp (button in the panel header) and only applied here; the
-// persistence helpers are exported with it.
-export type LabelMode = 'all' | 'unique' | 'none'
-const LABEL_CYCLE: LabelMode[] = ['all', 'unique', 'none']
+// Label display: all names or none. The mode is held in PlayerApp (button in
+// the panel header) and only applied here; the persistence helpers are
+// exported with it.
+export type LabelMode = 'all' | 'none'
+const LABEL_CYCLE: LabelMode[] = ['all', 'none']
 export function loadLabelMode(): LabelMode {
   try {
     const v = localStorage.getItem(LABELS_KEY)
-    if (v === 'all' || v === 'unique' || v === 'none') return v
+    if (v === 'all' || v === 'none') return v
   } catch { /* ignore */ }
   return 'all'
 }
@@ -291,23 +290,18 @@ function Footprints({ locations, currentId, events, labelMode }: {
         const minY = Math.min(...corners.map((p) => p.y))
         const maxY = Math.max(...corners.map((p) => p.y))
         const cx = (minX + maxX) / 2
-        const showLabel = labelMode === 'all'
-          || (labelMode === 'unique' && !loc.passable)
         return (
           <g key={loc.id}>
             <polygon points={pts}
               fill={here ? COL_ACCENT : COL_STONE}
-              fillOpacity={here ? 0.35 : loc.passable ? 0.12 : 0.28}
+              fillOpacity={here ? 0.35 : 0.28}
               stroke={here ? COL_ACCENT : COL_STONE} strokeWidth={1}
-              strokeOpacity={here ? 1 : 0.7}
-              strokeDasharray={loc.passable ? '5 4' : undefined}>
+              strokeOpacity={here ? 1 : 0.7}>
               <title>{loc.name}</title>
             </polygon>
-            {showLabel ? (
+            {labelMode === 'all' ? (
               <text x={cx} y={maxY + 11} fontSize={10} textAnchor="middle"
-                fill={COL_TEXT} pointerEvents="none"
-                fontStyle={loc.passable ? 'italic' : undefined}
-                opacity={loc.passable ? 0.7 : 0.95}>
+                fill={COL_TEXT} pointerEvents="none" opacity={0.95}>
                 {loc.name}
               </text>
             ) : null}

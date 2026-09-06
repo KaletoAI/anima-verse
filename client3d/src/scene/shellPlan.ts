@@ -34,7 +34,7 @@ export type FarShellSource = 'model' | 'recipe' | 'ground' | 'none';
 /** Everything the decision needs, all of it read straight off the payload and
  *  the tile — no meshes, no camera, no view state. */
 export interface FarShellFacts {
-  /** `tile.isBuilding` — a built place rather than a passable/template one. */
+  /** `tile.isBuilding` — a built place rather than an area location. */
   isBuilding: boolean;
   /** `tile.natureSite` — a named piece of nature (wood, lake, meadow, road). */
   natureSite: boolean;

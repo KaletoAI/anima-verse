@@ -2230,7 +2230,6 @@ a.ga-btn {
   border-color: var(--accent, #58a6ff);
   background: rgba(88, 166, 255, 0.12);
 }
-.ga-map-tray-item.ga-map-tray-template { border-style: dashed; }
 /* The terrain-area list scrolls inside the tray instead of pushing the
    location sections out of reach: a busy patch of world can have dozens of
    areas in view, and the tray is the only place the other two lists live. */

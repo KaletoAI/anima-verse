@@ -748,12 +748,7 @@ export function WorldDevTab() {
     })
   }
 
-  // Filter "Durchgangs-Locations" (passable=true: corridors, doorways,
-  // any place that exists only as a transit node) — they're not real
-  // contexts the LLM should reason about. Locations without an explicit
-  // `passable` flag default to non-passable and stay visible.
-  const contextLocationOptions = locations.filter((l) => l.passable !== true)
-  const remainingLocations = contextLocationOptions.filter((l) => !contextLocations.has(l.id))
+  const remainingLocations = locations.filter((l) => !contextLocations.has(l.id))
   const remainingCharacters = characters.filter((c) => !contextCharacters.has(c.name))
 
   return (
