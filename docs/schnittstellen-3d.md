@@ -1446,6 +1446,57 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
 - **Signatur-Polling** genügt; eine Änderung im NACHBARRAUM bewegt die
   Signatur mit (geteilte Wand).
 
+### Eltern-Verweis `on` (Furnish v2, 2026-09)
+
+„Die Kerze auf dem Tisch" ist eine **Beziehung**, keine Höhe
+(`plan-furnish-v2.md` § 4, Entscheid E1). Eine **gespeicherte** Platzierung
+(`layout.props[]`) darf mit `on` die Platzierung nennen, auf der sie steht —
+eine ID aus DERSELBEN Liste. Dann lesen sich ihre drei Pose-Felder im
+Träger-Rahmen:
+
+```
+on: "<Platzierungs-ID>"   # Träger; fehlt = das Stück steht auf dem Boden
+at: [dx, dz]              # Meter vom PUNKT des Trägers, in dessen
+                          # UNGEDREHTEM Rahmen (+x = seine Breitenachse,
+                          # +z = seine Tiefenachse)
+yaw: <Grad>               # RELATIV zur Ausrichtung des Trägers (fehlt = 0)
+offset_y: <m>             # Trimm ÜBER der Oberkante des Trägers
+                          # (fehlt = 0 = genau darauf)
+```
+
+Komposition (dieselbe Drehung, mit der ein Rechteck-Fußabdruck gedreht wird):
+
+```
+r  = radians(yaw_Träger)
+x  = x_Träger + dx·cos r − dz·sin r
+z  = z_Träger + dx·sin r + dz·cos r
+yaw      = (yaw_Träger + yaw_Kind) mod 360
+offset_y = props.stack_on_support(Träger, Kind) + offset_y_Kind
+```
+
+`stack_on_support` ist die Stapelregel ohne Fußtest — dieselbe Formel, die
+`props.stack_offset_y` benutzt, nachdem sie ihren Träger gesucht hat:
+`Oberkante(Träger) = ground_offset_m + offset_y + height_m`, Ergebnis minus
+`ground_offset_m(Kind)`. Beide Höhen sind die der VARIANTE, die die
+Platzierung zeigt.
+
+- **Ketten erlaubt** (Krug auf Tablett auf Tisch), Tiefe ≤ 3
+  (`room_recipe.ON_MAX_DEPTH`); Träger werden vor ihren Kindern komponiert.
+- **Ein Verweis, der nicht trägt, kostet nie das Stück.** Unbekannte ID,
+  Selbstbezug, Zyklus: nur das `on` fällt, `at`/`yaw` gelten als Raum-Meter
+  und das Teil bleibt, wo es gezeichnet war. Zu tiefe Kette: der Träger ist
+  gültig, also wird durch ihn hindurch in Raum-Meter komponiert und nur der
+  Verweis fällt. Der Sanitizer
+  (`world_ops._sanitize_props`) schreibt das so zurück und meldet es mit
+  Grund; die Rezept-Komposition macht dasselbe, falls doch eines durchkommt.
+- **Aufgelöst wird an genau EINER Stelle:** `room_recipe.compose_on_chain`,
+  benutzt von `_join_placements` (Raum wie Hof). Das Rezept trägt die
+  **fertigen, flachen** `at`/`yaw`/`offset_y` und daneben ein rein
+  informatives `on: "<ID>"`; kein Leser muss dem Verweis folgen.
+- **Das Szenen-Payload (Teil B) ändert sich nicht.** Es kennt nur die flachen
+  Werte, die es immer kannte — Client und `packages/scene-render` bleiben
+  ohne Diff. Zahlen von Hand: `scripts/smoke_scene_recipe.py` [7j].
+
 ## A5. Outdoor-Räume (`always_visible`)
 
 - Kennzeichnet Terrassen/Gärten, die nicht im Gebäudemodell stecken; der
@@ -5624,16 +5675,21 @@ veröffentlichten Liste, also geht er durch `props.placement_variant`, bevor die
 Maße gelesen werden.
 
 **Wo die Regel lebt:** `app/core/props.stack_offset_y` (rein, ohne Bibliothek)
-plus `placement_stack_offset_y` (mit ihr davor), erreichbar über
-`POST /world/props/stack-y` mit `{props: [...], index: n}` →
-`{"offset_y": 0.75}` bzw. `{"offset_y": null}`. Der Rumpf trägt die
-Platzierungsliste, wie `POST /play/scene-preview` den Location-Entwurf trägt —
-der Lageplan fragt also auch für ungespeicherte Arbeit. **Kein Renderer rechnet
-hier etwas**: das Ergebnis steht in `offset_y`, und beide Renderer lesen
-weiterhin nur `bottom_y`.
+sucht den Träger und übergibt ihn an `props.stack_on_support` — die Formel
+selbst, ohne Fußtest. **Kein Renderer rechnet hier etwas**: das Ergebnis steht
+in `offset_y`, und beide Renderer lesen weiterhin nur `bottom_y`.
+
+**Seit Furnish v2 (2026-09) speichert der Lageplan die BEZIEHUNG, nicht die
+Zahl** (§ A4, „Eltern-Verweis `on`"): „Place on top" schreibt `on` plus die
+Pose im Träger-Rahmen, und die Höhe entsteht bei der Komposition aus
+`stack_on_support`. Die Route `POST /world/props/stack-y` und ihr Wrapper
+`placement_stack_offset_y` sind damit ersatzlos entfallen — es gab keinen
+zweiten Aufrufer.
 
 **Bedienung:** Lageplan → Prop-Leiste → „Place on top" (angeboten, sobald
-wirklich etwas darunter liegt) und „Place on floor" als Umkehrung.
+wirklich etwas darunter liegt) und „Place on floor" als Umkehrung — letzteres
+nimmt den Eltern-Verweis zurück und lässt das Stück stehen, wo es gezeichnet
+ist.
 
 **Handrechnung (§ B5a)** — `scripts/smoke_scene_recipe.py` **[7f]**, Tisch
 1,2 × 0,8 × 0,75 m bei (2, 3), Teekessel 0,2 × 0,2 × 0,25 m:
