@@ -200,9 +200,9 @@ export function PlayerApp() {
     setOpenAnd(isOpen
       ? openRef.current.filter((x) => x !== id)
       : [...openRef.current, id])
-    // Wieder-Aktivieren → in den Vordergrund holen (Z-Stacking ans Ende).
+    // Re-activating brings the panel to the front (last in the z-stack).
     if (!isOpen) setOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]))
-    // IG öffnen → sofort als gesehen markieren (Badge weg), Stand nachziehen.
+    // Opening IG marks it seen at once (badge gone) and refreshes the count.
     if (!isOpen && id === 'instagram') { setIgNew(0); refreshBadges() }
   }, [setOpenAnd, refreshBadges])
   const closePanel = useCallback((id: string) => {
@@ -547,8 +547,8 @@ export function PlayerApp() {
     }
   }, [hasOthers])
 
-  // Z-Stacking für überlappende Fenster: zuletzt angefasstes Panel steht zuletzt
-  // im DOM → vorderstes. Klick/Drag auf ein Panel holt es nach vorn.
+  // Z-stacking for overlapping windows: the panel touched last comes last in
+  // the DOM and is therefore in front. A click or drag brings a panel forward.
   const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'news', 'settings', 'layouts'])
   const bringToFront = useCallback((id: string) => {
     setOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]))
@@ -1084,8 +1084,11 @@ export function PlayerApp() {
       ))}
     </div>
 
-    {/* Vergrößertes Panel (view-only) — Portal an document.body, damit das
-        position:fixed-Overlay dem react-grid-layout-Transform entkommt. */}
+    {/* The enlarged panel — a portal to document.body, so the position:fixed
+        overlay escapes the react-grid-layout transform. NOT view-only any
+        more: the travel panel shown here carries its actions (Travel, cancel
+        journey, room change), because a map is only worth enlarging if one
+        can also set off from it. */}
     {expanded && createPortal(
       <div onClick={() => setExpanded(null)}
         style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)', zIndex: 2000,

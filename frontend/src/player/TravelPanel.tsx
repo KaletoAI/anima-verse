@@ -95,6 +95,11 @@ export function TravelPanel({
   // What the player clicked on the map. Which outlines may be clicked at all
   // is the map's decision (`onPickLocation` + anchored footprint) — here only
   // the name and the distance of the pick are looked up.
+  //
+  // The lookup runs against the FOGGED payload. An admin playing with the
+  // map's "Show all locations" switch on can therefore pick an outline this
+  // panel cannot resolve; then the bar keeps showing the hint instead of a
+  // name. Accepted: the switch is an admin tool, and one plays with it off.
   const [pickedId, setPickedId] = useState('')
   const picked = useMemo<Picked | null>(() => {
     const l = (world?.locations || []).find((x) => x.id === pickedId)
@@ -103,9 +108,17 @@ export function TravelPanel({
     const d = me?.pos ? Math.hypot(l.pos_x - me.pos.x, l.pos_z - me.pos.z) : null
     return { id: l.id, name: l.name || l.id, distance_m: d }
   }, [world, pickedId])
-  // A started journey clears the pick: the status block takes the map's place
-  // and coming back should not offer a stale choice.
-  useEffect(() => { if (travel) setPickedId('') }, [travel])
+  // The pick is forgotten as soon as it stops being a destination: a journey
+  // starts (the status block takes the map's place), the avatar ARRIVES there
+  // (or is carried there by its party leader), or the place drops out of the
+  // payload altogether. Otherwise the bar would keep offering a trip to the
+  // very spot one is standing on.
+  useEffect(() => {
+    if (travel || pickedId === currentLocationId
+      || (pickedId && !world?.locations?.some((l) => l.id === pickedId))) {
+      setPickedId('')
+    }
+  }, [travel, pickedId, currentLocationId, world])
 
   // Party follower: no movement of its own — travel + room chips off, only a
   // note. The leader pulls the avatar along.

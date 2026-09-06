@@ -9,7 +9,7 @@
 import type { SVGProps } from 'react'
 
 export type IconName =
-  | 'chat' | 'surroundings' | 'move' | 'worldmap' | 'self' | 'others'
+  | 'chat' | 'surroundings' | 'move' | 'self' | 'others'
   | 'inventory' | 'journal' | 'gallery' | 'instagram' | 'phone' | 'tasks' | 'layouts' | 'news'
   | 'reset' | 'close' | 'sendBack' | 'autosize' | 'maximize' | 'lock' | 'unlock'
   | 'chevronLeft' | 'chevronRight'
@@ -21,7 +21,7 @@ export type IconName =
 // Each entry = the inner content of one <svg> (paths/shapes).
 const PATHS: Record<IconName, JSX.Element> = {
   chat: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
-  // Umgebung — Landschaft (Sonne + Berge), KEIN Foto-Rahmen.
+  // Surroundings — landscape (sun + mountains), NOT a photo frame.
   surroundings: (
     <>
       <circle cx="6.5" cy="7" r="2.2" />
@@ -29,19 +29,11 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="m4 20 5-7 3 4 3-5 5 8" />
     </>
   ),
-  // Move — Kompass.
+  // Move — compass.
   move: (
     <>
       <circle cx="12" cy="12" r="9" />
       <path d="m16 8-2 6-6 2 2-6z" />
-    </>
-  ),
-  // Map — globe.
-  worldmap: (
-    <>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M3 12h18" />
-      <path d="M12 3a14.5 14.5 0 0 0 0 18 14.5 14.5 0 0 0 0-18" />
     </>
   ),
   self: (
