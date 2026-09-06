@@ -143,18 +143,6 @@ _NEG_PROP = "scene, environment, floor shadow, people, hands, text, watermark"
 # Admin-UI (leeres Feld = dieser Default greift). Ohne Backend-Fallback braucht
 # JEDER Use-Case einen Default fuer beide Familien.
 _DEFAULT_IMAGE_USE_CASES = {
-    "map": {
-        "keywords": {
-            "prompt_style": "{subject}, game map tile, photorealistic, oblique top-down angle with a slight tilt for depth, single close-up map tile, subject fills the entire frame edge to edge, cohesive palette, highly detailed, full-bleed, no border, no frame, borderless",
-            "prompt_negative": "people, person, characters, faces, text, words, letters, watermark, signature, logo, frame, border, framed, vignette, grid lines, map pins, icons, flat, completely top-down, straight-down view, blueprint, schematic, side view, ground level, eye level, horizon, sky, distant, far away, zoomed out, wide region, blurry, lowres, jpeg artifacts, low quality",
-            "prompt_instruction": "Write comma-separated keywords for a single close-up game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, photorealistic style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject fills the entire frame edge to edge, closely framed, no border or frame. No people, no text, no camera or style talk.",
-        },
-        "natural": {
-            "prompt_style": "a single close-up game map tile of {subject}, photorealistic, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, the subject closely framed and filling the entire frame edge to edge with no border or frame around it, cohesive palette, highly detailed",
-            "prompt_negative": "people, person, characters, faces, text, words, watermark, signature, logo, frame, border, framed, vignette, flat, completely top-down, straight-down view, blueprint, schematic, side view, ground level, eye level, horizon, sky, distant, far away, zoomed out, wide region, blurry, low quality",
-            "prompt_instruction": "Describe a single close-up game map tile of the place, viewed from an oblique top-down angle (slightly tilted, not flat straight-down) for a sense of depth, photorealistic style. Stay faithful to the subject — depict only what it describes and do not invent extra landmarks or structures. The subject is closely framed and fills the entire frame edge to edge with no border or frame. No people, no text.",
-        },
-    },
     "scene": {
         # Composed player scene (room background + present characters).
         # Without a style the models drift into 3D/CGI looks — the default
@@ -1115,6 +1103,41 @@ def _strip_dead_config_fields(config: dict) -> bool:
     return changed
 
 
+# Use-case entries whose render occasion no longer exists. They sit one level
+# deeper than DEAD_CONFIG_FIELDS (image_generation.use_cases.<name>), so the
+# flat strip above walks past them.
+#   map / mapfit — removed with the map-icon teardown
+#     (plan-rueckbau-2d-karte.md). "map" was the 2D map icon's use case;
+#     "mapfit" never had a default nor a reader and only ever reached a
+#     config.json by hand.
+DEAD_USE_CASES: tuple = ("map", "mapfit")
+
+
+def _strip_dead_use_cases(config: dict) -> bool:
+    """Removes the DEAD_USE_CASES from ``image_generation.use_cases``.
+
+    Runs AFTER the seeding step, which only knows the living use cases and
+    therefore never puts these back. Idempotent; returns True only when
+    something was actually removed.
+
+    In-memory only — see `migrate_file()` for the disk side.
+    """
+    ig = config.get("image_generation")
+    if not isinstance(ig, dict):
+        return False
+    use_cases = ig.get("use_cases")
+    if not isinstance(use_cases, dict):
+        return False
+    changed = False
+    for name in DEAD_USE_CASES:
+        if name in use_cases:
+            del use_cases[name]
+            changed = True
+    if changed:
+        logger.info("Dead image use cases removed (render occasion gone)")
+    return changed
+
+
 # Config fields that hold a RENDER TARGET — a backend-name glob ("Flux2*", or
 # an exact name), optionally with the tolerated legacy prefix "backend:". The
 # ComfyUI era also wrote "workflow:<glob>" here; that form resolves to None in
@@ -1187,6 +1210,8 @@ def _apply_file_migrations(config: dict, fresh_world: bool) -> bool:
     if _strip_legacy_imagegen_prompt_fields(config):
         changed = True
     if _strip_dead_config_fields(config):
+        changed = True
+    if _strip_dead_use_cases(config):
         changed = True
     if _rewrite_legacy_workflow_specs(config):
         changed = True

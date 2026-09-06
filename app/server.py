@@ -163,6 +163,17 @@ async def lifespan(app: FastAPI):
     except Exception as _bte:
         logger.warning("building image-type migration failed: %s", _bte)
 
+    # The 2D map icon is gone (plan-rueckbau-2d-karte.md): delete every
+    # gallery image typed "map"/"map_2d" and strip the map-icon keys from
+    # every location. Content-idempotent, so it runs on every boot.
+    try:
+        from app.models.world import migrate_map_images_once
+        _mi = migrate_map_images_once()
+        if _mi.get("images_deleted") or _mi.get("fields_stripped"):
+            logger.info("Map icons removed: %s", _mi)
+    except Exception as _mie:
+        logger.warning("map icon migration failed: %s", _mie)
+
     # Surface textures are shared across all worlds, not per world: leftover
     # world folders hand their files to shared/surface_textures/ once, on boot
     # (E5 Task 4, 2026-08-12). The sweep covers EVERY world under the worlds

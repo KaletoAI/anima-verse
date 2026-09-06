@@ -67,7 +67,7 @@ def _load_world_data() -> Dict[str, Any]:
         conn = get_connection()
         rows = conn.execute(
             "SELECT id, name, description, pos_x, pos_z, outfit_type, "
-            "image_prompt_day, image_prompt_night, image_prompt_map, "
+            "image_prompt_day, image_prompt_night, "
             "visible_when, accessible_when, background_images, meta, "
             "decency, style_hint, swim_allowed, activity_hint, yaw_deg "
             "FROM locations ORDER BY name ASC"
@@ -77,7 +77,7 @@ def _load_world_data() -> Dict[str, Any]:
             for r in rows:
                 meta = {}
                 try:
-                    meta = json.loads(r[12] or "{}")
+                    meta = json.loads(r[11] or "{}")
                 except Exception:
                     pass
                 if meta and "id" in meta:
@@ -91,27 +91,26 @@ def _load_world_data() -> Dict[str, Any]:
                         "description": r[2] or "",
                         "pos_x": r[3],
                         "pos_z": r[4],
-                        "yaw_deg": float(r[17] or 0.0),
+                        "yaw_deg": float(r[16] or 0.0),
                         "outfit_type": r[5] or "",
                         "image_prompt_day": r[6] or "",
                         "image_prompt_night": r[7] or "",
-                        "image_prompt_map": r[8] or "",
-                        "decency": r[13] or "",
-                        "style_hint": r[14] or "",
-                        "swim_allowed": bool(r[15]),
-                        "activity_hint": r[16] or "",
+                        "decency": r[12] or "",
+                        "style_hint": r[13] or "",
+                        "swim_allowed": bool(r[14]),
+                        "activity_hint": r[15] or "",
                         "rooms": [],
                     }
                     try:
-                        loc["visible_when"] = json.loads(r[9] or "[]")
+                        loc["visible_when"] = json.loads(r[8] or "[]")
                     except Exception:
                         loc["visible_when"] = []
                     try:
-                        loc["accessible_when"] = json.loads(r[10] or "[]")
+                        loc["accessible_when"] = json.loads(r[9] or "[]")
                     except Exception:
                         loc["accessible_when"] = []
                     try:
-                        loc["background_images"] = json.loads(r[11] or "[]")
+                        loc["background_images"] = json.loads(r[10] or "[]")
                     except Exception:
                         loc["background_images"] = []
                     loc.update(meta)
@@ -171,11 +170,11 @@ def _load_world_data() -> Dict[str, Any]:
                 # a float rotation, and the blob only gets the key once a
                 # rotation was actually set.
                 for key, col_idx, cast in (
-                    ("decency",       13, str),
-                    ("style_hint",    14, str),
-                    ("swim_allowed",  15, bool),
-                    ("activity_hint", 16, str),
-                    ("yaw_deg",       17, float),
+                    ("decency",       12, str),
+                    ("style_hint",    13, str),
+                    ("swim_allowed",  14, bool),
+                    ("activity_hint", 15, str),
+                    ("yaw_deg",       16, float),
                 ):
                     if key not in loc:
                         val = r[col_idx]
@@ -238,11 +237,11 @@ def _save_world_data(data: Dict[str, Any]):
                 conn.execute("""
                     INSERT INTO locations
                         (id, name, description, pos_x, pos_z, yaw_deg, outfit_type,
-                         image_prompt_day, image_prompt_night, image_prompt_map,
+                         image_prompt_day, image_prompt_night,
                          visible_when, accessible_when, background_images, meta,
                          decency, style_hint, swim_allowed, activity_hint,
                          created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         name=excluded.name,
                         description=excluded.description,
@@ -252,7 +251,6 @@ def _save_world_data(data: Dict[str, Any]):
                         outfit_type=excluded.outfit_type,
                         image_prompt_day=excluded.image_prompt_day,
                         image_prompt_night=excluded.image_prompt_night,
-                        image_prompt_map=excluded.image_prompt_map,
                         visible_when=excluded.visible_when,
                         accessible_when=excluded.accessible_when,
                         background_images=excluded.background_images,
@@ -272,7 +270,6 @@ def _save_world_data(data: Dict[str, Any]):
                     loc.get("outfit_type", ""),
                     loc.get("image_prompt_day", ""),
                     loc.get("image_prompt_night", ""),
-                    loc.get("image_prompt_map", ""),
                     json.dumps(loc.get("visible_when", []), ensure_ascii=False),
                     json.dumps(loc.get("accessible_when", []), ensure_ascii=False),
                     json.dumps(loc.get("background_images", []), ensure_ascii=False),
@@ -1416,8 +1413,6 @@ def add_location(name: str, description: str,
                   activities: List[Dict[str, str]] = None,
                   image_prompt_day: str = None,
                   image_prompt_night: str = None,
-                  image_prompt_map: str = None,
-                  image_prompt_map_2d: str = None,
                   image_prompt_building: str = None,
                   decency: str = None,
                   style_hint: str = None,
@@ -1434,8 +1429,6 @@ def add_location(name: str, description: str,
         activities: legacy — ignored when rooms is given
         image_prompt_day: prompt for the daytime background image (6-18h)
         image_prompt_night: prompt for the nighttime background image (18-6h)
-        image_prompt_map: prompt for the isometric map image (legacy)
-        image_prompt_map_2d: prompt for the flat 2D map icon
         image_prompt_building: prompt for the building exterior view
             (source image for the location's 3D building model)
         decency/style_hint/swim_allowed/indoor/activity_hint: location-level
@@ -1514,10 +1507,6 @@ def add_location(name: str, description: str,
                 if image_prompt_night != location.get("image_prompt_night", ""):
                     location["prompt_changed"] = True
                 location["image_prompt_night"] = image_prompt_night
-            if image_prompt_map is not None:
-                location["image_prompt_map"] = image_prompt_map
-            if image_prompt_map_2d is not None:
-                location["image_prompt_map_2d"] = image_prompt_map_2d
             if image_prompt_building is not None:
                 location["image_prompt_building"] = image_prompt_building
             # Location-level semantic fields — only when given.
@@ -1558,8 +1547,6 @@ def add_location(name: str, description: str,
         "rooms": new_rooms,
         "image_prompt_day": image_prompt_day or "",
         "image_prompt_night": image_prompt_night or "",
-        "image_prompt_map": image_prompt_map or "",
-        "image_prompt_map_2d": image_prompt_map_2d or "",
         "image_prompt_building": image_prompt_building or "",
         "decency": decency or "",
         "style_hint": style_hint or "",
@@ -1702,82 +1689,6 @@ def update_location_position(location_id: str, pos_x: Optional[float],
     return None
 
 
-def set_location_map_image(location_id: str, field: str, filename: str) -> Optional[Dict[str, Any]]:
-    """Set the per-cell map image of a location/clone.
-
-    ``field`` is ``map_image`` (iso) or ``map_image_2d`` (flat), ``filename``
-    the gallery file name (empty = remove the choice → first-match fallback).
-    Written directly on the (possibly thin clone) dict, so it survives the
-    clone merge."""
-    if field not in ("map_image", "map_image_2d"):
-        return None
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            if filename:
-                loc[field] = filename
-            else:
-                loc.pop(field, None)
-            _save_world_data(data)
-            return loc
-    return None
-
-
-def first_map_image(owner_id: str, image_type: str = "map_2d") -> str:
-    """Erste Galerie-Datei des angegebenen Map-Typs eines Galerie-Owners.
-
-    Gleiche Reihenfolge wie der Lese-Fallback in ``routes/world.py`` (Typ-Dict).
-    Leerer String, wenn der Owner kein Bild dieses Typs hat."""
-    if not owner_id:
-        return ""
-    gallery_dir = get_gallery_dir(owner_id)
-    for fn, tp in (get_gallery_image_types(owner_id) or {}).items():
-        if tp == image_type and (gallery_dir / fn).exists():
-            return fn
-    return ""
-
-
-def clear_map_image_references(image_name: str) -> int:
-    """Remove dangling ``map_image``/``map_image_2d`` pointers to a (deleted)
-    gallery image from ALL locations/clones — otherwise the cell shows the
-    first tile instead of the chosen one. Returns the number of cleaned
-    pointers."""
-    if not image_name:
-        return 0
-    data = _load_world_data()
-    locations = data.get("locations", [])
-    n = 0
-    for loc in locations:
-        for field in ("map_image", "map_image_2d"):
-            if loc.get(field) == image_name:
-                loc.pop(field, None)
-                n += 1
-    if n:
-        _save_world_data(data)
-    return n
-
-
-def set_location_map_rotation(location_id: str, rotation: int) -> Optional[Dict[str, Any]]:
-    """Setzt die 90°-Drehung des 2D-Karten-Icons eines Ortes/Klons.
-
-    ``rotation`` in {0, 90, 180, 270}; 0 entfernt das Feld (keine Drehung). Wird
-    nur als Anzeige-Transform genutzt (CSS rotate) — das Bild bleibt unveraendert.
-    Direkt auf dem (Klon-)Dict gesetzt, ueberlebt den Clone-Merge."""
-    rot = int(rotation) % 360
-    if rot not in (0, 90, 180, 270):
-        return None
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            if rot:
-                loc["map_rotation_2d"] = rot
-            else:
-                loc.pop("map_rotation_2d", None)
-            _save_world_data(data)
-            return loc
-    return None
-
-
 def cleanup_orphan_backgrounds() -> Dict[str, int]:
     """Entfernt tote Eintraege aus ``background_images`` und den Galerie-
     Meta-Dicts (``image_types``, ``image_rooms``, ``image_metas``,
@@ -1808,8 +1719,7 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
     touched_locs = 0
     touched_meta_files = 0
 
-    # DB-Eintraege: background_images + tote map_image/map_image_2d-Wahl pruunen.
-    pruned_mapchoice = 0
+    # DB entries: prune dead background_images references.
     for loc in locations:
         loc_id = loc.get("id") or ""
         if not loc_id:
@@ -1822,14 +1732,6 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
             if len(valid) != len(bgs):
                 loc["background_images"] = valid
                 pruned_bgs += len(bgs) - len(valid)
-                touched_locs += 1
-        # Remove a dangling tile choice (pointing at a deleted file) —
-        # otherwise the cell shows the first instead of the chosen tile.
-        for field in ("map_image", "map_image_2d"):
-            choice = (loc.get(field) or "").strip()
-            if choice and not (gallery_dir / choice).exists():
-                loc.pop(field, None)
-                pruned_mapchoice += 1
                 touched_locs += 1
 
     if touched_locs:
@@ -1890,14 +1792,13 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
                         touched_meta_files += 1
 
     logger.info(
-        "cleanup_orphan_backgrounds: pruned_bgs=%d (locations=%d), pruned_meta=%d (files=%d), pruned_mapchoice=%d",
-        pruned_bgs, touched_locs, pruned_meta, touched_meta_files, pruned_mapchoice)
+        "cleanup_orphan_backgrounds: pruned_bgs=%d (locations=%d), pruned_meta=%d (files=%d)",
+        pruned_bgs, touched_locs, pruned_meta, touched_meta_files)
     return {
         "pruned_bgs": pruned_bgs,
         "touched_locations": touched_locs,
         "pruned_meta": pruned_meta,
         "touched_meta_files": touched_meta_files,
-        "pruned_mapchoice": pruned_mapchoice,
     }
 
 
@@ -2145,11 +2046,6 @@ def clone_location(template_id: str, pos_x: float,
         # location predating this carries.
         "variant_seed": _random.randint(1, 0xFFFFFFFF),
     }
-    # No "auto" mode: assign the template's first map image right away (if
-    # there is one) — otherwise generation sets it later.
-    _fm = first_map_image(template_id, "map_2d")
-    if _fm:
-        clone["map_image_2d"] = _fm
     data["locations"].append(clone)
     _save_world_data(data)
     # Return it resolved — the frontend gets the merge-ready instance.
@@ -2243,20 +2139,12 @@ def get_background_path(location_identifier: str, room: str = "",
     image_rooms = get_gallery_image_rooms(owner_id) or {}
     image_types = get_gallery_image_types(owner_id) or {}
 
-    def _not_map(img: str) -> bool:
-        # Map tiles are never room backgrounds. "map" is the legacy type,
-        # "map_2d" the current tile type since the 2.5D→2D consolidation —
-        # the missing map_2d filter let tiles end up as chat-image room
-        # references (they were also background-flagged by the fit/edge
-        # save paths; both fixed, this filter heals existing worlds).
-        return image_types.get(img, "") not in ("map", "map_2d")
-
     # Candidate selection by rule:
     # 1) room set → try the room images
     # 2) no room images / no room → location images (without a room tag)
     candidates: List[str] = []
     if room:
-        candidates = [img for img in valid if image_rooms.get(img, "") == room and _not_map(img)]
+        candidates = [img for img in valid if image_rooms.get(img, "") == room]
         if not candidates and room == GROUND_ROOM_ID:
             # The ground room is the outdoors. The untagged location images are
             # the inside, so it must not fall back to them — it falls back to
@@ -2284,7 +2172,7 @@ def get_background_path(location_identifier: str, room: str = "",
             # Used by the regenerate path (see docstring).
             return None
     if not candidates:
-        candidates = [img for img in valid if image_rooms.get(img, "") == "" and _not_map(img)]
+        candidates = [img for img in valid if image_rooms.get(img, "") == ""]
     if not candidates:
         return None
 
@@ -2540,10 +2428,10 @@ def remove_gallery_image_room(location_name: str, image_name: str):
         _save_gallery_meta(location_name, meta)
 
 
-# === Bild-Typ-Zuordnung (day/night/map) ===
+# === Image type assignment (day/night/building-<view>) ===
 
 def set_gallery_image_type(location_name: str, image_name: str, image_type: str):
-    """Setzt den Typ eines Galerie-Bildes: 'day', 'night', 'map' oder '' (kein Typ)."""
+    """Set the type of a gallery image: 'day', 'night', 'building-<view>' or '' (no type)."""
     meta = _load_gallery_meta(location_name)
     types = meta.get("image_types", {})
     if image_type:
@@ -2555,7 +2443,7 @@ def set_gallery_image_type(location_name: str, image_name: str, image_type: str)
 
 
 def get_gallery_image_types(location_name: str) -> Dict[str, str]:
-    """Gibt alle Bild-Typ-Zuordnungen zurueck: {image_name: 'day'|'night'|'map'}."""
+    """Return all image type assignments: {image_name: 'day'|'night'|'building-<view>'}."""
     meta = _load_gallery_meta(location_name)
     return meta.get("image_types", {})
 
@@ -2616,6 +2504,83 @@ def migrate_building_image_type_once() -> Dict[str, int]:
         galleries += 1
         images += renamed
     return {"galleries": galleries, "images": images} if galleries else {}
+
+
+_MAP_ICON_KEYS = ("map_image", "map_image_2d", "map_rotation_2d",
+                  "image_prompt_map_2d", "image_prompt_map")
+_MAP_ICON_TYPES = ("map", "map_2d")
+
+
+def _drop_gallery_prompt(gallery_dir: Path, image_name: str) -> None:
+    """Remove one image's entry from a gallery's ``prompts.json``.
+
+    Does nothing when the file is missing or unreadable — a prompt sidecar is
+    a convenience, never the source of truth."""
+    prompts_file = gallery_dir / "prompts.json"
+    if not prompts_file.exists():
+        return
+    try:
+        prompts = json.loads(prompts_file.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(prompts, dict) or image_name not in prompts:
+        return
+    prompts.pop(image_name, None)
+    prompts_file.write_text(json.dumps(prompts, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+
+
+def migrate_map_images_once() -> Dict[str, int]:
+    """Delete the map-icon era from a world (plan-rueckbau-2d-karte.md E3).
+
+    Every gallery image typed ``map`` (isometric) or ``map_2d`` (flat icon)
+    is deleted from disk and from ``gallery_meta.json`` (image_types,
+    prompts, image_metas, image_rooms, background list), and the five
+    map-icon keys are stripped from every location record. Idempotent by
+    content: a world that carries nothing of it reports zeros. Runs at
+    every boot — an old content ZIP may re-import the keys, and this is the
+    one place that removes them again.
+    """
+    images_deleted = 0
+    fields_stripped = 0
+    data = _load_world_data()
+    changed = False
+    for loc in data.get("locations", []):
+        for k in _MAP_ICON_KEYS:
+            if k in loc:
+                loc.pop(k)
+                fields_stripped += 1
+                changed = True
+        lid = loc.get("id") or ""
+        if not lid:
+            continue
+        meta = _load_gallery_meta(lid)
+        types = meta.get("image_types") or {}
+        victims = [fn for fn, t in types.items() if t in _MAP_ICON_TYPES]
+        if not victims:
+            continue
+        gdir = get_gallery_dir(lid)
+        for fn in victims:
+            p = gdir / fn
+            if p.exists():
+                p.unlink()
+            types.pop(fn, None)
+            for section in ("image_metas", "rooms"):
+                if isinstance(meta.get(section), dict):
+                    meta[section].pop(fn, None)
+            _drop_gallery_prompt(gdir, fn)
+            if fn in (loc.get("background_images") or []):
+                loc["background_images"].remove(fn)
+                changed = True
+            images_deleted += 1
+        meta["image_types"] = types
+        _save_gallery_meta(lid, meta)
+    if changed:
+        _save_world_data(data)
+    if images_deleted or fields_stripped:
+        logger.info("map icons removed: %d images, %d fields",
+                    images_deleted, fields_stripped)
+    return {"images_deleted": images_deleted, "fields_stripped": fields_stripped}
 
 
 def set_gallery_image_meta(location_name: str, image_name: str, meta_info: dict):

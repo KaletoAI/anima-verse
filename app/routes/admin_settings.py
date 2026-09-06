@@ -1574,18 +1574,16 @@ def _parse_world_scope(request: Request) -> str:
 
 @router.post("/image-postprocess/dryrun")
 def image_postprocess_dryrun(request: Request, user=Depends(require_admin)):
-    """Scan items or map-tagged gallery images without writing.
+    """Scan item images without writing.
 
     Query:
-      * ``scope=item|map``                   — what to scan
-      * ``world_scope=current|all`` (map only) — default current world only
+      * ``scope=item``              — what to scan
+      * ``world_scope=current|all`` — default current world only
     Returns per-bucket and totals: files scanned/resized + estimated bytes saved.
-    Map scope only walks gallery images whose ``image_type=="map"``;
-    location backgrounds are ignored.
     """
     scope = (request.query_params.get("scope") or "").strip().lower()
-    if scope not in ("item", "map"):
-        raise HTTPException(status_code=400, detail="scope must be item or map")
+    if scope != "item":
+        raise HTTPException(status_code=400, detail="scope must be item")
     world_scope = _parse_world_scope(request)
     from app.core.image_postprocess import migrate_tree
     result = migrate_tree(scope, dry_run=True, world_scope=world_scope)
@@ -1599,12 +1597,12 @@ def image_postprocess_migrate(request: Request, user=Depends(require_admin)):
     """Re-encode images in place. Destructive — originals are not kept.
 
     Query:
-      * ``scope=item|map``
-      * ``world_scope=current|all`` (map only) — default current world only
+      * ``scope=item``
+      * ``world_scope=current|all`` — default current world only
     """
     scope = (request.query_params.get("scope") or "").strip().lower()
-    if scope not in ("item", "map"):
-        raise HTTPException(status_code=400, detail="scope must be item or map")
+    if scope != "item":
+        raise HTTPException(status_code=400, detail="scope must be item")
     world_scope = _parse_world_scope(request)
     from app.core.image_postprocess import migrate_tree
     result = migrate_tree(scope, dry_run=False, world_scope=world_scope)

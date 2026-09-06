@@ -13,8 +13,6 @@ on disk. This module:
 Use-cases (see ``ui`` config section, "Image Downscaling" group):
 
 * ``item`` → items in shared/items/<id>/ (default cap 512 px)
-* ``map``  → map-icon thumbnails (gallery images tagged image_type=map,
-             default cap 400 px)
 * anything else / unset → bypass (full resolution kept)
 
 Location/room backgrounds (day/night/scene/description) are NOT
@@ -26,7 +24,6 @@ alpha channels stay intact.
 from __future__ import annotations
 
 import io
-import re
 import time
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
@@ -36,18 +33,13 @@ from app.core.log import get_logger
 logger = get_logger("image_postprocess")
 
 
-# Numeric PNG filenames (timestamp-style) — only these are touched by
-# migrate_tree. Other PNGs (preview thumbs, frame, manual uploads) stay.
-_NUMERIC_PNG_RE = re.compile(r"^\d+\.png$")
-
-
 def _config():
     """Lazy import to avoid circular import at module load."""
     from app.core import config as _cfg
     return _cfg
 
 
-_DEFAULT_MAX_DIMS = {"item": 512, "map": 400}
+_DEFAULT_MAX_DIMS = {"item": 512}
 
 
 def _max_dim_for(use_case: str) -> Optional[int]:
@@ -153,12 +145,7 @@ def _walk_targets(use_case: str, *, world_scope: str = "current") -> Iterable[Pa
       * ``"current"`` (default) — only the active storage world (or
         ``shared/`` for the item case, which is cross-world by design)
       * ``"all"`` — walk every sibling under ``<project>/worlds/``
-
-    For ``map``, only PNGs whose filename appears in the surrounding
-    ``gallery_meta.json`` with ``image_type=="map"`` are returned.
-    Backgrounds (day/night/scene/description) are skipped entirely.
     """
-    import json as _json
     from app.core.paths import get_shared_dir, get_storage_dir
     project_root = get_shared_dir().parent
     worlds_root = project_root / "worlds"
@@ -182,33 +169,6 @@ def _walk_targets(use_case: str, *, world_scope: str = "current") -> Iterable[Pa
                     yield png
         return
 
-    if use_case == "map":
-        if world_scope == "all":
-            if not worlds_root.exists():
-                return
-            meta_paths = worlds_root.glob("*/world_gallery/*/gallery_meta.json")
-        else:
-            gallery_root = get_storage_dir() / "world_gallery"
-            if not gallery_root.exists():
-                return
-            meta_paths = gallery_root.glob("*/gallery_meta.json")
-
-        for meta_path in meta_paths:
-            try:
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    meta = _json.load(f)
-            except Exception as exc:
-                logger.warning("skipping unreadable gallery_meta %s: %s", meta_path, exc)
-                continue
-            image_types = meta.get("image_types") or {}
-            gallery_dir = meta_path.parent
-            for fname, t in image_types.items():
-                if t != "map":
-                    continue
-                p = gallery_dir / fname
-                if p.exists() and _NUMERIC_PNG_RE.match(p.name):
-                    yield p
-
 
 def migrate_tree(
     use_case: str,
@@ -216,7 +176,7 @@ def migrate_tree(
     dry_run: bool = True,
     world_scope: str = "current",
 ) -> Dict:
-    """Walk shared/items or worlds/<scope>/world_gallery and downscale.
+    """Walk shared/items and the per-world items dirs and downscale.
 
     ``world_scope`` is ``"current"`` (default) or ``"all"``. For items the
     scope is irrelevant (items live under shared/).

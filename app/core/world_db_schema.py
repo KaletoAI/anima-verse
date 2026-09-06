@@ -79,7 +79,6 @@ SCHEMA_STATEMENTS = [
         activity_hint    TEXT DEFAULT '',
         image_prompt_day TEXT DEFAULT '',
         image_prompt_night TEXT DEFAULT '',
-        image_prompt_map TEXT DEFAULT '',
         visible_when     TEXT DEFAULT '[]',
         accessible_when  TEXT DEFAULT '[]',
         background_images TEXT DEFAULT '[]',

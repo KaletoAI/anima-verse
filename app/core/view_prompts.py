@@ -71,7 +71,7 @@ def building_type(view: str) -> str:
 
 def building_view(image_type: Any) -> str:
     """The view a gallery image type names ('' when it is not a building
-    view type — ``day``, ``map_2d`` and the retired bare ``building`` alike)."""
+    view type — ``day`` and the retired bare ``building`` alike)."""
     if isinstance(image_type, str) and image_type in BUILDING_TYPES:
         return image_type[len("building-"):]
     return ""

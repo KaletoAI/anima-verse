@@ -80,8 +80,8 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      answers "" — such a location is not a `fill_missing building_model`
      candidate, because there would be nothing to generate FROM; (a) with two
      `building-front` images and no model it answers the NEWEST of them
-     ("new.png", mtime-ordered — "map.png" is typed `map_2d` and never
-     counts); (b) once a model exists whose sidecar names an EXISTING gallery
+     ("new.png", mtime-ordered — the untyped "map.png" never counts);
+     (b) once a model exists whose sidecar names an EXISTING gallery
      file, that file wins ("old.png" — a regeneration re-meshes the picture
      the model was made from); (c) a sidecar naming a file that is gone falls
      back to (a) again.
@@ -426,11 +426,10 @@ async def fake_gallery_generate(location_name, data):
     world.set_gallery_image_meta(location_name, new_name, {
         "backend": data["backend"], "backend_type": "http", "model": "",
         "loras": []})
-    # Mirror of the core: map tiles and every building VIEW are map/mesh art,
-    # never a room background (`building-front` … `building-right`).
+    # Mirror of the core: every building VIEW is mesh art, never a room
+    # background (`building-front` … `building-right`).
     from app.core.view_prompts import building_view
-    if (data.get("prompt_type") != "map_2d"
-            and not building_view(data.get("prompt_type"))):
+    if not building_view(data.get("prompt_type")):
         world.toggle_background_image(location_name, new_name)
     return {"status": "success", "location": location_name,
             "location_id": location_name, "image": new_name, "warnings": []}
@@ -684,7 +683,6 @@ check("(d) no building-view image at all → no source",
       subjects.building_source_image(LOC_ID), "")
 world.set_gallery_image_type(LOC_ID, "old.png", "building-front")
 world.set_gallery_image_type(LOC_ID, "new.png", "building-front")
-world.set_gallery_image_type(LOC_ID, "map.png", "map_2d")
 check("(a) without a model the NEWEST building-front image wins",
       subjects.building_source_image(LOC_ID), "new.png")
 check("(d) a location without any gallery image has none either",

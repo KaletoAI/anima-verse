@@ -9,7 +9,6 @@ import math
 import os
 import re
 from fastapi import HTTPException
-from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from app.core.log import get_logger
@@ -804,9 +803,8 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # (Nr. 5): it turned the mesh around the very axis the model sidecar's
     # own orientation fix (``fix_euler`` y) already turns, so it was a second
     # dial on one axis and nothing but a source of arithmetic error. The
-    # location itself is turned by its anchor pin (§ A1.1), ``map_rotation_2d``
-    # is strictly the 2D ICON artwork rotation. Nothing reads the field and
-    # it is not kept here either: a location saved once drops it.
+    # location itself is turned by its anchor pin (§ A1.1). Nothing reads the
+    # field and it is not kept here either: a location saved once drops it.
     # ``size`` — the model's ]0, 1] share of the location's bounding box — is
     # GONE with v6 (Nr. 3): a model scales through its DECLARED REAL WIDTH in
     # metres (sidecar ``width_m``), like every other model in the contract.
@@ -1763,8 +1761,6 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     rooms = data.get("rooms", [])
     image_prompt_day = data.get("image_prompt_day")
     image_prompt_night = data.get("image_prompt_night")
-    image_prompt_map = data.get("image_prompt_map")
-    image_prompt_map_2d = data.get("image_prompt_map_2d")
     image_prompt_building = data.get("image_prompt_building")
     danger_level = data.get("danger_level")
     event_settings = data.get("event_settings")
@@ -1790,8 +1786,6 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     location = add_location(location_name, description, rooms=rooms,
                             image_prompt_day=image_prompt_day,
                             image_prompt_night=image_prompt_night,
-                            image_prompt_map=image_prompt_map,
-                            image_prompt_map_2d=image_prompt_map_2d,
                             image_prompt_building=image_prompt_building,
                             # A caller that generates places in bulk (a map
                             # draft's stubs) says so: a name it repeats is a
@@ -1886,8 +1880,6 @@ def update_location_with_extras(location_id: str,
     rooms = data.get("rooms")
     image_prompt_day = data.get("image_prompt_day")
     image_prompt_night = data.get("image_prompt_night")
-    image_prompt_map = data.get("image_prompt_map")
-    image_prompt_map_2d = data.get("image_prompt_map_2d")
     image_prompt_building = data.get("image_prompt_building")
     danger_level = data.get("danger_level")
     event_settings = data.get("event_settings")
@@ -1915,7 +1907,7 @@ def update_location_with_extras(location_id: str,
     # Update description, rooms and image prompts if provided
     if rooms is not None:
         _sanitize_rooms_layout(rooms)
-    has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_map, image_prompt_map_2d, image_prompt_building])
+    has_updates = any(v is not None for v in [description, rooms, image_prompt_day, image_prompt_night, image_prompt_building])
     if has_updates:
         loc = get_location_by_id(location_id)
         if loc:
@@ -1924,8 +1916,6 @@ def update_location_with_extras(location_id: str,
                 rooms=rooms if rooms is not None else loc.get("rooms", []),
                 image_prompt_day=image_prompt_day if image_prompt_day is not None else loc.get("image_prompt_day", ""),
                 image_prompt_night=image_prompt_night if image_prompt_night is not None else loc.get("image_prompt_night", ""),
-                image_prompt_map=image_prompt_map if image_prompt_map is not None else loc.get("image_prompt_map", ""),
-                image_prompt_map_2d=image_prompt_map_2d if image_prompt_map_2d is not None else loc.get("image_prompt_map_2d", ""),
                 image_prompt_building=image_prompt_building if image_prompt_building is not None else loc.get("image_prompt_building", ""),
                 location_id=location_id)  # update by id — unambiguous with duplicate names
 
@@ -2214,7 +2204,7 @@ def build_imagegen_options() -> Dict[str, Any]:
         # sets settings_applied and the server prepends nothing.
         from app.core.config import resolve_use_case_style as _rucs
         _styles = {}
-        for _uc in ("location", "map", "building", "building_outdoor",
+        for _uc in ("location", "building", "building_outdoor",
                     "room_model", "room_model_outdoor",
                     "building_back", "building_side",
                     "building_outdoor_back", "building_outdoor_side",
@@ -2272,10 +2262,6 @@ def delete_gallery_image(location_name: str, image_name: str) -> Dict[str, Any]:
     remove_background_image(loc_id, image_name)
     remove_gallery_image_room(loc_id, image_name)
     remove_gallery_image_type(loc_id, image_name)
-    # Detach any dangling map_image/map_image_2d choice of this image from all
-    # cells (otherwise the cell shows the first tile instead of the chosen one).
-    from app.models.world import clear_map_image_references
-    clear_map_image_references(image_name)
 
     return {"status": "success", "deleted": image_name}
 
@@ -2312,13 +2298,13 @@ def assign_gallery_image_room(location_name: str, image_name: str,
 
 def assign_gallery_image_type(location_name: str, image_name: str,
                               image_type: str) -> Dict[str, Any]:
-    """Set the type of a gallery image (day/night/map_2d/building-<view> or
+    """Set the type of a gallery image (day/night/building-<view> or
     empty)."""
     from app.core.view_prompts import BUILDING_TYPES
-    if image_type and image_type not in ("day", "night", "map_2d", *BUILDING_TYPES):
+    if image_type and image_type not in ("day", "night", *BUILDING_TYPES):
         raise HTTPException(
             status_code=400,
-            detail="Type must be 'day', 'night', 'map_2d', one of "
+            detail="Type must be 'day', 'night', one of "
                    + ", ".join(f"'{t}'" for t in BUILDING_TYPES) + " or empty")
 
     loc = resolve_location(location_name)
@@ -2587,55 +2573,6 @@ def clear_location_backgrounds(location_name: str) -> Dict[str, Any]:
     return {"status": "success", "location": location_name}
 
 
-# === Map / tiles / map-fit helpers ===
-
-_MAP_MEDIA_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg',
-                    '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
-
-
-def _serve_map_icon(location_name: str, image_type: str, override_field: str):
-    """Serves the map icon of a location for the given gallery type.
-
-    Per-cell choice: if ``override_field`` is set on the (cloned) location and
-    the file exists in the owner gallery, EXACTLY this image is served — so
-    with several images every map cell can show its own one. Otherwise fall
-    back to the first image tagged as ``image_type``.
-    """
-    loc = resolve_location(location_name)
-    if not loc:
-        raise HTTPException(status_code=404, detail="Ort nicht gefunden")
-    loc_id = loc.get("id", "")
-    if not loc_id:
-        raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
-
-    # Clones share the gallery of their template (owner_id = template id).
-    from app.models.world import _gallery_owner_id
-    owner_id = _gallery_owner_id(location_name) or loc_id
-    gallery_dir = get_gallery_dir(owner_id)
-
-    # 1) Image explicitly chosen per location/clone (if set + file exists).
-    chosen = (loc.get(override_field) or "").strip()
-    if chosen:
-        p = gallery_dir / chosen
-        if p.exists():
-            return FileResponse(str(p),
-                                media_type=_MAP_MEDIA_TYPES.get(p.suffix.lower(), 'image/png'),
-                                headers={"Cache-Control": "no-cache"})
-
-    # 2) Fallback: first image tagged as image_type.
-    image_types = get_gallery_image_types(owner_id)
-    map_images = [img for img, t in image_types.items() if t == image_type]
-    if not map_images:
-        raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
-    for img_name in map_images:
-        img_path = gallery_dir / img_name
-        if img_path.exists():
-            return FileResponse(str(img_path),
-                                media_type=_MAP_MEDIA_TYPES.get(img_path.suffix.lower(), 'image/png'),
-                                headers={"Cache-Control": "max-age=300"})
-    raise HTTPException(status_code=404, detail="Kein Karten-Bild vorhanden")
-
-
 # === prompt-changed flag ===
 
 def set_location_prompt_changed(location_id: str, room_id: str,
@@ -2703,8 +2640,6 @@ def resolve_gallery_subject(location: Dict[str, Any], room_id: str,
         description = location.get("image_prompt_day", "").strip()
     elif not description and prompt_type == "night":
         description = location.get("image_prompt_night", "").strip()
-    elif not description and prompt_type == "map_2d":
-        description = location.get("image_prompt_map_2d", "").strip()
     elif not description and building_view(prompt_type):
         description = location.get("image_prompt_building", "").strip()
     if not description:
@@ -2732,7 +2667,7 @@ def gallery_use_case(location: Dict[str, Any], room_id: str,
                 else ("building_outdoor" if is_outdoor_room(location, "")
                       else "building"))
         return view_use_case(base, view)
-    return "map" if prompt_type == "map_2d" else "location"
+    return "location"
 
 
 def is_outdoor_room(location: Dict[str, Any], room_id: str) -> bool:
@@ -2747,7 +2682,7 @@ def gallery_conditions(location: Dict[str, Any], room_id: str,
     """The outdoor weather clause for a gallery render — ``""`` when none.
 
     Two conditions have to hold. The render must be a PICTURE OF THE WORLD
-    (use case ``location``): the ``room_model*``/``building*``/``map`` cases
+    (use case ``location``): the ``room_model*``/``building*`` cases
     are isolated 3D-asset renders on a plain ground with deliberately flat,
     shadowless lighting, and a snowstorm would wreck exactly that. And the
     place has to be open air — the room's flag wins over the location's.
@@ -2877,7 +2812,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             from app.models.world import get_gallery_image_rooms
             room_id = get_gallery_image_rooms(location_name).get(
                 (data.get("reference_image") or "").strip(), "")
-        prompt_type = data.get("prompt_type", "").strip()  # day/night/map/description
+        prompt_type = data.get("prompt_type", "").strip()  # day/night/building-<view>
         workflow_name = data.get("workflow", "").strip()
         backend_name = data.get("backend", "").strip()
         loras_override = data.get("loras")
@@ -2889,7 +2824,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
 
         # Prompt source: custom_prompt > room+type > room > prompt type > location description.
-        # Subject only — framing/style come from the use case (map/location).
+        # Subject only — framing/style come from the use case.
         prompt = custom_prompt or resolve_gallery_subject(
             location, room_id, prompt_type, location_name)
         from app.core.view_prompts import building_view, view_subject
@@ -2898,9 +2833,6 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # (settings_applied) and already carries it from the preview.
         if _view and not custom_prompt:
             prompt = view_subject(_view, prompt)
-
-        # The map/location style now comes from the use case (applied below
-        # via resolve_use_case_style) — no separate suffix anymore.
 
         # Core image SERVICE — not the skill-manager lookup (see the
         # generate_location_image comment; TakePhoto has no backends).
@@ -2915,7 +2847,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             lambda: [b.check_availability()
                      for b in img_skill.backends if b.instance_enabled])
 
-        # Backend selection: map-blend (inpaint) > match spec > explicit > auto (cheapest)
+        # Backend selection: match spec > explicit > auto (cheapest)
         backend = None
         if workflow_name:
             # Match concept: glob + availability instead of an exact name.
@@ -2966,8 +2898,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             from app.skills.image_regenerate import enhance_prompt
             prompt = await asyncio.to_thread(enhance_prompt, prompt, _improve, None)
             logger.info("Regenerate-Prompt via enhance_prompt umgeschrieben: %s", prompt[:120])
-        # Use-case style/negative: a map tile -> "map", otherwise the
-        # location background.
+        # Use-case style/negative for this render occasion.
         from app.core import config as _cfg
         _uc_name = gallery_use_case(location, room_id, prompt_type)
         _ucp = _cfg.resolve_use_case_style(
@@ -3022,17 +2953,8 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             _warnings = _composed.warnings
             for _w in _warnings:
                 logger.info("Prompt composer (%s): %s", _uc_name, _w)
-        # Map icons are small thumbnails for the world overview and get
-        # downscaled. Day/night/description stay at full resolution
-        # as background images.
         params: Dict[str, Any] = {"width": _location_image_width(), "height": _location_image_height()}
-        if prompt_type == "map_2d":
-            params["image_use_case"] = "map"
-            # Generate 2D map tiles square (1:1, Flux-native 1024) instead of
-            # the 16:9 location format — fills the tile. Otherwise landscape.
-            params["width"] = 1024
-            params["height"] = 1024
-        elif _view:
+        if _view:
             # Square so the whole subject fits with a margin — every building
             # view feeds the image-to-3D pass (like the T-pose reference), which
             # needs the full silhouette in frame, not a 16:9 crop.
@@ -3042,8 +2964,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # Caller-picked resolution beats every use-case default (2026-07-25):
         # a 2 x 5 room needs a 2 x 5 image, not the square building format.
         # Rounded/clamped above; unset keeps the default. Backends without a
-        # free size ignore the values — best effort, never an error. The
-        # map-blend canvas below still overrides both: its size is geometry.
+        # free size ignore the values — best effort, never an error.
         _req_w = _clamp_image_dim(data.get("width"))
         _req_h = _clamp_image_dim(data.get("height"))
         if _req_w:
@@ -3080,9 +3001,9 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         import random as _rnd
         params["seed"] = _rnd.randint(1, 2**31 - 1)
 
-        # Self-reference: the existing (map) image as reference in slot 1 —
-        # for "regenerate with current image" (e.g. so 2D tiles fit together
-        # better). Only if the backend has reference slots.
+        # Self-reference: the existing image as reference in slot 1 — for
+        # "regenerate with current image". Only if the backend has reference
+        # slots.
         if (data.get("use_source_as_reference") and data.get("reference_image")
                 and int(getattr(backend, "ref_slot_count", 0) or 0) >= 1):
             _ref_name = (data.get("reference_image") or "").strip()
@@ -3191,10 +3112,9 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
 
             # Mark the new image as background by default — do NOT toggle on an
             # in-place replace (otherwise an already-set flag flips over), and
-            # NOT for map tiles (map_2d) or building renders: those are map/mesh
-            # art, never a room background — flagged tiles used to leak into the
-            # room-reference slot of chat images.
-            if not _is_replace and prompt_type != "map_2d" and not _view:
+            # NOT for building renders: those are mesh art, never a room
+            # background.
+            if not _is_replace and not _view:
                 toggle_background_image(loc_id, image_name)
 
             # Set the room assignment when room_id is given
@@ -3224,14 +3144,9 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             })
 
             # Set the image type when prompt_type is given
-            # (day/night/map_2d/building-<view>)
-            if prompt_type in ("day", "night", "map_2d") or _view:
+            # (day/night/building-<view>)
+            if prompt_type in ("day", "night") or _view:
                 set_gallery_image_type(loc_id, image_name, prompt_type)
-            # Set the newly created map tile as the displayed map item right away
-            # (fit/neighbor + normal map_2d gen) — otherwise the old tile would stay active.
-            if prompt_type == "map_2d":
-                from app.models.world import set_location_map_image
-                set_location_map_image(loc_id, "map_image_2d", image_name)
 
             _tq.track_finish(_track_id)
             _gen_duration = time.time() - _gen_start

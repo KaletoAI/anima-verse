@@ -25,6 +25,12 @@ shrink without this file disagreeing:
     inventory        : item_image_width, item_image_height
     random_events    : event_image_denoise_strength
 
+Beside the flat table there is a NESTED strip: ``image_generation.use_cases``
+entries whose render occasion is gone — ``map`` and ``mapfit``, removed with
+the map-icon teardown. They sit one level deeper than the table above, so the
+flat sweep walks past them; test 4c is their hand case, and the world fixture
+of tests 8/9 carries both so the end-to-end path proves it too.
+
 The fields live at TWO depths: normally inside their section, but worlds older
 than the sectioning (worlds/demo, worlds/hotopia) carry
 ``item_image_width``/``item_image_height`` at the top level and have no
@@ -107,6 +113,9 @@ EXPECTED_DEAD = {
     "random_events": {"event_image_denoise_strength"},
 }
 
+# The nested strip's table, by hand: use-case entries with no render occasion.
+EXPECTED_DEAD_USE_CASES = {"map", "mapfit"}
+
 # Living neighbours that must survive the strip untouched.
 LIVING = {
     "image_generation": {
@@ -171,6 +180,10 @@ def main():
           f"DEAD_CONFIG_FIELDS == 13 fields of the table (got {actual})")
     check(sum(len(v) for v in actual.values()) == 13,
           "13 fields in total")
+    check(set(cfgmod.DEAD_USE_CASES) == EXPECTED_DEAD_USE_CASES,
+          f"DEAD_USE_CASES == map + mapfit (got {set(cfgmod.DEAD_USE_CASES)})")
+    check(not (EXPECTED_DEAD_USE_CASES & set(cfgmod._DEFAULT_IMAGE_USE_CASES)),
+          "neither dead use case is a built-in default any more")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "config.json"
@@ -205,6 +218,21 @@ def main():
         check(cfgmod._strip_dead_config_fields(clean) is False,
               "clean config -> no change")
         check(clean == LIVING, "clean config untouched")
+
+        print("4c) the nested use-case strip removes map + mapfit")
+        uc_cfg = {"image_generation": {"use_cases": {
+            "map": {"styles": {"keywords": {"prompt_style": "tile"}}},
+            "mapfit": {"styles": {}},
+            "location": {"styles": {"keywords": {"prompt_style": "keep me"}}},
+        }}}
+        check(cfgmod._strip_dead_use_cases(uc_cfg) is True,
+              "returns True on the first run")
+        check(set(uc_cfg["image_generation"]["use_cases"]) == {"location"},
+              "map and mapfit are gone, the living use case stays")
+        check(cfgmod._strip_dead_use_cases(uc_cfg) is False,
+              "idempotent — the second run reports no change")
+        check(cfgmod._strip_dead_use_cases({"image_generation": {}}) is False,
+              "a config without use_cases is left alone")
 
         print("5) top-level strays (worlds older than the sectioning)")
         check(set(cfgmod.DEAD_TOPLEVEL_FIELDS)
@@ -284,6 +312,9 @@ def main():
                 "backends": [{"name": "gpu-a", "enabled": True,
                               "category": "generate", "prompt_prefix": "old",
                               "api_key": ""}],
+                # Both dead use cases, as an older world's config.json holds
+                # them — seeded before the map-icon teardown.
+                "use_cases": {"map": {"styles": {}}, "mapfit": {"styles": {}}},
             },
             "inventory": {"item_image_width": 128, "max_items": 50},
             "item_image_height": 256,

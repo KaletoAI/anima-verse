@@ -2,10 +2,10 @@
 """Smoke run for the World-Dev field coverage (Block W).
 
 Covers the plumbing the audit found leaking: the location-level semantic
-fields (decency / indoor / swim_allowed / style_hint / activity_hint) and the
-2D map prompt have to survive ``add_location`` -> DB -> load, in BOTH branches
-(new location and update of an existing one), and the room-level overrides
-have to come back untouched.
+fields (decency / indoor / swim_allowed / style_hint / activity_hint) have to
+survive ``add_location`` -> DB -> load, in BOTH branches (new location and
+update of an existing one), and the room-level overrides have to come back
+untouched.
 
 Hand-derived room count: an author submits ONE room, and the location comes
 back with TWO. That is the reserved GROUND ROOM (plan-grundflaeche.md § 3):
@@ -75,7 +75,6 @@ CREATE = dict(
     activity_hint="swim and sunbathe",
     image_prompt_day="sunny bay, day",
     image_prompt_night="sunny bay, night",
-    image_prompt_map_2d="flat 2d icon of a bay",
     rooms=[{
         "name": "Changing room",
         "description": "Small wooden cabin.",
@@ -101,7 +100,6 @@ UPDATE = dict(
     activity_hint="relax in the water",
     image_prompt_day="covered spa, day",
     image_prompt_night="covered spa, night",
-    image_prompt_map_2d="flat 2d icon of a spa",
     rooms=[{
         "name": "Pool hall",
         "description": "Warm indoor pool.",
@@ -116,8 +114,7 @@ UPDATE = dict(
 )
 
 LOC_FIELDS = ("description", "decency", "indoor", "swim_allowed", "style_hint",
-              "activity_hint", "image_prompt_day", "image_prompt_night",
-              "image_prompt_map_2d")
+              "activity_hint", "image_prompt_day", "image_prompt_night")
 ROOM_FIELDS = ("name", "description", "decency", "indoor", "swim_allowed",
                "style_hint", "activity_hint", "image_prompt_day",
                "image_prompt_night")
@@ -149,9 +146,8 @@ def main() -> int:
     run("1] create branch", CREATE)
     run("2] update branch — same name, every value changed", UPDATE)
 
-    print("\n[3] the legacy map prompt is not invented")
+    print("\n[3] exactly one location came out of both calls")
     loc = load(UPDATE["name"])
-    check("image_prompt_map stays empty", loc.get("image_prompt_map", ""), "")
     check("exactly one location exists", len(list_locations()), 1)
 
     print("\n[4] the ground room survives the update untouched")

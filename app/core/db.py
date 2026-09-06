@@ -434,6 +434,27 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("pose catalog field migration failed: %s", e)
 
+    # One-shot migration: drop the isometric map prompt column
+    # (plan-rueckbau-2d-karte.md). The map-icon era is gone — the column held
+    # the prompt for the retired isometric map image and has no reader left.
+    flag = conn.execute(
+        "SELECT value FROM schema_meta WHERE key='map_icons_removed_v1'"
+    ).fetchone()
+    if not flag:
+        try:
+            cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(locations)").fetchall()}
+            if "image_prompt_map" in cols:
+                conn.execute(
+                    "ALTER TABLE locations DROP COLUMN image_prompt_map")
+                logger.info("map icons: image_prompt_map column dropped")
+            conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES "
+                "('map_icons_removed_v1', '1')"
+            )
+        except Exception as e:
+            logger.warning("map icon column migration failed: %s", e)
+
     # One-shot Migration: Legacy-Keys aus character_state.meta entfernen.
     # Plan §8 (Schritt 8 Cleanup, May 2026):
     #   - runtime_outfit_skip → outfit_intent.forbidden_slots (Schritt 2)

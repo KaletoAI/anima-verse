@@ -2378,8 +2378,8 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         # A building has NO yaw dial of its own any more (v6 Nr. 10): the
         # sidecar's orientation fix (``fix_euler`` y) turns the mesh, and the
         # location itself is turned by its anchor pin (§ A1.1). The old
-        # ``map3d.rotation`` → ``map_rotation_2d`` chain was a second turn on
-        # the SAME axis and only ever a source of arithmetic error.
+        # ``map3d.rotation`` chain was a second turn on the SAME axis and only
+        # ever a source of arithmetic error.
         "yaw_deg": 0.0,
         # The width is met AFTER the yaw — a model turned 325° must still fit
         # its location, so the rotated footprint is what gets measured.

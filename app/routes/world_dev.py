@@ -1141,9 +1141,6 @@ def _apply_world_data_sync(data: Any):
     rooms = location_data.get("rooms", [])
     image_prompt_day = location_data.get("image_prompt_day")
     image_prompt_night = location_data.get("image_prompt_night")
-    # The live 2D map renders from image_prompt_map_2d — the only map prompt
-    # the schema generates.
-    image_prompt_map_2d = location_data.get("image_prompt_map_2d")
 
     # Normalize image_prompt fields
     for room in rooms:
@@ -1159,7 +1156,6 @@ def _apply_world_data_sync(data: Any):
         rooms=rooms,
         image_prompt_day=image_prompt_day,
         image_prompt_night=image_prompt_night,
-        image_prompt_map_2d=image_prompt_map_2d,
         image_prompt_building=location_data.get("image_prompt_building"),
         decency=location_data.get("decency"),
         style_hint=location_data.get("style_hint"),
@@ -2476,7 +2472,6 @@ def _apply_json_sync(data: Any):
             rooms=rooms,
             image_prompt_day=payload.get("image_prompt_day"),
             image_prompt_night=payload.get("image_prompt_night"),
-            image_prompt_map_2d=payload.get("image_prompt_map_2d"),
             image_prompt_building=payload.get("image_prompt_building"),
             decency=payload.get("decency"),
             style_hint=payload.get("style_hint"),
