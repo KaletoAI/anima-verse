@@ -22,7 +22,6 @@ A location has the following fields:
   "activity_hint": "Free-text hint (in the user's language) describing what characters typically do at this location as a whole — e.g. 'eat, drink and socialize'. The per-room hints below refine it.",
   "image_prompt_day": "English prompt for a daytime background image. Describe the scene in detail for AI image generation. No text, no people.",
   "image_prompt_night": "English prompt for a nighttime background image. Same scene as daytime but nighttime atmosphere.",
-  "image_prompt_map_2d": "English prompt for a flat 2D map icon of the location — top-down, simplified, clean. No text, no people.",
   "image_prompt_building": "English prompt for a three-quarter exterior view of the whole building (source for the location's 3D building model) — full structure in frame, neutral background, no people, no interior. ALWAYS set this when the location is or contains a building; leave empty only for open terrain (beach, clearing, lake).",
   "rooms": [
     {
@@ -48,7 +47,7 @@ A location has the following fields:
 ### CRITICAL: image prompts ALWAYS in English
 
 **EVERY field with the `image_prompt_*` suffix** (`image_prompt_day`, `image_prompt_night`,
-`image_prompt_map_2d`, `image_prompt_building`) MUST be written in **English** — even if the user is communicating
+`image_prompt_building`) MUST be written in **English** — even if the user is communicating
 with you in another language. These prompts feed directly into AI image generation;
 non-English words are not understood by the image model and produce poor images.
 
@@ -59,9 +58,8 @@ non-English words are not understood by the image model and produce poor images.
   prompt** describes the scene in English.
 - Image prompts contain **no people, no text and no writing** in the image.
 - Both day AND night variants (`image_prompt_day` + `image_prompt_night`) MUST be set.
-  The map prompt (`image_prompt_map_2d`) should always be set; the building prompt
-  (`image_prompt_building`) MUST be set whenever the location is or contains a building
-  (empty only for open terrain). Both must also be English.
+  The building prompt (`image_prompt_building`) MUST be set whenever the location is or
+  contains a building (empty only for open terrain). It must also be English.
 
 
 - `activity_hint` (location AND per room): free-text direction of what one typically does there. Activities are NOT a fixed library — characters act freely; this hint only inspires the LLM. Keep it short and in the user's language. Set the location-level hint to the place's overall purpose; refine per room where a room differs. Leave a room's hint empty only when nothing specific applies.

@@ -83,12 +83,12 @@ Infermatic) in the [README](../README.md#getting-started).
       host activities).
    3. Add **activities** per room (free text, e.g. "drinking coffee", "people-watching") — picked
       by the LLM via the `set_activity` skill.
-   4. Optionally fill day / night / map **image prompts** — backgrounds render asynchronously in
+   4. Optionally fill day / night **image prompts** — backgrounds render asynchronously in
       the background; you can keep editing.
 
-10. **Position locations on the world map.** Drag the location cards in the map view — positions set
-    `grid_x` / `grid_y` and are saved on drop. Characters move between adjacent cells, so positions
-    are not just cosmetic.
+10. **Position locations on the world map.** Drag the location outlines in the Map tab — positions
+    are metres (`pos_x`/`pos_z`), saved on drop. Characters travel along routes over the painted
+    terrain.
 
 11. **(Optional) Gate a room behind an item.** In the Game-Admin:
 

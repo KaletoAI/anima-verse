@@ -1228,11 +1228,10 @@ E1 unberührt:
   Nachbar-Blending, Outpainting, der Bildtyp `map_3x3` und ihre Routen
   sind ersatzlos gelöscht (sie waren seit E1 ohne Aufrufer, und
   **gezeichnet** hat die Kachelbilder zuletzt der Spieler-Panel, der seit
-  **E5** eine Schemakarte ist, § A11). Geblieben sind allein
-  `map_image_2d` und `map_rotation_2d`: das Footprint-Icon der Karte und
-  **allein dessen 90°-Anzeigedrehung**. Der früher daran hängende Yaw der
-  Szenen-Kette ist mit v6 Nr. 10 weg (§ A1.8) — `map_rotation_2d` erreicht
-  keinen 3D-Renderer, keine Szenen-Signatur und keine Draft-Vorschau mehr.
+  **E5** eine Schemakarte ist, § A11). Mit dem Rückbau 2026-09
+  (plan-rueckbau-2d-karte.md) sind auch `map_image_2d`, `map_rotation_2d`,
+  der Galerie-Typ `map_2d` und der Use-Case `map` gelöscht; die Karte zeigt
+  Orte nur noch als Umriss, Grundriss oder Dachansicht.
 
 Der **Reise-Payload (§ A11) war in E1 unverändert** (Zellen-Felder auf einer
 Meter-Karte, praktisch aber `travel: null`, weil ohne Raster keine Reise
@@ -1792,7 +1791,7 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
   `noise`, Zonen von der toward-Kante, `kind:"neighbor"` = häufigste
   Nicht-toward-Nachbar-Art). 404/leer/unbekannt → eingebaute prozedurale
   Fallbacks. 2D-Map-Icons werden NICHT als Boden verwendet
-  (`map-icon-2d` ist für den 3D-Pfad tot — README-Verweis streichen).
+  (es gibt keine Karten-Icons mehr).
 - **Die Zuordnung `terrain` → Bibliotheks-Kind macht der SERVER**
   (2026-08-05, plan-grundflaeche.md § 5). Jede Location-Auslieferung, die
   `terrain` trägt (`/world/locations`; **seit E1 NICHT mehr der

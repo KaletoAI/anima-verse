@@ -109,8 +109,8 @@ stops acting autonomously).
 - **Avatar takeover:** step into any playable character — their location/mood/outfit follow your
   decisions and they stop acting on their own.
 - **Structured movement only:** characters change location via the `set_location` skill
-  (pathfinder over named places), a single `move` grid step, or a teleport spell — never by RP text
-  claiming a cross-location jump. A 2D **world map** shows where everyone is and what they're doing.
+  (pathfinder over named places) or a teleport spell — never by RP text claiming a cross-location
+  jump. The player map shows where everyone is and what they're doing.
 - Locations → rooms → activities (**activity is free text**, not a fixed library). Per-location
   `known_locations`, an `entry_room`, item-gated rooms, and rule-based access control.
 - **Events:** disruption / danger events can swap the room background and spawn temporary access
