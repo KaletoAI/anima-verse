@@ -770,3 +770,31 @@ export function levelOutline(
   }
   return map3d?.outline || []
 }
+
+// ── Where a placement's `at` is measured from ────────────────────────────
+//
+// `props[].at` / `markers[].at` are stored ROOM-LOCAL in a room and
+// LOCATION-LOCAL on the yard (§ A13a). The two helpers below are that one
+// conversion, and they live here because the canvas, the drag math and the
+// strips all need the same answer.
+
+/** The min corner of a shape IN THE COORDINATES ITS `at` VALUES ARE STORED IN
+ *  — `[0, 0]` for a room, the derived bounding box's corner for the yard.
+ *  Two consequences, and they are the whole conversion:
+ *
+ *      room-local metres (what `rx`/`rz` want) = stored `at` − atOrigin
+ *      stored `at` = `storedAt(...)` of the plan point, clamped to
+ *                    atOrigin … atOrigin + w/d
+ *
+ *  For an ordinary room both collapse to what the editor always did. */
+export const atOrigin = (lay: RoomFrame, ground: boolean): Pt =>
+  (ground ? [lay.x, lay.y] : [0, 0])
+
+/** A plan point (LOCATION-local metres) in the frame `at` is STORED in: the
+ *  yard's `at` already is a location metre, a room's is room-local — and a
+ *  TURNED room's is room-local in its STRAIGHT frame, so the cursor has to be
+ *  turned back (contract v6 addendum). The inverse of what the room div is
+ *  drawn with; without it every drag on a turned room would drop the piece
+ *  somewhere else. */
+export const storedAt = (lay: RoomFrame, ground: boolean, p: Pt): Pt =>
+  (ground ? p : localToRoom(lay, p))
