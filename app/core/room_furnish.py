@@ -38,12 +38,12 @@ the solver's frame is shifted by the boundary's min corner and back
 """
 
 import json
-import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import get_connection, transaction
+from app.core.llm_json import llm_json
 from app.core.log import get_logger
 from app.core.timeutils import utc_now_iso
 
@@ -342,37 +342,6 @@ def _used_area(placements: List[Dict[str, Any]],
 
 # ── LLM plumbing ────────────────────────────────────────────────────────
 
-_JSON_OBJ_RE = re.compile(r"\{.*\}", re.S)
-_JSON_ARR_RE = re.compile(r"\[.*\]", re.S)
-
-
-def _parse_json(raw: str) -> Optional[Dict[str, Any]]:
-    """Strict-ish JSON extraction: the answer must contain ONE object; code
-    fences and stray prose around it are tolerated, everything else is a
-    parse failure (the caller retries once). A bare top-level ARRAY — the
-    common "forgot the wrapper" slip — is accepted as ``{"_list": [...]}``."""
-    text = (raw or "").strip()
-    if not text:
-        return None
-    match = _JSON_OBJ_RE.search(text)
-    if match:
-        try:
-            obj = json.loads(match.group(0))
-            if isinstance(obj, dict):
-                return obj
-        except ValueError:
-            pass
-    match = _JSON_ARR_RE.search(text)
-    if match:
-        try:
-            arr = json.loads(match.group(0))
-            if isinstance(arr, list):
-                return {"_list": arr}
-        except ValueError:
-            pass
-    return None
-
-
 def _list_field(obj: Dict[str, Any], key: str) -> List[Any]:
     """The expected list under ``key`` — falling back to an unwrapped array."""
     val = obj.get(key)
@@ -384,26 +353,10 @@ def _list_field(obj: Dict[str, Any], key: str) -> List[Any]:
 
 def _llm_json(task: str, system_prompt: str, user_prompt: str,
               label: str) -> Dict[str, Any]:
-    """One LLM task expecting a JSON object, with EXACTLY one repair attempt
-    (the model gets its own broken answer back and is asked for valid JSON)."""
-    from app.core.llm_router import llm_call
-    response = llm_call(task=task, system_prompt=system_prompt,
-                        user_prompt=user_prompt, agent_name="system", label=label)
-    raw = str(getattr(response, "content", "") or "")
-    obj = _parse_json(raw)
-    if obj is not None:
-        return obj
-    logger.info("room_furnish %s: unparsable answer, one repair attempt", task)
-    repair = (f"{raw[:4000]}\n\n"
-              "That was not valid JSON. Return the SAME content as a single "
-              "valid JSON object — no markdown, no code fence, no explanation.")
-    response = llm_call(task=task, system_prompt=system_prompt,
-                        user_prompt=repair, agent_name="system",
-                        label=f"{label} (repair)")
-    obj = _parse_json(str(getattr(response, "content", "") or ""))
-    if obj is None:
-        raise FurnishError(f"The {task} answer was not valid JSON.")
-    return obj
+    """The shared strict-JSON hop (``llm_json``), failing as a
+    :class:`FurnishError` — the job row shows that message verbatim, so the
+    error type is what this job binds to the shared helper."""
+    return llm_json(task, system_prompt, user_prompt, label, error=FurnishError)
 
 
 def _num(value: Any, lo: float, hi: float) -> Optional[float]:

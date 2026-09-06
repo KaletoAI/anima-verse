@@ -69,7 +69,7 @@ import { PropVariantStrip } from './PropVariantStrip'
 import {
   groupKeys, groupLabel, newId, posesInGroup, previewEntry, usePoseCatalog,
 } from '../world/placeTypes'
-import { CATEGORY_DATALIST_ID, PROP_EXTRA_VIEWS } from './propTypes'
+import { CATEGORY_DATALIST_ID, MOUNT_KINDS, PROP_EXTRA_VIEWS } from './propTypes'
 import {
   DESC_ROWS_OPEN, DESC_ROWS_REST, DIM_FIELDS, SINK_LIMIT_M, descPatch,
   dimRatios, dimsPatch, facePatch, sinkPatch,
@@ -514,6 +514,15 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const tagsNow = draftValue(buf, GENERAL_TARGET, 'tags', prop.tags.join(', '))
   const swayNow = draftValue<number>(buf, GENERAL_TARGET, 'sway_factor',
     prop.sway_factor ?? 1)
+  const mountNow = draftValue<string>(buf, GENERAL_TARGET, 'mount',
+    prop.mount || '')
+  // The LLM's guess is only still open while nothing has been DECIDED about
+  // the field in this draft: queueing a mount confirms it on Save, even when
+  // it is the value that was already there, so the hint goes the moment the
+  // buffer carries the key — not only when the value differs.
+  const mountSuggested = !!prop.mount_suggested
+    && draftValue<string | undefined>(buf, GENERAL_TARGET, 'mount',
+      undefined) === undefined
 
   // The RAW box of the mesh the viewer has OPEN, i.e. the SELECTED variant's,
   // measured on load. What the overlays scale by is the mesh on screen: a
@@ -1038,6 +1047,35 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                   if (tagsDraft !== tagsNow) queueGeneral({ tags: tagsDraft })
                 }} />
             </Field>
+            {/* WHICH SURFACE this piece is set down on — a fact about the
+                object, so it sits beside category and tags. Empty is a real
+                option: "nobody has said yet", which is what the furnish
+                solver has to be able to tell from an explicit "floor". */}
+            <Field label={t('Mount')}
+              hint={mountSuggested
+                ? t('suggested by LLM — confirm or change')
+                : undefined}>
+              <select className="ga-input" value={mountNow}
+                title={t('Which surface the furnish solver may set this prop down on.')}
+                onChange={(e) => queueGeneral({ mount: e.target.value })}>
+                <option value="">{t('— unclassified —')}</option>
+                {MOUNT_KINDS.map((m) => (
+                  <option key={m.kind} value={m.kind}>{t(m.label)}</option>
+                ))}
+              </select>
+            </Field>
+            {/* Agreeing with the guess is a decision too, and a select cannot
+                report the value it already shows — so the confirmation has
+                its own button. It queues the very same mount, which is what
+                clears the suggestion mark on Save. */}
+            {mountSuggested ? (
+              <Field label={t('Suggestion')} compact>
+                <button type="button" className="ga-btn ga-btn-sm"
+                  onClick={() => queueGeneral({ mount: mountNow })}>
+                  {t('Confirm')}
+                </button>
+              </Field>
+            ) : null}
             {/* The one number that describes the WHOLE object rather than one
                 of its versions: how hard it bends in the wind. It rides the
                 same row as the other prop-wide fields instead of holding a

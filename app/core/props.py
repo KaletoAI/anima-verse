@@ -21,7 +21,8 @@ Storage: ``worlds/<world>/props/<prop_id>/``:
                        from (one per variant, see the source-image law below)
     sidecar.json     — the prop MASTER record: {name, category, tags[],
                        bbox[3], sway_factor, slots[], slots_auto,
-                       key_areas[], created_at, source, prompt,
+                       key_areas[], mount, mount_suggested, created_at,
+                       source, prompt,
                        model_variants[{…, area_defaults{}, slot_values{}}]}
     model_<ts>.glb.areas.json — outline edges + mesh layout of the picture
                        areas of THAT mesh (spec-picture-props.md § 2)
@@ -89,6 +90,22 @@ How many ACTIVE variants a prop may have is ``image_generation.prop_variant_max`
 dims/bbox are measured from, and what every payload publishes as its single
 ``variants`` map — a consumer that knows nothing about variants keeps rendering
 exactly what it rendered before.
+
+HOW THE OBJECT IS MOUNTED (2026-09-06, plan-furnish-v2.md § 2 B1). Two fields
+on the PROP — the object hangs or stands the same way in every one of its
+versions — that both records (lean and full) always publish:
+
+===================  ========================================================
+``mount``            one of :data:`MOUNT_KINDS` (``floor`` / ``wall`` /
+                     ``ceiling`` / ``surface``) — which surface the furnish
+                     solver may set this piece down on. ``""`` = NOT
+                     CLASSIFIED, which is what an absent key means: silence
+                     is not "floor", or every picture would end up on the
+                     ground. An explicit ``floor`` IS stored.
+``mount_suggested``  True = the value is the classifier's guess
+                     (``props_mount.classify_mounts``) and is waiting to be
+                     confirmed. Any manual write of ``mount`` clears it.
+===================  ========================================================
 
 ``prop_id`` = slug of the name + a short hash (stable, file-safe).
 
@@ -292,6 +309,28 @@ SWAY_FACTOR_MIN, SWAY_FACTOR_MAX = 0.0, 1.0
 #: automatic base + ``ground_offset_m`` + ``offset_y``.
 GROUND_OFFSET_DEFAULT = 0.0
 GROUND_OFFSET_MIN, GROUND_OFFSET_MAX = -5.0, 5.0
+
+# ── Mount kind (plan-furnish-v2.md § 2 B1) ──────────────────────────────
+#: HOW this object is mounted — the one fact that decides which SURFACE the
+#: furnish solver may set it down on: the floor, a wall, the ceiling, or the
+#: top of another prop. It is a property of the OBJECT, not of one of its
+#: versions (a sapling hangs no differently than a pine), so it sits on the
+#: prop record beside ``category`` and ``tags``.
+#:
+#: ``surface`` is the one that is not a room face: a candle, a mug, a kettle
+#: stands ON another piece of furniture.
+MOUNT_KINDS = ("floor", "wall", "ceiling", "surface")
+#: Sidecar key. ABSENCE is "not classified yet", NOT "floor": most of a stock
+#: grown before the field existed says nothing, and a solver that read that
+#: silence as "floor" would nail every picture to the ground. An explicit
+#: ``floor`` is stored — that is the difference between an answer and no
+#: answer, and the only way the admin can see what is still open.
+MOUNT_KEY = "mount"
+#: Marker beside it: True = the value is the LLM's guess (:func:`classify_mounts`
+#: in ``props_mount``), waiting for the admin to confirm or correct it. Any
+#: manual write of ``mount`` clears the flag — picking a value IS the
+#: confirmation, even when it is the value that was already there.
+MOUNT_SUGGESTED_KEY = "mount_suggested"
 
 # ── Texture slots (plan-door-props-texture-slots) ───────────────────────
 #: The surfaces of a prop's mesh that can later be FILLED: a picture frame that
@@ -1361,6 +1400,27 @@ def sanitize_key_areas(raw: Any) -> List[str]:
                              + ", ".join(AREA_KINDS) + ")")
         wanted.add(kind)
     return [k for k in AREA_KINDS if k in wanted]
+
+
+def sanitize_mount(raw: Any) -> str:
+    """One of :data:`MOUNT_KINDS`, or ``""`` for "unclassified" — anything else
+    is a ``ValueError`` naming the allowed kinds (:func:`sanitize_key_areas`'
+    law: a silently dropped kind would report "Saved" over a value that
+    reached nothing).
+
+    ``None`` and the empty string are the CLEAR: they take the record back to
+    "nothing said about this prop", which is a real answer here and the state
+    every prop from before the field is in.
+    """
+    if raw is None:
+        return ""
+    kind = str(raw).strip().lower()
+    if not kind:
+        return ""
+    if kind not in MOUNT_KINDS:
+        raise ValueError(f"unknown mount kind {kind!r} (known: "
+                         + ", ".join(MOUNT_KINDS) + ")")
+    return kind
 
 
 def _coerce_vec(raw: Any, n: int, label: str) -> List[float]:
@@ -2634,7 +2694,8 @@ def _reconcile_areas(pid: str, variant: Any = None) -> None:
 def create_prop(*, name: str, category: str = "", width_m: Any = None,
                 depth_m: Any = None, height_m: Any = None,
                 tags: Any = None, description: str = "", prompt: str = "",
-                source: str = "manual", key_areas: Any = None) -> Dict[str, Any]:
+                source: str = "manual", key_areas: Any = None,
+                mount: str = "") -> Dict[str, Any]:
     """Create a new prop record (sidecar only — the model/source files are
     added by upload or the generation chain). Returns ``{id, **sidecar}``.
 
@@ -2643,6 +2704,11 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
     (:func:`compose_prompt`) and every landing mesh is split automatically
     (:func:`_areas_after_landing`). Stored only when non-empty; an unknown
     kind is ``ValueError``.
+
+    ``mount`` (:data:`MOUNT_KINDS`) says how the object is mounted — stored
+    only when it names one of the four kinds, because absence IS the
+    "unclassified" state the classifier later fills in; an unknown kind is
+    ``ValueError``.
 
     Dims: whatever is given is taken, every missing one becomes the LARGEST
     given value (a rough cube); nothing given = 1 m per dim. They land on the
@@ -2670,6 +2736,7 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
     if subject:
         variant[DESCRIPTION_KEY] = subject
     keys = sanitize_key_areas(key_areas)
+    mount_kind = sanitize_mount(mount)
     meta = {
         "name": name,
         "category": (category or "").strip(),
@@ -2687,6 +2754,8 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
     }
     if keys:
         meta[KEY_AREAS_KEY] = keys
+    if mount_kind:
+        meta[MOUNT_KEY] = mount_kind
     _write_sidecar(prop_id, meta)
     logger.info("Prop %s created (%s)", prop_id, name)
     return {"id": prop_id, **meta}
@@ -2697,7 +2766,7 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
 #: the variants (2026-08-25), and :data:`MOVED_TO_VARIANT` names those so a
 #: stale client is REFUSED instead of silently writing a key nobody reads.
 PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor", "slots",
-                   "key_areas")
+                   "key_areas", MOUNT_KEY)
 #: The fields that are variant-only now. A prop-level patch naming one of
 #: them is a 400 with the route that owns it — never a no-op: an editor that
 #: still sends ``height_m`` here would report "Saved" over a value that never
@@ -2742,6 +2811,8 @@ def _check_prop_patch(patch: Dict[str, Any],
         sanitize_slots(patch.get(SLOTS_KEY))
     if KEY_AREAS_KEY in patch:
         sanitize_key_areas(patch.get(KEY_AREAS_KEY))
+    if MOUNT_KEY in patch:
+        sanitize_mount(patch.get(MOUNT_KEY))
 
 
 def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
@@ -2784,11 +2855,23 @@ def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
             meta[KEY_AREAS_KEY] = keys
         else:
             meta.pop(KEY_AREAS_KEY, None)
+    if MOUNT_KEY in patch:
+        # A MANUAL write is the confirmation: whatever the classifier had
+        # guessed stops being a suggestion the moment the admin picks a value,
+        # even the same one (that is what "confirm" means in the detail).
+        # An empty value clears the field back to unclassified — absence is
+        # the "nothing said" state, so it is stored as absence.
+        kind = sanitize_mount(patch.get(MOUNT_KEY))
+        if kind:
+            meta[MOUNT_KEY] = kind
+        else:
+            meta.pop(MOUNT_KEY, None)
+        meta.pop(MOUNT_SUGGESTED_KEY, None)
 
 
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update the PROP's own fields (name / category / tags / sway_factor /
-    slots / key_areas). None when the prop does not exist.
+    slots / key_areas / mount). None when the prop does not exist.
 
     Raises ``ValueError`` when the patch names one of the fields that
     moved onto the variants (:data:`MOVED_TO_VARIANT`) — the route maps that to
@@ -2805,6 +2888,31 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
     _apply_prop_fields(meta, patch)
     _write_sidecar(pid, meta)
     return {"id": pid, **meta}
+
+
+def set_suggested_mount(prop_id: str, mount: str) -> bool:
+    """Store a CLASSIFIER's mount guess (``props_mount.classify_mounts``) —
+    the value plus :data:`MOUNT_SUGGESTED_KEY`. False when the prop does not
+    exist; ``ValueError`` for an unknown kind.
+
+    Its own writer beside :func:`update_prop`, because the two differ in
+    exactly the flag: a guess arrives marked as one and waits to be
+    confirmed, a manual patch clears the mark. Clearing the field is not a
+    thing a guess does — an empty kind is refused here rather than stored as
+    "unclassified with a suggestion", which is not a state.
+    """
+    kind = sanitize_mount(mount)
+    if not kind:
+        raise ValueError("a suggested mount must name one of: "
+                         + ", ".join(MOUNT_KINDS))
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
+        return False
+    meta[MOUNT_KEY] = kind
+    meta[MOUNT_SUGGESTED_KEY] = True
+    _write_sidecar(pid, meta)
+    return True
 
 
 def set_rotation(prop_id: str, rotation: Any, variant: Any = None,
@@ -5439,6 +5547,16 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         # Areas, leaf box, orientation fix and pane defaults are on
         # `variant_tiers[i]` — nothing of the kind on the record (v2 E1).
         KEY_AREAS_KEY: list(meta.get(KEY_AREAS_KEY) or []),
+        # HOW this object is mounted, and whether that is the classifier's
+        # guess. On the LEAN record too: the furnish solver reads it off the
+        # same listing the client library does, and `""` is the honest answer
+        # for a prop nobody has classified — never a defaulted "floor". A
+        # hand-edited sidecar carrying an unknown kind reads back as
+        # unclassified rather than as itself: reading is as forgiving as
+        # writing is strict (`sway_factor_of`).
+        MOUNT_KEY: (meta.get(MOUNT_KEY)
+                    if meta.get(MOUNT_KEY) in MOUNT_KINDS else ""),
+        MOUNT_SUGGESTED_KEY: bool(meta.get(MOUNT_SUGGESTED_KEY)),
         "marker_count": len(variant_markers(meta, primary)),
         "has_model": has_model,
         "model_tiers": tiers,
@@ -5549,7 +5667,7 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
 def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
     """All props. ``full`` adds the sidecar detail + file urls (admin);
     otherwise the lean client shape (id, name, category, width_m, depth_m,
-    height_m, tags, marker_count, has_model).
+    height_m, tags, mount, mount_suggested, marker_count, has_model).
 
     The marker LISTS ride only on the full record — the lean client library
     gets the count, exactly as before the markers became per-variant."""

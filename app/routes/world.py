@@ -2052,11 +2052,13 @@ def _prop_generate_sync(data: Any) -> Dict[str, Any]:
 @router.post("/props")
 async def prop_create(request: Request) -> Dict[str, Any]:
     """Create a prop record (body: {name, category?, width_m?, depth_m?,
-    height_m?, description?, tags?, key_areas?}). Missing dims become the
-    largest given one; size and description land on the prop's FIRST MODEL
+    height_m?, description?, tags?, key_areas?, mount?}). Missing dims become
+    the largest given one; size and description land on the prop's FIRST MODEL
     VARIANT, where both live (2026-08-25). The model/source files follow via
     upload or the generation chain. ``key_areas`` (``["picture", "glass"]``)
-    has every landing mesh split into picture areas; an unknown kind is a 400."""
+    has every landing mesh split into picture areas; an unknown kind is a 400.
+    ``mount`` (floor / wall / ceiling / surface) says which surface the piece
+    is set down on — omitted means unclassified, an unknown kind is a 400."""
     data = await request.json()
     return await asyncio.to_thread(_prop_create_sync, data)
 
@@ -2074,7 +2076,8 @@ def _prop_create_sync(data: Any) -> Dict[str, Any]:
                            width_m=data.get("width_m"), depth_m=data.get("depth_m"),
                            height_m=data.get("height_m"), tags=data.get("tags"),
                            description=str(data.get("description") or ""),
-                           key_areas=data.get("key_areas"))
+                           key_areas=data.get("key_areas"),
+                           mount=str(data.get("mount") or ""))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok", "prop": prop}
@@ -2135,6 +2138,42 @@ def _prop_stack_y_sync(data: Any) -> Dict[str, Any]:
     return {"offset_y": placement_stack_offset_y(placements, index)}
 
 
+@router.post("/props/mount-classify")
+async def prop_mount_classify(
+    request: Request,
+    _: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Have the LLM classify HOW props are mounted (body: ``{prop_ids?: [...]}``)
+    → ``{classified, mounts: {prop_id: mount}, unresolved: [prop_id, …]}``.
+
+    Without ``prop_ids`` every prop that has no ``mount`` yet is classified;
+    with them exactly those, whatever they say today. Each answer is stored
+    as a SUGGESTION (``mount_suggested``) the admin confirms or corrects in
+    the prop detail. Nothing to classify is a 409 — the button would otherwise
+    report a successful run over an LLM call that never happened.
+    """
+    data = await request.json() if await request.body() else {}
+    return await asyncio.to_thread(_prop_mount_classify_sync, data)
+
+
+def _prop_mount_classify_sync(data: Any) -> Dict[str, Any]:
+    """The blocking body of ``prop_mount_classify`` — runs in the threadpool."""
+    from app.core.props_mount import classify_mounts
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    raw = data.get("prop_ids")
+    if raw is not None and not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="prop_ids must be a list")
+    ids = [str(pid) for pid in raw] if isinstance(raw, list) else None
+    result = classify_mounts(ids)
+    # An empty SELECTION is the only way both counts come back at zero: a
+    # selection the model answered nothing for leaves its ids in `unresolved`.
+    if not result["classified"] and not result["unresolved"]:
+        raise HTTPException(status_code=409,
+                            detail="No props to classify.")
+    return result
+
+
 @router.get("/props/{prop_id}/export")
 def export_prop_route(prop_id: str,
                       _: Dict[str, Any] = Depends(require_admin)) -> StreamingResponse:
@@ -2167,8 +2206,12 @@ def prop_detail(prop_id: str) -> Dict[str, Any]:
 @router.post("/props/{prop_id}")
 async def prop_update(prop_id: str, request: Request) -> Dict[str, Any]:
     """Update the PROP's own fields (body: {name?, category?, tags?,
-    sway_factor?, slots?, area_defaults?}). `sway_factor` at its default 1.0
-    (and any junk) clears the key rather than storing it. `area_defaults`
+    sway_factor?, slots?, mount?, area_defaults?}). `sway_factor` at its
+    default 1.0 (and any junk) clears the key rather than storing it.
+    `mount` is one of floor / wall / ceiling / surface — an unknown kind is a
+    400 naming them, `""` clears the field back to unclassified, and any
+    value written here confirms it (the classifier's `mount_suggested` mark
+    goes). `area_defaults`
     (`{"<area id>": {"preset": "glass"}}`) is checked against the prop's
     picture areas — an unknown area or preset is a 400.
 
@@ -2204,7 +2247,7 @@ def _prop_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
 @router.post("/props/{prop_id}/bulk")
 async def prop_bulk_update(prop_id: str, request: Request) -> Dict[str, Any]:
     """THE BATCH SAVE of the prop detail (body: ``{general?: {name?, category?,
-    tags?, sway_factor?, slots?}, variants?: {"<store index>": {dims?, description?,
+    tags?, sway_factor?, slots?, mount?}, variants?: {"<store index>": {dims?, description?,
     ground_offset_m?, markers?, seasons?}}}``) — every field edit of one prop in
     ONE request and ONE sidecar write.
 

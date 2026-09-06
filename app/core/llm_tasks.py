@@ -72,6 +72,11 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "furnish_select":     {"label": "Furnish: Pick Library Props", "priority": Priority.NORMAL, "category": "tool"},
     "furnish_new":        {"label": "Furnish: Propose New Pieces", "priority": Priority.NORMAL, "category": "tool"},
     "furnish_place":      {"label": "Furnish: Placement Plan",     "priority": Priority.NORMAL, "category": "tool"},
+    # Which surface a prop may be set down on (floor / wall / ceiling / on
+    # another prop) — a one-off classification of the LIBRARY, run from the
+    # Props tab, that the furnish solver then reads. Same class of work as the
+    # three above and no thinking, for the same reason.
+    "prop_mount_classify": {"label": "Props: Classify Mount",       "priority": Priority.NORMAL, "category": "tool"},
 
     # LLM-Blender models (docs/llm-blender-models.md): the roof form of ONE
     # building as a small declarative JSON object. Everything the answer says
@@ -399,6 +404,20 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": True, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": False, "language_de": False, "latency_sensitive": False,
+    },
+    "prop_mount_classify": {
+        # hallucination_risk low: every answer is matched back against the
+        # batch's own refs and against the four known kinds — an invented
+        # reference or kind is dropped and the prop stays unclassified, and
+        # the admin confirms or corrects each guess in the Props tab
+        # (`mount_suggested`). min_context 4096 with no measurement (n=0):
+        # one line per prop, up to 40 props per call.
+        # latency_sensitive True, unlike the three furnish tasks above: this
+        # one runs behind a button the admin is waiting in front of, not
+        # inside a job that already waits half an hour on a mesh.
+        "tools": False, "vision": False, "json": True, "min_context": 4096,
+        "model_class": "medium", "arch": "any", "hallucination_risk": "low",
+        "creative": False, "language_de": False, "latency_sensitive": True,
     },
     "roof_design": {
         # The smallest structured-output task in the catalog: a handful of

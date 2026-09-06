@@ -158,6 +158,35 @@ export interface PropFull {
    *  carries — areas, leaf box, orientation fix, pane defaults — sits on the
    *  variant entry below. */
   key_areas?: string[]
+  /** WHICH SURFACE this object is set down on — the fact the furnish solver
+   *  hangs a picture on a wall and a candle on a table by. `''` = nobody has
+   *  classified it yet, which is NOT "floor". */
+  mount?: MountKind
+  /** True = `mount` is the classifier's guess and is waiting to be confirmed
+   *  (the detail says so; picking any value clears it). */
+  mount_suggested?: boolean
+}
+
+/** The four mount kinds, mirroring `props.MOUNT_KINDS`. `''` is not one of
+ *  them — it is the ABSENCE of an answer, and every reader has to keep the
+ *  two apart. */
+export type MountKind = 'floor' | 'wall' | 'ceiling' | 'surface'
+
+/** The mount kinds as the admin picks them: the server token plus the English
+ *  source string every label goes through `t()` with. ONE list — the filter
+ *  select, the list column and the detail's select all read it. */
+export const MOUNT_KINDS: { kind: MountKind; label: string }[] = [
+  { kind: 'floor', label: 'Floor' },
+  { kind: 'wall', label: 'Wall' },
+  { kind: 'ceiling', label: 'Ceiling' },
+  { kind: 'surface', label: 'Surface (on another prop)' },
+]
+
+/** The English label of a mount kind — `''` for the unclassified state and
+ *  for a kind this client does not know (a newer server), which the callers
+ *  render as the em dash rather than as a crash. */
+export function mountLabel(kind: string | undefined): string {
+  return MOUNT_KINDS.find((m) => m.kind === kind)?.label || ''
 }
 
 /**

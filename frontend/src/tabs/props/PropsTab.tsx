@@ -21,7 +21,7 @@ import { useToast } from '../../lib/Toast'
 import { PropCreateForm } from './PropCreateForm'
 import { PropDetail } from './PropDetail'
 import { PropImageDialog } from './PropImageDialog'
-import { CATEGORY_DATALIST_ID } from './propTypes'
+import { CATEGORY_DATALIST_ID, MOUNT_KINDS, mountLabel } from './propTypes'
 import type {
   ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage, PropView,
 } from './propTypes'
@@ -77,6 +77,20 @@ export function PropsTab() {
       image?: PropSourceImage; subject?: string } | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
+  // How the pieces are MOUNTED: '' = every prop, 'none' = the ones nobody has
+  // classified yet (the working list of the classify button), otherwise one
+  // of the four kinds. 'none' is its own token because the unclassified state
+  // is the ABSENCE of a kind, not a kind.
+  const [mountFilter, setMountFilter] = useState('')
+  // Props whose size is still the placeholder cube the create form wrote
+  // (`dims_estimated`). Those metres are what the furnish budget is spent
+  // from, so a wrong one eats a room — this filter is where the admin finds
+  // them (plan-furnish-v2.md § 2 B3).
+  const [estimatedOnly, setEstimatedOnly] = useState(false)
+  // The classify run: the confirmation the button opens, and whether it is
+  // running (the route is synchronous — it holds the LLM call).
+  const [classifyOpen, setClassifyOpen] = useState(false)
+  const [classifying, setClassifying] = useState(false)
   // How many unsaved FIELD edits the open detail holds (its change buffer,
   // `pendingFields`). A tab switch is asked about by the shell
   // (`lib/unsavedGuard`), but switching to another prop never leaves this tab —
@@ -172,11 +186,36 @@ export function PropsTab() {
     const q = query.trim().toLowerCase()
     return props.filter((p) => {
       if (catFilter && p.category !== catFilter) return false
+      if (mountFilter === 'none' ? !!p.mount
+        : mountFilter && p.mount !== mountFilter) return false
+      if (estimatedOnly && !p.dims_estimated) return false
       if (!q) return true
       return p.name.toLowerCase().includes(q)
         || p.tags.some((tag) => tag.toLowerCase().includes(q))
     })
-  }, [props, query, catFilter])
+  }, [props, query, catFilter, mountFilter, estimatedOnly])
+
+  /** How many props have no mount yet — what the classify run would work on,
+   *  and the number its confirmation states. */
+  const unclassified = useMemo(
+    () => props.filter((p) => !p.mount).length, [props])
+
+  const classifyMounts = useCallback(async () => {
+    setClassifyOpen(false)
+    setClassifying(true)
+    try {
+      const d = await apiPost<{ classified?: number; unresolved?: string[] }>(
+        '/world/props/mount-classify', {})
+      toast(t('{n} props classified, {m} unresolved')
+        .replace('{n}', String(d?.classified || 0))
+        .replace('{m}', String((d?.unresolved || []).length)))
+      await load()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setClassifying(false)
+    }
+  }, [load, t, toast])
 
   const selectedProp = props.find((p) => p.id === selected) || null
 
@@ -187,11 +226,18 @@ export function PropsTab() {
           title={t('Props')}
           onNew={() => navigate('', true)}
           extra={
-            <ImportButton
-              endpoint="/world/props/import"
-              overwriteSupported
-              onImported={() => { void load(); setCacheBump((b) => b + 1) }}
-            />
+            <>
+              <button className="ga-btn ga-btn-sm" disabled={classifying}
+                onClick={() => setClassifyOpen(true)}
+                title={t('Let the LLM say how each unclassified prop is mounted — on the floor, on a wall, on the ceiling or on another prop.')}>
+                {classifying ? t('Classifying…') : t('Classify mount (LLM)')}
+              </button>
+              <ImportButton
+                endpoint="/world/props/import"
+                overwriteSupported
+                onImported={() => { void load(); setCacheBump((b) => b + 1) }}
+              />
+            </>
           }
         />
         <div className="ga-form-row" style={{ padding: '0 8px 8px' }}>
@@ -202,7 +248,21 @@ export function PropsTab() {
             <option value="">{t('All categories')}</option>
             {categories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
+          <select className="ga-input" value={mountFilter} style={{ maxWidth: 140 }}
+            onChange={(e) => setMountFilter(e.target.value)}>
+            <option value="">{t('All mounts')}</option>
+            <option value="none">{t('Unclassified')}</option>
+            {MOUNT_KINDS.map((m) => (
+              <option key={m.kind} value={m.kind}>{t(m.label)}</option>
+            ))}
+          </select>
         </div>
+        <label className="ga-check-row" style={{ padding: '0 8px 8px' }}
+          title={t('Props whose size is still the placeholder cube of the create form. Those metres are what a room’s furnishing budget is spent from — fix them in the variant strip.')}>
+          <input type="checkbox" checked={estimatedOnly}
+            onChange={(e) => setEstimatedOnly(e.target.checked)} />
+          {t('Estimated size only')}
+        </label>
         <ul className="ga-list">
           {!loaded ? (
             <li className="ga-list-empty">{t('Loading…')}</li>
@@ -240,11 +300,33 @@ export function PropsTab() {
                         {p.category ? `${p.category} · ` : ''}
                         {`${p.width_m}×${p.depth_m}×${p.height_m} m`}
                       </span>
+                      {/* The mount column: which surface the piece is set
+                          down on. An em dash where nobody has said yet —
+                          that is a to-do, not a floor. */}
+                      <span className="ga-list-row-sub"
+                        title={t('How this prop is mounted')}>
+                        {p.mount ? t(mountLabel(p.mount)) : '—'}
+                      </span>
+                      {p.mount_suggested ? (
+                        <span className="ga-tag"
+                          title={t('Suggested by the LLM — open the prop to confirm or change it.')}>
+                          {t('suggested')}
+                        </span>
+                      ) : null}
                     </span>
                     {pending.includes(p.id) ? (
                       <span className="ga-source">{t('generating…')}</span>
                     ) : null}
                     {!p.has_model ? <span className="ga-source">{t('no model')}</span> : null}
+                    {/* The placeholder cube of the create form is what a
+                        room's furnishing budget is spent from — a wrong one
+                        eats the room, so it is flagged here. */}
+                    {p.dims_estimated ? (
+                      <span className="ga-tag ga-tag-missing"
+                        title={t('The size is still the placeholder cube of the create form — fix it in the variant strip before this prop is furnished into a room.')}>
+                        {t('size estimated')}
+                      </span>
+                    ) : null}
                     {/* Several meshes of the same object — worth seeing from
                         the list, a scattered prop looks different with them. */}
                     {(p.variant_count || 0) > 1 ? (
@@ -429,6 +511,34 @@ export function PropsTab() {
           }}
           onClose={() => setImgRegen(null)}
         />
+        {/* The classify run is asked about before it starts: it costs an LLM
+            call per 40 props and writes a value into every one of them. Real
+            UI, never a window.confirm. */}
+        {classifyOpen ? (
+          <div className="ga-modal-backdrop" role="presentation">
+            <div className="ga-modal" role="dialog" aria-modal="true"
+              aria-label={t('Classify mount (LLM)')} style={{ maxWidth: 460 }}>
+              <div className="ga-modal-header">
+                <h3>{t('Classify mount (LLM)')}</h3>
+              </div>
+              <div className="ga-modal-body">
+                {unclassified
+                  ? t('{n} props have no mount yet. The LLM says for each of them whether it stands on the floor, hangs on a wall or on the ceiling, or sits on another prop — as a suggestion you confirm or change per prop.')
+                    .replace('{n}', String(unclassified))
+                  : t('Every prop already has a mount. There is nothing to classify.')}
+              </div>
+              <div className="ga-modal-footer">
+                <button className="ga-btn" onClick={() => setClassifyOpen(false)}>
+                  {t('Cancel')}
+                </button>
+                <button className="ga-btn ga-btn-primary" disabled={!unclassified}
+                  onClick={() => { void classifyMounts() }}>
+                  {t('Classify')}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {/* The prop-switch guard. The same question the shell asks before a
             tab switch, asked here because a prop switch stays inside the tab
             — and asked as UI, never as window.confirm. */}

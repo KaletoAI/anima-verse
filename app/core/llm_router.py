@@ -338,9 +338,10 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
                 return resolve_llm(_parent, agent_name=agent_name)
         # Task FAMILIES without a parent task of their own fall back to a
         # generic anchor of their class: furnish_* is strict-JSON tool work →
-        # "intent" (the tool-class fallback). An explicit routing entry in
+        # "intent" (the tool-class fallback), and so is the prop-mount
+        # classifier the furnishing reads. An explicit routing entry in
         # /admin/settings always wins over this.
-        if task.startswith("furnish_"):
+        if task.startswith("furnish_") or task == "prop_mount_classify":
             logger.debug("resolve_llm(%s): no routing, falling back to 'intent'",
                          task)
             return resolve_llm("intent", agent_name=agent_name)
