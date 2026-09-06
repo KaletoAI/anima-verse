@@ -4378,6 +4378,34 @@ def _footprint_contains(box: Dict[str, Any], px: float, pz: float) -> bool:
             and abs(lz) <= float(box.get("depth_m") or 0.0) / 2.0)
 
 
+def stack_on_support(support: Dict[str, Any],
+                     target: Dict[str, Any]) -> float:
+    """THE STACKING FORMULA, without asking WHETHER the two boxes meet: the
+    ``offset_y`` that sets ``target`` down on ``support``'s top surface.
+
+    Both boxes are shaped as :func:`stack_offset_y` documents them; only the
+    vertical facts are read here (``ground_offset_m``, ``offset_y`` and
+    ``height_m`` of the support, ``ground_offset_m`` of the target), so a
+    caller that already KNOWS which piece carries which — a placement with a
+    parent link ``on`` (``room_recipe.compose_on_chain``) — needs no footprint
+    and no ``at`` at all::
+
+        top(support) = ground_offset_m(support) + offset_y(support) + height_m(support)
+        offset_y(target) = top(support) − ground_offset_m(target)
+
+    ``offset_y`` of the support is its FINISHED one (a tray already lying on a
+    table brings the table's height with it), which is why the chain composes
+    supports before their children.
+
+    One formula, two entry points: :func:`stack_offset_y` runs the footprint
+    test in front of it and hands over the topmost box it found.
+    """
+    top = (float(support.get("ground_offset_m") or 0.0)
+           + float(support.get("offset_y") or 0.0)
+           + float(support.get("height_m") or 0.0))
+    return round(top - float(target.get("ground_offset_m") or 0.0), 3)
+
+
 def stack_offset_y(boxes: Sequence[Dict[str, Any]], index: int) -> Optional[float]:
     """THE STACKING RULE — the ``offset_y`` that sets one placement down on the
     prop it stands over ("put the teapot on the table"). ``None`` when no other
@@ -4411,12 +4439,16 @@ def stack_offset_y(boxes: Sequence[Dict[str, Any]], index: int) -> Optional[floa
     turned box covers this placement's anchor qualifies, and of those the one
     with the highest top surface wins (a mug on a tray on a table). Ties fall to
     the LATER placement — the one drawn on top in the plan.
+
+    The arithmetic itself is :func:`stack_on_support`; what happens here is the
+    SEARCH for the box to hand it.
     """
     if index < 0 or index >= len(boxes):
         return None
     target = boxes[index]
     px, pz = float(target["at"][0]), float(target["at"][1])
-    best: Optional[float] = None
+    best: Optional[Dict[str, Any]] = None
+    best_top: Optional[float] = None
     for i, box in enumerate(boxes):
         if i == index or not box:
             continue
@@ -4425,61 +4457,11 @@ def stack_offset_y(boxes: Sequence[Dict[str, Any]], index: int) -> Optional[floa
         top = (float(box.get("ground_offset_m") or 0.0)
                + float(box.get("offset_y") or 0.0)
                + float(box.get("height_m") or 0.0))
-        if best is None or top >= best:
-            best = top
+        if best_top is None or top >= best_top:
+            best, best_top = box, top
     if best is None:
         return None
-    return round(best - float(target.get("ground_offset_m") or 0.0), 3)
-
-
-def placement_stack_offset_y(placements: Sequence[Dict[str, Any]],
-                             index: int) -> Optional[float]:
-    """:func:`stack_offset_y` for a STORED placement list — the library read in
-    front of the pure rule.
-
-    ``placements`` is ``layout.props`` as the floor-plan editor holds it
-    (``prop_id``, ``at``, ``yaw?``, ``offset_y?``, ``variant?``); a placement
-    whose prop the library does not know drops out of the candidate list — a
-    dangling id has no measurable surface to stand on. Scattered copies never
-    take part: they are computed at compose time and stored nowhere, so no
-    author can point at one.
-
-    EVERY box is resolved for ITS OWN variant (2026-08-24), target and support
-    alike: the placement's ``variant`` is a POSITION in the published list, so
-    it goes through :func:`placement_variant` before the facts are read. A
-    table placed as its tall variant carries the teapot at the tall variant's
-    height, and the same teapot placed as its own small variant sinks by its
-    own ground offset — the rule below is untouched, it is only fed the right
-    numbers.
-    """
-    # Cached per prop AND position: two placements of the same prop may show
-    # two different variants, and those are two different sizes.
-    facts: Dict[Tuple[str, int], Dict[str, float]] = {}
-    boxes: List[Optional[Dict[str, Any]]] = []
-    for placement in placements:
-        if not isinstance(placement, dict):
-            boxes.append(None)
-            continue
-        pid = safe_prop_id(str(placement.get("prop_id") or ""))
-        try:
-            pos = max(0, int(placement.get("variant") or 0))
-        except (TypeError, ValueError):
-            pos = 0
-        key = (pid, pos)
-        if pid and key not in facts:
-            # `placement_variant` answers None for a prop that publishes no
-            # variant at all, and that is exactly the primary-variant read.
-            facts[key] = prop_stack_facts(pid, placement_variant(pid, pos))
-        f = facts.get(key) or {}
-        at = placement.get("at")
-        if not f or not isinstance(at, (list, tuple)) or len(at) != 2:
-            boxes.append(None)
-            continue
-        boxes.append({"at": [at[0], at[1]], "yaw": placement.get("yaw"),
-                      "offset_y": placement.get("offset_y"), **f})
-    if index < 0 or index >= len(boxes) or not boxes[index]:
-        return None
-    return stack_offset_y([b or {} for b in boxes], index)
+    return stack_on_support(best, target)
 
 
 def prop_id_from_model_url(url: Any) -> str:

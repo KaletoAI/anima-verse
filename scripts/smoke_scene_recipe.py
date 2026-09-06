@@ -3806,9 +3806,10 @@ def test_prop_stacking() -> None:
     The rule below is PURE — it is handed finished boxes and never asks the
     library, so the per-variant sizes of 2026-08-24 change nothing here. WHICH
     box a placement gets (a variant may override the prop's dims, for the
-    support as well as for the target) is `props.placement_stack_offset_y`, and
+    support as well as for the target) is the library read in front of it, and
     its hand derivation lives in `scripts/smoke_prop_variants.py` [18], against
-    a real prop directory.
+    a real prop directory. The arithmetic itself is `props.stack_on_support`,
+    which the parent link `on` uses without any footprint test ([7j]).
 
     THE PAYLOAD SIDE, same numbers on storey 0 (floor 0.00, prop clearance
     0.01, § A16.9 / [7c]):
@@ -3875,6 +3876,233 @@ def test_prop_stacking() -> None:
     check("...i.e. exactly the table's 0.75 m above it",
           near(teapot["bottom_y"] - table["bottom_y"], 0.75),
           f'{teapot.get("bottom_y")} vs {table.get("bottom_y")}')
+    stub_props()
+
+
+# The parent-link fixture (plan-furnish-v2.md, decision E1): a table one may
+# put things ON, and three things to put on it. Round dims on purpose — every
+# number in [7j] is one line of mental arithmetic away from them.
+ON_TABLE = {
+    "id": "table", "name": "Table",
+    "width_m": 1.2, "depth_m": 0.8, "height_m": 0.75,
+    "rotation": {"x": 0, "y": 0, "z": 0}, "bbox": [1.2, 0.75, 0.8],
+    "has_model": True, "model_tiers": ["full"], "model_signature": "tabsig",
+}
+ON_CANDLE = {
+    "id": "candle", "name": "Candle",
+    "width_m": 0.1, "depth_m": 0.1, "height_m": 0.3,
+    "rotation": {"x": 0, "y": 0, "z": 0}, "bbox": [0.1, 0.3, 0.1],
+    "has_model": True, "model_tiers": ["full"], "model_signature": "cndsig",
+}
+ON_TRAY = {
+    "id": "tray", "name": "Tray",
+    "width_m": 0.5, "depth_m": 0.5, "height_m": 0.05,
+    "rotation": {"x": 0, "y": 0, "z": 0}, "bbox": [0.5, 0.05, 0.5],
+    "has_model": True, "model_tiers": ["full"], "model_signature": "trysig",
+}
+ON_MUG = {
+    "id": "mug", "name": "Mug",
+    "width_m": 0.1, "depth_m": 0.1, "height_m": 0.12,
+    "rotation": {"x": 0, "y": 0, "z": 0}, "bbox": [0.1, 0.12, 0.1],
+    "has_model": True, "model_tiers": ["full"], "model_signature": "mugsig",
+}
+
+
+def stub_on_props() -> None:
+    """Stub the library with the four props of [7j]."""
+    recs = {p["id"]: p for p in (ON_TABLE, ON_CANDLE, ON_TRAY, ON_MUG)}
+    stub_library(lambda pid: dict(recs[pid]) if pid in recs else None)
+
+
+def test_prop_on_support() -> None:
+    """[7j] THE CANDLE ON THE TABLE (plan-furnish-v2.md § 4, decision E1).
+
+    A placement may name the placement it stands ON. Then its three pose
+    fields are read in the SUPPORT's frame — ``at`` in metres from the
+    support's placement point in its UNTURNED frame, ``yaw`` relative to the
+    support's heading, ``offset_y`` as a trim above the support's top — and
+    ``room_recipe.compose_on_chain`` turns them into the flat room values the
+    payload has always carried::
+
+        r = radians(yaw_support)
+        x = x_support + dx·cos r − dz·sin r
+        z = z_support + dx·sin r + dz·cos r
+        yaw      = (yaw_support + yaw_child) mod 360
+        offset_y = props.stack_on_support(support, child) + offset_y_child
+
+    HAND-DERIVED, with the table 1.2 × 0.8 × 0.75 m at (3, 2) TURNED 90° and
+    the candle 0.1 × 0.1 × 0.3 m stored at ``[0.3, 0]`` on it:
+
+      a) cos 90 = 0, sin 90 = 1, so
+             x = 3.0 + 0.3·0 − 0.0·1 = 3.0
+             z = 2.0 + 0.3·1 + 0.0·0 = 2.3
+         yaw = 90 + 0 = 90, and the height is the stacking rule with both
+         sinks 0: offset_y = (0 + 0 + 0.75) − 0 = 0.75.
+      b) the same candle authored with ``yaw 45`` and ``offset_y 0.02``:
+         yaw = 90 + 45 = 135, offset_y = 0.75 + 0.02 = 0.77. The position does
+         not move — the child's own yaw turns the candle, not its spot.
+      c) A CHAIN, tray on table, mug on tray (depth 2). The tray sits at the
+         table's own point (``[0, 0]``) → (3.0, 2.0), yaw 90,
+         offset_y = 0.75. The mug at ``[0.1, 0]`` on the TRAY composes against
+         the tray's FINISHED pose:
+             x = 3.0 + 0.1·0 = 3.0,   z = 2.0 + 0.1·1 = 2.1
+             yaw = 90 + 0 = 90
+             offset_y = (0 + 0.75 + 0.05) − 0 = 0.80
+         — the tray's own offset is in the support's top, which is why
+         supports compose before their children.
+      d) A CHAIN ONE STOREY TOO DEEP. Five pieces, each on the one before,
+         every ``at`` ``[0.1, 0]`` and every yaw 0, the root at (1, 1):
+             depth  0     1     2     3     4
+             x      1.0   1.1   1.2   1.3   1.4
+         ``ON_MAX_DEPTH`` is 3, so the fifth piece loses its link — and it
+         loses ONLY the link: the SANITIZER writes it back at the composed
+         (1.4, 1.0) in plain room metres, so nothing moves on screen.
+
+    THE PAYLOAD SIDE, the [7j] table and candle in room "a" at room-local
+    (2.0, 1.5) with the table unturned, on storey 0 (floor 0.00, prop
+    clearance 0.01, § A16.9 / [7c]):
+
+        table  bottom_y = 0.00 + 0.01                = 0.01
+        candle bottom_y = 0.00 + 0.01 + 0.75         = 0.76
+
+    i.e. the candle's ``bottom_y`` is the table's plus the table's height —
+    the very difference [7f] checks for a hand-written ``offset_y``. The
+    payload stays FLAT: the composed numbers are in ``at``/``yaw``/
+    ``offset_y`` and the ``on`` beside them is informative only, so neither
+    renderer changes.
+    """
+    print("\n[7j] a prop stands ON another prop (the parent link `on`)")
+    from app.core.room_recipe import ON_MAX_DEPTH, compose_on_chain
+
+    def facts(prop_id, variant):
+        recs = {"table": ON_TABLE, "candle": ON_CANDLE, "tray": ON_TRAY,
+                "mug": ON_MUG}
+        rec = recs.get(prop_id)
+        return {"height_m": rec["height_m"], "ground_offset_m": 0.0} if rec else {}
+
+    def chain(*entries):
+        return compose_on_chain(list(entries), facts)
+
+    table = {"id": "tbl", "prop_id": "table", "at": [3.0, 2.0], "yaw": 90}
+    a = chain(table, {"id": "cnd", "prop_id": "candle", "at": [0.3, 0.0],
+                      "on": "tbl"})[1]
+    check("a) candle at [0.3, 0] on the 90°-turned table: (3.0, 2.3)",
+          near(a["at"][0], 3.0) and near(a["at"][1], 2.3), str(a["at"]))
+    check("   ...its yaw is the table's 90°",
+          near(a["yaw"], 90.0), str(a["yaw"]))
+    check("   ...and it sits on the 0.75 m table top",
+          near(a["offset_y"], 0.75), str(a["offset_y"]))
+    check("   ...carrying the link on the answer", a["on"] == "tbl", str(a))
+    b = chain(table, {"id": "cnd", "prop_id": "candle", "at": [0.3, 0.0],
+                      "yaw": 45, "offset_y": 0.02, "on": "tbl"})[1]
+    check("b) yaw 45 on the turned table adds up to 135°",
+          near(b["yaw"], 135.0), str(b["yaw"]))
+    check("   ...and a 2 cm trim lands it at 0.77",
+          near(b["offset_y"], 0.77), str(b["offset_y"]))
+    check("   ...while the spot is unchanged at (3.0, 2.3)",
+          near(b["at"][0], 3.0) and near(b["at"][1], 2.3), str(b["at"]))
+    c = chain(table,
+              {"id": "try", "prop_id": "tray", "at": [0.0, 0.0], "on": "tbl"},
+              {"id": "mug", "prop_id": "mug", "at": [0.1, 0.0], "on": "try"})
+    check("c) the tray lands on the table top: (3.0, 2.0), 0.75",
+          near(c[1]["at"][0], 3.0) and near(c[1]["at"][1], 2.0)
+          and near(c[1]["offset_y"], 0.75), str(c[1]))
+    check("   ...and the mug on the TRAY: (3.0, 2.1), 0.75 + 0.05 = 0.80",
+          near(c[2]["at"][0], 3.0) and near(c[2]["at"][1], 2.1)
+          and near(c[2]["offset_y"], 0.80), str(c[2]))
+    check("   ...at depth 2, the tray at 1",
+          [e["depth"] for e in c] == [0, 1, 2], str([e["depth"] for e in c]))
+    check("red: three storeys is the limit, not two", ON_MAX_DEPTH == 3)
+
+    # ── d) THE SANITIZER keeps every piece, links or no links ──
+    from app.core.world_ops import _sanitize_props
+    deep = [{"prop_id": "table", "at": [1.0, 1.0], "id": "p0"}]
+    for i in range(1, 5):
+        deep.append({"prop_id": "mug", "at": [0.1, 0.0], "id": f"p{i}",
+                     "on": f"p{i - 1}"})
+    kept = _sanitize_props(deep)
+    check("d) a 5-piece chain keeps all 5 placements", len(kept) == 5,
+          str(len(kept)))
+    check("   ...the first four keep their link",
+          [p.get("on") for p in kept[:4]] == [None, "p0", "p1", "p2"],
+          str([p.get("on") for p in kept[:4]]))
+    check("   ...the fifth loses it", "on" not in kept[4], str(kept[4]))
+    check("   ...and stands at the composed (1.4, 1.0)",
+          kept[4]["at"] == [1.4, 1.0], str(kept[4]["at"]))
+    check("   ...while the deep child's own at stays RELATIVE",
+          kept[3]["at"] == [0.1, 0.0], str(kept[3]["at"]))
+
+    self_ref = _sanitize_props(
+        [{"prop_id": "mug", "at": [2.0, 2.0], "id": "solo", "on": "solo"}])
+    check("a placement on ITSELF is kept, without the link",
+          len(self_ref) == 1 and "on" not in self_ref[0], str(self_ref))
+    check("   ...exactly where it was drawn", self_ref[0]["at"] == [2.0, 2.0],
+          str(self_ref[0]["at"]))
+    cyc = _sanitize_props(
+        [{"prop_id": "mug", "at": [2.0, 2.0], "id": "aaa", "on": "bbb"},
+         {"prop_id": "mug", "at": [3.0, 3.0], "id": "bbb", "on": "aaa"}])
+    check("a 2-cycle keeps both pieces, both without the link",
+          len(cyc) == 2 and not any("on" in p for p in cyc), str(cyc))
+    check("   ...both at their stored spots",
+          [p["at"] for p in cyc] == [[2.0, 2.0], [3.0, 3.0]],
+          str([p["at"] for p in cyc]))
+    unknown = _sanitize_props(
+        [{"prop_id": "mug", "at": [4.0, 4.0], "id": "kid", "on": "ghost"}])
+    check("...and so does a link to an id nobody carries",
+          len(unknown) == 1 and "on" not in unknown[0]
+          and unknown[0]["at"] == [4.0, 4.0], str(unknown))
+
+    # Every repair says so ONCE, naming the placement and the reason.
+    import logging
+    from app.core import world_ops as WO
+    seen: list = []
+
+    class _Sink(logging.Handler):
+        def emit(self, record):
+            seen.append(record.getMessage())
+
+    sink = _Sink()
+    WO.logger.addHandler(sink)
+    try:
+        _sanitize_props(
+            [{"prop_id": "mug", "at": [2.0, 2.0], "id": "aaa", "on": "bbb"},
+             {"prop_id": "mug", "at": [3.0, 3.0], "id": "bbb", "on": "aaa"}])
+    finally:
+        WO.logger.removeHandler(sink)
+    check("the 2-cycle warns once per piece, with the reason",
+          len(seen) == 2 and all("cycle" in m for m in seen), str(seen))
+    check("...naming both placements",
+          all(any(pid in m for m in seen) for pid in ("aaa", "bbb")), str(seen))
+
+    # ── and the stored relation reaches the payload as a flat placement ──
+    stub_on_props()
+    loc = fixture()
+    for room in loc["rooms"]:
+        if room["id"] == "a":
+            room["layout"]["props"] = [
+                {"prop_id": "table", "at": [2.0, 1.5], "id": "tbl"},
+                {"prop_id": "candle", "at": [0.0, 0.0], "id": "cnd",
+                 "on": "tbl"}]
+    from app.core.room_recipe import compose_recipe
+    room_a = [r for r in loc["rooms"] if r["id"] == "a"][0]
+    rec = compose_recipe(room_a, [r for r in loc["rooms"] if r["id"] != "a"])
+    cnd = [p for p in rec["placements"] if p["prop_id"] == "candle"][0]
+    check("the recipe places the candle at the table's own spot",
+          cnd["at"] == [-2.0, -2.5], str(cnd["at"]))
+    check("...with the composed offset_y 0.75 on it",
+          near(cnd["offset_y"], 0.75), str(cnd["offset_y"]))
+    check("...and the informative link beside it", cnd.get("on") == "tbl",
+          str(cnd.get("on")))
+    sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+    t_spec = spec_of(sc, "prop", "table")
+    c_spec = spec_of(sc, "prop", "candle")
+    check("the table stands on the ground: 0.00 + 0.01",
+          near(t_spec["bottom_y"], 0.01), str(t_spec.get("bottom_y")))
+    check("the candle stands on the table: 0.01 + 0.75 = 0.76",
+          near(c_spec["bottom_y"], 0.76), str(c_spec.get("bottom_y")))
+    check("...i.e. exactly the table's 0.75 m above it",
+          near(c_spec["bottom_y"] - t_spec["bottom_y"], 0.75),
+          f'{c_spec.get("bottom_y")} vs {t_spec.get("bottom_y")}')
     stub_props()
 
 
@@ -5215,6 +5443,7 @@ def main() -> int:
     test_place_slots()
     test_prop_ground_offset()
     test_prop_stacking()
+    test_prop_on_support()
     test_prop_depth_cut()
     test_clip_outline()
     test_signature()

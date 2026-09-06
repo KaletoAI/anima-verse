@@ -1364,13 +1364,23 @@ def _sanitize_room_layout(raw: Any) -> Dict[str, Any]:
     return out
 
 
+def _place_ref(raw: Any) -> str:
+    """A place id in STORED SHAPE, or ``""`` — lower-cased to ``[a-z0-9]`` and
+    cut to 16 chars.
+
+    The shaping half of :func:`_place_id`, for the places that REFER to one
+    (``props[].on``): a reference that shapes to nothing must stay nothing, or
+    a freshly minted id would send the reader looking for a support nobody
+    ever placed."""
+    return re.sub(r"[^a-z0-9]", "", str(raw or "").lower())[:16]
+
+
 def _place_id(raw: Any) -> str:
-    """The stable id of a place (marker or placement): the stored one,
-    lower-cased to ``[a-z0-9]`` and cut to 16 chars — or a fresh one when
-    nothing usable was sent, so every stored place can be held by name."""
+    """The stable id of a place (marker or placement): the stored one in
+    :func:`_place_ref` shape — or a fresh one when nothing usable was sent, so
+    every stored place can be held by name."""
     from app.core.places_migration import new_place_id
-    s = re.sub(r"[^a-z0-9]", "", str(raw or "").lower())[:16]
-    return s or new_place_id()
+    return _place_ref(raw) or new_place_id()
 
 
 def _capacity(raw: Any) -> int:
@@ -1493,6 +1503,27 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
     half a table against a wall is this table with a clipping plane through it,
     not a second library entry.
 
+    A placement may STAND ON another one (``on``, decision E1 of
+    plan-furnish-v2.md): "the candle on the table" is a relation, not a height.
+    ``on`` names another entry of the SAME list by its ``id``, and the child's
+    three pose fields are then read in the SUPPORT's frame —
+
+    * ``at: [dx, dz]`` = metres from the support's placement point, in its
+      UNTURNED frame (+x = its width axis, +z = its depth axis),
+    * ``yaw`` = degrees RELATIVE to the support's heading,
+    * ``offset_y`` = trim ABOVE the support's top surface (0 = exactly on it),
+
+    — so moving the support moves everything on it and the height is the
+    stacking rule (``props.stack_on_support``). Chains are allowed (mug on tray
+    on table) up to ``room_recipe.ON_MAX_DEPTH``. The composition into room
+    metres happens ONCE, in ``room_recipe.compose_on_chain``; what is stored
+    here stays relative.
+
+    A LINK THAT DOES NOT HOLD never costs the placement: an unknown id, a
+    self-reference, a circle or a chain that runs too deep loses only the
+    ``on`` — the piece keeps its place, composed through whatever part of the
+    chain WAS valid, and a warning names it.
+
     What a prop's texture slots SHOW is not a placement statement (D3): the
     picture is chosen where the prop is built, so a placement carries no
     values of its own and one that still brings some simply loses them here.
@@ -1523,6 +1554,13 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
         label = str(p.get("label") or "").strip()[:60]
         if label:
             entry["label"] = label
+        # WHAT THIS PIECE STANDS ON (E1) — an id of this same list. Whether it
+        # names one is decided after the whole list is read: ids are minted in
+        # this very pass, so the reference can only be resolved against the
+        # finished set.
+        on = _place_ref(p.get("on"))
+        if on:
+            entry["on"] = on
         yaw = p.get("yaw")
         if yaw is not None and f"{yaw}".strip() != "":
             try:
@@ -1589,7 +1627,44 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
                     except (TypeError, ValueError):
                         pass
         placements.append(entry)
-    return placements[:100]
+    kept = placements[:100]
+    _resolve_prop_parents(kept)
+    return kept
+
+
+def _resolve_prop_parents(placements: List[Dict[str, Any]]) -> None:
+    """Check every ``on`` of a finished placement list and repair the ones that
+    do not hold — in place.
+
+    Run AFTER the list is complete (the ids are minted in the same pass, and
+    the 100-placement cap may have taken a support with it). The chain
+    arithmetic is not repeated here: :func:`room_recipe.compose_on_chain` is the
+    one place that resolves a parent link, and it is asked with an EMPTY
+    library (``facts`` answers ``{}``) because the repair needs only the XZ
+    composition — a fallback position, never a height.
+
+    A link that fails leaves the piece exactly where it was drawn: composed
+    through the valid part of its chain into plain metres, ``on`` gone, one
+    warning per placement naming the id and the reason.
+    """
+    from app.core.room_recipe import compose_on_chain
+    if not any(p.get("on") for p in placements):
+        return
+    for entry, composed in zip(placements,
+                               compose_on_chain(placements, lambda p, v: {})):
+        if not entry.get("on") or composed["on"]:
+            continue
+        logger.warning("prop placement %s drops 'on' %r (%s)", entry["id"],
+                       entry["on"], composed["reason"])
+        entry.pop("on", None)
+        au, av = _metre(composed["at"][0]), _metre(composed["at"][1])
+        if au is not None and av is not None:
+            entry["at"] = [au, av]
+        yaw = round(float(composed["yaw"]) % 360, 1)
+        if yaw:
+            entry["yaw"] = int(yaw) if float(yaw).is_integer() else yaw
+        else:
+            entry.pop("yaw", None)
 
 
 # Everything a ROOM layout may carry and the ground layout may not (§ A13a).

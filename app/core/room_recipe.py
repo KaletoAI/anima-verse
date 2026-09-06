@@ -47,7 +47,7 @@ way around).
 import hashlib
 import json
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.scatter_curves import scatter as _scatter_props
@@ -557,6 +557,188 @@ def _placement_markers(prop: Dict[str, Any], variant: Any) -> List[Dict[str, Any
     return prop.get("markers") or []
 
 
+# How deep a support chain may run (plan-furnish-v2.md § 4, decision E1). The
+# root stands on the floor at depth 0, so 3 allows "mug on tray on table on
+# sideboard" and refuses the fourth storey — a tower nobody authors on purpose
+# and every reader would have to walk.
+ON_MAX_DEPTH = 3
+
+
+def compose_on_chain(
+        entries: List[Dict[str, Any]],
+        facts: Callable[[str, Any], Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """THE PARENT LINK ``on``, resolved — the ONE place a child placement's
+    stored frame becomes a room frame (plan-furnish-v2.md § 4, decision E1).
+
+    ``entries`` are STORED placements (``layout.props``) in list order;
+    ``facts(prop_id, variant)`` answers ``{height_m, ground_offset_m}`` for the
+    variant a placement draws (``{}`` for a prop the library does not know —
+    a dangling support then offers a surface of height 0, which keeps its
+    children where they are instead of dropping the pieces). The answer is one
+    dict per input entry, in input order::
+
+        {"at": [x, z], "yaw": deg, "offset_y": m, "on": "<id>", "depth": n,
+         "reason": ""}
+
+    ``at``/``yaw``/``offset_y`` are COMPOSED — the flat values every consumer
+    of the recipe already reads. ``on`` is the link that SURVIVED (``""`` when
+    there was none, or when it was dropped), ``reason`` names why it was
+    dropped, and ``depth`` is 0 for a piece on the floor.
+
+    THE CHILD FRAME. A placement carrying ``on: "<placement id>"`` stores
+
+    * ``at: [dx, dz]`` — metres from the SUPPORT's placement point, in the
+      support's UNTURNED frame (+x = its width axis, +z = its depth axis),
+    * ``yaw`` — degrees RELATIVE to the support's heading,
+    * ``offset_y`` — trim ABOVE the support's top surface.
+
+    and composes with the support's own finished pose (the clockwise turn
+    ``furnish_solver._rect_corners`` uses)::
+
+        r = radians(yaw_support)
+        x = x_support + dx·cos r − dz·sin r
+        z = z_support + dx·sin r + dz·cos r
+        yaw       = (yaw_support + yaw_child) mod 360
+        offset_y  = props.stack_on_support(support, child) + offset_y_child
+
+    Supports compose BEFORE their children (topological order), because the
+    support's finished ``offset_y`` is what its top surface is measured from.
+
+    A LINK THAT DOES NOT HOLD NEVER COSTS A PLACEMENT. Four ways it can fail,
+    and what the piece does instead:
+
+    * ``unknown`` — no entry of this list carries that id,
+    * ``self`` — the placement names itself,
+    * ``cycle`` — the chain runs in a circle,
+
+      all three leave the stored ``at``/``yaw`` exactly as they are: there is
+      no support to measure them against, so the numbers are read as room
+      metres and the piece stays put.
+
+    * ``depth`` — the chain is deeper than :data:`ON_MAX_DEPTH`. Here the
+      support IS valid, so the piece composes through it into room metres and
+      only loses the link. Its own children then hang off it as a fresh root,
+      which is why re-running this on the sanitized result changes nothing.
+
+    ``offset_y`` of a dropped link is kept as authored — without a support
+    there is nothing for a trim to sit above, and inventing a height would move
+    a piece the author never touched.
+    """
+    from app.core.props import stack_on_support
+    n = len(entries)
+    out: List[Dict[str, Any]] = []
+    for p in entries:
+        at = p.get("at") or [0.0, 0.0]
+        try:
+            x, z = float(at[0]), float(at[1])
+        except (TypeError, ValueError, IndexError):
+            x, z = 0.0, 0.0
+        try:
+            yaw = float(p.get("yaw") or 0.0) % 360
+        except (TypeError, ValueError):
+            yaw = 0.0
+        try:
+            off = float(p.get("offset_y") or 0.0)
+        except (TypeError, ValueError):
+            off = 0.0
+        out.append({"at": [x, z], "yaw": yaw, "offset_y": off,
+                    "on": "", "depth": 0, "reason": ""})
+
+    # ── who points at whom ──────────────────────────────────────────────
+    by_id: Dict[str, int] = {}
+    for i, p in enumerate(entries):
+        pid = str(p.get("id") or "")
+        if pid:
+            by_id.setdefault(pid, i)
+    parent: List[Optional[int]] = []
+    for i, p in enumerate(entries):
+        ref = str(p.get("on") or "")
+        if not ref:
+            parent.append(None)
+            continue
+        j = by_id.get(ref)
+        if j is None:
+            out[i]["reason"] = "unknown"
+            parent.append(None)
+        elif j == i:
+            out[i]["reason"] = "self"
+            parent.append(None)
+        else:
+            parent.append(j)
+
+    # ── circles ─────────────────────────────────────────────────────────
+    # Every node has at most one parent, so a walk upwards either ends or
+    # runs into a loop. Only the nodes ON the loop lose their link; a node
+    # merely POINTING at one keeps it and hangs off the piece that became a
+    # root.
+    state = [0] * n          # 0 = untouched, 1 = on the current walk, 2 = done
+    for start in range(n):
+        if state[start]:
+            continue
+        path: List[int] = []
+        v: Optional[int] = start
+        while v is not None and state[v] == 0:
+            state[v] = 1
+            path.append(v)
+            v = parent[v]
+        if v is not None and state[v] == 1:
+            for u in path[path.index(v):]:
+                out[u]["reason"] = "cycle"
+                parent[u] = None
+        for u in path:
+            state[u] = 2
+
+    # ── supports first, then their children ─────────────────────────────
+    placed = [parent[i] is None for i in range(n)]
+    order: List[int] = [i for i in range(n) if placed[i]]
+    remaining = [i for i in range(n) if not placed[i]]
+    while remaining:
+        progressed = False
+        still: List[int] = []
+        for i in remaining:
+            j = parent[i]
+            if j is not None and placed[j]:
+                order.append(i)
+                placed[i] = True
+                progressed = True
+            else:
+                still.append(i)
+        remaining = still
+        if not progressed:      # unreachable — every circle was cut above
+            order.extend(remaining)
+            break
+
+    for i in order:
+        j = parent[i]
+        if j is None:
+            continue
+        sup, child = out[j], out[i]
+        if sup["depth"] + 1 > ON_MAX_DEPTH:
+            child["reason"] = "depth"
+        r = math.radians(sup["yaw"])
+        cos, sin = math.cos(r), math.sin(r)
+        dx, dz = child["at"][0], child["at"][1]
+        child["at"] = [sup["at"][0] + dx * cos - dz * sin,
+                       sup["at"][1] + dx * sin + dz * cos]
+        child["yaw"] = (sup["yaw"] + child["yaw"]) % 360
+        if child["reason"] == "depth":
+            # Composed into room metres, but no longer a child: the trim it
+            # carries stays the plain offset it now is.
+            continue
+        sf = facts(str(entries[j].get("prop_id") or ""),
+                   entries[j].get("variant")) or {}
+        cf = facts(str(entries[i].get("prop_id") or ""),
+                   entries[i].get("variant")) or {}
+        child["offset_y"] = stack_on_support(
+            {"ground_offset_m": sf.get("ground_offset_m"),
+             "offset_y": sup["offset_y"], "height_m": sf.get("height_m")},
+            {"ground_offset_m": cf.get("ground_offset_m")}) + child["offset_y"]
+        child["depth"] = sup["depth"] + 1
+        child["on"] = str(entries[i].get("on") or "")
+    return out
+
+
 def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                      default_u: float, default_v: float,
                      ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -574,20 +756,57 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
     Dangling ids keep their placement and are flagged ``missing`` — world data
     lives in the DB, props are files, so there is no referential integrity by
     design and a placeholder beats a silently lost placement.
+
+    THE PARENT LINK ``on`` IS RESOLVED HERE and nowhere else
+    (:func:`compose_on_chain`): a child placement stores its pose relative to
+    the piece it stands on, and what leaves this function is the COMPOSED
+    ``at``/``yaw``/``offset_y`` plus the informative ``on``. Every reader
+    downstream — the scene spec, the places, both renderers — keeps reading the
+    flat values it always read.
     """
     from app.core import props as prop_store
     placements: List[Dict[str, Any]] = []
     prop_markers: List[Dict[str, Any]] = []
-    for placement in (lay.get("props") or []):
-        if not isinstance(placement, dict):
-            continue
+    entries = [p for p in (lay.get("props") or []) if isinstance(p, dict)]
+    # ONE library record per prop for the whole layout — the chain asks for the
+    # support's height and sink, the loop below for everything else.
+    records: Dict[str, Optional[Dict[str, Any]]] = {}
+
+    def _record(prop_id: str) -> Optional[Dict[str, Any]]:
+        if prop_id not in records:
+            records[prop_id] = prop_store.get_prop(prop_id)
+        return records[prop_id]
+
+    def _stack_facts(prop_id: str, variant: Any) -> Dict[str, Any]:
+        """Height and sink of the VARIANT a placement draws — the very numbers
+        the payload sizes it with, so a child lands on the mesh that is really
+        there. ``{}`` for a prop the library does not know."""
+        prop = _record(prop_id)
+        if not prop:
+            return {}
+        published = _variant_entry(prop, variant)
+        source = published if published is not None else prop
+        return {"height_m": _placement_dims(prop, variant)["height_m"],
+                "ground_offset_m": float(source.get("ground_offset_m") or 0.0)}
+
+    chain = compose_on_chain(
+        [dict(p, at=(p.get("at") or [default_u, default_v])) for p in entries],
+        _stack_facts)
+    # A link the sanitizer would have removed can still arrive here — layouts
+    # are edited by hand and moved by migrations. ONE line per layout says so;
+    # the pieces themselves stand where the chain composed them.
+    broken = [f'{p.get("id") or "?"}({c["reason"]})'
+              for p, c in zip(entries, chain) if p.get("on") and not c["on"]]
+    if broken:
+        logger.warning("placements with an unusable 'on', composed flat: %s",
+                       ", ".join(broken))
+    for placement, composed in zip(entries, chain):
         pid = str(placement.get("prop_id") or "")
-        at = placement.get("at") or [default_u, default_v]
         # The prop's OWN yaw plus the room's — one turn of the room turns
         # every piece of furniture in it by the same angle.
-        yaw = (float(placement.get("yaw") or 0) + room_yaw) % 360
-        off_y = float(placement.get("offset_y") or 0)
-        px, py = place(float(at[0]), float(at[1]))
+        yaw = (composed["yaw"] + room_yaw) % 360
+        off_y = composed["offset_y"]
+        px, py = place(composed["at"][0], composed["at"][1])
         entry: Dict[str, Any] = {
             "prop_id": pid,
             # The placement's stable id and label (plan-posen-plaetze.md): a
@@ -599,6 +818,13 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
             "yaw": _r(yaw, 1),
             "offset_y": _r(off_y, 3),
         }
+        # WHAT THIS PIECE STANDS ON, informative (decision E1): the three
+        # numbers above are already composed, so no reader has to follow the
+        # link — it is here so a client can say "on the table" and an editor
+        # can find the support again. Absent for a piece on the floor and for
+        # one whose link did not hold.
+        if composed["on"]:
+            entry["on"] = composed["on"]
         # An authored variant choice rides along (E2.3): the scene spec reads
         # it off the recipe placement (``scene_recipe._variant_index``), so
         # dropping it here would silently show variant 0 for every manual
@@ -623,7 +849,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                 entry["cut_side"] = ("front"
                                      if placement.get("cut_side") == "front"
                                      else "back")
-        prop = prop_store.get_prop(pid)
+        prop = _record(pid)
         if not prop:
             entry["missing"] = True
             placements.append(entry)

@@ -289,6 +289,31 @@ def placement(prop_id: str, **extra) -> dict:
     return entry
 
 
+def stack_by_placements(placements, index):
+    """`props.stack_offset_y` with the LIBRARY READ in front of it — the two
+    steps the room recipe takes for every placement, spelled out.
+
+    A placement's `variant` is a POSITION in the published list, so it goes
+    through `placement_variant` before `prop_stack_facts` is asked; the pure
+    rule then only ever sees finished boxes. Written here rather than in the
+    store because that is where it belongs now: since the parent link `on`
+    (plan-furnish-v2.md E1) the height of a stacked piece is composed in
+    `room_recipe`, and no product code asks a stored list "what is under
+    index n" any more.
+    """
+    boxes = []
+    for p in placements:
+        pos = max(0, int(p.get("variant") or 0))
+        facts = store.prop_stack_facts(p["prop_id"],
+                                       store.placement_variant(p["prop_id"], pos))
+        if not facts:
+            boxes.append({})
+            continue
+        boxes.append({"at": list(p["at"]), "yaw": p.get("yaw"),
+                      "offset_y": p.get("offset_y"), **facts})
+    return store.stack_offset_y(boxes, index) if boxes[index] else None
+
+
 def spec_of(prop_id: str, **extra) -> dict:
     """The finished placement spec the payload carries for one placement."""
     recipe = {"room_id": "r1", "level": 0, "always_visible": True,
@@ -477,14 +502,14 @@ def dims_section() -> None:
     def stack_on(variant: int):
         placements = [{"prop_id": crate, "at": [0.0, 0.0], "variant": variant},
                       {"prop_id": crate, "at": [0.0, 0.0]}]
-        return store.placement_stack_offset_y(placements, 1)
+        return stack_by_placements(placements, 1)
 
     check("a crate on the 2 m variant of a crate lands at 2.0",
           stack_on(1) == 2.0, str(stack_on(1)))
     check("...on the 1 m variant of the SAME prop at 1.0",
           stack_on(0) == 1.0, str(stack_on(0)))
     check("red: without a variant the support is the primary one, 1.0",
-          store.placement_stack_offset_y(
+          stack_by_placements(
               [{"prop_id": crate, "at": [0.0, 0.0]},
                {"prop_id": crate, "at": [0.0, 0.0]}], 1) == 1.0)
 
@@ -855,7 +880,7 @@ def variant_fields_section() -> None:
 
     # ── the stacking rule, both directions (hand derivation above) ──
     def stack(support_variant: int, target_variant: int):
-        return store.placement_stack_offset_y(
+        return stack_by_placements(
             [{"prop_id": bench, "at": [0.0, 0.0], "variant": support_variant},
              {"prop_id": bench, "at": [0.0, 0.0], "variant": target_variant}], 1)
 
