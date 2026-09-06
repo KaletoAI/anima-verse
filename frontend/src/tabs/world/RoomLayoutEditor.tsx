@@ -55,7 +55,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { SliderInput } from '../../components/SliderInput'
 import {
   CLOSE_TOL_PX, MIN_ROOM_M, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
   PLAN_MAX_M, SNAP_TOL_PX, absOutline, buildSnapTargets, clamp,
@@ -77,18 +76,23 @@ import { FurnishDialog, useFurnishJob } from './FurnishDialog'
 import { PlanInspector, type InspectorTab } from './PlanInspector'
 import { PlanInspectorLevel } from './PlanInspectorLevel'
 import { PlanFindings } from './PlanFindings'
+import { PlanElevatorStrip } from './PlanElevatorStrip'
+import { PlanRoomPicker } from './PlanRoomPicker'
+import { PlanStairStrip } from './PlanStairStrip'
+import { PlanOpeningStrip } from './PlanOpeningStrip'
+import { PlanMarkerStrip } from './PlanMarkerStrip'
+import { PlanModelPlacement } from './PlanModelPlacement'
+import { PlanPropStrip } from './PlanPropStrip'
 import { PlanFigure, PlanMetreGrid, PlanScaleBar } from './PlanMeasure'
 import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
 import type { PlanMode } from './PlanToolbar'
-import { PropVariantPicker } from './PropVariantPicker'
-import { OpeningDoorProp } from './DoorPropPicker'
 import type { PropSlot } from '../props/propTypes'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, SceneProblem, SceneRoom, ScenePayload, SceneStairs, SurfaceKind } from './worldTypes'
 import { GROUND_ROOM_ID, groundRoomLabel, hasRect, readMapWater } from './worldTypes'
-import { groupKeys, groupLabel, newId, posesInGroup, usePoseCatalog } from './placeTypes'
+import { groupKeys, groupLabel, newId, usePoseCatalog } from './placeTypes'
 import { pointInPolygon } from '../map/mapMath'
 import { isWaterKind } from '../map/mapTypes'
 import type { TerrainTypesResp } from '../map/mapTypes'
@@ -3456,29 +3460,30 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         />
       ) : null}
 
-      {selectedRoom && propSel !== null && selectedRoom.layout?.props?.[propSel] ? (() => {
+      {selectedRoom && propSel !== null
+        && selectedRoom.layout?.props?.[propSel] ? (() => {
         const placement = selectedRoom.layout!.props![propSel]
-        const dims = propDims[placement.prop_id]
         const patchProp = (patch: Partial<typeof placement> | null) => {
           const list = (selectedRoom.layout?.props || [])
-            .map((p, idx) => (idx === propSel ? { ...p, ...patch } : p))
-            .filter((_, idx) => !(patch === null && idx === propSel))
+            .map((p, i) => (i === propSel ? { ...p, ...patch } : p))
+            .filter((_, i) => !(patch === null && i === propSel))
           if (patch === null) setPropSel(null)
-          updateLayout(selectedRoom.id || '', { props: list.length ? list : undefined })
+          updateLayout(selectedRoom.id || '',
+                       { props: list.length ? list : undefined })
         }
         // Everything standing on this exact spot — the same turned-box test
         // that cycles the selection through a stack, asked at the placement's
         // own spot instead of at the cursor. Same ASCENDING-BY-INDEX order as
-        // there (later placement wins ties = topmost), so `n/N` counts from
-        // the bottom of the stack and N is the whole stack. The selection
-        // itself always hits its own footprint, hence it is always in here.
+        // there (later placement wins ties = topmost), so the counter in the
+        // strip reads from the bottom. The selection always hits its own
+        // footprint, hence it is always in here.
         const stackHits = propsAtPoint(
           selectedRoom.layout || {}, selOrigin,
           placement.at[0] - selOrigin[0], placement.at[1] - selOrigin[1],
         )
-        // Which OTHER placements this one stands over. It decides only
-        // whether the button is offered; the height comes from the server.
-        const stackSupports = stackHits.filter((i) => i !== propSel)
+        // WHERE the top surface underneath is, is the SERVER's answer — the
+        // plan, the preview and the 3D client must not each arrive at their
+        // own. The button is only offered when something IS underneath.
         const placeOnTop = async () => {
           try {
             const res = await apiPost<{ offset_y?: number | null }>(
@@ -3495,244 +3500,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           }
         }
         return (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="ga-hint" style={{ fontWeight: 600 }}>
-              🪑 {dims?.name || placement.prop_id}:
-            </span>
-            {/* What the LLM calls this place — names the placement's markers
-                in chips and prompts ("armchair by the window"). ≤ 60 chars,
-                the server trims the rest. */}
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('A name for this placement as a PLACE — the LLM and the marker chips call it that. Empty = the prop’s own name.')}>
-              {t('Label')}
-              <input
-                type="text"
-                className="ga-input"
-                maxLength={60}
-                style={{ width: 200 }}
-                value={placement.label || ''}
-                placeholder={t('e.g. armchair by the window — what the LLM calls this place')}
-                onChange={(e) => patchProp({ label: e.target.value.slice(0, 60) || undefined })}
-              />
-            </label>
-            {/* A stack is invisible on the plan — the top footprint covers the
-                rest. This says how deep the selection sits and that there is
-                anything else here at all, so the cycling click is
-                discoverable instead of a secret. */}
-            {stackHits.length > 1 ? (
-              <span
-                className="ga-hint"
-                title={t('Click the same spot again to select the next prop in this stack.')}
-                style={{ border: '1px solid #444c56', borderRadius: 10,
-                         padding: '1px 7px', cursor: 'help' }}
-              >
-                {t('{n}/{N} here')
-                  .replace('{n}', String(stackHits.indexOf(propSel) + 1))
-                  .replace('{N}', String(stackHits.length))}
-              </span>
-            ) : null}
-            {/* Position in METRES from the shape's min corner (v6 Nr. 2), so
-                the slider runs over its own box and the readback is a length
-                one can measure against the 1.70 m figure on the plan. On the
-                YARD the very same field is location-local metres (§ A13a), so
-                the range starts at the boundary box's corner instead of 0. */}
-            <SliderInput
-              label="X"
-              ariaLabel={t('Prop position X (m)')}
-              title={groundSel
-                ? t('Fine-tune the position: metres east of the anchor pin (negative = west).')
-                : t('Fine-tune the position: metres from the room’s west edge.')}
-              min={selOrigin[0]}
-              max={selOrigin[0] + (selLay?.w || 0)}
-              step={0.01}
-              value={placement.at[0]}
-              onChange={(v) => patchProp({
-                at: [rM(v), placement.at[1]] as [number, number],
-              })}
-              unit="m"
-              sliderWidth={100}
-              readback={<span style={{ minWidth: 52 }}>{fmtM(placement.at[0])} m</span>}
-            />
-            <SliderInput
-              label="Y"
-              ariaLabel={t('Prop position Y (m)')}
-              title={groundSel
-                ? t('Fine-tune the position: metres south of the anchor pin (negative = north).')
-                : t('Fine-tune the position: metres from the room’s north edge.')}
-              min={selOrigin[1]}
-              max={selOrigin[1] + (selLay?.d || 0)}
-              step={0.01}
-              value={placement.at[1]}
-              onChange={(v) => patchProp({
-                at: [placement.at[0], rM(v)] as [number, number],
-              })}
-              unit="m"
-              sliderWidth={100}
-              readback={<span style={{ minWidth: 52 }}>{fmtM(placement.at[1])} m</span>}
-            />
-            <SliderInput
-              label="↻"
-              ariaLabel={t('Prop yaw (°)')}
-              title={t('Yaw in degrees — free values; R while placing steps 90°.')}
-              min={0}
-              max={359.5}
-              step={0.5}
-              fineStep={0.1}
-              value={placement.yaw || 0}
-              onChange={(v) => patchProp({ yaw: v || undefined })}
-              unit="°"
-              sliderWidth={120}
-              inputWidth={68}
-            />
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Vertical offset in metres, additive to the floor (e.g. a picture on the wall).')}>
-              ↕ m
-              <input
-                type="number" min={-5} max={5} step={0.05}
-                value={placement.offset_y ?? 0}
-                onChange={(e) => {
-                  const v = Math.round((parseFloat(e.target.value) || 0) * 1000) / 1000
-                  patchProp({ offset_y: v || undefined })
-                }}
-                style={{ width: 70 }}
-                className="ga-input"
-              />
-            </label>
-            {/* Set it down ON the piece it stands over — the teapot onto the
-                table. The button is OFFERED by the same footprint test that
-                picks a prop out of a stack here (`propsAtPoint`); the height
-                itself is the SERVER's answer (`POST /world/props/stack-y`,
-                `props.stack_offset_y`), so the plan, the preview and the 3D
-                client cannot each arrive at their own surface. */}
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={!stackSupports.length}
-              title={stackSupports.length
-                ? t('Set this prop down on the top surface of the prop underneath it (the topmost one, if several).')
-                : t('Nothing underneath: move the prop over another one first.')}
-              onClick={() => { void placeOnTop() }}
-            >
-              ⬒ {t('Place on top')}
-            </button>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={!placement.offset_y}
-              title={t('Back down onto the floor — clears the vertical offset.')}
-              onClick={() => patchProp({ offset_y: undefined })}
-            >
-              ⬓ {t('Place on floor')}
-            </button>
-            {/* DEPTH CUT (§ B2 addendum 2026-08-23): how much of the prop's
-                depth survives — half a table against a wall is this table
-                with a plane through it, not a second library entry. 100 % =
-                uncut and the placement stores no key at all. The plane is the
-                SERVER's (`cut_plane` on the scene spec); this dial only says
-                how much and from which side. */}
-            <SliderInput
-              label="✂"
-              ariaLabel={t('Depth cut (%)')}
-              title={t('Cut the prop across its depth: how many percent of it remain. 100 = whole prop. The cut face stays open, so put it against a wall.')}
-              min={5}
-              max={100}
-              step={5}
-              value={Math.round((placement.cut_keep ?? 1) * 100)}
-              onChange={(v) => patchProp({
-                cut_keep: v >= 100 ? undefined : Math.round(v) / 100,
-                cut_side: v >= 100 ? undefined
-                  : (placement.cut_side || 'back'),
-              })}
-              unit="%"
-              sliderWidth={100}
-              inputWidth={62}
-            />
-            {placement.cut_keep && placement.cut_keep < 1 ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                title={t('Which half remains: “front” is the top of the footprint on the plan, “back” the bottom — turned with the prop’s yaw.')}
-                onClick={() => patchProp({
-                  cut_side: placement.cut_side === 'front' ? 'back' : 'front',
-                })}
-              >
-                {placement.cut_side === 'front' ? t('Keep front') : t('Keep back')}
-              </button>
-            ) : null}
-            {/* Scatter (v5.2 Nr. 12): a placement property — this anchor
-                throws `scatter_count` copies over the room from its own
-                seed; spacing alone rules the density (0 = may overlap). */}
-            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-              title={groundSel
-                ? t('Scatter: throw copies of THIS prop over the yard. The placement stays as the anchor; positions come from the seed and stay inside the location boundary — the rooms, the entrances and the markers stay clear.')
-                : t('Scatter: throw copies of THIS prop over the room area. The placement stays as the anchor; positions come from the seed — the road, openings and markers stay clear.')}>
-              <input
-                type="checkbox"
-                checked={!!placement.scatter_count}
-                onChange={(e) => patchProp(e.target.checked
-                  ? { scatter_count: 10,
-                      scatter_seed: crypto.getRandomValues(new Uint32Array(1))[0] }
-                  : { scatter_count: undefined, scatter_seed: undefined,
-                      scatter_spacing_m: undefined })}
-              />
-              <span>{t('Scatter')}</span>
-            </label>
-            {placement.scatter_count ? (
-              <>
-                <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-                  title={t('Number of scattered copies (Σ 120 per room; the anchor is extra).')}>
-                  n
-                  <input
-                    type="number" min={1} max={120} step={1}
-                    value={placement.scatter_count}
-                    onChange={(e) => {
-                      const v = Math.round(parseFloat(e.target.value) || 0)
-                      if (v >= 1) patchProp({ scatter_count: Math.min(120, v) })
-                    }}
-                    style={{ width: 62 }}
-                    className="ga-input"
-                  />
-                </label>
-                <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
-                  title={t('Minimum centre distance between the copies in metres — the whole density rule. 0 = they may overlap (a forest’s crowns do).')}>
-                  ↔ m
-                  <input
-                    type="number" min={0} max={5} step={0.1}
-                    value={placement.scatter_spacing_m ?? 0}
-                    onChange={(e) => {
-                      const v = Math.round((parseFloat(e.target.value) || 0) * 100) / 100
-                      patchProp({ scatter_spacing_m: v > 0 ? Math.min(5, v) : undefined })
-                    }}
-                    style={{ width: 62 }}
-                    className="ga-input"
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm"
-                  title={t('Reroll — a new seed gives a new arrangement.')}
-                  onClick={() => patchProp({
-                    scatter_seed: crypto.getRandomValues(new Uint32Array(1))[0] })}
-                >
-                  🎲
-                </button>
-              </>
-            ) : null}
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              onClick={() => patchProp(null)}
-            >
-              × {t('Remove')}
-            </button>
-            {/* Which model variant THIS placement shows — a dial like the
-                others beside it, so it belongs in the same strip. */}
-            <PropVariantPicker
-              propId={placement.prop_id}
-              variant={placement.variant}
-              onVariant={(v) => patchProp({ variant: v })}
-            />
-          </div>
+          <PlanPropStrip
+            placement={placement}
+            index={propSel}
+            name={propDims[placement.prop_id]?.name}
+            origin={selOrigin}
+            size={{ w: selLay?.w || 0, d: selLay?.d || 0 }}
+            ground={groundSel}
+            stackHits={stackHits}
+            onPlaceOnTop={stackHits.some((i) => i !== propSel)
+              ? () => { void placeOnTop() } : undefined}
+            onPatch={patchProp}
+          />
         )
       })() : null}
 
@@ -3744,448 +3523,63 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       {/* Model-placement strip: X/Y sliders + height for the selected
           room's diorama model — mirrors the prop strip; ↺ recentres. */}
       {selectedRoom && !groundSel && hasRect(selectedRoom.layout)
-        && modelDims[selectedRoom.id || ''] ? (() => {
-        const lay = selectedRoom.layout
-        // Absent = centred, which in metres is (w/2, d/2).
-        const mAt = lay.model_at || [lay.w / 2, lay.d / 2]
-        const setAt = (axis: 0 | 1, v: number) => {
-          const next: [number, number] = [mAt[0], mAt[1]]
-          next[axis] = rM(clamp(v, 0, axis === 0 ? lay.w : lay.d))
-          updateLayout(selectedRoom.id || '', { model_at: next })
-        }
-        return (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="ga-hint" style={{ fontWeight: 600 }}>
-              ⌂ {t('Model placement')}:
-            </span>
-            {(['X', 'Y'] as const).map((label, axis) => (
-              <SliderInput
-                key={label}
-                label={label}
-                ariaLabel={t('Room model anchor')}
-                title={t('Anchor of the room model: metres from the room’s min corner.')}
-                min={0}
-                max={axis === 0 ? lay.w : lay.d}
-                step={0.01}
-                value={mAt[axis]}
-                onChange={(v) => setAt(axis as 0 | 1, v)}
-                unit="m"
-                sliderWidth={110}
-                style={{ gap: 4 }}
-              />
-            ))}
-            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Height offset of the MODEL in real metres, relative to the room floor — negative sinks it.')}>
-              {t('Model height (m)')}
-              <input className="ga-input" type="number" step={0.05}
-                style={{ width: 78 }}
-                value={lay.model_offset_y ?? 0}
-                onChange={(e) => {
-                  const v = Number(e.target.value)
-                  updateLayout(selectedRoom.id || '', {
-                    model_offset_y: Number.isFinite(v) && v !== 0 ? v : undefined,
-                  })
-                }} />
-            </label>
-            {/* Shell clip (§ B1): a real-size diorama may be bigger than its
-                floor plan — with this on, the renderer cuts it at the room
-                hull. An outdoor room has no hull, so the server ignores it. */}
-            {!lay.always_visible ? (
-              <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-                title={t('Cut the model at the room hull: everything sticking out over the floor plan is hidden (the drawn polygon counts, not just the rectangle). Looking into a cut edge shows the room’s inside — there is no cap surface.')}>
-                <input type="checkbox"
-                  checked={!!lay.clip_model}
-                  onChange={(e) => updateLayout(selectedRoom.id || '', {
-                    clip_model: e.target.checked ? true : undefined,
-                  })} />
-                {t('Clip model to room bounds')}
-              </label>
-            ) : null}
-            {/* "Render walls" used to stand here and was therefore invisible
-                until a room HAD a diorama — a wall-less zone is exactly a room
-                that has none (E5 inventory 1a). It lives in the side panel
-                now, with the room's other shell properties. */}
-            <button type="button" className="ga-btn ga-btn-sm"
-              title={t('Back to the centred default placement.')}
-              onClick={() => updateLayout(selectedRoom.id || '', {
-                model_at: undefined, model_offset_y: undefined,
-              })}>
-              ↺
-            </button>
-          </div>
-        )
-      })() : null}
-
-      {selectedRoom && markerSel !== null && selectedRoom.layout?.markers?.[markerSel] ? (() => {
-        const marker = selectedRoom.layout!.markers![markerSel]
-        const patchMarker = (patch: Partial<typeof marker> | null) => {
-          const markers = (selectedRoom.layout?.markers || [])
-            .map((m, idx) => (idx === markerSel ? { ...m, ...patch } : m))
-            .filter((_, idx) => !(patch === null && idx === markerSel))
-          if (patch === null) setMarkerSel(null)
-          updateLayout(selectedRoom.id || '', { markers })
-        }
-        // Facing per contract: 0 = south, 90 = east, 180 = north, 270 = west;
-        // unset = the client's face-the-neighbours default.
-        const FACING: Record<number, string> = { 0: 'S', 90: 'E', 180: 'N', 270: 'W' }
-        const fac = marker.rotation
-        const capacity = marker.capacity || 1
-        // Preview cycler: the poses of the marker's place type, default
-        // first. VIEW state only, keyed by marker id — a marker stored before
-        // ids existed gets one minted into the draft on the first click, so
-        // the preview (which reads the payload's id) can find it.
-        const poses = posesInGroup(poseCatalog, marker.group)
-        const poseIdx = Math.max(0, poses.indexOf(
-          (marker.id && previewPose[marker.id]) || poses[0]))
-        const setPreview = (pose: string) => {
-          const id = marker.id || newId()
-          if (!marker.id) patchMarker({ id })
-          onPreviewPose?.(id, pose)
-        }
-        return (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="ga-hint" style={{ fontWeight: 600 }}>
-              🎯 {markerSel + 1} · {groupLabel(poseCatalog.groups, marker.group)}
-              {capacity > 1 ? ` ×${capacity}` : ''}:
-            </span>
-            <button
-              type="button"
-              className={`ga-btn ga-btn-sm${clickMode === 'marker-move' ? ' ga-btn-primary' : ''}`}
-              onClick={() => setClickMode((m) => (m === 'marker-move' ? '' : 'marker-move'))}
-              title={t('Then click inside the room to move this marker there.')}
-            >
-              ✥ {clickMode === 'marker-move' ? t('Click into the room…') : t('Move')}
-            </button>
-            {/* Fine X/Y correction after the coarse mouse placement — METRES
-                from the room's min corner (v6 Nr. 2). */}
-            <SliderInput
-              label="X"
-              ariaLabel={t('Marker position X (m)')}
-              title={groundSel
-                ? t('Fine-tune the marker position: metres east of the anchor pin (negative = west).')
-                : t('Fine-tune the marker position: metres from the room’s west edge.')}
-              min={selOrigin[0]}
-              max={selOrigin[0] + (selLay?.w || 0)}
-              step={0.01}
-              value={marker.at[0]}
-              onChange={(v) => patchMarker({
-                at: [rM(v), marker.at[1]] as [number, number],
-              })}
-              unit="m"
-              sliderWidth={100}
-              inputWidth={74}
-            />
-            <SliderInput
-              label="Y"
-              ariaLabel={t('Marker position Y (m)')}
-              title={groundSel
-                ? t('Fine-tune the marker position: metres south of the anchor pin (negative = north).')
-                : t('Fine-tune the marker position: metres from the room’s north edge.')}
-              min={selOrigin[1]}
-              max={selOrigin[1] + (selLay?.d || 0)}
-              step={0.01}
-              value={marker.at[1]}
-              onChange={(v) => patchMarker({
-                at: [marker.at[0], rM(v)] as [number, number],
-              })}
-              unit="m"
-              sliderWidth={100}
-              inputWidth={74}
-            />
-            <SliderInput
-              label="🧭"
-              ariaLabel={t('Marker facing (°)')}
-              title={t('Facing of the figure (0 south, 90 east, 180 north, 270 west; — = face the neighbours).')}
-              min={0}
-              max={359}
-              step={1}
-              value={fac}
-              fallback={0}
-              clearable
-              placeholder="—"
-              onChange={(v) => patchMarker({ rotation: v })}
-              onClear={() => patchMarker({ rotation: undefined })}
-              sliderWidth={120}
-              inputWidth={62}
-              readback={(
-                <span style={{ minWidth: 34 }}>
-                  {fac !== undefined && FACING[fac] ? FACING[fac] : ''}
-                </span>
-              )}
-            >
-              {fac !== undefined ? (
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm"
-                  onClick={() => patchMarker({ rotation: undefined })}
-                  title={t('Back to default: face the neighbours.')}
-                >
-                  ↺
-                </button>
-              ) : null}
-            </SliderInput>
-            {/* A place with room for several: the SERVER composes `capacity`
-                slots `spacing_m` apart across the facing (payload
-                `markers[].slots`); the plan shows one dot, the preview one
-                figure per slot. */}
-            <SliderInput
-              label={t('Capacity')}
-              ariaLabel={t('Marker capacity (figures)')}
-              title={t('How many figures this place takes — a bench seats several. The slots line up in a row; the slot axis says which way it runs.')}
-              min={1}
-              max={8}
-              step={1}
-              value={capacity}
-              onChange={(v) => {
-                const cap = Math.max(1, Math.min(8, Math.round(v)))
-                patchMarker(cap > 1
-                  ? { capacity: cap }
-                  : { capacity: undefined, spacing_m: undefined,
-                      slot_axis: undefined })
-              }}
-              sliderWidth={80}
-              inputWidth={52}
-            />
-            {capacity > 1 ? (
-              <SliderInput
-                label={t('Spacing')}
-                ariaLabel={t('Marker slot spacing (m)')}
-                title={t('Distance between neighbouring slots in metres (0.6 = a bench seat).')}
-                min={0.2}
-                max={3}
-                step={0.05}
-                value={marker.spacing_m ?? 0.6}
-                onChange={(v) => patchMarker({ spacing_m: rM(v) })}
-                unit="m"
-                sliderWidth={90}
-                inputWidth={62}
-              />
-            ) : null}
-            {/* WHICH WAY THE ROW RUNS. 90° — across the facing — is right for
-                everyone who sits or stands: their shoulders are the narrow
-                side. A LYING pose turns the body across the facing instead,
-                so the same 90° row runs down the body and two sleepers land
-                head-to-foot; 0° puts them side by side. */}
-            {capacity > 1 ? (
-              <SliderInput
-                label={t('Slot axis')}
-                ariaLabel={t('Marker slot axis (degrees off the facing)')}
-                title={t('Which way the row of slots runs, in degrees off the facing. 90 = across it — right for sitting and standing, where the shoulders are the narrow side. 0 = along it, which is what a bed wants: a lying figure already lies across its facing, so a 90° row would stack the sleepers head-to-foot instead of side by side.')}
-                min={0}
-                max={180}
-                step={5}
-                value={marker.slot_axis ?? 90}
-                onChange={(v) => patchMarker(
-                  { slot_axis: Math.max(0, Math.min(180, Math.round(v))) })}
-                unit="°"
-                sliderWidth={90}
-                inputWidth={62}
-              />
-            ) : null}
-            {poses.length ? (
-              <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}
-                title={t('Which pose of this place type the preview figures play — view only, nothing is stored. Every slot shows it; a pair pose seats both halves around the marker.')}>
-                <span className="ga-hint">{t('Preview pose')}</span>
-                <button type="button" className="ga-btn ga-btn-sm"
-                  onClick={() => setPreview(poses[(poseIdx + poses.length - 1) % poses.length])}>
-                  ◀
-                </button>
-                <span className="ga-hint">{poses[poseIdx]} ({poseIdx + 1}/{poses.length})</span>
-                <button type="button" className="ga-btn ga-btn-sm"
-                  onClick={() => setPreview(poses[(poseIdx + 1) % poses.length])}>
-                  ▶
-                </button>
-              </span>
-            ) : null}
-            <SliderInput
-              label={t('Height offset (m)')}
-              ariaLabel={t('Marker height offset (m)')}
-              title={t('Additive to the seat height the client samples under the marker.')}
-              min={-1}
-              max={1}
-              step={0.01}
-              value={marker.offset_y ?? 0}
-              onChange={(v) => patchMarker({ offset_y: v === 0 ? undefined : v })}
-              sliderWidth={120}
-              inputWidth={74}
-            />
-            {/* Lean axes: a figure on a slope is not upright, and the compass
-                alone cannot say that. Applied after the facing, in the
-                figure's own frame. */}
-            {([['tilt', '⤢', t('Tilt (°): head up (+) or down (−) — for lying or leaning figures.')],
-              ['roll', '⤡', t('Roll (°): lean sideways — right (+) or left (−).')]] as const)
-              .map(([key, icon, hint]) => (
-                <SliderInput
-                  key={key}
-                  label={icon}
-                  ariaLabel={hint}
-                  title={hint}
-                  min={-90}
-                  max={90}
-                  step={1}
-                  value={marker[key] ?? 0}
-                  onChange={(v) => patchMarker({ [key]: v === 0 ? undefined : v })}
-                  unit="°"
-                  sliderWidth={100}
-                  inputWidth={62}
-                />
-              ))}
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => patchMarker(null)}
-              title={t('Remove this marker')}
-            >
-              × {t('Remove')}
-            </button>
-          </div>
-        )
-      })() : null}
-
-      {selectedRoom && openingSel !== null && selectedRoom.layout?.openings?.[openingSel] ? (() => {
-        const op = selectedRoom.layout!.openings![openingSel]
-        const patchOpening = (patch: Partial<RoomOpening> | null) => {
-          const list = (selectedRoom.layout?.openings || [])
-            .map((o, idx) => (idx === openingSel ? { ...o, ...patch } : o))
-            .filter((_, idx) => !(patch === null && idx === openingSel))
-          if (patch === null) setOpeningSel(null)
-          updateLayout(selectedRoom.id || '', { openings: list })
-        }
-        const numField = (
-          field: 'width_m' | 'height_m' | 'sill_m', label: string, max: number,
-        ) => (
-          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}>
-            {label}
-            <input
-              key={`${field}-${op[field]}`}
-              className="ga-input"
-              type="number"
-              min={field === 'sill_m' ? 0 : 0.4}
-              max={max}
-              step={0.1}
-              style={{ width: 64 }}
-              defaultValue={op[field]}
-              onBlur={(e) => {
-                const n = parseFloat(e.target.value)
-                if (Number.isFinite(n) && n !== op[field]) patchOpening({ [field]: Math.round(n * 1000) / 1000 })
-              }}
-              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-            />
-          </label>
-        )
-        // Connectivity target: another room (same building) or 'outside'.
-        const otherRooms = rooms.filter((r) => r.id && r.id !== selectedRoom.id)
-        return (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="ga-hint" style={{ fontWeight: 600 }}>
-              🚪 {typeof op.edge === 'string' ? op.edge : `#${op.edge}`} · {op.type}:
-            </span>
-            <select
-              className="ga-input"
-              style={{ width: 110 }}
-              value={op.type}
-              onChange={(e) => patchOpening({ type: e.target.value as RoomOpening['type'] })}
-              title={t('Door, window or open passage.')}
-            >
-              <option value="door">{t('Door')}</option>
-              <option value="window">{t('Window')}</option>
-              <option value="passage">{t('Passage')}</option>
-            </select>
-            {numField('width_m', t('W (m)'), 10)}
-            {numField('height_m', t('H (m)'), 10)}
-            {numField('sill_m', t('Sill (m)'), 3)}
-            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-              title={t('Where a door/passage leads — another room or outside. Windows leave it empty.')}>
-              {t('to')}
-              <select
-                className="ga-input"
-                style={{ width: 130 }}
-                value={op.to ?? ''}
-                onChange={(e) => patchOpening({ to: e.target.value || undefined })}
-              >
-                <option value="">{t('— none —')}</option>
-                <option value="outside">{t('outside')}</option>
-                {otherRooms.map((r) => (
-                  <option key={r.id} value={r.id}>{r.name || r.id}</option>
-                ))}
-              </select>
-            </label>
-            {/* WHICH DOOR hangs in this hole. Only a door has one — a window
-                takes no prop and a passage is the open gap by definition
-                (`scene_recipe.door_prop_id`). Keyed on the selection so the
-                control's "Custom, nothing picked yet" state never travels to
-                the next opening. */}
-            {op.type === 'door' ? (
-              <OpeningDoorProp
-                key={openingSel}
-                opening={op}
-                defaultPropId={defaultDoorPropId}
-                onPatch={patchOpening}
-              />
-            ) : null}
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => patchOpening(null)}
-              title={t('Remove this opening')}
-            >
-              × {t('Remove')}
-            </button>
-          </div>
-        )
-      })() : null}
-
-      {elevatorSel && map3d?.elevator ? (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span className="ga-hint" style={{ fontWeight: 600 }}>🛗 {t('Elevator')}:</span>
-          <button
-            type="button"
-            className={`ga-btn ga-btn-sm${clickMode === 'elevator' ? ' ga-btn-primary' : ''}`}
-            onClick={() => setClickMode((m) => (m === 'elevator' ? '' : 'elevator'))}
-            title={t('Then click on the plan to move the elevator there.')}
-          >
-            ✥ {clickMode === 'elevator' ? t('Click on the plan…') : t('Move')}
-          </button>
-          {/* Metres from the anchor pin (v6 Nr. 2) — the same frame the
-              boundary is drawn in, so the sliders sweep the whole window. */}
-          <SliderInput
-            label="X"
-            ariaLabel={t('Elevator position X (m)')}
-            title={t('Fine-tune the elevator position: metres east of the anchor pin (negative = west).')}
-            min={view.x0}
-            max={view.x0 + view.size}
-            step={0.05}
-            fineStep={0.01}
-            value={map3d.elevator[0]}
-            onChange={(v) => onMap3d?.('elevator',
-              [rM(v), map3d.elevator![1]] as [number, number])}
-            unit="m"
-            sliderWidth={100}
-            readback={<span style={{ minWidth: 56 }}>{fmtM(map3d.elevator[0])} m</span>}
-          />
-          <SliderInput
-            label="Y"
-            ariaLabel={t('Elevator position Y (m)')}
-            title={t('Fine-tune the elevator position: metres south of the anchor pin (negative = north).')}
-            min={view.z0}
-            max={view.z0 + view.size}
-            step={0.05}
-            fineStep={0.01}
-            value={map3d.elevator[1]}
-            onChange={(v) => onMap3d?.('elevator',
-              [map3d.elevator![0], rM(v)] as [number, number])}
-            unit="m"
-            sliderWidth={100}
-            readback={<span style={{ minWidth: 56 }}>{fmtM(map3d.elevator[1])} m</span>}
-          />
-
-        </div>
+        && modelDims[selectedRoom.id || ''] ? (
+        <PlanModelPlacement
+          layout={selectedRoom.layout}
+          onPatch={(patch) => updateLayout(selectedRoom.id || '', patch)}
+        />
       ) : null}
 
-      {/* THE SELECTED FLIGHT. A staircase has exactly three things one does to
-          it: turn it, move its foot, take it away — and the two numbers that
-          decide whether it fits (its steps and the floor it eats) are stated
-          rather than left to be measured on the plan. */}
+      {selectedRoom && markerSel !== null
+        && selectedRoom.layout?.markers?.[markerSel] ? (
+        <PlanMarkerStrip
+          marker={selectedRoom.layout.markers[markerSel]}
+          index={markerSel}
+          catalog={poseCatalog}
+          origin={selOrigin}
+          size={{ w: selLay?.w || 0, d: selLay?.d || 0 }}
+          ground={groundSel}
+          mode={clickMode}
+          onMode={setClickMode}
+          previewPose={previewPose}
+          onPreviewPose={onPreviewPose}
+          onPatch={(patch) => {
+            const markers = (selectedRoom.layout?.markers || [])
+              .map((m, i) => (i === markerSel ? { ...m, ...patch } : m))
+              .filter((_, i) => !(patch === null && i === markerSel))
+            if (patch === null) setMarkerSel(null)
+            updateLayout(selectedRoom.id || '', { markers })
+          }}
+        />
+      ) : null}
+
+      {selectedRoom && openingSel !== null
+        && selectedRoom.layout?.openings?.[openingSel] ? (
+        <PlanOpeningStrip
+          opening={selectedRoom.layout.openings[openingSel]}
+          index={openingSel}
+          otherRooms={rooms.filter((r) => r.id && r.id !== selectedRoom.id)}
+          defaultDoorPropId={defaultDoorPropId}
+          onPatch={(patch) => {
+            const list = (selectedRoom.layout?.openings || [])
+              .map((o, i) => (i === openingSel ? { ...o, ...patch } : o))
+              .filter((_, i) => !(patch === null && i === openingSel))
+            if (patch === null) setOpeningSel(null)
+            updateLayout(selectedRoom.id || '', { openings: list })
+          }}
+        />
+      ) : null}
+
+      {elevatorSel && map3d?.elevator ? (
+        <PlanElevatorStrip
+          at={map3d.elevator}
+          view={view}
+          mode={clickMode}
+          onMode={setClickMode}
+          onMove={(at) => onMap3d?.('elevator', at)}
+        />
+      ) : null}
+
       {/* THE FLIGHT AND THE STOREY BELONG TOGETHER. Every path that changes
           the level clears the selection (they all run through `setSelected`),
           and picking a flight pulls the plan to its own storey — so this
@@ -4193,151 +3587,42 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           the row never states the steps and the run of a flight the plan above
           it is not showing. */}
       {stairSel !== null && map3d?.stairs?.[stairSel]
-        && map3d.stairs[stairSel].from_level === level ? (() => {
-        const st = map3d.stairs![stairSel]
-        const list = map3d.stairs || []
-        // The two numbers that decide whether a flight fits are the SERVER's
-        // (§ B1 `stairs`), not a formula repeated here. Absent = no composed
-        // block matches THIS flight — the preview has not answered for the
-        // draft yet, or its answer still describes the list as it was before
-        // the last delete/reorder (`sceneFlightAt`). Either way the row states
-        // no steps and no run rather than another flight's.
-        const flight = sceneFlightAt(stairSel)
-        const patch = (next: typeof st | null) => {
-          const rest = list.filter((_, i) => i !== stairSel)
-          if (!next) {
-            onMap3d?.('stairs', rest.length ? rest : undefined)
-            setStairSel(null)
-            return
-          }
-          onMap3d?.('stairs', list.map((s, i) => (i === stairSel ? next : s)))
-        }
-        return (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="ga-hint" style={{ fontWeight: 600 }}>
-              🪜 {t('Staircase')} {stairSel + 1}:
-            </span>
-            <span className="ga-hint">
-              {(flight
-                ? t('Level {a} → {b} · {n} steps · {run} m of floor · {deg}°')
-                  .replace('{n}', String(flight.steps))
-                  .replace('{run}', fmtM(flight.run_m))
-                : t('Level {a} → {b} · {deg}° · measuring the flight…'))
-                .replace('{a}', String(st.from_level))
-                .replace('{b}', String(st.from_level + 1))
-                .replace('{deg}', String(st.dir_deg))}
-            </span>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              onClick={() => patch({ ...st, dir_deg: (st.dir_deg + 90) % 360 })}
-              title={t('Turn the climb direction by a quarter — 0° climbs south (+y), 90° east (+x), 180° north (−y), 270° west (−x). The foot stays where it is.')}
-            >
-              ↻ {t('Rotate 90°')}
-            </button>
-            <button
-              type="button"
-              className={`ga-btn ga-btn-sm${clickMode === 'stairs' ? ' ga-btn-primary' : ''}`}
-              onClick={() => setClickMode((m) => (m === 'stairs' ? '' : 'stairs'))}
-              title={t('Then click on the plan to place ANOTHER flight on this level.')}
-            >
-              + {clickMode === 'stairs' ? t('Click on the plan…') : t('Add')}
-            </button>
-            {/* Metres from the anchor pin, the frame the whole plan is drawn
-                in — the foot is what the flight is anchored by. */}
-            <SliderInput
-              label="X"
-              ariaLabel={t('Staircase foot X (m)')}
-              title={t('Fine-tune the foot of the flight: metres east of the anchor pin (negative = west).')}
-              min={view.x0}
-              max={view.x0 + view.size}
-              step={0.05}
-              fineStep={0.01}
-              value={st.at[0]}
-              onChange={(v) => patch({ ...st, at: [rM(v), st.at[1]] })}
-              unit="m"
-              sliderWidth={100}
-              readback={<span style={{ minWidth: 56 }}>{fmtM(st.at[0])} m</span>}
-            />
-            <SliderInput
-              label="Y"
-              ariaLabel={t('Staircase foot Y (m)')}
-              title={t('Fine-tune the foot of the flight: metres south of the anchor pin (negative = north).')}
-              min={view.z0}
-              max={view.z0 + view.size}
-              step={0.05}
-              fineStep={0.01}
-              value={st.at[1]}
-              onChange={(v) => patch({ ...st, at: [st.at[0], rM(v)] })}
-              unit="m"
-              sliderWidth={100}
-              readback={<span style={{ minWidth: 56 }}>{fmtM(st.at[1])} m</span>}
-            />
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-danger"
-              onClick={() => patch(null)}
-              title={t('Remove this staircase — the storeys it connected fall back to the elevator, if there is one.')}
-            >
-              × {t('Remove')}
-            </button>
-          </div>
-        )
-      })() : null}
-
-      {/* Pick a room WITHOUT touching the plan — small, overlapping or
-          stacked rooms are hard to hit, and hitting them used to move them.
-          THE YARD IS ALWAYS FIRST (§ A13a): it is the one shape nobody draws,
-          it lies under everything else and it is the hardest thing on the plan
-          to hit on purpose. */}
-      {placedRooms.length || groundRoom ? (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span className="ga-hint">{t('On the plan:')}</span>
-          {groundRoom ? (
-            <button
-              type="button"
-              className={`ga-btn ga-btn-sm${selected === GROUND_ROOM_ID ? ' ga-btn-primary' : ''}`}
-              disabled={!yardLay}
-              onClick={() => { setLevel(0); setSelected(GROUND_ROOM_ID) }}
-              title={yardLay
-                ? t('Select the yard — the location surface. Props, scattered props and markers stand on the terrain here; it has no room geometry.')
-                : t('No boundary drawn: this location has no area, so it has no yard to furnish either. Draw its footprint on the map tab first.')}
-            >
-              ⬚ {yardName}
-            </button>
-          ) : null}
-          {placedRooms.map((room) => (
-            <button
-              key={room.id || room.name}
-              type="button"
-              className={`ga-btn ga-btn-sm${selected === room.id ? ' ga-btn-primary' : ''}`}
-              onClick={() => setSelected(room.id || '')}
-              title={t('Select this room — nothing on the plan moves.')}
-            >
-              {(room.layout?.level || 0) !== 0
-                ? `${room.name || room.id} · ${room.layout?.level}`
-                : (room.name || room.id)}
-            </button>
-          ))}
-        </div>
+        && map3d.stairs[stairSel].from_level === level ? (
+        <PlanStairStrip
+          index={stairSel}
+          flight={map3d.stairs[stairSel]}
+          composed={sceneFlightAt(stairSel)}
+          view={view}
+          mode={clickMode}
+          onMode={setClickMode}
+          onPatch={(next) => {
+            const list = map3d.stairs || []
+            if (!next) {
+              const rest = list.filter((_, i) => i !== stairSel)
+              onMap3d?.('stairs', rest.length ? rest : undefined)
+              setStairSel(null)
+              return
+            }
+            onMap3d?.('stairs',
+              list.map((st, i) => (i === stairSel ? next : st)))
+          }}
+        />
       ) : null}
 
-      {unplaced.length ? (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span className="ga-hint">{t('Not on the plan:')}</span>
-          {unplaced.map((room) => (
-            <button
-              key={room.id || room.name}
-              type="button"
-              className={`ga-btn ga-btn-sm${clickMode === 'draw-room' && drawTarget === room.id ? ' ga-btn-primary' : ''}`}
-              onClick={() => armDrawFor(room.id || '')}
-              title={t('Draw this room on the current level — click to place points, click the first point to close, Shift = free-hand, Esc = cancel.')}
-            >
-              ⬠ {room.name || room.id}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {/* Pick a room WITHOUT touching the plan (PlanRoomPicker). */}
+      <PlanRoomPicker
+        placed={placedRooms}
+        unplaced={unplaced}
+        hasYard={!!groundRoom}
+        yardPlaced={!!yardLay}
+        yardName={yardName}
+        selected={selected}
+        onSelect={setSelected}
+        onSelectYard={() => { setLevel(0); setSelected(GROUND_ROOM_ID) }}
+        drawTarget={drawTarget}
+        drawing={clickMode === 'draw-room'}
+        onDraw={armDrawFor}
+      />
         </>
         )}
       />
