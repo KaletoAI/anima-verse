@@ -150,9 +150,16 @@ def main() -> int:
     placed = status["placements"]["placed"]
     check("solver placed the plan", len(placed) >= 2,
           json.dumps(status["placements"]))
+    # Since the solver v2 every placement is minted with an ``id`` and may
+    # carry ``offset_y`` (wall/ceiling), ``on`` + a child-frame ``at``
+    # (surface) and ``variant`` — the sanitizer keeps exactly these keys.
     check("placements are layout.props entries",
-          all(set(p) <= {"prop_id", "at", "yaw", "offset_y"} and len(p["at"]) == 2
+          all(set(p) <= {"prop_id", "id", "at", "yaw", "offset_y", "on",
+                         "variant"} and len(p["at"]) == 2
               for p in placed))
+    check("every placement carries a minted id",
+          len({p["id"] for p in placed}) == len(placed),
+          json.dumps([p.get("id") for p in placed]))
     check("door zone kept free",
           all(p["at"][1] < 3.4 for p in placed),
           json.dumps([p["at"] for p in placed]))

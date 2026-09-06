@@ -146,7 +146,7 @@ def variant_mix(base_seed: int, variant: int) -> int:
 
 
 def point_in_poly(pt: Sequence[float], poly: Sequence[Sequence[float]]) -> bool:
-    """Parity test — same routine as ``furnish_solver._point_in_poly``."""
+    """Parity test — same routine as ``furnish_geometry.point_in_poly``."""
     x, y = float(pt[0]), float(pt[1])
     inside = False
     n = len(poly)
