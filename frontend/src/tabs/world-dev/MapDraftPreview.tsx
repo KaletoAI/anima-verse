@@ -441,7 +441,7 @@ export function MapDraftPreview({
 
   /**
    * The proposed placements as location records: the draft's position and yaw
-   * on the world's own name, icon and scale anchor.
+   * on the world's own name and scale anchor.
    *
    * ONE list, stubs included and in the server's order — a warning points at
    * `locations[i]`, so any split here would make every index mean something
@@ -469,15 +469,13 @@ export function MapDraftPreview({
         pos_z: l.pos_z,
         yaw_deg: typeof l.yaw_deg === 'number' ? l.yaw_deg : 0,
         map3d: src?.map3d,
-        map_rotation_2d: src?.map_rotation_2d,
       }
     }),
     [byId, normalized],
   )
 
   /** What the PLACEMENT layer may draw: places the world knows. A stub has no
-   *  id, so it has no icon endpoint and no record — it is drawn by the overlay
-   *  alone. */
+   *  id and no record — it is drawn by the overlay alone. */
   const placedDraftLocs = useMemo(
     () => draftLocs.filter((l) => !l.isNew), [draftLocs],
   )
@@ -628,7 +626,6 @@ export function MapDraftPreview({
                   onSelect={NOOP}
                   onMove={NOOP}
                   snapM={0}
-                  iconVer={{}}
                   ghost={null}
                   ghostPt={null}
                 />
@@ -639,7 +636,6 @@ export function MapDraftPreview({
                 onSelect={NOOP}
                 onMove={NOOP}
                 snapM={0}
-                iconVer={{}}
                 ghost={null}
                 ghostPt={null}
               />

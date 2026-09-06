@@ -1,17 +1,16 @@
 /**
  * LocationViewSwitch — WHAT a placed location shows inside its outline.
  *
- * Three states, one control, because they are three answers to one question
- * and never combine: the flat 2D map ICON (what the map has always drawn), the
- * rendered ROOFS (the building model from straight above) or the ROOMS (the
- * floor plan's own hulls, as flat colour over the painted ground).
+ * Two states, one control, because they are two answers to one question and
+ * never combine: the rendered ROOFS (the building model from straight above)
+ * or the ROOMS (the floor plan's own hulls, as flat colour over the painted
+ * ground).
  *
  * THE ROOMS STATE EXISTS FOR THE CASE A PICTURE CANNOT SERVE. A lake is
  * positioned by lining its water and shore rooms up with the terrain painting
- * underneath — the roof of a lake is nothing at all, and a flat icon says
- * nothing about where the water room ends. So the rooms are drawn
- * semi-transparently and the icon is dropped with them: the ground under the
- * shapes is the reference being aligned against.
+ * underneath — the roof of a lake is nothing at all. So the rooms are drawn
+ * semi-transparently: the ground under the shapes is the reference being
+ * aligned against.
  *
  * The two gates are not the same kind of gate, and the control says so:
  *   * ROOFS are RENDERED — one scene request plus one WebGL context each — so
@@ -20,8 +19,8 @@
  *     "there are no models".
  *   * ROOMS are VECTOR and cost nothing to draw. Their floor is only that at
  *     world zoom a whole location is a few pixels, so its rooms are dots that
- *     clutter exactly the ground somebody is painting. Below it the map falls
- *     back to the icons, which is what it looked like before.
+ *     clutter exactly the ground somebody is painting. Below it the footprints
+ *     carry nothing but their outline.
  *
  * It is a VIEW, like the switches in the Display panel above it: nothing here
  * changes the world, and it lives in the tray rather than in the toolbar,
@@ -66,8 +65,6 @@ export function LocationViewSwitch({
     <div className="ga-map-tray-section">
       <span className="ga-map-tray-title">{t('Location view')}</span>
       <div className="ga-map-view-switch">
-        {btn('icons', '🗺', t('Icons'),
-          t('The flat 2D map icon of each location, as before.'))}
         {btn('roofs', '🏢', t('Roofs') + (roofsZoomedOut ? ' ' + t('(zoom in)') : ''),
           roofsZoomedOut
             ? zoomHint(roofMinPxPerM)

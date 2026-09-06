@@ -16,9 +16,6 @@ export function WorldTab() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [locations, setLocations] = useState<Location[] | null>(null)
-  // Unfiltered list incl. clone placements — for the "used on the map"
-  // count in the gallery (clones carry map_image_2d + grid).
-  const [placements, setPlacements] = useState<Location[]>([])
   const [selection, setSelection] = useState<Selection>(null)
   // Unsaved-changes guard: the open LocationEditor reports its dirty state;
   // switching the tree selection then needs a SECOND click (armed pattern —
@@ -47,7 +44,6 @@ export function WorldTab() {
       // lives on the template. Editing happens here in the World tab;
       // placement (clones) lives in the Map tab.
       const all = data.locations || []
-      setPlacements(all)
       const visible = all.filter((l) => !(l.template_location_id || '').trim())
       // Dedupe by lowercased name as a final guard against legacy data
       // with duplicate labels.
@@ -115,7 +111,6 @@ export function WorldTab() {
         rooms: (src.rooms || []).map((r) => { const rest = { ...r }; delete rest.id; return rest }),
         image_prompt_day: src.image_prompt_day || '',
         image_prompt_night: src.image_prompt_night || '',
-        image_prompt_map_2d: src.image_prompt_map_2d || '',
         image_prompt_building: src.image_prompt_building || '',
         danger_level: src.danger_level,
         indoor: src.indoor || '',
@@ -207,7 +202,6 @@ export function WorldTab() {
             location={selectedLocation}
             items={items}
             allLocations={locations}
-            placements={placements}
             onChanged={reload}
             onDirty={(d) => {
               editorDirtyRef.current = d
@@ -246,7 +240,6 @@ export function WorldTab() {
                 room={selectedRoom}
                 roomFilter={selectedRoom.id || undefined}
                 allLocations={locations}
-                placements={placements}
               />
             ) : (
               <div className="ga-placeholder">{t('Select a place to view its gallery.')}</div>

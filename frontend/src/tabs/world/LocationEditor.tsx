@@ -18,7 +18,7 @@ import { RoomModelAdjust } from './RoomModelAdjust'
 import { useScenePreview } from './useScenePreview'
 
 // ── Location editor ────────────────────────────────────────────────────────
-// Split into four tabs: General (gameplay data), 2D world (day/night/map
+// Split into four tabs: General (gameplay data), 2D world (day/night
 // images), 3D world (map metadata + building images + the building model
 // with its tile placement) and Floor plan (room layout editor + live 3D
 // preview). One draft spans all tabs — Save persists it all.
@@ -28,9 +28,8 @@ type LocTab = 'general' | '2d' | '3d' | 'floor'
 interface LocationEditorProps {
   location: Location
   items: ItemRef[]
-  /** All places + unfiltered placements — handed through to the gallery. */
+  /** All places — handed through to the gallery. */
   allLocations: Location[]
-  placements: Location[]
   onChanged: () => void
   /** Reports whether the draft differs from the saved location — the tree
    *  guards selection changes against silently discarding it. */
@@ -38,7 +37,7 @@ interface LocationEditorProps {
   onDeleted: () => void
 }
 
-export function LocationEditor({ location, items, allLocations, placements, onChanged, onDirty, onDeleted }: LocationEditorProps) {
+export function LocationEditor({ location, items, allLocations, onChanged, onDirty, onDeleted }: LocationEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [draft, setDraft] = useState<Location>(() => ({ ...location }))
@@ -152,7 +151,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         map3d: draft.map3d,
         image_prompt_day: draft.image_prompt_day,
         image_prompt_night: draft.image_prompt_night,
-        image_prompt_map_2d: draft.image_prompt_map_2d,
         image_prompt_building: draft.image_prompt_building,
         event_settings: draft.event_settings,
         // Always sent, even as an empty list: that is how the last slot of a
@@ -187,12 +185,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
     })
     setNewRoomName('')
   }, [newRoomName])
-
-  // Ground texture for the placement viewer: the location's chosen 2D map
-  // icon (when set). Without it the tile renders as a plain square.
-  const mapIconUrl = (location.map_image_2d || '').trim()
-    ? `/world/locations/${encodeURIComponent(location.id)}/gallery/${encodeURIComponent(location.map_image_2d || '')}`
-    : undefined
 
   const generalTab = (
     <div className="ga-form">
@@ -380,14 +372,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             onChange={(e) => upd('image_prompt_night', e.target.value)}
           />
         </Field>
-        <Field label={t('2D map icon prompt')} help="image_prompt">
-          <textarea
-            className="ga-textarea"
-            rows={4}
-            value={draft.image_prompt_map_2d || ''}
-            onChange={(e) => upd('image_prompt_map_2d', e.target.value)}
-          />
-        </Field>
       </div>
       <LocationGallery
         mode="2d"
@@ -395,7 +379,6 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
         location={location}
         room={null}
         allLocations={allLocations}
-        placements={placements}
       />
     </div>
   )
@@ -567,13 +550,11 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             location={location}
             room={null}
             allLocations={allLocations}
-            placements={placements}
             extraActions={generateModel ? <GenerateModelButton action={generateModel} /> : null}
           />
         </div>
         <BuildingModelPanel
           locationId={location.id}
-          mapIconUrl={mapIconUrl}
           map3d={draft.map3d}
           scene={scene}
           onPreviewFileChange={setPreviewModelFile}

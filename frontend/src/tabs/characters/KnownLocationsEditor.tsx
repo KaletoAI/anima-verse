@@ -2,37 +2,32 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { ZoomButton } from '../../components/ZoomButton'
 
 /**
  * Known-locations editor (Characters → Locations): every placed location as a
- * map-icon-2d tile, unknown ones darkened as fog of war. Clicking a tile
- * toggles "known"; saving writes the full target state.
+ * row with its name, unknown ones dimmed as fog of war. Clicking a row toggles
+ * "known"; saving writes the full target state.
  *   GET /characters/{c}/memory/locations
  *   PUT /characters/{c}/known-locations  ({known_locations: [...]})
  *
- * The tiles are a plain WRAP LIST, not a map. This used to be a CSS grid over
- * the old integer cell coordinates; with free world metres a faithful layout
- * would mean a real projected canvas, and this surface is pure selection UI —
- * it never showed distances or routes. Deliberate simplification: the map
- * itself lives in the Map tab, here the tiles only need to be recognisable.
- * They are ordered by world position (z, then x) so neighbours on the map stay
- * neighbours in the list and the order is stable across reloads.
+ * A plain NAME LIST, not a map. This surface is pure selection UI — it never
+ * showed distances or routes, and the picture it used to show (the flat 2D map
+ * icon) does not exist any more. The map itself lives in the Map tab; here a
+ * location only needs to be recognisable by name. The rows are ordered by
+ * world position (z, then x) so neighbours on the map stay neighbours in the
+ * list and the order is stable across reloads.
  */
 interface LocItem {
   id: string
   name: string
   pos_x?: number | null
   pos_z?: number | null
-  map_rotation_2d?: number
-  passable: boolean
   is_known: boolean
   is_current: boolean
   visit_count: number
 }
 
-const CELL = 78
-const GAP = 4
+const GAP = 2
 const PAD = 6
 
 /** Placed = it stands somewhere on the world map. Metres are signed — there is
@@ -94,15 +89,15 @@ export function KnownLocationsEditor({ character }: { character: string }) {
     }
   }
 
-  const tiles = useMemo(() => {
+  const rows = useMemo(() => {
     const placed = items.filter(isPlaced)
     if (!placed.length) return null
     placed.sort((a, b) => ((a.pos_z as number) - (b.pos_z as number))
       || ((a.pos_x as number) - (b.pos_x as number)))
     return (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: GAP, padding: PAD }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: GAP, padding: PAD }}>
         {placed.map((l) => (
-          <MapCell key={l.id} loc={l} isKnown={known.has(l.id)} onClick={() => toggle(l.id)} t={t} />
+          <LocRow key={l.id} loc={l} isKnown={known.has(l.id)} onClick={() => toggle(l.id)} t={t} />
         ))}
       </div>
     )
@@ -130,13 +125,13 @@ export function KnownLocationsEditor({ character }: { character: string }) {
       </div>
 
       <div style={{ fontSize: '0.8em', opacity: 0.55, marginBottom: 8 }}>
-        {t('Click a location to toggle whether the character knows it. Darkened = unknown (fog of war); entering a location also reveals it automatically.')}
+        {t('Click a location to toggle whether the character knows it. Dimmed = unknown (fog of war); entering a location also reveals it automatically.')}
       </div>
 
-      {tiles ? (
+      {rows ? (
         <div style={{ overflow: 'auto', maxHeight: '60vh', border: '1px solid var(--border, #30363d)',
                       borderRadius: 8, background: 'var(--bg, #0d1117)' }}>
-          {tiles}
+          {rows}
         </div>
       ) : (
         <div className="ga-placeholder">{t('No places')}</div>
@@ -145,64 +140,18 @@ export function KnownLocationsEditor({ character }: { character: string }) {
   )
 }
 
-function MapCell({ loc, isKnown, onClick, t }: {
+function LocRow({ loc, isKnown, onClick, t }: {
   loc: LocItem; isKnown: boolean; onClick: () => void; t: (s: string) => string
 }) {
-  const [imgFail, setImgFail] = useState(false)
-  const rot = loc.map_rotation_2d || 0
   return (
-    <div
-      onClick={onClick}
-      title={`${loc.name}${isKnown ? '' : ' — ' + t('unknown (fog of war)')}`}
-      style={{
-        width: CELL, height: CELL, position: 'relative', borderRadius: 6, overflow: 'hidden',
-        cursor: 'pointer', userSelect: 'none', boxSizing: 'border-box',
-        border: isKnown ? '1px solid var(--border, #30363d)' : '1px solid rgba(255,255,255,0.08)',
-        outline: loc.is_current ? '2px solid var(--accent, #6aa9ff)' : 'none', outlineOffset: -2,
-        background: 'var(--bg, #0d1117)',
-      }}
-    >
-      {/* Map tile */}
-      {!imgFail && (
-        <img src={`/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d`} alt={loc.name}
-          onError={() => setImgFail(true)}
-          style={{
-            position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover',
-            transform: rot ? `rotate(${rot}deg)` : undefined,
-            // Fog of war: unknown → desaturated + darkened.
-            filter: isKnown ? undefined : 'grayscale(0.85) brightness(0.4)',
-          }} />
-      )}
-      {/* Extra fog veil (also without an image) */}
-      {!isKnown && (
-        <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }} />
-      )}
-      {/* Location name */}
-      <div style={{
-        position: 'absolute', left: 0, right: 0, bottom: 0, fontSize: '0.58em', lineHeight: 1.15,
-        textAlign: 'center', background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '1px 2px',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        fontStyle: loc.passable ? 'italic' : 'normal', opacity: isKnown ? 1 : 0.7,
-      }}>{loc.name}</div>
-      {/* Marker */}
-      {loc.is_current && (
-        <div style={{ position: 'absolute', top: 1, right: 2, fontSize: '0.85em', zIndex: 2 }}>📍</div>
-      )}
-      {/* Enlarge without toggling known/unknown; sits above the name bar,
-          clear of the 📍 marker in the top corner. */}
-      {!imgFail && (
-        <ZoomButton
-          item={{ src: `/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d`, alt: loc.name }}
-          style={{ top: 'auto', bottom: 16, right: 2, width: 18, height: 18 }}
-          size={12}
-        />
-      )}
-      {isKnown && loc.visit_count > 0 && (
-        <span style={{ position: 'absolute', top: 1, left: 3, fontSize: '0.6em', color: '#fff',
-                       textShadow: '0 0 3px #000', fontVariantNumeric: 'tabular-nums' }}>
-          {loc.visit_count}×
-        </span>
-      )}
-    </div>
+    <button type="button" onClick={onClick}
+      className={'ga-list-row' + (isKnown ? '' : ' ga-list-row-dim')}
+      title={isKnown ? t('Known') : t('Unknown (fog of war)')}
+      style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+               opacity: isKnown ? 1 : 0.45 }}>
+      <span style={{ width: '1.2em', textAlign: 'center' }}>{loc.is_current ? '📍' : (isKnown ? '✓' : '')}</span>
+      <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{loc.name}</span>
+      {loc.visit_count > 0 ? <span style={{ fontSize: '0.8em', opacity: 0.6 }}>{loc.visit_count}×</span> : null}
+    </button>
   )
 }

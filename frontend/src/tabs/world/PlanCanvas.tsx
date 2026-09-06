@@ -33,6 +33,7 @@ import {
   planMapView, r4, rM, stairSymbol,
 } from './planGeometry'
 import type { PlanView, Pt, SnapResult } from './planGeometry'
+import { composePlacements } from './placementCompose'
 import type { PlanMode } from './PlanToolbar'
 import type {
   Map3D, PlacedLayout, Room, SceneRoom, SceneStairs,
@@ -585,6 +586,17 @@ export function PlanCanvas({
       // The STORED layout: the yard's derived `lay` carries the shape,
       // never its content.
       const content = room.layout
+      // WHERE THE PIECES REALLY STAND. A placement with `on` stores its pose
+      // relative to the piece it stands on (decision E1), so the plan draws
+      // and clicks the COMPOSED one — index-aligned with `content.props`, the
+      // same list the drag handlers and the strip address.
+      const composedProps = composePlacements(content?.props || [])
+      // Ghosts may stand on each other AND on what is already in the room, so
+      // they compose over both lists and take their own slice back.
+      const composedGhosts = reviewing && room.id === selected
+        ? composePlacements([...(content?.props || []), ...furnish.ghosts])
+          .slice((content?.props || []).length)
+        : []
       // Holes owned by a NEIGHBOUR that pierce this room's wall too:
       // WHICH ones and WHERE is the server's answer (scene payload, in
       // room-local metres) — the editor only draws them and routes a
@@ -808,6 +820,7 @@ export function PlanCanvas({
             const fw = rx(dims?.width_m || 1)
             const fd = rz(dims?.depth_m || 1)
             const sel = room.id === selected && propSel === i
+            const pose = composedProps[i]
             return (
               <div
                 key={`prop-${i}`}
@@ -833,9 +846,9 @@ export function PlanCanvas({
                 }}
                 style={{
                   position: 'absolute',
-                  left: `${ax(p.at[0])}%`, top: `${az(p.at[1])}%`,
+                  left: `${ax(pose.at[0])}%`, top: `${az(pose.at[1])}%`,
                   width: `${fw}%`, height: `${fd}%`,
-                  transform: `translate(-50%, -50%) rotate(${-(p.yaw || 0)}deg)`,
+                  transform: `translate(-50%, -50%) rotate(${-pose.yaw}deg)`,
                   border: `1.5px ${dims ? 'solid' : 'dashed'} ${sel ? '#fff' : '#d29922'}`,
                   background: 'rgba(210,153,34,0.22)', borderRadius: 2,
                   boxSizing: 'border-box',
@@ -857,6 +870,7 @@ export function PlanCanvas({
               // (the furnish solver emits metres since the server wave).
               const fw = rx(dims?.width_m || 1)
               const fd = rz(dims?.depth_m || 1)
+              const pose = composedGhosts[i] || { at: p.at, yaw: p.yaw || 0 }
               return (
                 <div
                   key={`ghost-${i}`}
@@ -869,9 +883,9 @@ export function PlanCanvas({
                   }}
                   style={{
                     position: 'absolute',
-                    left: `${ax(p.at[0])}%`, top: `${az(p.at[1])}%`,
+                    left: `${ax(pose.at[0])}%`, top: `${az(pose.at[1])}%`,
                     width: `${fw}%`, height: `${fd}%`,
-                    transform: `translate(-50%, -50%) rotate(${-(p.yaw || 0)}deg)`,
+                    transform: `translate(-50%, -50%) rotate(${-pose.yaw}deg)`,
                     border: `1.5px dashed ${ghostSel === i ? '#fff' : '#d29922'}`,
                     background: 'rgba(210,153,34,0.14)', borderRadius: 2,
                     boxSizing: 'border-box', opacity: 0.75,

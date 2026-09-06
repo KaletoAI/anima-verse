@@ -100,13 +100,6 @@ export interface EditorLocation extends MapGeometry {
   passable?: boolean
   template_location_id?: string
   description?: string
-  /** Chosen gallery file for the flat map icon (`PATCH .../map-image`); empty
-   *  falls back to the first `map_2d` image of the gallery owner. */
-  map_image_2d?: string
-  /** 90°-step display rotation of that ICON (`PATCH .../map-rotation`) — it
-   *  turns the artwork inside the footprint and is NOT `yaw_deg`, which turns
-   *  the location itself in the world. */
-  map_rotation_2d?: number
   /** Server findings about the DRAWN boundary (contract v6 Nr. 1), today only
    *  `boundary_self_intersection`. Absent = nothing to report. The scene
    *  payload reports the same kinds in its `problems[]`, but a bare location

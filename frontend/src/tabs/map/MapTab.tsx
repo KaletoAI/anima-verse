@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
-import { ZoomButton } from '../../components/ZoomButton'
 import { CLOSE_TOL_PX, fmtM } from '../world/planGeometry'
 import {
   BOUNDARY_SEED_M, boundaryComplaint, putLocationBoundary, seedSquare,
@@ -226,11 +224,6 @@ import type {
  * stored shape is worse than no recipe at all. `Convert to area` is the exit —
  * it drops the recipe, keeps the polygon, and does not come back.
  */
-
-interface GalleryResp {
-  images?: string[]
-  image_types?: Record<string, string>
-}
 
 /** What the id of a locally drawn object starts with — see the module
  *  docstring. The server's ids begin `ta_`/`ha_`/`wp_`, so nothing can be
@@ -590,20 +583,6 @@ const variantLabel = (wp: WorldProp, pos: number,
     '{n}', String((typeof store === 'number' ? store : pos) + 1))
 }
 
-/** Flat 2D map icon as an HTML thumbnail (tray). Hidden when the location has
- *  none — a broken image would claim the entry is misconfigured. The map
- *  itself draws the same URL as an SVG `<image>`, which needs no such guard. */
-function MapIcon({ locId, className, cacheKey }: {
-  locId: string; className: string; cacheKey?: string
-}) {
-  const [hidden, setHidden] = useState(false)
-  useEffect(() => { setHidden(false) }, [cacheKey, locId])
-  if (hidden) return null
-  const base = `/world/locations/${encodeURIComponent(locId)}/map-icon-2d`
-  const src = cacheKey ? `${base}?v=${encodeURIComponent(cacheKey)}` : base
-  return <img className={className} src={src} alt="" onError={() => setHidden(true)} />
-}
-
 export function MapTab() {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -708,16 +687,12 @@ export function MapTab() {
    *  the props tool — nothing else on this canvas is placed by this raster. */
   const propGridM = propGrid.on && mode === 'props' ? propGrid.stepM : 0
 
-  // Per-location cache-buster for the map icon (bumped after a change).
-  const [iconVer, setIconVer] = useState<Record<string, number>>({})
-
-  // WHAT A FOOTPRINT SHOWS INSIDE ITS OUTLINE — one of three, never two
-  // (`LocationViewSwitch`): the flat 2D map icon, the rendered roof view, or
-  // the floor plan's ground-floor ROOMS as flat colour over the painted
-  // terrain. Session state like every other view switch here; the roof cache
-  // below hangs off it (see the module docstring for why the refresh is the
-  // switch and nothing else).
-  const [locView, setLocView] = useState<LocationView>('icons')
+  // WHAT A FOOTPRINT SHOWS INSIDE ITS OUTLINE — one of two, never both
+  // (`LocationViewSwitch`): the rendered roof view, or the floor plan's
+  // ground-floor ROOMS as flat colour over the painted terrain. Session state
+  // like every other view switch here; the roof cache below hangs off it (see
+  // the module docstring for why the refresh is the switch and nothing else).
+  const [locView, setLocView] = useState<LocationView>('rooms')
   const roofOn = locView === 'roofs'
   /** Are the locations drawn at all? A pure VIEW switch, session-only like the
    *  roof one next to it — nothing about the world changes, only what this
@@ -744,12 +719,6 @@ export function MapTab() {
   // exactly what the module avoids. The chain also means a cancelled pass
   // hands over instead of leaving the next one to guess whether it may start.
   const roofChainRef = useRef<Promise<void>>(Promise.resolve())
-  // Image picker: which location's picker is open plus its gallery, and which
-  // gallery file is armed for deletion (inline confirmation, no confirm()).
-  const [picker, setPicker] = useState<EditorLocation | null>(null)
-  const [pickerGallery, setPickerGallery] = useState<GalleryResp | null>(null)
-  const [delConfirm, setDelConfirm] = useState<string | null>(null)
-  const [gen, setGen] = useState<EditorLocation | null>(null)
 
   // The canvas pane is measured here as well: `fitBounds` needs the pixel size
   // BEFORE the first view exists, and the size the canvas measures for itself
@@ -1207,17 +1176,9 @@ export function MapTab() {
   worldPropsRef.current = worldProps
   const wpCapRef = useRef({ max: 0, warnAt: 0 })
   wpCapRef.current = wpCap
-  // Is a modal covering the canvas? The handler is bound once, so this cannot
-  // be read from the state directly.
-  const modalRef = useRef(false)
-  modalRef.current = !!picker || !!gen
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      // While a dialog is open, Escape is the reflex for CLOSING IT — acting
-      // on the canvas here would silently throw away a half-drawn polygon
-      // behind a window that stays open regardless. Not this handler's key.
-      if (modalRef.current) return
       if (ghostRef.current) { setGhost(null); setGhostPt(null) } else if (armedPropRef.current) {
         // The prop palette arms the same way the location tray does, so
         // Escape disarms it the same way — before anything else is dropped.
@@ -1465,7 +1426,7 @@ export function MapTab() {
    *  setter so the two can never disagree; the checkbox goes when the panel
    *  is next touched. */
   const toggleRoofs = useCallback(() => {
-    setLocationView(roofOn ? 'icons' : 'roofs')
+    setLocationView(roofOn ? 'rooms' : 'roofs')
   }, [roofOn, setLocationView])
 
   /** Hiding the locations also drops what only makes sense while they are
@@ -2276,7 +2237,7 @@ export function MapTab() {
     if (mode !== 'paint' || paintShape !== 'line') return
     if (draft.length < MIN_STROKE_POINTS) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Enter' || modalRef.current) return
+      if (e.key !== 'Enter') return
       const tag = document.activeElement?.tagName || ''
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       e.preventDefault()
@@ -2644,134 +2605,6 @@ export function MapTab() {
     window.location.hash = '#/world'
   }, [])
 
-  /** 90° step of the ICON inside the footprint (display transform), not the
-   *  location's rotation in the world. */
-  const rotateIcon = useCallback(async (loc: EditorLocation) => {
-    const next = ((loc.map_rotation_2d || 0) + 90) % 360
-    patchLocal(loc.id, { map_rotation_2d: next })
-    try {
-      await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-rotation`,
-        { rotation: next })
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-      void reload()
-    }
-  }, [patchLocal, reload, t, toast])
-
-  // ── Image picker (kept from the grid tab, cell mechanics removed) ─────────
-
-  // Clones share their template's gallery — images are read from the owner,
-  // the CHOICE is stored on the clone, so two copies can show two pictures.
-  const ownerOf = (loc: EditorLocation) => (loc.template_location_id || '').trim() || loc.id
-
-  const bumpIcon = useCallback((id: string) => {
-    setIconVer((v) => ({ ...v, [id]: (v[id] || 0) + 1 }))
-  }, [])
-
-  const openPicker = useCallback(async (loc: EditorLocation) => {
-    setPicker(loc)
-    setPickerGallery(null)
-    setDelConfirm(null)
-    try {
-      const g = await apiGet<GalleryResp>(
-        `/world/locations/${encodeURIComponent(ownerOf(loc))}/gallery`)
-      setPickerGallery(g)
-      // No "auto" mode: without an explicit choice the first map image is
-      // assigned right away, so what the map shows is always a named file.
-      if (!(loc.map_image_2d || '').trim()) {
-        const firstMap = (g.images || []).find((f) => (g.image_types || {})[f] === 'map_2d')
-        if (firstMap) {
-          await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image`,
-            { type: 'map_2d', file: firstMap })
-          bumpIcon(loc.id)
-          setPicker((p) => (p && p.id === loc.id ? { ...p, map_image_2d: firstMap } : p))
-          void reload()
-        }
-      }
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-      setPickerGallery({ images: [], image_types: {} })
-    }
-  }, [bumpIcon, reload, t, toast])
-
-  const chooseImage = useCallback(async (loc: EditorLocation, file: string) => {
-    try {
-      await apiPatch(`/world/locations/${encodeURIComponent(loc.id)}/map-image`,
-        { type: 'map_2d', file })
-      bumpIcon(loc.id)
-      await reload()
-      setPicker(null)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [bumpIcon, reload, t, toast])
-
-  // The backend clears dangling map_image_2d references itself; the gallery
-  // and the locations are re-read so the selection marker stays honest.
-  const deleteImage = useCallback(async (owner: string, file: string) => {
-    try {
-      await apiDelete(
-        `/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(file)}`)
-      const g = await apiGet<GalleryResp>(
-        `/world/locations/${encodeURIComponent(owner)}/gallery`)
-      setPickerGallery(g)
-      const data = await apiGet<{ locations?: EditorLocation[] }>('/world/locations')
-      const locs = data.locations || []
-      setLocations(locs)
-      setPicker((p) => (p ? locs.find((l) => l.id === p.id) || p : p))
-      toast(t('Image deleted'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [t, toast])
-
-  // Generation is fire-and-forget (the POST returns a track id, the image
-  // arrives asynchronously) — poll the track until it reaches a terminal
-  // state, then bust the icon cache ONCE. No periodic refresh: it would fight
-  // the editing hand.
-  const watchAndRefresh = useCallback(async (trackId: string, locId: string) => {
-    if (!trackId) return
-    const deadline = Date.now() + 4 * 60 * 1000  // map generations can take a while
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 2500))
-      let status: string | null = null
-      try {
-        const s = await apiGet<{
-          recent?: Array<{ task_id: string; status: string }>
-          recent_tasks?: Array<{ task_id: string; status: string }>
-        }>('/queue/status')
-        const hit = [...(s.recent || []), ...(s.recent_tasks || [])]
-          .find((x) => x.task_id === trackId)
-        if (hit) status = hit.status
-      } catch { /* keep polling */ }
-      if (status) {  // terminal state reached
-        if (status === 'completed') bumpIcon(locId)
-        return
-      }
-    }
-  }, [bumpIcon])
-
-  const submitGen = useCallback(async (payload: ImageGenSubmit, loc: EditorLocation) => {
-    const body: Record<string, unknown> = { prompt_type: 'map_2d', prompt: payload.prompt }
-    if (payload.backend) body.backend = payload.backend
-    if (payload.loras) body.loras = payload.loras
-    if (payload.prompt_settings_applied) body.settings_applied = true
-    // Composed negative (carries what the guard moved out of the subject).
-    if (payload.negative_prompt) body.negative_prompt = payload.negative_prompt
-    if (payload.llm_composed) {
-      body.llm_composed = true
-      body.cache_hit = !!payload.cache_hit
-    }
-    try {
-      const r = await apiPost<{ track_id?: string }>(
-        `/world/locations/${encodeURIComponent(loc.id)}/gallery`, body)
-      toast(t('Image queued'))
-      void watchAndRefresh(r?.track_id || '', loc.id)
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }, [t, toast, watchAndRefresh])
-
   // ── Render ───────────────────────────────────────────────────────────────
 
   if (locations == null) {
@@ -2783,9 +2616,9 @@ export function MapTab() {
   const roofsZoomedOut = roofOn && view.pxPerM < ROOF_MIN_PX_PER_M
   // The same sentence for the rooms, with the other floor (see
   // ROOMS_MIN_PX_PER_M) — and the fallback that goes with it: too far out,
-  // the footprints show their flat icons, which is what they always did.
+  // the footprints carry nothing but their outline.
   const roomsZoomedOut = locView === 'rooms' && view.pxPerM < ROOMS_MIN_PX_PER_M
-  const drawnLocView: LocationView = roomsZoomedOut ? 'icons' : locView
+  const drawnLocView: LocationView | null = roomsZoomedOut ? null : locView
 
   const selAnchor = selected ? anchorWidthM(selected) : null
   const selIsClone = !!(selected && (selected.template_location_id || '').trim())
@@ -2871,14 +2704,7 @@ export function MapTab() {
         title={kind === 'clone'
           ? t('Click, then click the map to place a copy')
           : t('Click, then click the map to place it')}
-        style={{ position: 'relative' }}
       >
-        <MapIcon locId={loc.id} className="ga-map-tray-icon"
-          cacheKey={String(iconVer[loc.id] || 0)} />
-        <ZoomButton
-          item={{ src: `/world/locations/${encodeURIComponent(loc.id)}/map-icon-2d?v=${encodeURIComponent(String(iconVer[loc.id] || 0))}`, alt: loc.name }}
-          style={{ top: 'auto', bottom: 4, right: 4 }}
-        />
         <span className="ga-map-tray-name">{loc.name}</span>
         <span className="ga-map-tray-stamp">
           {anchor ? fmtM(anchor) + ' m' : '?'}
@@ -3191,7 +3017,6 @@ export function MapTab() {
                   onSelect={setSelId}
                   onMove={(id, x, z) => { void commitMove(id, x, z) }}
                   snapM={snapOn ? SNAP_M : 0}
-                  iconVer={iconVer}
                   roofUrl={roofUrl}
                   locView={drawnLocView}
                   surfaceColors={surfaceColors}
@@ -3499,16 +3324,6 @@ export function MapTab() {
                   </button>
                 ) : null}
                 <button type="button" className="ga-btn ga-btn-sm"
-                  title={t('Choose which image this location shows on the map')}
-                  onClick={() => { void openPicker(selected) }}>
-                  🖼 {t('Image')}
-                </button>
-                <button type="button" className="ga-btn ga-btn-sm"
-                  title={t('Rotate the map icon 90° inside the footprint')}
-                  onClick={() => { void rotateIcon(selected) }}>
-                  ↻ {t('Icon')}
-                </button>
-                <button type="button" className="ga-btn ga-btn-sm"
                   onClick={() => editLocation(selected)}>
                   {t('Edit location')}
                 </button>
@@ -3536,101 +3351,6 @@ export function MapTab() {
           ) : null}
         </div>
       </div>
-
-      {picker ? (
-        <div className="ga-modal-backdrop" onMouseDown={() => setPicker(null)}>
-          <div className="ga-modal ga-map-imgpicker" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="ga-modal-header">
-              <span>{t('Map image')} — {picker.name}</span>
-              <button className="ga-modal-close" onClick={() => setPicker(null)}>×</button>
-            </div>
-            <div className="ga-modal-body">
-              {pickerGallery == null ? (
-                <div className="ga-empty">{t('Loading…')}</div>
-              ) : (
-                <div className="ga-map-imgpicker-group">
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                    <div className="ga-map-imgpicker-label" style={{ marginBottom: 0 }}>
-                      {t('2D icon')}
-                    </div>
-                    <button type="button" className="ga-btn ga-btn-sm"
-                      onClick={() => setGen(picker)}
-                      title={t('Generate a new map image for this location')}>
-                      ✨ {t('Generate')}
-                    </button>
-                  </div>
-                  {(() => {
-                    const imgs = (pickerGallery.images || []).filter(
-                      (f) => (pickerGallery.image_types || {})[f] === 'map_2d')
-                    if (imgs.length === 0) {
-                      return <div className="ga-map-tray-empty">{t('No images of this type.')}</div>
-                    }
-                    const owner = ownerOf(picker)
-                    const chosen = picker.map_image_2d || ''
-                    return (
-                      <div className="ga-map-imgpicker-grid">
-                        {imgs.map((f) => (
-                          <div key={f} className="ga-map-imgpicker-cell">
-                            <button
-                              type="button"
-                              className={'ga-map-imgpicker-item' + (chosen === f ? ' selected' : '')}
-                              onClick={() => { void chooseImage(picker, f) }}
-                              title={f}
-                            >
-                              <img
-                                src={`/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(f)}`}
-                                alt=""
-                              />
-                            </button>
-                            {/* Top-left: the top-right corner belongs to the delete button. */}
-                            <ZoomButton
-                              item={{ src: `/world/locations/${encodeURIComponent(owner)}/gallery/${encodeURIComponent(f)}`, alt: f }}
-                              style={{ right: 'auto', left: 3, top: 3 }}
-                            />
-                            {delConfirm === f ? (
-                              <div className="ga-map-imgpicker-confirm">
-                                <span>{t('Delete?')}</span>
-                                <div className="ga-map-imgpicker-confirm-row">
-                                  <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
-                                    onClick={() => { setDelConfirm(null); void deleteImage(owner, f) }}>
-                                    {t('Delete')}
-                                  </button>
-                                  <button type="button" className="ga-btn ga-btn-sm"
-                                    onClick={() => setDelConfirm(null)}>
-                                    {t('Cancel')}
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <button type="button" className="ga-map-imgpicker-del"
-                                title={t('Delete image')} onClick={() => setDelConfirm(f)}>
-                                ×
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )
-                  })()}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {gen ? (
-        <ImageGenDialog
-          open
-          title={t('Generate map image — {name}').replace('{name}', gen.name)}
-          defaultPrompt=""
-          // The server composes style + subject + guard (the same composer the
-          // batch path uses) and decides the use case itself.
-          composeRequest={{ location_id: gen.id, prompt_type: 'map_2d' }}
-          onSubmit={(payload) => submitGen(payload, gen)}
-          onClose={() => setGen(null)}
-        />
-      ) : null}
     </div>
   )
 }

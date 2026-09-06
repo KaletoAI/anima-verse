@@ -51,14 +51,14 @@
  * surface showing one says what is missing (the dashed ring here, a warning on
  * the selection chip, the seed button in the toolbar).
  *
- * WHAT A FOOTPRINT CARRIES INSIDE ITS OUTLINE is one of three things
- * (`locView`, the map's location-view switch), never two at once: the flat 2D
- * map icon, the rendered roof view — or, since 2026-08-20, the FLOOR-PLAN
- * ROOMS as flat colour (`FootRooms`). The rooms view exists for the alignment
- * case a picture cannot serve: a lake is placed by lining its water and shore
- * rooms up with the painted water, and a lake has no roof. It is therefore the
- * one view that is semi-transparent and drops the icon too — seeing the ground
- * UNDERNEATH is the whole point of it.
+ * WHAT A FOOTPRINT CARRIES INSIDE ITS OUTLINE is one of two things
+ * (`locView`, the map's location-view switch), never both at once: the
+ * rendered roof view — or the FLOOR-PLAN ROOMS as flat colour (`FootRooms`).
+ * The rooms view exists for the alignment case a picture cannot serve: a lake
+ * is placed by lining its water and shore rooms up with the painted water, and
+ * a lake has no roof. It is therefore semi-transparent — seeing the ground
+ * UNDERNEATH is the whole point of it. Zoomed out below the rooms' floor the
+ * footprint carries nothing but its outline (`locView` is `null` then).
  *
  * Moving is the canvas gesture, never HTML5 drag&drop: `pointerdown` on a
  * footprint stops propagation (so `MapCanvas` does not pan), the move runs on
@@ -109,11 +109,10 @@ const COL_GHOST = '#3fb950'
 const COL_WARN = '#d29922'
 
 /** WHICH PICTURE a footprint carries (`MapTab`'s location view switch):
- *  `icons` = the flat 2D map icon, as it always was; `roofs` = the rendered
- *  top-down view of the building model; `rooms` = the floor-plan room shapes
- *  as flat colour. Exactly one — two pictures of the same place in one
- *  outline only compete. */
-export type LocationView = 'icons' | 'roofs' | 'rooms'
+ *  `roofs` = the rendered top-down view of the building model; `rooms` = the
+ *  floor-plan room shapes as flat colour. Exactly one — two pictures of the
+ *  same place in one outline only compete. */
+export type LocationView = 'roofs' | 'rooms'
 
 /** How solid a room is drawn over the painted ground. SEMI-TRANSPARENT ON
  *  PURPOSE: the whole reason to draw rooms on the world map is to see the
@@ -222,27 +221,14 @@ export function isPlaced(loc: EditorLocation): boolean {
     && typeof loc.pos_z === 'number' && Number.isFinite(loc.pos_z)
 }
 
-/** Cache-busted 2D map icon of a location (404 = no image; an SVG `<image>`
- *  that fails to load simply draws nothing and lets the fill show). */
-export function mapIconUrl(locId: string, ver: number): string {
-  return `/world/locations/${encodeURIComponent(locId)}/map-icon-2d?v=${ver}`
-}
-
 /**
- * THE PICTURE inside a footprint: the roof view if there is one, the 2D map
- * icon otherwise, both covering the reference square (edge `plan_width_m`,
- * centred on the pin) of the location. It is drawn INSIDE the caller's yaw
- * rotation — the square draws it directly, the polygon draws it clipped to the
- * outline — so the derivation of the icon rotation below holds for both, and
- * there is exactly one place that knows how a location's picture is oriented.
+ * THE PICTURE inside a footprint: the roof view, covering the reference square
+ * (edge `plan_width_m`, centred on the pin) of the location. It is drawn
+ * INSIDE the caller's yaw rotation — the square draws it directly, the polygon
+ * draws it clipped to the outline — so there is exactly one place that knows
+ * how a location's picture is oriented.
  *
- * The icon carries its own 90°-step display rotation
- * (`map_rotation_2d`), which turns the ARTWORK inside the square and is not
- * the location's rotation in the world — it keeps SVG's own sign, because it
- * always was a screen rotation (the legacy CSS `rotate()` on the tile image),
- * never a § A1.1 world angle.
- *
- * THE ROOF VIEW CARRIES NO ROTATION OF ITS OWN — no `iconRot`, and since
+ * THE ROOF VIEW CARRIES NO ROTATION OF ITS OWN — and since
  * contract v6 Nr. 10 nothing baked in either. It is a top-down render of the
  * location's SCENE payload, and that payload is TILE-LOCAL: `compose_scene`
  * never reads `location.yaw_deg`, and the building spec's `yaw_deg` is now
@@ -261,24 +247,15 @@ export function mapIconUrl(locId: string, ver: number): string {
  *     here:      image u = 0.5 + 1/10 = 0.6, v = 0.5 -> (101,100);
  *                rotate(−90) about (100,100): (1,0) -> (0,−1) -> (100, 99)  ✔
  *
- * Adding `iconRot` on top would be a second turn on the same axis: `iconRot`
- * is applied as SVG `rotate(+θ)` while everything the payload contributes
- * arrives as `rotate(−θ)`, so it would not double the turn but MIRROR it. The
- * 90°-step display rotation belongs to the flat ICON artwork alone.
- *
  * The picture's square is NOT necessarily centred on the pin — see
  * `pictureFrameLocal`. The offset is applied inside the same `rotate(−yaw)`
  * group, i.e. in local metres, which is the frame the snapshot camera used.
  */
-function FootImage({ p, size, iconHref, iconRot, roofHref, offset }: {
+function FootImage({ p, size, roofHref, offset }: {
   p: ScreenPt
   size: number
-  iconHref?: string
-  iconRot?: number
   /** Top-down render of the location's building model, already covering
-   *  exactly this square (`extent_m` == the footprint edge since E4). It
-   *  REPLACES the 2D icon — two pictures of the same place in one square only
-   *  compete. */
+   *  exactly this square (`extent_m` == the footprint edge since E4). */
   roofHref?: string
   /** Where the picture's square sits relative to `p`, in PIXELS of the local
    *  frame (x right, z down — this runs inside the caller's `rotate(−yaw)`).
@@ -297,18 +274,13 @@ function FootImage({ p, size, iconHref, iconRot, roofHref, offset }: {
     return <image href={roofHref} x={cx - half} y={cy - half}
       width={size} height={size} />
   }
-  if (iconHref) {
-    return <image href={iconHref} x={cx - half} y={cy - half}
-      width={size} height={size} preserveAspectRatio="xMidYMid slice"
-      transform={iconRot ? `rotate(${iconRot} ${cx} ${cy})` : undefined} />
-  }
   return null
 }
 
 /** One footprint square: fill, picture, outline — all inside the yaw
  *  rotation. Only the ARMED GHOST is drawn this way now: it is a preview of
  *  where a click will drop the pin, not a claim about ground. */
-function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconRot,
+function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed,
   roofHref }: {
   p: ScreenPt
   size: number
@@ -316,8 +288,6 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
   stroke: string
   strokeWidth: number
   dashed?: boolean
-  iconHref?: string
-  iconRot?: number
   roofHref?: string
 }) {
   const half = size / 2
@@ -328,8 +298,7 @@ function FootSquare({ p, size, yaw, stroke, strokeWidth, dashed, iconHref, iconR
     <g transform={`rotate(${-yaw} ${p.x} ${p.y})`}>
       <rect x={p.x - half} y={p.y - half} width={size} height={size}
         fill="rgba(139,148,158,0.14)" stroke="none" />
-      <FootImage p={p} size={size} iconHref={iconHref} iconRot={iconRot}
-        roofHref={roofHref} />
+      <FootImage p={p} size={size} roofHref={roofHref} />
       <rect x={p.x - half} y={p.y - half} width={size} height={size}
         fill="none" stroke={stroke} strokeWidth={strokeWidth}
         strokeDasharray={dashed ? '6 4' : undefined} />
@@ -439,8 +408,8 @@ function FootRooms({ rooms, surfaceColors, stroke, part }: {
  * A fixed pixel length, because it says which way the place is TURNED, not how
  * big it is.
  */
-function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, dashed, iconHref,
-  iconRot, roofHref, picOffset, rooms, surfaceColors }: {
+function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, dashed,
+  roofHref, picOffset, rooms, surfaceColors }: {
   /** The boundary in WORLD metres (already transformed). */
   world: Array<[number, number]>
   pin: ScreenPt
@@ -453,8 +422,6 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, dashed, iconHref
    *  armed ghost draws itself this way — it says where a click would put this
    *  outline, which is not the same statement as "this ground is covered". */
   dashed?: boolean
-  iconHref?: string
-  iconRot?: number
   roofHref?: string
   /** Offset of the picture square from the pin, in local-frame pixels — see
    *  `pictureFrameLocal`. */
@@ -484,8 +451,7 @@ function FootPoly({ world, pin, yaw, size, stroke, strokeWidth, dashed, iconHref
       )}
       <g clipPath={`url(#${clipId})`}>
         <g transform={`rotate(${-yaw} ${pin.x} ${pin.y})`}>
-          <FootImage p={pin} size={size} iconHref={iconHref} iconRot={iconRot}
-            roofHref={roofHref} offset={picOffset} />
+          <FootImage p={pin} size={size} roofHref={roofHref} offset={picOffset} />
         </g>
         {/* The rooms are ALREADY world metres, so they stand outside the
             picture's `rotate(−yaw)` group — inside it they would be turned a
@@ -579,17 +545,14 @@ export interface PlacementLayerProps {
   onMove: (id: string, x: number, z: number) => void
   /** Snap the moved centre onto the 10 m grid. */
   snapM: number
-  /** Cache-buster per location id — bumped after an image change. */
-  iconVer: Record<string, number>
   /** Rendered roof view per location id, when the map's roof toggle is on.
    *  A missing entry (still rendering, no model, no scene) simply leaves the
    *  square as it was — the picture is an aid, never a precondition. */
   roofUrl?: Record<string, string>
   /** WHICH PICTURE a footprint carries — the map's location-view switch.
-   *  Absent = `icons`, what the map has always drawn. In `rooms` the flat
-   *  icon is dropped as well: an opaque picture under the room colours would
-   *  hide exactly the painted ground the view exists to compare against. */
-  locView?: LocationView
+   *  `null` (or absent) draws the bare outline, which is what the map shows
+   *  below the rooms' zoom floor. */
+  locView?: LocationView | null
   /** `surface kind -> #rrggbb` from the effective terrain catalog, so a room
    *  floor is drawn in the very colour the painted ground of the same
    *  material has (`roomShapes.surfaceColorMap`). */
@@ -610,8 +573,8 @@ export interface PlacementLayerProps {
 }
 
 export function PlacementLayer({
-  locations, selectedId, onSelect, onMove, snapM, iconVer, roofUrl,
-  locView = 'icons', surfaceColors, ghost, ghostPt,
+  locations, selectedId, onSelect, onMove, snapM, roofUrl,
+  locView = null, surfaceColors, ghost, ghostPt,
   boundaryEdit, onBoundary,
 }: PlacementLayerProps) {
   const { view, w, h } = useMapView()
@@ -758,12 +721,6 @@ export function PlacementLayer({
             {bdWorld ? (
               <FootPoly world={bdWorld} pin={p} yaw={yaw} size={size}
                 stroke={stroke} strokeWidth={selected ? 2 : 1}
-                // The ROOMS view drops the flat icon with the roof: an opaque
-                // picture under the room colours would hide the very terrain
-                // painting the rooms are being aligned against.
-                iconHref={locView === 'rooms' ? undefined
-                  : mapIconUrl(loc.id, iconVer[loc.id] || 0)}
-                iconRot={loc.map_rotation_2d || 0}
                 roofHref={locView === 'roofs' ? roofUrl?.[loc.id] : undefined}
                 // The pin taken here is the DRAG position, exactly as the
                 // boundary above uses it — so the rooms ride a move and a yaw

@@ -118,13 +118,28 @@ export interface RoomPropPlacement {
   /** What the LLM calls this place ("armchair by the window") — names the
    *  placement's markers in chips and prompts. ≤ 60 characters. */
   label?: string
+  /** WHAT THIS PIECE STANDS ON (plan-furnish-v2.md, decision E1): the `id` of
+   *  another placement of the SAME list — "the candle on the table" as a
+   *  relation, not as a height. With it the three fields below switch into
+   *  the SUPPORT's frame, so moving or turning the support moves the piece
+   *  along and the height is the stacking rule. Chains are allowed up to
+   *  `ON_MAX_DEPTH`; a link that does not hold costs only itself, never the
+   *  placement. Composed server-side in `room_recipe.compose_on_chain` and on
+   *  the plan by `placementCompose.composePlacements` — the scene payload
+   *  stays flat and carries this id informatively. */
+  on?: string
   /** Room-local position: METRES from the room's min corner (0…w / 0…d).
    *  ON THE YARD (§ A13a) the same field is LOCATION-LOCAL metres — the
-   *  ground has no min corner, its frame IS the location frame. */
+   *  ground has no min corner, its frame IS the location frame.
+   *  WITH `on`: metres from the SUPPORT's placement point in its UNTURNED
+   *  frame (+x = its width axis, +z = its depth axis). */
   at: [number, number]
-  /** Yaw in degrees, free values at 0.1° resolution. Absent = 0. */
+  /** Yaw in degrees, free values at 0.1° resolution. Absent = 0.
+   *  WITH `on`: degrees RELATIVE to the support's heading. */
   yaw?: number
-  /** Vertical offset in metres (clamped ±5), additive to the floor. */
+  /** Vertical offset in metres (clamped ±5), additive to the floor.
+   *  WITH `on`: the trim ABOVE the support's top surface (0 = exactly on it —
+   *  the height itself is the server's stacking rule). */
   offset_y?: number
   /** WHICH model variant of the prop this placement shows (E2.3) — a POSITION
    *  in the prop's ACTIVE meshes, not a store index; out of range wraps, so a
@@ -207,8 +222,7 @@ export interface Map3D {
   // v6 Nr. 10: it turned the mesh around the same axis the model sidecar's
   // own orientation fix (`fix_euler` y) already turns, a second dial on one
   // axis and nothing but a source of arithmetic error. A location is turned
-  // by its anchor pin (`yaw_deg`), a mesh by its sidecar fix, and
-  // `map_rotation_2d` is strictly the flat ICON artwork rotation. The server
+  // by its anchor pin (`yaw_deg`), a mesh by its sidecar fix. The server
   // sanitizer drops a submitted value.
   // `size` — the MODEL's share of the location's reference square — is GONE
   // with contract v6 Nr. 3: every model scales through a declared real width
@@ -390,18 +404,14 @@ export interface Location {
   passable?: boolean
   image_prompt_day?: string
   image_prompt_night?: string
-  image_prompt_map_2d?: string
   image_prompt_building?: string
   image_count?: number
   template_location_id?: string
   /** World position in METRES, `null` when the location is unplaced. */
   pos_x?: number | null
   pos_z?: number | null
-  /** § A1.1 rotation of the location itself — NOT `map_rotation_2d`, which
-   *  only turns the flat icon artwork inside the footprint. */
+  /** § A1.1 rotation of the location itself. */
   yaw_deg?: number
-  map_image_2d?: string
-  map_rotation_2d?: number
   event_settings?: EventSettings
   npc_slots?: NpcSlot[]
   terrain?: string
@@ -485,7 +495,7 @@ export interface GalleryResponse {
 
 export const BUILDING_TYPES = ['building-front', 'building-back', 'building-left', 'building-right'] as const
 export type BuildingType = typeof BUILDING_TYPES[number]
-export const IMAGE_TYPES = ['', 'day', 'night', 'map_2d', ...BUILDING_TYPES] as const
+export const IMAGE_TYPES = ['', 'day', 'night', ...BUILDING_TYPES] as const
 export const isBuildingType = (t: string | undefined): boolean =>
   (BUILDING_TYPES as readonly string[]).includes(t || '')
 

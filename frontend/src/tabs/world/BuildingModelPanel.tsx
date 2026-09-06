@@ -100,8 +100,6 @@ interface BuildingModelPanelProps {
    *  building: room routes, no map placement (a room's position comes from
    *  its floor-plan layout). */
   roomId?: string
-  /** Ground texture for the tile — the location's current 2D map icon, if any. */
-  mapIconUrl?: string
   /** Draft map3d — the panel READS the tile rotation to show the model the way
    *  the world will (the dial itself lives in the location's placement block). */
   map3d?: Map3D
@@ -152,7 +150,6 @@ export function GenerateModelButton({ action, roomId = '' }: {
 export function BuildingModelPanel({
   locationId,
   roomId = '',
-  mapIconUrl,
   map3d,
   scene,
   onPreviewFileChange,
@@ -643,7 +640,6 @@ export function BuildingModelPanel({
         offsetY={current.offset_y || 0}
         offsetX={current.offset_x || 0}
         offsetZ={current.offset_z || 0}
-        groundTextureUrl={roomId ? undefined : mapIconUrl}
         placement={roomId
           // Rooms get a neutral ground plate as the zero level — without it
           // the height offset has no visible reference (the model just

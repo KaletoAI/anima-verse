@@ -230,7 +230,7 @@ export interface TilePlacement {
 
 export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
-  groundTextureUrl, placement, onBounds, markers, dimsOverlay,
+  placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
   picking = false, onPickPoint,
   frontal = false, onFrontalChange, keepCamera = false,
@@ -253,9 +253,8 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   offsetX?: number
   offsetZ?: number
     /** When `placement` is set, the viewer shows the world tile (a 1×1 ground
-     *  square, textured with this image when given) and places the model on
-     *  it — centred, yawed and scaled per `placement`, feet on the ground. */
-    groundTextureUrl?: string
+     *  square) and places the model on it — centred, yawed and scaled per
+     *  `placement`, feet on the ground. */
     placement?: TilePlacement
     /** Object-local PLACES (numbered dots) — `at` = fractions of the RAW
      *  model bounding box, `group` the pose catalog's place type, and the
@@ -993,16 +992,6 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           // floor-plan preview — the two used to disagree because this stage
           // was a fixed 10 m tile while the preview drew map3d.extent_m.
           const groundMat = new THREE.MeshBasicMaterial({ color: 0x2e3742 })
-          if (groundTextureUrl) {
-            try {
-              const gtex = await new THREE.TextureLoader().loadAsync(groundTextureUrl)
-              gtex.colorSpace = THREE.SRGBColorSpace
-              groundMat.map = gtex
-              groundMat.color.set(0xffffff)
-              groundMat.needsUpdate = true
-            } catch { /* an untextured tile is fine */ }
-            if (disposed) return
-          }
           const groundGeo = new THREE.PlaneGeometry(1, 1)
           const ground = new THREE.Mesh(groundGeo, groundMat)
           ground.rotation.x = -Math.PI / 2
@@ -1840,7 +1829,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
       disposed = true
       cleanup?.()
     }
-  }, [url, format, clipUrl, textureUrl, height, groundTextureUrl])
+  }, [url, format, clipUrl, textureUrl, height])
 
   return (
     <div style={{ position: 'relative' }}>

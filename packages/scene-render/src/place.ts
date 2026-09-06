@@ -86,7 +86,7 @@ export function placeModelSpec(THREE: typeof import('three'),
   // it. The old minus was the map-yaw chain of § A1.8, and it flipped here, in
   // `sceneRecipe.ts` and in the admin's model viewer in ONE commit: two
   // renderers disagreeing about a sign is a mirrored world.
-  // That chain (`map3d.rotation` → `map_rotation_2d`) is GONE with v6 Nr. 10 —
+  // That chain (`map3d.rotation`) is GONE with v6 Nr. 10 —
   // a BUILDING spec now always carries `yaw_deg` 0 and is turned by its
   // sidecar fix alone. Rooms, props and extras keep their own placement yaw,
   // which is what this line still serves.

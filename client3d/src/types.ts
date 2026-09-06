@@ -43,8 +43,7 @@ export interface Map3dMeta {
   // `rotation` — the building yaw around the up axis — is GONE with contract
   // v6 Nr. 10: the model sidecar's own orientation fix (`fix_euler` y) already
   // turns the mesh around that very axis, and the location itself is turned
-  // by its anchor pin (§ A1.1). `map_rotation_2d` is strictly the flat ICON
-  // artwork rotation and never reaches a 3D renderer.
+  // by its anchor pin (§ A1.1).
   // `size` — the model's share of the reference square — is GONE with v6
   // Nr. 3: every model scales through its declared real width in metres.
   /** AV3D-12: gezeichneter Gebäude-Grundriss — Polygonpunkte als Fraktionen
@@ -144,7 +143,6 @@ export interface WorldLocation {
   passable?: boolean;
   entry_room?: string;
   template_location_id?: string;
-  map_rotation_2d?: number;
   indoor?: string;
   background_images?: string[];
   terrain?: string;   // AV3D-7: grass | forest | road | water | ...
@@ -159,7 +157,7 @@ export interface WorldLocation {
  *
  *  Deliberately SLIM: the map builds a footprint from it and nothing else.
  *  Everything the detail scene needs comes from the scene recipe, and the
- *  fields the grid world carried here (terrain/surface_kind, map_rotation_2d,
+ *  fields the grid world carried here (terrain/surface_kind,
  *  template_location_id) are not in the payload any more. */
 export interface MapLocation {
   id: string;

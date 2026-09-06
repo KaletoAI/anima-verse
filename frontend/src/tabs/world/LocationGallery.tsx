@@ -17,7 +17,6 @@ interface GalleryCardProps {
   type: string
   meta: { backend?: string; model?: string; loras?: string[] }
   isBusy: boolean
-  mapUsage: number
   /** Multi-select mode: the thumb toggles selection instead of zooming. */
   selectMode?: boolean
   isSelected?: boolean
@@ -37,7 +36,6 @@ const GalleryCard = memo(function GalleryCard({
   type,
   meta,
   isBusy,
-  mapUsage,
   selectMode,
   isSelected,
   onToggleSelect,
@@ -70,14 +68,6 @@ const GalleryCard = memo(function GalleryCard({
           }}>{isSelected ? '✓' : ''}</span>
         ) : null}
         <img src={url} alt={filename} />
-        {type === 'map_2d' ? (
-          <span
-            className="ga-gallery-usage"
-            title={t('How many placed locations currently show this image on the map')}
-          >
-            {mapUsage}
-          </span>
-        ) : null}
       </button>
       <div className="ga-gallery-card-body">
         <div className="ga-gallery-meta">
@@ -158,7 +148,6 @@ export function LocationGallery({
   room,
   roomFilter,
   allLocations,
-  placements,
   mode,
   extraActions,
 }: {
@@ -169,10 +158,8 @@ export function LocationGallery({
   roomFilter?: string
   /** All places (for the "move image to another location" picker). */
   allLocations: Location[]
-  /** Unfiltered list incl. clone placements (for the map-usage counter). */
-  placements: Location[]
   /** Which world the gallery serves: '2d' shows everything except building
-   *  images (day/night/map icons), '3d' shows only the building images that
+   *  images (day/night), '3d' shows only the building images that
    *  feed the 3D model. Follows the location editor's tab split. */
   mode: '2d' | '3d'
   /** Owner-supplied actions rendered in the generate row right after the
@@ -187,7 +174,7 @@ export function LocationGallery({
   const [busy, setBusy] = useState<string | null>(null)
   // `dialogType` is the DIALOG KIND (which button was pressed); for the
   // building kind the VIEW picks the wire type `building-<view>`.
-  const [dialogType, setDialogType] = useState<'day' | 'night' | 'map_2d' | 'building' | null>(null)
+  const [dialogType, setDialogType] = useState<'day' | 'night' | 'building' | null>(null)
   const [buildingView, setBuildingView] = useState<ImageView>('front')
   const promptType = dialogType === 'building' ? `building-${buildingView}` : dialogType
   const [imageSetOpen, setImageSetOpen] = useState(false)
@@ -241,20 +228,6 @@ export function LocationGallery({
 
   const types = data?.image_types || {}
   const metas = data?.image_metas || {}
-
-  // How often each map image is currently used on the map: placed locations
-  // whose gallery owner is this location (clones share the template gallery)
-  // and that picked exactly this file as their 2D map image. File -> count.
-  const mapUsage = useMemo(() => {
-    const m: Record<string, number> = {}
-    for (const l of placements) {
-      if (l.pos_x == null || l.pos_z == null) continue
-      if (((l.template_location_id || '').trim() || l.id) !== locationId) continue
-      const f = (l.map_image_2d || '').trim()
-      if (f) m[f] = (m[f] || 0) + 1
-    }
-    return m
-  }, [placements, locationId])
 
   // Filter to the selected room (if provided): keep images explicitly
   // assigned to it; images without a room assignment fall back to the
@@ -350,8 +323,8 @@ export function LocationGallery({
         prompt: payload.prompt,
       }
       // Room context: assign the image to the room — including the building
-      // views (the room's model-source images). Map types have no room dimension.
-      if (roomFilter && dialogType !== 'map_2d') body.room_id = roomFilter
+      // views (the room's model-source images).
+      if (roomFilter) body.room_id = roomFilter
       if (payload.backend) body.backend = payload.backend
       if (payload.loras) body.loras = payload.loras
       // The dialog already has the map-icon suffix in the prompt → don't duplicate it server-side.
@@ -525,16 +498,6 @@ export function LocationGallery({
           >
             🌙 {t('Generate night')}
           </button>
-          {!roomFilter ? (
-            <button
-              className="ga-btn ga-btn-sm"
-              disabled={!!busy}
-              onClick={() => setDialogType('map_2d')}
-              title={t('Open the image generation dialog for the flat 2D map icon.')}
-            >
-              🟦 {t('Generate 2D icon')}
-            </button>
-          ) : null}
           {roomFilter ? (
             <button
               className="ga-btn ga-btn-sm"
@@ -632,14 +595,13 @@ export function LocationGallery({
 
   // EVERY render type composes on the SERVER — one composer for dialog and
   // batch, and it alone decides the use case (room vs. location, indoor vs.
-  // outdoor, map vs. background). The client neither knows the style nor the
+  // outdoor). The client neither knows the style nor the
   // subject chain anymore; it shows the finished prompt and lets it be edited.
   const composeRequest = useMemo(
     () => (dialogType
       ? {
           location_id: locationId,
-          // Map tiles belong to the location, never to a room.
-          room_id: (roomFilter && dialogType !== 'map_2d') ? roomFilter : '',
+          room_id: roomFilter || '',
           prompt_type: promptType,
         }
       : undefined),
@@ -651,7 +613,7 @@ export function LocationGallery({
     () => (regenTarget
       ? {
           location_id: locationId,
-          room_id: (roomFilter && regenTarget.type !== 'map_2d') ? roomFilter : '',
+          room_id: roomFilter || '',
           prompt_type: regenTarget.type,
           subject_only: true,
         }
@@ -667,19 +629,16 @@ export function LocationGallery({
           ? t('Generate day image — {name}').replace('{name}', room?.name || location.name)
           : dialogType === 'night'
             ? t('Generate night image — {name}').replace('{name}', room?.name || location.name)
-            : dialogType === 'building'
-              ? t('Generate building image — {name}').replace('{name}', room?.name || location.name)
-              : t('Generate 2D map icon — {name}').replace('{name}', location.name)
+            : t('Generate building image — {name}').replace('{name}', room?.name || location.name)
       }
       defaultPrompt=""
       composeRequest={composeRequest}
       // The composed negative is editable and goes back with the submit — it
       // carries what the negation guard moved out of the subject.
       //
-      // Map tiles stay square by contract (they have to tile) — no size fields
-      // there. Everything else may pick its own; only the room-model source
+      // Every render may pick its own size; only the room-model source
       // arrives prefilled from the floor plan.
-      showResolution={dialogType === 'day' || dialogType === 'night' || dialogType === 'building'}
+      showResolution
       defaultResolution={dialogType === 'building' ? roomResolution : null}
       viewChoice={dialogType === 'building'
         ? { value: buildingView, onChange: setBuildingView } : undefined}
@@ -746,7 +705,6 @@ export function LocationGallery({
               type={type}
               meta={meta}
               isBusy={isBusy}
-              mapUsage={mapUsage[filename] || 0}
               selectMode={selectMode}
               isSelected={selected.has(filename)}
               onToggleSelect={toggleSelect}

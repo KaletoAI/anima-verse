@@ -109,7 +109,7 @@ interface Props {
   settingsPrefix?: { label: string; text: string }
   settingsSuffix?: { label: string; text: string }
   /**
-   * Use-case key ('location' | 'map' | 'building' | 'room_model'): show the
+   * Use-case key ('location' | 'building' | 'room_model'): show the
    * use case's prompt STYLE (resolved per backend family) as an editable
    * field above the prompt — the dialog then displays the COMPLETE final
    * prompt (house rule) and submits with `prompt_settings_applied`, so the
@@ -280,7 +280,7 @@ export function ImageGenDialog({
   }, [prompt, improvement, enhancing, enhanceEndpoint])
 
   // Resync prompt + independent config parts when the caller changes them
-  // (e.g. day → night, or map → map_2d with a different suffix).
+  // (e.g. day → night, with a different suffix).
   useEffect(() => {
     // With a server-composed prefill the prompt comes from compose-preview —
     // the caller's defaultPrompt would only overwrite it on every rerender.
