@@ -34,17 +34,48 @@ THE TURN (ruling 2026-09-06, fixes a v1 bug). Yaw turns like the renderer,
 −x·sin r + z·cos r)``. Two hand checks below:
 
 * a table at yaw 90 has its FRONT at compass 90 = east, so a chair
-  ``in_front_of`` it stands EAST of it (row T1);
+  ``in_front_of`` it stands EAST of it (row T);
 * a wall piece looks into the room, so its yaw is the compass of the opposite
   direction:  wall_n → 0 (S), wall_e → 270 (W), wall_s → 180 (N),
-  wall_w → 90 (E)  — row T2 checks all four against the edges' inward normals.
+  wall_w → 90 (E)  — row T checks all four against the edges' inward normals.
+
+Row T only compares the solver with itself, so row **R** anchors the very same
+matrix to the RENDERER: ``room_recipe.compose_prop_marker`` fed § B2's worked
+example (raw box [1.0/0.5/2.0], fix y 90°, dims [1.2/0.6/0.3], marker frac
+[0.5/1.0/0.25] with facing 90, placement yaw 90) answers ``offset_m [0, +0.3]``
+and ``facing 180``.  Its step 4 turns the object-local offset
+``pre = [−0.3, 0.3, 0.0]`` by R_y(+90):
+
+    dx = pre_x·cos 90 + pre_z·sin 90 = 0
+    dz = −pre_x·sin 90 + pre_z·cos 90 = +0.3
+
+and ``fg.local_to_world(0, 0, 90, −0.3, 0.0)`` has to land on that same
+``[0, +0.3]`` — a globally transposed convention would show up here as
+``[0, −0.3]``. The facing rule is the same addition (90 + 90 = 180), and a
+yaw-90 unit square's front side (its local +z edge) lies at (0.5, 0) = east.
 
 ROW BY ROW — the arithmetic
 
-1 around.  ``table center facing s`` lands on the centre-most cell of the
-  walkway grid (see row 10): cell 2.5 × 1.7 m, 2 × 2 cells over the 6 × 4 box
-  at (1.5, 1.0), (4.5, 1.0), (1.5, 3.0), (4.5, 3.0); all four are 1.803 m from
-  the centroid, so the north-west one wins → table at [1.5, 1.0], yaw 0.
+C1 one centre piece.  A ``center`` group of ONE solid copy has no gangway to
+  keep, so it takes the centroid (3, 2) and searches outwards in 0.25 m rings
+  only if that is blocked. Default facing `door` → the door midpoint (3, 4) is
+  due south → yaw 0.  ``sofa center`` → [3.0, 2.0].
+
+C2 an underlay in the centre group.  The rug is 2.0 × 1.5 m but only 0.02 m
+  high: it neither enters the cell size nor claims a cell (B10), so
+  ``rug center`` + ``table center`` is still a group of ONE solid copy and both
+  land on the centroid [3.0, 2.0]. The rug's hull x 2…4, z 1.25…2.75 lies
+  inside the room — the containment test still applies, so a 9 × 9 m rug in a
+  6 × 4 m room stays unplaced. It occupies nothing, so a chair ``around`` the
+  table afterwards takes its front seat at [3.0, 2.70].
+
+B beside.  ``sofa wall_n`` → [3.0, 0.5], yaw 0, its left is EAST. Both copies
+  walk the gaps BEFORE the sides, so the nearest gap on either side wins:
+  distance = 2.0/2 + 0.5/2 + 0.15 = 1.40 m from the sofa centre → copy 1 east
+  at x 4.40, copy 2 (the east spot taken) west at x 1.60, both at z 0.5 and
+  facing as the sofa (default `room`).
+
+1 around.  ``table center facing s`` → the centroid [3.0, 2.0], yaw 0 (C1).
   Seats: capacity per side = floor((L + 0.1) / (0.5 + 0.1)); front and back
   are the 1.6 m sides → floor(1.7/0.6) = 2, left and right the 0.8 m sides →
   floor(0.9/0.6) = 1; total 2+2+1+1 = 6. The six chairs are handed out one at
@@ -55,11 +86,11 @@ ROW BY ROW — the arithmetic
   Even spread along a side of length L for k seats: seat i at
   (i+1)·L/(k+1) − L/2, i.e. ±(1.6/3)/2 = ±0.2667 for the two front chairs and
   0 for a single one. So:
-      front  [1.5 − 0.2667, 1.0 + 0.70] = [1.23, 1.70]  and  [1.77, 1.70],
+      front  [3.0 − 0.2667, 2.0 + 0.70] = [2.73, 2.70]  and  [3.27, 2.70],
              both facing the table → yaw 180
-      back   [1.23, 0.30] and [1.77, 0.30], yaw 0
-      right  [1.5 − 1.10, 1.0] = [0.40, 1.00], yaw 90
-      left   [2.60, 1.00], yaw 270
+      back   [2.73, 1.30] and [3.27, 1.30], yaw 0
+      right  [3.0 − 1.10, 2.0] = [1.90, 2.00], yaw 90
+      left   [4.10, 2.00], yaw 270
   A seventh chair finds no side with capacity left → unplaced,
   "no seat around … (capacity 6) — lower the count or use beside".
 
@@ -92,8 +123,8 @@ ROW BY ROW — the arithmetic
   positions → 55 cells. 55 mugs placed, 5 unplaced with "surface … is full".
   The mug has 2 variants → variant = ordinal mod 2 = 0, 1, 0, 1, …
 
-6 pendant lamp.  ``lamp above table`` → at = the table's centre, base =
-  max(1.9, 3.0 − 1.0) = 2.0.
+6 pendant lamp.  ``lamp above table`` → at = the table's centre [3.0, 2.0],
+  base = max(1.9, 3.0 − 1.0) = 2.0.
 
 7 door clearance.  Room [[0,0],[4,0],[4,3],[0,3]] (4 m of south wall, 3 m
   deep), door centred on the south edge, width 1.0 → strip x 1.3…2.7,
@@ -118,10 +149,10 @@ ROW BY ROW — the arithmetic
   Curtain box 0.05…2.25 and shelf box 2.3…2.6 do not meet, so both stand on
   the same stretch of wall.
 
-9 rug.  ``rug under table`` → centred on the table, the table's yaw, height
-  0.02 ≤ 0.05 → an underlay: no occupancy, no floor budget. A chair placed
-  ``around`` the table afterwards therefore still finds its front seat at
-  [1.5, 1.70].
+9 rug.  ``rug under table`` → centred on the table [3.0, 2.0], the table's
+  yaw, height 0.02 ≤ 0.05 → an underlay: no occupancy, no floor budget. A chair
+  placed ``around`` the table afterwards therefore still finds its front seat
+  at [3.0, 2.70].
 
 10 center group.  Three tables, all ``center``: cell = footprint + 0.9 m
   gangway = 2.5 × 1.7 m; the 6 × 4 bounding box takes floor(6/2.5) = 2 by
@@ -137,6 +168,8 @@ ROW BY ROW — the arithmetic
   with "a wall piece needs a wall anchor"; a floor piece with anchor `on` →
   "anchor 'on' is for surface pieces". (A yard without walls is not the
   solver's business — the needs validator strikes wall pieces there.)
+  A plan entry with `count: 0` places nothing and reports nothing; only a
+  MISSING count falls back to one.
 
 12 determinism.  Row 1 solved twice → byte-identical JSON.
 
@@ -223,6 +256,8 @@ def row_turn_direction() -> None:
         check("a yaw-90 table faces EAST", near(table[0]["yaw"], 90.0, 0.05),
               json.dumps(table[0]))
         # Front half extent 0.4 + chair half 0.25 + first gap 0.15 = 0.80 east.
+        check("the table takes the room centre",
+              at_near(table[0]["at"], 3.0, 2.0), json.dumps(table[0]["at"]))
         check("the chair in front of it stands EAST of it",
               at_near(chair[0]["at"], table[0]["at"][0] + 0.80,
                       table[0]["at"][1]),
@@ -247,6 +282,107 @@ def row_turn_direction() -> None:
               json.dumps(got))
 
 
+
+# ── R renderer anchor ───────────────────────────────────────────────────
+
+def row_renderer_anchor() -> None:
+    """The turn matrix against the RENDERER's, not against itself."""
+    print("\nR — the turn matches room_recipe.compose_prop_marker (§ B2)")
+    from app.core.room_recipe import compose_prop_marker
+    marker = compose_prop_marker(
+        bbox=[1.0, 0.5, 2.0], rotation={"y": 90.0}, dims=[1.2, 0.6, 0.3],
+        frac=[0.5, 1.0, 0.25], facing=90.0, placement_yaw=90.0,
+        placement_offset_y=0.0)
+    # § B2's worked example: the object-local offset before the placement yaw
+    # is pre = [−0.3, 0.3, 0.0], and yaw 90 turns it to offset_m [0, +0.3].
+    check("§ B2's worked example still reads offset_m [0, +0.3]",
+          marker["offset_m"] == [0.0, 0.3] and marker["facing"] == 180.0,
+          json.dumps(marker))
+    # The solver's own transform, fed the SAME local offset (pre_x, pre_z):
+    # x = 0 + (−0.3)·cos 90 + 0·sin 90 = 0
+    # z = 0 − (−0.3)·sin 90 + 0·cos 90 = +0.3
+    turned = fg.local_to_world(0.0, 0.0, 90.0, -0.3, 0.0)
+    check("fg.local_to_world turns it to exactly the same point",
+          near(turned[0], marker["offset_m"][0], 1e-9)
+          and near(turned[1], marker["offset_m"][1], 1e-9),
+          json.dumps([round(turned[0], 6), round(turned[1], 6)]))
+    # And the facing rule is the same addition: front compass = 0 + yaw.
+    check("and the facing grows in the same sense (90 + 90 = 180)",
+          near(fg.compass_of(fg.compass_vec(90.0 + 90.0)), marker["facing"],
+               1e-6))
+    # The front axis of a placed rectangle is its local +z corner side.
+    corners = fg.rect_corners(0.0, 0.0, 1.0, 1.0, 90.0)
+    front = ((corners[2][0] + corners[3][0]) / 2,
+             (corners[2][1] + corners[3][1]) / 2)
+    check("a yaw-90 rectangle's front side lies east (0.5, 0)",
+          near(front[0], 0.5, 1e-9) and near(front[1], 0.0, 1e-9),
+          json.dumps([round(front[0], 6), round(front[1], 6)]))
+
+
+# ── C1/C2 the centre of the room ────────────────────────────────────────
+
+def row_single_center() -> None:
+    print("\nC1 — one centre piece stands in the MIDDLE")
+    out = run([{"prop": "sofa", "count": 1, "anchor": "center"}])
+    got = by_prop(out["placed"], "sofa")
+    # One copy → no walkway grid, the centroid itself: (3, 2). Facing default
+    # `door` → the door midpoint (3, 4) is due south → yaw 0.
+    check("a single sofa center lands on the centroid (3, 2), yaw 0",
+          len(got) == 1 and at_near(got[0]["at"], 3.0, 2.0)
+          and near(got[0]["yaw"], 0.0, 0.05),
+          json.dumps(got) + reasons(out["unplaced"]))
+
+
+def row_underlay_center() -> None:
+    print("\nC2 — an underlay neither sizes nor claims a cell")
+    out = run([{"prop": "rug", "count": 1, "anchor": "center"},
+               {"prop": "table", "count": 1, "anchor": "center"},
+               {"prop": "chair", "count": 1, "anchor": "around",
+                "ref": "table"}])
+    rug = by_prop(out["placed"], "rug")
+    table = by_prop(out["placed"], "table")
+    chair = by_prop(out["placed"], "chair")
+    # The rug is 2.0 × 1.5 but height 0.02: it does not enter the cell size and
+    # does not consume a cell, so the group counts ONE solid piece → both land
+    # on the centroid. The rug's hull x 2…4, z 1.25…2.75 stays inside the room.
+    check("rug and table both sit on the centroid",
+          len(rug) == 1 and len(table) == 1
+          and at_near(rug[0]["at"], 3.0, 2.0)
+          and at_near(table[0]["at"], 3.0, 2.0),
+          json.dumps(rug + table) + reasons(out["unplaced"]))
+    check("and the rug blocks nothing — the chair still takes its front seat",
+          len(chair) == 1 and at_near(chair[0]["at"], 3.0, 2.70),
+          json.dumps(chair) + reasons(out["unplaced"]))
+    # A rug that cannot lie inside the room is refused, not draped over a wall.
+    big = dict(PROPS["rug"], width_m=9.0, depth_m=9.0)
+    out2 = fs.solve(outline_m=OUTLINE, openings=OPENINGS, existing=[],
+                    plan=[{"prop": "rug", "count": 1, "anchor": "center"}],
+                    props=dict(PROPS, rug=big))
+    check("a rug larger than the room stays unplaced",
+          not out2["placed"] and len(out2["unplaced"]) == 1,
+          reasons(out2["unplaced"]))
+
+
+# ── B beside ────────────────────────────────────────────────────────────
+
+def row_beside_two_sides() -> None:
+    print("\nB — two nightstands, one per side")
+    out = run([{"prop": "sofa", "count": 1, "anchor": "wall_n",
+                "facing": "room"},
+               {"prop": "chair", "count": 2, "anchor": "beside",
+                "ref": "sofa"}], openings=[DOOR])
+    stands = by_prop(out["placed"], "chair")
+    # The sofa stands at [3.0, 0.5], yaw 0 → its left is EAST. Both copies use
+    # the nearest gap first: 2.0/2 + 0.5/2 + 0.15 = 1.40 m from its centre, so
+    # copy 1 goes east to x 4.40 and copy 2 — the east spot being taken —
+    # crosses to the west spot at x 1.60, both at z 0.5 and facing as the sofa.
+    check("they end up left AND right of the sofa, symmetric",
+          len(stands) == 2 and at_near(stands[0]["at"], 4.40, 0.5)
+          and at_near(stands[1]["at"], 1.60, 0.5)
+          and all(near(st["yaw"], 0.0, 0.05) for st in stands),
+          json.dumps([st["at"] for st in stands]) + reasons(out["unplaced"]))
+
+
 # ── 1 around ────────────────────────────────────────────────────────────
 
 def row_around() -> None:
@@ -256,14 +392,14 @@ def row_around() -> None:
     out = run(plan)
     table = by_prop(out["placed"], "table")
     chairs = by_prop(out["placed"], "chair")
-    check("the table takes the centre-most walkway cell",
-          len(table) == 1 and at_near(table[0]["at"], 1.5, 1.0)
+    check("the single table takes the room centre",
+          len(table) == 1 and at_near(table[0]["at"], 3.0, 2.0)
           and near(table[0]["yaw"], 0.0, 0.05), json.dumps(table))
     check("six chairs placed", len(chairs) == 6,
           f"{len(chairs)}: {reasons(out['unplaced'])}")
-    want = sorted([(1.23, 1.70, 180.0), (1.77, 1.70, 180.0),
-                   (1.23, 0.30, 0.0), (1.77, 0.30, 0.0),
-                   (0.40, 1.00, 90.0), (2.60, 1.00, 270.0)])
+    want = sorted([(2.73, 2.70, 180.0), (3.27, 2.70, 180.0),
+                   (2.73, 1.30, 0.0), (3.27, 1.30, 0.0),
+                   (1.90, 2.00, 90.0), (4.10, 2.00, 270.0)])
     got = sorted((round(c["at"][0], 2), round(c["at"][1], 2), c["yaw"])
                  for c in chairs)
     check("2 + 2 + 1 + 1 seats, each facing the table",
@@ -386,7 +522,7 @@ def row_ceiling() -> None:
                {"prop": "lamp", "count": 1, "anchor": "above", "ref": "table"}])
     lamp = by_prop(out["placed"], "lamp")
     check("it hangs over the table's centre at 3.0 − 1.0 = 2.0",
-          len(lamp) == 1 and at_near(lamp[0]["at"], 1.5, 1.0)
+          len(lamp) == 1 and at_near(lamp[0]["at"], 3.0, 2.0)
           and near(lamp[0].get("offset_y", -1), 2.0, 1e-6),
           json.dumps(lamp) + reasons(out["unplaced"]))
 
@@ -463,10 +599,10 @@ def row_underlay() -> None:
     rug = by_prop(out["placed"], "rug")
     chair = by_prop(out["placed"], "chair")
     check("the rug lies centred under the table with its yaw",
-          len(rug) == 1 and at_near(rug[0]["at"], 1.5, 1.0)
+          len(rug) == 1 and at_near(rug[0]["at"], 3.0, 2.0)
           and near(rug[0]["yaw"], 0.0, 0.05), json.dumps(rug))
-    check("and the chair still finds its front seat at [1.5, 1.70]",
-          len(chair) == 1 and at_near(chair[0]["at"], 1.5, 1.70),
+    check("and the chair still finds its front seat at [3.0, 2.70]",
+          len(chair) == 1 and at_near(chair[0]["at"], 3.0, 2.70),
           json.dumps(chair) + reasons(out["unplaced"]))
 
 
@@ -516,6 +652,9 @@ def row_wrong_pass() -> None:
           and out["unplaced"][0]["reason"]
           == "anchor 'on' is for surface pieces — use wall_n… or center",
           reasons(out["unplaced"]))
+    out = run([{"prop": "chair", "count": 0, "anchor": "center"}])
+    check("count 0 places nothing and reports nothing",
+          not out["placed"] and not out["unplaced"], json.dumps(out))
     out = run([{"prop": "candle", "count": 1, "anchor": "on", "ref": "nope"}])
     check("an unplaceable reference is named with an alternative",
           not out["placed"] and out["unplaced"][0]["pass"] == "surface"
@@ -557,6 +696,10 @@ def row_existing() -> None:
 def main() -> int:
     print("furnish solver v2 — pure geometry")
     row_turn_direction()
+    row_renderer_anchor()
+    row_single_center()
+    row_underlay_center()
+    row_beside_two_sides()
     row_around()
     row_wall_above()
     row_wall_base()

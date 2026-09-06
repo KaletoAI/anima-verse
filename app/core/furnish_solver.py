@@ -448,7 +448,8 @@ def _place_at_wall(s: _Solver, item: _Item, yaw: float, *, wall: str,
                 continue
             if s._fits(corners, y0, y0 + item.h):
                 return s._commit(item, at_world=(px, pz), yaw_world=yaw, y0=y0,
-                                 offset_y=None if base is None else y0,
+                                 offset_y=(None if base is None
+                                           else y0 - item.ground_offset_m),
                                  wall_series=(wall, grown) if series else None)
     return None
 
@@ -526,11 +527,30 @@ def _place_corner(s: _Solver, item: _Item,
                   f"try wall_{code[0]} or center")
 
 
+def _center_rings(s: _Solver) -> List[Vec]:
+    """The centroid, then rings of eight points around it in 0.25 m steps — the
+    v1 search, kept for the case the grid is not about: ONE piece in the middle
+    of the room belongs in the MIDDLE of the room."""
+    cx, cz = s.centroid
+    out: List[Vec] = [(cx, cz)]
+    rings = int(max(s.W, s.D) / (2 * SAMPLE_STEP_M)) + 1
+    for ring in range(1, rings + 1):
+        r = ring * SAMPLE_STEP_M
+        for i in range(8):
+            a = i * math.pi / 4
+            out.append((cx + r * math.cos(a), cz + r * math.sin(a)))
+    return out
+
+
 def _center_cells(s: _Solver, items: List[_Item]) -> List[Vec]:
     """The walkway grid of pass A's ``center`` group (B4).
 
-    Cell = the largest footprint of the group plus a 0.9 m gangway, per axis.
-    The bounding box is tiled with as many whole cells as fit
+    A group of ONE piece (underlays do not count — they lie under something)
+    has no walkway to keep: it takes the centroid and, if that is blocked,
+    searches outwards in rings (:func:`_center_rings`).
+
+    From two pieces on, cell = the largest footprint of the group plus a 0.9 m
+    gangway, per axis. The bounding box is tiled with as many whole cells as fit
     (``n = max(1, floor(extent / cell))``), the cell centres spread evenly over
     it, and the cells are visited by distance to the outline's centroid —
     equal distances north-west first. Tiling rather than stepping outwards from
@@ -538,8 +558,11 @@ def _center_cells(s: _Solver, items: List[_Item]) -> List[Vec]:
     k·cell puts its outer cells half a cell beyond the wall, where nothing can
     stand.
     """
-    cell_w = max(it.w for it in items) + WALKWAY_M
-    cell_d = max(it.d for it in items) + WALKWAY_M
+    solid = [it for it in items if not it.is_underlay]
+    if sum(it.count for it in solid) <= 1:
+        return _center_rings(s)
+    cell_w = max(it.w for it in solid) + WALKWAY_M
+    cell_d = max(it.d for it in solid) + WALKWAY_M
     nx = max(1, int(s.W / cell_w + 1e-9))
     nz = max(1, int(s.D / cell_d + 1e-9))
     cells = [(s.W * (i + 0.5) / nx, s.D * (j + 0.5) / nz)
@@ -565,15 +588,20 @@ def _place_center_group(s: _Solver, items: List[_Item],
                 continue
             hit = None
             for index, cell in enumerate(cells):
-                if index in used:
+                # An underlay occupies nothing (B10), so it neither claims a
+                # cell nor avoids one — but it may not stick out of the room.
+                if index in used and not item.is_underlay:
                     continue
                 facing = (item.facing or "door").strip().lower()
                 yaw = (fg.COMPASS_DEG[facing] if facing in fg.COMPASS_DEG
                        else s._door_yaw(cell))
                 y0 = item.ground_offset_m
                 corners = fg.rect_corners(cell[0], cell[1], item.w, item.d, yaw)
-                if item.is_underlay or s._fits(corners, y0, y0 + item.h):
-                    used.append(index)
+                ok = (fg.rect_in_poly(corners, s.poly) if item.is_underlay
+                      else s._fits(corners, y0, y0 + item.h))
+                if ok:
+                    if not item.is_underlay:
+                        used.append(index)
                     hit = s._commit(item, at_world=cell, yaw_world=yaw, y0=y0,
                                     occupy=not item.is_underlay)
                     break
@@ -640,7 +668,7 @@ def _place_beside(s: _Solver, item: _Item, ref_pieces: List[_Piece],
                   unplaced: List[Dict[str, str]]) -> None:
     """ONE side of the reference (the nightstand case): left first, then right,
     with the projected half extent OF THAT SIDE. Every copy takes the next free
-    side/gap — an occupied spot is simply blocked."""
+    gap/side — an occupied spot is simply blocked."""
     ref_piece = s._pick(ref_pieces)
     centre, _front, _back, left, right = _ref_frame(ref_piece)
     for _ in range(item.count):
@@ -649,14 +677,17 @@ def _place_beside(s: _Solver, item: _Item, ref_pieces: List[_Piece],
                                         "or use a smaller one"))
             continue
         hit = None
-        for side in (left, right):
-            ref_half = fg.half_extent(ref_piece.w, ref_piece.d, ref_piece.yaw,
-                                      side)
-            toward = fg.compass_of((-side[0], -side[1]))
-            yaw = s._relative_yaw(item.facing, "room", ref_yaw=ref_piece.yaw,
-                                  toward_yaw=toward)
-            my_half = fg.half_extent(item.w, item.d, yaw, side)
-            for gap in REF_GAPS_M:
+        # Gap-major: the nearest gap on EITHER side beats the second gap on the
+        # first side, so two nightstands end up left and right of the bed.
+        for gap in REF_GAPS_M:
+            for side in (left, right):
+                ref_half = fg.half_extent(ref_piece.w, ref_piece.d,
+                                          ref_piece.yaw, side)
+                toward = fg.compass_of((-side[0], -side[1]))
+                yaw = s._relative_yaw(item.facing, "room",
+                                      ref_yaw=ref_piece.yaw,
+                                      toward_yaw=toward)
+                my_half = fg.half_extent(item.w, item.d, yaw, side)
                 dist = ref_half + my_half + gap
                 px = centre[0] + side[0] * dist
                 pz = centre[1] + side[1] * dist
@@ -780,6 +811,14 @@ def _place_under(s: _Solver, item: _Item, ref_pieces: List[_Piece],
         return
     for i in range(item.count):
         ref_piece = ref_pieces[i % len(ref_pieces)]
+        # It blocks nothing, but it may not hang through a wall either.
+        corners = fg.rect_corners(ref_piece.at[0], ref_piece.at[1], item.w,
+                                  item.d, ref_piece.yaw)
+        if not fg.rect_in_poly(corners, s.poly):
+            unplaced.append(_fail(
+                item, f"it would stick out of the room under '{item.ref}' — "
+                      f"use a smaller underlay or center"))
+            continue
         placed.append(s._commit(item, at_world=ref_piece.at,
                                 yaw_world=ref_piece.yaw,
                                 y0=item.ground_offset_m, occupy=False))
@@ -876,7 +915,7 @@ def _place_wall_above(s: _Solver, item: _Item,
         if s._fits(corners, base, base + item.h):
             s.wall_used[wall] += item.w
             return s._commit(item, at_world=(px, pz), yaw_world=yaw, y0=base,
-                             offset_y=base), ""
+                             offset_y=base - item.ground_offset_m), ""
     return None, (f"no free wall spot above '{item.ref}' — "
                   f"try wall_{wall} or another wall")
 
@@ -936,7 +975,7 @@ def _place_at_opening(s: _Solver, item: _Item
     s.taken_openings.add(index)
     s.wall_used[wall] += item.w
     return s._commit(item, at_world=(px, pz), yaw_world=yaw, y0=base,
-                     offset_y=base), ""
+                     offset_y=base - item.ground_offset_m), ""
 
 
 def _place_ceiling(s: _Solver, item: _Item, ref_pieces: List[_Piece]
@@ -957,7 +996,7 @@ def _place_ceiling(s: _Solver, item: _Item, ref_pieces: List[_Piece]
         return None, (f"the ceiling {target} is taken — "
                       f"try another reference or center")
     return s._commit(item, at_world=at, yaw_world=yaw, y0=base,
-                     offset_y=base), ""
+                     offset_y=base - item.ground_offset_m), ""
 
 
 # ── Pass C — surface ────────────────────────────────────────────────────
@@ -1026,10 +1065,15 @@ def _normalize(plan: Optional[Sequence[Dict[str, Any]]],
         if not isinstance(raw, dict):
             continue
         prop = str(raw.get("prop") or "")
+        # A stated ZERO means zero — only a missing count falls back to one.
+        want = raw.get("count")
         try:
-            count = max(1, min(MAX_COUNT, int(raw.get("count") or 1)))
+            count = 1 if want is None else int(want)
         except (TypeError, ValueError):
             count = 1
+        count = max(0, min(MAX_COUNT, count))
+        if count <= 0:
+            continue
         facts = solver._prop(prop)
         if not facts:
             for _ in range(count):
