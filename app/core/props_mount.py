@@ -108,6 +108,19 @@ def classify_mounts(prop_ids: Optional[List[str]] = None) -> Dict[str, Any]:
     ``unresolved`` are the props of the selection the model did not answer
     for (or answered with an unusable ref or kind). They stay exactly as they
     were; nothing partial is written over them.
+
+    EVERY BATCH STANDS ON ITS OWN. A batch is written the moment it is
+    validated, and a batch whose call fails — two unparsable answers, a dead
+    provider — is caught, logged and leaves its props in ``unresolved``; that
+    is what the return contract already says about props nobody answered for.
+    A four-hundred-prop library is ten calls, and losing nine good ones to the
+    tenth would make the button unusable exactly where it is needed most.
+
+    The ONE case that raises is "no batch got through at all": then there is
+    no partial answer to report, and the caller must hear WHY instead of
+    reading a successful zero. The first failure is re-raised as it was
+    (``LlmJsonError`` for an unparsable answer); the route maps it to a 502
+    with its message.
     """
     # ONE listing, which is also the one directory walk this job does:
     # everything the prompt needs (name, category, the three metres, tags) and
@@ -124,21 +137,38 @@ def classify_mounts(prop_ids: Optional[List[str]] = None) -> Dict[str, Any]:
     if not ids:
         return {"classified": 0, "mounts": {}, "unresolved": []}
 
+    batches = 0
+    done = 0
+    first_error: Optional[BaseException] = None
     for start in range(0, len(ids), BATCH_MAX):
+        batches += 1
         items = _batch_items(ids[start:start + BATCH_MAX], library)
         # The prompt gets the rows WITHOUT their prop ids: the answer must
         # refer to the refs, so the ids are never in front of the model.
         rows = [{k: v for k, v in item.items() if k != "prop_id"}
                 for item in items]
         system, user = render_task(TASK, props=rows)
-        answer = llm_json(TASK, system, user,
-                          f"Prop mount classify ({len(items)} props)")
-        mounts.update(validate_mounts(answer, items))
+        try:
+            answer = llm_json(TASK, system, user,
+                              f"Prop mount classify ({len(items)} props)")
+        except Exception as e:  # noqa: BLE001 — one batch must not cost the rest
+            logger.warning("prop mount: batch %d of %d failed (%s: %s) — its "
+                           "props stay unclassified", batches,
+                           -(-len(ids) // BATCH_MAX), type(e).__name__, e)
+            if first_error is None:
+                first_error = e
+            continue
+        done += 1
+        batch = validate_mounts(answer, items)
+        # Written HERE, per batch: the value is a GUESS until the admin has
+        # looked at it — that is the whole difference between this write and a
+        # manual patch, which clears the flag.
+        for pid, kind in batch.items():
+            props.set_suggested_mount(pid, kind)
+        mounts.update(batch)
 
-    # The value is a GUESS until the admin has looked at it — that is the whole
-    # difference between this write and a manual patch, which clears the flag.
-    for pid, kind in mounts.items():
-        props.set_suggested_mount(pid, kind)
+    if first_error is not None and done == 0:
+        raise first_error
 
     unresolved = [pid for pid in ids if pid not in mounts]
     logger.info("prop mount: %d of %d props classified, %d unresolved",

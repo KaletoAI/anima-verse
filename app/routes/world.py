@@ -2151,6 +2151,10 @@ async def prop_mount_classify(
     as a SUGGESTION (``mount_suggested``) the admin confirms or corrects in
     the prop detail. Nothing to classify is a 409 — the button would otherwise
     report a successful run over an LLM call that never happened.
+
+    The props go out in batches, and a batch that fails costs only ITS props
+    (they come back in ``unresolved``); only a run in which NOT ONE batch got
+    through is an error, and that one is a 502 naming the upstream failure.
     """
     data = await request.json() if await request.body() else {}
     return await asyncio.to_thread(_prop_mount_classify_sync, data)
@@ -2165,7 +2169,16 @@ def _prop_mount_classify_sync(data: Any) -> Dict[str, Any]:
     if raw is not None and not isinstance(raw, list):
         raise HTTPException(status_code=400, detail="prop_ids must be a list")
     ids = [str(pid) for pid in raw] if isinstance(raw, list) else None
-    result = classify_mounts(ids)
+    try:
+        result = classify_mounts(ids)
+    except Exception as e:  # noqa: BLE001 — everything that fails here is the LLM hop
+        # Only raised when NOT ONE batch got through (a partial run answers
+        # normally and reports its failures as `unresolved`). It is an upstream
+        # failure, not a defect of this request: 502 with the message, because
+        # a bare 500 leaves the admin with "Internal Server Error" and no idea
+        # whether to retry or to fix the routing.
+        raise HTTPException(status_code=502,
+                            detail=f"Mount classification failed: {e}")
     # An empty SELECTION is the only way both counts come back at zero: a
     # selection the model answered nothing for leaves its ids in `unresolved`.
     if not result["classified"] and not result["unresolved"]:

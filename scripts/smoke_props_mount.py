@@ -81,6 +81,30 @@ model answered nothing for would leave its ids in `unresolved` instead.
 45 unclassified props, `BATCH_MAX` 40, so ceil(45 / 40) = 2 LLM calls, and
 the batches are 40 and 5 props long. Each batch is its own prompt and numbers
 from `#1` again — the second call's rows are `#1 … #5`.
+
+---------------------------------------------------------------------------
+[6] A FAILED BATCH COSTS ONLY ITS OWN PROPS
+---------------------------------------------------------------------------
+Same 45 props, so two batches again. Batch 1 answers for `#1` and `#2`,
+batch 2 answers junk — and junk again in its one repair round, which is where
+`llm_json` gives up. Hand-derived:
+
+    calls        1 (batch 1) + 2 (batch 2 and its repair)   = 3
+    classified   2   — crate 0 "floor", crate 1 "wall", both `mount_suggested`
+    unresolved   43  — the 38 unanswered props of batch 1 PLUS all 5 of
+                       batch 2, which is exactly what `unresolved` means
+    raised       nothing: one batch got through
+
+The write happens per batch, so batch 1 is on disk before batch 2 is even
+asked. Ten batches and a failure in the tenth must not throw away nine.
+
+---------------------------------------------------------------------------
+[7] EVERY BATCH FAILING IS AN ERROR, NOT A SUCCESSFUL ZERO
+---------------------------------------------------------------------------
+The 43 still-unclassified crates = two batches (40 + 3), both answering junk
+twice = 4 calls. NOT ONE batch got through, so there is no partial answer to
+report and the first failure is re-raised as it was (`LlmJsonError`); the
+route maps that to a 502 naming the message. Nothing is written.
 """
 import json
 import os
@@ -127,7 +151,10 @@ class FakeLLM:
                  label="", **_kw) -> FakeResponse:
         self.prompts.append(user_prompt)
         answer = self.answers[min(len(self.prompts) - 1, len(self.answers) - 1)]
-        return FakeResponse(json.dumps(answer))
+        # A STRING is handed back verbatim — that is how an answer that is not
+        # JSON at all is canned (the repair round gets the next entry).
+        return FakeResponse(answer if isinstance(answer, str)
+                            else json.dumps(answer))
 
 
 def install(answers) -> FakeLLM:
@@ -250,6 +277,45 @@ def main() -> int:
           result["classified"] == 0
           and sorted(result["unresolved"]) == sorted(many),
           str(len(result["unresolved"])))
+
+    print("[6] a failed batch costs only its own props")
+    # Batch 1 (crates 0…39) answers for #1 and #2; batch 2 (crates 40…44)
+    # answers junk twice, so `llm_json` gives up on it after its one repair
+    # round. Call order: 1 = batch 1, 2 + 3 = batch 2 and its repair.
+    fake = install([{"mounts": [{"ref": "#1", "mount": "floor"},
+                                {"ref": "#2", "mount": "wall"}]},
+                    "sorry, I cannot do that", "still not JSON"])
+    result = props_mount.classify_mounts(many)
+    check("three calls: batch 1, batch 2 and its one repair",
+          len(fake.prompts) == 3, str(len(fake.prompts)))
+    check("batch 1 was written, batch 2 did not take it down",
+          result["classified"] == 2
+          and result["mounts"] == {many[0]: "floor", many[1]: "wall"},
+          json.dumps(result["mounts"]))
+    check("…and the written values are suggestions",
+          store.get_prop(many[0])["mount_suggested"] is True
+          and store.get_prop(many[1])["mount"] == "wall")
+    check("the failed batch's props are unresolved, not classified",
+          all(pid in result["unresolved"] for pid in many[40:])
+          and len(result["unresolved"]) == 43,
+          str(len(result["unresolved"])))
+
+    print("[7] every batch failing is an error, not a successful zero")
+    # 43 still-unclassified crates = two batches, both answering junk twice
+    # (4 calls). Nothing got through, so there is no partial answer to report
+    # and the first failure is re-raised — the route turns THAT into its 502.
+    rest = many[2:]
+    fake = install(["nope"])
+    try:
+        props_mount.classify_mounts(rest)
+        check("a run in which no batch got through raises", False)
+    except Exception as e:  # noqa: BLE001 — the contract under test
+        check("a run in which no batch got through raises",
+              type(e).__name__ == "LlmJsonError", f"{type(e).__name__}: {e}")
+    check("both batches were tried, each with its repair round",
+          len(fake.prompts) == 4, str(len(fake.prompts)))
+    check("nothing was written",
+          all(not store.get_prop(pid)["mount"] for pid in rest))
 
     print()
     if FAILURES:
