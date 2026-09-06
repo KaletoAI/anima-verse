@@ -417,13 +417,13 @@ def check_access(character_name: str,
     location_id: str,
     room_id: str = "",
     action: str = "enter") -> Tuple[bool, str]:
-    """Prueft alle Blockade-Regeln fuer einen Ort/Raum-Zugang.
+    """Check every block rule for access to a location/room.
 
-    Returns: (allowed, reason) — False + Meldung wenn blockiert.
+    Returns: (allowed, reason) — False plus the message when blocked.
     """
     from app.core.activity_engine import evaluate_condition
 
-    # Danger-Level des Ziels ermitteln
+    # The danger level of the target
     target_danger = _get_target_danger_level(location_id, room_id)
 
     for rule in load_rules():
@@ -432,15 +432,15 @@ def check_access(character_name: str,
         if rule.get("action", "enter") != action:
             continue
 
-        # Character-Filter: Regel kann auf einen Character beschraenkt sein
+        # Character filter: a rule may be limited to one character
         rule_char = (rule.get("character") or "").strip()
         if rule_char and rule_char != character_name:
             continue
 
-        # Ziel-Match pruefen. Feldnamen tolerant lesen: die RulesTab speichert
-        # location/rooms/min_danger_level, der Event-Pfad location_id/room_ids/
-        # min_danger — beide Schemata muessen greifen (sonst sind UI-Regeln
-        # wirkungslos).
+        # Match the target. Field names are read leniently: the RulesTab
+        # stores location/rooms/min_danger_level, the event path
+        # location_id/room_ids/min_danger — BOTH schemas have to bite, or the
+        # rules authored in the UI would have no effect.
         target = rule.get("target", {})
         scope = target.get("scope", "")
         t_loc = (target.get("location_id") or target.get("location") or "").strip()
@@ -452,13 +452,13 @@ def check_access(character_name: str,
         elif scope == "room" and t_loc == location_id and room_id in t_rooms:
             matched = True
         elif scope == "any_room":
-            # Gilt fuer jeden Raum. Zwei Faelle:
-            #  a) Mit konkretem room_id → pruefe direkt gegen den Raum.
-            #  b) Location-level ohne room_id → pruefe ob JEDER Raum der
-            #     Location blocken wuerde. Wenn mind. ein Raum die Condition
-            #     nicht erfuellt, kann der Character dorthin routen und die
-            #     Location-Entry ist erlaubt (Scheduler/SetLocation-Skill
-            #     waehlen dann den passenden Raum).
+            # Applies to every room. Two cases:
+            #  a) with a concrete room_id -> check that room directly.
+            #  b) location level without a room_id -> check whether EVERY room
+            #     of the location would block. When at least one room does not
+            #     satisfy the condition, the character can route there and
+            #     entering the location is allowed (the scheduler / the
+            #     SetLocation skill then pick the room that works).
             if room_id:
                 matched = True
             elif location_id:

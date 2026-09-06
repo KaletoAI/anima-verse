@@ -1901,16 +1901,32 @@ def migrate_transit_places_once() -> Dict[str, int]:
     import shutil
     data = _load_world_data()
     locations = data.get("locations", [])
-    victims = [l for l in locations
-               if bool(l.get("passable")) or (l.get("template_location_id") or "").strip()]
+    # ONE pass, so the count and the effect can never disagree: a flagged
+    # record goes onto the victim pile whether or not it has an id. An
+    # id-less one is unaddressable garbage — it has no gallery, it never
+    # reached a DB row, and leaving it in the list would report a deletion
+    # that did not happen.
+    victims: List[Dict[str, Any]] = []
+    survivors: List[Dict[str, Any]] = []
+    for l in locations:
+        if bool(l.get("passable")) or (l.get("template_location_id") or "").strip():
+            victims.append(l)
+        else:
+            survivors.append(l)
     victim_ids = {l.get("id") for l in victims if l.get("id")}
     deleted_galleries = 0
     for vid in victim_ids:
         gdir = get_storage_dir() / "world_gallery" / vid
-        if gdir.is_dir():
+        if not gdir.is_dir():
+            continue
+        try:
             shutil.rmtree(gdir)
             deleted_galleries += 1
-    survivors = [l for l in locations if l.get("id") not in victim_ids]
+        except OSError as e:
+            # One unreadable directory must never abort the boot — the record
+            # still goes, the files stay behind and are named for a human.
+            logger.warning("transit gallery %s could not be removed: %s",
+                           gdir, e)
     fields_stripped = 0
     for l in survivors:
         for k in _TRANSIT_KEYS:

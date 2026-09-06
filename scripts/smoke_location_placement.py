@@ -13,12 +13,17 @@ Hand-derived expectations:
       yaw_deg 90.0 — position and rotation are independent dials.
   [4] update_location_position(id, None, None) unplaces: pos_x/pos_z None,
       yaw_deg reset to 0.0 (an unplaced location has no orientation).
-  [5] Persistence survives a fresh connection: a SECOND location placed at
-      (30.0, 40.0) without a yaw reads back from the DB columns as
-      pos_x 30.0, pos_z 40.0, yaw_deg 0.0 — truth in the meta blob AND in
-      the columns agree. Derived by hand: update_location_position writes
-      both, and a location that never had a rotation keeps the contract's
-      0.0 when the yaw argument is omitted.
+  [5] BOTH HALVES of the stored truth agree: a SECOND location placed at
+      (30.0, 40.0) without a yaw reads back as pos_x 30.0, pos_z 40.0,
+      yaw_deg 0.0 — once through get_location (the meta blob, which is what
+      every consumer sees) and once straight off the DB columns (which is
+      what SQL filters and the world map's bounds query see). Derived by
+      hand: update_location_position rounds to 2 decimals (30.0/40.0 are
+      already exact), writes blob AND columns in the same transaction, and
+      with the yaw argument omitted it leaves the current rotation alone —
+      which for a location that never had one is the contract's 0.0. Both
+      halves are measured, because a write that reaches only one of them is
+      exactly the failure this section exists to catch.
   [6] A location placed WITHOUT a yaw still HAS the key: "yaw_deg" in loc is
       True and the value is 0.0. Checked with `in`, not `.get(..., 0.0)` —
       the default in a .get would mask exactly the missing key. The contract
@@ -106,6 +111,10 @@ print("[5] columns agree with dict")
 second = add_location(name="Column Probe", description="smoke")
 sid = second["id"]
 update_location_position(sid, 30.0, 40.0)
+second = get_location(sid)
+check("dict pos_x", second.get("pos_x"), 30.0)
+check("dict pos_z", second.get("pos_z"), 40.0)
+check("dict yaw", second.get("yaw_deg"), 0.0)
 conn = db.get_connection()
 row = conn.execute("SELECT pos_x, pos_z, yaw_deg FROM locations WHERE id=?",
                    (sid,)).fetchone()
