@@ -93,25 +93,43 @@ const refChoices = (refVariants: number[], variant: number,
                     view: PropView): number[] =>
   (view === 'front' ? refVariants.filter((i) => i !== variant) : refVariants)
 
-/** The best candidate to reference: the target's OWN front for an extra view
- *  (what keeps back and side looking like the front), and for a FRONT render
- *  the nearest variant BEFORE it that has an image — in the usual flow the
- *  one the new variant was copied from. `null` when there is nothing to
- *  reference. */
+/** The candidate this render may reference WITHOUT being asked: for an extra
+ *  view the target's OWN front and nothing else — the back of THIS variant
+ *  keeps the look of THIS variant's front, which is exactly what the server
+ *  defaults to (`reference_front` with no `reference_variant`). Where the
+ *  target has no front image yet the answer is `null`, never the next
+ *  variant's picture: that render would come out looking like a different
+ *  object and nobody asked for it. For a FRONT render another variant's front
+ *  IS the legitimate reference — the nearest variant BEFORE the target that
+ *  has an image, in the usual flow the one the new variant was copied from. */
 const preferredRef = (refVariants: number[], variant: number,
                       view: PropView): number | null => {
   const choices = refChoices(refVariants, variant, view)
   if (!choices.length) return null
-  if (view !== 'front') return choices.includes(variant) ? variant : choices[0]
+  if (view !== 'front') return choices.includes(variant) ? variant : null
   const before = choices.filter((i) => i < variant)
   return before.length ? before[before.length - 1] : choices[0]
 }
 
+/** What TICKING THE CHECKBOX picks. Normally the preferred candidate, and
+ *  where there is none — an extra view of a variant whose own front is still
+ *  missing — the first offered picture: a foreign one, but an EXPLICITLY
+ *  asked-for one, with the dropdown right below saying which and letting it
+ *  be changed. `null` only when there is nothing to offer at all. */
+const checkedRef = (refVariants: number[], variant: number,
+                    view: PropView): number | null => {
+  const preferred = preferredRef(refVariants, variant, view)
+  if (preferred !== null) return preferred
+  const choices = refChoices(refVariants, variant, view)
+  return choices.length ? choices[0] : null
+}
+
 /** What the reference is set to when the dialog OPENS. An extra view keeps
- *  its historic default of "yes, the front beside me". A FRONT render starts
- *  OFF: pulling another picture into a plain re-render unasked would change
- *  what that button has always done — the pick behind the checkbox is
- *  pre-aimed, one click away. */
+ *  its historic default of "yes, the front beside me" — but only where that
+ *  front exists; without it the dialog opens OFF rather than aimed at some
+ *  other variant's picture. A FRONT render starts OFF too: pulling another
+ *  picture into a plain re-render unasked would change what that button has
+ *  always done — the pick behind the checkbox is pre-aimed, one click away. */
 const initialRef = (refVariants: number[], variant: number,
                     view: PropView): number | null =>
   (view === 'front' ? null : preferredRef(refVariants, variant, view))
@@ -134,7 +152,7 @@ const composePrompt = (prop: PropFull, backend: ImageBackendInfo | undefined,
 }
 
 export function PropImageDialog({ prop, variant, view, refVariants, subject,
-  image, backends, onGenerate, onClose }: {
+  image, backends, cacheBump, onGenerate, onClose }: {
   /** null = closed. */
   prop: PropFull | null
   /** Model variant the render targets — the image belongs to the variant, so
@@ -158,6 +176,12 @@ export function PropImageDialog({ prop, variant, view, refVariants, subject,
    *  from. */
   image?: PropSourceImage
   backends: ImageBackendInfo[]
+  /** The tab's image-cache key — it goes into the reference PREVIEW's URL as
+   *  `v=`, exactly like every other prop-source URL in this tab. The server
+   *  serves those files with `Cache-Control: public, max-age=3600`, so without
+   *  it a variant whose front was just re-rendered would still show its OLD
+   *  picture here — and this thumbnail is what the reference is picked by. */
+  cacheBump: number
   /** `referenceVariant` = the STORE INDEX of the variant whose front image
    *  goes into the backend's first reference slot, or `null` for a render
    *  from text alone. */
@@ -292,7 +316,7 @@ export function PropImageDialog({ prop, variant, view, refVariants, subject,
                       disabled={slots === 0}
                       onChange={(e) => setRefVariant(
                         e.target.checked
-                          ? preferredRef(refVariants, variant, view)
+                          ? checkedRef(refVariants, variant, view)
                           : null)} />
                     <span>
                       {t('Base it on an existing image')}
@@ -314,7 +338,7 @@ export function PropImageDialog({ prop, variant, view, refVariants, subject,
                       {/* The picture itself, not just its number: which image
                           is being referenced is the whole decision here. */}
                       <img
-                        src={`/assets/props/${encodeURIComponent(prop.id)}/source?variant=${refVariant}`}
+                        src={`/assets/props/${encodeURIComponent(prop.id)}/source?variant=${refVariant}&v=${cacheBump}`}
                         alt={`${t('Variant')} ${refVariant + 1}`}
                         style={{ width: 64, height: 64, objectFit: 'contain',
                           borderRadius: 6, background: 'rgba(255,255,255,0.04)',

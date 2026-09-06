@@ -400,6 +400,7 @@ export function PropsTab() {
           subject={imgRegen?.subject}
           image={imgRegen?.image}
           backends={imageBackends}
+          cacheBump={cacheBump}
           onGenerate={(imageBackend, prompt, negative, referenceVariant) => {
             const target = imgRegen
             setImgRegen(null)
