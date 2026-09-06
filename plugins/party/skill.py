@@ -5,6 +5,9 @@ enter/leave): PartySkill with verb='invite'|'join'|'leave'.
     - Target = avatar -> pending invite (question in the chat window, UI decides).
     - Target = NPC    -> the invitee is bumped and decides on its own via
       JoinParty in its own turn (no keyword matching).
+    Every invitation is recorded in ``party_invites`` — it is the direction
+    record of the party: an invitation answered with a counter-invitation is
+    turned into a JOIN, so whoever asked first stays the leader.
   join_party (verb='join'): the character JOINS a present character's party —
     the robust path for "X invites me, I say yes": the tool LLM calls this in
     the normal reply turn (no keyword detection, no separate consent round).
@@ -94,16 +97,33 @@ class PartySkill(PluginSkill):
             # into the scene must not reach them across the map.
             return (f"{target} is not at your location. "
                     f"You can only invite someone who is here with you.")
+        # Role-inversion brake: the OTHER one has already invited us. Both
+        # sides describe the same shared trip ("come along" / "fine, let's
+        # go"), so a tool LLM readily answers an invitation with a counter-
+        # invitation — and that would make the one who asked first the
+        # FOLLOWER, stripping the movement from exactly the character whose
+        # idea the trip was. The open invitation is the direction record:
+        # whoever asked first leads, our invite is really an acceptance.
+        if P.find_pending_invite(target, character_name) is not None:
+            self.ctx.logger.info(
+                "invite_to_party [%s -> %s]: open invitation the other way "
+                "round — joining instead of counter-inviting", character_name,
+                target)
+            return self._join(character_name, {**data, "leader": target})
         if P.get_party_of(target) is not None:
             return f"{target} is already in a party."
+        # The invitation is recorded for EVERY target, avatar or NPC: it is
+        # what the brake above reads when the invitee answers with an invite
+        # of its own.
+        P.create_pending_invite(character_name, target)
         try:
             from app.models.account import is_player_controlled
             _is_avatar = is_player_controlled(target)
         except Exception:
             _is_avatar = False
         if _is_avatar:
-            # An avatar cannot decide via LLM -> pending invite (UI question).
-            P.create_pending_invite(character_name, target)
+            # An avatar cannot decide via LLM -> the pending invite is the UI
+            # question.
             return (f"{character_name} invited {target} to the party "
                     f"— waiting for their answer.")
         # NPC target: NO keyword classification. The invitee decides on its

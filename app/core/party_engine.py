@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
-from app.core.timeutils import utc_now_iso
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 
 logger = get_logger("party")
 
@@ -247,6 +247,37 @@ def get_pending_invites_for(invitee: str) -> List[Dict]:
         return []
     return [{"invite_id": r[0], "inviter": r[1], "invitee": r[2], "created_at": r[3]}
             for r in rows if same_location(r[1], invitee)]
+
+
+def find_pending_invite(inviter: str, invitee: str,
+                        max_age_minutes: int = 30) -> Optional[Dict]:
+    """The open invitation ``inviter`` -> ``invitee``, if there is a fresh one.
+
+    Used as the DIRECTION record of a party: whoever asked first leads. Only
+    invitations younger than ``max_age_minutes`` (SYSTEM minutes — this is a
+    conversational window, not an in-world duration) count; an invitation that
+    was never answered must not still decide the roles in a scene hours later.
+    """
+    inviter = (inviter or "").strip()
+    invitee = (invitee or "").strip()
+    if not inviter or not invitee:
+        return None
+    try:
+        r = get_connection().execute(
+            "SELECT invite_id, inviter, invitee, created_at FROM party_invites "
+            "WHERE inviter=? AND invitee=? AND status='pending' "
+            "ORDER BY created_at DESC LIMIT 1", (inviter, invitee)).fetchone()
+    except Exception:
+        return None
+    if not r:
+        return None
+    try:
+        age = (utc_now() - parse_iso(r[3])).total_seconds()
+    except Exception:
+        age = 0.0
+    if age > max_age_minutes * 60:
+        return None
+    return {"invite_id": r[0], "inviter": r[1], "invitee": r[2], "created_at": r[3]}
 
 
 def get_invite(invite_id: str) -> Optional[Dict]:
