@@ -415,6 +415,23 @@ def get_prompt_fields(template: Dict[str, Any]) -> List[Dict[str, Any]]:
     return fields
 
 
+def source_file_keys(template: Dict[str, Any]) -> Dict[str, str]:
+    """Map profile key -> relative MD path for every ``source_file`` field.
+
+    The template is the ONE place that says which fields live in a file
+    instead of in the profile blob; every caller that has to tell the two
+    apart (profile save, soul reader, the blob migration) asks here.
+    """
+    keys: Dict[str, str] = {}
+    for section in template.get("sections", []):
+        for field in section.get("fields", []):
+            src = field.get("source_file")
+            key = field.get("key")
+            if src and key:
+                keys[key] = src
+    return keys
+
+
 def build_prompt_section(
     template: Dict[str, Any], data: Dict[str, Any],
     active_features: Optional[Dict[str, Any]] = None,
@@ -428,20 +445,21 @@ def build_prompt_section(
     (e.g. traits, goals, beliefs, rules belong only into the own character
     block, never into the partner block).
 
-    Felder mit "source_file" werden aus einer MD-Datei im Character-Verzeichnis
-    geladen statt aus den Profil-Daten (user_id+character_name muessen dafuer
-    gesetzt sein). Fehlende Datei = Feld wird uebersprungen.
+    Fields with "source_file" are loaded from an MD file in the character
+    directory instead of from the profile data (character_name must be set for
+    that). A missing or empty file means the field is skipped — there is no
+    fallback to the profile blob.
 
     Returns a list of "Label: value" strings.
     """
     lines = []
     for field in get_prompt_fields(template):
-        # Feature-Gate: Feld nur aufnehmen wenn Feature aktiv. Reihenfolge:
-        #   1. Per-Char Config-Override via is_feature_enabled (z.B.
-        #      retrospect_enabled aus character_config.json)
-        #   2. Template-Features-Dict (active_features)
-        # Damit gilt der UI-Toggle "Retrospect: Nein" auch wenn das Template
-        # die Underlying-Features (beliefs_enabled etc.) aktiv hat.
+        # Feature gate: include the field only when the feature is on. Order:
+        #   1. per-character config override via is_feature_enabled (e.g.
+        #      retrospect_enabled from the character config)
+        #   2. template features dict (active_features)
+        # That way the UI toggle "Retrospect: no" wins even when the template
+        # has the underlying features (beliefs_enabled etc.) switched on.
         required_feature = field.get("prompt_requires_feature")
         if required_feature:
             if character_name:
@@ -450,19 +468,18 @@ def build_prompt_section(
             elif active_features is not None:
                 if not active_features.get(required_feature):
                     continue
-        # Self-only: Im Partner-Block (Avatar) solche Felder auslassen
+        # Self-only: skip such fields in the partner block (avatar)
         if is_partner and field.get("prompt_self_only"):
             continue
 
         key = field["key"]
 
-        # source_file: Inhalt aus MD-Datei statt aus Profil-Daten
+        # source_file: content comes from the MD file, NEVER from the profile.
+        # There is deliberately no fallback to `data[key]`: a stale blob value
+        # would outlive a reset that cleared the file (the file IS the truth).
         source_file = field.get("source_file")
-        if source_file and character_name:
-            value = _load_source_file(character_name, source_file)
-            if not value:
-                # Fallback: alter Wert im Profil (waehrend Migration)
-                value = data.get(key)
+        if source_file:
+            value = load_source_file(character_name, source_file) if character_name else ""
         else:
             value = data.get(key)
 
@@ -485,10 +502,10 @@ def build_prompt_section(
                 if not value:
                     continue
 
-        # Mehrzeiliger Wert (z.B. strukturiertes MD): Label auf eigene Zeile.
-        # Multiline-Bloecke werden visuell separiert (Leerzeile davor + danach),
-        # damit nachfolgende Single-Line-Felder (Attention, Appearance, ...) nicht
-        # an den Body kleben.
+        # Multiline value (e.g. structured MD): label on its own line.
+        # Multiline blocks are separated visually (blank line before + after) so
+        # that following single-line fields (Attention, Appearance, ...) do not
+        # stick to the body.
         if isinstance(value, str) and "\n" in value:
             if lines and lines[-1] != "":
                 lines.append("")
@@ -497,51 +514,68 @@ def build_prompt_section(
             lines.append("")
         else:
             lines.append(f"{label}: {value}")
-    # Trailing-Blank wegtrimmen
+    # Trim the trailing blank
     while lines and lines[-1] == "":
         lines.pop()
     return lines
 
 
-def _load_source_file(character_name: str, relpath: str) -> str:
-    """Laedt den Inhalt einer MD/Text-Datei aus dem Character-Verzeichnis.
+def load_source_file(character_name: str, relpath: str) -> str:
+    """Load the content of an MD/text file from the character directory.
 
-    Aufbereitung fuer System-Prompt:
-    - Lock-/Edit-Marker entfernen (HTML-Kommentare)
-    - Top-Heading `# ...` weglassen (Label im Prompt uebernimmt diese Rolle)
-    - Leere `## Section`-Headings entfernen (kein Body → Noise)
+    This is THE reader for every ``source_file`` field — the MD file is the
+    single source of truth for those fields; save_character_profile keeps
+    them out of the profile blob (see ``source_file_keys``).
 
-    Leerer String wenn Datei fehlt, leer oder nur leere Sections.
+    Preparation for consumers (system prompt, thoughts, secrets, ...):
+    - drop lock/edit markers (HTML comments)
+    - drop the top `# ...` heading (the label takes that role)
+    - drop empty `## Section` headings (no body -> noise)
+
+    Empty string when the file is missing, empty or only holds empty sections.
     """
     try:
         from app.models.character import get_character_dir
-        import re as _re
         p = get_character_dir(character_name) / relpath
         if not p.exists():
             return ""
-        text = p.read_text(encoding="utf-8")
-        # Marker entfernen (HTML-Kommentare wie <!-- EDITABLE -->)
-        text = _re.sub(r"<!--\s*[A-Z]+\s*-->\s*\n?", "", text)
+        return strip_empty_sections(p.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
 
-        # In Sections zerlegen, leere Sections entfernen, Top-Heading droppen.
+
+def strip_empty_sections(text: str) -> str:
+    """Reduce soul markdown to what actually says something.
+
+    Drops lock/edit markers, the top `# ...` heading and every `## Section`
+    without a body. THE yardstick for "is this empty": a file holding nothing
+    but headings is a scaffold, and so is a value that looks like one. Both
+    have to answer the same way, or a migration counts a scaffold as content.
+    """
+    try:
+        import re as _re
+        # Strip markers (HTML comments such as <!-- EDITABLE -->)
+        text = _re.sub(r"<!--\s*[A-Z]+\s*-->\s*\n?", "", text or "")
+
+        # Split into sections, drop empty ones, drop the top heading.
         lines = text.splitlines()
         result_parts = []
-        cur_heading = None  # None = vor erstem ## Heading
+        cur_heading = None  # None = before the first ## heading
         cur_body = []
 
         def _flush():
             if cur_heading is None:
-                # Praeludium vor erstem ## (Top-`# Title` und Leerzeilen) — verwerfen
+                # Prelude before the first ## (top `# Title`, blank lines) — discard
                 return
             body_text = "\n".join(cur_body).strip()
             if body_text:
                 result_parts.append(f"## {cur_heading}")
                 result_parts.append(body_text)
-                result_parts.append("")  # Trenner
+                result_parts.append("")  # separator
 
         for line in lines:
             if line.startswith("# ") and not line.startswith("## "):
-                # Top-Heading ignorieren
+                # Ignore the top heading
                 _flush()
                 cur_heading = None
                 cur_body = []

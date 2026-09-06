@@ -492,6 +492,21 @@ def import_character_from_zip(
 
     zf.close()
 
+    # The pack carries the `characters` row verbatim, so an export taken before
+    # the soul values left profile_json puts that second copy back. Strip it
+    # now that the soul/*.md files are on disk: the sweep keeps whichever side
+    # actually holds the text (file wins, authored prose with an empty file is
+    # moved into it) and never leaves a blob value the UI cannot show.
+    try:
+        from app.core.soul_blob_migration import migrate_soul_blobs_once
+        _sb = migrate_soul_blobs_once(only=character_name)
+        if _sb:
+            logger.info("Import: %s — soul values stripped from the profile: %s",
+                        character_name, _sb)
+    except Exception as e:
+        logger.warning("Import: soul blob strip failed for %s: %s",
+                       character_name, e)
+
     # Re-init sweep — AFTER every restore, BEFORE the intro memory is seeded.
     # Not restoring a table only covers what the pack carries; this clears what
     # was already in the world under this name (a re-import over an existing

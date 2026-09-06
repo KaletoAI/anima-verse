@@ -413,68 +413,42 @@ def get_character_profile(character_name: str) -> Dict[str, Any]:
 
 
 def _inject_soul_md_values(character_name: str, profile: Dict[str, Any]) -> None:
-    """Injiziert Werte aus soul/*.md Files in profile-Dict.
+    """Inject the values of the soul/*.md files into the profile dict.
 
-    Beim Save werden source_file-Felder aus profile_json entfernt (MD = Source
-    of Truth). Beim Load muss der Wert aus der MD wieder injiziert werden,
-    sonst bekommen Consumer wie ThoughtLoop (character_task) oder
-    system_prompt_builder (personality, beliefs etc.) leere Strings.
+    ``source_file`` fields are stripped from profile_json on save (the MD file
+    is the source of truth). On load the value has to be injected again, or
+    consumers such as the ThoughtLoop (character_task) or the prompt builder
+    (personality, beliefs, ...) would see empty strings.
 
-    Nicht-destruktiv: bestehende Werte im profile werden NICHT ueberschrieben
-    (falls Caller etwas gesetzt hat). Fehlt das Feld → von MD lesen.
+    The FILE always wins — a value still sitting in the blob (from before the
+    strip landed, or from an import of an older export) is overwritten, and an
+    empty file clears it. Anything else resurrects a stale value that no UI
+    shows and no reset can reach.
     """
     try:
         template_id = profile.get("template", "")
         if not template_id:
             return
-        from app.models.character_template import get_template
+        from app.models.character_template import get_template, load_source_file
         tmpl = get_template(template_id)
         if not tmpl:
             return
-        char_dir = get_character_dir(character_name)
         for section in tmpl.get("sections", []):
             for field in section.get("fields", []):
                 source_file = field.get("source_file")
                 if not source_file:
                     continue
                 key = field.get("key", "")
-                if not key or profile.get(key):
+                if not key:
                     continue
-                md_path = char_dir / source_file
-                if not md_path.exists():
-                    continue
-                try:
-                    raw = md_path.read_text(encoding="utf-8")
-                except Exception:
-                    continue
-                body = _extract_md_body(raw)
-                if body:
-                    profile[key] = body
+                # ONE reader for everybody: load_source_file is what the
+                # prompt builder uses, and it drops empty `## Section`
+                # headings. A scaffold file is therefore empty here too —
+                # otherwise consumers would receive bare headings as if they
+                # were a personality.
+                profile[key] = load_source_file(character_name, source_file)
     except Exception as e:
         logger.debug("_inject_soul_md_values fuer %s: %s", character_name, e)
-
-
-def _extract_md_body(md_text: str) -> str:
-    """Liefert den Body einer Soul-MD ohne den ersten Titel-Header.
-
-    Erste Zeile beginnt typischerweise mit '# Titel'. Wir entfernen genau diese,
-    der Rest (## Sections + Body) bleibt als Markdown erhalten, weil Consumer
-    den Inhalt im Prompt-Kontext als formatiertes Markdown weiterverarbeiten.
-    """
-    if not md_text:
-        return ""
-    lines = md_text.splitlines()
-    out = []
-    header_consumed = False
-    for line in lines:
-        if not header_consumed and line.strip().startswith("# ") and not line.strip().startswith("## "):
-            header_consumed = True
-            continue
-        out.append(line)
-    # Fuehrende Leerzeilen abschneiden
-    while out and not out[0].strip():
-        out.pop(0)
-    return "\n".join(out).rstrip()
 
 
 def get_character_language(character_name: str) -> str:
@@ -609,6 +583,24 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     for k in _CONFIG_KEYS_IN_PROFILE:
         if k in profile:
             config_patch[k] = profile.pop(k)
+
+    # Soul files (`source_file` fields): the MD file is the source of truth, so
+    # those keys must never reach profile_json. A creation path (World Dev, the
+    # create form) may still HAND US a value — it is written into the empty MD
+    # file first, then dropped from the profile. Both steps run BEFORE the DB
+    # write: stripping afterwards would leave the value in the blob, where no
+    # UI shows it and no reset reaches it, and it would outlive the file.
+    try:
+        ensure_soul_files(character_name, profile=profile)
+        populate_soul_files_from_profile(character_name, profile=profile)
+        from app.models.character_template import get_template as _gt, source_file_keys
+        _tmpl = _gt(profile.get("template", ""))
+        if _tmpl:
+            for _key in source_file_keys(_tmpl):
+                profile.pop(_key, None)
+    except Exception as _se:
+        logger.debug("ensure/populate soul files failed for %s: %s", character_name, _se)
+
     # JSON-Sidecar und DB-Blob bekommen das gestrippte Profil
     profile_to_store = profile
 
@@ -724,24 +716,6 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                          lambda v: v)
         profile[name] = read_cast(value)
 
-    # Soul-Files anlegen falls noetig (Template-getrieben).
-    # Falls World Dev / Neu-Anlage Werte fuer source_file-Felder mitliefert,
-    # werden diese in MD geschrieben (populate_soul_files_from_profile),
-    # danach aus dem Profil geloescht.
-    try:
-        ensure_soul_files(character_name)
-        populate_soul_files_from_profile(character_name)
-        # source_file Werte aus dem Profil-JSON entfernen — MD ist Source
-        from app.models.character_template import get_template as _gt
-        _tmpl = _gt(profile.get("template", ""))
-        if _tmpl:
-            for _section in _tmpl.get("sections", []):
-                for _field in _section.get("fields", []):
-                    _key = _field.get("key", "")
-                    if _key and _field.get("source_file") and _key in profile:
-                        del profile[_key]
-    except Exception as _se:
-        logger.debug("ensure/populate soul files failed for %s: %s", character_name, _se)
 
     # A re-dressed temporary NPC needs its pictures again — see
     # npc_assets.on_outfit_description_changed for the rule (and for why the
@@ -893,18 +867,15 @@ def delete_character(character_name: str) -> bool:
 
 
 def get_character_personality(character_name: str) -> str:
-    """Gibt die Persoenlichkeit eines Characters zurueck"""
+    """Return a character's personality — the content of soul/personality.md.
+
+    The profile carries it only as an injected value (_inject_soul_md_values);
+    the file is the source of truth and the soul editor writes it.
+    """
     if not character_name:
         return ""
     profile = get_character_profile(character_name)
     return profile.get("character_personality", "")
-
-
-def save_character_personality(character_name: str, personality: str):
-    """Speichert die Persoenlichkeit eines Characters"""
-    profile = get_character_profile(character_name)
-    profile["character_personality"] = personality
-    save_character_profile(character_name, profile)
 
 
 def _get_character_config_path(character_name: str, *, create: bool = False) -> Path:
@@ -2476,20 +2447,27 @@ def _soul_template_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "shared" / "templates" / "soul"
 
 
-def populate_soul_files_from_profile(character_name: str) -> int:
-    """Schreibt JSON-Profil-Werte in die MD-Files unter erste ## Section.
+def populate_soul_files_from_profile(character_name: str,
+                                     profile: Optional[Dict[str, Any]] = None) -> int:
+    """Write profile values into the MD files, under the first ## section.
 
-    Aufruf nach save_character_profile + ensure_soul_files. Wirkt nur wenn:
-      - Template hat ein Feld mit source_file
-      - JSON-Profil hat einen Wert fuer den Field-Key
-      - MD-File existiert UND erste Section ist leer
-    Ueberschreibt nichts wenn MD bereits Content hat.
+    Called from save_character_profile after ensure_soul_files. Only takes
+    effect when:
+      - the template has a field with source_file
+      - the profile carries a value for that field key
+      - the MD file exists AND its first section is empty
+    Never overwrites an MD file that already has content.
 
-    Returns: Anzahl befuellter Files.
+    ``profile``: the profile being saved — pass it, because the value to be
+    rescued only exists in that dict; reading it back from the DB would come
+    up empty (the key never reaches the blob any more).
+
+    Returns: number of files populated.
     """
     if not character_name:
         return 0
-    profile = get_character_profile(character_name)
+    if profile is None:
+        profile = get_character_profile(character_name)
     template_id = profile.get("template", "")
     if not template_id:
         return 0
@@ -2572,14 +2550,19 @@ def _inject_into_first_empty_section(md_text: str, content: str) -> str:
     return md_text
 
 
-def ensure_soul_files(character_name: str) -> int:
-    """Legt fehlende Soul-MD-Dateien aus shared/templates/soul/ an.
+def ensure_soul_files(character_name: str,
+                      profile: Optional[Dict[str, Any]] = None) -> int:
+    """Create missing soul MD files from shared/templates/soul/.
 
-    Beruecksichtigt die Template-Features des Characters: Felder die
-    durch ein Feature gegated sind, werden nur erstellt wenn das Feature
-    im aktiven Template aktiviert ist (oder ungated → immer).
+    Honors the character's template features: a field gated by a feature is
+    only created when that feature is on in the active template (ungated ->
+    always).
 
-    Returns: Anzahl neu angelegter Dateien.
+    ``profile``: the profile to take the template from. Pass it when the
+    character row is not written yet (creation) — otherwise it is read from
+    the DB.
+
+    Returns: number of newly created files.
     """
     if not character_name:
         return 0
@@ -2587,8 +2570,9 @@ def ensure_soul_files(character_name: str) -> int:
     char_dir = get_character_dir(character_name)
     soul_dir = char_dir / "soul"
 
-    # Aktives Template + Features bestimmen
-    profile = get_character_profile(character_name)
+    # Determine the active template + features
+    if profile is None:
+        profile = get_character_profile(character_name)
     template_id = profile.get("template", "")
     features = {}
     if template_id:

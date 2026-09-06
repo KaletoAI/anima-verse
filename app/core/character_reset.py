@@ -312,6 +312,19 @@ def _reset_retrospect_soul_files(character_name: str) -> int:
                          (f"retrospect.last_at:{character_name}",))
     except Exception as e:
         logger.debug("reset [%s]: retrospect stamp: %s", character_name, e)
+    # Clearing the FILE is only half a reset while a copy can sit in the
+    # profile blob — that copy is what the character would keep speaking from.
+    # Saves no longer create one; this covers a row that an import of an older
+    # export put back. Same sweep as on boot, so authored prose is rescued and
+    # dropped Retrospect text is backed up.
+    try:
+        from app.core.soul_blob_migration import migrate_soul_blobs_once
+        _sb = migrate_soul_blobs_once(only=character_name)
+        if _sb.get("dropped") or _sb.get("rescued"):
+            logger.info("reset [%s]: soul values stripped from the profile: %s",
+                        character_name, _sb)
+    except Exception as e:
+        logger.warning("reset [%s]: soul blob strip failed: %s", character_name, e)
     return done
 
 

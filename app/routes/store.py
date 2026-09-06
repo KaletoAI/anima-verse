@@ -19,7 +19,6 @@ from app.models.account import (
     get_user_profile_image)
 from app.models.character import (
     get_character_personality,
-    save_character_personality,
     get_character_appearance,
     get_character_address_form,
     get_character_profile)
@@ -144,10 +143,6 @@ def _store_data_sync(key: str, data: Any) -> Dict[str, str]:
             except Exception:
                 pass
         set_chat_partner(value)
-    elif key == "character_personality":
-        current_agent = get_current_agent()
-        if current_agent:
-            save_character_personality(current_agent, value)
     elif key == "theme":
         save_user_theme(value)
     elif key == "user_profile":

@@ -292,6 +292,20 @@ async def lifespan(app: FastAPI):
     except Exception as _ie:
         logger.debug("intents migration failed: %s", _ie)
 
+    # Soul values (personality/presence/tasks/soul/beliefs/lessons/goals) live
+    # in the character's soul/*.md files. Saves used to leave a second copy in
+    # profile_json that no UI showed and no reset reached, but that the prompt
+    # fell back to once the file was cleared — a reset character kept speaking
+    # from months-old text. Strips that copy; authored prose whose file is
+    # empty is moved INTO the file first, dropped Retrospect text is backed up.
+    try:
+        from app.core.soul_blob_migration import migrate_soul_blobs_once
+        _sb = migrate_soul_blobs_once()
+        if _sb:
+            logger.info("Soul values stripped from the profile blob: %s", _sb)
+    except Exception as _sbe:
+        logger.warning("soul-blob migration failed: %s", _sbe)
+
     # Transit places are gone (plan-rueckbau-2d-karte.md E5): every record
     # flagged passable or bound to a template is deleted with its gallery.
     from app.models.world import migrate_transit_places_once
