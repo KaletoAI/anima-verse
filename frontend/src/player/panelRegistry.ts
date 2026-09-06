@@ -19,8 +19,9 @@ export const MARGIN = 4
 export const DEFAULT_LAYOUT: Layout[] = [
   { i: 'scene', x: 13, y: 18, w: 49, h: 26, minW: 8, minH: 8 },
   { i: 'env', x: 13, y: 3, w: 49, h: 33, minW: 6, minH: 5 },
-  { i: 'map', x: 75, y: 3, w: 16, h: 12, minW: 6, minH: 5 },
-  { i: 'worldmap', x: 62, y: 3, w: 13, h: 12, minW: 6, minH: 5 },
+  // The travel panel CARRIES the schematic map since the 2026-09 teardown, so
+  // its box is a map's box, not a list's.
+  { i: 'map', x: 62, y: 3, w: 29, h: 20, minW: 10, minH: 10 },
   { i: 'self', x: 0, y: 3, w: 13, h: 20, minW: 6, minH: 8 },
   { i: 'others', x: 41, y: 20, w: 13, h: 18, minW: 8, minH: 8 },
   { i: 'belongings', x: 62, y: 19, w: 29, h: 25, minW: 10, minH: 8 },
@@ -53,7 +54,6 @@ export const PANEL_META: {
   { id: 'scene', label: 'Chat', icon: 'chat' },
   { id: 'env', label: 'Surroundings', icon: 'surroundings' },
   { id: 'map', label: 'Travel', icon: 'move' },
-  { id: 'worldmap', label: 'Map', icon: 'worldmap' },
   { id: 'self', label: 'Self', icon: 'self' },
   { id: 'others', label: 'Others', icon: 'others' },
   { id: 'belongings', label: 'Inventory', icon: 'backpack' },
@@ -74,7 +74,7 @@ export const GRID_PANELS = PANEL_META.filter((p) => p.kind !== 'dialog').map((p)
 export const DIALOG_PANELS = PANEL_META.filter((p) => p.kind === 'dialog').map((p) => p.id)
 // Grid panel, but NOT open by default (occasional, opened via button).
 // Closed-by-default = all grid panels that were NOT open in the saved default
-// (open: scene/env/map/worldmap/self/others/belongings/gallery/instagram/tasks).
+// (open: scene/env/map/self/others/belongings/gallery/instagram/tasks).
 // 'layouts' is a dialog and is never tiled anyway.
 export const CLOSED_BY_DEFAULT = new Set(['journal', 'news', 'phone', 'quests', 'settings'])
 export const INITIAL_OPEN = GRID_PANELS.filter((id) => !CLOSED_BY_DEFAULT.has(id))
@@ -88,8 +88,7 @@ export const LABEL_BY_ID: Record<string, string> = Object.fromEntries(
 export const PANEL_COLOR: Record<string, string> = {
   scene: '#6aa9ff',      // Chat — blue
   env: '#4ec9a8',        // Surroundings — teal
-  map: '#56c4dd',        // Move — cyan
-  worldmap: '#e0a356',   // Map — amber
+  map: '#56c4dd',        // Travel — cyan
   self: '#b48ead',       // Self — violet
   others: '#e8995e',     // Others — orange
   belongings: '#d3a84a', // Inventory — gold
@@ -101,5 +100,5 @@ export const PANEL_COLOR: Record<string, string> = {
   quests: '#c7b07b',     // Quests — parchment
   settings: '#9aa4b2',   // Avatar — grey
 }
-// Panels that can show enlarged (view-only overlay). Extensible.
-export const EXPANDABLE = new Set<string>(['worldmap'])
+// Panels that can show enlarged (overlay). Extensible.
+export const EXPANDABLE = new Set<string>(['map'])

@@ -1,5 +1,5 @@
 /**
- * MapPanel — the player's SCHEMATIC map of the metre world (read-only).
+ * MapPanel — the player's SCHEMATIC map of the metre world.
  *
  * The tile grid is gone (contract § A1). The world is one continuous plane in
  * metres, so this panel draws exactly what the two metre payloads say and
@@ -39,7 +39,11 @@
  *                        the wilderness), the avatar bigger and in the accent
  *                        colour, foreign faces only once the zoom can carry
  *                        them.
- * No game action lives here: travelling is the TravelPanel's job.
+ * No game action lives here: travelling stays the TravelPanel's job. The one
+ * thing the map DOES take part in is the choice of a destination — with
+ * `onPickLocation` set (the Travel panel does that) a click on an outline
+ * reports which place was picked, and nothing more happens until the Travel
+ * button is pressed.
  *
  * Fills are translucent (55 %) because the canvas draws its metre grid BEFORE
  * its children — an opaque ground would swallow the scale aids.
@@ -269,11 +273,16 @@ function hillshadeUrl(field: WorldHeightField | null): Relief | null {
  *  the pin, taken through the ONE § A1.1 transform. A row whose `boundary` is
  *  `null` has NO area — since 2026-08-19 the server synthesizes no square for
  *  a location that was never drawn — and is not drawn here either. */
-function Footprints({ locations, currentId, events, labelMode }: {
+function Footprints({ locations, currentId, events, labelMode, onPick, pickedId }: {
   locations: WorldmapLocationRow[]
   currentId: string
   events: Record<string, Array<{ category: string; text: string }>>
   labelMode: LabelMode
+  /** Set by a picking host (the Travel panel): an outline becomes clickable
+   *  and reports the location it stands for. Unset = the map is read-only. */
+  onPick?: (id: string) => void
+  /** The outline drawn as chosen — accent stroke, 2 px. */
+  pickedId?: string
 }) {
   const { view, w, h } = useMapView()
   return (
@@ -290,13 +299,21 @@ function Footprints({ locations, currentId, events, labelMode }: {
         const minY = Math.min(...corners.map((p) => p.y))
         const maxY = Math.max(...corners.map((p) => p.y))
         const cx = (minX + maxX) / 2
+        // Pickable = a place one could actually set off for: not the one we
+        // stand in, and anchored on the walkable map (`plan_width_m`) — an
+        // unanchored target only ever earns an `unplaced_target` refusal.
+        const pickable = !!onPick && !here && loc.plan_width_m !== null
+        const picked = pickedId === loc.id
         return (
           <g key={loc.id}>
             <polygon points={pts}
               fill={here ? COL_ACCENT : COL_STONE}
-              fillOpacity={here ? 0.35 : 0.28}
-              stroke={here ? COL_ACCENT : COL_STONE} strokeWidth={1}
-              strokeOpacity={here ? 1 : 0.7}>
+              fillOpacity={here ? 0.35 : picked ? 0.4 : 0.28}
+              stroke={here || picked ? COL_ACCENT : COL_STONE}
+              strokeWidth={picked ? 2 : 1}
+              strokeOpacity={here || picked ? 1 : 0.7}
+              style={{ cursor: pickable ? 'pointer' : undefined }}
+              onClick={pickable ? (e) => { e.stopPropagation(); onPick(loc.id) } : undefined}>
               <title>{loc.name}</title>
             </polygon>
             {labelMode === 'all' ? (
@@ -395,8 +412,18 @@ function Characters({ chars, avatar, tooltip }: {
   )
 }
 
-export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all' }:
-  { currentLocationId: string; autoFit?: boolean; labelMode?: LabelMode }) {
+export function MapPanel({
+  currentLocationId, autoFit = false, labelMode = 'all', onPickLocation, pickedId,
+}: {
+  currentLocationId: string
+  autoFit?: boolean
+  labelMode?: LabelMode
+  /** Given by the Travel panel: the map becomes its destination picker. A
+   *  click on an outline reports the location — it never starts a journey,
+   *  that stays the Travel button's word. */
+  onPickLocation?: (id: string) => void
+  pickedId?: string
+}) {
   const { t } = useI18n()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
@@ -577,7 +604,8 @@ export function MapPanel({ currentLocationId, autoFit = false, labelMode = 'all'
           <TerrainAreas areas={terrain?.areas || []} types={types} />
           {relief && height ? <ReliefLayer relief={relief} field={height} /> : null}
           <Footprints locations={data.locations} currentId={current}
-            events={data.events_by_location || {}} labelMode={labelMode} />
+            events={data.events_by_location || {}} labelMode={labelMode}
+            onPick={onPickLocation} pickedId={pickedId} />
           <TravelLines chars={data.characters} />
           <Characters chars={data.characters} avatar={data.avatar} tooltip={tooltip} />
         </MapCanvas>

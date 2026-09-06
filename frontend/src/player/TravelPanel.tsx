@@ -1,20 +1,29 @@
 /**
  * TravelPanel — the avatar's movement control (was the MovePad compass).
  *
- * Two movements, two lists, one panel:
- *  - TRAVEL, to another location: a destination list with a Travel button
- *    each (`POST /play/travel`). The world is a metre plane since E1, so
- *    there is no "one cell north" any more — a trip is a timed journey to a
- *    NAMED place, and while it runs the list gives way to its status (target,
+ * Two movements, one panel:
+ *  - TRAVEL, to another location: THE DESTINATION IS PICKED ON THE MAP. The
+ *    schematic map (`MapPanel`) fills the upper half, a click on a location
+ *    outline selects it, and the bar under the map names the pick with its
+ *    straight-line distance plus the one Travel button (`POST /play/travel`).
+ *    A bare click never starts a journey. The world is a metre plane since E1,
+ *    so there is no "one cell north" any more — a trip is a timed journey to a
+ *    NAMED place, and while it runs the map gives way to its status (target,
  *    arrival on the game clock, metres left) with a Cancel button.
  *  - ROOM CHANGE, inside the current location: the chips below, unchanged
  *    (`POST /play/enter-room`).
  *
- * Where the destinations come from: `GET /play/worldmap`, FOGGED — that
+ * Where the pick's data comes from: `GET /play/worldmap`, FOGGED — that
  * payload IS the avatar's knowledge of the world (§ A12), so a place the
- * avatar has never heard of cannot even be offered, and no second endpoint
- * has to reproduce the same fog rule. Polled under the very key MapPanel
- * uses, so both panels share ONE request, and only while a panel is mounted.
+ * avatar has never heard of is neither drawn nor pickable, and no second
+ * endpoint has to reproduce the same fog rule. Polled under the very key
+ * MapPanel uses, so panel and map share ONE request.
+ *
+ * The distance is the STRAIGHT LINE, a rough sense of how far it is — the
+ * walked route is longer and only the server knows it (§ B5a, by hand):
+ *   avatar at (4, 1), the picked location's pin at (10, 9)
+ *   -> hypot(10 - 4, 9 - 1) = hypot(6, 8) = sqrt(36 + 64) = 10
+ *   -> the bar shows "10 m".
  *
  * The actions live in PlayerApp (onTravel/onCancelTravel/onEnterRoom); this
  * component decides nothing the server has not already decided. Locks are the
@@ -23,10 +32,11 @@
  * shown as it is — running it through `t()` would look up a sentence no
  * translation file has.
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../lib/api'
 import { useI18n } from '../i18n/I18nProvider'
 import { usePoll } from './usePolling'
+import { MapPanel, type LabelMode } from './MapPanel'
 import type { TravelInfo } from './ScenePanel'
 
 interface RoomInfo {
@@ -34,35 +44,42 @@ interface RoomInfo {
   enterable: boolean; reason: string
 }
 
-/** The slice of the worldmap payload the destination list needs. */
+/** The slice of the worldmap payload the pick bar needs — the MAP reads the
+ *  full payload itself, under the same poll key. */
 interface WorldMapLocation {
   id: string; name: string
   pos_x: number | null; pos_z: number | null
-  /** The location's edge in metres — null when it has no scale anchor. */
-  plan_width_m: number | null
 }
 interface WorldMapLite {
   avatar: string
-  current_location_id: string
   locations: WorldMapLocation[]
   characters: Array<{ name: string; pos: { x: number; z: number } | null }>
 }
 
-interface Destination { id: string; name: string; distance_m: number | null }
+/** The place the player clicked on the map — never a journey yet. */
+interface Picked { id: string; name: string; distance_m: number | null }
 
 export function TravelPanel({
-  rooms, currentRoomId, travel, busy,
-  onTravel, onCancelTravel, onEnterRoom,
+  rooms, currentRoomId, currentLocationId, travel, busy,
+  onTravel, onCancelTravel, onEnterRoom, labelMode = 'all', autoFit = false,
   partyFollower = false, partyLeaderName = '',
 }: {
   rooms: RoomInfo[]
   currentRoomId: string
+  /** The location the avatar stands in — the map marks it and refuses it as
+   *  a destination. */
+  currentLocationId: string
   /** The running journey from `/play/scene`, or null while standing still. */
   travel: TravelInfo | null
   busy: boolean
   onTravel: (locationId: string) => void
   onCancelTravel: () => void
   onEnterRoom: (roomId: string) => void
+  /** Label mode of the map, held by PlayerApp (header button). */
+  labelMode?: LabelMode
+  /** The enlarged overlay always fits the world and never writes the docked
+   *  panel's view back. */
+  autoFit?: boolean
   /** The avatar is a party follower: no movement of its own (travel + room
    *  chips off), the leader pulls it along. */
   partyFollower?: boolean
@@ -70,34 +87,25 @@ export function TravelPanel({
 }) {
   const { t } = useI18n()
   // Same key + interval as MapPanel: the hub shares one in-flight request and
-  // its result, so opening both panels costs a single poll.
+  // its result, so the map below and this bar cost a single poll.
   const { data: world } = usePoll<WorldMapLite>(
     'play-worldmap', () => apiGet<WorldMapLite>('/play/worldmap'),
     { intervalMs: 10000, enabled: !partyFollower })
 
-  const destinations = useMemo<Destination[]>(() => {
-    const here = world?.current_location_id || ''
+  // What the player clicked on the map. Which outlines may be clicked at all
+  // is the map's decision (`onPickLocation` + anchored footprint) — here only
+  // the name and the distance of the pick are looked up.
+  const [pickedId, setPickedId] = useState('')
+  const picked = useMemo<Picked | null>(() => {
+    const l = (world?.locations || []).find((x) => x.id === pickedId)
+    if (!l || l.pos_x === null || l.pos_z === null) return null
     const me = (world?.characters || []).find((c) => c.name === world?.avatar)
-    const from = me?.pos || null
-    return (world?.locations || [])
-      // Placed AND anchored: `start_journey` needs a `placed_footprint`, and
-      // that is exactly position + scale anchor (`plan_width_m`). A location
-      // with a point but no anchor stands on no walkable map — offering it
-      // would only ever produce an `unplaced_target` refusal.
-      .filter((l) => l.id && l.id !== here
-        && l.pos_x !== null && l.pos_z !== null && l.plan_width_m !== null)
-      .map((l) => ({
-        id: l.id,
-        name: l.name || l.id,
-        // Straight-line metres, a rough sense of distance for the choice —
-        // the walked route is longer and only the server knows it.
-        distance_m: from
-          ? Math.hypot((l.pos_x as number) - from.x, (l.pos_z as number) - from.z)
-          : null,
-      }))
-      .sort((a, b) => (a.distance_m ?? Infinity) - (b.distance_m ?? Infinity)
-        || a.name.localeCompare(b.name))
-  }, [world])
+    const d = me?.pos ? Math.hypot(l.pos_x - me.pos.x, l.pos_z - me.pos.z) : null
+    return { id: l.id, name: l.name || l.id, distance_m: d }
+  }, [world, pickedId])
+  // A started journey clears the pick: the status block takes the map's place
+  // and coming back should not offer a stale choice.
+  useEffect(() => { if (travel) setPickedId('') }, [travel])
 
   // Party follower: no movement of its own — travel + room chips off, only a
   // note. The leader pulls the avatar along.
@@ -127,12 +135,11 @@ export function TravelPanel({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 8 }}>
-      {/* On top: the journey, or the places one can set off for. */}
-      <div style={{
-        flex: '1 1 auto', minHeight: 0, overflowY: 'auto',
-        display: 'flex', flexDirection: 'column', gap: 4,
-      }}>
-        {travel ? (
+      {/* On top: the running journey, or the map one picks a destination on. */}
+      {travel ? (
+        // The status box keeps its natural height; the wrapper takes the rest
+        // of the panel, so the room chips stay where they were.
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
           <div style={{
             display: 'flex', flexDirection: 'column', gap: 6, padding: 8,
             borderRadius: 8, border: '1px solid var(--border, #30363d)',
@@ -157,37 +164,48 @@ export function TravelPanel({
               {t('Cancel journey')}
             </button>
           </div>
-        ) : destinations.length === 0 ? (
-          <div style={{ opacity: 0.6, fontSize: '0.78em', textAlign: 'center', padding: 8 }}>
-            {t('You know no other place to travel to yet.')}
+        </div>
+      ) : (
+        <div style={{ flex: '1 1 auto', minHeight: 120, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <MapPanel currentLocationId={currentLocationId} labelMode={labelMode}
+              autoFit={autoFit} onPickLocation={setPickedId} pickedId={pickedId} />
           </div>
-        ) : (
-          destinations.map((d) => (
-            <div key={d.id} style={{
-              display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em',
-            }}>
-              <span style={{
-                flex: '1 1 auto', minWidth: 0, overflow: 'hidden',
-                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }} title={d.name}>{d.name}</span>
-              {d.distance_m !== null && (
-                <span style={{ flex: '0 0 auto', fontSize: '0.9em', opacity: 0.55 }}>
-                  {Math.round(d.distance_m)} m
-                </span>
-              )}
-              <button onClick={() => onTravel(d.id)} disabled={busy}
-                style={{
-                  flex: '0 0 auto', padding: '2px 8px', borderRadius: 10,
-                  fontSize: '0.92em', cursor: busy ? 'default' : 'pointer',
-                  border: '1px solid var(--border, #30363d)',
-                  background: 'var(--bg-hover, #1f2937)', color: 'inherit',
-                }}>
-                {t('Travel')}
-              </button>
-            </div>
-          ))
-        )}
-      </div>
+          {/* The pick bar: what was clicked, how far it is as the crow flies,
+              and the ONE button that actually sets off. */}
+          <div style={{
+            flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 6,
+            fontSize: '0.82em', padding: '4px 0',
+          }}>
+            {picked ? (
+              <>
+                <span style={{
+                  flex: '1 1 auto', minWidth: 0, overflow: 'hidden',
+                  textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }} title={picked.name}>{picked.name}</span>
+                {picked.distance_m !== null && (
+                  <span style={{ flex: '0 0 auto', fontSize: '0.9em', opacity: 0.55 }}>
+                    {Math.round(picked.distance_m)} m
+                  </span>
+                )}
+                <button onClick={() => onTravel(picked.id)} disabled={busy}
+                  style={{
+                    flex: '0 0 auto', padding: '2px 8px', borderRadius: 10,
+                    fontSize: '0.92em', cursor: busy ? 'default' : 'pointer',
+                    border: '1px solid var(--border, #30363d)',
+                    background: 'var(--bg-hover, #1f2937)', color: 'inherit',
+                  }}>
+                  {t('Travel')}
+                </button>
+              </>
+            ) : (
+              <span style={{ opacity: 0.6 }}>
+                {t('Pick a place on the map to travel there.')}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* visual separator */}
       {rooms.length > 1 && (

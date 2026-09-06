@@ -22,7 +22,7 @@ import { ImageGenDialog } from '../components/ImageGenDialog'
 import { AnimateDialog } from '../components/AnimateDialog'
 import { TravelPanel } from './TravelPanel'
 import { EnvironmentPanel } from './EnvironmentPanel'
-import { MapPanel, type LabelMode, loadLabelMode, nextLabelMode, saveLabelMode } from './MapPanel'
+import { type LabelMode, loadLabelMode, nextLabelMode, saveLabelMode } from './MapPanel'
 import { TaskPanel } from './TaskPanel'
 import { NewsPanel } from './NewsPanel'
 // New in stage 6 and package-only from the start — no re-export stub needed,
@@ -49,6 +49,16 @@ import {
 
 type IconMode = 'icon' | 'iconText'
 type ToolbarAlign = 'left' | 'right'
+
+/** A layout saved in a profile or a preset may still name panels that no
+ *  longer exist (the schematic map lost its own tile in the 2026-09 teardown
+ *  and lives in the travel panel now). Unknown ids are dropped on the way IN:
+ *  `sizedLayout` lets a box with no default through, and the grid would then
+ *  render an empty tile for a panel nothing can fill. */
+const knownBoxes = (boxes: Layout[]): Layout[] =>
+  boxes.filter((l) => !!DEFAULT_BY_ID[l.i])
+const knownPanels = (ids: string[]): string[] =>
+  ids.filter((id) => ALL_PANELS.includes(id))
 
 export function PlayerApp() {
   const { t } = useI18n()
@@ -109,17 +119,17 @@ export function PlayerApp() {
     } }).catch(() => { /* best-effort */ })
   }, [])
 
-  // Layout + offene Panels aus dem Profil laden (einmalig)
+  // Load layout + open panels from the profile (once)
   useEffect(() => {
     apiGet<{ layout?: unknown }>('/play/layout')
       .then((r) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const v: any = r?.layout
         if (Array.isArray(v) && v.length) {
-          setLayout(v)  // altes Format (nur grid)
+          setLayout(knownBoxes(v))  // old format (grid only)
         } else if (v && typeof v === 'object') {
-          if (Array.isArray(v.grid) && v.grid.length) setLayout(v.grid)
-          if (Array.isArray(v.open)) setOpen(v.open)
+          if (Array.isArray(v.grid) && v.grid.length) setLayout(knownBoxes(v.grid))
+          if (Array.isArray(v.open)) setOpen(knownPanels(v.open))
           if (Array.isArray(v.autosize)) setAutosize(v.autosize)
           if (v.panelAlpha && typeof v.panelAlpha === 'object') setPanelAlpha(v.panelAlpha)
           if (v.iconMode === 'icon' || v.iconMode === 'iconText') setIconMode(v.iconMode)
@@ -129,7 +139,7 @@ export function PlayerApp() {
           if (typeof v.bg === 'string') setBgPanel(v.bg)
         }
       })
-      .catch(() => { /* Default behalten */ })
+      .catch(() => { /* keep the default */ })
       .finally(() => { layoutLoaded.current = true })
   }, [])
 
@@ -290,8 +300,8 @@ export function PlayerApp() {
   const loadPreset = useCallback((name: string) => {
     const p = presets[name]
     if (!p) return
-    const grid = Array.isArray(p.grid) && p.grid.length ? p.grid : DEFAULT_LAYOUT
-    const op = Array.isArray(p.open) ? p.open : ALL_PANELS
+    const grid = knownBoxes(Array.isArray(p.grid) && p.grid.length ? p.grid : DEFAULT_LAYOUT)
+    const op = knownPanels(Array.isArray(p.open) ? p.open : ALL_PANELS)
     const az = Array.isArray(p.autosize) ? p.autosize : []
     const pa = p.panelAlpha && typeof p.panelAlpha === 'object' ? p.panelAlpha : {}
     layoutRef.current = grid
@@ -302,12 +312,12 @@ export function PlayerApp() {
     setOpen(op)
     setAutosize(az)
     setPanelAlpha(pa)
-    // Toolbar-Position + Labels mit-wiederherstellen (aeltere Presets ohne diese
-    // Felder lassen die aktuelle Einstellung unveraendert).
+    // Restore toolbar position + labels along with it (older presets without
+    // those fields leave the current setting untouched).
     if (p.iconMode === 'icon' || p.iconMode === 'iconText') { iconModeRef.current = p.iconMode; setIconMode(p.iconMode) }
     if (p.toolbarAlign === 'left' || p.toolbarAlign === 'right') { toolbarAlignRef.current = p.toolbarAlign; setToolbarAlign(p.toolbarAlign) }
-    persist()  // geladenes Preset wird auch zum aktiven Layout
-    closePanel('layouts')  // Dialog schließt nach dem Laden
+    persist()  // a loaded preset becomes the active layout as well
+    closePanel('layouts')  // the dialog closes once it is loaded
   }, [presets, persist, closePanel])
 
   const savePreset = useCallback(async (name: string) => {
@@ -381,7 +391,7 @@ export function PlayerApp() {
           <Icon name="background" size={14} />
         </button>
       )}
-      {id === 'worldmap' && (
+      {id === 'map' && (
         <button className={`player-ctrl-btn${mapLabelMode !== 'all' ? ' on' : ''}`}
           onClick={cycleMapLabel} onMouseDown={(e) => e.stopPropagation()}
           title={`${t('Map labels')}: ${mapLabelMode === 'all' ? t('all') : t('off')}`}
@@ -407,10 +417,29 @@ export function PlayerApp() {
     return () => window.removeEventListener('keydown', onKey)
   }, [expanded])
 
-  // View-only content of a panel for the enlarged display. Extensible: return
-  // the (read-only) content per EXPANDABLE panel here.
+  // Content of a panel for the enlarged display. Extensible: return the
+  // content per EXPANDABLE panel here. The travel panel keeps its actions in
+  // the overlay — the map is only useful large if one can also set off from it.
   const expandedContent = (id: string): ReactNode => {
-    if (id === 'worldmap') return <MapPanel key={expandSeq} currentLocationId={data?.location_id || ''} autoFit labelMode={mapLabelMode} />
+    if (id === 'map') {
+      return (
+        <TravelPanel
+          key={expandSeq}
+          rooms={data?.rooms || []}
+          currentRoomId={data?.room_id || ''}
+          currentLocationId={data?.location_id || ''}
+          travel={data?.travel || null}
+          busy={moving}
+          onTravel={handleTravel}
+          onCancelTravel={handleCancelTravel}
+          onEnterRoom={handleEnterRoom}
+          labelMode={mapLabelMode}
+          autoFit
+          partyFollower={data?.party?.role === 'follower'}
+          partyLeaderName={data?.party?.leader || ''}
+        />
+      )
+    }
     return null
   }
 
@@ -520,7 +549,7 @@ export function PlayerApp() {
 
   // Z-Stacking für überlappende Fenster: zuletzt angefasstes Panel steht zuletzt
   // im DOM → vorderstes. Klick/Drag auf ein Panel holt es nach vorn.
-  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'worldmap', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'news', 'settings', 'layouts'])
+  const [order, setOrder] = useState<string[]>(['scene', 'env', 'map', 'tasks', 'self', 'others', 'belongings', 'journal', 'gallery', 'instagram', 'phone', 'news', 'settings', 'layouts'])
   const bringToFront = useCallback((id: string) => {
     setOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]))
   }, [])
@@ -573,11 +602,13 @@ export function PlayerApp() {
         <TravelPanel
           rooms={data?.rooms || []}
           currentRoomId={data?.room_id || ''}
+          currentLocationId={data?.location_id || ''}
           travel={data?.travel || null}
           busy={moving}
           onTravel={handleTravel}
           onCancelTravel={handleCancelTravel}
           onEnterRoom={handleEnterRoom}
+          labelMode={mapLabelMode}
           partyFollower={data?.party?.role === 'follower'}
           partyLeaderName={data?.party?.leader || ''}
         />
@@ -603,15 +634,6 @@ export function PlayerApp() {
       <div className="player-panel-head">{headIcon('env')}{t('Surroundings')}{headerControls('env', true)}</div>
       <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden' }}>
         {envContent}
-      </div>
-    </div>
-  )
-
-  const worldMapPanel = (
-    <div key="worldmap" className="player-panel" style={{ zIndex: zOf('worldmap') }} onMouseDownCapture={() => bringToFront('worldmap')}>
-      <div className="player-panel-head">{headIcon('worldmap')}{t('Map')}{headerControls('worldmap', true)}</div>
-      <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'hidden', padding: 4 }}>
-        <MapPanel currentLocationId={data?.location_id || ''} labelMode={mapLabelMode} />
       </div>
     </div>
   )
@@ -760,7 +782,7 @@ export function PlayerApp() {
   )
 
   const byId: Record<string, ReactNode> = {
-    scene: scenePanel, env: envPanel, map: mapPanel, worldmap: worldMapPanel,
+    scene: scenePanel, env: envPanel, map: mapPanel,
     tasks: tasksPanel, self: selfPanel, others: othersPanel, belongings: belongingsPanel,
     journal: journalPanel, gallery: galleryPanel, instagram: instagramPanel, phone: phonePanel,
     news: newsPanel, quests: questsPanel, settings: settingsPanel,
@@ -1071,9 +1093,9 @@ export function PlayerApp() {
         <div onClick={(e) => e.stopPropagation()} className="player-panel"
           style={{ width: '94vw', height: '94vh', display: 'flex', flexDirection: 'column' }}>
           <div className="player-panel-head">
-            {headIcon(expanded)}{t(LABEL_BY_ID[expanded] || 'Map')}
+            {headIcon(expanded)}{t(LABEL_BY_ID[expanded] || 'Travel')}
             <span className="player-head-ctrls">
-              {expanded === 'worldmap' && (
+              {expanded === 'map' && (
                 <button className={`player-ctrl-btn${mapLabelMode !== 'all' ? ' on' : ''}`}
                   onClick={cycleMapLabel}
                   title={`${t('Map labels')}: ${mapLabelMode === 'all' ? t('all') : t('off')}`}

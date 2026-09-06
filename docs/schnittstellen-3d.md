@@ -2537,7 +2537,10 @@ damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
   weil der Server die Position ohnehin liefert. Unter Fog hat nur der Avatar
   `waypoints`, alle anderen zeigen bloß ihren Punkt (§ A12). Mit demselben
   Umbau ist auch der letzte `grid_bounds`-Leser weg: der Kartenrahmen kommt
-  aus `world_bounds`.
+  aus `world_bounds`. **Seit dem Rückbau 2026-09** ist diese Schemakarte
+  zugleich die ZIELWAHL des Travel-Panels — ein Klick auf einen Umriss wählt
+  das Reiseziel (die Leiste darunter nennt Name, Luftlinie und den einen
+  „Travel“-Knopf), und das eigene Map-Panel ist ersatzlos entfallen.
 
 ---
 
