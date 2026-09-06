@@ -46,13 +46,13 @@ export interface Map3dMeta {
   // by its anchor pin (§ A1.1).
   // `size` — the model's share of the reference square — is GONE with v6
   // Nr. 3: every model scales through its declared real width in metres.
-  /** AV3D-12: gezeichneter Gebäude-Grundriss — Polygonpunkte als Fraktionen
-   *  des Bezugsquadrats (`plan_width_m`), automatisch geschlossen. Der Client
-   *  rendert daraus pro genutzter Etage Boden und Wände (Tür im EG). */
+  /** AV3D-12: the drawn building floor plan — polygon points as fractions of
+   *  the reference square (`plan_width_m`), closed automatically. The client
+   *  renders floor and walls per used storey from it (door on the ground
+   *  floor). */
   outline?: [number, number][];
-  /** AV3D-12: Fahrstuhl-Position (Fraktion des Referenzquadrats) — wird
-   *  automatisch auf allen Etagen platziert; Figuren nutzen ihn beim
-   *  Etagenwechsel */
+  /** AV3D-12: elevator position (fraction of the reference square) — placed
+   *  automatically on every storey; figures use it to change floors. */
   elevator?: [number, number];
   /** Etagenhöhe in REALEN Metern. Default 3. */
   storey_height_m?: number;

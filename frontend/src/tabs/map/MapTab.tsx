@@ -154,7 +154,7 @@ import type {
  * BUILDING ROOFS is a session switch, not a setting: with it on, every placed
  * location in the visible rectangle gets its building model rendered from
  * straight above into its footprint square, so a placement can be aligned
- * against the real building instead of against a flat icon. The pictures are
+ * against the real building instead of against a bare outline. The pictures are
  * expensive (one scene request plus one WebGL context each), which decides
  * everything about how they are fetched:
  *   - only the VISIBLE placed locations, and only from `ROOF_MIN_PX_PER_M` on
@@ -176,18 +176,17 @@ import type {
  * fired in a tab that is not mounted next to this one. Toggle off/on is the
  * cheap, explicit refresh.
  *
- * THE ROOMS are the third of the same switch (`LocationViewSwitch`) and cost
- * nothing at all: they are the floor plan's own ground-floor hulls, drawn as
- * flat semi-transparent colour over the painted ground through the very
+ * THE ROOMS are the other half of the same switch (`LocationViewSwitch`) and
+ * cost nothing at all: they are the floor plan's own ground-floor hulls, drawn
+ * as flat semi-transparent colour over the painted ground through the very
  * geometry the plan uses (`roomShapes` = `planGeometry.absOutline` plus the
  * § A1.1 pin transform). They exist for the alignment case no picture serves:
  * A LAKE HAS NO ROOF. Its water and shore rooms are what has to line up with
- * the painted water, so the rooms are drawn see-through, the flat icon is
- * dropped with the roof, and a room floor takes the colour the TERRAIN CATALOG
- * gives its material — same material, same colour, so a misplaced shore reads
- * as two colours and not as two shades. Nothing is fetched for it: the room
- * layouts are already in `GET /world/locations`, which returns the full
- * records.
+ * the painted water, so the rooms are drawn see-through and a room floor takes
+ * the colour the TERRAIN CATALOG gives its material — same material, same
+ * colour, so a misplaced shore reads as two colours and not as two shades.
+ * Nothing is fetched for it: the room layouts are already in
+ * `GET /world/locations`, which returns the full records.
  *
  * THE WORLD RELIEF is the fourth mode (`heights`, § A16) and reads its own
  * endpoint: `GET /world/height-areas`, written back through
@@ -437,8 +436,8 @@ const ROOF_MIN_PX_PER_M = 1
 /** Zoom floor for the ROOMS view. Not a budget gate like the roofs' — room
  *  hulls are vector and cost nothing — but at world zoom a whole location is
  *  a few pixels, so its rooms are dots that clutter exactly the painted
- *  ground somebody is aligning them against. Under it the map falls back to
- *  the flat icons, which is what it looked like before. */
+ *  ground somebody is aligning them against. Under it a footprint carries
+ *  nothing but its outline. */
 const ROOMS_MIN_PX_PER_M = 0.25
 /** Panning must not start a render per animation frame. */
 const ROOF_DEBOUNCE_MS = 300
@@ -2644,12 +2643,12 @@ export function MapTab() {
       <= CLOSE_TOL_PX / view.pxPerM)
 
   // The two GROUND modes. In them the painted areas move ABOVE the location
-  // footprints: a footprint carries an opaque picture (map image or roof
-  // snapshot) and swallowed the 45 % fills underneath it — and with them the
-  // running draft, which made painting inside a place a blind gesture
-  // (finding 4). The unpainted ground stays at the very bottom: it is a
-  // full-canvas wash, and putting THAT on top would grey out exactly the roof
-  // view that painting along a building's outline needs.
+  // footprints: a footprint carrying an opaque roof snapshot swallowed the
+  // 45 % fills underneath it — and with them the running draft, which made
+  // painting inside a place a blind gesture (finding 4). The unpainted ground
+  // stays at the very bottom: it is a full-canvas wash, and putting THAT on
+  // top would grey out exactly the roof view that painting along a building's
+  // outline needs.
   const groundMode = mode === 'paint' || mode === 'edit-area'
 
   // The two-step toolbar, derived from the one canvas mode: WHAT is being

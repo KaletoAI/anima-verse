@@ -138,8 +138,8 @@ export function anchorWidthM(loc: EditorLocation): number | null {
 }
 
 /**
- * THE PICTURE FRAME of a location — the square a roof render or a map icon
- * covers — in LOCAL metres around the pin: `{cx, cz}` its centre, `size` its
+ * THE PICTURE FRAME of a location — the square a roof render covers — in
+ * LOCAL metres around the pin: `{cx, cz}` its centre, `size` its
  * edge. `null` when the location has no drawn boundary and therefore no area.
  *
  * The edge is `plan_width_m` (= the scene payload's `extent_m`), and the
@@ -391,7 +391,7 @@ function FootRooms({ rooms, surfaceColors, stroke, part }: {
  * `boundaryWorld`, point by point — so nothing here rotates anything and the
  * sign trap of the square does not exist. The PICTURE still lives in the
  * location's own square frame (the reference square of edge `plan_width_m`
- * around the pin, which is what a roof render and a map icon cover), so it
+ * around the pin, which is what a roof render covers), so it
  * keeps the square's `rotate(−yaw)` and is CLIPPED to the outline. The clip
  * sits on an untransformed group above it, so it is evaluated in the very
  * screen space the path was built in.

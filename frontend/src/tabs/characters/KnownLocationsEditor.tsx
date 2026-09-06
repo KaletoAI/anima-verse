@@ -145,8 +145,8 @@ function LocRow({ loc, isKnown, onClick, t }: {
 }) {
   return (
     <button type="button" onClick={onClick}
-      className={'ga-list-row' + (isKnown ? '' : ' ga-list-row-dim')}
-      title={isKnown ? t('Known') : t('Unknown (fog of war)')}
+      className="ga-list-row"
+      title={`${loc.name} — ${isKnown ? t('Known') : t('Unknown (fog of war)')}`}
       style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%',
                opacity: isKnown ? 1 : 0.45 }}>
       <span style={{ width: '1.2em', textAlign: 'center' }}>{loc.is_current ? '📍' : (isKnown ? '✓' : '')}</span>

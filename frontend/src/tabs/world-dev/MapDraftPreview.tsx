@@ -288,7 +288,7 @@ interface DraftOverlayProps {
  * What the editor's layers cannot say about a DRAFT: which footprints are
  * proposed (green dashed ghosts over the ordinary squares), which places do
  * not exist yet (purple dashed outline plus a "new" badge — the placement
- * layer never sees them, since it draws icons for locations the world knows),
+ * layer never sees them, since it only draws locations the world knows),
  * where a line recipe ran (dashed centre line — the polygon is the ribbon, the
  * line is how it was drawn) and which shape a clicked warning is about (amber
  * ring).

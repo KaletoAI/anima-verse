@@ -178,7 +178,7 @@ export function LocationGallery({
   const [buildingView, setBuildingView] = useState<ImageView>('front')
   const promptType = dialogType === 'building' ? `building-${buildingView}` : dialogType
   const [imageSetOpen, setImageSetOpen] = useState(false)
-  // "Regenerate" target: recreate an existing map image using it as a reference.
+  // "Regenerate" target: recreate an existing gallery image using it as a reference.
   const [regenTarget, setRegenTarget] = useState<{ filename: string; type: string } | null>(null)
   // "Move image": the open image + the chosen target location.
   const [moveImage, setMoveImage] = useState<string | null>(null)
@@ -327,7 +327,7 @@ export function LocationGallery({
       if (roomFilter) body.room_id = roomFilter
       if (payload.backend) body.backend = payload.backend
       if (payload.loras) body.loras = payload.loras
-      // The dialog already has the map-icon suffix in the prompt → don't duplicate it server-side.
+      // The dialog already carries the settings suffix in the prompt → don't duplicate it server-side.
       if (payload.prompt_settings_applied) body.settings_applied = true
       // Negative from the dialog (room-model renders): carries the items the
       // composer's negation guard moved out of the subject — without it the
@@ -360,7 +360,7 @@ export function LocationGallery({
     [dialogType, promptType, locationId, roomFilter, t, toast],
   )
 
-  // Regenerate an existing map image — using itself as the reference.
+  // Regenerate an existing gallery image — using itself as the reference.
   // Always lands as a NEW gallery image (selectable per cell).
   const submitRegenRef = useCallback(
     async (payload: ImageGenSubmit, target: { filename: string; type: string }) => {
@@ -638,7 +638,6 @@ export function LocationGallery({
       //
       // Every render may pick its own size; only the room-model source
       // arrives prefilled from the floor plan.
-      showResolution
       defaultResolution={dialogType === 'building' ? roomResolution : null}
       viewChoice={dialogType === 'building'
         ? { value: buildingView, onChange: setBuildingView } : undefined}

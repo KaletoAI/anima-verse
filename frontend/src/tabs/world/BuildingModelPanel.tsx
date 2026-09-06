@@ -5,8 +5,8 @@
  * per-model orientation fix. Like the image gallery, SEVERAL models can be
  * stored — the list below the viewer previews any of them, "Select" makes one
  * the ACTIVE model the 3D clients get; generation/upload auto-select their
- * new model. For buildings the viewer shows the world tile (2D map icon as
- * ground texture) with the model's declared real width (contract v6 Nr. 3 —
+ * new model. For buildings the viewer shows the world tile (a plain ground
+ * square) with the model's declared real width (contract v6 Nr. 3 —
  * the plot-share dial map3d.size is gone) and NO placement yaw (v6 Nr. 10 —
  * the orientation fix is the only turn a building mesh has).
  */
