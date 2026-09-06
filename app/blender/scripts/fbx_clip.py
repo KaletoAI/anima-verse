@@ -457,6 +457,17 @@ def _scene_nodes() -> dict:
 _PALM_WEIGHT_MIN = 0.5
 #: Fewest vertices a hand has to contribute before its plane is believed.
 _PALM_MIN_VERTS = 50
+#: Percentile the hand's REACH along the palm axis is read at, instead of the
+#: bare extremes: one stray vertex weighted to the hand must not decide a sign.
+#: The verdict barely moves with it — the four hands measured give -0.146 /
+#: -0.133 / -0.171 / -0.167 raw and -0.144 / -0.131 / -0.178 / -0.172 at 5 %.
+_PALM_REACH_PCT = 0.05
+#: Smallest thumb reach — how far the hand stands off the wrist on the one side
+#: against the other, as a fraction of its full width along the palm axis —
+#: that may decide the axis' SIGN. Measured 0.144 / 0.131 (MotusMan, hand and
+#: fingers) and 0.178 / 0.172 (Meshy); a floor of 0.03 keeps a fourfold margin
+#: and still refuses a hand the mesh cannot decide.
+_PALM_SKEW_MIN = 0.03
 
 
 def _pca_smallest(points) -> Vector:
@@ -492,6 +503,28 @@ def _pca_smallest(points) -> Vector:
     return Vector((V[0][lo], V[1][lo], V[2][lo])).normalized()
 
 
+def _hand_direction(bones, src_of: dict, inter: str, bone) -> Vector:
+    """The hand's own axis, expressed in the hand bone's LOCAL rest frame.
+
+    The middle-finger root when the rig has one, the bone's local Y otherwise
+    — the same axis :func:`_synth_hand_targets` walks its synthetic finger root
+    along, so measurement and use read the hand the same way.
+
+    Local Y alone would not do. Blender's FBX importer orients a bone from the
+    node's OWN axes, not from where its child lies, and that is not always the
+    hand: MotusMan's imported hand bones point straight down while the hand
+    points sideways (84.0 deg on the left, 96.0 on the right), so ``normal x Y``
+    would be a cross product of two nearly parallel vectors there.
+    """
+    child = src_of.get(CHILD[inter])
+    if child and child in bones:
+        d = bone.matrix_local.to_3x3().inverted() @ (
+            bones[child].matrix_local.translation - bone.matrix_local.translation)
+        if d.length > 1e-6:
+            return d.normalized()
+    return Vector((0.0, 1.0, 0.0))
+
+
 def _palm_axes(bone_map: dict) -> dict:
     """``{"lhand"/"rhand": palm axis in that hand's OWN rest frame}`` measured
     off the SKINNED HAND MESH — ``{}`` when the file carries none.
@@ -512,18 +545,63 @@ def _palm_axes(bone_map: dict) -> dict:
     The palm itself is the only honest source, and it is right there in the
     rest file: a hand is a FLAT SLAB, so the axis of smallest spread of the
     vertices weighted to the hand IS the palm normal, and the palm axis is
-    perpendicular to it and to the bone. Both come out in the hand's own rest
-    frame, which is what makes the number reusable on the animation file — a
-    ``_without_skin`` export has no mesh to measure.
+    perpendicular to it and to the bone (:func:`_hand_direction`). Both come
+    out in the hand's own rest frame, which is what makes the number reusable
+    on the animation file — a ``_without_skin`` export has no mesh to measure.
+
+    ONE SPACE, NOT TWO. The vertices arrive in Blender's WORLD space while the
+    bone matrices are ARMATURE space, and the FBX importer keeps the two apart:
+    the Y-up -> Z-up conversion (rot X 90 deg) and the unit scale sit on the
+    ARMATURE OBJECT. The scale and the wrong-space ``head`` fall out of the fit
+    — a covariance is centred, and a uniform scale does not turn an eigenvector
+    — but the rotation does not. Measured on MotusMan, whose armature carries
+    the full 90 deg, the palm normal came out 80.6 / 81.8 deg from the truth
+    before ``arm.matrix_world.inverted()`` went in front of the vertices and
+    10.2 / 10.0 deg after (and the axis with it: 107.6 / 102.5 deg off the real
+    knuckle line before, 15.9 / 15.0 after). On the Meshy rig the importer left
+    the conversion on the MESH instead and the armature is rotation-free, so the
+    same code was right there all along — which is why the defect survived: the
+    one rig the feature was written for could not show it.
 
     THE SIGN is the one thing the plane cannot say: a normal has two
-    directions, and picking the wrong one turns the palm over. It is resolved
-    against the very fallback this replaces — of the two directions the one
-    nearer the shoulder line wins. That is only ever a 180 deg question, and
-    the fallback is wrong by well under 90 deg (69.2 / 68.7 on the two hands of
-    the rig measured here, against 110.8 / 111.3 for the flipped choice), so it
-    decides with room to spare. The two hands answering as mirror images of
-    each other is the check that it decided at all.
+    directions, and picking the wrong one turns the palm over. It is decided by
+    the THUMB, the one asymmetry of a hand that no pose can move — the thumb
+    hangs off the INDEX side and REACHES FURTHER from the wrist than the little
+    finger's edge does, so the side the hand stands off further on is the index
+    side. Measured as (near + far) / width at the 5th/95th percentile of the
+    projection: -0.144 and -0.131 on MotusMan (8.0 cm against 6.0), -0.178 and
+    -0.172 on the Meshy hand (8.7 against 6.1) — four hands, two rigs, the same
+    verdict, and on MotusMan it is the verdict the real knuckle line gives.
+
+    That REACH is read on the hand AND everything hanging off it, while the
+    PLANE is fitted on the hand bone alone. The two clouds are one and the same
+    on the rigs this exists for (a fingerless rig weights the whole hand to the
+    one bone), and they have to differ on a rig with fingers: the palm alone is
+    the only flat thing to fit a plane to, but it is also the one part of the
+    hand the thumb has been cut out of, and it then decides NOTHING — the mean
+    of MotusMan's palm-only cloud sits 0.033 to the PINKY side, i.e. wrong, and
+    its reach 0.02 off centre. Add the digits back and both hands answer with
+    the knuckle line. (An empty measure is the honest reading of a symmetric
+    cloud; a wrong one is not, which is why the rule is the reach of the whole
+    hand and not the mean of anything.)
+
+    THE SHOULDER LINE, which used to decide this, cannot — it is not merely
+    weak at rest but wrong by construction. Two hands are MIRROR images, so
+    whatever component their palm axes have along the shoulder line they have
+    with OPPOSITE signs, while the rule sent both to the same side: it was
+    bound to turn exactly one of them over, and it did. On MotusMan's real
+    knuckle lines the two axes dot the shoulder line at +0.274 and -0.274, and
+    the rule flipped the right hand. (The old note read the two hands' 69.2 /
+    68.7 deg as agreement and called it decided "with room to spare"; the flip
+    point is 90 deg, not 111, so the margin was 21 deg — and the number was the
+    fallback's own error, not a margin.)
+
+    THE MIRROR IS THE CHECK. Both axes are carried back to armature space and
+    the left one is mirrored through the sagittal plane (the shoulder line is
+    its normal); the two must then point the same way, and do on both rigs
+    measured (dot +1.000). If they do not, the mesh has decided nothing and the
+    import stops: a forearm rolled 180 deg for a whole take is worse than a
+    loud failure.
     """
     src_of = {inter: src for src, inter in bone_map.items()}
     arms = [o for o in bpy.data.objects if o.type == "ARMATURE"]
@@ -535,37 +613,67 @@ def _palm_axes(bone_map: dict) -> dict:
     lh, rh = src_of.get("lhumerus"), src_of.get("rhumerus")
     if not lh or not rh or lh not in bones or rh not in bones:
         return {}
-    shoulders = (bones[lh].matrix_local.translation
-                 - bones[rh].matrix_local.translation)
-    if shoulders.length < 1e-6:
+    lateral = (bones[lh].matrix_local.translation
+               - bones[rh].matrix_local.translation)
+    if lateral.length < 1e-6:
         return {}
-    out = {}
+    lateral.normalize()
+    to_arm = arm.matrix_world.inverted()
+    out, in_arm, skews = {}, {}, {}
     for inter in ("lhand", "rhand"):
         name = src_of.get(inter)
         if not name or name not in bones:
             continue
         bone = bones[name]
-        inv = bone.matrix_local.to_3x3().inverted()
+        rest = bone.matrix_local.to_3x3()
+        inv = rest.inverted()
         head = bone.matrix_local.translation
-        pts = []
+        digits = {name} | {c.name for c in bone.children_recursive}
+        palm, whole = [], []
         for ob in meshes:
             group = ob.vertex_groups.get(name)
             if group is None:
                 continue
+            hand = {ob.vertex_groups[g].index for g in digits if g in ob.vertex_groups}
+            to_bone = to_arm @ ob.matrix_world
             for v in ob.data.vertices:
-                w = next((g.weight for g in v.groups if g.group == group.index), 0.0)
-                if w > _PALM_WEIGHT_MIN:
-                    pts.append(inv @ (ob.matrix_world @ v.co - head))
-        if len(pts) < _PALM_MIN_VERTS:
+                on_hand = sum(g.weight for g in v.groups if g.group in hand)
+                if on_hand <= _PALM_WEIGHT_MIN:
+                    continue
+                p = inv @ (to_bone @ v.co - head)
+                whole.append(p)
+                if next((g.weight for g in v.groups
+                         if g.group == group.index), 0.0) > _PALM_WEIGHT_MIN:
+                    palm.append(p)
+        if len(palm) < _PALM_MIN_VERTS:
             continue
-        # The bone runs along local Y, so the palm axis is what is left of the
-        # palm plane once the bone direction is taken out of it.
-        axis = _pca_smallest(pts).cross(Vector((0.0, 1.0, 0.0)))
+        axis = _pca_smallest(palm).cross(_hand_direction(bones, src_of, inter, bone))
         if axis.length < 1e-6:
             continue
         axis.normalize()
-        world = (bone.matrix_local.to_3x3() @ axis)
-        out[inter] = axis if world.dot(shoulders) >= 0.0 else -axis
+        # The thumb reaches further off the wrist than the little finger, so
+        # the side the WHOLE hand stands off further on is the index side.
+        proj = sorted(p.dot(axis) for p in whole)
+        near = proj[int(_PALM_REACH_PCT * (len(proj) - 1))]
+        far = proj[len(proj) - 1 - int(_PALM_REACH_PCT * (len(proj) - 1))]
+        skew = (far + near) / (far - near) if far - near > 1e-9 else 0.0
+        if abs(skew) < _PALM_SKEW_MIN:
+            continue
+        axis = axis if skew > 0.0 else -axis
+        out[inter], skews[inter] = axis, skew
+        in_arm[inter] = (rest @ axis).normalized()
+    if len(in_arm) == 2:
+        left = in_arm["lhand"]
+        mirrored = left - lateral * (2.0 * left.dot(lateral))
+        if mirrored.dot(in_arm["rhand"]) <= 0.0:
+            raise ValueError(
+                "the two palm axes are not mirror images "
+                f"({math.degrees(mirrored.angle(in_arm['rhand'], 0.0)):.1f} deg "
+                "apart; against the shoulder line "
+                f"{math.degrees(left.angle(lateral, 0.0)):.1f} and "
+                f"{math.degrees(in_arm['rhand'].angle(lateral, 0.0)):.1f} deg, "
+                f"thumb reach {skews['lhand']:+.3f} and {skews['rhand']:+.3f}) "
+                "— the hand mesh cannot say which way the palm faces")
     return out
 
 
@@ -599,29 +707,41 @@ def _synth_hand_targets(P: dict, nodes: dict, palm: dict = None) -> None:
     without them the forearm's roll is taken from the shoulder line. Only their
     difference is ever read, so they are placed symmetrically about the wrist
     and their distance is a readability choice, not a measurement.
+
+    THE TWO ARE GATED SEPARATELY. The middle root is placed when the middle
+    root is missing, the knuckles when the KNUCKLES are missing — one absence
+    does not imply the other. A source that names a middle-finger root but no
+    index and pinky (a one-bone-per-hand rig with a weapon socket under it, a
+    map that carries only the middle chain) used to get its hand direction and
+    keep the shoulder line for the roll, because the knuckles hung off the
+    middle root's gate.
     """
     palm = palm or {}
     for hand, fore in (("lhand", "lradius"), ("rhand", "rradius")):
-        child = CHILD[hand]
-        if child in P or hand not in P or hand not in nodes:
+        if hand not in P or hand not in nodes:
             continue
         rot = nodes[hand].matrix_world.to_3x3()
-        axis = _blender_to_clip(rot.col[1].to_3d())
-        if axis.length < 1e-6:
-            continue
         reach = (P[hand] - P[fore]).length / 3.0 if fore in P else 5.0
         reach = max(reach, 1.0)
-        P[child] = P[hand] + axis.normalized() * reach
+        child = CHILD[hand]
+        if child not in P:
+            axis = _blender_to_clip(rot.col[1].to_3d())
+            if axis.length > 1e-6:
+                P[child] = P[hand] + axis.normalized() * reach
+        side = "Left" if hand == "lhand" else "Right"
+        index, pinky = f"{side}HandIndex1", f"{side}HandPinky1"
+        # One real knuckle beside one invented one would be worse than neither.
+        if index in P or pinky in P:
+            continue
         across = palm.get(hand)
         if across is None:
             continue
-        side = "Left" if hand == "lhand" else "Right"
         wide = _blender_to_clip(rot @ across)
         if wide.length < 1e-6:
             continue
         wide = wide.normalized() * (reach / 2.0)
-        P[f"{side}HandIndex1"] = P[hand] + wide
-        P[f"{side}HandPinky1"] = P[hand] - wide
+        P[index] = P[hand] + wide
+        P[pinky] = P[hand] - wide
 
 
 def _load_source(path: str, family: str, palm: dict = None):
@@ -631,8 +751,9 @@ def _load_source(path: str, family: str, palm: dict = None):
 
     ``palm`` is a palm-axis table measured elsewhere (:func:`_palm_axes`) —
     the animation file of a fingerless rig carries no mesh, so its axes come
-    from the REST file, which does. Absent, this file is measured itself; the
-    result travels back out so the caller can hand it on."""
+    from the REST file, which does. Absent, THIS file is measured instead, and
+    the result is returned alongside so a caller that has no rest file can read
+    what this one found."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.fbx(filepath=path, global_scale=1.0)
     scene_nodes = _scene_nodes()
@@ -789,7 +910,11 @@ def run(job):
     used = family
     off = [float(v) for v in (args.get("offset_b_m") or (0, 0, 0))]
     for role, path in entries:
-        sfps, (f0, f1), by_frame, used, rot_frame, palm = _load_source(
+        # ``palm`` is NEVER rebound from a source: without a rest file it stays
+        # None and every file measures its own mesh. Taking A's answer — {} for
+        # a mesh-less animation export, which reads as "already measured" —
+        # would rob B of its measurement, and B is a different body.
+        sfps, (f0, f1), by_frame, used, rot_frame, _own_palm = _load_source(
             path, family, palm)
         src_fps = src_fps or sfps
         if role == "b" and any(off):
