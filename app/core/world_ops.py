@@ -889,18 +889,43 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
     # the anchor pin, negative values legal, rounded to the centimetre. The
     # fraction era is gone without a reader — an old blob's [0,1] points are
     # simply a one-metre building, which is the agreed rebuild semantics.
-    ol = raw.get("outline")
-    if isinstance(ol, list):
-        pts = []
-        for pt in ol[:64]:
+    def _outline_pts(value: Any) -> Optional[List[List[float]]]:
+        """One stored point sequence, or None when it is not a polygon."""
+        if not isinstance(value, list):
+            return None
+        pts: List[List[float]] = []
+        for pt in value[:64]:
             if not isinstance(pt, (list, tuple)) or len(pt) != 2:
                 continue
             u, v = _metre(pt[0]), _metre(pt[1])
             if u is None or v is None:
                 continue
             pts.append([u, v])
-        if len(pts) >= 3:
-            out["outline"] = pts
+        return pts if len(pts) >= 3 else None
+
+    base_outline = _outline_pts(raw.get("outline"))
+    if base_outline:
+        out["outline"] = base_outline
+    # PER-STOREY FOOTPRINTS (2026-09-06): how a building that narrows upwards
+    # is drawn. Same points, same cap, one polygon per storey — and a CASCADE
+    # on the way out (``scene_recipe.outline_source_level``): a storey without
+    # an entry takes the nearest lower one at or above the ground floor, so a
+    # tower is drawn once where it narrows. A storey whose polygon does not
+    # survive is dropped rather than repaired: half a footprint is not a
+    # footprint, and the storey then simply inherits like every other.
+    lo = raw.get("level_outlines")
+    if isinstance(lo, dict):
+        outlines: Dict[str, List[List[float]]] = {}
+        for key, value in list(lo.items())[:32]:
+            try:
+                lvl = int(float(key))
+            except (TypeError, ValueError):
+                continue
+            got = _outline_pts(value)
+            if got:
+                outlines[str(lvl)] = got
+        if outlines:
+            out["level_outlines"] = outlines
     # Elevator position (AV3D-12): placed once, valid for ALL levels — the
     # client builds a shaft with a platform per level. LOCAL METRES since v6.
     ev = raw.get("elevator")
@@ -955,13 +980,29 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 floors[str(lvl)] = val.strip()[:60]
         if floors:
             out["level_floors"] = floors
-    # Wall texture of the WHOLE building shell: ONE surface-texture kind for
-    # every contour wall — the wall counterpart of level_floors. Deliberately
-    # not per level (decision 2026-07-27): one shell, one kind. A room's own
-    # surfaces.wall still wins wherever a room wall owns the contour stretch.
+    # Wall texture of the building shell: the surface-texture kind every
+    # contour wall tiles with. ``wall_kind`` is the shell-wide default, and
+    # ``level_walls`` overrides it for single storeys — the wall counterpart of
+    # level_floors, and deliberately the SAME shape: a storey either names its
+    # own kind or falls back to the global one. No cascade like the per-level
+    # OUTLINE has, because two inheritance rules on one panel is one too many.
+    # A room's own surfaces.wall still wins wherever a room wall owns the
+    # contour stretch.
     wk = raw.get("wall_kind")
     if isinstance(wk, str) and wk.strip():
         out["wall_kind"] = wk.strip()[:60]
+    lw = raw.get("level_walls")
+    if isinstance(lw, dict):
+        walls: Dict[str, str] = {}
+        for key, val in list(lw.items())[:32]:
+            try:
+                lvl = int(float(key))
+            except (TypeError, ValueError):
+                continue
+            if isinstance(val, str) and val.strip():
+                walls[str(lvl)] = val.strip()[:60]
+        if walls:
+            out["level_walls"] = walls
     # Area location (plan-area-locations.md): the location model STAYS in the
     # interior view instead of fading out — the building outline and any
     # indoor rooms placed outside it are cut out of it, outdoor rooms outside

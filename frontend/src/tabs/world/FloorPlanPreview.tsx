@@ -33,7 +33,7 @@ import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
   wallTargets } from '@anima/scene-render'
 import type { CutoutHandle, SurfaceMaterialSpec, VerifyRow } from '@anima/scene-render'
-import { fmtM } from './planGeometry'
+import { fmtM, levelOutline } from './planGeometry'
 import type { Map3D, Room, SceneModelSpec, ScenePayload, ScenePlate } from './worldTypes'
 import { hasRect, readMapWater } from './worldTypes'
 import { buildMeasureAids, disposeAids, useActiveMeasure,
@@ -1080,18 +1080,25 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       ? sc.levels.map((l) => l.level)
       : Array.from(new Set(current.filter((r) => r.layout)
           .map((r) => r.layout!.level || 0)))
-    if (m3?.outline?.length) {
-      // `map3d.outline` is LOCAL METRES since v6 Nr. 2 — the same frame as
-      // the boundary, so it goes into the scene unconverted.
-      const base = m3.outline.map(([x, z]) => [x, z] as [number, number])
+    // THE CONTOUR IS PER STOREY (plan-grundriss-werkbank.md § G): a building
+    // that narrows upwards has a different polygon on the storeys above, so
+    // the line is resolved for each of them through the same cascade the
+    // composer uses (`levelOutline`). Drawing `map3d.outline` on every storey
+    // — what this did before 2026-09-06 — put the wide ground-floor line over
+    // the narrow plate and walls the payload had already sent, and the 3D
+    // preview then contradicted the 2D plan next to it.
+    for (const lv of (usedLevels.length ? usedLevels : [0])) {
+      const pts = levelOutline(m3, lv)
+      if (pts.length < 3) continue
+      // LOCAL METRES since v6 Nr. 2 — the same frame as the boundary, so the
+      // points go into the scene unconverted.
+      const base = pts.map(([x, z]) => [x, z] as [number, number])
       base.push(base[0])
-      for (const lv of (usedLevels.length ? usedLevels : [0])) {
-        const geo = new THREE.BufferGeometry().setFromPoints(
-          base.map(([x, z]) => new THREE.Vector3(x, lv * lhEff + 0.02, z)))
-        boxes.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
-          color: 0x58a6ff, transparent: true, opacity: lv === 0 ? 0.9 : 0.45,
-        })))
-      }
+      const geo = new THREE.BufferGeometry().setFromPoints(
+        base.map(([x, z]) => new THREE.Vector3(x, lv * lhEff + 0.02, z)))
+      boxes.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: 0x58a6ff, transparent: true, opacity: lv === 0 ? 0.9 : 0.45,
+      })))
     }
     // ── Server-composed primitives (contract § B1) ──────────────────────
     // plates / walls / extras arrive FINISHED: world metres around the tile

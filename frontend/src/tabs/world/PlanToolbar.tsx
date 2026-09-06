@@ -51,7 +51,9 @@ interface PlanToolbarProps {
    *  room tools: they need a selection that is not the yard. */
   hasSelection: boolean
   selectionRotation: number
-  /** The building outline exists in the map3d draft. */
+  /** The storey being edited HAS a footprint — its own or an inherited one.
+   *  The 🗑 next to the pen removes this storey's own entry (on storey 0: the
+   *  building's outline), which is why the tooltip differs per storey. */
   hasOutline: boolean
   /** The LOCATION BOUNDARY exists (`map3d.boundary`, ≥ 3 points). Without one
    *  there are no vertices to drag — the seed button in the banner above the
@@ -64,9 +66,10 @@ interface PlanToolbarProps {
   /** How many staircases the location has at all — the tooltip of the stair
    *  tool would otherwise be the only place the 8-flight cap shows up. */
   stairCount: number
-  /** The storey the editor is on: a new flight starts THERE and ends one
-   *  above, so the tool says which two levels the click connects. */
-  stairLevel: number
+  /** The storey the editor is standing on. Two tools name it: a new stair
+   *  flight starts THERE and ends one above, and the 🏗 pen draws the
+   *  footprint OF that storey (§ G). */
+  editLevel: number
   /** Show the building group at all (the editor got an onMap3d writer). */
   building: boolean
   canSuggest: boolean
@@ -102,7 +105,7 @@ interface PlanToolbarProps {
 
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasOutline, hasBoundary,
-  outlineDraftLen, hasElevator, stairCount, stairLevel, building, canSuggest,
+  outlineDraftLen, hasElevator, stairCount, editLevel, building, canSuggest,
   canFitToModel, canCurve, ground, groundHint, noSelectionHint, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
@@ -160,7 +163,10 @@ export function PlanToolbar({
             <Tool
               icon="🏗"
               onClick={() => onMode('outline')}
-              title={t('Draw the building outline as a polygon in local metres — the 3D client renders floor plates and walls from it.')}
+              title={editLevel === 0
+                ? t('Draw the building outline as a polygon in local metres — the 3D client renders floor plates and walls from it. Storeys above inherit it unless they draw their own.')
+                : t('Draw the footprint of storey {level} — every storey above inherits it, so this is how a building gets narrower as it rises. Storey 0 carries the building’s own outline.')
+                  .replace('{level}', String(editLevel))}
             />
           )}
           {hasOutline && !outlining ? (
@@ -168,7 +174,9 @@ export function PlanToolbar({
               icon="🗑"
               danger
               onClick={onRemoveOutline}
-              title={t('Remove the outline — the client falls back to the rectangle.')}
+              title={editLevel === 0
+                ? t('Remove the building outline — the client falls back to the plot.')
+                : t('Remove this storey’s own footprint — it inherits the storey below again.')}
             />
           ) : null}
           <Tool
@@ -190,8 +198,8 @@ export function PlanToolbar({
             active={mode === 'stairs'}
             onClick={() => onMode('stairs')}
             title={t('Place a staircase with one click — it starts at the level you are editing and leads ONE storey up (a climb over two storeys needs two flights). Click the symbol on the plan to turn or remove it. Now: level {level} → {up}, {n} of {max} flights placed.')
-              .replace('{level}', String(stairLevel))
-              .replace('{up}', String(stairLevel + 1))
+              .replace('{level}', String(editLevel))
+              .replace('{up}', String(editLevel + 1))
               .replace('{n}', String(stairCount))
               .replace('{max}', String(STAIR_MAX))}
           />

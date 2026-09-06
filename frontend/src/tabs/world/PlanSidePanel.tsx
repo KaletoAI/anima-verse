@@ -22,8 +22,8 @@
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { SliderInput } from '../../components/SliderInput'
-import { useEnlarge } from '../../components/ZoomButton'
 import { PropsPalette } from './PropsPalette'
+import { SurfaceKindSelect } from './SurfaceKindSelect'
 import type { PropFull } from '../props/propTypes'
 import type { MapWaterRef, Room, RoomLayout, SurfaceKind } from './worldTypes'
 import { groupKeys, groupLabel } from './placeTypes'
@@ -126,7 +126,6 @@ export function PlanSidePanel({
   propsOpen, onPickProp, armedPropId,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
-  const enlarge = useEnlarge()
   const layout = room?.layout
   const markers = layout?.markers || []
 
@@ -271,8 +270,6 @@ export function PlanSidePanel({
         {t('Surfaces')}
       </div>
       {surfaceKinds.length || layout.surfaces ? SURFACE_SLOTS.map(({ key, label }) => {
-        const cur = layout.surfaces?.[key] || ''
-        const thumb = surfaceKinds.find((s) => s.kind === cur)?.url
         // A FLOOR MAY NOT BE WATER (W1 § 6). The server strips such a pick at
         // the one write path, so offering it would mean watching a selection
         // vanish on the next save with nothing said. Only the FLOOR is
@@ -282,28 +279,15 @@ export function PlanSidePanel({
           ? surfaceKinds.filter((s) => !waterKinds.has(s.kind))
           : surfaceKinds
         return (
-          <label key={key} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}>
-            <span style={{ width: 32, flex: '0 0 auto' }}>{t(label)}</span>
-            {thumb ? (
-              <img className="ga-list-thumb" alt="" src={thumb}
-                {...enlarge({ src: thumb, alt: cur, caption: cur }, { width: 20, height: 20 })} />
-            ) : null}
-            <select
-              className="ga-input"
-              style={{ flex: 1, minWidth: 0 }}
-              value={cur}
-              onChange={(e) => onSurface(key, e.target.value)}
-            >
-              <option value="">{t('— default —')}</option>
-              {options.map((s) => (
-                <option key={s.kind} value={s.kind}>{s.name}</option>
-              ))}
-              {/* A stored kind the list no longer offers stays selectable. */}
-              {cur && !options.some((s) => s.kind === cur) ? (
-                <option value={cur}>{cur}</option>
-              ) : null}
-            </select>
-          </label>
+          <SurfaceKindSelect
+            key={key}
+            label={label}
+            labelWidth={32}
+            value={layout.surfaces?.[key] || ''}
+            kinds={options}
+            emptyLabel="— default —"
+            onChange={(kind) => onSurface(key, kind)}
+          />
         )
       }) : (
         <span className="ga-hint">

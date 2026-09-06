@@ -60,7 +60,8 @@ import {
   CLOSE_TOL_PX, MIN_ROOM_M, MIN_WINDOW_EDGE_M, OPENING_COLOR, OPENING_DEFAULT,
   PLAN_MAX_M, SNAP_TOL_PX, absOutline, buildSnapTargets, clamp,
   edgePointOnEdge, edgeSegment, exteriorEdges, fmtM, localToRoom,
-  nearestPolygonEdge, normalizeOpeningEdge, outlineOf, planMapView, r4, rM,
+  levelOutline, nearestPolygonEdge, normalizeOpeningEdge, outlineOf,
+  outlineSourceLevel, planMapView, r4, rM,
   rotateAbout,
   sharedEdges, snapDrawPoint, snapMoveOffset, snapToGrid,
   stairSymbol, STAIR_MAX, viewFx, viewFz,
@@ -73,6 +74,9 @@ import {
 import { MapViewCtx } from '../map/MapCanvas'
 import { PolygonHandles } from '../map/PolygonHandles'
 import { FurnishDialog, useFurnishJob } from './FurnishDialog'
+import { PlanInspector, type InspectorTab } from './PlanInspector'
+import { PlanInspectorLevel } from './PlanInspectorLevel'
+import { PlanFindings } from './PlanFindings'
 import { PlanFigure, PlanMetreGrid, PlanScaleBar } from './PlanMeasure'
 import { PlanSidePanel } from './PlanSidePanel'
 import { PlanToolbar } from './PlanToolbar'
@@ -89,7 +93,18 @@ import { pointInPolygon } from '../map/mapMath'
 import { isWaterKind } from '../map/mapTypes'
 import type { TerrainTypesResp } from '../map/mapTypes'
 
-const CANVAS_W = 420
+/** Narrowest the 2D plan is ever drawn, in px. SINCE THE WORKBENCH REBUILD
+ *  (plan-grundriss-werkbank.md § W1) A FLOOR, NOT THE WIDTH: the canvas takes
+ *  whatever the plan column gives it, clamped into [CANVAS_MIN_W, CANVAS_MAX_W],
+ *  because a plan pinned at 420 px could never use a wide screen. */
+const CANVAS_MIN_W = 420
+/** Widest the plan grows on its own. Past this a bigger screen buys detail
+ *  nobody asked for and the inspector beside it starts to look lost; the zoom
+ *  is the way past it. */
+const CANVAS_MAX_W = 1000
+/** Width kept free for the scroll viewport's vertical scrollbar when the plan
+ *  column is measured — a fixed allowance on purpose, see the observer. */
+const SCROLLBAR_PX = 16
 /** Under this side length a room is not a small room but a LEFTOVER: in the
  *  fraction era `layout.x/y/w/d` were shares of a reference square, and the
  *  metre wave reinterprets those numbers as metres without converting them
@@ -199,10 +214,13 @@ interface RoomLayoutEditorProps {
    *  STORED world have to know: a room that only exists in this draft does
    *  not exist for them. */
   unsaved?: boolean
-  /** The location's `default_door_prop_id` — READ only, so the opening panel
-   *  can name the door an opening inherits when it chooses nothing. The
-   *  field itself is edited on the Floor-plan tab, beside the plan. */
+  /** The location's `default_door_prop_id`. The opening panel names the door
+   *  an opening inherits when it chooses nothing, and the inspector's Storey
+   *  tab edits it — it is a setting OF this plan, and it used to stand as a
+   *  lone full-width row above the whole editor. */
   defaultDoorPropId?: string
+  /** Absent = the field is read-only here (the tab did not hand a writer). */
+  onDefaultDoorProp?: (id: string) => void
   /** Rendered at the bottom INSIDE the editor's frame — the Floor-plan tab
    *  slots the model adjustment strip of the selected room here. */
   children?: ReactNode
@@ -308,10 +326,30 @@ const storedAt = (lay: PlacedLayout, ground: boolean, p: Pt): Pt =>
 
 const NO_PREVIEW_POSES: Record<string, string> = {}
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', onDefaultDoorProp, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [level, setLevel] = useState(0)
+  // WHICH storey a running footprint draft belongs to (§ G). Recorded when the
+  // 🏗 tool is armed, not read when it commits: switching storeys mid-draw
+  // must not land the points on a floor nobody drew them on.
+  const [outlineLevel, setOutlineLevel] = useState(0)
+  const outlineLevelRef = useRef(outlineLevel)
+  outlineLevelRef.current = outlineLevel
+  // Which pane the inspector dock shows, and whether it is folded away. VIEW
+  // state, so it is remembered per browser and never travels with the world.
+  const [inspTab, setInspTab] = useState<InspectorTab>('selection')
+  const [inspCollapsed, setInspCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem('av.floorplan.inspectorOff') === '1'
+    } catch { return false }
+  })
+  const setInspCollapsedStored = useCallback((v: boolean) => {
+    setInspCollapsed(v)
+    try {
+      window.localStorage.setItem('av.floorplan.inspectorOff', v ? '1' : '0')
+    } catch { /* storage off — the dock simply starts open next time. */ }
+  }, [])
   const [selected, setSelectedRaw] = useState<string>('')
   const setSelected = useCallback((id: string) => {
     setSelectedRaw(id)
@@ -458,11 +496,24 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // window's bottom-left is right now", so it starts visible whatever the plot
   // looks like and stays where the user last put it afterwards.
   const [figurePos, setFigurePos] = useState<[number, number] | null>(null)
-  // The canvas is CANVAS_W at zoom 1 — unless a narrow pane shrinks it via
-  // maxWidth. The scale bar and the grid step are stated in PIXELS, so they
-  // measure the edge instead of assuming it.
-  const [canvasPx, setCanvasPx] = useState(CANVAS_W)
+  // What the canvas edge REALLY is in px (`baseW * planZoom`, or less when a
+  // narrow pane clips it). The scale bar and the grid step are stated in
+  // PIXELS, so they measure the edge instead of assuming it.
+  const [canvasPx, setCanvasPx] = useState(CANVAS_MIN_W)
+  // The callbacks below convert pixels to metres and run outside React's
+  // render, so they read the measurement by ref — a stale `canvasPx` would
+  // mis-scale a drag by exactly the amount the pane last changed.
+  const canvasPxRef = useRef(canvasPx)
+  canvasPxRef.current = canvasPx
+  // BASE width at zoom 1: what the plan column offers, clamped. The canvas is
+  // `baseW * planZoom`; before the workbench rebuild this was a constant and
+  // the plan could not use a wide pane, however much room the screen had.
+  const [baseW, setBaseW] = useState(CANVAS_MIN_W)
+  const baseWRef = useRef(baseW)
+  baseWRef.current = baseW
   const canvasRef = useRef<HTMLDivElement>(null)
+  /** The plan COLUMN — the element whose width the canvas may fill. */
+  const planColRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState>(null)
   // Did the last prop press travel past `MOVE_START_PX`, i.e. was it a DRAG?
   // `dragRef` is already cleared on pointerup, and the click that follows the
@@ -475,7 +526,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // The contract's reference surface is a fixed 8×8 m SQUARE — the canvas
   // is square too, whatever the building footprint says. Its height is
   // therefore whatever width the browser really gave it (`canvasPx`), never
-  // the nominal CANVAS_W — see the zoom viewport below.
+  // a nominal constant — see the zoom viewport below.
   // 2D-plan zoom (1x..3x): the canvas renders LARGER inside a scroll
   // container — children are %-positioned and every handler works on
   // getBoundingClientRect fractions, so zooming needs no interaction math.
@@ -504,8 +555,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       setPlanZoom(nz)
       // After the resize, scroll so the point under the cursor stays put.
       requestAnimationFrame(() => {
-        vp.scrollLeft = fx * CANVAS_W * nz - (e.clientX - vpRect.left)
-        vp.scrollTop = fy * CANVAS_W * nz - (e.clientY - vpRect.top)
+        vp.scrollLeft = fx * baseWRef.current * nz - (e.clientX - vpRect.left)
+        vp.scrollTop = fy * baseWRef.current * nz - (e.clientY - vpRect.top)
       })
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
@@ -518,7 +569,27 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     const el = canvasRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
-      setCanvasPx(el.getBoundingClientRect().width || CANVAS_W)
+      setCanvasPx(el.getBoundingClientRect().width || CANVAS_MIN_W)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // THE PLAN TAKES THE COLUMN IT IS GIVEN (§ W1).
+  //
+  // MEASURED ON THE COLUMN, NOT ON THE VIEWPORT. The scroll viewport grows a
+  // vertical scrollbar as soon as the square canvas is taller than its cap,
+  // so measuring IT would feed the scrollbar's width back into the canvas
+  // width and the two would flip back and forth around that threshold. The
+  // column outside it never scrolls; SCROLLBAR_PX is the fixed allowance for
+  // the bar that will appear inside, and 2 px are the canvas border.
+  useEffect(() => {
+    const el = planColRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth - SCROLLBAR_PX - 2
+      setBaseW(Math.round(Math.min(CANVAS_MAX_W,
+                                   Math.max(CANVAS_MIN_W, w || CANVAS_MIN_W))))
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -681,7 +752,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const problemText = (p: SceneProblem) => {
     const room = p.room_id
       ? (rooms.find((r) => r.id === p.room_id)?.name || p.room_id) : ''
-    return room ? `${room}: ${t(p.message)}` : t(p.message)
+    // WHICH STOREY, when the finding is about one. A narrowed building earns
+    // findings that read identically on every floor ("this storey's own
+    // footprint"), and the author is standing on one floor at a time.
+    const where = p.levels?.length
+      ? t('Storeys {n}').replace('{n}', p.levels.join(', '))
+      : typeof p.level === 'number'
+        ? t('Storey {n}').replace('{n}', String(p.level))
+        : ''
+    const lead = [where, room].filter(Boolean).join(' · ')
+    return lead ? `${lead}: ${t(p.message)}` : t(p.message)
   }
   const placedRooms = rooms.filter((r) => hasRect(r.layout) && r.id)
   const levels = Array.from(
@@ -725,6 +805,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
    * unreachable before: the old canvas WAS the pin-centred reference square,
    * and everything the boundary put outside it could not be clicked.
    */
+  /** The footprint the storey on screen is built on — its own entry, the
+   *  nearest lower one, or the building's `outline` (§ G cascade). */
+  const levelOutlinePts = useMemo(
+    () => levelOutline(map3d, level), [map3d, level])
+  /** …and whether that shape is THIS storey's own. Level 0 always is: the
+   *  building's outline IS the ground floor's. */
+  const ownLevelOutline = level === 0
+    ? !!map3d?.outline?.length
+    : outlineSourceLevel(map3d?.level_outlines, level) === level
+
   const view = useMemo<PlanView>(() => {
     const pts: Pt[] = [...boundaryM]
     for (const r of rooms) {
@@ -734,11 +824,16 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       if (!hasRect(lay)) continue
       pts.push([lay.x, lay.y], [lay.x + lay.w, lay.y + lay.d])
     }
+    // EVERY storey's footprint frames the view, not just the one on screen:
+    // switching to a narrower top floor must not make the plan jump.
     for (const p of map3d?.outline || []) pts.push([p[0], p[1]])
+    for (const pl of Object.values(map3d?.level_outlines || {})) {
+      for (const p of pl || []) pts.push([p[0], p[1]])
+    }
     const base = viewportFor(pts, 0, FALLBACK_VIEW_M)
     const m = Math.max(1, base.size * 0.08)
     return { x0: base.x0 - m, z0: base.z0 - m, size: base.size + 2 * m }
-  }, [boundaryM, rooms, map3d?.outline])
+  }, [boundaryM, rooms, map3d?.outline, map3d?.level_outlines])
   // Canvas fraction ⇄ local metres. Every handler and every %-position goes
   // through these four; there is no second conversion anywhere in the file.
   const fx = useCallback((x: number) => viewFx(view, x), [view])
@@ -900,8 +995,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
    * hulls may be aimed at at all; deriving it twice would let the two drift.
    */
   const snapTolM = useMemo(
-    () => Math.max(SNAP_TOL_PX * (view.size / (CANVAS_W * planZoom)), 0.05),
-    [view.size, planZoom])
+    () => Math.max(SNAP_TOL_PX * (view.size / (canvasPx || CANVAS_MIN_W)), 0.05),
+    [view.size, canvasPx])
 
   // Snapping while drawing (always on, Shift = free-hand): targets are the
   // hulls of the placed rooms on the current level plus the draft's own
@@ -947,7 +1042,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     return buildSnapTargets(hulls, {
       // Rooms snap onto the building outline; while the OUTLINE itself is
       // being redrawn it is not a target.
-      buildingOutline: clickMode === 'draw-room' ? map3d?.outline : undefined,
+      buildingOutline: clickMode === 'draw-room'
+        ? levelOutline(map3d, level) : undefined,
       // The location BOUNDARY is always a target: corners, edge midpoints and
       // the edges — a room meant to touch the plot's edge really touches it
       // (plan-area-detail-scenes.md). Since v6 that is the drawn polygon, not
@@ -955,7 +1051,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       boundary: boundaryM,
       extraPoints: outlineDraft,
     })
-  }, [clickMode, rooms, level, outlineDraft, drawTarget, map3d?.outline,
+  }, [clickMode, rooms, level, outlineDraft, drawTarget, map3d,
     boundaryM, snapTolM])
 
   const computeSnap = useCallback((clientX: number, clientY: number,
@@ -964,7 +1060,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     // Tolerances in METRES: the aiming radius is `snapTolM`, the ONE
     // derivation the target list was filtered with; only the closing radius
     // is its own number.
-    const mPerPx = view.size / (CANVAS_W * planZoomRef.current)
+    const mPerPx = view.size / (canvasPxRef.current || CANVAS_MIN_W)
     const tol = snapTolM
     const prev = outlineDraft.length ? outlineDraft[outlineDraft.length - 1] : undefined
     const prev2 = outlineDraft.length >= 2 ? outlineDraft[outlineDraft.length - 2] : undefined
@@ -982,17 +1078,39 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     })
   }, [outlineDraft, snapTargets, pointerM, view.size, gridStep, snapTolM])
 
+  /** Write ONE storey's footprint (§ G). Level 0 is the building's own
+   *  `map3d.outline` — there is no storey below it to inherit from, so a
+   *  separate entry for it would be a second name for the same shape. Every
+   *  other storey lands in `level_outlines`; passing null drops its entry and
+   *  it inherits again. */
+  const writeLevelOutline = useCallback((lv: number,
+      pts: Array<[number, number]> | null) => {
+    if (lv === 0) {
+      onMap3d?.('outline', pts && pts.length >= 3 ? pts : undefined)
+      return
+    }
+    const merged: Record<string, Array<[number, number]>> = {
+      ...(map3dRef.current?.level_outlines || {}) }
+    if (pts && pts.length >= 3) merged[String(lv)] = pts
+    else delete merged[String(lv)]
+    onMap3d?.('level_outlines',
+      Object.keys(merged).length ? merged : undefined)
+  }, [onMap3d])
+
   const commitOutline = useCallback(() => {
     if (outlineDraft.length < 3) {
       planLog('commitOutline refused: fewer than 3 points',
         { draftLen: outlineDraft.length })
       return
     }
-    onMap3d?.('outline', outlineDraft)
+    // THE DRAFT BELONGS TO THE STOREY IT WAS STARTED ON, not to whichever one
+    // the editor shows now: arming the tool records the level, so switching
+    // storeys mid-draw cannot land the points on a floor nobody drew them on.
+    writeLevelOutline(outlineLevelRef.current, outlineDraft)
     setOutlineDraft([])
     setHoverSnap(null)
     setClickMode('')
-  }, [outlineDraft, onMap3d])
+  }, [outlineDraft, writeLevelOutline])
 
   // Drops any armed mode plus the running draft — Esc, the ✕ tool and every
   // mode toggle go through here. Disarms the prop tool too (the palette
@@ -1232,7 +1350,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       if (!room || !hasRect(lay)) return
       const mPerPx = drag.kind === 'move' || drag.kind === 'resize'
         ? drag.mPerPx
-        : viewRef.current.size / (canvas.clientWidth || CANVAS_W)
+        : viewRef.current.size / (canvas.clientWidth || canvasPxRef.current)
       const step = gridStepRef.current
       if (drag.kind === 'move') {
         // A press selects; only a real movement moves. Once past the
@@ -1257,7 +1375,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         if (!e.shiftKey) {
           const hulls = hullsOf(roomsRef.current, lay.level || 0, drag.roomId)
           const targets = buildSnapTargets(hulls, {
-            buildingOutline: map3dRef.current?.outline,
+            buildingOutline: levelOutline(map3dRef.current,
+                                          lay.level || 0),
             boundary: boundaryRef.current })
           const tol = Math.max(SNAP_TOL_PX * mPerPx, 0.05)
           const [sx, sy] = snapMoveOffset(
@@ -1392,7 +1511,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     e.stopPropagation()
     setSelected(room.id)
     const mPerPx = view.size
-      / (canvasRef.current?.clientWidth || CANVAS_W * planZoomRef.current)
+      / (canvasRef.current?.clientWidth || canvasPxRef.current)
     dragRef.current = kind === 'move'
       ? { kind, roomId: room.id, startX: e.clientX, startY: e.clientY,
           origX: lay.x, origY: lay.y, mPerPx }
@@ -1798,9 +1917,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     }
     setOutlineDraft([])
     setHoverSnap(null)
+    if (m === 'outline') setOutlineLevel(level)
     setClickMode(m)
-    planLog('armed', { mode: m })
-  }, [clickMode, selected, selectedRoom, groundSel, cancelDraw])
+    planLog('armed', { mode: m, ...(m === 'outline' ? { level } : {}) })
+  }, [clickMode, selected, selectedRoom, groundSel, cancelDraw, level])
 
   /**
    * Arm the hull pen ON A NAMED ROOM — the route that does NOT go through the
@@ -1962,6 +2082,34 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const figureAt: [number, number] = figurePos
     ?? [view.x0 + view.size * 0.12, view.z0 + view.size * 0.86]
 
+  // A CLICK ON THE PLAN IS A REQUEST TO SEE WHAT WAS CLICKED. Without this
+  // the inspector could sit on the storey settings while the author drags a
+  // prop, and the strip that edits it would be one tab away — the exact
+  // stacking problem the dock was built to remove, only sideways.
+  useEffect(() => {
+    if (selected || propSel !== null || markerSel !== null
+        || openingSel !== null || stairSel !== null || elevatorSel) {
+      setInspTab('selection')
+    }
+  }, [selected, propSel, markerSel, openingSel, stairSel, elevatorSel])
+
+  // How much the findings tab is holding, and what the selection tab is about
+  // — the label says WHAT is selected, which is worth more on a tab than the
+  // word "Selection" is.
+  // WHAT THE BADGE COUNTS: things waiting to be fixed. The server's findings
+  // and the leftover rooms — not the pass-throughs (data the author placed)
+  // and not the ℹ note about a location without one, which describes a legal
+  // state and would paint a red badge on a plan with nothing wrong.
+  const findings = (scene?.problems || []).length + tinyRooms.length
+  const selectionLabel = propSel !== null ? t('Prop')
+    : markerSel !== null ? t('Marker')
+      : openingSel !== null ? t('Opening')
+        : stairSel !== null ? t('Stairs')
+          : elevatorSel ? t('Lift')
+            : groundSel ? t('Yard')
+              : selectedRoom ? t('Room')
+                : t('Nothing')
+
   return (
     <div className="ga-form" style={{ gap: 6 }}>
       <div className="ga-form-section-label">{t('Room layout (floor plan)')}</div>
@@ -2064,65 +2212,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           title={t('Zoom the 2D plan in for precise placement (mouse wheel over the plan works too).')}>
           ➕
         </button>
-        {onMap3d ? (
-          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Floor texture of THIS storey: the client tiles the whole level plate with the kind; a room floor kind overrides only its own area. Empty = the global floor kind.')}>
-            🟫
-            <select
-              className="ga-input"
-              style={{ maxWidth: 130 }}
-              value={map3d?.level_floors?.[String(level)] || ''}
-              onChange={(e) => {
-                const merged = { ...(map3d?.level_floors || {}) }
-                if (e.target.value) merged[String(level)] = e.target.value
-                else delete merged[String(level)]
-                onMap3d('level_floors',
-                  Object.keys(merged).length ? merged : undefined)
-              }}
-            >
-              <option value="">{t('Level floor: global')}</option>
-              {surfaceKinds.map((k) => (
-                <option key={k.kind} value={k.kind}>{k.name}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        {onMap3d ? (
-          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-            title={t('Wall texture of the whole building shell: the client tiles every contour wall with the kind. Not per storey — one shell, one kind. A room wall keeps its own wall kind. Empty = plain shell colour.')}>
-            🧱
-            <select
-              className="ga-input"
-              style={{ maxWidth: 130 }}
-              value={map3d?.wall_kind || ''}
-              onChange={(e) => onMap3d('wall_kind', e.target.value || undefined)}
-            >
-              <option value="">{t('Building walls: none')}</option>
-              {surfaceKinds.map((k) => (
-                <option key={k.kind} value={k.kind}>{k.name}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        {onMap3d ? (
-          <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-            title={t('For villages, lakes and other AREAS: the location model stays in the interior view and gets holes cut into it — the floor plan plus every indoor room placed outside it. Outdoor rooms outside the plan become walkable zones on the model surface. Off = single building, the model fades out.')}>
-            <input type="checkbox" checked={!!map3d?.area_model}
-              onChange={(e) => {
-                onMap3d('area_model', e.target.checked || undefined)
-                if (!e.target.checked) onMap3d('area_detail', undefined)
-              }} />
-            <span>{t('Area location (model stays in interior view)')}</span>
-          </label>
-        ) : null}
-        {onMap3d && map3d?.area_model ? (
-          <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-            title={t('Detail scene: the area model becomes a fading shell — zooming in fades it out like a building and shows the drawn rooms (ground textures, scattered props) instead. No holes are cut into the model any more.')}>
-            <input type="checkbox" checked={!!map3d?.area_detail}
-              onChange={(e) => onMap3d('area_detail', e.target.checked || undefined)} />
-            <span>{t('Detail scene (model fades on zoom-in)')}</span>
-          </label>
-        ) : null}
+        {/* THE STOREY'S FLOOR AND WALL TEXTURES AND THE AREA SWITCHES MOVED
+            INTO THE INSPECTOR'S "Storey" TAB (§ W3). Two selects behind a
+            brown and a brick emoji used to sit here, in the row that is meant
+            to say WHERE one is — and they said nothing about the texture they
+            held. The picker there shows the tile itself. */}
         {/* THE SCENE'S OWN RELIEF IS GONE ("Ein Boden" E5a, decision 1 of
             the plan): the amplitude/seed/wave dials and the per-room "Keep
             flat" opt-out that stood here rolled a 17 × 17 height field that
@@ -2234,17 +2328,22 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         </div>
       ) : null}
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+      {/* THE WORKBENCH ROW (§ W): tool rail — plan — inspector dock. The row
+          may shrink below its content (`minWidth: 0`), which is what lets the
+          plan column measure the width it really has instead of the width its
+          canvas wants. */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start',
+        minWidth: 0 }}>
       <PlanToolbar
         mode={clickMode}
         hasSelection={!!selectedRoom}
         selectionRotation={selectedRoom?.layout?.rotation || 0}
-        hasOutline={!!map3d?.outline?.length}
+        hasOutline={ownLevelOutline}
         hasBoundary={hasBoundary}
         outlineDraftLen={outlineDraft.length}
         hasElevator={!!map3d?.elevator}
         stairCount={map3d?.stairs?.length || 0}
-        stairLevel={level}
+        editLevel={level}
         building={!!onMap3d}
         canSuggest={placedHere.length > 0}
         canFitToModel={!groundSel && !!(selectedRoom?.id
@@ -2258,7 +2357,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onMode={armMode}
         onRotate={rotateSelected}
         onUnplace={() => { updateLayout(selectedRoom?.id || '', null); setSelected('') }}
-        onRemoveOutline={() => onMap3d?.('outline', undefined)}
+        onRemoveOutline={() => writeLevelOutline(level, null)}
         onRemoveElevator={() => onMap3d?.('elevator', undefined)}
         onCommitOutline={commitOutline}
         onCommitRoom={commitRoomDraft}
@@ -2268,16 +2367,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       />
       {/* Zoom viewport: the canvas grows with the zoom, this box scrolls it
           in BOTH axes (wheel zooms on the canvas). Its height follows the
-          measured canvas width — the canvas is 1:1, so a fixed cap at the
-          nominal CANVAS_W clipped every zoom step (and every wide pane)
-          vertically while the width grew. The viewport-relative cap keeps a
+          canvas BASE width — the canvas is 1:1, so a fixed cap clipped every
+          zoom step (and every wide pane) vertically while the width grew. The viewport-relative cap keeps a
           3x plan from pushing the rest of the editor off the page; past it
           the box scrolls vertically like it always scrolled horizontally.
           The frame around it carries the scale bar — inside the viewport a
           zoomed-in plan would scroll its own scale out of sight. */}
-      <div style={{ position: 'relative', flex: '0 1 auto', maxWidth: '100%' }}>
+      <div ref={planColRef}
+        style={{ position: 'relative', flex: '1 1 auto', minWidth: 0,
+                 maxWidth: '100%' }}>
       <div ref={zoomViewportRef} style={{ overflow: 'auto', maxWidth: '100%',
-        maxHeight: `min(${canvasPx + 14}px, 85vh)` }}>
+        maxHeight: `min(${baseW + 14}px, 85vh)` }}>
       <div
         ref={canvasRef}
         style={{
@@ -2286,7 +2386,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           // gives us. With a fixed height a narrow pane would shrink only the
           // width and squeeze every fraction-drawn overlay horizontally — on
           // a surface that claims to show metres, that is not acceptable.
-          width: CANVAS_W * planZoom, aspectRatio: '1 / 1',
+          width: baseW * planZoom, aspectRatio: '1 / 1',
           maxWidth: planZoom === 1 ? '100%' : undefined,
           border: '1px solid var(--border, #30363d)', borderRadius: 6,
           background: 'rgba(255,255,255,0.03)', overflow: 'hidden', touchAction: 'none',
@@ -2450,10 +2550,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
                 </line>
               )
             })}
-            {map3d?.outline?.length ? (
+            {/* THE BUILDING ON THIS STOREY (§ G). Its OWN footprint is
+                drawn solid; one it merely INHERITS is dashed and paler, so a
+                glance says whether this floor decides its own shape or
+                follows the one below it. */}
+            {levelOutlinePts.length >= 3 ? (
               <polygon
-                points={map3d.outline.map(([x, z]) => `${svgX(x)},${svgZ(z)}`).join(' ')}
-                fill="rgba(88,166,255,0.07)" stroke="#58a6ff" strokeWidth={0.6}
+                points={levelOutlinePts.map(([x, z]) => `${svgX(x)},${svgZ(z)}`).join(' ')}
+                fill={ownLevelOutline
+                  ? 'rgba(88,166,255,0.07)' : 'rgba(88,166,255,0.03)'}
+                stroke="#58a6ff"
+                strokeOpacity={ownLevelOutline ? 1 : 0.55}
+                strokeWidth={0.6}
+                strokeDasharray={ownLevelOutline ? undefined : '2 1.6'}
               />
             ) : null}
             {outlineDraft.length ? (
@@ -3189,162 +3298,93 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         ) : null}
       </div>
       </div>
-      <PlanScaleBar view={view} canvasPx={canvasPx} />
-      {/* THE THREE SHAPES, NAMED. The plan draws a plot, a house and rooms on
-          top of each other, and until this line existed nothing said which was
-          which — an author who drew the building contour expecting a room got
-          a correct but unhelpful "no room has a floor plan" and no way to tell
-          the shapes apart (user finding 2026-08-20). One line, always visible,
-          in the colours and strokes the canvas really uses. */}
-      <div className="ga-hint" style={{ display: 'flex', gap: 10,
-        flexWrap: 'wrap', alignItems: 'center', marginTop: 4,
-        fontSize: '0.76em' }}>
-        <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}
-          title={t('The plot itself — the ground this location covers. Editable here with the 🟩 tool and on the map tab; solid once the location is placed, dashed while it is not.')}>
-          <svg width={20} height={8} aria-hidden>
-            <line x1={1} y1={4} x2={19} y2={4} stroke="#3fb950" strokeWidth={2}
-              strokeDasharray={hasBoundary && placedOnMap ? undefined : '4 3'} />
-          </svg>
-          {t('location boundary')}
-        </span>
-        <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}
-          title={t('The building standing on the plot — the 🏗 tool draws it. It is NOT a room: a contour with no room inside holds nothing anybody can enter.')}>
-          <svg width={20} height={8} aria-hidden>
-            <line x1={1} y1={4} x2={19} y2={4} stroke="#58a6ff" strokeWidth={2} />
-          </svg>
-          {t('building contour')}
-        </span>
-        <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}
-          title={t('The rooms — what can actually be entered. Drawn with the ⬠ tool; every location needs at least one.')}>
-          <svg width={20} height={8} aria-hidden>
-            <rect x={1} y={1} width={18} height={6} fill="rgba(139,148,158,0.12)"
-              stroke="#8b949e" strokeWidth={1.5} />
-          </svg>
-          {t('rooms')}
-        </span>
+      {/* THE ONE LINE UNDER THE PLAN (§ W3). Everything that used to stack
+          here — the legend, the leftover-room warning, the server's findings
+          and the pass-through rows — lives in the inspector's Findings tab
+          now and costs the plan no height when there is nothing to say. What
+          is left is a pointer: how many findings are waiting, and a click
+          that opens them. */}
+      <div className="ga-plan-status">
+        <PlanScaleBar view={view} canvasPx={canvasPx} />
+        {findings ? (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            title={t('Open the findings — what the composer and this editor have to say about the plan.')}
+            onClick={() => {
+              setInspTab('findings'); setInspCollapsedStored(false)
+            }}
+          >
+            ⚠ {t('{n} findings').replace('{n}', String(findings))}
+          </button>
+        ) : null}
+        {map3d?.boundary_openings?.length ? (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            title={t('Open the boundary pass-throughs.')}
+            onClick={() => {
+              setInspTab('findings'); setInspCollapsedStored(false)
+            }}
+          >
+            {t('{n} pass-throughs').replace('{n}',
+              String(map3d.boundary_openings.length))}
+          </button>
+        ) : null}
       </div>
-      {/* The editor's OWN finding, not the server's: rooms left over from the
-          fraction era. Gentle — it is a "here is why", not an error, and it
-          names the rooms so the author can go and fix the right ones. */}
-      {tinyRooms.length ? (
-        <div className="ga-form" style={{ gap: 4, marginTop: 6 }}>
-          <div className="ga-anchor-banner">
-            <span>⚠ {t('{rooms} — smaller than {n} m. These are leftovers from before rooms were stored in metres; their old share of the reference square is now read as metres. Nothing repairs them automatically: delete them, or redraw their hull with ⬠.')
-              .replace('{rooms}', tinyRooms.map((r) => r.name || r.id).join(', '))
-              .replace('{n}', String(TINY_ROOM_M))}</span>
-          </div>
-        </div>
-      ) : null}
-      {/* Findings of the SERVER about this floor plan (§ 4.3,
-          plan-betreten-und-tueren.md): the composer states them, the editor
-          only shows them — at the room it names, otherwise at the location. */}
-      {(scene?.problems || []).length ? (
-        <div className="ga-form" style={{ gap: 4, marginTop: 6 }}>
-          {(scene?.problems || []).map((p, i) => (
-            <div key={`${p.kind}-${p.room_id || ''}-${i}`}
-              className="ga-anchor-banner">
-              <span>⚠ {problemText(p)}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {/* Boundary pass-throughs (plan-area-detail-scenes.md): building-level
-          data, so the rows live under the plan, not in the room panel. An
-          ordinary means of every location, not a speciality of area/detail
-          ones (ruling 2026-08-04) — shown with zero openings too, when the
-          server reports no entrance at all (has_entrance false), which is
-          exactly where one gets added. */}
-      {onMap3d
-        && (map3d?.boundary_openings?.length || hasEntrance === false) ? (
-        <div className="ga-form" style={{ gap: 4, marginTop: 6 }}>
-          <div className="ga-form-section-label">{t('Boundary pass-throughs')}</div>
-          {hasEntrance === false ? (
-            <div className="ga-anchor-banner">
-              <span>ℹ {t('No pass-through drawn: characters may enter anywhere along the boundary. Draw openings to channel entry.')}</span>
-            </div>
-          ) : null}
-          {(map3d?.boundary_openings || []).map((bo, i) => {
-            const write = (patch: Partial<typeof bo>) =>
-              onMap3d('boundary_openings', (map3d?.boundary_openings || [])
-                .map((b, j) => (j === i ? { ...b, ...patch } : b)))
-            return (
-              <div key={i} onClick={() => setSelectedBoundary(i)}
-                style={{ display: 'flex', gap: 6, alignItems: 'center',
-                  fontSize: '0.82em', padding: '2px 4px', borderRadius: 4,
-                  background: selectedBoundary === i
-                    ? 'rgba(224,163,86,0.15)' : undefined }}>
-                {/* WHICH boundary edge the pass-through sits on (v6 Nr. 5):
-                    an index, labelled with the two points it runs between so
-                    it can be picked without counting vertices on the plan.
-                    Clicking the gold bar selects the row; clicking the plan
-                    in "pass-through" mode picks the nearest edge outright. */}
-                <select className="ga-input" style={{ width: 168 }}
-                  value={bo.edge}
-                  title={t('Boundary edge the pass-through sits on')}
-                  onChange={(e) => write({ edge: Number(e.target.value) })}>
-                  {boundaryM.map((_p, ei) => {
-                    const { a, b } = edgeSegment(boundaryM, ei)
-                    // The points ARE local metres — the label just rounds.
-                    const m = (v: number) => Math.round(v * 10) / 10
-                    return (
-                      <option key={ei} value={ei}>
-                        {`${t('Edge')} ${ei}: (${m(a[0])},${m(a[1])})→(${m(b[0])},${m(b[1])})`}
-                      </option>
-                    )
-                  })}
-                  {bo.edge >= boundaryM.length ? (
-                    <option value={bo.edge}>
-                      {`${t('Edge')} ${bo.edge} — ${t('outside the boundary')}`}
-                    </option>
-                  ) : null}
-                </select>
-                <input className="ga-input" type="number" min={0} max={1}
-                  step={0.01} style={{ width: 64 }} value={bo.at}
-                  title={t('Position along the edge (0..1)')}
-                  onChange={(e) => {
-                    const v = Number(e.target.value)
-                    if (Number.isFinite(v)) write({ at: r4(clamp(v, 0, 1)) })
-                  }} />
-                {/* The pass-through lies ON a boundary edge, and the
-                    location's own width is its maximum (plan_width_m — the
-                    bounding box of the drawn outline). Without the anchor the
-                    server's 10 m fallback applies — the same rule on both
-                    sides. */}
-                <input className="ga-input" type="number" min={0.5}
-                  max={planW || 10}
-                  step={0.5} style={{ width: 64 }} value={bo.width_m}
-                  title={t('Width (m) — at most the length of the edge')}
-                  onChange={(e) => {
-                    const v = Number(e.target.value)
-                    if (Number.isFinite(v)) {
-                      write({ width_m: clamp(v, 0.5, planW || 10) })
-                    }
-                  }} />
-                <select className="ga-input" style={{ flex: 1, minWidth: 90 }}
-                  value={bo.room || ''}
-                  title={t('Linked room — where the pass-through leads (feeds the future journey walk-through).')}
-                  onChange={(e) => write({ room: e.target.value || undefined })}>
-                  <option value="">{t('No room link')}</option>
-                  {placedRooms.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name || r.id}</option>
-                  ))}
-                </select>
-                <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
-                  title={t('Remove')}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    const next = (map3d?.boundary_openings || [])
-                      .filter((_, j) => j !== i)
-                    onMap3d('boundary_openings', next.length ? next : undefined)
-                    setSelectedBoundary(null)
-                  }}>✕</button>
-              </div>
-            )
-          })}
-        </div>
-      ) : null}
       </div>
 
+      {/* ── The inspector dock (§ W3) ────────────────────────────────────
+          Three panes as nodes, not as props: the selection pane below is
+          built from closures over the drag state, the running draft and the
+          server calls of this very component. */}
+      <PlanInspector
+        tab={inspTab}
+        onTab={setInspTab}
+        collapsed={inspCollapsed}
+        onCollapsed={setInspCollapsedStored}
+        selectionLabel={selectionLabel}
+        findingCount={findings}
+        level={(
+          <PlanInspectorLevel
+            level={level}
+            map3d={map3d}
+            onMap3d={onMap3d
+              ? (key, value) => onMap3d(key as never, value as never)
+              : undefined}
+            surfaceKinds={surfaceKinds}
+            defaultDoorPropId={defaultDoorPropId || ''}
+            onDefaultDoorProp={onDefaultDoorProp}
+            drawingOutline={clickMode === 'outline' && outlineLevel === level}
+            canForkOutline={levelOutlinePts.length >= 3}
+            onDrawOutline={() => armMode('outline')}
+            onForkOutline={() => writeLevelOutline(level,
+              levelOutlinePts.map((p) => [p[0], p[1]] as [number, number]))}
+            onDropOutline={() => writeLevelOutline(level, null)}
+          />
+        )}
+        findings={(
+          <PlanFindings
+            hasBoundary={hasBoundary}
+            placedOnMap={placedOnMap}
+            tinyRooms={tinyRooms}
+            tinyRoomM={TINY_ROOM_M}
+            problems={scene?.problems || []}
+            problemText={problemText}
+            map3d={map3d}
+            onMap3d={onMap3d
+              ? (key, value) => onMap3d(key as never, value as never)
+              : undefined}
+            boundaryM={boundaryM}
+            planW={planW}
+            placedRooms={placedRooms}
+            selectedBoundary={selectedBoundary}
+            onSelectBoundary={setSelectedBoundary}
+            hasEntrance={hasEntrance}
+          />
+        )}
+        selection={(
+        <>
       <PlanSidePanel
         room={selectedRoom || null}
         ground={groundSel}
@@ -3397,8 +3437,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           setArmedProp((cur) => (cur === p.id ? '' : p.id))
         }}
       />
-      </div>
 
+      {/* The furnishing proposal is a MODAL and renders through a portal, so
+          it does not care that it is written inside the inspector pane. */}
       {furnishOpen && selectedRoom ? (
         <FurnishDialog
           roomId={furnishTarget}
@@ -4297,6 +4338,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           ))}
         </div>
       ) : null}
+        </>
+        )}
+      />
+      </div>
     </div>
   )
 }

@@ -1232,6 +1232,234 @@ def test_contour_wall_texture() -> None:
           != sc["signature"])
 
 
+# ── A building that narrows as it rises (plan-grundriss-werkbank.md § G) ──
+# Contour = the whole 10 x 10 square, level_outlines["1"] = a 6 x 6 square
+# (world −3…3 on both axes). Three storeys are in use, so the payload has to
+# show three different answers to "what shape is this floor":
+#
+#   level 0   the 10 x 10 outline          (its own — map3d.outline IS it)
+#   level 1   the 6 x 6 override           (its own entry)
+#   level 2   the 6 x 6 override           (CASCADES down to level 1)
+#
+# Derived by hand from the contract: a level plate is the storey's contour, so
+# level 1 and 2 carry 4 points spanning 6 m, level 0 carries NO plate at all
+# (E5a: the terrain is its floor). A contour wall runs one edge of that same
+# polygon, so the four full-height pieces measure 10 m on level 0 and 6 m on
+# levels 1 and 2 — 3 storeys x 4 edges = 12 pieces, since no door cuts any of
+# them in this fixture.
+NARROW_ROOMS = [
+    {"id": "g", "name": "G", "layout": {
+        "x": -4.0, "y": -4.0, "w": 3.0, "d": 3.0, "level": 0}},
+    {"id": "u", "name": "U", "layout": {
+        "x": -2.0, "y": -2.0, "w": 3.0, "d": 3.0, "level": 1}},
+    {"id": "t", "name": "T", "layout": {
+        "x": -2.0, "y": -2.0, "w": 3.0, "d": 3.0, "level": 2}},
+]
+
+
+def narrow_fixture() -> dict:
+    return {
+        "id": "loc",
+        "map3d": {"plan_width_m": PLAN_W, "storey_height_m": STOREY_REAL,
+                  "outline": [[-5, -5], [5, -5], [5, 5], [-5, 5]],
+                  "level_outlines": {
+                      "1": [[-3, -3], [3, -3], [3, 3], [-3, 3]]}},
+        "rooms": [dict(r) for r in NARROW_ROOMS],
+    }
+
+
+def edge_len(w: dict) -> float:
+    return math.hypot(w["to"][0] - w["from"][0], w["to"][1] - w["from"][1])
+
+
+def span_of(pts: list) -> float:
+    """The wider side of a polygon's bounding box."""
+    xs = [p[0] for p in pts]
+    zs = [p[1] for p in pts]
+    return max(max(xs) - min(xs), max(zs) - min(zs))
+
+
+def test_level_outlines() -> None:
+    print("\n[4e] a storey may draw its own footprint — and the cascade")
+    sc = scene_recipe.compose_scene(narrow_fixture(), plan_width_m=PLAN_W)
+
+    # ── The resolver itself, before any geometry ──────────────────────
+    m3 = narrow_fixture()["map3d"]
+    check("level 0 takes the building outline (no lower entry)",
+          scene_recipe.outline_source_level(m3, 0) is None)
+    check("level 1 takes its OWN entry",
+          scene_recipe.outline_source_level(m3, 1) == 1)
+    check("level 2 CASCADES down to level 1",
+          scene_recipe.outline_source_level(m3, 2) == 1)
+    check("level 3 cascades to level 1 as well",
+          scene_recipe.outline_source_level(m3, 3) == 1)
+    # THE CASCADE STOPS AT THE GROUND FLOOR: a cellar drawn narrower must not
+    # shrink the house standing on it.
+    cellar = {"outline": m3["outline"],
+              "level_outlines": {"-1": [[-2, -2], [2, -2], [2, 2], [-2, 2]]}}
+    check("a basement's own footprint does NOT reach the ground floor",
+          scene_recipe.outline_source_level(cellar, 0) is None)
+    check("...but the basement itself uses it",
+          scene_recipe.outline_source_level(cellar, -1) == -1)
+
+    # ── Level plates: one per DECLARED storey, in that storey's shape ──
+    lvl_plates = {p["level"]: p for p in sc["plates"] if not p.get("room_id")}
+    check("no plate on storey 0 (E5a — the terrain is its floor)",
+          0 not in lvl_plates, str(sorted(lvl_plates)))
+    check("the level-1 plate spans 6 m, not 10",
+          near(span_of(lvl_plates[1]["outline"]), 6.0)
+          and len(lvl_plates[1]["outline"]) == 4,
+          f"{span_of(lvl_plates[1]['outline'])} m, "
+          f"{len(lvl_plates[1]['outline'])} points")
+    check("the level-2 plate INHERITS the 6 m shape",
+          near(span_of(lvl_plates[2]["outline"]), 6.0),
+          f"{span_of(lvl_plates[2]['outline'])} m")
+
+    # ── Contour walls: 4 whole edges per storey, at that storey's size ──
+    for level, want in ((0, 10.0), (1, 6.0), (2, 6.0)):
+        pieces = [w for w in sc["walls"]
+                  if not w.get("room_id") and w["level"] == level]
+        full = [w for w in pieces if not w.get("lintel") and not w.get("leaf")]
+        check(f"storey {level}: 4 contour pieces of {want} m",
+              len(full) == 4 and all(near(edge_len(w), want) for w in full),
+              f"{len(full)} pieces, {sorted(round(edge_len(w), 2) for w in full)}")
+    check("12 contour pieces in total — 3 storeys x 4 edges",
+          len([w for w in sc["walls"] if not w.get("room_id")]) == 12,
+          str(len([w for w in sc["walls"] if not w.get("room_id")])))
+
+    # ── The findings a narrowed storey can earn ───────────────────────
+    kinds = {p["kind"] for p in sc["problems"]}
+    check("a room INSIDE the narrowed storey earns no finding",
+          "room_outside_level_outline" not in kinds, str(sorted(kinds)))
+
+    over = narrow_fixture()
+    # World x −2…2 is inside the 6 x 6, but z 2…6 reaches 3 m past its north
+    # edge at z = 3 — the room hangs over the storey's own footprint.
+    over["rooms"][2]["layout"] = {"x": -2.0, "y": 2.0, "w": 4.0, "d": 4.0,
+                                  "level": 1}
+    over["rooms"][2]["id"] = "over"
+    sc_over = scene_recipe.compose_scene(over, plan_width_m=PLAN_W)
+    stray = [p for p in sc_over["problems"]
+             if p["kind"] == "room_outside_level_outline"]
+    check("a room hanging over the narrowed storey IS a finding",
+          len(stray) == 1 and stray[0]["level"] == 1
+          and stray[0]["room_ids"] == ["over"],
+          str(stray))
+
+    # THE INHERITING STOREY IS JUDGED TOO (review finding 2026-09-06). Room
+    # "t" sits on level 2, which has no entry of its own and takes the 6 x 6
+    # from level 1 — and the room reaches to x = 5, two metres past its east
+    # edge at x = 3. Judging only the storey that DREW the polygon let this
+    # through while the plate quietly clipped the floor away.
+    up = narrow_fixture()
+    up["rooms"][2]["layout"] = {"x": 1.0, "y": -1.0, "w": 4.0, "d": 2.0,
+                                "level": 2}
+    up_stray = [p for p in scene_recipe.compose_scene(
+        up, plan_width_m=PLAN_W)["problems"]
+        if p["kind"] == "room_outside_level_outline"]
+    check("a room on an INHERITING storey earns the finding as well",
+          len(up_stray) == 1 and up_stray[0]["level"] == 2
+          and up_stray[0]["room_ids"] == ["t"], str(up_stray))
+
+    # A world that never drew a per-storey footprint stays silent: the fixture
+    # without level_outlines has room "t" on level 2 with no contour of its
+    # own, and that has always been allowed.
+    plain = narrow_fixture()
+    plain["map3d"].pop("level_outlines")
+    check("without a drawn storey footprint there is no such finding",
+          not any(p["kind"] == "room_outside_level_outline"
+                  for p in scene_recipe.compose_scene(
+                      plain, plan_width_m=PLAN_W)["problems"]))
+
+    # The lift at (4, 4) stands outside the 6 x 6 of storey 1.
+    lift = narrow_fixture()
+    lift["map3d"]["elevator"] = [4.0, 4.0]
+    lifts = [p for p in scene_recipe.compose_scene(
+        lift, plan_width_m=PLAN_W)["problems"]
+        if p["kind"] == "elevator_outside_level_outline"]
+    # BOTH storeys, not just the one that drew the polygon: level 2 inherits
+    # the 6 x 6, so the shaft misses a platform there too.
+    check("a lift outside a narrowed storey IS a finding, on every storey "
+          "the shape reaches",
+          len(lifts) == 1 and lifts[0]["levels"] == [1, 2], str(lifts))
+    lift["map3d"]["elevator"] = [1.0, 1.0]
+    check("...and inside it is not",
+          not any(p["kind"] == "elevator_outside_level_outline"
+                  for p in scene_recipe.compose_scene(
+                      lift, plan_width_m=PLAN_W)["problems"]))
+
+    # A CONTOUR THAT EXISTS ONLY ON AN UPPER STOREY still counts as "there is
+    # a building here": without `outline` but with level_outlines["1"], the
+    # location has walls on storey 1, and `rooms_without_layout` must be able
+    # to speak up. `no_building_entrance` stays a GROUND-FLOOR question and
+    # keeps quiet — there is no hull down there to leave a door out of.
+    only_up = narrow_fixture()
+    only_up["map3d"].pop("outline")
+    only_up["rooms"] = [{"id": "r", "name": "R"}]      # no layout at all
+    kinds_up = {p["kind"] for p in scene_recipe.compose_scene(
+        only_up, plan_width_m=PLAN_W)["problems"]}
+    check("a contour on an upper storey alone is still a building",
+          "rooms_without_layout" in kinds_up, str(sorted(kinds_up)))
+    check("...but the ground-floor entrance question stays quiet",
+          "no_building_entrance" not in kinds_up, str(sorted(kinds_up)))
+
+    # A flight from storey 0 to 1, footed at (4, −4): it climbs +z and its
+    # head lands around x = 4, which is 1 m past the 6 x 6's east edge at
+    # x = 3 — the climb would end under a closed floor.
+    st = narrow_fixture()
+    st["map3d"]["stairs"] = [{"at": [4.0, -4.0], "from_level": 0,
+                              "dir_deg": 0}]
+    bad = [p for p in scene_recipe.compose_scene(
+        st, plan_width_m=PLAN_W)["problems"]
+        if p["kind"] == "stair_outside_level_outline"]
+    check("a staircase arriving outside the narrowed storey IS a finding",
+          len(bad) == 1 and bad[0]["level"] == 1, str(bad))
+    st["map3d"]["stairs"] = [{"at": [0.0, -2.0], "from_level": 0,
+                              "dir_deg": 0}]
+    check("...and one arriving inside it is not",
+          not any(p["kind"] == "stair_outside_level_outline"
+                  for p in scene_recipe.compose_scene(
+                      st, plan_width_m=PLAN_W)["problems"]))
+
+    # BOTH ENDS OF A FLIGHT ARE CHECKED. A flight from storey 1 to 2 footed at
+    # (4, 0) starts outside the 6 x 6 of storey 1 — its first tread stands on
+    # nothing — and the finding names the storey to widen, which is 1.
+    st2 = narrow_fixture()
+    st2["map3d"]["stairs"] = [{"at": [4.0, 0.0], "from_level": 1,
+                               "dir_deg": 0}]
+    feet = [p for p in scene_recipe.compose_scene(
+        st2, plan_width_m=PLAN_W)["problems"]
+        if p["kind"] == "stair_outside_level_outline"]
+    check("a staircase whose FOOT stands outside is a finding too",
+          any(p["level"] == 1 for p in feet), str(feet))
+
+
+def test_level_walls() -> None:
+    print("\n[4f] map3d.level_walls textures ONE storey's shell")
+    loc = narrow_fixture()
+    loc["map3d"]["wall_kind"] = "plaster"
+    loc["map3d"]["level_walls"] = {"1": "brick"}
+    sc = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+    # Derived by hand: the storey's own entry wins, otherwise the shell-wide
+    # kind — and there is NO cascade, so storey 2 falls back to "plaster"
+    # although the storey below it names "brick".
+    for level, want in ((0, "plaster"), (1, "brick"), (2, "plaster")):
+        pieces = [w for w in sc["walls"]
+                  if not w.get("room_id") and w["level"] == level]
+        check(f"storey {level} tiles with {want}",
+              len(pieces) == 4
+              and all(w.get("texture_kind") == want for w in pieces),
+              f"{len(pieces)} pieces, "
+              f"{sorted(str(w.get('texture_kind')) for w in pieces)}")
+    check("the level-wall resolver has no cascade",
+          scene_recipe.level_wall_kind(2, {"1": "brick"}, "plaster")
+          == "plaster")
+    check("...and an entry always wins over the shell kind",
+          scene_recipe.level_wall_kind(1, {"1": "brick"}, "plaster") == "brick")
+    check("no entry, no shell kind: the piece stays untextured",
+          scene_recipe.level_wall_kind(0, {}, "") == "")
+
+
 # ── Area locations (plan-area-locations.md) ────────────────────────────
 # Contour covers the LEFT HALF of the location (world x −5…0), so
 # "outside the floor plan" is expressible at all. Four rooms, one per case.
@@ -4970,6 +5198,8 @@ def main() -> int:
     test_openings_without_walls()
     test_wall_skirt()
     test_contour_wall_texture()
+    test_level_outlines()
+    test_level_walls()
     test_area_locations()
     test_map_water_reference()
     test_boundary_only_datum()

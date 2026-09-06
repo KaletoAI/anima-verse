@@ -493,6 +493,12 @@ a.ga-btn {
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
+  /* THE GUTTER IS ALWAYS THERE, scrollbar or not (review finding 2026-09-06).
+     The floor plan measures this pane to size its canvas, and the canvas is
+     square: 10 px less width means 10 px less height, which can be exactly
+     what makes the scrollbar go away — and the next frame brings it back.
+     A reserved gutter takes the pane's width out of that loop entirely. */
+  scrollbar-gutter: stable;
 }
 
 /* Collapsible list column (components/ListPane.tsx). Expanded, the grip is
@@ -2776,15 +2782,15 @@ a.ga-btn {
   margin-top: 0;
 }
 
+/* The room panel LIVES IN THE INSPECTOR now (§ W3), which owns the width and
+   the scrolling. Its own caps were for the days when it was a third column
+   beside the plan; keeping them would give the dock a scroll area inside a
+   scroll area and pin the panel at 260 px inside a 300 px column. */
 .ga-plan-panel {
-  flex: 1 1 220px;
-  min-width: 160px;
-  max-width: 260px;
   display: flex;
   flex-direction: column;
   gap: 5px;
-  max-height: 420px;
-  overflow-y: auto;
+  min-width: 0;
 }
 
 .ga-plan-panel-title {
@@ -2796,6 +2802,156 @@ a.ga-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ONE picker for a surface-texture kind (SurfaceKindSelect) — the swatch IS
+   the chosen tile, the word next to it is the category the old 🟫/🧱 emojis
+   were trying to be. */
+.ga-surface-pick {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  font-size: 0.82em;
+  min-width: 0;
+}
+
+.ga-surface-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+
+/* Nothing chosen: a hatched frame, which reads as "not set" instead of as a
+   texture nobody recognises. */
+.ga-surface-swatch--empty {
+  border: 1px dashed var(--border, #30363d);
+  background: repeating-linear-gradient(45deg,
+    transparent, transparent 3px,
+    var(--border, #30363d) 3px, var(--border, #30363d) 4px);
+  opacity: 0.55;
+}
+
+/* THE FLOOR-PLAN WORKBENCH (plan-grundriss-werkbank.md § W).
+   Outer split: the plan workbench left, the 3D preview as a dock right of a
+   draggable grip. The dock's width is the author's, remembered in
+   localStorage — before this the two sat in a hard 50/50 grid and the plan
+   could never be wider than half the page. */
+.ga-plan-split {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.ga-plan-split-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ga-plan-split-grip {
+  flex: 0 0 auto;
+  width: 12px;
+  align-self: stretch;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+.ga-plan-split-grip::before {
+  content: '';
+  width: 2px;
+  height: 48px;
+  border-radius: 2px;
+  background: var(--border, #30363d);
+}
+
+.ga-plan-split-grip:hover::before,
+.ga-plan-split-grip:focus-visible::before {
+  background: var(--accent, #58a6ff);
+}
+
+.ga-plan-split-side {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Narrow pane: the dock stops being a dock and stacks, like every other
+   split on this page. */
+@media (max-width: 900px) {
+  .ga-plan-split { display: block; }
+  .ga-plan-split-grip { display: none; }
+  .ga-plan-split-side { width: auto !important; margin-top: 12px; }
+}
+
+/* Inspector dock right of the plan: three tabs, one visible at a time, so a
+   selection, the storey settings and the findings no longer stack below the
+   canvas and eat its height. */
+.ga-plan-inspector {
+  flex: 0 0 auto;
+  width: 300px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ga-plan-inspector.is-collapsed {
+  width: 30px;
+}
+
+.ga-plan-inspector-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.ga-plan-inspector-tabs .ga-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 2px;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ga-plan-inspector-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  max-height: 78vh;
+}
+
+/* Count on the findings tab: with nothing to report the tab is silent and
+   the findings cost NO vertical space at all — the point of the rebuild. */
+.ga-plan-badge {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 3px;
+  margin-left: 3px;
+  border-radius: 7px;
+  background: var(--danger, #f85149);
+  color: #fff;
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+}
+
+
+/* The ONE line under the plan: scale bar plus a short word on what the
+   findings tab is holding. */
+.ga-plan-status {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 0.8em;
+  color: var(--text-muted, #8b949e);
 }
 
 /* Prop palette inside the side panel: compact thumbnail cards. */

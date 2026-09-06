@@ -613,8 +613,15 @@ export interface SceneProblem {
    *  `openings_without_walls` / `room_outside_boundary`: how many rooms are
    *  affected. */
   room_count?: number
-  /** `room_outside_boundary`: which rooms stick out, in recipe order. */
+  /** `room_outside_boundary` / `room_outside_level_outline`: which rooms
+   *  stick out, in recipe order. */
   room_ids?: string[]
+  /** The STOREY a finding is about — `room_outside_level_outline` and
+   *  `stair_outside_level_outline`, both of which only a building that
+   *  narrows as it rises can earn. */
+  level?: number
+  /** `elevator_outside_level_outline`: the storeys the shaft misses. */
+  levels?: number[]
 }
 
 /** Pass-through at the LOCATION edge (§ B1 Nr. 13) — where a road enters and

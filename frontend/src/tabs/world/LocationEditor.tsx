@@ -13,8 +13,8 @@ import { LocationGallery } from './LocationGallery'
 import { BuildingModelPanel, GenerateModelButton, type GenerateModelAction } from './BuildingModelPanel'
 import { RoomLayoutEditor } from './RoomLayoutEditor'
 import { FloorPlanPreview } from './FloorPlanPreview'
+import { PlanSplit } from './PlanSplit'
 import { RoomModelAdjust } from './RoomModelAdjust'
-import { DoorPropSelect } from './DoorPropPicker'
 import { useScenePreview } from './useScenePreview'
 
 // ── Location editor ────────────────────────────────────────────────────────
@@ -605,24 +605,15 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
     && r.id !== GROUND_ROOM_ID)
   const tabFloor = (
     <div className="ga-form">
-      {/* THE PLACE'S OWN DOOR. It belongs beside the plan, not in the general
-          data: it is the fallback every door opening on this plan inherits,
-          and the opening panel below names it in its first option. */}
-      <div className="ga-form-row">
-        <Field
-          label={t('Default door prop')}
-          compact
-          hint={t('Fills every door opening that picks nothing of its own. An opening can override it with its own prop or opt out with “None”.')}
-        >
-          <DoorPropSelect
-            value={draft.default_door_prop_id || ''}
-            onChange={(id) => upd('default_door_prop_id', id)}
-            emptyLabel={t('— no default door —')}
-            width={190}
-          />
-        </Field>
-      </div>
-      <div className="ga-loc-twocol ga-loc-twocol--5050">
+      {/* THE PLACE'S OWN DOOR MOVED INTO THE PLAN (§ W3). It used to stand
+          here as a full-width row above everything — one select, the whole
+          width of the page, above a plan that had none to spare. It is a
+          setting OF this floor plan (the fallback every door opening on it
+          inherits), so it now lives in the inspector's Level tab, handed down
+          as `onDefaultDoorProp`. */}
+      <PlanSplit
+        sideLabel={t('3D')}
+        main={(
         <RoomLayoutEditor
           rooms={draft.rooms || []}
           onChange={(rooms) => upd('rooms', rooms)}
@@ -646,6 +637,7 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           onPreviewPose={(id, pose) => setPreviewPose((cur) => ({ ...cur, [id]: pose }))}
           unsaved={dirty}
           defaultDoorPropId={draft.default_door_prop_id || ''}
+          onDefaultDoorProp={(id) => upd('default_door_prop_id', id)}
         >
           {floorSelRoom?.id ? (
             <RoomModelAdjust
@@ -674,6 +666,8 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
             />
           ) : null}
         </RoomLayoutEditor>
+        )}
+        side={(
         <FloorPlanPreview
           locationId={location.id}
           rooms={draft.rooms || []}
@@ -685,7 +679,8 @@ export function LocationEditor({ location, items, allLocations, placements, onCh
           calibration={calibration}
           previewPose={previewPose}
         />
-      </div>
+        )}
+      />
     </div>
   )
 

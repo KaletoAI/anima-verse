@@ -1506,6 +1506,30 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   gilt `floor` auch auf Etage 0. Ein `level_floors`-Eintrag schlägt beides,
   auf jeder Etage — ein Dielenboden im ersten Stock ist kein Terrain.
   Die Reihenfolge steht in `scene_recipe.level_plate_kind`.
+- `map3d.level_walls?: {"<level>": "<kind>"}` (seit 2026-09-06): das
+  Gegenstück zu `level_floors` für die HÜLLE — jedes Konturwandstück der
+  Etage trägt das Kind als `texture_kind`. Ohne Eintrag gilt das
+  gebäudeweite `map3d.wall_kind`, ohne beides bleibt das Stück
+  texturlos und die Renderer nehmen `style.wall_color`. **Keine Kaskade**
+  wie beim Grundriss: eine Etage ohne Eintrag schaut nicht nach unten,
+  sie nimmt das globale Kind (`scene_recipe.level_wall_kind`).
+- `map3d.level_outlines?: {"<level>": [[x,z], …]}` (seit 2026-09-06): der
+  Grundriss EINER Etage, in denselben lokalen Metern wie `map3d.outline`,
+  offen gespeichert, max. 64 Punkte. So wird ein Gebäude nach oben
+  schmaler. **Kaskade nach unten:** eine Etage ohne eigenen Eintrag nimmt
+  die nächstniedrigere MIT Eintrag, sonst `map3d.outline` — ein Turm wird
+  einmal dort gezeichnet, wo er sich verjüngt. Die Kaskade **endet am
+  Erdgeschoss**: eine Etage ≥ 0 erbt nur von Etagen ≥ 0, sonst würde ein
+  kleiner gezeichneter Keller das Haus über sich schrumpfen lassen
+  (`scene_recipe.outline_source_level`). Etagenplatte und Konturwände
+  einer Etage folgen ihrem aufgelösten Grundriss; der Payload ändert
+  seine Form nicht — `plates[].outline` und `walls[].from/to` tragen die
+  Etagenform wie bisher, die Renderer brauchen keine Änderung.
+  Drei zusätzliche `problems[]`-Befunde greifen NUR auf Etagen mit eigenem
+  Grundriss, damit Welten ohne das Feature stumm bleiben:
+  `room_outside_level_outline` (`level`, `room_ids`),
+  `stair_outside_level_outline` (`level`) und
+  `elevator_outside_level_outline` (`levels`).
 - `map3d.elevator`: `[x, y]`-Fraktion, gilt für alle Etagen. Rezept:
   Schacht 1,8 m², Ecksäulen 0,14, Glas 3 Seiten (offene Seite Richtung
   Gebäudemitte), Pads 1,6 m², Kabine 1,4 m² × 0,6 storey — alles echte

@@ -230,11 +230,16 @@ export interface Map3D {
   /** Floor-texture KIND per storey ({"0": "parquet"}) — the client tiles the
    *  level plate with it; a room's surfaces.floor overrides its own area. */
   level_floors?: Record<string, string>
-  /** Wall-texture KIND of the WHOLE building shell — every contour wall
-   *  tiles with it (the wall counterpart of level_floors, deliberately not
-   *  per level). A room wall keeps its own surfaces.wall. Absent = the shell
-   *  renders in style.wall_color. */
+  /** Wall-texture KIND of the building shell — the SHELL-WIDE default every
+   *  contour wall tiles with, overridable per storey by `level_walls`. A room
+   *  wall keeps its own surfaces.wall. Absent = the shell renders in
+   *  style.wall_color. */
   wall_kind?: string
+  /** Wall-texture KIND per storey ({"1": "brick"}) — the wall counterpart of
+   *  level_floors and deliberately the same shape: a storey either names its
+   *  own kind or falls back to `wall_kind`. NO cascade like `level_outlines`
+   *  has — a texture does not carry "and upwards from here". */
+  level_walls?: Record<string, string>
   /** Area location: the location MODEL stays standing in the interior view
    *  and gets holes instead — the floor plan plus every indoor room placed
    *  outside it. Outdoor rooms outside the plan become zones on the model
@@ -273,6 +278,12 @@ export interface Map3D {
    *  same frame as `boundary`), auto-closed — the client renders floor plates
    *  and walls per used level from it. Absent = rectangle as before. */
   outline?: Array<[number, number]>
+  /** Per-storey FOOTPRINT overrides ({"2": [[x,z],…]}) — how a building that
+   *  narrows upwards is drawn. Points like `outline`: local metres around the
+   *  pin, stored open, at most 64. A storey WITHOUT an entry CASCADES DOWN: it
+   *  takes the nearest lower storey that has one, and `outline` when none
+   *  does. So a tower drawn once on level 2 keeps that shape on 3 and 4. */
+  level_outlines?: Record<string, Array<[number, number]>>
   /** Elevator position in LOCAL METRES around the pin (v6 Nr. 2) — placed
    *  once, valid for all levels (client builds the shaft). */
   elevator?: [number, number]

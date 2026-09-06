@@ -371,11 +371,9 @@ def _used_levels(recipes: List[Dict[str, Any]]) -> List[int]:
     return levels or [0]
 
 
-def _outline_world(map3d: Dict[str, Any]) -> List[List[float]]:
-    """``map3d.outline`` — the drawn BUILDING contour — in world metres, or []
-    when there is no polygon. Stored in local metres since v6 (Nr. 2), so
-    nothing is scaled here."""
-    pts = (map3d or {}).get("outline")
+def _parse_outline(pts: Any) -> List[List[float]]:
+    """One stored point sequence as world metres, or [] when it is not one.
+    Stored in local metres since v6 (Nr. 2), so nothing is scaled here."""
     if not isinstance(pts, list) or len(pts) < 3:
         return []
     out: List[List[float]] = []
@@ -384,6 +382,78 @@ def _outline_world(map3d: Dict[str, Any]) -> List[List[float]]:
             return []
         out.append([_r(_num(pt[0])), _r(_num(pt[1]))])
     return out
+
+
+def _level_outline_levels(map3d: Dict[str, Any]) -> List[int]:
+    """The storeys ``map3d.level_outlines`` names, as ints; [] when there are
+    none. The keys are decimal strings (the sanitizer's own spelling)."""
+    lv = (map3d or {}).get("level_outlines")
+    if not isinstance(lv, dict):
+        return []
+    out: List[int] = []
+    for key in lv:
+        try:
+            out.append(int(str(key)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def outline_source_level(map3d: Dict[str, Any], level: int) -> Optional[int]:
+    """WHICH storey's drawn footprint a storey uses, or None for the global
+    ``map3d.outline``.
+
+    THE CASCADE RUNS DOWNWARD (user decision 2026-09-06): a storey without its
+    own entry in ``level_outlines`` takes the nearest LOWER storey that has
+    one, and ``map3d.outline`` when none does. A tower that narrows is drawn
+    once, on the storey where it narrows, and every storey above inherits the
+    new shape — which is what "the building gets narrower from here up" means.
+    Looking upward instead would make the top storey the author of the ones
+    below it, and taking the global outline everywhere would mean redrawing
+    the same shape on every storey of the tower.
+
+    IT STOPS AT THE GROUND FLOOR. A cascade that ran through level 0 would let
+    a BASEMENT redefine the house: a cellar drawn smaller than the building —
+    the ordinary case — would shrink the ground floor and everything above it,
+    because level −1 is the nearest lower storey with an entry. So a storey at
+    or above 0 only inherits from storeys at or above 0, and a storey below
+    ground uses its own entry or the global outline and nothing else. Nobody
+    builds a house whose shape is dictated by its cellar.
+    """
+    lv = (map3d or {}).get("level_outlines")
+    if not isinstance(lv, dict):
+        return None
+    floor = 0 if level >= 0 else level
+    best: Optional[int] = None
+    for key, pts in lv.items():
+        try:
+            k = int(str(key))
+        except (TypeError, ValueError):
+            continue
+        if not floor <= k <= level or len(_parse_outline(pts)) < 3:
+            continue
+        if best is None or k > best:
+            best = k
+    return best
+
+
+def _outline_world(map3d: Dict[str, Any],
+                   level: Optional[int] = None) -> List[List[float]]:
+    """The drawn BUILDING contour in world metres, or [] when there is none.
+
+    Without ``level`` this is ``map3d.outline`` — the building's own footprint
+    and the answer to "does this location have a contour at all". With one it
+    is the footprint of THAT storey, resolved through
+    :func:`outline_source_level`.
+    """
+    if level is not None:
+        src = outline_source_level(map3d, level)
+        if src is not None:
+            got = _parse_outline((map3d or {}).get("level_outlines", {})
+                                 .get(str(src)))
+            if got:
+                return got
+    return _parse_outline((map3d or {}).get("outline"))
 
 
 def _drawn_boundary(map3d: Dict[str, Any]) -> List[List[float]]:
@@ -683,6 +753,28 @@ def level_plate_kind(level: int, level_floors: Any, ground_kind: str) -> str:
     return DEFAULT_FLOOR_KIND
 
 
+def level_wall_kind(level: int, level_walls: Any, wall_kind: str) -> str:
+    """The texture kind the CONTOUR WALLS of one storey carry.
+
+    The wall counterpart of :func:`level_plate_kind`, and deliberately the same
+    two words in the same order: ``map3d.level_walls["<level>"]`` names this
+    storey's shell outright, otherwise the shell-wide ``map3d.wall_kind``
+    applies. Empty means the piece ships no ``texture_kind`` at all and the
+    renderers fall back to ``style.wall_color``.
+
+    NO CASCADE, unlike the per-level OUTLINE: a storey without an entry does
+    not look for the storey below it, it takes the global kind. The outline
+    cascades because a tower that narrows keeps its new shape upwards; a
+    texture does not carry that meaning, and one panel with two inheritance
+    rules would be a panel nobody can read.
+    """
+    if isinstance(level_walls, dict):
+        declared = str(level_walls.get(str(level)) or "").strip()
+        if declared:
+            return declared
+    return str(wall_kind or "").strip()
+
+
 def _plate_holes(flights: List[Dict[str, Any]], level: int,
                  outline: List[List[float]],
                  *, by_centre: bool) -> List[List[List[float]]]:
@@ -748,9 +840,12 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
 
     WHAT THE LEVEL PLATE IS SHAPED LIKE (contract v6 Nr. 4): the drawn
     location boundary — the plate is the triangulated boundary polygon, not a
-    square any more. A drawn BUILDING contour (``map3d.outline``) still wins
-    where there is one: it is the more specific shape, the floor plan of the
-    house inside the plot, and the walls are built along it. A location with
+    square any more. A drawn BUILDING contour still wins where there is one:
+    it is the more specific shape, the floor plan of the house inside the
+    plot, and the walls are built along it. THAT CONTOUR IS PER STOREY since
+    2026-09-06 — ``map3d.level_outlines`` overrides ``map3d.outline`` from one
+    storey upward (:func:`outline_source_level`), which is how a building
+    narrows as it rises. A location with
     neither gets no level plate at all, exactly as before — the synthesized
     square is a transition crutch for the payload's ``boundary``
     field, never a floor somebody drew.
@@ -762,13 +857,18 @@ def _plates(map3d: Dict[str, Any], recipes: List[Dict[str, Any]],
     to the plate it belongs to, so a hole never hangs over an outline.
     """
     plates: List[Dict[str, Any]] = []
-    contour = _outline_world(map3d) or _drawn_boundary(map3d)
+    plot = _drawn_boundary(map3d)
     level_floors = (map3d or {}).get("level_floors") or {}
     ground = min(levels)
-    if contour:
-        for level in levels:
-            if level == 0:
-                continue                    # the terrain is the floor here
+    for level in levels:
+        if level == 0:
+            continue                        # the terrain is the floor here
+        # PER STOREY since 2026-09-06: a building that narrows upwards draws
+        # its own footprint on the storey where it narrows, and every storey
+        # above inherits it (:func:`outline_source_level`). Without any drawn
+        # contour the plot stands in, as it always did.
+        contour = _outline_world(map3d, level) or plot
+        if contour:
             plates.append({
                 "level": level,
                 "outline": contour,
@@ -976,48 +1076,60 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     its own wall gap IS the entrance there. ``room_hulls`` maps level → list of
     room outlines in world metres.
 
-    ``map3d.wall_kind`` textures the whole shell: every emitted piece carries
-    it as ``texture_kind``, the same field a room wall gets from its own
-    ``surfaces.wall``. Without the field the contour stays untextured and the
-    renderers fall back to ``style.wall_color``.
+    ``map3d.wall_kind`` textures the shell and ``map3d.level_walls`` overrides
+    it PER STOREY (:func:`level_wall_kind`): every emitted piece carries the
+    kind of ITS level as ``texture_kind``, the same field a room wall gets from
+    its own ``surfaces.wall``. Without a kind the contour stays untextured and
+    the renderers fall back to ``style.wall_color``.
     """
-    pts = _outline_world(map3d)
-    if len(pts) < 3:
-        return []
-    # Winding decides which side is outside (shoelace in the XZ plane).
-    area2 = 0.0
-    for i, (x1, z1) in enumerate(pts):
-        x2, z2 = pts[(i + 1) % len(pts)]
-        area2 += x1 * z2 - x2 * z1
-    ccw = area2 > 0
-
-    # (level, edge index) → the (span, head height, has a leaf, the leaf is a
-    # PROP) the doors of that storey cut out of it.
-    cuts: Dict[Tuple[int, int],
-               List[Tuple[float, float, float, bool, bool]]] = {}
-    for door in doors:
-        hit = _contour_hit(pts, door["at"], door["normal"])
-        if not hit:
-            continue
-        i, t = hit
-        half = _num(door.get("width")) / 2
-        cuts.setdefault((int(door.get("level") or 0), i), []).append(
-            (t - half, t + half, _num(door.get("top_y")),
-             bool(door.get("leaf")), bool(door.get("door_prop"))))
-
     height = _wall_height(storey)
-    wall_kind = str((map3d or {}).get("wall_kind") or "").strip()
+    # ONE kind per storey, resolved once (:func:`level_wall_kind`): the
+    # storey's own entry in ``level_walls``, else the shell-wide ``wall_kind``.
+    wall_kinds = {lv: level_wall_kind(lv, (map3d or {}).get("level_walls"),
+                                      str((map3d or {}).get("wall_kind") or ""))
+                  for lv in levels}
     walls: List[Dict[str, Any]] = []
-    for i, a in enumerate(pts):
-        b = pts[(i + 1) % len(pts)]
-        frame = _edge_frame(a, b)
-        if not frame:
+    # THE STOREY IS THE OUTER LOOP SINCE 2026-09-06, because the CONTOUR is a
+    # per-storey thing now: a building that narrows upwards has different edges
+    # — a different NUMBER of edges — on the storey where it narrows, so an
+    # edge index means nothing until one says which storey it belongs to.
+    for level in levels:
+        pts = _outline_world(map3d, level)
+        if len(pts) < 3:
             continue
-        ux, uz, length = frame
-        nx = (uz if ccw else -uz)
-        nz = (-ux if ccw else ux)
-        for level in levels:
-            door_cuts = list(cuts.get((level, i), []))
+        # Winding decides which side is outside (shoelace in the XZ plane).
+        area2 = 0.0
+        for i, (x1, z1) in enumerate(pts):
+            x2, z2 = pts[(i + 1) % len(pts)]
+            area2 += x1 * z2 - x2 * z1
+        ccw = area2 > 0
+
+        # Edge index → the (span, head height, has a leaf, the leaf is a PROP)
+        # the doors of THIS storey cut out of it. Hit-tested against this
+        # storey's own contour: a door on the narrow top floor has nothing to
+        # do with the wide ground floor's edges.
+        cuts: Dict[int, List[Tuple[float, float, float, bool, bool]]] = {}
+        for door in doors:
+            if int(door.get("level") or 0) != level:
+                continue
+            hit = _contour_hit(pts, door["at"], door["normal"])
+            if not hit:
+                continue
+            i, t = hit
+            half = _num(door.get("width")) / 2
+            cuts.setdefault(i, []).append(
+                (t - half, t + half, _num(door.get("top_y")),
+                 bool(door.get("leaf")), bool(door.get("door_prop"))))
+
+        for i, a in enumerate(pts):
+            b = pts[(i + 1) % len(pts)]
+            frame = _edge_frame(a, b)
+            if not frame:
+                continue
+            ux, uz, length = frame
+            nx = (uz if ccw else -uz)
+            nz = (-ux if ccw else ux)
+            door_cuts = list(cuts.get(i, []))
             # Room-hull spans on this contour edge: colinear within roughly
             # a wall thickness → the room wall owns that stretch.
             yielded: List[Tuple[float, float]] = []
@@ -1088,8 +1200,8 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                         # wall: the renderers skip the plate, the entry stays
                         # for the exterior render.
                         entry["door_prop"] = True
-                elif wall_kind:
-                    entry["texture_kind"] = wall_kind
+                elif wall_kinds.get(level):
+                    entry["texture_kind"] = wall_kinds[level]
                 if kind == "lintel":
                     # Over the door one WALKS — the piece is drawn, it does not
                     # block (§ B1 ``lintel``).
@@ -1606,7 +1718,9 @@ def rooms_outside_boundary(recipes: List[Dict[str, Any]],
 
 def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
               shell_levels: Set[int], doorways: List[Dict[str, Any]],
-              recipes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+              recipes: List[Dict[str, Any]],
+              flights: Optional[List[Dict[str, Any]]] = None,
+              ) -> List[Dict[str, Any]]:
     """Findings instead of silent repairs (plan-betreten-und-tueren.md § 4.3).
 
     ``rooms_without_layout`` — the location has a contour, it has rooms, and
@@ -1656,7 +1770,17 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
     """
     out: List[Dict[str, Any]] = []
     from app.models.world import GROUND_ROOM_ID
-    has_contour = len(_outline_world(map3d)) >= 3
+    # TWO DIFFERENT QUESTIONS, TWO DIFFERENT CONTOURS (review 2026-09-06).
+    # ``rooms_without_layout`` asks "is there a drawn building at all, standing
+    # over nothing?" — ANY storey's contour answers that, and a location whose
+    # only polygon sits in ``level_outlines`` would otherwise never be asked.
+    # ``no_building_entrance`` asks about the GROUND FLOOR specifically: a door
+    # on an upper storey opens the hull up there and still lets nobody in.
+    ground_contour = len(_outline_world(map3d, 0)) >= 3
+    any_contour = ground_contour or any(
+        len(_outline_world(map3d, lv)) >= 3
+        for lv in ({int(r.get("level") or 0) for r in recipes}
+                   | set(_level_outline_levels(map3d))))
     # The GROUND room is out: it is the location's open surface and NEVER
     # carries a layout (the sanitizer strips one), so counting it would blame
     # the author for a room that cannot be drawn.
@@ -1666,7 +1790,7 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
     # props (§ A13a) composes a recipe, but it is not a room somebody can
     # enter, so it must not silence this finding.
     room_recipes = [r for r in recipes if not r.get("is_ground")]
-    if has_contour and rooms and not room_recipes:
+    if any_contour and rooms and not room_recipes:
         out.append({
             "kind": "rooms_without_layout",
             "location_id": str(location.get("id") or ""),
@@ -1675,7 +1799,7 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
                        "contour holds nothing that can be entered. Draw a "
                        "layout for at least one of its rooms.",
         })
-    if (has_contour
+    if (ground_contour
             and 0 in shell_levels
             and not any(d.get("outside") and int(d.get("level") or 0) == 0
                         for d in doorways)):
@@ -1727,6 +1851,140 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
                        "floor plan stands on ground this location does not "
                        "cover. Move them inside or widen the boundary.",
         })
+    out.extend(_narrowed_storey_problems(location, map3d, recipes,
+                                         flights or []))
+    return out
+
+
+def _narrowed_storey_problems(location: Dict[str, Any], map3d: Dict[str, Any],
+                              recipes: List[Dict[str, Any]],
+                              flights: List[Dict[str, Any]],
+                              ) -> List[Dict[str, Any]]:
+    """What a building that NARROWS as it rises can get wrong (§ G3).
+
+ONLY STOREYS WHOSE SHAPE COMES FROM ``level_outlines`` ARE JUDGED — its
+    own entry OR one inherited through the cascade. A storey standing on the
+    building's plain ``outline`` has always been able to hold a room reaching
+    past the contour: that is how an outbuilding, an area location or a
+    balcony is drawn, and turning it into a finding would put a warning on
+    every world that never touched this feature.
+
+    THE INHERITING STOREY COUNTS TOO (review finding 2026-09-06). Judging only
+    the storey that drew the polygon missed the more likely mistake by far: a
+    tower drawn once on storey 1 hands its narrow shape to 2, 3 and 4, and a
+    room — or a staircase head — left standing out there on storey 2 got no
+    finding at all while its plate silently clipped the hole away. Inheriting
+    is new behaviour itself, so nothing old can trip over this.
+
+    The narrowing is what creates the mistake: floor that was there on the
+    storey below is not there any more, and a room, a staircase head or a lift
+    platform standing in the missing part stands on nothing.
+
+    All three are WARNINGS, like every other finding here: the composer states
+    them and builds what it was given (:func:`clip_ring_to_outline` already
+    trims a hole that hangs over the edge). Nothing is repaired behind the
+    author's back.
+    """
+    out: List[Dict[str, Any]] = []
+    loc_id = str(location.get("id") or "")
+    if not isinstance((map3d or {}).get("level_outlines"), dict):
+        return out
+    # Every storey IN PLAY: the ones that drew a polygon, the ones rooms stand
+    # on, and the ones a flight starts from or arrives at. A storey is judged
+    # when its shape comes from ``level_outlines`` at all — inherited counts.
+    in_play: Set[int] = set(_level_outline_levels(map3d))
+    for recipe in recipes:
+        in_play.add(int(recipe.get("level") or 0))
+    for flight in flights:
+        in_play.add(int((flight.get("block") or {}).get("from_level") or 0))
+        in_play.add(int((flight.get("hole") or {}).get("level") or 0))
+    narrowed: Dict[int, List[List[float]]] = {}
+    for lv in in_play:
+        if outline_source_level(map3d, lv) is None:
+            continue
+        pts = _outline_world(map3d, lv)
+        if len(pts) >= 3:
+            narrowed[lv] = pts
+    if not narrowed:
+        return out
+
+    for lv, contour in sorted(narrowed.items()):
+        # INDOOR rooms only: an outdoor room is a zone on a surface, not a
+        # floor the storey has to carry.
+        on_level = [r for r in recipes
+                    if int(r.get("level") or 0) == lv
+                    and not r.get("always_visible")
+                    and not r.get("is_ground")]
+        stray = rooms_outside_boundary(on_level, contour)
+        if stray:
+            out.append({
+                "kind": "room_outside_level_outline",
+                "location_id": loc_id,
+                "level": lv,
+                "room_ids": stray,
+                "room_count": len(stray),
+                "message": "Rooms reach out of this storey's footprint: "
+                           "the storey is narrower than the one below, and "
+                           "their floor plan stands where this floor has no "
+                           "floor. Move them inside or widen the storey.",
+            })
+
+    # A FLIGHT NEEDS BOTH ENDS. Its foot stands on the storey it starts from,
+    # its hole opens the storey it arrives on — and a narrowed storey can have
+    # dropped the ground under either. Each is reported at the storey the
+    # ground is missing on, so the author is told which floor to widen.
+    for flight in flights:
+        # The flight's own numbers live in its ``block`` (:func:`_stair_flights`
+        # returns extras/block/hole): ``at`` is the FOOT in world metres — the
+        # spot the first tread begins — and ``from_level`` the storey it
+        # stands on. ``block.foot``/``block.head`` are the 3D landing points,
+        # not this.
+        block = flight.get("block") or {}
+        at = block.get("at") or []
+        start = int(block.get("from_level") or 0)
+        if (len(at) == 2 and start in narrowed
+                and not _point_in_polygon(_num(at[0]), _num(at[1]),
+                                          narrowed[start])):
+            out.append({
+                "kind": "stair_outside_level_outline",
+                "location_id": loc_id,
+                "level": start,
+                "message": "A staircase starts outside this storey's "
+                           "footprint: its first tread stands where this "
+                           "floor has no floor. Move the flight, or widen "
+                           "the storey.",
+            })
+        hole = flight.get("hole") or {}
+        arrive = int(hole.get("level") or 0)
+        centre = hole.get("center") or []
+        if len(centre) != 2 or arrive not in narrowed:
+            continue
+        if _point_in_polygon(_num(centre[0]), _num(centre[1]),
+                             narrowed[arrive]):
+            continue
+        out.append({
+            "kind": "stair_outside_level_outline",
+            "location_id": loc_id,
+            "level": arrive,
+            "message": "A staircase arrives outside this storey's footprint: "
+                       "it opens no hole, so the climb ends under a closed "
+                       "floor. Move the flight, or widen the storey.",
+        })
+
+    lift = (map3d or {}).get("elevator")
+    if isinstance(lift, (list, tuple)) and len(lift) == 2:
+        lx, lz = _num(lift[0]), _num(lift[1])
+        missing = sorted(lv for lv, contour in narrowed.items()
+                         if not _point_in_polygon(lx, lz, contour))
+        if missing:
+            out.append({
+                "kind": "elevator_outside_level_outline",
+                "location_id": loc_id,
+                "levels": missing,
+                "message": "The lift stands outside the footprint of one or "
+                           "more storeys: there is no floor to step out onto "
+                           "there. Move the lift, or widen those storeys.",
+            })
     return out
 
 
@@ -3589,7 +3847,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # author's back (§ 4.3). Always present, empty when all is well;
         # editor and 3D client only display it.
         "problems": _problems(location, map3d, shell_levels, doorways,
-                              recipes),
+                              recipes, flights),
     }
     if boundary:
         out["boundary_openings"] = boundary

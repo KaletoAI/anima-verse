@@ -725,3 +725,48 @@ export function draftStairSymbol(st: StairSpec, storey: number): StairSymbol | n
     footprint: [pt(0, half), pt(run, half), pt(run, -half), pt(0, -half)],
   })
 }
+
+// ── Per-storey building footprint (plan-grundriss-werkbank.md § G) ────────
+//
+// A building may narrow as it rises: `map3d.level_outlines` holds one polygon
+// per storey that differs, `map3d.outline` is the building's own footprint.
+// The resolution below MIRRORS the server's `scene_recipe.outline_source_level`
+// — the plan draws what the composer will build, and two different cascades
+// would mean the editor shows a house nobody gets.
+
+/** WHICH storey's drawn footprint a storey uses, or null for `map3d.outline`.
+ *
+ *  The cascade runs DOWNWARD and stops at the ground floor: a storey at or
+ *  above 0 inherits from the nearest lower storey at or above 0, a storey
+ *  below ground uses its own entry or the global outline. Without the stop a
+ *  cellar drawn smaller than the house — the ordinary case — would shrink the
+ *  ground floor and everything above it. */
+export function outlineSourceLevel(
+  levelOutlines: Record<string, Array<[number, number]>> | undefined,
+  level: number,
+): number | null {
+  if (!levelOutlines) return null
+  const floor = level >= 0 ? 0 : level
+  let best: number | null = null
+  for (const [key, pts] of Object.entries(levelOutlines)) {
+    const k = Number(key)
+    if (!Number.isInteger(k) || k < floor || k > level) continue
+    if (!Array.isArray(pts) || pts.length < 3) continue
+    if (best === null || k > best) best = k
+  }
+  return best
+}
+
+/** The footprint ONE storey is built on, resolved through the cascade. */
+export function levelOutline(
+  map3d: { outline?: Array<[number, number]>
+           level_outlines?: Record<string, Array<[number, number]>> } | undefined,
+  level: number,
+): Array<[number, number]> {
+  const src = outlineSourceLevel(map3d?.level_outlines, level)
+  if (src !== null) {
+    const pts = map3d?.level_outlines?.[String(src)]
+    if (pts && pts.length >= 3) return pts
+  }
+  return map3d?.outline || []
+}
