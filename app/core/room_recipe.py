@@ -39,9 +39,10 @@ location's. :func:`room_transform` is that step, and it is the only place it
 happens — storage stays straight, so drawing stays a straight-on gesture.
 
 Yaw/facing are degrees; the compass vocabulary of the room markers applies
-(0 = south, 90 = east, …), composed prop facing = ``facing − placement.yaw``
-(the plan yaw turns clockwise in the top view, the compass counts the other
-way around).
+(0 = south, 90 = east, …), composed prop facing = ``facing + placement.yaw``
+— since E4 both render as ``rotation.y = +rad(…)``, so the facing grows in the
+SAME sense as the yaw (:func:`compose_prop_marker`). The subtraction that stood
+here was the mirror image of the old model-yaw sign.
 """
 
 import hashlib

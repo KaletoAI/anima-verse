@@ -315,7 +315,7 @@ export function PlanPropStrip({
       {confirmRemove ? (
         <>
           <span className="ga-hint">
-            {t('Also removes {n} pieces standing on it.')
+            {t('Also removes {n} piece(s) standing on it.')
               .replace('{n}', String(dependents))}
           </span>
           <button

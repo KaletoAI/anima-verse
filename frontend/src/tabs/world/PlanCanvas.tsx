@@ -33,7 +33,7 @@ import {
   planMapView, r4, rM, stairSymbol,
 } from './planGeometry'
 import type { PlanView, Pt, SnapResult } from './planGeometry'
-import { composePlacements } from './placementCompose'
+import { composePlacements, withPropHeights } from './placementCompose'
 import type { PlanMode } from './PlanToolbar'
 import type {
   Map3D, PlacedLayout, Room, SceneRoom, SceneStairs,
@@ -590,11 +590,13 @@ export function PlanCanvas({
       // relative to the piece it stands on (decision E1), so the plan draws
       // and clicks the COMPOSED one — index-aligned with `content.props`, the
       // same list the drag handlers and the strip address.
-      const composedProps = composePlacements(content?.props || [])
+      const composedProps = composePlacements(
+        withPropHeights(content?.props || [], propDims))
       // Ghosts may stand on each other AND on what is already in the room, so
       // they compose over both lists and take their own slice back.
       const composedGhosts = reviewing && room.id === selected
-        ? composePlacements([...(content?.props || []), ...furnish.ghosts])
+        ? composePlacements(withPropHeights(
+          [...(content?.props || []), ...furnish.ghosts], propDims))
           .slice((content?.props || []).length)
         : []
       // Holes owned by a NEIGHBOUR that pierce this room's wall too:

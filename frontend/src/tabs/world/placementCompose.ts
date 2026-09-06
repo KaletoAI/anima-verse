@@ -25,11 +25,21 @@ export const ON_MAX_DEPTH = 3
 /** What the composition reads off a stored placement. */
 export interface ComposeInput {
   id?: string
+  /** Library id — only `withPropHeights` needs it. */
+  prop_id?: string
   /** Room metres for a piece on the floor; metres in the SUPPORT's unturned
    *  frame for a child (+x = its width axis, +z = its depth axis). */
   at: [number, number]
   /** Degrees — absolute for a root, relative to the support for a child. */
   yaw?: number
+  /** Metres above the floor for a piece on the floor; the trim above the
+   *  SUPPORT's top surface for a child. */
+  offset_y?: number
+  /** The REAL height of the prop this placement shows, in metres — the plan
+   *  reads it from the library (`withPropHeights`). Only the vertical
+   *  composition needs it; the XZ turn does not, so a call site that just
+   *  draws footprints may leave it out. */
+  height_m?: number
   /** Placement id of the piece this one stands on. */
   on?: string
 }
@@ -38,6 +48,15 @@ export interface ComposeInput {
 export interface ComposedPlacement {
   at: [number, number]
   yaw: number
+  /** Metres of this piece's BASE above the floor, composed through the chain.
+   *
+   *  APPROXIMATE ON PURPOSE, and never a render value: the plan does not know
+   *  a prop's `ground_offset_m` (how deep it sinks into its ground), so this
+   *  is the server's `stack_on_support` with every sink taken as 0. It exists
+   *  to RANK candidate supports by their top surface — which is what the
+   *  server's own rule does — while the metres a renderer draws come from the
+   *  recipe. Meaningless unless the entries carry `height_m`. */
+  offset_y: number
   /** The link that SURVIVED — `''` for a root and for a broken link. */
   on: string
   /** 0 = on the floor. */
@@ -55,7 +74,11 @@ export interface ComposedPlacement {
  *     r = radians(yaw_support)
  *     x = x_support + dx·cos r + dz·sin r
  *     z = z_support − dx·sin r + dz·cos r
- *     yaw = (yaw_support + yaw_child) mod 360
+ *     yaw      = (yaw_support + yaw_child) mod 360
+ *     offset_y = offset_y_support + height_m_support + offset_y_child
+ *
+ * The last line is the server's `stack_on_support` with the sinks taken as 0
+ * (see `ComposedPlacement.offset_y`) — it ranks supports, it never draws.
  *
  * Order in the list does not matter — supports are composed before their
  * children. A link that does not hold (unknown id, self-reference, circle)
@@ -70,6 +93,7 @@ export function composePlacements(
   const out: ComposedPlacement[] = list.map((p) => ({
     at: [Number(p.at?.[0]) || 0, Number(p.at?.[1]) || 0],
     yaw: ((Number(p.yaw) || 0) % 360 + 360) % 360,
+    offset_y: Number(p.offset_y) || 0,
     on: '',
     depth: 0,
   }))
@@ -144,6 +168,10 @@ export function composePlacements(
                 sup.at[1] - dx * sin + dz * cos]
     child.yaw = (sup.yaw + child.yaw) % 360
     if (tooDeep) continue       // composed into room metres, no longer a child
+    // The support's FINISHED base plus its own height is its top surface, so
+    // the child's stored trim sits on it — the same order the server composes
+    // in, which is why supports run first.
+    child.offset_y += sup.offset_y + (Number(list[j].height_m) || 0)
     child.depth = sup.depth + 1
     child.on = list[i].on || ''
   }
@@ -207,4 +235,64 @@ export function dependentIndices(
     if (!grew) break
   }
   return [...doomed].sort((a, b) => a - b)
+}
+
+/**
+ * The stored placements with the library height of the prop each one shows —
+ * the ONE place the plan joins a placement to its dims for the composition.
+ *
+ * Without it a composed `offset_y` is only the sum of the stored trims, which
+ * is not a height above the floor; with it the vertical chain is the server's
+ * (minus the sinks the plan cannot see).
+ */
+export function withPropHeights<T extends ComposeInput>(
+  list: readonly T[],
+  dims: Record<string, { height_m?: number } | undefined>,
+): Array<T & { height_m: number }> {
+  return list.map((p) => ({
+    ...p, height_m: dims[p.prop_id || '']?.height_m || 0,
+  }))
+}
+
+/**
+ * WHICH of the pieces under a placement carries it — the index to write into
+ * `on`, or `null` when none of them may.
+ *
+ * `candidates` are the placements whose turned footprint covers this one's
+ * anchor (`RoomLayoutEditor.propsAtPoint`, the same test that cycles a click
+ * through a stack): the footprint question stays there, this answers the
+ * ranking question.
+ *
+ * TWO RULES, and both have cost a bug:
+ *
+ * 1. **Never the piece's own subtree.** A tray standing centred on a table
+ *    covers the table's anchor, so it IS one of the table's candidates —
+ *    setting the table down on its own tray would close a circle, and the
+ *    circle rule would then cut it and drop both pieces back to their raw
+ *    stored `at`. `dependentIndices` names exactly what is out of bounds.
+ * 2. **The TOPMOST surface wins**, ties to the later placement — the server's
+ *    own rule (`props.stack_offset_y`), read off the COMPOSED base plus the
+ *    prop's height. The stored `offset_y` would be the wrong number here: on
+ *    a child it is a trim above ITS support, not a height above the floor.
+ *    Depth does not enter it: a 1.8 m floor lamp beside the table is a higher
+ *    surface than a coaster lying on the table, whatever their chain depths.
+ */
+export function pickSupport(
+  list: readonly ComposeInput[],
+  composed: readonly ComposedPlacement[],
+  index: number,
+  candidates: readonly number[],
+): number | null {
+  const own = new Set(dependentIndices(list, index))
+  let best: number | null = null
+  let bestTop = -Infinity
+  for (const i of candidates) {
+    if (own.has(i) || !composed[i]) continue
+    const top = composed[i].offset_y + (Number(list[i].height_m) || 0)
+    if (top >= bestTop) {
+      best = i
+      bestTop = top
+    }
+  }
+  return best
 }

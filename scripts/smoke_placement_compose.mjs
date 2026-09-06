@@ -82,6 +82,41 @@
  *   yaw = 135 − 90 = 45                  →  at [0.3, 0], yaw 45
  *
  * ============================================================================
+ * THE VERTICAL CHAIN — composed `offset_y`
+ * ============================================================================
+ * The plan cannot know a prop's sink (`ground_offset_m`), so it composes the
+ * server's `stack_on_support` with every sink taken as 0:
+ *
+ *   offset_y = offset_y_support + height_m_support + offset_y_child
+ *
+ * Table 0.75 m high, tray 0.05 m on it, mug on the tray:
+ *
+ *   table  base 0.00
+ *   tray   base 0.00 + 0.75 + 0.00 = 0.75      (top = 0.75 + 0.05 = 0.80)
+ *   mug    base 0.75 + 0.05 + 0.00 = 0.80
+ *
+ * and a 2 cm trim on the tray moves the tray to 0.77 and the mug to 0.82.
+ * These are the same numbers `smoke_scene_recipe.py` [7j] derives for the
+ * SERVER, which is the point: the plan may not disagree with the recipe about
+ * which surface is the higher one.
+ *
+ * ============================================================================
+ * pickSupport — WHICH PIECE CARRIES THE ONE BEING SET DOWN
+ * ============================================================================
+ * Candidates are the footprints covering the piece's anchor (the editor's own
+ * hit test). Two rules, both hand-checked below:
+ *
+ *   (1) NEVER the piece's own subtree. A tray centred on a table covers the
+ *       TABLE's anchor too, so it is one of the table's candidates — writing
+ *       `table.on = tray` while `tray.on = table` closes a circle, and the
+ *       circle rule would then cut it and drop both pieces to their raw `at`.
+ *   (2) The TOPMOST surface wins, ties to the LATER placement — the server's
+ *       rule, read off the COMPOSED base plus the prop's own height. Chain
+ *       depth does not enter it: a 1.8 m floor lamp is a higher surface than
+ *       a 0.01 m coaster lying on a 0.75 m table (top 0.76), whatever their
+ *       depths say.
+ *
+ * ============================================================================
  * dependentIndices — WHAT A DELETE TAKES WITH IT
  * ============================================================================
  * A candle whose table is gone has no frame left to stand in, so removing a
@@ -148,56 +183,57 @@ function check(label, actual, expected) {
   }
 }
 
-const { composePlacements, toSupportFrame, dependentIndices, ON_MAX_DEPTH } =
+const { composePlacements, toSupportFrame, dependentIndices, pickSupport,
+  withPropHeights, ON_MAX_DEPTH } =
   await loadBundled(SRC, 'placecompose-');
 
-const TABLE = { id: 'tbl', at: [3.0, 2.0], yaw: 90 };
+const TABLE = { id: 'tbl', at: [3.0, 2.0], yaw: 90, height_m: 0.75 };
 
 console.log('\nA  the candle on the turned table');
 let out = composePlacements([TABLE, { id: 'cnd', at: [0.3, 0.0], on: 'tbl' }]);
 check('the table itself does not move', out[0],
-  { at: [3, 2], yaw: 90, on: '', depth: 0 });
-check('the candle lands at (3.0, 1.7), yaw 90, depth 1', out[1],
-  { at: [3, 1.7], yaw: 90, on: 'tbl', depth: 1 });
+  { at: [3, 2], yaw: 90, offset_y: 0, on: '', depth: 0 });
+check('the candle lands at (3.0, 1.7), yaw 90, depth 1, base 0.75', out[1],
+  { at: [3, 1.7], yaw: 90, offset_y: 0.75, on: 'tbl', depth: 1 });
 out = composePlacements([TABLE, { id: 'cnd', at: [0.3, 0.0], yaw: 45, on: 'tbl' }]);
 check('its own yaw 45 adds up to 135 and the spot stays', out[1],
-  { at: [3, 1.7], yaw: 135, on: 'tbl', depth: 1 });
+  { at: [3, 1.7], yaw: 135, offset_y: 0.75, on: 'tbl', depth: 1 });
 check('a placement on the floor composes to itself',
-  composePlacements([{ id: 'x', at: [1.5, -2.25], yaw: 30 }])[0],
-  { at: [1.5, -2.25], yaw: 30, on: '', depth: 0 });
+  composePlacements([{ id: 'x', at: [1.5, -2.25], yaw: 30, offset_y: 0.4 }])[0],
+  { at: [1.5, -2.25], yaw: 30, offset_y: 0.4, on: '', depth: 0 });
 
 console.log('\nB  a chain, in any order');
 const CHAIN = [TABLE,
-  { id: 'try', at: [0.0, 0.0], on: 'tbl' },
-  { id: 'mug', at: [0.1, 0.0], on: 'try' }];
+  { id: 'try', at: [0.0, 0.0], on: 'tbl', height_m: 0.05 },
+  { id: 'mug', at: [0.1, 0.0], on: 'try', height_m: 0.12 }];
 out = composePlacements(CHAIN);
-check('the tray sits on the table point', out[1],
-  { at: [3, 2], yaw: 90, on: 'tbl', depth: 1 });
-check('the mug composes against the TRAY: (3.0, 1.9), depth 2', out[2],
-  { at: [3, 1.9], yaw: 90, on: 'try', depth: 2 });
+check('the tray sits on the table point, base 0.75', out[1],
+  { at: [3, 2], yaw: 90, offset_y: 0.75, on: 'tbl', depth: 1 });
+check('the mug composes against the TRAY: (3.0, 1.9), base 0.80', out[2],
+  { at: [3, 1.9], yaw: 90, offset_y: 0.8, on: 'try', depth: 2 });
 const reversed = composePlacements([CHAIN[2], CHAIN[1], CHAIN[0]]);
 check('listed child-first the mug lands in the same place', reversed[0],
-  { at: [3, 1.9], yaw: 90, on: 'try', depth: 2 });
+  { at: [3, 1.9], yaw: 90, offset_y: 0.8, on: 'try', depth: 2 });
 check('...and the answer stays in INPUT order', reversed[2],
-  { at: [3, 2], yaw: 90, on: '', depth: 0 });
+  { at: [3, 2], yaw: 90, offset_y: 0, on: '', depth: 0 });
 
 console.log('\nC  links that do not hold');
 check('an unknown support: the piece keeps its spot',
   composePlacements([{ id: 'kid', at: [4, 4], on: 'ghost' }])[0],
-  { at: [4, 4], yaw: 0, on: '', depth: 0 });
+  { at: [4, 4], yaw: 0, offset_y: 0, on: '', depth: 0 });
 check('a self-reference: likewise',
   composePlacements([{ id: 'solo', at: [2, 2], on: 'solo' }])[0],
-  { at: [2, 2], yaw: 0, on: '', depth: 0 });
+  { at: [2, 2], yaw: 0, offset_y: 0, on: '', depth: 0 });
 check('a 2-cycle: both pieces keep their spots and lose the link',
   composePlacements([{ id: 'aaa', at: [2, 2], on: 'bbb' },
     { id: 'bbb', at: [3, 3], on: 'aaa' }]),
-  [{ at: [2, 2], yaw: 0, on: '', depth: 0 },
-    { at: [3, 3], yaw: 0, on: '', depth: 0 }]);
+  [{ at: [2, 2], yaw: 0, offset_y: 0, on: '', depth: 0 },
+    { at: [3, 3], yaw: 0, offset_y: 0, on: '', depth: 0 }]);
 check('a piece hanging off a cut circle still follows it',
   composePlacements([{ id: 'aaa', at: [2, 2], on: 'bbb' },
     { id: 'bbb', at: [3, 3], on: 'aaa' },
     { id: 'kid', at: [0.5, 0], on: 'aaa' }])[2],
-  { at: [2.5, 2], yaw: 0, on: 'aaa', depth: 1 });
+  { at: [2.5, 2], yaw: 0, offset_y: 0, on: 'aaa', depth: 1 });
 
 console.log('\nD  the chain is three storeys deep, no more');
 check('the limit is 3', ON_MAX_DEPTH, 3);
@@ -209,7 +245,7 @@ check('x runs 1.0 1.1 1.2 1.3 1.4', out.map((p) => p.at[0]),
 check('the first four keep their links', out.slice(0, 4).map((p) => p.on),
   ['', 'p0', 'p1', 'p2']);
 check('the fifth is composed but linkless, a root of its own', out[4],
-  { at: [1.4, 1], yaw: 0, on: '', depth: 0 });
+  { at: [1.4, 1], yaw: 0, offset_y: 0, on: '', depth: 0 });
 
 console.log('\nE  toSupportFrame — the inverse');
 const sup = composePlacements([TABLE])[0];
@@ -222,7 +258,55 @@ check('and it undoes the forward step for an arbitrary pair',
     { id: 'c', at: [-0.4, 0.25], yaw: 200, on: 'tbl' }])[1].at, 290, sup),
   { at: [-0.4, 0.25], yaw: 200 });
 
-console.log('\nF  dependentIndices — what goes with a support');
+console.log('\nF  the vertical chain — composed offset_y');
+out = composePlacements(CHAIN);
+check('table 0, tray 0.75, mug 0.80', out.map((p) => p.offset_y),
+  [0, 0.75, 0.8]);
+check('a 2 cm trim on the tray lifts the mug with it',
+  composePlacements([CHAIN[0], { ...CHAIN[1], offset_y: 0.02 }, CHAIN[2]])
+    .map((p) => p.offset_y), [0, 0.77, 0.82]);
+check('withPropHeights joins the library height onto a placement',
+  withPropHeights([{ id: 'a', prop_id: 'table', at: [0, 0] }],
+    { table: { height_m: 0.75 } })[0].height_m, 0.75);
+check('...and an unknown prop weighs nothing',
+  withPropHeights([{ id: 'a', prop_id: 'nope', at: [0, 0] }], {})[0].height_m, 0);
+
+console.log('\nG  pickSupport — which piece carries the one being set down');
+const chainC = composePlacements(CHAIN);
+check('the mug on a table+tray stack takes the TRAY (top 0.80 > 0.75)',
+  pickSupport(CHAIN, chainC, 2, [0, 1, 2]), 1);
+// FINDING 1 (review round 2): the tray covers the TABLE's anchor as well, so
+// it is one of the table's candidates — and it must never be picked.
+check('setting the TABLE down cannot pick its own tray: null',
+  pickSupport(CHAIN, chainC, 0, [0, 1, 2]), null);
+check('...nor the mug two storeys up',
+  pickSupport(CHAIN, chainC, 0, [0, 1, 2, 2]), null);
+check('the tray may not stand on the mug it carries either',
+  pickSupport(CHAIN, chainC, 1, [0, 1, 2]), 0);
+check('nothing underneath at all: null',
+  pickSupport(CHAIN, chainC, 2, [2]), null);
+// FINDING 2: rank by the COMPOSED top. Two coasters at the SAME depth 1, one
+// on the 0.75 m table (top 0.75 + 0.01 = 0.76), one on a 0.40 m stool
+// (top 0.40 + 0.01 = 0.41) — the table's wins, and the stored `offset_y` of
+// both is 0, so only the composed base can tell them apart.
+const TWO = [
+  { id: 'tbl', at: [0, 0], height_m: 0.75 },
+  { id: 'stl', at: [0, 0], height_m: 0.4 },
+  { id: 'c1', at: [0, 0], on: 'tbl', height_m: 0.01 },
+  { id: 'c2', at: [0, 0], on: 'stl', height_m: 0.01 },
+  { id: 'book', at: [0, 0], height_m: 0.03 }];
+const twoC = composePlacements(TWO);
+check('the two coasters sit at 0.75 and 0.40', [twoC[2].offset_y, twoC[3].offset_y],
+  [0.75, 0.4]);
+check('equal depth, different supports: the higher coaster wins',
+  pickSupport(TWO, twoC, 4, [0, 1, 2, 3, 4]), 2);
+// …and depth itself decides nothing: a 1.8 m floor lamp on the FLOOR beats a
+// coaster lying on the table (top 1.80 > 0.76), though it is a depth-0 piece.
+const LAMP = [...TWO, { id: 'lmp', at: [0, 0], height_m: 1.8 }];
+check('a tall floor piece outranks a low one up a chain',
+  pickSupport(LAMP, composePlacements(LAMP), 4, [0, 1, 2, 3, 4, 5]), 5);
+
+console.log('\nH  dependentIndices — what goes with a support');
 check('nothing stands on a lone piece', dependentIndices(CHAIN, 2), [2]);
 check('the tray takes the mug with it', dependentIndices(CHAIN, 1), [1, 2]);
 check('the table takes the whole chain', dependentIndices(CHAIN, 0), [0, 1, 2]);

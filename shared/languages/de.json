@@ -2522,7 +2522,7 @@
     "Trim above the support’s top — 0 means exactly on it. The surface height itself is the server’s stacking rule.": "Feinversatz über der Oberkante des Trägers — 0 heißt genau darauf. Die Höhe der Fläche selbst kommt aus der Stapelregel des Servers.",
     "Set this prop down on the prop underneath it (the topmost one, if several) — it then moves and turns with that piece.": "Dieses Prop auf das Prop darunter stellen (bei mehreren auf das oberste) — es bewegt und dreht sich dann mit jenem Stück.",
     "Off the support and back onto the floor — the prop stays where it is drawn.": "Vom Träger herunter auf den Boden — das Prop bleibt, wo es gezeichnet ist.",
-    "Also removes {n} pieces standing on it.": "Entfernt auch {n} Stücke, die darauf stehen.",
+    "Also removes {n} piece(s) standing on it.": "Entfernt auch {n} Stück(e), die darauf stehen.",
     "Remove all": "Alle entfernen"
   }
 }

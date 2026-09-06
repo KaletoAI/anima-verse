@@ -94,7 +94,7 @@ import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, RoomPropPlacement, SceneProblem, SceneRoom, ScenePayload, SceneStairs, SurfaceKind } from './worldTypes'
 import { GROUND_ROOM_ID, groundRoomLabel, hasRect, readMapWater } from './worldTypes'
 import { groupKeys, newId, usePoseCatalog } from './placeTypes'
-import { composePlacements, dependentIndices, toSupportFrame } from './placementCompose'
+import { composePlacements, dependentIndices, pickSupport, toSupportFrame, withPropHeights } from './placementCompose'
 import { pointInPolygon } from '../map/mapMath'
 import { isWaterKind } from '../map/mapTypes'
 import type { TerrainTypesResp } from '../map/mapTypes'
@@ -1209,6 +1209,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   updateLayoutRef.current = updateLayout
   const modelDimsRef = useRef(modelDims)
   modelDimsRef.current = modelDims
+  // The drag handler is bound once and needs the CURRENT library heights to
+  // compose a child's support pose.
+  const propDimsRef = useRef(propDims)
+  propDimsRef.current = propDims
   const selectedRef = useRef(selected)
   selectedRef.current = selected
 
@@ -1430,7 +1434,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           const support = list.findIndex((q) => q.id === child.on)
           if (support < 0) return point
           const rel = toSupportFrame(point, child.yaw || 0,
-                                     composePlacements(list)[support])
+            composePlacements(withPropHeights(list, propDimsRef.current))[support])
           return [rM(rel.at[0]), rM(rel.at[1])]
         }
         if (drag.kind === 'ghost') {
@@ -1572,7 +1576,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     const hits: number[] = []
     // COMPOSED poses (decision E1): a piece standing on another one is drawn
     // where its support carries it, so that is where it is clicked too.
-    const composed = composePlacements(lay.props || [])
+    const composed = composePlacements(
+      withPropHeights(lay.props || [], propDims))
     ;(lay.props || []).forEach((p, i) => {
       const dims = propDims[p.prop_id]
       const pose = composed[i]
@@ -2606,7 +2611,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         <div style={{ display: 'flex', gap: 10, alignItems: 'center',
                       flexWrap: 'wrap' }}>
           <span className="ga-hint">
-            {t('Also removes {n} pieces standing on it.')
+            {t('Also removes {n} piece(s) standing on it.')
               .replace('{n}', String(ghostDrop.dependents))}
           </span>
           <button
@@ -2632,7 +2637,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         const placement = list[propSel]
         // COMPOSED poses (decision E1): everything below asks WHERE the pieces
         // really stand, which for a child is not what it stores.
-        const composed = composePlacements(list)
+        const withDims = withPropHeights(list, propDims)
+        const composed = composePlacements(withDims)
         const pose = composed[propSel]
         const patchProp = (patch: Partial<typeof placement> | null) => {
           // A delete takes the whole subtree: a piece whose support is gone
@@ -2657,31 +2663,18 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           selectedRoom.layout || {}, selOrigin,
           pose.at[0] - selOrigin[0], pose.at[1] - selOrigin[1],
         )
-        // WHICH of them carries the piece: the TOPMOST one under its anchor,
-        // ties to the later placement — the server's rule
-        // (`props.stack_offset_y`), read with the numbers a top view has. A
-        // piece further up a chain is above its own support by construction,
-        // so the depth decides first and the height of the surface second.
-        // The plan never computes the resulting HEIGHT: what is stored is the
+        // WHICH of them carries the piece — the topmost surface that is not
+        // part of this piece's own subtree (`pickSupport`, which owns both
+        // rules and is checked by `scripts/smoke_placement_compose.mjs`). The
+        // plan never computes the resulting HEIGHT: what is stored is the
         // relation, and the metres are composed server-side.
-        let support = -1
-        let bestTop: [number, number] = [-1, -Infinity]
-        for (const i of stackHits) {
-          if (i === propSel) continue
-          const top: [number, number] = [composed[i].depth,
-            (list[i].offset_y || 0) + (propDims[list[i].prop_id]?.height_m || 0)]
-          if (top[0] > bestTop[0]
-              || (top[0] === bestTop[0] && top[1] >= bestTop[1])) {
-            support = i
-            bestTop = top
-          }
-        }
+        const support = pickSupport(withDims, composed, propSel, stackHits)
         // SET IT DOWN ON THAT PIECE. What is written is the parent link plus
         // the pose in the support's frame — no height at all: the server
         // composes it from the support's top surface, so plan, preview and 3D
         // client cannot each arrive at their own answer.
         const placeOnTop = () => {
-          if (support < 0) return
+          if (support === null) return
           const supportId = list[support].id || newId()
           const rel = toSupportFrame(pose.at, pose.yaw, composed[support])
           const next = list.map((p, i) => {
@@ -2720,7 +2713,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               depth_m: propDims[list[supportIdx].prop_id]?.depth_m || 1,
             } : undefined}
             dependents={dependentIndices(list, propSel).length - 1}
-            onPlaceOnTop={support >= 0 ? placeOnTop : undefined}
+            onPlaceOnTop={support !== null ? placeOnTop : undefined}
             onPlaceOnFloor={placeOnFloor}
             onPatch={patchProp}
           />
