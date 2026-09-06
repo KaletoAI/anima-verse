@@ -310,8 +310,12 @@ def t_furnish_place() -> None:
         check("repair: every error is its own line",
               len([ln for ln in sys_p.splitlines()
                    if ln.startswith("- [")]) == 2)
-        check("repair: only the named group is re-planned",
-              "Re-plan ONLY the wall group" in sys_p)
+        # The wall pass carries the ceiling group with it, so the sentence
+        # has to name both — a model told "only the wall group" would drop the
+        # pendant lamp whose error it was just shown.
+        check("repair: the wall re-plan names the ceiling group with it",
+              "Re-plan ONLY the wall and ceiling group" in sys_p,
+              f"| got: {sys_p[-900:]!r}")
         check("repair: demands a CHANGED plan",
               "same anchor again" in sys_p,
               "| the repair round must forbid repeating the failed plan")
@@ -320,8 +324,23 @@ def t_furnish_place() -> None:
               "non-rectangular" in user_p)
         check("repair: the child names its support",
               "stands on Oak Table" in user_p, f"| got: {user_p[:600]!r}")
-        check("repair: the closing instruction names the group",
-              "plan for the wall group" in user_p, f"| got: {user_p[-200:]!r}")
+        check("repair: the closing instruction names the same group",
+              "plan for the wall and ceiling group" in user_p,
+              f"| got: {user_p[-200:]!r}")
+
+    # A floor (or surface) re-plan keeps the plain group name — only the wall
+    # pass has a second group riding along.
+    sys_p, _user_p = try_render_task(
+        "repair-floor", "furnish_place", room_name="Kitchen",
+        room_description="", room_w_m=4.0, room_d_m=4.0, is_rect=True,
+        storey_height_m=3.0, openings=[], existing=[], floor_items=floor,
+        wall_items=[], ceiling_items=[], surface_items=[],
+        errors=[{"pass": "floor", "text": "Oak Table (oak-table-1): no free "
+                                          "spot — try center"}],
+        repass="floor")
+    if sys_p:
+        check("repair-floor: the floor re-plan names only the floor group",
+              "Re-plan ONLY the floor group" in sys_p)
 
 
 # ── 4. spell_detect ─────────────────────────────────────────────────────

@@ -2775,9 +2775,9 @@ async def furnish_accept(room_id: str, request: Request,
 @router.post("/rooms/{room_id}/furnish/discard")
 def furnish_discard(room_id: str,
                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Drop the job. Generated props stay in the library. 409 while the
-    meshes of an accepted room are being generated — the placements are in the
-    room already, so there is nothing left to discard."""
+    """Drop the job. Generated props stay in the library. 409 while meshes of
+    an accepted room are still outstanding — the placements are in the room
+    already, so there is nothing to discard until they have landed."""
     from app.core.room_furnish import discard
     return _furnish_call(discard, room_id)
 
@@ -2802,7 +2802,9 @@ def furnish_retry(room_id: str,
 def furnish_continue(room_id: str,
                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Continue a job whose orchestrator thread died with the server
-    (status ``stalled``)."""
+    (status ``stalled``). A job whose meshes all arrived while no thread was
+    watching is closed instead of continued and answers
+    ``{"status": "finished"}``."""
     from app.core.room_furnish import resume
     return _furnish_call(resume, room_id)
 

@@ -19,8 +19,11 @@ placeholders:
   ceiling_items: The same for pieces that hang from the ceiling
   surface_items: The same for pieces that stand on another piece
   errors: List of {pass, text} from the previous solver run (empty on the first attempt)
-  repass: Name of the ONE group being re-planned (None on the first attempt)
+  repass: Name of the ONE pass being re-planned — floor | wall | surface (None on the
+          first attempt). The wall pass carries the ceiling group with it, which is
+          what the derived `repass_label` says in the prompt.
 ---
+{% set repass_label = 'wall and ceiling' if repass == 'wall' else repass %}
 ## system
 You arrange furniture in a room for a life-simulation game. You NEVER output coordinates — you output RELATIONAL placements; a deterministic solver turns them into geometry. North is the top wall, south the bottom, east the right, west the left.
 
@@ -71,7 +74,7 @@ Your PREVIOUS plan failed for these pieces:
 - [{{ e.pass }} pass] {{ e.text }}
 {% endfor %}
 {% if repass %}
-Re-plan ONLY the {{ repass }} group; the other groups are already placed and are listed under "Already standing". Answer with an entry for every piece of the {{ repass }} group and for no other piece.
+Re-plan ONLY the {{ repass_label }} group; the other groups are already placed and are listed under "Already standing". Answer with an entry for every piece of the {{ repass_label }} group and for no other piece.
 {% else %}
 Re-plan them. Your answer must again contain an entry for EVERY piece listed below, not just the failed ones — the plan is solved from scratch, and pieces that are not listed above worked and keep their entry unchanged.
 {% endif %}
@@ -139,7 +142,7 @@ Surface pieces to place (each needs an "on" support):
 {% endfor %}
 {% if repass %}
 
-Produce the placement plan for the {{ repass }} group.
+Produce the placement plan for the {{ repass_label }} group.
 {% else %}
 
 Produce the placement plan — one entry per item id above, in any order.

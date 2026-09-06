@@ -44,6 +44,18 @@ Every expected number is derived by hand from the rule:
   * a match is refused when the mount differs or when the largest dimension
     is more than DIM_TOLERANCE = 40 % of the need's away from it: a need of
     0.5 m against a 1.2 m table is 0.7 m off, and 0.7 > 0.4 × 0.5 = 0.2.
+  * build only what was PLACED (controller ruling): a run whose plan names one
+    of two built needs creates exactly ONE prop — 6 props before, 7 after —
+    and the accept's notification names the other kind. The empty-accept case
+    is the same rule with an empty placement set: 0 props, 0 generating.
+  * a job stranded in `generating` (accepted, its mesh delivered by the
+    persistent queue while no thread watched) is FINISHED, not stuck: nothing
+    is pending, so continue/discard/a plain status read each close the row and
+    the room can be furnished again. Reached in the smoke by accepting with
+    the orchestrator frozen and then attaching the GLB from outside.
+  * a layout write that fails must not cost the created props: accept persists
+    their ids on the row BEFORE the write, so the refused accept leaves 8 props
+    and the retry still leaves 8.
   * the repair loop (canned solver results, section 2c): run 1 places
     floor 1/2 and wall 1/1 and fails one floor and one surface piece, so two
     passes have errors and exactly two re-plan calls follow. The floor
@@ -662,9 +674,10 @@ def main() -> int:
     room_furnish.reset("smokeroom")
     check("reset drops the job", room_furnish.get_status("smokeroom") is None)
 
-    # ── accept with nothing placed builds nothing (E6 edge case) ────────
-    # A prop nobody put in a room is a library entry the admin never asked
-    # for, so an empty placement list must not create one.
+    # ── accept with nothing placed builds nothing ───────────────────────
+    # Not a special case any more, just the "build only what was placed" rule
+    # with an empty placement list: a prop nobody put in a room is a library
+    # entry the admin never asked for.
     print("\n  accepting an empty result")
     answers["furnish_needs"] = {
         "needs": [need("a", "iron kettle", count=1, mount="floor",
@@ -689,6 +702,9 @@ def main() -> int:
           len(props.list_props()) == props_before_empty
           and room_furnish.get_status("smokeroom") is None,
           str(len(props.list_props())))
+    check("…and says which kind it did not build",
+          any("not built: iron kettle" in t for t in notification_texts()),
+          json.dumps(notification_texts()[:2]))
 
     # ── start_direct: admin picks become needs ──────────────────────────
     print("\n  start_direct (admin picks, no LLM)")
@@ -715,6 +731,134 @@ def main() -> int:
                             "generating": 0}
           and room_furnish.get_status("smokeroom") is None,
           json.dumps(direct_accept))
+
+    # ── build only what was PLACED (controller ruling 2026-09-07) ───────
+    # A need the solver could not fit gets no prop and no mesh — the accept
+    # names it instead, so a kind never vanishes silently between the proposal
+    # and the room.
+    print("\n  only a placed need is built")
+    answers["furnish_needs"] = {
+        "needs": [need("a", "wooden stool", category="chair", count=1,
+                       mount="floor", width_m=0.4, depth_m=0.4, height_m=0.5,
+                       description="a small wooden stool"),
+                  need("b", "iron kettle", category="tableware", count=1,
+                       mount="floor", width_m=0.3, depth_m=0.3, height_m=0.3,
+                       description="a black iron kettle")],
+        "surfaces": None}
+    answers["furnish_match"] = {"matches": []}
+    # The plan names only the stool; the kettle stays unplaced.
+    answers["furnish_place"] = {"plan": [
+        {"prop": "need:n1", "count": 1, "anchor": "wall_e", "ref": None,
+         "facing": "room"}]}
+    props_before_ruling = len(props.list_props())
+    room_furnish.start("smokeroom")
+    status = wait_for(("proposal_ready", "error"))
+    room_furnish.confirm("smokeroom", status["proposal"])
+    status = wait_for(("review_ready", "error"))
+    check("only the planned piece is placed",
+          len(status["placements"]["placed"]) == 1,
+          json.dumps(status["placements"]))
+    ruling = room_furnish.accept("smokeroom")
+    check("accept builds the placed need and only that one",
+          ruling == {"status": "accepted", "placed": 1, "generating": 1}
+          and len(props.list_props()) == props_before_ruling + 1,
+          f'{json.dumps(ruling)} / {len(props.list_props())}')
+    check("…and names the piece it did not build",
+          any("not built: iron kettle" in t for t in notification_texts()),
+          json.dumps(notification_texts()[:2]))
+    wait_for(("error",), tries=100)
+    check("the job closes once its one mesh is there",
+          room_furnish.get_status("smokeroom") is None)
+
+    # ── a failed layout write leaves the created props on the row ───────
+    # Otherwise a second accept (the state is still review_ready) would make
+    # every prop twice — the ids only live on the row.
+    print("\n  a layout write that fails")
+    import app.models.world as world_module
+
+    def one_build_job(kind: str) -> dict:
+        """Drive one job with a single built floor need up to review_ready."""
+        answers["furnish_needs"] = {
+            "needs": [need("a", kind, category="chair", count=1,
+                           mount="floor", width_m=0.3, depth_m=0.3,
+                           height_m=0.4, description=f"a {kind}")],
+            "surfaces": None}
+        answers["furnish_match"] = {"matches": []}
+        answers["furnish_place"] = {"plan": [
+            {"prop": "need:n1", "count": 1, "anchor": "wall_e", "ref": None,
+             "facing": "room"}]}
+        room_furnish.start("smokeroom")
+        st = wait_for(("proposal_ready", "error"))
+        room_furnish.confirm("smokeroom", st["proposal"])
+        return wait_for(("review_ready", "error"))
+
+    status = one_build_job("oak footstool")
+    check("the fixture job is ready to accept",
+          len(status["placements"]["placed"]) == 1,
+          json.dumps(status["placements"]))
+    real_append = world_module.append_room_props
+    world_module.append_room_props = lambda *a, **kw: False
+    props_before_fail = len(props.list_props())
+    check("a layout write that fails refuses the accept",
+          _refused_with(room_furnish.accept, 409, "smokeroom"))
+    props_after_fail = len(props.list_props())
+    check("the prop was created and its id kept on the row",
+          props_after_fail == props_before_fail + 1
+          and all(n.get("prop_id") for n in
+                  room_furnish.get_status("smokeroom")["proposal"]["needs"]),
+          str(props_after_fail))
+    world_module.append_room_props = real_append
+    room_furnish.accept("smokeroom")
+    check("the retry reuses that prop instead of making a second one",
+          len(props.list_props()) == props_after_fail,
+          str(len(props.list_props())))
+    wait_for(("error",), tries=100)
+
+    # ── a job stranded in generating closes itself ──────────────────────
+    # The NORMAL outcome of a server restart during generation: the task queue
+    # is persistent and delivers the mesh, the furnish thread is not and never
+    # sees it. Without a terminal case the row would sit in `generating`, and
+    # every verb refuses that state — the room could never be furnished again.
+    print("\n  a job stranded in generating")
+
+    def stranded(kind: str) -> str:
+        """Accept a one-piece job with the orchestrator frozen, then hand the
+        prop its mesh from outside — the queue's job, done without a thread."""
+        one_build_job(kind)
+        real = suppress_spawn()
+        room_furnish.accept("smokeroom")
+        room_furnish._spawn = real
+        row = room_furnish._get_row("smokeroom")
+        pid = next(n["prop_id"] for n in room_furnish._needs(row["proposal"])
+                   if n.get("build"))
+        props.save_uploaded_glb(pid, b"glTF-stub")
+        return pid
+
+    stranded("birch stool")
+    check("the stranded job is what a restart leaves behind",
+          (room_furnish._get_row("smokeroom") or {}).get("state") == "generating")
+    check("continue closes it instead of refusing it",
+          room_furnish.resume("smokeroom") == {"status": "finished"}
+          and room_furnish._get_row("smokeroom") is None)
+    check("…and posts the mesh notification once",
+          sum(1 for t in notification_texts()
+              if "Meshes ready — 1 model generated" in t) >= 1,
+          json.dumps(notification_texts()[:2]))
+    check("the room can be furnished again",
+          room_furnish.start("smokeroom")["state"] in ("selecting",
+                                                       "proposal_ready"))
+    wait_for(("proposal_ready", "error"))
+    room_furnish.reset("smokeroom")
+
+    stranded("ash stool")
+    check("discard goes through once every ordered mesh is there",
+          room_furnish.discard("smokeroom") == {"status": "discarded"}
+          and room_furnish._get_row("smokeroom") is None)
+
+    stranded("pine stool")
+    check("a plain status read heals the row on its own",
+          room_furnish.get_status("smokeroom") is None
+          and room_furnish._get_row("smokeroom") is None)
 
     # ── legacy job rows ─────────────────────────────────────────────────
     print("\n  the boot-time cleanup of v1 job rows")
