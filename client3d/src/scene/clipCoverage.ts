@@ -8,7 +8,14 @@
  * This module knows no bones: it is handed the kind NAMES the library offered
  * and the kind names a model can actually play, and it is handed models that
  * already carry the verdict "the library fits this skeleton".
+ *
+ * ITS ONE IMPORT is the locomotion mapping of `game/walk.ts` — which kind the
+ * admin let the roles walk/run/idle mean. That file is import-free itself, so
+ * there is no cycle and the smoke check still transpiles the pair without a
+ * bundler; anything else (and `three` above all) still has no business here.
  */
+import { LOCOMOTION_ROLES, locomotionClip } from '../game/walk';
+import type { LocomotionRole } from '../game/walk';
 
 /**
  * The library kinds a model cannot play — offered minus bound, lower-cased,
@@ -152,12 +159,43 @@ export const CLIP_FALLBACK: Readonly<Record<string, string>> = {
 };
 
 /**
+ * WHICH locomotion ROLE a kind IS, `''` when it is none of them.
+ *
+ * A kind that the admin picked for a role (Poses → Library,
+ * `shared/config/locomotion_clips.json`) MEANS that role, so for fallback
+ * purposes it is one: `mob1-walk` as the walk role is a walk, however unlike
+ * the free `walk` family it looks.
+ *
+ * WHY. The family is a name grouping (`mob1-walk` → `mob1`), and the mapping
+ * points a role at kinds from a licensed pack that only some rigs carry and a
+ * fresh clone has not at all. Without this the chain of `mob1-walk` were
+ * `['mob1-walk', 'idle']` and its `proceduralGait` `null` — the very
+ * `walk-cmu` regression `animFamily` was written against, only reintroduced
+ * through the role indirection: a clip-less rig standing stock still while it
+ * slides across the map. The role is the one thing the client knows about
+ * such a kind, so it is what carries it back to the free clips.
+ */
+export function locomotionRole(kind: string | null | undefined): LocomotionRole | '' {
+  const want = (kind ?? '').trim().toLowerCase();
+  if (!want) return '';
+  for (const role of LOCOMOTION_ROLES) if (locomotionClip(role) === want) return role;
+  return '';
+}
+
+/**
  * The ordered KINDS to try for a wanted one, best first:
  *
- *   1. the kind itself            (`walk-cmu`)
- *   2. its explicit stand-in      (`CLIP_FALLBACK['walk-cmu']`)
- *   3. the stand-in of its family (`CLIP_FALLBACK['walk']`)
- *   4. idle — the floor everything ends on
+ *   1. the kind itself             (`walk-cmu`)
+ *   2. the ROLE it is              (`mob1-walk` → `walk`, see above)
+ *   3. its explicit stand-in       (`CLIP_FALLBACK['walk-cmu']`)
+ *   4. the stand-in of that role   (`CLIP_FALLBACK['run']` → `walk`)
+ *   5. the stand-in of its family  (`CLIP_FALLBACK['walk']`)
+ *   6. the idle ROLE'S kind, then idle — the floor everything ends on
+ *
+ * The role sits in FRONT of the stand-ins because it is the SAME motion under
+ * another name, while a stand-in is a different one ("someone lying should at
+ * least sit"): `mob1-jog` → `run` → `walk` walks only after every run take is
+ * ruled out.
  *
  * The FAMILY of the wanted kind is deliberately NOT a step of its own: every
  * step is matched with `matchAnimKind`, which already accepts a family
@@ -166,13 +204,17 @@ export const CLIP_FALLBACK: Readonly<Record<string, string>> = {
  * wanted `walk` — and it keeps the curated stand-in behind the same motion:
  * a `run-fast` walks only after every `run…` take has been ruled out.
  *
- * Blank and duplicate steps are dropped, so the chain of `idle` is `['idle']`.
+ * Blank and duplicate steps are dropped, so the chain of `idle` is `['idle']`
+ * as long as the idle role means `idle` itself.
  */
 export function clipKindChain(kind: string): string[] {
   const want = (kind ?? '').trim().toLowerCase() || 'idle';
   const family = animFamily(want);
+  const role = locomotionRole(want);
   const chain: string[] = [];
-  for (const step of [want, CLIP_FALLBACK[want], CLIP_FALLBACK[family], 'idle']) {
+  const steps = [want, role, CLIP_FALLBACK[want], role ? CLIP_FALLBACK[role] : '',
+    CLIP_FALLBACK[family], locomotionClip('idle'), 'idle'];
+  for (const step of steps) {
     if (step && !chain.includes(step)) chain.push(step);
   }
   return chain;
@@ -198,11 +240,15 @@ export function resolveClipKind(kind: string, bound: readonly string[]): string 
  * The procedural GAIT a clip-less rig (UniRig animals, static meshes) has to
  * fake for a kind: `'run'`, `'walk'` or `null` for "stand and breathe".
  *
- * By family, not by literal — a rig with no clips at all cannot fall back to
- * anything, so if this misses the kind the figure stands stock still while it
- * slides across the map. That is exactly what `walk-cmu` did to it.
+ * By ROLE first and by family second, never by literal — a rig with no clips
+ * at all cannot fall back to anything, so if this misses the kind the figure
+ * stands stock still while it slides across the map. That is exactly what
+ * `walk-cmu` did to it, and what a role kind out of a licensed pack
+ * (`mob1-walk`, whose family is `mob1`) would do again without the role step.
  */
 export function proceduralGait(kind: string | null | undefined): 'walk' | 'run' | null {
+  const role = locomotionRole(kind);
+  if (role === 'walk' || role === 'run') return role;
   const family = animFamily(kind);
   return family === 'run' ? 'run' : family === 'walk' ? 'walk' : null;
 }

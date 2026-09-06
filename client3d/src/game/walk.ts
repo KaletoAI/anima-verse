@@ -233,6 +233,13 @@ export function moveClip(moveAnim: string, running: boolean,
  * `clipCoverage.clipKindChain`, which is the last resort when the chosen kind
  * is bound on no rig. This module is import-free on purpose (the smoke
  * scripts transpile it alone), so the state lives here and not in a store.
+ *
+ * THE MAPPING IS ALSO READ BACKWARDS. `clipCoverage.locomotionRole` asks this
+ * module which role a KIND is, because a role kind out of a licensed pack
+ * (`mob1-walk`) has no family in common with the free clips — the role name is
+ * what carries it back to them, wherever the kind comes from: this module,
+ * the server's `animation` or the pose catalog. Hence the one-way import
+ * there: `clipCoverage` may read this file, this file imports nothing.
  */
 export type LocomotionRole = 'walk' | 'run' | 'idle';
 export const LOCOMOTION_ROLES: readonly LocomotionRole[] = ['walk', 'run', 'idle'];
