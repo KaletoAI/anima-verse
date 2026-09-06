@@ -6,10 +6,17 @@ Hand-derived expectations:
     "map_2d", b.png typed "map" (legacy isometric), c.png typed "day" — and
     whose record carries map_image_2d="a.png", map_rotation_2d=90,
     image_prompt_map_2d="icon", image_prompt_map="iso".
+    All three files carry the FULL sidecar set the render path writes, put
+    there through the real writers (save_gallery_prompt / set_gallery_image_meta
+    / set_gallery_image_room), so every structure the migration touches is
+    non-empty and a wrong section key cannot pass unnoticed.
   * After migrate_map_images_once(): a.png and b.png are GONE from disk and
-    from gallery_meta.json (image_types, prompts, metas), c.png stays typed
-    "day"; the five legacy keys are gone from the location dict; the
-    return value is {"images_deleted": 2, "fields_stripped": 5}.
+    from every sidecar — prompts.json holds only c.png, gallery_meta.json's
+    image_types / image_metas / rooms hold only c.png (the section key is
+    "rooms", the very one set_gallery_image_room writes) — c.png stays typed
+    "day" with its prompt, meta and room intact; the five legacy keys are
+    gone from the location dict; the return value is
+    {"images_deleted": 2, "fields_stripped": 5}.
   * A second run changes nothing: {"images_deleted": 0, "fields_stripped": 0}.
   * world_ops.assign_gallery_image_type refuses "map_2d" and "map"
     with HTTP 400; "day" and "building-front" pass.
@@ -47,7 +54,10 @@ check("image_prompt_map column dropped", "image_prompt_map" in cols, False)
 from app.models.world import (add_location, _load_world_data, _save_world_data,
                               get_gallery_dir, set_gallery_image_type,
                               get_gallery_image_types, migrate_map_images_once,
-                              get_location_by_id)
+                              get_location_by_id, save_gallery_prompt,
+                              get_all_gallery_prompts, set_gallery_image_meta,
+                              get_gallery_image_metas, set_gallery_image_room,
+                              get_gallery_image_rooms)
 loc = add_location("Bay", "a bay", rooms=[{"name": "Shore", "description": ""}])
 lid = loc["id"]
 gdir = get_gallery_dir(lid); gdir.mkdir(parents=True, exist_ok=True)
@@ -56,6 +66,14 @@ for fn in ("a.png", "b.png", "c.png"):
 set_gallery_image_type(lid, "a.png", "map_2d")
 set_gallery_image_type(lid, "b.png", "map")
 set_gallery_image_type(lid, "c.png", "day")
+# The full sidecar set the render path writes, through the real writers — the
+# migration has to reach all three, and the survivor proves it reaches no more.
+room_id = loc["rooms"][0]["id"]
+for fn in ("a.png", "b.png", "c.png"):
+    save_gallery_prompt(lid, fn, f"{fn} prompt")
+    set_gallery_image_meta(lid, fn, {"backend": "x", "backend_type": "http",
+                                     "model": "", "loras": []})
+    set_gallery_image_room(lid, fn, room_id)
 data = _load_world_data()
 for l in data["locations"]:
     if l["id"] == lid:
@@ -70,6 +88,9 @@ check("a.png deleted", (gdir / "a.png").exists(), False)
 check("b.png deleted", (gdir / "b.png").exists(), False)
 check("c.png kept", (gdir / "c.png").exists(), True)
 check("types after", get_gallery_image_types(lid), {"c.png": "day"})
+check("prompts after", get_all_gallery_prompts(lid), {"c.png": "c.png prompt"})
+check("image_metas after", sorted(get_gallery_image_metas(lid)), ["c.png"])
+check("rooms after", get_gallery_image_rooms(lid), {"c.png": room_id})
 after = get_location_by_id(lid)
 check("legacy keys gone", [k for k in ("map_image_2d", "map_rotation_2d",
       "image_prompt_map_2d", "image_prompt_map", "map_image") if k in after], [])
