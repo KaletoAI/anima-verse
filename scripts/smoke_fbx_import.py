@@ -207,6 +207,28 @@ def S(name, take=None):
     return {"name": name} if take is None else {"name": name, "take": take}
 
 
+def contact_identity(con):
+    """Is the contact fit's own arithmetic intact? ``(ok, detail)``.
+
+    ``cmu_clip`` computes ``delta = rig_d - cmu_d`` and shifts each half by
+    ``delta/2`` towards the other ONLY when delta is positive — the fit closes
+    a gap the bigger rig opened, it never pushes two actors apart who are
+    already close enough. So there are two cases, and both are the identity:
+
+        shift > 0   ->  rig_distance - shift == actor_distance
+        shift == 0  ->  rig_distance <= actor_distance   (nothing to close)
+    """
+    rig_d, shift, act_d = (con.get("rig_distance_m"), con.get("shift_m"),
+                           con.get("actor_distance_m"))
+    if None in (rig_d, shift, act_d):
+        return False, f"incomplete: {con}"
+    if shift > 0:
+        return (abs((rig_d - shift) - act_d) <= 0.002,
+                f"{rig_d} - {shift} = {round(rig_d - shift, 3)} vs {act_d}")
+    return (rig_d <= act_d + 0.002,
+            f"no shift, and {rig_d} <= {act_d}")
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'✓' if ok else '✗'} {label}{f' — {detail}' if detail else ''}")
     if not ok:
@@ -1131,14 +1153,114 @@ def test_real() -> None:
           src.get("rotation_mode") == "rest-delta", str(src.get("rotation_mode")))
     geo = side.get("geometry") or {}
     dist = geo.get("root_distance_m")
-    check("the two roots stand 0.15–0.30 m apart (measured 0.22)",
-          isinstance(dist, (int, float)) and 0.15 <= dist <= 0.30, str(dist))
+    # NOT a remembered number any more. This inbox is per installation and
+    # untracked, so "0.15-0.30 m, measured 0.22" only ever held for the pair
+    # that happened to sort first on one machine; a machine whose first pair
+    # is a seated pose instead of a close one failed a check about nothing.
+    # What DOES hold for every pair is the identity below — the contact fit is
+    # defined as delta = rig_d - cmu_d and shifts each half by delta/2 towards
+    # the other, so afterwards the rig's contact distance is the actors'.
+    check("the two roots end up within arm's reach (0-2 m)",
+          isinstance(dist, (int, float)) and 0.0 < dist < 2.0, str(dist))
+    check("the contact fit's arithmetic is intact",
+          *contact_identity(geo.get("contact") or {}))
     floor = geo.get("rig_floor_min_cm")
     check("no figure sinks through the floor (rig_floor_min_cm > -1)",
           isinstance(floor, (int, float)) and floor > -1.0, str(floor))
     for role in ("a", "b"):
         check_continuity(f"half {role}", LICENSED / "real" / f"smoketest-pair__{role}.fbx")
     print(f"  · {res['seconds']:.1f} s, files {res['outputs']}")
+
+
+def test_real_pack() -> None:
+    """One TRUE pair conversion out of ONE pack file — both halves and the
+    reference pose are takes of the same file.
+
+    The file is named by ``CLIP_IMPORT_REAL_FBX`` and nothing about it is
+    written down here: the first take is the A half, its partner comes from
+    ``partner_take`` and the reference pose is the take whose NAME says so. So
+    this runs against any multi-take pack without a pack, scene or take name
+    entering the repository.
+
+    The expectations are identities of the converter, derived by hand from
+    ``cmu_clip``:
+
+    * The contact fit's arithmetic — see :func:`contact_identity`.
+    * Both halves come off the SAME source skeleton, so the leg factor must be
+      the same number twice. A difference would tilt the two figures against
+      each other.
+    * ``rig_floor_min_cm`` is ``lows[0] - floor_cm`` with ``floor_cm`` the
+      minimum of the per-take medians, so it is at most 0 and a large negative
+      value means somebody stands through the floor.
+    * The clip is resampled to ``fps``, so ``duration_s == frames / fps``.
+    """
+    print("\n[14] real conversion out of ONE pack file")
+    src_env = os.environ.get("CLIP_IMPORT_REAL_FBX", "")
+    st = runner.status()
+    rig = paths.get_rig_file()
+    pack = Path(src_env) if src_env else None
+    if not (st["executable"] and rig.is_file() and pack and pack.is_file()):
+        print(f"  – skipped (blender={bool(st['executable'])}, rig={rig.is_file()}, "
+              f"CLIP_IMPORT_REAL_FBX={'set' if src_env else 'unset'})")
+        return
+    live = pack.parent
+    os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(live)
+    fbx_import._probe_cache.clear()
+    fbx_import._takes_cache.clear()
+    try:
+        takes = fbx_import.inbox_takes(pack.name)
+        if len(takes) < 2:
+            print(f"  – skipped ({pack.name} holds {len(takes)} take(s))")
+            return
+        first = next((x for x in takes if x["pair"] is not None), None)
+        rest = next((x for x in takes if fbx_import.is_rest_name(x["name"])), None)
+        if first is None:
+            print("  – skipped (no take in this file has a partner)")
+            return
+        res = fbx_import.import_fbx(
+            "smoketest-pack",
+            [S(pack.name, first["index"]), S(pack.name, first["pair"])],
+            rest_file=S(pack.name, rest["index"]) if rest else None,
+            target="licensed", out_dir=LICENSED / "pack", rig=rig, overwrite=True)
+    finally:
+        os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(INBOX)
+        fbx_import._probe_cache.clear()
+        fbx_import._takes_cache.clear()
+
+    side = res["sidecar"]
+    check("both halves were written",
+          (LICENSED / "pack" / "smoketest-pack__a.fbx").is_file()
+          and (LICENSED / "pack" / "smoketest-pack__b.fbx").is_file())
+    check("two takes of ONE file make a pair", side.get("pair") is True)
+    src = side.get("source") or {}
+    check("both halves name their own take",
+          isinstance(src.get("takes"), list) and len(src["takes"]) == 2
+          and src["takes"][0] != src["takes"][1], str(src.get("takes")))
+    if rest:
+        check("a reference-pose TAKE puts it in rest-delta mode",
+              src.get("rotation_mode") == "rest-delta", str(src.get("rotation_mode")))
+
+    geo = side.get("geometry") or {}
+    con = geo.get("contact") or {}
+    scales = geo.get("hips_scale") or []
+    check("the two halves share one leg factor",
+          len(scales) == 2 and scales[0] == scales[1], str(scales))
+
+    check("the contact fit's arithmetic is intact", *contact_identity(con))
+    check("…and it only ever pulls the halves TOGETHER",
+          (con.get("shift_m") or 0) >= 0, str(con.get("shift_m")))
+    check("the roots end up a positive distance apart",
+          (geo.get("root_distance_m") or 0) > 0, str(geo.get("root_distance_m")))
+    low = geo.get("rig_floor_min_cm")
+    check("nobody stands through the floor (0 to -5 cm)",
+          low is not None and -5.0 <= low <= 0.0, str(low))
+    check("the clip's length is its frame count at the output rate",
+          abs(side.get("duration_s", 0) - side.get("frames", 0) / side.get("fps", 30))
+          <= 0.001,
+          f"{side.get('duration_s')} vs {side.get('frames')}/{side.get('fps')}")
+    if "loop" in first["name"].lower():
+        check("a take that calls itself a loop came out as a cycle",
+              side.get("loop") is True, str(side.get("loop")))
 
 
 def test_real_mob1() -> None:
@@ -1236,6 +1358,7 @@ def main() -> int:
     if a.real:
         test_real()
         test_real_mob1()
+        test_real_pack()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 
