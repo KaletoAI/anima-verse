@@ -36,7 +36,16 @@ interface Probe {
   bone_count: number
   has_fingers: boolean
   is_rest_candidate: boolean
+  take_count: number
   error?: string
+}
+
+/** One animation inside a file. The INDEX is what the importer addresses — a
+ *  take name is not unique once Blender has truncated it. */
+interface Take {
+  index: number
+  name: string
+  duration_s: number
 }
 
 interface InboxEntry {
@@ -99,6 +108,8 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   /** the subfolder groups the user has opened (the root files are never folded) */
   const [openGroups, setOpenGroups] = useState<string[]>([])
   const [second, setSecond] = useState('')
+  /** the takes of the selected file — empty until one is loaded */
+  const [takes, setTakes] = useState<Take[]>([])
   const [restFile, setRestFile] = useState('')
 
   const [kind, setKind] = useState('')
@@ -120,6 +131,17 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   const [redistributable, setRedistributable] = useState(false)
   const [importing, setImporting] = useState(false)
   const [imported, setImported] = useState<{ kind: string; files: string[]; seq: number } | null>(null)
+
+  /** The takes of the selected file. Loaded on demand: the listing only
+   *  carries how MANY there are, because a pack file has over a hundred. */
+  useEffect(() => {
+    if (!selected) { setTakes([]); return }
+    let live = true
+    apiGet<{ takes?: Take[] }>(`/assets/clips-inbox/takes/${encodeURI(selected)}`)
+      .then((r) => { if (live) setTakes(r.takes || []) })
+      .catch(() => { if (live) setTakes([]) })
+    return () => { live = false }
+  }, [selected])
 
   const loadClips = useCallback(async () => {
     try {
@@ -433,6 +455,8 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
                         e.probe.skeleton_family || t('unknown rig'),
                         e.probe.has_fingers ? t('fingers') : '',
                         e.probe.is_rest_candidate ? t('reference pose') : '',
+                        e.probe.take_count > 1
+                          ? `${e.probe.take_count} ${t('animations')}` : '',
                         e.pair ? `${t('pair with')} ${splitInboxName(e.pair)[1]}` : '',
                         mb(e.size),
                       ].filter(Boolean)
@@ -490,6 +514,26 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
                   : t('Unknown rig — no bone map matches this file. It cannot be imported; the known families are listed in the inbox README.')}
               </div>
             </div>
+
+            {entry.probe.take_count > 1 ? (
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span className="ga-hint">
+                  {t('Animation in this file')} ({takes.length})
+                </span>
+                <select className="ga-input" size={8} disabled>
+                  {takes.map((tk) => (
+                    <option key={tk.index} value={tk.index}>
+                      {tk.name} — {tk.duration_s.toFixed(2)} s
+                    </option>
+                  ))}
+                </select>
+                <span className="ga-hint">
+                  {t('This file holds more than one animation. Choosing one is not'
+                     + ' built yet, so the import refuses it rather than silently'
+                     + ' converting the first.')}
+                </span>
+              </label>
+            ) : null}
 
             <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span className="ga-hint">{t('Second file (a pair — both halves become one kind)')}</span>

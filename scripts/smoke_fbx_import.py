@@ -140,6 +140,7 @@ import json
 import os
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import tracemalloc
@@ -314,6 +315,95 @@ def fake_fbx(names, extra: bytes = b"") -> bytes:
     for name in names:
         body += name.encode() + b"\x00\x01Model\x00"
     return body + extra
+
+
+#: An Auto-Rig-Pro skeleton: ``.x``/``.l``/``.r`` side suffixes and
+#: ``*_stretch`` limb names. 12 of these are in the map (bone_count 12); the
+#: four after them are the rig's face controls and its null above the hips,
+#: which the map discards exactly like MotusMan's weapon sockets.
+ARP_NAMES = ("root.x", "spine_01.x", "spine_02.x", "spine_03.x", "neck.x",
+             "head.x", "shoulder.l", "arm_stretch.l", "forearm_stretch.l",
+             "hand.l", "thigh_stretch.l", "c_index1.l",
+             "Root", "Jaw_ref.x", "eyes_ref.x", "eye_ref.L")
+ARP_MAPPED = 12
+
+#: FBX ticks per second — the constant ``fbx_import`` derives a duration with.
+FBX_TICKS = 46186158000
+
+#: The take fixture, derived BY HAND from the format: a binary FBX whose
+#: ``Objects`` block holds two ``AnimationStack`` nodes. The first runs a full
+#: second, the second half of one, so the expected answer is
+#: ``[(0, "alpha", 1.0), (1, "beta", 0.5)]`` by construction — 2 takes,
+#: because two were written, and those durations because
+#: ``(stop - start) / FBX_TICKS`` is what the format says a KTime means.
+TAKE_FIXTURE = (("alpha", 0, FBX_TICKS), ("beta", 0, FBX_TICKS // 2))
+TAKE_EXPECT = [(0, "alpha", 1.0), (1, "beta", 0.5)]
+
+
+def _fbx_prop_str(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return b"S" + struct.pack("<I", len(raw)) + raw
+
+
+def _fbx_prop_long(value: int) -> bytes:
+    return b"L" + struct.pack("<q", value)
+
+
+def _fbx_node(name: bytes, props: bytes, nprops: int, kids, start: int) -> bytes:
+    """One binary-FBX node at absolute offset ``start``.
+
+    ``kids`` is a list of builders that each take their own start offset — the
+    end offset in the header is absolute, so a node can only be written once
+    its children's lengths are known.
+    """
+    body = start + 25 + len(name)
+    blob = b""
+    pos = body + len(props)
+    for build in kids:
+        chunk = build(pos)
+        blob += chunk
+        pos += len(chunk)
+    if kids:
+        blob += b"\x00" * 25   # the null record that closes a nested list
+        pos += 25
+    return (struct.pack("<QQQ", pos, nprops, len(props))
+            + bytes([len(name)]) + name + props + blob)
+
+
+def fake_take_fbx(takes, names=()) -> bytes:
+    """A binary FBX (version 7500) carrying nothing but ``Objects`` and one
+    ``AnimationStack`` per entry of ``takes`` — enough for the take walker,
+    and nothing it does not read.
+
+    ``names`` appends rig node names AFTER the structure, where the probe's
+    byte scan finds them and the take walker never looks: it stops at
+    ``Objects``, the only block that can carry a stack. That is what lets one
+    fixture answer both questions — which rig, and how many animations.
+    """
+    def stack(name: str, start_t: int, stop_t: int):
+        def build(off: int) -> bytes:
+            def p70(off2: int) -> bytes:
+                def one(key: str, value: int):
+                    def build_p(off3: int) -> bytes:
+                        props = (_fbx_prop_str(key) + _fbx_prop_str("KTime")
+                                 + _fbx_prop_str("") + _fbx_prop_str("")
+                                 + _fbx_prop_long(value))
+                        return _fbx_node(b"P", props, 5, [], off3)
+                    return build_p
+                return _fbx_node(b"Properties70", b"", 0,
+                                 [one("LocalStart", start_t),
+                                  one("LocalStop", stop_t)], off2)
+            props = (_fbx_prop_long(1234)
+                     + _fbx_prop_str(f"{name}\x00\x01AnimStack")
+                     + _fbx_prop_str(""))
+            return _fbx_node(b"AnimationStack", props, 3, [p70], off)
+        return build
+
+    head = b"Kaydara FBX Binary  \x00\x1a\x00" + struct.pack("<I", 7500)
+    objects = _fbx_node(b"Objects", b"", 0,
+                        [stack(n, a, b) for n, a, b in takes], len(head))
+    tail = b"".join(n.encode() + b"\x00\x01Model\x00" for n in names)
+    return head + objects + b"\x00" * 25 + tail
 
 
 #: RULE 1e — the chunked-scan fixture. The probe window is shrunk to
@@ -565,6 +655,70 @@ def test_families() -> None:
     check(f"…and the scan peaks under {BIG_PEAK_LIMIT // 1024} KiB on a "
           f"{BIG_SIZE // 1024} KiB file (RULE 1e)", used < BIG_PEAK_LIMIT,
           f"peak {used / 1024:.1f} KiB")
+
+    # RULE 1f — the Auto-Rig-Pro family. Its node names share no token with
+    # any Mixamo-shaped rig, so it can neither absorb nor be absorbed by one.
+    a = probe("arp_rig", ARP_NAMES)
+    check("an Auto-Rig-Pro skeleton is recognised",
+          a["skeleton_family"] == "autorig-pro", str(a))
+    check(f"bone_count counts only the mapped names ({ARP_MAPPED} planted)",
+          a["bone_count"] == ARP_MAPPED, str(a["bone_count"]))
+    check("Root / Jaw_ref.x / eyes_ref.x / eye_ref.L are neither counted nor "
+          "an obstacle",
+          a["bone_count"] == ARP_MAPPED and a["skeleton_family"] == "autorig-pro")
+    check("its three-joint fingers are seen", a["has_fingers"] is True, str(a))
+    check("an Auto-Rig-Pro file is read as no Mixamo-shaped family",
+          a["skeleton_family"] not in ("mixamo-noprefix", "meshy-biped"), str(a))
+    check("…and the other families are untouched by it",
+          probe("unity_after_arp", UNITY_NAMES)["skeleton_family"] == "unity-humanoid"
+          and probe("mob_after_arp", MOB_NAMES)["skeleton_family"] == "mixamo-noprefix")
+
+    # RULE 1g — the take walker, against a file whose takes were WRITTEN here,
+    # so the expectation comes from the construction and not from the output.
+    take_file = FIXT / "two_takes.fbx"
+    take_file.write_bytes(fake_take_fbx(TAKE_FIXTURE))
+    got = fbx_import.fbx_takes(take_file)
+    check("both takes are listed, in file order",
+          [(g["index"], g["name"], g["duration_s"]) for g in got] == TAKE_EXPECT,
+          str(got))
+    single = FIXT / "one_take.fbx"
+    single.write_bytes(fake_take_fbx(TAKE_FIXTURE[:1]))
+    check("a single-take file answers with exactly one entry",
+          [(g["index"], g["name"]) for g in fbx_import.fbx_takes(single)]
+          == [(0, "alpha")], str(fbx_import.fbx_takes(single)))
+
+    check("the probe reports how many animations a file holds",
+          fbx_import.probe_fbx(take_file)["take_count"] == 2
+          and fbx_import.probe_fbx(single)["take_count"] == 1)
+
+    not_fbx = FIXT / "plain.fbx"
+    not_fbx.write_bytes(b"this is not an FBX at all")
+    raised = False
+    try:
+        fbx_import.fbx_takes(not_fbx)
+    except fbx_import.FbxReadError:
+        raised = True
+    check("a file that is no binary FBX is refused, not guessed at", raised)
+    check("…and the probe survives it with take_count 0",
+          fbx_import.probe_fbx(not_fbx)["take_count"] == 0)
+
+    # RULE 1h — a multi-take file is REFUSED. Blender assigns only the first
+    # stack's action, so importing one without naming a take would silently
+    # convert the wrong animation under the name the user asked for.
+    (INBOX / "many.fbx").write_bytes(fake_take_fbx(TAKE_FIXTURE, ARP_NAMES))
+    fbx_import._probe_cache.pop(str(INBOX / "many.fbx"), None)
+    fbx_import._takes_cache.pop(str(INBOX / "many.fbx"), None)
+    check("the same file answers both questions — rig and take count",
+          fbx_import.probe_fbx(INBOX / "many.fbx")["skeleton_family"] == "autorig-pro"
+          and fbx_import.probe_fbx(INBOX / "many.fbx")["take_count"] == 2,
+          str(fbx_import.probe_fbx(INBOX / "many.fbx")))
+    refused = ""
+    try:
+        fbx_import.import_fbx("many", ["many.fbx"])
+    except Exception as e:      # ClipImportError, by its message
+        refused = str(e)
+    check("a file with several animations is refused by the importer",
+          "2 animations" in refused, refused or "no refusal")
 
     # The two tables MUST agree — `fbx_clip` imports bpy and cannot be
     # imported here, so its families are read out of the source. A family

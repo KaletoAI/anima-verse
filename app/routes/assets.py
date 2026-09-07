@@ -453,6 +453,25 @@ def delete_clips_inbox(name: str,
     return {"name": name, "removed": removed}
 
 
+@router.get("/clips-inbox/takes/{name:path}")
+def get_clips_inbox_takes(name: str,
+                          _: Dict[str, Any] = Depends(require_admin)
+                          ) -> Dict[str, Any]:
+    """The animation takes of one inbox file — ``[{index, name, duration_s}]``
+    in file order.
+
+    A single-take export answers with one entry, a pack file with all of them.
+    The ``index`` is what the import body carries; the name is for the user to
+    read (see ``fbx_import.fbx_takes``). Read straight from the bytes, so this
+    costs no Blender run.
+    """
+    try:
+        takes = fbx_import.inbox_takes(name)
+    except ClipImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"name": name, "takes": takes}
+
+
 @router.post("/clips-inbox/preview")
 async def post_clips_inbox_preview(request: Request,
                                    _: Dict[str, Any] = Depends(require_admin)
