@@ -125,7 +125,7 @@ def _mixamo_noprefix():
     joint and the toe end sites are added here. Everything the rig carries on
     top is DISCARDED by omission — MotusMan's ``Root`` above the hips, the
     ``hand_l_wep``/``hand_r_wep`` weapon sockets and the ``Leaf*Roll1`` twist
-    helpers. The root is not lost with it: ``_load_source`` reads
+    helpers. The root is not lost with it: ``_Source`` reads
     ``matrix_world``, so an animated parent is already folded into the hips.
     """
     m = dict(cmu_clip.BONE_MAP)
@@ -163,7 +163,7 @@ def _meshy_biped():
 
     ``head_end`` and ``headfront`` are discarded by omission, like MotusMan's
     ``Root`` and weapon sockets — the head end site is reconstructed from the
-    neck direction in ``_load_source`` regardless of what the file carries.
+    neck direction in ``_Source.sample`` regardless of what the file carries.
     """
     return {
         "Hips": "root",
@@ -200,7 +200,7 @@ def _autorig_pro():
     * No toe end site. ``ltoes``/``rtoes`` stay unanimated for the same reason.
 
     Discarded by omission, like MotusMan's weapon sockets: the ``Root`` null
-    above the hips (``_load_source`` reads ``matrix_world``, so an animated
+    above the hips (``_Source`` reads ``matrix_world``, so an animated
     parent is already folded into the hips anyway) and the ``Jaw_ref.x`` /
     ``eyes_ref.x`` / ``eye_ref.L`` / ``eye_ref.R`` control nodes, which drive a
     face the clip library does not carry.
@@ -742,7 +742,7 @@ def _synth_hand_targets(P: dict, nodes: dict, palm: dict = None) -> None:
     The information is not missing, only the JOINT is: the hand node has a full
     orientation of its own. So the absent finger root is placed along the
     node's own bone axis, a third of the forearm ahead of the wrist — the same
-    move :func:`_load_source` already makes for ``head_end``, which has no node
+    move :meth:`_Source.sample` already makes for ``head_end``, which has no node
     either. The length is arbitrary (a frame normalises its direction) and only
     kept plausible so a dump of ``P`` stays readable.
 
@@ -795,52 +795,109 @@ def _synth_hand_targets(P: dict, nodes: dict, palm: dict = None) -> None:
         P[pinky] = P[hand] - wide
 
 
-def _load_source(path: str, family: str, palm: dict = None):
-    """Imports the FBX and returns ``(fps, frame_range, positions_by_frame,
-    family, rotations_by_frame, palm_axes)`` with positions as
-    ``{intermediate name: Vector(cm, Y up)}`` per frame.
+class _Source:
+    """ONE imported FBX, sampled take by take.
 
-    ``palm`` is a palm-axis table measured elsewhere (:func:`_palm_axes`) —
-    the animation file of a fingerless rig carries no mesh, so its axes come
-    from the REST file, which does. Absent, THIS file is measured instead, and
-    the result is returned alongside so a caller that has no rest file can read
-    what this one found."""
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.fbx(filepath=path, global_scale=1.0)
-    scene_nodes = _scene_nodes()
-    names = set(scene_nodes)
-    if family == "auto":
-        family = _detect_family(names)
-    bone_map = BONE_MAPS[family]()
-    nodes = {inter: scene_nodes[src] for src, inter in bone_map.items() if src in names}
-    # Measured HERE, while this file's mesh is still in the scene.
-    palm = palm if palm is not None else _palm_axes(bone_map)
-    missing = [c for c in ("root", "lfemur", "ltibia", "lfoot", "lhumerus", "lradius", "lhand")
-               if c not in nodes]
-    if missing:
-        raise ValueError(f"{family}: essential bones missing in the file: {missing}")
-    scene = bpy.context.scene
-    fps = float(scene.render.fps) / float(scene.render.fps_base or 1.0)
-    frames = set()
-    for o in bpy.data.objects:
-        if o.animation_data and o.animation_data.action:
-            r = o.animation_data.action.frame_range
-            frames.update((int(r[0]), int(r[1])))
-    f0, f1 = (min(frames), max(frames)) if frames else (1, 1)
-    by_frame = []
-    rot_frame = []
-    for fr in range(f0, f1 + 1):
-        scene.frame_set(fr)
-        bpy.context.view_layer.update()
-        P = {inter: _blender_to_clip(o.matrix_world.translation) for inter, o in nodes.items()}
-        # head end site: no node — continue the neck direction by the
-        # neck's own length
-        if "upperneck" in P and "lowerneck" in P:
-            P["head_end"] = P["upperneck"] + (P["upperneck"] - P["lowerneck"])
-        _synth_hand_targets(P, nodes, palm)
-        by_frame.append(P)
-        rot_frame.append({inter: _rot_to_clip(o.matrix_world) for inter, o in nodes.items()})
-    return fps, (f0, f1), by_frame, family, rot_frame, palm
+    Importing is what a pack file costs — measured on a 87 MB file with 121
+    takes: 6.5 s and 850 MB for the import, 0.01 s to sample one 30-frame take
+    off it. So the file is opened ONCE and every take the job needs is read
+    from that one scene; opening per take would turn a scene of five roles
+    into half a minute of re-reading the same bytes.
+
+    Only one FBX can be open at a time (the importer resets the scene), so an
+    instance is valid until the next one is created. :func:`run` respects that
+    by grouping its entries per file.
+    """
+
+    def __init__(self, path: str, family: str, palm: dict = None):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.import_scene.fbx(filepath=path, global_scale=1.0)
+        scene_nodes = _scene_nodes()
+        names = set(scene_nodes)
+        if family == "auto":
+            family = _detect_family(names)
+        self.family = family
+        self.path = path
+        bone_map = BONE_MAPS[family]()
+        self.nodes = {inter: scene_nodes[src]
+                      for src, inter in bone_map.items() if src in names}
+        # Measured HERE, while this file's mesh is still in the scene.
+        self.palm = palm if palm is not None else _palm_axes(bone_map)
+        missing = [c for c in ("root", "lfemur", "ltibia", "lfoot",
+                               "lhumerus", "lradius", "lhand")
+                   if c not in self.nodes]
+        if missing:
+            raise ValueError(
+                f"{family}: essential bones missing in the file: {missing}")
+        scene = bpy.context.scene
+        self.fps = float(scene.render.fps) / float(scene.render.fps_base or 1.0)
+        # File order — the n-th action is the n-th take of the file. Blender
+        # creates one per animation stack as it reads them, and session_uid
+        # counts up in creation order. The NAME cannot be used: it is
+        # "<object>|<stack>|<layer>" capped at 63 characters, so a long take
+        # name arrives here truncated.
+        self.actions = sorted(bpy.data.actions, key=lambda a: a.session_uid)
+
+    def select(self, take, take_count=0, take_name=""):
+        """Makes take number ``take`` (an index into the file's stacks) the
+        active animation. ``None`` keeps whatever the importer assigned, which
+        is the first stack — right for a single-take file and for nothing else.
+
+        ``take_count`` and ``take_name`` are the server's reading of the same
+        file, checked against Blender's. They disagree when the file has more
+        than one animated object (then the actions are stacks TIMES objects and
+        the index means something else) — a mismatch that would otherwise
+        surface as a clip with the wrong motion in it.
+        """
+        if take is None:
+            return
+        if take_count and len(self.actions) != take_count:
+            raise ValueError(
+                f"take {take}: the file lists {take_count} animations but "
+                f"Blender made {len(self.actions)} actions — the index is not "
+                "a take number here (several animated objects?)")
+        if not 0 <= take < len(self.actions):
+            raise ValueError(
+                f"take {take} out of range: the file has {len(self.actions)}")
+        action = self.actions[take]
+        # A prefix long enough to catch a wrong index, short enough to survive
+        # the 63-character cap in front of it.
+        head = str(take_name or "")[:16]
+        if head and head not in action.name:
+            raise ValueError(
+                f"take {take} is {action.name!r}, which does not carry "
+                f"{head!r} — the file order and the listing disagree")
+        for o in bpy.data.objects:
+            if o.animation_data:
+                o.animation_data.action = action
+
+    def sample(self):
+        """The active take as ``(fps, frame_range, positions_by_frame,
+        rotations_by_frame)``, positions as ``{intermediate name: Vector(cm,
+        Y up)}`` per frame."""
+        scene = bpy.context.scene
+        frames = set()
+        for o in bpy.data.objects:
+            if o.animation_data and o.animation_data.action:
+                r = o.animation_data.action.frame_range
+                frames.update((int(r[0]), int(r[1])))
+        f0, f1 = (min(frames), max(frames)) if frames else (1, 1)
+        by_frame = []
+        rot_frame = []
+        for fr in range(f0, f1 + 1):
+            scene.frame_set(fr)
+            bpy.context.view_layer.update()
+            P = {inter: _blender_to_clip(o.matrix_world.translation)
+                 for inter, o in self.nodes.items()}
+            # head end site: no node — continue the neck direction by the
+            # neck's own length
+            if "upperneck" in P and "lowerneck" in P:
+                P["head_end"] = P["upperneck"] + (P["upperneck"] - P["lowerneck"])
+            _synth_hand_targets(P, self.nodes, self.palm)
+            by_frame.append(P)
+            rot_frame.append({inter: _rot_to_clip(o.matrix_world)
+                              for inter, o in self.nodes.items()})
+        return self.fps, (f0, f1), by_frame, rot_frame
 
 
 class _FakeBone:
@@ -889,16 +946,20 @@ def _mixamo_rest(rig_path: str):
     return P, _frames_of(P)
 
 
-def _rest_reference(path: str, family: str, mix_frames: dict):
-    """From a rest-pose FBX of the source rig: per bone the rotation that
-    carries the Mixamo rest onto the source's reference pose
+def _rest_reference(by_frame, rot_frame, mix_frames: dict):
+    """From the FIRST frame of a reference-pose take: per bone the rotation
+    that carries the Mixamo rest onto the source's reference pose
     (``A_rest = F_src_rest · F_mix_restᵀ``) and the node's world rotation in
-    that pose — what the delta mode needs."""
-    _fps, _rng, by_frame, _fam, rot_frame, palm = _load_source(path, family)
+    that pose — what the delta mode needs.
+
+    Takes the sampled frames rather than a path, because the reference pose is
+    just as often a TAKE of the animation file itself as a file of its own —
+    a pack ships its T-pose as one stack among the movements.
+    """
     P, R = by_frame[0], rot_frame[0]
     fr = _frames_of(P)
-    return ({name: (fr[name] @ mix_frames[name].transposed(), R[name])
-             for name in fr if name in mix_frames and name in R}, palm)
+    return {name: (fr[name] @ mix_frames[name].transposed(), R[name])
+            for name in fr if name in mix_frames and name in R}
 
 
 def _build_take(role, fps, src_fps, by_frame, mix_pos, mix_frames, args,
@@ -948,25 +1009,73 @@ def run(job):
     args["out_dir"] = job["out_dir"]
     fps = int(args.get("fps", 30))
     family = str(args.get("bone_map") or "auto")
+    # Per role: which FILE, and which TAKE inside it. A single-take export
+    # passes take None and behaves exactly as before; a pack file names the
+    # index the server read off its stacks.
+    picks = list(args.get("takes") or [])
+
+    def _pick(i):
+        """(take index, take count, take name) for entry i — all optional."""
+        spec = picks[i] if i < len(picks) else None
+        if not isinstance(spec, dict):
+            return None, 0, ""
+        take = spec.get("take")
+        return (None if take is None else int(take),
+                int(spec.get("take_count") or 0), str(spec.get("take_name") or ""))
+
+    # A pair whose halves are two takes of ONE file arrives with src_a only.
     entries = ([("", inputs["src"])] if "src" in inputs
-               else [("a", inputs["src_a"]), ("b", inputs["src_b"])])
+               else [("a", inputs["src_a"]),
+                     ("b", inputs.get("src_b") or inputs["src_a"])])
+    entries = [(role, path) + _pick(i) for i, (role, path) in enumerate(entries)]
     mix_pos, mix_frames = _mixamo_rest(args["rig"])
-    # The rest file is the one with the skinned mesh, so the palm axes of a
-    # fingerless rig are measured there and handed to the animation files,
-    # which carry no mesh of their own.
-    rest, palm = (_rest_reference(inputs["rest"], family, mix_frames)
-                  if inputs.get("rest") else (None, None))
+
+    # The reference pose is either its own input, or a TAKE of one of the
+    # sources — a pack ships its T-pose as one stack among the movements, and
+    # then there is no second file to hand over.
+    rest_from = str(args.get("rest_from") or "")
+    rest_path = inputs.get(rest_from) if rest_from else inputs.get("rest")
+    rest_spec = args.get("rest_take") or {}
+    rest_pick = (rest_spec.get("take"), int(rest_spec.get("take_count") or 0),
+                 str(rest_spec.get("take_name") or ""))
+
+    # One open per FILE, the rest file first: it is the one with the skinned
+    # mesh, so the palm axes of a fingerless rig are measured there and handed
+    # to the animation files, which carry no mesh of their own. A file that is
+    # both the rest source and an animation source is opened once for both.
+    order = ([rest_path] if rest_path else [])
+    for _role, path, _t, _c, _n in entries:
+        if path not in order:
+            order.append(path)
+
+    rest = None
+    palm = None
+    sampled = {}
+    used = family
+    for path in order:
+        src = _Source(path, family, palm)
+        used = src.family
+        if path == rest_path and rest is None:
+            src.select(rest_pick[0], rest_pick[1], rest_pick[2])
+            _fps, _rng, r_by, r_rot = src.sample()
+            rest = _rest_reference(r_by, r_rot, mix_frames)
+            # ``palm`` is NEVER rebound from an animation source: without a
+            # rest file it stays None and every file measures its own mesh.
+            # Taking A's answer — {} for a mesh-less export, which reads as
+            # "already measured" — would rob B of its measurement, and B is a
+            # different body.
+            palm = src.palm
+        for role, p, take, count, name in entries:
+            if p != path:
+                continue
+            src.select(take, count, name)
+            sampled[role] = src.sample()
+
     takes = []
     src_fps = None
-    used = family
     off = [float(v) for v in (args.get("offset_b_m") or (0, 0, 0))]
-    for role, path in entries:
-        # ``palm`` is NEVER rebound from a source: without a rest file it stays
-        # None and every file measures its own mesh. Taking A's answer — {} for
-        # a mesh-less animation export, which reads as "already measured" —
-        # would rob B of its measurement, and B is a different body.
-        sfps, (f0, f1), by_frame, used, rot_frame, _own_palm = _load_source(
-            path, family, palm)
+    for role, _path, _t, _c, _n in entries:
+        sfps, (f0, f1), by_frame, rot_frame = sampled[role]
         src_fps = src_fps or sfps
         if role == "b" and any(off):
             shift = Vector((off[0] * 100.0, off[1] * 100.0, off[2] * 100.0))
@@ -975,11 +1084,13 @@ def run(job):
                                  rot_frame, rest))
     args["source_fps"] = src_fps
     source = {"format": "fbx", "bone_map": used,
-              "files": list(args.get("source_name") or [Path(p).name for _r, p in entries]),
+              "files": list(args.get("source_name")
+                            or [Path(p).name for _r, p, _t, _c, _n in entries]),
+              "takes": [t for _r, _p, t, _c, _n in entries],
               "fingers": any("LeftHandIndex1" in t.sk.bones for t in takes),
               "rotation_mode": "rest-delta" if rest else "positional",
               "offset_b_m": off,
-              "rest_file": Path(inputs["rest"]).name if inputs.get("rest") else ""}
+              "rest_file": str(args.get("rest_name") or "")}
     return cmu_clip.run_takes(takes, args, fps, source)
 
 

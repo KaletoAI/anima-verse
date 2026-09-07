@@ -87,6 +87,70 @@ function slugFromFile(name: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
+/** A kind proposal from a TAKE name: the role marker off, the rest slugged.
+ *  `Female[A]_Resting_Loop0` → `resting-loop0`. The phase stays in the name —
+ *  one take is one clip, and two phases of a scene are two kinds. */
+function slugFromTake(name: string): string {
+  return name
+    .replace(/^[A-Za-z]+\[[A-Za-z0-9]+\][_-]/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/** Does a take NAME say "this is a pose, not a movement"? Mirrors
+ *  `fbx_import.REST_MARKERS`, so the picker proposes the same file the server
+ *  would have proposed had the pose been a file of its own. */
+function isRestTake(name: string): boolean {
+  const low = name.toLowerCase()
+  return ['tpose', 't-pose', 't_pose', 'apose', 'a-pose', 'rest', 'bind']
+    .some((m) => low.includes(m))
+}
+
+/** The animation picker of one file. Rendered only when a file holds more
+ *  than one — a single-take export has nothing to choose. */
+function TakeSelect({ label, hint, takes, value, onChange, placeholder }: {
+  label: string
+  hint?: string
+  takes: Take[]
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+}) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <span className="ga-hint">{label} ({takes.length})</span>
+      <select className="ga-input" value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{placeholder}</option>
+        {takes.map((tk) => (
+          <option key={tk.index} value={tk.index}>
+            {tk.name} — {tk.duration_s.toFixed(2)} s
+          </option>
+        ))}
+      </select>
+      {hint ? <span className="ga-hint">{hint}</span> : null}
+    </label>
+  )
+}
+
+/** The takes of one inbox file, loaded on demand. The listing only carries
+ *  how MANY a file holds, because a pack file has over a hundred of them. */
+function useTakes(name: string): Take[] {
+  const [takes, setTakes] = useState<Take[]>([])
+  useEffect(() => {
+    if (!name) {
+      setTakes([])
+      return
+    }
+    let live = true
+    apiGet<{ takes?: Take[] }>(`/assets/clips-inbox/takes/${encodeURI(name)}`)
+      .then((r) => { if (live) setTakes(r.takes || []) })
+      .catch(() => { if (live) setTakes([]) })
+    return () => { live = false }
+  }, [name])
+  return takes
+}
+
 function mb(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
@@ -108,8 +172,10 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   /** the subfolder groups the user has opened (the root files are never folded) */
   const [openGroups, setOpenGroups] = useState<string[]>([])
   const [second, setSecond] = useState('')
-  /** the takes of the selected file — empty until one is loaded */
-  const [takes, setTakes] = useState<Take[]>([])
+  /** which animation inside each file — '' when the file holds only one */
+  const [take, setTake] = useState('')
+  const [secondTake, setSecondTake] = useState('')
+  const [restTake, setRestTake] = useState('')
   const [restFile, setRestFile] = useState('')
 
   const [kind, setKind] = useState('')
@@ -131,17 +197,6 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   const [redistributable, setRedistributable] = useState(false)
   const [importing, setImporting] = useState(false)
   const [imported, setImported] = useState<{ kind: string; files: string[]; seq: number } | null>(null)
-
-  /** The takes of the selected file. Loaded on demand: the listing only
-   *  carries how MANY there are, because a pack file has over a hundred. */
-  useEffect(() => {
-    if (!selected) { setTakes([]); return }
-    let live = true
-    apiGet<{ takes?: Take[] }>(`/assets/clips-inbox/takes/${encodeURI(selected)}`)
-      .then((r) => { if (live) setTakes(r.takes || []) })
-      .catch(() => { if (live) setTakes([]) })
-    return () => { live = false }
-  }, [selected])
 
   const loadClips = useCallback(async () => {
     try {
@@ -214,6 +269,9 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
       setRestFile(rest && rest.name !== name
         && rest.probe.skeleton_family === e?.probe.skeleton_family ? rest.name : '')
       setKind(slugFromFile(name))
+      setTake('')
+      setSecondTake('')
+      setRestTake('')
       setStartS('0')
       setEndS('')
       setLoopOn(false)
@@ -272,6 +330,28 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
       ),
     [clips, clipSet, target],
   )
+  const takes = useTakes(selected)
+  const secondTakes = useTakes(second)
+  const restTakes = useTakes(restFile)
+
+  // A pack ships its reference pose as one take among the movements, so a
+  // multi-take file offers ITS OWN pose rather than a foreign file — the
+  // file-name heuristic behind `rest_suggestion` cannot see inside a file.
+  useEffect(() => {
+    if (!selected || takes.length <= 1) return
+    const i = takes.findIndex((tk) => isRestTake(tk.name))
+    setRestFile(i >= 0 ? selected : '')
+    setRestTake(i >= 0 ? String(i) : '')
+  }, [selected, takes])
+
+  // With a take chosen, the clip name comes from what the ANIMATION is called,
+  // not from the pack file it happens to sit in.
+  useEffect(() => {
+    if (take === '') return
+    const tk = takes.find((x) => String(x.index) === take)
+    if (tk) setKind(slugFromTake(tk.name))
+  }, [take, takes])
+
   const kindExists = existingKinds.has(kind.trim().toLowerCase())
   const unknownRig = !!entry && !entry.probe.skeleton_family
   const isPair = !!second
@@ -280,13 +360,21 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   const [probe, setProbe] = useState<{ urls: { a?: string; b?: string; solo?: string }; seq: number; seconds: number } | null>(null)
   const [probing, setProbing] = useState(false)
 
+  /** One source address as the API spells it: the file, and which animation
+   *  inside it. A file with a single take passes no take. */
+  const src = useCallback((name: string, idx: string) => (
+    idx === '' ? { name } : { name, take: Number(idx) }
+  ), [])
+
   const formBody = useCallback((): Record<string, unknown> | null => {
     if (!entry) return null
-    const files = isPair ? [entry.name, second] : [entry.name]
+    const files = isPair
+      ? [src(entry.name, take), src(second, secondTake)]
+      : [src(entry.name, take)]
     return {
       kind: kind.trim().toLowerCase() || 'preview',
       files,
-      rest_file: restFile || null,
+      rest_file: restFile ? src(restFile, restTake) : null,
       set: clipSet,
       start_s: Number(startS) || 0,
       end_s: endS === '' ? null : Number(endS),
@@ -299,7 +387,8 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
       redistributable: target === 'free' ? redistributable : false,
     }
   }, [clipSet, endS, entry, inPlace, isPair, kind, loopOn, loopS, offFwd, offSide, offUp, speed,
-      overwrite, redistributable, restFile, second, startS, target])
+      overwrite, redistributable, restFile, restTake, second, secondTake, src, startS, take,
+      target])
 
   const runProbe = useCallback(async () => {
     const body = formBody()
@@ -321,39 +410,27 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   }, [formBody, probing, t, toast])
 
   const runImport = useCallback(async () => {
-    if (!entry || importing) return
+    const body = formBody()
+    if (!entry || !body || importing) return
     setImporting(true)
     try {
-      const files = isPair ? [entry.name, second] : [entry.name]
-      const body: Record<string, unknown> = {
-        kind: kind.trim().toLowerCase(),
-        files,
-        rest_file: restFile || null,
-        set: clipSet,
-        start_s: Number(startS) || 0,
-        end_s: endS === '' ? null : Number(endS),
-        loop_s: loopOn && !isPair ? Number(loopS) || 1 : null,
-        speed: Number(speed) || 1,
-        in_place: inPlace && !isPair,
-        offset_b_m: isPair ? [Number(offSide) || 0, Number(offUp) || 0, Number(offFwd) || 0] : null,
-        overwrite,
-        target,
-        redistributable: target === 'free' ? redistributable : false,
-      }
+      // The very same body the preview plays — one place decides what an
+      // import IS, so a field added to the form cannot reach only one of them.
+      body.kind = kind.trim().toLowerCase()
+      const names = isPair ? [entry.name, second] : [entry.name]
       const r = await apiPost<{ kind: string; seconds: number; files: string[] }>(
         '/assets/clips-inbox/import',
         body,
       )
       toast(`${t('Imported as')} ${r.kind} (${(r.seconds || 0).toFixed(1)} s)`)
-      setImported((prev) => ({ kind: r.kind, files, seq: (prev?.seq || 0) + 1 }))
+      setImported((prev) => ({ kind: r.kind, files: names, seq: (prev?.seq || 0) + 1 }))
       await loadClips()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
       setImporting(false)
     }
-  }, [clipSet, endS, entry, importing, inPlace, isPair, kind, loadClips, loopOn, loopS, offFwd, offSide, offUp, speed,
-      overwrite, redistributable, restFile, second, startS, t, target, toast])
+  }, [entry, formBody, importing, isPair, kind, loadClips, second, t, toast])
 
   // Only the FIRST load blanks the view; a refresh keeps the list (and the
   // selection, the form, the preview) in place while the answer is on its way.
@@ -515,49 +592,71 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
               </div>
             </div>
 
-            {entry.probe.take_count > 1 ? (
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span className="ga-hint">
-                  {t('Animation in this file')} ({takes.length})
-                </span>
-                <select className="ga-input" size={8} disabled>
-                  {takes.map((tk) => (
-                    <option key={tk.index} value={tk.index}>
-                      {tk.name} — {tk.duration_s.toFixed(2)} s
-                    </option>
-                  ))}
-                </select>
-                <span className="ga-hint">
-                  {t('This file holds more than one animation. Choosing one is not'
-                     + ' built yet, so the import refuses it rather than silently'
-                     + ' converting the first.')}
-                </span>
-              </label>
+            {takes.length > 1 ? (
+              <TakeSelect
+                label={t('Animation')}
+                hint={t('This file holds several. Pick the one to convert —'
+                        + ' the import refuses a file whose animation is unnamed'
+                        + ' rather than silently taking the first.')}
+                takes={takes}
+                value={take}
+                onChange={setTake}
+                placeholder={t('— pick one —')}
+              />
             ) : null}
 
             <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span className="ga-hint">{t('Second file (a pair — both halves become one kind)')}</span>
               <select className="ga-input" value={second} onChange={(e) => setSecond(e.target.value)}>
                 <option value="">{t('— solo —')}</option>
+                {/* Both halves out of one pack file is the normal case for a
+                    scene, so the file itself is a partner candidate. */}
+                {takes.length > 1 ? (
+                  <option value={entry.name}>{t('this file (another animation)')}</option>
+                ) : null}
                 {kin.map((e) => (
                   <option key={e.name} value={e.name}>{e.name}</option>
                 ))}
               </select>
             </label>
 
+            {isPair && secondTakes.length > 1 ? (
+              <TakeSelect
+                label={t("The partner's animation")}
+                takes={secondTakes}
+                value={secondTake}
+                onChange={setSecondTake}
+                placeholder={t('— pick one —')}
+              />
+            ) : null}
+
             <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span className="ga-hint">{t('Reference pose (optional)')}</span>
               <select className="ga-input" value={restFile} onChange={(e) => setRestFile(e.target.value)}>
                 <option value="">{t('— none —')}</option>
+                {takes.length > 1 ? (
+                  <option value={entry.name}>{t('this file (another animation)')}</option>
+                ) : null}
                 {kin.map((e) => (
                   <option key={e.name} value={e.name}>{e.name}</option>
                 ))}
               </select>
               <span className="ga-hint">
                 {t('The bind pose of THIS rig — gives the bones their real twist.'
-                   + ' Only files of the same rig family are offered.')}
+                   + ' Only files of the same rig family are offered; a pack'
+                   + ' usually carries its own pose as one of its animations.')}
               </span>
             </label>
+
+            {restFile && restTakes.length > 1 ? (
+              <TakeSelect
+                label={t('The reference pose animation')}
+                takes={restTakes}
+                value={restTake}
+                onChange={setRestTake}
+                placeholder={t('— pick one —')}
+              />
+            ) : null}
 
             <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <span className="ga-hint">{t('Clip kind (the file stem, lowercase, no "__")')}</span>

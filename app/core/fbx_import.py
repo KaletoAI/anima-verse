@@ -482,6 +482,53 @@ def probe_fbx(path: Path) -> Dict[str, Any]:
     return out
 
 
+def file_spec(entry: Any) -> Tuple[str, Optional[int]]:
+    """One source address → ``(relative name, take index or None)``.
+
+    THE address form of this module: ``{"name": "pack.fbx", "take": 7}``. A
+    file that holds a single animation passes ``take`` as null (or leaves it
+    out); a pack file names which of its stacks it means. There is deliberately
+    no second, shorter spelling — a bare string would have to mean "take 0",
+    and "the first one" is exactly the guess that hands a user the wrong
+    animation under the right name.
+    """
+    if not isinstance(entry, dict):
+        raise ClipImportError(
+            "a source is {name, take}, not " + type(entry).__name__)
+    name = safe_inbox_name(entry.get("name"))
+    raw = entry.get("take")
+    if raw is None or raw == "":
+        return name, None
+    try:
+        take = int(raw)
+    except (TypeError, ValueError):
+        raise ClipImportError(f"{name}: take must be a number, got {raw!r}")
+    if take < 0:
+        raise ClipImportError(f"{name}: take must not be negative")
+    return name, take
+
+
+def resolve_take(name: str, take: Optional[int]) -> Dict[str, Any]:
+    """Checks one address against the file and returns what Blender needs —
+    ``{take, take_count, take_name}``.
+
+    A file with several animations MUST name one: picking silently would mean
+    picking the first, which is what the FBX importer assigns and what nobody
+    asked for. A file with one animation may name it or not.
+    """
+    takes = _cached_takes(inbox_path(name))
+    count = len(takes)
+    if take is None:
+        if count > 1:
+            raise ClipImportError(
+                f"{name}: this file holds {count} animations — pick one")
+        return {"take": None, "take_count": count, "take_name": ""}
+    if not 0 <= take < max(count, 1):
+        raise ClipImportError(f"{name}: no take {take} — the file has {count}")
+    return {"take": take, "take_count": count,
+            "take_name": takes[take]["name"] if takes else ""}
+
+
 def inbox_takes(name: Any) -> List[Dict[str, Any]]:
     """Every take of ONE inbox file, addressed by its relative path.
 
@@ -687,7 +734,7 @@ def target_dir(target: str) -> Path:
     return get_animation_clips_dir() if target == "free" else get_licensed_clips_dir()
 
 
-def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
+def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
                clip_set: str = "", start_s: float = 0.0,
                end_s: Optional[float] = None, loop_s: Optional[float] = None,
                in_place: bool = False, overwrite: bool = False,
@@ -724,14 +771,19 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
             "the free library is redistributable — tick 'redistributable' to "
             "confirm the licence allows it, or import into the licensed library")
 
-    names = [safe_inbox_name(f) for f in (files or [])]
-    if not 1 <= len(names) <= 2:
-        raise ClipImportError("an import takes one file, or two for a pair")
-    if len(names) == 2 and names[0].lower() == names[1].lower():
-        raise ClipImportError("a pair needs two DIFFERENT files")
+    specs = [file_spec(f) for f in (files or [])]
+    names = [n for n, _t in specs]
+    if not 1 <= len(specs) <= 2:
+        raise ClipImportError("an import takes one source, or two for a pair")
+    if len(specs) == 2 and (specs[0][0].lower(), specs[0][1]) == \
+            (specs[1][0].lower(), specs[1][1]):
+        raise ClipImportError(
+            "a pair needs two DIFFERENT sources — one take cannot play both "
+            "halves")
     paths_in: List[Path] = []
+    take_specs: List[Dict[str, Any]] = []
     src_family = ""
-    for name in names:
+    for name, take in specs:
         p = inbox_path(name)
         if not p.is_file():
             raise ClipImportError(f"no such file in the inbox: {name}")
@@ -746,23 +798,21 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
                 f"{src_family} — both halves of a pair have to come from the "
                 "same rig")
         src_family = src_family or family
-        # Fail CLOSED on a file that holds several animations. Blender assigns
-        # only the FIRST stack's action on import, and the converter reads the
-        # frame range of whatever is active — so a pack file would convert its
-        # first take under the name the user asked for, without a word. Until
-        # a take can be named, refusing is the only honest answer.
-        takes = _cached_takes(p)
-        if len(takes) > 1:
-            raise ClipImportError(
-                f"{name}: this file holds {len(takes)} animations. Picking one "
-                "is not built yet — a file with a single take imports as before")
+        # Which animation of the file. Fails CLOSED when the file holds
+        # several and the caller named none: Blender assigns only the FIRST
+        # stack's action on import and the converter reads the range of
+        # whatever is active, so guessing here converts the wrong take under
+        # the right name.
+        take_specs.append(resolve_take(name, take))
         paths_in.append(p)
 
     rest_path: Optional[Path] = None
+    rest_spec: Dict[str, Any] = {}
     if rest_file:
-        rest_path = inbox_path(rest_file)
+        rest_name, rest_take = file_spec(rest_file)
+        rest_path = inbox_path(rest_name)
         if not rest_path.is_file():
-            raise ClipImportError(f"no such reference pose in the inbox: {rest_file}")
+            raise ClipImportError(f"no such reference pose in the inbox: {rest_name}")
         # The reference pose is read on the SOURCE rig — a file from another
         # rig family carries different bones in different places, and the
         # delta it produces is nonsense that no later stage can notice.
@@ -778,14 +828,17 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
             # it inside Blender — a late, ugly failure at best, and a silent
             # retarget against the wrong family at worst.
             raise ClipImportError(
-                f"{rest_file}: unknown rig — the reference pose's rig family "
+                f"{rest_name}: unknown rig — the reference pose's rig family "
                 f"could not be identified from its node names "
                 f"(known: {', '.join(sorted(SIGNATURES))})")
         if rest_family != src_family:
             raise ClipImportError(
-                f"{rest_file} carries a {rest_family} rig, but the clip is "
+                f"{rest_name} carries a {rest_family} rig, but the clip is "
                 f"{src_family} — a reference pose has to come from the SAME "
                 "rig as the animation")
+        # A pack ships its reference pose as one stack among the movements, so
+        # the rest slot is addressed exactly like a source: file AND take.
+        rest_spec = resolve_take(rest_name, rest_take)
 
     cset = str(clip_set or "").strip().lower()
     if cset and ("/" in cset or "\\" in cset or cset in (".", "..")):
@@ -802,20 +855,42 @@ def import_fbx(kind: str, files: List[str], *, rest_file: Optional[str] = None,
 
     inputs: Dict[str, Path] = {"rig": rig}
     if len(paths_in) == 2:
-        inputs["src_a"], inputs["src_b"] = paths_in
+        inputs["src_a"] = paths_in[0]
+        # Both halves out of ONE pack file is the normal case for a scene, and
+        # then the file travels once: the runner copies every input into the
+        # job directory and Blender imports every path it is given, so naming
+        # it twice would copy and import the same bytes twice.
+        if paths_in[1] != paths_in[0]:
+            inputs["src_b"] = paths_in[1]
     else:
         inputs["src"] = paths_in[0]
+    # A reference pose that IS one of the sources travels as a take index, not
+    # as a second copy of the same file: the runner copies every input into the
+    # job directory, so passing it twice would copy a pack file twice and make
+    # Blender import it twice — measured at 6.5 s and 850 MB per import.
+    rest_from = ""
     if rest_path is not None:
-        inputs["rest"] = rest_path
+        same = [key for key, val in inputs.items()
+                if key != "rig" and val == rest_path]
+        if same:
+            rest_from = same[0]
+        else:
+            inputs["rest"] = rest_path
 
     params = {"kind": kind, "fps": int(fps), "start_s": float(start_s or 0.0),
               "end_s": end_s, "anchor_s": None,
               "in_place": bool(in_place) and len(paths_in) == 1,
               "loop_s": loop_s if len(paths_in) == 1 else None,
-              # declared cycle: the caller's word, else the file name's
-              # ("…_Loop0.fbx" is how packs mark their cycles)
+              # declared cycle: the caller's word, else what the source
+              # CALLS itself — the take name for a pack file, the file name
+              # for a single-take export ("…_Loop0" is how packs mark cycles).
               "loops": bool(loops) if loops is not None
-              else any("loop" in Path(f).name.lower() for f in files),
+              else any("loop" in (s["take_name"] or n).lower()
+                       for s, n in zip(take_specs, names)),
+              "takes": take_specs,
+              "rest_take": rest_spec,
+              "rest_from": rest_from,
+              "rest_name": rest_path.name if rest_path is not None else "",
               "offset_b_m": [float(v) for v in (offset_b_m or (0, 0, 0))][:3],
               "speed": float(speed or 1.0),
               "bone_map": "auto", "source_name": names}

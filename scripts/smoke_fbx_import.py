@@ -198,6 +198,15 @@ MESHY_NAMES = ("Hips", "Spine", "Spine01", "Spine02", "neck", "Head",
 MESHY_MAPPED = 12
 
 
+def S(name, take=None):
+    """One source address for an import body — ``{name, take}``.
+
+    Spelled out here so the checks read like the API does: a file that holds a
+    single animation passes no take, a pack file names one.
+    """
+    return {"name": name} if take is None else {"name": name, "take": take}
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'✓' if ok else '✗'} {label}{f' — {detail}' if detail else ''}")
     if not ok:
@@ -480,7 +489,10 @@ def fake_run(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
     RUNS.append(kind)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    pair = "src_b" in (inputs or {})
+    # The real script's rule, not a paraphrase of it: a pair is "no solo
+    # slot". Two takes of ONE file arrive as src_a alone, so asking for src_b
+    # would read that scene as a solo.
+    pair = "src" not in (inputs or {})
     stems = [f"{kind}__a", f"{kind}__b"] if pair else [kind]
     outputs = {}
     for stem in stems:
@@ -714,11 +726,39 @@ def test_families() -> None:
           str(fbx_import.probe_fbx(INBOX / "many.fbx")))
     refused = ""
     try:
-        fbx_import.import_fbx("many", ["many.fbx"])
+        fbx_import.import_fbx("many", [S("many.fbx")])
     except Exception as e:      # ClipImportError, by its message
         refused = str(e)
     check("a file with several animations is refused by the importer",
           "2 animations" in refused, refused or "no refusal")
+
+    # RULE 1i — the address form. One spelling for every source: {name, take}.
+    bad = ""
+    try:
+        fbx_import.file_spec("many.fbx")
+    except Exception as e:
+        bad = str(e)
+    check("a bare file name is not an address", "{name, take}" in bad, bad)
+    check("an address without a take reads as 'the only one'",
+          fbx_import.file_spec({"name": "many.fbx"}) == ("many.fbx", None))
+    check("…and with one it carries the index",
+          fbx_import.file_spec({"name": "many.fbx", "take": 1}) == ("many.fbx", 1))
+
+    def refusal(fn):
+        try:
+            fn()
+        except Exception as e:
+            return str(e)
+        return ""
+
+    check("a multi-take file without a take is refused",
+          "pick one" in refusal(lambda: fbx_import.resolve_take("many.fbx", None)))
+    check("a take beyond the file is refused",
+          "no take 9" in refusal(lambda: fbx_import.resolve_take("many.fbx", 9)))
+    check("a named take resolves to index, count and name",
+          fbx_import.resolve_take("many.fbx", 1)
+          == {"take": 1, "take_count": 2, "take_name": "beta"},
+          str(fbx_import.resolve_take("many.fbx", 1)))
 
     # The two tables MUST agree — `fbx_clip` imports bpy and cannot be
     # imported here, so its families are read out of the source. A family
@@ -828,27 +868,27 @@ def test_import() -> None:
                           ("a/b", "a path separator"),
                           ("", "empty"),
                           ("dance.fbx", "an extension")]:
-            code = status_of(lambda: imp({"kind": kind, "files": ["Female_Dance.fbx"]}))
+            code = status_of(lambda: imp({"kind": kind, "files": [S("Female_Dance.fbx")]}))
             check(f"422 for kind {kind!r} — {why}", code == 422, str(code))
         check("422 for an unknown rig",
-              status_of(lambda: imp({"kind": "odd", "files": ["strange.fbx"]})) == 422)
+              status_of(lambda: imp({"kind": "odd", "files": [S("strange.fbx")]})) == 422)
         check("422 for a file that is not in the inbox",
-              status_of(lambda: imp({"kind": "x", "files": ["gone.fbx"]})) == 422)
+              status_of(lambda: imp({"kind": "x", "files": [S("gone.fbx")]})) == 422)
         check("422 for three files",
-              status_of(lambda: imp({"kind": "x", "files": ["a.fbx", "b.fbx", "c.fbx"]})) == 422)
+              status_of(lambda: imp({"kind": "x", "files": [S("a.fbx"), S("b.fbx"), S("c.fbx")]})) == 422)
         check("400 when files is not a list",
               status_of(lambda: imp({"kind": "x", "files": "Female_Dance.fbx"})) == 400)
         check("400 for the free library without 'redistributable' (RULE 4)",
-              status_of(lambda: imp({"kind": "dance", "files": ["Female_Dance.fbx"],
+              status_of(lambda: imp({"kind": "dance", "files": [S("Female_Dance.fbx")],
                                      "target": "free"})) == 400)
         check("422 for an unknown target",
-              status_of(lambda: imp({"kind": "dance", "files": ["Female_Dance.fbx"],
+              status_of(lambda: imp({"kind": "dance", "files": [S("Female_Dance.fbx")],
                                      "target": "public"})) == 422)
         check("409 for a kind the licensed library already has",
-              status_of(lambda: imp({"kind": "idle", "files": ["Female_Dance.fbx"]})) == 409)
+              status_of(lambda: imp({"kind": "idle", "files": [S("Female_Dance.fbx")]})) == 409)
 
         print("\n[7] a solo import — licensed by default")
-        res = imp({"kind": "resting", "files": ["Female_Dance.fbx"],
+        res = imp({"kind": "resting", "files": [S("Female_Dance.fbx")],
                    "start_s": 0.5, "end_s": 3.0, "loop_s": 1.5, "in_place": True})
         check("the clip landed in the LICENSED library",
               (LICENSED / "resting.fbx").is_file() and (LICENSED / "resting.json").is_file())
@@ -872,8 +912,8 @@ def test_import() -> None:
               "resting" in assets.list_animation_clips()["kinds"])
 
         print("\n[8] the reference pose reaches inputs['rest']")
-        res = imp({"kind": "resting2", "files": ["Female_Dance.fbx"],
-                   "rest_file": "Tpose.fbx"})
+        res = imp({"kind": "resting2", "files": [S("Female_Dance.fbx")],
+                   "rest_file": S("Tpose.fbx")})
         check("the rest slot is filled",
               res["sidecar"]["slots"] == ["rest", "rig", "src"],
               str(res["sidecar"]["slots"]))
@@ -883,34 +923,33 @@ def test_import() -> None:
         check("and the answer reports it", res["rest_file"] == "Tpose.fbx",
               str(res["rest_file"]))
         check("422 for a reference pose that is not in the inbox",
-              status_of(lambda: imp({"kind": "resting3", "files": ["Female_Dance.fbx"],
-                                     "rest_file": "nope.fbx"})) == 422)
+              status_of(lambda: imp({"kind": "resting3", "files": [S("Female_Dance.fbx")],
+                                     "rest_file": S("nope.fbx")})) == 422)
 
         print("\n[8b] a reference pose has to be the SAME RIG (RULE 6)")
         check("422 for a Unity reference pose under a Mixamo clip",
-              status_of(lambda: imp({"kind": "mob-rest", "files": ["MOB1_Walk.fbx"],
-                                     "rest_file": "Tpose.fbx"})) == 422)
+              status_of(lambda: imp({"kind": "mob-rest", "files": [S("MOB1_Walk.fbx")],
+                                     "rest_file": S("Tpose.fbx")})) == 422)
         check("422 for two pair halves of different rigs",
               status_of(lambda: imp({"kind": "mob-pair",
-                                     "files": ["MOB1_Walk.fbx",
-                                               "Female_Dance.fbx"]})) == 422)
+                                     "files": [S("MOB1_Walk.fbx"), S("Female_Dance.fbx")]})) == 422)
         before = len(RUNS)
         code = status_of(lambda: imp({"kind": "rest-unknown",
-                                      "files": ["Female_Dance.fbx"],
-                                      "rest_file": "strange.fbx"}))
+                                      "files": [S("Female_Dance.fbx")],
+                                      "rest_file": S("strange.fbx")}))
         check("422 for a reference pose whose rig cannot be named at all "
               "— the guard fails CLOSED", code == 422, str(code))
         check("…and Blender was never started for it",
               len(RUNS) == before, f"{len(RUNS) - before} run(s)")
-        res = imp({"kind": "mob-ok", "files": ["MOB1_Walk.fbx"],
-                   "rest_file": "MOB1_Jog.fbx"})
+        res = imp({"kind": "mob-ok", "files": [S("MOB1_Walk.fbx")],
+                   "rest_file": S("MOB1_Jog.fbx")})
         check("but the same family goes through",
               res["sidecar"]["rest_name"] == "MOB1_Jog.fbx",
               res["sidecar"]["rest_name"])
 
         print("\n[9] a pair import — both halves, one kind")
-        res = imp({"kind": "resting-pair", "files": ["Female_Dance.fbx", "Male_Dance.fbx"],
-                   "rest_file": "Tpose.fbx", "in_place": True, "loop_s": 2.0})
+        res = imp({"kind": "resting-pair", "files": [S("Female_Dance.fbx"), S("Male_Dance.fbx")],
+                   "rest_file": S("Tpose.fbx"), "in_place": True, "loop_s": 2.0})
         check("both halves were written",
               (LICENSED / "resting-pair__a.fbx").is_file()
               and (LICENSED / "resting-pair__b.fbx").is_file())
@@ -932,20 +971,72 @@ def test_import() -> None:
               str(assets.list_animation_clips()["pair_kinds"]))
         check("422 for a pair of the same file twice",
               status_of(lambda: imp({"kind": "twin",
-                                     "files": ["Female_Dance.fbx", "Female_Dance.fbx"]})) == 422)
+                                     "files": [S("Female_Dance.fbx"), S("Female_Dance.fbx")]})) == 422)
+
+        print("\n[9b] one file, several animations")
+    # RULE 1j — what reaches the converter. The take travels as an INDEX with
+        # the count and name beside it, so Blender can check its own reading of
+        # the file against the server's before it converts anything.
+        res = imp({"kind": "picked", "files": [S("many.fbx", 1)]})
+        sent = res["sidecar"]["params"]
+        check("the chosen take reaches the converter",
+              sent["takes"] == [{"take": 1, "take_count": 2, "take_name": "beta"}],
+              str(sent.get("takes")))
+        check("a single-take file passes no take",
+              imp({"kind": "unpicked", "files": [S("Female_Dance.fbx")]})
+              ["sidecar"]["params"]["takes"]
+              == [{"take": None, "take_count": 0, "take_name": ""}])
+
+        # RULE 1k — the cycle flag comes from what the ANIMATION is called. A pack
+        # file's own name says nothing about the take inside it.
+        (INBOX / "pack2.fbx").write_bytes(
+            fake_take_fbx((("Rest_Loop0", 0, FBX_TICKS), ("Rest_Climax", 0, FBX_TICKS)),
+                          ARP_NAMES))
+        fbx_import._probe_cache.pop(str(INBOX / "pack2.fbx"), None)
+        fbx_import._takes_cache.pop(str(INBOX / "pack2.fbx"), None)
+        check("a take that calls itself a loop is imported as one",
+              imp({"kind": "cyc", "files": [S("pack2.fbx", 0)]})
+              ["sidecar"]["params"]["loops"] is True)
+        check("…and one that does not, is not",
+              imp({"kind": "once", "files": [S("pack2.fbx", 1)]})
+              ["sidecar"]["params"]["loops"] is False)
+
+        # RULE 1l — two takes of ONE file are a pair, and the file travels once.
+        res = imp({"kind": "one-file-pair",
+                   "files": [S("pack2.fbx", 0), S("pack2.fbx", 1)]})
+        check("two takes of one file make a pair",
+              res["sidecar"]["pair"] is True, str(res["sidecar"]["pair"]))
+        check("…and the file is handed over ONCE, not twice",
+              res["sidecar"]["slots"] == ["rig", "src_a"], str(res["sidecar"]["slots"]))
+        check("…while the same take twice is refused",
+              status_of(lambda: imp({"kind": "x",
+                                     "files": [S("pack2.fbx", 0), S("pack2.fbx", 0)]})) == 422)
+
+        # RULE 1m — a reference pose that IS one of the sources travels as a take,
+        # not as a second copy of the same file.
+        res = imp({"kind": "self-rest", "files": [S("pack2.fbx", 0)],
+                   "rest_file": S("pack2.fbx", 1)})
+        check("a reference pose from the same file adds no second input slot",
+              res["sidecar"]["slots"] == ["rig", "src"], str(res["sidecar"]["slots"]))
+        check("…and names which source it is a take of",
+              res["sidecar"]["params"]["rest_from"] == "src",
+              str(res["sidecar"]["params"].get("rest_from")))
+        check("…and which take",
+              res["sidecar"]["params"]["rest_take"]["take"] == 1,
+              str(res["sidecar"]["params"].get("rest_take")))
 
         print("\n[10] overwrite, set and the free library")
         check("409 without the flag",
-              status_of(lambda: imp({"kind": "resting", "files": ["Female_Dance.fbx"]})) == 409)
-        again = imp({"kind": "resting", "files": ["Female_Dance.fbx"], "overwrite": True})
+              status_of(lambda: imp({"kind": "resting", "files": [S("Female_Dance.fbx")]})) == 409)
+        again = imp({"kind": "resting", "files": [S("Female_Dance.fbx")], "overwrite": True})
         check("200 with it", again["kind"] == "resting")
-        res = imp({"kind": "resting", "files": ["Female_Dance.fbx"], "set": "female"})
+        res = imp({"kind": "resting", "files": [S("Female_Dance.fbx")], "set": "female"})
         check("the same kind is free again in another set",
               (LICENSED / "female" / "resting.fbx").is_file())
         check("its url carries the set segment",
               res["clip"]["url"] == "/assets/animation-clips/licensed/female/resting.fbx",
               str(res["clip"]["url"]))
-        res = imp({"kind": "free-take", "files": ["take_A.fbx"],
+        res = imp({"kind": "free-take", "files": [S("take_A.fbx")],
                    "target": "free", "redistributable": True})
         check("with redistributable the clip goes into the FREE library",
               (FREE / "free-take.fbx").is_file() and res["target"] == "free")
@@ -990,8 +1081,8 @@ def test_real() -> None:
         # The project's reference skeleton — the same file an import in
         # production picks (``cmu_import.default_rig()``); it lives outside
         # the libraries, so the throwaway target does not hide it.
-        res = fbx_import.import_fbx("smoketest-pair", [female[0], male[0]],
-                                    rest_file=rest[0], target="licensed",
+        res = fbx_import.import_fbx("smoketest-pair", [S(female[0]), S(male[0])],
+                                    rest_file=S(rest[0]), target="licensed",
                                     out_dir=LICENSED / "real", rig=rig,
                                     overwrite=True)
     finally:
@@ -1048,11 +1139,11 @@ def test_real_mob1() -> None:
     os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(live)
     fbx_import._probe_cache.clear()
     try:
-        res = fbx_import.import_fbx("smoketest-mob1", [src], target="licensed",
+        res = fbx_import.import_fbx("smoketest-mob1", [S(src)], target="licensed",
                                     out_dir=LICENSED / "mob1", rig=rig,
                                     overwrite=True)
-        res_rest = (fbx_import.import_fbx("smoketest-mob1-rest", [src],
-                                          rest_file=rest, target="licensed",
+        res_rest = (fbx_import.import_fbx("smoketest-mob1-rest", [S(src)],
+                                          rest_file=S(rest), target="licensed",
                                           out_dir=LICENSED / "mob1", rig=rig,
                                           overwrite=True) if rest else None)
     finally:

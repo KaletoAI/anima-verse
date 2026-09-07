@@ -504,10 +504,16 @@ async def post_clips_inbox_import(request: Request,
 async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any]:
     """Imports one inbox file — or a pair — into a clip library, synchronously.
 
-    Body: ``{kind, files: [name] | [a, b], rest_file?, set?, start_s?, end_s?,
-    loop_s?, in_place?, overwrite?, target?, redistributable?}`` — every file
-    is a path relative to the inbox (``pack/walk.fbx``). The Blender run takes
-    a second or two, so the answer carries the finished clip.
+    Body: ``{kind, files: [src] | [src_a, src_b], rest_file?, set?, start_s?,
+    end_s?, loop_s?, in_place?, overwrite?, target?, redistributable?}``.
+
+    A SOURCE is ``{name, take}``: ``name`` a path relative to the inbox
+    (``pack/walk.fbx``), ``take`` the index of the animation inside it —
+    null, or absent, for a file that holds only one. ``rest_file`` is a source
+    too, because a pack ships its reference pose as one take among the
+    movements. ``GET /clips-inbox/takes/{name}`` lists what a file offers.
+    The Blender run takes a second or two, so the answer carries the finished
+    clip.
 
     ``target`` defaults to ``licensed``: a foreign file is licensed material
     until its owner says otherwise. ``free`` (the tracked, redistributable
@@ -528,7 +534,8 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
 
     files = body.get("files")
     if not isinstance(files, list):
-        raise HTTPException(status_code=400, detail="files must be a list of names")
+        raise HTTPException(status_code=400,
+                            detail="files must be a list of {name, take}")
     target = str(body.get("target") or "licensed").strip().lower()
     redistributable = bool(body.get("redistributable"))
     if preview:
@@ -541,7 +548,7 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
     try:
         return fbx_import.import_fbx(
             body.get("kind"), files,
-            rest_file=str(body.get("rest_file") or "") or None,
+            rest_file=body.get("rest_file") or None,
             clip_set=str(body.get("set") or ""),
             start_s=_num("start_s") or 0.0, end_s=_num("end_s"),
             loop_s=_num("loop_s"),

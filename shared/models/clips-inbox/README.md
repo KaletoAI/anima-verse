@@ -40,13 +40,22 @@ unless you explicitly mark it as redistributable.
 ## Files with more than one animation
 
 An export can hold a whole pack of takes in ONE file. The listing says how
-many (`121 animations`), and picking one shows them all with their length.
+many (`121 animations`); picking the file offers them all with their length,
+and the one you choose is the one that gets converted.
 
-Such a file cannot be imported yet: Blender assigns only the FIRST take's
-action when it reads the file, so an import would quietly convert that one
-under whatever name was asked for. The importer therefore refuses a
-multi-take file outright instead of guessing. Single-take files are
-unaffected.
+Three things follow from that:
+
+* **A file with several animations must have one named.** The importer refuses
+  it otherwise. Blender assigns only the FIRST take's action when it reads the
+  file, so guessing would quietly convert that one under whatever name was
+  asked for.
+* **The reference pose is usually a take of the same file** — a pack ships its
+  T-pose as one animation among the movements. Pick the file itself in
+  "Reference pose" and then its pose take; it is handed over once, not twice.
+* **Both halves of a pair may come from one file.** Pick the file itself as
+  the second file and choose the partner's animation. The clip kind is
+  proposed from the ANIMATION's name, not the file's, and a take that calls
+  itself a loop is imported as a cycle.
 
 ## Pairs
 
