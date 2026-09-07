@@ -537,7 +537,11 @@ def inbox_takes(name: Any) -> List[Dict[str, Any]]:
     :func:`fbx_takes` on why the name cannot).
     """
     rel = safe_inbox_name(name)
-    return _cached_takes(get_clips_inbox_dir() / rel)
+    takes = _cached_takes(get_clips_inbox_dir() / rel)
+    names = [t["name"] for t in takes]
+    # ``pair`` is the partner's INDEX, so the picker can preselect the other
+    # half the way it preselects a partner FILE for a single-take export.
+    return [dict(t, pair=partner_take(t["name"], names)) for t in takes]
 
 
 def _cached_probe(path: Path) -> Dict[str, Any]:
@@ -675,6 +679,65 @@ def partner_names(name: str) -> List[str]:
             out.append(low[: -len(first)] + second + ext)
             break            # the LONGEST matching suffix decides ("__a", not "_a")
     return out
+
+
+#: A take name in a pack names its ROLE before the scene it belongs to:
+#: "Female[A]_Resting_Loop0" — a word for the kind of performer, an optional
+#: slot letter when a scene has several of that kind, then the scene and phase.
+_TAKE_ROLE_RE = re.compile(
+    r"^(?P<who>[A-Za-z]+)(?P<slot>\[[A-Za-z0-9]+\])?[_-](?P<rest>.+)$")
+
+#: The counterpart words, from the same table the file-name rule uses.
+PAIR_ROLE_WORDS = tuple((a.strip("_-"), b.strip("_-")) for a, b in PAIR_PREFIXES)
+
+
+def _take_role(name: str) -> Optional[Tuple[str, str, str]]:
+    """``(role word, slot, scene)`` of a take name, all lowercase — or None
+    when the name carries no role marker at all."""
+    m = _TAKE_ROLE_RE.match(name.strip())
+    if not m:
+        return None
+    return (m.group("who").lower(), (m.group("slot") or "").lower(),
+            m.group("rest").lower())
+
+
+def partner_take(name: str, names: List[str]) -> Optional[int]:
+    """Index in ``names`` of the take that plays the OTHER half of the same
+    scene as ``name`` — the take-level twin of :func:`pair_suggestion`.
+
+    Both halves of a scene live in ONE pack file, so the partner is not
+    another file but another take: the same scene and the same phase, played
+    by the counterpart role. Preference is the counterpart word at the SAME
+    slot first (a scene with three performers of one kind still pairs A with
+    A), then the counterpart word at any slot.
+
+    Returns None when nothing matches — a suggestion pointing at the wrong
+    animation is worse than no suggestion, exactly as in
+    :func:`pair_suggestion`.
+    """
+    me = _take_role(name)
+    if me is None:
+        return None
+    mates = {b for a, b in PAIR_ROLE_WORDS if a == me[0]}
+    mates |= {a for a, b in PAIR_ROLE_WORDS if b == me[0]}
+    best: Optional[Tuple[int, int]] = None
+    for i, other in enumerate(names):
+        if other == name:
+            continue
+        o = _take_role(other)
+        # Same scene AND same phase: the partner of a cycle is the partner's
+        # cycle, never their climax.
+        if o is None or o[2] != me[2]:
+            continue
+        if o[0] == me[0] and o[1] == me[1]:
+            continue
+        if o[0] in mates:
+            score = 0 if o[1] == me[1] else 1
+        else:
+            continue
+        if best is None or score < best[0]:
+            best = (score, i)
+    return None if best is None else best[1]
 
 
 def pair_suggestion(name: str) -> str:

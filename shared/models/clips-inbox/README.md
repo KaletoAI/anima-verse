@@ -52,10 +52,13 @@ Three things follow from that:
 * **The reference pose is usually a take of the same file** — a pack ships its
   T-pose as one animation among the movements. Pick the file itself in
   "Reference pose" and then its pose take; it is handed over once, not twice.
-* **Both halves of a pair may come from one file.** Pick the file itself as
-  the second file and choose the partner's animation. The clip kind is
-  proposed from the ANIMATION's name, not the file's, and a take that calls
-  itself a loop is imported as a cycle.
+* **Both halves of a pair come from one file, and the partner is proposed.**
+  Choosing an animation preselects the other half of the same scene — the same
+  scene and the same phase played by the counterpart role, the way a partner
+  FILE is proposed for a single-take export. Set the second file back to solo
+  for one half on its own. The clip kind is proposed from the ANIMATION's
+  name, not the file's, and a take that calls itself a loop is imported as a
+  cycle.
 
 ## Pairs
 

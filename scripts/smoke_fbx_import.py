@@ -720,6 +720,12 @@ def test_families() -> None:
     (INBOX / "many.fbx").write_bytes(fake_take_fbx(TAKE_FIXTURE, ARP_NAMES))
     fbx_import._probe_cache.pop(str(INBOX / "many.fbx"), None)
     fbx_import._takes_cache.pop(str(INBOX / "many.fbx"), None)
+    listed = fbx_import.inbox_takes("many.fbx")
+    check("the listing an importer reads carries a partner field per take",
+          len(listed) == 2 and all("pair" in x for x in listed), str(listed))
+    check("…which is None when no take plays an opposite role",
+          [x["pair"] for x in listed] == [None, None], str(listed))
+
     check("the same file answers both questions — rig and take count",
           fbx_import.probe_fbx(INBOX / "many.fbx")["skeleton_family"] == "autorig-pro"
           and fbx_import.probe_fbx(INBOX / "many.fbx")["take_count"] == 2,
@@ -743,6 +749,30 @@ def test_families() -> None:
           fbx_import.file_spec({"name": "many.fbx"}) == ("many.fbx", None))
     check("…and with one it carries the index",
           fbx_import.file_spec({"name": "many.fbx", "take": 1}) == ("many.fbx", 1))
+
+    # RULE 1n — the partner TAKE. Both halves of a scene live in one file, so
+    # the picker has to propose the other half the way it proposes a partner
+    # FILE for a single-take export.
+    scene = ["Female[A]_Sitting_Loop0", "Male[A]_Sitting_Loop0",
+             "Female[A]_Sitting_Climax", "Male[A]_Sitting_Climax",
+             "Male[B]_Sitting_Loop0", "Tpose"]
+    pt = fbx_import.partner_take
+    check("the counterpart role at the SAME slot is the partner",
+          pt("Female[A]_Sitting_Loop0", scene) == 1,
+          str(pt("Female[A]_Sitting_Loop0", scene)))
+    check("the pairing is symmetric",
+          pt("Male[A]_Sitting_Loop0", scene) == 0,
+          str(pt("Male[A]_Sitting_Loop0", scene)))
+    check("a cycle pairs with the partner's CYCLE, never their climax",
+          pt("Female[A]_Sitting_Climax", scene) == 3,
+          str(pt("Female[A]_Sitting_Climax", scene)))
+    check("a performer without one of their own kind pairs across slots",
+          pt("Male[B]_Sitting_Loop0", scene) == 0,
+          str(pt("Male[B]_Sitting_Loop0", scene)))
+    check("a take with no role marker gets no partner",
+          pt("Tpose", scene) is None, str(pt("Tpose", scene)))
+    check("…and neither does a scene nobody else plays",
+          pt("Female[A]_Alone_Loop0", scene + ["Female[A]_Alone_Loop0"]) is None)
 
     def refusal(fn):
         try:

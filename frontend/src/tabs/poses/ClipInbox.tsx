@@ -46,6 +46,8 @@ interface Take {
   index: number
   name: string
   duration_s: number
+  /** index of the take that plays the other half of the same scene, or null */
+  pair: number | null
 }
 
 interface InboxEntry {
@@ -345,12 +347,19 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
   }, [selected, takes])
 
   // With a take chosen, the clip name comes from what the ANIMATION is called,
-  // not from the pack file it happens to sit in.
+  // not from the pack file it happens to sit in — and the other half of the
+  // scene is preselected the way a single-take export preselects its partner
+  // FILE, because here both halves live in one file.
   useEffect(() => {
     if (take === '') return
     const tk = takes.find((x) => String(x.index) === take)
-    if (tk) setKind(slugFromTake(tk.name))
-  }, [take, takes])
+    if (!tk) return
+    setKind(slugFromTake(tk.name))
+    if (tk.pair != null) {
+      setSecond(selected)
+      setSecondTake(String(tk.pair))
+    }
+  }, [selected, take, takes])
 
   const kindExists = existingKinds.has(kind.trim().toLowerCase())
   const unknownRig = !!entry && !entry.probe.skeleton_family
@@ -623,6 +632,9 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
             {isPair && secondTakes.length > 1 ? (
               <TakeSelect
                 label={t("The partner's animation")}
+                hint={t('Preselected: the same scene and phase played by the'
+                        + ' counterpart role. Set the second file to solo if you'
+                        + ' want this half on its own.')}
                 takes={secondTakes}
                 value={secondTake}
                 onChange={setSecondTake}
