@@ -104,6 +104,10 @@ interface PlanSidePanelProps {
   propsOpen: boolean
   onPickProp: (prop: PropFull) => void
   armedPropId: string
+  /** Variant the NEXT placement gets — the palette dials it, the editor
+   *  writes it into the placement it mints. */
+  armedVariant?: number
+  onArmedVariant: (value: number | undefined) => void
 }
 
 /** Job state → the badge next to the Furnish button. */
@@ -123,7 +127,7 @@ export function PlanSidePanel({
   onFloorOffset,
   surfaceKinds, waterKinds, onSurface, mapWater,
   furnishState, furnishDisabled, furnishHint, onFurnish,
-  propsOpen, onPickProp, armedPropId,
+  propsOpen, onPickProp, armedPropId, armedVariant, onArmedVariant,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
   const layout = room?.layout
@@ -342,7 +346,12 @@ export function PlanSidePanel({
     <div className="ga-plan-panel">
       {roomBlock}
       {propsOpen ? (
-        <PropsPalette onPick={onPickProp} armedPropId={armedPropId} />
+        <PropsPalette
+          onPick={onPickProp}
+          armedPropId={armedPropId}
+          armedVariant={armedVariant}
+          onArmedVariant={onArmedVariant}
+        />
       ) : null}
     </div>
   )

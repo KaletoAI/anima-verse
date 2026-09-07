@@ -5,6 +5,11 @@
  * `onPick`; `armedPropId` marks the card the caller considers armed. The
  * placement itself (ghost footprint, drag, adjustment strip) is NOT here.
  *
+ * The one thing it does decide is WHICH MODEL VARIANT the next placement gets
+ * (2026-09-07): a caller that passes `onArmedVariant` gets the same picker the
+ * placement strip uses, so a prop with several meshes need not be dropped as
+ * the primary one and corrected afterwards.
+ *
  * The library is fetched once on mount — props change through the Props tab,
  * not while a floor plan is being edited, so a Refresh button beats a poll.
  */
@@ -13,15 +18,24 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { ZoomButton } from '../../components/ZoomButton'
 import type { PropFull } from '../props/propTypes'
+import { PropVariantPicker } from './PropVariantPicker'
 
 interface PropsPaletteProps {
   /** Fires on card click — the caller decides what "picked" means. */
   onPick: (prop: PropFull) => void
   /** Card to mark as armed ('' = none). */
   armedPropId: string
+  /** Model variant the NEXT placement gets (undefined = the primary one).
+   *  Only meaningful together with `onArmedVariant`. */
+  armedVariant?: number
+  /** Set the variant for the next placement. Left out by callers that place
+   *  the primary variant only — then the picker stays away entirely. */
+  onArmedVariant?: (value: number | undefined) => void
 }
 
-export function PropsPalette({ onPick, armedPropId }: PropsPaletteProps) {
+export function PropsPalette({
+  onPick, armedPropId, armedVariant, onArmedVariant,
+}: PropsPaletteProps) {
   const { t } = useI18n()
   const [props, setProps] = useState<PropFull[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -84,6 +98,25 @@ export function PropsPalette({ onPick, armedPropId }: PropsPaletteProps) {
           <option value="">{t('All categories')}</option>
           {categories.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
+      ) : null}
+      {/* WHICH VERSION the next click drops. It stands at the TOP, beside the
+          armed prop's name and not under the grid: after arming a card the
+          next gesture is a click in the plan, and a dial that has scrolled
+          out of sight is one nobody turns. The picker knows the prop's
+          variants and shows nothing when there is only one to have. */}
+      {armedPropId && onArmedVariant ? (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="ga-hint" style={{
+            maxWidth: '100%', overflow: 'hidden',
+            textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            ▸ {props.find((p) => p.id === armedPropId)?.name || armedPropId}
+          </span>
+          <PropVariantPicker
+            propId={armedPropId}
+            variant={armedVariant}
+            onVariant={onArmedVariant}
+          />
+        </div>
       ) : null}
       {!loaded ? (
         <span className="ga-hint">{t('Loading…')}</span>

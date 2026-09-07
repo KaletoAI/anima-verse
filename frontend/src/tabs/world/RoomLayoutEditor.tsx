@@ -278,6 +278,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // the highlighted palette card; nothing on the plan reads it so far.
   const [propsOpen, setPropsOpen] = useState(false)
   const [armedProp, setArmedProp] = useState('')
+  // WHICH MODEL VARIANT the armed prop is dropped as (undefined = the primary
+  // one). It belongs to the ARMING, not to a placement: the same prop may be
+  // set down as v2 here and as the primary one two clicks later, and picking
+  // a different card is a new statement — so it resets with the pick.
+  const [armedVariant, setArmedVariant] = useState<number | undefined>(undefined)
   // Selected placement (index into the selected room's layout.props) for the
   // adjustment strip below the plan.
   const [propSel, setPropSel] = useState<number | null>(null)
@@ -1763,7 +1768,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // save would make "place the candle on this table" a two-step gesture.
       const placements = [...(stored?.props || []),
         { id: newId(), prop_id: armedProp, at: [px, py] as [number, number],
-          ...(ghostYaw ? { yaw: ghostYaw } : {}) }]
+          ...(ghostYaw ? { yaw: ghostYaw } : {}),
+          // Only a non-primary pick is written down: an absent `variant` IS
+          // the primary one everywhere else, and a stored 0 would say the
+          // same thing in a second way.
+          ...(armedVariant ? { variant: armedVariant } : {}) }]
       updateLayout(room.id, { props: placements })
       setSelected(room.id)
       setPropSel(placements.length - 1)
@@ -1846,9 +1855,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       // to stack several doors/windows on top of each other.
     }
     setClickMode('')
-  }, [clickMode, armedProp, ghostYaw, markerGroup, markerSel, selected,
-    setSelected, updateLayout, calibrationRoomId, onCalibrationAt, t, toast,
-    pointerM, gridStep])
+  }, [clickMode, armedProp, armedVariant, ghostYaw, markerGroup, markerSel,
+    selected, setSelected, updateLayout, calibrationRoomId, onCalibrationAt,
+    t, toast, pointerM, gridStep])
 
   // The selected shape. A room qualifies once it has a RECTANGLE; the yard
   // qualifies as soon as the location has a boundary — it needs no layout of
@@ -2604,6 +2613,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onFurnish={() => setFurnishOpen(true)}
         propsOpen={propsOpen}
         armedPropId={armedProp}
+        armedVariant={armedVariant}
+        onArmedVariant={setArmedVariant}
         onPickProp={(p) => {
           // Arming the prop tool drops any other armed mode/draft; picking
           // the armed prop again disarms.
@@ -2612,6 +2623,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           setHoverSnap(null)
           setDrawTarget('')
           setArmedProp((cur) => (cur === p.id ? '' : p.id))
+          // Another card is another object — its variants are not this one's.
+          setArmedVariant(undefined)
         }}
       />
 

@@ -482,6 +482,17 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
         negative: prop.negative || '', generated_at: prop.source_generated_at || '' }
       : null)
 
+  /** The picture's own provenance as ONE tooltip text, hung on the IMAGE and
+   *  on the caption under it. Written out it is a paragraph, and a paragraph
+   *  of prompt is what pushed everything below it off the screen — over the
+   *  picture it costs nothing and is where one looks for it. */
+  const imageTip = shownImage
+    ? (shownImage.prompt
+      ? `${t('Prompt')}: ${shownImage.prompt}${shownImage.negative
+        ? `\n${t('Negative prompt')}: ${shownImage.negative}` : ''}`
+      : t('No generation record for this image.'))
+    : ''
+
   const [nameDraft, setNameDraft] = useState(prop.name)
   const [categoryDraft, setCategoryDraft] = useState(prop.category)
   const [tagsDraft, setTagsDraft] = useState(prop.tags.join(', '))
@@ -1111,10 +1122,15 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             </span>
           ) : null}
 
+          {/* WHERE THE MODEL COMES FROM — one line: generated or brought
+              along, and on which mesh backend. The prompt itself is NOT
+              written out here (2026-09-07): it filled five lines of the
+              column with the text that belongs to the picture, and the
+              picture opposite now carries it in its tooltip. */}
           {prop.prompt ? (
             <span className="ga-hint" style={{ fontSize: '0.78em' }} title={prop.prompt}>
               {prop.source === 'generated' ? t('Generated') : t('Source')}
-              {prop.backend ? ` · ${prop.backend}` : ''} · {prop.prompt}
+              {prop.backend ? ` · ${prop.backend}` : ''}
             </span>
           ) : null}
 
@@ -1474,6 +1490,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     objectFit: 'contain', borderRadius: 8,
                     border: '1px solid var(--border, #30363d)',
                     background: 'rgba(255,255,255,0.04)' })}
+                // AFTER the spread, deliberately: `enlarge` brings its own
+                // "Click to enlarge" title, and the prompt would be the one
+                // overwritten. Both fit in one tooltip.
+                title={imageTip
+                  ? `${imageTip}\n\n${t('Click to enlarge')}`
+                  : t('Click to enlarge')}
               />
             ) : (
               <div className="ga-empty">
@@ -1488,10 +1510,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 and say so. */}
             {shownImage && srcOk ? (
               <span className="ga-hint" style={{ fontSize: 10, lineHeight: '13px' }}
-                title={shownImage.prompt
-                  ? `${t('Prompt')}: ${shownImage.prompt}${shownImage.negative
-                    ? `\n${t('Negative prompt')}: ${shownImage.negative}` : ''}`
-                  : t('No generation record for this image.')}>
+                title={imageTip}>
                 {shownImage.backend
                   ? `🖼 ${shownImage.backend}${shownImage.generated_at
                     ? ` · ${shownImage.generated_at.slice(0, 10)}` : ''}`
