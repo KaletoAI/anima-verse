@@ -89,6 +89,20 @@ shared/templates/llm/
 | `secret_generation.md` | `secret_generation` | `secret_engine.generate_secrets` | Generate plausible secrets for a character |
 | `retrospect.md` | `consolidation` | `RetrospectSkill.execute` | Self-reflection — extract beliefs + improvement intentions |
 
+### Room furnishing / props (world building)
+
+Furnish v2 (`development_instructions/plan-furnish-v2.md`) — stage 1 is split
+into "what does the room need" and "what does the library already have";
+`furnish_select` / `furnish_new` are gone.
+
+| Template | Task | Caller | Purpose |
+|---|---|---|---|
+| `furnish_needs.md` | `furnish_needs` | `room_furnish._phase_needs` | Stage 1a: the room's complete need list (kind, category, count, mount, size, style, marker) invented from its purpose alone — the library is not in the prompt |
+| `furnish_match.md` | `furnish_match` | `room_furnish._phase_needs` | Stage 1b: map the setting-filtered prop catalog (short ids `#n`) onto that need list; every unmatched need is built as a new prop |
+| `furnish_place.md` | `furnish_place` | `furnish_place.run` (via `room_furnish._phase_place`) | Stage 2: relational placement plan per mount pass (anchors `around` / `under` / `wall_above` / `at_opening` / `above` / `on`), with one repair round per failing pass; `furnish_solver` turns it into metres |
+| `room_description_sync.md` | `room_description_sync` | `room_description_sync.propose` | Rewrite a room's description so it names the props that now stand in it — preview in the Furnish dialog, the admin decides |
+| `prop_mount_classify.md` | `prop_mount_classify` | `props_mount.classify_mounts` | Classify library props into `floor` / `wall` / `ceiling` / `surface` (batched); the guess lands as `mount_suggested` and the admin confirms it in the Props tab |
+
 ## Top-level chat composites
 
 ### `chat/agent_thought.md`
