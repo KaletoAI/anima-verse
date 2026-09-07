@@ -180,6 +180,11 @@ export function ClipInbox({ onCreatePose }: {
   const [take, setTake] = useState('')
   const [secondTake, setSecondTake] = useState('')
   const [restTake, setRestTake] = useState('')
+  /** takes queued for one batch run, by index */
+  const [batch, setBatch] = useState<number[]>([])
+  const [batchRun, setBatchRun] = useState<{ done: number; total: number } | null>(null)
+  const [batchResult, setBatchResult] = useState<
+    { name: string; kind: string; error: string }[]>([])
   const [restFile, setRestFile] = useState('')
 
   const [kind, setKind] = useState('')
@@ -276,6 +281,8 @@ export function ClipInbox({ onCreatePose }: {
       setTake('')
       setSecondTake('')
       setRestTake('')
+      setBatch([])
+      setBatchResult([])
       setStartS('0')
       setEndS('')
       setLoopOn(false)
@@ -377,13 +384,22 @@ export function ClipInbox({ onCreatePose }: {
     idx === '' ? { name } : { name, take: Number(idx) }
   ), [])
 
-  const formBody = useCallback((): Record<string, unknown> | null => {
+  /** The import body for ONE take of the selected file. Without an argument
+   *  it is what the form currently shows; with one it is that take with its
+   *  own partner and its own name, which is what a batch needs. */
+  const formBody = useCallback((only?: Take): Record<string, unknown> | null => {
     if (!entry) return null
-    const files = isPair
-      ? [src(entry.name, take), src(second, secondTake)]
-      : [src(entry.name, take)]
+    const myTake = only ? String(only.index) : take
+    const myPair = only
+      ? (only.pair == null ? '' : String(only.pair))
+      : secondTake
+    const mySecond = only ? (only.pair == null ? '' : entry.name) : second
+    const files = (only ? !!mySecond : isPair)
+      ? [src(entry.name, myTake), src(mySecond, myPair)]
+      : [src(entry.name, myTake)]
     return {
-      kind: kind.trim().toLowerCase() || 'preview',
+      kind: only ? slugFromTake(only.name)
+        : (kind.trim().toLowerCase() || 'preview'),
       files,
       rest_file: restFile ? src(restFile, restTake) : null,
       set: clipSet,
@@ -419,6 +435,38 @@ export function ClipInbox({ onCreatePose }: {
       setProbing(false)
     }
   }, [formBody, probing, t, toast])
+
+  /** Import every queued take, one after another. Sequential on purpose: each
+   *  run occupies Blender, and a per-take row is what makes a failure in the
+   *  middle readable instead of losing the whole run. */
+  const runBatch = useCallback(async () => {
+    if (!entry || batchRun) return
+    const queued = takes.filter((tk) => batch.includes(tk.index))
+    if (!queued.length) return
+    setBatchResult([])
+    setBatchRun({ done: 0, total: queued.length })
+    const out: { name: string; kind: string; error: string }[] = []
+    for (const tk of queued) {
+      const body = formBody(tk)
+      let kindName = ''
+      try {
+        if (!body) throw new Error('no file selected')
+        kindName = String(body.kind || '')
+        const r = await apiPost<{ kind: string }>('/assets/clips-inbox/import', body)
+        out.push({ name: tk.name, kind: r.kind, error: '' })
+      } catch (e) {
+        out.push({ name: tk.name, kind: kindName, error: (e as Error).message })
+      }
+      setBatchResult([...out])
+      setBatchRun({ done: out.length, total: queued.length })
+    }
+    setBatchRun(null)
+    await loadClips()
+    const bad = out.filter((r) => r.error).length
+    toast(bad
+      ? `${out.length - bad}/${out.length} ${t('imported')} — ${bad} ${t('failed')}`
+      : `${out.length} ${t('imported')}`, bad ? 'error' : undefined)
+  }, [batch, batchRun, entry, formBody, loadClips, t, takes, toast])
 
   const runImport = useCallback(async () => {
     const body = formBody()
@@ -630,6 +678,65 @@ export function ClipInbox({ onCreatePose }: {
                 ))}
               </select>
             </label>
+
+            {takes.length > 1 ? (
+              <details style={{ border: '1px solid var(--ga-border, #3a3a3a)',
+                borderRadius: 4, padding: '6px 8px' }}>
+                <summary style={{ cursor: 'pointer' }}>
+                  {t('Import several at once')}
+                  {batch.length ? ` (${batch.length})` : ''}
+                </summary>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6,
+                  marginTop: 6 }}>
+                  <span className="ga-hint">
+                    {t('Every animation you tick becomes its own clip, named after'
+                       + ' itself, with its own counterpart preselected. The settings'
+                       + ' above (set, target, reference pose) apply to all of them.'
+                       + ' They run one after another.')}
+                  </span>
+                  <select
+                    className="ga-input"
+                    multiple
+                    size={10}
+                    value={batch.map(String)}
+                    onChange={(e) => setBatch(
+                      Array.from(e.target.selectedOptions, (o) => Number(o.value)))}
+                  >
+                    {takes.map((tk) => (
+                      <option key={tk.index} value={tk.index}>
+                        {tk.name} — {tk.duration_s.toFixed(2)} s
+                        {tk.pair != null ? ` + ${takes[tk.pair]?.name ?? ''}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button
+                      className="ga-btn ga-btn-sm"
+                      type="button"
+                      disabled={!batch.length || !!batchRun || unknownRig}
+                      onClick={runBatch}
+                    >
+                      {batchRun
+                        ? `${t('Importing')} ${batchRun.done}/${batchRun.total}…`
+                        : `${t('Import')} ${batch.length}`}
+                    </button>
+                    {batch.length ? (
+                      <button className="ga-btn ga-btn-sm" type="button"
+                        onClick={() => setBatch([])}>{t('Clear')}</button>
+                    ) : null}
+                  </div>
+                  {batchResult.length ? (
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.9em' }}>
+                      {batchResult.map((r) => (
+                        <li key={r.name} style={{ color: r.error ? 'var(--ga-danger, #e06c6c)' : undefined }}>
+                          {r.name} → {r.error ? r.error : r.kind}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              </details>
+            ) : null}
 
             {isPair && secondTakes.length > 1 ? (
               <TakeSelect
