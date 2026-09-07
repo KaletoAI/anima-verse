@@ -32,6 +32,7 @@ import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
+import { CommaListInput } from '../../components/CommaListInput'
 
 type Axis = 'pose' | 'expression'
 /** The tab has four surfaces: the catalog entries, the installed clip library
@@ -871,15 +872,9 @@ export function PosesTab() {
                   label={t('Synonyms')}
                   hint={t('Comma-separated. Free text matching one of these lands on this key directly, without an embedding lookup.')}
                 >
-                  <input
-                    className="ga-input"
-                    value={draft.synonyms.join(', ')}
-                    onChange={(e) =>
-                      upd(
-                        'synonyms',
-                        e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
-                      )
-                    }
+                  <CommaListInput
+                    value={draft.synonyms}
+                    onChange={(next) => upd('synonyms', next)}
                   />
                 </Field>
 

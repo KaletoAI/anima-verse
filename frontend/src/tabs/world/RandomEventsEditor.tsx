@@ -1,6 +1,7 @@
 import { useI18n } from '../../i18n/I18nProvider'
 import { Field } from '../../components/Field'
 import { EVENT_CATEGORIES, type EventSettings } from './worldTypes'
+import { CommaListInput } from '../../components/CommaListInput'
 
 // ── Per-location random-events overrides ──────────────────────────────────
 // Mirrors the global "Random events" config block but lets a location set
@@ -17,7 +18,6 @@ export function RandomEventsEditor({ value, onChange }: RandomEventsEditorProps)
   const settings: EventSettings = value || {}
   const probabilityPct = Math.round(((settings.event_probability ?? 0.1) as number) * 100)
   const allowed = settings.allowed_categories || [...EVENT_CATEGORIES]
-  const blacklistText = (settings.event_blacklist || []).join(', ')
 
   const update = (patch: Partial<EventSettings>) => {
     onChange({ ...settings, ...patch })
@@ -90,18 +90,10 @@ export function RandomEventsEditor({ value, onChange }: RandomEventsEditorProps)
         </div>
       </Field>
       <Field label={t('Blacklist')} hint={t('Comma-separated event names that must never fire here.')}>
-        <input
-          className="ga-input"
-          value={blacklistText}
-          placeholder="z.B. Feuer, Erdbeben"
-          onChange={(e) =>
-            update({
-              event_blacklist: e.target.value
-                .split(',')
-                .map((s) => s.trim())
-                .filter(Boolean),
-            })
-          }
+        <CommaListInput
+          value={settings.event_blacklist || []}
+          placeholder={t('e.g. Fire, Earthquake')}
+          onChange={(next) => update({ event_blacklist: next })}
         />
       </Field>
     </div>
