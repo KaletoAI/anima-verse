@@ -1040,23 +1040,33 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 }} />
             </Field>
             <Field label={t('Tags (comma-separated)')}
-              hint={t('Tag "walkable" lets figures stand on this prop; its surface is baked from the mesh.')}>
+              tip={t('Tag "walkable" lets figures stand on this prop; its surface is baked from the mesh.')}>
               <input className="ga-input" value={tagsDraft}
                 onChange={(e) => setTagsDraft(e.target.value)}
                 onBlur={() => {
                   if (tagsDraft !== tagsNow) queueGeneral({ tags: tagsDraft })
                 }} />
             </Field>
+          </div>
+          {/* SECOND LINE (2026-09-07): six fields in one row left every one of
+              them a sliver. WHAT the object is stands above — how it is set
+              down and how it behaves stands here. And every help text of the
+              section rides its caption as a `tip` glyph now: as hint
+              paragraphs the longest sentence, not the input, decided how wide
+              a column got. */}
+          <div className="ga-form-row">
             {/* WHICH SURFACE this piece is set down on — a fact about the
                 object, so it sits beside category and tags. Empty is a real
                 option: "nobody has said yet", which is what the furnish
                 solver has to be able to tell from an explicit "floor". */}
-            <Field label={t('Mount')}
+            <Field label={t('Mount')} compact
+              tip={t('Which surface the furnish solver may set this prop down on.')}
               hint={mountSuggested
                 ? t('suggested by LLM — confirm or change')
                 : undefined}>
-              <select className="ga-input" value={mountNow}
-                title={t('Which surface the furnish solver may set this prop down on.')}
+              {/* A fixed width instead of `auto`: a select sized by its
+                  content jumps every time another mount kind is picked. */}
+              <select className="ga-input" value={mountNow} style={{ width: 200 }}
                 onChange={(e) => queueGeneral({ mount: e.target.value })}>
                 <option value="">{t('— unclassified —')}</option>
                 {MOUNT_KINDS.map((m) => (
@@ -1077,18 +1087,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               </Field>
             ) : null}
             {/* The one number that describes the WHOLE object rather than one
-                of its versions: how hard it bends in the wind. It rides the
-                same row as the other prop-wide fields instead of holding a
-                line of its own for one narrow number (§ B1). Size, subject,
+                of its versions: how hard it bends in the wind. Size, subject,
                 sink and markers moved into the variants (2026-08-25). */}
-            {/* One number between 0 and 1 — `compact` keeps it at the width
-                of what it holds instead of taking an equal share of the row
-                from the three text fields beside it. */}
-            <Field label={t('Sway factor')} compact>
+            <Field label={t('Sway factor')} compact
+              tip={t('How much of its ground’s wind this prop takes part in when it is scattered over a painted area: the terrain kind says how far things bend there, this multiplies it. 1 = the full amount, 0 = stands still whatever blows, empty = 1. Very small products stand still as well — the deflection only starts at about 0.005 m, so on a ground that bends 0.06 m every factor up to 0.08 comes to a standstill.')}>
               <input className="ga-input" type="number" min={0} max={1} step={0.05}
                 style={{ width: 76 }}
                 value={swayDraft}
-                title={t('How much of its ground’s wind this prop takes part in when it is scattered over a painted area: the terrain kind says how far things bend there, this multiplies it. 1 = the full amount, 0 = stands still whatever blows, empty = 1. Very small products stand still as well — the deflection only starts at about 0.005 m, so on a ground that bends 0.06 m every factor up to 0.08 comes to a standstill.')}
                 onChange={(e) => setSwayDraft(e.target.value)}
                 onBlur={commitSway}
                 onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
