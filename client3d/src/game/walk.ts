@@ -252,6 +252,60 @@ export function locomotionClip(role: LocomotionRole): string {
 }
 
 /**
+ * TRANSITIONS — the clip that has to play BETWEEN two clips.
+ *
+ * Without one, a figure that stops sitting is walking in the very next frame:
+ * the switch is instant and reads as a jump. A rule names the clip that has to
+ * run first — standing up before walking, sitting down before sitting.
+ *
+ * `'*'` is a wildcard: on the `to` side it is the EXIT clip of a state
+ * ("stand up, whatever comes next"), on the `from` side the ENTER clip of one.
+ * The server owns the table (`shared/config/clip_transitions.json`), this is
+ * only the copy the figures read; the precedence below MIRRORS
+ * `animation_clips.resolve_transition` and must keep mirroring it.
+ */
+export interface ClipTransition { from: string; to: string; kind: string }
+
+const TRANSITION_ANY = '*';
+let clipTransitions: ClipTransition[] = [];
+
+/** Takes the server's transition table over. Junk is no table — a broken
+ *  payload must not cost the figures their plain clip switching. */
+export function setClipTransitions(raw: unknown): ClipTransition[] {
+  const list = Array.isArray(raw) ? raw : [];
+  clipTransitions = list.flatMap((r) => {
+    if (!r || typeof r !== 'object') return [];
+    const e = r as Record<string, unknown>;
+    const from = String(e.from ?? '').trim().toLowerCase();
+    const to = String(e.to ?? '').trim().toLowerCase();
+    const kind = String(e.kind ?? '').trim().toLowerCase();
+    return from && to && kind ? [{ from, to, kind }] : [];
+  });
+  return clipTransitions;
+}
+
+/**
+ * The clip that has to play between `from` and `to` — `''` when none is
+ * configured. Most specific rule wins, in a FIXED order rather than the
+ * table's: both named, then the exit rule, then the enter rule. Switching onto
+ * the same clip is never a transition — a figure that keeps walking must not
+ * stand up first.
+ */
+export function clipTransition(from: string | null | undefined, to: string): string {
+  const src = String(from ?? '').trim().toLowerCase();
+  const dst = String(to ?? '').trim().toLowerCase();
+  if (!src || !dst || src === dst) return '';
+  let wildTo = '';
+  let wildFrom = '';
+  for (const r of clipTransitions) {
+    if (r.from === src && r.to === dst) return r.kind;
+    if (r.from === src && r.to === TRANSITION_ANY && !wildTo) wildTo = r.kind;
+    else if (r.from === TRANSITION_ANY && r.to === dst && !wildFrom) wildFrom = r.kind;
+  }
+  return wildTo || wildFrom;
+}
+
+/**
  * Takes the server's mapping over. A role that is missing, empty or not a
  * string keeps its own name — junk in the payload must not leave a figure
  * without a walk. Returns the mapping now in force (for the smoke checks).

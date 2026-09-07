@@ -14,7 +14,7 @@ import type { RestCorrection, RestPose } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
-import { locomotionClip, setLocomotionClips } from '../game/walk';
+import { clipTransition, locomotionClip, setClipTransitions, setLocomotionClips } from '../game/walk';
 
 /**
  * Animierte 3D-Figuren für NPCs (AV3D-5): Modelle kommen vom Server
@@ -735,6 +735,12 @@ export class FigureLibrary {
       const roles = setLocomotionClips(library.locomotion);
       console.info(`[figures] locomotion roles: walk=${roles.walk}, run=${roles.run}, idle=${roles.idle}`);
     }
+    // The transition table rides the same listing, and for the same reason:
+    // a figure built before it arrived would switch clips hard once.
+    if (library.transitions) {
+      const rules = setClipTransitions(library.transitions);
+      console.info(`[figures] clip transitions: ${rules.length}`);
+    }
     const serverClips = library.clips;
     // A PAIR clip's half is indexed under `<kind>__<role>` (§ A8a) — the name
     // an interaction asks for; a solo clip keeps its plain kind.
@@ -1248,6 +1254,11 @@ export class Figure {
   private actions = new Map<ClipKind, THREE.AnimationAction>();
   private current: THREE.AnimationAction | null = null;
   private currentKind: ClipKind | null = null;
+  /** The one-shot clip bridging two states, and where it is headed. While
+   *  this runs, `currentKind` IS the bridge — the target only arrives when it
+   *  has finished. */
+  private transition: THREE.AnimationAction | null = null;
+  private pending: { kind: ClipKind; terrainClip: boolean; sink: number } | null = null;
   private targetYaw = Math.PI; // Default: Richtung Süden (Kamera-Grundstellung)
 
   private baseScale = 1;
@@ -1299,6 +1310,17 @@ export class Figure {
     this.root.add(inst);
 
     this.mixer = new THREE.AnimationMixer(inst);
+    // A bridge clip runs ONCE; when it ends, the state it was headed for
+    // begins. Chained on the mixer's own event rather than on a timer, so a
+    // clip's real length decides — the sidecar's duration is the server's
+    // number and says nothing about this rig's playback.
+    this.mixer.addEventListener('finished', (e) => {
+      if ((e as unknown as { action?: THREE.AnimationAction }).action !== this.transition) return;
+      this.transition = null;
+      const next = this.pending;
+      this.pending = null;
+      if (next) this.play(next.kind, next.terrainClip, next.sink);
+    });
     // Offenes Clip-Vokabular (Vertrag § A8): JEDES geladene Kind bekommt eine
     // Action unter seinem EIGENEN Namen. Vorher wurden nur die sieben
     // hartkodierten CLIP_SYNONYMS-Kinds gebunden — alle anderen Server-Kinds
@@ -1362,6 +1384,35 @@ export class Figure {
    *  because a swimmer lies flat and a treader hangs upright. */
   play(rawKind: ClipKind, terrainClip = false, sink = 0) {
     const kind = (rawKind || locomotionClip('idle')).toLowerCase();
+    if (this.transition) {
+      // A bridge is running. Let it finish and go WHEREVER the last word says
+      // — cutting it short is the abruptness this exists to remove, and a
+      // figure that changes its mind mid-standup still has to finish standing
+      // up first.
+      this.pending = { kind, terrainClip, sink };
+      return;
+    }
+    const via = clipTransition(this.currentKind, kind);
+    // Only a bridge this rig actually carries: a rule pointing at a clip the
+    // figure does not have must cost nothing, not stall it between states.
+    if (via && via !== kind && this.actions.has(via)) {
+      const bridge = this.actions.get(via)!;
+      this.pending = { kind, terrainClip, sink };
+      this.transition = bridge;
+      bridge.reset();
+      bridge.setLoop(THREE.LoopOnce, 1);
+      // Hold the last frame: without it the bridge snaps back to its first
+      // pose in the frame between "finished" and the target's fade-in.
+      bridge.clampWhenFinished = true;
+      bridge.timeScale = 1;
+      bridge.fadeIn(0.25).play();
+      this.current?.fadeOut(0.25);
+      this.current = bridge;
+      this.currentKind = via;
+      this.root.userData.clipKind = via;
+      this.root.userData.clipBound = true;
+      return;
+    }
     // Junk is no depth, and never NaN: one NaN in the drop and the figure
     // hangs at no height for the rest of the session.
     const sinkM = terrainClip && Number.isFinite(sink) && sink > 0 ? sink : 0;

@@ -321,6 +321,150 @@ def save_locomotion_clips(changes: Dict[str, Any],
     return load_locomotion_clips(target)
 
 
+# ── Transitions: the clip that has to play BETWEEN two clips ─────────────
+
+#: Wildcard in a transition rule: "whatever comes next" on the ``to`` side is
+#: an EXIT clip, "whatever came before" on the ``from`` side an ENTER clip.
+TRANSITION_ANY = "*"
+
+
+def clip_transitions_path() -> Path:
+    """``shared/config/clip_transitions.json`` — beside the locomotion
+    mapping and for the same reason: it points at clips, and the clips are
+    world-independent, so this is too.
+
+    A separate file rather than a key in the locomotion mapping: that file is
+    rewritten to exactly the known roles on every save, so anything else in it
+    would be dropped by the next edit.
+    """
+    return get_config_dir() / "clip_transitions.json"
+
+
+def _read_transitions_file(path: Path) -> List[Dict[str, Any]]:
+    """The raw rule list; ``[]`` when the file is absent or junk — no
+    transition is a working state, a crash here would take every figure's
+    animation with it."""
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.warning("clip transitions %s unreadable, ignoring: %s", path, e)
+        return []
+    rules = data.get("transitions") if isinstance(data, dict) else data
+    return rules if isinstance(rules, list) else []
+
+
+def load_transitions(path: Optional[Path] = None) -> List[Dict[str, str]]:
+    """The transition rules as ``[{from, to, kind}]``, junk entries dropped.
+
+    Order is the file's own — :func:`resolve_transition` decides by
+    specificity, not by position, so a hand-edited file cannot become
+    order-dependent behind the editor's back.
+    """
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for raw in _read_transitions_file(path or clip_transitions_path()):
+        if not isinstance(raw, dict):
+            continue
+        src = str(raw.get("from") or "").strip().lower()
+        dst = str(raw.get("to") or "").strip().lower()
+        kind = str(raw.get("kind") or "").strip().lower()
+        if not src or not dst or not kind:
+            continue
+        if (src, dst) in seen:
+            continue
+        seen.add((src, dst))
+        out.append({"from": src, "to": dst, "kind": kind})
+    return out
+
+
+def resolve_transition(from_kind: Any, to_kind: Any,
+                       rules: Optional[List[Dict[str, str]]] = None) -> str:
+    """The clip that has to play when a figure goes from ``from_kind`` to
+    ``to_kind`` — ``""`` when nothing is configured.
+
+    Most specific rule wins, and the order is fixed rather than the file's:
+
+    1. both named — the transition between exactly these two,
+    2. ``from`` named, ``to`` the wildcard — the EXIT clip of a state
+       ("standing up after sitting, whatever comes next"),
+    3. ``to`` named, ``from`` the wildcard — the ENTER clip of a state.
+
+    A switch onto the SAME clip is never a transition: a figure that keeps
+    walking must not stand up first.
+    """
+    src = str(from_kind or "").strip().lower()
+    dst = str(to_kind or "").strip().lower()
+    if not src or not dst or src == dst:
+        return ""
+    table = load_transitions() if rules is None else rules
+    exact = wild_to = wild_from = ""
+    for r in table:
+        rs, rd = r.get("from", ""), r.get("to", "")
+        if rs == src and rd == dst:
+            exact = r.get("kind", "")
+            break
+        if rs == src and rd == TRANSITION_ANY and not wild_to:
+            wild_to = r.get("kind", "")
+        elif rs == TRANSITION_ANY and rd == dst and not wild_from:
+            wild_from = r.get("kind", "")
+    return exact or wild_to or wild_from
+
+
+def save_transitions(entries: Any,
+                     path: Optional[Path] = None) -> List[Dict[str, str]]:
+    """Replaces the whole rule list and returns what is now stored.
+
+    The whole list, not a merge: the rules are few and the editor shows all of
+    them, so a partial write would only invite two editors to disagree about
+    what "the list" is.
+
+    ``kind`` must exist as a SOLO clip — a rule pointing at a file nobody has
+    would stall a figure between two states. ``from``/``to`` are NOT checked
+    against the library: they are the kinds a pose or a ground happens to
+    name, and a world may carry clips this installation does not. Both sides
+    wildcard is refused — that rule would fire on every single clip change.
+    """
+    if not isinstance(entries, list):
+        raise ClipLibraryError("a list of {from, to, kind} is expected")
+    out: List[Dict[str, str]] = []
+    seen = set()
+    solo = None
+    for i, raw in enumerate(entries):
+        if not isinstance(raw, dict):
+            raise ClipLibraryError(f"rule {i + 1}: an object is expected")
+        src = str(raw.get("from") or "").strip().lower()
+        dst = str(raw.get("to") or "").strip().lower()
+        if not src or not dst:
+            raise ClipLibraryError(f"rule {i + 1}: 'from' and 'to' are required")
+        if src == TRANSITION_ANY and dst == TRANSITION_ANY:
+            raise ClipLibraryError(
+                f"rule {i + 1}: '{TRANSITION_ANY}' on both sides would fire on "
+                "every clip change — name at least one side")
+        for side, value in (("from", src), ("to", dst)):
+            if value != TRANSITION_ANY:
+                _validate_kind(value)
+        kind = _validate_kind(raw.get("kind"))
+        if solo is None:
+            solo = _solo_kinds()
+        if kind not in solo:
+            raise ClipLibraryError(
+                f"rule {i + 1}: no solo clip of kind '{kind}' in any library")
+        if (src, dst) in seen:
+            raise ClipLibraryError(
+                f"rule {i + 1}: '{src}' to '{dst}' is already ruled")
+        seen.add((src, dst))
+        out.append({"from": src, "to": dst, "kind": kind})
+
+    target = path or clip_transitions_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"transitions": out}, indent=2,
+                                 ensure_ascii=False) + "\n", encoding="utf-8")
+    logger.info("clip transitions saved: %d rule(s)", len(out))
+    return out
+
+
 # ── The library view: one clip as the listing (and the editor) sees it ────
 
 def _origin(meta: Optional[Dict[str, Any]]) -> str:

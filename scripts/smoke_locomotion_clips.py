@@ -79,6 +79,7 @@ from app.core import animation_clips as ac  # noqa: E402
 
 FAILURES = []
 MAPPING = CONF / "locomotion_clips.json"
+TRANS = CONF / "clip_transitions.json"
 IDENTITY = {"walk": "walk", "run": "run", "idle": "idle"}
 
 
@@ -205,6 +206,95 @@ def test_validation() -> None:
           str(stored()))
 
 
+def rules() -> list:
+    return ac.load_transitions(TRANS)
+
+
+def put(entries) -> list:
+    return ac.save_transitions(entries, TRANS)
+
+
+def test_transitions() -> None:
+    """The clip that has to play BETWEEN two clips.
+
+    Expected values derived BY HAND from the fixture and the rules:
+
+    * No file at all -> no rules, and every lookup answers "" — the plain hard
+      switch, which is what the client did before this existed.
+    * ``resolve_transition`` decides by SPECIFICITY, not by file order: both
+      sides named beats the exit rule (``from`` named, ``to`` "*"), which beats
+      the enter rule ("*" -> ``to``). The rules below are stored in the
+      opposite order on purpose, so an order-dependent implementation fails.
+    * A switch onto the SAME kind is never a transition — a figure that keeps
+      walking must not stand up first.
+    """
+    print("\n[transitions]")
+    TRANS.unlink(missing_ok=True)
+    check("no file means no rules", rules() == [], str(rules()))
+    check("…and every lookup is empty",
+          ac.resolve_transition("sit", "walk", rules()) == "")
+
+    # Deliberately least-specific FIRST.
+    stored_rules = put([
+        {"from": "*", "to": "walk", "kind": "stroll"},
+        {"from": "sit", "to": "*", "kind": "idle"},
+        {"from": "sit", "to": "walk", "kind": "run"},
+    ])
+    check("all three rules are stored", len(stored_rules) == 3, str(stored_rules))
+    r = rules()
+    check("both sides named wins over the exit rule",
+          ac.resolve_transition("sit", "walk", r) == "run",
+          ac.resolve_transition("sit", "walk", r))
+    check("the exit rule covers every other target",
+          ac.resolve_transition("sit", "run", r) == "idle",
+          ac.resolve_transition("sit", "run", r))
+    check("the enter rule covers every other origin",
+          ac.resolve_transition("idle", "walk", r) == "stroll",
+          ac.resolve_transition("idle", "walk", r))
+    check("an unruled pair stays empty",
+          ac.resolve_transition("idle", "run", r) == "",
+          ac.resolve_transition("idle", "run", r))
+    check("the same kind twice is no transition",
+          ac.resolve_transition("walk", "walk", r) == "")
+    check("an empty side is no transition",
+          ac.resolve_transition("", "walk", r) == ""
+          and ac.resolve_transition("sit", "", r) == "")
+
+    raises("a kind no file backs", ac.ClipLibraryError,
+           lambda: put([{"from": "sit", "to": "walk", "kind": "nope"}]))
+    raises("a pair kind is no transition clip", ac.ClipLibraryError,
+           lambda: put([{"from": "sit", "to": "walk", "kind": "hug"}]))
+    raises("both sides wildcard", ac.ClipLibraryError,
+           lambda: put([{"from": "*", "to": "*", "kind": "idle"}]))
+    raises("a missing side", ac.ClipLibraryError,
+           lambda: put([{"from": "sit", "kind": "idle"}]))
+    raises("the same pair twice", ac.ClipLibraryError,
+           lambda: put([{"from": "sit", "to": "walk", "kind": "idle"},
+                        {"from": "sit", "to": "walk", "kind": "run"}]))
+    raises("a non-list body", ac.ClipLibraryError,
+           lambda: put({"from": "sit", "to": "walk", "kind": "idle"}))
+    check("nothing changed through the refused calls", len(rules()) == 3,
+          str(rules()))
+
+    # A save REPLACES the list — the editor shows all of them.
+    check("saving one rule drops the others",
+          put([{"from": "sit", "to": "walk", "kind": "idle"}])
+          == [{"from": "sit", "to": "walk", "kind": "idle"}], str(rules()))
+
+    # A junk file is no table, exactly as a junk mapping is no mapping.
+    TRANS.write_text("not json at all", encoding="utf-8")
+    check("a junk file leaves the figures with plain switching",
+          rules() == [], str(rules()))
+    TRANS.write_text(json.dumps({"transitions": [
+        {"from": "sit", "to": "walk", "kind": "idle"},
+        {"from": "sit"},
+        "nonsense",
+        {"from": "sit", "to": "walk", "kind": "run"},
+    ]}), encoding="utf-8")
+    check("junk ENTRIES are dropped one by one, the good ones survive",
+          rules() == [{"from": "sit", "to": "walk", "kind": "idle"}], str(rules()))
+
+
 def test_real_file() -> None:
     print("\n[repo file, read-only]")
     real = ac.locomotion_clips_path()
@@ -231,6 +321,7 @@ def main() -> int:
     test_load()
     test_save()
     test_validation()
+    test_transitions()
     test_real_file()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0

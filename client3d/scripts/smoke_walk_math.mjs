@@ -5297,6 +5297,38 @@ async function main() {
   check('a tile mounted WITH the field puts the prop on the same y',
     propY(oneShotYard), propY(stable), 1e-12);
 
+  // --- CLIP TRANSITIONS -----------------------------------------------
+  // The clip that has to play BETWEEN two clips. The precedence here MIRRORS
+  // `animation_clips.resolve_transition` on the server, and the same cases are
+  // checked there (scripts/smoke_locomotion_clips.py, group [transitions]) —
+  // two implementations of one rule, so both are pinned to the same table.
+  //
+  // Derived by hand from the rule: both sides named beats the exit rule
+  // (`from` named, `to` "*"), which beats the enter rule ("*" -> `to`). The
+  // table is fed in the LEAST specific order on purpose, so an implementation
+  // that simply takes the first match fails.
+  const { setClipTransitions, clipTransition } = walk;
+  check('no table means no transition', clipTransition('sit', 'walk'), '');
+  setClipTransitions([
+    { from: '*', to: 'walk', kind: 'stroll' },
+    { from: 'sit', to: '*', kind: 'idle' },
+    { from: 'sit', to: 'walk', kind: 'run' },
+  ]);
+  check('both sides named wins over the exit rule',
+    clipTransition('sit', 'walk'), 'run');
+  check('the exit rule covers every other target',
+    clipTransition('sit', 'jog'), 'idle');
+  check('the enter rule covers every other origin',
+    clipTransition('idle', 'walk'), 'stroll');
+  check('an unruled pair stays empty', clipTransition('idle', 'jog'), '');
+  check('the same kind twice is no transition', clipTransition('walk', 'walk'), '');
+  check('case and padding do not matter', clipTransition('  SIT ', 'WALK'), 'run');
+  check('an empty side is no transition', clipTransition('', 'walk'), '');
+  check('junk entries are dropped, the good ones survive',
+    setClipTransitions([{ from: 'sit', to: 'walk', kind: 'run' }, null, { from: 'sit' }, 7]).length, 1);
+  check('a junk table leaves plain switching', setClipTransitions('nonsense').length, 0);
+  check('…and then every lookup is empty again', clipTransition('sit', 'walk'), '');
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

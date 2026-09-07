@@ -548,27 +548,31 @@ export interface ApiClip {
   url: string;
 }
 
-/** The server's global clip library plus the LOCOMOTION mapping — which clip
- *  kind every figure plays for `walk` / `run` / `idle` when neither the ground
- *  nor the server names one (`game/walk.setLocomotionClips`). */
+/** The server's global clip library plus the two mappings that say WHICH clip
+ *  a figure plays: the LOCOMOTION roles (`game/walk.setLocomotionClips`) and
+ *  the TRANSITIONS between two clips (`game/walk.setClipTransitions`). */
 export interface ApiClipLibrary {
   clips: ApiClip[];
   /** `{walk, run, idle} → kind`, every role filled by the server; `null` when
    *  the listing could not be read — the roles then keep their own names. */
   locomotion: Record<string, string> | null;
+  /** `[{from, to, kind}]` — the clip that has to play BETWEEN two clips;
+   *  empty when none is configured, which is the plain hard switch. */
+  transitions: Array<{ from: string; to: string; kind: string }>;
 }
 
 /** The server's global animation library; empty when it is not reachable. */
 export async function getAnimationClips(): Promise<ApiClipLibrary> {
   try {
     const res = await fetch('/assets/animation-clips');
-    if (!res.ok) return { clips: [], locomotion: null };
+    if (!res.ok) return { clips: [], locomotion: null, transitions: [] };
     const data = await res.json();
     const locomotion = data.locomotion && typeof data.locomotion === 'object'
       ? (data.locomotion as Record<string, string>) : null;
-    return { clips: (data.clips ?? []) as ApiClip[], locomotion };
+    const transitions = Array.isArray(data.transitions) ? data.transitions : [];
+    return { clips: (data.clips ?? []) as ApiClip[], locomotion, transitions };
   } catch {
-    return { clips: [], locomotion: null };
+    return { clips: [], locomotion: null, transitions: [] };
   }
 }
 

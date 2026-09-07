@@ -51,8 +51,9 @@ from app.core import clip_catalog, fbx_import
 from app.core.animation_clips import (CLIP_EXTS, ClipExists, ClipLibraryError,
                                       ClipNotFound, clip_entries, clip_meta,
                                       clip_view, delete_clip,
-                                      load_locomotion_clips, pair_kinds,
-                                      rename_clip, save_locomotion_clips)
+                                      load_locomotion_clips, load_transitions,
+                                      pair_kinds, rename_clip,
+                                      save_locomotion_clips, save_transitions)
 from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError
 from app.core.http_files import etag_file_response
@@ -113,7 +114,10 @@ def list_animation_clips() -> Dict[str, Any]:
             # (female/male/animal, which follow from gender + the humanoid
             # feature) plus any further set found in the files.
             "sets": available_sets(),
-            "locomotion": load_locomotion_clips()}
+            "locomotion": load_locomotion_clips(),
+            # The clip that has to play BETWEEN two clips — an exit ("stand up
+            # before walking"), an enter, or the pair of exactly two states.
+            "transitions": load_transitions()}
 
 
 # ── Editing the libraries (the Poses tab's "Library" view) ───────────────
@@ -197,6 +201,30 @@ async def put_locomotion_clips(request: Request,
         raise HTTPException(status_code=400, detail="invalid JSON body")
     try:
         return {"locomotion": save_locomotion_clips(body)}
+    except ClipLibraryError as e:
+        raise _clip_edit_error(e)
+
+
+@router.put("/animation-clips/transitions")
+async def put_clip_transitions(request: Request,
+                               _: Dict[str, Any] = Depends(require_admin)
+                               ) -> Dict[str, Any]:
+    """Sets the transition rules — which clip has to play BETWEEN two clips.
+
+    Body ``{transitions: [{from, to, kind}]}`` (a bare list is accepted too),
+    and it replaces the WHOLE list: the rules are few and the editor shows all
+    of them. ``"*"`` on the ``to`` side is an exit clip ("stand up, whatever
+    comes next"), on the ``from`` side an enter clip; both sides at once is
+    refused. ``kind`` must exist as a solo clip (400 otherwise). Answers the
+    stored list, in the shape the listing carries under ``transitions``.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    rules = body.get("transitions") if isinstance(body, dict) else body
+    try:
+        return {"transitions": save_transitions(rules)}
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
 
