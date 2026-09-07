@@ -225,7 +225,7 @@ def main() -> int:
     chair = make_prop("Chair", 0.5, 0.5, 0.9, category="chair")
     sconce = make_prop("Wall Sconce", 0.2, 0.15, 0.4, category="lamp",
                        mount="wall")
-    make_prop("Evergreen Pine", 2.0, 2.0, 5.0, category="Evergreen Trees")
+    make_prop("Evergreen Pine", 2.0, 2.0, 5.0, category="evergreen tree")
     library = {p["id"]: p for p in props.list_props()}
 
     # ── 1. Need validation (pure) ───────────────────────────────────────

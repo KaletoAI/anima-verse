@@ -46,9 +46,13 @@ CATALOG_STYLE_CHARS = 60
 
 #: Categories that belong OUTSIDE (B8). An indoor room never gets them, and
 #: that is a filter, not a judgement call — the model used to pick trees for a
-#: living room because the catalog was all the library had.
-OUTDOOR_CATEGORIES = ("deciduous trees", "evergreen trees", "forest floor",
-                      "tree", "bush", "shrub", "rock", "city", "terrain")
+#: living room because the catalog was all the library had. Singular, lower
+#: case, one word wherever the thing has one — the same vocabulary the prop
+#: library is classified in, so a whole house or a tuft of grass is caught
+#: here just like a tree.
+OUTDOOR_CATEGORIES = ("deciduous tree", "evergreen tree", "tree", "bush",
+                      "shrub", "grass", "forest floor", "rock", "terrain",
+                      "building")
 #: …and the tag that says the same thing on a prop of any category.
 OUTDOOR_TAG = "outdoor"
 
