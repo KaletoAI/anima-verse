@@ -472,6 +472,37 @@ def _bake_route(start: Point, goal: Point,
     return waypoints, speed
 
 
+def departure_bridge(character_name: str) -> Tuple[str, float]:
+    """``(clip kind, game seconds)`` a figure needs to LEAVE its current pose
+    before it can walk — ``("", 0.0)`` when nothing is configured.
+
+    A character that walks away while still sitting is the jump this exists to
+    remove. The rule comes from the transition table
+    (``animation_clips.resolve_transition``): from what the pose plays now, to
+    what walking plays (the admin's ``walk`` role). The length is the CLIP's
+    own, from its sidecar — no separate number to keep in step with it.
+
+    Never raises: a missing catalog, an unknown pose or a clip without a
+    sidecar all mean "no bridge", and the journey starts as it always did.
+    """
+    try:
+        from app.core.animation_clips import (clip_meta, load_locomotion_clips,
+                                              resolve_transition)
+        from app.core.expression_pose_maps import resolve_pose_animation
+        from app.models.character import get_effective_pose_key
+        from_kind = resolve_pose_animation(get_effective_pose_key(character_name))
+        to_kind = load_locomotion_clips().get("walk") or "walk"
+        via = resolve_transition(from_kind, to_kind)
+        if not via:
+            return "", 0.0
+        meta = clip_meta(via) or {}
+        seconds = float(meta.get("duration_s") or 0.0)
+        return (via, seconds) if seconds > 0 else ("", 0.0)
+    except Exception as e:                                   # pragma: no cover
+        logger.debug("departure bridge for %s: %s", character_name, e)
+        return "", 0.0
+
+
 def start_journey(character_name: str,
                   target_id: str) -> Tuple[Dict[str, Any] | None, str]:
     """Begin a timed journey to ``target_id``.
@@ -536,9 +567,22 @@ def start_journey(character_name: str,
     if waypoints is None:
         return None, "no_route"
 
+    # STANDING UP TAKES TIME. The journey starts that much LATER, so the
+    # figure stays where it is while it gets up instead of gliding away
+    # mid-animation — `journey_state` clamps a not-yet-started journey to its
+    # first point on its own, and the ETA moves with it because it is derived
+    # from the same stamp.
+    exit_clip, exit_s = departure_bridge(character_name)
+    starts = game_time() + GameDuration.of(seconds=exit_s) if exit_s else game_time()
     journey = {"target": target_id, "waypoints": waypoints,
-               "started_at_game": game_time().canonical(), "speed_m_s": speed,
+               "started_at_game": starts.canonical(), "speed_m_s": speed,
                "entry_edge": entry_edge}
+    if exit_clip:
+        # What to PLAY while the world waits, and how long the wait is — the
+        # roster reads both off the journey rather than resolving the rule a
+        # second time (and possibly differently) per poll.
+        journey["exit_clip"] = exit_clip
+        journey["exit_s"] = round(exit_s, 3)
     # Walking away ends a running pair interaction for BOTH participants.
     from app.core.interaction_engine import end_interaction
     end_interaction(character_name, reason="journey")
@@ -1347,9 +1391,13 @@ class TravelTicker:
                 logger.exception("travel tick failed")
             try:
                 # Pair interactions end on the game clock too; the same beat
-                # closes the ones whose clip has run out.
-                from app.core.interaction_engine import settle_finished
+                # closes the ones whose clip has run out — and binds the ones
+                # whose accepted invitation was only waiting for the walk
+                # over, which is why it runs AFTER the journeys.
+                from app.core.interaction_engine import (settle_approaches,
+                                                         settle_finished)
                 await asyncio.to_thread(settle_finished)
+                await asyncio.to_thread(settle_approaches)
             except Exception:
                 logger.exception("interaction settle failed")
             await asyncio.sleep(_TICK_SECONDS)

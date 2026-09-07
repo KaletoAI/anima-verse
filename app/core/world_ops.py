@@ -610,6 +610,19 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             cm = _height_cm(_prof)
         except Exception:
             cm = None
+        # STANDING UP BEFORE WALKING (`travel_engine.departure_bridge`): a
+        # journey whose start lies AHEAD of the clock has not begun — the
+        # figure is still getting out of its pose, and what it plays for that
+        # is the very clip the start was delayed by. The position needs no
+        # special case: `journey_state` clamps a not-yet-started journey to
+        # its first point.
+        _bridge = ""
+        try:
+            if _j and _j.get("exit_clip") and _j.get("started_at_game"):
+                if (_now_game - GameTime.parse(_j["started_at_game"])).seconds < 0:
+                    _bridge = str(_j["exit_clip"])
+        except Exception as e:
+            logger.debug("departure bridge payload for %s: %s", name, e)
         # The travel target itself stays in the payload (the client draws the
         # direction), but an unknown destination stays NAMELESS — otherwise
         # the fog would leak place names through the roster.
@@ -626,7 +639,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "height_cm": cm,
             "room_id": get_character_current_room(name) or "",
             "activity": activity,
-            "activity_animation": resolve_pose_animation(pose_key),
+            "activity_animation": _bridge or resolve_pose_animation(pose_key),
             "animation_set": (anim_sets[0] if anim_sets else ""),
             "animation_sets": anim_sets,
             "mood": get_character_current_feeling(name) or "",

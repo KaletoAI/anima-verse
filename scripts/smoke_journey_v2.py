@@ -465,6 +465,90 @@ check("a failed start leaves no target behind",
       get_movement_target("wild_npc"), "")
 check("… and stores no journey", travel_engine.get_journey("wild_npc"), None)
 
+# ── Standing up before walking (T2) ─────────────────────────────────────
+#
+# `travel_engine.departure_bridge` combines three answers into one: what the
+# character's POSE plays now, what WALKING plays, and whether the transition
+# table rules a clip between them. The rule under test is that combination, so
+# the three collaborators are stood in for.
+print("\n[departure bridge]")
+import app.core.animation_clips as _ac                        # noqa: E402
+import app.core.expression_pose_maps as _epm                  # noqa: E402
+import app.models.character as _ch                            # noqa: E402
+
+_keep = (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
+         _ac.load_locomotion_clips, _ac.resolve_transition, _ac.clip_meta)
+try:
+    _ch.get_effective_pose_key = lambda n: "sitting"
+    _epm.resolve_pose_animation = lambda k: "sit"
+    _ac.load_locomotion_clips = lambda *a, **k: {"walk": "walk", "run": "run",
+                                                 "idle": "idle"}
+    _ac.resolve_transition = lambda a, b, rules=None: (
+        "standup" if (a, b) == ("sit", "walk") else "")
+    _ac.clip_meta = lambda kind, *a, **k: ({"duration_s": 2.23}
+                                           if kind == "standup" else None)
+    check("the bridge is the ruled clip and ITS OWN length",
+          travel_engine.departure_bridge("wild_npc"), ("standup", 2.23))
+
+    _ac.resolve_transition = lambda a, b, rules=None: ""
+    check("no rule means no delay",
+          travel_engine.departure_bridge("wild_npc"), ("", 0.0))
+
+    # A clip whose sidecar says nothing about its length cannot delay a
+    # journey by a number nobody knows.
+    _ac.resolve_transition = lambda a, b, rules=None: "standup"
+    _ac.clip_meta = lambda kind, *a, **k: {}
+    check("a clip without a length is no delay either",
+          travel_engine.departure_bridge("wild_npc"), ("", 0.0))
+
+    # A collaborator that throws is no delay — walking away must not fail
+    # because an animation table is broken.
+    def _boom(*a, **k):
+        raise RuntimeError("catalog on fire")
+    _ac.resolve_transition = _boom
+    check("a broken table is no delay, and no exception",
+          travel_engine.departure_bridge("wild_npc"), ("", 0.0))
+finally:
+    (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
+     _ac.load_locomotion_clips, _ac.resolve_transition, _ac.clip_meta) = _keep
+
+# ── The world WAITS: a journey that starts later ────────────────────────
+#
+# Derived BY HAND. A journey of 10 m over 10 game seconds, started 2.23 s
+# after the clock reads START (the length of the standing-up clip):
+#
+#   now = START + 0.00 s  ->  elapsed −2.23 s, clamped to 0 -> the first point
+#   now = START + 2.23 s  ->  elapsed  0.00 s               -> the first point
+#   now = START + 7.23 s  ->  elapsed  5.00 s, half the line -> (5, 0)
+#   eta                    =  START + 2.23 + 10 = 12.23 s, NOT 10 —
+#                             getting up is part of how long it takes to
+#                             arrive, which is the whole point of delaying it.
+print("\n[the world waits for the exit clip]")
+_WPS = [[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]]
+_EXIT = 2.23
+_LATER = (START_GT + GameDuration.of(seconds=_EXIT)).canonical()
+
+
+def _at(seconds):
+    return travel_engine.journey_state(
+        _WPS, _LATER, START_GT + GameDuration.of(seconds=seconds))
+
+
+approx("at the moment of the order the figure has not moved",
+       _at(0.0)["progress_m"], 0.0)
+check("… and stands on the first waypoint", rounded(_at(0.0)["pos"]), (0.0, 0.0))
+approx("still nothing a breath before the start",
+       _at(_EXIT - 0.01)["progress_m"], 0.0)
+approx("at the start it begins", _at(_EXIT)["progress_m"], 0.0)
+approx("five seconds later it is halfway", _at(_EXIT + 5.0)["progress_m"], 5.0)
+check("… at the middle of the line", rounded(_at(_EXIT + 5.0)["pos"]), (5.0, 0.0))
+check("the arrival is the delay LATER, not the same",
+      _at(0.0)["eta_game"],
+      (START_GT + GameDuration.of(seconds=_EXIT + 10.0)).canonical())
+check_true("and it is not the undelayed arrival",
+           _at(0.0)["eta_game"]
+           != (START_GT + GameDuration.of(seconds=10.0)).canonical())
+
 print()
 if FAILURES:
     print(f"FAILED {len(FAILURES)}/{CHECKED}: {FAILURES}")
