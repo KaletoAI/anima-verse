@@ -96,6 +96,21 @@ export interface FurnishStatus {
   updated_at?: string
 }
 
+/** What a job transition answers. Only ``accept`` fills it in
+ *  (`room_furnish.accept`): ``placements`` are the entries AS WRITTEN into the
+ *  room — every temporary ``need:<key>`` prop id already rewritten to the real
+ *  one. The editor appends THESE to its draft, never the ghosts it sent: a
+ *  draft holding `need:` ids differs from the room and the next location save
+ *  would drop the whole furnishing (the room sanitizer refuses the colon). */
+export interface FurnishActResult {
+  status?: string
+  placed?: number
+  generating?: number
+  /** The confirmed floor/wall kinds reached the room (E9). */
+  surfaces_applied?: boolean
+  placements?: RoomPropPlacement[]
+}
+
 export interface FurnishJob {
   status: FurnishStatus | null
   busy: boolean
@@ -107,7 +122,7 @@ export interface FurnishJob {
   ghosts: RoomPropPlacement[]
   setGhosts: (next: RoomPropPlacement[]) => void
   refresh: () => Promise<void>
-  act: (action: string, body?: unknown) => Promise<void>
+  act: (action: string, body?: unknown) => Promise<FurnishActResult>
 }
 
 /** One library prop as the dialog needs it: the match select shows name and

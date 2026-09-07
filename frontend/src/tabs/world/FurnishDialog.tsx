@@ -28,9 +28,10 @@ import type { RoomPropPlacement, SurfaceKind } from './worldTypes'
 import { newId, usePoseCatalog } from './placeTypes'
 import { DescriptionSyncPanel } from './DescriptionSyncPanel'
 import { FurnishNeedsList } from './FurnishNeedsList'
-import { MOUNT_GROUPS, NEED_ID_PREFIX, propMount, type FurnishJob,
-  type FurnishLibProp, type FurnishNeed, type FurnishProposal,
-  type FurnishStatus, type FurnishSurfaces } from './furnishTypes'
+import { MOUNT_GROUPS, NEED_ID_PREFIX, propMount, type FurnishActResult,
+  type FurnishJob, type FurnishLibProp, type FurnishNeed,
+  type FurnishProposal, type FurnishStatus,
+  type FurnishSurfaces } from './furnishTypes'
 
 export type { FurnishJob, FurnishState, FurnishStatus } from './furnishTypes'
 
@@ -45,6 +46,10 @@ const POLL_IDLE_MS = 15000
  *  uses by standing/sitting/lying at it. Without a place marker such a prop is
  *  furniture nobody can use (plan-furnish-v2.md § 2b B18). */
 const PLACE_WORDS = ['chair', 'sofa', 'bench', 'stool', 'bed', 'counter', 'bar']
+/** …matched as WHOLE WORDS. A substring test warned about a "bedside table"
+ *  (bed) and a "barrel" (bar) — pieces nobody sits on — which trains the admin
+ *  to ignore the warning. */
+const PLACE_WORD_RE = new RegExp(`\\b(${PLACE_WORDS.join('|')})\\b`)
 
 /**
  * The single source of truth for one target's furnishing job. `open` = the
@@ -113,13 +118,18 @@ export function useFurnishJob(roomId: string, open: boolean): FurnishJob {
     return () => window.clearInterval(id)
   }, [roomId, open, refresh])
 
-  const act = useCallback(async (action: string, body?: unknown) => {
-    if (!roomId) return
+  // The RESPONSE BODY is handed back, not swallowed: `accept` answers with the
+  // placements as they were written into the room (real prop ids), and the
+  // editor needs exactly those for its draft.
+  const act = useCallback(async (action: string,
+                                 body?: unknown): Promise<FurnishActResult> => {
+    if (!roomId) return {}
     setBusy(true)
     try {
-      await apiPost(
+      const res = await apiPost<FurnishActResult>(
         `/world/rooms/${encodeURIComponent(roomId)}/furnish/${action}`, body || {})
       await refresh()
+      return res || {}
     } finally {
       setBusy(false)
     }
@@ -542,7 +552,7 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
       seen.add(g.prop_id)
       if (propMount(prop) !== 'floor' || (prop.marker_count || 0) > 0) continue
       const hay = `${prop.category || ''} ${prop.name || ''}`.toLowerCase()
-      if (PLACE_WORDS.some((w) => hay.includes(w))) {
+      if (PLACE_WORD_RE.test(hay)) {
         markerWarnings.push({ id: prop.id, name: prop.name })
       }
     }

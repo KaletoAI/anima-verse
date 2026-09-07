@@ -72,6 +72,7 @@ import {
   BOUNDARY_SEED_M, boundaryComplaint, putLocationBoundary, seedSquare,
 } from './boundaryApi'
 import { FurnishDialog, useFurnishJob } from './FurnishDialog'
+import { NEED_ID_PREFIX } from './furnishTypes'
 import { PlanInspector, type InspectorTab } from './PlanInspector'
 import { PlanInspectorLevel } from './PlanInspectorLevel'
 import { PlanFindings } from './PlanFindings'
@@ -323,6 +324,25 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [propsOpen, reviewing])
+  // …PLUS the pieces that do not exist yet. A ghost of an unbuilt need carries
+  // the temporary `need:<key>` prop id, which no library record answers — so
+  // without this the review drew every piece still to be made as an unnamed
+  // 1×1 m box, and seeing the room BEFORE it is built is the whole point of
+  // the review (E6). The need's own size and kind stand in until the prop is
+  // real. ONE map for every dims lookup on the plan: placed props are
+  // untouched (their ids are real and win by being in `propDims`).
+  const ghostDims = useMemo<Record<string, PropDims>>(() => {
+    const needs = furnish.status?.proposal?.needs || []
+    if (!needs.length) return propDims
+    const map: Record<string, PropDims> = { ...propDims }
+    for (const n of needs) {
+      const id = `${NEED_ID_PREFIX}${n.key || ''}`
+      if (!n.key || map[id]) continue
+      map[id] = { name: n.kind || id, width_m: n.width_m,
+                  depth_m: n.depth_m, height_m: n.height_m }
+    }
+    return map
+  }, [propDims, furnish.status])
   // The room whose hull is being drawn ('draw-room' mode) — set by the
   // "Not on the plan" chips (first placement) and the redraw tool.
   const [drawTarget, setDrawTarget] = useState('')
@@ -1211,8 +1231,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   modelDimsRef.current = modelDims
   // The drag handler is bound once and needs the CURRENT library heights to
   // compose a child's support pose.
-  const propDimsRef = useRef(propDims)
-  propDimsRef.current = propDims
+  const propDimsRef = useRef(ghostDims)
+  propDimsRef.current = ghostDims
   const selectedRef = useRef(selected)
   selectedRef.current = selected
 
@@ -1549,6 +1569,13 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // Accept: the server appends the CURRENT ghost positions to layout.props —
   // the editor draft has to follow, or the next Save would write the room
   // back without them.
+  //
+  // WHAT IS APPENDED IS THE SERVER'S ANSWER, not the ghosts that were sent: a
+  // ghost of an unbuilt piece carries the temporary `need:<key>` prop id, and
+  // the server rewrote every one of them to the prop it just created. With the
+  // ghosts in the draft the editor would be dirty against a room it matches,
+  // and the next location save would send ids that `_sanitize_room_props`
+  // refuses (the colon) — the whole accepted furnishing would vanish.
   const acceptFurnish = useCallback(async () => {
     const job = furnishRef.current
     const room = roomsRef.current.find((r) => r.id === selected)
@@ -1557,10 +1584,12 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     // exactly what creates one there (§ A13a), so the room itself is enough.
     if (!room || !list.length) return
     try {
-      await job.act('accept', { placements: list })
-      updateLayout(room.id || '', { props: [...(room.layout?.props || []), ...list] })
+      const res = await job.act('accept', { placements: list })
+      const written = res?.placements?.length ? res.placements : list
+      updateLayout(room.id || '', { props: [...(room.layout?.props || []), ...written] })
       setGhostSel(null)
-      toast(t('{n} pieces added to the room').replace('{n}', String(list.length)))
+      toast(t('{n} pieces added to the room')
+        .replace('{n}', String(written.length)))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
@@ -1577,9 +1606,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     // COMPOSED poses (decision E1): a piece standing on another one is drawn
     // where its support carries it, so that is where it is clicked too.
     const composed = composePlacements(
-      withPropHeights(lay.props || [], propDims))
+      withPropHeights(lay.props || [], ghostDims))
     ;(lay.props || []).forEach((p, i) => {
-      const dims = propDims[p.prop_id]
+      const dims = ghostDims[p.prop_id]
       const pose = composed[i]
       // Metres from the placement's own anchor — the prop's dims are metres
       // too, so nothing converts.
@@ -1599,7 +1628,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           && Math.abs(ly) <= (dims?.depth_m || 1) / 2) hits.push(i)
     })
     return hits
-  }, [propDims])
+  }, [ghostDims])
 
   // ── ONE PILE UNDER THE POINTER ───────────────────────────────────────
   // The plan draws in layers: room divs carry the prop footprints, and the
@@ -2386,7 +2415,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         ownLevelOutline={ownLevelOutline}
         level={level}
         yardName={yardName}
-        propDims={propDims}
+        propDims={ghostDims}
         modelDims={modelDims}
         derivedSize={derivedSize}
         poseCatalog={poseCatalog}
@@ -2646,7 +2675,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         const placement = list[propSel]
         // COMPOSED poses (decision E1): everything below asks WHERE the pieces
         // really stand, which for a child is not what it stores.
-        const withDims = withPropHeights(list, propDims)
+        const withDims = withPropHeights(list, ghostDims)
         const composed = composePlacements(withDims)
         const pose = composed[propSel]
         const patchProp = (patch: Partial<typeof placement> | null) => {
@@ -2709,17 +2738,17 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           <PlanPropStrip
             placement={placement}
             index={propSel}
-            name={propDims[placement.prop_id]?.name}
+            name={ghostDims[placement.prop_id]?.name}
             origin={selOrigin}
             size={{ w: selLay?.w || 0, d: selLay?.d || 0 }}
             ground={groundSel}
             stackHits={stackHits}
             support={supportIdx >= 0 ? {
               label: list[supportIdx].label
-                || propDims[list[supportIdx].prop_id]?.name
+                || ghostDims[list[supportIdx].prop_id]?.name
                 || list[supportIdx].prop_id,
-              width_m: propDims[list[supportIdx].prop_id]?.width_m || 1,
-              depth_m: propDims[list[supportIdx].prop_id]?.depth_m || 1,
+              width_m: ghostDims[list[supportIdx].prop_id]?.width_m || 1,
+              depth_m: ghostDims[list[supportIdx].prop_id]?.depth_m || 1,
             } : undefined}
             dependents={dependentIndices(list, propSel).length - 1}
             onPlaceOnTop={support !== null ? placeOnTop : undefined}

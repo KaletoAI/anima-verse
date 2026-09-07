@@ -2101,8 +2101,10 @@ def _prop_mount_classify_sync(data: Any) -> Dict[str, Any]:
         # failure, not a defect of this request: 502 with the message, because
         # a bare 500 leaves the admin with "Internal Server Error" and no idea
         # whether to retry or to fix the routing.
-        raise HTTPException(status_code=502,
-                            detail=f"Mount classification failed: {e}")
+        logger.exception("mount classification failed")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Mount classification failed: {e}") from e
     # An empty SELECTION is the only way both counts come back at zero: a
     # selection the model answered nothing for leaves its ids in `unresolved`.
     if not result["classified"] and not result["unresolved"]:
@@ -2766,7 +2768,10 @@ async def furnish_accept(room_id: str, request: Request,
     layer's CURRENT positions), absent = the solver's result. Creates the
     props that still had to be built, appends everything to layout.props and
     starts the mesh generation in the background. Answers {status, placed,
-    generating}; the job row survives only while ``generating`` > 0."""
+    generating, surfaces_applied, placements} — ``placements`` are the entries
+    AS WRITTEN (real prop ids instead of the ghosts' ``need:<key>``), which is
+    what the editor has to put into its draft; the job row survives only while
+    ``generating`` > 0."""
     body = await _furnish_body(request)
     from app.core.room_furnish import accept
     return _furnish_call(accept, room_id, body.get("placements"))

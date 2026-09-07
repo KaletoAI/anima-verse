@@ -8,9 +8,13 @@
  *
  * The plan has to DRAW and HIT-TEST the composed positions, so it runs the
  * same arithmetic the server does (`room_recipe.compose_on_chain`, decision E1
- * of plan-furnish-v2.md). Pure, no React, no library — the vertical half of
- * the composition (the stacking height) is the server's alone and never
- * appears on the plan, which is a top view.
+ * of plan-furnish-v2.md). Pure, no React, no library.
+ *
+ * The vertical half of the composition is computed here too (`offset_y`) but
+ * is never DRAWN: a top view has no height. It exists only to RANK candidate
+ * supports by their top surface (`pickSupport`), and it is approximate on
+ * purpose — the plan does not know a prop's `ground_offset_m`. The metres a
+ * renderer uses are the server's alone.
  *
  * KEEP THIS IN LOCKSTEP WITH `app/core/room_recipe.compose_on_chain`: same
  * frame, same turn, same repair of a link that does not hold. The numbers are

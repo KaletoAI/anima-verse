@@ -1268,6 +1268,8 @@ def _apply_surfaces(location_id: str, room_id: str,
                 continue
             layout = room.get("layout")
             if not isinstance(layout, dict):
+                logger.warning("room_furnish %s: no layout to skin — the "
+                               "confirmed surfaces are dropped", room_id)
                 return False
             stored = layout.get("surfaces") if isinstance(
                 layout.get("surfaces"), dict) else {}
@@ -1280,12 +1282,17 @@ def _apply_surfaces(location_id: str, room_id: str,
                 return False
             clean = _sanitize_room_layout({**layout, "surfaces": merged})
             if not clean:
+                logger.warning("room_furnish %s: the sanitizer refused the "
+                               "skinned layout (%s) — surfaces not applied",
+                               room_id, json.dumps(merged))
                 return False
             room["layout"] = clean
             _save_world_data(data)
             logger.info("room_furnish %s: surfaces applied (%s)", room_id,
                         json.dumps(clean.get("surfaces") or {}))
             return True
+    logger.warning("room_furnish %s: room not found in location %s — the "
+                   "confirmed surfaces are dropped", room_id, location_id)
     return False
 
 
@@ -1308,6 +1315,13 @@ def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
     :func:`_create_built_props`.
 
     ``on`` is untouched by the rewrite: it names a PLACEMENT, not a prop.
+
+    Answers ``{status, placed, generating, surfaces_applied, placements}``.
+    ``placements`` are the entries EXACTLY as they were written into the room
+    — the temporary ``need:<key>`` prop ids already rewritten to the real ones,
+    ``on``/``id`` untouched. The editor appends that list to its draft; with
+    the ghosts it sent instead, the draft would carry ids the room sanitizer
+    refuses and the next location save would drop the whole furnishing.
     """
     row = _get_row(room_id)
     if not row:
@@ -1338,9 +1352,10 @@ def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
     # THE TEXTURES COME WITH THE FURNITURE (E9). The confirmed proposal carries
     # them or it does not — the dialog's "apply on accept" checkbox is what
     # decides that, and it decided at confirm time.
-    _apply_surfaces(row["location_id"], target_room,
-                    proposal.get("surfaces") if isinstance(
-                        proposal.get("surfaces"), dict) else {})
+    surfaces_applied = _apply_surfaces(
+        row["location_id"], target_room,
+        proposal.get("surfaces") if isinstance(
+            proposal.get("surfaces"), dict) else {})
     logger.info("room_furnish %s: %d placements accepted, %d prop(s) created, "
                 "%d not built (%s)", room_id, len(entries), created,
                 len(skipped), ", ".join(skipped) or "-")
@@ -1351,14 +1366,16 @@ def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:
     pending = _pending_builds(proposal)
     if not pending:
         _delete_row(room_id)
-        return {"status": "accepted", "placed": len(entries), "generating": 0}
+        return {"status": "accepted", "placed": len(entries), "generating": 0,
+                "surfaces_applied": surfaces_applied, "placements": entries}
     # The layout write has happened — the flag says so, so a restart during
     # the generation resumes into the mesh phase instead of appending again.
     _update_row(room_id, state=STATE_GENERATING, error="", proposal=proposal,
                 placements={**stored, "placed": entries, "accepted": True})
     _spawn(room_id, "generate", _room_label(_load_room(room_id)[1]))
     return {"status": "accepted", "placed": len(entries),
-            "generating": len(pending)}
+            "generating": len(pending),
+            "surfaces_applied": surfaces_applied, "placements": entries}
 
 
 def discard(room_id: str) -> Dict[str, Any]:

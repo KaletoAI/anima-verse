@@ -57,6 +57,14 @@ Every expected number is derived by hand from the rule:
     is pending, so continue/discard/a plain status read each close the row and
     the room can be furnished again. Reached in the smoke by accepting with
     the orchestrator frozen and then attaching the GLB from outside.
+  * ACCEPT ANSWERS WITH WHAT IT WROTE (fix wave F-A): the editor appends the
+    response's ``placements`` to its draft, so the two lists must be identical
+    — 3 in, 3 out, every ``need:<key>`` replaced by the prop id the accept
+    just minted, ``on`` untouched (it names a placement, not a prop). With the
+    ghosts appended instead, the draft would hold ids the room sanitizer
+    refuses and the next location save would drop the whole furnishing.
+    ``surfaces_applied`` is True only in the E9 run above, where one kind was
+    confirmed; every other accept here has no surfaces and reports False.
   * a layout write that fails must not cost the created props: accept persists
     their ids on the row BEFORE the write, so the refused accept leaves 8 props
     and the retry still leaves 8 — AND the retry's layout entry names that very
@@ -580,8 +588,33 @@ def main() -> int:
     real_spawn = suppress_spawn()
     accepted = room_furnish.accept("smokeroom")
     check("accept reports what it placed and what it now generates",
-          accepted == {"status": "accepted", "placed": 3, "generating": 2},
-          json.dumps(accepted))
+          {k: v for k, v in accepted.items() if k != "placements"}
+          == {"status": "accepted", "placed": 3, "generating": 2,
+              "surfaces_applied": True},
+          json.dumps({k: v for k, v in accepted.items() if k != "placements"}))
+    # F-A: the answer carries the entries AS WRITTEN. The editor appends THESE
+    # to its draft — with the ghosts it sent (three placements, one of them a
+    # `need:` id) the draft would differ from the room and the next location
+    # save would drop the lot. Three in, three out; the two built needs came in
+    # as `need:n2`/`need:n3` and must be real prop ids now.
+    answer_places = accepted.get("placements")
+    check("accept answers with the placements it wrote",
+          isinstance(answer_places, list) and len(answer_places) == 3,
+          json.dumps(answer_places))
+    check("…with no placeholder id left in them",
+          not any(str(e.get("prop_id") or "").startswith("need:")
+                  for e in answer_places),
+          json.dumps([e.get("prop_id") for e in answer_places]))
+    check("…the same list the room got",
+          [e.get("prop_id") for e in answer_places]
+          == [p.get("prop_id") for p in
+              (room_furnish._load_room("smokeroom")[1].get("layout") or {})
+              .get("props") or []],
+          json.dumps([e.get("prop_id") for e in answer_places]))
+    check("…and `on` untouched by the rewrite (it names a PLACEMENT)",
+          next(e for e in answer_places if e.get("on"))["on"]
+          == table_place["id"],
+          json.dumps([e.get("on") for e in answer_places]))
     status = room_furnish.get_status("smokeroom")
     check("the job waits in generating", status["state"] == "generating",
           json.dumps(status["state"]))
@@ -710,7 +743,8 @@ def main() -> int:
           json.dumps(status.get("placements")))
     empty_accept = room_furnish.accept("smokeroom")
     check("accepting nothing places nothing and generates nothing",
-          empty_accept == {"status": "accepted", "placed": 0, "generating": 0},
+          empty_accept == {"status": "accepted", "placed": 0, "generating": 0,
+                           "surfaces_applied": False, "placements": []},
           json.dumps(empty_accept))
     check("…and creates no prop for the unplaced need",
           len(props.list_props()) == props_before_empty
@@ -741,10 +775,16 @@ def main() -> int:
           json.dumps(status["placements"]))
     direct_accept = room_furnish.accept("smokeroom")
     check("a job with nothing to build closes at accept",
-          direct_accept == {"status": "accepted", "placed": 2,
-                            "generating": 0}
+          {k: v for k, v in direct_accept.items() if k != "placements"}
+          == {"status": "accepted", "placed": 2, "generating": 0,
+              "surfaces_applied": False}
           and room_furnish.get_status("smokeroom") is None,
-          json.dumps(direct_accept))
+          json.dumps({k: v for k, v in direct_accept.items()
+                      if k != "placements"}))
+    check("…and hands the two placements back for the editor draft",
+          [e.get("prop_id") for e in direct_accept["placements"]]
+          == [chair, chair],
+          json.dumps(direct_accept["placements"]))
 
     # ── build only what was PLACED (controller ruling 2026-09-07) ───────
     # A need the solver could not fit gets no prop and no mesh — the accept
@@ -774,9 +814,18 @@ def main() -> int:
           json.dumps(status["placements"]))
     ruling = room_furnish.accept("smokeroom")
     check("accept builds the placed need and only that one",
-          ruling == {"status": "accepted", "placed": 1, "generating": 1}
+          {k: v for k, v in ruling.items() if k != "placements"}
+          == {"status": "accepted", "placed": 1, "generating": 1,
+              "surfaces_applied": False}
           and len(props.list_props()) == props_before_ruling + 1,
           f'{json.dumps(ruling)} / {len(props.list_props())}')
+    # The row is deleted the moment the single mesh lands, so the answer is
+    # checked against the LIBRARY: exactly one prop was made, and the one
+    # placement handed back names it — no `need:` id survives.
+    check("…and the answered placement names the prop it just made",
+          [e.get("prop_id") for e in ruling["placements"]]
+          == [props.list_props()[-1]["id"]],
+          json.dumps(ruling["placements"]))
     check("…and names the piece it did not build",
           any("not built: iron kettle" in t for t in notification_texts()),
           json.dumps(notification_texts()[:2]))

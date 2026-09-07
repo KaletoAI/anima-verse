@@ -666,9 +666,12 @@ def _place_in_front_of(s: _Solver, item: _Item, ref_pieces: List[_Piece],
 def _place_beside(s: _Solver, item: _Item, ref_pieces: List[_Piece],
                   placed: List[Dict[str, Any]],
                   unplaced: List[Dict[str, str]]) -> None:
-    """ONE side of the reference (the nightstand case): left first, then right,
-    with the projected half extent OF THAT SIDE. Every copy takes the next free
-    gap/side — an occupied spot is simply blocked."""
+    """Beside the reference (the nightstand case), with the projected half
+    extent OF THAT SIDE. The search is GAP-MAJOR: the smallest gap is tried on
+    the left and then on the right before the next gap is tried at all, so two
+    nightstands end up on opposite sides of the bed rather than both on the
+    left. Every copy takes the next free gap/side — an occupied spot is simply
+    blocked."""
     ref_piece = s._pick(ref_pieces)
     centre, _front, _back, left, right = _ref_frame(ref_piece)
     for _ in range(item.count):

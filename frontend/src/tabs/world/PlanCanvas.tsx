@@ -870,6 +870,9 @@ export function PlanCanvas({
               // Ghosts are placements like any other — metres from the
               // room's min corner, true size from the prop's own dims
               // (the furnish solver emits metres since the server wave).
+              // A piece that does NOT exist yet has no library record, so the
+              // editor's map answers its `need:<key>` id out of the proposal
+              // (`ghostDims`) — kind and size, not a nameless 1×1 m box.
               const fw = rx(dims?.width_m || 1)
               const fd = rz(dims?.depth_m || 1)
               const pose = composedGhosts[i] || { at: p.at, yaw: p.yaw || 0 }
