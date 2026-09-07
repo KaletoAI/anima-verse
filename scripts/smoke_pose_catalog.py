@@ -167,6 +167,7 @@ Stage 9 - groups route contract (task 2), derived BY HAND:
 The stage-2/3/4/5/7 DB work runs against a throwaway storage dir, never the
 demo world (the server may hold it).
 """
+import json
 import shutil
 import sys
 import tempfile
@@ -863,5 +864,105 @@ try:
     if _FAILURES:
         raise AssertionError(f"stage 9: {len(_FAILURES)} failed check(s): {_FAILURES}")
     print("OK smoke_pose_catalog stage 9")
+
+    # ── Stage 10: the local overlay ──────────────────────────────────────
+    print("\nStage 10 - local overlay")
+    from fastapi import HTTPException
+    _FAILURES = []
+    _o_real = pc.catalog_path
+    _o_dir = Path(_tmp_storage)
+    _o_shared = _o_dir / "overlay_pose_catalog.json"
+    _o_local = _o_dir / "overlay_pose_catalog.local.json"
+    shutil.copy2(_o_real("pose"), _o_shared)
+    _o_local.unlink(missing_ok=True)
+
+    # Only the curated path is redirected; the overlay is derived from it, so
+    # it lands beside the copy on its own.
+    pc.catalog_path = lambda axis: _o_shared if axis == "pose" else _o_real(axis)
+    pc.reload_catalogs()
+    try:
+        _base = frozenset(pc.get_catalog("pose"))
+        check("without an overlay file the catalog is just the shared one",
+              _base == _shipped_pose_keys and not _o_local.exists(),
+              str(sorted(_base ^ _shipped_pose_keys)))
+
+        poses_route._create_entry_sync({}, {
+            "axis": "pose", "key": "zz-overlay", "prompt": "a private pose",
+            "animation": "idle", "group": "stand", "store": "local"})
+        pc.reload_catalogs()
+        cat = pc.get_catalog("pose")
+        check("a local entry is written to the overlay file, not the shared one",
+              _o_local.exists()
+              and "zz-overlay" in json.loads(_o_local.read_text())["entries"]
+              and "zz-overlay" not in json.loads(_o_shared.read_text())["entries"])
+        check("…and the merged catalog sees it, marked as local",
+              cat.get("zz-overlay", {}).get("_store") == "local",
+              str(cat.get("zz-overlay")))
+        check("…so the game can reach it — that is the point of the overlay",
+              "zz-overlay" in cat)
+
+        # The overlay WINS for a key both files carry.
+        _sh = json.loads(_o_shared.read_text())
+        _sh["entries"]["zz-overlay"] = {"prompt": "the shared one",
+                                        "animation": "idle", "group": "stand"}
+        _o_shared.write_text(json.dumps(_sh), encoding="utf-8")
+        pc.reload_catalogs()
+        check("a key in both files is the OVERLAY's",
+              pc.get_catalog("pose")["zz-overlay"]["prompt"] == "a private pose",
+              pc.get_catalog("pose")["zz-overlay"]["prompt"])
+        _sh["entries"].pop("zz-overlay")
+        _o_shared.write_text(json.dumps(_sh), encoding="utf-8")
+        pc.reload_catalogs()
+
+        # An edit stays where the entry lives — the trap this exists to avoid.
+        poses_route._update_entry_sync("zz-overlay", "pose", {},
+                                       {"prompt": "edited privately"})
+        check("editing a local entry does NOT promote it into the shared file",
+              "zz-overlay" not in json.loads(_o_shared.read_text())["entries"]
+              and json.loads(_o_local.read_text())["entries"]["zz-overlay"]["prompt"]
+              == "edited privately")
+
+        # Moving is explicit, and leaves exactly one copy behind.
+        poses_route._update_entry_sync("zz-overlay", "pose", {}, {"store": "shared"})
+        check("an explicit move writes the new home and clears the old",
+              "zz-overlay" in json.loads(_o_shared.read_text())["entries"]
+              and "zz-overlay" not in json.loads(_o_local.read_text())["entries"])
+        poses_route._update_entry_sync("zz-overlay", "pose", {}, {"store": "local"})
+        check("…and back again",
+              "zz-overlay" not in json.loads(_o_shared.read_text())["entries"]
+              and "zz-overlay" in json.loads(_o_local.read_text())["entries"])
+
+        expect_400("an unknown store is refused",
+                   lambda: poses_route._update_entry_sync(
+                       "zz-overlay", "pose", {}, {"store": "elsewhere"}),
+                   "store must be one of")
+
+        # A key may exist only ONCE across both files: the alias rules and the
+        # render key would otherwise depend on which file is read first.
+        try:
+            poses_route._create_entry_sync({}, {
+                "axis": "pose", "key": "zz-overlay", "prompt": "again",
+                "animation": "idle", "group": "stand", "store": "shared"})
+            check("a key already in the overlay cannot be created in the shared "
+                  "file", False, "no 409")
+        except HTTPException as e:
+            check("a key already in the overlay cannot be created in the shared "
+                  "file", e.status_code == 409, str(e.detail))
+
+        poses_route.delete_entry("zz-overlay", "pose", {})
+        pc.reload_catalogs()
+        check("deleting removes it from the store it lived in",
+              "zz-overlay" not in pc.get_catalog("pose")
+              and "zz-overlay" not in json.loads(_o_local.read_text())["entries"])
+    finally:
+        pc.catalog_path = _o_real
+        pc.reload_catalogs()
+    check("the real catalog file is untouched",
+          frozenset(pc.get_catalog("pose")) == _shipped_pose_keys,
+          str(sorted(frozenset(pc.get_catalog("pose")) ^ _shipped_pose_keys)))
+
+    if _FAILURES:
+        raise AssertionError(f"stage 10: {len(_FAILURES)} failed check(s): {_FAILURES}")
+    print("OK smoke_pose_catalog stage 10")
 finally:
     shutil.rmtree(_tmp_storage, ignore_errors=True)

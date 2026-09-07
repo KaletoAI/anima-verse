@@ -157,7 +157,9 @@ function mb(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => void }) {
+export function ClipInbox({ onCreatePose }: {
+  onCreatePose?: (kind: string, store?: 'shared' | 'local') => void
+}) {
   const { t } = useI18n()
   const { toast } = useToast()
   const fileInput = useRef<HTMLInputElement | null>(null)
@@ -783,7 +785,11 @@ export function ClipInbox({ onCreatePose }: { onCreatePose?: (kind: string) => v
                   <span className="ga-source">{t('imported as')} {imported.kind}</span>
                   {onCreatePose ? (
                     <button type="button" className="ga-btn ga-btn-sm"
-                      onClick={() => onCreatePose(imported.kind)}>
+                      // A clip that went into the LICENSED library is licensed
+                      // or adult material: its catalog entry belongs in the
+                      // overlay, never in a committed file.
+                      onClick={() => onCreatePose(imported.kind,
+                        target === 'free' ? 'shared' : 'local')}>
                       {t('Create pose entry')}
                     </button>
                   ) : null}

@@ -142,7 +142,9 @@ function slugKind(description: string): string {
   return slug.split('-').filter(Boolean).slice(0, 3).join('-')
 }
 
-export function ClipCatalog({ onCreatePose }: { onCreatePose?: (kind: string) => void }) {
+export function ClipCatalog({ onCreatePose }: {
+  onCreatePose?: (kind: string, store?: 'shared' | 'local') => void
+}) {
   const { t } = useI18n()
   const { toast } = useToast()
 

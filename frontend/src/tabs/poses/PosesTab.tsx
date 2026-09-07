@@ -62,7 +62,12 @@ interface Entry {
   places?: 1 | 2
   /** degrees the pair clip's frame turns against the marker facing */
   yaw_offset?: number
+  /** which file the entry lives in: the tracked catalog, or the gitignored
+   *  local overlay for entries that must never be committed */
+  store?: Store
 }
+
+type Store = 'shared' | 'local'
 
 interface CatalogData {
   entries: Entry[]
@@ -83,7 +88,8 @@ interface Candidate {
   last_seen: string
 }
 
-const EMPTY: Entry = { key: '', prompt: '', synonyms: [], animation: '', solo: true, group: '' }
+const EMPTY: Entry = { key: '', prompt: '', synonyms: [], animation: '', solo: true,
+  group: '', store: 'shared' }
 
 /** Figure height the root drop is read back against — the reference figure of
  *  every metre readout in the admin UI. */
@@ -220,12 +226,15 @@ export function PosesTab() {
    *  axis is already 'pose' — switching INTO the catalog forces it, so the
    *  axis-change effect below cannot wipe the draft right after it was set. */
   const startFromClip = useCallback(
-    async (animation: string) => {
+    // `store` is what the importer knows and this form cannot: a clip that
+    // went into the LICENSED library is licensed or adult material, and its
+    // catalog entry belongs in the overlay, not in a committed file.
+    async (animation: string, store: Store = 'shared') => {
       setView('entries')
       setSelected('')
       setIsNew(true)
       setApproveOf('')
-      setDraft({ ...EMPTY, key: animation, animation })
+      setDraft({ ...EMPTY, key: animation, animation, store })
       await load()
     },
     [load],
@@ -259,6 +268,7 @@ export function PosesTab() {
         key,
         prompt: draft.prompt,
         synonyms: draft.synonyms,
+        store: draft.store || 'shared',
         ...(isPose
           ? {
               animation: draft.animation,
@@ -717,6 +727,8 @@ export function PosesTab() {
                     </span>
                   ) : null}
                   {p.is_default ? <span className="ga-source">{t('default')}</span> : null}
+                  {p.store === 'local'
+                    ? <span className="ga-source">{t('local')}</span> : null}
                 </button>
               </li>
             ))}
@@ -876,6 +888,24 @@ export function PosesTab() {
                     value={draft.synonyms}
                     onChange={(next) => upd('synonyms', next)}
                   />
+                </Field>
+
+                <Field
+                  label={t('Stored in')}
+                  hint={t('The shared catalog travels with the repository. Pick the'
+                          + ' local overlay for an entry that must never be committed —'
+                          + ' a licensed or adult clip. An entry is only reachable in'
+                          + ' the game once it is in one of the two, and the overlay'
+                          + ' wins over the shared file for the same key.')}
+                >
+                  <select
+                    className="ga-input"
+                    value={draft.store || 'shared'}
+                    onChange={(e) => upd('store', e.target.value as Store)}
+                  >
+                    <option value="shared">{t('shared catalog (committed)')}</option>
+                    <option value="local">{t('local overlay (never committed)')}</option>
+                  </select>
                 </Field>
 
                 {isPose ? (

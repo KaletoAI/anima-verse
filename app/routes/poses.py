@@ -62,18 +62,21 @@ def _catalog_txn(axis: str) -> Iterator[None]:
     and a dropped edit would have to be retyped.
     """
     from app.core.keyed_lock import keyed_lock
-    with keyed_lock("pose_catalog", str(pose_catalog.catalog_path(axis))):
+    # Keyed on the AXIS, not on one store's file: an entry can move between
+    # the tracked catalog and the local overlay, and that touches both files.
+    with keyed_lock("pose_catalog", axis):
         yield
 
 
-def _read(axis: str) -> Dict[str, Any]:
-    """Raw catalog document of an axis (keeps ``_comment`` and any field this
+def _read(axis: str, store: str = "shared") -> Dict[str, Any]:
+    """Raw catalog document of ONE store (keeps ``_comment`` and any field this
     router does not know about, so a write never eats them).
 
     Call it inside :func:`_catalog_txn` whenever the result is written back.
     """
     try:
-        data = json.loads(pose_catalog.catalog_path(axis).read_text(encoding="utf-8"))
+        data = json.loads(
+            pose_catalog.store_path(axis, store).read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         data = {}
     if not isinstance(data, dict):
@@ -83,7 +86,23 @@ def _read(axis: str) -> Dict[str, Any]:
     return data
 
 
-def _write(axis: str, data: Dict[str, Any]) -> None:
+def _store_of(axis: str, key: str) -> str:
+    """Which store an existing entry lives in — the merged catalog knows."""
+    entry = pose_catalog.get_catalog(axis).get(key) or {}
+    return str(entry.get("_store") or "shared")
+
+
+def _validated_store(raw: Any, fallback: str) -> str:
+    """The store a write should target."""
+    value = str(raw or "").strip().lower() or fallback
+    if value not in pose_catalog.STORES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"store must be one of {', '.join(pose_catalog.STORES)}")
+    return value
+
+
+def _write(axis: str, data: Dict[str, Any], store: str = "shared") -> None:
     """ATOMIC catalog write — temp file in the same directory, then rename.
 
     The old in-place ``open(path, "w")`` truncated the catalog before writing
@@ -95,7 +114,7 @@ def _write(axis: str, data: Dict[str, Any]) -> None:
     over from the file being replaced — ``mkstemp`` creates 0600, and the
     catalog is a tracked repo file whose mode must not change under an edit.
     """
-    path = pose_catalog.catalog_path(axis)
+    path = pose_catalog.store_path(axis, store)
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".json.tmp")
@@ -287,6 +306,9 @@ def list_entries(axis: str = Query("pose"),
             "solo": bool(entry.get("solo", True)),
             "is_default": bool(entry.get("_default")),
             "axis": axis,
+            # Which file this entry lives in. The editor writes it back where
+            # it came from, and the list can show what would be committed.
+            "store": entry.get("_store", "shared"),
         }
         if axis == "pose":
             # Place fields are POSE vocabulary — an expression has no place.
@@ -330,9 +352,12 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     if axis == "pose" and not animation:
         raise HTTPException(status_code=400, detail="animation missing")
     group = _group(body.get("group")) if axis == "pose" else ""
+    # A new entry defaults to the TRACKED catalog; the importer of a licensed
+    # clip asks for "local" so its name never reaches a committed file.
+    store = _validated_store(body.get("store"), "shared")
     with _catalog_txn(axis):
-        data = _read(axis)
-        if key in data["entries"]:
+        data = _read(axis, store)
+        if key in pose_catalog.get_catalog(axis):
             raise HTTPException(status_code=409, detail="Entry already exists")
         synonyms = _synonyms(body.get("synonyms") or [])
         _require_free_aliases(axis, [key] + synonyms)
@@ -346,8 +371,8 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
                 entry["places"] = _places(body.get("places"))
                 entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
         data["entries"][key] = entry
-        _write(axis, data)
-    return {"status": "success", "key": key, "axis": axis}
+        _write(axis, data, store)
+    return {"status": "success", "key": key, "axis": axis, "store": store}
 
 
 @router.put("/{key}")
@@ -365,7 +390,12 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
     axis = _axis(axis)
     key = key.strip().lower()
     with _catalog_txn(axis):
-        data = _read(axis)
+        was = _store_of(axis, key)
+        # An entry may MOVE between the tracked catalog and the local overlay
+        # — that is how an entry which must not be committed gets out of the
+        # tracked file again.
+        store = _validated_store(body.get("store"), was)
+        data = _read(axis, was)
         entry = data["entries"].get(key)
         if entry is None:
             raise HTTPException(status_code=404, detail="Entry not found")
@@ -395,9 +425,19 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
             # the pair fields behind would be a stray the catalog reports.
             entry.pop("places", None)
             entry.pop("yaw_offset", None)
-        data["entries"][key] = entry
-        _write(axis, data)
-    return {"status": "success", "key": key, "axis": axis}
+        if store == was:
+            data["entries"][key] = entry
+            _write(axis, data, store)
+        else:
+            # Write the new home FIRST: a crash between the two writes then
+            # leaves the entry in both files (the overlay wins, so the world
+            # still sees the edited one), never in neither.
+            target = _read(axis, store)
+            target["entries"][key] = entry
+            _write(axis, target, store)
+            data["entries"].pop(key, None)
+            _write(axis, data, was)
+    return {"status": "success", "key": key, "axis": axis, "store": store}
 
 
 @router.delete("/{key}")
@@ -408,7 +448,8 @@ def delete_entry(key: str, axis: str = Query("pose"),
     axis = _axis(axis)
     key = key.strip().lower()
     with _catalog_txn(axis):
-        data = _read(axis)
+        store = _store_of(axis, key)
+        data = _read(axis, store)
         entry = data["entries"].get(key)
         if entry is None:
             raise HTTPException(status_code=404, detail="Entry not found")
@@ -416,8 +457,8 @@ def delete_entry(key: str, axis: str = Query("pose"),
             raise HTTPException(status_code=400,
                                 detail="the default entry cannot be deleted")
         data["entries"].pop(key, None)
-        _write(axis, data)
-    return {"status": "success", "key": key, "axis": axis}
+        _write(axis, data, store)
+    return {"status": "success", "key": key, "axis": axis, "store": store}
 
 
 # ── Candidates: free text the catalog could not absorb ───────────────────
@@ -459,8 +500,12 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     if not raw_text:
         raise HTTPException(status_code=400, detail="raw_text missing")
     with _catalog_txn(axis):
-        data = _read(axis)
         target = str(body.get("as_synonym_of") or "").strip().lower()
+        # Attaching to an existing entry writes where THAT entry lives; a new
+        # entry goes where the caller asks, tracked catalog by default.
+        store = (_store_of(axis, target) if target
+                 else _validated_store(body.get("store"), "shared"))
+        data = _read(axis, store)
 
         if target:
             entry = data["entries"].get(target)
@@ -491,7 +536,7 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
             # A new pose entry is a new pose: same place-type rule as create,
             # or the catalog is invalid the moment the candidate is absorbed.
             group = _group(body.get("group")) if axis == "pose" else ""
-            if key in data["entries"]:
+            if key in pose_catalog.get_catalog(axis):
                 raise HTTPException(status_code=409, detail="Entry already exists")
             # The candidate text itself becomes a synonym unless it IS the key
             # — on top of whatever the admin typed into the form.
@@ -513,10 +558,10 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
                     entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
             data["entries"][key] = entry
 
-        _write(axis, data)
+        _write(axis, data, store)
     pose_catalog.delete_candidate(axis, raw_text)
-    logger.info("candidate approved: %s/%r -> %r", axis, raw_text, key)
-    return {"status": "success", "axis": axis, "key": key}
+    logger.info("candidate approved: %s/%r -> %r (%s)", axis, raw_text, key, store)
+    return {"status": "success", "axis": axis, "key": key, "store": store}
 
 
 @router.post("/candidates/dismiss")

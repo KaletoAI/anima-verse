@@ -14,6 +14,19 @@ from app.core.log import get_logger
 
 logger = get_logger("pose_catalog")
 
+class PairPoseWithoutPartner(ValueError):
+    """A two-person pose (catalog ``solo: false``) was set on a character that
+    is not bound to a running pair interaction.
+
+    Such a pose describes what TWO people do; written on one profile alone it
+    is an invalid state — no partner, no anchor, no second half of the clip.
+    The one legitimate writer is ``interaction_engine.start_interaction``,
+    which binds the pair FIRST and only then sets the pose. Every other
+    caller gets this exception so it can redirect (a skill), map it to a
+    status code (a route) or discard the pose (a chat extraction).
+    """
+
+
 AXES = ("pose", "expression")
 _FILES = {
     "pose": ("pose", "pose_catalog.json"),
@@ -26,21 +39,73 @@ _cache: Dict[str, Dict[str, dict]] = {}
 _groups_cache: Dict[str, dict] = {}
 
 
+#: Where an entry lives. ``shared`` is the curated, TRACKED catalog that
+#: travels with the repository; ``local`` is a gitignored overlay of the same
+#: shape beside it.
+#:
+#: The overlay exists because the catalog is the only way a clip becomes
+#: reachable in the game (``interaction_engine.partner_poses`` iterates it and
+#: nothing else), while a clip imported from licensed or adult material must
+#: not put its name into a tracked file. Without the overlay the choice was
+#: "unusable clip" or "uncommittable edit", and the second one has already gone
+#: wrong once.
+STORES = ("shared", "local")
+
+
 def catalog_path(axis: str) -> Path:
-    """File the catalog of this axis lives in — the ONE place the admin
-    editor writes to as well. Raises KeyError on an unknown axis."""
+    """File the CURATED catalog of this axis lives in — the tracked one.
+    Raises KeyError on an unknown axis."""
     from app.core.paths import get_shared_dir
     sub, name = _FILES[axis]
     return get_shared_dir() / "templates" / sub / name
 
 
-def _load(axis: str) -> Dict[str, dict]:
+def store_path(axis: str, store: str = "shared") -> Path:
+    """File one STORE of an axis lives in. Raises ValueError on an unknown one.
+
+    The overlay's path is DERIVED from the curated one rather than built from
+    scratch, so anything that redirects ``catalog_path`` — every test harness
+    here does — redirects the overlay with it, and the two never end up in
+    different directories.
+    """
+    if store not in STORES:
+        raise ValueError(f"unknown catalog store: {store!r}")
+    path = catalog_path(axis)
+    if store == "shared":
+        return path
+    return path.with_name(path.name.replace(".json", ".local.json"))
+
+
+def _read_doc(axis: str, store: str) -> dict:
+    """The raw catalog document of one store — ``{}`` when it is absent, which
+    is the normal state of the overlay."""
     try:
-        data = json.loads(catalog_path(axis).read_text(encoding="utf-8"))
-        entries = data.get("entries") or {}
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning("catalog %s unreadable: %s", axis, e)
-        entries = {}
+        data = json.loads(store_path(axis, store).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as e:
+        logger.warning("catalog %s/%s unreadable: %s", axis, store, e)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load(axis: str) -> Dict[str, dict]:
+    """Every entry of an axis, the local overlay laid over the shared file.
+
+    A key present in both is the overlay's — that is what makes an overlay an
+    overlay. Each entry carries the store it came from in ``_store``, so the
+    editor writes it back where it belongs instead of promoting a local entry
+    into the tracked file on the next save.
+    """
+    entries: Dict[str, dict] = {}
+    origin: Dict[str, str] = {}
+    for store in STORES:
+        block = _read_doc(axis, store).get("entries") or {}
+        if not isinstance(block, dict):
+            continue
+        for key, entry in block.items():
+            entries[key] = entry
+            origin[key] = store
     out: Dict[str, dict] = {}
     for key, entry in entries.items():
         solo = bool(entry.get("solo", True))
@@ -50,6 +115,7 @@ def _load(axis: str) -> Dict[str, dict]:
             "animation": str(entry.get("animation") or ""),
             "solo": solo,
             "_default": bool(entry.get("_default", False)),
+            "_store": origin.get(key, "shared"),
         }
         if axis == "pose":
             # Place types are POSE vocabulary — an expression has no place.
@@ -73,12 +139,11 @@ def _load_groups() -> Dict[str, dict]:
     vocabulary a MARKER speaks. ``root_drop`` x figure height is how far a
     figure's root sinks below the marked surface; ``default`` the pose a
     "sit here" click sets."""
-    try:
-        data = json.loads(catalog_path("pose").read_text(encoding="utf-8"))
-        raw = data.get("groups") or {}
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning("pose groups unreadable: %s", e)
-        raw = {}
+    raw: Dict[str, dict] = {}
+    for store in STORES:
+        block = _read_doc("pose", store).get("groups") or {}
+        if isinstance(block, dict):
+            raw.update(block)
     out: Dict[str, dict] = {}
     for key, spec in raw.items():
         k = str(key).strip().lower()

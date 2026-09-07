@@ -222,3 +222,7 @@ shared/models/clips-inbox/**
 shared/models/figure/*.fbx
 shared/models/figure/*.glb
 shared/models/figure/*.gltf
+
+# Local catalog overlays: entries that must never be committed
+# (licensed or adult clip names). The tracked catalog sits beside them.
+shared/templates/*/*.local.json
