@@ -7436,8 +7436,9 @@ rendert das Prop, wie es modelliert wurde.
 ### Der Tausch im Renderer (`applySlotMaterials`)
 
 `packages/scene-render/src/slotMaterials.ts` ist die EINE Routine, die einen
-Slot auf ein Mesh schreibt; beide Renderer rufen sie (3D-Client
-`sceneRecipe.ts`, Admin-Vorschau `FloorPlanPreview.tsx`). Sie durchläuft die
+Slot auf ein Mesh schreibt; drei Aufrufer rufen sie (3D-Client
+`sceneRecipe.ts`, Admin-Grundriss-Vorschau `FloorPlanPreview.tsx`,
+Prop-Betrachter des Props-Reiters `Model3DViewer.tsx`). Sie durchläuft die
 gesetzte Gruppe und vergleicht den SLOT-NAMEN jedes Materials mit den
 Schlüsseln aus `slots`.
 
@@ -7466,11 +7467,62 @@ das Bild damit von selbst.
   `metalness` 0 · `transmission` 0,85 nur, wenn das Material das Feld hat) plus
   `transparent` und `DoubleSide` — eine einseitige Scheibe verschwindet, sobald
   man um die Tür herumgeht.
+- `preset "mirror"` → ein **planarer Spiegel auf den eigenen Faces der
+  Scheibe** (`packages/scene-render/src/mirrorSurface.ts`). Die Ebene wird
+  EINMAL aus den Faces genau dieser Materialgruppe gemessen
+  (flächengewichteter Schwerpunkt, Normale aus der Summe der Face-Vektoren,
+  `planeOfFaces`); das Material wird durch ein `ShaderMaterial` mit
+  Spiegelkamera, schiefer Nah-Ebene und projizierter Textur ersetzt (die Mathe
+  von three.js `Reflector.js`, plus die Clipping-Chunks, damit der
+  Tiefenschnitt weiter greift), und der Reflexions-Durchgang hängt an
+  `mesh.onBeforeRender`. Das Material ist `DoubleSide`, und die Normale wird je
+  Frame zur Kamera gedreht: **beide Seiten einer Scheibe spiegeln.** Der
+  Payload trägt nur den Wert — die Ebene ist eine Eigenschaft des Meshes vor
+  dem Renderer, und in EINER Routine gemessen kann sie zwischen den Renderern
+  nicht auseinanderlaufen.
+
+  **Gespiegelt wird nur eine kohärente Scheibe**: |Σ Face-Vektoren| /
+  Σ |Face-Vektoren| ≥ 0,9 (`FACE_COHERENCE_MIN`). Die Schwelle ist gemessen,
+  nicht geraten — die Scheiben eines echten Wandspiegel-Props liegen bei
+  1,0000, die 134 Splitter einer Tür-Glasfläche bei 0,7384 (und 87° neben dem
+  eigenen Sidecar). Darunter — Splitter-Rauschen, oder beide Häute einer
+  Scheibe in EINER Materialgruppe — bleibt das Mesh, wie es modelliert wurde,
+  und `attachMirror` sagt es EINMAL auf der Konsole, mit Slot-Namen und Grund
+  (Schweigen wäre die schlechteste Antwort: der Autor hat „Mirror" gewählt und
+  sähe eine gewöhnliche Scheibe).
+
+  **Kosten sind App-Sache**, nicht Paket-Sache: der fünfte Parameter
+  `mirror?: MirrorOptions` (`textureSize` px · `maxPerFrame` · `maxDistanceM`
+  m) ist die Sichtpolitik des Aufrufers — der 3D-Client setzt 512 / 2 / 12 m
+  (`sceneRecipe.ts`), die Grundriss-Vorschau 512 / 1 / 12 m
+  (`FloorPlanPreview.tsx`), der Prop-Betrachter nimmt die Vorgaben
+  (512 / unbegrenzt / unbegrenzt). `maxPerFrame` ist ein **App-weites** Limit,
+  keines je Scheibe: das Paket hält je Wert EINEN `MirrorBudget`
+  (`sharedMirrorBudget`), den sich alle so angehängten Spiegel teilen. Gezählt
+  wird gegen `renderer.info.render.frame`, und jede gewährte Reflexion ist ein
+  verschachtelter Render, der genau diesen Zähler hochzählt — ein Budget je
+  Scheibe würde deshalb gar nichts begrenzen. Ein Spiegel über Budget oder
+  Distanz behält seine letzte Textur (das Bild des letzten Frames, keine
+  schwarze Scheibe). Rekursionsschutz: während ein Spiegel-Durchgang die Szene
+  rendert, startet kein zweiter — ein Spiegel im Spiegel zeigt das letzte Bild.
+  Ein Mesh, das im Frustum-Culling fällt, erreicht den Hook nie und kostet
+  nichts.
+
+  **Erwartetes Rauschen**: ein Tiefenschnitt-Klon eines Spiegel-Materials lässt
+  three einmal „UniformsUtils: Textures of render targets cannot be cloned"
+  loggen — `UniformsUtils.clone` kopiert die Textur eines Render-Targets nicht.
+  Harmlos, weil `renderMirror` `tDiffuse` und die Textur-Matrix bei JEDEM Draw
+  auf die Material-Instanz schreibt, die tatsächlich gezeichnet wird.
+
+  Gewählt wird das Preset in der Oberfläche unter „Pane defaults" (Areas-Reiter
+  des Props) und im Bild-Varianten-Dialog; beide bieten „Glass" und „Mirror" an
+  (`PRESET_LABELS`, `frontend/src/tabs/props/propTypes.ts`).
 
 Zurück kommt die Liste der Klone. Sie gehört dem Aufrufer: jeder Klon besitzt
 die Textur, die für ihn geladen wurde, und `disposeSlotMaterials` gibt beides
-frei (Client: beim Stufenwechsel und im `unmountScene`; Vorschau: vor jedem
-Neuaufbau).
+frei — bei einer Spiegel-Scheibe zusätzlich das Render-Target und den
+Mesh-Hook (Client: beim Stufenwechsel und im `unmountScene`; Vorschau: vor
+jedem Neuaufbau).
 
 `three` ist Parameter, kein Import — Paketregel.
 
@@ -7507,6 +7559,9 @@ Neuaufbau).
 | `applySlotMaterials`: das benannte Material bekommt eine `map`, das andere bleibt DASSELBE Objekt, und zwei Platzierungen derselben Cache-Gruppe haben VERSCHIEDENE Material-Instanzen | `scripts/smoke_slot_materials.mjs` **[1]/[2]** |
 | `applySlotMaterials` streift das Präfix ab: Materialien `slot_picture_1`/`slot_glass_1` werden von den Schlüsseln `picture_1`/`glass_1` gefüllt — plus rote Proben (roher Name als Schlüssel trifft nichts, `slotpicture_1` ohne Unterstrich ist kein Treffer, nur EIN Präfix fällt) | ebenda **[8]** |
 | Glas-Preset setzt `transparent` + die Konstanten, `transmission` nur wo das Feld existiert | ebenda **[3]** |
+| Preset `mirror`: die Ebene aus den Faces — Rechteck, Wicklung, gekippt, Bereiche samt Klemmung, degeneriert, NaN-Wache, Flächengewichtung gegen den einfachen Mittelwert, Kohärenzschwelle von beiden Seiten, Budget-Folge mit der Zwei-Spiegel-Lesart (optional ein lokales Prop gegen sein Sidecar, 1 cm / 2°) | `scripts/smoke_mirror_plane.mjs` |
+| Preset `mirror`: Spiegel-`ShaderMaterial` auf dem Klon, Nachbar-Material unberührt, gemessen wird die EIGENE Gruppe (`mirrorPlaneOf`), `DoubleSide`, EINE Warnung je Anhängen, erneutes Anhängen gibt das Erste frei, Hook setzen und zurückgeben, geteiltes Budget | `scripts/smoke_slot_materials.mjs` **[9]–[13]** |
+| `SLOT_PRESETS` == `MATERIAL_PRESETS`, `mirror` wird angenommen, Unbekanntes abgewiesen, kein Preset auf einer `picture`-Fläche | `scripts/smoke_props_slots.py` **[7]** |
 
 ## Nachtrag 2026-08-27 (§ B2): Bild-Props (v5) — das Bild reitet auf der VARIANTE
 
