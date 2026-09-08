@@ -210,6 +210,14 @@ def rules() -> list:
     return ac.load_transitions(TRANS)
 
 
+def via(src, dst, table=None) -> str:
+    """The CLIP a lookup answers with — "" for no rule. `resolve_transition`
+    hands back the whole rule (clip and acceleration belong together); these
+    checks are about which rule wins, so they read the clip off it."""
+    hit = ac.resolve_transition(src, dst, rules() if table is None else table)
+    return (hit or {}).get("kind", "")
+
+
 def put(entries) -> list:
     return ac.save_transitions(entries, TRANS)
 
@@ -231,8 +239,8 @@ def test_transitions() -> None:
     print("\n[transitions]")
     TRANS.unlink(missing_ok=True)
     check("no file means no rules", rules() == [], str(rules()))
-    check("…and every lookup is empty",
-          ac.resolve_transition("sit", "walk", rules()) == "")
+    check("…and every lookup answers nothing",
+          ac.resolve_transition("sit", "walk", rules()) is None)
 
     # Deliberately least-specific FIRST.
     stored_rules = put([
@@ -243,22 +251,15 @@ def test_transitions() -> None:
     check("all three rules are stored", len(stored_rules) == 3, str(stored_rules))
     r = rules()
     check("both sides named wins over the exit rule",
-          ac.resolve_transition("sit", "walk", r) == "run",
-          ac.resolve_transition("sit", "walk", r))
+          via("sit", "walk", r) == "run", via("sit", "walk", r))
     check("the exit rule covers every other target",
-          ac.resolve_transition("sit", "run", r) == "idle",
-          ac.resolve_transition("sit", "run", r))
+          via("sit", "run", r) == "idle", via("sit", "run", r))
     check("the enter rule covers every other origin",
-          ac.resolve_transition("idle", "walk", r) == "stroll",
-          ac.resolve_transition("idle", "walk", r))
-    check("an unruled pair stays empty",
-          ac.resolve_transition("idle", "run", r) == "",
-          ac.resolve_transition("idle", "run", r))
-    check("the same kind twice is no transition",
-          ac.resolve_transition("walk", "walk", r) == "")
+          via("idle", "walk", r) == "stroll", via("idle", "walk", r))
+    check("an unruled pair stays empty", via("idle", "run", r) == "")
+    check("the same kind twice is no transition", via("walk", "walk", r) == "")
     check("an empty side is no transition",
-          ac.resolve_transition("", "walk", r) == ""
-          and ac.resolve_transition("sit", "", r) == "")
+          via("", "walk", r) == "" and via("sit", "", r) == "")
 
     raises("a kind no file backs", ac.ClipLibraryError,
            lambda: put([{"from": "sit", "to": "walk", "kind": "nope"}]))
@@ -279,7 +280,8 @@ def test_transitions() -> None:
     # A save REPLACES the list — the editor shows all of them.
     check("saving one rule drops the others",
           put([{"from": "sit", "to": "walk", "kind": "idle"}])
-          == [{"from": "sit", "to": "walk", "kind": "idle"}], str(rules()))
+          == [{"from": "sit", "to": "walk", "kind": "idle", "accel": 0.0}],
+          str(rules()))
 
     # A junk file is no table, exactly as a junk mapping is no mapping.
     TRANS.write_text("not json at all", encoding="utf-8")
@@ -292,7 +294,30 @@ def test_transitions() -> None:
         {"from": "sit", "to": "walk", "kind": "run"},
     ]}), encoding="utf-8")
     check("junk ENTRIES are dropped one by one, the good ones survive",
-          rules() == [{"from": "sit", "to": "walk", "kind": "idle"}], str(rules()))
+          rules() == [{"from": "sit", "to": "walk", "kind": "idle", "accel": 0.0}],
+          str(rules()))
+
+    # ── how fast the figure gets going WHILE the bridge plays ──────────
+    #
+    # `accel` is the fraction of normal speed gained per second. 0 (the
+    # default) means it never gains any — the figure stays on the spot for the
+    # whole clip, which is standing up out of a seat. 1 reaches full speed
+    # after a second. Junk, a negative number and "no value at all" are the
+    # same answer: 0, the safe one that holds the figure.
+    def accel_of(value):
+        rule = {"from": "sit", "to": "walk", "kind": "idle"}
+        if value is not None:
+            rule["accel"] = value
+        return put([rule])[0]["accel"]
+
+    check("a rule without a value holds the figure", accel_of(None) == 0.0)
+    check("a value is kept", accel_of(1.5) == 1.5, str(accel_of(1.5)))
+    check("junk, a negative number and zero all hold the figure",
+          [accel_of(v) for v in ("nonsense", -2, 0)] == [0.0, 0.0, 0.0])
+    check("an absurd value is capped rather than refused",
+          accel_of(99) == 8.0, str(accel_of(99)))
+    check("…and the value survives a reload", rules()[0]["accel"] == 8.0,
+          str(rules()))
 
 
 def test_real_file() -> None:

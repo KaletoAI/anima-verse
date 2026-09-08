@@ -1258,6 +1258,10 @@ export class Figure {
    *  has finished. */
   private transition: THREE.AnimationAction | null = null;
   private pending: { kind: ClipKind; terrainClip: boolean; sink: number } | null = null;
+  /** How fast the running bridge lets the figure get going, and when it
+   *  started — whoever steers reads both to ramp the speed. */
+  private bridgeAccel = 0;
+  private bridgeStart = 0;
   /** Wall-clock deadline of the running bridge. A gate that waits for a clip
    *  must not be able to wait for ever: a figure the frame loop stops updating
    *  (culled, tab in the background) would never see the mixer's "finished"
@@ -1322,6 +1326,7 @@ export class Figure {
       if ((e as unknown as { action?: THREE.AnimationAction }).action !== this.transition) return;
       this.transition = null;
       this.bridgeUntil = 0;
+      this.bridgeAccel = 0;
       const next = this.pending;
       this.pending = null;
       if (next) this.play(next.kind, next.terrainClip, next.sink);
@@ -1397,10 +1402,11 @@ export class Figure {
       this.pending = { kind, terrainClip, sink };
       return;
     }
-    const via = clipTransition(this.currentKind, kind);
+    const rule = clipTransition(this.currentKind, kind);
+    const via = rule?.kind ?? '';
     // Only a bridge this rig actually carries: a rule pointing at a clip the
     // figure does not have must cost nothing, not stall it between states.
-    if (via && via !== kind && this.actions.has(via)) {
+    if (rule && via && via !== kind && this.actions.has(via)) {
       const bridge = this.actions.get(via)!;
       this.pending = { kind, terrainClip, sink };
       this.transition = bridge;
@@ -1413,6 +1419,8 @@ export class Figure {
       // Half a second of slack over the clip: the crossfade at each end, and
       // a frame loop that is never exactly on time.
       this.bridgeUntil = performance.now() + bridge.getClip().duration * 1000 + 500;
+      this.bridgeAccel = rule.accel;
+      this.bridgeStart = performance.now();
       // Loud on purpose: a bridge is rare (a state change), and when one fires
       // in a loop — the figure keeps starting over — this line is what says
       // WHICH origin keeps coming back. Without it the loop is only visible as
@@ -1489,6 +1497,20 @@ export class Figure {
     return true;
   }
 
+  /** HOW FAST the figure may move while the running bridge plays: a fraction
+   *  of its normal speed, 0 while nothing bridges and 0 for a rule that holds
+   *  it (standing up out of a seat). A rule with `accel` ramps from a standstill
+   *  to full speed over `1 / accel` seconds — that is the "starting to walk"
+   *  case, where the figure has to get going while the clip runs rather than
+   *  wait for it. */
+  get bridgePace(): number {
+    if (!this.bridging || this.bridgeAccel <= 0) return 0;
+    const elapsed = (performance.now() - this.bridgeStart) / 1000;
+    // Never exactly 0: a pace of 0 reads as "no pace given" further down and
+    // would silently become full speed.
+    return Math.min(1, Math.max(0.02, this.bridgeAccel * elapsed));
+  }
+
   /** Put the instance at `groundY − drop`. The anchor itself stays what the
    *  bind pose made it; only this ONE extra term moves, and it goes back to 0
    *  the moment the terrain move ends. Static rigs never get here — they have
@@ -1523,9 +1545,13 @@ export class Figure {
     this.ghost.dispose();
   }
 
-  faceTowards(dir: THREE.Vector3) {
+  faceTowards(dir: THREE.Vector3, snap = false) {
     if (dir.lengthSq() < 1e-6) return;
     this.targetYaw = Math.atan2(dir.x, dir.z);
+    // `snap` turns the body AT ONCE instead of easing over ~0.3 s: a figure
+    // that starts walking has to leave in the direction that was asked for,
+    // not swing into it after the first metre.
+    if (snap) this.root.rotation.y = this.targetYaw;
   }
 
   /** Turn the ROOT to an absolute yaw (radians, three.js Y rotation) — for a

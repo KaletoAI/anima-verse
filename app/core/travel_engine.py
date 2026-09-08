@@ -482,6 +482,10 @@ def departure_bridge(character_name: str) -> Tuple[str, float]:
     what walking plays (the admin's ``walk`` role). The length is the CLIP's
     own, from its sidecar — no separate number to keep in step with it.
 
+    A rule with ``accel`` above 0 is NOT a wait: the figure is meant to get
+    going while the clip runs, so such a rule delays nothing and the answer is
+    empty. Only a rule that keeps the figure on the spot holds the journey.
+
     Never raises: a missing catalog, an unknown pose or a clip without a
     sidecar all mean "no bridge", and the journey starts as it always did.
     """
@@ -492,9 +496,10 @@ def departure_bridge(character_name: str) -> Tuple[str, float]:
         from app.models.character import get_effective_pose_key
         from_kind = resolve_pose_animation(get_effective_pose_key(character_name))
         to_kind = load_locomotion_clips().get("walk") or "walk"
-        via = resolve_transition(from_kind, to_kind)
-        if not via:
+        rule = resolve_transition(from_kind, to_kind)
+        if not rule or float(rule.get("accel") or 0) > 0:
             return "", 0.0
+        via = str(rule.get("kind") or "")
         meta = clip_meta(via) or {}
         seconds = float(meta.get("duration_s") or 0.0)
         return (via, seconds) if seconds > 0 else ("", 0.0)

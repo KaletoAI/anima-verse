@@ -509,9 +509,17 @@ export class NpcManager {
    *  facing away from where the keys pointed, then snapped round on its first
    *  step. Sitting DOWN is the other case and never gets here: nobody steers,
    *  and the seat decides which way the figure looks. */
-  faceTowards(name: string, dx: number, dz: number) {
+  faceTowards(name: string, dx: number, dz: number, snap = false) {
     const npc = this.npcs.get(name);
-    npc?.figure?.faceTowards(new THREE.Vector3(dx, 0, dz));
+    npc?.figure?.faceTowards(new THREE.Vector3(dx, 0, dz), snap);
+  }
+
+  /** How fast this figure may move while a bridge clip runs: 0 holds it on
+   *  the spot (standing up), a fraction between 0 and 1 lets it get going
+   *  while the clip plays (starting to walk). 0 when nothing bridges — the
+   *  caller checks `isBridging` for that difference. */
+  bridgePace(name: string): number {
+    return this.npcs.get(name)?.figure?.bridgePace ?? 0;
   }
 
   /** Is this figure playing a BRIDGE clip (standing up, sitting down)? The

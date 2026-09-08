@@ -5308,26 +5308,44 @@ async function main() {
   // table is fed in the LEAST specific order on purpose, so an implementation
   // that simply takes the first match fails.
   const { setClipTransitions, clipTransition } = walk;
-  check('no table means no transition', clipTransition('sit', 'walk'), '');
+  // `clipTransition` hands back the WHOLE rule (the clip and how fast the
+  // figure may get going belong together); these cases are about which rule
+  // wins, so they read the clip off it.
+  const via = (a, b) => clipTransition(a, b)?.kind ?? '';
+  check('no table means no transition', via('sit', 'walk'), '');
   setClipTransitions([
     { from: '*', to: 'walk', kind: 'stroll' },
     { from: 'sit', to: '*', kind: 'idle' },
     { from: 'sit', to: 'walk', kind: 'run' },
   ]);
-  check('both sides named wins over the exit rule',
-    clipTransition('sit', 'walk'), 'run');
-  check('the exit rule covers every other target',
-    clipTransition('sit', 'jog'), 'idle');
-  check('the enter rule covers every other origin',
-    clipTransition('idle', 'walk'), 'stroll');
-  check('an unruled pair stays empty', clipTransition('idle', 'jog'), '');
-  check('the same kind twice is no transition', clipTransition('walk', 'walk'), '');
-  check('case and padding do not matter', clipTransition('  SIT ', 'WALK'), 'run');
-  check('an empty side is no transition', clipTransition('', 'walk'), '');
+  check('both sides named wins over the exit rule', via('sit', 'walk'), 'run');
+  check('the exit rule covers every other target', via('sit', 'jog'), 'idle');
+  check('the enter rule covers every other origin', via('idle', 'walk'), 'stroll');
+  check('an unruled pair stays empty', via('idle', 'jog'), '');
+  check('the same kind twice is no transition', via('walk', 'walk'), '');
+  check('case and padding do not matter', via('  SIT ', 'WALK'), 'run');
+  check('an empty side is no transition', via('', 'walk'), '');
   check('junk entries are dropped, the good ones survive',
     setClipTransitions([{ from: 'sit', to: 'walk', kind: 'run' }, null, { from: 'sit' }, 7]).length, 1);
   check('a junk table leaves plain switching', setClipTransitions('nonsense').length, 0);
-  check('…and then every lookup is empty again', clipTransition('sit', 'walk'), '');
+  check('…and then every lookup is empty again', via('sit', 'walk'), '');
+
+  // --- how fast the figure gets going DURING the bridge ------------------
+  // `accel` is the fraction of normal speed gained per second, and the client
+  // normalises it exactly as the server does (scripts/smoke_locomotion_clips.py
+  // [transitions]): missing, junk, negative and zero all mean 0 — the figure
+  // stays on the spot, which is standing up out of a seat — and an absurd
+  // value is capped at 8 rather than refused.
+  const accelOf = (value) => setClipTransitions(
+    [{ from: 'sit', to: 'walk', kind: 'run', ...(value === undefined ? {} : { accel: value }) }],
+  )[0].accel;
+  check('a rule without a value holds the figure', accelOf(undefined), 0);
+  check('a value is kept', accelOf(1.5), 1.5);
+  check('junk holds the figure', accelOf('nonsense'), 0);
+  check('a negative number holds the figure', accelOf(-2), 0);
+  check('an absurd value is capped', accelOf(99), 8);
+  setClipTransitions([{ from: 'sit', to: 'walk', kind: 'run', accel: 2 }]);
+  check('…and the lookup carries it', clipTransition('sit', 'walk').accel, 2);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

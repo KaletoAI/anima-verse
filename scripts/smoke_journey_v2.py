@@ -483,20 +483,29 @@ try:
     _epm.resolve_pose_animation = lambda k: "sit"
     _ac.load_locomotion_clips = lambda *a, **k: {"walk": "walk", "run": "run",
                                                  "idle": "idle"}
-    _ac.resolve_transition = lambda a, b, rules=None: (
-        "standup" if (a, b) == ("sit", "walk") else "")
+    def _rule(a, b, rules=None, accel=0.0):
+        return ({"from": a, "to": b, "kind": "standup", "accel": accel}
+                if (a, b) == ("sit", "walk") else None)
+
+    _ac.resolve_transition = _rule
     _ac.clip_meta = lambda kind, *a, **k: ({"duration_s": 2.23}
                                            if kind == "standup" else None)
     check("the bridge is the ruled clip and ITS OWN length",
           travel_engine.departure_bridge("wild_npc"), ("standup", 2.23))
 
-    _ac.resolve_transition = lambda a, b, rules=None: ""
+    # A rule that lets the figure GET GOING is no wait: it walks while the
+    # clip plays, so the journey must not be held back.
+    _ac.resolve_transition = lambda a, b, rules=None: _rule(a, b, accel=0.6)
+    check("a rule with a speed-up delays nothing",
+          travel_engine.departure_bridge("wild_npc"), ("", 0.0))
+
+    _ac.resolve_transition = lambda a, b, rules=None: None
     check("no rule means no delay",
           travel_engine.departure_bridge("wild_npc"), ("", 0.0))
 
     # A clip whose sidecar says nothing about its length cannot delay a
     # journey by a number nobody knows.
-    _ac.resolve_transition = lambda a, b, rules=None: "standup"
+    _ac.resolve_transition = lambda a, b, rules=None: _rule(a, b)
     _ac.clip_meta = lambda kind, *a, **k: {}
     check("a clip without a length is no delay either",
           travel_engine.departure_bridge("wild_npc"), ("", 0.0))

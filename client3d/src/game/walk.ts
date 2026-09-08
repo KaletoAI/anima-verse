@@ -264,7 +264,16 @@ export function locomotionClip(role: LocomotionRole): string {
  * only the copy the figures read; the precedence below MIRRORS
  * `animation_clips.resolve_transition` and must keep mirroring it.
  */
-export interface ClipTransition { from: string; to: string; kind: string }
+export interface ClipTransition {
+  from: string;
+  to: string;
+  kind: string;
+  /** Fraction of normal speed the figure GAINS PER SECOND while the bridge
+   *  plays. 0 — the default — means it gains none and stays on the spot for
+   *  the whole clip (standing up out of a seat). 1 reaches full speed after a
+   *  second, 0.5 after two. */
+  accel: number;
+}
 
 const TRANSITION_ANY = '*';
 let clipTransitions: ClipTransition[] = [];
@@ -279,28 +288,33 @@ export function setClipTransitions(raw: unknown): ClipTransition[] {
     const from = String(e.from ?? '').trim().toLowerCase();
     const to = String(e.to ?? '').trim().toLowerCase();
     const kind = String(e.kind ?? '').trim().toLowerCase();
-    return from && to && kind ? [{ from, to, kind }] : [];
+    const raw = Number(e.accel);
+    const accel = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 8) : 0;
+    return from && to && kind ? [{ from, to, kind, accel }] : [];
   });
   return clipTransitions;
 }
 
 /**
- * The clip that has to play between `from` and `to` — `''` when none is
- * configured. Most specific rule wins, in a FIXED order rather than the
- * table's: both named, then the exit rule, then the enter rule. Switching onto
- * the same clip is never a transition — a figure that keeps walking must not
- * stand up first.
+ * The RULE that applies between `from` and `to` — `null` when none is
+ * configured. The whole rule, not just its clip: what happens during the
+ * bridge depends on `accel` as much as on `kind`, and two lookups for one
+ * answer is how the two start to disagree. Most specific wins, in a FIXED
+ * order rather than the table's: both named, then the exit rule, then the
+ * enter rule. Switching onto the same clip is never a transition — a figure
+ * that keeps walking must not stand up first.
  */
-export function clipTransition(from: string | null | undefined, to: string): string {
+export function clipTransition(from: string | null | undefined,
+                               to: string): ClipTransition | null {
   const src = String(from ?? '').trim().toLowerCase();
   const dst = String(to ?? '').trim().toLowerCase();
-  if (!src || !dst || src === dst) return '';
-  let wildTo = '';
-  let wildFrom = '';
+  if (!src || !dst || src === dst) return null;
+  let wildTo: ClipTransition | null = null;
+  let wildFrom: ClipTransition | null = null;
   for (const r of clipTransitions) {
-    if (r.from === src && r.to === dst) return r.kind;
-    if (r.from === src && r.to === TRANSITION_ANY && !wildTo) wildTo = r.kind;
-    else if (r.from === TRANSITION_ANY && r.to === dst && !wildFrom) wildFrom = r.kind;
+    if (r.from === src && r.to === dst) return r;
+    if (r.from === src && r.to === TRANSITION_ANY && !wildTo) wildTo = r;
+    else if (r.from === TRANSITION_ANY && r.to === dst && !wildFrom) wildFrom = r;
   }
   return wildTo || wildFrom;
 }

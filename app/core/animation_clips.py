@@ -375,14 +375,38 @@ def load_transitions(path: Optional[Path] = None) -> List[Dict[str, str]]:
         if (src, dst) in seen:
             continue
         seen.add((src, dst))
-        out.append({"from": src, "to": dst, "kind": kind})
+        out.append({"from": src, "to": dst, "kind": kind,
+                    "accel": _accel(raw.get("accel"))})
     return out
 
 
+def _accel(raw: Any) -> float:
+    """How fast the figure gets up to speed WHILE the bridge plays, as a
+    fraction of its normal speed gained per second.
+
+    ``0`` — the default — means it never gains any: the figure stays put for
+    the whole clip, which is what standing up out of a seat looks like. ``1``
+    reaches full speed after a second, ``0.5`` after two. Anything above 8
+    would be indistinguishable from an instant start and is capped there.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if not value > 0:
+        return 0.0
+    return round(min(value, 8.0), 3)
+
+
 def resolve_transition(from_kind: Any, to_kind: Any,
-                       rules: Optional[List[Dict[str, str]]] = None) -> str:
-    """The clip that has to play when a figure goes from ``from_kind`` to
-    ``to_kind`` — ``""`` when nothing is configured.
+                       rules: Optional[List[Dict[str, Any]]] = None
+                       ) -> Optional[Dict[str, Any]]:
+    """The RULE that applies when a figure goes from ``from_kind`` to
+    ``to_kind`` — ``None`` when nothing is configured.
+
+    The whole rule, not just its clip: what happens during the bridge depends
+    on ``accel`` as much as on ``kind``, and two lookups for one answer is how
+    the two start to disagree.
 
     Most specific rule wins, and the order is fixed rather than the file's:
 
@@ -397,18 +421,18 @@ def resolve_transition(from_kind: Any, to_kind: Any,
     src = str(from_kind or "").strip().lower()
     dst = str(to_kind or "").strip().lower()
     if not src or not dst or src == dst:
-        return ""
+        return None
     table = load_transitions() if rules is None else rules
-    exact = wild_to = wild_from = ""
+    exact = wild_to = wild_from = None
     for r in table:
         rs, rd = r.get("from", ""), r.get("to", "")
         if rs == src and rd == dst:
-            exact = r.get("kind", "")
+            exact = r
             break
-        if rs == src and rd == TRANSITION_ANY and not wild_to:
-            wild_to = r.get("kind", "")
-        elif rs == TRANSITION_ANY and rd == dst and not wild_from:
-            wild_from = r.get("kind", "")
+        if rs == src and rd == TRANSITION_ANY and wild_to is None:
+            wild_to = r
+        elif rs == TRANSITION_ANY and rd == dst and wild_from is None:
+            wild_from = r
     return exact or wild_to or wild_from
 
 
@@ -455,7 +479,8 @@ def save_transitions(entries: Any,
             raise ClipLibraryError(
                 f"rule {i + 1}: '{src}' to '{dst}' is already ruled")
         seen.add((src, dst))
-        out.append({"from": src, "to": dst, "kind": kind})
+        out.append({"from": src, "to": dst, "kind": kind,
+                    "accel": _accel(raw.get("accel"))})
 
     target = path or clip_transitions_path()
     target.parent.mkdir(parents=True, exist_ok=True)

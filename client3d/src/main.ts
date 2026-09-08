@@ -3941,13 +3941,20 @@ async function startApp(username: string, role: string) {
     // over it (`standingClipFor`), so wading is unaffected.
     const steering = !!dir;
     npcs.setPlayerAnimation(avatarName, steering ? locomotionClip('walk') : null);
+    // HOW MUCH of its speed the figure has while a bridge clip runs. 0 is a
+    // rule that holds it on the spot — getting out of a seat; a fraction is a
+    // rule that lets it get going while the clip plays — starting to walk,
+    // ramping to full speed over `1 / accel` seconds. 1 outside a bridge.
+    let bridgePace = 1;
     if (steering && dir && npcs.isBridging(avatarName)) {
-      // TURN while getting up. The facing normally follows the STEP, so a
-      // figure held still keeps the way it looked and snapped round on its
-      // first step. Sitting down is the other case and never gets here:
-      // nobody steers, and the seat decides which way the figure looks.
-      npcs.faceTowards(avatarName, dir.x, dir.z);
-      dir = null;
+      bridgePace = npcs.bridgePace(avatarName);
+      // TURN. The facing normally follows the STEP, so a figure held still
+      // keeps the way it looked and swung round on its first step. A figure
+      // that is about to walk turns AT ONCE — it has to leave in the direction
+      // that was asked for. One that is held turns smoothly; there is time.
+      // Sitting DOWN never gets here: nobody steers, and the seat decides.
+      npcs.faceTowards(avatarName, dir.x, dir.z, bridgePace > 0);
+      if (bridgePace <= 0) dir = null;
     }
     if (!dir) {
       // Standing still is when the FINAL report of a walk goes out — the
@@ -4000,7 +4007,7 @@ async function startApp(username: string, role: string) {
       if (routeStalled >= STALL_FRAMES) cancelRoute();
     }
     walkGoal.set(x, roomFloorY(here, x, z) ?? groundY(x, z), z);
-    npcs.setPlayerTarget(avatarName, walkGoal, pace);
+    npcs.setPlayerTarget(avatarName, walkGoal, pace * bridgePace);
     // The report is about where the figure IS, not where it is being sent:
     // `setPlayerTarget` only moves the goal, `tick()` walks the figure there.
     // Reporting the goal would put the server up to one lead ahead of the
