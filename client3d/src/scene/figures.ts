@@ -1413,6 +1413,11 @@ export class Figure {
       // Half a second of slack over the clip: the crossfade at each end, and
       // a frame loop that is never exactly on time.
       this.bridgeUntil = performance.now() + bridge.getClip().duration * 1000 + 500;
+      // Loud on purpose: a bridge is rare (a state change), and when one fires
+      // in a loop — the figure keeps starting over — this line is what says
+      // WHICH origin keeps coming back. Without it the loop is only visible as
+      // a stutter and every diagnosis is a guess.
+      console.info(`[figures] bridge ${this.currentKind} -> ${kind} via ${via}`);
       bridge.fadeIn(0.25).play();
       this.current?.fadeOut(0.25);
       this.current = bridge;

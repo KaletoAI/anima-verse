@@ -3906,12 +3906,7 @@ async function startApp(username: string, role: string) {
       seatedKey = '';
       ownSeatChangeAt = Infinity;
       npcs.setPlayerPose(avatarName, null, null);
-      // …and the clip it asks for is WALKING, not "nothing". That request is
-      // what lets a transition rule fire (`game/walk.clipTransition`): the
-      // figure plays the way out of its pose first and the walk after it. With
-      // `null` the frame decided on the idle clip, no rule ever matched, and
-      // the standing-up could only play once the figure was already moving.
-      npcs.setPlayerAnimation(avatarName, locomotionClip('walk'));
+      npcs.setPlayerAnimation(avatarName, null);
       void api.postActivity({ activity: '' })
         .then(() => {
           // …and a poll is asked right away, exactly as the sit-down does it:
@@ -3935,7 +3930,25 @@ async function startApp(username: string, role: string) {
     // walks off at once, no round trip between key and picture", user decision
     // 2026-09-08): the immediate part still holds — nothing waits for the
     // server here, the hold is local and lasts exactly one clip.
-    if (dir && npcs.isBridging(avatarName)) dir = null;
+    // WHILE THE PLAYER STEERS, THE PLAYER'S INPUT DECIDES THE AVATAR'S CLIP —
+    // not the worldmap poll. The poll still reports the pose the figure was in
+    // (up to WORLDMAP_POLL_MS old, and the server clears it only after the
+    // release), and putting `sit` back on a figure whose keys are down makes
+    // the stand-up rule fire a SECOND time: the walk breaks off and the whole
+    // thing starts over. This one line is what stops that loop. It only bites
+    // while the figure stands still — the moving branch of `npcs.tick` asks
+    // `moveClip` and never looks at this field — and the GROUND still wins
+    // over it (`standingClipFor`), so wading is unaffected.
+    const steering = !!dir;
+    npcs.setPlayerAnimation(avatarName, steering ? locomotionClip('walk') : null);
+    if (steering && dir && npcs.isBridging(avatarName)) {
+      // TURN while getting up. The facing normally follows the STEP, so a
+      // figure held still keeps the way it looked and snapped round on its
+      // first step. Sitting down is the other case and never gets here:
+      // nobody steers, and the seat decides which way the figure looks.
+      npcs.faceTowards(avatarName, dir.x, dir.z);
+      dir = null;
+    }
     if (!dir) {
       // Standing still is when the FINAL report of a walk goes out — the
       // server's last word about where the avatar is must be where it really

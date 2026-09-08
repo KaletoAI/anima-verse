@@ -503,6 +503,17 @@ export class NpcManager {
    *  figure walks, while the payload in flight still says `sit`. Clearing it
    *  here makes the very next frame ask `standingClipFor` again and get
    *  `idle`/`walk`; the poll after the server's answer writes the truth back. */
+  /** Turn a figure toward a direction WITHOUT moving it. Ordinarily the
+   *  facing follows the step (`faceTowards` at the move below), so a figure
+   *  that is held still keeps the way it looked — and the avatar stood up
+   *  facing away from where the keys pointed, then snapped round on its first
+   *  step. Sitting DOWN is the other case and never gets here: nobody steers,
+   *  and the seat decides which way the figure looks. */
+  faceTowards(name: string, dx: number, dz: number) {
+    const npc = this.npcs.get(name);
+    npc?.figure?.faceTowards(new THREE.Vector3(dx, 0, dz));
+  }
+
   /** Is this figure playing a BRIDGE clip (standing up, sitting down)? The
    *  avatar's steering asks before it takes a step — see `Figure.bridging`. */
   isBridging(name: string): boolean {
