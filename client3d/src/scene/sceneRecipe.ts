@@ -351,12 +351,12 @@ function hex(c: string | undefined): THREE.Color {
   return new THREE.Color(Number.isFinite(v) ? v : 0xffffff);
 }
 
-// ── Szenen-Bibliothek: Signatur-Polling wie beim Raum-Rezept ──────────────
+// ── Scene library: signature polling, as for the room recipe ──────────────
 
-/** Szene pro Location mit signature-Polling: request() holt einmalig (404 =
- *  nichts zu komponieren → null), sweep() fragt bekannte Locations erneut und
- *  meldet Änderungen über onScene. Die Signatur deckt map3d, ALLE Raum-Layouts,
- *  die Modell-Metas und die Prop-Sidecars ab — Polling genügt (§ B1). */
+/** One scene per location, polled by signature: request() fetches once (404 =
+ *  nothing to compose → null), sweep() asks the known locations again and
+ *  reports changes through onScene. The signature covers map3d, ALL room
+ *  layouts, the model metas and the prop sidecars — polling is enough (§ B1). */
 export class SceneLibrary {
   private cache = new Map<string, ScenePayload | null>();
   private pending = new Set<string>();
@@ -366,24 +366,24 @@ export class SceneLibrary {
     return this.cache.get(locationId);
   }
 
-  /** true = für diese Location gilt der Szenen-Pfad (Payload vorhanden). */
+  /** true = the scene path applies to this location (a payload exists). */
   has(locationId: string): boolean {
     return !!this.cache.get(locationId);
   }
 
-  /** Szenen VOR dem ersten Kachelbau holen (kein onScene, kein Remount): so
-   *  entsteht die Kachel gleich im richtigen Modus statt legacy gebaut und
-   *  sofort wieder verworfen zu werden. Fehler bleiben ungecacht — der
-   *  normale request/sweep-Zyklus holt sie nach. */
+  /** Fetch scenes BEFORE the first tile is built (no onScene, no remount):
+   *  the tile is then created in the right mode straight away instead of being
+   *  built legacy and thrown away again at once. Failures stay uncached — the
+   *  normal request/sweep cycle picks them up. */
   async prime(locationIds: string[]): Promise<void> {
     await Promise.all(locationIds.map(async (id) => {
       if (this.cache.has(id)) return;
       try {
         this.cache.set(id, await getLocationScene(id));
-      } catch { /* nächster Zyklus fragt neu */ }
+      } catch { /* the next cycle asks again */ }
     }));
     const n = [...this.cache.values()].filter(Boolean).length;
-    console.info(`[scene] ${n}/${locationIds.length} Locations mit Szenen-Rezept`);
+    console.info(`[scene] ${n}/${locationIds.length} locations with a scene recipe`);
   }
 
   request(locationId: string): void {
@@ -393,14 +393,14 @@ export class SceneLibrary {
       .then((scene) => {
         this.cache.set(locationId, scene);
         if (scene) {
-          console.info(`[scene] ${locationId}: ${scene.plates.length} Platten, `
-            + `${scene.walls.length} Wandsegmente, ${scene.extras.length} Extras, `
-            + `${scene.models.length} Modelle (k=${scene.k}, storey=${scene.storey_m})`);
+          console.info(`[scene] ${locationId}: ${scene.plates.length} plates, `
+            + `${scene.walls.length} wall segments, ${scene.extras.length} extras, `
+            + `${scene.models.length} models (k=${scene.k}, storey=${scene.storey_m})`);
         }
         this.onScene?.(locationId, scene);
       })
-      // Netzwerk/5xx: nicht als "keine Szene" cachen, nächster Zyklus fragt neu
-      .catch((e) => console.warn(`[scene] ${locationId}: (noch) nicht ladbar — neuer Versuch folgt`, e))
+      // Network/5xx: do NOT cache that as "no scene" — the next cycle retries
+      .catch((e) => console.warn(`[scene] ${locationId}: not loadable (yet) — a retry follows`, e))
       .finally(() => this.pending.delete(locationId));
   }
 
@@ -411,33 +411,33 @@ export class SceneLibrary {
         const changed = (prev?.signature ?? null) !== (fresh?.signature ?? null);
         this.cache.set(locationId, fresh);
         if (changed) this.onScene?.(locationId, fresh);
-      } catch { /* Server kurz weg -> nächster Sweep */ }
+      } catch { /* the server blinked -> the next sweep */ }
     }
   }
 }
 
-// ── Verify (§ B5a): Arithmetik statt Screenshots ──────────────────────────
+// ── Verify (§ B5a): arithmetic instead of screenshots ─────────────────────
 
-/** Eine Abweichungszeile — Definition im geteilten Paket, hier nur
- *  weitergereicht, damit die Konsumenten dieses Moduls sie weiter von hier
- *  beziehen können. */
+/** One deviation row — defined in the shared package, re-exported here only so
+ *  that this module's consumers can keep taking it from here. */
 export type { VerifyRow } from '@anima/scene-render';
 
 export interface VerifyReport {
   location: string;
   checked: number;
   rows: VerifyRow[];
-  /** Modell-Specs, die gar nicht platziert wurden (Mesh nicht ladbar). Eine
-   *  übersprungene Spec ist ein FEHLENDES Objekt in der Szene und darf nicht
-   *  als „geprüft und in Ordnung" durchgehen — sie zählt als Abweichung. */
+  /** Model specs that were not placed at all (mesh not loadable). A skipped
+   *  spec is a MISSING object in the scene and must not pass as "checked and
+   *  fine" — it counts as a deviation. */
   skipped: number;
   models: { placed: number; total: number };
-  /** Beschnittene Dioramen (§ B1 clip_outline) mit ihrer Punktzahl. */
+  /** Clipped dioramas (§ B1 clip_outline) with their point count. */
   clips: { object: string; punkte: number }[];
 }
 
-/** Verify-Modus aus: `?verify=1` in der URL oder `window.__verify3d = true`
- *  (zur Laufzeit umschaltbar; wirkt beim nächsten Mount). */
+/** Where verify mode comes from: `?verify=1` in the URL or
+ *  `window.__verify3d = true` (switchable at runtime; takes effect on the next
+ *  mount). */
 function verifyOn(): boolean {
   const w = window as unknown as { __verify3d?: boolean };
   if (w.__verify3d !== undefined) return !!w.__verify3d;
@@ -448,14 +448,15 @@ function verifyOn(): boolean {
   }
 }
 
-/** Das Szenen-Rezept ist das SOLL: nach dem Aufbau wird jedes Objekt neu in
- *  Weltkoordinaten vermessen und gegen die Spec gedifft. Befunde reisen als
- *  ZAHLEN zwischen den Sessions (Objekt, Feld, Ist, Soll), nie als Bild. */
+/** The scene recipe is the TARGET: after the build, every object is measured
+ *  again in world coordinates and diffed against the spec. Findings travel
+ *  between sessions as NUMBERS (object, field, actual, target), never as an
+ *  image. */
 class Verifier {
-  // Der Diff selbst liegt in @anima/scene-render — DIESELBE Rechnung, die die
-  // Admin-Vorschau fährt. Hier drumherum bleibt der BERICHT: übersprungene
-  // Specs, Modellzählung, Clip-Vermerke, console-Ausgabe und der Ablageort
-  // window.__sceneVerify. Das ist Client-Sache und soll es bleiben.
+  // The diff itself lives in @anima/scene-render — THE SAME arithmetic the
+  // admin preview runs. What stays here around it is the REPORT: skipped specs,
+  // the model count, clip notes, the console output and the window.__sceneVerify
+  // drop. That is the client's business and should stay so.
   private readonly v: SpecVerifier;
   skipped = 0;
   placed = 0;
@@ -466,23 +467,22 @@ class Verifier {
   get rows(): VerifyRow[] { return this.v.rows; }
   get checked(): number { return this.v.checked; }
 
-  /** Beschnittenes Diorama vermerken (§ B1 clip_outline). Keine Abweichung,
-   *  sondern eine Eigenschaft des Aufbaus — sie gehört trotzdem in die
-   *  Ausgabe, sonst sieht man einem fehlenden Möbelstück nicht an, ob es
-   *  weggeclippt oder gar nicht geladen wurde. */
+  /** Note a clipped diorama (§ B1 clip_outline). Not a deviation but a
+   *  property of the build — it belongs in the output all the same, or one
+   *  cannot tell of a missing piece of furniture whether it was clipped away
+   *  or never loaded at all. */
   clipped(spec: SceneModelSpec, points: number): void {
     this.clips.push({ object: `${spec.role}:${spec.id}`, punkte: points });
   }
 
-  /** Eine Modell-Spec, die NICHT platziert wurde (Mesh nach allen Versuchen
-   *  nicht ladbar, kein Platzhalter). Das ist ein fehlendes Objekt in der
-   *  Szene — es wandert als Abweichungszeile in die Tabelle (`geladen` 0
-   *  statt 1), damit eine Lücke nicht wie ein Erfolg aussieht. Wird
-   *  unabhängig vom Verify-Modus gezählt und geloggt. */
+  /** A model spec that was NOT placed (mesh not loadable after every attempt,
+   *  no placeholder). That is a missing object in the scene — it goes into the
+   *  table as a deviation row (`geladen` 0 instead of 1) so that a gap does not
+   *  look like a success. Counted and logged regardless of verify mode. */
   skip(spec: SceneModelSpec): void {
     this.skipped += 1;
-    console.warn(`[scene] ${spec.role}:${spec.id} übersprungen — Mesh nicht ladbar `
-      + `(${pickModelVariant(spec) || 'ohne URL'})`);
+    console.warn(`[scene] ${spec.role}:${spec.id} skipped — mesh not loadable `
+      + `(${pickModelVariant(spec) || 'no URL'})`);
     this.v.check(`${spec.role}:${spec.id}`, 'geladen', 0, 1);
   }
 
@@ -490,9 +490,9 @@ class Verifier {
     this.v.check(object, field, actual, target);
   }
 
-  /** Primitiv gegen seine Spec prüfen. Bezugsrahmen = die KACHEL: ihr Zentrum
-   *  als Ursprung und ihre Fußabdruck-Drehung als Rahmen-Yaw (§ A1.1) — die
-   *  Spec-Zahlen sind kachel-lokal, die Messung ist es damit auch. */
+  /** Check a primitive against its spec. The frame of reference is the TILE:
+   *  its centre as the origin and its footprint rotation as the frame yaw
+   *  (§ A1.1) — the spec numbers are tile-local, so the measurement is too. */
   primitive(mesh: THREE.Object3D, tile: Tile, name: string,
             targets: PrimitiveTarget[]): void {
     this.v.primitive(mesh, tile.center, name, targets, tile.yaw);
@@ -1733,21 +1733,22 @@ function dropFarShell(tile: Tile): void {
 function applyBuildingModel(tile: Tile, placed: THREE.Group,
                             spec: SceneModelSpec): void {
   applySceneBuilding(tile, placed, spec.display ?? 'shell', !!spec.roof_only);
-  // Die deklarierte Standhöhe reist mit: `tileGroundY` misst den Dachschutz
-  // daran, statt an einer festen 1,2-m-Marke (Befund B8, game/ground.ts).
+  // The declared standing height travels with it: `tileGroundY` measures the
+  // roof guard against that instead of a fixed 1.2 m mark (finding B8,
+  // game/ground.ts).
   tile.modelWalkY = spec.walk_y_world;
   const cutouts = spec.cutouts || [];
   if (cutouts.length) {
-    // Polygone kommen um das Kachelzentrum, der Shader misst in
-    // Weltkoordinaten — dieselbe Umrechnung wie beim Raum-Clip.
+    // The polygons arrive around the tile centre, the shader measures in world
+    // coordinates — the same conversion as for the room clip.
     tile.cutouts?.dispose();
     tile.cutouts = applyCutouts(THREE, placed, cutouts.map(
       (poly) => poly.map(([cx, cz]) => {
         const w = tileToWorld(tile, cx, cz);
         return [w.x, w.z] as [number, number];
       })));
-    // Sofort den aktuellen Sichtzustand anlegen: die Kachel kann bereits
-    // in der Innenansicht stehen, wenn das Modell nachträglich eintrifft.
+    // Apply the current view state at once: the tile may already be in the
+    // interior view by the time the model arrives.
     tile.cutouts.setEnabled(tile.fade > 0.03);
   }
 }

@@ -26,7 +26,7 @@ Order is the FILE's order — the detection below carries it through, so the
 slot list reads like the material list of the model.
 
 ---------------------------------------------------------------------------
-[2] `detect_slots` — THE ONE RULE (Entscheid 4, made precise)
+[2] `detect_slots` — THE ONE RULE (Decision 4, made precise)
 ---------------------------------------------------------------------------
 For every material name `m`, lower-cased:
 

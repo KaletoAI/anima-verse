@@ -7481,6 +7481,13 @@ das Bild damit von selbst.
   dem Renderer, und in EINER Routine gemessen kann sie zwischen den Renderern
   nicht auseinanderlaufen.
 
+  Während des Durchgangs versteckt sich **nur die Scheibe selbst**
+  (`material.visible = false` für die Dauer des verschachtelten Renders;
+  `projectObject` überspringt ein Material, das nicht sichtbar ist, einzeln wie
+  als Gruppe eines Material-Arrays). Der Rahmen um das Glas und die Kommode,
+  auf der der Spiegel steht, stehen damit in ihrem eigenen Spiegelbild — das
+  ganze Mesh zu verstecken hatte sie herausgeschnitten.
+
   **Gespiegelt wird nur eine kohärente Scheibe**: |Σ Face-Vektoren| /
   Σ |Face-Vektoren| ≥ 0,9 (`FACE_COHERENCE_MIN`). Die Schwelle ist gemessen,
   nicht geraten — die Scheiben eines echten Wandspiegel-Props liegen bei
@@ -7501,12 +7508,25 @@ das Bild damit von selbst.
   (`sharedMirrorBudget`), den sich alle so angehängten Spiegel teilen. Gezählt
   wird gegen `renderer.info.render.frame`, und jede gewährte Reflexion ist ein
   verschachtelter Render, der genau diesen Zähler hochzählt — ein Budget je
-  Scheibe würde deshalb gar nichts begrenzen. Ein Spiegel über Budget oder
-  Distanz behält seine letzte Textur (das Bild des letzten Frames, keine
-  schwarze Scheibe). Rekursionsschutz: während ein Spiegel-Durchgang die Szene
-  rendert, startet kein zweiter — ein Spiegel im Spiegel zeigt das letzte Bild.
-  Ein Mesh, das im Frustum-Culling fällt, erreicht den Hook nie und kostet
-  nichts.
+  Scheibe würde deshalb gar nichts begrenzen.
+
+  Und die Scheiben **wechseln sich ab**: three sortiert die Render-Liste nach
+  `material.id`, die Hooks feuern also in jedem Frame in derselben Reihenfolge,
+  und ein bloßes „die ersten N gewinnen" hätte dieselben N für immer bedient —
+  die Scheibe N+1 wäre NIE gerendert worden, und ein nie gerendertes
+  Render-Target ist schwarz, nicht „die letzte Textur". Der Budget-Zähler führt
+  deshalb die Scheiben mit, die im letzten Frame gefragt haben, und bedient je
+  Frame ein um `maxPerFrame` weitergerücktes Fenster daraus. Drei Scheiben bei
+  Limit 2 werden A,B — dann C,A — dann B,C bedient: **eine Scheibe über Budget
+  zeigt ein ein bis zwei Frames altes Spiegelbild, keine bleibt schwarz.**
+
+  Die **Distanz-Grenze gilt erst ab dem zweiten Durchgang**: eine Scheibe, die
+  noch nie gerendert hat, hat kein altes Bild zu behalten — ihr Render-Target
+  ist schwarz. Der erste Durchgang läuft deshalb unabhängig von `maxDistanceM`
+  (Budget und Rekursionsschutz gelten weiter), ab dem zweiten entscheidet die
+  Distanz. Rekursionsschutz: während ein Spiegel-Durchgang die Szene rendert,
+  startet kein zweiter — ein Spiegel im Spiegel zeigt das letzte Bild. Ein
+  Mesh, das im Frustum-Culling fällt, erreicht den Hook nie und kostet nichts.
 
   **Erwartetes Rauschen**: ein Tiefenschnitt-Klon eines Spiegel-Materials lässt
   three einmal „UniformsUtils: Textures of render targets cannot be cloned"

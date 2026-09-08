@@ -17,8 +17,9 @@
  *
  * THE COST CAP IS APP-WIDE, not per pane: `MirrorOptions.maxPerFrame` picks a
  * counter shared by every mirror attached with that value, so N mirrors in
- * view cost at most N_max scene renders per frame and the rest keep last
- * frame's texture. See `sharedMirrorBudget`.
+ * view cost at most N_max scene renders per frame — and the panes take TURNS,
+ * so a pane over budget shows a one-to-two-frame-old reflection instead of
+ * going permanently black. See `MirrorBudget` and `sharedMirrorBudget`.
  *
  * EXPECTED NOISE: a mirror pane that also goes through `applyDepthCut` gets
  * its material cloned, and `UniformsUtils.clone` refuses to copy a render
@@ -205,31 +206,104 @@ export function planeOfFaces(
 
 /**
  * How many reflections a frame may render — ONE counter, for however many
- * mirrors share the instance. A budget per pane would cap nothing: the guard
- * that matters is the one every pane of the page asks, so see
- * `sharedMirrorBudget` below, which is what `attachMirror` uses.
+ * mirrors share the instance, AND A ROTATION over the panes that ask it.
  *
- * The frame is `renderer.info.render.frame`, and every reflection IS a nested
- * `renderer.render`, which bumps that counter by one before the next hook of
- * the same top-level frame runs. So "the same frame" is `frame === expected`
- * where `expected` is the last frame seen plus the nested renders granted
- * since; anything else is a new frame and resets the count. That is exactly
+ * The counter alone would starve. three sorts the opaque render list by
+ * `material.id` before depth (`painterSortStable` in `WebGLRenderLists.js`),
+ * so the mirror hooks of a scene fire in the SAME order every frame: a plain
+ * "first N win" cap would grant the same N panes forever and pane N+1 would
+ * never render at all — and a render target that was never rendered is BLACK,
+ * not a stale reflection. That was visible: at cap 1 the second pane of a
+ * two-pane wall mirror stayed black for good.
+ *
+ * So the budget remembers WHO asked last frame, in ask order, and each frame
+ * serves a window of `maxPerFrame` of them, advanced by `maxPerFrame`. Three
+ * panes A, B, C at cap 2 are served A,B — then C,A — then B,C: every pane gets
+ * a reflection in any two consecutive frames, and a pane over budget shows a
+ * one-to-two-frame-old reflection rather than nothing. A pane nobody has seen
+ * before is not in the rotation yet; it is served if the frame's budget still
+ * has room, and joins the rotation from the next frame.
+ *
+ * The frame is `renderer.info.render.frame`, and every GRANTED reflection is a
+ * nested `renderer.render`, which bumps that counter by one before the next
+ * hook of the same top-level frame runs. So "the same frame" is
+ * `frame === expected`, where `expected` is the last frame seen plus the
+ * nested renders granted since; anything else is a new frame. That is also
  * what makes ONE shared instance work across panes: pane A's grant leaves
  * `expected` at `frame + 1`, and pane B's hook — running after A's nested
  * render — is handed that very number.
+ *
+ * `maxPerFrame` of `Infinity` short-circuits the whole mechanism: everyone is
+ * granted, nothing is remembered.
  */
 export class MirrorBudget {
+  /** Grants made in the frame being served. */
   private used = 0
+  /** The frame number the next ask of the SAME top-level frame will carry. */
   private expected = Number.NaN
+  /** Who asked last frame, in ask order — the rotation runs over this. */
+  private order: object[] = []
+  private orderSet = new Set<object>()
+  /** Who has asked in the frame being served, in ask order. */
+  private asking: object[] = []
+  /** Where in `order` this frame's window starts. */
+  private cursor = 0
+  /** The panes `order` grants this frame. */
+  private window = new Set<object>()
+
   constructor(private readonly maxPerFrame: number) {}
 
-  allow(frame: number): boolean {
-    if (frame !== this.expected) this.used = 0
+  /**
+   * May `key` — one mirror pane — render its reflection in this frame?
+   *
+   * `key` is the pane's identity, and it must be stable across frames or the
+   * rotation cannot know whose turn it is.
+   */
+  allow(frame: number, key: object): boolean {
+    if (this.maxPerFrame === Number.POSITIVE_INFINITY) return true
+    if (frame !== this.expected) this.startFrame()
     this.expected = frame
-    if (this.used >= this.maxPerFrame) return false
+    this.asking.push(key)
+    // A pane already in the rotation waits for its turn even when the frame
+    // still has room: the room is reserved for the rest of the window. A pane
+    // the rotation has never seen takes whatever is left.
+    const granted = this.used < this.maxPerFrame
+      && (!this.orderSet.has(key) || this.window.has(key))
+    if (!granted) return false
     this.used += 1
     this.expected = frame + 1
     return true
+  }
+
+  /** Take a pane out of the rotation — `disposeMirror` calls this, or the
+   *  budget (a module-level singleton) would hold every pane ever attached. */
+  forget(key: object): void {
+    this.orderSet.delete(key)
+    this.window.delete(key)
+    this.order = this.order.filter((k) => k !== key)
+    this.asking = this.asking.filter((k) => k !== key)
+  }
+
+  /** Roll the rotation on: last frame's askers become the order, and the
+   *  window moves `maxPerFrame` places along it.
+   *
+   *  Rebuilding `order` from who actually ASKED is what keeps the rotation
+   *  honest when a mirror leaves the view (or the scene): it drops out after
+   *  one frame. The cost of that one frame is at most one unused slot — a
+   *  pane in the window that no longer asks — which the next frame corrects. */
+  private startFrame(): void {
+    this.order = this.asking
+    this.orderSet = new Set(this.order)
+    this.asking = []
+    this.used = 0
+    this.window = new Set()
+    const n = this.order.length
+    if (n === 0) return
+    this.cursor = (this.cursor + this.maxPerFrame) % n
+    const take = Math.min(this.maxPerFrame, n)
+    for (let i = 0; i < take; i += 1) {
+      this.window.add(this.order[(this.cursor + i) % n])
+    }
   }
 }
 
@@ -241,9 +315,10 @@ export class MirrorBudget {
  *  mirrors in view would render ten scenes per frame no matter what number the
  *  app passed. Every mirror of one app is attached with the same
  *  `maxPerFrame`, so keying the instance by that value is what turns the
- *  option into the app-wide cap its documentation promises — and a second app
- *  (or a deliberate second tier) with a different number gets its own counter
- *  rather than fighting over one.
+ *  option into the app-wide cap its documentation promises — and it is also
+ *  what lets the rotation above see all of an app's panes in one order. A
+ *  second app (or a deliberate second tier) with a different number gets its
+ *  own counter rather than fighting over one.
  *
  *  `Infinity` is a perfectly good key: it is the "no limit" entry, and it
  *  grants unconditionally. */
@@ -273,16 +348,21 @@ export interface MirrorOptions {
   /** Edge of the square render target in pixels (default 512). */
   textureSize?: number
   /** Reflections rendered per frame across ALL mirrors (default unlimited).
-   *  A mirror over budget keeps its last texture — which is last frame's
-   *  reflection, not a black pane.
    *
    *  The counter is SHARED by every mirror attached with the same value
    *  (`sharedMirrorBudget`), which is what makes this an app-wide cap rather
-   *  than a per-pane one: an app passes one number for all its mirrors, and
-   *  the eleventh pane in view is the one that goes without. */
+   *  than a per-pane one, and the panes take TURNS (`MirrorBudget`): a pane
+   *  over budget shows a one-to-two-frame-old reflection, and none stays
+   *  black. */
   maxPerFrame?: number
-  /** Beyond this camera distance in metres a mirror keeps its last texture
-   *  (default unlimited). */
+  /** Beyond this camera distance in metres a mirror stops refreshing and
+   *  keeps the reflection it has (default unlimited).
+   *
+   *  ITS FIRST PASS IGNORES THIS. A pane that has never rendered has no
+   *  reflection to keep — its render target is black — so the cap would show
+   *  a black pane until the camera happened to come close enough. The budget
+   *  and the recursion guard still apply to that first pass; from the second
+   *  on, the distance decides. */
   maxDistanceM?: number
 }
 
@@ -297,7 +377,16 @@ export const MIRROR_PRESET = {
 
 /** Reflector.js's shader with the clipping-plane chunks added, so a mirror
  *  prop under `applyDepthCut` is cut like the rest of its mesh (needs
- *  `clipping: true` on the material and `renderer.localClippingEnabled`). */
+ *  `clipping: true` on the material and `renderer.localClippingEnabled`).
+ *
+ *  THE POSITION IS COMPUTED BY `#include <project_vertex>`, not by hand, even
+ *  though two lines would do it: `applyClipOutline` (`clip.ts`) and
+ *  `applyCutouts` (`cutouts.ts`) hook their world-position varying onto
+ *  exactly that string, and they patch whatever material a mesh carries. A
+ *  hand-written `gl_Position` would silently swallow their patch and a mirror
+ *  prop would be the one thing in the room the room clip does not cut. The
+ *  chunk needs `transformed` as its input and defines both `mvPosition` (which
+ *  `clipping_planes_vertex` below reads) and `gl_Position`. */
 const MIRROR_VERTEX = /* glsl */ `
 uniform mat4 textureMatrix;
 varying vec4 vUv;
@@ -306,8 +395,8 @@ varying vec4 vUv;
 #include <clipping_planes_pars_vertex>
 void main() {
   vUv = textureMatrix * vec4(position, 1.0);
-  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * mvPosition;
+  vec3 transformed = vec3(position);
+  #include <project_vertex>
   #include <logdepthbuf_vertex>
   #include <clipping_planes_vertex>
 }`
@@ -352,6 +441,9 @@ interface MirrorState {
   budget: MirrorBudget
   maxPerFrame: number
   maxDistanceM: number
+  /** Has this pane ever completed a pass? Until it has, its render target is
+   *  black and the distance cap must not be allowed to keep it that way. */
+  rendered: boolean
   cameras: WeakMap<Camera, Camera>
   textureMatrix: Matrix4
   material: Material
@@ -492,6 +584,7 @@ export function attachMirror(
     budget: sharedMirrorBudget(maxPerFrame),
     maxPerFrame,
     maxDistanceM: opts.maxDistanceM ?? Number.POSITIVE_INFINITY,
+    rendered: false,
     cameras: new WeakMap(),
   }
   stateOfMaterial.set(material, state)
@@ -544,8 +637,11 @@ function renderMirror(THREE: typeof import('three'), mesh: Mesh, renderer: WebGL
   view.subVectors(mirrorPos, cameraPos)
   // Both sides of a pane mirror: the normal always faces the camera.
   if (view.dot(normal) > 0) normal.negate()
-  if (view.length() > state.maxDistanceM) return
-  if (!state.budget.allow(renderer.info.render.frame)) return
+  // The FIRST pass ignores the distance: a pane that has never rendered has a
+  // black render target, and a mirror that starts out of range would stay
+  // black until the camera happened to come close.
+  if (state.rendered && view.length() > state.maxDistanceM) return
+  if (!state.budget.allow(renderer.info.render.frame, state)) return
 
   let reflectionCamera = state.cameras.get(camera)
   if (!reflectionCamera) {
@@ -585,11 +681,14 @@ function renderMirror(THREE: typeof import('three'), mesh: Mesh, renderer: WebGL
   if (ortho) { proj.elements[10] = clip.z - MIRROR_PRESET.clipBias; proj.elements[14] = clip.w - 1 }
   else { proj.elements[10] = clip.z + 1 - MIRROR_PRESET.clipBias; proj.elements[14] = clip.w }
 
-  // The pass. The whole mesh hides (a pane cannot see its own frame from
-  // behind its plane anyway), shadows and XR are frozen like Reflector does.
+  // The pass. ONLY THE PANE hides — `projectObject` skips a render item whose
+  // material is not visible, for a single material and for one group of an
+  // array alike — so the frame around the glass, and the dresser the mirror
+  // sits on, are still in their own reflection. Hiding the whole mesh would
+  // cut them out of it. Shadows and XR are frozen the way Reflector does it.
   inMirrorPass = true
-  const wasVisible = mesh.visible
-  mesh.visible = false
+  const wasVisible = material.visible
+  material.visible = false
   const prevTarget = renderer.getRenderTarget()
   const prevXr = renderer.xr.enabled
   const prevShadow = renderer.shadowMap.autoUpdate
@@ -600,13 +699,16 @@ function renderMirror(THREE: typeof import('three'), mesh: Mesh, renderer: WebGL
   if (renderer.autoClear === false) renderer.clear()
   try {
     renderer.render(scene, reflectionCamera)
+    // Only now does the pane have a reflection to keep, so only now may the
+    // distance cap start withholding one.
+    state.rendered = true
   } finally {
     renderer.xr.enabled = prevXr
     renderer.shadowMap.autoUpdate = prevShadow
     renderer.setRenderTarget(prevTarget)
     const viewport = (camera as Camera & { viewport?: Vector4 }).viewport
     if (viewport !== undefined) renderer.state.viewport(viewport)
-    mesh.visible = wasVisible
+    material.visible = wasVisible
     inMirrorPass = false
   }
 }
@@ -648,6 +750,7 @@ export function disposeMirror(mat: Material): void {
   const state = stateOfMaterial.get(mat)
   if (!state) return
   stateOfMaterial.delete(mat)
+  state.budget.forget(state)
   state.rt.dispose()
   mat.dispose?.()
   const states = meshStates.get(state.mesh)

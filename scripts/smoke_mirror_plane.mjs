@@ -28,27 +28,49 @@
  * [6] A degenerate group (three identical points) → null.
  * [7] A count past the end of the buffer is clamped, not read out of bounds:
  *     ranges [[3, 9999]] on the buffer of [4] → answer of [1].
- * [8] MirrorBudget(2), frames as `renderer.info.render.frame` would report
- *     them (each granted reflection is a nested render that bumps the counter
- *     by one before the next hook of the same frame runs):
- *       allow(10) → true   (1st of frame 10, nested render → counter 11)
- *       allow(11) → true   (2nd; counter → 12)
- *       allow(12) → false  (over budget; counter stays 12)
- *       allow(12) → false  (another mirror, same frame)
- *       allow(13) → true   (a new top-level frame resets the budget)
- *       allow(20) → true   (a frame with no pending nested count is new)
- *     MirrorBudget(0) → allow(1) is false. MirrorBudget(Infinity) →
- *     allow(n) is always true.
+ * [8] MirrorBudget(2) AND ITS ROTATION. three sorts the opaque render list by
+ *     `material.id` before depth, so the mirror hooks fire in the same order
+ *     every frame — panes A, B, C, always in that order. A plain "first N
+ *     win" cap would therefore grant A and B forever and C would NEVER render
+ *     once, which does not mean "C keeps its last texture": a render target
+ *     that was never rendered is BLACK. So the budget serves a window of
+ *     `maxPerFrame` panes out of last frame's askers and advances the window
+ *     by `maxPerFrame` each frame.
  *
- *     THAT SEQUENCE IS THE TWO-MIRROR READING, which is the point of the
- *     class: one budget of 2 shared by panes A, B, C, all three hooked in the
- *     SAME top-level frame 10. A's hook asks allow(10) → true, and its nested
- *     render bumps the renderer's counter to 11; B's hook asks allow(11) →
- *     true (the budget expected exactly that) and bumps it to 12; C's hook
- *     asks allow(12) → false, so C keeps last frame's texture. A budget per
- *     pane would grant all three — each private counter would see a "new
- *     frame" and reset — which is why `sharedMirrorBudget` keys ONE instance
- *     per limit for the whole page.
+ *     `renderer.info.render.frame` is the frame number, and each GRANTED
+ *     reflection is a nested render that bumps it by one before the next hook
+ *     of the same top-level frame runs — so within a frame the numbers the
+ *     hooks see rise by one per grant and stand still on a denial. Frame by
+ *     frame, with the ask order A, B, C every time:
+ *
+ *       frame 1, counter 10 — nobody is in the rotation yet, so all three are
+ *         new and take what the budget has left:
+ *           A.allow(10) -> true   (used 1, counter -> 11)
+ *           B.allow(11) -> true   (used 2, counter -> 12)
+ *           C.allow(12) -> false  (used = max; counter stays 12)
+ *         the order for the next frame is [A, B, C] — who asked, in ask order
+ *       frame 2, counter 13 — a new frame: cursor = (0 + 2) mod 3 = 2, so the
+ *         window is order[2], order[0] = {C, A}:
+ *           A.allow(13) -> true   (in the window; counter -> 14)
+ *           B.allow(14) -> false  (in the rotation, NOT in the window — its
+ *                                  slot is reserved for C)
+ *           C.allow(14) -> true   (in the window; counter -> 15)
+ *       frame 3, counter 16 — cursor = (2 + 2) mod 3 = 1, window = {B, C}:
+ *           A.allow(16) -> false
+ *           B.allow(16) -> true   (counter -> 17)
+ *           C.allow(17) -> true
+ *
+ *     So the served sets are {A,B}, {A,C}, {B,C}: every pane gets a reflection
+ *     in any two consecutive frames, none is ever permanently black, and a
+ *     pane over budget is showing a one-to-two-frame-old reflection.
+ *     MirrorBudget(0) grants nothing. MirrorBudget(Infinity) grants everyone
+ *     and keeps no rotation at all. A pane that is disposed leaves the
+ *     rotation (`forget`), so its slot goes back to the panes still there.
+ *
+ *     `sharedMirrorBudget(n)` is one instance per limit for the whole page —
+ *     that is what puts every pane of an app into ONE rotation. A budget per
+ *     pane would cap nothing at all: each private counter would see a "new
+ *     frame" after the pane before it rendered, and reset.
  * [9] COHERENCE — the faces of one group must agree on a side. With
  *     `len` = |Σ (b-a)×(c-a)| and `weight` = Σ |(b-a)×(c-a)|, a group whose
  *     `len / weight` is under 0.9 has no plane: two opposite skins of one pane
@@ -276,24 +298,55 @@ async function main() {
   check('range [3,9999] → the rectangle of [1]',
         p7 && vecNear(p7.point, [0.1, 0.3, 0.2]) && vecNear(p7.normal, [0, 0, 1]), JSON.stringify(p7))
 
-  console.log('\n[8] the per-frame budget')
+  console.log('\n[8] the per-frame budget and its rotation')
+  /** ONE top-level frame: the panes ask in a fixed order (three sorts the
+   *  opaque render list by material.id, so the hooks really do fire in the
+   *  same order every frame), and each GRANT is a nested render that bumps the
+   *  renderer's frame counter by one before the next hook runs. `next` is the
+   *  first number of the following frame — the top-level render bumps the
+   *  counter once more. */
+  const askFrame = (budget, panes, start) => {
+    let frame = start
+    const got = panes.map((pane) => {
+      const ok = budget.allow(frame, pane)
+      if (ok) frame += 1
+      return ok
+    })
+    return { got, next: frame + 1 }
+  }
   const b = new MirrorBudget(2)
-  const seq = [b.allow(10), b.allow(11), b.allow(12), b.allow(12), b.allow(13), b.allow(20)]
-  check('sequence true,true,false,false,true,true', JSON.stringify(seq) === '[true,true,false,false,true,true]', JSON.stringify(seq))
-  check('budget 0 grants nothing', new MirrorBudget(0).allow(1) === false)
+  const paneA = { id: 'A' }, paneB = { id: 'B' }, paneC = { id: 'C' }
+  const abc = [paneA, paneB, paneC]
+  const f1 = askFrame(b, abc, 10)
+  const f2 = askFrame(b, abc, f1.next)
+  const f3 = askFrame(b, abc, f2.next)
+  check('frame 1: nobody is in the rotation yet → A, B served, C waits',
+        JSON.stringify(f1.got) === '[true,true,false]', JSON.stringify(f1.got))
+  check('frame 2: the window moved to {C, A} → A and C served, B waits',
+        JSON.stringify(f2.got) === '[true,false,true]', JSON.stringify(f2.got))
+  check('frame 3: the window moved to {B, C} → B and C served, A waits',
+        JSON.stringify(f3.got) === '[false,true,true]', JSON.stringify(f3.got))
+  check('...so every pane was served in any two consecutive frames',
+        f1.got.map((v, i) => v || f2.got[i]).every(Boolean)
+        && f2.got.map((v, i) => v || f3.got[i]).every(Boolean))
+  check('budget 0 grants nothing', new MirrorBudget(0).allow(1, paneA) === false)
   const inf = new MirrorBudget(Infinity)
-  check('unlimited budget always grants', inf.allow(1) && inf.allow(2) && inf.allow(3))
-  // The two-mirror reading, executable: the hooks of panes A, B and C in ONE
-  // top-level frame 10, all asking the SAME budget of 2. A budget per pane
-  // would grant all three, because each private counter would see a new frame
-  // after the pane before it rendered — that is the whole reason
-  // `sharedMirrorBudget` keys one instance per limit.
+  check('unlimited budget always grants',
+        inf.allow(1, paneA) && inf.allow(2, paneB) && inf.allow(3, paneA))
+  // One instance per limit for the whole page is what puts every pane of an
+  // app into ONE rotation.
   const shared = sharedMirrorBudget(2)
-  const abc = [shared.allow(10), shared.allow(11), shared.allow(12)]
-  check('panes A, B, C on one shared budget of 2 → true, true, false',
-        JSON.stringify(abc) === '[true,true,false]', JSON.stringify(abc))
   check('the same limit IS the same counter, a different limit is not',
         sharedMirrorBudget(2) === shared && sharedMirrorBudget(3) !== shared)
+  // A disposed pane leaves the rotation, or the shared budget (a module-level
+  // singleton) would keep spending slots on panes that are gone.
+  const leaving = new MirrorBudget(1)
+  const kept = { id: 'kept' }, dropped = { id: 'dropped' }
+  askFrame(leaving, [kept, dropped], 100)
+  leaving.forget(dropped)
+  const after = askFrame(leaving, [kept], 200)
+  check('a forgotten pane frees its slot in the rotation',
+        JSON.stringify(after.got) === '[true]', JSON.stringify(after.got))
 
   console.log('\n[9] the faces of a group must agree on a side')
   // The unit square in z = 0, counter-clockwise seen from +z. Both its faces
