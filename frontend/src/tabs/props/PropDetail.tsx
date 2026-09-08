@@ -1979,7 +1979,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               className="ga-hint"
               style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
                 marginTop: 4, cursor: 'pointer' }}
-              title={t('Puts a FIXED 1.70 m person beside the model, on the ground the model stands IN, over a one-metre grid — the preview’s scale. The ground is solid, so whatever the sink buries really disappears under it. The figure never scales with the prop: if it looks wrong, the W/D/H of this variant are wrong.')}
+              title={t('Puts a FIXED 1.70 m person beside the model, on the ground the model stands IN, over a one-metre grid — the preview’s scale. The ground is solid, so whatever the sink buries really disappears under it. The figure never scales with the prop: if it looks wrong, the W/D/H of this variant are wrong. The place markers and their posed figures are part of the kit and go with it.')}
             >
               <input
                 type="checkbox"

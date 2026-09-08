@@ -1629,7 +1629,12 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
             }
             // Numbered marker dots at their raw-box fractions.
             const r = rawMaxDim * 0.025
-            ;(markersRef.current || []).forEach((m, i) => {
+            // The markers belong to the scale kit (user 2026-09-08): the
+            // checkbox that hides the 1.70 m figure hides the numbered dots
+            // and the posed preview figures with it — on a wall mirror they
+            // sit right on the pane. `rebuildOverlay` re-runs on the toggle
+            // (see its effect deps), so this is the whole switch.
+            if (scaleFigureRef.current) (markersRef.current || []).forEach((m, i) => {
               const local = new THREE.Vector3(
                 rawBox.min.x + m.at[0] * rawSize.x,
                 rawBox.min.y + m.at[1] * rawSize.y,
