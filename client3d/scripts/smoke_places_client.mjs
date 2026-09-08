@@ -174,10 +174,11 @@ async function main() {
             new THREE.Vector3(-2, 0, -3),
             new THREE.Vector3(-2, 0, -2.4)],
     // `drop` is the payload's `root_offset` in METRES, i.e. the catalog's
-    // seat `root_drop` 0.320 x the 1.70 m reference figure = 0.544. No check
-    // in this file reads it, but a fixture that disagrees with the shipped
-    // catalog reads as a second truth (it used to carry the bare fraction).
-    rotation: 90, drop: 0.544, offsetY: 0, fixed: true, level: 0, lift: 0,
+    // seat `root_drop` 0.243 x the 1.70 m reference figure = 0.4131, shipped
+    // as 0.413. No check in this file reads it, but a fixture that disagrees
+    // with the shipped catalog reads as a second truth (it used to carry the
+    // bare fraction).
+    rotation: 90, drop: 0.413, offsetY: 0, fixed: true, level: 0, lift: 0,
   }
 
   console.log('[1] a numbered slot is that slot')

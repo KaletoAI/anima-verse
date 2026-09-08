@@ -105,7 +105,15 @@ logger = get_logger(__name__)
 #: and a marker's ``group`` (with its ``root_drop``) is what a client colours
 #: its glyph and drops its figure by. A cached scene would still speak the
 #: old vocabulary, so the payload version moves with it.
-SCENE_RECIPE_VERSION = 11
+#: 12 (2026-09-08): THE ROOT OFFSET IS A CONTACT HEIGHT — ``seat``/``lie``
+#: were re-derived so the body part that meets the surface lands ON it
+#: (buttocks, lowest lying point), not the hip joint
+#: (``pose_catalog._load_groups``). Every seat and lying marker's
+#: ``root_offset`` moved (0.544 -> 0.413, 0.128 -> 0.005) with nothing else
+#: in the world changing, and the scene signature does not hash the pose
+#: catalog — so a client on a cached scene would keep drawing sitters 13 cm
+#: in the cushion until the version tells it to re-fetch.
+SCENE_RECIPE_VERSION = 12
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):

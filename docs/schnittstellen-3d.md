@@ -8509,7 +8509,7 @@ muss sich bewegen, sonst behält jeder Client seine alte Szene.
 | Clipping: der Ring x 2…6,85 kommt an der ±5-Kontur UND im Raum „hall" (x 1…5) als x 2…5 an; ein Raum, in dessen Ecke er ragt, trägt nur die Überlappung; ein Ring, der ganz innen liegt, bleibt unverändert; ROTE PROBE: keine Platte trägt das rohe Rechteck | ebenda **[2s]** |
 | Kanonische Ringe: ein ganz innen liegender Lauf bleibt unverändert — nach Osten (`dir` 90, Ring x −2…2,85) UND nach Norden (`dir` 0, Ring `[[1,4,−2],[2,6,−2],[2,6,2,85],[1,4,2,85]]` ab der kleinsten Ecke) | ebenda **[2s]** |
 | `clip_ring_to_outline` von Hand: Identität (auch bei umgekehrt gewickelter Outline), Ost-Schnitt, Ecken-Schnitt, keine Überlappung → `[]`, blosse BERÜHRUNG → `[]`, Ergebnis im Uhrzeigersinn, Fläche 3,6 m² (beides am RÜCKGABEWERT gemessen) | ebenda **[2c]** |
-| `SCENE_RECIPE_VERSION` == 11 (die Konstante gehört dem ganzen Payload: nach dem Marker-`diorama` dieser Runde hat sie zuletzt die Platz-Typ-Umbenennung vom 2026-09-08 weitergedreht) | ebenda **[7i]** |
+| `SCENE_RECIPE_VERSION` == 12 (die Konstante gehört dem ganzen Payload: nach dem Marker-`diorama` dieser Runde haben sie die Platz-Typ-Umbenennung und die Kontakt-Höhe des `root_offset` vom 2026-09-08 weitergedreht) | ebenda **[7i]** |
 | Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`client3d/scripts/smoke_walk_math.mjs`) |
 | `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | **noch nicht bewiesen — folgt mit Task 3** (ebenda) |
 | Fahrstuhl: `{levels:[0,1], current:0}` → einzige Option 1, `{[0,1], 1}` → 0, `{[0,1,2], 1}` → `null` | **noch nicht bewiesen — folgt mit Task 4** (ebenda) |
@@ -8536,27 +8536,44 @@ zu sein vorgab, „an einem Gerät stehen, ihm zugewandt", sagen Position und
 **`root_drop` bleibt an der Gruppe**, und die Herleitung des Nachtrags
 2026-08-28 gilt unverändert: `root_offset = groups[group].root_drop × 1,70`, auf
 Millimeter gerundet, allein vom Server gerechnet, kein Renderer hat eine
-Tabelle. Nur die Tabelle selbst ist neu:
+Tabelle. Die Tabelle selbst ist neu, und seit dem Nachmittag des 2026-09-08
+(Rezept-Version **12**) ist der Wert eine **Kontakt-Höhe**: der Körperteil,
+der die Fläche berührt — das Gesäß des Sitzenden, der tiefste Punkt des
+Liegenden — landet AUF der markierten Fläche, nicht das Hüftgelenk
+(Entscheid 2026-08-29, Herleitung in `pose_catalog._load_groups`):
 
 | Gruppe | `root_drop` | `root_offset` bei 1,70 m |
 |---|---|---|
 | `stand` | 0 | 0 |
 | `ground` | 0 | 0 |
-| `seat` | 0,314 | 0,534 |
-| `lie` | 0,051 | 0,087 |
+| `seat` | 0,243 | 0,413 |
+| `lie` | 0,003 | 0,005 |
+
+`seat`: Hüftgelenk 0,98013 − Clip-Absenkung 0,39335 − Gesäß 0,1741 unter der
+Hüfte = 0,41268, ÷ 1,70 = 0,243. `lie`: 0,98013 − 0,79894 − 0,1754 (tiefster
+Körperpunkt) = 0,00579, ÷ 1,70 = 0,003 — ein Liege-Clip ist am Boden
+animiert, seine eigene Hüfthöhe legt den Körper schon auf die Fläche. Damit
+sitzt das Gesäß bei S − 0,0003 (Hüfte S + 0,174) und liegt der Körper bei
+S + 0,0008 (Hüfte S + 0,176). Die Hüftgelenk-Werte desselben Vormittags
+(0,320 / 0,075) steckten den Sitzenden 0,131 m ins Polster und den Liegenden
+0,122 m in die Matratze; die Erst-Werte dieses Nachtrags (0,314 / 0,051)
+waren gegen die Clip-Bibliothek vor `a605c5a7` gelesen.
 
 `bed`s 0,631 war am 2026-08-27 gegen den Mixamo-Clip `sleep` kalibriert, der
 drei Tage später (`c2eb166d`) gelöscht wurde. `sleeping`, `lying` und
 `recovering` spielen heute denselben CMU-Clip `laying`; mit 0,631 steckte jede
-schlafende Figur 0,93 m unter der Matratze, mit `lie` 0,051 liegt sie darauf.
-Nachgerechnet aus der E5-Kette
-(`posed hips = S − rootOffset − clipHipsDrop + hipsBindY`) in
-`scripts/smoke_platztypen.py` **[4]**.
+schlafende Figur mit der Hüfte 0,93 m unter der Matratze (0,89 m gegen die
+heutigen Clips gelesen), mit `lie` 0,003 liegt sie darauf. Nachgerechnet aus
+der E5-Kette (`posed hips = S − rootOffset − clipHipsDrop + hipsBindY`) in
+`scripts/smoke_platztypen.py` **[4]**, am echten Skelett gemessen in
+`scripts/smoke_prop_marker_place.mjs` **E5** (Hüft-Mediane, Kontakt-Tiefen,
+Kontaktpunkt auf S ± 2 mm).
 
 **Offener Punkt, ausdrücklich benannt:** auf Dauer gehört die Zahl an den CLIP,
-nicht an den Platz-Typ — derselbe `sit`-Clip sitzt in zwei Bibliotheksfassungen
-3 cm verschieden tief (`scripts/smoke_prop_marker_place.mjs`,
-E5-Abschnitt). Das ist ein geparkter eigener Strang; er braucht die
+nicht an den Platz-Typ — der eigene `sit`-Clip des Sets `male` (Median 60,011)
+will 0,211 statt 0,243, eine Figur, die ihn spielt, sitzt unter dem
+Katalogwert 5,4 cm im Polster (`pose_catalog._load_groups`). Das ist ein
+geparkter eigener Strang; er braucht die
 Hüft-Median-Messung als Sidecar-Feld und die Klärung des Verhältnisses zu
 `clipHipsDrop`, das zur Laufzeit bereits dasselbe aus anderer Richtung misst.
 Bis dahin ist die Gruppe die beste verfügbare Adresse, und `bed`s Wert war
@@ -8618,4 +8635,4 @@ gecachte Szene und zeichnete graue Glyphen für Gruppen, die es nicht mehr gibt.
 | Der Einschlafende im Sessel verliert seinen Sitzplatz an den `lie`-Marker bzw. gibt ihn frei | ebenda **[6]** |
 | Der Import-Pfad benennt um und sagt es, statt zu schlucken | ebenda **[7]** |
 | Eine unbekannte Gruppe erzeugt eine MELDUNG (beide Sanitizer, das Szenen-Rezept einmal je Komposition, die Möblierung mit Eintrag im Bestätigungsdialog) — und wird trotzdem nicht korrigiert | ebenda **[8]** |
-| `code_version` == 11 | `scripts/smoke_scene_recipe.py` **[7i]** |
+| `code_version` == 12 | `scripts/smoke_scene_recipe.py` **[7i]** |

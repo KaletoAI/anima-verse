@@ -111,9 +111,17 @@
  * alike (this file's E5 is what measures it).
  *
  * Sitting is therefore drawn `hipsBind × (1 − median(sit)/median(idle))`
- * higher than it is played — 0.4267 m with the served Mixamo clips — and
- * every seat marker aligned in that preview was set that far too low.
- * `clipHipsDrop()` is that missing term, shared by both admin previews.
+ * higher than it is played — 0.4267 m with the Mixamo clips served at the
+ * time, 0.3934 m with today's CMU `sit` — and every seat marker aligned in
+ * that preview was set that far too low. `clipHipsDrop()` is that missing
+ * term, shared by both admin previews.
+ *
+ * E5 also measures the CONTACT: since 2026-09-08 (decision of 2026-08-29)
+ * the catalog's `root_drop` puts the body point that meets the surface ON
+ * the marked surface — a sitter's buttocks, a lying body's lowest point —
+ * not the hip joint. The derivation is `pose_catalog._load_groups`; E5
+ * re-measures the contact depths it rests on and checks where the contact
+ * lands.
  *
  * The server half of the same chain is
  * `scripts/smoke_prop_marker_surface.py` part 5.
@@ -320,31 +328,33 @@ console.log('\nE  the figure meets the marker — ONE law for all three renderer
   // surface sits at 0.587 on storey 0, and the group's `root_drop` in
   // `shared/templates/pose/pose_catalog.json` is the share the catalog owns —
   // the caller (server or prop tab) has already turned it into metres before
-  // `figureRootY` sees it. Re-derived 2026-09-08 against the re-imported CMU
-  // library (a605c5a7, fixed rest alignment); E5 below measures where the
-  // hips actually land with these numbers.
-  //   seat   0.320 × 1.70 = 0.5440  ->  0.587 − 0.5440 =  0.0430
-  //   lie    0.075 × 1.70 = 0.1275  ->  0.587 − 0.1275 =  0.4595
-  //   ground 0                      ->  0.587
+  // `figureRootY` sees it — and the SERVER rounds that metre value to
+  // millimetres before it ships (`scene_recipe._root_drop`), so the offsets
+  // below are the payload's numbers, not the raw products. Derived 2026-09-08
+  // for the CONTACT point (`pose_catalog._load_groups`); E5 below measures
+  // where buttocks, body and hips actually land with them.
+  //   seat   0.243 × 1.70 = 0.4131 -> 0.413  ->  0.587 − 0.413 = 0.174
+  //   lie    0.003 × 1.70 = 0.0051 -> 0.005  ->  0.587 − 0.005 = 0.582
+  //   ground 0                              ->  0.587
   // ONE lying group since plan-platztypen.md. The old `bed` type carried
   // 0.631 × 1.70 = 1.0727 and put the same figure at 0.587 − 1.0727 = −0.4857,
   // i.e. 0.49 m UNDER the surface it was lying on — that value was calibrated
   // for a Mixamo `sleep` clip which was deleted in c2eb166d, and it is the RED
   // PROBE of this block: no lying place may produce it any more.
   const SURFACE = 0.587;
-  const ROOT_OFFSET = {           // catalog `root_drop` × 1.70 m
-    seat: 0.320 * FIGURE_HEIGHT_M,
-    lie: 0.075 * FIGURE_HEIGHT_M,
+  const ROOT_OFFSET = {           // the payload's `root_offset`, metres
+    seat: 0.413,
+    lie: 0.005,
     ground: 0,
     stand: 0,
   };
-  near('seat root', figureRootY(SURFACE, ROOT_OFFSET.seat), 0.0430);
-  near('lie root', figureRootY(SURFACE, ROOT_OFFSET.lie), 0.4595);
+  near('seat root', figureRootY(SURFACE, ROOT_OFFSET.seat), 0.174);
+  near('lie root', figureRootY(SURFACE, ROOT_OFFSET.lie), 0.582);
   near('ground root', figureRootY(SURFACE, ROOT_OFFSET.ground), SURFACE, 1e-9);
-  // The merge's correction, in one number: 1.0727 − 0.1275 = 0.9452 m. That
+  // The merge's correction, in one number: 1.0727 − 0.005 = 1.0677 m. That
   // is how far a lying figure used to be dragged under its own surface.
-  near('the retired bed drop lies 0.945 m lower',
-       figureRootY(SURFACE, ROOT_OFFSET.lie) - (-0.4857), 0.9452);
+  near('the retired bed drop lies 1.068 m lower',
+       figureRootY(SURFACE, ROOT_OFFSET.lie) - (-0.4857), 1.0677);
   // A place type with no drop touches at its own root — a stander stands ON
   // the mark, and so does a marker whose group the caller does not know yet.
   near('a standing spot keeps the surface',
@@ -386,37 +396,37 @@ console.log('\nE  the figure meets the marker — ONE law for all three renderer
       console.log('  FAIL a clip without a hips track must answer null');
     }
   }
-  // The drop itself, hand-derived from the medians measured on the SERVED
-  // clip library (`shared/models/clips-licensed`, headless FBXLoader.parse,
-  // Mixamo centimetres) and the bind hips of the reference figure at H = 1.70 m:
+  // The drop itself, hand-derived from the medians E5 measures on the clips
+  // in `shared/models/clips` (the free CMU library — the one served for
+  // these kinds; headless FBXLoader.parse, centimetres) and the bind hips of
+  // the reference figure at H = 1.70 m. ONE table for E4 and E5: the formula
+  // check here and the file check below read the same medians.
   //
-  //   hipsBind 0.9801   idle 110.13   walk 108.53   sit 62.18
-  //                     laying 14.56  sleep 119.48  kneeling 53.30
+  //   hipsBind 0.98013   idle 110.179   sit 65.961   laying 20.368
   //
-  //   drop = 0.9801 × (1 − median/110.13)
-  //     walk      0.9801 × (1 − 0.985472) = 0.9801 × 0.014528 =  0.01424
-  //     sit       0.9801 × (1 − 0.564605) = 0.9801 × 0.435395 =  0.42673
-  //     laying    0.9801 × (1 − 0.132207) = 0.9801 × 0.867793 =  0.85052
-  //     sleep     0.9801 × (1 − 1.084900) = 0.9801 × −0.084900 = −0.08321
-  //     kneeling  0.9801 × (1 − 0.483976) = 0.9801 × 0.516024 =  0.50576
-  const HIPS_BIND = 0.9801;
-  const STAND_REF = 110.13;
+  //   drop = 0.98013 × (1 − median/110.179)
+  //     sit       0.98013 × (1 − 0.598671) = 0.98013 × 0.401329 = 0.39335
+  //     laying    0.98013 × (1 − 0.184863) = 0.98013 × 0.815137 = 0.79894
+  //
+  // The retired Mixamo `sleep` (median 119.48, deleted in c2eb166d) is kept
+  // as the one SYNTHETIC input: a clip animated on a bed plays ABOVE its own
+  // standing hips, the term is NEGATIVE and must stay so — clamping it at 0
+  // would bury such a sleeper in the mattress by exactly this much.
+  //     sleep     0.98013 × (1 − 1.084417) = 0.98013 × −0.084417 = −0.08274
+  const HIPS_BIND = 0.98013;
+  const STAND_REF = 110.179;
   near('idle IS the reference — nothing to put back',
-       clipHipsDrop(HIPS_BIND, 110.13, STAND_REF), 0, 1e-9);
-  near('walk barely moves', clipHipsDrop(HIPS_BIND, 108.53, STAND_REF), 0.01424);
-  near('sit sinks by', clipHipsDrop(HIPS_BIND, 62.18, STAND_REF), 0.42673);
-  near('laying sinks by', clipHipsDrop(HIPS_BIND, 14.56, STAND_REF), 0.85052);
-  // A sleeper is played ABOVE its own standing hips (the clip is animated on
-  // a bed): the term is NEGATIVE and must stay so — clamping it at 0 would
-  // bury the sleeper in the mattress by exactly this much.
-  near('sleep rises by', clipHipsDrop(HIPS_BIND, 119.48, STAND_REF), -0.08321);
-  near('kneeling sinks by', clipHipsDrop(HIPS_BIND, 53.30, STAND_REF), 0.50576);
+       clipHipsDrop(HIPS_BIND, 110.179, STAND_REF), 0, 1e-9);
+  near('sit sinks by', clipHipsDrop(HIPS_BIND, 65.961, STAND_REF), 0.39335, 1e-5);
+  near('laying sinks by', clipHipsDrop(HIPS_BIND, 20.368, STAND_REF), 0.79894, 1e-5);
+  near('a clip animated above its standing hips rises',
+       clipHipsDrop(HIPS_BIND, 119.48, STAND_REF), -0.08274, 1e-5);
   // Missing inputs = no correction, never a NaN into a position.
   for (const [label, args] of [
-    ['no bind height', [null, 62.18, STAND_REF]],
+    ['no bind height', [null, 65.961, STAND_REF]],
     ['no clip median', [HIPS_BIND, null, STAND_REF]],
-    ['no standing reference', [HIPS_BIND, 62.18, null]],
-    ['a zero reference (division)', [HIPS_BIND, 62.18, 0]],
+    ['no standing reference', [HIPS_BIND, 65.961, null]],
+    ['a zero reference (division)', [HIPS_BIND, 65.961, 0]],
   ]) near(`${label} = no drop`, clipHipsDrop(...args), 0, 1e-9);
 }
 
@@ -424,50 +434,70 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
 {
   // The chain of `Model3DViewer.addMarkerFigure`, replayed on the real files:
   // anchor the bind pose to 1.70 m, measure the hips, drop the hips POSITION
-  // track, play frame 0, then lower the figure by `clipHipsDrop`. The check is
-  // WHERE THE HIPS END UP against the marker surface — that is the number the
-  // user aligns a seat marker by.
+  // track, play the clip, then lower the figure by `clipHipsDrop`. Two things
+  // are checked against the marker surface S: WHERE THE HIPS END UP (the
+  // number every derivation is written in) and WHERE THE CONTACT lands — a
+  // sitter's buttocks, a lying body's lowest point — because that is what the
+  // catalog's `root_drop` puts ON the surface since 2026-09-08.
   //
-  // Hand-derived, per set (S = the marked surface):
+  // Hand-derived (S = the marked surface; `pose_catalog._load_groups`):
   //   hipsBind = (104.275 + 0.035) / 180.923 × 1.70 = 0.98013   (the figure
   //     shipped with this check, raw: hips y 104.275, box min.y −0.035,
   //     box height 180.923)
   //   posed hips y = S − rootOffset − drop + hipsBind
-  //   free     sit    S − 0.5440 − 0.39331 + 0.9801 = S + 0.04279
-  //   free     laying S − 0.1275 − 0.79890 + 0.9801 = S + 0.05370
-  //   idle (a standing spot, offset 0 and drop 0) = S + 0.9801
+  //   sit    S − 0.413 − 0.39335 + 0.98013 = S + 0.17378
+  //   laying S − 0.005 − 0.79894 + 0.98013 = S + 0.17619
+  //   idle (a standing spot, offset 0 and drop 0) = S + 0.98013
+  //   contact = hips − depth, with the depth measured here as the median
+  //   over 17 frames of the clip (the same sampling the catalog's numbers
+  //   come from):
+  //   sit    buttocks 0.1741 below the hips  ->  S + 0.17378 − 0.1741 = S − 0.0003
+  //   laying lowest   0.1754 below the hips  ->  S + 0.17619 − 0.1754 = S + 0.0008
   //
   // BOTH inputs are optional files: the reference figure is user-provided per
   // installation (gitignored) and the clip library may be emptied, replaced or
   // deleted — nothing outside "no animations play" depends on it. So a missing
   // figure or a missing clip is a SKIP with a named reason, not a failure; the
   // law itself is pinned above and needs no file at all.
+  //
+  // WHICH library is served: `paths.get_animation_clips_licensed_dir` shadows
+  // a free clip by the same name. The medians and contact depths here are
+  // those of the FREE files, so a licensed idle/sit/laying on this machine
+  // means the runtime plays a clip nobody calibrated — that is a SKIP naming
+  // the shadow, never a silent pass on the wrong file.
   const FIG = join(ROOT, 'shared/models/figure/default.fbx');
   // RE-MEASURED 2026-09-08 against the library that is actually served. The
   // numbers here used to be those of 9c4df7cf; a605c5a7 re-imported the CMU
   // clips with the fixed rest alignment (feet stopped rolling onto their
   // outer edges, heads stopped leaning) and the medians moved with it —
   // idle 110.86 → 110.179, sit 65.19 → 65.961, laying 15.81 → 20.368. That
-  // import repairs real defects, so it is the one to calibrate against, and
-  // `seat`/`lie` were re-derived from it (0.314 → 0.320, 0.051 → 0.075):
-  // with the old drops a lying figure floated 0.094 m over its surface.
+  // import repairs real defects, so it is the one to calibrate against.
   // Re-recording a median is only honest once the import behind it has been
   // judged — that is what happened here, and the reason is above.
-  const SETS = [
-    { name: 'free (CMU)', dir: join(ROOT, 'shared/models/clips'),
-      files: { idle: 'idle.fbx', sit: 'sit.fbx',
-               laying: 'laying.fbx' },
-      medians: { idle: 110.179, sit: 65.961, laying: 20.368 },
-      drops: { idle: 0, sit: 0.39331, laying: 0.79890 },
-      hips: { idle: 0.9801, sit: 0.04279, laying: 0.05370 } },
-  ];
+  const SET = {
+    name: 'free (CMU)', dir: join(ROOT, 'shared/models/clips'),
+    files: { idle: 'idle.fbx', sit: 'sit.fbx', laying: 'laying.fbx' },
+    medians: { idle: 110.179, sit: 65.961, laying: 20.368 },
+    drops: { idle: 0, sit: 0.39335, laying: 0.79894 },
+    hips: { idle: 0.98013, sit: 0.17378, laying: 0.17619 },
+    // depth of the contact point below the hips, and where it lands
+    depth: { sit: 0.1741, laying: 0.1754 },
+    contact: { sit: -0.0003, laying: 0.0008 },
+  };
+  const LICENSED = join(ROOT, 'shared/models/clips-licensed');
   const GROUP_OF = { idle: 'stand', sit: 'seat', laying: 'lie' };
-  const OFFSET = { stand: 0, seat: 0.320 * FIGURE_HEIGHT_M,
-                   lie: 0.075 * FIGURE_HEIGHT_M };
+  // The payload's `root_offset` (millimetres — the server rounds
+  // `root_drop × 1.70`, and a client never sees the raw product).
+  const OFFSET = { stand: 0, seat: 0.413, lie: 0.005 };
   const SURFACE = 0.587;          // the bench of E2, once more
 
+  const shadowed = Object.values(SET.files)
+    .filter((f) => existsSync(join(LICENSED, f)));
   if (!existsSync(FIG)) {
     console.log(`  SKIP no test figure at ${FIG} — the law is pinned in E4`);
+  } else if (shadowed.length) {
+    console.log(`  SKIP ${LICENSED} shadows ${shadowed.join(', ')} — the `
+      + 'runtime plays a clip this calibration never measured');
   } else {
     const { FBXLoader } =
       await import('three/examples/jsm/loaders/FBXLoader.js');
@@ -484,20 +514,50 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
       root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o; });
       return found;
     };
+    // The lowest skinned vertex of the posed body, in world y — optionally
+    // only among the vertices whose DOMINANT bone matches `boneRe` (the
+    // buttocks are the vertices the hips bone owns; a sitter's feet are
+    // lower still, but they are not what meets the seat).
+    const lowestVertexY = (root, boneRe) => {
+      const v = new THREE.Vector3();
+      let min = Infinity;
+      root.updateMatrixWorld(true);
+      root.traverse((o) => {
+        if (!o.isSkinnedMesh) return;
+        const pos = o.geometry.attributes.position;
+        const si = o.geometry.attributes.skinIndex;
+        const sw = o.geometry.attributes.skinWeight;
+        const bones = o.skeleton.bones;
+        for (let i = 0; i < pos.count; i++) {
+          if (boneRe) {
+            let best = 0; let bw = -1;
+            for (let k = 0; k < 4; k++) {
+              const w = sw.getComponent(i, k);
+              if (w > bw) { bw = w; best = si.getComponent(i, k); }
+            }
+            if (!boneRe.test(bones[best].name)) continue;
+          }
+          v.fromBufferAttribute(pos, i);
+          o.applyBoneTransform(i, v);
+          v.applyMatrix4(o.matrixWorld);
+          if (v.y < min) min = v.y;
+        }
+      });
+      return min;
+    };
+    const CONTACT_BONE = { sit: /hips$/i, laying: null };
     const src = parse(FIG);
-    for (const set of SETS) {
-      const missing = Object.values(set.files)
-        .filter((f) => !existsSync(join(set.dir, f)));
-      if (missing.length) {
-        console.log(`  SKIP ${set.name}: ${set.dir} has no `
-          + `${missing.join(', ')} — the law is pinned in E4`);
-        continue;
-      }
+    const set = SET;
+    const missing = Object.values(set.files)
+      .filter((f) => !existsSync(join(set.dir, f)));
+    if (missing.length) {
+      console.log(`  SKIP ${set.name}: ${set.dir} has no `
+        + `${missing.join(', ')} — the law is pinned in E4`);
+    } else {
       const standRef = hipsTrackMedian(parse(join(set.dir, set.files.idle))
         .animations[0]);
       near(`${set.name}: standing reference (idle hips median)`,
            standRef, set.medians.idle, 0.02);
-      const residual = {};
       for (const kind of ['idle', 'sit', 'laying']) {
         const clipObj = parse(join(set.dir, set.files[kind]));
         const clip = clipObj.animations[0];
@@ -516,7 +576,8 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
         clip.tracks = clip.tracks.filter(
           (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')));
         const mixer = new THREE.AnimationMixer(inst);
-        mixer.clipAction(clip).play();
+        const action = mixer.clipAction(clip);
+        action.play();
         mixer.update(0);
         pivot.updateMatrixWorld(true);
         // RED PROBE — this is the bug: with the track gone the posed hips are
@@ -524,7 +585,7 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
         near(`${set.name}: ${kind} posed hips before the correction`,
              instHips.getWorldPosition(new THREE.Vector3()).y, 0.98013, 5e-4);
         const drop = clipHipsDrop(hipsBindY, median, standRef);
-        near(`${set.name}: ${kind} clip drop`, drop, set.drops[kind], 2e-3);
+        near(`${set.name}: ${kind} clip drop`, drop, set.drops[kind], 2e-4);
         // The figure hangs at the marker root, lowered by the clip's own hips.
         const fig = new THREE.Group();
         fig.add(pivot);
@@ -533,27 +594,31 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
         scene.add(fig);
         scene.updateMatrixWorld(true);
         const hipsY = instHips.getWorldPosition(new THREE.Vector3()).y;
-        residual[kind] = hipsY - SURFACE;
         near(`${set.name}: ${kind} hips over the marked surface`,
-             residual[kind], set.hips[kind], 2e-3);
-      }
-      // …and the bound that matters to the user: a seated or lying body meets
-      // the surface it was marked on. The residual is the catalog's
-      // calibration, not the law — `seat.root_drop` and `lie.root_drop` are
-      // derived from the SERVED clips (2026-09-08, 0.320 / 0.075), and the
-      // same pose measures a few centimetres differently in the licensed
-      // library, which is why the number belongs to the clip and not to the
-      // place type. The hip-joint-versus-buttocks term of the same finding is
-      // a pending user decision. Hence a BOUND, like case C above.
-      const worst = Math.max(Math.abs(residual.sit), Math.abs(residual.laying));
-      if (worst <= 0.06) {
-        passed += 1;
-        console.log(`  ok   ${set.name}: seated/lying hips within `
-          + `${worst.toFixed(3)} m of the marked surface`);
-      } else {
-        failed += 1;
-        console.log(`  FAIL ${set.name}: ${worst.toFixed(3)} m off the marked `
-          + 'surface — more than the documented catalog calibration');
+             hipsY - SURFACE, set.hips[kind], 2e-3);
+        if (kind === 'idle') continue;
+        // ── the contact: median over 17 frames of the depth below the hips,
+        // exactly the sampling the catalog's numbers were derived from ──
+        const depths = [];
+        const N = 16;
+        for (let i = 0; i <= N; i++) {
+          action.time = clip.duration * i / N;
+          mixer.update(0);
+          scene.updateMatrixWorld(true);
+          const hy = instHips.getWorldPosition(new THREE.Vector3()).y;
+          depths.push(hy - lowestVertexY(scene, CONTACT_BONE[kind]));
+        }
+        depths.sort((a, b) => a - b);
+        const depth = depths[Math.floor(depths.length / 2)];
+        near(`${set.name}: ${kind} contact depth below the hips`,
+             depth, set.depth[kind], 2e-3);
+        // …and the bound that matters to the user: the body point meets the
+        // surface it was marked on. Two millimetres is the sum of the
+        // roundings above (the payload's millimetre and the catalog's third
+        // decimal); a hip-joint calibration would fail this by 13 cm (sit)
+        // and 12 cm (laying).
+        near(`${set.name}: ${kind} contact point on the marked surface`,
+             (hipsY - depth) - SURFACE, set.contact[kind], 2e-3);
       }
     }
   }

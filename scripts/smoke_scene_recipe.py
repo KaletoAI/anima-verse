@@ -3560,7 +3560,7 @@ def test_place_slots() -> None:
     that is the whole range: a marker at (0, 0), facing 0, capacity 2,
     spacing 1 gives bearing 0 → (0, 1) → [[0,-0.5],[0,0.5]] at axis 0, and
     bearing 180 → (0, −1) → [[0,0.5],[0,-0.5]] at axis 180 — same two points,
-    swapped. root_offset = seat.root_drop 0.320 × 1.70 = 0.5440 → 0.544
+    swapped. root_offset = seat.root_drop 0.243 × 1.70 = 0.4131 → 0.413
     (three decimals, like every drop in the payload). The payload
     marker carries id "m1seat00", group "seat", label "Seat" (a room marker
     has no prop → the group label), capacity 3. Capacity 1 → slots ==
@@ -3614,7 +3614,7 @@ def test_place_slots() -> None:
     check("payload slots follow slot_axis 0",
           ma["slots"] == [[-2.6, -3.0], [-2.0, -3.0], [-1.4, -3.0]],
           str(ma["slots"]))
-    check("payload root_offset 0.544", m["root_offset"] == 0.544,
+    check("payload root_offset 0.413", m["root_offset"] == 0.413,
           str(m["root_offset"]))
     check("no animation key any more", "animation" not in m)
 
@@ -4762,9 +4762,10 @@ def test_ground_placements() -> None:
     check("the ground marker sits at its stored metre (−1, 2), y = 0",
           len(mk) == 1 and mk[0]["at_world"] == [-1.0, 2.0]
           and near(mk[0]["y_world"], 0.0), str(mk))
-    # sit → the figure's root drops 0.320 × 1.70 m = 0.5440 below the surface.
-    check("...and carries the sit root drop 0.320 × 1.70 = 0.5440",
-          near(mk[0]["root_offset"], 0.5440), str(mk[0]["root_offset"]))
+    # sit → the figure's root drops 0.243 × 1.70 m = 0.4131 → 0.413 below the
+    # surface (the payload is millimetres).
+    check("...and carries the sit root drop 0.243 × 1.70 → 0.413",
+          mk[0]["root_offset"] == 0.413, str(mk[0]["root_offset"]))
     # The table brings its own seat marker: the yard's storey floor (0.00 on
     # this NATURAL location) + 0.01 clearance plus the marker's composed
     # height over the placement — in the built fixture's room the same seat
@@ -5273,7 +5274,7 @@ def test_surface_specs() -> None:
     the numbers of the lattice are the bake's, and the recipe hands them on
     character for character:
 
-    * ``SCENE_RECIPE_VERSION`` is 11, so every client re-fetches once — the
+    * ``SCENE_RECIPE_VERSION`` is 12, so every client re-fetches once — the
       constant is the payload's own code version and moves with EVERY change
       to what the composer answers for unchanged data (6 = these baked
       surfaces, 7 = markers speaking place types, 8 = the prop marker naming
@@ -5282,7 +5283,10 @@ def test_surface_specs() -> None:
       ``diorama``, 2026-08-29; 11 = the place-type rename bed/floor -> lie and
       counter -> stand, plan-platztypen.md — the payload carries the group
       NAME per marker and the clients colour their glyphs by it, so a client
-      on a cached scene would draw grey glyphs for groups it no longer knows);
+      on a cached scene would draw grey glyphs for groups it no longer knows;
+      12 = the root offset became a contact height, 2026-09-08 — every seat
+      and lying marker's ``root_offset`` moved without any world data moving,
+      and the signature does not hash the catalog);
     * a room whose meta carries ``surface`` gives the block to its ``room``
       spec unchanged, and a room whose meta carries none gets no field;
     * a prop tagged ``walkable`` gets ``walkable: True`` and — only if its
@@ -5293,8 +5297,8 @@ def test_surface_specs() -> None:
     """
     print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 11 (the place-type rename)",
-          scene_recipe.SCENE_RECIPE_VERSION == 11,
+    check("code_version 12 (the contact-height root offset)",
+          scene_recipe.SCENE_RECIPE_VERSION == 12,
           str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────

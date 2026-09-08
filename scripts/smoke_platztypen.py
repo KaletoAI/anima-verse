@@ -7,11 +7,13 @@ A place type used to name a piece of FURNITURE; since this rebuild it names a
 BODY SHAPE::
 
     old:  seat(0.314)  bed(0.631)  floor(0.051)  counter(0)  stand(0)
-    new:  seat(0.320, needs_place)  lie(0.075, needs_place)  ground(0)  stand(0)
+    new:  seat(0.243, needs_place)  lie(0.003, needs_place)  ground(0)  stand(0)
 
-(The two drops of the new table read 0.314 / 0.051 when this rebuild landed;
-they were re-derived on 2026-09-08 against the re-imported clip library — see
-"the medians moved" below.)
+(The two drops of the new table read 0.314 / 0.051 when this rebuild landed.
+On 2026-09-08 they were re-derived twice: first against the re-imported clip
+library, still for the HIP JOINT (0.320 / 0.075), then for the CONTACT point —
+the body part that meets the surface — which is the decision of 2026-08-29.
+See "the medians moved" and "the contact" below.)
 
 Two bugs are the reason, and both are pinned below as numbers.
 
@@ -41,16 +43,31 @@ actually served::
     idle    median 110.179   ->  clipHipsDrop 0
     laying  median  20.368   ->  0.9801 × (1 − 20.368 / 110.179) = 0.7989
 
-Hand-derived for both drops:
+The server rounds `root_drop × 1.70` to millimetres before it ships (that is
+the `root_offset` a client subtracts), so the hand-derivation uses the payload
+value. For both drops:
 
-    lie    0.075 × 1.70 = 0.1275  ->  S − 0.1275 − 0.7989 + 0.9801 = S + 0.0537
-    bed    0.631 × 1.70 = 1.0727  ->  S − 1.0727 − 0.7989 + 0.9801 = S − 0.8915
+    lie    0.003 × 1.70 = 0.0051 -> 0.005  ->  S − 0.005 − 0.7989 + 0.9801 = S + 0.1762
+    bed    0.631 × 1.70 = 1.0727           ->  S − 1.0727 − 0.7989 + 0.9801 = S − 0.8915
 
-    difference = 1.0727 − 0.1275 = 0.9452 m
+    difference = 1.0727 − 0.005 = 1.0677 m
 
-**Every sleeper in the field stood 0.89 m below the mattress**, and the merge
-is what lifts them out. § 4 checks the new number and keeps the old one beside
-it as the red probe.
+**The contact.** The hips are not what touches the mattress. The lowest point
+of the lying body sits 0.1754 m below the hip joint (measured headless over 17
+frames of `laying.fbx`, `smoke_prop_marker_place.mjs` E5), so with the
+catalog's drop it lands at S + 0.1762 − 0.1754 = S + 0.0008 — ON the surface.
+That is what `lie.root_drop` is derived FOR since 2026-09-08 (decision of
+2026-08-29, `pose_catalog._load_groups`):
+
+    (hipsBindY − clipHipsDrop − contact) / 1.70
+    = (0.98013 − 0.79894 − 0.1754) / 1.70 = 0.00579 / 1.70 = 0.0034 -> 0.003
+
+**Every sleeper in the field lay under the mattress**: 0.93 m at the hips
+against the clips the retired value shipped with (laying median 15.81, drop
+0.84033), 0.89 m re-read against today's clips — one retired value, two
+readings; the difference of the root drops, 1.0677 m, holds for any clip. The
+merge is what lifts them out. § 4 checks the new number and keeps the old one
+beside it as the red probe.
 
     The medians moved. Until 2026-09-08 this file derived the same chain from
     idle 110.86 / laying 15.81 and `hipsBindY` 0.98013, i.e.
@@ -58,11 +75,13 @@ it as the red probe.
     with the fixed rest alignment — feet had been rolling onto their outer
     edges and heads leaning — so the new library is the one to calibrate
     against, and `lie.root_drop` was re-derived with it (0.051 -> 0.075, and
-    `seat` 0.314 -> 0.320). Read against the new clips the OLD drop put a
-    lying figure at S + 0.0945, i.e. floating 9.4 cm over its own mattress.
-    The 0.9452 m between the two ROOT DROPS is independent of any clip: the
-    `clipHipsDrop` term cancels out of the difference, so whatever the library
-    measures, the retired group put the figure 0.9452 m lower than this one.
+    `seat` 0.314 -> 0.320) — for the hip joint, at S + 0.0537. Read against
+    the new clips the OLD drop put a lying figure's hips at S + 0.0945; the
+    HIP-JOINT drop 0.075 put the hips 5 cm over the mattress and the body
+    0.1217 m in it. The 1.0677 m between the two ROOT DROPS is independent of
+    any clip: the `clipHipsDrop` term cancels out of the difference, so
+    whatever the library measures, the retired group put the figure 1.0677 m
+    lower than this one.
 
 **`counter` is gone** without an heir. Its only entry, `working` ("sitting at
 desk, hands on keyboard", clip `sit`), is a sitting pose and moved to `seat`;
@@ -109,13 +128,14 @@ Hand-derived expectations
       lying pose are still two different body shapes.
 
   [4] Bug 2, the height (chain above). With the catalog's own `lie.root_drop`
-      the hips of a `sleeping` figure land at S + 0.0537 for the bench surface
-      S = 0.587 of smoke_prop_marker_surface.py: 0.6407. With the retired
-      `bed` drop they landed at S − 0.8915 = −0.3045, i.e. 0.30 m below the
-      floor the bed stands on. The difference is 0.9452 m and does not depend
-      on the clip. The pre-2026-09-08 drop 0.051 is kept as a second red
-      probe: against today's clips it answers S + 0.0945, a lying figure
-      hovering 9.4 cm above the surface it was marked on.
+      the hips of a `sleeping` figure land at S + 0.1762 for the bench surface
+      S = 0.587 of smoke_prop_marker_surface.py: 0.7632, and the body's
+      lowest point 0.1754 lower, at S + 0.0008 = 0.5878 — on the mattress.
+      With the retired `bed` drop the hips landed at S − 0.8915 = −0.3045,
+      i.e. 0.30 m below the floor the bed stands on. The difference is
+      1.0677 m and does not depend on the clip. The hip-joint drop 0.075 of
+      the same morning is kept as a second red probe: it puts the hips at
+      S + 0.0537 and the body 0.1217 m INTO the mattress.
 
   [5] `needs_place`. `kneeling` is a `ground` pose: `assign` returns None and
       writes no place even though the room has markers, `_named_place` is None
@@ -221,9 +241,9 @@ pose_catalog.catalog_path = (
                    "needs_place": False},
         # The shipped catalog's own drops — a fixture that invents different
         # ones would show a second truth beside the values § 4 derives.
-        "seat": {"label": "Seat", "root_drop": 0.320, "default": "sitting",
+        "seat": {"label": "Seat", "root_drop": 0.243, "default": "sitting",
                  "needs_place": True},
-        "lie": {"label": "Lying place", "root_drop": 0.075, "default": "lying",
+        "lie": {"label": "Lying place", "root_drop": 0.003, "default": "lying",
                 "needs_place": True},
     },
     "entries": {
@@ -416,13 +436,22 @@ HIPS_BIND_Y = 0.9801           # the reference figure at H = 1.70 m
 MEDIAN_IDLE = 110.179
 MEDIAN_LAYING = 20.368
 CLIP_HIPS_DROP_LAYING = HIPS_BIND_Y * (1 - MEDIAN_LAYING / MEDIAN_IDLE)
+# How far the lying body's lowest point sits below the hip joint — the
+# contact the catalog's drop is derived for (median over 17 frames, E5).
+CONTACT_BELOW_HIPS_LAYING = 0.1754
 SURFACE = 0.587                # the bench of smoke_prop_marker_surface.py § 5
 RETIRED_BED_DROP = 0.631       # calibrated on the deleted Mixamo `sleep` clip
-STALE_LIE_DROP = 0.051         # derived on the pre-a605c5a7 clip library
+HIP_JOINT_LIE_DROP = 0.075     # the hip-joint calibration of 2026-09-08 morning
+
+
+def root_offset(root_drop: float) -> float:
+    """The payload's `root_offset`: the drop in metres, rounded to
+    millimetres by the server (scene_recipe._root_drop)."""
+    return round(root_drop * FIGURE_HEIGHT_M, 3)
 
 
 def posed_hips(surface: float, root_drop: float) -> float:
-    return (surface - root_drop * FIGURE_HEIGHT_M
+    return (surface - root_offset(root_drop)
             - CLIP_HIPS_DROP_LAYING + HIPS_BIND_Y)
 
 
@@ -430,31 +459,38 @@ check("clipHipsDrop(laying) = 0.9801 × (1 − 20.368 / 110.179) = 0.7989",
       abs(CLIP_HIPS_DROP_LAYING - 0.7989) < 5e-5,
       str(round(CLIP_HIPS_DROP_LAYING, 5)))
 _lie_drop = pose_catalog.get_groups()["lie"]["root_drop"]
-check("the catalog's lying drop is the served clip's 0.075",
-      _lie_drop == 0.075, str(_lie_drop))
-check("root offset in metres: 0.075 × 1.70 = 0.1275",
-      abs(_lie_drop * FIGURE_HEIGHT_M - 0.1275) < 5e-5,
-      str(round(_lie_drop * FIGURE_HEIGHT_M, 5)))
+check("the catalog's lying drop is the contact-derived 0.003",
+      _lie_drop == 0.003, str(_lie_drop))
+check("root offset in metres: 0.003 × 1.70 = 0.0051, shipped as 0.005",
+      root_offset(_lie_drop) == 0.005, str(root_offset(_lie_drop)))
 _now = posed_hips(SURFACE, _lie_drop)
-check("the sleeper's hips land at S + 0.0537 = 0.6407",
-      abs(_now - 0.6407) < 1e-3, str(round(_now, 5)))
+check("the sleeper's hips land at S + 0.1762 = 0.7632",
+      abs(_now - 0.7632) < 1e-3, str(round(_now, 5)))
+check("…and the body's lowest point at S + 0.0008 = 0.5878, on the mattress",
+      abs((_now - CONTACT_BELOW_HIPS_LAYING) - 0.5878) < 1e-3,
+      str(round(_now - CONTACT_BELOW_HIPS_LAYING, 5)))
 # RED PROBE: the number the retired group produced. 0.587 − 1.0727 − 0.7989
 # + 0.9801 = −0.3045 — a sleeping figure 0.30 m under the floor the bed
-# stands on, and 0.89 m under the mattress it was marked on.
+# stands on, and 0.89 m under the mattress it was marked on (0.93 m against
+# the clips it shipped with).
 _then = posed_hips(SURFACE, RETIRED_BED_DROP)
 check("the retired bed drop put it at −0.3045", abs(_then + 0.3045) < 1e-3,
       str(round(_then, 5)))
-# 1.0727 − 0.1275 = 0.9452. The clip cancels out of the difference, so this
+# 1.0727 − 0.005 = 1.0677. The clip cancels out of the difference, so this
 # number holds whatever the clip library currently measures.
-check("the merge lifts every sleeper by 0.9452 m",
-      abs((_now - _then) - 0.9452) < 1e-3, str(round(_now - _then, 5)))
-# SECOND RED PROBE, the other direction: the drop this file derived before the
-# a605c5a7 re-import leaves the same figure 9.4 cm ABOVE its mattress.
-_stale = posed_hips(SURFACE, STALE_LIE_DROP)
-check("the pre-re-import drop floats it at S + 0.0945 = 0.6815",
-      abs(_stale - 0.6815) < 1e-3, str(round(_stale, 5)))
+check("the merge lifts every sleeper by 1.0677 m",
+      abs((_now - _then) - 1.0677) < 1e-3, str(round(_now - _then, 5)))
+# SECOND RED PROBE: the hip-joint calibration of the same morning. Hips at
+# S + 0.0537 reads like "on the mattress" until the body is measured: its
+# lowest point is 0.1217 m INSIDE it.
+_joint = posed_hips(SURFACE, HIP_JOINT_LIE_DROP)
+check("the hip-joint drop put the hips at S + 0.0537 = 0.6407",
+      abs(_joint - 0.6407) < 1e-3, str(round(_joint, 5)))
+check("…and the body 0.1217 m into the mattress",
+      abs((_joint - CONTACT_BELOW_HIPS_LAYING) - (SURFACE - 0.1217)) < 1e-3,
+      str(round(_joint - CONTACT_BELOW_HIPS_LAYING - SURFACE, 5)))
 check("no place type carries a retired drop any more",
-      all(g["root_drop"] not in (RETIRED_BED_DROP, STALE_LIE_DROP)
+      all(g["root_drop"] not in (RETIRED_BED_DROP, HIP_JOINT_LIE_DROP)
           for g in pose_catalog.get_groups().values()))
 
 

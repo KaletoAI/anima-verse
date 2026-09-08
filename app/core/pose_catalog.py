@@ -39,17 +39,29 @@ _cache: Dict[str, Dict[str, dict]] = {}
 _groups_cache: Dict[str, dict] = {}
 
 
-#: Where an entry lives. ``shared`` is the curated, TRACKED catalog that
-#: travels with the repository; ``local`` is a gitignored overlay of the same
-#: shape beside it.
+#: Where an entry or a place type lives — the two layers of the catalog,
+#: the same shape as the terrain types (``terrain_types.py``): ``shared`` is
+#: the curated, TRACKED catalog file that travels with the repository, the
+#: seed every world starts from; ``world`` is the world's own layer in its
+#: ``world.db`` (table ``pose_catalog_world``). A world row REPLACES the shared
+#: entry or group of the same key (override-replace, per key) or adds one the
+#: shared file does not carry; dropping the row brings the shared one back.
 #:
-#: The overlay exists because the catalog is the only way a clip becomes
+#: The world layer exists because the catalog is the only way a clip becomes
 #: reachable in the game (``interaction_engine.partner_poses`` iterates it and
 #: nothing else), while a clip imported from licensed or adult material must
-#: not put its name into a tracked file. Without the overlay the choice was
-#: "unusable clip" or "uncommittable edit", and the second one has already gone
-#: wrong once.
-STORES = ("shared", "local")
+#: not put its name into a tracked file. Without a second layer the choice was
+#: "unusable clip" or "uncommittable edit", and the second one has already
+#: gone wrong once. Until 2026-09-08 that layer was a gitignored overlay FILE
+#: beside the shared one (``<axis>_catalog.local.json``, per installation, not
+#: per world); it moved into the world so the catalog follows the one
+#: shared/world concept the rest of the app has, and
+#: :func:`migrate_catalog_overlay_once` carries an existing overlay across.
+STORES = ("shared", "world")
+
+#: The world layer's table (``world_db_schema``): one row per entry or place
+#: type, the document as JSON.
+WORLD_TABLE = "pose_catalog_world"
 
 
 def catalog_path(axis: str) -> Path:
@@ -60,47 +72,168 @@ def catalog_path(axis: str) -> Path:
     return get_shared_dir() / "templates" / sub / name
 
 
-def store_path(axis: str, store: str = "shared") -> Path:
-    """File one STORE of an axis lives in. Raises ValueError on an unknown one.
-
-    The overlay's path is DERIVED from the curated one rather than built from
-    scratch, so anything that redirects ``catalog_path`` — every test harness
-    here does — redirects the overlay with it, and the two never end up in
-    different directories.
-    """
-    if store not in STORES:
-        raise ValueError(f"unknown catalog store: {store!r}")
+def legacy_overlay_path(axis: str) -> Path:
+    """Where the pre-2026-09-08 overlay file of an axis sat — DERIVED from the
+    curated path, so a harness that redirects ``catalog_path`` redirects the
+    migration's source with it. Only :func:`migrate_catalog_overlay_once`
+    reads it; nothing writes it any more."""
     path = catalog_path(axis)
-    if store == "shared":
-        return path
     return path.with_name(path.name.replace(".json", ".local.json"))
 
 
-def _read_doc(axis: str, store: str) -> dict:
-    """The raw catalog document of one store — ``{}`` when it is absent, which
-    is the normal state of the overlay."""
+def _read_shared(axis: str) -> dict:
+    """The raw shared catalog document — ``{}`` when it is absent or
+    unreadable (logged)."""
     try:
-        data = json.loads(store_path(axis, store).read_text(encoding="utf-8"))
+        data = json.loads(catalog_path(axis).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except json.JSONDecodeError as e:
-        logger.warning("catalog %s/%s unreadable: %s", axis, store, e)
+        logger.warning("catalog %s unreadable: %s", axis, e)
         return {}
     return data if isinstance(data, dict) else {}
 
 
-def _load(axis: str) -> Dict[str, dict]:
-    """Every entry of an axis, the local overlay laid over the shared file.
+def _world_rows(axis: str, kind: str) -> Dict[str, dict]:
+    """The world layer's documents of one kind (``entry`` / ``group``), keyed.
 
-    A key present in both is the overlay's — that is what makes an overlay an
-    overlay. Each entry carries the store it came from in ``_store``, so the
-    editor writes it back where it belongs instead of promoting a local entry
-    into the tracked file on the next save.
+    A world without the table yet — a harness that reads the catalog before
+    ``init_schema``, a script that runs without a world — simply has an EMPTY
+    world layer; that is what the shared seed is for. Any other database
+    error propagates: a world whose layer cannot be read must not silently
+    fall back to the seed and serve poses its author replaced.
+    """
+    import sqlite3
+    from app.core.db import get_connection
+    try:
+        rows = get_connection().execute(
+            f"SELECT key, doc FROM {WORLD_TABLE} WHERE axis=? AND kind=?",
+            (axis, kind)).fetchall()
+    except sqlite3.OperationalError as e:
+        if "no such table" not in str(e):
+            raise
+        return {}
+    out: Dict[str, dict] = {}
+    for key, doc in rows:
+        try:
+            parsed = json.loads(doc or "{}")
+        except ValueError:
+            logger.warning("world catalog row %s/%s/%s unreadable", axis, kind, key)
+            continue
+        if isinstance(parsed, dict):
+            out[str(key)] = parsed
+    return out
+
+
+def world_entries(axis: str) -> Dict[str, dict]:
+    """The raw entries of the WORLD layer of an axis, keyed — what the editor
+    reads before it writes the layer back as a whole."""
+    return _world_rows(axis, "entry")
+
+
+def world_groups() -> Dict[str, dict]:
+    """The raw place types of the WORLD layer (pose axis), keyed."""
+    return _world_rows("pose", "group")
+
+
+def _replace_world_rows(axis: str, kind: str, docs: Dict[str, dict]) -> None:
+    """Make the world layer of one kind exactly ``docs``: rows for keys not
+    in it are deleted, every key in it is upserted — one transaction, so a
+    reader never sees the layer half replaced."""
+    from app.core.db import transaction
+    from app.core.timeutils import utc_now_iso
+    now = utc_now_iso()
+    keys = list(docs)
+    with transaction() as conn:
+        if keys:
+            conn.execute(
+                f"DELETE FROM {WORLD_TABLE} WHERE axis=? AND kind=? AND key NOT IN "
+                f"({','.join('?' * len(keys))})", (axis, kind, *keys))
+        else:
+            conn.execute(f"DELETE FROM {WORLD_TABLE} WHERE axis=? AND kind=?",
+                         (axis, kind))
+        for key, doc in docs.items():
+            conn.execute(
+                f"INSERT INTO {WORLD_TABLE} (axis, kind, key, doc, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(axis, kind, key) DO UPDATE SET doc=excluded.doc, "
+                "updated_at=excluded.updated_at",
+                (axis, kind, key, json.dumps(doc, ensure_ascii=False), now))
+
+
+def replace_world_entries(axis: str, entries: Dict[str, dict]) -> None:
+    """Write the WORLD layer's entries of an axis as a whole (see
+    :func:`_replace_world_rows`). The caller drops the caches."""
+    _replace_world_rows(axis, "entry", entries)
+
+
+def replace_world_groups(groups: Dict[str, dict]) -> None:
+    """Write the WORLD layer's place types as a whole."""
+    _replace_world_rows("pose", "group", groups)
+
+
+def migrate_catalog_overlay_once() -> Dict[str, int]:
+    """One-time boot migration (2026-09-08): the gitignored overlay file of
+    each axis (``<axis>_catalog.local.json``, the per-installation layer of
+    2026-09-07) becomes the WORLD layer of the world being started.
+
+    Every entry and every group of the overlay is inserted into the world
+    layer unless the world already carries that key (``INSERT OR IGNORE`` —
+    a world edited since keeps its own row); the file is then renamed to
+    ``*.migrated`` so this runs once per file. A world started later finds
+    no file and migrates nothing: the overlay was per installation, so it
+    lands in the FIRST world that boots after the change — the one the
+    machine was running when the overlay was written.
+
+    Returns ``{"entries": n, "groups": n}`` (zeros when nothing was found).
+    """
+    from app.core.db import transaction
+    from app.core.timeutils import utc_now_iso
+    counts = {"entries": 0, "groups": 0}
+    for axis in AXES:
+        path = legacy_overlay_path(axis)
+        if not path.is_file():
+            continue
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("catalog overlay %s unreadable, left in place: %s", path, e)
+            continue
+        if not isinstance(doc, dict):
+            doc = {}
+        now = utc_now_iso()
+        with transaction() as conn:
+            for kind, block_key in (("entry", "entries"), ("group", "groups")):
+                block = doc.get(block_key) or {}
+                if not isinstance(block, dict):
+                    continue
+                for key, spec in block.items():
+                    if not isinstance(spec, dict):
+                        continue
+                    cur = conn.execute(
+                        f"INSERT OR IGNORE INTO {WORLD_TABLE} "
+                        "(axis, kind, key, doc, updated_at) VALUES (?, ?, ?, ?, ?)",
+                        (axis, kind, str(key).strip().lower(),
+                         json.dumps(spec, ensure_ascii=False), now))
+                    counts[block_key] += cur.rowcount
+        path.rename(path.with_name(path.name + ".migrated"))
+        logger.info("catalog overlay %s migrated into the world layer", path.name)
+    reload_catalogs()
+    return counts
+
+
+def _load(axis: str) -> Dict[str, dict]:
+    """Every entry of an axis, the world layer laid over the shared file.
+
+    A key present in both is the world's — override-replace per key. Each
+    entry carries the store it came from in ``_store``, so the editor writes
+    it back where it belongs instead of promoting a world entry into the
+    tracked file on the next save.
     """
     entries: Dict[str, dict] = {}
     origin: Dict[str, str] = {}
-    for store in STORES:
-        block = _read_doc(axis, store).get("entries") or {}
+    shared = _read_shared(axis).get("entries") or {}
+    for store, block in (("shared", shared), ("world", world_entries(axis))):
         if not isinstance(block, dict):
             continue
         for key, entry in block.items():
@@ -146,40 +279,64 @@ def _load_groups() -> Dict[str, dict]:
     marker at all — a False group is offered "anywhere here", gets no place
     assigned and its spot is never named.
 
-    Where the numbers come from — measured against the CLIPS THAT ARE
-    SERVED, through the project's own chain
-    (``scripts/smoke_prop_marker_place.mjs`` E5,
-    ``posed hips = S - rootOffset - clipHipsDrop + hipsBindY`` with
-    ``clipHipsDrop = hipsBindY x (1 - median / median(idle))``,
-    ``hipsBindY`` 0.9801 on the 1.70 m reference figure)::
+    Where the numbers come from — the CONTACT POINT of the body meets the
+    marked surface S (decision 2026-08-29, folded in on 2026-09-08). Measured
+    headless on the 1.70 m reference figure against the clips in
+    ``shared/models/clips`` (the files that are served for these kinds —
+    the licensed library shadows none of them), through the project's own
+    chain (``scripts/smoke_prop_marker_place.mjs`` E5)::
 
-        idle    median 110.179   drop 0       stand  0
-        sit     median  65.961   drop 0.3933  seat   0.320  -> hips S + 0.043
-        laying  median  20.368   drop 0.7989  lie    0.075  -> hips S + 0.054
+        posed hips   = S - rootOffset - clipHipsDrop + hipsBindY
+        clipHipsDrop = hipsBindY x (1 - median / median(idle))
+        hipsBindY    = 0.98013
+        contact      = how far the body point that meets the surface lies
+                       BELOW the hip joint in the posed clip (median over 17
+                       frames): for ``sit`` the buttocks = the lowest vertex
+                       skinned to the hips bone, for ``laying`` the lowest
+                       vertex of the whole body
+        root_drop    = (hipsBindY - clipHipsDrop - contact) / 1.70
 
-    Re-derived on 2026-09-08. The medians had been recorded before
-    ``a605c5a7`` re-imported the CMU library with the fixed rest alignment
-    (feet stopped rolling onto their outer edges, heads stopped leaning) —
-    a real repair, so the new library is the one to calibrate against, and
-    the old 0.314 / 0.051 left a lying figure 0.094 m over its surface.
+        idle    median 110.179  drop 0        contact   —      stand 0
+        sit     median  65.961  drop 0.39335  buttocks 0.1741  seat  0.243
+        laying  median  20.368  drop 0.79894  lowest   0.1754  lie   0.003
 
-    ``bed`` carried 0.631 until the place types became body shapes: that was
-    calibrated for the Mixamo ``sleep`` clip, gone since ``c2eb166d``, and
-    with it every sleeper sank 0.93 m into the mattress. ``sleeping`` and
-    ``lying`` name the same ``laying`` clip today, so one value serves both.
+        seat: (0.98013 - 0.39335 - 0.1741) / 1.70 = 0.41268 / 1.70 = 0.24275
+        lie:  (0.98013 - 0.79894 - 0.1754) / 1.70 = 0.00579 / 1.70 = 0.00341
 
-    Still open, and deliberately not folded in here: the target itself is the
-    HIP JOINT, not the contact surface — a seated body's buttocks sit 0.175 m
-    below its hips, so the figure still sinks into the cushion
-    (``done/plan-sitzhoehe.md``). And the number belongs to the CLIP, not to
-    the place type: the same ``sit`` sits 3 cm lower in the licensed library
-    than in the CMU one. Both are their own strand.
+    The payload rounds ``root_drop x 1.70`` to millimetres: seat 0.4131 ->
+    0.413, lie 0.0051 -> 0.005. What a client then draws on the bench
+    S = 0.587: a seated body's buttocks at S - 0.0003 (hips S + 0.1738), a
+    lying body's lowest point at S + 0.0008 (hips S + 0.1762). A lying clip
+    is authored on the floor, which is why ``lie`` is all but zero: the
+    clip's own hips height already puts the body on its surface.
+
+    History, so nobody re-derives an old number as the new one. Until the
+    morning of 2026-09-08 the target was the HIP JOINT (seat 0.320 / lie
+    0.075, hips at S + 0.043 / S + 0.054): a seated body sat 0.131 m in the
+    cushion and a lying one 0.122 m in the mattress. Before that (0.314 /
+    0.051) the same values were read against the clip library ``a605c5a7``
+    replaced. ``bed`` carried 0.631 until the place types became body
+    shapes — calibrated for the Mixamo ``sleep`` clip, gone since
+    ``c2eb166d``; against the clips it shipped with (laying median 15.81,
+    drop 0.84033) that put every sleeper's hips 0.93 m under the mattress,
+    re-read against today's clips it is 0.89 m — two readings of one
+    retired value. ``sleeping`` and ``lying`` name the same ``laying`` clip
+    today, so one value serves both.
+
+    Still open, its own strand: the number belongs to the CLIP, not to the
+    place type. A set's own clip measures differently — ``male/sit.fbx``
+    (median 60.011, drop 0.44635, buttocks 0.1751) wants 0.211, so a figure
+    playing it sits 0.054 m into the cushion under this catalog value.
     """
     raw: Dict[str, dict] = {}
-    for store in STORES:
-        block = _read_doc("pose", store).get("groups") or {}
-        if isinstance(block, dict):
-            raw.update(block)
+    origin: Dict[str, str] = {}
+    shared = _read_shared("pose").get("groups") or {}
+    for store, block in (("shared", shared), ("world", world_groups())):
+        if not isinstance(block, dict):
+            continue
+        for key, spec in block.items():
+            raw[key] = spec
+            origin[key] = store
     out: Dict[str, dict] = {}
     for key, spec in raw.items():
         k = str(key).strip().lower()
@@ -194,7 +351,10 @@ def _load_groups() -> Dict[str, dict]:
                   "default": str(spec.get("default") or "").strip().lower(),
                   # A place type normally demands a marker — only a group
                   # that says otherwise gets by without one.
-                  "needs_place": bool(spec.get("needs_place", True))}
+                  "needs_place": bool(spec.get("needs_place", True)),
+                  # Which layer the effective group comes from, so the editor
+                  # writes it back there (the entries carry the same key).
+                  "_store": origin.get(key, "shared")}
     return out
 
 

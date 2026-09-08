@@ -9,7 +9,7 @@
     },
     "seat": {
       "label": "Seat",
-      "root_drop": 0.32,
+      "root_drop": 0.243,
       "default": "sitting",
       "needs_place": true
     },
@@ -21,7 +21,7 @@
     },
     "lie": {
       "label": "Lying place",
-      "root_drop": 0.075,
+      "root_drop": 0.003,
       "default": "lying",
       "needs_place": true
     }
