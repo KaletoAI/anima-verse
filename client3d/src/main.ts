@@ -3683,6 +3683,11 @@ async function startApp(username: string, role: string) {
   let route: { x: number; z: number } | null = null;
   /** Frames in a row in which the walk got nowhere — see `walkStalled`. */
   let routeStalled = 0;
+  /** Did WE put the walking clip on the avatar? Only then may it be taken off
+   *  again — clearing the field on every idle frame wiped whatever the server
+   *  had said (the sitting clip above all) a frame after each poll delivered
+   *  it. */
+  let steerClipOverride = false;
 
   function cancelRoute() {
     if (!route) return;
@@ -3940,7 +3945,23 @@ async function startApp(username: string, role: string) {
     // `moveClip` and never looks at this field — and the GROUND still wins
     // over it (`standingClipFor`), so wading is unaffected.
     const steering = !!dir;
-    npcs.setPlayerAnimation(avatarName, steering ? locomotionClip('walk') : null);
+    if (steering) {
+      npcs.setPlayerAnimation(avatarName, locomotionClip('walk'));
+      steerClipOverride = true;
+    } else if (steerClipOverride) {
+      // ONCE, on release — and never again. Writing `null` every idle frame
+      // took the server's own clip off the figure a frame after every poll,
+      // and a seated avatar never showed its sitting animation again.
+      npcs.setPlayerAnimation(avatarName, null);
+      steerClipOverride = false;
+      // A bridge that was only there to get the figure GOING has nothing left
+      // to do once the key is up — it would play its start-walking motion out
+      // on a figure that already stands still, which is the after-run a short
+      // tap produced. One that HOLDS the figure runs to its end instead: the
+      // seat is already released on the server, and breaking off half-way
+      // would leave the figure between two states.
+      if (npcs.bridgePace(avatarName) > 0) npcs.cancelBridge(avatarName);
+    }
     // HOW MUCH of its speed the figure has while a bridge clip runs. 0 is a
     // rule that holds it on the spot — getting out of a seat; a fraction is a
     // rule that lets it get going while the clip plays — starting to walk,

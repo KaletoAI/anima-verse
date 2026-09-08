@@ -514,6 +514,11 @@ export class NpcManager {
     npc?.figure?.faceTowards(new THREE.Vector3(dx, 0, dz), snap);
   }
 
+  /** Give a figure's running bridge up — see `Figure.cancelBridge`. */
+  cancelBridge(name: string) {
+    this.npcs.get(name)?.figure?.cancelBridge();
+  }
+
   /** How fast this figure may move while a bridge clip runs: 0 holds it on
    *  the spot (standing up), a fraction between 0 and 1 lets it get going
    *  while the clip plays (starting to walk). 0 when nothing bridges — the

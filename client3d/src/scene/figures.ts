@@ -1495,6 +1495,21 @@ export class Figure {
     return true;
   }
 
+  /** Give the running bridge up. It stops being the gate at once; WHAT plays
+   *  instead is the next frame's business, exactly as when one ends by itself
+   *  — the clip that is still on screen is faded out by that call.
+   *
+   *  For whoever steers: a bridge that only exists to get the figure GOING has
+   *  nothing left to do once the input is gone. Playing its start-walking
+   *  motion out on a figure that already stands still is the after-run a short
+   *  tap produced. */
+  cancelBridge() {
+    if (!this.transition) return;
+    this.transition = null;
+    this.bridgeUntil = 0;
+    this.bridgeAccel = 0;
+  }
+
   /** HOW FAST the figure may move while the running bridge plays: a fraction
    *  of its normal speed, 0 while nothing bridges and 0 for a rule that holds
    *  it (standing up out of a seat). A rule with `accel` ramps from a standstill
