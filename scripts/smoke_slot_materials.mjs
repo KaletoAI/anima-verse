@@ -57,6 +57,20 @@ async function main() {
   const { applySlotMaterials, disposeSlotMaterials, GLASS_PRESET,
           MATERIAL_PRESETS } =
     await import('../packages/scene-render/src/slotMaterials.ts')
+  // The mirror's own module, for the two questions `applySlotMaterials` alone
+  // cannot answer: WHICH faces were measured, and does a second attach on the
+  // same pane free the first.
+  const { attachMirror, disposeMirror, mirrorPlaneOf } =
+    await import('../packages/scene-render/src/mirrorSurface.ts')
+
+  /** Run `fn` with console.warn captured; returns everything it said. */
+  const capturingWarnings = (fn) => {
+    const said = []
+    const real = console.warn
+    console.warn = (...args) => { said.push(args.join(' ')) }
+    try { fn() } finally { console.warn = real }
+    return said
+  }
 
   const failures = []
   const check = (label, ok, detail = '') => {
@@ -377,24 +391,79 @@ async function main() {
   check('the frame material is the very same object', mirrorMesh.material[0] === mirrorFrame)
   check('the source pane material was not written to', mirrorPane.map === null && !mirrorPane.isShaderMaterial)
   check('the render target uses the option size', mirrorMat.uniforms.tDiffuse.value.rt.width === 256, String(mirrorMat.uniforms.tDiffuse.value.rt?.width))
+  check('the pane is double-sided (both sides of a mirror reflect)',
+        mirrorMat.side === 'double-token', String(mirrorMat.side))
   check('the mesh got a render hook chained in front of its own', typeof mirrorMesh.onBeforeRender === 'function' && mirrorMesh.onBeforeRender !== before)
   check('exactly one clone is returned', clones9.length === 1 && clones9[0] === mirrorMat)
+  // WHICH faces were measured. Group 1 is the rectangle of
+  // scripts/smoke_mirror_plane.mjs [1] — centroid (0.1, 0.3, 0.2), normal
+  // (0, 0, ±1). Group 0 is a triangle at z = 5; measuring the WHOLE mesh
+  // instead of the pane's own group would put the centroid near z ≈ 1.8 and
+  // is exactly the defect this assertion exists for.
+  const info9 = mirrorPlaneOf(mirrorMat)
+  const nearAt = (a, b) => Math.abs(a - b) <= 1e-6
+  check('the plane is the PANE\'s group, not the whole mesh',
+        !!info9 && nearAt(info9.plane.point[0], 0.1)
+        && nearAt(info9.plane.point[1], 0.3) && nearAt(info9.plane.point[2], 0.2)
+        && nearAt(Math.abs(info9.plane.normal[2]), 1),
+        JSON.stringify(info9?.plane))
+  check('the cost options reached the state', info9?.maxPerFrame === 1
+        && info9?.maxDistanceM === 9,
+        `${info9?.maxPerFrame}/${info9?.maxDistanceM}`)
   const rt9 = mirrorMat.uniforms.tDiffuse.value.rt
   disposeSlotMaterials(clones9)
   check('dispose frees the render target and the material', rt9.disposed === true && mirrorMat.disposed === true)
   check('after dispose the mesh hook is the original again', mirrorMesh.onBeforeRender === before)
+  check('...and the material no longer answers as a mirror',
+        mirrorPlaneOf(mirrorMat) === undefined)
 
   console.log('\n[10] a pane without measurable faces stays as modelled')
   const flatPane = new FakeMaterial('glass')
   const degenerate = { isMesh: true, material: flatPane, geometry: {
     attributes: { position: { array: new Float32Array([1, 1, 1, 1, 1, 1, 1, 1, 1]), count: 3 } }, index: null, groups: [] },
     onBeforeRender: before, visible: true }
-  const clones10 = applySlotMaterials(THREE2, { traverse(cb) { cb(degenerate) } }, { glass: { preset: 'mirror' } }, loadTexture)
+  let clones10 = []
+  const said10 = capturingWarnings(() => {
+    clones10 = applySlotMaterials(THREE2, { traverse(cb) { cb(degenerate) } }, { glass: { preset: 'mirror' } }, loadTexture)
+  })
   check('material untouched, nothing returned', degenerate.material === flatPane && clones10.length === 0)
   check('...and no hook was installed', degenerate.onBeforeRender === before)
+  // Silence here would be the worst answer available: the author picked
+  // `mirror` in the admin and would see a plain pane with nothing anywhere to
+  // say that the MODEL is the problem, not the setting.
+  check('...but it SAID so, once, naming the slot and the reason',
+        said10.length === 1 && said10[0].includes('mirror slot "glass"')
+        && said10[0].includes('no face of the group has any area')
+        && said10[0].includes('left as modelled'),
+        JSON.stringify(said10))
 
   console.log('\n[11] the preset list names mirror after glass')
   check('MATERIAL_PRESETS = [glass, mirror]', JSON.stringify(MATERIAL_PRESETS) === '["glass","mirror"]', JSON.stringify(MATERIAL_PRESETS))
+
+  console.log('\n[12] attaching the same pane twice frees the first one')
+  // A re-applied placement can hand the same mesh+slot to `attachMirror`
+  // again. Without a guard the first render target would leak and the mesh's
+  // hook bookkeeping would count a state no material points at any more — so
+  // ONE dispose would no longer be enough to unhook the mesh.
+  const reFrame = new FakeMaterial('wood')
+  const rePane = new FakeMaterial('slot_glass_1')
+  const reMesh = { isMesh: true, material: [reFrame, rePane], geometry: mirrorGeometry,
+                   onBeforeRender: before, visible: true }
+  const first = attachMirror(THREE2, reMesh, rePane, 1, 'glass_1', { textureSize: 64 })
+  const firstRt = first.uniforms.tDiffuse.value.rt
+  const second = attachMirror(THREE2, reMesh, rePane, 1, 'glass_1', { textureSize: 32 })
+  check('the mesh carries the second material now',
+        second !== null && second !== first && reMesh.material[1] === second)
+  check('the first pane was freed — render target AND material',
+        firstRt.disposed === true && first.disposed === true)
+  check('...and no longer answers as a mirror', mirrorPlaneOf(first) === undefined)
+  check('the second one does, with its own defaults',
+        mirrorPlaneOf(second)?.maxPerFrame === Infinity
+        && mirrorPlaneOf(second)?.maxDistanceM === Infinity,
+        JSON.stringify(mirrorPlaneOf(second)))
+  disposeMirror(second)
+  check('ONE dispose is enough to unhook the mesh (no stale state left over)',
+        reMesh.onBeforeRender === before)
 
   console.log(`\n${failures.length
     ? 'FAILED: ' + failures.join(', ') : 'all checks passed'}`)

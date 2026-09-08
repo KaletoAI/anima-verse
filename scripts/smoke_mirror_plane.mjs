@@ -41,16 +41,24 @@
  *     allow(n) is always true.
  * [9] COHERENCE — the faces of one group must agree on a side. With
  *     `len` = |Σ (b-a)×(c-a)| and `weight` = Σ |(b-a)×(c-a)|, a group whose
- *     `len / weight` is under 0.5 has no plane: two opposite skins of one pane
- *     cancel, and sliver noise points nowhere. Hand-derived on the unit square
- *     in z = 0 — a(0,0,0) b(1,0,0) c(1,1,0) d(0,1,0), faces (a,b,c)(a,c,d),
- *     two face vectors (0,0,1) of length 1 each, so weight 2 and Σ (0,0,2) per
- *     copy wound counter-clockwise, and (0,0,-2) per copy wound the other way:
- *       1 ccw + 1 cw  → Σ 0,       weight 4 → ratio 0     → null
- *       2 ccw + 1 cw  → Σ (0,0,2), weight 6 → ratio 1/3   → null
- *       3 ccw + 1 cw  → Σ (0,0,4), weight 8 → ratio 0.5   → a plane,
+ *     `len / weight` is under 0.9 has no plane: two opposite skins of one pane
+ *     cancel, and sliver noise points nowhere. A pane a renderer can mirror is
+ *     FLAT — a real wall mirror's panes measure 1.0000, while the 134 slivers
+ *     of a door-glass prop measure 0.7384 and sit 87° off their own sidecar,
+ *     so the threshold belongs between those two and near the flat end.
+ *     Hand-derived on the unit square in z = 0 — a(0,0,0) b(1,0,0) c(1,1,0)
+ *     d(0,1,0), faces (a,b,c)(a,c,d), two face vectors (0,0,1) of length 1
+ *     each, so weight 2 and Σ (0,0,2) per copy wound counter-clockwise, and
+ *     (0,0,-2) per copy wound the other way — n copies ccw and m cw give
+ *     Σ = (0,0,2(n-m)), weight 2(n+m), ratio (n-m)/(n+m):
+ *        1 ccw +  1 cw → Σ 0,        weight  4 → ratio 0      → null
+ *        2 ccw +  1 cw → Σ (0,0, 2), weight  6 → ratio 1/3    → null
+ *        3 ccw +  1 cw → Σ (0,0, 4), weight  8 → ratio 0.5    → null
+ *       18 ccw +  2 cw → Σ (0,0,32), weight 40 → ratio 0.8    → null
+ *       19 ccw +  1 cw → Σ (0,0,36), weight 40 → ratio 0.9    → a plane,
  *                        centroid (0.5, 0.5, 0), normal (0, 0, 1)
- *     The square alone is ratio 1 (as the rectangle of [1] is).
+ *     The square alone is ratio 1 (as the rectangle of [1] is). 0.5 and 0.8
+ *     are the cases that pin the threshold from below, 0.9 the one from above.
  * [10] An index past the end of `positions` reads `undefined` and poisons the
  *     sums with NaN. A NaN plane is not a plane:
  *     planeOfFaces([0,0,0, 1,0,0, 0,1,0], [0, 1, 99], [[0, 3]]) → null.
@@ -238,11 +246,21 @@ async function main() {
   check('one skin plus its mirror image → ratio 0 → null',
         planeOfFaces(sq, [...ccw, ...cw], [[0, 12]]) === null,
         JSON.stringify(planeOfFaces(sq, [...ccw, ...cw], [[0, 12]])))
-  check('2 ccw + 1 cw → ratio 2/6 = 1/3 is under 0.5 → null',
-        planeOfFaces(sq, [...ccw, ...ccw, ...cw], [[0, 18]]) === null,
-        JSON.stringify(planeOfFaces(sq, [...ccw, ...ccw, ...cw], [[0, 18]])))
-  const p9 = planeOfFaces(sq, [...ccw, ...ccw, ...ccw, ...cw], [[0, 24]])
-  check('3 ccw + 1 cw → ratio 4/8 = 0.5 is still a plane, (0.5,0.5,0)/(0,0,1)',
+  /** n copies of the square wound ccw and m wound cw, in one index range. */
+  const mix = (n, m) => {
+    const idx = []
+    for (let i = 0; i < n; i += 1) idx.push(...ccw)
+    for (let i = 0; i < m; i += 1) idx.push(...cw)
+    return planeOfFaces(sq, idx, [[0, idx.length]])
+  }
+  check('2 ccw + 1 cw → ratio 2/6 = 1/3 → null', mix(2, 1) === null,
+        JSON.stringify(mix(2, 1)))
+  check('3 ccw + 1 cw → ratio 4/8 = 0.5 → null', mix(3, 1) === null,
+        JSON.stringify(mix(3, 1)))
+  check('18 ccw + 2 cw → ratio 32/40 = 0.8 → still null', mix(18, 2) === null,
+        JSON.stringify(mix(18, 2)))
+  const p9 = mix(19, 1)
+  check('19 ccw + 1 cw → ratio 36/40 = 0.9 → a plane, (0.5,0.5,0)/(0,0,1)',
         p9 && vecNear(p9.point, [0.5, 0.5, 0]) && vecNear(p9.normal, [0, 0, 1]),
         JSON.stringify(p9))
   check('the square on its own is ratio 1',

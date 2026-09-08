@@ -44,8 +44,8 @@ export { applySlotMaterials, disposeSlotMaterials, GLASS_PRESET,
 export type { MaterialPreset, SlotTextureLoader } from './slotMaterials'
 
 export { planeOfFaces, MirrorBudget, attachMirror, disposeMirror,
-  MIRROR_PRESET } from './mirrorSurface'
-export type { MirrorPlane, MirrorOptions } from './mirrorSurface'
+  mirrorPlaneOf, MIRROR_PRESET } from './mirrorSurface'
+export type { MirrorPlane, MirrorOptions, MirrorInfo } from './mirrorSurface'
 
 export { applyCutouts, CUTOUT_MAX_POLYS,
   CUTOUT_MAX_POINTS } from './cutouts'

@@ -14,16 +14,30 @@
  * one place cannot drift between them. `scripts/smoke_mirror_plane.mjs` pins
  * the arithmetic with hand-derived numbers and can cross-check a local prop
  * against its sidecar (§ B5a — numbers, never screenshots).
+ *
+ * EXPECTED NOISE: a mirror pane that also goes through `applyDepthCut` gets
+ * its material cloned, and `UniformsUtils.clone` refuses to copy a render
+ * target's texture — three logs `UniformsUtils: Textures of render targets
+ * cannot be cloned` once per clone and leaves the copy's `tDiffuse` at null.
+ * That warning is expected and harmless here: `renderMirror` writes the render
+ * target back onto whatever material is actually being drawn, every draw.
  */
 
-import type { BufferGeometry, Camera, IUniform, Material, Matrix4, Mesh,
-  Object3D, OrthographicCamera, PerspectiveCamera, Scene, ShaderMaterial,
-  Vector4, WebGLRenderer, WebGLRenderTarget } from 'three'
+import type { BufferGeometry, Camera, IUniform, Material, Matrix3, Matrix4,
+  Mesh, Object3D, OrthographicCamera, PerspectiveCamera, Plane, Scene,
+  ShaderMaterial, Vector3, Vector4, WebGLRenderer,
+  WebGLRenderTarget } from 'three'
 
 /** How much the faces of one group have to agree on their side before the
  *  group counts as a plane: |Σ face vectors| / Σ |face vectors|. 1 is a flat
- *  group, 0 is one that cancels itself out. */
-const FACE_COHERENCE_MIN = 0.5
+ *  group, 0 is one that cancels itself out.
+ *
+ *  0.9 is measured, not guessed: the two panes of a local wall-mirror prop
+ *  score 1.0000, while the 134 slivers of a door-glass prop (0.006 m²) score
+ *  0.7384 and put their normal 87° off the same prop's sidecar. The threshold
+ *  has to sit between those two, and near the flat end — a pane a renderer can
+ *  mirror is FLAT, not merely more coherent than noise. */
+const FACE_COHERENCE_MIN = 0.9
 
 export interface MirrorPlane {
   /** Area-weighted centroid of the faces, in the geometry's own space. */
@@ -34,33 +48,31 @@ export interface MirrorPlane {
   normal: [number, number, number]
 }
 
-/**
- * The plane through a set of triangles. `ranges` are `[start, count]` pairs in
- * three's `geometry.groups` convention — INDEX units when `index` is given,
- * VERTEX units otherwise; a `count` past the end is clamped (three itself
- * stores `Infinity` for "the rest"). Returns `null` when the faces have no
- * area (a pane nothing can be measured from is not a mirror; the caller then
- * leaves the material as modelled).
- *
- * IT ALSO RETURNS `null` WHEN THE FACES DISAGREE ABOUT THEIR SIDE. With
- * `len` = |Σ (b-a)×(c-a)| and `weight` = Σ |(b-a)×(c-a)|, the ratio
- * `len / weight` is 1 for a flat group and 0 for one whose face vectors cancel
- * exactly; under 0.5 the group has no side worth mirroring. That is the shape
- * of a real defect: a pane modelled as TWO opposite skins in one material
- * group averages to no normal at all, and a group that is mostly sliver noise
- * points nowhere. Both would render a reflection off a plane nobody can see —
- * better no mirror than a wrong one. Found on a door-glass prop whose 134
- * slivers (0.006 m²) put the measured normal 87° off its sidecar.
- *
- * A vertex index past the end of `positions` reads `undefined` and poisons
- * every sum with NaN; a NaN plane is not a plane either, so that is `null` too
- * rather than a mirror pointing at nothing.
- */
-export function planeOfFaces(
+/** The raw sums a set of faces produces. Measured ONCE, because the mirror
+ *  needs the same numbers twice: to build the plane, and to say why there is
+ *  none when there is none. */
+interface FaceMoments {
+  /** Σ (b-a)×(c-a) — each face's normal, scaled by twice its area. */
+  sum: [number, number, number]
+  /** Σ face centroid · |(b-a)×(c-a)|. */
+  moment: [number, number, number]
+  /** Σ |(b-a)×(c-a)| — twice the total area. */
+  weight: number
+  /** |Σ (b-a)×(c-a)|. */
+  len: number
+  /** How many faces had any area at all. */
+  faces: number
+}
+
+/** Walk the faces of `ranges` and add them up. `ranges` are `[start, count]`
+ *  pairs in three's `geometry.groups` convention — INDEX units when `index` is
+ *  given, VERTEX units otherwise; a `count` past the end is clamped (three
+ *  itself stores `Infinity` for "the rest"). */
+function faceMoments(
   positions: ArrayLike<number>,
   index: ArrayLike<number> | null,
   ranges: ReadonlyArray<readonly [number, number]>,
-): MirrorPlane | null {
+): FaceMoments {
   const total = index ? index.length : Math.floor(positions.length / 3)
   const vert = (i: number): [number, number, number] => {
     const v = index ? index[i] : i
@@ -69,6 +81,7 @@ export function planeOfFaces(
   let nx = 0, ny = 0, nz = 0          // sum of (b-a)×(c-a) = 2·area·normal
   let cx = 0, cy = 0, cz = 0          // sum of centroid·(2·area)
   let weight = 0
+  let faces = 0
   for (const [start, count] of ranges) {
     const s = Math.max(0, Math.floor(start))
     const end = Math.min(total, s + Math.max(0, Math.floor(count)))
@@ -86,19 +99,103 @@ export function planeOfFaces(
       cy += (a[1] + b[1] + c[1]) / 3 * twiceArea
       cz += (a[2] + b[2] + c[2]) / 3 * twiceArea
       weight += twiceArea
+      faces += 1
     }
   }
-  const len = Math.sqrt(nx * nx + ny * ny + nz * nz)
-  if (!Number.isFinite(len) || !Number.isFinite(weight)
-      || !Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(cz)) {
-    return null
-  }
-  if (weight <= 1e-12 || len <= 1e-12) return null
-  if (len / weight < FACE_COHERENCE_MIN) return null
   return {
-    point: [cx / weight, cy / weight, cz / weight],
-    normal: [nx / len, ny / len, nz / len],
+    sum: [nx, ny, nz],
+    moment: [cx, cy, cz],
+    weight,
+    len: Math.sqrt(nx * nx + ny * ny + nz * nz),
+    faces,
   }
+}
+
+/** A plane, or the one sentence that says why there is none. `why` is empty
+ *  exactly when `plane` is set — the mirror puts it straight into a warning,
+ *  so it has to read as an explanation, not as an error code. */
+interface FaceMeasurement {
+  plane: MirrorPlane | null
+  why: string
+}
+
+/**
+ * The plane through a set of triangles, WITH the reason when there is none.
+ *
+ * Three ways a group fails to be a plane, and each is a different sentence:
+ *
+ *  - NO AREA. Every face is degenerate (three identical points, a collapsed
+ *    strip). Nothing to measure at all.
+ *  - CANCELLING FACES. The face vectors sum to zero: the classic shape is a
+ *    pane modelled as two opposite skins inside ONE material group.
+ *  - NO COHERENT PLANE. `len / weight` under `FACE_COHERENCE_MIN` — the faces
+ *    point in too many directions to call any of them "the" plane. Sliver
+ *    noise lands here.
+ *
+ * A vertex index past the end of `positions` reads `undefined` and poisons
+ * every sum with NaN; a NaN plane is not a plane either, so that is its own
+ * reason rather than a mirror pointing at nothing.
+ */
+function measureFaces(
+  positions: ArrayLike<number>,
+  index: ArrayLike<number> | null,
+  ranges: ReadonlyArray<readonly [number, number]>,
+): FaceMeasurement {
+  const m = faceMoments(positions, index, ranges)
+  const fail = (why: string): FaceMeasurement => ({ plane: null, why })
+  if (!Number.isFinite(m.len) || !Number.isFinite(m.weight)
+      || !m.moment.every((v) => Number.isFinite(v))) {
+    return fail('a vertex index reaches past the position buffer')
+  }
+  if (!m.faces || m.weight <= 1e-12) {
+    return fail('no face of the group has any area')
+  }
+  if (m.len <= 1e-12) {
+    return fail(`its ${m.faces} faces cancel out exactly `
+      + '(two opposite skins in one material group)')
+  }
+  const ratio = m.len / m.weight
+  if (ratio < FACE_COHERENCE_MIN) {
+    return fail(`its ${m.faces} faces have no coherent plane `
+      + `(ratio ${ratio.toFixed(4)} < ${FACE_COHERENCE_MIN}, `
+      + `${(m.weight / 2).toFixed(6)} m² of surface)`)
+  }
+  return {
+    plane: {
+      point: [m.moment[0] / m.weight, m.moment[1] / m.weight,
+              m.moment[2] / m.weight],
+      normal: [m.sum[0] / m.len, m.sum[1] / m.len, m.sum[2] / m.len],
+    },
+    why: '',
+  }
+}
+
+/**
+ * The plane through a set of triangles. `ranges` are `[start, count]` pairs in
+ * three's `geometry.groups` convention — INDEX units when `index` is given,
+ * VERTEX units otherwise; a `count` past the end is clamped (three itself
+ * stores `Infinity` for "the rest"). Returns `null` when the faces have no
+ * measurable plane; `measureFaces` above enumerates the three ways that
+ * happens and is what `attachMirror` uses, because it also wants to SAY which
+ * one it hit.
+ *
+ * THE COHERENCE RULE, because it is the surprising one: with
+ * `len` = |Σ (b-a)×(c-a)| and `weight` = Σ |(b-a)×(c-a)|, the ratio
+ * `len / weight` is 1 for a flat group and 0 for one whose face vectors cancel
+ * exactly; under `FACE_COHERENCE_MIN` the group has no side worth mirroring.
+ * That is the shape of a real defect — a pane modelled as TWO opposite skins
+ * in one material group averages to no normal at all, and a group that is
+ * mostly sliver noise points nowhere. Both would render a reflection off a
+ * plane nobody can see, and better no mirror than a wrong one: a door-glass
+ * prop whose 134 slivers (0.006 m²) score 0.7384 puts its measured normal 87°
+ * off its own sidecar, while a real wall mirror's panes score 1.0000.
+ */
+export function planeOfFaces(
+  positions: ArrayLike<number>,
+  index: ArrayLike<number> | null,
+  ranges: ReadonlyArray<readonly [number, number]>,
+): MirrorPlane | null {
+  return measureFaces(positions, index, ranges).plane
 }
 
 /**
@@ -211,6 +308,7 @@ interface MirrorState {
   plane: MirrorPlane
   rt: WebGLRenderTarget
   budget: MirrorBudget
+  maxPerFrame: number
   maxDistanceM: number
   cameras: WeakMap<Camera, Camera>
   textureMatrix: Matrix4
@@ -232,6 +330,47 @@ const stateOfMaterial = new WeakMap<Material, MirrorState>()
  *  reflection and costs nothing. */
 let inMirrorPass = false
 
+/** The vectors and matrices `renderMirror` works in. three's classes are a
+ *  PARAMETER of this package, so they cannot be module constants — they are
+ *  built on the first reflection instead, and only from inside `renderMirror`,
+ *  so `attachMirror`'s constructor path stays the short list a smoke can stub.
+ *  ONE set serves every mirror on the page: the recursion guard above means no
+ *  two panes are ever mid-pass at the same time, and each pass writes every
+ *  slot it reads before it reads it. */
+interface MirrorScratch {
+  mirrorPos: Vector3
+  normal: Vector3
+  cameraPos: Vector3
+  view: Vector3
+  lookAt: Vector3
+  target: Vector3
+  rotation: Matrix4
+  normalMatrix: Matrix3
+  clipPlane: Plane
+  clip: Vector4
+  q: Vector4
+}
+let scratch: MirrorScratch | null = null
+
+function mirrorScratch(THREE: typeof import('three')): MirrorScratch {
+  if (!scratch) {
+    scratch = {
+      mirrorPos: new THREE.Vector3(),
+      normal: new THREE.Vector3(),
+      cameraPos: new THREE.Vector3(),
+      view: new THREE.Vector3(),
+      lookAt: new THREE.Vector3(),
+      target: new THREE.Vector3(),
+      rotation: new THREE.Matrix4(),
+      normalMatrix: new THREE.Matrix3(),
+      clipPlane: new THREE.Plane(),
+      clip: new THREE.Vector4(),
+      q: new THREE.Vector4(),
+    }
+  }
+  return scratch
+}
+
 type GroupRange = readonly [number, number]
 
 /** The index/vertex ranges of ONE material of a mesh (three's groups). */
@@ -249,6 +388,11 @@ function rangesOf(geometry: BufferGeometry, materialIndex: number | null): Group
  *
  * `materialIndex` is the position in `mesh.material` when that is an array,
  * `null` for a single material.
+ *
+ * A pane that CANNOT be measured says so once, on the console, naming the slot
+ * and the reason. Silence would be the worst answer available: the author
+ * picked `mirror` in the admin and would see a plain pane with nothing
+ * anywhere to say the model is the problem, not the setting.
  */
 export function attachMirror(
   THREE: typeof import('three'),
@@ -260,13 +404,28 @@ export function attachMirror(
 ): Material | null {
   const geometry = mesh.geometry
   const pos = geometry?.attributes?.position
-  if (!pos) return null
-  const plane = planeOfFaces(pos.array as ArrayLike<number>,
+  if (!pos) {
+    console.warn(`mirror slot "${slot}": the mesh carries no position `
+      + 'attribute — left as modelled')
+    return null
+  }
+  const measured = measureFaces(pos.array as ArrayLike<number>,
     geometry.index ? (geometry.index.array as ArrayLike<number>) : null,
     rangesOf(geometry, materialIndex))
-  if (!plane) return null
+  const plane = measured.plane
+  if (!plane) {
+    console.warn(`mirror slot "${slot}": ${measured.why} — left as modelled`)
+    return null
+  }
+
+  // Attaching the SAME slot of the SAME mesh again (a re-applied placement)
+  // has to free the pane that is already there, or its render target leaks and
+  // the mesh's hook bookkeeping counts a state no material points at any more.
+  const previous = meshStates.get(mesh)?.get(slot)
+  if (previous) disposeMirror(previous.material)
 
   const size = Math.max(16, Math.floor(opts.textureSize ?? MIRROR_PRESET.textureSize))
+  const maxPerFrame = opts.maxPerFrame ?? Number.POSITIVE_INFINITY
   const rt = new THREE.WebGLRenderTarget(size, size, { samples: 4, type: THREE.HalfFloatType })
   const textureMatrix = new THREE.Matrix4()
   const material = new THREE.ShaderMaterial({
@@ -275,6 +434,10 @@ export function attachMirror(
     vertexShader: MIRROR_VERTEX,
     fragmentShader: MIRROR_FRAGMENT,
     clipping: true,
+    // Both sides of a pane mirror — `renderMirror` turns the normal towards
+    // the camera every frame, and a single-skin pane would otherwise vanish
+    // the moment one walks round it.
+    side: THREE.DoubleSide,
   })
   material.uniforms.color.value = new THREE.Color(MIRROR_PRESET.tint)
   material.uniforms.tDiffuse.value = rt.texture
@@ -284,7 +447,8 @@ export function attachMirror(
 
   const state: MirrorState = {
     mesh, slot, plane, rt, textureMatrix, material,
-    budget: new MirrorBudget(opts.maxPerFrame ?? Number.POSITIVE_INFINITY),
+    budget: new MirrorBudget(maxPerFrame),
+    maxPerFrame,
     maxDistanceM: opts.maxDistanceM ?? Number.POSITIVE_INFINITY,
     cameras: new WeakMap(),
   }
@@ -318,17 +482,24 @@ function renderMirror(THREE: typeof import('three'), mesh: Mesh, renderer: WebGL
   if (!state) return
   const uniforms = (material as ShaderMaterial).uniforms
   if (!uniforms?.tDiffuse || !uniforms.textureMatrix) return
-  // A depth-cut clone carries its own uniform OBJECTS (UniformsUtils.clone
-  // copies a Matrix4), so the state's target and matrix are written onto
-  // whatever material is actually being drawn.
+  // WHY THIS IS REWRITTEN ON EVERY DRAW, not just set once in `attachMirror`:
+  // `applyDepthCut` CLONES the material it is given, and `UniformsUtils.clone`
+  // flatly refuses to copy a render target's texture — three logs
+  // "UniformsUtils: Textures of render targets cannot be cloned" and leaves
+  // the clone's `tDiffuse` at null, which would draw a cut mirror black. (The
+  // clone also gets its own copy of the Matrix4, so the texture matrix would
+  // freeze at whatever it held when the cut was made.) Writing both onto
+  // whatever material is ACTUALLY being drawn repairs the clone every frame.
   uniforms.tDiffuse.value = state.rt.texture
   uniforms.textureMatrix.value = state.textureMatrix
 
-  const mirrorPos = new THREE.Vector3(...state.plane.point).applyMatrix4(mesh.matrixWorld)
-  const normal = new THREE.Vector3(...state.plane.normal)
-    .applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize()
-  const cameraPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld)
-  const view = new THREE.Vector3().subVectors(mirrorPos, cameraPos)
+  const { mirrorPos, normal, cameraPos, view, lookAt, target, rotation,
+          normalMatrix, clipPlane, clip, q } = mirrorScratch(THREE)
+  mirrorPos.set(...state.plane.point).applyMatrix4(mesh.matrixWorld)
+  normal.set(...state.plane.normal)
+    .applyMatrix3(normalMatrix.getNormalMatrix(mesh.matrixWorld)).normalize()
+  cameraPos.setFromMatrixPosition(camera.matrixWorld)
+  view.subVectors(mirrorPos, cameraPos)
   // Both sides of a pane mirror: the normal always faces the camera.
   if (view.dot(normal) > 0) normal.negate()
   if (view.length() > state.maxDistanceM) return
@@ -339,10 +510,10 @@ function renderMirror(THREE: typeof import('three'), mesh: Mesh, renderer: WebGL
     reflectionCamera = camera.clone()
     state.cameras.set(camera, reflectionCamera)
   }
-  const rotation = new THREE.Matrix4().extractRotation(camera.matrixWorld)
+  rotation.extractRotation(camera.matrixWorld)
   view.reflect(normal).negate().add(mirrorPos)
-  const lookAt = new THREE.Vector3(0, 0, -1).applyMatrix4(rotation).add(cameraPos)
-  const target = new THREE.Vector3().subVectors(mirrorPos, lookAt).reflect(normal).negate().add(mirrorPos)
+  lookAt.set(0, 0, -1).applyMatrix4(rotation).add(cameraPos)
+  target.subVectors(mirrorPos, lookAt).reflect(normal).negate().add(mirrorPos)
   reflectionCamera.position.copy(view)
   reflectionCamera.up.set(0, 1, 0).applyMatrix4(rotation).reflect(normal)
   reflectionCamera.lookAt(target)
@@ -356,11 +527,11 @@ function renderMirror(THREE: typeof import('three'), mesh: Mesh, renderer: WebGL
     .multiply(mesh.matrixWorld)
 
   // Oblique near plane (Lengyel), verbatim from Reflector.js.
-  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, mirrorPos)
+  clipPlane.setFromNormalAndCoplanarPoint(normal, mirrorPos)
     .applyMatrix4(reflectionCamera.matrixWorldInverse)
-  const clip = new THREE.Vector4(plane.normal.x, plane.normal.y, plane.normal.z, plane.constant)
+  clip.set(clipPlane.normal.x, clipPlane.normal.y, clipPlane.normal.z,
+           clipPlane.constant)
   const proj = reflectionCamera.projectionMatrix
-  const q = new THREE.Vector4()
   const ortho = (reflectionCamera as OrthographicCamera).isOrthographicCamera === true
   q.x = (Math.sign(clip.x) + proj.elements[8]) / proj.elements[0]
   q.y = (Math.sign(clip.y) + proj.elements[9]) / proj.elements[5]
@@ -395,6 +566,36 @@ function renderMirror(THREE: typeof import('three'), mesh: Mesh, renderer: WebGL
     if (viewport !== undefined) renderer.state.viewport(viewport)
     mesh.visible = wasVisible
     inMirrorPass = false
+  }
+}
+
+/** What a live mirror material is made of, for anyone who has to CHECK it
+ *  rather than draw it: the plane the pane was measured to have, and the cost
+ *  policy that reached the state. */
+export interface MirrorInfo {
+  /** A copy — writing to it cannot move the pane. */
+  plane: MirrorPlane
+  maxPerFrame: number
+  maxDistanceM: number
+}
+
+/** Read back what `attachMirror` measured and stored for a material.
+ *  `undefined` for anything that is not a live mirror (a picture clone, a
+ *  glass clone, a pane already disposed). This is how
+ *  `scripts/smoke_slot_materials.mjs` [9] can tell WHICH material group was
+ *  measured — without it a mirror on the wrong faces looks like a mirror on
+ *  the right ones. */
+export function mirrorPlaneOf(mat: Material): MirrorInfo | undefined {
+  const state = stateOfMaterial.get(mat)
+  if (!state) return undefined
+  const { point, normal } = state.plane
+  return {
+    plane: {
+      point: [point[0], point[1], point[2]],
+      normal: [normal[0], normal[1], normal[2]],
+    },
+    maxPerFrame: state.maxPerFrame,
+    maxDistanceM: state.maxDistanceM,
   }
 }
 
