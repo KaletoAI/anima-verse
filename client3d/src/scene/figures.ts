@@ -1258,6 +1258,11 @@ export class Figure {
    *  has finished. */
   private transition: THREE.AnimationAction | null = null;
   private pending: { kind: ClipKind; terrainClip: boolean; sink: number } | null = null;
+  /** Wall-clock deadline of the running bridge. A gate that waits for a clip
+   *  must not be able to wait for ever: a figure the frame loop stops updating
+   *  (culled, tab in the background) would never see the mixer's "finished"
+   *  and would hold whoever asked. */
+  private bridgeUntil = 0;
   private targetYaw = Math.PI; // Default: Richtung Süden (Kamera-Grundstellung)
 
   private baseScale = 1;
@@ -1316,6 +1321,7 @@ export class Figure {
     this.mixer.addEventListener('finished', (e) => {
       if ((e as unknown as { action?: THREE.AnimationAction }).action !== this.transition) return;
       this.transition = null;
+      this.bridgeUntil = 0;
       const next = this.pending;
       this.pending = null;
       if (next) this.play(next.kind, next.terrainClip, next.sink);
@@ -1404,6 +1410,9 @@ export class Figure {
       // pose in the frame between "finished" and the target's fade-in.
       bridge.clampWhenFinished = true;
       bridge.timeScale = 1;
+      // Half a second of slack over the clip: the crossfade at each end, and
+      // a frame loop that is never exactly on time.
+      this.bridgeUntil = performance.now() + bridge.getClip().duration * 1000 + 500;
       bridge.fadeIn(0.25).play();
       this.current?.fadeOut(0.25);
       this.current = bridge;
@@ -1458,6 +1467,21 @@ export class Figure {
     this.current?.fadeOut(0.25);
     this.current = resolved;
     this.currentKind = kind;
+  }
+
+  /** Is a BRIDGE clip running — the one-shot that carries this figure out of
+   *  one state into the next? Whoever steers the figure asks before it moves
+   *  it: walking while the standing-up plays is the jump transitions exist to
+   *  remove. False again the moment the clip ends, and after the deadline
+   *  even if the "finished" event never arrived. */
+  get bridging(): boolean {
+    if (!this.transition) return false;
+    if (performance.now() > this.bridgeUntil) {
+      this.transition = null;
+      this.bridgeUntil = 0;
+      return false;
+    }
+    return true;
   }
 
   /** Put the instance at `groundY − drop`. The anchor itself stays what the

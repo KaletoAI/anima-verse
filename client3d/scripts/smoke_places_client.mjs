@@ -294,6 +294,16 @@ async function main() {
     [standingClipFor('sit', ''), standingClipFor(undefined, ''),
      standingClipFor('sit', 'tread')], ['sit', 'idle', 'tread'])
 
+  // …and this is what the stand-up leans on: it no longer clears the clip but
+  // asks for WALKING, and that request has to reach the figure — only then can
+  // a transition rule fire and play the way out of the pose first. Cleared to
+  // nothing (the old behaviour) the rule answered 'idle' and never matched.
+  checkList("the stand-up's own request wins over idle",
+    [standingClipFor('mob1-walk', ''), standingClipFor(undefined, '')],
+    ['mob1-walk', 'idle'])
+  checkTrue('…but the ground still wins over it (standing in a lake)',
+    standingClipFor('mob1-walk', 'tread') === 'tread')
+
   if (FAILED.length) {
     console.error(`\n${FAILED.length} check(s) FAILED: ${FAILED.join(', ')}`)
     process.exit(1)

@@ -13,8 +13,8 @@ import { installSpotHighlight, setSpot } from './scene/spotHighlight';
 import { openPlaceMenu } from './game/placeMenu';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
-  gateStandY, groundScope, groundStoreyFloors, slideBlocked, slopeBlocks,
-  terrainBlocks, terrainPace, walkDir, type GroundScope,
+  gateStandY, groundScope, groundStoreyFloors, locomotionClip, slideBlocked,
+  slopeBlocks, terrainBlocks, terrainPace, walkDir, type GroundScope,
 } from './game/walk';
 import {
   goalDir, planClickWalk, reachedGoal, walkStalled, STALL_FRAMES,
@@ -3906,7 +3906,12 @@ async function startApp(username: string, role: string) {
       seatedKey = '';
       ownSeatChangeAt = Infinity;
       npcs.setPlayerPose(avatarName, null, null);
-      npcs.setPlayerAnimation(avatarName, null);
+      // …and the clip it asks for is WALKING, not "nothing". That request is
+      // what lets a transition rule fire (`game/walk.clipTransition`): the
+      // figure plays the way out of its pose first and the walk after it. With
+      // `null` the frame decided on the idle clip, no rule ever matched, and
+      // the standing-up could only play once the figure was already moving.
+      npcs.setPlayerAnimation(avatarName, locomotionClip('walk'));
       void api.postActivity({ activity: '' })
         .then(() => {
           // …and a poll is asked right away, exactly as the sit-down does it:
@@ -3919,6 +3924,18 @@ async function startApp(username: string, role: string) {
         })
         .catch((e) => { ownSeatChangeAt = 0; uiActions.toast?.(String(e)); });
     }
+    // STANDING UP TAKES TIME. While the figure plays the clip that carries it
+    // out of its pose, the keys steer nothing — a figure that walks while it
+    // is still getting up is the very picture transitions exist to remove.
+    // The gate opens by itself when the clip ends (`Figure.bridging`, which
+    // also gives up after a deadline so a figure the frame loop stopped
+    // updating can never hold the player).
+    //
+    // This REVISES one sentence of plan-posen-plaetze.md § 4 ("the figure
+    // walks off at once, no round trip between key and picture", user decision
+    // 2026-09-08): the immediate part still holds — nothing waits for the
+    // server here, the hold is local and lasts exactly one clip.
+    if (dir && npcs.isBridging(avatarName)) dir = null;
     if (!dir) {
       // Standing still is when the FINAL report of a walk goes out — the
       // server's last word about where the avatar is must be where it really

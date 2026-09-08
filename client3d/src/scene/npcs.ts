@@ -503,6 +503,12 @@ export class NpcManager {
    *  figure walks, while the payload in flight still says `sit`. Clearing it
    *  here makes the very next frame ask `standingClipFor` again and get
    *  `idle`/`walk`; the poll after the server's answer writes the truth back. */
+  /** Is this figure playing a BRIDGE clip (standing up, sitting down)? The
+   *  avatar's steering asks before it takes a step — see `Figure.bridging`. */
+  isBridging(name: string): boolean {
+    return this.npcs.get(name)?.figure?.bridging ?? false;
+  }
+
   setPlayerAnimation(name: string, animation: string | null) {
     const npc = this.npcs.get(name);
     if (!npc) return;
