@@ -633,6 +633,14 @@ export function CharactersTab() {
     }
     const features = (template?.features || {}) as Record<string, boolean>
     const gateOk = (id: string) => {
+      // Expressions is a cache VIEWER, not a generator: it lists the rendered
+      // files, deletes single ones and clears the cache. A temporary NPC makes
+      // no variants (`expression_variants_enabled` is off) but it HAS
+      // expression pictures — the finishing job renders its one default
+      // variant (`npc_assets._render_default_expression`), and every outfit
+      // edit leaves the previous ones behind. For that sheet the tab hangs on
+      // HAVING pictures, not on being allowed to make new ones.
+      if (id === 'expressions' && isTempNpc) return true
       const f = specialGate[id]
       return !f || features[f] !== false
     }
@@ -654,7 +662,7 @@ export function CharactersTab() {
     if (!inserted) out.push(...afterAussehen)
     out.push(...SPECIAL_TABS.filter((s) => !placed.has(s.id) && gateOk(s.id)))
     return out
-  }, [fieldTabs, template])
+  }, [fieldTabs, template, isTempNpc])
 
   // KEEP the selected tab across a character switch. Jump to the first field
   // tab only when the current tab does not exist for this character at all
