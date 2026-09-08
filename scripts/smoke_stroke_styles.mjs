@@ -1,5 +1,7 @@
 /**
- * Smoke run for `decorateStroke` in `frontend/src/tabs/map/mapMath.ts` — the
+ * Smoke run for `decorateStroke` — since 2026-09-09 in
+ * `packages/scene-render/src/stroke.ts`, re-exported by
+ * `frontend/src/tabs/map/mapMath.ts` (the entry bundled below) — the
  * line tool's jagged and wavy styles, the step BEFORE the ribbon is built.
  *
  * Usage:  node scripts/smoke_stroke_styles.mjs

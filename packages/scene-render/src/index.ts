@@ -92,6 +92,12 @@ export type {
   ScatterYawMode,
 } from './scatter'
 
+export {
+  STROKE_STYLES, isStrokeStyle, strokeSeed, decorateStroke,
+  MAX_DECORATED_POINTS,
+} from './stroke'
+export type { StrokeStyle, StrokeDeco, DecoratedStroke } from './stroke'
+
 export { SpecVerifier, VERIFY_EPS } from './verify'
 export type { PrimitiveTarget, VerifyRow } from './verify'
 
