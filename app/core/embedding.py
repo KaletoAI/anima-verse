@@ -28,26 +28,29 @@ logger = get_logger("embedding")
 DEFAULT_INTERNAL_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_CACHE_DIR = "./models/fastembed"
 
-# Kuratierte fastembed-Modelle (klein, CPU-tauglich). Schluessel = fastembed
-# model_name, Wert = UI-Label. Wird vom config_schema fuer das Dropdown genutzt.
+# Curated fastembed models (small, CPU-friendly). Key = fastembed model_name,
+# value = UI label. config_schema feeds its dropdown from this.
 INTERNAL_MODELS = {
     "BAAI/bge-small-en-v1.5": "bge-small-en (384d, ~130 MB) — Default",
     "BAAI/bge-base-en-v1.5": "bge-base-en (768d, ~440 MB)",
     "sentence-transformers/all-MiniLM-L6-v2": "all-MiniLM-L6 (384d, ~90 MB)",
     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2":
-        "paraphrase-multilingual-MiniLM-L12 (384d, multilingual)",
+        "paraphrase-multilingual-MiniLM-L12 (384d, multilingual, ~220 MB)",
+    "sentence-transformers/paraphrase-multilingual-mpnet-base-v2":
+        "paraphrase-multilingual-mpnet-base (768d, multilingual, ~1 GB) — "
+        "recommended for German pose aliases",
 }
 
-# model_id -> fastembed.TextEmbedding | None (None = Laden fehlgeschlagen)
+# model_id -> fastembed.TextEmbedding | None (None = loading failed)
 _MODEL_CACHE: dict = {}
 _FASTEMBED_MISSING_LOGGED = False
 
 
 def embed(text: str) -> Optional[List[float]]:
-    """Erzeugt ein Embedding fuer ``text`` gemaess Config-Backend.
+    """Embedding of ``text`` via the configured backend.
 
-    Returns ``None`` wenn kein Modell verfuegbar/konfiguriert ist oder der
-    Aufruf fehlschlaegt.
+    Returns ``None`` when no model is available/configured or the call
+    fails.
     """
     text = (text or "").strip()
     if not text:
@@ -117,22 +120,22 @@ def _get_internal_model(model_id: str, cache_dir: str):
     except ImportError:
         if not _FASTEMBED_MISSING_LOGGED:
             logger.warning(
-                "fastembed nicht installiert — internes Embedding deaktiviert "
-                "(Pose-Matching faellt auf String-Vergleich zurueck). "
-                "Installation: pip install fastembed"
+                "fastembed not installed — internal embedding disabled "
+                "(pose matching falls back to string comparison). "
+                "Install: pip install fastembed"
             )
             _FASTEMBED_MISSING_LOGGED = True
         _MODEL_CACHE[model_id] = None
         return None
     try:
-        logger.info("Lade internes Embedding-Modell %r (cache: %s) …",
+        logger.info("Loading internal embedding model %r (cache: %s) …",
                     model_id, cache_dir)
         model = TextEmbedding(model_name=model_id, cache_dir=cache_dir or None)
         _MODEL_CACHE[model_id] = model
         return model
     except Exception as e:
-        logger.warning("Internes Embedding-Modell %r konnte nicht geladen "
-                       "werden: %s", model_id, e)
+        logger.warning("Internal embedding model %r could not be loaded: %s",
+                       model_id, e)
         _MODEL_CACHE[model_id] = None
         return None
 
@@ -150,15 +153,15 @@ def _embed_internal(text: str) -> Optional[List[float]]:
             return None
         return [float(x) for x in vecs[0]]
     except Exception as e:
-        logger.debug("internes Embedding fehlgeschlagen (%s): %s",
+        logger.debug("internal embedding failed (%s): %s",
                      type(e).__name__, e)
         return None
 
 
-# ── extern (gerouteter /v1/embeddings-Provider) ──────────────────────────
+# ── external (routed /v1/embeddings provider) ────────────────────────────
 
 def _resolve_external():
-    """Liefert (inst, provider) fuer den Task ``pose_embedding`` oder (None, None)."""
+    """(inst, provider) for the ``pose_embedding`` task, or (None, None)."""
     try:
         from app.core.llm_router import resolve_llm
         inst = resolve_llm("pose_embedding")

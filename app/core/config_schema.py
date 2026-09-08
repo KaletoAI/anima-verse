@@ -215,11 +215,15 @@ SECTIONS = {
                     "BAAI/bge-base-en-v1.5",
                     "sentence-transformers/all-MiniLM-L6-v2",
                     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                    "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
                 ],
                 "default": "BAAI/bge-small-en-v1.5",
                 "description": "Built-in embedding model (downloaded on first use, CPU). "
-                               "Pose descriptions are normalized to short English, so a small "
-                               "English model is enough. Only used when backend is internal/auto.",
+                               "Pose aliases are matched in the language they are written in: "
+                               "for English-only aliases a small English model is enough; German "
+                               "aliases need a multilingual one, and MiniLM-L12 measures German "
+                               "short phrases poorly — prefer mpnet-base (~1 GB) there. "
+                               "Only used when backend is internal/auto.",
             },
             "cache_dir": {
                 "type": "str",

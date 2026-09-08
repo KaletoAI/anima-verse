@@ -63,6 +63,9 @@ Stage 5 - admin surface (task 6), derived BY HAND from the route contract:
 - `delete_candidate` removes the row for good (approve), while
   `set_candidate_status(..., "dismissed")` keeps it and only takes it out of
   the open list (dismiss).
+- the route lists open candidates MOST OFTEN SEEN FIRST (count desc, then
+  most recent): a text recorded 3x precedes one recorded 2x, even when the
+  latter is the more recent sighting.
 - approve/new-entry KEEPS the synonyms the admin typed: ["Baking bread",
   " rolling dough ", ""] + raw_text "kneading dough" under the key `kneading`
   -> ["baking bread", "rolling dough", "kneading dough"] (trimmed,
@@ -473,6 +476,24 @@ try:
     record_candidate("pose", "counting stars", "", None)
     _open = {c["raw_text"] for c in list_candidates("pose")}
     assert _open - _base == {"juggling knives", "counting stars"}, _open
+    #    The admin list is sorted by HOW OFTEN a text missed, most often first
+    #    (user ruling 2026-09-08): "juggling knives" seen 3x beats "counting
+    #    stars" seen 2x, although the latter was seen more recently.
+    record_candidate("pose", "juggling knives", "standing", 0.7)
+    record_candidate("pose", "juggling knives", "standing", 0.7)
+    record_candidate("pose", "counting stars", "", None)   # 2x, and the NEWEST
+    #    (stamps are second-resolution, so the recency gap is made explicit)
+    from datetime import timedelta as _td
+    from app.core.timeutils import utc_now as _utc_now
+    from app.core.db import transaction as _tx
+    with _tx() as _conn:
+        _conn.execute("UPDATE pose_candidates SET last_seen=? WHERE axis='pose' "
+                      "AND raw_text='counting stars'",
+                      ((_utc_now() + _td(minutes=1)).isoformat(timespec="seconds"),))
+    from app.routes.poses import list_candidates as _route_list
+    _listed = [c["raw_text"] for c in _route_list(axis="pose", status="open", _={})["candidates"]]
+    assert _listed[0] == "juggling knives", _listed
+    assert _listed.index("juggling knives") < _listed.index("counting stars"), _listed
     assert set_candidate_status("pose", "counting stars", "dismissed") is True
     assert "counting stars" not in {c["raw_text"] for c in list_candidates("pose")}
     assert [c["raw_text"] for c in list_candidates("pose", status="dismissed")] \

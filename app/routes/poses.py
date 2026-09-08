@@ -541,15 +541,16 @@ def delete_entry(key: str, axis: str = Query("pose"),
 @router.get("/candidates")
 def list_candidates(axis: str = Query("pose"), status: str = Query("open"),
                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Open candidates of an axis, most recently seen first.
+    """Open candidates of an axis, MOST OFTEN SEEN FIRST, most recent as the
+    tie-break (user ruling 2026-09-08 — the order ``list_candidates`` already
+    returns).
 
-    ``count`` counts the FIRST sighting per server process on the expression
-    axis (the resolver memoizes), so it reads as "seen", not as a hit count —
-    recency is the better sort key.
+    On the expression axis ``count`` counts the FIRST sighting per server
+    process (the resolver memoizes there), so it reads as "seen" rather than
+    as a hit count; on the pose axis every miss counts.
     """
     axis = _axis(axis)
     rows = pose_catalog.list_candidates(axis, status=status)
-    rows.sort(key=lambda r: (r.get("last_seen") or ""), reverse=True)
     return {"candidates": rows, "axis": axis}
 
 

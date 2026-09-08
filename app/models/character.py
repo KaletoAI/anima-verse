@@ -1826,9 +1826,16 @@ def get_character_pose_flavor(character_name: str) -> str:
     return (profile.get("pose_flavor") or "") if profile else ""
 
 
-def set_pose_intent(character_name: str, pose: str, prefer: str = "") -> None:
+def set_pose_intent(character_name: str, pose: str, prefer: str = "",
+                    flavor: Optional[str] = None) -> None:
     """Canonical setter for 'character does X now'. Resolves the free text to
     a catalog key (the ONLY render key) + sanitized flavor. Empty pose resets.
+
+    ``flavor`` is for a caller that already holds the KEY and a separate
+    display sentence (the NPC director answers both): ``pose`` is then the
+    key and ``flavor`` the sentence that becomes the display text, run
+    through the same ``sanitize_flavor`` as a free text would be. None keeps
+    today's rule — the flavor is the sanitized ``pose`` text itself.
 
     The key also SEATS the character (plan-posen-plaetze.md § 4):
     ``places.assign`` gives it a free place of the pose's group in its room
@@ -1848,11 +1855,12 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "") -> None:
     if not character_name:
         return
     raw = (pose or "").strip()
+    display = flavor          # the caller's own sentence, or None
     key, flavor = "", ""
     if raw:
         from app.core.pose_catalog import resolve_to_catalog, sanitize_flavor
         key, _how = resolve_to_catalog(raw, "pose")
-        flavor = sanitize_flavor(raw)
+        flavor = sanitize_flavor(raw if display is None else display)
         if flavor.lower() == key.lower():
             flavor = ""          # flavor that adds nothing is noise
     profile = get_character_profile(character_name) or {}
@@ -2105,13 +2113,13 @@ def get_character_current_feeling(character_name: str) -> str:
 
 
 def save_character_current_feeling(character_name: str, feeling: str):
-    """Speichert das aktuelle Gefuehl"""
+    """Stores the current feeling."""
     profile = get_character_profile(character_name)
     old_feeling = profile.get("current_feeling", "")
     profile["current_feeling"] = feeling
     save_character_profile(character_name, profile)
-    # Hintergrund-Variant fuer die neue Mood generieren, damit beim
-    # Character-Wechsel schon ein aktuelles Bild bereitsteht. Low-Prio GPU-Task.
+    # Generate the background variant for the new mood so a current image is
+    # ready by the time the character is switched to. Low-priority GPU task.
     if feeling and feeling != old_feeling:
         _schedule_background_variant(character_name)
 
@@ -2120,7 +2128,8 @@ def force_set_status(character_name: str,
                      location: Optional[str] = None,
                      room: Optional[str] = None,
                      activity: Optional[str] = None,
-                     feeling: Optional[str] = None) -> Dict[str, Any]:
+                     feeling: Optional[str] = None,
+                     pose: Optional[str] = None) -> Dict[str, Any]:
     """Direct write of character state — no LLM, no AgentLoop, no guards.
 
     For plot/admin overrides where the story or world needs to put a
@@ -2128,6 +2137,10 @@ def force_set_status(character_name: str,
     chat sessions, or partner locks. Use sparingly — bypasses every safety
     that the scheduler-driven ``_action_set_status`` and the AgentLoop
     bump+hint pattern provide.
+
+    ``pose`` names the catalog KEY outright (the NPC director picks it from
+    the list it was shown): the key is set exactly and ``activity`` becomes
+    the display text. Without it ``activity`` is resolved to a key as today.
 
     Returns a dict with the keys that were actually written.
     """
@@ -2146,7 +2159,11 @@ def force_set_status(character_name: str,
         # failing the whole write.
         from app.core.pose_catalog import PairPoseWithoutPartner
         try:
-            set_pose_intent(character_name, activity)
+            if pose:
+                set_pose_intent(character_name, pose, flavor=activity)
+                written["pose"] = pose
+            else:
+                set_pose_intent(character_name, activity)
             written["activity"] = activity
         except PairPoseWithoutPartner as e:
             logger.info("force_set_status(%s): '%s' is a two-person pose (%s) "

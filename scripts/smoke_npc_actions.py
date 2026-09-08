@@ -25,9 +25,11 @@ Hand-derived expectations, case by case:
   (a) A VALID ANSWER MOVES AND ACTS. `{"room": "kitchen", "activity": "…"}`
       for an NPC standing in `taproom` of a place that has both rooms:
       `current_room` is `kitchen` afterwards and the activity is the
-      answer's sentence (`set_pose_intent` stores the first sentence, ≤120
-      chars, as the flavor — the test sentence is one short sentence and
-      carries no character name, so it survives verbatim). Exactly ONE LLM
+      answer's sentence minus its leading pronoun — "Sie ruehrt den Eintopf
+      um." is stored as "Ruehrt den Eintopf um." (rule (l); `set_pose_intent`
+      then keeps the first sentence, ≤120 chars, as the flavor — one short
+      sentence without a character name survives otherwise verbatim). The
+      return carries `pose` "" (no key named — see (m)). Exactly ONE LLM
       call. The user prompt really carries the assembled room list: both
       room ids, both activity hints and the standing task are in it. The
       call carries `max_tokens=200`: the answer is two short fields, and an
@@ -107,7 +109,50 @@ Hand-derived expectations, case by case:
   (k) THE TEMPLATE RENDERS. `render_task("npc_action", …)` under
       StrictUndefined returns a non-empty system AND user part for the very
       variable set the module passes — a placeholder the module forgets is a
-      crash in production, not a warning.
+      crash in production, not a warning. The user part carries the SOLO pose
+      keys of the catalog (`cleaning` is one) and none of the pair keys
+      (`shaking hands` needs a partner the director cannot supply), and the
+      system part spells out the third answer field `pose`.
+
+  (l) THE SUBJECT IS CUT OFF THE SENTENCE. The director is told to start with
+      the verb, and `strip_subject` is the safety net behind it: at the
+      sentence START the NPC's own name (whole, or any single part of it) and
+      the pronouns er/sie/es/he/she/it go, a comma between them too, and when
+      something was cut the first remaining letter is upper-cased. Nothing
+      else in the sentence is touched. Hand-derived, for the NPC "Luisa Weber":
+        "Luisa wischt die Theke ab."        -> "Wischt die Theke ab."
+        "Luisa Weber wischt die Theke ab."  -> "Wischt die Theke ab."
+        "Weber wischt die Theke ab."        -> "Wischt die Theke ab."
+        "Sie wischt den Tresen ab und beobachtet die Gäste."
+                                            -> "Wischt den Tresen ab und beobachtet die Gäste."
+        "She wipes the counter."            -> "Wipes the counter."
+        "Er schleppt Fässer."               -> "Schleppt Fässer."
+        "Luisa, sie wischt die Theke ab."   -> "Wischt die Theke ab."
+        "  sie wischt die Theke ab."        -> "Wischt die Theke ab."  (leading blanks)
+        "Wischt die Theke ab."              -> unchanged (already verb-first)
+        "lauert im Unterholz"               -> unchanged (nothing cut, casing kept)
+        "Die Wirtin wischt die Theke ab."   -> unchanged ("Die" is not "sie")
+        "Siegfried poliert Gläser."         -> unchanged (whole-word match only)
+        "Luisa"                             -> ""  (nothing left is no activity)
+        ""                                  -> ""
+      Why: the embedding resolver measures "Luisa wischt die Theke ab." closer
+      to "Luisa liegt im Bett." (0.72) than to its own alias "wischt die Theke
+      ab" (0.53) — the name dominates the vector (finding 2026-09-08).
+
+  (m) THE DIRECTOR PICKS THE POSE KEY; THE RESOLVER IS THE FALLBACK. A third
+      answer field `pose`:
+        - a SOLO catalog key ("cleaning", also shouted/padded " CLEANING ")
+          is written EXACTLY as `pose_key`, no resolver involved, and the
+          stripped sentence becomes the display text ("Wischt die Theke
+          ab."); the return carries `pose`.
+        - an unknown key ("juggling"), a missing field, or a PAIR key
+          ("shaking hands", `solo: false` — no partner to bind) all fall back
+          to today's path: the stripped sentence goes through
+          `set_pose_intent`, which (embedding stubbed to None) resolves by
+          alias equality and lands on the default `standing`. The activity is
+          still written — a bad key never costs the sentence.
+        - the fallback path ALSO gets the stripped sentence: "Gudrun poliert
+          Gläser." for the NPC Gudrun is stored as "Poliert Gläser.".
 
 Usage:  ./.venv/bin/python scripts/smoke_npc_actions.py
 """
@@ -245,13 +290,13 @@ isolate(A)
 LLM = FakeLLM('{"room": "kitchen", "activity": "Sie ruehrt den Eintopf um."}')
 res = npc_actions.run_action_for(A, llm=LLM)
 check("the answer was applied",
-      {k: res.get(k) for k in ("name", "room", "activity", "moved")} if res else None,
+      {k: res.get(k) for k in ("name", "room", "activity", "moved", "pose")} if res else None,
       {"name": A, "room": "kitchen",
-       "activity": "Sie ruehrt den Eintopf um.", "moved": True})
+       "activity": "Ruehrt den Eintopf um.", "moved": True, "pose": ""})
 check("the NPC really stands in the kitchen", get_character_current_room(A),
       "kitchen")
 check("and really does what the answer says", get_effective_activity(A),
-      "Sie ruehrt den Eintopf um.")
+      "Ruehrt den Eintopf um.")
 check("exactly one LLM call", len(LLM.calls), 1)
 check("on the npc_action task", LLM.calls[0]["task"], "npc_action")
 _user = LLM.calls[0]["user"]
@@ -284,7 +329,7 @@ check("applied without a move",
       {"room": "taproom", "moved": False})
 check("still in the taproom", get_character_current_room(A), "taproom")
 check("but doing the new thing", get_effective_activity(A),
-      "Sie poliert die Glaeser.")
+      "Poliert die Glaeser.")
 
 isolate(A)
 LLM = FakeLLM('{"room": "  KITCHEN ", "activity": "Sie schaelt Rueben."}')
@@ -504,6 +549,68 @@ _system, _user = render_task("npc_action", **_vars)
 check("system part is non-empty", bool(_system.strip()), True)
 check("user part is non-empty", bool(_user.strip()), True)
 check("and the answer shape is spelled out", '"room"' in _system, True)
+check("the pose field is part of the shape", '"pose"' in _system, True)
+check("the user part lists a solo pose key", "cleaning" in _user, True)
+check("but no pair key", "shaking hands" in _user, False)
+
+# ── (l) the subject is cut off the sentence ─────────────────────────────────
+print("(l) name and pronoun at the sentence start are cut off")
+_cut = npc_actions.strip_subject
+for _src, _want in [
+        ("Luisa wischt die Theke ab.", "Wischt die Theke ab."),
+        ("Luisa Weber wischt die Theke ab.", "Wischt die Theke ab."),
+        ("Weber wischt die Theke ab.", "Wischt die Theke ab."),
+        ("Sie wischt den Tresen ab und beobachtet die Gäste.",
+         "Wischt den Tresen ab und beobachtet die Gäste."),
+        ("She wipes the counter.", "Wipes the counter."),
+        ("Er schleppt Fässer.", "Schleppt Fässer."),
+        ("Luisa, sie wischt die Theke ab.", "Wischt die Theke ab."),
+        ("  sie wischt die Theke ab.", "Wischt die Theke ab."),
+        ("Wischt die Theke ab.", "Wischt die Theke ab."),
+        ("lauert im Unterholz", "lauert im Unterholz"),
+        ("Die Wirtin wischt die Theke ab.", "Die Wirtin wischt die Theke ab."),
+        ("Siegfried poliert Gläser.", "Siegfried poliert Gläser."),
+        ("Luisa", ""),
+        ("", "")]:
+    check(f"strip_subject({_src!r})", _cut(_src, "Luisa Weber"), _want)
+
+# ── (m) the director picks the pose key, the resolver is the fallback ──────
+print("(m) a known solo pose key is written exactly; anything else falls back")
+from app.models.character import get_character_pose_key  # noqa: E402
+P = make_npc("Brunhild", room_id="taproom")
+isolate(P)
+LLM = FakeLLM('{"room": "taproom", "activity": "Sie wischt die Theke ab.", "pose": "cleaning"}')
+res = npc_actions.run_action_for(P, llm=LLM)
+check("the key is written exactly", get_character_pose_key(P), "cleaning")
+check("the stripped sentence is the display text", get_effective_activity(P),
+      "Wischt die Theke ab.")
+check("and the return names the pose", res.get("pose") if res else None, "cleaning")
+
+isolate(P)
+LLM = FakeLLM('{"room": "taproom", "activity": "Sie poliert die Gläser.", "pose": " CLEANING "}')
+npc_actions.run_action_for(P, llm=LLM)
+check("a shouted, padded key still addresses the entry", get_character_pose_key(P), "cleaning")
+check("with its own sentence", get_effective_activity(P), "Poliert die Gläser.")
+
+isolate(P)
+LLM = FakeLLM('{"room": "taproom", "activity": "Sie wischt die Theke ab.", "pose": "juggling"}')
+res = npc_actions.run_action_for(P, llm=LLM)
+check("an unknown key falls back to the resolver's default", get_character_pose_key(P), "standing")
+check("the sentence is still written", get_effective_activity(P), "Wischt die Theke ab.")
+check("and the return carries no pose", res.get("pose") if res else "missing", "")
+
+isolate(P)
+LLM = FakeLLM('{"room": "taproom", "activity": "Sie zapft ein Bier.", "pose": "shaking hands"}')
+npc_actions.run_action_for(P, llm=LLM)
+check("a pair key is no key for a lone NPC — fallback", get_character_pose_key(P), "standing")
+check("sentence written all the same", get_effective_activity(P), "Zapft ein Bier.")
+
+isolate(A)
+LLM = FakeLLM('{"room": "taproom", "activity": "Gudrun poliert Gläser."}')
+npc_actions.run_action_for(A, llm=LLM)
+check("without a pose field the sentence goes the old way — stripped",
+      get_effective_activity(A), "Poliert Gläser.")
+check("and resolves as before", get_character_pose_key(A), "standing")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

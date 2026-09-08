@@ -39,6 +39,20 @@ module short: the room change publishes the state event, writes the state
 history and the movement trace, and the activity goes through the pose
 catalog — perception, events and the 3D client's ``room_id`` all follow from
 that setter, not from anything here.
+
+TWO RULES SIT BETWEEN THE ANSWER AND THAT SETTER (2026-09-08):
+
+* **The director names the pose key.** The turn is shown the catalog's solo
+  pose keys and answers a third field ``pose``. A key that is on that list is
+  written EXACTLY (:func:`_pose_from_answer`) — no embedding, no threshold.
+  Anything else (empty, unknown, a pair key) falls back to today's path: the
+  sentence alone goes through ``set_pose_intent`` and its resolver.
+* **The sentence starts with the verb.** :func:`strip_subject` cuts the NPC's
+  own name and a pronoun off the sentence start before ANY write. The
+  resolver measured "Luisa wischt die Theke ab." closer to "Luisa liegt im
+  Bett." than to its own alias "wischt die Theke ab" — the name dominates the
+  vector. The prompt asks for verb-first sentences; the cut is the net under
+  it.
 """
 import json
 import re
@@ -71,6 +85,53 @@ _MAX_ACTIVITY_CHARS = 200
 _MAX_ANSWER_TOKENS = 200
 
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.S)
+
+# Pronouns a director sentence may open with — German and English, the two
+# languages the standing tasks are written in. Whole words only.
+_LEADING_PRONOUNS = ("er", "sie", "es", "he", "she", "it")
+
+
+def strip_subject(text: str, npc_name: str) -> str:
+    """The activity sentence without its subject at the START: the NPC's own
+    name (whole, or any single part of it), then a pronoun of
+    :data:`_LEADING_PRONOUNS`, a comma between them tolerated; when something
+    was cut, the first letter left standing is upper-cased. Nothing after the
+    subject changes. A sentence that was verb-first already comes back
+    exactly as it was (casing included); one that consisted of the subject
+    alone comes back empty (no activity).
+    """
+    rest = (text or "").strip()
+    if not rest:
+        return ""
+    before = rest
+    parts = [p for p in re.split(r"\s+", (npc_name or "").strip()) if p]
+    names = sorted({(npc_name or "").strip(), *parts}, key=len, reverse=True)
+    names = [n for n in names if n]
+    if names:
+        alt = "|".join(re.escape(n) for n in names)
+        rest = re.sub(rf"^(?:{alt})\b[,\s]*", "", rest, count=1, flags=re.IGNORECASE)
+    alt = "|".join(_LEADING_PRONOUNS)
+    rest = re.sub(rf"^(?:{alt})\b[,\s]*", "", rest, count=1, flags=re.IGNORECASE)
+    rest = rest.strip()
+    if rest == before or not rest:
+        return rest
+    return rest[0].upper() + rest[1:]
+
+
+def _solo_pose_keys() -> List[str]:
+    """The catalog's solo pose keys, in catalog order — the menu the director
+    picks from. Pair poses are left out: a lone NPC has nobody to bind."""
+    from app.core.pose_catalog import get_catalog
+    return [k for k, e in get_catalog("pose").items() if e.get("solo", True)]
+
+
+def _pose_from_answer(answer: Dict[str, Any], pose_keys: List[str]) -> str:
+    """The answer's ``pose`` when it names a key of ``pose_keys`` (case and
+    padding tolerated, like a room id), else ``""`` — the fallback signal."""
+    raw = str(answer.get("pose") or "").strip().lower()
+    if not raw:
+        return ""
+    return next((k for k in pose_keys if k.lower() == raw), "")
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +336,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
                 "game_time_label": game_time().label(),
                 "rooms": [],
                 "home": label,
+                "pose_keys": _solo_pose_keys(),
             }
         logger.warning("npc_action(%s): unreadable npc_home %r — asked as an "
                        "ordinary room NPC", name, home)
@@ -311,6 +373,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
         "game_time_label": game_time().label(),
         "rooms": rooms,
         "home": "",
+        "pose_keys": _solo_pose_keys(),
     }
 
 
@@ -400,14 +463,15 @@ def _apply_home_answer(name: str,
     from app.models.character import (force_set_status, get_character_pos,
                                       get_character_profile)
 
-    activity = str(answer.get("activity") or "").strip()[:_MAX_ACTIVITY_CHARS]
+    activity = strip_subject(str(answer.get("activity") or ""), name)[:_MAX_ACTIVITY_CHARS]
     if not activity:
         logger.info("npc_action(%s): the roaming answer names no activity — "
                     "discarded", name)
         return None
     profile = get_character_profile(name) or {}
     home = profile.get("npc_home") or {}
-    if not force_set_status(name, activity=activity):
+    pose = _pose_from_answer(answer, _solo_pose_keys())
+    if not force_set_status(name, activity=activity, pose=pose or None):
         # The sentence named a two-person pose (nobody to share it with out
         # here) — the NPC keeps its old activity but still takes its walk.
         # Losing the whole tick over the wording would freeze it in place.
@@ -497,7 +561,8 @@ def run_action_for(name: str, *,
                     "does not have — discarded", name, answer.get("room"))
         return None
 
-    activity = str(answer.get("activity") or "").strip()[:_MAX_ACTIVITY_CHARS]
+    activity = strip_subject(str(answer.get("activity") or ""), name)[:_MAX_ACTIVITY_CHARS]
+    pose = _pose_from_answer(answer, variables["pose_keys"])
     current_room = variables["current_room_id"]
     moved = room != current_room
 
@@ -511,12 +576,15 @@ def run_action_for(name: str, *,
 
     from app.models.character import force_set_status
     written = force_set_status(name, room=room if moved else None,
-                               activity=activity or None)
+                               activity=activity or None,
+                               pose=pose or None)
     if not written:
         return None
-    logger.debug("npc_action(%s): %s%s", name,
-                 f"-> {room} " if moved else "", activity)
-    return {"name": name, "room": room, "activity": activity, "moved": moved}
+    logger.debug("npc_action(%s): %s%s%s", name,
+                 f"-> {room} " if moved else "",
+                 f"[{pose}] " if pose else "", activity)
+    return {"name": name, "room": room, "activity": activity, "moved": moved,
+            "pose": pose}
 
 
 # ---------------------------------------------------------------------------
