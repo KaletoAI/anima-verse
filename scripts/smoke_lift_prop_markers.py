@@ -17,7 +17,8 @@ The expected numbers are derived BY HAND from that, rounded to 4 decimals like
 ``props.sanitize_markers`` — never copied from a run:
 
     seat delta = +0.2715 m   (drawn buttock height 0.8053 - applied drop 0.5338)
-    bed  delta = -0.2802 m   (drop 1.0727 - laying's lowest point 0.7925)
+    lie  delta = -0.2802 m   (drop 1.0727 - laying's lowest point 0.7925;
+                              the ex-`bed` markers, renamed to `lie` at boot)
 
     (0.5338 / 1.0727 are the drops the preview applied WHILE the markers were
     authored, not the current catalog's — see the same section in
@@ -165,7 +166,7 @@ def build_world(root: Path) -> None:
                     {"stem": "kingbed", "active": True,
                      "width_m": 2.0, "depth_m": 2.1, "height_m": 1.25,
                      "markers": [
-                         {"id": "ymzz7gz6", "group": "bed", "at": [0.5, 0.66, 0.5]},
+                         {"id": "ymzz7gz6", "group": "lie", "at": [0.5, 0.66, 0.5]},
                      ]},
                 ], bbox=[2.0, 1.25, 2.1]))
     _write_json(props / "king-size-bed-bbb222" / "selection.json",
@@ -235,7 +236,7 @@ def part1_dry_run(worlds: Path, world: Path) -> None:
     before = snapshot(world)
     rc, out, err = run(worlds, "--world", "fixture",
                        "--group", "seat", "--delta-m", SEAT_DELTA,
-                       "--group", "bed", "--delta-m", BED_DELTA)
+                       "--group", "lie", "--delta-m", BED_DELTA)
     check("exit code", rc, 0)
     check("files byte-identical", snapshot(world), before)
     check_true("table shows the composed factor 0.9000", "0.9000" in out, out)
@@ -267,7 +268,7 @@ def part2_apply(worlds: Path, world: Path) -> None:
     print("\n2) --apply — hand-derived values land in the files")
     rc, out, err = run(worlds, "--world", "fixture", "--apply",
                        "--group", "seat", "--delta-m", SEAT_DELTA,
-                       "--group", "bed", "--delta-m", BED_DELTA)
+                       "--group", "lie", "--delta-m", BED_DELTA)
     check("exit code", rc, 0)
     check_true("summary counts markers and files",
                "written 4 markers in 3 files" in out, out)
@@ -351,7 +352,7 @@ def part4_guards(worlds: Path) -> None:
     check_true("stand refusal names the group", "stand" in (out + err), out + err)
 
     rc, out, err = run(worlds, "--world", "fixture",
-                       "--group", "seat", "--group", "bed",
+                       "--group", "seat", "--group", "lie",
                        "--delta-m", SEAT_DELTA)
     check_true("unpaired --group/--delta-m fails", rc != 0, out + err)
 
@@ -361,6 +362,19 @@ def part4_guards(worlds: Path) -> None:
     check_true("a repeated --group fails", rc != 0, out + err)
     check_true("the repeat message names the group",
                "seat" in (out + err), out + err)
+
+    # A group NO marker carries — the retired `bed` of the usage line before
+    # 2026-09-08 — is refused before anything is written, and the message
+    # names what the world does carry. Without this gate the seat markers
+    # moved, the bed ones matched nothing, and the summary read like success.
+    before = snapshot(worlds / "fixture")
+    rc, out, err = run(worlds, "--world", "fixture", "--apply",
+                       "--group", "seat", "--delta-m", SEAT_DELTA,
+                       "--group", "bed", "--delta-m", BED_DELTA)
+    check_true("a group no marker carries fails", rc != 0, out + err)
+    check_true("…naming the group", "bed" in err, err)
+    check_true("…and the groups the world carries", "lie" in err and "seat" in err, err)
+    check_true("…and nothing was written", snapshot(worlds / "fixture") == before, "")
 
     rc, out, err = run(worlds, "--world", "fixture")
     check_true("no group at all fails", rc != 0, out + err)

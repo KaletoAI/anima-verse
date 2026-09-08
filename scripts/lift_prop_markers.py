@@ -5,12 +5,23 @@ Usage:
     # dry run (default) — prints the table, writes nothing
     ./.venv/bin/python scripts/lift_prop_markers.py --world demo \\
         --group seat --delta-m 0.2715 \\
-        --group bed  --delta-m -0.2802
+        --group lie  --delta-m -0.2802
 
     # the same run, writing the sidecars atomically
     ./.venv/bin/python scripts/lift_prop_markers.py --world demo --apply \\
         --group seat --delta-m 0.2715 \\
-        --group bed  --delta-m -0.2802
+        --group lie  --delta-m -0.2802
+
+The groups are the place types of TODAY's catalog. ``bed`` and ``floor`` no
+longer exist: the boot migration of plan-platztypen.md (2026-09-08,
+``app/core/place_group_migration.py``) renamed every stored marker of either
+to ``lie``, so a world that has started since then has ``lie`` markers only,
+and ``--group bed`` would match nothing. That is REFUSED, not reported — a
+group no marker of the world carries ends the run before anything is written,
+naming the groups the world does carry. Mind that the merge put the ex-bed
+and the ex-floor markers into ONE group: a delta for ``lie`` moves both, so a
+world with lying markers of both origins needs two runs, or the floor ones set
+by hand afterwards.
 
 STOP THE SERVER FIRST when using --apply. This rewrites
 ``worlds/<world>/props/<prop>/sidecar.json`` behind the running app, which
@@ -86,8 +97,8 @@ Those two drops are the ones the PREVIEW APPLIED WHILE THE MARKERS WERE BEING
 AUTHORED (the pre-2026-09-08 catalog: `seat` 0.314, the since-retired `bed`
 0.631), not today's. Deliberately so: the delta is the authoring error, and a
 marker belongs on the seat surface no matter what a figure's root later
-subtracts from it. Re-deriving these with the current `seat` 0.320 x 1.70 =
-0.5440 would repair a mistake nobody made. A world whose markers were authored
+subtracts from it. Re-deriving these with the current `seat` 0.243 x 1.70 =
+0.413 would repair a mistake nobody made. A world whose markers were authored
 under a different drop needs its own pair of deltas — that is what --delta-m
 is for.
 
@@ -96,7 +107,11 @@ figure's hips track is the reference itself) and this script REFUSES every
 such group, so a mistyped run cannot move them; the few of them are corrected
 by hand in the repaired preview. Which groups those are is READ FROM THE POSE
 CATALOG (``needs_place: false``) rather than named here, so a place type
-authored tomorrow is refused the day it exists.
+authored tomorrow is refused the day it exists. Only the SHARED catalog file
+is read: a world's own overrides of the place types live in its ``world.db``,
+and this script does not open a database beside a possibly running server —
+a group a world added there is unknown here and fails the "no marker of this
+group" gate only if the world has no marker of it either.
 
 This script keeps no memory
 ---------------------------
@@ -130,10 +145,10 @@ ROTATION_KEY = "rotation"
 
 REPO = Path(__file__).resolve().parent.parent
 
-# The pose catalog, read as plain JSON — the tracked file plus its gitignored
-# overlay (app/core/pose_catalog.py STORES; the overlay wins on a shared key).
+# The pose catalog, read as plain JSON — the tracked SHARED file. A world's
+# overrides live in its world.db (app/core/pose_catalog.py STORES), which this
+# script deliberately never opens (see the docstring).
 POSE_CATALOG = REPO / "shared" / "templates" / "pose" / "pose_catalog.json"
-POSE_CATALOG_LOCAL = POSE_CATALOG.with_name("pose_catalog.local.json")
 
 
 def forbidden_groups() -> set:
@@ -147,18 +162,15 @@ def forbidden_groups() -> set:
     the accident this guard exists to prevent.
     """
     groups: Dict[str, Any] = {}
-    for path in (POSE_CATALOG, POSE_CATALOG_LOCAL):
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            if path is POSE_CATALOG_LOCAL:
-                continue          # the overlay is normally absent
-            raise SystemExit(f"pose catalog not found: {path}")
-        except (OSError, json.JSONDecodeError) as e:
-            raise SystemExit(f"pose catalog unreadable ({path}): {e}")
-        block = doc.get("groups")
-        if isinstance(block, dict):
-            groups.update(block)
+    try:
+        doc = json.loads(POSE_CATALOG.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise SystemExit(f"pose catalog not found: {POSE_CATALOG}")
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"pose catalog unreadable ({POSE_CATALOG}): {e}")
+    block = doc.get("groups")
+    if isinstance(block, dict):
+        groups.update(block)
     if not groups:
         raise SystemExit(f"pose catalog names no place types: {POSE_CATALOG}")
     return {str(k).strip().lower() for k, v in groups.items()
@@ -381,6 +393,30 @@ def lift_sidecar(data: Dict[str, Any], prop: str, prop_dir: Path,
     return rows, touched
 
 
+def groups_in_world(props_dir: Path) -> set:
+    """Every place type any prop marker of the world carries — what the
+    refusal of an unmatched ``--group`` names, so the operator sees ``lie``
+    where the old usage line said ``bed``. Read-only, tolerant of every
+    malformed sidecar (those are reported by the main pass)."""
+    out: set = set()
+    for prop_dir in sorted(p for p in props_dir.iterdir() if p.is_dir()):
+        try:
+            data = json.loads((prop_dir / SIDECAR_NAME).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for variant in data.get("model_variants") or []:
+            if not isinstance(variant, dict):
+                continue
+            for marker in variant.get("markers") or []:
+                if isinstance(marker, dict):
+                    g = str(marker.get("group") or "").strip().lower()
+                    if g:
+                        out.add(g)
+    return out
+
+
 def write_atomic(path: Path, data: Dict[str, Any]) -> None:
     """Temp file in the SAME directory, then ``os.replace`` — the pattern of
     ``app/routes/poses.py::_write``. An in-place open("w") truncates the
@@ -456,10 +492,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         if touched:
             pending.append((sidecar, data))
 
-    if all_rows:
-        print_table(all_rows)
-    else:
-        print("  (no marker of these groups found)")
+    # A group NO marker of this world carries is a mistyped or retired name
+    # (`bed`, `floor` — renamed to `lie` at boot since 2026-09-08), and it is
+    # fatal BEFORE anything is written: the table would have shown the other
+    # groups moving and the summary would have read like success.
+    found = {r.group for r in all_rows}
+    unmatched = sorted(g for g in deltas if g not in found)
+    if unmatched:
+        carried = sorted(groups_in_world(props_dir))
+        raise SystemExit(
+            f"no marker of group {', '.join(unmatched)} in world "
+            f"{args.world!r} — nothing written; the world's markers carry: "
+            f"{', '.join(carried) or 'no groups at all'}")
+    print_table(all_rows)
     print()
 
     changed = sum(1 for r in all_rows if r.changed)
