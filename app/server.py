@@ -52,6 +52,18 @@ try:
 except Exception:
     pass
 
+# One-time migration (2026-09-08): the gitignored catalog overlay files
+# (<axis>_catalog.local.json, per installation) become the WORLD layer of the
+# pose/expression catalog in world.db. Each file is renamed to *.migrated, so
+# this runs once per file; a world already carrying a key keeps its own row.
+try:
+    from app.core.pose_catalog import migrate_catalog_overlay_once
+    _co = migrate_catalog_overlay_once()
+    if any(_co.values()):
+        logger.info("Catalog overlay migrated into the world layer: %s", _co)
+except Exception as _coe:
+    logger.warning("catalog overlay migration failed: %s", _coe)
+
 # One-time consolidation: the per-world model_capabilities.json files are folded
 # into the shared shared/config/model_capabilities.json. Model abilities and
 # suitability scores describe the model plus its hardware, not a world.

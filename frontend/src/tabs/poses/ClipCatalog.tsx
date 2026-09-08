@@ -143,7 +143,7 @@ function slugKind(description: string): string {
 }
 
 export function ClipCatalog({ onCreatePose }: {
-  onCreatePose?: (kind: string, store?: 'shared' | 'local') => void
+  onCreatePose?: (kind: string, store?: 'shared' | 'world') => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()

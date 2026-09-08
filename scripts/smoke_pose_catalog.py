@@ -110,16 +110,19 @@ plan-platztypen.md), derived BY HAND from the catalog file:
 - get_groups() has exactly the four place types stand/ground/seat/lie — a
   place type names a BODY SHAPE, not a piece of furniture, so `bed` and
   `floor` merged into `lie` and `counter` (one sitting pose) dissolved into
-  `stand`. Drops: seat 0.320, lie 0.075, stand 0, ground 0 (the ONE source of
+  `stand`. Drops: seat 0.243, lie 0.003, stand 0, ground 0 (the ONE source of
   every root_offset in the scene payload; the old
-  scene_recipe.FIGURE_ROOT_DROP table is gone). Both are derived from the hips
-  medians of the clips that are served — the derivation is written out in
-  `pose_catalog._load_groups` and re-run by hand in
-  `scripts/smoke_platztypen.py` § 4. They read 0.314 / 0.051 until 2026-09-08,
-  measured against the clip library that `a605c5a7` replaced; against the
-  re-imported one those left a lying figure floating 0.094 m over its surface.
-  The older bed value 0.631 belonged to a Mixamo `sleep` clip deleted in
-  c2eb166d and buried every sleeper 0.89 m in the mattress.
+  scene_recipe.FIGURE_ROOT_DROP table is gone). Both are derived for the
+  CONTACT point — a sitter's buttocks, a lying body's lowest point — from the
+  hips medians and contact depths of the clips that are served; the
+  derivation is written out in `pose_catalog._load_groups`, re-run by hand in
+  `scripts/smoke_platztypen.py` § 4 and measured on the real skeleton in
+  `scripts/smoke_prop_marker_place.mjs` E5. They read 0.314 / 0.051 until
+  2026-09-08 (hip joint, against the clip library `a605c5a7` replaced) and
+  0.320 / 0.075 for a morning (hip joint, re-imported clips — a sitter 0.131 m
+  in the cushion). The older bed value 0.631 belonged to a Mixamo `sleep` clip
+  deleted in c2eb166d and buried every sleeper 0.93 m in the mattress (0.89 m
+  re-read against today's clips).
 - `needs_place` says whether the group's poses want a marker at all: seat and
   lie do, stand and ground do not — poses_without_place() therefore lists
   every pose of `stand` and `ground` and nothing else, and every one of them
@@ -179,8 +182,29 @@ Stage 9 - groups route contract (task 2), derived BY HAND:
   and re-writing the very same block afterwards is a 400 -- `bench` has a pose
   now, so its empty default is no longer legal.
 
-The stage-2/3/4/5/7 DB work runs against a throwaway storage dir, never the
-demo world (the server may hold it).
+Stage 10 - the WORLD layer of the catalog (2026-09-08; it replaced the
+gitignored overlay file of 2026-09-07), derived BY HAND from the store
+contract in `pose_catalog.STORES`:
+- with an empty world layer the merged catalog is exactly the shared file;
+  an entry created with `store: "world"` is a row in world.db and NOT a line
+  in the shared file, the merged catalog carries it marked `_store: "world"`.
+- a key in both layers is the world's (override-replace); editing a world
+  entry never promotes it into the shared file; moving is an explicit
+  `store` change that writes the new home and clears the old, both ways;
+  `store: "local"` (the retired name) is a 400; a key already in one layer
+  cannot be created in the other (409); deleting removes it from its layer.
+- place types have the same two layers: saving `seat` with `store: "world"`
+  and root_drop 0.5 writes a world row, leaves the shared file's seed value
+  untouched, and the effective group is the world's (marked); saving it back
+  as shared drops the row.
+- the one-time boot migration `migrate_catalog_overlay_once`: a legacy
+  `pose_catalog.local.json` beside the (redirected) catalog is folded into
+  the world layer — {"entries": 1, "groups": 1} — and renamed *.migrated; a
+  second run finds nothing; a later overlay never overwrites a key the world
+  already carries (INSERT OR IGNORE).
+
+The stage-2/3/4/5/7/10 DB work runs against a throwaway storage dir, never
+the demo world (the server may hold it).
 """
 import json
 import shutil
@@ -658,11 +682,11 @@ try:
     pc.reload_catalogs()
     groups = pc.get_groups()
     check("four place types", sorted(groups) == ["ground", "lie", "seat", "stand"], str(sorted(groups)))
-    check("seat root_drop 0.320", groups["seat"]["root_drop"] == 0.320)
+    check("seat root_drop 0.243", groups["seat"]["root_drop"] == 0.243)
     # One lying group, one drop: the merged `lie` keeps the value measured on
     # the clip that actually serves it. 0.631 (the old `bed`) described a
     # Mixamo clip that no longer exists and put the sleeper under the mattress.
-    check("lie root_drop 0.075", groups["lie"]["root_drop"] == 0.075)
+    check("lie root_drop 0.003", groups["lie"]["root_drop"] == 0.003)
     check("stand/ground drop 0", groups["stand"]["root_drop"] == 0 and groups["ground"]["root_drop"] == 0)
     check("seat and lie want a marker",
           groups["seat"]["needs_place"] is True and groups["lie"]["needs_place"] is True)
@@ -911,101 +935,166 @@ try:
         raise AssertionError(f"stage 9: {len(_FAILURES)} failed check(s): {_FAILURES}")
     print("OK smoke_pose_catalog stage 9")
 
-    # ── Stage 10: the local overlay ──────────────────────────────────────
-    print("\nStage 10 - local overlay")
+    # ── Stage 10: the world layer ────────────────────────────────────────
+    print("\nStage 10 - world layer")
     from fastapi import HTTPException
     _FAILURES = []
     _o_real = pc.catalog_path
     _o_dir = Path(_tmp_storage)
-    _o_shared = _o_dir / "overlay_pose_catalog.json"
-    _o_local = _o_dir / "overlay_pose_catalog.local.json"
+    _o_shared = _o_dir / "world_pose_catalog.json"
     shutil.copy2(_o_real("pose"), _o_shared)
-    _o_local.unlink(missing_ok=True)
 
-    # Only the curated path is redirected; the overlay is derived from it, so
-    # it lands beside the copy on its own.
+    # Only the curated path is redirected; the world layer is this run's
+    # throwaway world.db (stage 2 created the schema), emptied first.
     pc.catalog_path = lambda axis: _o_shared if axis == "pose" else _o_real(axis)
+    pc.replace_world_entries("pose", {})
+    pc.replace_world_groups({})
     pc.reload_catalogs()
+
+    def _shared_doc():
+        return json.loads(_o_shared.read_text(encoding="utf-8"))
+
     try:
-        # Compare against the COPIED file, not against the merged catalog of
-        # this installation: an installation that already carries an overlay
-        # (licensed or NSFW entries live there) merges more keys than the
-        # tracked file holds, and this stage exists to test exactly that.
-        _o_keys = frozenset(json.loads(_o_shared.read_text())["entries"])
+        _o_keys = frozenset(_shared_doc()["entries"])
         _base = frozenset(pc.get_catalog("pose"))
-        check("without an overlay file the catalog is just the shared one",
-              _base == _o_keys and not _o_local.exists(),
+        check("with an empty world layer the catalog is just the shared file",
+              _base == _o_keys and pc.world_entries("pose") == {},
               str(sorted(_base ^ _o_keys)))
 
         poses_route._create_entry_sync({}, {
-            "axis": "pose", "key": "zz-overlay", "prompt": "a private pose",
-            "animation": "idle", "group": "stand", "store": "local"})
+            "axis": "pose", "key": "zz-world", "prompt": "a private pose",
+            "animation": "idle", "group": "stand", "store": "world"})
         pc.reload_catalogs()
         cat = pc.get_catalog("pose")
-        check("a local entry is written to the overlay file, not the shared one",
-              _o_local.exists()
-              and "zz-overlay" in json.loads(_o_local.read_text())["entries"]
-              and "zz-overlay" not in json.loads(_o_shared.read_text())["entries"])
-        check("…and the merged catalog sees it, marked as local",
-              cat.get("zz-overlay", {}).get("_store") == "local",
-              str(cat.get("zz-overlay")))
-        check("…so the game can reach it — that is the point of the overlay",
-              "zz-overlay" in cat)
+        check("a world entry is a row in world.db, not a line in the shared file",
+              "zz-world" in pc.world_entries("pose")
+              and "zz-world" not in _shared_doc()["entries"])
+        check("…and the merged catalog sees it, marked as world",
+              cat.get("zz-world", {}).get("_store") == "world",
+              str(cat.get("zz-world")))
+        check("…so the game can reach it — that is the point of the layer",
+              "zz-world" in cat)
 
-        # The overlay WINS for a key both files carry.
-        _sh = json.loads(_o_shared.read_text())
-        _sh["entries"]["zz-overlay"] = {"prompt": "the shared one",
-                                        "animation": "idle", "group": "stand"}
+        # The world WINS for a key both layers carry.
+        _sh = _shared_doc()
+        _sh["entries"]["zz-world"] = {"prompt": "the shared one",
+                                      "animation": "idle", "group": "stand"}
         _o_shared.write_text(json.dumps(_sh), encoding="utf-8")
         pc.reload_catalogs()
-        check("a key in both files is the OVERLAY's",
-              pc.get_catalog("pose")["zz-overlay"]["prompt"] == "a private pose",
-              pc.get_catalog("pose")["zz-overlay"]["prompt"])
-        _sh["entries"].pop("zz-overlay")
+        check("a key in both layers is the WORLD's",
+              pc.get_catalog("pose")["zz-world"]["prompt"] == "a private pose",
+              pc.get_catalog("pose")["zz-world"]["prompt"])
+        _sh["entries"].pop("zz-world")
         _o_shared.write_text(json.dumps(_sh), encoding="utf-8")
         pc.reload_catalogs()
 
         # An edit stays where the entry lives — the trap this exists to avoid.
-        poses_route._update_entry_sync("zz-overlay", "pose", {},
+        poses_route._update_entry_sync("zz-world", "pose", {},
                                        {"prompt": "edited privately"})
-        check("editing a local entry does NOT promote it into the shared file",
-              "zz-overlay" not in json.loads(_o_shared.read_text())["entries"]
-              and json.loads(_o_local.read_text())["entries"]["zz-overlay"]["prompt"]
-              == "edited privately")
+        check("editing a world entry does NOT promote it into the shared file",
+              "zz-world" not in _shared_doc()["entries"]
+              and pc.world_entries("pose")["zz-world"]["prompt"] == "edited privately")
 
         # Moving is explicit, and leaves exactly one copy behind.
-        poses_route._update_entry_sync("zz-overlay", "pose", {}, {"store": "shared"})
+        poses_route._update_entry_sync("zz-world", "pose", {}, {"store": "shared"})
         check("an explicit move writes the new home and clears the old",
-              "zz-overlay" in json.loads(_o_shared.read_text())["entries"]
-              and "zz-overlay" not in json.loads(_o_local.read_text())["entries"])
-        poses_route._update_entry_sync("zz-overlay", "pose", {}, {"store": "local"})
+              "zz-world" in _shared_doc()["entries"]
+              and "zz-world" not in pc.world_entries("pose"))
+        poses_route._update_entry_sync("zz-world", "pose", {}, {"store": "world"})
         check("…and back again",
-              "zz-overlay" not in json.loads(_o_shared.read_text())["entries"]
-              and "zz-overlay" in json.loads(_o_local.read_text())["entries"])
+              "zz-world" not in _shared_doc()["entries"]
+              and "zz-world" in pc.world_entries("pose"))
 
         expect_400("an unknown store is refused",
                    lambda: poses_route._update_entry_sync(
-                       "zz-overlay", "pose", {}, {"store": "elsewhere"}),
+                       "zz-world", "pose", {}, {"store": "local"}),
                    "store must be one of")
 
-        # A key may exist only ONCE across both files: the alias rules and the
-        # render key would otherwise depend on which file is read first.
+        # A key may exist only ONCE across both layers: the alias rules and the
+        # render key would otherwise depend on which layer is read first.
         try:
             poses_route._create_entry_sync({}, {
-                "axis": "pose", "key": "zz-overlay", "prompt": "again",
+                "axis": "pose", "key": "zz-world", "prompt": "again",
                 "animation": "idle", "group": "stand", "store": "shared"})
-            check("a key already in the overlay cannot be created in the shared "
-                  "file", False, "no 409")
+            check("a key already in the world layer cannot be created in the "
+                  "shared file", False, "no 409")
         except HTTPException as e:
-            check("a key already in the overlay cannot be created in the shared "
-                  "file", e.status_code == 409, str(e.detail))
+            check("a key already in the world layer cannot be created in the "
+                  "shared file", e.status_code == 409, str(e.detail))
 
-        poses_route.delete_entry("zz-overlay", "pose", {})
+        poses_route.delete_entry("zz-world", "pose", {})
         pc.reload_catalogs()
-        check("deleting removes it from the store it lived in",
-              "zz-overlay" not in pc.get_catalog("pose")
-              and "zz-overlay" not in json.loads(_o_local.read_text())["entries"])
+        check("deleting removes it from the layer it lived in",
+              "zz-world" not in pc.get_catalog("pose")
+              and "zz-world" not in pc.world_entries("pose"))
+
+        # ── place types have the same two layers ──
+        _seed = _shared_doc()["groups"]["seat"]["root_drop"]
+        _g = {k: dict(v, store=v["_store"]) for k, v in pc.get_groups().items()}
+        check("every shipped group comes from the shared file",
+              all(v["_store"] == "shared" for v in pc.get_groups().values()))
+        _g["seat"] = dict(_g["seat"], store="world", root_drop=0.5)
+        poses_route._put_groups_sync({"groups": _g})
+        check("a world group is a row in world.db",
+              pc.world_groups().get("seat", {}).get("root_drop") == 0.5,
+              str(pc.world_groups()))
+        check("…the shared file keeps its seed value untouched",
+              _shared_doc()["groups"]["seat"]["root_drop"] == _seed,
+              str(_shared_doc()["groups"]["seat"]))
+        check("…and the effective group is the world's, marked so",
+              pc.get_groups()["seat"]["root_drop"] == 0.5
+              and pc.get_groups()["seat"]["_store"] == "world",
+              str(pc.get_groups()["seat"]))
+        check("the other groups stay shared",
+              all(v["_store"] == "shared" for k, v in pc.get_groups().items()
+                  if k != "seat"))
+        # Dropping the world row brings the seed back — and saving it as
+        # shared writes the value INTO the file instead.
+        _g["seat"] = dict(_g["seat"], store="shared", root_drop=_seed)
+        poses_route._put_groups_sync({"groups": _g})
+        check("moving the group back to shared drops the world row",
+              "seat" not in pc.world_groups()
+              and pc.get_groups()["seat"]["_store"] == "shared"
+              and pc.get_groups()["seat"]["root_drop"] == _seed)
+
+        # ── the one-time migration of the retired overlay FILE ──
+        _legacy = pc.legacy_overlay_path("pose")
+        check("the legacy overlay path sits beside the (redirected) catalog",
+              _legacy.parent == _o_shared.parent and _legacy.name.endswith(".local.json"),
+              str(_legacy))
+        _legacy.write_text(json.dumps({
+            "entries": {"zz-legacy": {"prompt": "from the overlay",
+                                      "animation": "idle", "group": "stand"}},
+            "groups": {"perch": {"label": "Perch", "root_drop": 0.1,
+                                 "default": "", "needs_place": True}},
+        }), encoding="utf-8")
+        _counts = pc.migrate_catalog_overlay_once()
+        check("the overlay's entries and groups land in the world layer",
+              _counts == {"entries": 1, "groups": 1}
+              and pc.world_entries("pose").get("zz-legacy", {}).get("prompt") == "from the overlay"
+              and "perch" in pc.world_groups(),
+              str((_counts, sorted(pc.world_entries("pose")), sorted(pc.world_groups()))))
+        _migrated = _legacy.with_name(_legacy.name + ".migrated")
+        check("…and the file is renamed *.migrated",
+              not _legacy.exists() and _migrated.exists())
+        check("…so the next boot finds nothing to do",
+              pc.migrate_catalog_overlay_once() == {"entries": 0, "groups": 0})
+        # A world that already carries the key keeps ITS row: the overlay is
+        # a one-time seed, never an overwrite.
+        _legacy.write_text(json.dumps({"entries": {"zz-legacy": {
+            "prompt": "a later overlay", "animation": "idle", "group": "stand"}}}),
+            encoding="utf-8")
+        _counts = pc.migrate_catalog_overlay_once()
+        check("a key the world already carries is left alone",
+              _counts == {"entries": 0, "groups": 0}
+              and pc.world_entries("pose")["zz-legacy"]["prompt"] == "from the overlay",
+              str(_counts))
+        _migrated.unlink(missing_ok=True)
+        check("the migrated catalog validates",
+              pc.validate_catalog("pose") == [], str(pc.validate_catalog("pose")))
     finally:
+        pc.replace_world_entries("pose", {})
+        pc.replace_world_groups({})
         pc.catalog_path = _o_real
         pc.reload_catalogs()
     check("the real catalog file is untouched",

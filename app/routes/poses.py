@@ -1,17 +1,20 @@
 """Catalog editor routes — the two finite render-key axes.
 
 `pose` and `expression` are the ONLY keys under which image variants are
-cached and animation clips are resolved (plan-pose-katalog.md). Both axes live
-in one curated JSON file each (``shared/templates/<axis>/<axis>_catalog.json``,
-``pose_catalog.catalog_path``); this router is the write surface behind the
-Poses admin tab: edit entries, approve/dismiss the candidates the resolver
-recorded for free text it could not absorb, and clear the rendered expression
-images after a prompt edit (the image cache is keyed by the catalog KEY, so an
-edited prompt does not invalidate anything by itself).
+cached and animation clips are resolved (plan-pose-katalog.md). Each axis has
+TWO layers (``pose_catalog.STORES``): the curated, tracked JSON file
+(``shared/templates/<axis>/<axis>_catalog.json``, ``pose_catalog.catalog_path``)
+and the world's own layer in its ``world.db``, which overrides the file per
+key and holds what must never be committed. This router is the write surface
+behind the Poses admin tab: edit entries in either layer, approve/dismiss the
+candidates the resolver recorded for free text it could not absorb, and clear
+the rendered expression images after a prompt edit (the image cache is keyed
+by the catalog KEY, so an edited prompt does not invalidate anything by
+itself).
 
-The pose axis carries a second, much smaller vocabulary in the same file: the
-PLACE TYPES (``groups``) a marker speaks, edited through ``GET``/``PUT
-/poses/groups``. Every pose names exactly one of them.
+The pose axis carries a second, much smaller vocabulary in the same two
+layers: the PLACE TYPES (``groups``) a marker speaks, edited through
+``GET``/``PUT /poses/groups``. Every pose names exactly one of them.
 
 Free text never creates an entry any more — the catalog grows only through the
 approval flow here. The animation vocabulary is NOT hardcoded either: it is
@@ -62,21 +65,24 @@ def _catalog_txn(axis: str) -> Iterator[None]:
     and a dropped edit would have to be retyped.
     """
     from app.core.keyed_lock import keyed_lock
-    # Keyed on the AXIS, not on one store's file: an entry can move between
-    # the tracked catalog and the local overlay, and that touches both files.
+    # Keyed on the AXIS, not on one store: an entry can move between the
+    # tracked catalog and the world layer, and that touches both.
     with keyed_lock("pose_catalog", axis):
         yield
 
 
 def _read(axis: str, store: str = "shared") -> Dict[str, Any]:
-    """Raw catalog document of ONE store (keeps ``_comment`` and any field this
-    router does not know about, so a write never eats them).
+    """Raw catalog document of ONE store: the shared FILE (keeps ``_comment``
+    and any field this router does not know about, so a write never eats
+    them), or the world layer's entries as a document of the same shape.
 
     Call it inside :func:`_catalog_txn` whenever the result is written back.
     """
+    if store == "world":
+        return {"entries": dict(pose_catalog.world_entries(axis))}
     try:
         data = json.loads(
-            pose_catalog.store_path(axis, store).read_text(encoding="utf-8"))
+            pose_catalog.catalog_path(axis).read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         data = {}
     if not isinstance(data, dict):
@@ -102,8 +108,19 @@ def _validated_store(raw: Any, fallback: str) -> str:
     return value
 
 
+def _after_write() -> None:
+    """What every catalog write of either layer has to drop afterwards."""
+    # Drops the catalog cache, the alias embeddings and the expression memo.
+    epm.reload_presets()
+    # The place types (groups) live in this catalog — the seat inventory
+    # composed from the old ones is stale.
+    from app.core import places; places.invalidate()
+
+
 def _write(axis: str, data: Dict[str, Any], store: str = "shared") -> None:
-    """ATOMIC catalog write — temp file in the same directory, then rename.
+    """Write ONE store back as a whole: the world layer's entries in one
+    transaction, or the shared file ATOMICALLY — temp file in the same
+    directory, then rename.
 
     The old in-place ``open(path, "w")`` truncated the catalog before writing
     it: a crash, a full disk or a reader arriving mid-write saw a truncated or
@@ -114,7 +131,11 @@ def _write(axis: str, data: Dict[str, Any], store: str = "shared") -> None:
     over from the file being replaced — ``mkstemp`` creates 0600, and the
     catalog is a tracked repo file whose mode must not change under an edit.
     """
-    path = pose_catalog.store_path(axis, store)
+    if store == "world":
+        pose_catalog.replace_world_entries(axis, data.get("entries") or {})
+        _after_write()
+        return
+    path = pose_catalog.catalog_path(axis)
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".json.tmp")
@@ -129,11 +150,7 @@ def _write(axis: str, data: Dict[str, Any], store: str = "shared") -> None:
         except OSError:
             pass
         raise
-    # Drops the catalog cache, the alias embeddings and the expression memo.
-    epm.reload_presets()
-    # The place types (groups) live in this catalog — the seat inventory
-    # composed from the old ones is stale.
-    from app.core import places; places.invalidate()
+    _after_write()
 
 
 def _key(raw: Any) -> str:
@@ -228,7 +245,8 @@ def _require_free_aliases(axis: str, aliases: List[str], exclude_key: str = "") 
 def _normalize_group(raw: Any) -> Dict[str, Any]:
     """One place type as it is stored: a label, the root drop as a fraction of
     the figure height (clamped to 0..1), the pose a click on such a marker
-    sets, and whether the group's poses need a marker at all.
+    sets, and whether the group's poses need a marker at all. The layer it
+    goes to (``store``) is read by the caller, never stored in the document.
 
     ``needs_place`` defaults to True — a place type normally demands a
     marker; only a body shape one can strike anywhere (standing, kneeling)
@@ -288,26 +306,48 @@ async def put_groups(request: Request,
 def _put_groups_sync(body: Any) -> Dict[str, Any]:
     """The blocking body of ``put_groups`` — runs in the threadpool.
 
-    The block is replaced as a WHOLE, so it is checked as a whole: dropping a
-    type some pose still names, or pointing a default at a pose of another
-    group, would leave the catalog invalid the moment it is written.
+    The EFFECTIVE block is replaced as a whole, so it is checked as a whole:
+    dropping a type some pose still names, or pointing a default at a pose of
+    another group, would leave the catalog invalid the moment it is written.
+    Every group says which layer it goes to (``store``, default ``shared``):
+    the world groups become the world layer as a whole; the shared file gets
+    the shared groups — and keeps, untouched, its own version of a group the
+    body moved to the world, because that version is the seed the world row
+    overrides and comes back once the row is dropped.
     """
     raw = (body or {}).get("groups")
     if not isinstance(raw, dict) or not raw:
         raise HTTPException(status_code=400, detail="groups missing")
-    groups: Dict[str, Any] = {}
+    by_store: Dict[str, Dict[str, Any]] = {s: {} for s in pose_catalog.STORES}
     for key, spec in raw.items():
         k = _key(key)
-        groups[k] = _normalize_group(spec)
-        if not groups[k]["label"]:
-            groups[k]["label"] = k
+        store = _validated_store((spec or {}).get("store") if isinstance(spec, dict)
+                                 else None, "shared")
+        group = _normalize_group(spec)
+        if not group["label"]:
+            group["label"] = k
+        by_store[store][k] = group
     with _catalog_txn("pose"):
         data = _read("pose")
-        problems = _groups_problems(groups, data.get("entries") or {})
+        old_shared = data.get("groups") if isinstance(data.get("groups"), dict) else {}
+        shared_block: Dict[str, Any] = dict(by_store["shared"])
+        for k in by_store["world"]:
+            if k in old_shared:
+                shared_block[k] = old_shared[k]
+        effective = dict(shared_block)
+        effective.update(by_store["world"])
+        # Checked against the EFFECTIVE entries: a world pose may name a
+        # world group, and a shared pose must still find its group.
+        entries = {k: e for k, e in pose_catalog.get_catalog("pose").items()}
+        problems = _groups_problems(effective, entries)
         if problems:
             raise HTTPException(status_code=400, detail="; ".join(problems))
-        data["groups"] = groups
-        _write("pose", data)
+        pose_catalog.replace_world_groups(by_store["world"])
+        if shared_block != old_shared:
+            data["groups"] = shared_block
+            _write("pose", data)
+        else:
+            _after_write()
     return {"status": "success", "groups": pose_catalog.get_groups()}
 
 
@@ -388,7 +428,7 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="animation missing")
     group = _group(body.get("group")) if axis == "pose" else ""
     # A new entry defaults to the TRACKED catalog; the importer of a licensed
-    # clip asks for "local" so its name never reaches a committed file.
+    # clip asks for "world" so its name never reaches a committed file.
     store = _validated_store(body.get("store"), "shared")
     with _catalog_txn(axis):
         data = _read(axis, store)
@@ -426,7 +466,7 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
     key = key.strip().lower()
     with _catalog_txn(axis):
         was = _store_of(axis, key)
-        # An entry may MOVE between the tracked catalog and the local overlay
+        # An entry may MOVE between the tracked catalog and the world layer
         # — that is how an entry which must not be committed gets out of the
         # tracked file again.
         store = _validated_store(body.get("store"), was)
@@ -465,8 +505,8 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
             _write(axis, data, store)
         else:
             # Write the new home FIRST: a crash between the two writes then
-            # leaves the entry in both files (the overlay wins, so the world
-            # still sees the edited one), never in neither.
+            # leaves the entry in both layers (the world layer wins, so the
+            # game still sees the edited one), never in neither.
             target = _read(axis, store)
             target["entries"][key] = entry
             _write(axis, target, store)

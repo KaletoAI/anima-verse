@@ -616,6 +616,22 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (axis, raw_text)
     )""",
 
+    # ── Pose/Expression catalog, the WORLD layer (2026-09-08) ───────────
+    # The shared catalog file (shared/templates/<axis>/<axis>_catalog.json)
+    # is the seed; a row here REPLACES the shared entry or place type of the
+    # same key (override-replace, the terrain-type rule) or adds one the
+    # shared file does not carry. Deleting a row brings the shared one back.
+    # This is where an entry that must never be committed lives — a licensed
+    # or adult clip's name. See app/core/pose_catalog.py STORES.
+    """CREATE TABLE IF NOT EXISTS pose_catalog_world (
+        axis       TEXT NOT NULL CHECK(axis IN ('pose','expression')),
+        kind       TEXT NOT NULL CHECK(kind IN ('entry','group')),
+        key        TEXT NOT NULL,
+        doc        TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (axis, kind, key)
+    )""",
+
     # ── LLM Call Statistik (fuer Dauer-Schaetzung + Admin-Auswertung) ──
     """CREATE TABLE IF NOT EXISTS llm_call_stats (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,

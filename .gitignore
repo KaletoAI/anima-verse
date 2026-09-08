@@ -223,6 +223,8 @@ shared/models/figure/*.fbx
 shared/models/figure/*.glb
 shared/models/figure/*.gltf
 
-# Local catalog overlays: entries that must never be committed
-# (licensed or adult clip names). The tracked catalog sits beside them.
+# Local catalog overlays (retired 2026-09-08 — the boot migration folds them
+# into the world's own catalog layer in world.db and renames them *.migrated;
+# both names stay ignored so a not-yet-migrated file never gets committed).
 shared/templates/*/*.local.json
+shared/templates/*/*.local.json.migrated

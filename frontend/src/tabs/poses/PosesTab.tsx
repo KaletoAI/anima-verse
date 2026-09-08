@@ -50,6 +50,10 @@ interface PlaceType {
   root_drop: number
   default: string
   needs_place: boolean
+  /** which layer the effective group comes from (server: `_store`) and, in
+   *  the editable copy, which layer it is saved to (`store`) */
+  _store?: Store
+  store?: Store
 }
 
 interface Entry {
@@ -66,12 +70,13 @@ interface Entry {
   places?: 1 | 2
   /** degrees the pair clip's frame turns against the marker facing */
   yaw_offset?: number
-  /** which file the entry lives in: the tracked catalog, or the gitignored
-   *  local overlay for entries that must never be committed */
+  /** which layer the entry lives in: the tracked catalog file, or this
+   *  world's own layer in its world.db for entries that must never be
+   *  committed */
   store?: Store
 }
 
-type Store = 'shared' | 'local'
+type Store = 'shared' | 'world'
 
 interface CatalogData {
   entries: Entry[]
@@ -200,7 +205,11 @@ export function PosesTab() {
   // The server is the truth for the place types: every (re)load restarts the
   // editable copy from what was just fetched.
   useEffect(() => {
-    setGroupsDraft({ ...(data.groups || {}) })
+    // The server says where each effective group COMES FROM (`_store`); the
+    // draft carries where it GOES (`store`), which starts out the same.
+    setGroupsDraft(Object.fromEntries(
+      Object.entries(data.groups || {}).map(([k, g]) => [k, { ...g, store: g._store || 'shared' }]),
+    ))
     setNewGroupKey('')
   }, [data.groups])
 
@@ -249,7 +258,7 @@ export function PosesTab() {
   const startFromClip = useCallback(
     // `store` is what the importer knows and this form cannot: a clip that
     // went into the LICENSED library is licensed or adult material, and its
-    // catalog entry belongs in the overlay, not in a committed file.
+    // catalog entry belongs in this world's layer, not in a committed file.
     async (animation: string, store: Store = 'shared') => {
       setView('entries')
       setSelected('')
@@ -432,7 +441,7 @@ export function PosesTab() {
     }
     setGroupsDraft((prev) => ({
       ...prev,
-      [key]: { label: key, root_drop: 0, default: '', needs_place: true },
+      [key]: { label: key, root_drop: 0, default: '', needs_place: true, store: 'shared' },
     }))
     setNewGroupKey('')
   }, [groupsDraft, newGroupKey, t, toast])
@@ -659,6 +668,19 @@ export function PosesTab() {
                           </label>
                         </Field>
                         <Field
+                          label={t('Stored in')}
+                          hint={t('The shared catalog travels with the repository; this world keeps its own version in its world.db, which overrides the shared one for the same key and is never committed.')}
+                        >
+                          <select
+                            className="ga-input"
+                            value={g.store || 'shared'}
+                            onChange={(e) => patchGroup(key, { store: e.target.value as Store })}
+                          >
+                            <option value="shared">{t('shared catalog (committed)')}</option>
+                            <option value="world">{t('this world (never committed)')}</option>
+                          </select>
+                        </Field>
+                        <Field
                           label={t('Default pose')}
                           hint={t('The pose a click on such a marker sets. It has to be a pose of this place type — only a place type without poses may stay empty.')}
                         >
@@ -778,8 +800,8 @@ export function PosesTab() {
                     </span>
                   ) : null}
                   {p.is_default ? <span className="ga-source">{t('default')}</span> : null}
-                  {p.store === 'local'
-                    ? <span className="ga-source">{t('local')}</span> : null}
+                  {p.store === 'world'
+                    ? <span className="ga-source">{t('world')}</span> : null}
                 </button>
               </li>
             ))}
@@ -943,11 +965,12 @@ export function PosesTab() {
 
                 <Field
                   label={t('Stored in')}
-                  hint={t('The shared catalog travels with the repository. Pick the'
-                          + ' local overlay for an entry that must never be committed —'
-                          + ' a licensed or adult clip. An entry is only reachable in'
-                          + ' the game once it is in one of the two, and the overlay'
-                          + ' wins over the shared file for the same key.')}
+                  hint={t('The shared catalog travels with the repository. Pick this'
+                          + ' world for an entry that must never be committed —'
+                          + ' a licensed or adult clip; it lives in the world.db. An'
+                          + ' entry is only reachable in the game once it is in one of'
+                          + ' the two, and the world layer wins over the shared file'
+                          + ' for the same key.')}
                 >
                   <select
                     className="ga-input"
@@ -955,7 +978,7 @@ export function PosesTab() {
                     onChange={(e) => upd('store', e.target.value as Store)}
                   >
                     <option value="shared">{t('shared catalog (committed)')}</option>
-                    <option value="local">{t('local overlay (never committed)')}</option>
+                    <option value="world">{t('this world (never committed)')}</option>
                   </select>
                 </Field>
 
