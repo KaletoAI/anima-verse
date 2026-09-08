@@ -844,6 +844,38 @@ export function Hud({ avatar, username, role }: {
   // happened by the time this does.
   useEffect(() => { measureChat(); }, [sceneStamp, chatSize, measureChat]);
 
+  // --- The camera aims BESIDE the chat window ------------------------------
+  //
+  // The panel lies on the picture, bottom left, and may be dragged over most
+  // of it. The scene answers by shifting its frustum so the avatar leaves the
+  // covered corner (`scene/viewShift.ts`) — but only the HUD knows where the
+  // panel actually is, so this measures it and hands the rectangle over.
+  //
+  // Two listeners, two different events. The observer catches every size the
+  // panel takes, the drag included. The window listener is for the moves that
+  // do NOT change its size: the panel hangs on the BOTTOM edge, so a shorter
+  // window slides it upwards while leaving it exactly as big as it was.
+  useEffect(() => {
+    const el = chatRef.current;
+    if (!open.chat || !el) {
+      gameActions.setChatBox?.(null);
+      return;
+    }
+    const report = () => {
+      const r = el.getBoundingClientRect();
+      gameActions.setChatBox?.({ x: r.left, y: r.top, w: r.width, h: r.height });
+    };
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    window.addEventListener('resize', report);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', report);
+      gameActions.setChatBox?.(null);
+    };
+  }, [open.chat]);
+
   // WHOSE faces the column shows. The pointer half comes from the panel:
   // `ScenePanel` forwards `onRowHover` to every row, so this only stores what
   // it is told — the rule decides, and it lets the pointer win over both the

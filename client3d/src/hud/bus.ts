@@ -132,6 +132,14 @@ export interface HudGameActions {
    *  arrive here; the state at startup the ground reads for itself, the same
    *  way the audio drivers read `loadPrefs`. */
   applyScatterPrefs?: (prefs: ScatterPrefs) => void;
+  /** How much of the picture the chat window covers, as a rectangle in WINDOW
+   *  coordinates, or null while it is closed. The scene answers it by aiming
+   *  beside the panel instead of straight through it (`scene/viewShift.ts`):
+   *  the chat is dragged to any size, and at a large one the avatar used to
+   *  sit centred behind the transcript with its surroundings hidden. Only the
+   *  HUD can measure this — the panel is React's, the camera is the scene's,
+   *  so this is where the two meet. */
+  setChatBox?: (box: { x: number; y: number; w: number; h: number } | null) => void;
 }
 
 /** React-side handlers the vanilla app calls (e.g. the F key opens the chat). */

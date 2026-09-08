@@ -608,6 +608,12 @@ async function startApp(username: string, role: string) {
   };
   gameActions.backToTitle = () => void backToTitle();
   const hud = createHud({ username, avatar: firstMap.avatar, onLogout: backToTitle });
+  // The chat window covers the picture; the camera aims beside it. Straight
+  // through to the engine, which reads the box once per frame — the HUD sends
+  // one on every drag step, and buffering them here would only add a lag.
+  // Registered BEFORE the mount below: the HUD reports its panel from an
+  // effect, and a handler that arrived afterwards would miss that first one.
+  gameActions.setChatBox = (box) => { engine.obstruction = box; };
   mountHud({ username, avatar: firstMap.avatar, role });   // React HUD island (E2-T5)
   npcs.setAvatar(firstMap.avatar);
 

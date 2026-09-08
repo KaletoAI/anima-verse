@@ -7,6 +7,7 @@ import {
   basePitchDeg, MAX_DIST, MIN_DIST, OVERVIEW_NEAR_PITCH_DEG,
 } from './cameraFraming';
 import { SHADOW_HALF_M, SHADOW_MAP_PX, snapShadowCentre } from './shadowSnap';
+import { type ScreenBox, viewShiftFor } from './viewShift';
 
 /** The framing arithmetic lives in `scene/cameraFraming.ts` — pure numbers, so
  *  the distances and the pitch curve can be checked without a GL context
@@ -111,6 +112,28 @@ export class Engine {
    *  returns per frame and the WASD pan is skipped — those keys then belong to
    *  the avatar (task 3). Wheel zoom, Q/E and orbit stay live. */
   follow: (() => THREE.Vector3 | null) | null = null;
+  /** What the HUD covers of the picture, in CLIENT coordinates, or null while
+   *  nothing does. TODAY that is the chat window and nothing else: it is the
+   *  one panel the user drags to any size, and at its maximum it owns most of
+   *  the screen while the avatar sits centred behind it. The engine does not
+   *  move the camera for it — it renders an off-centre cut-out of the same
+   *  picture, so the aim point slides out of the covered corner while the
+   *  viewing direction stays untouched (`scene/viewShift.ts`).
+   *
+   *  Written by `main.ts` from the HUD, read once per frame. Client
+   *  coordinates rather than canvas ones because that is what the HUD can
+   *  measure; the frame subtracts the canvas origin itself. */
+  obstruction: ScreenBox | null = null;
+
+  /** The shift currently APPLIED, in CSS pixels — the smoothed value, chased
+   *  towards what `viewShiftFor` asks for the same way `dist` and `yaw` chase
+   *  theirs. The panel fades in over 150 ms and is dragged live, and a shift
+   *  that snapped would jerk the whole world sideways with it. */
+  private viewDx = 0;
+  private viewDy = 0;
+  /** What was last handed to `setViewOffset`, so an unchanged frame does not
+   *  rebuild the projection matrix. `null` = the camera has no offset set. */
+  private viewApplied: { dx: number; dy: number; w: number; h: number } | null = null;
   /** Ceiling of the USER's zoom-out, in metres; `null` = the engine's own
    *  `MAX_DIST`. The embodied mode sets it (finding B12): zooming out there
    *  used to slide seamlessly back into the overview, and the player never
@@ -458,6 +481,66 @@ export class Engine {
     });
   }
 
+  /**
+   * Slide the aim point out of the corner the HUD covers — the frustum shift
+   * of `scene/viewShift.ts`, applied once per frame.
+   *
+   * `lookAt` has just put the target in the exact middle of the picture. This
+   * renders an OFF-CENTRE cut-out of that same picture instead, which moves
+   * where the target lands without touching the camera at all: direction,
+   * horizon and the avatar's facing stay as they were, and everything that
+   * projects through the camera — clicks, plates, bubbles, culling — follows
+   * on its own because it all reads this one projection matrix.
+   *
+   * `setViewOffset(w, h, x, y, w, h)` shows the cut-out at (x, y) of a
+   * full-size picture, so the point that would sit in the middle appears at
+   * (w/2 − x, h/2 − y): a NEGATIVE x moves it right, a POSITIVE y moves it up.
+   * Hence the two negations — `dx`/`dy` are screen axes (right, down).
+   */
+  private applyViewShift(dt: number) {
+    const el = this.renderer.domElement;
+    const w = el.clientWidth;
+    const h = el.clientHeight;
+    let box: ScreenBox | null = null;
+    if (this.obstruction && w > 0 && h > 0) {
+      // The HUD measures against the WINDOW, the rule works on the canvas.
+      const rect = el.getBoundingClientRect();
+      box = {
+        x: this.obstruction.x - rect.left,
+        y: this.obstruction.y - rect.top,
+        w: this.obstruction.w,
+        h: this.obstruction.h,
+      };
+    }
+    const want = viewShiftFor(w, h, box);
+    const k = 1 - Math.exp(-8 * dt);
+    this.viewDx += (want.dx - this.viewDx) * k;
+    this.viewDy += (want.dy - this.viewDy) * k;
+    // An exponential chase never arrives. Closing the last twentieth of a
+    // pixel by hand is what lets a closed panel actually CLEAR the offset
+    // again instead of leaving the camera permanently a hair off centre.
+    if (want.dx === 0 && want.dy === 0
+        && Math.abs(this.viewDx) < 0.05 && Math.abs(this.viewDy) < 0.05) {
+      this.viewDx = 0;
+      this.viewDy = 0;
+    }
+    const applied = this.viewApplied;
+    if (this.viewDx === 0 && this.viewDy === 0) {
+      if (applied) {
+        this.camera.clearViewOffset();
+        this.viewApplied = null;
+      }
+      return;
+    }
+    // Rebuilding the projection matrix on a frame that changed nothing is
+    // waste — and once the chase has settled, nothing changes for minutes.
+    if (applied && applied.w === w && applied.h === h
+        && Math.abs(applied.dx - this.viewDx) < 0.01
+        && Math.abs(applied.dy - this.viewDy) < 0.01) return;
+    this.camera.setViewOffset(w, h, -this.viewDx, -this.viewDy, w, h);
+    this.viewApplied = { dx: this.viewDx, dy: this.viewDy, w, h };
+  }
+
   private frame() {
     const dt = Math.min(this.clock.getDelta(), 0.1);
     // ONE time value for everything that moves by itself: the water surfaces
@@ -512,6 +595,7 @@ export class Engine {
     ).multiplyScalar(this.dist);
     this.camera.position.copy(this.target).add(off);
     this.camera.lookAt(this.target);
+    this.applyViewShift(dt);
 
     // The sun follows the map section so the shadow map can stay small — but it
     // follows it in WHOLE SHADOW TEXELS (`scene/shadowSnap.ts`). A frustum that
