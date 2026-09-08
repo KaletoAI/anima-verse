@@ -137,15 +137,31 @@ with `slots_auto` False stays empty over the next upload.
 ---------------------------------------------------------------------------
 Both keys live in the sidecar JSON and read back identically through
 `read_sidecar`, so nothing here depends on the record being built.
+
+---------------------------------------------------------------------------
+[7] PRESETS: `mirror` is a look, and the two lists are one list
+---------------------------------------------------------------------------
+SLOT_PRESETS is a mirror of MATERIAL_PRESETS in
+packages/scene-render/src/slotMaterials.ts ("change both or neither"):
+    set(SLOT_PRESETS) == set(names in the TS literal)          -> True
+    sanitize_area_defaults({"glass_1": {"preset": "mirror"}}, areas)
+        with areas = [{"id": "glass_1", "kind": "glass"}]      -> stored as given
+    sanitize_area_defaults({"glass_1": {"preset": "chrome"}}, areas)
+                                                                -> ValueError
+    sanitize_variant_slot_values({"glass_1": {"preset": "mirror"}}, ...)
+                                                                -> accepted
+    a `picture` area with {"preset": "mirror"}                  -> ValueError
 """
 import json
 import os
+import re
 import struct
 import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 WORLD = Path(tempfile.mkdtemp(prefix="prop-slots-smoke-"))
 os.environ["STORAGE_DIR"] = str(WORLD)
@@ -377,6 +393,35 @@ def main() -> int:
     finally:
         store._auto_bake_vc, store._auto_retexture = real_bake, real_tex
         store.request_low_tier, store._autofill_slots = real_low, real_fill
+
+    print("\n[7] presets: `mirror` is a look, and the two lists are one list")
+    ts = (ROOT / "packages/scene-render/src/slotMaterials.ts").read_text(
+        encoding="utf-8")
+    m = re.search(r"MATERIAL_PRESETS\s*=\s*\[([^\]]*)\]", ts)
+    ts_presets = set(re.findall(r"'([a-z_]+)'", m.group(1))) if m else set()
+    check("SLOT_PRESETS mirrors MATERIAL_PRESETS",
+          ts_presets == set(store.SLOT_PRESETS),
+          f"ts={sorted(ts_presets)} py={sorted(store.SLOT_PRESETS)}")
+    pane = [{"id": "glass_1", "kind": "glass"}]
+    panel = [{"id": "picture_1", "kind": "picture"}]
+    got = store.sanitize_area_defaults({"glass_1": {"preset": "mirror"}}, pane)
+    check("a prop-wide default may be `mirror`",
+          got == {"glass_1": {"preset": "mirror"}}, str(got))
+    try:
+        store.sanitize_area_defaults({"glass_1": {"preset": "chrome"}}, pane)
+        check("…but not a look no renderer draws", False, "no ValueError")
+    except ValueError as exc:
+        check("…but not a look no renderer draws", True, str(exc)[:60])
+    got = store.sanitize_variant_slot_values({"glass_1": {"preset": "mirror"}},
+                                             pane)
+    check("a variant's pane takes `mirror` too",
+          got == {"glass_1": {"preset": "mirror"}}, str(got))
+    try:
+        store.sanitize_variant_slot_values({"picture_1": {"preset": "mirror"}},
+                                           panel)
+        check("a picture area still takes no preset", False, "no ValueError")
+    except ValueError as exc:
+        check("a picture area still takes no preset", True, str(exc)[:60])
 
     print()
     if FAILURES:

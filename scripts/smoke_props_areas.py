@@ -58,7 +58,7 @@ two areas of [1] on variant 0's full file:
                                            and `areas_info(pid, 0)`
     {}                                  -> clears them
     {"nope": {"preset": "glass"}}       -> ValueError (unknown area)
-    {"glass_1": {"preset": "mirror"}}   -> ValueError (preset not in SLOT_PRESETS)
+    {"glass_1": {"preset": "chrome"}}   -> ValueError (preset not in SLOT_PRESETS)
     {"glass_1": {}}                     -> ValueError (a default needs a preset)
     {"picture_1": {"preset": "glass"}}  -> ValueError (a default is the LOOK
                                            of a pane; a picture area takes none)
@@ -171,7 +171,7 @@ URL, glass -> preset in SLOT_PRESETS":
     {"picture_1": {"image": "/foo/x.png"}}      -> ValueError (URL form)
     {"picture_1": {"preset": "glass"}}    -> ValueError (preset on a picture)
     {"glass_1": {"image": IMG}}           -> ValueError (image on a pane)
-    {"glass_1": {"preset": "mirror"}}     -> ValueError (not in SLOT_PRESETS)
+    {"glass_1": {"preset": "chrome"}}     -> ValueError (not in SLOT_PRESETS)
     "picture_1"                           -> ValueError (not an object)
 
 A refused `add_picture_variant` creates NOTHING: the variant count stays put
@@ -715,7 +715,7 @@ def part2() -> None:
             ("a preset on a picture area", {"picture_1": {"preset": "glass"}}),
             ("an image on a pane", {"glass_1": {"image": IMG}}),
             ("a preset outside SLOT_PRESETS",
-             {"glass_1": {"preset": "mirror"}}),
+             {"glass_1": {"preset": "chrome"}}),
             ("a string instead of an object", "picture_1")):
         try:
             store.set_variant_slot_values(pid6, 1, value)
@@ -1582,7 +1582,7 @@ def main() -> int:
     before = sidecar_text(pid)
     for label, value in (("an unknown area", {"nope": {"preset": "glass"}}),
                          ("a preset outside SLOT_PRESETS",
-                          {"glass_1": {"preset": "mirror"}}),
+                          {"glass_1": {"preset": "chrome"}}),
                          ("a default without preset", {"glass_1": {}}),
                          # The KIND decides the shape, as it does for a
                          # variant's slot_values: a default is the LOOK of a

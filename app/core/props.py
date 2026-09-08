@@ -366,11 +366,12 @@ MATERIAL_SLOT_NAMES = ("glass", "mirror", "matte")
 #: the code that DRAWS them — ``MATERIAL_PRESETS`` in
 #: ``packages/scene-render/src/slotMaterials.ts``, the one routine both
 #: renderers use. A preset no renderer can draw is not a preset, so this tuple
-#: is a mirror of that list and never grows on its own. (It is deliberately
-#: shorter than :data:`MATERIAL_SLOT_NAMES`: a mesh may NAME a ``mirror``
-#: surface long before anything can render one.)
+#: is a mirror of that list and never grows on its own. ``glass`` and
+#: ``mirror`` are drawn (``slotMaterials.ts``, ``mirrorSurface.ts``); ``matte``
+#: is still only a NAME a mesh may carry, which is why this tuple stays
+#: shorter than :data:`MATERIAL_SLOT_NAMES`.
 #: Kept for variant slot values (picture props).
-SLOT_PRESETS = ("glass",)
+SLOT_PRESETS = ("glass", "mirror")
 
 # ── Picture areas (spec-picture-props.md) ───────────────────────────────
 #: A frame prop's PANELS — the faces of its mesh that take a picture (kind
