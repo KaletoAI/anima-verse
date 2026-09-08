@@ -797,7 +797,10 @@ export class NpcManager {
       // The walking mark comes from the TRAVEL BLOCK, not from the route: a
       // fogged traveller has no waypoints but is just as much on its way, and
       // its arrival time is in the payload all the same (§ A11).
-      const travelling = !!st.char.travel;
+      // A journey whose start still lies ahead is NOT under way: the figure
+      // is getting out of its pose and stays where it is. Reading `travel`
+      // alone walked it while the standing-up clip was still running.
+      const travelling = !!st.char.travel && !st.char.travel.starts_in_s;
       const eta = st.char.travel?.eta_hhmm ? ` ${st.char.travel.eta_hhmm}` : '';
       npc.labelName.textContent = (travelling ? `🚶${eta} ` : '') + st.char.name;
       npc.travelling = travelling;

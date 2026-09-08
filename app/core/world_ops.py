@@ -557,6 +557,13 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                 # …and the pace this very segment is baked at (terrain).
                 _pace = segment_pace_m_s(_j["waypoints"], _st)
                 _eta = GameTime.parse(_st["eta_game"])
+                # NOT UNDER WAY YET: the start lies ahead of the clock because
+                # the figure is still getting out of its pose
+                # (`travel_engine.departure_bridge`). Everything below that
+                # would let a client move it has to say so — a client that
+                # extrapolates here walks a figure that is standing up.
+                _pending = max(0.0, (GameTime.parse(_j["started_at_game"])
+                                     - _now_game).seconds)
                 travel = {
                     "target_id": _j["target"],
                     # x/z ONLY — the baked cumulative game seconds (t_cum) are
@@ -582,9 +589,14 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                     # extrapolate. Successor of v1's cell_seconds_real, with
                     # the factor on the other side: a DURATION divides by it,
                     # a SPEED (metres per second) multiplies.
+                    # REAL seconds until the figure starts walking — null
+                    # once it does. A client shows the bridge clip
+                    # (`activity_animation`) and moves nothing until then.
+                    "starts_in_s": (round(_pending / _factor, 3)
+                                    if _pending > 0 and _factor > 0 else None),
                     "speed_m_s_real": (round(_speed * _factor, 4)
-                                       if not _thin and _factor > 0
-                                       and _speed > 0 else None),
+                                       if not _thin and not _pending
+                                       and _factor > 0 and _speed > 0 else None),
                     # The pace of the segment being walked RIGHT NOW (§ A11,
                     # E4): the terrain speed_factor sits in the baked stamps,
                     # not in speed_m_s, so THIS is what a client extrapolates
@@ -592,9 +604,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                     # null on a frozen clock, after the arrival and for a
                     # degenerate segment — the three cases where the number
                     # would be a lie.
+                    # …and the FOURTH case in which this number would be a
+                    # lie: a journey that has not begun.
                     "pace_m_s_real": (round(_pace * _factor, 4)
-                                      if not _thin and _factor > 0
-                                      and _pace else None),
+                                      if not _thin and not _pending
+                                      and _factor > 0 and _pace else None),
                 }
         except Exception as e:
             travel = None

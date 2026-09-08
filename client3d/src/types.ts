@@ -216,6 +216,10 @@ export interface MapTravel {
    *  `null` on a frozen clock, after arrival and for a degenerate segment —
    *  the three cases where the number would be a lie. */
   pace_m_s_real: number | null;
+  /** REAL seconds until the figure STARTS walking — it is standing up until
+   *  then (`activity_animation` carries the clip it plays for that). `null`
+   *  once the journey is under way, which is the ordinary case. */
+  starts_in_s?: number | null;
 }
 
 export interface MapCharacter {

@@ -503,6 +503,18 @@ def departure_bridge(character_name: str) -> Tuple[str, float]:
         return "", 0.0
 
 
+def _exit_delay(exit_s: float) -> int:
+    """The exit clip's length as WHOLE game seconds, rounded UP.
+
+    The world calendar has second resolution, so a 2.23 s clip stored as a
+    stamp comes back as 2 s and the last 0.23 s of the standing-up would be
+    cut off by the first walking step. Rounding up holds the clip's last frame
+    for the remainder instead (the client clamps it), which is a pause nobody
+    sees — a cut mid-motion is.
+    """
+    return math.ceil(exit_s) if exit_s > 0 else 0
+
+
 def start_journey(character_name: str,
                   target_id: str) -> Tuple[Dict[str, Any] | None, str]:
     """Begin a timed journey to ``target_id``.
@@ -573,7 +585,7 @@ def start_journey(character_name: str,
     # first point on its own, and the ETA moves with it because it is derived
     # from the same stamp.
     exit_clip, exit_s = departure_bridge(character_name)
-    starts = game_time() + GameDuration.of(seconds=exit_s) if exit_s else game_time()
+    starts = game_time() + GameDuration.of(seconds=_exit_delay(exit_s))
     journey = {"target": target_id, "waypoints": waypoints,
                "started_at_game": starts.canonical(), "speed_m_s": speed,
                "entry_edge": entry_edge}
@@ -661,10 +673,16 @@ def start_journey_to_point(character_name: str, x: float,
     if waypoints is None:
         return None, "no_route"
 
+    # Same delay as a journey to a place: getting up takes as long either way.
+    exit_clip, exit_s = departure_bridge(character_name)
+    starts = game_time() + GameDuration.of(seconds=_exit_delay(exit_s))
     journey = {"target": "", "target_point": {"x": gx, "z": gz},
                "waypoints": waypoints,
-               "started_at_game": game_time().canonical(), "speed_m_s": speed,
+               "started_at_game": starts.canonical(), "speed_m_s": speed,
                "entry_edge": None}
+    if exit_clip:
+        journey["exit_clip"] = exit_clip
+        journey["exit_s"] = round(exit_s, 3)
     # Walking away ends a running pair interaction for BOTH participants.
     from app.core.interaction_engine import end_interaction
     end_interaction(character_name, reason="journey")

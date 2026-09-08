@@ -508,6 +508,15 @@ try:
     _ac.resolve_transition = _boom
     check("a broken table is no delay, and no exception",
           travel_engine.departure_bridge("wild_npc"), ("", 0.0))
+
+    # The delay is WHOLE game seconds, rounded UP: the calendar has second
+    # resolution, so 2.23 s stored as a stamp comes back as 2 and the last
+    # 0.23 s of the standing-up would be cut off by the first step.
+    check("a clip length rounds UP to whole game seconds",
+          travel_engine._exit_delay(2.23), 3)
+    check("… an exact second stays that second",
+          travel_engine._exit_delay(1.0), 1)
+    check("… and no clip is no delay", travel_engine._exit_delay(0.0), 0)
 finally:
     (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
      _ac.load_locomotion_clips, _ac.resolve_transition, _ac.clip_meta) = _keep
@@ -548,6 +557,67 @@ check("the arrival is the delay LATER, not the same",
 check_true("and it is not the undelayed arrival",
            _at(0.0)["eta_game"]
            != (START_GT + GameDuration.of(seconds=10.0)).canonical())
+
+# ── What the ROSTER says while the figure gets up ───────────────────────
+#
+# The delay only works if everything that could move the figure says so. The
+# client reads three of these fields, and reading `travel` alone walked a
+# figure whose standing-up clip was still running:
+#
+#   activity_animation  the bridge clip, so it PLAYS standing up
+#   starts_in_s         real seconds until it walks — the "not yet" flag
+#   pace/speed_m_s_real null, so nothing extrapolates between polls
+#
+# Derived by hand: at game factor 1 a 2.23 game-second delay is 2.23 real
+# seconds; once the start has passed, all three go back to their normal value.
+print("\n[the roster says 'not yet']")
+from app.core import world_ops as _wo                          # noqa: E402
+
+_ROSTER_NPC = "roster_npc"
+try:
+    set_game_factor(1.0)
+    # A figure only reaches the roster once it stands somewhere.
+    save_character_profile(_ROSTER_NPC, {"current_location": ""}, create_new=True)
+    save_character_current_location(_ROSTER_NPC, HOME)
+    set_character_pos(_ROSTER_NPC, 0.0, 0.0)
+
+    def _roster(offset_s):
+        _p = get_character_profile(_ROSTER_NPC) or {}
+        _p["journey"] = {
+            "target": "somewhere", "waypoints": [[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]],
+            "started_at_game": (game_time()
+                                + GameDuration.of(seconds=offset_s)).canonical(),
+            "speed_m_s": 1.0, "exit_clip": "standup", "exit_s": 2.23}
+        _p["movement_target"] = "somewhere"
+        save_character_profile(_ROSTER_NPC, _p)
+        _rows = _wo.build_worldmap_payload(show_all=True)["characters"]
+        return next((c for c in _rows if c["name"] == _ROSTER_NPC), None)
+
+    # 3.0, not 2.23: that is what `start_journey` writes for a 2.23 s clip.
+    _up = _roster(3.0)
+    _go = _roster(0.0)
+    check_true("the figure is in the roster at all", _up is not None)
+    if _up and _go:
+        check("while getting up it plays the bridge clip",
+              _up["activity_animation"], "standup")
+        # 2.23 s of clip -> 3 WHOLE game seconds: the calendar has second
+        # resolution, and rounding DOWN would cut the last 0.23 s of the
+        # standing-up off with the first step (`_exit_delay`).
+        approx("… and the roster says how long that still takes",
+               _up["travel"]["starts_in_s"], 3.0)
+        check("… and nothing may extrapolate its position",
+              (_up["travel"]["pace_m_s_real"], _up["travel"]["speed_m_s_real"]),
+              (None, None))
+        approx("… while it has walked nothing", _up["travel"]["progress_m"], 0.0)
+        check("once under way the bridge is gone",
+              _go["activity_animation"], "")
+        check("… the 'not yet' flag with it",
+              _go["travel"]["starts_in_s"], None)
+        check_true("… and the pace is a number again",
+                   _go["travel"]["pace_m_s_real"] is not None,
+                   str(_go["travel"]["pace_m_s_real"]))
+except Exception as _e:                                        # pragma: no cover
+    check_true(f"the roster check ran ({_e})", False)
 
 print()
 if FAILURES:
