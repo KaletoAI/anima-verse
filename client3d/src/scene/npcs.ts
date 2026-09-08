@@ -1341,15 +1341,20 @@ export class NpcManager {
         npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
       }
       if (!moving && npc.figure) {
-        // Standing: the marker's facing > look at the neighbours > the
-        // camera's base direction
+        // Standing: the marker's facing beats looking at the neighbours, and
+        // where NEITHER says anything the figure keeps the way it is already
+        // looking. There used to be a third rule — turn south — and it made
+        // every figure that stopped walking swing back to one fixed world
+        // direction, the avatar included: let go of the key and it turned away
+        // from where it had just gone. "Nobody said which way" is not a
+        // direction, so nothing is written.
         const target = faceTo.get(npc.name);
         const dir = npc.face
           ? npc.face.clone()
           : target
             ? target.clone().sub(npc.root.position).setY(0)
-            : new THREE.Vector3(0, 0, 1);
-        npc.figure.faceTowards(dir);
+            : null;
+        if (dir) npc.figure.faceTowards(dir);
       }
 
       if (npc.figure) {
