@@ -2391,11 +2391,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           zoom step (and every wide pane) vertically while the width grew. The viewport-relative cap keeps a
           3x plan from pushing the rest of the editor off the page; past it
           the box scrolls vertically like it always scrolled horizontally.
-          The frame around it carries the scale bar — inside the viewport a
-          zoomed-in plan would scroll its own scale out of sight. */}
+          The frame right around the viewport carries the scale bar — inside
+          the viewport a zoomed-in plan would scroll its own scale out of
+          sight, and anchored one level higher (on the column that also holds
+          the status line) its "bottom: 8" would land on the status line's
+          buttons instead of the plan's corner. */}
       <div ref={planColRef}
-        style={{ position: 'relative', flex: '1 1 auto', minWidth: 0,
-                 maxWidth: '100%' }}>
+        style={{ flex: '1 1 auto', minWidth: 0, maxWidth: '100%' }}>
+      <div style={{ position: 'relative' }}>
       <div ref={zoomViewportRef} style={{ overflow: 'auto', maxWidth: '100%',
         maxHeight: `min(${baseW + 14}px, 85vh)` }}>
       <PlanCanvas
@@ -2484,6 +2487,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         ownerOpeningIndex={ownerOpeningIndex}
       />
       </div>
+      <PlanScaleBar view={view} canvasPx={canvasPx} />
+      </div>
       {/* THE ONE LINE UNDER THE PLAN (§ W3). Everything that used to stack
           here — the legend, the leftover-room warning, the server's findings
           and the pass-through rows — lives in the inspector's Findings tab
@@ -2491,7 +2496,6 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           is left is a pointer: how many findings are waiting, and a click
           that opens them. */}
       <div className="ga-plan-status">
-        <PlanScaleBar view={view} canvasPx={canvasPx} />
         {findings ? (
           <button
             type="button"
