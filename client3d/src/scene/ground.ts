@@ -68,8 +68,9 @@ import * as THREE from 'three';
 import { buildAreaGeometry,
   heightAt as worldHeightAt, pickVariant, pointInRing,
   propBoxFootprints, propGroundFit, rayGroundHit,
-  scatterCellInstances, scatterCellSeed, scatterClearM,
+  scatterCellAt, scatterCellInstances, scatterCellSeed, scatterClearM,
   SCATTER_CELL_M,
+  alongSeed, strokeCentreLine, strokeStations,
   strokeWidthM,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
   waterfallsFrom,
@@ -91,7 +92,7 @@ import { sanitizePolygon } from '../game/polygon';
 // rule that uses it lives in `walk.wadeGate`.
 import { SWIM_FROM_DEFAULT_M, swimFrom } from '../game/walk';
 import type { MapLocation, TerrainArea, TerrainPayload,
-  TerrainScatterEntry, TerrainType,
+  TerrainAlongEntry, TerrainScatterEntry, TerrainType,
   WorldBounds } from '../types';
 import { HEIGHT_TILE_CACHE_MAX, HEIGHT_TILE_RADIUS_M, tileBatches,
   wantedTiles } from './heightTiles';
@@ -1042,6 +1043,23 @@ function readScatterList(area: TerrainArea): TerrainScatterEntry[] {
   return raw.filter((e): e is TerrainScatterEntry => !!e && typeof e === 'object');
 }
 
+/** The rows along a line-drawn area (`meta.stroke.along`), same trust as
+ *  `readScatterList`: a list of objects, nothing more is assumed. */
+function readAlongList(area: TerrainArea): TerrainAlongEntry[] {
+  const raw = area.meta?.stroke?.along;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((e): e is TerrainAlongEntry => !!e && typeof e === 'object');
+}
+
+/** What a scatter row and an along row have in common once their instances
+ *  are known — the prop facts the builder reads off the entry — and the one
+ *  thing that differs: WHERE the instances stand. */
+interface GrownRow {
+  entry: TerrainScatterEntry | TerrainAlongEntry;
+  index: number;
+  sample: (variantCount: number, clearM: number) => ScatterInstance[];
+}
+
 /**
  * The MESHES one scatter row may draw — one tier map per active model variant
  * of its prop, the primary one first (§ B2 addendum).
@@ -1057,7 +1075,8 @@ function readScatterList(area: TerrainArea): TerrainScatterEntry[] {
  * is taken whole rather than merged with it — reading both would be two names
  * for the primary variant and one chance to disagree.
  */
-function readVariantMaps(entry: TerrainScatterEntry): Record<string, string>[] {
+function readVariantMaps(entry: TerrainScatterEntry | TerrainAlongEntry
+): Record<string, string>[] {
   const list = entry.model_variants;
   if (Array.isArray(list)) {
     const maps = list.filter(
@@ -1638,8 +1657,76 @@ export function createGround(): Ground {
         && rMaxZ >= z0 && rMinZ <= z0 + SCATTER_CELL_M;
     });
     if (!cells.length) return out;
-    readScatterList(area).forEach((entry, index) => {
-      const density = Number(entry.density_per_100m2 ?? 0);
+    // THE ROWS THIS AREA GROWS — its scatter over the ground and, on a drawn
+    // line, the rows along it (§ A9 addendum 2026-09-09). Both are the same
+    // kind of thing from here on (a prop, a height, tiers, wind, sink); only
+    // WHERE the instances stand differs, and that is the `sample` below —
+    // the cell sampler for a scatter row, `strokeStations` for an along row.
+    // The along stations are computed for the whole line (a few hundred at
+    // most) and kept where they fall into a window cell, so a row comes and
+    // goes with the camera exactly like a wood does.
+    const inWindow = new Set(cells.map(([cx, cz]) => `${cx},${cz}`));
+    const rows: GrownRow[] = readScatterList(area).map((entry, index) => ({
+      entry,
+      index,
+      sample: (variantCount, clearM) => {
+        const pts: ScatterInstance[] = [];
+        const density = Number(entry.density_per_100m2 ?? 0);
+        for (const [cx, cz] of cells) {
+          for (const p of scatterCellInstances({
+            ring,
+            cx,
+            cz,
+            densityPer100m2: density,
+            seed: scatterCellSeed(area.id, index, cx, cz),
+            footprints,
+            clearM,
+            occluders,
+            // HOW FAR THIS ROW'S OWN PROPS STAY APART (authored, 2026-08-23).
+            // Straight through from the entry — the sampler is the one place
+            // that knows where the props already stand, and the map editor's
+            // preview hands the very same number to the very same call.
+            minSpacingM: Number(entry.min_spacing_m) > 0
+              ? Number(entry.min_spacing_m) : undefined,
+            variantCount,
+            // HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-09) — the sampler
+            // answers the finished yaw, so nothing below knows about modes.
+            yawMode: entry.yaw_mode,
+            yawDeg: entry.yaw_deg,
+          })) pts.push(p);
+        }
+        return pts;
+      },
+    }));
+    const stroke = area.meta?.stroke;
+    const along = readAlongList(area);
+    if (stroke && along.length) {
+      const line = strokeCentreLine(stroke);
+      along.forEach((entry, index) => {
+        if (!entry.model) return;
+        rows.push({
+          entry,
+          index,
+          sample: (variantCount, clearM) => strokeStations({
+            line,
+            spacingM: entry.spacing_m,
+            offsetM: entry.offset_m,
+            side: entry.side,
+            yawDeg: entry.yaw_deg,
+            yawMode: entry.yaw_mode,
+            startM: entry.start_m,
+            seed: alongSeed(area.id, index),
+            footprints,
+            clearM,
+            occluders,
+            variantCount,
+            variant: entry.variant,
+          }).filter((p) => inWindow.has(
+            `${scatterCellAt(p.x)},${scatterCellAt(p.z)}`)),
+        });
+      });
+    }
+    rows.forEach(({ entry, sample }) => {
       // An entry WITH a model gets its cone at the height the mesh will have —
       // the cone is that prop's stand-in, and a knee-high one that turns into
       // an 8 m tree is a pop where the sizes could simply agree. Only the
@@ -1685,28 +1772,8 @@ export function createGround(): Ground {
       // into is the sampler's answer (`variant`), never a count of its own: the
       // formula needs the CANDIDATE ordinal, and only the sampler knows it.
       const buckets: ScatterInstance[][] = kinds.map(() => []);
-      for (const [cx, cz] of cells) {
-        for (const p of scatterCellInstances({
-          ring,
-          cx,
-          cz,
-          densityPer100m2: density,
-          seed: scatterCellSeed(area.id, index, cx, cz),
-          footprints,
-          clearM,
-          occluders,
-          // HOW FAR THIS ROW'S OWN PROPS STAY APART (authored, 2026-08-23).
-          // Straight through from the entry — the sampler is the one place
-          // that knows where the props already stand, and the map editor's
-          // preview hands the very same number to the very same call.
-          minSpacingM: Number(entry.min_spacing_m) > 0
-            ? Number(entry.min_spacing_m) : undefined,
-          variantCount: kinds.length,
-          // HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-09) — the sampler
-          // answers the finished yaw, so nothing below knows about modes.
-          yawMode: entry.yaw_mode,
-          yawDeg: entry.yaw_deg,
-        })) (buckets[p.variant ?? 0] ?? buckets[0]).push(p);
+      for (const p of sample(kinds.length, clearM)) {
+        (buckets[p.variant ?? 0] ?? buckets[0]).push(p);
       }
       // THE one place the two authors of the wind meet (§ A9): the area's
       // amplitude times this prop's factor. Everything downstream — the tuft

@@ -252,6 +252,92 @@ export interface TerrainStroke {
   spacing_m?: number
   /** how far they swing to either side of the line, in metres */
   amplitude_m?: number
+  /** What stands ALONG the line, in rows (§ A9 addendum 2026-09-09) —
+   *  lamps, trees, parked cars. Absent = nothing. */
+  along?: TerrainAlongEntry[]
+}
+
+/** Which side(s) of a drawn line a row stands on, walking in drawing order.
+ *  Server mirror — `app/models/terrain.ALONG_SIDES`. */
+export type AlongSide = 'right' | 'left' | 'both' | 'alternate'
+export const ALONG_SIDES: readonly AlongSide[] = ['right', 'left', 'both', 'alternate']
+/** Server mirrors — `app/models/terrain.MAX_ALONG_ENTRIES` and the spacing /
+ *  offset clamps. */
+export const MAX_ALONG_ENTRIES = 8
+export const ALONG_SPACING_MIN_M = 1
+export const ALONG_SPACING_MAX_M = 500
+export const ALONG_OFFSET_MAX_M = 100
+
+/** One row of props along a drawn line — `meta.stroke.along[]`, server
+ *  whitelist `app/models/terrain._sanitize_along_entry`. The stations are
+ *  computed by the ONE shared function both renderers call
+ *  (`@anima/scene-render` → `strokeStations`). */
+export interface TerrainAlongEntry {
+  /** URL of the prop mesh, `/assets/props/<id>/model`. A row without one
+   *  places nothing — there is no tuft along a road. */
+  model?: string
+  /** Distance between two stations along the line, metres (1..500). */
+  spacing_m: number
+  /** How far the row stands beside the centre line, metres (0..100). */
+  offset_m: number
+  /** `right` (absent) / `left` / `both` / `alternate`. */
+  side?: AlongSide
+  /** The prop's turn RELATIVE to the walking direction, degrees. On the left
+   *  side the direction is reversed first, so one number faces the road from
+   *  either side: 0 = a parked car in the direction of traffic, 90 = a bench
+   *  looking across the line. Absent = 0. */
+  yaw_deg?: number
+  /** `random` = every instance its own seeded turn (trees). Absent = the
+   *  relative turn above. */
+  yaw_mode?: 'random'
+  /** Arc length of the first station, 0..spacing; absent = half a spacing. */
+  start_m?: number
+  /** Target height, as on a scatter entry. */
+  height_m?: number
+  /** A pinned model-variant list position for the whole row (a lamp row is
+   *  one lamp); absent = the shared variant formula over the station. */
+  variant?: number
+}
+
+/** What a freshly added row starts as: a lamp every 20 m, on the line, right
+ *  side. The editor seeds the offset from the ribbon width. */
+export const NEW_ALONG_ENTRY: TerrainAlongEntry = { spacing_m: 20, offset_m: 0 }
+
+/** `meta.stroke.along` read through a check, like `readScatter` — the list is
+ *  trusted for nothing but its shape. */
+export function readAlong(stroke: unknown): TerrainAlongEntry[] {
+  const raw = (stroke && typeof stroke === 'object')
+    ? (stroke as { along?: unknown }).along : undefined
+  if (!Array.isArray(raw)) return []
+  const out: TerrainAlongEntry[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const e = item as unknown as Record<string, unknown>
+    const num = (v: unknown): number | undefined =>
+      (typeof v === 'number' && Number.isFinite(v)) ? v : undefined
+    const spacing = num(e.spacing_m)
+    const entry: TerrainAlongEntry = {
+      spacing_m: spacing && spacing > 0 ? spacing : NEW_ALONG_ENTRY.spacing_m,
+      offset_m: Math.max(0, num(e.offset_m) ?? 0),
+    }
+    if (typeof e.model === 'string' && e.model) entry.model = e.model
+    if ((ALONG_SIDES as readonly string[]).includes(String(e.side))) {
+      entry.side = e.side as AlongSide
+    }
+    const yaw = num(e.yaw_deg)
+    if (yaw !== undefined) entry.yaw_deg = yaw
+    if (e.yaw_mode === 'random') entry.yaw_mode = 'random'
+    const start = num(e.start_m)
+    if (start !== undefined && start >= 0) entry.start_m = start
+    const height = num(e.height_m)
+    if (height !== undefined && height > 0) entry.height_m = height
+    const variant = num(e.variant)
+    if (variant !== undefined && variant >= 0 && Number.isInteger(variant)) {
+      entry.variant = variant
+    }
+    out.push(entry)
+  }
+  return out
 }
 
 /** An area's `meta`. Free-form by contract — the known key is named, the rest

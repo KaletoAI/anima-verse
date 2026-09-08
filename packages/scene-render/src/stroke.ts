@@ -14,7 +14,9 @@
  * `scripts/smoke_stroke_styles.mjs` bundles this file with esbuild exactly as
  * it bundled mapMath before.
  */
-import { seededRandom } from './scatter'
+import { footprintBlocks, pointInRing, scatterVariantIndex, seededRandom,
+  SCATTER_MAX_PER_ENTRY } from './scatter'
+import type { ScatterFootprint, ScatterInstance, ScatterPoint2 } from './scatter'
 
 /** Two stroke points closer than this are the same click, not a segment. */
 const STROKE_EPS = 1e-9
@@ -409,4 +411,217 @@ export function decorateStroke(points: Array<[number, number]>,
   }
   out.push(line[line.length - 1])
   return { points: out, spacingM: spacing, capped }
+}
+
+// ── What stands ALONG the line (§ A9 addendum, 2026-09-09) ─────────────────
+
+
+/** The decoration a stroke recipe gets when it authors a style but no numbers
+ *  — the editor's toolbar defaults, and since the 3D client regenerates the
+ *  same line they live HERE, in the one place both renderers read. */
+export const STROKE_SPACING_DEFAULT_M = 10
+export const STROKE_AMPLITUDE_DEFAULT_M = 2
+
+/** A stroke recipe as it is STORED (`meta.stroke`): the clicked points, the
+ *  ribbon width and, optionally, how the line is bent. Only what
+ *  `strokeCentreLine` reads; the editor's `TerrainStroke` is a superset. */
+export interface StrokeRecipe {
+  points: ReadonlyArray<readonly [number, number]>
+  style?: string
+  spacing_m?: number
+  amplitude_m?: number
+}
+
+/**
+ * THE centre line of a stored stroke, decorated exactly as the editor
+ * decorated it when it built the polygon — clicked points, style, and the
+ * toolbar defaults where the recipe authors no numbers. Every reader of a
+ * stroke's axis goes through here (the editor's handles, the 3D client's
+ * rows), so no two of them can disagree about where the line runs.
+ */
+export function strokeCentreLine(recipe: StrokeRecipe): Array<[number, number]> {
+  const pts = recipe.points.map((p): [number, number] => [p[0], p[1]])
+  const style = isStrokeStyle(recipe.style) ? recipe.style : 'straight'
+  const num = (v: unknown, fallback: number): number =>
+    (typeof v === 'number' && Number.isFinite(v) && v > 0) ? v : fallback
+  return decorateStroke(pts, style,
+    num(recipe.spacing_m, STROKE_SPACING_DEFAULT_M),
+    num(recipe.amplitude_m, STROKE_AMPLITUDE_DEFAULT_M)).points
+}
+
+/** Which side(s) of the line a row stands on, walking in drawing order. */
+export type AlongSide = 'right' | 'left' | 'both' | 'alternate'
+export const ALONG_SIDES: readonly AlongSide[] = ['right', 'left', 'both', 'alternate']
+
+/** One row of `meta.stroke.along` — server whitelist
+ *  `app/models/terrain._sanitize_along_entry`. */
+export interface AlongEntry {
+  model?: string
+  spacing_m: number
+  offset_m: number
+  side?: AlongSide
+  yaw_deg?: number
+  yaw_mode?: 'random'
+  start_m?: number
+  height_m?: number
+  variant?: number
+}
+
+/** The seed of one row — area- AND row-stable, like `scatterSeed`. */
+export function alongSeed(areaId: string, index: number): string {
+  return `terrain:along:${areaId}:${index}`
+}
+
+export interface StrokeStationOptions {
+  /** The DECORATED centre line (`strokeCentreLine`), world metres. */
+  line: ReadonlyArray<readonly [number, number]>
+  /** Distance between two stations along the line, metres (> 0). */
+  spacingM: number
+  /** How far the row stands beside the line, metres (>= 0). */
+  offsetM: number
+  /** `right` (default) / `left` / `both` / `alternate`. */
+  side?: string
+  /** The prop's turn RELATIVE to the walking direction, degrees. */
+  yawDeg?: number
+  /** `random` = one seeded draw per instance instead of the relative turn. */
+  yawMode?: string
+  /** Arc length of the first station; absent = half a spacing. */
+  startM?: number
+  /** `alongSeed(areaId, index)` — the stream of the random turn and the
+   *  offset of the variant formula. */
+  seed: string
+  footprints?: readonly ScatterFootprint[]
+  clearM?: number
+  occluders?: readonly (readonly ScatterPoint2[])[]
+  /** How many model variants the prop has; > 1 hands every instance one. */
+  variantCount?: number
+  /** A pinned LIST POSITION for every instance (a lamp row is one lamp);
+   *  absent = `scatterVariantIndex` over the instance ordinal. */
+  variant?: number
+  maxPoints?: number
+}
+
+/**
+ * THE STATIONS OF A ROW along a drawn line — deterministic, the same points
+ * for the editor's preview and the planted world (§ A9 addendum 2026-09-09).
+ *
+ * Arc length is accumulated over the decorated line; station k sits at
+ *
+ *     s_k = start + k · spacing,   0 <= s_k <= L        (start = spacing/2 unless authored)
+ *
+ * on the segment that contains s_k, with that segment's unit direction
+ * (dx, dz). The right-hand normal, walking in drawing order, is (−dz, dx) and
+ * the left-hand one (dz, −dx) — on a north-up map with z growing southwards
+ * that is the right and the left of the walker. An instance stands at
+ *
+ *     P(s_k) + n_side · offset
+ *
+ * and faces `atan2(dx, dz)` — the walking direction in the yaw convention of
+ * `scatterYaw` (0 = +z, π/2 = +x) — PLUS `yawDeg`; on the LEFT side the
+ * walking direction is reversed first (+π), so one authored number faces the
+ * road from either side: 0 is a parked car in the direction of traffic, 90 a
+ * bench looking across the line. `random` draws the yaw from the row's own
+ * seeded stream instead, one number per instance, and draws nothing else.
+ *
+ * `both` puts two instances at every station (right, then left); `alternate`
+ * one per station, right for even k, left for odd. Every instance keeps its
+ * ORDINAL in the row — rejected ones included — so a building painted over
+ * a road subtracts exactly the lamps it covers and leaves the numbering, and
+ * with it the variant of every other lamp, exactly as it was (the rule the
+ * scatter sampler follows for the same reason). Rejected: an instance inside
+ * a covering area (`occluders`) or blocked by a footprint (`footprintBlocks`
+ * with `clearM`). The line's own ribbon is NOT a rejection — the offset is
+ * what says whether a row stands on the asphalt or beside it.
+ *
+ * Variants: with `variantCount` > 1 every instance carries one — the pinned
+ * `variant` (clamped to the count) when the row names one, else
+ * `(FNV-1a(seed) + ordinal) mod n`, the scatter formula over the ordinal.
+ */
+export function strokeStations(opts: StrokeStationOptions): ScatterInstance[] {
+  const spacing = Number(opts.spacingM)
+  const offset = Number(opts.offsetM)
+  if (!Number.isFinite(spacing) || spacing <= 0) return []
+  if (!Number.isFinite(offset) || offset < 0) return []
+  // 1. the line as the ribbon builder read it: finite, no repeated point.
+  const line: Array<[number, number]> = []
+  for (const p of opts.line ?? []) {
+    if (!p || p.length < 2) return []
+    const [x, z] = p
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return []
+    const prev = line[line.length - 1]
+    if (prev && Math.abs(prev[0] - x) < STROKE_EPS
+      && Math.abs(prev[1] - z) < STROKE_EPS) continue
+    line.push([x, z])
+  }
+  if (line.length < 2) return []
+  const cum = [0]
+  for (let i = 1; i < line.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(line[i][0] - line[i - 1][0],
+      line[i][1] - line[i - 1][1]))
+  }
+  const total = cum[cum.length - 1]
+  if (!(total > 0)) return []
+
+  const side = opts.side
+  const sides: number[] = side === 'left' ? [-1]
+    : side === 'both' ? [1, -1] : [1]
+  const alternate = side === 'alternate'
+  const start = (typeof opts.startM === 'number' && Number.isFinite(opts.startM)
+    && opts.startM >= 0) ? Math.min(opts.startM, spacing) : spacing / 2
+  const random = opts.yawMode === 'random'
+  const rnd = random ? seededRandom(opts.seed) : null
+  const yawRel = (Number.isFinite(Number(opts.yawDeg))
+    ? Number(opts.yawDeg) : 0) * Math.PI / 180
+  const footprints = opts.footprints ?? []
+  const occluders = opts.occluders ?? []
+  const variants = Math.floor(Number(opts.variantCount))
+  const mixing = Number.isFinite(variants) && variants > 1
+  const pinned = (typeof opts.variant === 'number' && Number.isFinite(opts.variant)
+    && opts.variant >= 0) ? Math.min(Math.floor(opts.variant), variants - 1) : -1
+  const max = opts.maxPoints ?? SCATTER_MAX_PER_ENTRY
+  const TAU = Math.PI * 2
+
+  const out: ScatterInstance[] = []
+  let seg = 1
+  let ordinal = 0
+  for (let k = 0; ; k++) {
+    const s = start + k * spacing
+    if (s > total + STROKE_EPS) break
+    if (out.length >= max) break
+    while (seg < line.length - 1 && cum[seg] < s - STROKE_EPS) seg++
+    const [ax, az] = line[seg - 1]
+    const [bx, bz] = line[seg]
+    const len = cum[seg] - cum[seg - 1]
+    const t = len > 0 ? Math.min(1, Math.max(0, (s - cum[seg - 1]) / len)) : 0
+    const dx = (bx - ax) / len
+    const dz = (bz - az) / len
+    const px = ax + t * (bx - ax)
+    const pz = az + t * (bz - az)
+    const heading = Math.atan2(dx, dz)
+    const at = alternate ? [k % 2 === 0 ? 1 : -1] : sides
+    for (const sign of at) {
+      const index = ordinal
+      ordinal += 1
+      const x = px + (sign > 0 ? -dz : dz) * offset
+      const z = pz + (sign > 0 ? dx : -dx) * offset
+      let yaw = rnd ? rnd() * TAU
+        : heading + (sign > 0 ? 0 : Math.PI) + yawRel
+      yaw = ((yaw % TAU) + TAU) % TAU
+      let hidden = false
+      for (const occ of occluders) {
+        if ((occ?.length ?? 0) >= 3 && pointInRing(x, z, occ)) { hidden = true; break }
+      }
+      if (hidden) continue
+      let covered = false
+      for (const fp of footprints) {
+        if (footprintBlocks(fp, x, z, opts.clearM)) { covered = true; break }
+      }
+      if (covered) continue
+      out.push(mixing
+        ? { x, z, yaw, variant: pinned >= 0 ? pinned
+          : scatterVariantIndex(opts.seed, index, variants) }
+        : { x, z, yaw })
+    }
+  }
+  return out
 }

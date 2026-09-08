@@ -55,9 +55,10 @@ import {
   scatterCellSeed, scatterCellsInBox, scatterClearM, scatterInstances,
   scatterSeed, scatterWantedCount, worldToLocalXZ,
   SCATTER_CELL_M, SCATTER_CELLS_MAX, SCATTER_MAX_PER_CELL,
+  alongSeed, strokeCentreLine, strokeStations,
 } from '@anima/scene-render'
 import type { Point2, ScatterFootprint } from '@anima/scene-render'
-import { readScatter } from './mapTypes'
+import { readAlong, readScatter, readStrokePoints } from './mapTypes'
 import type { FlowAlong, TerrainArea, TerrainWaterKnot,
   TerrainWaterProfile } from './mapTypes'
 
@@ -1396,6 +1397,48 @@ export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
  *  got and how many props those stand for. The text is
  *  `scatterThinnedPercentText(drawn, wanted)` — the layer writes it, this is
  *  the arithmetic behind it. */
+/**
+ * The stations of every row along every drawn line, as preview dots
+ * (§ A9 addendum 2026-09-09) — the very points the 3D world plants, from the
+ * ONE shared function (`strokeStations`) over the ONE shared centre line
+ * (`strokeCentreLine`). A row's dot colour continues the area's scatter
+ * colours (`entry` = scatter rows + row index), so a road's lamps and its
+ * scatter can be told apart.
+ *
+ * Never thinned: a line carries a few hundred stations at most, and the
+ * budget question of the scatter overview does not arise.
+ */
+export function alongPreviewDots(areas: readonly TerrainArea[],
+  footprints: readonly ScatterFootprint[]): ScatterDot[] {
+  const rings = areas.map((a) => cleanRing(a.polygon))
+  const out: ScatterDot[] = []
+  areas.forEach((a, ai) => {
+    const stroke = a.meta?.stroke
+    const rows = readAlong(stroke)
+    if (!rows.length || !readStrokePoints(a.meta)) return
+    const line = strokeCentreLine(stroke as Parameters<typeof strokeCentreLine>[0])
+    const occluders = rings.slice(ai + 1).filter((r) => r.length >= 3)
+    const base = readScatter(a.meta).length
+    rows.forEach((e, i) => {
+      if (!e.model) return
+      for (const p of strokeStations({
+        line,
+        spacingM: e.spacing_m,
+        offsetM: e.offset_m,
+        side: e.side,
+        yawDeg: e.yaw_deg,
+        yawMode: e.yaw_mode,
+        startM: e.start_m,
+        seed: alongSeed(a.id, i),
+        footprints,
+        occluders,
+        clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m) : 2),
+      })) out.push({ x: p.x, z: p.z, entry: base + i })
+    })
+  })
+  return out
+}
+
 export interface ScatterAreaBadge {
   areaId: string
   /** the arithmetic mean of the area's ring, in world metres */

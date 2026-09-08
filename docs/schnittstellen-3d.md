@@ -1009,6 +1009,63 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   (eine Zahl, die auf nichts wirkt); ein unbekannter Modus verliert beide
   Schlüssel. Zahlen von Hand: `client3d/scripts/smoke_scatter_math.mjs`
   Abschnitt (Q), Whitelist in `scripts/smoke_terrain_areas.py` [11y].
+- **`meta.stroke.along[]` — die Strich-Streuung (Nachtrag 2026-09-09).** Eine
+  mit dem LINIENWERKZEUG gezeichnete Fläche trägt in ihrem Rezept zusätzlich
+  Reihen von Props ENTLANG ihrer Mittellinie — Laternen, Alleebäume, parkende
+  Autos, Bänke. Höchstens 8 Reihen; Whitelist
+  `app/models/terrain._sanitize_along_entry`:
+
+  ```
+  along: [ {model?: str,        # /assets/props/<id>/model; fehlt = die Reihe setzt nichts
+            spacing_m: float,   # Abstand der Stationen entlang der Linie, 1..500 (Vorgabe 20)
+            offset_m: float,    # seitlicher Abstand von der Mittellinie, 0..100 (Vorgabe 0)
+            side?: "left" | "both" | "alternate",   # fehlt = rechts (in Zeichenrichtung)
+            yaw_deg?: float,    # Drehung RELATIV zur Laufrichtung, 0..360; fehlt = 0
+            yaw_mode?: "random",# fehlt = fest; random = je Instanz ein Zug aus dem Reihen-Seed
+            start_m?: float,    # Bogenlänge der ersten Station, 0..spacing; fehlt = spacing/2
+            height_m?: float,   # Zielhöhe wie beim Scatter
+            variant?: int}, …]  # Listenposition der Modell-Variante; fehlt = Formel
+  ```
+
+  Die Auslieferung hängt dieselben Prop-Fakten an wie an einen Scatter-Eintrag
+  (`variants`, `model_variants`, `prop_height_m`, `sway_factor`,
+  `ground_offset_m` — dieselbe Schleife `terrain.with_scatter_props`).
+
+  **Die Achse ist die DEKORIERTE Mittellinie**, aus der der Editor das
+  Polygon gebaut hat: `@anima/scene-render` → `strokeCentreLine(recipe)` =
+  `decorateStroke(points, style, spacing_m | 10, amplitude_m | 2)`. Die
+  Dekoration zog dafür aus `mapMath` ins Paket; sie ist deterministisch
+  (Seed aus den geklickten Punkten), also laufen Laternen auch an einer
+  welligen Straße auf dem Asphaltrand.
+
+  **Die Stationen** (`strokeStations`, dieselbe Funktion für Editor-Vorschau
+  und 3D-Client): Bogenlänge `s_k = start + k · spacing`, `0 ≤ s_k ≤ L`;
+  Tangente `(dx, dz)` des Segments, in dem `s_k` liegt; Normale rechts
+  `(−dz, dx)`, links `(dz, −dx)` (auf einer Karte mit z nach Süden: rechts und
+  links des Gehenden in Zeichenrichtung); Instanz bei `P(s_k) + n · offset_m`;
+  Yaw `atan2(dx, dz) + yaw_deg·π/180`, **auf der linken Seite die Laufrichtung
+  vorher umgekehrt (+π)** — so schaut eine Bank mit `yaw_deg 90` von beiden
+  Seiten zur Straße, ein Auto mit 0 steht in Fahrtrichtung der jeweiligen
+  Seite. `alternate` = Station k rechts (gerade) / links (ungerade); `both`
+  = je Station zwei Instanzen (rechts, dann links). `random` zieht den Yaw aus
+  `terrain:along:<area_id>:<index>`, ein Zug je Instanz, sonst nichts.
+
+  **Subtraktion wie beim Scatter:** Instanz in einer SPÄTEREN Fläche
+  (Occluder) oder von einem Grundriss geblockt (`footprintBlocks`, `clearM`)
+  fällt weg, ihre laufende Nummer bleibt vergeben — die Variante der
+  übrigen Instanzen ändert sich nicht. Die eigene Fläche prüft NICHT (der
+  Versatz sagt, ob die Reihe auf dem Asphalt oder daneben steht). Variante:
+  `variant` gesetzt → alle diese Listenposition (auf n geklemmt), sonst
+  `(FNV-1a(seed) + Nummer) mod n`.
+
+  **Client:** `ground.ts buildScatter` führt jede Reihe durch denselben
+  `ScatterProp`-Bau wie eine Scatter-Zeile (LOD, Impostor, Wind, Bodenprobe,
+  Download-Reihenfolge) — nur die Punkte kommen aus `strokeStations`, auf die
+  Zellen des Kamerafensters gefiltert. **Editor:** Strich-Chip → „Along the
+  line", die Stationen erscheinen in der „Scatter preview" als Punkte in den
+  Farben hinter den Scatter-Zeilen. Zahlen von Hand:
+  `scripts/smoke_stroke_styles.mjs` [S1]–[S11], Whitelist
+  `scripts/smoke_terrain_areas.py` [11z], Auslieferung [12c].
 - **Der Server hängt an einen Eintrag mit Prop-`model` zusätzlich
   `variants: {tier: "/assets/props/<id>/model?tier=<tier>"}`** — nur die
   Stufen, die das Prop WIRKLICH hat, aufgelöst mit derselben einen Regel

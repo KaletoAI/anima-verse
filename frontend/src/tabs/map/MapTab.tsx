@@ -38,7 +38,7 @@ import { WorldPropLayer } from './WorldPropLayer'
 import { PropsPalette } from '../world/PropsPalette'
 import type { PropFull } from '../props/propTypes'
 import {
-  readAreaLabel, readNpcSlots, readRelief, readScatter, readWater,
+  readAlong, readAreaLabel, readNpcSlots, readRelief, readScatter, readWater,
   readWaterProfile,
 } from './mapTypes'
 import {
@@ -53,7 +53,7 @@ import type { NpcSlot } from '../world/worldTypes'
 import type {
   BulkSaveResp,
   EditorLocation, HeightArea, HeightAreasResp,
-  TerrainArea, TerrainMeta, TerrainRelief, TerrainWater,
+  TerrainAlongEntry, TerrainArea, TerrainMeta, TerrainRelief, TerrainWater,
   TerrainPayload, TerrainScatterEntry, TerrainStroke, TerrainType,
   TerrainTypesResp, WorldProp, WorldPropBox, WorldPropsResp, WorldmapPayload,
 } from './mapTypes'
@@ -507,12 +507,16 @@ function readStroke(area: TerrainArea | null): TerrainStroke | null {
     if (typeof z !== 'number' || !Number.isFinite(z)) return null
     pts.push([x, z])
   }
+  const along = readAlong(raw)
   return {
     points: pts,
     width_m: width,
     style: isStrokeStyle(style) ? style : 'straight',
     spacing_m: recipeNum(spacing, STROKE_SPACING_DEFAULT_M),
     amplitude_m: recipeNum(amplitude, STROKE_AMPLITUDE_DEFAULT_M),
+    // The rows along the line travel with the recipe (§ A9 addendum
+    // 2026-09-09) — a width change or a dragged point must not lose them.
+    ...(along.length ? { along } : {}),
   }
 }
 
@@ -538,6 +542,7 @@ const strokeDeco = (s: TerrainStroke): StrokeDeco => ({
  *  spellings of it. */
 function storedStroke(s: TerrainStroke): TerrainStroke {
   const bare: TerrainStroke = { points: s.points, width_m: s.width_m }
+  if (s.along?.length) bare.along = s.along
   if (!s.style || s.style === 'straight') return bare
   const deco = strokeDeco(s)
   return {
@@ -2301,6 +2306,18 @@ export function MapTab() {
     putStroke(a, { ...selStroke, width_m: widthM })
   }, [putStroke, selStroke, selectedArea])
 
+  /** New rows along the selected stroke (§ A9 addendum 2026-09-09) — the
+   *  recipe is rewritten whole, like a width change, so polygon and recipe
+   *  keep travelling together. */
+  const setStrokeAreaAlong = useCallback((entries: TerrainAlongEntry[]) => {
+    const a = selectedArea
+    if (!a || !selStroke) return
+    const next: TerrainStroke = { ...selStroke }
+    if (entries.length) next.along = entries
+    else delete next.along
+    putStroke(a, next)
+  }, [putStroke, selStroke, selectedArea])
+
   /** Drop the recipe, keep the shape. The polygon is already the truth, so
    *  nothing about the area changes on the map — it simply stops being edited
    *  by a line and hands its outline to the point editor. There is no way
@@ -3030,6 +3047,7 @@ export function MapTab() {
               onKind={setAreaKind}
               onZOrder={bumpAreaZ}
               onWidth={setStrokeAreaWidth}
+              onAlong={setStrokeAreaAlong}
               onScatter={setAreaScatter}
               onConvert={convertToArea}
               onDelete={() => { deleteArea() }}

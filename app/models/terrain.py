@@ -82,6 +82,24 @@ MIN_SPACING_MAX_M = 100.0
 #: 90°. No key = the random yaw of every scatter before this existed. The
 #: sampler reads the pair (`@anima/scene-render` → `scatterYaw`).
 SCATTER_YAW_MODES = ("fixed", "quarter")
+#: What grows ALONG a drawn line (``meta.stroke.along``, § A9 addendum
+#: 2026-09-09): at most this many rows per stroke, like the scatter list.
+MAX_ALONG_ENTRIES = 8
+#: The station spacing along the line, in metres — a lamp every 25 m, a parked
+#: car every 7 m. Below 1 m two props of any size overlap; the ceiling keeps a
+#: typo from placing one prop per kilometre and calling the row empty.
+ALONG_SPACING_MIN_M, ALONG_SPACING_MAX_M = 1.0, 500.0
+#: How far a row stands from the centre line, sideways. 0 = on the line (a
+#: bollard row down the middle); the ceiling is a stroke width nobody draws.
+ALONG_OFFSET_MAX_M = 100.0
+#: Which side(s) of the line a row stands on, walking in drawing order.
+#: ``alternate`` = station k right when k is even, left when odd; ``both`` =
+#: every station twice. Absent = right.
+ALONG_SIDES = ("right", "left", "both", "alternate")
+#: The turn modes of an along row. Its DEFAULT is fixed (``yaw_deg`` relative
+#: to the walking direction) — a lamp row is not a wood — so the only stored
+#: mode is the one that says otherwise.
+ALONG_YAW_MODES = ("random",)
 #: How a stroke recipe bends its centre line before it is widened. The same
 #: three the editor offers (``mapMath.STROKE_STYLES``); absent means straight,
 #: which is what every line drawn before the styles existed is.
@@ -307,7 +325,94 @@ def _sanitize_stroke(raw: Any) -> Dict[str, Any]:
     if amplitude is not None:
         out["amplitude_m"] = round(min(max(amplitude, STROKE_AMPLITUDE_MIN_M),
                                        STROKE_AMPLITUDE_MAX_M), 2)
+    if "along" in raw:
+        along = _sanitize_along_list(raw.get("along"))
+        # An emptied list is dropped, not stored: "nothing along this line"
+        # is the absence of the key, the state of every stroke before rows
+        # existed — one shape for one meaning.
+        if along:
+            out["along"] = along
     return out
+
+
+def _sanitize_along_entry(raw: Any) -> Dict[str, Any]:
+    """One row of ``meta.stroke.along`` — what stands ALONG a drawn line, at
+    regular stations (§ A9 addendum 2026-09-09), whitelisted to the fields the
+    shared sampler reads (``packages/scene-render/src/stroke.ts``
+    ``strokeStations``):
+
+    * ``spacing_m`` — the distance between two stations along the line,
+      clamped to 1..500 m, two decimals. Always present (default 20).
+    * ``offset_m`` — how far the row stands beside the centre line, 0..100 m,
+      two decimals. Always present (default 0 = on the line).
+    * ``side`` — ``right`` / ``left`` / ``both`` / ``alternate`` in walking
+      order; junk loses the key, and no key IS right.
+    * ``yaw_deg`` — the prop's turn RELATIVE to the walking direction (on the
+      left side the direction is reversed, so one number faces the road from
+      either side), 0..360, two decimals; junk loses the key, no key is 0.
+    * ``yaw_mode`` — ``random`` for a row that should not look tiled (trees);
+      anything else loses the key, and no key is the fixed turn above.
+    * ``start_m`` — the arc length of the first station, 0..spacing; junk
+      loses the key, no key is half a spacing (the row is centred on the line).
+    * ``height_m`` / ``model`` — exactly as on a scatter entry. A row without
+      a model places NOTHING (there is no tuft along a road).
+    * ``variant`` — the LIST POSITION of the model variant every station
+      shows (a lamp row is one lamp); a whole number >= 0 survives, junk loses
+      the key, and no key is the shared formula over the station index.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("along entry must be an object")
+    spacing = _finite(raw.get("spacing_m"))
+    if spacing is None:
+        spacing = 20.0
+    offset = _finite(raw.get("offset_m"))
+    if offset is None or offset < 0:
+        offset = 0.0
+    out: Dict[str, Any] = {
+        "spacing_m": round(min(max(spacing, ALONG_SPACING_MIN_M),
+                               ALONG_SPACING_MAX_M), 2),
+        "offset_m": round(min(offset, ALONG_OFFSET_MAX_M), 2),
+    }
+    side = raw.get("side")
+    if isinstance(side, str) and side.strip() in ALONG_SIDES \
+            and side.strip() != "right":
+        # Right is the ABSENT side — one shape for one meaning.
+        out["side"] = side.strip()
+    yaw = _finite(raw.get("yaw_deg"))
+    if yaw is not None:
+        out["yaw_deg"] = round(yaw % 360.0, 2)
+    mode = raw.get("yaw_mode")
+    if isinstance(mode, str) and mode.strip() in ALONG_YAW_MODES:
+        out["yaw_mode"] = mode.strip()
+    start = _finite(raw.get("start_m"))
+    if start is not None and start >= 0:
+        out["start_m"] = round(min(start, out["spacing_m"]), 2)
+    height = _finite(raw.get("height_m"))
+    if height is not None and height > 0:
+        out["height_m"] = round(height, 3)
+    model = raw.get("model")
+    if isinstance(model, str) and model.strip():
+        url = model.strip()
+        if len(url) <= MODEL_URL_MAX:
+            out["model"] = url
+    variant = raw.get("variant")
+    if isinstance(variant, bool):
+        variant = None
+    if isinstance(variant, (int, float)) and math.isfinite(variant) \
+            and variant >= 0 and int(variant) == variant:
+        out["variant"] = int(variant)
+    return out
+
+
+def _sanitize_along_list(raw: Any) -> List[Dict[str, Any]]:
+    """``meta.stroke.along`` as a whitelisted LIST; a non-list raises, more
+    than :data:`MAX_ALONG_ENTRIES` rows raise — the same discipline as the
+    scatter list, for the same reason (the list travels to every client)."""
+    if not isinstance(raw, list):
+        raise ValueError("meta.stroke.along must be a list of entries")
+    if len(raw) > MAX_ALONG_ENTRIES:
+        raise ValueError(f"at most {MAX_ALONG_ENTRIES} along entries")
+    return [_sanitize_along_entry(entry) for entry in raw]
 
 
 def _sanitize_water(meta: Dict[str, Any]) -> None:
@@ -617,10 +722,20 @@ def with_scatter_props(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cache: Dict[str, Dict[str, Any]] = {}
     for area in areas:
         meta = area.get("meta")
-        scatter = meta.get("scatter") if isinstance(meta, dict) else None
-        if not isinstance(scatter, list):
+        if not isinstance(meta, dict):
             continue
-        for entry in scatter:
+        # BOTH lists a painted shape may grow things from: the scatter over
+        # its ground and, on a drawn line, the rows along it (§ A9 addendum
+        # 2026-09-09) — one enrichment, one cache, one payload shape.
+        entries: List[Any] = []
+        scatter = meta.get("scatter")
+        if isinstance(scatter, list):
+            entries.extend(scatter)
+        stroke = meta.get("stroke")
+        along = stroke.get("along") if isinstance(stroke, dict) else None
+        if isinstance(along, list):
+            entries.extend(along)
+        for entry in entries:
             if not isinstance(entry, dict):
                 continue
             prop_id = _props.prop_id_from_model_url(entry.get("model"))

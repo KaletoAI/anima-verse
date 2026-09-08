@@ -785,6 +785,54 @@ check("the list survives the save/read round trip",
        "note": "free form", "water_level": 0.0})
 terrain.delete_area(_scat["id"])
 
+print("[11z] meta.stroke.along whitelist — what stands along a drawn line")
+LINE = [[0, 0], [100, 0]]
+
+
+def along_of(rows):
+    return terrain.sanitize_area({"kind": "water", "polygon": SQUARE,
+                                  "meta": {"stroke": {"points": LINE, "width_m": 5,
+                                                      "along": rows}}}
+                                 )["meta"]["stroke"].get("along")
+
+
+check("a full row survives with its numbers rounded",
+      along_of([{"model": "/assets/props/lamp/model", "spacing_m": 25.004,
+                 "offset_m": 3.5, "side": "alternate", "yaw_deg": 90,
+                 "start_m": 5, "height_m": 6, "variant": 1}]),
+      [{"spacing_m": 25.0, "offset_m": 3.5, "side": "alternate",
+        "yaw_deg": 90.0, "start_m": 5.0, "height_m": 6.0,
+        "model": "/assets/props/lamp/model", "variant": 1}])
+check("an empty row gets the defaults and nothing else",
+      along_of([{}]), [{"spacing_m": 20.0, "offset_m": 0.0}])
+check("spacing is clamped to 1..500, offset to 0..100",
+      along_of([{"spacing_m": 0.2, "offset_m": 250}, {"spacing_m": 900, "offset_m": -4}]),
+      [{"spacing_m": 1.0, "offset_m": 100.0}, {"spacing_m": 500.0, "offset_m": 0.0}])
+check("right is the absent side, junk sides lose the key",
+      [r.get("side") for r in along_of([{"side": "right"}, {"side": "up"}, {"side": "left"}])],
+      [None, None, "left"])
+check("yaw wraps, random is the only stored mode",
+      along_of([{"yaw_deg": -90, "yaw_mode": "random"}, {"yaw_mode": "fixed"}]),
+      [{"spacing_m": 20.0, "offset_m": 0.0, "yaw_deg": 270.0, "yaw_mode": "random"},
+       {"spacing_m": 20.0, "offset_m": 0.0}])
+check("start_m is clamped to the spacing",
+      along_of([{"spacing_m": 10, "start_m": 15}])[0]["start_m"], 10.0)
+check("a variant must be a whole number >= 0; a bool is not one",
+      [r.get("variant") for r in along_of([{"variant": 2.0}, {"variant": -1},
+                                           {"variant": 1.5}, {"variant": True}])],
+      [2, None, None, None])
+check("an emptied list is dropped from the recipe",
+      along_of([]), None)
+raises_value_error("a bare object instead of a list raises",
+                   lambda: along_of({"spacing_m": 5}))
+raises_value_error(f"more than {terrain.MAX_ALONG_ENTRIES} rows raise",
+                   lambda: along_of([{}] * (terrain.MAX_ALONG_ENTRIES + 1)))
+check("a recipe without the key stays without it",
+      terrain.sanitize_area({"kind": "water", "polygon": SQUARE,
+                             "meta": {"stroke": {"points": LINE, "width_m": 5}}}
+                            )["meta"]["stroke"],
+      {"points": [[0.0, 0.0], [100.0, 0.0]], "width_m": 5.0})
+
 print("[12] scatter enrichment — the tiers and the height the prop HAS")
 from app.core import props  # noqa: E402
 
@@ -1037,6 +1085,34 @@ check("the loose mutant would really answer the foreign URL",
 check("the echoing mutant would really answer 3 m",
       mutant_echo_entry({"model": f"/assets/props/{TREE}/model",
                          "height_m": 3}), 3.0)
+
+print("[12c] the rows along a line get the same prop facts as a scatter entry")
+# Hand-derived: an along row naming TREE is enriched exactly like a scatter
+# entry naming it — `variants` (full + low) and `prop_height_m` 8.5 — while a
+# row naming the mesh-less GHOST gets `prop_height_m` (a record always has a
+# height) but no `variants`, and a row without a model gets nothing. The
+# stored six fields stay untouched beside the additions.
+_along_area = terrain.save_area(
+    {"kind": "water", "polygon": SQUARE,
+     "meta": {"stroke": {"points": [[0, 0], [100, 0]], "width_m": 5,
+                         "along": [{"model": f"/assets/props/{TREE}/model",
+                                    "spacing_m": 25, "offset_m": 3},
+                                   {"model": f"/assets/props/{GHOST}/model",
+                                    "spacing_m": 10, "offset_m": 0},
+                                   {"spacing_m": 10, "offset_m": 0}]}}})
+_along_rows = next(a["meta"]["stroke"]["along"]
+                   for a in terrain.with_scatter_props(terrain.list_areas())
+                   if a["id"] == _along_area["id"])
+check("the tree row carries its tiers and its real height",
+      {k: _along_rows[0][k] for k in ("variants", "prop_height_m", "spacing_m", "offset_m")},
+      {"variants": {"full": f"/assets/props/{TREE}/model?tier=full",
+                    "low": f"/assets/props/{TREE}/model?tier=low"},
+       "prop_height_m": 8.5, "spacing_m": 25.0, "offset_m": 3.0})
+check("the mesh-less row has a height but no tiers",
+      ("variants" in _along_rows[1], _along_rows[1].get("prop_height_m")), (False, 1.0))
+check("a row without a model gets nothing",
+      _along_rows[2], {"spacing_m": 10.0, "offset_m": 0.0})
+terrain.delete_area(_along_area["id"])
 
 print("[13] sway_factor — the sidecar sanitizer and the payload it feeds")
 # (13a) The sanitizer, through the real update path. Every case is read back

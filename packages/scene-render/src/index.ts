@@ -94,9 +94,13 @@ export type {
 
 export {
   STROKE_STYLES, isStrokeStyle, strokeSeed, decorateStroke,
-  MAX_DECORATED_POINTS,
+  MAX_DECORATED_POINTS, STROKE_SPACING_DEFAULT_M, STROKE_AMPLITUDE_DEFAULT_M,
+  strokeCentreLine, strokeStations, alongSeed, ALONG_SIDES,
 } from './stroke'
-export type { StrokeStyle, StrokeDeco, DecoratedStroke } from './stroke'
+export type {
+  StrokeStyle, StrokeDeco, DecoratedStroke, StrokeRecipe, AlongSide,
+  AlongEntry, StrokeStationOptions,
+} from './stroke'
 
 export { SpecVerifier, VERIFY_EPS } from './verify'
 export type { PrimitiveTarget, VerifyRow } from './verify'

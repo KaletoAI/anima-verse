@@ -68,6 +68,7 @@ import type { ScatterFootprint } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useMapView } from './MapCanvas'
 import {
+  alongPreviewDots,
   decorateStroke, flowArrow, flowArrowsAlong, flowAxisPoints, scatterAreaCosts,
   scatterAreaPlan, scatterPreviewJobs, scatterThinnedByArea,
   scatterThinnedPercentText, scatterWindowDots, strokeToPolygon,
@@ -319,9 +320,17 @@ export function TerrainLayer({
   const thinned = useMemo(() => (thinJobs.length
     ? scatterThinnedByArea(thinJobs, footprints) : NO_THINNED),
   [footprints, thinJobs])
+  // …and the rows along every drawn line, in the same preview switch: the
+  // stations are cheap (a few hundred per line) and never thinned.
+  const alongDots = useMemo(() => (scatterPreview && part !== 'ground'
+    ? alongPreviewDots(areas, footprints) : NO_DOTS),
+  [areas, footprints, part, scatterPreview])
   const scatterDots = useMemo(
-    () => (thinned.dots.length ? [...windowDots, ...thinned.dots] : windowDots),
-    [thinned, windowDots],
+    () => {
+      const base = thinned.dots.length ? [...windowDots, ...thinned.dots] : windowDots
+      return alongDots.length ? [...base, ...alongDots] : base
+    },
+    [alongDots, thinned, windowDots],
   )
   /** …and, for every APPROXIMATED area, how much of it the dots on it are —
    *  the honest half of a sample that cannot show it all. An area drawn

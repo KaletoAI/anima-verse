@@ -2094,8 +2094,11 @@ async function main() {
     bucketsOf(plain, 1).map((b) => b.length), [plain.length]);
   // …and that this is really what the client does, pinned by its source (E).
   const mixSrc = await readFile(GROUND_SRC, 'utf8');
+  // Since the along rows (2026-09-09) the sampling is the row's own
+  // `sample(variantCount, clearM)`; the count still comes from the kinds.
   check('N5 buildScatter tells the sampler how many variants there are',
-    mixSrc.includes('variantCount: kinds.length'), true);
+    mixSrc.includes('sample(kinds.length, clearM)')
+      && mixSrc.includes('variantCount,\n'), true);
   check('N5 …buckets the points by the sampler\'s answer, never by a count',
     mixSrc.includes('(buckets[p.variant ?? 0] ?? buckets[0]).push(p)'), true);
   check('N5 …and builds one entry per (row, variant)',

@@ -39,13 +39,15 @@ import {
   FLOW_DIR_MAX_DEG, FLOW_DIR_MIN_DEG, FLOW_SPEED_DEFAULT_M_S,
   FLOW_SPEED_MAX_M_S, FLOW_SPEED_MIN_M_S, RELIEF_AMP_MAX_M, RELIEF_AMP_MIN_M,
   RELIEF_WAVE_DEFAULT_M, RELIEF_WAVE_MAX_M, RELIEF_WAVE_MIN_M,
+  ALONG_OFFSET_MAX_M, ALONG_SIDES, ALONG_SPACING_MAX_M, ALONG_SPACING_MIN_M,
+  MAX_ALONG_ENTRIES, NEW_ALONG_ENTRY,
   SCATTER_YAW_MODES, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
   WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M, isWaterKind, waterKindDefaults,
 } from './mapTypes'
 import type {
-  FlowAlong, HeightArea, ScatterYawMode, TerrainArea, TerrainRelief,
-  TerrainScatterEntry, TerrainStroke, TerrainType, TerrainWater,
-  TerrainWaterProfile,
+  AlongSide, FlowAlong, HeightArea, ScatterYawMode, TerrainAlongEntry,
+  TerrainArea, TerrainRelief, TerrainScatterEntry, TerrainStroke, TerrainType,
+  TerrainWater, TerrainWaterProfile,
 } from './mapTypes'
 
 /**
@@ -184,10 +186,12 @@ export const STROKE_WIDTH_DEFAULT_M = 3
  *  a bank one can see the shape of: a deflection every 10 m, 2 m out. */
 export const STROKE_SPACING_MIN_M = 2
 export const STROKE_SPACING_MAX_M = 100
-export const STROKE_SPACING_DEFAULT_M = 10
+/** The decoration a stroke gets when the recipe authors a style but no
+ *  numbers — defined in the shared package since 2026-09-09, because the 3D
+ *  client regenerates the same centre line to grow rows along it. */
+export { STROKE_SPACING_DEFAULT_M, STROKE_AMPLITUDE_DEFAULT_M } from '@anima/scene-render'
 export const STROKE_AMPLITUDE_MIN_M = 0.5
 export const STROKE_AMPLITUDE_MAX_M = 30
-export const STROKE_AMPLITUDE_DEFAULT_M = 2
 
 /** The width as it may be stored: inside the range, on the 2-decimal metre
  *  grid the server keeps coordinates on. */
@@ -609,6 +613,173 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
         </button>
         <span className="ga-map-chip-label">
           {t('Placement is deterministic per area and skips the footprints of placed locations. Ground covered by an area painted on top of this one stays bare. Switch on “Scatter preview” to see the very points the 3D world plants — the automatic undergrowth of the ground type is grown by the 3D client alone and never appears here.')}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * What stands ALONG a drawn line — the row editor of § A9's 2026-09-09
+ * addendum, the sibling of `ScatterEditor` for stroke areas.
+ *
+ * A row is a prop at regular STATIONS along the centre line, beside it by
+ * an offset, on one side or both, turned relative to the walking direction.
+ * The same write-through discipline as the scatter rows: numbers commit on
+ * blur, pickers on choice, and a key the server would drop is dropped here
+ * too, so a cleared field never travels as junk. `colorOf` continues the
+ * scatter colours, so the preview dots of a road's lamps and its scatter
+ * can be told apart.
+ */
+function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
+  entries: TerrainAlongEntry[]
+  widthM: number
+  props: PropRef[]
+  colorOf: (index: number) => string
+  onChange: (entries: TerrainAlongEntry[]) => void
+}) {
+  const { t } = useI18n()
+  const patch = (i: number, next: Partial<TerrainAlongEntry>) => {
+    const out = entries.map((e, k) => (k === i ? { ...e, ...next } : e))
+    const e = out[i]
+    if (!(typeof e.height_m === 'number' && e.height_m > 0)) delete e.height_m
+    if (!e.model) delete e.model
+    if (!e.side || e.side === 'right') delete e.side
+    if (!(typeof e.yaw_deg === 'number' && Number.isFinite(e.yaw_deg))) delete e.yaw_deg
+    if (e.yaw_mode !== 'random') delete e.yaw_mode
+    if (!(typeof e.start_m === 'number' && e.start_m >= 0)) delete e.start_m
+    if (!(typeof e.variant === 'number' && e.variant >= 0)) delete e.variant
+    onChange(out)
+  }
+  const sideWords = (side: AlongSide): string => (side === 'left' ? t('left')
+    : side === 'both' ? t('both sides') : side === 'alternate' ? t('alternating')
+      : t('right'))
+  return (
+    <div className="ga-terrain-scatter">
+      {entries.map((e, i) => {
+        const model = e.model || ''
+        const prop = props.find((p) => propModelUrl(p.id) === model)
+        const known = !model || !!prop
+        const inherited = (prop && Number(prop.height_m) > 0)
+          ? Number(prop.height_m) : SCATTER_FALLBACK_HEIGHT_M
+        return (
+          <div className="ga-terrain-scatter-row" key={i}>
+            <ScatterSwatch
+              color={colorOf(i)}
+              name={prop ? (prop.name || prop.id) : (model || t('No prop yet'))}
+              imageUrl={prop ? propImageUrl(prop.id) : ''}
+            />
+            <label className="ga-terrain-scatter-model">
+              <select
+                className="ga-input"
+                value={model}
+                title={t('The prop that stands at every station of this row. Only props that already have a mesh are offered.')}
+                onChange={(ev) => patch(i, { model: ev.target.value })}
+              >
+                <option value="">{t('No prop yet')}</option>
+                {props.map((p) => (
+                  <option key={p.id} value={propModelUrl(p.id)}>{p.name || p.id}</option>
+                ))}
+                {known ? null : <option value={model}>{model}</option>}
+              </select>
+            </label>
+            <ScatterNum
+              label={t('every (m)')}
+              title={t('The distance between two stations along the line, in metres — a lamp every 25 m, a parked car every 7 m.')}
+              value={e.spacing_m}
+              step={1}
+              onCommit={(v) => patch(i, {
+                spacing_m: Math.min(ALONG_SPACING_MAX_M,
+                  Math.max(ALONG_SPACING_MIN_M, v ?? NEW_ALONG_ENTRY.spacing_m)),
+              })}
+            />
+            <ScatterNum
+              label={t('beside (m)')}
+              title={t('How far the row stands beside the centre line, in metres. Half the width ({w} m) is the edge of the ribbon; a little more puts the row on the verge, a little less on the road itself.')
+                .replace('{w}', String(widthM / 2))}
+              value={e.offset_m}
+              step={0.5}
+              onCommit={(v) => patch(i, {
+                offset_m: Math.min(ALONG_OFFSET_MAX_M, Math.max(0, v ?? 0)),
+              })}
+            />
+            <label title={t('Which side of the line the row stands on, walking in the order the line was drawn. Alternating puts one prop per station, left and right in turn; both sides puts one on each.')}>
+              {t('side')}
+              <select
+                className="ga-input"
+                value={e.side || 'right'}
+                onChange={(ev) => patch(i, { side: ev.target.value as AlongSide })}
+              >
+                {ALONG_SIDES.map((sd) => (
+                  <option key={sd} value={sd}>{sideWords(sd)}</option>
+                ))}
+              </select>
+            </label>
+            <label title={t('How the prop is turned. Along the line = relative to the walking direction (0° faces along the line, 90° faces across it — the same number works on both sides). Random = every prop its own way, for trees.')}>
+              {t('turn')}
+              <select
+                className="ga-input"
+                value={e.yaw_mode || ''}
+                onChange={(ev) => patch(i, ev.target.value === 'random'
+                  ? { yaw_mode: 'random', yaw_deg: undefined }
+                  : { yaw_mode: undefined, yaw_deg: e.yaw_deg ?? 0 })}
+              >
+                <option value="">{t('Along the line')}</option>
+                <option value="random">{t('Random')}</option>
+              </select>
+            </label>
+            {e.yaw_mode === 'random' ? null : (
+              <ScatterNum
+                label={t('angle (°)')}
+                title={t('The turn relative to the walking direction, in degrees: 0 = a parked car in the direction of traffic, 90 = a bench looking across the line, 180 = facing back. On the left side the direction is reversed first, so one number faces the road from either side.')}
+                value={typeof e.yaw_deg === 'number' ? e.yaw_deg : 0}
+                step={15}
+                onCommit={(v) => patch(i, { yaw_deg: ((v ?? 0) % 360 + 360) % 360 })}
+              />
+            )}
+            <ScatterNum
+              label={t('height (m)')}
+              title={model && prop
+                ? t('Target height: the model is scaled until it is this tall. Empty = the prop’s own height from the Props tab ({h} m).')
+                  .replace('{h}', String(inherited))
+                : t('Target height: the model is scaled until it is this tall. Empty = the prop’s own height from the Props tab.')}
+              value={typeof e.height_m === 'number' ? e.height_m : null}
+              placeholder={model ? String(inherited) : undefined}
+              step={0.5}
+              onCommit={(v) => patch(i, { height_m: v && v > 0 ? v : undefined })}
+            />
+            <ScatterNum
+              label={t('variant')}
+              title={t('Which model variant of the prop every station shows, as its position in the prop’s variant list (0 = the first). Empty = mixed, the same rule the scatter uses — a lamp row usually wants ONE.')}
+              value={typeof e.variant === 'number' ? e.variant : null}
+              placeholder={t('mixed')}
+              step={1}
+              onCommit={(v) => patch(i, {
+                variant: v !== null && v >= 0 ? Math.floor(v) : undefined,
+              })}
+            />
+            <button type="button" className="ga-btn ga-btn-sm"
+              title={t('Remove this row')}
+              onClick={() => onChange(entries.filter((_, k) => k !== i))}>
+              ×
+            </button>
+          </div>
+        )
+      })}
+      <div className="ga-terrain-scatter-row">
+        <button type="button" className="ga-btn ga-btn-sm"
+          disabled={entries.length >= MAX_ALONG_ENTRIES}
+          title={entries.length >= MAX_ALONG_ENTRIES
+            ? t('At most {n} rows per line').replace('{n}', String(MAX_ALONG_ENTRIES))
+            : t('Add a row of props along this line')}
+          onClick={() => onChange([...entries,
+            // A new row starts on the VERGE: half the ribbon plus a metre,
+            // which is where a lamp or a bench stands beside a road.
+            { ...NEW_ALONG_ENTRY, offset_m: Math.round((widthM / 2 + 1) * 2) / 2 }])}>
+          + {t('Row')}
+        </button>
+        <span className="ga-map-chip-label">
+          {t('Props at regular stations along the centre line — lamps, trees, parked cars. They follow every bend of the line, skip the footprints of placed locations and ground painted over this one, and appear in the “Scatter preview”.')}
         </span>
       </div>
     </div>
@@ -1554,6 +1725,8 @@ export interface TerrainAreaChipProps {
   onZOrder: (delta: number) => void
   /** New width for a stroke area — the polygon is regenerated from it. */
   onWidth: (m: number) => void
+  /** The rows along a stroke area's centre line (`meta.stroke.along`). */
+  onAlong: (entries: TerrainAlongEntry[]) => void
   /** What this area GROWS (`meta.scatter`, already checked by the caller) and
    *  the prop library its model picker offers. */
   scatter: TerrainScatterEntry[]
@@ -1628,7 +1801,7 @@ export interface TerrainAreaChipProps {
 export function TerrainAreaChip({
   area, types, typeList, typesError, stroke, scatter, props, water,
   waterProfile, relief, reliefWarnAmpM, scatterColor, label, npcSlots,
-  onKind, onZOrder, onWidth, onScatter, onWater, onRelief, onLabel,
+  onKind, onZOrder, onWidth, onAlong, onScatter, onWater, onRelief, onLabel,
   onNpcSlots, onConvert, onDelete, onClose,
 }: TerrainAreaChipProps) {
   const { t } = useI18n()
@@ -1698,9 +1871,17 @@ export function TerrainAreaChip({
           formatAreaM2(polygonAreaM2(area.polygon)))}
       </div>
       {stroke && known ? (
-        <div className="ga-map-chip-row">
-          <WidthField widthM={stroke.width_m} onWidth={onWidth} />
-        </div>
+        <>
+          <div className="ga-map-chip-row">
+            <WidthField widthM={stroke.width_m} onWidth={onWidth} />
+          </div>
+          <div className="ga-map-chip-row">
+            <span className="ga-map-chip-label">{t('Along the line')}</span>
+          </div>
+          <AlongEditor entries={stroke.along ?? []} widthM={stroke.width_m}
+            props={props} colorOf={(i) => scatterColor(scatter.length + i)}
+            onChange={onAlong} />
+        </>
       ) : null}
       <div className="ga-map-chip-row">
         <span className="ga-map-chip-label">{t('Type')}</span>

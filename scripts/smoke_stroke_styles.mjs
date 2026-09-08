@@ -165,7 +165,8 @@ async function loadMapMath() {
     await esbuild.build({
       stdin: {
         contents: `export * from ${JSON.stringify(SRC)};\n`
-          + "export { seededRandom } from '@anima/scene-render';\n",
+          + "export { seededRandom, strokeStations, strokeCentreLine, alongSeed,"
+          + " scatterVariantIndex, scatterSeedHash } from '@anima/scene-render';\n",
         resolveDir: ROOT, sourcefile: 'smoke-entry.mjs', loader: 'js',
       },
       outfile: file, bundle: true, format: 'esm',
@@ -219,7 +220,8 @@ function compare(a, b, eps) {
 }
 
 const { decorateStroke, strokeSeed, strokeToPolygon, MAX_DECORATED_POINTS,
-  STROKE_STYLES, isStrokeStyle, seededRandom } = await loadMapMath();
+  STROKE_STYLES, isStrokeStyle, seededRandom, strokeStations, strokeCentreLine,
+  alongSeed, scatterVariantIndex } = await loadMapMath();
 
 /** The rule's own rounding — `Math.round(v·100)/100`, `+0` to kill −0. */
 const r2 = (v) => Math.round(v * 100) / 100 + 0;
@@ -443,6 +445,109 @@ const m7 = bent.points[1][1] / n7[1];    // the height that normal implies
 check('...and the deflection inside the window rides it',
   [bent.points.length, bent.points[1][0], inBand(bent.points[1][1])],
   [4, 5 + m7 * n7[0], true], 0.011);
+
+// ---------------------------------------------------------------------------
+// [S] WHAT STANDS ALONG THE LINE — `strokeStations` (§ A9 addendum 2026-09-09)
+// ---------------------------------------------------------------------------
+// Hand-derived (see the plan, `plan-strassenrand-scatter.md`):
+//   [S1] [(0,0),(100,0)], spacing 25, offset 3, right: stations at
+//        s = 12.5, 37.5, 62.5, 87.5 (start = spacing/2, 87.5 + 25 > 100).
+//        Direction (1,0): right normal (−dz, dx) = (0, 1) -> z = +3,
+//        yaw = atan2(1, 0) = π/2, plus yaw_deg 0.
+//   [S2] the same, `left`: normal (dz, −dx) = (0, −1) -> z = −3, and the
+//        walking direction is reversed -> yaw = π/2 + π = 3π/2.
+//   [S3] `alternate`: k even right, k odd left -> z = +3, −3, +3, −3 with
+//        yaws π/2, 3π/2, π/2, 3π/2.
+//   [S4] `both`: two per station, right then left -> 8 instances.
+//   [S5] yaw_deg 90 on the right side: π/2 + π/2 = π; on the LEFT side
+//        3π/2 + π/2 = 2π -> 0 (normalised). A bench "looking across" faces −z
+//        from the right (yaw π faces (sin π, cos π) = (0, −1)) and +z from the
+//        left (yaw 0 faces (0, 1)): both look at the line. That is the rule.
+//   [S6] a corner [(0,0),(10,0),(10,10)], spacing 10, offset 2, right, start
+//        5: s = 5 on the first segment -> (5, 2), yaw π/2; s = 15 on the
+//        second (direction (0,1), right normal (−1, 0)) -> (8, 5), yaw
+//        atan2(0, 1) = 0.
+//   [S7] start_m 0 puts the first station on the start point; start_m past
+//        the spacing is clamped to it: spacing 25, start 30 -> first at 25.
+//   [S8] a footprint square over (37.5, 3) drops station 1 and keeps the
+//        ORDINALS: with 3 variants and no pin the survivors keep the variant
+//        they had without the footprint (2, 4 and 6 of 8 in `both` mode…);
+//        simplest: right side only, variants over ordinal k, the survivors'
+//        variants equal the unblocked run's at the same k.
+//   [S9] a pinned variant 1 gives every instance 1; a pin past the count
+//        clamps to n − 1; variantCount 1 carries no variant field at all.
+//   [S10] `random` draws one number per instance from the row's seed and
+//        the positions do not move: same x/z as [S1].
+//   [S11] `strokeCentreLine` of a straight recipe is the clicked points;
+//        of a wavy one it is `decorateStroke` with the toolbar defaults
+//        (10 m, 2 m) when the recipe authors no numbers.
+console.log('\n[S] strokeStations');
+const ROW = { line: [[0, 0], [100, 0]], spacingM: 25, offsetM: 3, seed: 'terrain:along:a:0' };
+const s1 = strokeStations(ROW);
+check('S1 four stations, right side, z = +3', s1.map((p) => [p.x, p.z]),
+  [[12.5, 3], [37.5, 3], [62.5, 3], [87.5, 3]]);
+check('S1 …every one facing along the line (π/2)', s1.map((p) => p.yaw),
+  [Math.PI / 2, Math.PI / 2, Math.PI / 2, Math.PI / 2]);
+const s2 = strokeStations({ ...ROW, side: 'left' });
+check('S2 left: z = −3 and the direction reversed (3π/2)',
+  s2.map((p) => [p.x, p.z, p.yaw]),
+  [[12.5, -3, 3 * Math.PI / 2], [37.5, -3, 3 * Math.PI / 2],
+    [62.5, -3, 3 * Math.PI / 2], [87.5, -3, 3 * Math.PI / 2]]);
+check('S3 alternate: right, left, right, left',
+  strokeStations({ ...ROW, side: 'alternate' }).map((p) => [p.z, p.yaw]),
+  [[3, Math.PI / 2], [-3, 3 * Math.PI / 2], [3, Math.PI / 2], [-3, 3 * Math.PI / 2]]);
+const s4 = strokeStations({ ...ROW, side: 'both' });
+check('S4 both: eight instances, right before left at each station',
+  s4.map((p) => [p.x, p.z]),
+  [[12.5, 3], [12.5, -3], [37.5, 3], [37.5, -3], [62.5, 3], [62.5, -3],
+    [87.5, 3], [87.5, -3]]);
+check('S5 yaw_deg 90 faces across the line from the right (π)…',
+  strokeStations({ ...ROW, yawDeg: 90 })[0].yaw, Math.PI);
+check('S5 …and from the left (0, normalised from 2π)',
+  strokeStations({ ...ROW, side: 'left', yawDeg: 90 })[0].yaw, 0);
+const cornerRow = strokeStations({ line: [[0, 0], [10, 0], [10, 10]], spacingM: 10,
+  offsetM: 2, startM: 5, seed: 'c' });
+check('S6 the corner: (5, 2) facing π/2, then (8, 5) facing 0',
+  cornerRow.map((p) => [p.x, p.z, p.yaw]), [[5, 2, Math.PI / 2], [8, 5, 0]]);
+check('S7 start_m 0 puts a station on the start point',
+  strokeStations({ ...ROW, startM: 0 }).map((p) => p.x), [0, 25, 50, 75, 100]);
+check('S7 start_m past the spacing is clamped to it',
+  strokeStations({ ...ROW, startM: 30 }).map((p) => p.x), [25, 50, 75, 100]);
+// [S8] a 4 m square around (37.5, 3) — `footprintBlocks` with no clearance
+// is the plain inside test.
+const BLOCK = { points: [[35.5, 1], [39.5, 1], [39.5, 5], [35.5, 5]] };
+const free = strokeStations({ ...ROW, variantCount: 3 });
+const blocked = strokeStations({ ...ROW, variantCount: 3, footprints: [BLOCK] });
+check('S8 the footprint drops exactly station 1', blocked.map((p) => p.x),
+  [12.5, 62.5, 87.5]);
+check('S8 …and the survivors keep the variant they had (ordinals, not survivors)',
+  blocked.map((p) => p.variant), [free[0].variant, free[2].variant, free[3].variant]);
+check('S8 …which is the shared formula over the ordinal',
+  free.map((p) => p.variant),
+  [0, 1, 2, 3].map((k) => scatterVariantIndex('terrain:along:a:0', k, 3)));
+check('S9 a pinned variant is every instance\'s',
+  strokeStations({ ...ROW, variantCount: 3, variant: 1 }).map((p) => p.variant),
+  [1, 1, 1, 1]);
+check('S9 a pin past the count clamps to n − 1',
+  strokeStations({ ...ROW, variantCount: 3, variant: 7 })[0].variant, 2);
+check('S9 one variant carries no variant field',
+  Object.keys(strokeStations({ ...ROW, variantCount: 1 })[0]), ['x', 'z', 'yaw']);
+const rndRow = strokeStations({ ...ROW, yawMode: 'random' });
+const rndRef = seededRandom('terrain:along:a:0');
+check('S10 random: the seeded stream, one draw per instance, positions unmoved',
+  rndRow.map((p) => [p.x, p.z, p.yaw]),
+  [12.5, 37.5, 62.5, 87.5].map((x) => [x, 3, rndRef() * Math.PI * 2]));
+check('S11 a straight recipe is its clicked points',
+  strokeCentreLine({ points: [[0, 0], [100, 0]] }), [[0, 0], [100, 0]]);
+check('S11 a wavy recipe without numbers is decorateStroke at 10 m / 2 m',
+  strokeCentreLine({ points: [[0, 0], [100, 0]], style: 'wavy' }),
+  decorateStroke([[0, 0], [100, 0]], 'wavy', 10, 2).points);
+check('S11 an unknown style reads as straight',
+  strokeCentreLine({ points: [[0, 0], [100, 0]], style: 'zigzag' }), [[0, 0], [100, 0]]);
+check('S the seed is area- and row-stable', alongSeed('ta_1', 2), 'terrain:along:ta_1:2');
+check('S a zero-length line places nothing',
+  strokeStations({ ...ROW, line: [[5, 5], [5, 5]] }), []);
+check('S a negative offset places nothing', strokeStations({ ...ROW, offsetM: -1 }), []);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

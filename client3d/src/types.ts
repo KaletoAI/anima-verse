@@ -566,6 +566,51 @@ export interface TerrainTypeMeta {
   [key: string]: unknown;
 }
 
+/** The stored recipe of a line-drawn area (`meta.stroke`): the clicked
+ *  points, the ribbon width, how the line is bent — and what stands along it.
+ *  The client regenerates the very centre line the editor widened
+ *  (`@anima/scene-render` → `strokeCentreLine`) to place the rows. */
+export interface TerrainStrokeMeta {
+  points: [number, number][];
+  width_m: number;
+  style?: string;
+  spacing_m?: number;
+  amplitude_m?: number;
+  along?: TerrainAlongEntry[];
+}
+
+/** One row of props ALONG a drawn line — `meta.stroke.along[]`, server
+ *  whitelist `app/models/terrain._sanitize_along_entry`. The delivery adds
+ *  the same prop facts a scatter entry gets (`prop_height_m`, `variants`,
+ *  `model_variants`, `sway_factor`, `ground_offset_m`), so `scene/ground.ts`
+ *  builds a row exactly like a scatter row — only the points come from
+ *  `strokeStations` instead of the cell sampler. */
+export interface TerrainAlongEntry {
+  /** URL of the prop mesh; a row without one places nothing. */
+  model?: string;
+  /** Distance between two stations along the line, metres. */
+  spacing_m: number;
+  /** How far the row stands beside the centre line, metres. */
+  offset_m: number;
+  /** `right` (absent) / `left` / `both` / `alternate`, in drawing order. */
+  side?: 'right' | 'left' | 'both' | 'alternate';
+  /** The turn relative to the walking direction, degrees; absent = 0. */
+  yaw_deg?: number;
+  /** `random` = one seeded draw per instance instead. */
+  yaw_mode?: 'random';
+  /** Arc length of the first station; absent = half a spacing. */
+  start_m?: number;
+  /** Target height, as on a scatter entry. */
+  height_m?: number;
+  /** A pinned model-variant list position for the whole row. */
+  variant?: number;
+  prop_height_m?: number;
+  sway_factor?: number;
+  ground_offset_m?: number;
+  variants?: Record<string, string>;
+  model_variants?: Record<string, string>[];
+}
+
 /** What an area GROWS — `meta.scatter[]`, one entry per prop kind. The server
  *  STORES exactly four fields (`app/models/terrain._sanitize_scatter_list`)
  *  and adds `variants`, `prop_height_m` + `sway_factor` on delivery;
@@ -638,6 +683,10 @@ export interface TerrainScatterEntry {
 export interface TerrainMeta {
   scatter?: TerrainScatterEntry[];
   [key: string]: unknown;
+  /** The recipe of a line-drawn area, with the rows along it (§ A9
+   *  addendum 2026-09-09) — `scene/ground.ts` regenerates the centre line
+   *  from it and plants the rows. */
+  stroke?: TerrainStrokeMeta;
 }
 
 /** One painted area. `polygon` is a ring of world points `[x, z]` in metres;
