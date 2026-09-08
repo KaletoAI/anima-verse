@@ -100,7 +100,12 @@ logger = get_logger(__name__)
 #: Nachtrag "Plätze auf Dioramen") — a place on a diorama has no placement of
 #: its own, so the room model is the only mesh that can take its click, and
 #: the marker is where the payload says so.
-SCENE_RECIPE_VERSION = 10
+#: 11 (2026-09-08): PLACE TYPES ARE BODY SHAPES (plan-platztypen.md) —
+#: ``bed``/``floor``/``counter`` are gone, ``lie`` and ``ground`` are new,
+#: and a marker's ``group`` (with its ``root_drop``) is what a client colours
+#: its glyph and drops its figure by. A cached scene would still speak the
+#: old vocabulary, so the payload version moves with it.
+SCENE_RECIPE_VERSION = 11
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -3005,7 +3010,8 @@ def marker_slots(at: Tuple[float, float], facing_deg: Optional[float],
 
 
 def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
-             has_diorama: bool) -> List[Dict[str, Any]]:
+             has_diorama: bool,
+             unknown: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """Every marker of one room, finished in world coordinates — as PLACES
     (plan-posen-plaetze.md § 3.3/3.4): a stable ``id``, the place type
     ``group``, a ``label`` for the chip, and the finished ``slots`` a figure
@@ -3031,7 +3037,16 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     had no drop at all and every author baked one into the marker by hand.
     One source, both renderers, both marker sources.
 
-    A marker whose group the catalog does not know is no place and is skipped.
+    A marker whose group the catalog does not know is no place and is skipped
+    — but not silently: its group and one of its marker ids land in
+    ``unknown``, which the caller reports ONCE for the whole scene
+    (plan-platztypen.md E2). Collecting beats logging on the spot because this
+    is the hot path: a composition walks every room and every prop marker of a
+    location on every scene request, and a single mistyped group in a
+    twenty-seat tavern would otherwise write twenty identical lines per poll.
+    Per composition rather than per process, because the catalog and the
+    layouts are editable at runtime — a warning that fires once and never
+    again would go quiet the moment someone fixes or re-breaks a marker.
 
     ``has_diorama`` is the caller's answer to "did :func:`_diorama_model`
     produce a spec for THIS room" — the one determination, handed down rather
@@ -3067,6 +3082,8 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     for marker in recipe.get("markers") or []:
         group = str(marker.get("group") or "").strip().lower()
         if group not in groups:
+            if unknown is not None:
+                unknown.setdefault(group, f"{room_id}/{marker.get('id') or ''}")
             continue
         at = marker.get("at") or [w / 2, d / 2]
         anchor_u, anchor_v = place(_num(at[0], w / 2), _num(at[1], d / 2))
@@ -3109,6 +3126,8 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
     for marker in recipe.get("prop_markers") or []:
         group = str(marker.get("group") or "").strip().lower()
         if group not in groups:
+            if unknown is not None:
+                unknown.setdefault(group, f"{room_id}/{marker.get('id') or ''}")
             continue
         try:
             placement = placements[int(marker.get("placement"))]
@@ -3692,6 +3711,11 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                          "d": _r(max(max(zs) - min(zs), 0.5))},
                 "y": _r(y),
             }
+    # Every place type the catalog does not know, gathered over the WHOLE
+    # scene and reported once below: a marker with such a group is dropped
+    # from the payload and from the place inventory, and the symptom of that
+    # is an empty room, not an error (plan-platztypen.md E2).
+    unknown_groups: Dict[str, str] = {}
     for recipe in recipes:
         room_id = str(recipe.get("room_id") or "")
         room = by_room.get(room_id) or {}
@@ -3705,7 +3729,16 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # ONE determination, two readers: the spec just built above IS the
         # answer to "does this room have a diorama", so the marker branch is
         # handed that very result instead of re-deciding it from the meta.
-        markers.extend(_markers(recipe, room, storey, bool(diorama)))
+        markers.extend(_markers(recipe, room, storey, bool(diorama),
+                                unknown_groups))
+    if unknown_groups:
+        logger.warning(
+            "scene %s: %d marker place type(s) the pose catalog does not "
+            "know — dropped from the scene and from the place inventory: %s",
+            location.get("id") or location.get("name") or "?",
+            len(unknown_groups),
+            ", ".join(f"{g!r} (e.g. {mid})"
+                      for g, mid in sorted(unknown_groups.items())))
 
     # A threshold lies at the STANDING height of the rooms it joins, and THIS
     # is where that is decided (finding 2026-08-16: the 3D client recomputed

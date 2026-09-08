@@ -359,17 +359,23 @@ def execute_cast(avatar_name: str, target_name: str,
             success = False
 
     if success:
-        # Avatar-Pose setzen — Default "casting a spell", ueberschreibbar pro
-        # Spell ueber cast_activity. Greift in beiden Pfaden (klassisch +
-        # Anker-Teleport) und beim Self-Cast aus dem Inventar.
+        # Set the avatar pose — default "casting a spell", overridable per
+        # spell via cast_activity. Applies on both paths (classic + anchor
+        # teleport) and on a self-cast from the inventory.
         cast_activity = (spell.get("cast_activity") or "casting a spell").strip()
         if cast_activity:
+            from app.core.pose_catalog import PairPoseWithoutPartner
             try:
                 from app.models.character import set_pose_intent
                 set_pose_intent(avatar_name, cast_activity)
                 logger.info("Cast pose set: %s -> %s", avatar_name, cast_activity)
+            except PairPoseWithoutPartner as e:
+                # A spell cannot conscript a partner — the cast succeeds, the
+                # pose does not.
+                logger.info("Cast pose skipped: '%s' is the two-person pose "
+                            "'%s'", cast_activity, e)
             except Exception as e:
-                logger.warning("Cast pose set fehlgeschlagen: %s", e)
+                logger.warning("Cast pose could not be set: %s", e)
 
         hint = (spell.get("success_text") or "").strip()
         if not hint:

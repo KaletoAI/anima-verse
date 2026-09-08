@@ -442,7 +442,9 @@ export interface SceneMarker {
   room_id: string
   /** Stable marker id; for a prop marker `"<placement.id>/<marker.id>"`. */
   id: string
-  /** Place type (pose-catalog group key, e.g. `seat`, `bed`, `floor`). */
+  /** Place type: a pose-catalog group key. The catalog owns the vocabulary
+   *  (today `seat`, `lie`, `ground`, `stand`) — nothing here may assume a
+   *  fixed set, an admin may add one. */
   group: string
   /** Human label the server composed for this place (placement label or the
    *  group's own). */

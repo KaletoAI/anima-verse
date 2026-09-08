@@ -652,6 +652,26 @@ SCHEMA_STATEMENTS = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_party_invites_invitee ON party_invites (invitee, status)",
 
+    # ── Pair-interaction invitations (app/core/interaction_engine.py) ─────
+    # "Shall we dance?" — one row per open proposal. A pair clip binds two
+    # figures to one anchor, so it is never started AT someone: the invitee
+    # answers (the avatar through /play/interact/respond, an NPC through its
+    # own InteractWith turn) and only the answer starts the clip. The row
+    # also records the DIRECTION: an invitation answered with a counter-
+    # invitation of the same pose is read as consent, not as a second
+    # proposal. Geometry is NOT checked here — an invitation stays valid
+    # while the two walk towards each other and is validated on acceptance.
+    """CREATE TABLE IF NOT EXISTS interaction_invites (
+        invite_id  TEXT PRIMARY KEY,
+        inviter    TEXT NOT NULL,
+        invitee    TEXT NOT NULL,
+        pose_key   TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        status     TEXT NOT NULL DEFAULT 'pending'
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_interaction_invites_invitee "
+    "ON interaction_invites (invitee, status)",
+
     # ── Room furnishing job (plan-room-furnish.md) ────────────────────────
     # ONE active "✨ Furnish" job per room. The job is the persisted state
     # machine behind the dialog (selecting -> proposal_ready -> generating ->

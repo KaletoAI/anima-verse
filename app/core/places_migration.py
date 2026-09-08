@@ -11,10 +11,13 @@ layout included), ``layout.props[]`` (ids only) and the prop sidecars — the
 record-level ``markers`` list AND each entry of ``VARIANTS_KEY``. Idempotent
 via the world_kv flag; no reader keeps a fallback for ``animation``.
 
-Kind → group follows the numbers the deleted ``FIGURE_ROOT_DROP`` table held:
-``sit`` 0.314 = seat, ``sleep`` 0.631 = bed, ``lie``/``laying`` 0.051 = floor
-(the catalog's own ``lying`` pose sits in ``floor`` too); every other kind
-touched at its root and is a standing spot.
+Kind → group follows the body shape the clip strikes (plan-platztypen.md):
+``sit`` is a seat, ``sit-ground`` is ground, ``sleep``/``lie``/``lay`` are a
+lying place; every other kind touches the floor at its root and is a
+standing spot. The vocabulary is the CURRENT one — this function still runs
+in any world that never got the ``migration.places_v1`` flag (an old backup,
+an imported world), and a group the catalog no longer knows would be
+skipped in silence by ``scene_recipe``.
 """
 import secrets
 from typing import Any, Dict
@@ -33,17 +36,15 @@ def new_place_id() -> str:
 
 
 def group_for_kind(kind: str) -> str:
-    """The place type a legacy clip kind implies — the same drop the old
-    root-drop table gave that kind."""
+    """The place type a legacy clip kind implies — the body shape the clip
+    strikes, in today's vocabulary."""
     k = (kind or "").strip().lower()
     if k.startswith("sit-ground"):
-        return "floor"
+        return "ground"
     if k.startswith("sit"):
         return "seat"
-    if k.startswith("sleep"):
-        return "bed"
-    if k.startswith(("lie", "lay")):
-        return "floor"
+    if k.startswith(("sleep", "lie", "lay")):
+        return "lie"
     return "stand"
 
 

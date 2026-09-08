@@ -33,10 +33,28 @@ class SetPoseSkill(PluginSkill):
             pose = (data.get("pose") or data.get("input") or "").strip()
             if not pose:
                 return "Error: no pose given."
+            from app.core.pose_catalog import PairPoseWithoutPartner
             from app.models.character import (get_character_pose_key,
                                               set_pose_intent)
             # Catalog key + flavor + image variant, all in the setter
-            set_pose_intent(character_name, pose)
+            try:
+                set_pose_intent(character_name, pose)
+            except PairPoseWithoutPartner as e:
+                # The text landed on a two-person pose. Say so instead of
+                # writing half a pair. The turn is usually over by the time
+                # this is read (the tool phase does not loop back for a
+                # second choice), so this answer is for the LOG and for the
+                # models that do get another pass — the prompt is what stops
+                # the wrong choice being made in the first place.
+                from app.core.hooks import get_provider
+                _verb = get_provider("pair_verb_name")
+                _name = _verb() if _verb else ""
+                how = (f"Start it together with {_name}: "
+                       f"{{\"partner\": \"<name>\", \"action\": \"{e}\"}}. "
+                       if _name else "There is no way to start it here. ")
+                return (f"'{e}' is a two-person action, not something "
+                        f"{character_name} does alone. {how}For a solo pose, "
+                        f"describe what {character_name} does on their own.")
             return f"{character_name}: {get_character_pose_key(character_name) or pose}"
         except Exception as e:
             self.ctx.logger.exception("%s [%s] failed: %s", self.name, character_name, e)

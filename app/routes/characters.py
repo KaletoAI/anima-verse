@@ -235,7 +235,14 @@ async def update_character_current_activity(character_name: str, request: Reques
         # pose catalog, which may embed the text (a routed external embedding
         # endpoint is a blocking HTTP call) and writes the DB. Running that
         # inline would stall every SSE stream.
-        await _aio.to_thread(set_pose_intent, character_name, activity)
+        from app.core.pose_catalog import PairPoseWithoutPartner
+        try:
+            await _aio.to_thread(set_pose_intent, character_name, activity)
+        except PairPoseWithoutPartner as e:
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{e}' is a two-person pose — it is started as a pair "
+                       f"interaction, not set on one character")
 
         return {"status": "success", "character": character_name,
                 "current_activity": activity, "woke": woke,

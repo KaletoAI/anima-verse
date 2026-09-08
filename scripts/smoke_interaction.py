@@ -47,8 +47,19 @@ Hand-derived expectations:
       490 m away elsewhere is refused, a solo pose ("standing") is refused,
       an already-bound character is refused.
 
+  [5a] ``set_pose_intent`` refuses a two-person key (catalog ``solo: false``)
+      on a character that no interaction of that key binds: a pair pose on a
+      lone profile has no partner and no anchor. "embracing" on the unbound
+      Eve raises ``PairPoseWithoutPartner("embracing")`` and writes nothing,
+      "standing" still goes through, and the pose the ENGINE wrote on the
+      bound pair stands. The refusal happens BEFORE the setter's
+      end-interaction branch, so asking a bound Ann for the other pair pose
+      "cuddling" is refused with her running "embracing" untouched — a
+      rejected pose must not cost her the pair she is in.
+
   [6] A new pose on one partner ends the interaction for both; a manual
-      ``set_character_pos`` (teleport) ends it too.
+      ``set_character_pos`` (teleport) ends it too, and so does a plain ROOM
+      change — which writes no position, so the teleport guard never sees it.
 
   [7] The worldmap payload carries the ``interaction`` block on both
       characters while it runs (anchor, role, elapsed), and null after.
@@ -57,6 +68,35 @@ Hand-derived expectations:
       for LOOP_INTERACTION_S game seconds — the payload says so
       (``loop``, ``clip_duration_s`` 0.5) and a client replays the cycle;
       after 5 s it is still running.
+
+  [10] Invitations. A pair is ASKED, never imposed: ``create_invite`` writes
+      the question and nothing else happens — no interaction on either side.
+      Only the invitee is asked (the inviter sees what it waits on through
+      ``outgoing_invite_of``), and asking twice replaces the open question
+      rather than queueing a second. ``find_pending_invite`` is what turns a
+      counter-invitation into consent. Accepting starts the pair and clears
+      the question; declining starts nothing and cannot be re-answered. An
+      inviter in another room is filtered out of the invitee's list at read
+      time and reappears when they come back. Past ``INVITE_MAX_AGE_MIN``
+      (SYSTEM minutes — a conversational window that a world freeze must not
+      stretch forever) the row is neither offered nor read as consent.
+      Answering one question clears the OTHER questions both partners were
+      part of; a refusal that standing still will not fix (a sleeping
+      partner) closes its question instead of leaving it hanging; and
+      ``_claim_invite`` makes a second answer to the same row a no-op.
+
+      THE WALK OVER. Geometry is checked on acceptance, and distance alone
+      is the one refusal that walking fixes — so it is not a refusal. With
+      Bob 8 m away his yes turns the row into ``approaching`` and sends BOB
+      (the one who agreed, never the one who asked) to a metre short of Ann;
+      ``settle_approaches`` leaves him alone while the journey runs, binds
+      the pair on the beat after it ends, and marks the row ``accepted``.
+      Calling the invitation off mid-walk cancels the journey with it — the
+      trip existed only for that pair. Arriving with the other one gone ends
+      the approach (``stale``) instead of walking after them forever.
+
+      Finally ``describe`` renders the running pair as "embracing with Bob"
+      from both sides and "" without one.
 
   [9] A pair anchors on a free PLACE of its group (plan-posen-plaetze.md
       § 4, Task 9). The room "square" gets the layout {x −5, y −5, w 10,
@@ -150,6 +190,7 @@ from app.core import places, pose_catalog  # noqa: E402
 from app.core.animation_clips import pair_kinds  # noqa: E402
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.timeutils import game_time, set_game_factor, set_game_time  # noqa: E402
+from app.core.travel_engine import cancel_journey, get_journey  # noqa: E402
 from app.models.character import (  # noqa: E402
     clear_pose_intent, get_character_pos, get_character_pose_key, get_character_profile,
     save_character_current_location, save_character_current_room,
@@ -200,8 +241,14 @@ def _smoke_catalog_path(axis: str) -> Path:
 
 pose_catalog.catalog_path = _smoke_catalog_path
 (CAT / "pose_catalog.json").write_text(json.dumps({"groups": {
-    "stand": {"label": "Standing spot", "root_drop": 0, "default": "standing"},
-    "seat": {"label": "Seat", "root_drop": 0.314, "default": "cuddling"},
+    # ``needs_place`` (plan-platztypen.md) is the property the "a pair without
+    # a marker meets halfway" rule hangs on — it used to be the literal group
+    # name "stand". A fixture that leaves it out inherits the default True and
+    # would make every standing pair raise PlaceUnavailable.
+    "stand": {"label": "Standing spot", "root_drop": 0, "default": "standing",
+              "needs_place": False},
+    "seat": {"label": "Seat", "root_drop": 0.314, "default": "cuddling",
+             "needs_place": True},
 }, "entries": {
     "standing": {"prompt": "standing", "synonyms": [], "animation": "idle", "_default": True,
                  "group": "stand"},
@@ -321,6 +368,37 @@ new_character("Eve", 10.0, 30.0)            # 5 m from Cid (10, 25)
 check("5 m is too far", "too far" in refused("Cid", "Eve", "embracing"),
       refused("Cid", "Eve", "embracing"))
 
+# ── [5a] the setter refuses a pair pose without a pair ──────────────────
+print("\n[5a] a pair pose needs a bound pair")
+from app.core.pose_catalog import PairPoseWithoutPartner  # noqa: E402
+
+
+def pose_refused(name, pose):
+    """The setter's verdict: the exception's key, or "" when it wrote."""
+    try:
+        set_pose_intent(name, pose)
+        return ""
+    except PairPoseWithoutPartner as e:
+        return str(e)
+
+
+check("a lone character cannot put on a pair pose",
+      pose_refused("Eve", "embracing") == "embracing")
+check("… and nothing was written", get_character_pose_key("Eve") == "")
+check("a solo pose still goes through", pose_refused("Eve", "standing") == ""
+      and get_character_pose_key("Eve") == "standing")
+set_pose_intent("Eve", "")
+check("the bound pair keeps its pose (the engine's own write)",
+      get_character_pose_key("Ann") == "embracing"
+      and get_character_pose_key("Bob") == "embracing")
+# A pair pose OTHER than the running one is refused — and the refusal must
+# not have torn down the interaction on its way out.
+check("a bound character cannot switch to another pair pose",
+      pose_refused("Ann", "cuddling") == "cuddling")
+check("… and the running interaction survived the refusal",
+      ie.get_interaction("Ann") is not None and ie.get_interaction("Bob") is not None
+      and get_character_pose_key("Ann") == "embracing")
+
 # ── [4] clock ───────────────────────────────────────────────────────────
 print("\n[4] the game clock ends it")
 set_game_time(START + GameDuration.of(seconds=1))
@@ -356,6 +434,18 @@ set_character_pos("Ann", 12.0, 20.0)         # a manual move = teleport
 check("a manual position write frees both", ie.get_interaction("Ann") is None
       and ie.get_interaction("Bob") is None)
 check("the interaction's own position writes did NOT cancel it (proved by [3])", True)
+# A ROOM change writes no position at all, so the position guard above never
+# sees it — and a pair anchored in the lounge must not keep playing while one
+# half stands in the cellar.
+set_character_pos("Ann", 10.0, 20.0)
+set_character_pos("Bob", 10.0, 24.0)
+ie.start_interaction("Ann", "Bob", "embracing")
+save_character_current_room("Bob", "cellar")
+check("a room change frees both", ie.get_interaction("Ann") is None
+      and ie.get_interaction("Bob") is None)
+save_character_current_room("Bob", "square")
+clear_pose_intent("Ann")
+clear_pose_intent("Bob")
 
 # ── [8] a looping pair runs for LOOP_INTERACTION_S, the clip repeats ───────
 print("\n[8] looping pair")
@@ -570,6 +660,190 @@ check("turned by 90°: spot faces 180, slots (10.3, 22) + (9.7, 22)",
       _spot["facing"] == 180.0 and _spot["slots"] == [[10.3, 22.0], [9.7, 22.0]], str(_spot))
 update_location_position(PLAZA, 10.0, 22.0, yaw_deg=0.0)
 places.invalidate()
+
+# ── [10] invitations: a pair is asked, never imposed ────────────────────
+print("\n[10] invitations")
+for _n in ("Ann", "Bob", "Cid"):
+    ie.end_interaction(_n)
+    clear_pose_intent(_n)
+    ie.clear_invites_for(_n)
+set_character_pos("Ann", 10.0, 20.0)
+set_character_pos("Bob", 10.0, 24.0)
+
+iid = ie.create_invite("Ann", "Bob", "embracing")
+check("an invitation is recorded", bool(iid))
+check("nothing started from the question alone",
+      ie.get_interaction("Ann") is None and ie.get_interaction("Bob") is None)
+check("Bob is asked", [i["invite_id"] for i in ie.pending_invites_for("Bob")] == [iid])
+check("Ann is not asked (she is the one asking)", ie.pending_invites_for("Ann") == [])
+check("Ann sees what she is waiting on",
+      (ie.outgoing_invite_of("Ann") or {}).get("invite_id") == iid)
+# Asking again replaces the open question instead of queueing a second one.
+iid2 = ie.create_invite("Ann", "Bob", "embracing")
+check("asking twice leaves ONE open question",
+      [i["invite_id"] for i in ie.pending_invites_for("Bob")] == [iid2] and iid2 != iid)
+
+# The counter-invitation IS the consent: Bob asking Ann for the same thing
+# finds her open question and starts the pair instead of asking back.
+found = ie.find_pending_invite("Ann", "Bob", "embracing")
+check("Bob finds Ann's open question", (found or {}).get("invite_id") == iid2)
+res = ie.resolve_invite(iid2, True)
+check("accepting starts the pair", res["status"] == "started")
+check("both are bound", ie.get_interaction("Ann") is not None
+      and ie.get_interaction("Bob") is not None)
+check("the answered question is gone", ie.pending_invites_for("Bob") == [])
+
+# A refusal is an answer, and it starts nothing.
+ie.end_interaction("Ann")
+iid3 = ie.create_invite("Ann", "Bob", "embracing")
+check("declining starts nothing", ie.resolve_invite(iid3, False)["status"] == "declined"
+      and ie.get_interaction("Bob") is None)
+check("a declined question is not asked again", ie.pending_invites_for("Bob") == [])
+check("answering it twice is not_found",
+      ie.resolve_invite(iid3, True)["status"] == "not_found")
+
+# Geometry is validated on ACCEPTANCE, not when the question is asked — the
+# invitation survives the walk over. Close enough, and the yes starts the
+# clip at once; the too-far case has its own block below.
+iid4 = ie.create_invite("Ann", "Bob", "embracing")
+check("within reach, a yes starts the pair straight away",
+      ie.resolve_invite(iid4, True)["status"] == "started")
+ie.end_interaction("Ann")
+
+# Someone who leaves the room takes the question with them.
+ie.end_interaction("Ann")
+iid5 = ie.create_invite("Ann", "Bob", "embracing")
+save_character_current_room("Ann", "cellar")
+check("a question from another room is not asked", ie.pending_invites_for("Bob") == [])
+save_character_current_room("Ann", "square")
+check("… and comes back when she does",
+      [i["invite_id"] for i in ie.pending_invites_for("Bob")] == [iid5])
+check("taking it back closes it", ie.cancel_invite(iid5)
+      and ie.pending_invites_for("Bob") == [])
+check("and it cannot be taken back twice", ie.cancel_invite(iid5) is False)
+
+# An invitation nobody answered must not start a clip in a scene hours later.
+iid6 = ie.create_invite("Ann", "Bob", "embracing")
+from app.core.db import transaction as _tx  # noqa: E402
+from app.core.timeutils import utc_now as _now  # noqa: E402
+from datetime import timedelta as _td  # noqa: E402
+with _tx() as _c:
+    _c.execute("UPDATE interaction_invites SET created_at=? WHERE invite_id=?",
+               ((_now() - _td(minutes=ie.INVITE_MAX_AGE_MIN + 1)).isoformat(), iid6))
+check("a question older than the window is not asked any more",
+      ie.pending_invites_for("Bob") == [])
+check("… and is not found as consent either",
+      ie.find_pending_invite("Ann", "Bob", "embracing") is None)
+ie.clear_invites_for("Ann")
+
+# Starting a pair sweeps the OTHER questions both partners were part of:
+# Cid's open ask to Bob cannot be answered while Bob is in a clip, and it
+# would come back the moment the clip ends.
+ie.end_interaction("Ann")
+for _n in ("Ann", "Bob", "Cid"):
+    ie.clear_invites_for(_n)
+cid_ask = ie.create_invite("Cid", "Bob", "embracing")
+ann_ask = ie.create_invite("Ann", "Bob", "embracing")
+check("Bob has two open questions", len(ie.pending_invites_for("Bob")) == 2)
+ie.resolve_invite(ann_ask, True)
+check("answering one clears the other too", ie.pending_invites_for("Bob") == [],
+      str(ie.get_invite(cid_ask)))
+ie.end_interaction("Ann")
+
+# Refusals that are NOT about the metres close the question: standing still
+# will not make a sleeping partner available, so the banner must not linger.
+from app.models.character import set_is_sleeping  # noqa: E402
+iid7 = ie.create_invite("Ann", "Bob", "embracing")
+set_is_sleeping("Bob", True)
+res = ie.resolve_invite(iid7, True)
+check("accepting with a sleeping partner is refused",
+      res["status"] == "cannot" and "asleep" in res["reason"], str(res))
+check("… and that question is closed, not left hanging",
+      ie.get_invite(iid7)["status"] == "stale")
+set_is_sleeping("Bob", False)
+
+# The claim makes a double answer harmless: the second one finds nothing.
+iid8 = ie.create_invite("Ann", "Bob", "embracing")
+check("claiming the row once works", ie._claim_invite(iid8))
+check("… and a second claim on the same row fails",
+      ie._claim_invite(iid8) is False)
+check("an already-claimed question answers not_found",
+      ie.resolve_invite(iid8, True)["status"] == "not_found")
+ie.clear_invites_for("Ann")
+
+# ── the walk over: yes was said, only the metres are missing ────────────
+# Ann asks from 8 m away. Bob says yes: the pair cannot start (8 m > 4.5),
+# but the answer is consent, so BOB — the one who agreed — walks to a metre
+# short of Ann and the ticker binds the pair when he arrives.
+ie.end_interaction("Ann")
+for _n in ("Ann", "Bob"):
+    ie.clear_invites_for(_n)
+    clear_pose_intent(_n)
+set_character_pos("Ann", 10.0, 20.0)
+set_character_pos("Bob", 10.0, 28.0)
+iid9 = ie.create_invite("Ann", "Bob", "embracing")
+res = ie.resolve_invite(iid9, True)
+check("too far on yes: the walk starts instead of a refusal",
+      res["status"] == "approaching" and "too far" in res["reason"], str(res))
+check("the one who AGREED is the one walking",
+      get_journey("Bob") is not None and get_journey("Ann") is None)
+check("the question is now an approach, not an open one",
+      ie.get_invite(iid9)["status"] == "approaching"
+      and ie.pending_invites_for("Bob") == [])
+check("both ends see the approach",
+      (ie.approach_of("Ann") or {}).get("invite_id") == iid9
+      and (ie.approach_of("Bob") or {}).get("invite_id") == iid9)
+check("nothing has started yet", ie.get_interaction("Ann") is None)
+check("the ticker leaves a walker alone", ie.settle_approaches() == 0)
+check("… and it is still an approach",
+      ie.get_invite(iid9)["status"] == "approaching")
+# Arrival: the journey ends, the next beat binds the pair.
+cancel_journey("Bob")
+set_character_pos("Bob", 10.0, 21.0)
+check("on arrival the beat binds the pair", ie.settle_approaches() == 1)
+check("both are in the clip now", ie.get_interaction("Ann") is not None
+      and ie.get_interaction("Bob") is not None)
+check("the invitation is spent", ie.get_invite(iid9)["status"] == "accepted")
+
+# Called off mid-walk: the trip goes with the invitation — it only existed
+# to make that pair possible.
+ie.end_interaction("Ann")
+for _n in ("Ann", "Bob"):
+    ie.clear_invites_for(_n)
+    clear_pose_intent(_n)
+set_character_pos("Bob", 10.0, 28.0)
+iid10 = ie.create_invite("Ann", "Bob", "embracing")
+check("… the walk starts again",
+      ie.resolve_invite(iid10, True)["status"] == "approaching")
+check("calling it off works", ie.cancel_invite(iid10))
+check("… and stops the walk", get_journey("Bob") is None)
+check("… and cannot be done twice", ie.cancel_invite(iid10) is False)
+
+# Walked all the way and the other one is gone: the approach dies, it does
+# not follow them across the world.
+for _n in ("Ann", "Bob"):
+    ie.clear_invites_for(_n)
+set_character_pos("Bob", 10.0, 28.0)
+iid11 = ie.create_invite("Ann", "Bob", "embracing")
+ie.resolve_invite(iid11, True)
+cancel_journey("Bob")                      # the walk ended…
+check("arrived but still too far: the approach is over",
+      ie.settle_approaches() == 0
+      and ie.get_invite(iid11)["status"] == "stale")
+check("… and nothing started", ie.get_interaction("Bob") is None)
+ie.clear_invites_for("Ann")
+set_character_pos("Ann", 10.0, 20.0)
+set_character_pos("Bob", 10.0, 24.0)
+
+# describe(): a pair pose without its partner reads as a solo pose.
+set_character_pos("Ann", 10.0, 20.0)
+set_character_pos("Bob", 10.0, 24.0)
+ie.start_interaction("Ann", "Bob", "embracing")
+check("describe names the partner", ie.describe("Ann") == "embracing with Bob",
+      ie.describe("Ann"))
+check("… from both sides", ie.describe("Bob") == "embracing with Ann")
+ie.end_interaction("Ann")
+check("and is empty without a pair", ie.describe("Ann") == "")
 
 
 print()

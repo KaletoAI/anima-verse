@@ -719,6 +719,7 @@ def _sanitize_imported_location(loc: Dict[str, Any]) -> List[str]:
       (v6 Nr. 5). The letters N/S/E/W have no reader left, so such an entry is
       dropped, and so is an index the outline does not have.
     """
+    from app.core.place_group_migration import rename_place_groups
     from app.core.world_ops import (_GROUND_FORBIDDEN, _sanitize_map3d,
                                     _sanitize_room_layout,
                                     sanitize_ground_layout)
@@ -789,6 +790,20 @@ def _sanitize_imported_location(loc: Dict[str, Any]) -> List[str]:
                 warnings.append(
                     f"room '{label}': the whole layout was dropped — x/y/w/d "
                     "in METRES are what makes a layout (contract v6 Nr. 2)")
+        # A place type names a BODY SHAPE since plan-platztypen.md E1, so a
+        # pack authored before it carries `bed`/`floor`/`counter` markers. They
+        # are RENAMED, not dropped: the boot migration ran long before this
+        # import, and scene_recipe skips a marker whose group the catalog does
+        # not know SILENTLY — the room would arrive without its seats and
+        # nothing would say so. Same one-way transform, applied where the
+        # markers land; not a fallback reader.
+        if isinstance(clean, dict):
+            n_renamed = rename_place_groups(clean.get("markers"))
+            if n_renamed:
+                warnings.append(
+                    f"room '{label}': {n_renamed} marker(s) carried a retired "
+                    "place type (bed/floor/counter) and were renamed to the "
+                    "body-shape vocabulary (lie/stand)")
         if clean and isinstance(raw, dict):
             for key, what in (("props", "prop placement"),
                               ("markers", "marker"),

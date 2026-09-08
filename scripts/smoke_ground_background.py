@@ -5,7 +5,7 @@ The ground room ``__ground__`` is the outdoors of a location. It used to fall
 through to the location's UNTAGGED images — which are the inside, so standing
 outside showed the living room in /play (F8: strict, no image). F8b gives it
 the images that DO show the outside: the location's EXTERIOR renders, i.e.
-gallery images of type ``building`` (the same marker ``location_model3d.py``
+gallery images of type ``building-front`` (the same marker ``location_model3d.py``
 reads for the 3D building model), and any image tagged to the ground room
 itself. The pick reuses the shared day/night tail of ``get_background_path``.
 
@@ -15,7 +15,7 @@ Expectations derived by hand from the rule set in ``get_background_path``
   gallery of the location:
     interior.png  — untagged, no type (the location default)
     living.png    — tagged to the "Living room" room
-    outside.png   — untagged, type "building" (the exterior render; note it is
+    outside.png   — untagged, type "building-front" (the exterior render; note it is
                     NOT flagged as a background image, exactly as the
                     generator leaves building renders)
     ground_day.png / ground_night.png — tagged to __ground__, types day/night
@@ -127,7 +127,11 @@ def main() -> int:
 
     print("\n[5] the exterior render is the ground's background")
     # A building render as the generator leaves it: typed, NOT background-flagged.
-    put("outside.png", background=False, itype="building")
+    # The type is a building VIEW since the multiview round of 2026-09-02: the
+    # bare ``building`` was migrated to ``building-front`` and no reader knows
+    # it any more, so a fixture writing the old word tags an image nothing
+    # recognises as an exterior.
+    put("outside.png", background=False, itype="building-front")
     check("ground at 10h", get_background_path(loc_id, room=GROUND_ROOM_ID,
                                                hour=10, stable=True),
           gallery / "outside.png")

@@ -19,7 +19,7 @@ import { useCallback, useEffect, useRef, useState,
   type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent,
   type ReactNode } from 'react'
 import { useI18n } from './I18nProvider'
-import { apiPost, apiUpload } from './api'
+import { ApiError, apiPost, apiUpload } from './api'
 import { useToast } from './Toast'
 import { ChatGalleryPicker } from './ChatGalleryPicker'
 import { GiftPicker, type GiftResult } from './GiftPicker'
@@ -92,6 +92,18 @@ export interface SceneData {
   follow_suggestions?: Array<{ character: string; room_id: string; room_name: string }>
   party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
   party_invites?: Array<{ invite_id: string; inviter: string }>
+  /** Pair interactions (app/core/interaction_engine.py). A shared action is
+   *  ASKED, never imposed, so the banner has three states: questions waiting
+   *  for the avatar, the question it is waiting on itself, and the pair it is
+   *  currently in. */
+  interaction_invites?: Array<{ invite_id: string; inviter: string; pose_key: string }>
+  interaction_pending?: { invite_id: string; invitee: string; pose_key: string } | null
+  /** Agreed but not started: whoever said yes is still walking over.
+   *  `walking` is true when that is the avatar itself. */
+  interaction_approaching?: {
+    invite_id: string; partner: string; pose_key: string; walking: boolean
+  } | null
+  interaction?: { partner: string; pose_key: string } | null
   rooms: RoomInfo[]
   travel?: TravelInfo | null
   /** GONE since E3 Task 5 — the grid compass they described does not exist
@@ -430,6 +442,42 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     catch { /* ignore */ }
   }, [refreshScene, toast, t])
 
+  /** Answer a shared action the avatar was offered. A "no" is an ordinary
+   *  answer; a "yes" the world refuses (the other one walked off while the
+   *  question stood) comes back as 409 and is shown as the reason it is.
+   *
+   *  The in-flight guard is not cosmetic: two answers to the same question
+   *  would both reach the engine, and the second would be told the pair the
+   *  first just started is "already busy with someone". */
+  const [answering, setAnswering] = useState('')
+  const handleInteractRespond = useCallback(async (inviteId: string, accept: boolean) => {
+    if (answering) return
+    setAnswering(inviteId)
+    try {
+      await apiPost('/play/interact/respond', { invite_id: inviteId, accept })
+    }
+    catch (e) {
+      const detail = e instanceof ApiError ? String(e.detail || '') : ''
+      if (detail) toast(detail, 'error')
+    }
+    await refreshScene()
+    setAnswering('')
+  }, [answering, refreshScene, toast])
+
+  /** Take back the avatar's own open proposal. */
+  const handleInteractCancel = useCallback(async (inviteId: string) => {
+    try { await apiPost('/play/interact/cancel', { invite_id: inviteId }) }
+    catch { /* ignore */ }
+    await refreshScene()
+  }, [refreshScene])
+
+  /** Step out of the running pair (both partners are released). */
+  const handleInteractEnd = useCallback(async () => {
+    try { await apiPost('/play/interact/end', {}) }
+    catch { /* ignore */ }
+    await refreshScene()
+  }, [refreshScene])
+
   // `id` is carried through: it is the stable key of a row and what a host
   // addresses a row by (`data-scene-id`). `volume` stays dropped on purpose —
   // handing it over would switch on SceneView's whisper/shout formatting for
@@ -515,6 +563,72 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                 </button>
               </span>
             ))}
+          </div>
+        )}
+
+        {((data?.interaction_invites?.length ?? 0) > 0 || data?.interaction_pending
+          || data?.interaction_approaching || data?.interaction) && (
+          <div style={{
+            flex: '0 0 auto', padding: '6px 12px', display: 'flex', flexWrap: 'wrap',
+            gap: 10, alignItems: 'center', borderTop: '1px solid var(--border, #30363d)',
+            background: 'rgba(214,176,106,0.10)',
+          }}>
+            {(data?.interaction_invites ?? []).map((inv) => (
+              <span key={inv.invite_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
+                <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
+                  🤝 {t('{name} asks you to {pose} together.')
+                    .replace('{name}', inv.inviter).replace('{pose}', inv.pose_key)}
+                </span>
+                <button onClick={() => handleInteractRespond(inv.invite_id, true)}
+                  disabled={!!answering} className="player-chip player-chip-follow">
+                  {t('Yes')}
+                </button>
+                <button onClick={() => handleInteractRespond(inv.invite_id, false)}
+                  disabled={!!answering} className="player-chip">
+                  {t('No')}
+                </button>
+              </span>
+            ))}
+            {data?.interaction_pending && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
+                <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
+                  🤝 {t('Waiting for {name} to answer about {pose}.')
+                    .replace('{name}', data.interaction_pending.invitee)
+                    .replace('{pose}', data.interaction_pending.pose_key)}
+                </span>
+                <button onClick={() => handleInteractCancel(data!.interaction_pending!.invite_id)}
+                  className="player-chip">
+                  {t('Take back')}
+                </button>
+              </span>
+            )}
+            {data?.interaction_approaching && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
+                <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
+                  🤝 {(data.interaction_approaching.walking
+                    ? t('On your way to {name} for {pose}.')
+                    : t('{name} is on their way to you for {pose}.'))
+                    .replace('{name}', data.interaction_approaching.partner)
+                    .replace('{pose}', data.interaction_approaching.pose_key)}
+                </span>
+                <button onClick={() => handleInteractCancel(data!.interaction_approaching!.invite_id)}
+                  className="player-chip">
+                  {t('Call it off')}
+                </button>
+              </span>
+            )}
+            {data?.interaction && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
+                <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
+                  🤝 {t('{pose} with {name}.')
+                    .replace('{pose}', data.interaction.pose_key)
+                    .replace('{name}', data.interaction.partner)}
+                </span>
+                <button onClick={handleInteractEnd} className="player-chip">
+                  {t('Stop')}
+                </button>
+              </span>
+            )}
           </div>
         )}
 

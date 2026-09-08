@@ -97,16 +97,34 @@ def count(value: Any) -> int:
         return 1
 
 
-def valid_marker(raw: Any, groups: Sequence[str]) -> Optional[Dict[str, Any]]:
+def valid_marker(raw: Any, groups: Sequence[str],
+                 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """The marker suggestion of a need: a PLACE TYPE of the pose catalog
     (``group``) plus box fractions. The id is minted where the marker is
-    stored (``props.sanitize_markers``)."""
+    stored (``props.sanitize_markers``).
+
+    Returns ``(marker, problem)``. ``problem`` is a sentence for the
+    confirmation dialog and is only set for a marker that MEANT something and
+    could not be used — a place type the catalog does not know. A need without
+    a marker at all, or one whose ``marker`` is not an object, says nothing and
+    reports nothing.
+
+    The two cases used to be one ``None`` (plan-platztypen.md E2). A stale
+    content pack or a typo in the group therefore built the armchair WITHOUT
+    its seat, and nothing anywhere said so: the dialog showed the need, the
+    piece was generated, and the missing place only surfaced as a character
+    that would not sit down.
+    """
     from app.core.props import MARKER_AT_MAX, MARKER_AT_MIN, MARKER_AT_Y_MIN
     if not isinstance(raw, dict):
-        return None
+        return None, None
     group = str(raw.get("group") or "").strip().lower()
-    if not group or group not in groups:
-        return None
+    if not group:
+        return None, None
+    if group not in groups:
+        return None, (f"its place marker: the pose catalog has no place type "
+                      f"'{group}' — the piece is built without a place to sit "
+                      f"or lie on")
     at = raw.get("at")
     if not isinstance(at, (list, tuple)) or len(at) != 3:
         at = [0.5, 0.5, 0.5]
@@ -118,7 +136,7 @@ def valid_marker(raw: Any, groups: Sequence[str]) -> Optional[Dict[str, Any]]:
                for i in range(3)]
     except (TypeError, ValueError):
         at3 = [0.5, 0.5, 0.5]
-    return {"group": group, "at": at3}
+    return {"group": group, "at": at3}, None
 
 
 # ── the need list ───────────────────────────────────────────────────────
@@ -135,9 +153,13 @@ def valid_needs(raw: Any, groups: Sequence[str], *, is_yard: bool = False,
 
     ``dropped`` carries what was thrown away with a reason the dialog can
     show: a need the yard cannot hold (no walls, no ceiling — code, not
-    prompt), an impossible size, a piece without a generation subject.
-    Entries that say nothing at all (no kind) vanish silently; there is
-    nothing to report about them.
+    prompt), an impossible size, a piece without a generation subject — and,
+    since plan-platztypen.md E2, a MARKER whose place type the catalog does
+    not know. The last one is the only entry whose need survives: the piece is
+    still built, it just arrives without a place to sit or lie on, and its
+    reason names the marker so the line does not read as the whole need
+    vanishing. Entries that say nothing at all (no kind) vanish silently;
+    there is nothing to report about them.
 
     ``library`` — when given, the entry's ``prop_id`` is kept if the library
     really has it and ``build`` is derived from it (``confirm`` re-validates
@@ -179,6 +201,14 @@ def valid_needs(raw: Any, groups: Sequence[str], *, is_yard: bool = False,
             dropped.append({"kind": kind,
                             "reason": "no description to generate it from"})
             continue
+        marker, marker_problem = valid_marker(entry.get("marker"), groups)
+        if marker_problem:
+            # The NEED survives — a chair without a marker is still a chair —
+            # but the loss is reported twice: in the log for whoever reads it
+            # afterwards, and in ``dropped`` so the admin sees it in the
+            # confirmation dialog BEFORE the piece is generated.
+            logger.warning("furnish need %r: %s", kind, marker_problem)
+            dropped.append({"kind": kind, "reason": marker_problem})
         need: Dict[str, Any] = {
             "key": f"n{len(needs) + 1}",
             "kind": kind,
@@ -187,7 +217,7 @@ def valid_needs(raw: Any, groups: Sequence[str], *, is_yard: bool = False,
             "mount": mount,
             "style": str(entry.get("style") or "").strip()[:60],
             "description": description,
-            "marker": valid_marker(entry.get("marker"), groups),
+            "marker": marker,
             "key_areas": [k for k in allowed_areas
                           if k in {str(a).strip().lower()
                                    for a in (entry.get("key_areas") or [])

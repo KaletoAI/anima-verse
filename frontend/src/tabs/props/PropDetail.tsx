@@ -841,9 +841,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   // by half a box per axis (seats sit ON the hull, see
   // props.sanitize_markers).
   //
-  // A marker names a PLACE TYPE (`group`: seat, bed, floor …), never a clip —
-  // which pose is played there is the character's business, and the ◀ ▶
-  // cycler below only decides which one the preview figures hold.
+  // A marker names a PLACE TYPE (`group`, a key of the pose catalog), never
+  // a clip — which pose is played there is the character's business, and the
+  // ◀ ▶ cycler below only decides which one the preview figures hold.
   //
   // They belong to the VARIANT since 2026-08-25: a fraction of one mesh's box
   // means nothing on another bake, so the editor below always edits the chip
@@ -1172,7 +1172,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               the German heading reads "Orte" over a list of seats. */}
           <div className="ga-form-section-label">{t('Prop places')}</div>
           <span className="ga-hint">
-            {t('Object-local PLACES a character is seated on — each names a place type (seat, bed, floor …) and takes as many figures as its capacity. They belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 2, because seats and lying surfaces sit on the hull or outside it. Place roughly with ✥, fine-tune with the sliders — the figures in the preview follow live.')}
+            {t('Object-local PLACES a character is seated on — each names a place type of the pose catalog and takes as many figures as its capacity. They belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 2, because seats and lying surfaces sit on the hull or outside it. Place roughly with ✥, fine-tune with the sliders — the figures in the preview follow live.')}
           </span>
           <div className="ga-list-detail">
             <div className="ga-list-detail-side">
@@ -1250,7 +1250,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                     className="ga-input"
                     style={{ flex: 1, minWidth: 0 }}
                     value={selMarker.group}
-                    title={t('Place type of the pose catalog (seat, bed, floor …) — WHAT this spot is, not which clip plays on it. A character taking a pose of this type is seated here.')}
+                    title={t('Place type of the pose catalog — WHAT this spot is, not which clip plays on it. A character taking a pose of this type is seated here.')}
                     onChange={(e) => patchMarker(selIdx, { group: e.target.value })}
                   >
                     {groupOptions.map((k) => (

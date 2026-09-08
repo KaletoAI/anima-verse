@@ -601,7 +601,12 @@ HUT_IN = {"x": 0, "y": 0, "w": 8, "d": 6,
           "outline_curves": [{"edge": 1, "c": [6, 3]}],
           "no_walls": True, "clip_model": True}
 GROUND_IN = {"props": [{"prop_id": OAK, "id": "oak2", "at": [5, -5], "yaw": 90}],
-             "markers": [{"id": "lie1", "group": "floor", "at": [-3, 4],
+             # Place type of the CURRENT vocabulary (plan-platztypen.md): the
+             # ground marker is a lying place. A pack that still says "floor"
+             # is renamed on import — that path has its own check in
+             # smoke_platztypen.py; this one measures the lossless round trip,
+             # so it writes what a pack written today writes.
+             "markers": [{"id": "lie1", "group": "lie", "at": [-3, 4],
                           "tilt": 10}]}
 
 rooms_in = [dict(r) for r in get_location_by_id(GROVE)["rooms"]]
@@ -660,7 +665,7 @@ HUT_OUT = {"x": 0.0, "y": 0.0, "w": 8.0, "d": 6.0, "level": 0,
            "outline_curves": [{"edge": 1, "c": [6.0, 3.0]}]}
 GROUND_OUT = {"props": [{"prop_id": OAK, "id": "oak2", "at": [5.0, -5.0],
                          "yaw": 90}],
-              "markers": [{"id": "lie1", "group": "floor", "at": [-3.0, 4.0],
+              "markers": [{"id": "lie1", "group": "lie", "at": [-3.0, 4.0],
                            "tilt": 10.0}]}
 
 

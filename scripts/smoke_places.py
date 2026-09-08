@@ -12,10 +12,16 @@ write would put the characters into the open), room "lounge" (min corner
   s2  group seat, at (5, 1), capacity 2, spacing 0.6,
       facing 0 (south): lateral (cos 0, −sin 0) = (1, 0)
       → slots (1 − 0.3, −3) = (0.7, −3) and (1.3, −3)
-  b1  group bed,  at (2, 4), capacity 1               → slot (−2, 0)
-Catalog: standing (stand, default), sitting (seat, default of seat),
-reading (seat), sleeping (bed, default of bed), cuddling (seat, solo false,
-places 2, animation "cuddle").
+  b1  group lie,  at (2, 4), capacity 1               → slot (−2, 0)
+Catalog (the four place types of plan-platztypen.md, minus the two this
+fixture has no marker for): standing (stand, default), sitting (seat, default
+of seat), reading (seat), sleeping (lie, default of lie), cuddling (seat, solo
+false, places 2, animation "cuddle"). ``seat`` and ``lie`` carry
+``needs_place: true``, ``stand`` ``false`` — a standing pose wants no marker,
+and that flag, not the group NAME, is what the four rules below hang on. The
+lying group is LABELLED "Bed" because the only lying marker of this fixture is
+one; the label is what a prompt calls the place, the group name is the body
+shape.
 
 Hand-derived expectations:
   [1] room_places("lounge") has 3 places, s2.slots == [[0.7,-3],[1.3,-3]],
@@ -94,7 +100,8 @@ Hand-derived expectations:
       two lines; the pair pose "cuddling" needs 2 free seat slots → absent;
       "reading" is a seat pose → absent because no seat is free; the lounge's
       activity_hint "reading nooks" closes the block.)
-      room_offer_short == "seat 0 free, bed 1 free".
+      room_offer_short == "seat 0 free, lie 1 free" (the group NAME, not
+      the label).
       location_occupancy(house) — one roster pass — is exactly
       {"lounge": {s1: [Ann/0], s2: [Bob/0, Cid/1]}} (Dan, Eve, Fay hold
       nothing; b1 is nobody's), and room_offer_short fed that room's map
@@ -129,7 +136,7 @@ Hand-derived expectations:
       (same id, slot "pair", the pose is that pair pose) — place and
       position unchanged. occupancy s2 == [Ann/pair, Bob/pair];
       free_slots(s2) == [] and _taken_count(s2) == 2 — the pair is counted
-      ONCE, not per partner. room_offer_short == "seat 4 free, bed 1 free"
+      ONCE, not per partner. room_offer_short == "seat 4 free, lie 1 free"
       (s1 1 + s3 3). place_of(Ann) = s2 slot "pair" at the place's CENTRE
       (1, −3) — the pair's anchor. release_pair clears both; s2 is no
       occupancy.
@@ -220,8 +227,10 @@ Hand-derived expectations:
       → "on the seat"; scene_render._pose_hint("Ann") = "p, on the seat"
       (catalog prompt "p", no flavor) and system_prompt_builder
       ._presence_suffix("Ann") = " (sitting, on the seat)"; sleeping on b1
-      (bed) → "in the bed" while place_label stays "Bed"; Fay holds nothing
-      → "" and her suffix names no place.
+      (lie) → "on the bed" while place_label stays "Bed"; Fay holds nothing
+      → "" and her suffix names no place. "on", not the old "in": what is
+      named is the SURFACE a figure lies on, and one surface reads the same
+      whether it is a mattress, a couch or the ground.
 
 Usage:  ./.venv/bin/python scripts/smoke_places.py
 """
@@ -256,6 +265,34 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         FAILURES.append(label)
 
 
+def pair_pose(a: str, b: str, key: str) -> None:
+    """Write the pair pose on both partners the way the interaction engine
+    does: the interaction record FIRST, the pose after it.
+
+    ``set_pose_intent`` refuses a two-person key (catalog ``solo: false``) on
+    a character that is not bound to an interaction naming that key — a pair
+    pose on a lone profile has no partner and no anchor. The engine binds the
+    pair before it sets the pose; this helper mirrors exactly that order, so
+    the stage still measures assign's pair-seat branch and not the guard.
+    """
+    for name, role, other in ((a, "a", b), (b, "b", a)):
+        prof = get_character_profile(name) or {}
+        prof["interaction"] = {"id": "smoke", "kind": key, "role": role,
+                               "partner": other, "pose_key": key,
+                               "started_at_game": "Y0001-D001T00:00:00"}
+        save_character_profile(name, prof)
+        set_pose_intent(name, key)
+
+
+def unpair(*names: str) -> None:
+    """Drop the interaction records ``pair_pose`` wrote — the engine's
+    ``end_interaction`` does this when the clip is over."""
+    for name in names:
+        prof = get_character_profile(name) or {}
+        if prof.pop("interaction", None) is not None:
+            save_character_profile(name, prof)
+
+
 # ── fixtures ────────────────────────────────────────────────────────────
 # A private pose catalog: the real one must not be edited.
 CAT = Path(tempfile.mkdtemp(prefix="places-cat-"))
@@ -263,13 +300,20 @@ _orig_catalog_path = pose_catalog.catalog_path
 pose_catalog.catalog_path = (
     lambda axis: CAT / "pose_catalog.json" if axis == "pose" else _orig_catalog_path(axis))
 (CAT / "pose_catalog.json").write_text(json.dumps({
-    "groups": {"seat": {"label": "Seat", "root_drop": 0.314, "default": "sitting"},
-               "bed": {"label": "Bed", "root_drop": 0.631, "default": "sleeping"},
-               "stand": {"label": "Standing spot", "root_drop": 0, "default": "standing"}},
+    "groups": {"seat": {"label": "Seat", "root_drop": 0.314, "default": "sitting",
+                        "needs_place": True},
+               # The lying group of plan-platztypen.md. Its label is what the
+               # prompts call the place, and this fixture's one lying marker is
+               # a bed, so "Bed" it is. Drop 0.051 — the merged group's single
+               # value, measured on the clip that serves every lying pose.
+               "lie": {"label": "Bed", "root_drop": 0.051, "default": "sleeping",
+                       "needs_place": True},
+               "stand": {"label": "Standing spot", "root_drop": 0, "default": "standing",
+                         "needs_place": False}},
     "entries": {"standing": {"prompt": "p", "animation": "idle", "group": "stand", "_default": True},
                 "sitting": {"prompt": "p", "animation": "sit", "group": "seat"},
                 "reading": {"prompt": "p", "animation": "sit", "group": "seat"},
-                "sleeping": {"prompt": "p", "animation": "sleep", "group": "bed"},
+                "sleeping": {"prompt": "p", "animation": "laying", "group": "lie"},
                 "cuddling": {"prompt": "p", "animation": "cuddle", "group": "seat",
                              "solo": False, "places": 2, "yaw_offset": 0}}}), encoding="utf-8")
 pose_catalog.reload_catalogs()
@@ -281,7 +325,7 @@ update_location_position(HOUSE, 0.0, 0.0)
 MARKERS = [
     {"id": "s1", "group": "seat", "at": [1, 1], "rotation": 0},
     {"id": "s2", "group": "seat", "at": [5, 1], "capacity": 2, "spacing_m": 0.6, "rotation": 0},
-    {"id": "b1", "group": "bed", "at": [2, 4]},
+    {"id": "b1", "group": "lie", "at": [2, 4]},
 ]
 
 
@@ -597,7 +641,7 @@ for _i, (_want, _got) in enumerate(zip(EXPECTED_OFFER.split("\n"),
     check(f"offer line {_i + 1}: {_want}", _got == _want, repr(_got))
 check("offer has exactly six lines", offer == EXPECTED_OFFER, repr(offer))
 short = places.room_offer_short(HOUSE, "lounge")
-check("room_offer_short", short == "seat 0 free, bed 1 free", repr(short))
+check("room_offer_short", short == "seat 0 free, lie 1 free", repr(short))
 loc_occ = places.location_occupancy(HOUSE)
 check("location_occupancy: one map for the whole house",
       loc_occ == {"lounge": {"s1": [("Ann", 0)], "s2": [("Bob", 0), ("Cid", 1)]}}, str(loc_occ))
@@ -623,7 +667,7 @@ places.room_places = lambda loc, room: (
     [prop_place("c1/s", "Chair", 1), prop_place("c2/s", "Chair", 1), prop_place("sofa/s", "Sofa", 2)]
     if room == "den" else _orig_room_places(loc, room))
 try:
-    den = places._group_lines(HOUSE, "den", "Fay")
+    den, _covered = places._group_lines(HOUSE, "den", "Fay")
 finally:
     places.room_places = _orig_room_places
 check("two rows (the two chairs collapsed, the sofa apart)", len(den) == 2, str(den))
@@ -640,6 +684,7 @@ S3 = {"id": "s3", "group": "seat", "at": [5, 4], "capacity": 3, "spacing_m": 0.6
 write_layout(MARKERS + [S3])
 places.invalidate()
 for _n in ("Ann", "Bob", "Cid", "Dan", "Eve", "Fay"):
+    unpair(_n)
     clear_pose_intent(_n)
     set_character_pos(_n, -3.5, -3.5)
 pl = {p["id"]: p for p in places.room_places(HOUSE, "lounge")}
@@ -652,6 +697,7 @@ def near(a, b, eps=1e-4) -> bool:
     return abs(float(a) - float(b)) <= eps
 
 
+
 r = places.assign_pair("Ann", "Bob", "cuddling")
 check("assign_pair → (s2, −π/2): nearest place with 2 free slots",
       r is not None and r[0]["id"] == "s2" and near(r[1], -math.pi / 2), str(r))
@@ -660,8 +706,7 @@ check("both profiles hold s2/pair",
       and get_character_profile("Bob").get("place") == PAIR_S2)
 check("assign_pair moves nobody", get_character_pos("Ann") == {"x": -3.5, "z": -3.5}
       and get_character_pos("Bob") == {"x": -3.5, "z": -3.5})
-set_pose_intent("Ann", "cuddling")
-set_pose_intent("Bob", "cuddling")
+pair_pose("Ann", "Bob", "cuddling")
 check("the setter keeps the pair seat (assign's keep branch)",
       get_character_profile("Ann").get("place") == PAIR_S2
       and get_character_profile("Bob").get("place") == PAIR_S2
@@ -673,12 +718,13 @@ check("occupancy s2 [Ann/pair, Bob/pair]",
 check("a pair of two takes both slots — counted once, not per partner",
       places.free_slots(pl["s2"], occ["s2"]) == [] and places._taken_count(pl["s2"], occ["s2"]) == 2)
 short = places.room_offer_short(HOUSE, "lounge")
-check("room_offer_short: seat 4 free, bed 1 free", short == "seat 4 free, bed 1 free", repr(short))
+check("room_offer_short: seat 4 free, lie 1 free", short == "seat 4 free, lie 1 free", repr(short))
 po = places.place_of("Ann")
 check("place_of(Ann) = s2 slot pair at the centre (1, −3)",
       po is not None and po["id"] == "s2" and po["slot"] == "pair" and po["x"] == 1.0 and po["z"] == -3.0,
       str(po))
 places.release_pair("Ann", "Bob")
+unpair("Ann", "Bob")
 check("release_pair clears both",
       get_character_profile("Ann").get("place") is None and get_character_profile("Bob").get("place") is None
       and "s2" not in places.occupancy(HOUSE, "lounge"))
@@ -696,8 +742,7 @@ check("Cid → s1", places.assign("Cid", "sitting", prefer="s1") == field("s1", 
 r = places.assign_pair("Ann", "Bob", "lapsitting")
 check("a places-1 pair → (s2, 0.0): facing 0 − 90 + yaw_offset 90",
       r is not None and r[0]["id"] == "s2" and near(r[1], 0.0), str(r))
-set_pose_intent("Ann", "lapsitting")
-set_pose_intent("Bob", "lapsitting")
+pair_pose("Ann", "Bob", "lapsitting")
 occ = places.occupancy(HOUSE, "lounge")
 check("it takes ONE slot: free_slots(s2) == [1], _taken_count 1",
       places.free_slots(pl["s2"], occ["s2"]) == [1] and places._taken_count(pl["s2"], occ["s2"]) == 1,
@@ -716,13 +761,13 @@ check("a standing pair without a stand marker → None, nothing written",
 pose_catalog.reload_catalogs()
 places.invalidate()
 for _n in ("Ann", "Bob", "Dan", "Eve"):
+    unpair(_n)
     clear_pose_intent(_n)
 check("Dan → s2/0", places.assign("Dan", "sitting", prefer="s2") == field("s2", 0))
 r = places.assign_pair("Ann", "Bob", "cuddling")
 check("s2 has one free slot: the pair goes to s3 (−π/2)",
       r is not None and r[0]["id"] == "s3" and near(r[1], -math.pi / 2), str(r))
-set_pose_intent("Ann", "cuddling")
-set_pose_intent("Bob", "cuddling")
+pair_pose("Ann", "Bob", "cuddling")
 occ = places.occupancy(HOUSE, "lounge")
 check("on a capacity-3 place the pair takes 2: free_slots(s3) == [2]",
       places.free_slots(pl["s3"], occ["s3"]) == [2] and places._taken_count(pl["s3"], occ["s3"]) == 2,
@@ -740,6 +785,7 @@ S4 = {"id": "s4", "group": "seat", "at": [5, 1], "capacity": 4, "spacing_m": 0.6
 write_layout([S4])
 places.invalidate()
 for _n in ("Ann", "Bob", "Cid", "Dan", "Eve", "Fay"):
+    unpair(_n)
     clear_pose_intent(_n)
     set_character_pos(_n, -3.5, -3.5)
 s4 = next(p for p in places.room_places(HOUSE, "lounge") if p["id"] == "s4")
@@ -747,8 +793,7 @@ check("s4 slots (0.1, −3) … (1.9, −3)",
       s4["slots"] == [[0.1, -3.0], [0.7, -3.0], [1.3, -3.0], [1.9, -3.0]], str(s4["slots"]))
 r = places.assign_pair("Ann", "Bob", "cuddling")
 check("Ann+Bob → s4", r is not None and r[0]["id"] == "s4", str(r))
-set_pose_intent("Ann", "cuddling")
-set_pose_intent("Bob", "cuddling")
+pair_pose("Ann", "Bob", "cuddling")
 occ = places.occupancy(HOUSE, "lounge")
 check("one pair on a capacity-4 place: free_slots [2, 3], _taken_count 2",
       places.free_slots(s4, occ["s4"]) == [2, 3] and places._taken_count(s4, occ["s4"]) == 2,
@@ -770,6 +815,7 @@ occ = places.occupancy(HOUSE, "lounge")
 check("free [3], _taken_count 3", places.free_slots(s4, occ["s4"]) == [3]
       and places._taken_count(s4, occ["s4"]) == 3)
 places.release_pair("Ann", "Bob")
+unpair("Ann", "Bob")
 clear_pose_intent("Ann")
 clear_pose_intent("Bob")
 places.release("Eve")
@@ -778,11 +824,11 @@ check("after the first pair ends, Cid+Dan get s4 (−π/2)",
       r is not None and r[0]["id"] == "s4" and near(r[1], -math.pi / 2), str(r))
 # solo first: the pair holds the first slots the solo sitter does NOT
 places.release_pair("Cid", "Dan")
+unpair("Cid", "Dan")
 check("Eve → s4/0 (prefer)", places.assign("Eve", "sitting", prefer="s4") == field("s4", 0)
       and get_character_pos("Eve") == {"x": 0.1, "z": -3.0})
 r = places.assign_pair("Ann", "Bob", "cuddling")
-set_pose_intent("Ann", "cuddling")
-set_pose_intent("Bob", "cuddling")
+pair_pose("Ann", "Bob", "cuddling")
 occ = places.occupancy(HOUSE, "lounge")
 check("pair beside a solo on slot 0: held {0, 1, 2} → free [3], _taken_count 3",
       r is not None and r[0]["id"] == "s4" and places.free_slots(s4, occ["s4"]) == [3]
@@ -795,6 +841,7 @@ print("\n[8] the click-UI route")
 write_layout(MARKERS)
 places.invalidate()
 for _n in ("Ann", "Bob", "Cid", "Dan", "Eve", "Fay"):
+    unpair(_n)
     clear_pose_intent(_n)
     set_character_pos(_n, -3.5, -3.5)
 check("Ann → s2/0", places.assign("Ann", "sitting", prefer="s2") == field("s2", 0))
@@ -812,8 +859,8 @@ check("s1: Seat, seat, capacity 1, free 1 (the avatar's own seat counts free), f
 check("s2: free 1, free_slots [1] — Ann on 0",
       by_id.get("s2", {}).get("free") == 1 and by_id.get("s2", {}).get("free_slots") == [1]
       and by_id.get("s2", {}).get("capacity") == 2, str(by_id.get("s2")))
-check("b1: Bed, bed, free 1, poses [sleeping]",
-      by_id.get("b1") == {"id": "b1", "label": "Bed", "group": "bed", "capacity": 1, "free": 1,
+check("b1: Bed, lie, free 1, poses [sleeping]",
+      by_id.get("b1") == {"id": "b1", "label": "Bed", "group": "lie", "capacity": 1, "free": 1,
                           "free_slots": [0], "poses": [{"key": "sleeping", "label": "sleeping"}]},
       str(by_id.get("b1")))
 save_character_current_room("Eve", "")
@@ -838,6 +885,7 @@ S5 = {"id": "s5", "group": "seat", "at": [12, 1], "capacity": 2, "spacing_m": 0.
 write_layout(MARKERS + [S5])
 places.invalidate()
 for _n in ("Ann", "Bob", "Cid", "Dan", "Eve", "Fay"):
+    unpair(_n)
     clear_pose_intent(_n)
     set_character_pos(_n, -3.5, -3.5)
 s5 = next(p for p in places.room_places(HOUSE, "lounge") if p["id"] == "s5")
@@ -921,7 +969,9 @@ check("_pose_hint ends with it", _pose_hint("Ann").endswith(", on the seat"), re
 check("_presence_suffix ends with it", _presence_suffix("Ann").endswith(", on the seat)"),
       repr(_presence_suffix("Ann")))
 set_pose_intent("Ann", "sleeping")
-check("Ann on b1: 'in the bed'", places.place_phrase("Ann") == "in the bed", repr(places.place_phrase("Ann")))
+# "on the bed", not "in the bed": the phrase names the SURFACE the figure
+# rests on, the same word for a mattress, a couch and the ground.
+check("Ann on b1: 'on the bed'", places.place_phrase("Ann") == "on the bed", repr(places.place_phrase("Ann")))
 check("place_label stays the bare label", places.place_label("Ann") == "Bed")
 check("Fay (no place): ''", places.place_phrase("Fay") == "" and _presence_suffix("Fay").count("the") == 0,
       repr(_presence_suffix("Fay")))

@@ -32,31 +32,33 @@ import { SliderInput } from '../../components/SliderInput'
 
 const FIGURE_H = 1.7
 
-/** The virtual marker a pair is played on, per place type.
+/** The virtual marker a pair is played on, per place type
+ *  (plan-platztypen.md).
  *
  *  `size` is width × height × depth in metres, the width across the marker's
- *  facing. `support` says what the box IS: a body the figures rest on (seat,
- *  bed, floor — the marked surface is its TOP, the root sinks `root_drop`
- *  below that), or furniture they stand AT. A counter's `root_drop` is 0
- *  because the marked surface is the floor spot where the person stands; the
- *  counter body belongs in FRONT of them, so its box keeps the ground plane
- *  and is pushed out along the marker facing.
+ *  facing. The box IS the body the figures rest on: the marked surface is its
+ *  TOP, and the root sinks `root_drop` below that.
  *
- *  A stand (and any place type without a body — an unknown or empty group)
- *  has no box: the pair plays on the ground, the way this preview always did. */
+ *  ONLY THE PLACE TYPES THAT NEED A MARKER HAVE A BOX. `stand` and `ground`
+ *  are `needs_place: false` in the catalog — no marker is ever authored for
+ *  them, so there is nothing to draw and the pair plays on the ground plane,
+ *  the way this preview always did for a stand. Same for an unknown or empty
+ *  group. The dropped `counter` was the one box the figures only stood AT;
+ *  with the group gone ("standing at a device" is a stand with a facing, not
+ *  a place type of its own) every box left is one they rest on.
+ *
+ *  `lie` covers a mattress, a couch and the bare floor — the group no longer
+ *  says which, the marker's own height does. Its box is therefore the
+ *  FOOTPRINT of a lying body on a low slab, not a bed: 2.0 × 1.0 m shows how
+ *  much room the pose takes, and a slab makes no claim about furniture that
+ *  the marker has not made. */
 interface MarkerBox {
   size: [number, number, number]
-  support: boolean
 }
 
-/** Gap between the figures' floor spot and the furniture they stand at. */
-const FRONT_GAP_M = 0.2
-
 const MARKER_BOX: Record<string, MarkerBox> = {
-  seat: { size: [0.5, 0.45, 0.5], support: true },
-  bed: { size: [2.0, 0.5, 1.0], support: true },
-  floor: { size: [1.0, 0.05, 0.6], support: true },
-  counter: { size: [1.0, 0.9, 0.6], support: false },
+  seat: { size: [0.5, 0.45, 0.5] },
+  lie: { size: [2.0, 0.1, 1.0] },
 }
 
 function markerBox(group?: string): MarkerBox | undefined {
@@ -230,12 +232,10 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             new THREE.EdgesGeometry(geom),
             new THREE.LineBasicMaterial({ color: 0xc9d4e4 }),
           )
-          // Both kinds stand ON the ground plane; furniture the figures only
-          // stand AT is pushed out along the marker facing (+z = south), so
-          // the counter is in front of them instead of under them.
-          const boxZ = seat.support ? 0 : bd / 2 + FRONT_GAP_M
+          // The box stands ON the ground plane and the pair rests on its
+          // top — nothing is pushed out along the marker facing any more.
           for (const o of [mesh, edges]) {
-            o.position.set(0, bh / 2, boxZ)
+            o.position.set(0, bh / 2, 0)
             scene.add(o)
           }
           disposers.push(() => {
@@ -339,13 +339,11 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           if (seat) {
             // Server formula, both terms: the frame turns by facing − 90° +
             // yaw_offset, and its origin sits `root_drop × 1.70` under the
-            // MARKED SURFACE — the box top for a body the figures rest on,
-            // the ground plane for furniture they only stand at.
+            // MARKED SURFACE, which is the box top.
             // The server's rule (`places.pair_yaw`, shared mirror) with the
             // preview's virtual marker facing SOUTH (compass 0).
             frame.rotation.y = pairYaw(0, yawRef.current || 0)
-            frame.position.y = (seat.support ? seat.size[1] : 0)
-              - (dropRef.current || 0) * FIGURE_H
+            frame.position.y = seat.size[1] - (dropRef.current || 0) * FIGURE_H
           }
           for (const p of players) {
             p.mixer.setTime(time)
@@ -377,14 +375,12 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
     }
   }, [kind, set, height, urlKey, group, t])
 
-  // What the marker under (or in front of) the pair is — only while one is
-  // actually seated on it.
+  // What the marker under the pair is — only while one is actually seated
+  // on it.
   const markerNote = seated && box
     ? ` · ${t('marker')} ${box.size[0].toFixed(2)} × ${box.size[1].toFixed(2)}`
       + ` × ${box.size[2].toFixed(2)} m, ${t('facing south')}`
-      + (box.support
-        ? `, ${t('drop')} ${(rootDrop * FIGURE_H).toFixed(2)} m`
-        : `, ${t('in front — the figures stand on the floor spot')}`)
+      + `, ${t('drop')} ${(rootDrop * FIGURE_H).toFixed(2)} m`
     : ''
 
   return (

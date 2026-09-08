@@ -1,39 +1,26 @@
 {
- "kind": "sit",
+ "kind": "breast-stroke",
  "pair": false,
  "roles": [],
  "fps": 30,
  "source_fps": 120.0,
- "frames": 60,
- "duration_s": 2.0,
- "loop": true,
+ "frames": 415,
+ "duration_s": 13.833,
+ "loop": false,
  "speed": 1.0,
  "geometry": {
-  "floor_shift_cm": -2.59,
+  "floor_shift_cm": 2.84,
   "in_place": true,
-  "loop": {
-   "min_s": 2.0,
-   "cut_frames": [
-    22,
-    82
-   ],
-   "cut_s": [
-    0.733,
-    2.733
-   ],
-   "seam_distance": 0.59,
-   "blend_frames": 8
-  },
   "hips_scale": [
-   1.0596
+   1.1139
   ],
-  "rig_floor_shift_cm": 4.24,
-  "rig_floor_min_cm": -0.25
+  "rig_floor_shift_cm": -19.37,
+  "rig_floor_min_cm": -18.63
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
   "takes": [
-   "13_04"
+   "126_04"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
  }

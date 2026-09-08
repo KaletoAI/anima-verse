@@ -79,7 +79,7 @@ Stage 5 - admin surface (task 6), derived BY HAND from the route contract:
 - the pose axis demands a place type (task 2), on BOTH creation paths:
   `create_entry` WITHOUT `group` -> 400 "place type missing or unknown" and no
   key written, while the same body with `group: "seat"` goes through and the
-  entry stores that group; approve-as-entry stores the `group: "counter"` it
+  entry stores that group; approve-as-entry stores the `group: "stand"` it
   was given.
 The real catalog FILES are never written: the approve checks run against a
 COPY in the throwaway dir, injected through `pose_catalog.catalog_path` (the
@@ -105,15 +105,24 @@ Stage 7 - the pose-variant teardown (Aug 2026), derived BY HAND from it:
 - `clear_expression_cache` - the surviving per-character reset - runs without
   any variant row and reports 0 for a character that never rendered.
 
-Stage 8 - place types (plan-posen-plaetze.md § 3.1/3.2), derived BY HAND
-from the catalog file:
-- get_groups() has exactly the five start types seat/bed/floor/counter/stand;
-  seat.root_drop == 0.314, bed 0.631, floor 0.051, counter 0, stand 0
-  (the ONE source of every root_offset in the scene payload; the old
-  scene_recipe.FIGURE_ROOT_DROP table is gone).
+Stage 8 - place types (plan-posen-plaetze.md § 3.1/3.2,
+plan-platztypen.md), derived BY HAND from the catalog file:
+- get_groups() has exactly the four place types stand/ground/seat/lie — a
+  place type names a BODY SHAPE, not a piece of furniture, so `bed` and
+  `floor` merged into `lie` and `counter` (one sitting pose) dissolved into
+  `stand`. Drops: seat 0.314, lie 0.051, stand 0, ground 0 (the ONE source of
+  every root_offset in the scene payload; the old
+  scene_recipe.FIGURE_ROOT_DROP table is gone). The lie drop is the serving
+  `laying.fbx` clip's, measured; the old bed value 0.631 belonged to a Mixamo
+  `sleep` clip deleted in c2eb166d and buried every sleeper 0.93 m in the
+  mattress.
+- `needs_place` says whether the group's poses want a marker at all: seat and
+  lie do, stand and ground do not — poses_without_place() therefore lists
+  every pose of `stand` and `ground` and nothing else, and every one of them
+  has a group that carries needs_place False.
 - every entry carries a group that exists; group_of("sitting") == "seat",
-  group_of("sleeping") == "bed", group_of("standing") == "stand",
-  group_of("nope") == "".
+  group_of("sleeping") == "lie", group_of("standing") == "stand",
+  group_of("kneeling") == "ground", group_of("nope") == "".
 - poses_in_group("seat") starts with the group's default "sitting".
 - pose_places("sitting") == 1 (solo), pose_places("dancing together") == 2
   (pair default), pose_yaw_offset("dancing together") == 0.0; the stored entry
@@ -127,8 +136,8 @@ from the catalog file:
   pose can name it, so a group with no poses may carry an empty default. A
   second private copy with four groups — `stand` (sound), `bench` (no poses,
   default ""), `shelf` (no poses, default "standing", which belongs to
-  `stand`) and `floor` (owns the pose `lying`, default "") — therefore reports
-  exactly two problems, `shelf` and `floor`, and says nothing about `bench`.
+  `stand`) and `lie` (owns the pose `lying`, default "") — therefore reports
+  exactly two problems, `shelf` and `lie`, and says nothing about `bench`.
 
 Stage 9 - groups route contract (task 2), derived BY HAND:
 - _groups_problems accepts the shipped block against the shipped entries
@@ -139,7 +148,9 @@ Stage 9 - groups route contract (task 2), derived BY HAND:
   with default "" is reported; a poseless `bench` whose default is `standing`
   (a pose of `stand`) is reported.
 - _normalize_group({"label": " Seat ", "root_drop": "0.3", "default": "Sitting"})
-  == {"label": "Seat", "root_drop": 0.3, "default": "sitting"}.
+  == {"label": "Seat", "root_drop": 0.3, "default": "sitting",
+  "needs_place": True} — the flag defaults to True, so an admin-made place
+  type demands a marker until it says otherwise.
 - the two new routes, against a COPY of the shipped catalog (stage-5 harness):
   `_put_groups_sync({})` -> 400 "groups missing"; a block whose `seat` default
   is `standing` (a pose of `stand`) -> 400 "... default 'standing' is not a
@@ -147,9 +158,9 @@ Stage 9 - groups route contract (task 2), derived BY HAND:
   block is not written.
 - the invariant of the whole task: after a SUCCESSFUL group write (seat
   relabelled) an entry save through `_create_entry_sync` leaves the block
-  alone - the re-read file still has all five types AND the new label, plus
+  alone - the re-read file still has all four types AND the new label, plus
   the new entry with its group. `_write` serialises the whole document.
-- `list_entries("pose")` carries the five types and reads the place fields
+- `list_entries("pose")` carries the four types and reads the place fields
   through the ACCESSORS: the solo entry `sitting` reports places 1 /
   yaw_offset 0.0 (the stored entry has neither field), the pair entry
   `dancing together` reports 2. The expression axis carries `groups` {} and
@@ -344,8 +355,13 @@ try:
     )
     from app.core.expression_regen import _cache_key
 
-    _GARDENING = ("kneeling on ground, hands in soil, sun hat on, "
-                  "looking down at plants")
+    # Verbatim from the catalog file. The wording follows the CLIP: `plant`
+    # (CMU 80_20 "planting") measures hips 109.75 cm against the standing
+    # reference idle 110.18 cm - a STANDING motion - so the entry describes a
+    # standing gardener, not the kneeling one it claimed while it played
+    # `idle`.
+    _GARDENING = ("standing over a flower bed, bent forward from the hips, "
+                  "a young plant in one hand, soil on the other, sun hat on")
     _STANDING = ("standing with one hand on hip, weight shifted to one leg, "
                  "shoulder slightly raised, chin up")
     assert get_pose_prompt("gardening") == _GARDENING, get_pose_prompt("gardening")
@@ -471,7 +487,7 @@ try:
         asyncio.run(approve_candidate(_Req({
             "axis": "pose", "raw_text": "kneading dough", "key": "kneading",
             "prompt": "leaning over a table, pressing dough with both hands",
-            "animation": "idle", "solo": True, "group": "counter",
+            "animation": "idle", "solo": True, "group": "stand",
             "synonyms": ["Baking bread", " rolling dough ", ""],
         }), _={}))
         _new = _entries()["kneading"]
@@ -480,7 +496,7 @@ try:
         assert _new["synonyms"] == ["baking bread", "rolling dough",
                                     "kneading dough"], _new["synonyms"]
         assert _new["animation"] == "idle" and _new["solo"] is True, _new
-        assert _new["group"] == "counter", _new
+        assert _new["group"] == "stand", _new
         assert "kneading dough" not in {c["raw_text"] for c in list_candidates("pose")}
         # the freshly approved aliases resolve now — that is the point of it
         assert resolve_to_catalog("baking bread", "pose")[0] == "kneading"
@@ -637,16 +653,33 @@ try:
 
     pc.reload_catalogs()
     groups = pc.get_groups()
-    check("five start types", sorted(groups) == ["bed", "counter", "floor", "seat", "stand"], str(sorted(groups)))
+    check("four place types", sorted(groups) == ["ground", "lie", "seat", "stand"], str(sorted(groups)))
     check("seat root_drop 0.314", groups["seat"]["root_drop"] == 0.314)
-    check("bed root_drop 0.631", groups["bed"]["root_drop"] == 0.631)
-    check("floor root_drop 0.051", groups["floor"]["root_drop"] == 0.051)
-    check("stand/counter drop 0", groups["stand"]["root_drop"] == 0 and groups["counter"]["root_drop"] == 0)
+    # One lying group, one drop: the merged `lie` keeps the value measured on
+    # the clip that actually serves it. 0.631 (the old `bed`) described a
+    # Mixamo clip that no longer exists and put the sleeper under the mattress.
+    check("lie root_drop 0.051", groups["lie"]["root_drop"] == 0.051)
+    check("stand/ground drop 0", groups["stand"]["root_drop"] == 0 and groups["ground"]["root_drop"] == 0)
+    check("seat and lie want a marker",
+          groups["seat"]["needs_place"] is True and groups["lie"]["needs_place"] is True)
+    check("stand and ground do not",
+          groups["stand"]["needs_place"] is False and groups["ground"]["needs_place"] is False)
+    _free = pc.poses_without_place()
+    check("poses_without_place is exactly stand + ground",
+          set(_free) == set(pc.poses_in_group("stand")) | set(pc.poses_in_group("ground")),
+          str(sorted(set(_free) ^ (set(pc.poses_in_group("stand")) | set(pc.poses_in_group("ground"))))))
+    check("...and none of them is a placed pose",
+          all(not groups[pc.get_catalog("pose")[k]["group"]]["needs_place"]
+              for k in _free))
     cat = pc.get_catalog("pose")
     check("every pose has a known group", all(e["group"] in groups for e in cat.values()),
           str([k for k, e in cat.items() if e["group"] not in groups]))
-    check("group_of sitting/sleeping/standing", (pc.group_of("sitting"), pc.group_of("sleeping"),
-          pc.group_of("standing"), pc.group_of("nope")) == ("seat", "bed", "stand", ""))
+    check("group_of sitting/sleeping/standing/kneeling",
+          (pc.group_of("sitting"), pc.group_of("sleeping"), pc.group_of("standing"),
+           pc.group_of("kneeling"), pc.group_of("nope"))
+          == ("seat", "lie", "stand", "ground", ""),
+          str((pc.group_of("sitting"), pc.group_of("sleeping"), pc.group_of("standing"),
+               pc.group_of("kneeling"))))
     check("poses_in_group(seat) starts with default", pc.poses_in_group("seat")[0] == "sitting")
     check("pose_places solo 1 / pair 2", (pc.pose_places("sitting"), pc.pose_places("dancing together")) == (1, 2))
     check("solo entry stores 1 place", cat["sitting"]["places"] == 1, str(cat["sitting"]))
@@ -680,16 +713,16 @@ try:
 
     # A second private copy for the EMPTY-DEFAULT rule. A place type has to
     # exist before any pose can name it, so a group without poses may carry an
-    # empty default; `floor` (which owns `lying`) may not, and the poseless
+    # empty default; `lie` (which owns `lying`) may not, and the poseless
     # `shelf` pointing at `standing` (a pose of `stand`) is still wrong.
     _new = _P(_tf.mkdtemp(prefix="pose-newgroup-")) / "pose_catalog.json"
     _new.write_text(_json.dumps({
         "groups": {"stand": {"label": "Stand", "root_drop": 0, "default": "standing"},
                    "bench": {"label": "Bench", "root_drop": 0.3, "default": ""},
                    "shelf": {"label": "Shelf", "root_drop": 0, "default": "standing"},
-                   "floor": {"label": "Floor", "root_drop": 0.051, "default": ""}},
+                   "lie": {"label": "Lying place", "root_drop": 0.051, "default": ""}},
         "entries": {"standing": {"prompt": "p", "animation": "idle", "group": "stand", "_default": True},
-                    "lying": {"prompt": "p", "animation": "lie", "group": "floor"}}}), encoding="utf-8")
+                    "lying": {"prompt": "p", "animation": "laying", "group": "lie"}}}), encoding="utf-8")
     pc.catalog_path = lambda axis: _new if axis == "pose" else _orig(axis)
     try:
         pc.reload_catalogs()
@@ -697,10 +730,10 @@ try:
         check("poseless group may keep an empty default",
               not any("'bench'" in p for p in _p2), str(_p2))
         check("a group WITH poses is still asked for one",
-              any("'floor'" in p and "default ''" in p for p in _p2), str(_p2))
+              any("'lie'" in p and "default ''" in p for p in _p2), str(_p2))
         check("a poseless group with a foreign default is still wrong",
               any("'shelf'" in p for p in _p2), str(_p2))
-        check("exactly shelf + floor", len(_p2) == 2, str(_p2))
+        check("exactly shelf + lie", len(_p2) == 2, str(_p2))
     finally:
         pc.catalog_path = _orig
         shutil.rmtree(_new.parent, ignore_errors=True)
@@ -721,8 +754,13 @@ try:
     check("dropping a used group is refused", any("still used" in p for p in poses_route._groups_problems(_g2, _entry_map)))
     _g3 = dict(_g); _g3["seat"] = dict(_g["seat"], default="standing")
     check("foreign default refused", any("default" in p for p in poses_route._groups_problems(_g3, _entry_map)))
-    check("normalize group", poses_route._normalize_group({"label": " Seat ", "root_drop": "0.3", "default": "Sitting"})
-          == {"label": "Seat", "root_drop": 0.3, "default": "sitting"})
+    check("normalize group",
+          poses_route._normalize_group({"label": " Seat ", "root_drop": "0.3",
+                                        "default": "Sitting"})
+          == {"label": "Seat", "root_drop": 0.3, "default": "sitting",
+              "needs_place": True},
+          str(poses_route._normalize_group({"label": " Seat ", "root_drop": "0.3",
+                                            "default": "Sitting"})))
     # The empty-default rule, measured against the entries the block is
     # written for: no poses -> an empty default is fine, poses -> it is not.
     _g4 = dict(_g); _g4["bench"] = {"label": "Bench", "root_drop": 0.3, "default": ""}
@@ -783,7 +821,7 @@ try:
             "axis": "pose", "key": "roosting", "prompt": "perched on a rail",
             "animation": "idle", "group": "seat"})
         check("groups survive an entry save",
-              sorted(_doc()["groups"]) == ["bed", "counter", "floor", "seat", "stand"]
+              sorted(_doc()["groups"]) == ["ground", "lie", "seat", "stand"]
               and _doc()["groups"]["seat"]["label"] == "Seat edited",
               str(sorted(_doc()["groups"])))
         check("the new entry stored its place type",
@@ -793,7 +831,7 @@ try:
         # The listing reads the place fields through the ACCESSORS.
         _listing = poses_route.list_entries(axis="pose", _={})
         check("listing carries the groups block",
-              sorted(_listing["groups"]) == ["bed", "counter", "floor", "seat", "stand"],
+              sorted(_listing["groups"]) == ["ground", "lie", "seat", "stand"],
               str(sorted(_listing["groups"])))
         _row = next(r for r in _listing["entries"] if r["key"] == "sitting")
         check("solo row says 1 place",
@@ -840,8 +878,12 @@ try:
         _g_new = dict(_res["groups"])
         _g_new["bench"] = {"label": "Bench", "root_drop": 0.3, "default": ""}
         poses_route._put_groups_sync({"groups": _g_new})
+        # `needs_place` is not in the body, so the normaliser fills in its
+        # default True — a new admin place type demands a marker until the
+        # admin says otherwise.
         check("a poseless new place type is written",
-              _doc()["groups"]["bench"] == {"label": "Bench", "root_drop": 0.3, "default": ""},
+              _doc()["groups"]["bench"] == {"label": "Bench", "root_drop": 0.3,
+                                            "default": "", "needs_place": True},
               str(_doc()["groups"].get("bench")))
         check("the catalog with the empty new type validates",
               pc.validate_catalog("pose") == [], str(pc.validate_catalog("pose")))
@@ -881,10 +923,15 @@ try:
     pc.catalog_path = lambda axis: _o_shared if axis == "pose" else _o_real(axis)
     pc.reload_catalogs()
     try:
+        # Compare against the COPIED file, not against the merged catalog of
+        # this installation: an installation that already carries an overlay
+        # (licensed or NSFW entries live there) merges more keys than the
+        # tracked file holds, and this stage exists to test exactly that.
+        _o_keys = frozenset(json.loads(_o_shared.read_text())["entries"])
         _base = frozenset(pc.get_catalog("pose"))
         check("without an overlay file the catalog is just the shared one",
-              _base == _shipped_pose_keys and not _o_local.exists(),
-              str(sorted(_base ^ _shipped_pose_keys)))
+              _base == _o_keys and not _o_local.exists(),
+              str(sorted(_base ^ _o_keys)))
 
         poses_route._create_entry_sync({}, {
             "axis": "pose", "key": "zz-overlay", "prompt": "a private pose",

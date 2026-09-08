@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from './I18nProvider'
-import { apiGet, apiPost } from './api'
+import { ApiError, apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
@@ -66,12 +66,25 @@ export function SelfPanel() {
     catch { /* ignore */ } finally { setBusy(false) }
   }, [busy, moodDraft, refresh])
 
+  // A two-person action cannot be put on alone — the server refuses it with
+  // 409 "pair_pose". Silently swallowing that leaves the player typing
+  // "hug Kira" into a field that never reacts, so the refusal is spelled out
+  // and points at the way that does work.
+  const [activityNote, setActivityNote] = useState('')
+
   const setActivity = useCallback(async () => {
     if (busy) return
     setBusy(true)
-    try { await apiPost('/play/self/activity', { activity: activityDraft.trim() }); await refresh() }
-    catch { /* ignore */ } finally { setBusy(false) }
-  }, [busy, activityDraft, refresh])
+    setActivityNote('')
+    try { await apiPost('/play/self/activity', { activity: activityDraft.trim() }) }
+    catch (e) {
+      if (e instanceof ApiError && e.detail === 'pair_pose') {
+        setActivityNote(t('That takes two — ask them with “Together…” on their card.'))
+      }
+    }
+    await refresh()
+    setBusy(false)
+  }, [busy, activityDraft, refresh, t])
 
   if (!data || !data.avatar) {
     return <EmptyState icon="self" title={t('No active avatar')} />
@@ -169,6 +182,9 @@ export function SelfPanel() {
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
           placeholder={t('What are you doing?')}
           className="ga-input" style={{ width: '100%', boxSizing: 'border-box' }} />
+        {activityNote && (
+          <span style={{ color: '#d6b06a', fontSize: '0.76em' }}>{activityNote}</span>
+        )}
       </label>
     </div>
   )

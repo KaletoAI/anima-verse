@@ -135,10 +135,37 @@ def _load(axis: str) -> Dict[str, dict]:
 
 
 def _load_groups() -> Dict[str, dict]:
-    """Place types of the pose axis (plan-posen-plaetze.md § 3.1): the finite
-    vocabulary a MARKER speaks. ``root_drop`` x figure height is how far a
-    figure's root sinks below the marked surface; ``default`` the pose a
-    "sit here" click sets."""
+    """Place types of the pose axis (plan-platztypen.md): the finite
+    vocabulary a MARKER speaks. A place type is a BODY SHAPE, not a kind of
+    furniture — one lies on the floor, on a couch and in a bed, so ``lie``
+    covers all three and the marker says where.
+
+    ``root_drop`` x figure height is how far a figure's root sinks below the
+    marked surface; ``default`` the pose a "sit here" click sets;
+    ``needs_place`` (default True) says whether the group's poses need a
+    marker at all — a False group is offered "anywhere here", gets no place
+    assigned and its spot is never named.
+
+    Where ``lie``'s 0.051 comes from: ``sleeping`` and ``lying`` both name
+    ``animation: laying`` and the only clip on disk is
+    ``shared/models/clips/laying.fbx`` (CMU). Through the project's own
+    chain (``scripts/smoke_prop_marker_place.mjs`` E5,
+    ``posed hips = S - rootOffset - clipHipsDrop + hipsBindY``) the measured
+    ``laying`` hips median 15.81 gives clipHipsDrop 0.84033 and hipsBindY
+    0.9801, so the fraction 0.051 — 0.0867 m on a 1.70 m figure — puts the
+    hips at ``S + 0.053``, on the surface. The 0.631 the deleted ``bed`` group
+    carried was calibrated for the Mixamo ``sleep`` clip, gone since
+    ``c2eb166d``; with it every sleeper sank 0.93 m into the mattress.
+
+    That median is the one RECORDED in the .mjs check, not what the library
+    measures today: the CMU clips were re-imported since (``a605c5a7`` /
+    ``7f8b113f``) and the same chain now reads 20.37, which would put the hips
+    at ``S + 0.094``. 0.051 is kept anyway — it is the value ``lying`` already
+    used on a floor marker, so the merge inherits that deviation instead of
+    introducing it, and re-calibrating here would bless an import whose rest
+    alignment nobody has signed off. The number belongs to the clip, not to
+    the place type; moving it there is its own strand.
+    """
     raw: Dict[str, dict] = {}
     for store in STORES:
         block = _read_doc("pose", store).get("groups") or {}
@@ -155,7 +182,10 @@ def _load_groups() -> Dict[str, dict]:
             drop = 0.0
         out[k] = {"label": str(spec.get("label") or k),
                   "root_drop": round(max(0.0, min(1.0, drop)), 3),
-                  "default": str(spec.get("default") or "").strip().lower()}
+                  "default": str(spec.get("default") or "").strip().lower(),
+                  # A place type normally demands a marker — only a group
+                  # that says otherwise gets by without one.
+                  "needs_place": bool(spec.get("needs_place", True))}
     return out
 
 
@@ -192,6 +222,33 @@ def group_of(pose_key: str) -> str:
     """Place type a pose needs ("" = unknown key or ungrouped entry)."""
     entry = get_catalog("pose").get((pose_key or "").strip().lower())
     return (entry or {}).get("group", "")
+
+
+def needs_place(group: str) -> bool:
+    """Does a pose of this place type need a MARKER? False = it is a body
+    shape one can strike anywhere (standing, kneeling): the pose is offered
+    under "anywhere here", no place is assigned and the spot is never named.
+
+    An unknown group counts as needing one — a marker speaking a group the
+    catalog no longer knows is a defect, and naming it is the louder
+    failure than silently swallowing it.
+    """
+    spec = get_groups().get((group or "").strip().lower())
+    return True if spec is None else bool(spec.get("needs_place", True))
+
+
+def placeless_groups() -> List[str]:
+    """Ids of the groups whose poses need no marker, in catalog order."""
+    return [g for g, spec in get_groups().items() if not spec.get("needs_place", True)]
+
+
+def poses_without_place() -> List[str]:
+    """Every pose that needs no marker — the "anywhere here" menu. Group by
+    group in catalog order, each group's default first (:func:`poses_in_group`)."""
+    out: List[str] = []
+    for g in placeless_groups():
+        out += [k for k in poses_in_group(g) if k not in out]
+    return out
 
 
 def poses_in_group(group: str) -> List[str]:

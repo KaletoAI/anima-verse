@@ -1,9 +1,12 @@
 /**
  * placeTypes — the pose catalog's PLACE TYPES as the world editors see them
  * (plan-posen-plaetze.md § 4). A room marker or a prop marker names a place
- * type (`group`: seat, bed, floor, …), never a clip; which pose plays there
- * is the character's business. The editors need three things of the
- * catalog, and they need them alike: the group vocabulary for the picker
+ * type (`group`) and never a clip; which pose plays there is the character's
+ * business. The vocabulary is the catalog's, not this file's — it is fetched,
+ * never listed here.
+ *
+ * The editors need three things of the catalog, and they need them alike:
+ * the group vocabulary for the picker
  * (label shown, key stored), the poses of a group for the preview cycler
  * (the group's DEFAULT first, then alphabetical — the same order the server's
  * `poses_in_group` yields) and a stable id for a new marker.
@@ -21,6 +24,11 @@ export interface PoseGroupSpec {
   root_drop?: number
   /** The pose a click on such a marker sets — first in the cycler. */
   default?: string
+  /** Whether the group's poses need a marker at all (plan-platztypen.md).
+   *  A false group (`stand`, `ground`) is offered "anywhere here", gets no
+   *  place assigned and no marker is ever authored for it. Absent means
+   *  true, the same default the server normalizes to. */
+  needs_place?: boolean
 }
 
 export interface PoseEntryLite {

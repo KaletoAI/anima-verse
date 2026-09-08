@@ -82,9 +82,12 @@ high. The markers therefore sit low by exactly that error:
     seat: drawn buttock height 0.8053 m - applied drop 0.5338 m = +0.2715 m
     bed:  applied drop 1.0727 m - laying's lowest point 0.7925 m = -0.2802 m
 
-``stand`` markers were never affected (the standing figure's hips track is the
-reference itself) and this script REFUSES the group, so a mistyped run cannot
-move them; the three of them are corrected by hand in the repaired preview.
+Markers of a place type that needs none were never affected (the standing
+figure's hips track is the reference itself) and this script REFUSES every
+such group, so a mistyped run cannot move them; the few of them are corrected
+by hand in the repaired preview. Which groups those are is READ FROM THE POSE
+CATALOG (``needs_place: false``) rather than named here, so a place type
+authored tomorrow is refused the day it exists.
 
 This script keeps no memory
 ---------------------------
@@ -116,10 +119,41 @@ SIDECAR_NAME = "sidecar.json"
 SELECTION_NAME = "selection.json"
 ROTATION_KEY = "rotation"
 
-# The group whose markers were never wrong; refused outright, see the docstring.
-FORBIDDEN_GROUPS = {"stand"}
-
 REPO = Path(__file__).resolve().parent.parent
+
+# The pose catalog, read as plain JSON — the tracked file plus its gitignored
+# overlay (app/core/pose_catalog.py STORES; the overlay wins on a shared key).
+POSE_CATALOG = REPO / "shared" / "templates" / "pose" / "pose_catalog.json"
+POSE_CATALOG_LOCAL = POSE_CATALOG.with_name("pose_catalog.local.json")
+
+
+def forbidden_groups() -> set:
+    """Place types whose markers this script refuses to move: the ones whose
+    poses need no marker at all (``needs_place: false`` — a standing spot, a
+    ground pose). Their markers were never wrong, see the docstring.
+
+    Read from the catalog instead of hardcoded, so the refusal follows the
+    vocabulary. A catalog that cannot be read at all is fatal: without it the
+    script cannot tell which groups it must protect, and guessing is exactly
+    the accident this guard exists to prevent.
+    """
+    groups: Dict[str, Any] = {}
+    for path in (POSE_CATALOG, POSE_CATALOG_LOCAL):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            if path is POSE_CATALOG_LOCAL:
+                continue          # the overlay is normally absent
+            raise SystemExit(f"pose catalog not found: {path}")
+        except (OSError, json.JSONDecodeError) as e:
+            raise SystemExit(f"pose catalog unreadable ({path}): {e}")
+        block = doc.get("groups")
+        if isinstance(block, dict):
+            groups.update(block)
+    if not groups:
+        raise SystemExit(f"pose catalog names no place types: {POSE_CATALOG}")
+    return {str(k).strip().lower() for k, v in groups.items()
+            if isinstance(v, dict) and not v.get("needs_place", True)}
 
 
 @dataclass
@@ -161,7 +195,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                          "it for a storage dir outside the repo, and the smoke "
                          "test points it at its fixture")
     ap.add_argument("--group", action="append", default=[], metavar="NAME",
-                    help="marker group to lift (seat, bed, ...); repeatable")
+                    help="marker group to lift (seat, lie, ...); repeatable")
     ap.add_argument("--delta-m", action="append", default=[], type=float,
                     metavar="METRES",
                     help="metres to lift the matching --group by; repeatable")
@@ -180,15 +214,17 @@ def build_deltas(args: argparse.Namespace) -> Dict[str, float]:
     if not args.group:
         raise SystemExit("nothing to do — pass at least one "
                          "--group NAME --delta-m METRES pair")
+    forbidden = forbidden_groups()
     deltas: Dict[str, float] = {}
     for name, delta in zip(args.group, args.delta_m):
         group = name.strip().lower()
         if not group:
             raise SystemExit("empty --group")
-        if group in FORBIDDEN_GROUPS:
+        if group in forbidden:
             raise SystemExit(
-                f"refusing --group {group}: standing markers were never "
-                "affected by the preview bug and are corrected by hand")
+                f"refusing --group {group}: its poses need no marker "
+                "(needs_place: false), such markers were never affected by "
+                "the preview bug and are corrected by hand")
         if group in deltas:
             raise SystemExit(f"--group {group} given twice")
         deltas[group] = delta

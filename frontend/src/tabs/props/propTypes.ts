@@ -11,7 +11,8 @@ export interface PropMarker {
   /** Stable id — minted client-side when the marker is created; the server
    *  keeps it and mints one only for a marker that arrives without. */
   id?: string
-  /** Place type: a group of the pose catalog (seat, bed, floor …). A marker
+  /** Place type: a group of the pose catalog (today seat, lie, ground,
+   *  stand — the catalog owns the vocabulary, an admin may add one). A marker
    *  whose group the catalog does not know is dropped on save. */
   group: string
   /** Object-local position: fractions [X, Y, Z] of the RAW model bounding

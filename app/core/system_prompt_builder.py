@@ -81,8 +81,15 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
     # flavor when the character has one, otherwise the bare catalog key. Both
     # are already cleaned and length-capped at the write path (pose_catalog.
     # sanitize_flavor), so nothing is trimmed here.
+    # A pair pose is only half a statement without its partner: "shaking
+    # hands" alone reads as a solo pose the character strikes on its own,
+    # and a character that does not know who it is holding cannot play the
+    # scene. A running interaction therefore names the partner.
+    from app.core.interaction_engine import describe as _describe_interaction
+    _pair = _describe_interaction(character_name, profile)
     data["activity"] = ("Sleeping" if profile.get("is_sleeping")
-                        else (profile.get("pose_flavor")
+                        else (_pair
+                              or profile.get("pose_flavor")
                               or profile.get("pose_key") or "")) or "None"
     data["feeling"] = profile.get("current_feeling", "") or "Neutral"
     from app.core.timeutils import game_time
@@ -309,11 +316,15 @@ def _load_presence_in_the_open(character_name: str) -> tuple:
 def _presence_suffix(other: str) -> str:
     """`` (reading, on the sofa)`` — the activity the others see and the
     place held (``places.place_phrase``, the group's own preposition);
-    ``""`` when there is neither."""
+    ``""`` when there is neither. A running pair interaction replaces the
+    activity and names the partner (`` (embracing with Kira)``)."""
     from app.core import places
+    from app.core.interaction_engine import describe as _describe_interaction
     from app.models.character import get_effective_activity
-    bits = [get_effective_activity(other) or "", places.place_phrase(other)]
-    bits = [b for b in bits if b]
+    # A pair the onlooker can SEE — two people in one clip, not two people
+    # who happen to hold the same pose beside each other.
+    doing = _describe_interaction(other) or get_effective_activity(other) or ""
+    bits = [b for b in (doing, places.place_phrase(other)) if b]
     return f" ({', '.join(bits)})" if bits else ""
 
 

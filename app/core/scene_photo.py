@@ -59,6 +59,34 @@ def _person_descriptions(subjects: List[str]) -> str:
     return "People in the frame: " + "; ".join(parts)
 
 
+def _pairs_among(names: List[str]) -> List[tuple]:
+    """The running pair interactions INSIDE this set of names, each once, as
+    ``(a, b, pose_key)`` in the order the names come in.
+
+    A pair pose describes ONE event between two people. Listed per person it
+    turns into two people striking the same pose side by side — the very
+    thing the image pipeline gets wrong when it only ever sees one character
+    (``expression_regen`` skips partner poses for exactly that reason). Here
+    both are in the frame on purpose, so the event is named once.
+    """
+    from app.core.interaction_engine import get_interaction
+    seen = set()
+    out: List[tuple] = []
+    for name in names:
+        inter = get_interaction(name)
+        if not inter:
+            continue
+        partner = str(inter.get("partner") or "")
+        if partner not in names:
+            continue
+        pair = tuple(sorted((name, partner)))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        out.append((name, partner, str(inter.get("pose_key") or "")))
+    return out
+
+
 def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
     """Builds the photo prompt (chat-context distillation + person
     descriptions) WITHOUT generating — feeds the image-gen dialog."""
@@ -73,8 +101,18 @@ def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
 
     present = [c for c in (_list_characters_in_room(loc, room) or [])
                if c != avatar]
-    # Alone in the room -> selfie.
-    subjects = present or [avatar]
+    # The photographer stays behind the camera — unless they are part of
+    # what there is to photograph. In a running pair the avatar is a
+    # participant, and a photo of the moment that leaves out one half of it
+    # is the wrong photo. The template flips to its selfie wording on its
+    # own once the photographer is among the subjects.
+    from app.core.interaction_engine import get_interaction
+    if present and get_interaction(avatar):
+        subjects = present + [avatar]
+    else:
+        # Alone in the room -> selfie.
+        subjects = present or [avatar]
+    pairs = _pairs_among(subjects)
 
     transcript = _room_transcript(avatar, loc, room)
 
@@ -88,6 +126,8 @@ def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
                 "scene_photo",
                 photographer=avatar,
                 subjects=", ".join(subjects),
+                pairs="; ".join(f"{a} and {b} are {pose} together"
+                                for a, b, pose in pairs),
                 transcript=transcript)
             resp = llm_call(task="image_prompt", system_prompt=sys_p,
                             user_prompt=user_p, agent_name=avatar)
@@ -97,7 +137,12 @@ def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
     if not prompt:
         from app.core.scene_render import _pose_hint
         parts = []
+        paired = {n for a, b, _ in pairs for n in (a, b)}
+        for a, b, pose in pairs:
+            parts.append(f"{a} and {b} ({pose} together)")
         for n in subjects:
+            if n in paired:
+                continue
             hint = _pose_hint(n)
             parts.append(f"{n} ({hint})" if hint else n)
         prompt = ("Candid photograph of the current moment: "
@@ -169,12 +214,24 @@ def take_scene_photo(avatar: str,
     # room stream + chime reactions via the loop — NPCs notice the photo
     # being taken and can react. The image_url meta renders the photo
     # inline in the scene view.
+    from app.core.i18n import t
     from app.core.perception import announce_action
-    if present:
-        _line = (f"{avatar} zückt die Kamera und macht ein Foto von "
-                 f"{', '.join(present)}.")
+    from app.models.character import get_character_language
+    _lang = get_character_language(avatar) or "de"
+    # Who is in the picture, not who is in the room: the dialog may have
+    # deselected people, and in a pair the avatar photographs itself along
+    # with its partner.
+    _others = [n for n in subjects if n != avatar]
+    if not _others:
+        _line = t("{actor} takes a selfie.", _lang).format(actor=avatar)
+    elif avatar in subjects:
+        _line = t("{actor} holds up the camera and takes a photo of "
+                  "themselves with {others}.", _lang).format(
+            actor=avatar, others=", ".join(_others))
     else:
-        _line = f"{avatar} macht ein Selfie."
+        _line = t("{actor} holds up the camera and takes a photo of "
+                  "{others}.", _lang).format(
+            actor=avatar, others=", ".join(_others))
     announce_action(avatar, _line, source="scene_photo",
                     perception_meta={"image_url":
                                      f"/characters/{avatar}/images/{filename}"})

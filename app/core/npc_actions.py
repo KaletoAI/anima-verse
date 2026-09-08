@@ -408,7 +408,11 @@ def _apply_home_answer(name: str,
     profile = get_character_profile(name) or {}
     home = profile.get("npc_home") or {}
     if not force_set_status(name, activity=activity):
-        return None
+        # The sentence named a two-person pose (nobody to share it with out
+        # here) — the NPC keeps its old activity but still takes its walk.
+        # Losing the whole tick over the wording would freeze it in place.
+        logger.info("npc_action(%s): the roaming activity %r was not written "
+                    "— walking anyway", name, activity[:60])
 
     pos = get_character_pos(name)
     here = (pos["x"], pos["z"]) if pos else None

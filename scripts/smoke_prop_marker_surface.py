@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke: a marker names the SURFACE, and the migration moves nothing.
+"""Smoke: a marker names the SURFACE, and what the renderers take off it.
 
 Usage:
     ./.venv/bin/python scripts/smoke_prop_marker_surface.py
@@ -12,23 +12,21 @@ baked one in by hand — every marker in the field carried a negative height.
 Now the recipe ships ``root_offset`` with the marker, both renderers subtract
 it, and the marker means "here is the seat".
 
-The migration lifts the stored fractions by exactly that drop, so nothing on
-screen moves. Worked through BY HAND for the fixture below — a bench like the
-Wooden Sauna Bench:
+The one-time lift that carried the stored fractions across that change was
+deleted in 2026-09: it read a prop-level ``markers`` list against prop-level
+dims, and no world has carried that shape since the field migration moved both
+onto the variants. What stays here is the arithmetic the composition rests on,
+worked through BY HAND for a bench like the Wooden Sauna Bench:
 
     raw bbox      = [1.0, 0.29406, 0.32149]     (mesh units)
     dims          = 1.73 x 0.56 x 0.51 m
     scale s       = max(dims) / max(bbox) = 1.73 / 1.0        = 1.73
     per fraction  = bbox.y x s = 0.29406 x 1.73               = 0.50872 m
     drop (real)   = 0.314 x 1.70 m                            = 0.5338 m
-    lift          = 0.5338 / 0.50872                          = 1.04933
 
-    at.y  -0.63  ->  -0.63 + 1.04933                          =  0.41933
-    height_m      = 0.41933 x 0.50872                         =  0.21332 m
-    (before)      = -0.63    x 0.50872                        = -0.32048 m
-
-    So the composed height rises by 0.5338 m — exactly the drop the renderers
-    now take off again. Root position: unchanged.
+    height_m(-0.63)   = -0.63    x 0.50872                    = -0.32048 m
+    height_m(0.41933) =  0.41933 x 0.50872                    =  0.21332 m
+    height_m(1.0)     =  the box top                          =  0.50872 m
 
 Part 4 pins the COMPOSITION against the renderer's placement law (§ B2), the
 three terms that made a seat land beside its prop (finding 2026-08-20). Hand
@@ -79,14 +77,21 @@ no ground offset and no placement trim.
     — and is addressed as ``"<placement.id>/<marker.id>"`` = ``"p1/s1"`` with
     the placement's label, else the prop's name (``"Bench"``).
 
-Part 3 runs the SURFACE migration on the legacy sidecar shape it was written
-for (a marker still naming a clip KIND) and then the PLACES migration on
-top: ``sit`` becomes group ``seat`` (drop 0.314), ``idle`` a ``stand``
-spot, every marker gets an 8-char id, and the second run of either is a
-no-op. The room half of the places migration is exercised on one location
-saved straight into the throwaway world: a ``sleep`` marker becomes ``bed``,
-a ``laying`` one ``floor`` (the two ground-level kinds of the old table), and
-the placement gets its id.
+Part 2 pins the place types themselves. Since plan-platztypen.md there are
+four, and they name a BODY SHAPE, not a piece of furniture: ``stand`` (0),
+``ground`` (0), ``seat`` (0.314) and ``lie`` (0.051). ``bed`` and ``floor``
+merged into ``lie``; the old ``bed`` drop of 0.631 was calibrated in 2026-08
+against a Mixamo ``sleep`` clip that was deleted three days later (c2eb166d),
+so it had been describing a clip nobody plays. Everything lying plays
+``laying.fbx`` today, root 0.051 x H = 0.0867 m under the body — one clip, one
+drop. ``counter`` is gone with it; its only pose was a sitting one.
+
+Part 3b runs the PLACES migration (clip kind -> place type, stable ids) on the
+legacy layout shape. Its sibling, the one-time SURFACE lift that made a marker
+name the seat instead of the figure's root, was deleted in 2026-09 together
+with the numbers this header used to derive: it read a prop-level ``markers``
+list against prop-level dims, and no world has carried that shape since the
+field migration moved both onto the variants.
 
     The invariant that survives every datum change: y_world - bottom_y is the
     marker's own composed height, 0.577 — the seat belongs to the OBJECT.
@@ -160,51 +165,37 @@ def main() -> int:
     drop_real = groups["seat"]["root_drop"] * FIGURE_HEIGHT_M
     check("seat drop in real metres", drop_real, 0.5338)
     check("a standing spot drops by nothing", groups["stand"]["root_drop"], 0.0)
-    # A lying clip authored ON A BED carries the whole body 0.6 x H above the
-    # root — the biggest drop of all, and the reason a sleep marker had to be
-    # dragged a metre under the mattress before this existed.
-    check("bed drops by the most", groups["bed"]["root_drop"], 0.631)
-    check("floor lies at ground level", groups["floor"]["root_drop"], 0.051)
-    # The legacy kind → place type rule keeps every old drop: sit was 0.314,
-    # sleep 0.631, laying/lie 0.051, anything else 0.
+    # ONE lying group since plan-platztypen.md: bed (0.631) and floor (0.051)
+    # were never two body shapes, only two clips, and the bed one was
+    # calibrated against a Mixamo ``sleep`` clip that was deleted in c2eb166d.
+    # Everything lying plays ``laying.fbx`` today, whose root sits 0.051 x H
+    # under the body — 0.0867 m, the value the merged group keeps.
+    check("lie drops by the serving clip's root", groups["lie"]["root_drop"], 0.051)
+    check("lie drop in real metres", groups["lie"]["root_drop"] * FIGURE_HEIGHT_M,
+          0.0867)
+    check("a ground spot drops by nothing", groups["ground"]["root_drop"], 0.0)
+    check("the furniture-named groups are gone",
+          sorted(g for g in ("bed", "floor", "counter") if g in groups), [])
+    # The legacy kind → place type rule speaks the CURRENT vocabulary (it still
+    # runs in a world that never got the places_v1 flag): sit is a seat,
+    # sit-ground is ground, everything sleeping/lying is one lie, the rest
+    # stands.
     check("legacy kind sit -> seat", group_for_kind("sit"), "seat")
-    check("legacy kind sleep -> bed", group_for_kind("sleep"), "bed")
-    check("legacy kind laying -> floor", group_for_kind("laying"), "floor")
-    check("legacy kind lie -> floor", group_for_kind("lie"), "floor")
-    check("legacy kind sit-ground -> floor", group_for_kind("sit-ground"), "floor")
+    check("legacy kind sleep -> lie", group_for_kind("sleep"), "lie")
+    check("legacy kind laying -> lie", group_for_kind("laying"), "lie")
+    check("legacy kind lie -> lie", group_for_kind("lie"), "lie")
+    check("legacy kind sit-ground -> ground", group_for_kind("sit-ground"), "ground")
     check("legacy kind idle -> stand", group_for_kind("idle"), "stand")
 
-    print("\n3. the migration lifts by exactly that — nothing moves")
+    print("\n3. the places migration: kind -> place type, ids everywhere")
     pid = "bench-smoke"
-    d = paths.get_storage_dir() / "props" / pid
-    d.mkdir(parents=True, exist_ok=True)
+    (paths.get_storage_dir() / "props" / pid).mkdir(parents=True, exist_ok=True)
     ps._write_sidecar(pid, {
         "name": "Bench", "width_m": DIMS[0], "depth_m": DIMS[1],
         "height_m": DIMS[2], "bbox": BBOX, "rotation": ROT,
         "markers": [{"animation": "sit", "at": [0.5, -0.63, 0.525]},
                     {"animation": "idle", "at": [0.2, 0.0, 0.2]}],
     })
-    before = height_of(-0.63)
-    stats = ps.migrate_marker_surface_once()
-    check("props touched", stats.get("props"), 1)
-    check("markers lifted", stats.get("markers_lifted"), 1)
-
-    markers = ps.read_sidecar(pid)["markers"]
-    sit = next(m for m in markers if m["animation"] == "sit")
-    idle = next(m for m in markers if m["animation"] == "idle")
-    check("sit fraction lifted", sit["at"][1], 0.41933)
-    check("a standing marker is untouched", idle["at"][1], 0.0)
-    check("x/z untouched", [sit["at"][0], sit["at"][2]], [0.5, 0.525])
-
-    after = height_of(sit["at"][1])
-    # 1 mm: the stored fraction is rounded to 4 decimals and the composed
-    # height to 3, so the round trip cannot be exact — it must be tight
-    # enough that a real error cannot hide in it.
-    check("surface rose by the drop", after - before, drop_real, 1.5e-3)
-    check("ROOT stays where it was", after - drop_real, before, 1.5e-3)
-    check("second run is a no-op", ps.migrate_marker_surface_once(), {})
-
-    print("\n3b. the places migration: kind -> place type, ids everywhere")
     from app.models.world import _load_world_data, _save_world_data
     _save_world_data({"locations": [{
         "id": "loc1", "name": "Loc", "rooms": [{
@@ -221,8 +212,8 @@ def main() -> int:
     check("placements changed", stats.get("placements"), 1)
     check("prop markers changed", stats.get("prop_markers"), 4)
     lay = _load_world_data()["locations"][0]["rooms"][0]["layout"]
-    check("sleep became a bed", lay["markers"][0]["group"], "bed")
-    check("laying became a floor spot", lay["markers"][1]["group"], "floor")
+    check("sleep became a lying place", lay["markers"][0]["group"], "lie")
+    check("laying became the SAME lying place", lay["markers"][1]["group"], "lie")
     check("an existing id is kept", lay["markers"][1]["id"], "keepme")
     check("no animation key survives in the room",
           any("animation" in m for m in lay["markers"]), False)

@@ -6,6 +6,8 @@
    Variables:
      photographer — avatar taking the photo
      subjects     — comma-separated names that should be in the frame
+     pairs        — who is physically doing something TOGETHER right now
+                    ("A and B are dancing together; ..."), "" when nobody is
      transcript   — recent room conversation ("Speaker: text" per line)
 #}
 
@@ -19,6 +21,10 @@ Rules:
   {{ photographer }} is taking the photo{% if photographer in subjects %} (selfie — they ARE in the frame){% else %} and is NOT in the frame{% endif %}.
 - Derive each person's pose, expression and mood from the LAST lines of the
   conversation — the photo captures what is happening RIGHT NOW.
+{% if pairs %}- These people are touching, holding or moving WITH each other right now:
+  {{ pairs }}. Describe each of these as ONE shared action between the two —
+  never as two people striking the same pose beside each other.
+{% endif %}
 - Describe only what a camera sees: poses, expressions, gestures, spatial
   arrangement. No names of places, no story, no dialogue, no camera brand.
 - Do NOT invent appearance details (hair, body, clothing) — appearance and

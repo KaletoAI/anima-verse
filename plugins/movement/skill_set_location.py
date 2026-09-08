@@ -392,7 +392,16 @@ class SetLocationSkill(PluginSkill):
         save_character_current_location(character_name, location_id)
         save_character_current_room(character_name, room_id)
         if pose:
-            set_pose_intent(character_name, pose)
+            # An arrival pose is something the character strikes on its own;
+            # a two-person one has no partner here and is simply dropped.
+            from app.core.pose_catalog import PairPoseWithoutPartner
+            try:
+                set_pose_intent(character_name, pose)
+            except PairPoseWithoutPartner as e:
+                logger.info("SetLocation [%s]: arrival pose '%s' is the "
+                            "two-person pose '%s' — not set", character_name,
+                            pose, e)
+                pose = ""
 
         # Avatar follow: a LOCATION change is no longer taken over (the
         # avatar stays where the user put it). Only a ROOM change follows,

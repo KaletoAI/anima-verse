@@ -1785,8 +1785,18 @@ def _extract_activity(agent_name: str, response: str) -> Optional[str]:
     old_activity = get_effective_activity(agent_name)
     if not raw_activity or raw_activity.lower() == (old_activity or "").lower():
         return None
+    from app.core.pose_catalog import PairPoseWithoutPartner
     from app.models.character import set_pose_intent
-    set_pose_intent(agent_name, raw_activity)
+    try:
+        set_pose_intent(agent_name, raw_activity)
+    except PairPoseWithoutPartner as e:
+        # RP prose claiming a two-person action is exactly what the pair verb
+        # is for — narrating it does not make it happen. The pose is dropped;
+        # the text itself stays in the answer.
+        logger.info("Pose %s discarded: '%s' resolves to the two-person pose "
+                    "'%s' — a pair is started via InteractWith",
+                    agent_name, raw_activity, e)
+        return None
     logger.info("Pose %s: %s -> %s", agent_name, old_activity, raw_activity)
     return raw_activity
 
@@ -2067,31 +2077,36 @@ def _extract_context_from_last_chat(agent_name: str,
             logger.debug("Chat-Kontext [%s]: JSON-Parse-Fehler: %s", target_name, raw[:100])
             return
 
-        # Removed-Liste wird ignoriert wenn Lock aktiv ist — kein Write,
-        # kein Expression-Trigger.
+        # The removed list is ignored while the lock is on — no write, no
+        # expression trigger.
         removed_raw = [] if outfit_locked else data.get("removed") or []
         if not isinstance(removed_raw, list):
             removed_raw = []
         removed_names = [str(n).strip() for n in removed_raw if n and str(n).strip()]
 
-        # Activity nur aus Character-Call — und nie auf einen Spieler-Avatar
-        # schreiben (auch nicht wenn er gerade als chat-target geoeffnet ist).
-        # is_avatar wird call-site-driven gesetzt (Call 1 = agent, Call 2 =
-        # user-input) — wenn der User aber ueber das Legacy-Admin ein NPC-
-        # Chat-Picker auf seinen eigenen Avatar oeffnet, lief Call 1 mit
-        # is_avatar=False auf dem Avatar und hat dessen activity/detail aus
-        # der LLM-Antwort gefuellt (z.B. "Talking" + "sleeps"). Der
-        # is_player_controlled-Check faengt das ab.
+        # Activity only from the character call — and never written onto a
+        # player avatar (not even while it is open as the chat target).
+        # is_avatar is set call-site-driven (call 1 = agent, call 2 = user
+        # input) — but when the user opened an NPC chat picker on their own
+        # avatar through the legacy admin, call 1 ran with is_avatar=False on
+        # the avatar and filled its activity/detail from the LLM answer (e.g.
+        # "Talking" + "sleeps"). The is_player_controlled check stops that.
         from app.models.account import is_player_controlled as _is_pc
         if not is_avatar and not _is_pc(target_name):
             # Pose: through the canonical setter — it resolves the catalog key,
             # sanitizes the flavor and no-ops when neither changed.
             extracted_pose = (data.get("pose") or "").strip()
             if extracted_pose:
+                from app.core.pose_catalog import PairPoseWithoutPartner
                 from app.models.character import set_pose_intent
-                set_pose_intent(target_name, extracted_pose)
-                logger.info("Chat context [%s]: pose -> %r", target_name,
-                            extracted_pose[:80])
+                try:
+                    set_pose_intent(target_name, extracted_pose)
+                    logger.info("Chat context [%s]: pose -> %r", target_name,
+                                extracted_pose[:80])
+                except PairPoseWithoutPartner as e:
+                    logger.info("Chat context [%s]: pose %r discarded — '%s' "
+                                "is a two-person pose", target_name,
+                                extracted_pose[:80], e)
 
             # Stats: Malus/Bonus dieser Szene auf status_effects anwenden
             stats_raw = data.get("stats")

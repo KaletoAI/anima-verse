@@ -238,22 +238,11 @@ async def lifespan(app: FastAPI):
     except Exception as _tre:
         logger.warning("terrain relief migration failed: %s", _tre)
 
-    # Prop markers name the SURFACE now; the seat drop travels as root_offset
-    # in the payload. Lifts the stored fractions by exactly that amount so
-    # nothing moves on screen (2026-07-28).
-    try:
-        from app.core.props import migrate_marker_surface_once
-        _pm = migrate_marker_surface_once()
-        if _pm:
-            logger.info("Prop markers migrated: %s", _pm)
-    except Exception as _pme:
-        logger.warning("prop marker migration failed: %s", _pme)
-
     # Markers speak PLACE TYPES (plan-posen-plaetze.md § 9): the clip kind
     # `animation` becomes the catalog group, every marker and placement gets
-    # a stable id. No reader keeps a fallback for the old key. AFTER the
-    # surface repair, which reads the kind; BEFORE the field migration, which
-    # copies the (already converted) record-level markers onto the variants.
+    # a stable id. No reader keeps a fallback for the old key. BEFORE the
+    # field migration, which copies the (already converted) record-level
+    # markers onto the variants.
     try:
         from app.core.places_migration import migrate_places_once
         _pl = migrate_places_once()
@@ -276,6 +265,23 @@ async def lifespan(app: FastAPI):
             logger.info("Prop fields moved onto the variants: %s", _pf)
     except Exception as _pfe:
         logger.warning("prop field migration failed: %s", _pfe)
+
+    # A place type names a BODY SHAPE now, not a piece of furniture
+    # (plan-platztypen.md E1): `bed` and `floor` merge into `lie`, `counter`
+    # becomes `stand`. The catalog no longer knows the old names, and
+    # scene_recipe skips a marker with an unknown group SILENTLY — an
+    # unmigrated marker would vanish from the scene and from the place
+    # inventory without an error. AFTER the field migration above, which is
+    # what puts the record-level markers onto the variants in the first
+    # place: renaming before it would leave half of them at the old address.
+    try:
+        from app.core.place_group_migration import migrate_place_groups_once
+        _pg = migrate_place_groups_once()
+        if _pg and any(_pg.values()):
+            logger.info("Place groups renamed to the body-shape vocabulary: "
+                        "%s", _pg)
+    except Exception as _pge:
+        logger.warning("place group migration failed: %s", _pge)
 
     # Picture areas, the door-leaf box and the orientation fix belong to the
     # MODEL FILE now (spec-bild-props-v2.md E1, ruling V0, 2026-08-28): every

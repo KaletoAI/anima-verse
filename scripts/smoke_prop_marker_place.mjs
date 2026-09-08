@@ -322,18 +322,27 @@ console.log('\nE  the figure meets the marker — ONE law for all three renderer
   // ONE source of that share, and the caller (server or prop tab) has already
   // turned it into metres before `figureRootY` sees it.
   //   seat   0.314 × 1.70 = 0.5338  ->  0.587 − 0.5338 =  0.0532
-  //   bed    0.631 × 1.70 = 1.0727  ->  0.587 − 1.0727 = −0.4857
-  //   floor  0.051 × 1.70 = 0.0867  ->  0.587 − 0.0867 =  0.5003
+  //   lie    0.051 × 1.70 = 0.0867  ->  0.587 − 0.0867 =  0.5003
+  //   ground 0                      ->  0.587
+  // ONE lying group since plan-platztypen.md. The old `bed` type carried
+  // 0.631 × 1.70 = 1.0727 and put the same figure at 0.587 − 1.0727 = −0.4857,
+  // i.e. 0.49 m UNDER the surface it was lying on — that value was calibrated
+  // for a Mixamo `sleep` clip which was deleted in c2eb166d, and it is the RED
+  // PROBE of this block: no lying place may produce it any more.
   const SURFACE = 0.587;
   const ROOT_OFFSET = {           // catalog `root_drop` × 1.70 m
     seat: 0.314 * FIGURE_HEIGHT_M,
-    bed: 0.631 * FIGURE_HEIGHT_M,
-    floor: 0.051 * FIGURE_HEIGHT_M,
+    lie: 0.051 * FIGURE_HEIGHT_M,
+    ground: 0,
     stand: 0,
   };
   near('seat root', figureRootY(SURFACE, ROOT_OFFSET.seat), 0.0532);
-  near('bed root', figureRootY(SURFACE, ROOT_OFFSET.bed), -0.4857);
-  near('floor root', figureRootY(SURFACE, ROOT_OFFSET.floor), 0.5003);
+  near('lie root', figureRootY(SURFACE, ROOT_OFFSET.lie), 0.5003);
+  near('ground root', figureRootY(SURFACE, ROOT_OFFSET.ground), SURFACE, 1e-9);
+  // The merge's correction, in one number: 1.0727 − 0.0867 = 0.9860 m. That
+  // is how far a lying figure used to be dragged under its own surface.
+  near('the retired bed drop lies 0.986 m lower',
+       figureRootY(SURFACE, ROOT_OFFSET.lie) - (-0.4857), 0.986);
   // A place type with no drop touches at its own root — a stander stands ON
   // the mark, and so does a marker whose group the caller does not know yet.
   near('a standing spot keeps the surface',
@@ -432,6 +441,15 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
   // figure or a missing clip is a SKIP with a named reason, not a failure; the
   // law itself is pinned above and needs no file at all.
   const FIG = join(ROOT, 'shared/models/figure/default.fbx');
+  // KNOWN DRIFT, not repaired here: the medians below were measured on the
+  // CMU library as it stood in 9c4df7cf. The library was re-imported since
+  // (a605c5a7 "re-import the CMU clip library with the fixed rest alignment",
+  // 7f8b113f) and the same files now measure idle 110.179, sit 65.961,
+  // laying 20.368 — so `laying` lands 0.094 m over the marked surface instead
+  // of 0.053 and this stage reports it. Re-recording the numbers would only
+  // bless whichever import is right; the open question is whether the new
+  // rest alignment is correct and `lie.root_drop` (0.051) has to be
+  // recalibrated with it. Everything above E5 is clip-free and unaffected.
   const SETS = [
     { name: 'free (CMU)', dir: join(ROOT, 'shared/models/clips'),
       files: { idle: 'idle.fbx', sit: 'sit.fbx',
@@ -440,9 +458,9 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
       drops: { idle: 0, sit: 0.40376, laying: 0.84033 },
       hips: { idle: 0.9801, sit: 0.04254, laying: 0.05307 } },
   ];
-  const GROUP_OF = { idle: 'stand', sit: 'seat', laying: 'floor' };
+  const GROUP_OF = { idle: 'stand', sit: 'seat', laying: 'lie' };
   const OFFSET = { stand: 0, seat: 0.314 * FIGURE_HEIGHT_M,
-                   floor: 0.051 * FIGURE_HEIGHT_M };
+                   lie: 0.051 * FIGURE_HEIGHT_M };
   const SURFACE = 0.587;          // the bench of E2, once more
 
   if (!existsSync(FIG)) {

@@ -41,11 +41,15 @@ type Axis = 'pose' | 'expression'
 type View = 'entries' | 'library' | 'catalog' | 'inbox'
 
 /** One place type: the vocabulary a marker speaks. `root_drop` is a FRACTION
- *  of the figure height, so it reads back as metres against a 1.70 m figure. */
+ *  of the figure height, so it reads back as metres against a 1.70 m figure.
+ *  `needs_place` false means the poses of this type need no marker at all —
+ *  they are offered "anywhere here", get no place assigned and their spot is
+ *  never named (standing and ground-level poses). */
 interface PlaceType {
   label: string
   root_drop: number
   default: string
+  needs_place: boolean
 }
 
 interface Entry {
@@ -74,6 +78,11 @@ interface CatalogData {
   kinds: string[]
   /** kinds that exist as a PAIR clip (two halves) — two-person poses */
   pair_kinds?: string[]
+  /** Per pair kind: how far apart the two figures stand at the anchor moment,
+   *  in metres, measured by the clip importer. A MARKER SLOT is 0.6 m wide,
+   *  so this says how many slots the two bodies span — but not how much floor
+   *  the pose sweeps, which is why it suggests and never decides. */
+  pair_spans?: Record<string, number>
   /** place types, keyed by group id (pose axis only) */
   groups?: Record<string, PlaceType>
   problems: string[]
@@ -86,6 +95,18 @@ interface Candidate {
   count: number
   first_seen: string
   last_seen: string
+}
+
+/** A marker slot, in metres — the default `spacing_m` of a place marker. */
+const SLOT_WIDTH_M = 0.6
+
+/** The slot count the clip's own measurement SUGGESTS: two bodies closer
+ *  together than one slot fit on one. Only a suggestion — a dance sweeps far
+ *  more floor than the distance between its dancers (salsa measures 0.39 m
+ *  and still wants two slots), so the author has the last word. */
+function suggestedPlaces(span: number | undefined): 1 | 2 | undefined {
+  if (typeof span !== 'number') return undefined
+  return span <= SLOT_WIDTH_M ? 1 : 2
 }
 
 const EMPTY: Entry = { key: '', prompt: '', synonyms: [], animation: '', solo: true,
@@ -262,6 +283,14 @@ export function PosesTab() {
       toast(t('A place type is required for poses'), 'error')
       return
     }
+    // A pair pose has no sensible default slot count. It used to fall back to
+    // 2 silently, which is how every pair pose in the catalog ended up
+    // claiming two slots — including the ones whose bodies lie 6 cm apart and
+    // fit on any single bed.
+    if (isPose && draft.solo === false && draft.places !== 1 && draft.places !== 2) {
+      toast(t('Choose how many marker slots this pair pose uses'), 'error')
+      return
+    }
     try {
       const body = {
         axis,
@@ -278,7 +307,7 @@ export function PosesTab() {
               // turns, and the server drops them again when solo is set.
               ...(draft.solo
                 ? {}
-                : { places: draft.places ?? 2, yaw_offset: draft.yaw_offset ?? 0 }),
+                : { places: draft.places, yaw_offset: draft.yaw_offset ?? 0 }),
             }
           : {}),
       }
@@ -401,7 +430,10 @@ export function PosesTab() {
       toast(t('This place type already exists'), 'error')
       return
     }
-    setGroupsDraft((prev) => ({ ...prev, [key]: { label: key, root_drop: 0, default: '' } }))
+    setGroupsDraft((prev) => ({
+      ...prev,
+      [key]: { label: key, root_drop: 0, default: '', needs_place: true },
+    }))
     setNewGroupKey('')
   }, [groupsDraft, newGroupKey, t, toast])
 
@@ -606,6 +638,25 @@ export function PosesTab() {
                               patchGroup(key, { root_drop: Number(e.target.value) })
                             }
                           />
+                        </Field>
+                        <Field
+                          label={t('Needs a marker')}
+                          hint={t('On: a pose of this type is only possible where a marker of it stands. Off: the poses are offered anywhere in the room, take no place and their spot is never named.')}
+                        >
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <input
+                              type="checkbox"
+                              checked={g.needs_place !== false}
+                              onChange={(e) =>
+                                patchGroup(key, { needs_place: e.target.checked })
+                              }
+                            />
+                            <span style={{ fontSize: '0.85em', opacity: 0.75 }}>
+                              {g.needs_place !== false
+                                ? t('a marker is required')
+                                : t('no marker needed')}
+                            </span>
+                          </label>
                         </Field>
                         <Field
                           label={t('Default pose')}
@@ -1002,9 +1053,16 @@ export function PosesTab() {
                       <div className="ga-form-row">
                         <Field
                           label={t('Places')}
-                          hint={t('How many slots of the anchor marker the pair uses: 2 = both on the bench, 1 = one on the bed edge, the other beside it')}
+                          hint={(() => {
+                            const span = data.pair_spans?.[draft.animation]
+                            if (typeof span !== 'number') {
+                              return t('How many slots of the anchor marker the pair uses. A slot is 0.60 m — one body width.')
+                            }
+                            return t('The clip measures {span} m between the two figures; a slot is 0.60 m. That is the space they STAND in, not the floor the pose sweeps — a dance needs two slots however close the dancers are.')
+                              .replace('{span}', span.toFixed(2))
+                          })()}
                         >
-                          <div style={{ display: 'flex', gap: 12 }}>
+                          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                             {([1, 2] as const).map((n) => (
                               <label
                                 key={n}
@@ -1013,12 +1071,22 @@ export function PosesTab() {
                                 <input
                                   type="radio"
                                   name="pose-places"
-                                  checked={(draft.places ?? 2) === n}
+                                  checked={draft.places === n}
                                   onChange={() => upd('places', n)}
                                 />
                                 <span>{n}</span>
+                                {suggestedPlaces(data.pair_spans?.[draft.animation]) === n && (
+                                  <span style={{ opacity: 0.6, fontSize: '0.8em' }}>
+                                    {t('(measured)')}
+                                  </span>
+                                )}
                               </label>
                             ))}
+                            {draft.places !== 1 && draft.places !== 2 && (
+                              <span style={{ color: '#d6b06a', fontSize: '0.82em' }}>
+                                {t('Please choose — a pair pose has no sensible default.')}
+                              </span>
+                            )}
                           </div>
                         </Field>
                         {/* The yaw offset is dialled UNDER THE PREVIEW, against

@@ -39,16 +39,21 @@ Idempotent through a ``world_kv`` marker, like every other one-time repair (the
 ``worlds/<world>/props/``, so the world that boots is the one that gets
 repaired.
 
-RUNS AFTER ``props.migrate_marker_surface_once``, which reads the pre-move
-shape (prop-level markers measured against prop-level dims). Both are one-time
-repairs; a world that still needs that one still has its props in the shape it
-expects, and once this migration has run there is nothing left there to find.
+It used to run after ``props.migrate_marker_surface_once``, the one-time lift
+that made a marker name the SURFACE instead of the figure's root. That repair
+was deleted in 2026-09 — it read a prop-level ``markers`` list against
+prop-level dims, a shape no world has carried since this very migration moved
+both onto the variants.
 
 The same per-prop transform is also the INGEST normaliser: a content pack
 authored before this change installs a whole ``props/<id>/`` directory, sidecar
 included, long after the boot migration ran. ``normalize_prop_sidecar`` puts
 one such sidecar into the current shape at import time — not a fallback reader,
-a write.
+a write. It carries the SECOND one-way marker transform as well: the place-type
+rename of plan-platztypen.md E1 (``bed``/``floor`` → ``lie``, ``counter`` →
+``stand``), applied after the field move so it reaches the markers at their new
+address. The boot pass deliberately does not — that rename is its own
+migration with its own flag (``place_group_migration``).
 """
 
 from typing import Any, Dict, List, Optional
@@ -144,14 +149,25 @@ def move_fields_to_variants(meta: Dict[str, Any]) -> bool:
     return True
 
 
-def normalize_prop_sidecar(prop_id: str) -> bool:
-    """Read ONE prop's sidecar, move the fields and write it back. True when
-    the file changed. Used by the boot pass and by the content-pack import,
-    which installs whole prop directories long after boot."""
-    from app.core.props import _write_sidecar, read_sidecar
-    meta = read_sidecar(prop_id)
-    if not meta or not move_fields_to_variants(meta):
-        return False
+def _rename_sidecar_place_groups(meta: Dict[str, Any]) -> int:
+    """The place types of every marker list in ``meta``, in the current
+    vocabulary. A pack exported before plan-platztypen.md E1 carries ``bed`` /
+    ``floor`` / ``counter`` markers, and the boot migration that renames them
+    ran long before this import — an unrenamed marker is dropped without a
+    word by ``scene_recipe``, i.e. the piece arrives without its seat."""
+    from app.core.place_group_migration import rename_place_groups
+    from app.core.props import MARKERS_KEY, VARIANTS_KEY
+    n = rename_place_groups(meta.get(MARKERS_KEY))
+    for entry in meta.get(VARIANTS_KEY) or []:
+        if isinstance(entry, dict):
+            n += rename_place_groups(entry.get(MARKERS_KEY))
+    return n
+
+
+def _write_normalized(prop_id: str, meta: Dict[str, Any]) -> bool:
+    """Write the transformed sidecar back; False (with a warning) when the
+    file resists."""
+    from app.core.props import _write_sidecar
     try:
         _write_sidecar(prop_id, meta)
     except (OSError, ValueError) as e:
@@ -161,14 +177,43 @@ def normalize_prop_sidecar(prop_id: str) -> bool:
     return True
 
 
+def normalize_prop_sidecar(prop_id: str) -> bool:
+    """Read ONE prop's sidecar, move the fields, bring the marker place types
+    into the current vocabulary and write it back. True when the file changed.
+
+    The INGEST normaliser: the content-pack import installs whole prop
+    directories long after both boot migrations ran, so both one-way
+    transforms are applied here, in the same order boot applies them — the
+    field move puts the record-level markers onto the variants, the place-type
+    rename then reaches them at their new address.
+    """
+    from app.core.props import read_sidecar
+    meta = read_sidecar(prop_id)
+    if not meta:
+        return False
+    moved = move_fields_to_variants(meta)
+    renamed = _rename_sidecar_place_groups(meta)
+    if not moved and not renamed:
+        return False
+    return _write_normalized(prop_id, meta)
+
+
 def move_prop_fields() -> Dict[str, int]:
     """Walk every prop of THIS world and move the five fields. Returns
-    ``{"props": <seen>, "moved": <changed>}``."""
-    from app.core.props import _all_prop_ids
+    ``{"props": <seen>, "moved": <changed>}``.
+
+    Only the field move, not the place-type rename: that one is its own boot
+    migration with its own flag and its own log line, and counting its
+    rewrites here would report field moves that never happened.
+    """
+    from app.core.props import _all_prop_ids, read_sidecar
     seen = moved = 0
     for pid in _all_prop_ids():
         seen += 1
-        if normalize_prop_sidecar(pid):
+        meta = read_sidecar(pid)
+        if not meta or not move_fields_to_variants(meta):
+            continue
+        if _write_normalized(pid, meta):
             moved += 1
     return {"props": seen, "moved": moved}
 

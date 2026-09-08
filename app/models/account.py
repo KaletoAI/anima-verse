@@ -229,15 +229,28 @@ def _has_avatar_only_presence(character_name: str) -> bool:
 
 
 def apply_presence_transition(old_avatar: str, new_avatar: str) -> None:
-    """Avatar-only-Presence-Uebergang bei Avatar-Wechsel/-Freigabe.
+    """Avatar-only presence transition on an avatar switch/release.
 
-    - Wird der alte Avatar von niemandem mehr gesteuert und hat den Flag,
-      verschwindet er von der Karte (Offmap, letzter Ort gemerkt).
-    - Der neue Avatar mit Flag taucht am letzten Ort / home / Default auf.
-    Auf get_all_avatars() angewiesen — daher NACH dem Settings-Update aufrufen.
+    - When nobody controls the old avatar any more and it carries the flag,
+      it disappears from the map (offmap, its last place remembered).
+    - A new avatar with the flag appears at its last place / home / default.
+    Depends on get_all_avatars() — so call it AFTER the settings update.
     """
     old_avatar = (old_avatar or "").strip()
     new_avatar = (new_avatar or "").strip()
+    if old_avatar and old_avatar != new_avatar:
+        # An open pair proposal addressed to (or made by) the released
+        # character is now addressed to nobody: the player who would have
+        # answered it in the UI is gone, and as an NPC it was never bumped
+        # to answer on its own. Drop the question instead of leaving it to
+        # rot until its window expires.
+        try:
+            from app.core.interaction_engine import clear_invites_for
+            clear_invites_for(old_avatar)
+        except Exception:
+            from app.core.log import get_logger
+            get_logger("account").debug(
+                "clearing interaction invites of %s failed", old_avatar)
     try:
         if old_avatar and old_avatar != new_avatar and _has_avatar_only_presence(old_avatar):
             if old_avatar not in get_all_avatars():

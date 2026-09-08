@@ -17,8 +17,11 @@ placeholders:
   existing: List of {name, count, mount} already placed in the room
   openings: List of {type, count} — the room's doors, windows and passages (may be empty)
   marker_groups: List of {key, label} — the PLACE TYPES of the pose catalog a marker may
-                 name (seat, bed, floor, counter, stand, …). The validator accepts only
-                 these keys (furnish_needs.valid_marker).
+                 name (seat, lie, ground, stand, …). A place type is a BODY SHAPE, not a
+                 kind of furniture: one lies on a mattress, on a couch and on the floor,
+                 and all three are `lie`. The list is rendered below from the catalog, so
+                 it is the catalog and not this line that decides; the validator accepts
+                 only those keys (furnish_needs.valid_marker).
   key_area_kinds: List of {key, meaning} — the fillable panels a piece may ask for
                   (picture, glass)
   surfaces_missing: True when the room has neither a floor nor a wall texture kind (bool)
@@ -45,7 +48,7 @@ Per need:
 - "width_m", "depth_m", "height_m": realistic real-world size in metres, each between 0.05 and 5.
 - "style": 2 to 4 words, taken from the room's style hint and description ("rustic oak medieval").
 - "description": the GENERATION SUBJECT this object's image is rendered from — materials, colours, shape, wear. Describe the ISOLATED object only: never a scene, never a room, never people, never other furniture.
-- "marker": the PLACE the piece offers a character, or null. Only for pieces a character sits on, lies on, stands at or works at. {"group": one of the allowed place types, "at": [x, y, z] fractions of the object's bounding box (x = along width, y = along height, z = along depth); a chair seat is roughly [0.5, 0.45, 0.5], a bed's lying surface roughly [0.5, 0.55, 0.5]}.
+- "marker": the PLACE the piece offers a character, or null. Only for pieces a character sits on, lies on, stands at or works at. {"group": one of the allowed place types (the BODY SHAPE the piece affords — a bed and a couch both offer "lie"), "at": [x, y, z] fractions of the object's bounding box (x = along width, y = along height, z = along depth); a chair seat is roughly [0.5, 0.45, 0.5], a lying surface roughly [0.5, 0.55, 0.5]}.
 - "key_areas": the fillable panels this piece needs — ["picture"] for a painting, poster or screen, ["glass"] for a mirror or a glazed pane, [] for everything else.
 - "from_description": true when the room description names this very object, false otherwise.
 

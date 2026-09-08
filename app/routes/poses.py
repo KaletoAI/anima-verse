@@ -166,9 +166,21 @@ def _group(raw: Any) -> str:
 
 
 def _places(raw: Any) -> int:
-    """Marker slots a PAIR pose consumes — 1 or 2, nothing else."""
+    """Marker slots a PAIR pose consumes — 1 or 2, and it must be SAID.
+
+    There is no sensible default: two bodies 6 cm apart fit on one slot, two
+    dancers sweeping the floor need two, and the difference is not something
+    the server can guess. A silent fallback to 2 is how every pair pose in the
+    catalog came to claim two slots, which made a bed marker of capacity 1
+    refuse a pose whose figures lie 19 cm apart. The editor shows the clip's
+    measured distance beside the field so the choice is informed.
+    """
+    if raw is None or raw == "":
+        raise HTTPException(
+            status_code=400,
+            detail="places is required for a pair pose (1 or 2)")
     try:
-        return 2 if int(raw or 2) >= 2 else 1
+        return 2 if int(raw) >= 2 else 1
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="places must be 1 or 2")
 
@@ -215,8 +227,13 @@ def _require_free_aliases(axis: str, aliases: List[str], exclude_key: str = "") 
 
 def _normalize_group(raw: Any) -> Dict[str, Any]:
     """One place type as it is stored: a label, the root drop as a fraction of
-    the figure height (clamped to 0..1) and the pose a click on such a marker
-    sets."""
+    the figure height (clamped to 0..1), the pose a click on such a marker
+    sets, and whether the group's poses need a marker at all.
+
+    ``needs_place`` defaults to True — a place type normally demands a
+    marker; only a body shape one can strike anywhere (standing, kneeling)
+    says otherwise.
+    """
     raw = raw if isinstance(raw, dict) else {}
     try:
         drop = round(max(0.0, min(1.0, float(raw.get("root_drop") or 0.0))), 3)
@@ -224,7 +241,8 @@ def _normalize_group(raw: Any) -> Dict[str, Any]:
         drop = 0.0
     return {"label": str(raw.get("label") or "").strip(),
             "root_drop": drop,
-            "default": str(raw.get("default") or "").strip().lower()}
+            "default": str(raw.get("default") or "").strip().lower(),
+            "needs_place": bool(raw.get("needs_place", True))}
 
 
 def _groups_problems(groups: Dict[str, Any], entries: Dict[str, Any]) -> List[str]:
@@ -234,6 +252,9 @@ def _groups_problems(groups: Dict[str, Any], entries: Dict[str, Any]) -> List[st
     A group with NO poses may carry an empty default — a place type has to
     exist before any pose can name it (``_group`` rejects an unknown one), so
     demanding a default from the start would make the block unable to grow.
+
+    A group with ``needs_place: false`` is checked the same way: its poses
+    still need a default, they just never get a marker.
     """
     problems: List[str] = []
     for key, entry in entries.items():
@@ -320,13 +341,27 @@ def list_entries(axis: str = Query("pose"),
             row["yaw_offset"] = pose_catalog.pose_yaw_offset(key)
         out.append(row)
     out.sort(key=lambda p: p["key"])
-    from app.core.animation_clips import pair_kinds
+    from app.core.animation_clips import clip_meta, pair_kinds
+    _pairs = pair_kinds() if axis == "pose" else []
+    # How far apart the two figures stand at the anchor moment, per pair kind
+    # — the clip's own measurement (`geometry.root_distance_m`). The editor
+    # shows it beside the slot count so nobody has to guess how much room a
+    # pair takes: 0.06 m is one body on top of another, 0.63 m is arm's
+    # length. It is a MEASUREMENT, not the answer — a dance sweeps far more
+    # floor than the distance between its dancers.
+    _spans: Dict[str, float] = {}
+    for _k in _pairs:
+        _g = (clip_meta(_k) or {}).get("geometry") or {}
+        _d = _g.get("root_distance_m")
+        if isinstance(_d, (int, float)):
+            _spans[_k] = round(float(_d), 3)
     return {
         "entries": out,
         "kinds": epm.available_animation_kinds() if axis == "pose" else [],
         # Kinds that exist as a PAIR clip (two halves, § A8a): such a pose is
         # a two-person one and has to carry solo: false.
-        "pair_kinds": pair_kinds() if axis == "pose" else [],
+        "pair_kinds": _pairs,
+        "pair_spans": _spans,
         "groups": pose_catalog.get_groups() if axis == "pose" else {},
         "problems": pose_catalog.validate_catalog(axis),
     }

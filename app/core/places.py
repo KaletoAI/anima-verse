@@ -1,5 +1,5 @@
-"""Places — the seats, beds and standing spots of a room, and who holds them
-(plan-posen-plaetze.md § 3.6, § 4).
+"""Places — the seats, lying places and standing spots of a room, and who
+holds them (plan-posen-plaetze.md § 3.6, § 4; plan-platztypen.md).
 
 A place is a scene marker (room or prop) finished in world metres by
 ``scene_recipe`` — the SAME geometry every renderer draws, so the server
@@ -39,7 +39,7 @@ an unplaced location — no pin, no world frame — has no places at all.
 """
 import math
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
@@ -284,8 +284,8 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
     the profile and put the character on the slot; returns the profile field
     ``{"id", "slot", "room_id"}``. None when the room has no free place of
     that group (the pose stays, the client falls back) — and a place held
-    from before is released then. A pose without a group (a standing pose)
-    releases the place as well. ``prefer`` names the one place that will do;
+    from before is released then. A pose with no group at all (an ungrouped
+    catalog entry) releases the place as well. ``prefer`` names the one place that will do;
     :class:`PlaceUnavailable` when it has no free slot.
 
     A PAIR pose is seated by :func:`assign_pair` only (one place for two):
@@ -409,10 +409,11 @@ def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place
     once per place) would evict both partners. None when the
     actor stands in no location/room (outdoors: the caller anchors at the
     midpoint, whatever the group) or when no place of the group fits and
-    the group is ``stand`` (a standing pair meets halfway); any other
-    group without a fitting place raises :class:`PlaceUnavailable` — a
-    seated pair without a seat is no pair."""
-    from app.core.pose_catalog import group_of, pose_places
+    the group needs none (``needs_place: false`` — a standing pair meets
+    halfway); any group that DOES need a marker raises
+    :class:`PlaceUnavailable` when none fits — a seated pair without a seat
+    is no pair."""
+    from app.core.pose_catalog import group_of, needs_place, pose_places
     from app.models.character import (get_character_pos, get_character_profile,
                                       save_character_profile)
     group = group_of(pose_key)
@@ -431,7 +432,7 @@ def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place
             if not _has_pair(others) and len(free_slots(p, others)) >= need:
                 fitting.append(p)
         if not fitting:
-            if group == "stand":
+            if not needs_place(group):
                 return None
             raise PlaceUnavailable(f"no free {group} for two")
         pa, pb = get_character_pos(actor), get_character_pos(partner)
@@ -479,13 +480,18 @@ def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:
 
 # ── what the LLM is told ────────────────────────────────────────────────
 _OFFER_MAX_LINES = 12
-_ANYWHERE_MAX = 8             # the stand group's default + 7 more on the "Anywhere" line
+_ANYWHERE_MAX = 8             # poses on the "Anywhere here" line, defaults first
 #: The preposition a prompt puts before a held place, per group — a group
-#: nobody listed here (an admin-made place type) reads "at the".
-_PREPOSITION = {"seat": "on", "bed": "in", "floor": "on", "counter": "at"}
+#: nobody listed here (an admin-made place type) reads "at the". What is
+#: named is the SURFACE, not the piece of furniture, so all of them read
+#: "on": "on the couch", "on the bed", "on the floor". A group with
+#: ``needs_place: false`` never appears here — its place is never named
+#: (:func:`_named_place`).
+_PREPOSITION = {"seat": "on", "lie": "on", "ground": "on"}
 
 
-def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
+def _group_lines(location_id: str, room_id: str,
+                 viewer: str) -> Tuple[List[str], Set[str]]:
     """One line per place — the markers of one prop collapse into a single
     line per group (a "2× Chair" is one row), room markers stay apart —
     busy ones by the names holding them, free ones with the poses of their
@@ -495,7 +501,12 @@ def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
     row's sum. A place that already holds a pair takes no second one (one
     pair per place), so it does not count towards that gate whatever is
     left on it. ``viewer`` never counts as an occupant: the block is written
-    for them."""
+    for them.
+
+    Returns the lines AND the set of pose keys they already offered, so the
+    "Anywhere here" line below can leave them out instead of naming the same
+    pose twice. A row with no free slot offers nothing and therefore covers
+    nothing — a standing spot that is taken must not stop anyone standing."""
     from app.core.pose_catalog import get_catalog, poses_in_group
     occ = occupancy(location_id, room_id, exclude=viewer)
     cat = get_catalog("pose")
@@ -512,6 +523,7 @@ def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
         row["cap"] += p["capacity"]
         row["who"] += [n for n, _ in taken]
     lines: List[str] = []
+    covered: Set[str] = set()
     for row in rows.values():
         head = f"{row['count']}× {row['label']}" if row["count"] > 1 else row["label"]
         if row["free"] == 0:
@@ -524,10 +536,13 @@ def _group_lines(location_id: str, room_id: str, viewer: str) -> List[str]:
                 poses.append(k)
             elif row["max_free"] >= e["places"]:
                 poses.append(f"{k} (with partner)")
+            else:
+                continue
+            covered.add(k)
         state = ("free" if not row["who"]
                  else f"{row['free']} of {row['cap']} free, {', '.join(row['who'])} here")
         lines.append(f"- {head} ({state}): {', '.join(poses)}")
-    return lines
+    return lines, covered
 
 
 def room_offer(name: str, location_id: str, room_id: str) -> str:
@@ -536,21 +551,34 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
 
         Places here:
         - Seat (occupied by Ann)
-        - Bed (free): sleeping
-        Anywhere here: standing
+        - Lying place (free): lying, sleeping
+        Anywhere here: standing, kneeling
         Also typical here: reading nooks
 
-    Markers first (capped at ``_OFFER_MAX_LINES`` rows), then the poses
-    that need no place at all — the group's default first, then up to
+    Markers first (capped at ``_OFFER_MAX_LINES`` rows), then the poses that
+    need no place at all — every pose of every group with
+    ``needs_place: false``, each group's default first, then up to
     ``_ANYWHERE_MAX - 1`` more in catalog order and ``…and N more`` when
-    the stand group is bigger (it holds dozens of poses; the LLM may use any
-    catalog key, the line is a reminder, not the menu) — then the room's
-    free-text ``activity_hint`` as the tail. A room without markers still
-    gets the last two lines; nothing at all yields ``""`` so a template can
-    ``{% if %}`` it away."""
-    from app.core.pose_catalog import get_catalog, poses_in_group
+    there are more (they hold dozens of poses; the LLM may use any catalog
+    key, the line is a reminder, not the menu) — then the room's free-text
+    ``activity_hint`` as the tail.
+
+    A pose a MARKER already offers is left out of "Anywhere here": a room
+    with a standing spot used to repeat all 33 standing poses, once on the
+    marker line and once here, which is 33 names of prompt for no new
+    information. The marker line wins because it says something the other
+    does not — WHERE. When every marker of the group is taken it offers
+    nothing, so its poses come back here: a full room must not stop anyone
+    standing.
+
+    A room without markers still gets the last two lines; nothing at all
+    yields ``""`` so a template can ``{% if %}`` it away."""
+    from app.core.pose_catalog import get_catalog, poses_without_place
     from app.models.world import get_room_activity_hint
-    lines = _group_lines(location_id, room_id, name) if location_id and room_id else []
+    if location_id and room_id:
+        lines, covered = _group_lines(location_id, room_id, name)
+    else:
+        lines, covered = [], set()
     out: List[str] = []
     if lines:
         out.append("Places here:")
@@ -558,7 +586,8 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
         if len(lines) > _OFFER_MAX_LINES:
             out.append(f"…and {len(lines) - _OFFER_MAX_LINES} more")
     cat = get_catalog("pose")
-    anywhere = [k if cat[k]["solo"] else f"{k} (with partner)" for k in poses_in_group("stand")]
+    anywhere = [k if cat[k]["solo"] else f"{k} (with partner)"
+                for k in poses_without_place() if k not in covered]
     if anywhere:
         line = "Anywhere here: " + ", ".join(anywhere[:_ANYWHERE_MAX])
         if len(anywhere) > _ANYWHERE_MAX:
@@ -609,25 +638,33 @@ def room_offer_short(location_id: str, room_id: str,
 
 
 def _named_place(name: str) -> Optional[Place]:
-    """The place ``name`` holds when it is worth naming — a standing spot
-    is not: "standing, on the standing spot" tells a prompt nothing."""
+    """The place ``name`` holds when it is worth naming — a place of a group
+    that needs none is not: "standing, on the standing spot" tells a prompt
+    nothing. The rule hangs on ``needs_place``, not on a group name."""
+    from app.core.pose_catalog import needs_place
     p = place_of(name)
-    return p if p and p["group"] != "stand" else None
+    return p if p and needs_place(p["group"]) else None
 
 
 def place_label(name: str) -> str:
-    """Label of the place ``name`` holds ("Seat", "Bed", a prop's name) or
-    ``""`` (nothing held, or a standing spot)."""
+    """Label of the place ``name`` holds ("Seat", a prop's name) or ``""``
+    (nothing held, or a place of a group that needs none)."""
     p = _named_place(name)
     return p["label"] if p else ""
 
 
+def phrase_for(place: Place) -> str:
+    """A place ALREADY in hand as a prompt reads it — ``"on the sofa"``,
+    ``"on the bed"`` (:data:`_PREPOSITION` per group). For a caller that
+    just read the place itself (``/play/others``) and would otherwise pay
+    for a second roster pass through :func:`place_phrase`."""
+    return f"{_PREPOSITION.get(place['group'], 'at')} the {place['label'].lower()}"
+
+
 def place_phrase(name: str) -> str:
-    """The held place as a prompt reads it — ``"on the sofa"``, ``"in the
-    bed"``, ``"at the counter"`` (:data:`_PREPOSITION` per group) — or
-    ``""`` like :func:`place_label`. ONE phrase for the 2D scene prompt, the
-    presence line and the player's Others panel."""
+    """The held place as a prompt reads it — ``"on the sofa"``, ``"on the
+    bed"`` (:func:`phrase_for`) — or ``""`` like :func:`place_label`. ONE
+    phrase for the 2D scene prompt, the presence line and the player's
+    Others panel."""
     p = _named_place(name)
-    if not p:
-        return ""
-    return f"{_PREPOSITION.get(p['group'], 'at')} the {p['label'].lower()}"
+    return phrase_for(p) if p else ""

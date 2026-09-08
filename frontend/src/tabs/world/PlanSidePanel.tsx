@@ -310,7 +310,7 @@ export function PlanSidePanel({
               style={{ flex: 1, minWidth: 0 }}
               value={markerGroup}
               onChange={(e) => onMarkerGroup(e.target.value)}
-              title={t('Place type the 🎯 tool drops — a pose-catalog group (seat, bed, floor, …); the server seats characters on it.')}
+              title={t('Place type the 🎯 tool drops — a group of the pose catalog; the server seats characters on it.')}
             >
               {groupKeys(groups).map((k) => (
                 <option key={k} value={k}>{groupLabel(groups, k)}</option>

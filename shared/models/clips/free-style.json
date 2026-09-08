@@ -1,0 +1,27 @@
+{
+ "kind": "free-style",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 120.0,
+ "frames": 458,
+ "duration_s": 15.267,
+ "loop": false,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": -1.79,
+  "in_place": true,
+  "hips_scale": [
+   1.1139
+  ],
+  "rig_floor_shift_cm": -18.2,
+  "rig_floor_min_cm": -16.93
+ },
+ "source": {
+  "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
+  "takes": [
+   "126_11"
+  ],
+  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+ }
+}

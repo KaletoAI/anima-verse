@@ -6,7 +6,7 @@ as ``GET /play/locations/{id}/scene`` does (same input loading) and diffs the
 top-level keys against the contract § B1 — no missing and no surplus key. It
 also spot-checks the invariants that cannot be seen in a fixture: every
 primitive in world metres, every model spec complete for the ONE place()
-routine, every marker/exit resolved.
+routine, every marker/doorway resolved.
 
 Usage:  ./.venv/bin/python scripts/smoke_scene_demo.py [world_dir]
         (default world_dir = worlds/demo)
@@ -16,12 +16,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Contract § B1 — the complete top-level key list of the scene payload.
+# Contract § B1 — the top-level key list of the scene payload, read off the
+# spec block in docs/schnittstellen-3d.md § B1 (not off a run): the eighteen
+# keys the composer ALWAYS answers with. ``exits`` used to be here and is
+# gone — a location's ways out are ``doorways[]`` (the finished thresholds of
+# plan-betreten-und-tueren.md § 4.1) and ``boundary_openings[]`` (§ B1 Nr. 13)
+# now, and a "no missing key" check for a key nobody writes is a check that
+# can only fail.
 CONTRACT_KEYS = {
-    "signature", "rooms", "k", "storey_m", "levels", "style",
-    "plates", "walls", "extras", "models",
-    "figures", "markers", "exits", "outdoor_rooms",
+    "signature", "rooms", "boundary", "extent_m", "k", "storey_m", "levels",
+    "style", "plates", "floor_plan", "walls", "extras", "stairs", "models",
+    "figures", "markers", "doorways", "outdoor_rooms", "problems",
 }
+# Present only when the data calls for them: a location without a drawn
+# boundary opening ships no ``boundary_openings``, and only an area location
+# in detail mode ships ``area_detail``.
+OPTIONAL_KEYS = {"boundary_openings", "area_detail"}
 SPEC_KEYS = {"role", "id", "variants", "level", "fix_euler", "yaw_deg",
              "max_m", "measure", "anchor", "bottom_y"}
 
@@ -69,8 +79,9 @@ def main() -> int:
     print("\n[1] payload shape vs. contract § B1")
     check("no missing top-level key", not (CONTRACT_KEYS - set(sc)),
           str(sorted(CONTRACT_KEYS - set(sc))))
-    check("no surplus top-level key", not (set(sc) - CONTRACT_KEYS),
-          str(sorted(set(sc) - CONTRACT_KEYS)))
+    check("no surplus top-level key",
+          not (set(sc) - CONTRACT_KEYS - OPTIONAL_KEYS),
+          str(sorted(set(sc) - CONTRACT_KEYS - OPTIONAL_KEYS)))
     check("signature is an md5", len(sc["signature"]) == 32)
     check("figures carry base height + the 0.12 constant",
           set(sc["figures"]) == {"base_height_m_world", "stand_clearance"}
@@ -79,7 +90,7 @@ def main() -> int:
     print("\n[2] primitives")
     print(f"  {len(sc['plates'])} plates, {len(sc['walls'])} walls, "
           f"{len(sc['extras'])} extras, {len(sc['models'])} models, "
-          f"{len(sc['markers'])} markers, {len(sc['exits'])} exits")
+          f"{len(sc['markers'])} markers, {len(sc['doorways'])} doorways")
     check("plates carry level/outline/top_y/thickness",
           all({"level", "outline", "top_y", "thickness", "opacity_role"}
               <= set(p) for p in sc["plates"]))
@@ -87,10 +98,17 @@ def main() -> int:
           all({"level", "from", "to", "base_y", "height", "thickness",
                "opacity_role", "outward_normal"} <= set(w)
               for w in sc["walls"]))
+    # The scene frame is the LOCAL frame around the location's anchor pin and
+    # ``extent_m`` is the width of its bounding box (§ B1 Nr. 2), so half of it
+    # is the furthest any primitive of this location may reach from the origin.
+    # The old bound here was the flat 5.0 of the 10 m grid tile — the tile is
+    # gone since the seamless metre world (E4: extent_m = plan_width_m, k = 1),
+    # and a location wider than 10 m failed a rule that no longer exists.
+    limit = float(sc["extent_m"]) / 2.0
     coords = [c for w in sc["walls"] for c in (w["from"] + w["to"])]
-    check("every wall coordinate is inside the 10 m tile",
-          all(abs(c) <= 5.0 for c in coords),
-          f"max |c| = {max((abs(c) for c in coords), default=0)}")
+    check("every wall coordinate is inside the location's own extent",
+          all(abs(c) <= limit + 1e-6 for c in coords),
+          f"max |c| = {max((abs(c) for c in coords), default=0)} of {limit}")
     check("no wall is taller than a storey",
           all(w["height"] <= sc["storey_m"] + 1e-6 for w in sc["walls"]))
     check("opacity roles are ground/upper only",
@@ -120,8 +138,9 @@ def main() -> int:
                "slots", "y_world", "root_offset", "source"}
               <= set(m) and len(m["slots"]) == m["capacity"]
               for m in sc["markers"]))
-    check("exits are resolved to world coordinates",
-          all({"room_id", "at_world"} <= set(e) for e in sc["exits"]))
+    check("doorways are resolved to world coordinates",
+          all({"level", "at_world", "along", "type", "width_m", "height_m",
+               "base_y", "rooms", "outside"} <= set(d) for d in sc["doorways"]))
 
     print("\n[4] stability")
     again = compose_scene(best, plan_width_m=plan_width_m,

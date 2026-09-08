@@ -1,30 +1,29 @@
 {
-  "_comment": "Curated pose catalog - the ONLY render/cache key axis for poses. Every entry MUST carry an animation kind. Grows only via the candidate approval flow in the Poses admin tab. `groups` are the PLACE TYPES a marker names; every entry belongs to exactly one.",
+  "_comment": "Curated pose catalog - the ONLY render/cache key axis for poses. Every entry MUST carry an animation kind. Grows only via the candidate approval flow in the Poses admin tab. `groups` are the PLACE TYPES a marker names - a BODY SHAPE, not a kind of furniture (one lies on the floor, on a couch and in a bed) - and every entry belongs to exactly one. `needs_place: false` means poses of that group need no marker at all: they are offered \"anywhere here\", get no place assigned and their spot is never named. `root_drop` is a fraction of the figure height; see pose_catalog._load_groups for how the numbers were derived.",
   "groups": {
-    "seat": {
-      "label": "Seat",
-      "root_drop": 0.314,
-      "default": "sitting"
-    },
-    "bed": {
-      "label": "Bed",
-      "root_drop": 0.631,
-      "default": "sleeping"
-    },
-    "floor": {
-      "label": "Floor",
-      "root_drop": 0.051,
-      "default": "lying"
-    },
-    "counter": {
-      "label": "Counter",
-      "root_drop": 0,
-      "default": "working"
-    },
     "stand": {
       "label": "Standing spot",
       "root_drop": 0,
-      "default": "standing"
+      "default": "standing",
+      "needs_place": false
+    },
+    "seat": {
+      "label": "Seat",
+      "root_drop": 0.314,
+      "default": "sitting",
+      "needs_place": true
+    },
+    "ground": {
+      "label": "Ground",
+      "root_drop": 0,
+      "default": "kneeling",
+      "needs_place": false
+    },
+    "lie": {
+      "label": "Lying place",
+      "root_drop": 0.051,
+      "default": "lying",
+      "needs_place": true
     }
   },
   "entries": {
@@ -32,18 +31,34 @@
       "prompt": "standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up",
       "synonyms": [
         "stehen",
-        "stehend"
+        "stehend",
+        "steht",
+        "stehen bleiben",
+        "am fenster stehen",
+        "vor dem fenster stehen",
+        "an der tür stehen",
+        "herumstehen"
       ],
       "_default": true,
       "animation": "idle",
-      "group": "stand"
+      "group": "stand",
+      "solo": true
     },
     "sitting": {
       "prompt": "sitting comfortably in a chair, legs crossed, hands resting on lap, relaxed shoulders",
       "synonyms": [
         "sitzen",
         "sitzend",
-        "sauna"
+        "sauna",
+        "sitzt",
+        "sich setzen",
+        "hinsetzen",
+        "platz nehmen",
+        "auf dem stuhl sitzen",
+        "auf der couch sitzen",
+        "auf dem sofa sitzen",
+        "auf der bank sitzen",
+        "am tisch sitzen"
       ],
       "animation": "sit",
       "group": "seat",
@@ -53,7 +68,12 @@
       "prompt": "sitting with book in hands, head tilted slightly down, focused posture, legs tucked",
       "synonyms": [
         "lesen",
-        "lesend"
+        "lesend",
+        "liest",
+        "ein buch lesen",
+        "liest ein buch",
+        "zeitung lesen",
+        "in einem buch blättern"
       ],
       "animation": "sit",
       "group": "seat"
@@ -63,8 +83,13 @@
       "synonyms": [
         "kochen",
         "kochend",
-        "kaffee kochen",
-        "kaffee machen"
+        "kocht",
+        "kocht das abendessen",
+        "abendessen kochen",
+        "essen kochen",
+        "das essen zubereiten",
+        "am herd stehen",
+        "mittagessen kochen"
       ],
       "animation": "idle",
       "group": "stand"
@@ -74,10 +99,15 @@
       "synonyms": [
         "schlafen",
         "schlafend",
-        "pennen"
+        "pennen",
+        "schläft",
+        "im bett schlafen",
+        "schlafen gehen",
+        "ein nickerchen machen",
+        "eingeschlafen"
       ],
       "animation": "laying",
-      "group": "bed",
+      "group": "lie",
       "solo": true
     },
     "walking": {
@@ -86,7 +116,11 @@
         "gehen",
         "gehend",
         "spazieren",
-        "spaziergang"
+        "spaziergang",
+        "geht",
+        "spazieren gehen",
+        "einen spaziergang machen",
+        "zu fuß gehen"
       ],
       "animation": "walk",
       "solo": true,
@@ -99,16 +133,25 @@
         "laufend",
         "rennen",
         "joggen",
-        "laufband"
+        "laufband",
+        "rennt",
+        "läuft",
+        "joggt",
+        "sprinten",
+        "joggen gehen"
       ],
       "animation": "run",
-      "group": "stand"
+      "group": "stand",
+      "solo": true
     },
     "dancing": {
       "prompt": "graceful dance pose, one arm raised, body turned, weight on one foot",
       "synonyms": [
         "tanzen",
-        "tanzend"
+        "tanzend",
+        "tanzt",
+        "allein tanzen",
+        "zur musik tanzen"
       ],
       "animation": "dance",
       "group": "stand"
@@ -117,7 +160,13 @@
       "prompt": "sitting at table, fork in hand, leaning slightly toward plate, napkin on lap",
       "synonyms": [
         "essen",
-        "essend"
+        "essend",
+        "isst",
+        "zu mittag essen",
+        "zu abend essen",
+        "frühstücken",
+        "eine mahlzeit essen",
+        "am tisch essen"
       ],
       "animation": "sit",
       "group": "seat"
@@ -137,9 +186,15 @@
         "spielt mit dem bieretikett",
         "opening a bottle of beer",
         "have a cup of coffee",
-        "ordering drinks"
+        "ordering drinks",
+        "trinkt",
+        "etwas trinken",
+        "einen kaffee trinken",
+        "ein bier trinken",
+        "ein glas wein trinken",
+        "einen schluck nehmen"
       ],
-      "animation": "idle",
+      "animation": "drinking",
       "group": "stand"
     },
     "working": {
@@ -149,10 +204,15 @@
         "arbeitend",
         "papiere sortieren",
         "sorting papers",
-        "inhaltserstellung"
+        "inhaltserstellung",
+        "arbeitet",
+        "am schreibtisch arbeiten",
+        "am computer arbeiten",
+        "büroarbeit",
+        "akten bearbeiten"
       ],
       "animation": "sit",
-      "group": "counter"
+      "group": "seat"
     },
     "exercising": {
       "prompt": "athletic stance, arms flexed, feet shoulder-width apart, dynamic energy",
@@ -163,7 +223,12 @@
         "sport machen",
         "gewichte heben",
         "rowing on a rowing machine",
-        "handtraining"
+        "handtraining",
+        "trainiert",
+        "workout",
+        "übungen machen",
+        "sich aufwärmen",
+        "fitness"
       ],
       "animation": "idle",
       "group": "stand"
@@ -172,17 +237,26 @@
       "prompt": "cross-legged on floor, hands on knees palms up, straight back, eyes closed",
       "synonyms": [
         "meditieren",
-        "meditierend"
+        "meditierend",
+        "meditiert",
+        "im schneidersitz sitzen",
+        "auf dem boden sitzen",
+        "am boden sitzen",
+        "zur ruhe kommen"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "sit-ground",
+      "group": "ground"
     },
     "painting": {
       "prompt": "standing at easel, brush in one hand, palette in other, stepping back to look",
       "synonyms": [
         "malen",
         "malend",
-        "zeichnen"
+        "zeichnen",
+        "malt",
+        "zeichnet",
+        "ein bild malen",
+        "skizzieren"
       ],
       "animation": "idle",
       "group": "stand"
@@ -193,29 +267,48 @@
         "spielen",
         "spielend",
         "zocken",
-        "gamen"
+        "gamen",
+        "zockt",
+        "videospiele spielen",
+        "am computer spielen",
+        "konsole spielen"
       ],
       "animation": "sit",
       "group": "seat"
     },
     "cleaning": {
-      "prompt": "on all fours cleaning, hands and knees on floor, focused cleaning task",
+      "prompt": "standing and tidying up, upper body bent forward, one hand reaching down to pick something up, the other holding a cloth",
       "synonyms": [
         "putzen",
         "putzend",
         "aufraeumen",
-        "saubermachen"
+        "saubermachen",
+        "putzt",
+        "aufräumen",
+        "räumt auf",
+        "sauber machen",
+        "den boden wischen",
+        "staubsaugen",
+        "staub wischen"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "cleaning-up",
+      "group": "stand",
+      "solo": true
     },
     "gardening": {
-      "prompt": "kneeling on ground, hands in soil, sun hat on, looking down at plants",
+      "prompt": "standing over a flower bed, bent forward from the hips, a young plant in one hand, soil on the other, sun hat on",
       "synonyms": [
         "gaertnern",
-        "im garten"
+        "im garten",
+        "gärtnern",
+        "im garten arbeiten",
+        "im beet arbeiten",
+        "kniet im beet",
+        "blumen pflanzen",
+        "pflanzen gießen",
+        "unkraut jäten"
       ],
-      "animation": "idle",
+      "animation": "plant",
       "group": "stand"
     },
     "shopping": {
@@ -223,7 +316,10 @@
       "synonyms": [
         "einkaufen",
         "einkaufend",
-        "shoppen"
+        "shoppen",
+        "kauft ein",
+        "einkaufen gehen",
+        "shoppen gehen"
       ],
       "animation": "walk",
       "group": "stand"
@@ -236,7 +332,12 @@
         "entspannt",
         "entpannen",
         "chillen",
-        "relaxen"
+        "relaxen",
+        "entspannt sich",
+        "ausspannen",
+        "eine pause machen",
+        "es sich gemütlich machen",
+        "die füße hochlegen"
       ],
       "animation": "sit",
       "group": "seat"
@@ -246,7 +347,11 @@
       "synonyms": [
         "lernen",
         "lernend",
-        "studieren"
+        "studieren",
+        "lernt",
+        "für die prüfung lernen",
+        "hausaufgaben machen",
+        "büffeln"
       ],
       "animation": "sit",
       "group": "seat"
@@ -256,7 +361,10 @@
       "synonyms": [
         "singen",
         "singend",
-        "performing"
+        "performing",
+        "singt",
+        "ein lied singen",
+        "mitsingen"
       ],
       "animation": "idle",
       "group": "stand"
@@ -265,7 +373,10 @@
       "prompt": "playful dynamic pose, arms outstretched, light bouncy stance",
       "synonyms": [
         "herumtoben",
-        "herumalbern"
+        "herumalbern",
+        "tobt herum",
+        "herumblödeln",
+        "albern sein"
       ],
       "animation": "idle",
       "group": "stand"
@@ -283,7 +394,14 @@
         "kleine gespräche",
         "discussing concept",
         "private conversations",
-        "mit_jemandem_fluestern"
+        "mit_jemandem_fluestern",
+        "redet",
+        "spricht",
+        "sich unterhalten",
+        "plaudern",
+        "quatschen",
+        "ein gespräch führen",
+        "mit jemandem reden"
       ],
       "animation": "idle",
       "group": "stand"
@@ -292,35 +410,47 @@
       "prompt": "standing under water, head tilted back, eyes closed, arms raised to hair",
       "synonyms": [
         "duschen",
-        "duschend"
+        "duschend",
+        "duscht",
+        "eine dusche nehmen",
+        "unter der dusche stehen"
       ],
-      "animation": "idle",
+      "animation": "standing wash-self",
       "group": "stand"
     },
     "bathing": {
       "prompt": "standing in bathtub, washing own body",
       "synonyms": [
         "baden",
-        "badend"
+        "badend",
+        "badet",
+        "ein bad nehmen",
+        "sich waschen"
       ],
-      "animation": "standing washing",
+      "animation": "standing wash-self",
       "group": "stand",
       "solo": true
     },
     "yoga": {
-      "prompt": "standing in tree pose, one foot on inner thigh, arms raised above head, balanced",
+      "prompt": "in a low yoga posture on a mat, knees folded under the hips, back straight, arms reaching forward",
       "synonyms": [
-        "yoga machen"
+        "yoga machen",
+        "yoga üben",
+        "eine yoga-übung machen"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "yoga",
+      "group": "ground"
     },
     "meeting": {
       "prompt": "sitting at conference table, hands folded, upright posture, attentive engaged pose",
       "synonyms": [
         "besprechung",
         "konferenz",
-        "meeting"
+        "meeting",
+        "in einer besprechung sitzen",
+        "am konferenztisch sitzen",
+        "teambesprechung",
+        "sitzung"
       ],
       "animation": "sit",
       "group": "seat"
@@ -330,16 +460,24 @@
       "synonyms": [
         "praesentieren",
         "vortragen",
-        "vortrag"
+        "vortrag",
+        "präsentieren",
+        "einen vortrag halten",
+        "eine präsentation halten",
+        "vor publikum sprechen"
       ],
       "animation": "idle",
-      "group": "stand"
+      "group": "stand",
+      "solo": true
     },
     "driving": {
       "prompt": "sitting with hands on steering wheel, upright posture, eyes forward, seatbelt on",
       "synonyms": [
         "fahren",
-        "autofahren"
+        "autofahren",
+        "fährt",
+        "auto fahren",
+        "am steuer sitzen"
       ],
       "animation": "sit",
       "group": "seat"
@@ -357,9 +495,13 @@
         "model",
         "fotos begutachten",
         "adjusting the aperture of the canon r5 and testing the autofocus",
-        "künstlerische aufnahme machen"
+        "künstlerische aufnahme machen",
+        "fotografiert",
+        "ein foto machen",
+        "bilder machen",
+        "knipsen"
       ],
-      "animation": "taking-fotos",
+      "animation": "idle",
       "solo": true,
       "group": "stand"
     },
@@ -371,49 +513,73 @@
         "watching tv",
         "watching a movie",
         "choosing_a_movie",
-        "preparing movie"
+        "preparing movie",
+        "sieht fern",
+        "tv schauen",
+        "einen film schauen",
+        "eine serie schauen",
+        "vor dem fernseher sitzen"
       ],
       "animation": "sit",
       "group": "seat"
     },
     "thinking": {
-      "prompt": "leaning forward slightly, one elbow propped on a knee while the other hand supports the chin, contemplative gaze",
+      "prompt": "standing with the weight on one leg, one arm folded across the chest, the other hand supporting the chin, gaze lowered in thought",
       "synonyms": [
         "denken",
         "gedanken machen",
         "grübeln",
-        "nachdenken"
+        "nachdenken",
+        "denkt nach",
+        "grübelt",
+        "überlegen",
+        "in gedanken versunken",
+        "nachdenklich"
       ],
       "animation": "idle",
-      "group": "stand"
+      "group": "stand",
+      "solo": true
     },
     "waiting": {
       "prompt": "standing with weight shifted to one leg, arms loosely crossed over the chest, head tilted slightly as if scanning",
       "synonyms": [
         "warten",
-        "waiting for guests"
+        "waiting for guests",
+        "wartet",
+        "abwarten",
+        "auf jemanden warten",
+        "geduldig warten"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "waiting",
+      "group": "stand",
+      "solo": true
     },
     "kneeling": {
-      "prompt": "kneeling upright, legs folded beneath the torso, arms resting gently on the thighs, back held straight",
+      "prompt": "down on the floor on both knees, torso leaning forward, hands resting on the ground in front of the knees",
       "synonyms": [
         "knien",
         "kniend",
         "kneeling on the kitchen floor",
-        "kneeling on the black carpet"
+        "kneeling on the black carpet",
+        "kniet",
+        "auf den knien",
+        "sich hinknien",
+        "auf dem boden knien"
       ],
-      "animation": "kneeling",
-      "group": "stand"
+      "animation": "crawling",
+      "group": "ground"
     },
     "celebrating": {
       "prompt": "standing with legs slightly apart, arms raised high in a celebratory gesture, energetic stance",
       "synonyms": [
         "feiern",
-        "partying"
+        "partying",
+        "feiert",
+        "jubeln",
+        "eine party feiern",
+        "anstoßen"
       ],
-      "animation": "dance",
+      "animation": "victory",
       "group": "stand"
     },
     "making_coffee": {
@@ -426,7 +592,13 @@
         "foaming milk for a latte",
         "practicing latte art",
         "polishing the coffee machine",
-        "going to the coffee machine"
+        "going to the coffee machine",
+        "kaffee kochen",
+        "kaffee machen",
+        "einen kaffee machen",
+        "kaffee aufbrühen",
+        "espresso machen",
+        "an der kaffeemaschine stehen"
       ],
       "animation": "idle",
       "group": "stand"
@@ -436,16 +608,25 @@
       "synonyms": [
         "bedienen",
         "serving customers",
-        "preparing for customers"
+        "preparing for customers",
+        "bedient",
+        "gäste bedienen",
+        "kunden bedienen",
+        "servieren",
+        "am tresen bedienen"
       ],
-      "animation": "walk",
+      "animation": "idle",
       "group": "stand"
     },
     "monitoring": {
       "prompt": "sitting upright with focused gaze, hands resting lightly on desk or device, legs firmly on the floor",
       "synonyms": [
         "überwachen",
-        "beobachten"
+        "beobachten",
+        "beobachtet",
+        "überwacht",
+        "im auge behalten",
+        "kontrollieren"
       ],
       "animation": "sit",
       "group": "seat"
@@ -454,7 +635,10 @@
       "prompt": "leaning slightly forward with an open posture, one hand gently touching the hair, relaxed crossed legs",
       "synonyms": [
         "flirten",
-        "flirtend"
+        "flirtend",
+        "flirtet",
+        "schöne augen machen",
+        "kokettieren"
       ],
       "animation": "idle",
       "group": "stand"
@@ -467,7 +651,11 @@
         "mach das video",
         "wird gefilmt",
         "taking photos",
-        "preparing for the next shot"
+        "preparing for the next shot",
+        "filmt",
+        "ein video drehen",
+        "video aufnehmen",
+        "mit der kamera filmen"
       ],
       "animation": "idle",
       "group": "stand"
@@ -477,7 +665,12 @@
       "synonyms": [
         "umkleiden",
         "sich umkleiden",
-        "sich_umkleiden"
+        "sich_umkleiden",
+        "umziehen",
+        "sich umziehen",
+        "zieht sich um",
+        "kleider wechseln",
+        "sich anziehen"
       ],
       "animation": "putting on a dress",
       "group": "stand",
@@ -487,7 +680,12 @@
       "prompt": "standing upright, leaning slightly toward a mirror, hands engaged in grooming or washing",
       "synonyms": [
         "sich frisch machen",
-        "freshening up"
+        "freshening up",
+        "frisch machen",
+        "sich zurechtmachen",
+        "sich schminken",
+        "haare richten",
+        "sich kämmen"
       ],
       "animation": "idle",
       "group": "stand"
@@ -500,26 +698,41 @@
         "lying on the sofa",
         "lying on a blue velvet sofa",
         "lying exhausted on the sofa",
-        "lying on the training mat"
+        "lying on the training mat",
+        "liegt",
+        "auf der couch liegen",
+        "auf dem sofa liegen",
+        "im bett liegen",
+        "sich hinlegen",
+        "ausgestreckt liegen",
+        "auf dem rücken liegen"
       ],
       "animation": "laying",
-      "group": "floor"
+      "group": "lie"
     },
     "washing_dishes": {
       "prompt": "standing at sink, legs slightly apart, arms extended forward with elbows bent, hands scrubbing under running water",
       "synonyms": [
         "abwaschen",
         "washing knives in the kitchen sink",
-        "geschirr spülen"
+        "geschirr spülen",
+        "spülen",
+        "spült das geschirr",
+        "das geschirr abwaschen",
+        "am spülbecken stehen",
+        "abwasch machen"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "standing washing",
+      "group": "stand",
+      "solo": true
     },
     "holding_knife": {
       "prompt": "standing upright with a relaxed posture, holding a knife firmly in one hand while the other arm rests naturally at the side",
       "synonyms": [
         "holding a knife in the kitchen",
-        "messer halten"
+        "messer halten",
+        "hält ein messer",
+        "mit dem messer hantieren"
       ],
       "animation": "idle",
       "group": "stand"
@@ -528,16 +741,23 @@
       "prompt": "slumped in a chair with a relaxed posture, arms resting loosely on the knees, legs gently crossed",
       "synonyms": [
         "erholen",
-        "ausruhen"
+        "ausruhen",
+        "ruht sich aus",
+        "sich erholen",
+        "verschnaufen",
+        "erschöpft sitzen"
       ],
-      "animation": "laying",
-      "group": "bed",
+      "animation": "sitting-in-chair",
+      "group": "seat",
       "solo": true
     },
     "shooting": {
       "prompt": "standing with knees slightly bent and feet shoulder-width apart, firearm held with both hands extended forward at shoulder height, elbows tucked in",
       "synonyms": [
-        "schießen"
+        "schießen",
+        "schießt",
+        "zielen",
+        "mit der waffe zielen"
       ],
       "animation": "idle",
       "group": "stand"
@@ -545,7 +765,11 @@
     "commanding_attention": {
       "prompt": "standing tall with shoulders back, feet planted firmly in a wide stance, arms held open and deliberate at the sides",
       "synonyms": [
-        "autoritaet"
+        "autoritaet",
+        "autorität",
+        "das kommando übernehmen",
+        "sich durchsetzen",
+        "streng auftreten"
       ],
       "animation": "idle",
       "group": "stand"
@@ -558,7 +782,9 @@
         "händeschütteln",
         "hände schütteln",
         "die hand geben",
-        "begrüßung per handschlag"
+        "begrüßung per handschlag",
+        "sich die hand geben",
+        "jemandem die hand schütteln"
       ],
       "animation": "handshake",
       "solo": false,
@@ -575,7 +801,9 @@
         "dancing with someone",
         "zusammen tanzen",
         "paartanz",
-        "salsa tanzen"
+        "salsa tanzen",
+        "miteinander tanzen",
+        "mit jemandem tanzen"
       ],
       "animation": "salsa",
       "solo": false,
@@ -592,7 +820,13 @@
         "troesten",
         "trost spenden",
         "hände auf die schultern",
-        "reassure"
+        "reassure",
+        "jemanden trösten",
+        "umarmen",
+        "jemanden umarmen",
+        "eine umarmung",
+        "in den arm nehmen",
+        "beruhigen"
       ],
       "animation": "comfort",
       "solo": false,

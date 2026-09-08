@@ -542,8 +542,8 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
     const unplaced = status.placements?.unplaced || []
     const counts = status.phase_counts || {}
     const byId = new Map((libProps || []).map((p) => [p.id, p]))
-    // B18: a seat/bed/counter WITHOUT a place marker is furniture nobody can
-    // use. One warning per prop, not per copy.
+    // B18: a seat or a lying surface WITHOUT a place marker is furniture
+    // nobody can use. One warning per prop, not per copy.
     const seen = new Set<string>()
     const markerWarnings: Array<{ id: string; name: string }> = []
     for (const g of ghosts) {

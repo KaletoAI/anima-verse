@@ -194,7 +194,7 @@ You may also use other locations not in this list if the roleplay requires it.
 
 Activity change: If the roleplay clearly changes your activity, add this line at the very end (BEFORE any location line): **I do <activity name>**
 {{ known_activities }}
-Name the activity by one of the pose keys listed after a place (or under "Anywhere here"); free text is fine when the roleplay needs it.
+Name the activity by one of the pose keys listed after a place (or under "Anywhere here"); free text is fine when the roleplay needs it. Never name a key marked *(with partner)* here — those are two-person actions and are started together via InteractWith, not by this marker.
 {% endif %}
 {% if intent_tracking_enabled %}
 

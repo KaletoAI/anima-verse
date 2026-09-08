@@ -323,6 +323,34 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     except Exception:
         party_invites = []
 
+    # Pair interactions: the questions waiting for the avatar, the one it is
+    # waiting on itself, and the pair it is in right now — the three states
+    # the banner has to render.
+    try:
+        from app.core import interaction_engine as _IE
+        interaction_invites = [
+            {"invite_id": i["invite_id"], "inviter": i["inviter"],
+             "pose_key": i["pose_key"]}
+            for i in _IE.pending_invites_for(avatar)]
+        _out = _IE.outgoing_invite_of(avatar)
+        interaction_pending = ({"invite_id": _out["invite_id"],
+                                "invitee": _out["invitee"],
+                                "pose_key": _out["pose_key"]} if _out else None)
+        # Agreed, not started yet: whoever said yes is walking over.
+        _app = _IE.approach_of(avatar)
+        interaction_approaching = (
+            {"invite_id": _app["invite_id"], "pose_key": _app["pose_key"],
+             "partner": (_app["inviter"] if _app["invitee"] == avatar
+                         else _app["invitee"]),
+             "walking": _app["invitee"] == avatar} if _app else None)
+        _run = _IE.get_interaction(avatar)
+        interaction = ({"partner": _run["partner"], "pose_key": _run["pose_key"]}
+                       if _run else None)
+    except Exception as _ie:
+        logger.debug("interaction block failed: %s", _ie)
+        interaction_invites, interaction_pending = [], None
+        interaction_approaching, interaction = None, None
+
     # MARK the storyteller lines, then localise their label — in that order,
     # and the mark UNCONDITIONALLY.
     #
@@ -353,6 +381,10 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         "present": present, "present_detail": present_detail, "scene": scene,
         "follow_suggestions": follow_suggestions,
         "party": party, "party_invites": party_invites,
+        "interaction_invites": interaction_invites,
+        "interaction_pending": interaction_pending,
+        "interaction_approaching": interaction_approaching,
+        "interaction": interaction,
         "speaker_expr_versions": speaker_expr_versions,
         "avatar_expr_version": _expr_v(avatar),
         "bg_version": _bg_version(loc, room) if loc else "",
@@ -1738,6 +1770,148 @@ def play_party_leave(user=Depends(get_current_user)):
     return {"ok": res.get("status") == "ok", **res}
 
 
+# ── pair interactions (app/core/interaction_engine.py) ──────────────────
+# The avatar's half of the invite/answer shape: it can propose a shared
+# action, answer one it was offered, take back its own, and step out of a
+# running pair. Everything an NPC does through the InteractWith verb.
+
+@router.get("/play/interact/options")
+def play_interact_options(user=Depends(get_current_user)):
+    """The two-person actions this world can actually play — the catalog
+    poses that have a complete pair clip. Empty list = the UI offers nothing.
+
+    Also empty when no package supplies the ``pair_verb_name`` capability:
+    without the verb an NPC has no way to agree, so proposing a pair would
+    be an offer nobody could ever accept.
+    """
+    from app.core.hooks import get_provider
+    from app.core.interaction_engine import partner_poses
+    if not get_provider("pair_verb_name"):
+        return {"poses": []}
+    return {"poses": [{"key": k, "kind": kind} for k, kind in partner_poses()]}
+
+
+@router.post("/play/interact")
+async def play_interact(request: Request, user=Depends(get_current_user)):
+    """The avatar proposes a shared action to a present character."""
+    import asyncio
+    body = await request.json() or {}
+    return await asyncio.to_thread(_play_interact_sync, body)
+
+
+def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The blocking body of ``play_interact`` — runs in the threadpool.
+
+    Answers ``{"ok", "status"}``: "started" when the partner had already
+    asked for the same thing (the avatar's proposal is then its consent),
+    otherwise "asked". 400 on an unknown pose, 409 with the engine's reason
+    when the two cannot pair up at all.
+    """
+    from app.core import interaction_engine as IE
+    avatar = _require_avatar()
+    partner = str(body.get("partner") or "").strip()
+    pose = str(body.get("pose") or body.get("action") or "").strip().lower()
+    if not partner or not pose:
+        raise HTTPException(status_code=400, detail="partner and pose required")
+    if pose not in dict(IE.partner_poses()):
+        raise HTTPException(status_code=400, detail="not a two-person action")
+    # The partner asked first: the avatar's proposal IS its acceptance —
+    # the same brake the verb applies between two NPCs.
+    open_ask = IE.find_pending_invite(partner, avatar, pose)
+    if open_ask:
+        res = IE.resolve_invite(open_ask["invite_id"], True)
+        if res.get("status") not in ("started", "approaching"):
+            raise HTTPException(status_code=409,
+                                detail=res.get("reason") or res.get("status"))
+        return {"ok": True, "status": res["status"], "partner": partner,
+                "pose": pose}
+    blocked = IE.check_can_pair(avatar, partner)
+    if blocked:
+        raise HTTPException(status_code=409, detail=blocked)
+    # create_invite emits ``interaction.invited``; the package that owns the
+    # pair verb gives an NPC invitee its turn. Nothing to do here.
+    if not IE.create_invite(avatar, partner, pose):
+        raise HTTPException(status_code=409, detail="could not ask")
+    return {"ok": True, "status": "asked", "partner": partner, "pose": pose}
+
+
+@router.post("/play/interact/respond")
+async def play_interact_respond(request: Request, user=Depends(get_current_user)):
+    """The avatar answers a shared action it was offered."""
+    import asyncio
+    body = await request.json() or {}
+    return await asyncio.to_thread(_play_interact_respond_sync, body)
+
+
+def _play_interact_respond_sync(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The blocking body of ``play_interact_respond``.
+
+    A "no" is an answer, not an error: the inviter is bumped so it reacts in
+    character. A "yes" that the geometry refuses comes back as 409 with the
+    engine's own reason — "Kira is too far away" is a sentence the player
+    can act on.
+    """
+    from app.core import interaction_engine as IE
+    from app.core.agent_loop import get_agent_loop
+    avatar = _require_avatar()
+    invite_id = str(body.get("invite_id") or "").strip()
+    accept = bool(body.get("accept"))
+    if not invite_id:
+        raise HTTPException(status_code=400, detail="invite_id required")
+    inv = IE.get_invite(invite_id)
+    if not inv or inv.get("invitee") != avatar:
+        raise HTTPException(status_code=404, detail="invite not found")
+    res = IE.resolve_invite(invite_id, accept)
+    if res["status"] == "not_found":
+        raise HTTPException(status_code=404, detail="invite not found")
+    if res["status"] == "cannot":
+        raise HTTPException(status_code=409, detail=res.get("reason") or "cannot")
+    if res["status"] == "approaching":
+        # Yes was said and the walk has begun — not a refusal, so not a 409.
+        return {"ok": True, "status": "approaching", "partner": inv["inviter"],
+                "pose": inv["pose_key"]}
+    if res["status"] == "declined":
+        try:
+            get_agent_loop().bump(
+                inv["inviter"],
+                hint=(f"{avatar} does not want to {inv['pose_key']} with you "
+                      f"right now. React in character."))
+        except Exception as e:
+            logger.debug("decline bump failed: %s", e)
+    return {"ok": True, "status": res["status"], "partner": inv["inviter"],
+            "pose": inv["pose_key"]}
+
+
+@router.post("/play/interact/cancel")
+async def play_interact_cancel(request: Request, user=Depends(get_current_user)):
+    """The avatar takes back its own open proposal."""
+    import asyncio
+    body = await request.json() or {}
+    return await asyncio.to_thread(_play_interact_cancel_sync, body)
+
+
+def _play_interact_cancel_sync(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The blocking body of ``play_interact_cancel`` — only the avatar's own
+    proposal, never someone else's question."""
+    from app.core import interaction_engine as IE
+    avatar = _require_avatar()
+    invite_id = str(body.get("invite_id") or "").strip()
+    if not invite_id:
+        raise HTTPException(status_code=400, detail="invite_id required")
+    inv = IE.get_invite(invite_id)
+    if not inv or inv.get("inviter") != avatar:
+        raise HTTPException(status_code=404, detail="invite not found")
+    return {"ok": IE.cancel_invite(invite_id)}
+
+
+@router.post("/play/interact/end")
+def play_interact_end(user=Depends(get_current_user)):
+    """The avatar steps out of the pair it is in (both are released)."""
+    from app.core.interaction_engine import end_interaction
+    avatar = _require_avatar()
+    return {"ok": end_interaction(avatar, reason="avatar")}
+
+
 # How long the delayed silence check waits for the room's respond turns
 # (SYSTEM seconds). Long enough for a slow chat model plus a queued chime,
 # short enough that the narration still belongs to the same beat.
@@ -2067,16 +2241,25 @@ def play_self(user=Depends(get_current_user)):
 def _state_block(name: str) -> dict:
     """Mood + status bars + conditions + profile image of a character (shared
     with the /play/self logic, used by /play/others) — plus the place it holds
-    (plan-posen-plaetze.md § 7: the presence list shows "in the armchair"):
-    ``place_label`` is the bare label, ``place_group`` the place type the
-    client picks its localized preposition by; both "" when nothing is held."""
+    (plan-posen-plaetze.md § 7: the presence list shows "on the armchair"):
+    ``place_label`` is the bare label, ``place_phrase`` the finished phrase
+    the card prints ("on the sofa" — the server owns the preposition, so no
+    client keeps a second table of them) and ``place_group`` the place type;
+    all three "" when nothing is held. A place of a group that needs none
+    (``needs_place: false``) is not named — "standing on the standing spot"
+    tells a card nothing.
+
+    ``interaction`` names the partner of a running pair, so the card can say
+    "dancing together with Kira" instead of a pose that reads as a solo one.
+    """
     from app.core import places
     from app.models.character import (get_effective_activity,
                                       get_character_current_feeling,
                                       get_character_profile_image)
     blk = {"name": name, "mood": "", "activity": "", "status_effects": {},
            "bar_meta": {}, "conditions": [], "profile_image": "",
-           "place_label": "", "place_group": ""}
+           "place_label": "", "place_group": "", "place_phrase": "",
+           "interaction": None}
     try:
         blk["mood"] = get_character_current_feeling(name) or ""
     except Exception:
@@ -2086,10 +2269,20 @@ def _state_block(name: str) -> dict:
     except Exception:
         pass
     try:
+        from app.core.pose_catalog import needs_place
         held = places.place_of(name)
-        if held and held["group"] != "stand":
+        if held and needs_place(held["group"]):
             blk["place_label"] = held["label"]
             blk["place_group"] = held["group"]
+            blk["place_phrase"] = places.phrase_for(held)
+    except Exception:
+        pass
+    try:
+        from app.core.interaction_engine import get_interaction
+        run = get_interaction(name)
+        if run:
+            blk["interaction"] = {"partner": run["partner"],
+                                  "pose_key": run["pose_key"]}
     except Exception:
         pass
     try:
@@ -3290,7 +3483,8 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     the avatar's room, 409 place taken. Answer ``{"ok", "activity", "place"}``.
     """
     from app.core import places
-    from app.core.pose_catalog import get_catalog, group_of
+    from app.core.pose_catalog import (PairPoseWithoutPartner, get_catalog,
+                                       group_of)
     from app.models.character import (clear_pose_intent, get_character_profile,
                                       is_character_sleeping, set_is_sleeping,
                                       set_pose_intent, wake_from_offmap)
@@ -3322,9 +3516,16 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
             set_pose_intent(avatar, pose, prefer=place_id)
         except places.PlaceUnavailable:
             raise HTTPException(status_code=409, detail="place is taken")
+        except PairPoseWithoutPartner:
+            raise HTTPException(status_code=409, detail="pair_pose")
         activity = pose
     elif activity:
-        set_pose_intent(avatar, activity)
+        # A two-person pose is not something the avatar puts on alone — it is
+        # asked for (POST /play/interact) and started when the other agrees.
+        try:
+            set_pose_intent(avatar, activity)
+        except PairPoseWithoutPartner:
+            raise HTTPException(status_code=409, detail="pair_pose")
     else:
         clear_pose_intent(avatar)
     return {"ok": True, "activity": activity,

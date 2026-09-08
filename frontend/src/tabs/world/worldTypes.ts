@@ -68,7 +68,8 @@ export interface RoomLayout {
    *  waterline (`water_level` is). */
   floor_offset_y?: number
   /** PLACES (plan-posen-plaetze.md § 4): a marker names a place TYPE — the
-   *  pose-catalog `group` (seat, bed, floor, …), never a clip — and the
+   *  pose-catalog `group` (today seat, lie, ground, stand — the catalog
+   *  owns the vocabulary), never a clip — and the
    *  server seats characters on it. id = stable marker id (the server mints
    *  one for a marker stored without); at = METRES from the room's min
    *  corner; capacity = how many figures the place takes (default 1),

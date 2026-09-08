@@ -1429,8 +1429,9 @@ def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     spots of a layout a figure can take. ``at`` = METRES in the frame of
     whatever carries the layout — the room's min corner for a room, the
     LOCATION's own frame for the ground (§ A13a) — and ``group`` the PLACE
-    TYPE from the pose catalog (``pose_catalog.get_groups()``: seat, bed,
-    floor, counter, stand, …). A marker no longer names a clip: which pose
+    TYPE from the pose catalog (``pose_catalog.get_groups()`` — today
+    seat, lie, ground, stand; an admin may add one, so nothing here assumes a
+    fixed set). A marker no longer names a clip: which pose
     plays there is the character's business, the marker only says what kind
     of place it is. ``id`` is stable (kept verbatim, else generated) so a
     deleted neighbour never renumbers it.
@@ -1445,9 +1446,19 @@ def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     lying on a slope or leaning against something is not upright, and facing
     alone cannot say that (user finding 2026-07-28 — lying slightly angled on
     the sand). At most 50.
+
+    A group the catalog does not know is KEPT verbatim and reported
+    (plan-platztypen.md E2). It is not corrected and it does not fall back to
+    a neighbouring group — the stored value is the author's, and guessing at
+    it would hide the typo instead of showing it. What the warning buys is a
+    trace: further down the line :mod:`app.core.scene_recipe` drops such a
+    marker from the scene AND from the place inventory, and without a line in
+    the log that reads as an empty room rather than as a mistake.
     """
     if not isinstance(raw, list):
         return []
+    from app.core.pose_catalog import get_groups
+    known = get_groups()
     markers: List[Dict[str, Any]] = []
     for m in raw:
         if not isinstance(m, dict):
@@ -1456,6 +1467,11 @@ def _sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
         group = str(m.get("group") or "").strip().lower()
         if not group or not isinstance(at, (list, tuple)) or len(at) != 2:
             continue
+        if group not in known:
+            logger.warning(
+                "layout marker %s: the pose catalog has no place type %r — "
+                "the marker is stored as it is, but the scene will drop it",
+                m.get("id") or "<new>", group)
         au, av = _metre(at[0]), _metre(at[1])
         if au is None or av is None:
             continue

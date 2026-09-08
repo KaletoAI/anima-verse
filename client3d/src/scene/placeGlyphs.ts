@@ -28,16 +28,24 @@ import type { PlaceOffer } from '../api';
 import type { PlacePick } from '../game/placement';
 import type { PlaceEntry } from './placeSlot';
 
-/** Ring colour per place group — the five groups the catalog knows. */
+/** Ring colour per place group — the place types the catalog knows
+ *  (plan-platztypen.md: a place type is a BODY SHAPE, not a kind of
+ *  furniture). A group missing here draws grey, so an admin-made place type
+ *  is still visible; the four below are the ones that ship.
+ *
+ *  The two colours of the merge keep their meaning: `lie` inherits what `bed`
+ *  had, because it IS that body shape — one lies on a mattress, on a couch
+ *  and on the floor, and the marker says which. `ground` inherits `floor`'s
+ *  green, because that is where the eye already looked for a place at ground
+ *  level. Only `counter` is gone without an heir; it was never a body shape. */
 export const GLYPH_COLOUR_SEAT = 0xf2cd6e;     // the HUD's gold
-export const GLYPH_COLOUR_BED = 0x8fb3ff;
-export const GLYPH_COLOUR_FLOOR = 0x9fd48a;
-export const GLYPH_COLOUR_COUNTER = 0xf0a060;
+export const GLYPH_COLOUR_LIE = 0x8fb3ff;
+export const GLYPH_COLOUR_GROUND = 0x9fd48a;
 export const GLYPH_COLOUR_STAND = 0xd9d0bd;
 const GLYPH_COLOUR_UNKNOWN = 0x9a9a9a;
 const GLYPH_COLOURS: Record<string, number> = {
-  seat: GLYPH_COLOUR_SEAT, bed: GLYPH_COLOUR_BED, floor: GLYPH_COLOUR_FLOOR,
-  counter: GLYPH_COLOUR_COUNTER, stand: GLYPH_COLOUR_STAND,
+  seat: GLYPH_COLOUR_SEAT, lie: GLYPH_COLOUR_LIE,
+  ground: GLYPH_COLOUR_GROUND, stand: GLYPH_COLOUR_STAND,
 };
 /** Inner/outer radius of the ring (metres) — a foot's width, not a target. */
 const RING_INNER_M = 0.25;

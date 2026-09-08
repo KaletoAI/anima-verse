@@ -1,11 +1,17 @@
 """Interact package — the pair-interaction verb.
 
-``InteractWith`` binds the acting character and a present partner to a PAIR
-animation clip (``app/core/interaction_engine.py``): the action text is
+``InteractWith`` proposes a PAIR animation clip
+(``app/core/interaction_engine.py``) to a present partner: the action text is
 resolved against the pose catalog like any pose, and only a catalog pose that
 is marked ``solo: false`` AND whose ``animation`` is a complete pair clip
 (``<kind>__a`` + ``<kind>__b``) qualifies. The partner name is matched exactly
 (case-insensitive) — never by first name or substring.
+
+A pair is ASKED, never imposed: the call records an invitation and the clip
+starts only on the answer. The avatar answers through the player UI
+(``/play/interact/respond``); an NPC is bumped and answers by calling this
+same verb back, which the counter-invitation brake reads as consent — the
+same shape the party's invite/join uses, and never a keyword match on prose.
 
 The interaction itself ends on the game clock (travel ticker), or when either
 participant walks away, is moved, or takes another pose.
@@ -15,6 +21,25 @@ from typing import Any, Dict
 from app.plugins.base import PluginSkill
 from app.plugins.context import PluginContext
 from app.skills.base import ToolSpec
+
+
+#: An answer of "no" — the ONE piece of prose this verb reads, and only from
+#: its own ``answer`` argument, never from the character's reply text.
+_NO_ANSWERS = frozenset({"no", "nein", "decline", "refuse", "reject", "false"})
+
+
+def _is_refusal(data: Dict[str, Any]) -> bool:
+    """True when the call is a refusal: ``{"answer": "no"}``.
+
+    A character that does not want to has to be able to SAY so, or its
+    partner's question stands open until the window expires. The tool's own
+    argument is the only signal — reading the RP prose for a "no" would be
+    the keyword classification this project does not do.
+    """
+    ans = data.get("answer")
+    if isinstance(ans, bool):
+        return not ans
+    return str(ans or "").strip().lower() in _NO_ANSWERS
 
 
 class InteractSkill(PluginSkill):
@@ -55,8 +80,7 @@ class InteractSkill(PluginSkill):
         if not partner_raw or not action:
             return "Error: pass {\"partner\": \"<name>\", \"action\": \"<what you do together>\"}."
         try:
-            from app.core.interaction_engine import (partner_poses,
-                                                     start_interaction)
+            from app.core import interaction_engine as IE
             from app.core.pose_catalog import resolve_to_catalog
             from app.models.character import list_available_characters
             available = list_available_characters()
@@ -64,16 +88,62 @@ class InteractSkill(PluginSkill):
                             if n.lower() == partner_raw.lower()), "")
             if not partner:
                 return f"Character '{partner_raw}' not found. Available: {', '.join(available)}"
-            known = dict(partner_poses())
+            known = dict(IE.partner_poses())
             key, _how = resolve_to_catalog(action, "pose")
             if key not in known:
                 return (f"'{action}' is not a two-person action. "
                         f"Known: {', '.join(sorted(known)) or 'none'}.")
-            inter = start_interaction(actor, partner, key)
-            return (f"{actor} and {partner}: {key} "
-                    f"(for about {inter['duration_s']:.0f} seconds).")
+            # The other one already asked US for this very thing: calling the
+            # verb back is how a character says yes. Answering an invitation
+            # with a counter-invitation would otherwise leave two open
+            # questions and start nothing (the party has the same brake).
+            open_ask = IE.find_pending_invite(partner, actor, key)
+            if open_ask:
+                if _is_refusal(data):
+                    IE.resolve_invite(open_ask["invite_id"], False)
+                    return (f"{actor} turns {partner} down — no {key}. "
+                            f"Say why in character.")
+                res = IE.resolve_invite(open_ask["invite_id"], True)
+                if res.get("status") == "started":
+                    return (f"{actor} accepts: {actor} and {partner} now "
+                            f"{key} (for about "
+                            f"{res['interaction']['duration_s']:.0f} seconds).")
+                if res.get("status") == "approaching":
+                    # Agreed, but not close enough yet — the walk over is
+                    # already running and the pair starts on arrival.
+                    return (f"{actor} agrees and walks over to {partner} "
+                            f"— the {key} starts when they get there.")
+                return f"Cannot: {res.get('reason') or res.get('status')}"
+            if _is_refusal(data):
+                # Nothing to refuse — never turn a "no" into a fresh proposal
+                # of the very thing that was refused.
+                return f"{partner} has not asked {actor} for anything."
+            blocked = IE.check_can_pair(actor, partner)
+            if blocked:
+                return f"Cannot: {blocked}"
+            if not IE.create_invite(actor, partner, key):
+                return f"Cannot ask {partner} right now."
+            return self._ask(actor, partner, key)
         except ValueError as e:
             return f"Cannot: {e}"
         except Exception as e:
             self.ctx.logger.exception("%s [%s] failed: %s", self.name, actor, e)
             return f"Error in {self.name}: {e}"
+
+    def _ask(self, actor: str, partner: str, key: str) -> str:
+        """Hand the recorded question to whoever has to answer it: the player
+        sees it in the UI, an NPC is nudged to answer in its own turn."""
+        try:
+            from app.models.account import is_player_controlled
+            is_avatar = is_player_controlled(partner)
+        except Exception:
+            is_avatar = False
+        if is_avatar:
+            # A player is not asked through an LLM — the recorded invitation
+            # IS the question, and /play/interact/respond is the answer.
+            return (f"{actor} asks {partner} to {key} together "
+                    f"— waiting for their answer.")
+        # An NPC invitee gets its turn from this package's own hook handler
+        # (register.py), which the core fires on every recorded invitation —
+        # so the route and this verb nudge it in exactly one place.
+        return f"{actor} asks {partner} to {key} together."

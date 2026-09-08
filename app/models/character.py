@@ -1367,6 +1367,16 @@ def save_character_current_location(character_name: str = "", location: str = ""
     old_room = profile.get("current_room", "")
     target = (profile.get("movement_target") or "").strip()
     location_changed = bool(location) and location != old_location
+    if location_changed:
+        # A pair clip holds two figures at ONE anchor. Leaving the place ends
+        # it for both — the journey and the teleport already do this on their
+        # own paths, but a plot/admin override (force_set_status, a scheduler
+        # rule) reaches this function directly. The engine writes both
+        # profiles itself, so ours is re-read afterwards.
+        from app.core.interaction_engine import end_interaction
+        if end_interaction(character_name, reason="location"):
+            profile = get_character_profile(character_name)
+            old_room = profile.get("current_room", "")
     # A POINT journey (travel_engine.start_journey_to_point) walks to a free
     # (x, z) and therefore stamps NO movement_target — the journey dict alone
     # says a trip is running, so the abort below has to ask for both.
@@ -1829,7 +1839,12 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "") -> None:
     nothing changed, and a mere seat change under an unchanged pose is
     still carried out and published. Without ``prefer`` an identical repeat
     returns early and never re-assigns. Any other seat failure degrades to
-    "pose without place" — never into a lost pose."""
+    "pose without place" — never into a lost pose.
+
+    Raises ``PairPoseWithoutPartner`` when the text resolves to a two-person
+    key (catalog ``solo: false``) and no running interaction names that key:
+    such a pose on a single profile is an invalid state, and the caller is
+    meant to redirect to the pair verb instead of writing it."""
     if not character_name:
         return
     raw = (pose or "").strip()
@@ -1841,6 +1856,21 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "") -> None:
         if flavor.lower() == key.lower():
             flavor = ""          # flavor that adds nothing is noise
     profile = get_character_profile(character_name) or {}
+    # A two-person pose belongs to a BOUND pair, never to a lone profile.
+    # ``interaction_engine.start_interaction`` writes the interaction first
+    # and only then calls this setter, so the running interaction naming the
+    # same key is the one thing that makes such a key legal here. The check
+    # sits before the interaction block below: a rejected pose must not first
+    # tear down the pair the character is currently in.
+    if key:
+        from app.core.expression_pose_maps import is_partner_activity
+        if is_partner_activity(key):
+            from app.core.pose_catalog import PairPoseWithoutPartner
+            running = profile.get("interaction")
+            bound = (isinstance(running, dict)
+                     and running.get("pose_key") == key)
+            if not bound:
+                raise PairPoseWithoutPartner(key)
     unchanged = ((profile.get("pose_key") or "") == key
                  and (profile.get("pose_flavor") or "") == flavor)
     if unchanged and not prefer:
@@ -1993,6 +2023,16 @@ def save_character_current_room(character_name: str, room_id: str,
     guard, like save_character_current_location)."""
     profile = get_character_profile(character_name)
     old_room = profile.get("current_room", "")
+    if room_id != old_room:
+        # A pair clip holds two figures at ONE anchor in one room. Walking
+        # out of that room ends it for both — the same rule a journey, a
+        # teleport and a new pose already follow; without it the partner
+        # keeps playing a duet with someone who left. The engine loads and
+        # saves both profiles itself, so ours is re-read afterwards and the
+        # room is written into a fresh copy.
+        from app.core.interaction_engine import end_interaction
+        if end_interaction(character_name, reason="room"):
+            profile = get_character_profile(character_name)
     cur_loc = profile.get("current_location", "")
     profile["current_room"] = room_id
     if room_id != old_room:
@@ -2057,7 +2097,7 @@ def save_character_current_room(character_name: str, room_id: str,
 
 
 def get_character_current_feeling(character_name: str) -> str:
-    """Gibt das aktuelle Gefuehl zurueck"""
+    """The character's current feeling ("" when it has none)."""
     if not character_name:
         return ""
     profile = get_character_profile(character_name)
@@ -2101,8 +2141,16 @@ def force_set_status(character_name: str,
         save_character_current_room(character_name, room)
         written["room"] = room
     if activity is not None:
-        set_pose_intent(character_name, activity)
-        written["activity"] = activity
+        # A two-person pose has no meaning for a single character; an
+        # override that names one keeps the previous pose rather than
+        # failing the whole write.
+        from app.core.pose_catalog import PairPoseWithoutPartner
+        try:
+            set_pose_intent(character_name, activity)
+            written["activity"] = activity
+        except PairPoseWithoutPartner as e:
+            logger.info("force_set_status(%s): '%s' is a two-person pose (%s) "
+                        "— activity not written", character_name, activity, e)
     if feeling is not None:
         save_character_current_feeling(character_name, feeling)
         written["feeling"] = feeling
@@ -3996,6 +4044,14 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     pose presets, prompt building and the world map's animation all read the
     activity. Waking CLEARS it instead of restoring the old one: what held
     eight hours ago no longer holds, and the next thought turn sets a new one.
+
+    So does the PLACE, on the way in: ``get_effective_pose_key`` answers
+    ``sleeping`` the moment this flag is set, and ``sleeping`` is a ``lie``
+    pose. A sitter who nods off used to keep the ``seat`` place and get the
+    lying figure's root drop on it — he sank into the upholstery. Falling
+    asleep therefore hands the place out again (``places.assign``): the
+    character finds a ``lie`` place in the room, or gives up the one it held.
+    Whoever sleeps lies down.
     """
     if not character_name:
         return
@@ -4020,7 +4076,33 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     if was and not value:
         profile["pose_key"] = ""
         profile["pose_flavor"] = ""
+        # The bed goes with the sleep. Falling asleep took a lying place
+        # (below); keeping it awake would leave the figure standing on the
+        # mattress with no pose, and every renderer draws it there because
+        # the place, not the pose, says where a body is. Same rule as
+        # ``clear_pose_intent``: whoever gives up the pose stands up.
+        profile["place"] = None
     save_character_profile(character_name, profile)
+    # Only on the transition awake -> asleep, and AFTER the save above:
+    # places.assign writes profile["place"] itself, so an earlier call would
+    # be overwritten by our own write. A failure here must not keep anyone
+    # awake — the flag is already stored, the place is bookkeeping.
+    if value and not was:
+        try:
+            # A pair clip holds two figures at one anchor and cannot survive
+            # one of them lying down elsewhere — the partner would keep
+            # playing a duet alone and hold the seat for it.
+            from app.core.interaction_engine import end_interaction
+            end_interaction(character_name, reason="sleep")
+        except Exception as e:
+            logger.warning("%s fell asleep during an interaction that could "
+                           "not be ended: %s", character_name, e)
+        try:
+            from app.core import places
+            places.assign(character_name, "sleeping")
+        except Exception as e:
+            logger.warning("%s fell asleep, but the place could not be "
+                           "reassigned: %s", character_name, e)
     # Sleep-length measurement for the daily consolidation (plan-history-
     # consolidation-cleanup.md, phase 2): falling asleep records the start
     # time, waking up checks whether it was the main sleep (>= threshold)

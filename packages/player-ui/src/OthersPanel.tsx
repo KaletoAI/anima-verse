@@ -3,9 +3,10 @@
  * counterpart to Self. The cards flow responsively side by side or stacked
  * (flex-wrap, depending on the window width). Source: GET /play/others.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
-import { apiGet } from './api'
+import { ApiError, apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
@@ -22,30 +23,36 @@ interface CharState {
   bar_meta: Record<string, BarMeta>
   conditions: Array<{ name?: string; label?: string; icon?: string }>
   profile_image: string
-  /** The place held (plan-posen-plaetze.md § 7) — the bare label and its
-   *  place type; both "" when nothing (or only a standing spot) is held. */
-  place_label?: string
-  place_group?: string
+  /** The place held (plan-posen-plaetze.md § 7) as a finished phrase —
+   *  "on the sofa". The SERVER composes it (`places.place_phrase`), because
+   *  the preposition belongs to the place type and that table may only exist
+   *  once; "" when nothing (or a place that is never named, such as a
+   *  standing spot) is held. */
+  place_phrase?: string
   in_party?: boolean
   relation?: Relation | null
+  /** The running pair interaction, or null — a two-person pose says nothing
+   *  without the partner it is shared with. */
+  interaction?: { partner: string; pose_key: string } | null
 }
 interface Others { avatar: string; characters: CharState[] }
+interface PairPose { key: string; kind: string }
 
-/** The preposition per place type — "reading, in the armchair"; a place
- *  type not listed (an admin-made one) reads "at the". English source
- *  strings, localized through t(); the server's own English phrase for the
- *  LLM (`places.place_phrase`) uses the same words. */
-const PLACE_PREPOSITION: Record<string, string> = {
-  seat: 'on the', bed: 'in the', floor: 'on the', counter: 'at the',
-}
-
-/** "reading, in the armchair" — activity and place, either alone when the
- *  other is missing, "" when both are. */
+/** "reading, on the armchair" — activity and place, either alone when the
+ *  other is missing, "" when both are. A running pair replaces the activity:
+ *  "dancing together" on its own reads as a solo pose next to someone.
+ *
+ *  The place is whatever `place_phrase` says and nothing else: no
+ *  preposition table here, because the same one lives in the server
+ *  (`places._PREPOSITION`) and two copies drift apart — that is what this
+ *  field was added for. An empty or absent phrase prints no place. */
 function whereabouts(c: CharState, t: (s: string) => string): string {
-  const place = c.place_label
-    ? `${t(PLACE_PREPOSITION[c.place_group || ''] || 'at the')} ${c.place_label.toLowerCase()}`
-    : ''
-  return [c.activity, place].filter(Boolean).join(', ')
+  const place = (c.place_phrase || '').trim().toLowerCase()
+  const doing = c.interaction
+    ? t('{pose} with {name}').replace('{pose}', c.interaction.pose_key)
+      .replace('{name}', c.interaction.partner)
+    : c.activity
+  return [doing, place].filter(Boolean).join(', ')
 }
 
 function portraitUrl(c: CharState): string {
@@ -114,11 +121,117 @@ function StatBars({ c }: { c: CharState }) {
   )
 }
 
+/** The "do something together" popover of ONE card.
+ *
+ *  Rendered into document.body: the panel lives in the /play react-grid
+ *  layout, where an absolutely positioned child is clipped away by the grid
+ *  item. Anchored to the button that opened it.
+ */
+function PairMenu({ anchorEl, poses, onPick, onClose, t }: {
+  anchorEl: HTMLElement
+  poses: PairPose[]
+  onPick: (key: string) => void
+  onClose: () => void
+  t: (s: string) => string
+}) {
+  const box = useRef<HTMLDivElement | null>(null)
+  // Follows the button rather than freezing where it was opened: the panel
+  // is inside a resizable grid item, and a menu pinned to a stale rectangle
+  // drifts away from the card it belongs to.
+  const [rect, setRect] = useState<DOMRect>(() => anchorEl.getBoundingClientRect())
+  useEffect(() => {
+    const reposition = () => setRect(anchorEl.getBoundingClientRect())
+    const away = (e: Event) => {
+      // A scroll INSIDE the menu is not a scroll away from it — the list
+      // has its own overflow, and closing on it would make it unscrollable.
+      if (box.current && e.target instanceof Node && box.current.contains(e.target)) {
+        return
+      }
+      onClose()
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('mousedown', onClose)
+    window.addEventListener('scroll', away, true)
+    window.addEventListener('resize', reposition)
+    window.addEventListener('keydown', onKey)
+    box.current?.querySelector('button')?.focus()
+    return () => {
+      window.removeEventListener('mousedown', onClose)
+      window.removeEventListener('scroll', away, true)
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [anchorEl, onClose])
+  return createPortal(
+    <div ref={box} role="menu" onMouseDown={(e) => e.stopPropagation()} style={{
+      position: 'fixed', zIndex: 4000,
+      top: Math.min(rect.bottom + 4, window.innerHeight - 180),
+      left: Math.min(rect.left, window.innerWidth - 200),
+      minWidth: 160, maxHeight: 220, overflowY: 'auto', padding: 4,
+      borderRadius: 8, background: 'var(--panel, #161b22)',
+      border: '1px solid var(--border, #30363d)',
+      boxShadow: '0 6px 20px rgba(0,0,0,0.45)',
+    }}>
+      {poses.length === 0 && (
+        <div style={{ padding: '6px 8px', opacity: 0.6, fontSize: '0.78em' }}>
+          {t('No two-person actions available.')}
+        </div>
+      )}
+      {poses.map((p) => (
+        <button key={p.key} role="menuitem" onClick={() => onPick(p.key)} style={{
+          display: 'block', width: '100%', textAlign: 'left', padding: '5px 8px',
+          background: 'none', border: 'none', color: 'inherit', cursor: 'pointer',
+          borderRadius: 5, fontSize: '0.82em',
+        }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}>
+          {p.key}
+        </button>
+      ))}
+    </div>,
+    document.body)
+}
+
 export function OthersPanel() {
   const { t } = useI18n()
   const enlarge = useEnlarge()
-  const { data } = usePoll<Others>(
+  const { data, refresh } = usePoll<Others>(
     'play-others', () => apiGet<Others>('/play/others'), { intervalMs: 5000 })
+  // The world's two-person actions — fetched once; the clip library does not
+  // change while a scene is being played.
+  const [pairPoses, setPairPoses] = useState<PairPose[] | null>(null)
+  const [menu, setMenu] = useState<{ name: string; el: HTMLElement } | null>(null)
+  const [note, setNote] = useState('')
+
+  const openMenu = useCallback((name: string, el: HTMLElement) => {
+    setNote('')
+    setMenu({ name, el })
+    if (pairPoses === null) {
+      apiGet<{ poses: PairPose[] }>('/play/interact/options')
+        .then((d) => setPairPoses(d.poses || []))
+        .catch(() => setPairPoses([]))
+    }
+  }, [pairPoses])
+
+  // Stable identity: PairMenu keys its window listeners on this, and a new
+  // function each render would re-register them on every 5 s poll.
+  const closeMenu = useCallback(() => setMenu(null), [])
+
+  const propose = useCallback(async (name: string, pose: string) => {
+    setMenu(null)
+    try { await apiPost('/play/interact', { partner: name, pose }) }
+    catch (e) {
+      // 409 carries the engine's own reason ("Kira is in another room") —
+      // that sentence is the whole point, so it is shown, not swallowed.
+      setNote(e instanceof ApiError ? String(e.detail || '') : String(e))
+    }
+    refresh()
+  }, [refresh])
+
+  const stop = useCallback(async () => {
+    try { await apiPost('/play/interact/end', {}) } catch { /* ignore */ }
+    refresh()
+  }, [refresh])
 
   if (!data) return <EmptyState small title={t('Loading…')} />
   if (!data.characters.length) {
@@ -160,8 +273,28 @@ export function OthersPanel() {
             </div>
           )}
           <StatBars c={c} />
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {c.interaction?.partner === data.avatar ? (
+              <button onClick={stop} className="player-chip">{t('Stop')}</button>
+            ) : (
+              <button className="player-chip"
+                disabled={!!c.interaction}
+                title={c.interaction ? t('Busy with someone else') : t('Ask to do something together')}
+                onClick={(e) => openMenu(c.name, e.currentTarget)}>
+                {t('Together…')}
+              </button>
+            )}
+          </div>
         </div>
       ))}
+      {note && (
+        <div style={{ flex: '1 1 100%', fontSize: '0.76em', color: '#ff9b9b' }}>{note}</div>
+      )}
+      {menu && (
+        <PairMenu anchorEl={menu.el} poses={pairPoses || []} t={t}
+          onClose={closeMenu}
+          onPick={(key) => propose(menu.name, key)} />
+      )}
     </div>
   )
 }

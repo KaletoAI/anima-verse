@@ -1431,7 +1431,8 @@ und „Fraktionen des 8×8-Quadrats" heißt Fraktionen des Fußabdruck-Quadrats
   `id`/`group`/`at`/`capacity?`/`spacing_m?`/`slot_axis?`/`rotation`/`offset_y`
   additiv zur abgetasteten Auflagehöhe/`tilt`/`roll`). **Ein Marker nennt seit
   v7 keinen Clip mehr, sondern einen PLATZ-TYP** (`group` = Gruppe des
-  Posen-Katalogs: seat/bed/floor/counter/stand …, Nachtrag 2026-08-28);
+  Posen-Katalogs: seat/lie/ground/stand …, Nachträge 2026-08-28 und
+  2026-09-08);
   die fertigen Sitzplätze (`slots`) rechnet allein das Szenen-Rezept.
 - **`slot_axis` — in welche Richtung die Reihe der Plätze läuft** (Grad zur
   Blickrichtung, 0..180, Standard 90 = quer; Nachtrag 2026-08-29). Quer ist
@@ -4335,7 +4336,7 @@ sie produziert.
 | `scripts/smoke_terrain_layers.py` | [1] Raster == `rank_at` == `kind_at` an 500 Gitterproben, die sd-Quantisierung, der Endpunkt in beiden Modi, `uniform`, `waters` |
 | `scripts/smoke_terrain_types.py` [9] | die Sanitizer der Katalog-Felder (`edge_blend_m` mit 0 als WERT, Relief-Amplitude/Welle) |
 | `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor`; **[4a]** der Wandsaum — beide Grenzen des 0,14-Maßes von Hand, die feste Oberkante, der ungesäumte Sturz, die ungesäumte Türschwelle und die unbewegte deklarierte Etage |
-| `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **10** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
+| `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **11** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
 | `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
 **Client — Höhe, Schnitt, Wasser, Szene**
@@ -7971,12 +7972,12 @@ voller `null` — sonst würde ewig neu gebacken.
 | `surface` | `models[]` mit `role: "room"`, und `role: "prop"` **mit** `walkable` | der Nutzlast-Block `step, origin, cols, rows, values, box_min, box_max, extent_snapped` — die Zahlen der Datei unverändert, im Modell-Rahmen |
 | `walkable` | nur Prop-Spec | das Prop trägt das Tag `walkable`; ohne das Feld schickt es kein Raster (das Raster einer Tischplatte wäre totes Gewicht in jeder Nutzlast) |
 
-Gebäude-Specs bekommen keins (Entscheid 1). `code_version` steht auf **10** —
+Gebäude-Specs bekommen keins (Entscheid 1). `code_version` steht auf **11** —
 die Konstante gehört dem ganzen Payload, nicht diesem Abschnitt, und bewegt
 sich mit jeder Änderung an dem, was der Composer bei unveränderten Daten
 antwortet (6 = diese Raster, 7 = Platz-Typen an den Markern, 8 = der
 `anchor` am Prop-Marker, 9 = `stairs[]` samt Plattenloch, 10 = Marker
-`diorama`).
+`diorama`, 11 = das umbenannte Platz-Typ-Vokabular).
 
 **Die Signatur.** `_signature` nimmt je Raster einen Kurz-Hash des Blocks auf
 (`model_surface.block_sig`, 8 Zeichen), unter dem Schlüssel
@@ -8215,7 +8216,7 @@ Tastendruck im Lageplan-Editor.
 | Die Zellenregel Knoten für Knoten an einer rein in Python geschriebenen Mini-GLB (Sockel + Block + hoher Überhang + niedriger Sims): 80 / 20 / **20** / **90** cm und `null` neben dem Modell — 20, weil unter dem hohen Überhang 1,3 m ≥ 1,2 m Luft ist, 90, weil unter dem Sims nur 0,6 m bleiben; dazu beide Boxen, `extent_snapped` unter Fix 0 und Fix x = 90, und die Gültigkeit (Version, Quelle, Fix, unvollständige Datei) | ebenda **part 1** (36 Checks, echtes Blender; ohne Blender SKIP statt Fehler) |
 | Die Sampler-Handtabelle: Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt | ebenda **part 2** (15 Checks) |
 | **Dieselbe Handtabelle in TypeScript** — `surfaceHeightAt`/`highestSurfaceAt` Zahl für Zahl wie der Python-Zwilling | `client3d/scripts/smoke_surface_math.mjs` (15 Checks) |
-| Rezept: `code_version` **10** (die Konstante bewegt sich mit JEDER Änderung an dem, was der Composer bei unveränderten Daten antwortet: 6 = diese Oberflächen-Raster, 7 = Marker sprechen Platz-Typen, 8 = der Prop-Marker nennt seinen `anchor`, 9 = `stairs[]` samt Plattenloch, 10 = Marker `diorama`), das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
+| Rezept: `code_version` **11** (die Konstante bewegt sich mit JEDER Änderung an dem, was der Composer bei unveränderten Daten antwortet: 6 = diese Oberflächen-Raster, 7 = Marker sprechen Platz-Typen, 8 = der Prop-Marker nennt seinen `anchor`, 9 = `stairs[]` samt Plattenloch, 10 = Marker `diorama`, 11 = das umbenannte Platz-Typ-Vokabular), das Raum-Spec trägt den Block unverändert, ein Raum ohne Raster kein Feld, das ungetaggte Prop weder `walkable` noch Block, das getaggte beides (und `walkable` ohne Bake: die Flagge ohne Block) — und die Signatur bewegt sich, sobald ein Raster erscheint | `scripts/smoke_scene_recipe.py` **[7i]** (9 Checks) |
 | Zwei Varianten desselben Props in einem Raum: jede Kopie bekommt das Raster IHRER Store-Variante, und ein Neubacken der „verschluckten" Variante bewegt die Signatur | ebenda **[7h]** (8 Checks) |
 | Die Höhensperre: neben der Kiste blanker Boden, auf der 0,3-m-Kiste 0,3 (Schritt erlaubt), am 0,8-m-Block `too_steep` als STUFE, wieder herunter erlaubt; Etage-0-Filter, Anker-Lift, TTL-Cache, `forget_surfaces` und der defekte Sidecar, der auf Boden zurückfällt statt zu 500 | `scripts/smoke_play_pos.py` **[23]** (21 Checks) |
 | Sprosse 1 auf der Server-Seite: ein Loch im Raster (`null`-Knoten) fällt auf das `walk_y_world` des Raums in seinem `floor_plan`-Hull, außerhalb jedes Hulls antwortet das Gelände, bei Überlappung gewinnt der kleinste Hull — und das Schritt-Tor misst gegen 0,9 statt gegen 0,0 | ebenda **[23h]** (11 Checks) |
@@ -8229,9 +8230,13 @@ Tastendruck im Lageplan-Editor.
 **Was sich ändert.** Ein Marker sagte bisher „hier spielt Clip `sit`"; jetzt
 sagt er „hier ist ein Sitzplatz". Das Vokabular ist die endliche Liste der
 **Platz-Typen** des Posen-Katalogs (`pose_catalog.get_groups()` — Start-Satz
-`seat` 0,314 / `bed` 0,631 / `floor` 0,051 / `counter` 0 / `stand` 0 als
-`root_drop`); welche Pose dort gespielt wird, entscheidet der Charakter, nicht
-der Marker (plan-posen-plaetze.md § 3). Jeder Marker und jede Platzierung
+dieses Nachtrags: `seat` 0,314 / `bed` 0,631 / `floor` 0,051 / `counter` 0 /
+`stand` 0 als `root_drop`; **das Vokabular wurde am 2026-09-08 abgelöst**,
+siehe den Nachtrag „Ein Platz-Typ ist eine KÖRPERFORM" unten — die Liste
+bleibt hier stehen, weil die Herleitung `root_offset =
+groups[group].root_drop × 1,70` unten daran hängt und weiter gilt); welche
+Pose dort gespielt wird, entscheidet der Charakter, nicht der Marker
+(plan-posen-plaetze.md § 3). Jeder Marker und jede Platzierung
 trägt eine **stabile ID** (8 Zeichen Base32 `a-z2-7`, vom Sanitizer
 vergeben, gespeicherte IDs bleiben), damit ein gelöschter Nachbar keinen
 Platz umnummeriert und ein Charakter einen Platz beim Namen halten kann.
@@ -8311,8 +8316,10 @@ Renderer rechnet einen Slot nach (§ B5a).
 **Einmal-Migration beim Boot** (`app/core/places_migration.py`,
 `world_kv`-Flag `migration.places_v1`, direkt nach der Marker-Oberflächen-
 Reparatur und VOR der Prop-Feld-Migration): `animation` → `group` nach der
-Regel der alten Absenk-Tabelle (`sit*` → seat, `sleep*` → bed, `lie*`/`lay*`
-und `sit-ground*` → floor, alles andere → stand), IDs für jeden Marker und
+Regel der alten Absenk-Tabelle (`sit-ground*` → ground, sonst `sit*` → seat,
+`sleep*`/`lie*`/`lay*` → lie, alles andere → stand — `group_for_kind` spricht
+seit dem 2026-09-08 das neue Vokabular, denn sie läuft in jeder Welt ohne das
+Flag `migration.places_v1` und erzeugte sonst tote Gruppen), IDs für jeden Marker und
 jede Platzierung; betrifft `layout.markers[]`, `layout.props[]` und die
 Prop-Sidecars (Datensatz-`markers` UND jede Variante). Kein Fallback-Leser
 für `animation` — nirgends.
@@ -8502,7 +8509,113 @@ muss sich bewegen, sonst behält jeder Client seine alte Szene.
 | Clipping: der Ring x 2…6,85 kommt an der ±5-Kontur UND im Raum „hall" (x 1…5) als x 2…5 an; ein Raum, in dessen Ecke er ragt, trägt nur die Überlappung; ein Ring, der ganz innen liegt, bleibt unverändert; ROTE PROBE: keine Platte trägt das rohe Rechteck | ebenda **[2s]** |
 | Kanonische Ringe: ein ganz innen liegender Lauf bleibt unverändert — nach Osten (`dir` 90, Ring x −2…2,85) UND nach Norden (`dir` 0, Ring `[[1,4,−2],[2,6,−2],[2,6,2,85],[1,4,2,85]]` ab der kleinsten Ecke) | ebenda **[2s]** |
 | `clip_ring_to_outline` von Hand: Identität (auch bei umgekehrt gewickelter Outline), Ost-Schnitt, Ecken-Schnitt, keine Überlappung → `[]`, blosse BERÜHRUNG → `[]`, Ergebnis im Uhrzeigersinn, Fläche 3,6 m² (beides am RÜCKGABEWERT gemessen) | ebenda **[2c]** |
-| `SCENE_RECIPE_VERSION` == 10 (die Konstante gehört dem ganzen Payload: seit dieser Runde hat der Marker-`diorama` sie weitergedreht) | ebenda **[7i]** |
+| `SCENE_RECIPE_VERSION` == 11 (die Konstante gehört dem ganzen Payload: nach dem Marker-`diorama` dieser Runde hat sie zuletzt die Platz-Typ-Umbenennung vom 2026-09-08 weitergedreht) | ebenda **[7i]** |
 | Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`client3d/scripts/smoke_walk_math.mjs`) |
 | `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | **noch nicht bewiesen — folgt mit Task 3** (ebenda) |
 | Fahrstuhl: `{levels:[0,1], current:0}` → einzige Option 1, `{[0,1], 1}` → 0, `{[0,1,2], 1}` → `null` | **noch nicht bewiesen — folgt mit Task 4** (ebenda) |
+
+## Nachtrag 2026-09-08 (§ A4/§ B): Ein Platz-Typ ist eine KÖRPERFORM (v11)
+
+**Was sich ändert.** Das Vokabular der Platz-Typen (`pose_catalog.get_groups()`,
+Nachtrag 2026-08-28) benannte Möbelsorten; es benennt jetzt Körperformen:
+
+```
+alt:  seat  bed  floor  counter  stand
+neu:  seat  lie  ground  stand
+```
+
+`bed` und `floor` sind EINE Gruppe `lie`: Liegen ist eine Haltung, und ob die
+Fläche eine Matratze, eine Couch oder der Boden ist, sagt der Marker, nicht die
+Pose. (Anlass war der gespiegelte Fall: eine Figur, die auf der Couch liegen
+sollte, fand keinen `floor`-Platz und lag neben dem Sofa auf dem Boden.)
+`counter` entfällt ersatzlos — sein einziger Eintrag (`working`, „sitting at
+desk, hands on keyboard") ist eine Sitzpose und ist heute `seat`; was die Gruppe
+zu sein vorgab, „an einem Gerät stehen, ihm zugewandt", sagen Position und
+`facing` des Markers längst. `ground` (bodennah: hocken, knien) ist neu.
+
+**`root_drop` bleibt an der Gruppe**, und die Herleitung des Nachtrags
+2026-08-28 gilt unverändert: `root_offset = groups[group].root_drop × 1,70`, auf
+Millimeter gerundet, allein vom Server gerechnet, kein Renderer hat eine
+Tabelle. Nur die Tabelle selbst ist neu:
+
+| Gruppe | `root_drop` | `root_offset` bei 1,70 m |
+|---|---|---|
+| `stand` | 0 | 0 |
+| `ground` | 0 | 0 |
+| `seat` | 0,314 | 0,534 |
+| `lie` | 0,051 | 0,087 |
+
+`bed`s 0,631 war am 2026-08-27 gegen den Mixamo-Clip `sleep` kalibriert, der
+drei Tage später (`c2eb166d`) gelöscht wurde. `sleeping`, `lying` und
+`recovering` spielen heute denselben CMU-Clip `laying`; mit 0,631 steckte jede
+schlafende Figur 0,93 m unter der Matratze, mit `lie` 0,051 liegt sie darauf.
+Nachgerechnet aus der E5-Kette
+(`posed hips = S − rootOffset − clipHipsDrop + hipsBindY`) in
+`scripts/smoke_platztypen.py` **[4]**.
+
+**Offener Punkt, ausdrücklich benannt:** auf Dauer gehört die Zahl an den CLIP,
+nicht an den Platz-Typ — derselbe `sit`-Clip sitzt in zwei Bibliotheksfassungen
+3 cm verschieden tief (`scripts/smoke_prop_marker_place.mjs`,
+E5-Abschnitt). Das ist ein geparkter eigener Strang; er braucht die
+Hüft-Median-Messung als Sidecar-Feld und die Klärung des Verhältnisses zu
+`clipHipsDrop`, das zur Laufzeit bereits dasselbe aus anderer Richtung misst.
+Bis dahin ist die Gruppe die beste verfügbare Adresse, und `bed`s Wert war
+nicht „an der falschen Stelle", sondern schlicht gegen eine gelöschte Datei
+geeicht.
+
+**Neu im Gruppen-Payload: `needs_place`** (`GET /poses/groups`, und in jedem
+Schreibpfad des Katalogs normalisiert):
+
+```
+groups: { <key>: { label, root_drop, default, needs_place } }
+```
+
+`needs_place: false` heißt „Posen dieser Gruppe brauchen keinen Marker": sie
+werden unter „Anywhere here" angeboten, `places.assign` vergibt keinen Platz,
+der Platz wird nie benannt (`place_label`/`place_phrase` bleiben leer) und ein
+Paar trifft sich auf halbem Weg statt an einem Marker. Fehlt der Schlüssel,
+gilt `true` — dieselbe Vorgabe, auf die der Server normalisiert. Heute tragen
+`stand` und `ground` `false`, `seat` und `lie` `true`. Damit hängen die
+Sonderregeln, die bisher am Literal `"stand"` klebten, an einer EIGENSCHAFT
+statt an einem Namen: ein Client, der Platz-Typen anzeigt oder Marker autoren
+lässt, liest das Feld und rät nicht am Gruppennamen.
+
+**Marker mit unbekannter Gruppe.** Unverändert gilt: ein Marker, dessen Gruppe
+der Katalog nicht kennt, ist kein Platz und fehlt im Payload. Neu ist, dass das
+keine STILLE Löschung mehr ist — die beiden Sanitizer
+(`world_ops._sanitize_markers`, `props.sanitize_markers`) und das Szenen-Rezept
+melden die unbekannte Gruppe ins Log. Korrigiert wird nichts und nichts fällt
+auf eine Ersatzgruppe zurück: der gespeicherte Wert bleibt stehen, es gibt nur
+eine Spur, damit ein Tippfehler oder ein altes Content-Pack nicht als „leerer
+Raum" statt als Meldung erscheint.
+
+**Einmal-Migration beim Boot** (`app/core/place_group_migration.py`,
+`world_kv`-Flag `migration.place_groups_v1`, nach `migrate_prop_fields_once`):
+`bed`/`floor` → `lie`, `counter` → `stand` in `locations[].rooms[]
+.layout.markers[]` (das Gelände ist der Raum `__ground__` und läuft im selben
+Durchgang mit) und in den Prop-Sidecars (jede Variante plus defensiv das
+Legacy-Feld `markers`). Dieselbe reine Funktion `rename_place_groups(markers)`
+hängt im Content-Pack-Import (`content_io._sanitize_imported_location`,
+`prop_field_migration.normalize_prop_sidecar`) — ein Paket von vor dieser Runde
+brächte sonst `bed`-Marker in eine längst migrierte Welt zurück. Auch
+`places_migration.group_for_kind` spricht jetzt das neue Vokabular; sie läuft in
+jeder Welt ohne das ältere Flag `migration.places_v1` und erzeugte sonst tote
+Gruppen.
+
+`SCENE_RECIPE_VERSION` 10 → **11**: die Gruppennamen stehen im Payload und die
+Glyph-Farben der Clients hängen daran; ohne Bump behielte jeder Client seine
+gecachte Szene und zeichnete graue Glyphen für Gruppen, die es nicht mehr gibt.
+
+### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Die reine Umbenennung: `RENAMES` bildet genau `bed`/`floor` → `lie` und `counter` → `stand` ab, `seat`/`stand` fehlen (ein Treffer-Miss heißt „nichts zu tun"), Groß-/Kleinschreibung wird gefangen, andere Felder bleiben unberührt | `scripts/smoke_platztypen.py` **[1]** |
+| Die Boot-Migration in allen vier Marker-Heimaten samt Idempotenz (zweiter Lauf → None) und dem Teil-Lauf, der das Flag NICHT setzt | ebenda **[2]/[6b]** |
+| Der Couch-Fall: ein gespeicherter `bed`-Marker nimmt nach der Migration eine `lying`-Pose auf, ein `seat`-Marker nicht | ebenda **[3]** |
+| Die Höhe: `sleeping` auf der Bankfläche S = 0,587 → Hüfte 0,640 (`S + 0,0531`) statt −0,346 (`S − 0,9330`); Differenz 0,986 m, clipunabhängig | ebenda **[4]** |
+| `needs_place: false`: kein Platz, kein Name, „Anywhere here" im `room_offer`, und ein Paar bekommt None statt `PlaceUnavailable` | ebenda **[5]** |
+| Der Einschlafende im Sessel verliert seinen Sitzplatz an den `lie`-Marker bzw. gibt ihn frei | ebenda **[6]** |
+| Der Import-Pfad benennt um und sagt es, statt zu schlucken | ebenda **[7]** |
+| Eine unbekannte Gruppe erzeugt eine MELDUNG (beide Sanitizer, das Szenen-Rezept einmal je Komposition, die Möblierung mit Eintrag im Bestätigungsdialog) — und wird trotzdem nicht korrigiert | ebenda **[8]** |
+| `code_version` == 11 | `scripts/smoke_scene_recipe.py` **[7i]** |
