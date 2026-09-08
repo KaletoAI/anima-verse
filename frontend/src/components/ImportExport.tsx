@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { downloadBlob } from '../lib/download'
 import { useToast } from '../lib/Toast'
+import { summarizeImport, type ImportResult } from '../lib/importNotes'
 
 export interface ExportOption {
   key: string
@@ -373,25 +374,6 @@ export function PublishButton({
 interface PreviewElement { kind: string; id: string; name: string; exists: boolean }
 interface PreviewResult { type: string; multi: boolean; elements: PreviewElement[] }
 
-/** What an importer answers under `result`. A collection carries one `results`
- *  row per sub-pack; every other type reports a single `status`. */
-interface ImportResultRow {
-  name?: string; type?: string; status?: string; error?: string
-  /** A sub-pack's own importer dict — a nested location reports its
-   *  `props_missing` and `warnings` in here, not on the collection's top
-   *  level. */
-  result?: { props_missing?: unknown; warnings?: unknown }
-}
-interface ImportResult {
-  status?: string
-  results?: ImportResultRow[]
-  props_missing?: unknown
-  /** What the world's sanitizers refused, in plain words (a location pack
-   *  from before contract v6 loses its letter edges and its fraction-era
-   *  layouts — no migration, so the import SAYS what fell away). */
-  warnings?: unknown
-}
-
 /**
  * File-picker button for ZIP imports. Opens a generic preview dialog: every
  * importable element is listed with a checkbox, and elements that would
@@ -502,20 +484,7 @@ export function ImportButton({
       // The route answers {status, result: <importer dict>}, so the importer's
       // own fields sit under `result` (app/routes/content_packs.py, /import).
       const result = (body as { result?: ImportResult }).result || {}
-      const rows = Array.isArray(result.results) ? result.results : []
-      // A collection installs entry by entry and never aborts, so its outcome
-      // is only in the rows: counting them is what keeps a run in which
-      // NOTHING landed from reading as a green "Imported".
-      const n = (s: string) => rows.filter((r) => r.status === s).length
-      const installed = n('success')
-      const existed = n('exists')
-      const broken = n('failed') + n('skipped')
-      const parts: string[] = []
-      if (installed) parts.push(t('{n} installed').replace('{n}', String(installed)))
-      if (existed) parts.push(t('{n} already there').replace('{n}', String(existed)))
-      if (broken) parts.push(t('{n} failed').replace('{n}', String(broken)))
-      const summary = rows.length > 0 ? parts.join(', ') : ''
-      const wentWrong = rows.length > 0 ? installed === 0 || broken > 0 : result.status === 'failed'
+      const { summary, wentWrong, notes } = summarizeImport(result, t)
 
       if (summary) {
         toast(summary, wentWrong ? 'error' : 'info')
@@ -532,51 +501,18 @@ export function ImportButton({
       onImported?.(body)
 
       // Everything that must NOT vanish with a 2-second toast stays in the
-      // dialog until the user closes it: a partly failed collection (with the
-      // reason of each entry) and the props a location import could not find.
-      const notes: string[] = []
-      if (wentWrong && summary) {
-        const why = rows
-          .filter((r) => r.status !== 'success')
-          .map((r) => `${r.name || r.type || '?'}: ${r.error || r.status}`)
-        notes.push(t('Import result:') + ' ' + summary
-          + (why.length > 0 ? ' — ' + why.join('; ') : ''))
-      }
-      // A location import lists every prop its placements name that is neither
-      // bundled nor already known here — those placements render as "missing".
-      // In a collection the location sits one level down, so its list is in
-      // `results[i].result.props_missing` — the union of both levels is shown,
-      // ids deduped.
-      const asIds = (v: unknown) => (Array.isArray(v) ? v.map(String).filter(Boolean) : [])
-      const missingIds = [...new Set([
-        ...asIds(result.props_missing),
-        ...rows.flatMap((r) => asIds(r.result?.props_missing)),
-      ])]
-      if (missingIds.length > 0) {
-        notes.push(t('Missing props (placements will render as missing):')
-          + ' ' + missingIds.join(', '))
-      }
-      // The importer runs an archive through the world's own sanitizers and
-      // does NOT migrate what they refuse — a pre-v6 pack arrives without its
-      // letter edges and without layouts that carry no metric rectangle. Each
-      // drop is one line, and it stays on screen: a silently emptied room is
-      // found weeks later, this is found now.
-      const asLines = (v: unknown) => (Array.isArray(v) ? v.map(String).filter(Boolean) : [])
-      const dropped = [...new Set([
-        ...asLines(result.warnings),
-        ...rows.flatMap((r) => asLines(r.result?.warnings)),
-      ])]
-      if (dropped.length > 0) {
-        notes.push(t('Dropped on import (no migration — rebuild these):')
-          + '\n· ' + dropped.join('\n· '))
-      }
+      // dialog until the user closes it (summarizeImport says what).
       if (notes.length > 0) {
         setWarn(notes.join('\n'))
       } else {
         close()
       }
     } catch (e) {
-      toast(t('Import failed') + ': ' + (e as Error).message, 'error')
+      // The importer's refusals are full sentences (a fraction-era location
+      // pack names why and what to do) — a toast is gone before they are read.
+      const msg = t('Import failed') + ': ' + (e as Error).message
+      toast(msg, 'error')
+      setWarn(msg)
     } finally {
       setBusy(false)
     }

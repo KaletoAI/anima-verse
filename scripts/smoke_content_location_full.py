@@ -158,17 +158,23 @@ already owns the prop:
       source images, and the roof sidecar. ``warnings`` is empty — a pack from
       a current world loses nothing.
 
- [13] LEGACY ARCHIVE — the sanitizer decides, nothing is migrated. A hand-made
-      ZIP with pre-v6 state:
-        * ``map3d`` with plan_width_m, rotation, size, extent_m, tile_rotation
-          and two boundary openings on LETTER edges ("N"/"E"). None of them
-          has a reader: every field is dropped, and since a location without a
-          drawn boundary has no area, the whole map3d goes. Each drop is named
-          in ``warnings``.
-        * a fraction-era room rect (0.1/0.1/0.5/0.5) is NOT translated — those
-          are finite metres, so the room arrives 50 cm across. A factor would
-          be exactly the migration this repo refuses, and nothing distinguishes
-          it from a legitimately tiny room.
+ [13] LEGACY ARCHIVE — refused or sanitized, never migrated. Two hand-made
+      ZIPs with pre-v6 state:
+      [13a] FRACTION ERA: ``map3d.plan_width_m`` stored WITHOUT a boundary and
+          a room rect of 0.1/0.1/0.5/0.5 — the shape a pre-v6 export has. The
+          import is REFUSED with a message naming the cause: a v6 save never
+          stores a width without a boundary, and the rect would otherwise pass
+          the metre sanitizers as a 50-cm room (bug "Bernstein Academy",
+          2026-09-08; the detector is ``content_io._fraction_era_reason``, its
+          own check is ``smoke_content_location_fraction_era.py``). Nothing is
+          written.
+      [13b] DEAD DIALS, no width: the same archive without ``plan_width_m``
+          and with a metre-sized yard (1/1/5/5):
+        * ``map3d`` with rotation, size, extent_m, tile_rotation and two
+          boundary openings on LETTER edges ("N"/"E"). None of them has a
+          reader: every field is dropped, and since a location without a drawn
+          boundary has no area, the whole map3d goes. Each drop is named in
+          ``warnings``.
         * a letter edge on a ROOM opening stays valid: only the LOCATION
           boundary moved to indices (v6 Nr. 5). ``_sanitize_opening`` still
           accepts N/S/E/W for rectangles.
@@ -203,7 +209,7 @@ from app.core.props import _prop_dir, create_prop, delete_prop  # noqa: E402
 from app.models.inventory import _save_items, add_item_to_room  # noqa: E402
 from app.models.world import (  # noqa: E402
     GROUND_ROOM_ID, _load_world_data, _save_world_data, add_location,
-    get_location_by_id)
+    get_location_by_id, list_locations)
 
 FAILURES = []
 CHECKED = 0
@@ -749,7 +755,21 @@ check("Dach-Modell-Meta wiederhergestellt",
       read_json(_model_dir(_owner_id(NEW)) / "building_1.json"), ROOF_META)
 
 
-print("\n[13] Alt-Archiv: der Sanitizer entscheidet, es wird NICHT migriert")
+print("\n[13a] Alt-Archiv aus der Bruchteil-Aera: der Import wird ABGELEHNT")
+
+
+def legacy_zip(loc):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as out:
+        out.writestr("db/location.json", json.dumps(loc, ensure_ascii=False))
+        out.writestr("manifest.json", json.dumps({
+            "version": 1, "type": "location", "location_id": loc["id"],
+            "location_name": loc["name"], "room_count": len(loc["rooms"]),
+            "image_count": 0, "exported_at": "2026-01-01T00:00:00Z", "files": [],
+        }, ensure_ascii=False))
+    return buf.getvalue()
+
+
 legacy_loc = {
     "id": "legacy01", "name": "Legacy Yard", "description": "",
     "map3d": {
@@ -770,15 +790,22 @@ legacy_loc = {
                     "props": [{"prop_id": OAK, "id": "oak3", "at": [1, 1]}]}},
     ],
 }
-legacy_buf = io.BytesIO()
-with zipfile.ZipFile(legacy_buf, "w", zipfile.ZIP_DEFLATED) as out:
-    out.writestr("db/location.json", json.dumps(legacy_loc, ensure_ascii=False))
-    out.writestr("manifest.json", json.dumps({
-        "version": 1, "type": "location", "location_id": "legacy01",
-        "location_name": "Legacy Yard", "room_count": 2, "image_count": 0,
-        "exported_at": "2026-01-01T00:00:00Z", "files": [],
-    }, ensure_ascii=False))
-res7 = import_location_from_zip(legacy_buf.getvalue())
+n_before = len(list_locations())
+try:
+    import_location_from_zip(legacy_zip(legacy_loc))
+    refusal = ""
+except ValueError as e:
+    refusal = str(e)
+check("Bruchteil-Pack abgelehnt", "fraction-era location pack" in refusal, True)
+check("Meldung nennt den Grund",
+      "plan_width_m is stored without a boundary" in refusal, True)
+check("nichts geschrieben", len(list_locations()), n_before)
+
+print("\n[13b] Alt-Archiv ohne Planbreite: der Sanitizer entscheidet, es wird NICHT migriert")
+legacy_loc["id"] = "legacy02"
+del legacy_loc["map3d"]["plan_width_m"]
+legacy_loc["rooms"][0]["layout"].update({"x": 1, "y": 1, "w": 5, "d": 5})
+res7 = import_location_from_zip(legacy_zip(legacy_loc))
 legacy_id = res7["location_id"]
 legacy_after = get_location_by_id(legacy_id)
 warn_text = "\n".join(res7["warnings"])
@@ -787,20 +814,15 @@ warn_text = "\n".join(res7["warnings"])
 check("map3d komplett weg", "map3d" in legacy_after, False)
 check("beide Buchstaben-Oeffnungen verworfen",
       "2 of 2 boundary opening(s) dropped" in warn_text, True)
-check("plan_width_m als Eingabe ignoriert",
-      "plan_width_m (12.0) was ignored" in warn_text, True)
 check("tote v6-Felder gemeldet",
       "extent_m, rotation, size, tile_rotation" in warn_text, True)
 check("Location steht ohne Flaeche da",
       "nothing survived" in warn_text, True)
 
 legacy_layouts = layouts_of(legacy_id)
-# NOT translated: a fraction-era rect is a finite number of metres, so it
-# arrives as a 50-cm room. There is no way to tell it from a legitimately tiny
-# one, and inventing a factor would be exactly the migration this repo refuses.
-check("Bruchteil-Rechteck bleibt als Zentimeter-Raum stehen",
+check("Meter-Rechteck kommt unveraendert an",
       {k: legacy_layouts["Yard"][k] for k in ("x", "y", "w", "d")},
-      {"x": 0.1, "y": 0.1, "w": 0.5, "d": 0.5})
+      {"x": 1.0, "y": 1.0, "w": 5.0, "d": 5.0})
 # A ROOM opening may still name a letter edge — _sanitize_opening keeps
 # 'N'|'S'|'E'|'W' for rectangles. Only the LOCATION boundary switched to
 # indices (v6 Nr. 5), and only there is a letter dropped.

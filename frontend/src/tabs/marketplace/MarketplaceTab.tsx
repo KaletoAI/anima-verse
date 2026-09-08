@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { summarizeImport, type ImportResult } from '../../lib/importNotes'
 import { CollectionBuilder } from './CollectionBuilder'
 import { useEnlarge } from '../../components/ZoomButton'
 import { ListPane } from '../../components/ListPane'
@@ -96,6 +97,14 @@ export function MarketplaceTab() {
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [loading, setLoading] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
+  // What the last install left to say, pinned to the pack it belongs to: a
+  // partly failed collection, missing props, sanitizer drops, or the
+  // importer's refusal. It stays in the details pane until closed — the same
+  // importers answer the local ZIP dialog, which already shows all of this;
+  // a 2-second toast is gone before a refusal is read.
+  const [installNotes, setInstallNotes] = useState<{
+    packId: string; lines: string[]; failed: boolean
+  } | null>(null)
   // Skill-package (code) install awaiting the in-app trust confirmation.
   const [pendingTrust, setPendingTrust] = useState<string | null>(null)
   const [selected, setSelected] = useState<Pack | null>(null)
@@ -198,18 +207,33 @@ export function MarketplaceTab() {
       }
       setPendingTrust(null)
       setInstalling(pack.id)
+      setInstallNotes(null)
       try {
-        const result = await apiPost<{ result?: { status?: string } }>(
+        const result = await apiPost<{ result?: ImportResult }>(
           '/api/content/install',
           body,
         )
-        toast(t('Installed: {name}').replace('{name}', pack.name || pack.id))
-        // Soft hint: tell the user which local tab to check.
-        const where = PRETTY_TYPE[pack.type] || pack.type
-        toast(t('Visit the {tab} tab to use it').replace('{tab}', where))
+        const { summary, wentWrong, notes } = summarizeImport(result.result || {}, t)
+        if (summary) {
+          toast(summary, wentWrong ? 'error' : 'info')
+        } else if (result.result?.status === 'exists') {
+          toast(t('Already present — nothing changed.'), 'error')
+        } else if (result.result?.status === 'failed') {
+          toast(t('Nothing was installed.'), 'error')
+        } else {
+          toast(t('Installed: {name}').replace('{name}', pack.name || pack.id))
+          // Soft hint: tell the user which local tab to check.
+          const where = PRETTY_TYPE[pack.type] || pack.type
+          toast(t('Visit the {tab} tab to use it').replace('{tab}', where))
+        }
+        if (notes.length > 0) {
+          setInstallNotes({ packId: pack.id, lines: notes, failed: wentWrong })
+        }
         return result
       } catch (e) {
-        toast(t('Install failed') + ': ' + (e as Error).message, 'error')
+        const msg = t('Install failed') + ': ' + (e as Error).message
+        toast(msg, 'error')
+        setInstallNotes({ packId: pack.id, lines: [msg], failed: true })
       } finally {
         setInstalling(null)
       }
@@ -552,6 +576,22 @@ export function MarketplaceTab() {
                 </span>
               ) : null}
             </div>
+            {installNotes && installNotes.packId === selected.id ? (
+              <div style={{
+                marginTop: 12, padding: '8px 10px', borderRadius: 6, fontSize: '0.85em',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                color: installNotes.failed ? '#f85149' : '#e0a356',
+                border: `1px solid ${installNotes.failed ? '#f85149' : '#e0a356'}`,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <strong>{installNotes.failed ? t('Install result') : t('Installed with notes')}</strong>
+                  <button className="ga-btn ga-btn-sm" onClick={() => setInstallNotes(null)}>
+                    {t('Close')}
+                  </button>
+                </div>
+                <div style={{ marginTop: 6 }}>{installNotes.lines.join('\n')}</div>
+              </div>
+            ) : null}
           </div>
         )}
       </section>

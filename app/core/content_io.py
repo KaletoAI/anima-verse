@@ -822,6 +822,59 @@ def _sanitize_imported_location(loc: Dict[str, Any]) -> List[str]:
     return warnings
 
 
+def _fraction_era_reason(loc: Dict[str, Any]) -> Optional[str]:
+    """Why a location dict is a FRACTION-ERA pack — or ``None`` when it is not.
+
+    Before contract v6 (the metre wave, 2026-08-19) a room rectangle was a
+    SHARE 0…1 of ``map3d.plan_width_m`` and ``map3d.outline`` a fraction
+    polygon. Since v6 every length is metres and ``plan_width_m`` is DERIVED
+    from ``map3d.boundary`` — a v6 save never stores a width without one.
+    The v6 sanitizers cannot tell 0.26 (a share) from 0.26 (metres), so such
+    a pack sailed through them and arrived as centimetre rooms pushed onto
+    the pin, with no warning at all. This is the detector the sanitizers lack;
+    the importer REFUSES on it (no migration, by doctrine — same as the
+    grid-era refusal in :func:`import_map_layout_from_zip`).
+
+    Two signatures, either suffices:
+
+    * a stored ``plan_width_m`` and no ``boundary`` — impossible after v6;
+    * a fraction ``outline`` (every coordinate in 0…1, no ``boundary``) AND
+      every room rectangle within 0…1 — a drawn floor plan a metre across.
+
+    A single small room on its own is NOT proof (a garden shed is 0.8 m wide
+    and legitimately so), which is why the second rule needs the outline.
+    """
+    m3 = loc.get("map3d")
+    m3 = m3 if isinstance(m3, dict) else {}
+    has_boundary = bool(m3.get("boundary"))
+    if has_boundary:
+        return None
+    if m3.get("plan_width_m") is not None:
+        return ("map3d.plan_width_m is stored without a boundary — since v6 "
+                "the width is derived from the drawn boundary and never saved "
+                "on its own")
+
+    def _unit(v: Any) -> bool:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return False
+        return 0.0 <= f <= 1.0
+
+    outline = m3.get("outline")
+    if not (isinstance(outline, list) and len(outline) >= 3 and all(
+            isinstance(pt, (list, tuple)) and len(pt) == 2
+            and _unit(pt[0]) and _unit(pt[1]) for pt in outline)):
+        return None
+    rects = [room.get("layout") for room in (loc.get("rooms") or [])
+             if isinstance(room, dict) and isinstance(room.get("layout"), dict)
+             and room.get("layout", {}).get("w") is not None]
+    if rects and all(_unit(r.get(k)) for r in rects for k in ("x", "y", "w", "d")):
+        return ("map3d.outline and every room rectangle lie within 0…1 — a "
+                "floor plan one metre across is a fraction plan")
+    return None
+
+
 def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     """Import a location ZIP. Always creates a new location (new UUID).
 
@@ -856,6 +909,15 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     loc = json.loads(zf.read("db/location.json"))
     if not isinstance(loc, dict):
         raise ValueError("db/location.json must be an object")
+    # REFUSED, not translated: a fraction-era plan would pass the metre
+    # sanitizers unnoticed and arrive as centimetre rooms on the pin.
+    reason = _fraction_era_reason(loc)
+    if reason:
+        raise ValueError(
+            "fraction-era location pack — its floor plan stores room rectangles "
+            "as shares of the plan width (contract before v6, 2026-08-19), not "
+            "metres, and would import as centimetre rooms; no longer importable. "
+            f"Export the location again from a current world. ({reason})")
 
     # Fresh ids: the imported location gets a new id.
     new_loc_id = uuid.uuid4().hex[:8]
