@@ -207,8 +207,10 @@ async function main() {
   console.log('\n[9] optional local fixture')
   const glbPath = process.env.MIRROR_FIXTURE_GLB
   const jsonPath = process.env.MIRROR_FIXTURE_JSON
-  if (!glbPath || !jsonPath) {
+  if (!glbPath) {
     console.log('  - skipped (MIRROR_FIXTURE_GLB not set)')
+  } else if (!jsonPath) {
+    console.log('  - skipped (MIRROR_FIXTURE_JSON not set)')
   } else if (!fs.existsSync(glbPath) || !fs.existsSync(jsonPath)) {
     console.log(`  - skipped (fixture not on disk: ${
       !fs.existsSync(glbPath) ? glbPath : jsonPath})`)
