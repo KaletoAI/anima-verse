@@ -8,7 +8,7 @@ import {
 } from './clipCoverage';
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
-  bindRelativeValues, normBoneName, restCorrections, restPoseOf,
+  bindRelativeValues, hipsTrackMedian, normBoneName, restCorrections, restPoseOf,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
@@ -454,32 +454,28 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
 
   const q = new THREE.Quaternion();
   const v = new THREE.Vector3();
-  // The source's STANDING reference. It used to be the MAXIMUM hips height over
-  // ALL clips — which made a SINGLE badly scaled clip the reference and pushed
-  // EVERY figure into the ground (finding 2026-07-26: taking-fotos.fbx with
-  // hips ~211 instead of ~110 → all NPCs ~0.47 m too deep, everywhere).
-  // Now: measure the MEDIAN hips height per clip; the reference is the largest
-  // clip median that at least one second clip confirms to within 70 % (sitting
-  // and lying clips legitimately stay below it and lower the hips as intended).
-  // A clip ABOVE 1.5 × the reference is an export scale error and is itself
-  // scaled back onto the reference.
-  const hipMedian = (clip: THREE.AnimationClip): number => {
-    const ys: number[] = [];
-    for (const track of clip.tracks) {
-      if (track.name.endsWith('.position') && /hips\./i.test(track.name.replace(/^mixamorig:?/i, ''))) {
-        for (let i = 1; i < track.values.length; i += 3) ys.push(Math.abs(track.values[i]));
-      }
-    }
-    ys.sort((a, b) => a - b);
-    return ys.length ? ys[Math.floor(ys.length / 2)] : 0;
-  };
+  // The source's STANDING reference: the hips median of the IDLE clip, read
+  // by `hipsTrackMedian` of @anima/scene-render — the ONE rule the admin
+  // previews use too (`clipHipsDrop` there, the rescaled track here come to
+  // the same height). The catalog's `root_drop` is calibrated against exactly
+  // that reference (`pose_catalog._load_groups`), so a seated or lying figure
+  // lands on its marker here as it does in the admin, whatever else this
+  // library holds: with the reference read off the whole library instead,
+  // importing three more standing clips moved every sitter by millimetres
+  // while the catalog and every check stayed put (review 2026-09-08).
+  //
+  // The CLUSTER below is the fallback for a library without an idle clip, and
+  // it still names the scale outliers. It used to be the reference itself:
+  // first the MAXIMUM hips height over ALL clips — a SINGLE badly scaled
+  // clip became the reference and pushed EVERY figure into the ground
+  // (finding 2026-07-26: taking-fotos.fbx with hips ~211 instead of ~110 →
+  // all NPCs ~0.47 m too deep) — then the median of the standing cluster
+  // [0.7 × cap .. cap], cap = the largest median a second clip confirms to
+  // within 70 %. A clip ABOVE 1.5 × the reference is an export scale error
+  // and is itself scaled back onto the reference.
   const medians = new Map<THREE.AnimationClip, number>(
-    clips.map((c) => [c, hipMedian(c)] as [THREE.AnimationClip, number]));
+    clips.map((c) => [c, hipsTrackMedian(c) ?? 0] as [THREE.AnimationClip, number]));
   const sorted = [...medians.values()].filter((m) => m > 1e-6).sort((a, b) => b - a);
-  // The cap = the largest value a second clip confirms to within 70 %; the
-  // reference = the median of the STANDING cluster [0.7 × cap .. cap] — so
-  // neither a scale outlier (211) nor a single tall clip (sleep 119.5) decides
-  // the standing height, but the dense idle/walk group (~110).
   let cap = sorted[0] || 0;
   for (let i = 0; i < sorted.length; i++) {
     if (sorted.length === 1 || (sorted[i + 1] !== undefined && sorted[i + 1] >= sorted[i] * 0.7)) {
@@ -488,9 +484,12 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
     }
   }
   const cluster = sorted.filter((m) => m >= cap * 0.7 && m <= cap).sort((a, b) => a - b);
-  const sourceRest = cluster.length
+  const clusterRest = cluster.length
     ? cluster[Math.floor(cluster.length / 2)]
     : (sorted[0] || 0);
+  const idleClip = clips.find((c) => c.name === 'idle');
+  const idleRest = idleClip ? hipsTrackMedian(idleClip) : null;
+  const sourceRest = idleRest !== null && idleRest > 1e-6 ? idleRest : clusterRest;
   // Scale healing per clip: normalise an outlier's |y| values onto the
   // reference before the bounce is computed.
   const scaleFixOf = (clip: THREE.AnimationClip): number => {
