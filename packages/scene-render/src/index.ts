@@ -77,7 +77,7 @@ export type { AreaGeometry, Point2 } from './groundAreas'
 
 export {
   propGroundFit, scatterInstances, scatterSeed, scatterWantedCount,
-  scatterSeedHash, scatterVariantIndex,
+  scatterSeedHash, scatterVariantIndex, scatterYaw,
   seededRandom, pointInRing, pointInFootprint, worldToLocalXZ,
   footprintBlocks, footprintDistance, scatterClearM,
   propBoxFootprint, propBoxFootprints,
@@ -89,6 +89,7 @@ export {
 export type {
   PropGroundFit, ScatterCellOptions, ScatterEntry, ScatterFootprint,
   ScatterInstance, ScatterPoint2, ScatterPropBox, ScatterSampleOptions,
+  ScatterYawMode,
 } from './scatter'
 
 export { SpecVerifier, VERIFY_EPS } from './verify'

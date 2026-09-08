@@ -1702,6 +1702,10 @@ export function createGround(): Ground {
           minSpacingM: Number(entry.min_spacing_m) > 0
             ? Number(entry.min_spacing_m) : undefined,
           variantCount: kinds.length,
+          // HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-09) — the sampler
+          // answers the finished yaw, so nothing below knows about modes.
+          yawMode: entry.yaw_mode,
+          yawDeg: entry.yaw_deg,
         })) (buckets[p.variant ?? 0] ?? buckets[0]).push(p);
       }
       // THE one place the two authors of the wind meet (§ A9): the area's

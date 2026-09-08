@@ -66,6 +66,39 @@ export interface ScatterEntry {
    *  other (`ScatterSampleOptions.minSpacingM`). Absent or 0 = no constraint,
    *  which is what every scatter authored before this field is. */
   min_spacing_m?: number
+  /** How the instances are TURNED (2026-09-09): absent = random, `fixed` =
+   *  every instance at `yaw_deg`, `quarter` = `yaw_deg` plus a random
+   *  multiple of 90°. Read by `scatterYaw`. */
+  yaw_mode?: ScatterYawMode
+  /** The base angle of `yaw_mode`, in degrees (0..360). Meaningless without
+   *  a mode, and the server stores it only beside one. */
+  yaw_deg?: number
+}
+
+/** The two authored turn modes of a scatter entry — see `scatterYaw`. */
+export type ScatterYawMode = 'fixed' | 'quarter'
+
+/**
+ * WHICH WAY AN INSTANCE STANDS, from the candidate's yaw draw `r` (0..1) and
+ * the entry's turn mode (§ A9, 2026-09-09):
+ *
+ *     random  (no mode)  yaw = r · 2π                       — every scatter before this
+ *     fixed              yaw = deg · π/180
+ *     quarter            yaw = deg · π/180 + floor(r · 4) · π/2
+ *
+ * The DRAW is the same in every mode — three numbers per candidate, always
+ * (see `scatterInstances`) — so an entry switched from random to fixed keeps
+ * every prop exactly where it stood and only turns it. A mode this build does
+ * not know reads as random, a non-finite angle as 0. In radians, about +y,
+ * the same rotation `ground.ts` applies (`setFromAxisAngle(up, yaw)`): 0
+ * faces +z, π/2 faces +x — the bearing convention of the flow direction.
+ * `r` is clamped below 1 so a draw of exactly 1 cannot become a fifth step.
+ */
+export function scatterYaw(r: number, mode?: string, deg?: number): number {
+  if (mode !== 'fixed' && mode !== 'quarter') return r * Math.PI * 2
+  const base = Number.isFinite(Number(deg)) ? (Number(deg) * Math.PI) / 180 : 0
+  if (mode === 'fixed') return base
+  return base + Math.floor(Math.min(Math.max(r, 0), 0.999999) * 4) * (Math.PI / 2)
 }
 
 /** One placed instance: where it stands and which way it faces (radians). */
@@ -563,6 +596,9 @@ export interface ScatterSampleOptions {
    * below instead of by simulating a PRNG on paper.
    */
   rng?: () => number
+  /** The entry's turn mode and base angle — `scatterYaw`. Absent = random. */
+  yawMode?: string
+  yawDeg?: number
 }
 
 /**
@@ -601,7 +637,7 @@ export function scatterWantedCount(areaM2: number, densityPer100m2: number,
  *   wanted = min( round(areaM2 / 100 * density), maxPoints )
  *   x   = minX + r · (maxX − minX)
  *   z   = minZ + r · (maxZ − minZ)
- *   yaw = r · 2π
+ *   yaw = scatterYaw(r, mode, deg)   — r · 2π unless the entry authors a turn
  *   reject when the point is outside the ring, inside a covering area
  *     (`occluders`), within `clearM` of any footprint (`footprintBlocks` —
  *     the plain "inside" test when no clearance is given) or closer than
@@ -697,7 +733,7 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
     candidate += 1
     const x = minX + rnd() * (maxX - minX)
     const z = minZ + rnd() * (maxZ - minZ)
-    const yaw = rnd() * Math.PI * 2
+    const yaw = scatterYaw(rnd(), opts.yawMode, opts.yawDeg)
     if (!pointInRing(x, z, ring)) continue
     // Covered by an area painted OVER this one: that ground is not visible,
     // so nothing grows on it. Same shape of rejection as the footprint below —
@@ -997,6 +1033,9 @@ export interface ScatterCellOptions {
   variantCount?: number
   /** the random stream, for the smoke check only — see `ScatterSampleOptions` */
   rng?: () => number
+  /** The entry's turn mode and base angle — `scatterYaw`. Absent = random. */
+  yawMode?: string
+  yawDeg?: number
 }
 
 /**
@@ -1042,6 +1081,8 @@ export function scatterCellInstances(opts: ScatterCellOptions): ScatterInstance[
     triesPerPoint: 1,
     variantCount: opts.variantCount,
     rng: opts.rng,
+    yawMode: opts.yawMode,
+    yawDeg: opts.yawDeg,
   })
   // …and the painted shape decides which of them are ITS props. The filter
   // runs AFTER the sampling, never as a smaller box: the stream of a cell must

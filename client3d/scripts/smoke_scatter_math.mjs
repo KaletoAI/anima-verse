@@ -1144,6 +1144,35 @@
  *      mutant draws about 4× the billboards the rule now draws at 190 m.
  *
  * ============================================================================
+ * (Q) THE TURN — `scatterYaw` (§ A9, 2026-09-09)
+ * ============================================================================
+ * The third draw of every candidate, `r`, becomes the instance's yaw by the
+ * entry's mode:
+ *
+ *     random (no mode)  r · 2π
+ *     fixed             deg · π/180
+ *     quarter           deg · π/180 + floor(r · 4) · π/2
+ *
+ * (Q1) r = 0.25, no mode        -> 0.25 · 2π = π/2 = 1.5707963…
+ *      the same r, mode "spin"  -> unknown mode reads as random, π/2 again.
+ * (Q2) fixed, deg 90            -> π/2 whatever r is (r = 0 and r = 0.99).
+ *      fixed, deg absent / NaN  -> 0.
+ * (Q3) quarter, deg 30: r in [0, 0.25) adds nothing, [0.25, 0.5) adds π/2,
+ *      [0.5, 0.75) π, [0.75, 1) 3π/2 -> for r = 0, 0.3, 0.6, 0.9 the yaws are
+ *      π/6, π/6 + π/2, π/6 + π, π/6 + 3π/2 = 0.5235988, 2.0943951, 3.6651914,
+ *      5.2359878. r = 1 exactly is clamped below 1 -> still 3π/2, never a
+ *      fifth step; r = 0.25 exactly is the second step (floor(1.0) = 1).
+ * (Q4) THE STREAM IS UNTOUCHED. The SQUARE of (C) sampled with the fed stream
+ *      [0.5, 0.5, 0.25] gives ONE instance at (10, 10) with yaw π/2 under no
+ *      mode; the SAME stream under fixed 180 gives the same (10, 10) with yaw
+ *      π, and under quarter 0 the point again with floor(0.25 · 4) · π/2 =
+ *      π/2. Three modes, one position — a mode turns props in place.
+ * (Q5) …and through the CELL sampler the same law: `scatterCellInstances`
+ *      with yawMode "fixed" / yawDeg 45 answers only yaws of π/4 for a cell
+ *      of the SQUARE at density 1 (the seed of (K) draws whatever it draws,
+ *      every instance still reads π/4).
+ *
+ * ============================================================================
  * (J) THE DETAIL DISTANCES AS A SETTING — `client3d/src/game/prefs.ts`
  * ============================================================================
  * The three distances are a LOCAL view setting (localStorage), so the same
@@ -1227,7 +1256,7 @@ async function loadTs(src, mutate) {
  *  behind it. See the header for the derivation. */
 function yawOnAcceptance(source) {
   return source
-    .replace('    const yaw = rnd() * Math.PI * 2\n', '')
+    .replace('    const yaw = scatterYaw(rnd(), opts.yawMode, opts.yawDeg)\n', '')
     .replace(
       'out.push(mixing\n'
       + '      ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, index, variants) }\n'
@@ -1441,6 +1470,7 @@ function stream(values) {
 async function main() {
   const {
     propGroundFit, pointInFootprint, pointInRing, scatterInstances, scatterSeed,
+    scatterYaw,
     scatterWantedCount, scatterCellAt, scatterCellInstances, scatterCellRing,
     scatterCellSeed, scatterCellSpan, scatterCellsInBox, wantedScatterCells,
     scatterSeedHash, scatterVariantIndex,
@@ -2877,6 +2907,38 @@ async function main() {
     [0, 1, 2]);
   check('J4 …including the thinning line of the set cull distance',
     instanceShare(160, setCfg), 1 - (120 / 260) * 0.75);
+
+  // (Q) THE TURN
+  check('Q1 no mode: r = 0.25 is a quarter turn', scatterYaw(0.25), Math.PI / 2);
+  check('Q1 an unknown mode reads as random', scatterYaw(0.25, 'spin', 90), Math.PI / 2);
+  check('Q2 fixed 90 is π/2 for r = 0', scatterYaw(0, 'fixed', 90), Math.PI / 2);
+  check('Q2 …and for r = 0.99', scatterYaw(0.99, 'fixed', 90), Math.PI / 2);
+  check('Q2 fixed without an angle is 0', scatterYaw(0.7, 'fixed'), 0);
+  check('Q2 fixed with a NaN angle is 0', scatterYaw(0.7, 'fixed', NaN), 0);
+  check('Q3 quarter 30 over r = 0 / 0.3 / 0.6 / 0.9',
+    [0, 0.3, 0.6, 0.9].map((r) => scatterYaw(r, 'quarter', 30)),
+    [0.5235988, 2.0943951, 3.6651914, 5.2359878], 1e-6);
+  check('Q3 r = 1 exactly is still the fourth step, never a fifth',
+    scatterYaw(1, 'quarter', 0), 3 * Math.PI / 2);
+  check('Q3 r = 0.25 exactly is the second step',
+    scatterYaw(0.25, 'quarter', 0), Math.PI / 2);
+  const turnCase = (mode, deg) => scatterInstances({
+    ring: SQUARE, areaM2: 400, densityPer100m2: 0.25, seed: 'q',
+    rng: stream([0.5, 0.5, 0.25]), yawMode: mode, yawDeg: deg,
+  });
+  check('Q4 no mode: (10, 10) with yaw π/2', turnCase(undefined, undefined),
+    [{ x: 10, z: 10, yaw: Math.PI / 2 }]);
+  check('Q4 fixed 180: the same point, yaw π', turnCase('fixed', 180),
+    [{ x: 10, z: 10, yaw: Math.PI }]);
+  check('Q4 quarter 0: the same point, floor(0.25 · 4) = 1 step -> π/2',
+    turnCase('quarter', 0), [{ x: 10, z: 10, yaw: Math.PI / 2 }]);
+  const cellYaws = scatterCellInstances({
+    ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 1,
+    seed: scatterCellSeed('area', 0, 0, 0), yawMode: 'fixed', yawDeg: 45,
+  }).map((p) => p.yaw);
+  check('Q5 the cell sampler places something on the square', cellYaws.length > 0, true);
+  check('Q5 …and every instance reads π/4',
+    cellYaws.every((y) => Math.abs(y - Math.PI / 4) < 1e-9), true);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

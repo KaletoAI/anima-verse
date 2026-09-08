@@ -177,7 +177,18 @@ export interface TerrainScatterEntry {
    *  whose spacing does not fit its density simply ends up thinner
    *  (`@anima/scene-render` → `minSpacingM`). */
   min_spacing_m?: number
+  /** How the instances are TURNED (§ A9, 2026-09-09): absent = random,
+   *  `fixed` = every instance at `yaw_deg`, `quarter` = `yaw_deg` plus a
+   *  random multiple of 90° — for buildings along a grid. The server stores
+   *  `yaw_deg` only beside a mode. */
+  yaw_mode?: ScatterYawMode
+  /** The base angle of `yaw_mode` in degrees, 0..360. */
+  yaw_deg?: number
 }
+
+/** Server mirror — `app/models/terrain.SCATTER_YAW_MODES`. */
+export type ScatterYawMode = 'fixed' | 'quarter'
+export const SCATTER_YAW_MODES: readonly ScatterYawMode[] = ['fixed', 'quarter']
 
 /** One kind of ground in the effective catalog (§ A1.5). `passable`,
  *  `speed_factor` and the two clip keys come from HERE and nowhere else —
@@ -436,6 +447,11 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
     if (Number.isFinite(height) && height > 0) entry.height_m = height
     if (Number.isFinite(spacing) && spacing > 0) entry.min_spacing_m = spacing
     if (typeof e.model === 'string' && e.model) entry.model = e.model
+    if (e.yaw_mode === 'fixed' || e.yaw_mode === 'quarter') {
+      entry.yaw_mode = e.yaw_mode
+      const yaw = Number(e.yaw_deg)
+      entry.yaw_deg = Number.isFinite(yaw) ? yaw : 0
+    }
     out.push(entry)
   }
   return out

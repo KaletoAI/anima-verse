@@ -77,6 +77,11 @@ MODEL_URL_MAX = 300
 #: a bigger number would not thin the wood any further, it would only make the
 #: rejection loop run out of tries.
 MIN_SPACING_MAX_M = 100.0
+#: How a scatter entry may TURN its instances (2026-09-09): ``fixed`` = every
+#: instance at ``yaw_deg``, ``quarter`` = ``yaw_deg`` plus a random multiple of
+#: 90°. No key = the random yaw of every scatter before this existed. The
+#: sampler reads the pair (`@anima/scene-render` → `scatterYaw`).
+SCATTER_YAW_MODES = ("fixed", "quarter")
 #: How a stroke recipe bends its centre line before it is widened. The same
 #: three the editor offers (``mapMath.STROKE_STYLES``); absent means straight,
 #: which is what every line drawn before the styles existed is.
@@ -154,6 +159,13 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
       knob, like every other metre in this module) and kept to two decimals —
       a scatter is not authored in millimetres, and the number travels to
       every client.
+    * ``yaw_mode`` / ``yaw_deg`` — how the instances are TURNED (2026-09-09).
+      Absent mode = the random yaw every scatter has had; ``fixed`` turns
+      every instance to ``yaw_deg``; ``quarter`` to ``yaw_deg`` plus a random
+      multiple of 90° (buildings along a grid). ``yaw_deg`` is normalised to
+      0..360 with two decimals and is stored ONLY beside a mode — a bare angle
+      on a random scatter would be a number that acts on nothing. A mode this
+      module does not know loses both keys.
 
     Raises ValueError when the entry is not an object at all — a list of junk
     is an authoring mistake worth a 400, not something to silently drop.
@@ -175,7 +187,21 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
         url = model.strip()
         if len(url) <= MODEL_URL_MAX:
             out["model"] = url
+    out.update(_sanitize_yaw(raw, SCATTER_YAW_MODES))
     return out
+
+
+def _sanitize_yaw(raw: Dict[str, Any], modes: tuple) -> Dict[str, Any]:
+    """The ``yaw_mode`` / ``yaw_deg`` pair of a scatter or along entry, or
+    ``{}`` when the mode is absent or unknown. ``yaw_deg`` is normalised to
+    [0, 360) and defaults to 0.0 beside a mode, so a stored pair is always
+    complete and every reader sees the same two keys."""
+    mode = raw.get("yaw_mode")
+    if not isinstance(mode, str) or mode.strip() not in modes:
+        return {}
+    deg = _finite(raw.get("yaw_deg"))
+    deg = (deg or 0.0) % 360.0
+    return {"yaw_mode": mode.strip(), "yaw_deg": round(deg, 2)}
 
 
 def _sanitize_scatter_list(raw: Any) -> List[Dict[str, Any]]:

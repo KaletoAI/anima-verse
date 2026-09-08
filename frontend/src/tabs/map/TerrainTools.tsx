@@ -39,12 +39,13 @@ import {
   FLOW_DIR_MAX_DEG, FLOW_DIR_MIN_DEG, FLOW_SPEED_DEFAULT_M_S,
   FLOW_SPEED_MAX_M_S, FLOW_SPEED_MIN_M_S, RELIEF_AMP_MAX_M, RELIEF_AMP_MIN_M,
   RELIEF_WAVE_DEFAULT_M, RELIEF_WAVE_MAX_M, RELIEF_WAVE_MIN_M,
-  SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
+  SCATTER_YAW_MODES, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
   WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M, isWaterKind, waterKindDefaults,
 } from './mapTypes'
 import type {
-  FlowAlong, HeightArea, TerrainArea, TerrainRelief, TerrainScatterEntry,
-  TerrainStroke, TerrainType, TerrainWater, TerrainWaterProfile,
+  FlowAlong, HeightArea, ScatterYawMode, TerrainArea, TerrainRelief,
+  TerrainScatterEntry, TerrainStroke, TerrainType, TerrainWater,
+  TerrainWaterProfile,
 } from './mapTypes'
 
 /**
@@ -471,6 +472,12 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
       delete e.min_spacing_m
     }
     if (!e.model) delete e.model
+    // A turn without a mode is a number that acts on nothing — the server
+    // drops it, and so does this (§ A9, 2026-09-09).
+    if (!e.yaw_mode) { delete e.yaw_mode; delete e.yaw_deg }
+    else if (!(typeof e.yaw_deg === 'number' && Number.isFinite(e.yaw_deg))) {
+      e.yaw_deg = 0
+    }
     onChange(out)
   }
   return (
@@ -547,6 +554,42 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                   ? Math.min(v, SCATTER_SPACING_MAX_M) : undefined,
               })}
             />
+            {/* HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-09). Random is
+                the absent key — the wood every scatter has been so far;
+                fixed and 90° steps are for things with a front, buildings
+                along a grid above all. The angle field appears only with a
+                mode, because without one it would be a number that acts on
+                nothing. Positions never move: only the yaw draw is read
+                differently, so switching modes turns props in place. */}
+            <label title={t('How these props are turned. Random = every one its own way (plants, rocks). Fixed = all at the angle. 90° steps = the angle plus a random quarter turn, for buildings along a grid. Changing the mode never moves a prop, it only turns it.')}>
+              {t('turn')}
+              <select
+                className="ga-input"
+                value={e.yaw_mode || ''}
+                onChange={(ev) => {
+                  const mode = ev.target.value as ScatterYawMode | ''
+                  patch(i, mode
+                    ? { yaw_mode: mode, yaw_deg: e.yaw_deg ?? 0 }
+                    : { yaw_mode: undefined, yaw_deg: undefined })
+                }}
+              >
+                <option value="">{t('Random')}</option>
+                {SCATTER_YAW_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {m === 'fixed' ? t('Fixed') : t('90° steps')}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {e.yaw_mode ? (
+              <ScatterNum
+                label={t('angle (°)')}
+                title={t('The base angle in degrees, 0..360: 0 faces south (+z), 90 east (+x) — the same bearing the flow direction uses. With 90° steps each prop adds 0, 90, 180 or 270 to it.')}
+                value={typeof e.yaw_deg === 'number' ? e.yaw_deg : 0}
+                step={15}
+                onCommit={(v) => patch(i, { yaw_deg: ((v ?? 0) % 360 + 360) % 360 })}
+              />
+            ) : null}
             <button type="button" className="ga-btn ga-btn-sm"
               title={t('Remove this scatter')}
               onClick={() => onChange(entries.filter((_, k) => k !== i))}>

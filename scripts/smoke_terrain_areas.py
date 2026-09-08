@@ -92,7 +92,20 @@ Throwaway storage. Hand-derived expectations:
                                   inside the cell it is sampled in anyway)
         100      -> 100.0        (exactly at the limit, untouched)
         0 / -1 / NaN / inf / "wide" / None -> the KEY IS DROPPED, which is
-                                  how both renderers read "no constraint". The list itself: a non-list raises (the field moved AS a
+                                  how both renderers read "no constraint".
+      [11y] THE TURN (2026-09-09): yaw_mode "fixed" / "quarter" survives
+      together with yaw_deg, normalised to [0, 360) with two decimals and
+      defaulting to 0.0 beside a mode; a bare yaw_deg without a mode is
+      dropped (a number that acts on nothing), an unknown mode drops both:
+        {yaw_mode: "fixed", yaw_deg: 90}     -> both kept
+        {yaw_mode: "quarter"}                -> yaw_deg 0.0 added
+        {yaw_mode: "fixed", yaw_deg: 370}    -> yaw_deg 10.0
+        {yaw_mode: "fixed", yaw_deg: -90}    -> yaw_deg 270.0
+        {yaw_mode: "fixed", yaw_deg: 12.345} -> yaw_deg 12.35
+        {yaw_deg: 90}                        -> neither key
+        {yaw_mode: "spin", yaw_deg: 90}      -> neither key
+        {yaw_mode: "fixed", yaw_deg: "east"} -> yaw_deg 0.0 (junk angle = 0)
+      The list itself: a non-list raises (the field moved AS a
       list, so a bare object is an old client, not a guess), an entry that
       is not an object raises, more than MAX_SCATTER_ENTRIES (8) raises, an
       empty list is kept as sent ("authored to nothing"). Foreign meta keys
@@ -717,6 +730,25 @@ check("over-long model loses the key (never truncated)",
 check("model exactly at the limit survives",
       scatter_of({"scatter": [{"density_per_100m2": 1, "model": _long[:-1]}]}),
       {"scatter": [{"density_per_100m2": 1.0, "model": _long[:-1]}]})
+print("[11y] the turn — yaw_mode / yaw_deg")
+_turn = lambda entry: scatter_of({"scatter": [{"density_per_100m2": 1, **entry}]})["scatter"][0]
+check("fixed + 90 survives as a pair",
+      _turn({"yaw_mode": "fixed", "yaw_deg": 90}),
+      {"density_per_100m2": 1.0, "yaw_mode": "fixed", "yaw_deg": 90.0})
+check("a mode without an angle gets 0.0",
+      _turn({"yaw_mode": "quarter"}),
+      {"density_per_100m2": 1.0, "yaw_mode": "quarter", "yaw_deg": 0.0})
+check("370 wraps to 10", _turn({"yaw_mode": "fixed", "yaw_deg": 370})["yaw_deg"], 10.0)
+check("-90 wraps to 270", _turn({"yaw_mode": "fixed", "yaw_deg": -90})["yaw_deg"], 270.0)
+check("two decimals", _turn({"yaw_mode": "fixed", "yaw_deg": 12.345})["yaw_deg"], 12.35)
+check("an angle without a mode is dropped",
+      _turn({"yaw_deg": 90}), {"density_per_100m2": 1.0})
+check("an unknown mode drops both keys",
+      _turn({"yaw_mode": "spin", "yaw_deg": 90}), {"density_per_100m2": 1.0})
+check("a junk angle beside a mode is 0.0",
+      _turn({"yaw_mode": "fixed", "yaw_deg": "east"})["yaw_deg"], 0.0)
+check("SCATTER_YAW_MODES is the pair the sampler knows",
+      terrain.SCATTER_YAW_MODES, ("fixed", "quarter"))
 check("an empty list is kept as sent", scatter_of({"scatter": []}),
       {"scatter": []})
 check("foreign meta keys survive next to scatter",

@@ -959,14 +959,16 @@ immer sichtbar, nur Locations verstecken sich.
 
 **`areas[].meta.scatter` — die Streuung (Vertrag für BEIDE Renderer):**
 
-Eine **Liste** je Fläche, höchstens 8 Einträge, jeder Eintrag genau vier
+Eine **Liste** je Fläche, höchstens 8 Einträge, jeder Eintrag genau sechs
 Felder (Server-Whitelist `app/models/terrain._sanitize_scatter_list`):
 
 ```
 scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = keine
             model?: str,                # /assets/props/<id>/model; fehlt = eingebautes Büschel
             height_m?: float,           # ZIELHÖHE: das Prop wird uniform darauf skaliert
-            min_spacing_m?: float}, … ] # Mindestabstand der EIGENEN Instanzen, 0..100 m
+            min_spacing_m?: float,      # Mindestabstand der EIGENEN Instanzen, 0..100 m
+            yaw_mode?: "fixed" | "quarter",   # Ausrichtung; fehlt = zufällig (2026-09-09)
+            yaw_deg?: float}, … ]       # Basiswinkel 0..360, nur MIT yaw_mode gespeichert
 ```
 
 - **Fehlende oder leere Liste = es wächst nichts.** Es gibt keine Vorgabe.
@@ -989,6 +991,24 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   (eine Zelle ist ein eigener Lauf, an der Naht kann ein Paar enger stehen).
   **Das Try-Budget bleibt `wanted · triesPerPoint`:** ein Eintrag, dessen
   Abstand seine Dichte nicht zulässt, endet einfach mit weniger Instanzen.
+- **`yaw_mode` / `yaw_deg` — die Ausrichtung (Nachtrag 2026-09-09).** Der
+  dritte Zufallszug je Kandidat, `r`, wird in allen Modi gezogen (Strom und
+  Varianten-Formel bleiben Byte für Byte); nur was aus ihm wird, ändert sich
+  (`@anima/scene-render` → `scatterYaw`):
+
+  ```
+  fehlt:    yaw = r · 2π                                   (jeder Scatter bisher)
+  fixed:    yaw = yaw_deg · π/180
+  quarter:  yaw = yaw_deg · π/180 + floor(r · 4) · π/2     (Gebäude am Raster)
+  ```
+
+  Bogenmaß um +y, Blickrichtung `(sin yaw, cos yaw)` — 0° = +z (Süden),
+  90° = +x (Osten), dieselbe Peilung wie `flow_dir_deg`. Ein Moduswechsel
+  bewegt nie ein Prop, er dreht es an Ort und Stelle. `yaw_deg` wird auf
+  [0, 360) normiert, zwei Nachkommastellen, und ohne Modus nicht gespeichert
+  (eine Zahl, die auf nichts wirkt); ein unbekannter Modus verliert beide
+  Schlüssel. Zahlen von Hand: `client3d/scripts/smoke_scatter_math.mjs`
+  Abschnitt (Q), Whitelist in `scripts/smoke_terrain_areas.py` [11y].
 - **Der Server hängt an einen Eintrag mit Prop-`model` zusätzlich
   `variants: {tier: "/assets/props/<id>/model?tier=<tier>"}`** — nur die
   Stufen, die das Prop WIRKLICH hat, aufgelöst mit derselben einen Regel
