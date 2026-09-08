@@ -146,25 +146,34 @@ def _load_groups() -> Dict[str, dict]:
     marker at all — a False group is offered "anywhere here", gets no place
     assigned and its spot is never named.
 
-    Where ``lie``'s 0.051 comes from: ``sleeping`` and ``lying`` both name
-    ``animation: laying`` and the only clip on disk is
-    ``shared/models/clips/laying.fbx`` (CMU). Through the project's own
-    chain (``scripts/smoke_prop_marker_place.mjs`` E5,
-    ``posed hips = S - rootOffset - clipHipsDrop + hipsBindY``) the measured
-    ``laying`` hips median 15.81 gives clipHipsDrop 0.84033 and hipsBindY
-    0.9801, so the fraction 0.051 — 0.0867 m on a 1.70 m figure — puts the
-    hips at ``S + 0.053``, on the surface. The 0.631 the deleted ``bed`` group
-    carried was calibrated for the Mixamo ``sleep`` clip, gone since
-    ``c2eb166d``; with it every sleeper sank 0.93 m into the mattress.
+    Where the numbers come from — measured against the CLIPS THAT ARE
+    SERVED, through the project's own chain
+    (``scripts/smoke_prop_marker_place.mjs`` E5,
+    ``posed hips = S - rootOffset - clipHipsDrop + hipsBindY`` with
+    ``clipHipsDrop = hipsBindY x (1 - median / median(idle))``,
+    ``hipsBindY`` 0.9801 on the 1.70 m reference figure)::
 
-    That median is the one RECORDED in the .mjs check, not what the library
-    measures today: the CMU clips were re-imported since (``a605c5a7`` /
-    ``7f8b113f``) and the same chain now reads 20.37, which would put the hips
-    at ``S + 0.094``. 0.051 is kept anyway — it is the value ``lying`` already
-    used on a floor marker, so the merge inherits that deviation instead of
-    introducing it, and re-calibrating here would bless an import whose rest
-    alignment nobody has signed off. The number belongs to the clip, not to
-    the place type; moving it there is its own strand.
+        idle    median 110.179   drop 0       stand  0
+        sit     median  65.961   drop 0.3933  seat   0.320  -> hips S + 0.043
+        laying  median  20.368   drop 0.7989  lie    0.075  -> hips S + 0.054
+
+    Re-derived on 2026-09-08. The medians had been recorded before
+    ``a605c5a7`` re-imported the CMU library with the fixed rest alignment
+    (feet stopped rolling onto their outer edges, heads stopped leaning) —
+    a real repair, so the new library is the one to calibrate against, and
+    the old 0.314 / 0.051 left a lying figure 0.094 m over its surface.
+
+    ``bed`` carried 0.631 until the place types became body shapes: that was
+    calibrated for the Mixamo ``sleep`` clip, gone since ``c2eb166d``, and
+    with it every sleeper sank 0.93 m into the mattress. ``sleeping`` and
+    ``lying`` name the same ``laying`` clip today, so one value serves both.
+
+    Still open, and deliberately not folded in here: the target itself is the
+    HIP JOINT, not the contact surface — a seated body's buttocks sit 0.175 m
+    below its hips, so the figure still sinks into the cushion
+    (``done/plan-sitzhoehe.md``). And the number belongs to the CLIP, not to
+    the place type: the same ``sit`` sits 3 cm lower in the licensed library
+    than in the CMU one. Both are their own strand.
     """
     raw: Dict[str, dict] = {}
     for store in STORES:

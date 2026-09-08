@@ -3560,7 +3560,7 @@ def test_place_slots() -> None:
     that is the whole range: a marker at (0, 0), facing 0, capacity 2,
     spacing 1 gives bearing 0 → (0, 1) → [[0,-0.5],[0,0.5]] at axis 0, and
     bearing 180 → (0, −1) → [[0,0.5],[0,-0.5]] at axis 180 — same two points,
-    swapped. root_offset = seat.root_drop 0.314 × 1.70 = 0.5338 → 0.534
+    swapped. root_offset = seat.root_drop 0.320 × 1.70 = 0.5440 → 0.544
     (three decimals, like every drop in the payload). The payload
     marker carries id "m1seat00", group "seat", label "Seat" (a room marker
     has no prop → the group label), capacity 3. Capacity 1 → slots ==
@@ -3614,7 +3614,7 @@ def test_place_slots() -> None:
     check("payload slots follow slot_axis 0",
           ma["slots"] == [[-2.6, -3.0], [-2.0, -3.0], [-1.4, -3.0]],
           str(ma["slots"]))
-    check("payload root_offset 0.534", m["root_offset"] == 0.534,
+    check("payload root_offset 0.544", m["root_offset"] == 0.544,
           str(m["root_offset"]))
     check("no animation key any more", "animation" not in m)
 
@@ -4762,9 +4762,9 @@ def test_ground_placements() -> None:
     check("the ground marker sits at its stored metre (−1, 2), y = 0",
           len(mk) == 1 and mk[0]["at_world"] == [-1.0, 2.0]
           and near(mk[0]["y_world"], 0.0), str(mk))
-    # sit → the figure's root drops 0.314 × 1.70 m = 0.5338 below the surface.
-    check("...and carries the sit root drop 0.314 × 1.70 = 0.5338",
-          near(mk[0]["root_offset"], 0.5338), str(mk[0]["root_offset"]))
+    # sit → the figure's root drops 0.320 × 1.70 m = 0.5440 below the surface.
+    check("...and carries the sit root drop 0.320 × 1.70 = 0.5440",
+          near(mk[0]["root_offset"], 0.5440), str(mk[0]["root_offset"]))
     # The table brings its own seat marker: the yard's storey floor (0.00 on
     # this NATURAL location) + 0.01 clearance plus the marker's composed
     # height over the placement — in the built fixture's room the same seat

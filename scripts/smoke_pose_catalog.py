@@ -110,12 +110,16 @@ plan-platztypen.md), derived BY HAND from the catalog file:
 - get_groups() has exactly the four place types stand/ground/seat/lie — a
   place type names a BODY SHAPE, not a piece of furniture, so `bed` and
   `floor` merged into `lie` and `counter` (one sitting pose) dissolved into
-  `stand`. Drops: seat 0.314, lie 0.051, stand 0, ground 0 (the ONE source of
+  `stand`. Drops: seat 0.320, lie 0.075, stand 0, ground 0 (the ONE source of
   every root_offset in the scene payload; the old
-  scene_recipe.FIGURE_ROOT_DROP table is gone). The lie drop is the serving
-  `laying.fbx` clip's, measured; the old bed value 0.631 belonged to a Mixamo
-  `sleep` clip deleted in c2eb166d and buried every sleeper 0.93 m in the
-  mattress.
+  scene_recipe.FIGURE_ROOT_DROP table is gone). Both are derived from the hips
+  medians of the clips that are served — the derivation is written out in
+  `pose_catalog._load_groups` and re-run by hand in
+  `scripts/smoke_platztypen.py` § 4. They read 0.314 / 0.051 until 2026-09-08,
+  measured against the clip library that `a605c5a7` replaced; against the
+  re-imported one those left a lying figure floating 0.094 m over its surface.
+  The older bed value 0.631 belonged to a Mixamo `sleep` clip deleted in
+  c2eb166d and buried every sleeper 0.89 m in the mattress.
 - `needs_place` says whether the group's poses want a marker at all: seat and
   lie do, stand and ground do not — poses_without_place() therefore lists
   every pose of `stand` and `ground` and nothing else, and every one of them
@@ -654,11 +658,11 @@ try:
     pc.reload_catalogs()
     groups = pc.get_groups()
     check("four place types", sorted(groups) == ["ground", "lie", "seat", "stand"], str(sorted(groups)))
-    check("seat root_drop 0.314", groups["seat"]["root_drop"] == 0.314)
+    check("seat root_drop 0.320", groups["seat"]["root_drop"] == 0.320)
     # One lying group, one drop: the merged `lie` keeps the value measured on
     # the clip that actually serves it. 0.631 (the old `bed`) described a
     # Mixamo clip that no longer exists and put the sleeper under the mattress.
-    check("lie root_drop 0.051", groups["lie"]["root_drop"] == 0.051)
+    check("lie root_drop 0.075", groups["lie"]["root_drop"] == 0.075)
     check("stand/ground drop 0", groups["stand"]["root_drop"] == 0 and groups["ground"]["root_drop"] == 0)
     check("seat and lie want a marker",
           groups["seat"]["needs_place"] is True and groups["lie"]["needs_place"] is True)
@@ -720,7 +724,7 @@ try:
         "groups": {"stand": {"label": "Stand", "root_drop": 0, "default": "standing"},
                    "bench": {"label": "Bench", "root_drop": 0.3, "default": ""},
                    "shelf": {"label": "Shelf", "root_drop": 0, "default": "standing"},
-                   "lie": {"label": "Lying place", "root_drop": 0.051, "default": ""}},
+                   "lie": {"label": "Lying place", "root_drop": 0.075, "default": ""}},
         "entries": {"standing": {"prompt": "p", "animation": "idle", "group": "stand", "_default": True},
                     "lying": {"prompt": "p", "animation": "laying", "group": "lie"}}}), encoding="utf-8")
     pc.catalog_path = lambda axis: _new if axis == "pose" else _orig(axis)

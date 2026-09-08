@@ -19,6 +19,11 @@ The expected numbers are derived BY HAND from that, rounded to 4 decimals like
     seat delta = +0.2715 m   (drawn buttock height 0.8053 - applied drop 0.5338)
     bed  delta = -0.2802 m   (drop 1.0727 - laying's lowest point 0.7925)
 
+    (0.5338 / 1.0727 are the drops the preview applied WHILE the markers were
+    authored, not the current catalog's — see the same section in
+    scripts/lift_prop_markers.py. The deltas are inputs to this check either
+    way: what is verified below is the conversion at[1] += delta / per_frac.)
+
     wingback (bbox [0.956, 1.0, 0.95] — NOT proportional to the dims)
       v0  dims 0.9 / 0.9 / 0.79   per_frac = 1.0 x 0.9  / 1.0 = 0.9000
           0.155 + 0.2715/0.9  = 0.155 + 0.301667 = 0.456667 -> 0.4567

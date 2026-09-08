@@ -82,6 +82,15 @@ high. The markers therefore sit low by exactly that error:
     seat: drawn buttock height 0.8053 m - applied drop 0.5338 m = +0.2715 m
     bed:  applied drop 1.0727 m - laying's lowest point 0.7925 m = -0.2802 m
 
+Those two drops are the ones the PREVIEW APPLIED WHILE THE MARKERS WERE BEING
+AUTHORED (the pre-2026-09-08 catalog: `seat` 0.314, the since-retired `bed`
+0.631), not today's. Deliberately so: the delta is the authoring error, and a
+marker belongs on the seat surface no matter what a figure's root later
+subtracts from it. Re-deriving these with the current `seat` 0.320 x 1.70 =
+0.5440 would repair a mistake nobody made. A world whose markers were authored
+under a different drop needs its own pair of deltas — that is what --delta-m
+is for.
+
 Markers of a place type that needs none were never affected (the standing
 figure's hips track is the reference itself) and this script REFUSES every
 such group, so a mistyped run cannot move them; the few of them are corrected

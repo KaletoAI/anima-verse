@@ -247,7 +247,10 @@ pose_catalog.catalog_path = _smoke_catalog_path
     # would make every standing pair raise PlaceUnavailable.
     "stand": {"label": "Standing spot", "root_drop": 0, "default": "standing",
               "needs_place": False},
-    "seat": {"label": "Seat", "root_drop": 0.314, "default": "cuddling",
+    # 0.320 is the shipped catalog's seat drop (re-derived 2026-09-08); no
+    # check here reads it, but a fixture number that disagrees with the real
+    # one just puts a second truth in front of the next reader.
+    "seat": {"label": "Seat", "root_drop": 0.320, "default": "cuddling",
              "needs_place": True},
 }, "entries": {
     "standing": {"prompt": "standing", "synonyms": [], "animation": "idle", "_default": True,
