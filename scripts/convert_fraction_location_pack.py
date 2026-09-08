@@ -36,7 +36,10 @@ What comes out (contract v6, metres, the frame ``map3d.boundary`` lives in):
     metres relative to the room's min corner;
   * a boundary opening on a LETTER edge (N/E/S/W) becomes the index of that
     edge of the square (the square is emitted N, E, S, W = 0, 1, 2, 3 in the
-    winding the sanitizer keeps);
+    winding the sanitizer keeps). Its ``at`` ran west→east on N/S and
+    north→south on E/W (``scene_recipe._BOUNDARY_EDGES`` of commit 8522f15f);
+    an index edge runs point i → i+1, so where the square's edge starts at
+    the other corner (S and W in the emitted order) ``at`` becomes 1 − at;
   * ``rotation``/``size``/``plan_width_m`` on map3d and ``grid_x``/``grid_y``
     on the location are dropped (no reader since v6 / the metre map; the
     width is derived from the boundary again on import).
@@ -72,18 +75,24 @@ def _cm(v: float) -> float:
     return round(v, 2)
 
 
-def square_boundary(width: float) -> List[List[float]]:
-    """The reference square around the pin, ordered N, E, S, W as edges
-    0..3 — in the winding the sanitizer keeps (positive signed area), so
-    the indices survive the import unchanged."""
+def square_boundary(width: float) -> tuple[List[List[float]], List[str]]:
+    """The reference square around the pin as (points, corner names), in the
+    winding the sanitizer keeps (positive signed area), so the edge indices
+    survive the import unchanged. Edge i runs corner i → corner i+1."""
     h = width / 2.0
-    pts = [[-h, -h], [h, -h], [h, h], [-h, h]]      # NW, NE, SE, SW
+    pts = [[-h, -h], [h, -h], [h, h], [-h, h]]
+    names = ["NW", "NE", "SE", "SW"]
     if polygon_signed_area(pts) < 0:
-        # Reversed the edges would read W, S, E, N — keep the letters right.
         pts = [[h, -h], [-h, -h], [-h, h], [h, h]]
+        names = ["NE", "NW", "SW", "SE"]
         assert polygon_signed_area(pts) > 0
-        return pts
-    return pts
+    return pts, names
+
+
+# A letter edge and the corner its old ``at`` = 0 sat on: west→east on N/S,
+# north→south on E/W (scene_recipe._BOUNDARY_EDGES, commit 8522f15f).
+LETTER_EDGE_CORNERS = {"N": ("NW", "NE"), "E": ("NE", "SE"),
+                       "S": ("SW", "SE"), "W": ("NW", "SW")}
 
 
 def convert_location(loc: Dict[str, Any]) -> List[str]:
@@ -103,16 +112,20 @@ def convert_location(loc: Dict[str, Any]) -> List[str]:
         v = _f(f)
         return None if v is None else _cm((v - 0.5) * width)
 
-    boundary = square_boundary(width)
+    boundary, corners = square_boundary(width)
     m3["boundary"] = [[_cm(u), _cm(v)] for u, v in boundary]
     notes.append(f"boundary = the {width} m reference square around the pin")
 
-    # Letter index in the emitted square: point i = corner i, edge i = i→i+1.
-    # For the NW,NE,SE,SW order that is N=0, E=1, S=2, W=3; for the reversed
-    # fallback order (NE,NW,SW,SE) it is N=0, W=1, S=2, E=3.
-    first_is_nw = boundary[0][0] < 0
-    letter_index = {"N": 0, "E": 1, "S": 2, "W": 3} if first_is_nw \
-        else {"N": 0, "W": 1, "S": 2, "E": 3}
+    def letter_to_index(letter: str) -> tuple[int, bool]:
+        """(edge index, whether ``at`` must be mirrored) for a letter edge:
+        the emitted edge i runs corner i → i+1; when that start corner is
+        not the corner the old ``at`` = 0 sat on, the ratio flips."""
+        start, end = LETTER_EDGE_CORNERS[letter]
+        for i in range(4):
+            a, b = corners[i], corners[(i + 1) % 4]
+            if {a, b} == {start, end}:
+                return i, a != start
+        raise AssertionError(letter)
 
     ol = m3.get("outline")
     if isinstance(ol, list):
@@ -127,9 +140,14 @@ def convert_location(loc: Dict[str, Any]) -> List[str]:
     for op in (m3.get("boundary_openings") or []):
         if isinstance(op, dict) and isinstance(op.get("edge"), str):
             letter = op["edge"].strip().upper()
-            if letter in letter_index:
-                op["edge"] = letter_index[letter]
-                notes.append(f"boundary opening edge {letter!r} → index {op['edge']}")
+            if letter in LETTER_EDGE_CORNERS:
+                idx, mirrored = letter_to_index(letter)
+                op["edge"] = idx
+                at = _f(op.get("at"))
+                if mirrored and at is not None:
+                    op["at"] = round(1.0 - at, 4)
+                notes.append(f"boundary opening edge {letter!r} → index {idx}"
+                             + (f", at {at} → {op['at']}" if mirrored and at is not None else ""))
     for key in ("rotation", "size"):
         if key in m3:
             m3.pop(key)
