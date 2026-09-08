@@ -42,7 +42,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { PictureVariantDialog } from './PictureVariantDialog'
-import { AREA_KINDS, areaKindOf } from './propTypes'
+import { AREA_KINDS, PRESET_LABELS, areaKindOf } from './propTypes'
 import type { PropArea, PropAreasInfo, PropFull, PropSlotValues,
   PropVariant } from './propTypes'
 
@@ -442,7 +442,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
                       offerable. */}
                   {MATERIAL_PRESETS.map((preset) => (
                     <option key={preset} value={preset}>
-                      {preset === 'glass' ? t('Glass') : preset}
+                      {t(PRESET_LABELS[preset] ?? preset)}
                     </option>
                   ))}
                 </select>

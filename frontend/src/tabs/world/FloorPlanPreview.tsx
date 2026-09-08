@@ -32,7 +32,8 @@ import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
   SpecVerifier, flatGround, storeyGroundLift,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
   wallTargets } from '@anima/scene-render'
-import type { CutoutHandle, SurfaceMaterialSpec, VerifyRow } from '@anima/scene-render'
+import type { CutoutHandle, MirrorOptions, SurfaceMaterialSpec,
+  VerifyRow } from '@anima/scene-render'
 import { fmtM, levelOutline } from './planGeometry'
 import type { Map3D, Room, SceneModelSpec, ScenePayload, ScenePlate } from './worldTypes'
 import { hasRect, readMapWater } from './worldTypes'
@@ -57,6 +58,10 @@ const AID = {
   figure: 0x8b949e,
   ruler: 0xc9d1d9,
 }
+// THIS preview's view policy for mirror panes (§ B2 v5, preset `mirror`) —
+// lighter than the 3D client's: a small canvas next to a form, one mirror
+// pass per frame at 512 px and nothing beyond 12 m.
+const MIRROR_OPTS: MirrorOptions = { textureSize: 512, maxPerFrame: 1, maxDistanceM: 12 }
 
 interface CachedModel {
   obj: Object3D
@@ -570,7 +575,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       slotMatsRef.current.push(
         ...applySlotMaterials(THREE, outer, spec.slots,
                               (url, onError) => new THREE.TextureLoader()
-                                .load(url, undefined, undefined, onError)))
+                                .load(url, undefined, undefined, onError),
+                              MIRROR_OPTS))
       // Room clip (§ B1): the client discards diorama fragments outside the
       // room hull — without the same call here the preview showed the FULL
       // diorama including its baked surroundings and diverged massively from

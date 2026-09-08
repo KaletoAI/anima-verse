@@ -2266,6 +2266,7 @@
     "Dissolve this area — its triangles go back to the material they came from.": "Löst diese Fläche auf — ihre Dreiecke gehen zurück in ihr Ursprungsmaterial.",
     "Pane defaults": "Scheiben-Standard",
     "Glass": "Glas",
+    "Mirror": "Spiegel",
     "Picture variants": "Bild-Varianten",
     "Every picture hung on this frame is a variant of the prop: it carries a copy of the frame’s mesh and shows its own picture. The floor plan then places the prop and picks the variant.": "Jedes Bild an diesem Rahmen ist eine Variante des Props: Sie trägt eine Kopie des Rahmen-Meshes und zeigt ihr eigenes Bild. Der Lageplan setzt dann Prop und Variante.",
     "Stop previewing — show the bare frame again.": "Vorschau beenden — wieder den blanken Rahmen zeigen.",

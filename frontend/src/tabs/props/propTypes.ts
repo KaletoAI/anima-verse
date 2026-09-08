@@ -524,6 +524,14 @@ export const AREA_KINDS: AreaKind[] = [
   },
 ]
 
+/** English label per look of `MATERIAL_PRESETS` (@anima/scene-render) — the
+ *  dropdowns render `t(PRESET_LABELS[p] ?? p)`. A preset without a label
+ *  shows its token, so a new look is visible before it is worded. */
+export const PRESET_LABELS: Record<string, string> = {
+  glass: 'Glass',
+  mirror: 'Mirror',
+}
+
 /** `door.leaf_bbox` / the prop's `leaf_bbox`: the box of the `leaf` node in
  *  RAW y-up model metres (spec § 6) — where the viewer's test swing hangs its
  *  pivot; the server measured it at the split, the client only reads it. */
@@ -582,7 +590,7 @@ export function applyKeyAreas(prompt: string, negative: string,
 
 /** What ONE picture area is filled with. Exactly one of the two per entry —
  *  a `picture` panel takes an image URL of this world's galleries, a `glass`
- *  pane a preset out of `SLOT_PRESETS` (`glass` is the only one today).
+ *  pane a preset out of `SLOT_PRESETS` (`glass` and `mirror`).
  *  Structurally the `SceneSlotValues` of @anima/scene-render. */
 export interface PropSlotValue {
   image?: string

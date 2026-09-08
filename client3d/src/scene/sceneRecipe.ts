@@ -8,7 +8,7 @@ import { applyClipOutline, applyCutouts, applyDepthCut, applySlotMaterials,
   pickModelVariant, placeModelSpec, plateTargets,
   SpecVerifier, storeyGroundLift, storeyGroundRelift, VERIFY_EPS,
   surfaceMaterial, surfaceScale, wallLength, wallTargets } from '@anima/scene-render';
-import type { FixEuler, LeafBox, ModelTier, PrimitiveTarget,
+import type { FixEuler, LeafBox, MirrorOptions, ModelTier, PrimitiveTarget,
   VerifyRow } from '@anima/scene-render';
 import {
   getLocationScene,
@@ -787,11 +787,18 @@ function registerDoorProp(list: SwingingDoor[], scene: ScenePayload,
 const slotTexture = (url: string, onError?: () => void) =>
   new THREE.TextureLoader().load(url, undefined, undefined, onError);
 
+/** THIS client's cost policy for mirror panes (§ B2 v5, preset `mirror`):
+ *  a 512 px reflection, at most two mirror passes per frame across the whole
+ *  scene, and no pass at all beyond 12 m — a wall mirror across a hall is a
+ *  few pixels, and each pass is a full second render of the scene. View
+ *  state, so it lives here and not in the package. */
+const MIRROR_OPTS: MirrorOptions = { textureSize: 512, maxPerFrame: 2, maxDistanceM: 12 };
+
 /** Fill the texture slots of one placed group and REMEMBER the clones on its
  *  record, so the tier swap and the unmount can free them. The record is the
  *  only thing that knows they exist. */
 function fillSlots(rec: PlacedSceneModel, placed: THREE.Object3D): void {
-  rec.slotMats = applySlotMaterials(THREE, placed, rec.spec.slots, slotTexture);
+  rec.slotMats = applySlotMaterials(THREE, placed, rec.spec.slots, slotTexture, MIRROR_OPTS);
 }
 
 /** A tier swap has replaced a door prop's mesh: the swing list points at the

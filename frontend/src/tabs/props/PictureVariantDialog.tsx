@@ -26,7 +26,7 @@ import { createPortal } from 'react-dom'
 import { MATERIAL_PRESETS } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ImagePicker } from './ImagePicker'
-import { areaKindOf, type PropArea, type PropSlotValues } from './propTypes'
+import { PRESET_LABELS, areaKindOf, type PropArea, type PropSlotValues } from './propTypes'
 
 export function PictureVariantDialog({ open, title, areas, initial, initialLabel,
   busy, onSubmit, onClose }: {
@@ -127,7 +127,7 @@ export function PictureVariantDialog({ open, title, areas, initial, initialLabel
                     >
                       <option value="">{t('None')}</option>
                       {MATERIAL_PRESETS.map((p) => (
-                        <option key={p} value={p}>{p === 'glass' ? t('Glass') : p}</option>
+                        <option key={p} value={p}>{t(PRESET_LABELS[p] ?? p)}</option>
                       ))}
                     </select>
                   ) : (
