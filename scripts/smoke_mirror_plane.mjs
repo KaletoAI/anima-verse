@@ -75,11 +75,21 @@
  * [13] OPTIONAL local cross-check (skipped, not failed, when the file is
  *     absent): MIRROR_FIXTURE_GLB=<path to a prop's model_<ts>.glb> and
  *     MIRROR_FIXTURE_JSON=<its .json sidecar> — for every area whose id
- *     starts with `glass`, the plane measured from the GLB's material group
- *     of that name must lie within 1 cm (centroid, |n·(c_measured -
- *     c_sidecar)|) and 2° (normal, ignoring sign) of the sidecar's
- *     `centroid` / `normal`. The GLB is parsed with the stdlib only
- *     (12-byte header, JSON chunk, BIN chunk; accessors of the one mesh).
+ *     starts with `glass` AND has a measured plane, that plane must lie
+ *     within 1 cm (centroid, |n·(c_measured - c_sidecar)|) and 2° (normal,
+ *     ignoring sign) of the sidecar's `centroid` / `normal`. The GLB is
+ *     parsed with the stdlib only (12-byte header, JSON chunk, BIN chunk;
+ *     accessors of the one mesh).
+ *
+ *     AN AREA WITH NO PLANE IS INFORMATIONAL, NOT A FAILURE. The sidecar's
+ *     centroid/normal come from a PCA fit over the vertex CLOUD
+ *     (`picture_areas.py`), while [9]'s rule is the area-weighted sum over
+ *     the FACES — on a group of slivers or of two opposite skins the two
+ *     disagree by construction, and "this pane has no plane, leave it as
+ *     modelled" is the product behaviour, not a defect on either side. Such
+ *     an area prints its coherence ratio and is skipped. A sidecar area with
+ *     no material group of that name at all IS still a failure: that is a
+ *     structural mismatch between the model and its sidecar.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -154,6 +164,33 @@ function readGlbGroups(glbPath) {
     groups.set(slot, { positions, indices })
   }
   return groups
+}
+
+/**
+ * |Σ (b-a)×(c-a)| / Σ |(b-a)×(c-a)| over a group's faces — the same quotient
+ * `planeOfFaces` gates on ([9]). It is recomputed here only to LABEL the
+ * informational line of section [13] with a number a reader can act on; the
+ * decision whether an area has a plane stays the module's, never this copy's.
+ */
+function coherenceOf(positions, indices) {
+  const total = indices ? indices.length : Math.floor(positions.length / 3)
+  const vert = (i) => {
+    const v = indices ? indices[i] : i
+    return [positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]]
+  }
+  let nx = 0, ny = 0, nz = 0, weight = 0
+  for (let i = 0; i + 2 < total; i += 3) {
+    const a = vert(i), b = vert(i + 1), c = vert(i + 2)
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2]
+    const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2]
+    const fx = uy * vz - uz * vy
+    const fy = uz * vx - ux * vz
+    const fz = ux * vy - uy * vx
+    const t = Math.sqrt(fx * fx + fy * fy + fz * fz)
+    if (!(t > 0)) continue
+    nx += fx; ny += fy; nz += fz; weight += t
+  }
+  return weight > 0 ? Math.sqrt(nx * nx + ny * ny + nz * nz) / weight : 0
 }
 
 async function main() {
@@ -318,7 +355,13 @@ async function main() {
         : Math.floor(g.positions.length / 3)
       const m = planeOfFaces(g.positions, g.indices, [[0, count]])
       if (!m) {
-        check(`${area.id}: the group has a measurable plane`, false, 'null')
+        // Not a failure — see the section's note in the header: the sidecar's
+        // PCA fit over the vertices and the area-weighted face rule disagree
+        // by design on a group of slivers or of two opposite skins, and the
+        // renderer's answer for such a pane is "leave it as modelled".
+        console.log(`  - ${area.id}: no coherent plane `
+          + `(ratio ${coherenceOf(g.positions, g.indices).toFixed(4)}, `
+          + `${count / 3} faces) — skipped`)
         continue
       }
       const cs = area.centroid, ns = area.normal
