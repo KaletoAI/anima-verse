@@ -2556,6 +2556,21 @@ def test_elevator() -> None:
           not near(pad["center"][1], -0.025), str(pad["center"][1]))
     check("no elevator without map3d.elevator",
           not scene_recipe.compose_scene({"map3d": {}, "rooms": []})["extras"])
+    # TEXTURE (v13): ``map3d.elevator_kind`` lands on every OPAQUE part —
+    # 5 shaft boxes + 1 pad + 1 cabin = 7 — and on no pane of glass; without
+    # the key not one extra carries ``texture_kind`` (red probe).
+    check("red: no elevator extra carries texture_kind without elevator_kind",
+          not [e for e in sc["extras"] if "texture_kind" in e])
+    loc = fixture()
+    loc["map3d"] = {**loc["map3d"], "elevator_kind": "dark_stone"}
+    sct = scene_recipe.compose_scene(loc, plan_width_m=PLAN_W)
+    tex = [e for e in sct["extras"] if e.get("texture_kind") == "dark_stone"]
+    check("elevator_kind: 7 opaque parts tile with it, the 3 glass panes not",
+          len(tex) == 7 and {e["kind"] for e in tex}
+          == {"elevator_shaft", "elevator_pad", "elevator_cabin"}
+          and not [e for e in sct["extras"]
+                   if e["kind"] == "elevator_glass" and "texture_kind" in e],
+          str(sorted(e["kind"] for e in tex)))
 
 
 def stair_fixture(stairs, extra_rooms=()) -> dict:
@@ -2576,22 +2591,37 @@ def stair_scene(stairs, extra_rooms=()) -> dict:
 
 
 def test_stairs() -> None:
-    print("\n[5s] stairs — a flight of solid steps between two storeys")
+    print("\n[5s] stairs — treads, risers and two sloped stringers between "
+          "two storeys")
     # THE WHOLE DERIVATION BY HAND (spec § 0), never read off the output.
     # Constants: width 1.20 across the climb, tread 0.26 along it, nominal
-    # rise 0.20, pad edge 0.90 × 0.05 thick.
+    # rise 0.20, pad edge 0.90 × 0.05 thick; (v13) tread board 0.04 thick,
+    # riser plate 0.03, stringer board 0.16 deep × 0.05 thick, the parts
+    # between the stringers 1.20 − 2·0.05 = 1.10 wide.
     #
     # EG → OG, storey 3.00, at = (2, −2), dir 90 → +X:
     #   base   = storey_floor_y(0, 3) = 0.00          (storey 0 IS the terrain)
     #   target = storey_floor_y(1, 3) = 1·3 + 0.08 = 3.08
     #   climb  = 3.08          steps = round(3.08 / 0.20) = round(15.4) = 15
     #   rise   = 3.08 / 15 = 0.2053333…               run = 15 · 0.26 = 3.90
-    # Step i is a SOLID box from the floor up to base + (i+1)·rise:
-    #   centre = [2 + (i+0.5)·0.26,  base + (i+1)·rise/2,  −2]
-    #   size   = [0.26, (i+1)·rise, 1.20]
-    #   i = 0  → centre [2.13, 0.1026667, −2]  size [0.26, 0.2053333, 1.2]
-    #   i = 14 → centre [2 + 3.77, 3.08/2, −2] = [5.77, 1.54, −2]
-    #            size [0.26, 3.08, 1.2]
+    # TREAD i: a board whose TOP is base + (i+1)·rise —
+    #   centre = [2 + (i+0.5)·0.26,  (i+1)·rise − 0.02,  −2]
+    #   size   = [0.26, 0.04, 1.10]
+    #   i = 0  → [2.13, 0.1853333, −2]     i = 14 → [5.77, 3.06, −2]
+    # RISER i: the plate at the step's FRONT, from the tread below up to the
+    # underside of its own tread, i.e. rise − 0.04 = 0.1653333 tall —
+    #   centre = [2 + i·0.26 + 0.015,  (i+1)·rise − 0.04 − 0.0826667,  −2]
+    #   size   = [0.03, 0.1653333, 1.10]
+    #   i = 0  → [2.015, 0.0826667, −2]    i = 14 → [5.655, 2.9573333, −2]
+    # STRINGER: top edge from (0, −0.04) to (3.90, 3.04) in (along, y) —
+    #   θ = atan2(3.08, 3.90) = 38.2997°     L = hypot(3.90, 3.08) = 4.969547
+    #   sin θ = 0.6197748   cos θ = 0.7847797
+    #   centre along = 3.90/2 + sin θ · 0.16/2 = 1.95 + 0.0495820 = 1.9995820
+    #   centre y     = −0.04 + 3.08/2 − cos θ · 0.08 = 1.5 − 0.0627824
+    #                = 1.4372176
+    #   → centre [3.9995820, 1.4372176, −2 ± 0.575]   size [4.969547, 0.16, 0.05]
+    #   rotation [0, 0, +38.2997] (a flight along +x pitches about z, the
+    #   +x end up); left board at z = −2.575, right at −1.425
     # The pads are markers, one per end, and their TOP is the storey floor
     # PLUS one PROP_CLEARANCE (0.01) — elevator_pad's law since Treppen v2,
     # because a top exactly on the datum z-fights with the floor (finding 7b):
@@ -2603,27 +2633,59 @@ def test_stairs() -> None:
     kinds = {}
     for e in sc["extras"]:
         kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
-    check("15 steps and 2 pads next to the elevator's own primitives",
-          kinds.get("stair_step") == 15 and kinds.get("stair_pad") == 2,
+    check("15 treads, 15 risers, 2 stringers and 2 pads next to the "
+          "elevator's own primitives",
+          kinds.get("stair_tread") == 15 and kinds.get("stair_riser") == 15
+          and kinds.get("stair_stringer") == 2 and kinds.get("stair_pad") == 2,
           str(kinds))
-    steps = [e for e in sc["extras"] if e["kind"] == "stair_step"]
-    first, last = steps[0], steps[-1]
-    check("step 0: centre [2.13, 0.10267, −2], size [0.26, 0.20533, 1.2]",
-          near(first["center"][0], 2.13) and near(first["center"][1], 0.102667)
+    check("red: the solid stair_step wedge is gone",
+          "stair_step" not in kinds, str(kinds))
+    treads = [e for e in sc["extras"] if e["kind"] == "stair_tread"]
+    first, last = treads[0], treads[-1]
+    check("tread 0: centre [2.13, 0.18533, −2], size [0.26, 0.04, 1.10]",
+          near(first["center"][0], 2.13) and near(first["center"][1], 0.185333)
           and near(first["center"][2], -2.0)
-          and near(first["size"][0], 0.26) and near(first["size"][1], 0.205333)
-          and near(first["size"][2], 1.2),
+          and near(first["size"][0], 0.26) and near(first["size"][1], 0.04)
+          and near(first["size"][2], 1.1),
           f"{first['center']} {first['size']}")
-    check("step 14: centre [5.77, 1.54, −2], size [0.26, 3.08, 1.2] — the "
-          "last step reaches the upper floor",
-          near(last["center"][0], 5.77) and near(last["center"][1], 1.54)
-          and near(last["center"][2], -2.0)
-          and near(last["size"][0], 0.26) and near(last["size"][1], 3.08)
-          and near(last["size"][2], 1.2),
+    check("tread 14: centre [5.77, 3.06, −2] — its top IS the upper floor",
+          near(last["center"][0], 5.77) and near(last["center"][1], 3.06)
+          and near(last["center"][2], -2.0) and near(last["size"][1], 0.04),
           f"{last['center']} {last['size']}")
-    check("every step carries its lower level and the stair index",
-          all(s.get("level") == 0 and s.get("stair") == 0 for s in steps),
-          str({(s.get("level"), s.get("stair")) for s in steps}))
+    risers = [e for e in sc["extras"] if e["kind"] == "stair_riser"]
+    r0, r14 = risers[0], risers[-1]
+    check("riser 0: centre [2.015, 0.08267, −2], size [0.03, 0.16533, 1.10]",
+          near(r0["center"][0], 2.015) and near(r0["center"][1], 0.082667)
+          and near(r0["center"][2], -2.0)
+          and near(r0["size"][0], 0.03) and near(r0["size"][1], 0.165333)
+          and near(r0["size"][2], 1.1),
+          f"{r0['center']} {r0['size']}")
+    check("riser 14: centre [5.655, 2.95733, −2] — it stops under its tread",
+          near(r14["center"][0], 5.655) and near(r14["center"][1], 2.957333),
+          f"{r14['center']}")
+    check("every tread and riser carries its lower level and the stair index",
+          all(s.get("level") == 0 and s.get("stair") == 0
+              for s in treads + risers),
+          str({(s.get("level"), s.get("stair")) for s in treads + risers}))
+    check("red: no tread, riser or pad carries a rotation",
+          not [e for e in sc["extras"] if e["kind"] in
+               ("stair_tread", "stair_riser", "stair_pad") and "rotation" in e])
+    stringers = {e.get("side"): e for e in sc["extras"]
+                 if e["kind"] == "stair_stringer"}
+    check("stringers: left at z −2.575, right at −1.425",
+          near(stringers["left"]["center"][2], -2.575)
+          and near(stringers["right"]["center"][2], -1.425),
+          str({k: v["center"] for k, v in stringers.items()}))
+    st = stringers["left"]
+    check("stringer: centre [3.99958, 1.43722], size [4.96955, 0.16, 0.05]",
+          near(st["center"][0], 3.999582) and near(st["center"][1], 1.437218)
+          and near(st["size"][0], 4.969547) and near(st["size"][1], 0.16)
+          and near(st["size"][2], 0.05),
+          f"{st['center']} {st['size']}")
+    check("stringer: rotation [0, 0, +38.2997] — pitched about z, +x end up",
+          near(st["rotation"][0], 0) and near(st["rotation"][1], 0)
+          and near(st["rotation"][2], 38.2997, 1e-3),
+          str(st.get("rotation")))
     pads = {e.get("end"): e for e in sc["extras"] if e["kind"] == "stair_pad"}
     check("foot pad: centre [1.5, −0.015, −2], size 0.9 × 0.05, level 0",
           near(pads["foot"]["center"][0], 1.5)
@@ -2639,16 +2701,55 @@ def test_stairs() -> None:
           and near(pads["head"]["center"][1], 3.065)
           and near(pads["head"]["center"][2], -2.0)
           and pads["head"].get("level") == 1, str(pads.get("head")))
+    # TEXTURE (v13): the flight's own kind lands on EVERY one of its boxes —
+    # 15 + 15 + 2 + 2 = 34 — and on none of the elevator's; without the key
+    # no stair box carries the field (red probe).
+    check("red: no stair box carries texture_kind without the flight's kind",
+          not [e for e in sc["extras"] if str(e["kind"]).startswith("stair_")
+               and "texture_kind" in e])
+    sct = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 90,
+                        "texture_kind": "wooden_floor"}])
+    tex = [e for e in sct["extras"] if e.get("texture_kind") == "wooden_floor"]
+    check("texture_kind: all 34 boxes of the flight tile with it, the "
+          "elevator's none",
+          len(tex) == 34
+          and all(str(e["kind"]).startswith("stair_") for e in tex)
+          and not [e for e in sct["extras"]
+                   if str(e["kind"]).startswith("elevator_")
+                   and "texture_kind" in e],
+          str(len(tex)))
     # The climb direction decides which axis carries the tread — the width
-    # stays ACROSS it. dir 0 = (0, +1): step 0 centre z = −2 + 0.13 = −1.87,
-    # size [1.2, 0.2053333, 0.26]; foot pad z = −2 − 0.5 = −2.5, head pad
+    # stays ACROSS it. dir 0 = (0, +1): tread 0 centre z = −2 + 0.13 = −1.87,
+    # size [1.10, 0.04, 0.26]; the stringers stand at x = 2 ± 0.575 with
+    # size [0.05, 0.16, 4.969547] and rotation [−38.2997, 0, 0] (about x,
+    # the +z end up); foot pad z = −2 − 0.5 = −2.5, head pad
     # z = −2 + 3.9 + 0.5 = 2.4, both on x = 2.
     sc0 = stair_scene([{"at": [2.0, -2.0], "from_level": 0, "dir_deg": 0}])
-    s0 = [e for e in sc0["extras"] if e["kind"] == "stair_step"][0]
+    s0 = [e for e in sc0["extras"] if e["kind"] == "stair_tread"][0]
     check("dir 0 climbs along +z: size x↔z swapped, centre moves in z",
           near(s0["center"][0], 2.0) and near(s0["center"][2], -1.87)
-          and near(s0["size"][0], 1.2) and near(s0["size"][2], 0.26),
+          and near(s0["size"][0], 1.1) and near(s0["size"][2], 0.26),
           f"{s0['center']} {s0['size']}")
+    st0 = [e for e in sc0["extras"] if e["kind"] == "stair_stringer"]
+    check("dir 0 stringers: x = 2 ± 0.575, size [0.05, 0.16, 4.96955], "
+          "rotation [−38.2997, 0, 0]",
+          {round(e["center"][0], 3) for e in st0} == {1.425, 2.575}
+          and all(near(e["size"][0], 0.05) and near(e["size"][2], 4.969547)
+                  and near(e["rotation"][0], -38.2997, 1e-3)
+                  and near(e["rotation"][2], 0) for e in st0),
+          str([(e["center"], e["size"], e["rotation"]) for e in st0]))
+    # dir 180 (−z) and 270 (−x): the far end must still be the HIGH end, so
+    # the pitch flips sign with the direction.
+    st180 = [e for e in stair_scene([{"at": [2.0, -2.0], "from_level": 0,
+                                      "dir_deg": 180}])["extras"]
+             if e["kind"] == "stair_stringer"][0]
+    st270 = [e for e in stair_scene([{"at": [2.0, -2.0], "from_level": 0,
+                                      "dir_deg": 270}])["extras"]
+             if e["kind"] == "stair_stringer"][0]
+    check("dir 180 pitches +38.2997 about x, dir 270 −38.2997 about z",
+          near(st180["rotation"][0], 38.2997, 1e-3)
+          and near(st270["rotation"][2], -38.2997, 1e-3),
+          f"{st180['rotation']} {st270['rotation']}")
     p0 = {e.get("end"): e for e in sc0["extras"] if e["kind"] == "stair_pad"}
     check("dir 0 pads sit at z −2.5 and z 2.4, both on x 2",
           near(p0["foot"]["center"][2], -2.5) and near(p0["head"]["center"][2], 2.4)
@@ -2658,19 +2759,25 @@ def test_stairs() -> None:
     # BASEMENT → EG (§ 0's second hand calculation): base =
     # storey_floor_y(−1, 3) = −3 + 0.08 = −2.92, target = 0.00, climb 2.92,
     # steps = round(14.6) = 15, rise = 2.92 / 15 = 0.1946667, run 3.90.
-    #   step 0  centre_y = −2.92 + 0.0973333 = −2.8226667
-    #   step 14 centre_y = −2.92 + 1.46 = −1.46, size_y = 2.92
+    #   tread 0  centre_y = −2.92 + 0.1946667 − 0.02 = −2.7453333
+    #   tread 14 centre_y = 0.00 − 0.02 = −0.02
+    #   stringer: θ = atan2(2.92, 3.90) = 36.8229°, L = 4.872002,
+    #     sin θ = 0.5993430, cos θ = 0.8004923
+    #     centre_y = −2.92 − 0.04 + 1.46 − 0.8004923 · 0.08 = −1.5640394
     #   foot pad −2.92 + 0.01 − 0.025 = −2.935 (level −1),
     #   head pad 0.00 + 0.01 − 0.025 = −0.015 (level 0)
     scb = stair_scene([{"at": [2.0, -2.0], "from_level": -1, "dir_deg": 90}])
-    bsteps = [e for e in scb["extras"] if e["kind"] == "stair_step"]
+    bsteps = [e for e in scb["extras"] if e["kind"] == "stair_tread"]
+    bstr = [e for e in scb["extras"] if e["kind"] == "stair_stringer"][0]
     bpads = {e.get("end"): e for e in scb["extras"] if e["kind"] == "stair_pad"}
-    check("basement flight: 15 steps, first at −2.82267, last 2.92 tall",
-          len(bsteps) == 15 and near(bsteps[0]["center"][1], -2.822667)
-          and near(bsteps[0]["size"][1], 0.194667)
-          and near(bsteps[-1]["size"][1], 2.92)
-          and near(bsteps[-1]["center"][1], -1.46),
-          f"{bsteps[0]['center']} {bsteps[-1]['size']}")
+    check("basement flight: 15 treads, first at −2.74533, last at −0.02",
+          len(bsteps) == 15 and near(bsteps[0]["center"][1], -2.745333)
+          and near(bsteps[-1]["center"][1], -0.02),
+          f"{bsteps[0]['center']} {bsteps[-1]['center']}")
+    check("basement stringer: centre_y −1.56404, length 4.872, pitch 36.8229",
+          near(bstr["center"][1], -1.564039) and near(bstr["size"][0], 4.872002)
+          and near(bstr["rotation"][2], 36.8229, 1e-3),
+          f"{bstr['center']} {bstr['size']} {bstr['rotation']}")
     check("basement pads: −2.935 on level −1, −0.015 on level 0",
           near(bpads["foot"]["center"][1], -2.935)
           and bpads["foot"].get("level") == -1
@@ -5274,7 +5381,7 @@ def test_surface_specs() -> None:
     the numbers of the lattice are the bake's, and the recipe hands them on
     character for character:
 
-    * ``SCENE_RECIPE_VERSION`` is 12, so every client re-fetches once — the
+    * ``SCENE_RECIPE_VERSION`` is 13, so every client re-fetches once — the
       constant is the payload's own code version and moves with EVERY change
       to what the composer answers for unchanged data (6 = these baked
       surfaces, 7 = markers speaking place types, 8 = the prop marker naming
@@ -5286,7 +5393,9 @@ def test_surface_specs() -> None:
       on a cached scene would draw grey glyphs for groups it no longer knows;
       12 = the root offset became a contact height, 2026-09-08 — every seat
       and lying marker's ``root_offset`` moved without any world data moving,
-      and the signature does not hash the catalog);
+      and the signature does not hash the catalog; 13 = a flight is treads,
+      risers and two pitched stringers instead of a solid wedge, and every
+      extra may carry a ``texture_kind``, 2026-09-09);
     * a room whose meta carries ``surface`` gives the block to its ``room``
       spec unchanged, and a room whose meta carries none gets no field;
     * a prop tagged ``walkable`` gets ``walkable: True`` and — only if its
@@ -5297,8 +5406,8 @@ def test_surface_specs() -> None:
     """
     print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 12 (the contact-height root offset)",
-          scene_recipe.SCENE_RECIPE_VERSION == 12,
+    check("code_version 13 (treads, risers, stringers + texture_kind on extras)",
+          scene_recipe.SCENE_RECIPE_VERSION == 13,
           str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────

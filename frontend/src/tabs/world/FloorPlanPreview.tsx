@@ -1316,20 +1316,38 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     // to the one above, a pad sits on the level it is stamped with.
     if (sc) {
       for (const extra of sc.extras) {
-        const stair = extra.kind === 'stair_step' || extra.kind === 'stair_pad'
+        const stair = extra.kind.startsWith('stair_')
         if (solo !== null) {
           if (!stair) continue
           const lv = extra.level ?? 0
-          const touches = extra.kind === 'stair_step'
-            ? (lv === solo || lv + 1 === solo) : lv === solo
+          // A pad sits on ONE storey; every other piece of a flight (tread,
+          // riser, stringer) spans from its own storey to the one above.
+          const touches = extra.kind === 'stair_pad'
+            ? lv === solo : (lv === solo || lv + 1 === solo)
           if (!touches) continue
         }
         const glass = extra.kind.endsWith('_glass')
-        const mat = glass
-          ? new THREE.MeshStandardMaterial({
+        // TEXTURE (v13): an extra with a `texture_kind` tiles it like a wall
+        // — the same clone-per-mesh and the same uv scaling `buildWall` gets.
+        const texInfo = !glass && extra.texture_kind
+          ? ensureSurfaceTex(extra.texture_kind) : null
+        let tileM = 0
+        let mat: Material
+        if (texInfo?.tex) {
+          tileM = texInfo.sizeM * kFac
+          const tex = (texInfo.tex as Texture).clone()
+          tex.needsUpdate = true
+          const cabin = extra.kind === 'elevator_cabin'
+          mat = surfaceMaterial(THREE, {
+            material: surfaceListRef.current.map.get(extra.texture_kind!)?.material ?? null,
+            map: tex, transparent: cabin,
+            opacity: cabin ? sc.style.elevator_cabin_opacity : 1 })
+        } else if (glass) {
+          mat = new THREE.MeshStandardMaterial({
               color: glassColor, transparent: true,
               opacity: sc.style.elevator_glass_opacity })
-          : new THREE.MeshStandardMaterial({
+        } else {
+          mat = new THREE.MeshStandardMaterial({
               // Masonry, not machinery: a staircase takes the payload's own
               // stair colour, so it never reads as part of the elevator.
               color: hex(stair
@@ -1346,7 +1364,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
               transparent: extra.kind === 'elevator_cabin',
               opacity: extra.kind === 'elevator_cabin'
                 ? sc.style.elevator_cabin_opacity : 1 })
-        boxes.add(buildExtra(THREE, extra, mat))
+        }
+        boxes.add(buildExtra(THREE, extra, mat, tileM))
       }
     }
 

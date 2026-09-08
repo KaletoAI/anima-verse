@@ -4503,11 +4503,22 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # Kollider
   extras:  [ { kind: "elevator_shaft"|"elevator_pad"|"elevator_cabin"|…,
                … je Kind eine feste Primitiv-Form … } ],
-                                           # stair_step (Nachtrag 2026-08-25):
-                                           # eine MASSIVE Stufe, center+size
-                                           # wie jeder extras-Kasten, dazu
-                                           # `level` (die untere Etage) und
-                                           # `stair` (Index des Laufs)
+                                           # stair_tread / stair_riser /
+                                           # stair_stringer (v13, Nachtrag
+                                           # 2026-09-09): Auftritt, Setzstufe
+                                           # und die zwei geneigten Wangen
+                                           # eines Laufs, center+size wie
+                                           # jeder extras-Kasten, dazu `level`
+                                           # (die untere Etage) und `stair`
+                                           # (Index des Laufs); die Wange
+                                           # trägt als einziger Kasten eine
+                                           # `rotation` [rx,ry,rz] in GRAD
+                                           # (Euler XYZ um die Mitte) und
+                                           # `side` "left"|"right"
+                                           # texture_kind? (v13) an jedem
+                                           # opaken Kasten: Kacheln wie eine
+                                           # Wand (`applyWorldScaleWallUVs`);
+                                           # fehlt es, gilt die `style`-Farbe
                                            # stair_pad: der Trigger am Fuß und
                                            # am Kopf des Laufs, `end`:
                                            # "foot"|"head", `level` = die
@@ -7168,7 +7179,9 @@ Die nominelle Steigung ist nur der Teiler: gerechnet wird mit `rise`, damit die
 letzte Stufe EXAKT auf dem oberen Boden landet statt eine Handbreit darunter.
 **Stufe *i* ist ein MASSIVER Kasten** vom unteren Boden bis zu ihrem eigenen
 Auftritt — eine Treppe, auf der man überall steht, kein Satz schwebender
-Platten:
+Platten. *(Seit v13 ERSETZT: Auftritt + Setzstufe + zwei Wangen, siehe den
+Nachtrag 2026-09-09 unten. Die Formel bleibt hier als Herkunft der Zahlen
+stehen; `steps`/`rise`/`run` und die Pads gelten unverändert.)*
 
 ```
 center = at + dir·(i+0.5)·TREAD ,  y = base + (i+1)·rise/2
@@ -8731,3 +8744,134 @@ gecachte Szene und zeichnete graue Glyphen für Gruppen, die es nicht mehr gibt.
 | Der Import-Pfad benennt um und sagt es, statt zu schlucken | ebenda **[7]** |
 | Eine unbekannte Gruppe erzeugt eine MELDUNG (beide Sanitizer, das Szenen-Rezept einmal je Komposition, die Möblierung mit Eintrag im Bestätigungsdialog) — und wird trotzdem nicht korrigiert | ebenda **[8]** |
 | `code_version` == 12 | `scripts/smoke_scene_recipe.py` **[7i]** |
+
+## Nachtrag 2026-09-09 (§ A6/B1): TEXTUREN für Treppe und Fahrstuhl, die Treppe ist eine TREPPE (v13)
+
+### Befund
+
+Treppe und Fahrstuhl waren die einzigen Bauteile, die nur eine Farbe kannten
+(`style.stair_color`, `style.elevator_*_color`), während jede Wand und jede
+Platte ein `texture_kind` aus der Surface-Bibliothek trägt. Und ein Lauf war
+ein KEIL: jede Stufe ein massiver Kasten vom unteren Boden bis zum Auftritt —
+von unten und von der Seite ein Klotz, keine Treppe.
+
+### 1. Drahtform (Autorenformat)
+
+```json
+"stairs":        [ { "at": [2.0, -2.0], "from_level": 0, "dir_deg": 90,
+                     "texture_kind": "wooden_floor" } ],
+"elevator_kind": "dark_stone"
+```
+
+- `stairs[i].texture_kind?` — die Art JEDES Kastens dieses Laufs (Auftritte,
+  Setzstufen, Wangen, beide Pads). Pro Lauf, keine Kaskade, kein globales
+  Treppen-Kind: der Lauf ist wie ein Raum eine eigene Sache mit eigenem
+  Streifen im Editor (`PlanStairStrip`).
+- `elevator_kind?` — die Art der OPAKEN Fahrstuhlteile: Säulen, Dach, Pads,
+  Kabine. Glas bleibt Glas, die Kabinen-Deckkraft bleibt (`PlanElevatorStrip`).
+- Beide leer ⇒ exakt das bisherige Bild aus den `style`-Farben. Der Sanitizer
+  (`world_ops`) nimmt beide als String ≤ 60 Zeichen mit.
+
+### 2. Payload — `texture_kind` und `rotation` an `extras[]`
+
+- Jeder opake `extras`-Kasten darf `texture_kind` tragen; die Renderer kacheln
+  ihn EXAKT wie eine Wand — Auflösung über die Wand-Kette (kein
+  Boden-Fallback), Klon je Kasten, Kachelmaß in die UVs
+  (`applyWorldScaleWallUVs`, geteiltes Paket, jetzt auch von `buildExtra`
+  gerufen: `buildExtra(THREE, extra, material, tileM)`). Glas trägt nie eines.
+- `rotation?: [rx, ry, rz]` in GRAD, Euler XYZ (threes Vorgabe-Reihenfolge)
+  um die Kastenmitte; `size` ist die EIGENE Ausdehnung vor der Drehung. Heute
+  nur an der Wange. Ein Renderer wendet sie wörtlich an (`mesh.rotation.set`
+  in Radiant) — nichts wird zurückgerechnet.
+- `stair_step` ist WEG. Ein Lauf ist je Stufe `stair_tread` + `stair_riser`,
+  dazu zwei `stair_stringer` (`side` "left"|"right", bergauf gesehen) und
+  wie bisher zwei `stair_pad`. Alle tragen `level` (untere Etage) und
+  `stair` (Index). Wer Treppenteile filtert, prüft `kind.startsWith("stair_")`;
+  ein Pad liegt auf EINER Etage, jedes andere Teil spannt von `level` nach
+  `level + 1` (Admin-Solo-Ansicht).
+- `SCENE_RECIPE_VERSION` 12 → **13**.
+
+### 3. Das Rezept je Stufe (Server-Konstanten, echte Meter)
+
+| Konstante | Wert | Was |
+|---|---|---|
+| `STAIR_TREAD_THICKNESS` | 0,04 | Dicke des Auftritt-Bretts |
+| `STAIR_RISER_THICKNESS` | 0,03 | Dicke der Setzstufe |
+| `STAIR_STRINGER_DEPTH_M` | 0,16 | Höhe der Wange (quer zur Steigung) |
+| `STAIR_STRINGER_THICKNESS` | 0,05 | Dicke der Wange |
+
+`steps`, `rise`, `run`, `base`, `target` wie im Nachtrag 2026-08-25; `tt` =
+Auftrittdicke, `inner` = `STAIR_WIDTH_M − 2·STAIR_STRINGER_THICKNESS` = 1,10
+(die Breite ZWISCHEN den Wangen).
+
+```
+tread i : center = at + dir·(i+0,5)·TREAD ,  y = base + (i+1)·rise − tt/2
+          size   = TREAD entlang, tt hoch, inner quer
+riser i : center = at + dir·(i·TREAD + RISER/2) ,
+          y = base + (i+1)·rise − tt − (rise − tt)/2
+          size   = RISER entlang, (rise − tt) hoch, inner quer
+```
+
+Die Setzstufe endet unter dem eigenen Auftritt und beginnt auf dem Auftritt
+darunter — keine Fläche liegt doppelt.
+
+**Die Wange** ist ein Brett, dessen OBERKANTE die Linie durch die
+hinteren-unteren Auftrittkanten ist — von `(0, base − tt)` nach
+`(run, target − tt)` in (entlang, y). Damit berührt sie jede Stufe entlang
+einer KANTE und teilt mit keiner eine Fläche (kein Z-Fighting), und sie
+schließt an Fuß und Kopf bündig mit den Böden ab.
+
+```
+θ      = atan2(climb, run)          L = hypot(run, climb)
+along  = run/2 + sin θ · DEPTH/2    y = base − tt + climb/2 − cos θ · DEPTH/2
+across = ± (STAIR_WIDTH_M − THICKNESS)/2       ("left" = −, "right" = +)
+size   = L entlang, DEPTH hoch, THICKNESS quer
+rotation: dir ±x → [0, 0, ±θ] ; dir ±z → [∓θ, 0, 0]
+```
+
+Das Vorzeichen ist so gewählt, dass das FERNE Ende das hohe ist: eine Drehung
+um z um +θ hebt das +x-Ende, eine Drehung um x um +θ SENKT das +z-Ende — also
+`−θ` für einen Lauf nach +z. **Ein Kasten lässt sich nicht rechtwinklig
+abschneiden:** das Fußende sinkt `cos θ · DEPTH` (≈ 0,13) unter den unteren
+Boden über die ersten `sin θ · DEPTH` (≈ 0,10) Meter, das Kopfende reicht
+ebenso weit unter den oberen Boden — INS Loch, das der Lauf dort ohnehin
+schneidet. Auf Etage 0 verschluckt das Terrain das Fußende; auf einer
+deklarierten Etage steckt es im Bodenaufbau (Raumplatte +0,10).
+
+### Handrechnung EG → OG (storey 3,00, `at` = (2, −2), `dir_deg` 90 → +X)
+
+`steps` 15, `rise` 0,205333, `run` 3,90 wie gehabt; `tt` 0,04.
+
+| Primitiv | `center` | `size` | sonst |
+|---|---|---|---|
+| `stair_tread` i = 0 | [2,13 / 0,185333 / −2] | [0,26 / 0,04 / 1,10] | level 0 |
+| `stair_tread` i = 14 | [5,77 / 3,06 / −2] | [0,26 / 0,04 / 1,10] | Oberkante = 3,08 |
+| `stair_riser` i = 0 | [2,015 / 0,082667 / −2] | [0,03 / 0,165333 / 1,10] | |
+| `stair_riser` i = 14 | [5,655 / 2,957333 / −2] | [0,03 / 0,165333 / 1,10] | |
+| `stair_stringer` | [3,999582 / 1,437218 / −2 ∓ 0,575] | [4,969547 / 0,16 / 0,05] | rotation [0, 0, 38,2997] |
+
+Wange: θ = atan2(3,08; 3,90) = 38,2997°, sin θ = 0,6197748, cos θ = 0,7847797,
+L = 4,969547; along = 1,95 + 0,0495820 = 1,9995820; y = −0,04 + 1,54 −
+0,0627824 = 1,4372176. Gegenprobe im Client (drei wendet die Euler an): die
+lokale Ecke (−L/2, +DEPTH/2, 0) landet auf **(2,00 / −0,04)**, die Ecke
+(+L/2, +DEPTH/2, 0) auf **(5,90 / 3,04)** — genau die Oberkanten-Linie.
+`dir_deg` 0: `size` x ↔ z, Wangen bei x = 2 ± 0,575, rotation
+[−38,2997, 0, 0]; 180 → [+38,2997, 0, 0]; 270 → [0, 0, −38,2997].
+Keller → EG: θ = atan2(2,92; 3,90) = 36,8229°, L = 4,872002, Wangen-Mitte
+y = −2,96 + 1,46 − 0,0640394 = −1,5640394.
+
+### Editor
+
+`PlanStairStrip` und `PlanElevatorStrip` tragen je ein `SurfaceKindSelect`
+„Texture" aus derselben Bibliotheksliste wie der Etagen-Reiter; leer heißt
+„Stair colour" bzw. „Elevator colours".
+
+### Die Beweise (§ B5a)
+
+| Zahl | Wo |
+|---|---|
+| 15 Auftritte, 15 Setzstufen, 2 Wangen, 2 Pads; ROTE PROBE „kein `stair_step` mehr"; jede Zahl der Handrechnung oben; Vorzeichen der Neigung für alle vier Richtungen; Keller-Wange | `scripts/smoke_scene_recipe.py` **[5s]** |
+| `texture_kind` auf allen 34 Kästen eines Laufs, auf keinem Fahrstuhlteil; ROTE PROBE ohne Kind; `elevator_kind` auf 7 opaken Teilen, auf keiner Scheibe | ebenda **[5s]**, **[5]** |
+| `code_version` 13 | ebenda **[7i]** |
+| Euler in Radiant, die zwei Oberkanten-Ecken der Wange (±x UND ±z), UV-Maximum je Fläche eines gekachelten Auftritts, `tileM` 0 lässt 0..1 | `packages/scene-render/scripts/smoke_extra_box.mjs` |
+

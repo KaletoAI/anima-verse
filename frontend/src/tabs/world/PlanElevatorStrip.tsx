@@ -1,9 +1,10 @@
 /**
  * PlanElevatorStrip — the selected lift: move it by click, or nudge it on two
- * metre sliders.
+ * metre sliders, and pick the texture of its opaque parts.
  *
  * The lift is placed ONCE and serves every storey (the client builds the
- * shaft), so there is nothing per-level to edit here — only where it stands.
+ * shaft), so there is nothing per-level to edit here — only where it stands
+ * and what it is made of.
  * Its position is metres from the anchor pin (v6 Nr. 2), the same frame the
  * boundary is drawn in, which is why the sliders sweep the whole drawing
  * window rather than some normalized range.
@@ -13,10 +14,17 @@ import { SliderInput } from '../../components/SliderInput'
 import { fmtM, rM } from './planGeometry'
 import type { PlanView } from './planGeometry'
 import type { PlanMode } from './PlanToolbar'
+import { SurfaceKindSelect } from './SurfaceKindSelect'
+import type { SurfaceKind } from './worldTypes'
 
 interface Props {
   /** Where the lift stands, in local metres around the pin. */
   at: [number, number]
+  /** `map3d.elevator_kind` — the texture of columns, roof, pads and cabin;
+   *  '' = the style colours. */
+  kind: string
+  surfaceKinds: SurfaceKind[]
+  onKind: (kind: string) => void
   /** The drawing window — the sliders span exactly it. */
   view: PlanView
   /** The armed click mode; 'elevator' means the next plan click moves it. */
@@ -25,7 +33,9 @@ interface Props {
   onMove: (at: [number, number]) => void
 }
 
-export function PlanElevatorStrip({ at, view, mode, onMode, onMove }: Props) {
+export function PlanElevatorStrip({
+  at, kind, surfaceKinds, onKind, view, mode, onMode, onMove,
+}: Props) {
   const { t } = useI18n()
   const arming = mode === 'elevator'
   return (
@@ -66,6 +76,15 @@ export function PlanElevatorStrip({ at, view, mode, onMode, onMove }: Props) {
         unit="m"
         sliderWidth={100}
         readback={<span style={{ minWidth: 56 }}>{fmtM(at[1])} m</span>}
+      />
+      <SurfaceKindSelect
+        label="Texture"
+        labelWidth={52}
+        value={kind}
+        kinds={surfaceKinds}
+        emptyLabel={t('Elevator colours')}
+        title={t('Surface texture of the elevator\'s opaque parts — columns, roof, landing pads and cabin. The glass stays glass. Nothing chosen keeps the plain elevator colours.')}
+        onChange={onKind}
       />
     </div>
   )

@@ -2611,6 +2611,11 @@
     "(measured)": "(gemessen)",
     "Please choose — a pair pose has no sensible default.": "Bitte wählen — für eine Paar-Pose gibt es keinen sinnvollen Vorgabewert.",
     "How many slots of the anchor marker the pair uses. A slot is 0.60 m — one body width.": "Wie viele Slots des Ankers das Paar belegt. Ein Slot ist 0,60 m — eine Körperbreite.",
-    "The clip measures {span} m between the two figures; a slot is 0.60 m. That is the space they STAND in, not the floor the pose sweeps — a dance needs two slots however close the dancers are.": "Der Clip misst {span} m zwischen den beiden Figuren; ein Slot ist 0,60 m. Das ist der Platz, auf dem sie STEHEN, nicht die Fläche, die die Pose überstreicht — ein Tanz braucht zwei Slots, so eng die Tanzenden auch beieinander sind."
+    "The clip measures {span} m between the two figures; a slot is 0.60 m. That is the space they STAND in, not the floor the pose sweeps — a dance needs two slots however close the dancers are.": "Der Clip misst {span} m zwischen den beiden Figuren; ein Slot ist 0,60 m. Das ist der Platz, auf dem sie STEHEN, nicht die Fläche, die die Pose überstreicht — ein Tanz braucht zwei Slots, so eng die Tanzenden auch beieinander sind.",
+    "Texture": "Textur",
+    "Stair colour": "Treppenfarbe",
+    "Elevator colours": "Fahrstuhlfarben",
+    "Surface texture of this flight — treads, risers, stringers and both landing pads tile with it. Nothing chosen keeps the plain stair colour.": "Oberflächentextur dieses Laufs — Auftritte, Setzstufen, Wangen und beide Podest-Pads kacheln damit. Ohne Auswahl bleibt die einfache Treppenfarbe.",
+    "Surface texture of the elevator's opaque parts — columns, roof, landing pads and cabin. The glass stays glass. Nothing chosen keeps the plain elevator colours.": "Oberflächentextur der undurchsichtigen Fahrstuhlteile — Säulen, Dach, Etagen-Pads und Kabine. Das Glas bleibt Glas. Ohne Auswahl bleiben die einfachen Fahrstuhlfarben."
   }
 }

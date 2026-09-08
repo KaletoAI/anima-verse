@@ -1,8 +1,8 @@
 /**
  * PlanStairStrip — the selected staircase.
  *
- * A flight has exactly three things one does to it: turn it, move its foot,
- * take it away — and the two numbers that decide whether it FITS (its step
+ * A flight has exactly four things one does to it: turn it, move its foot,
+ * pick its texture, take it away — and the two numbers that decide whether it FITS (its step
  * count and the metres of floor it eats) are stated here rather than left to
  * be measured on the plan.
  *
@@ -17,13 +17,17 @@ import { SliderInput } from '../../components/SliderInput'
 import { fmtM, rM } from './planGeometry'
 import type { PlanView } from './planGeometry'
 import type { PlanMode } from './PlanToolbar'
-import type { SceneStairs } from './worldTypes'
+import { SurfaceKindSelect } from './SurfaceKindSelect'
+import type { SceneStairs, SurfaceKind } from './worldTypes'
 
 /** One authored flight — `map3d.stairs[i]`. */
 export interface StairFlight {
   at: [number, number]
   from_level: number
   dir_deg: number
+  /** Surface-texture kind of every piece of the flight (v13); unset = the
+   *  payload's stair colour. */
+  texture_kind?: string
 }
 
 interface Props {
@@ -35,12 +39,14 @@ interface Props {
   view: PlanView
   mode: PlanMode
   onMode: (next: PlanMode) => void
+  /** The surface-texture library, for the flight's own kind. */
+  surfaceKinds: SurfaceKind[]
   /** Replace this flight, or remove it when null is passed. */
   onPatch: (next: StairFlight | null) => void
 }
 
 export function PlanStairStrip({
-  index, flight, composed, view, mode, onMode, onPatch,
+  index, flight, composed, view, mode, onMode, surfaceKinds, onPatch,
 }: Props) {
   const { t } = useI18n()
   const arming = mode === 'stairs'
@@ -104,6 +110,19 @@ export function PlanStairStrip({
         unit="m"
         sliderWidth={100}
         readback={<span style={{ minWidth: 56 }}>{fmtM(flight.at[1])} m</span>}
+      />
+      <SurfaceKindSelect
+        label="Texture"
+        labelWidth={52}
+        value={flight.texture_kind || ''}
+        kinds={surfaceKinds}
+        emptyLabel={t('Stair colour')}
+        title={t('Surface texture of this flight — treads, risers, stringers and both landing pads tile with it. Nothing chosen keeps the plain stair colour.')}
+        onChange={(kind) => {
+          const next = { ...flight, texture_kind: kind || undefined }
+          if (!kind) delete next.texture_kind
+          onPatch(next)
+        }}
       />
       <button
         type="button"

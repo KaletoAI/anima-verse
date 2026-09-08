@@ -35,7 +35,8 @@ in, so nothing is denormalized here):
                 LINTEL above it up to the top of the wall, and a PANE in the
                 hole itself — glass for a window, a dark DOOR LEAF for a door.
                 A door is a hole, not a slot up to the ceiling,
-- ``extras``  — the elevator primitives,
+- ``extras``  — the elevator and staircase primitives (boxes; a stringer is
+                the one box that carries a ``rotation``),
 - ``style``   — the colours/opacities both renderers used to keep as copies,
 - ``models``  — ONE spec form for building, room diorama and prop; the client
                 runs the single ``place()`` routine of § B2 over it,
@@ -113,7 +114,15 @@ logger = get_logger(__name__)
 #: in the world changing, and the scene signature does not hash the pose
 #: catalog — so a client on a cached scene would keep drawing sitters 13 cm
 #: in the cushion until the version tells it to re-fetch.
-SCENE_RECIPE_VERSION = 12
+#: 13 (2026-09-09): A STAIRCASE IS A STAIRCASE, NOT A WEDGE (plan: "Texturen
+#: für Treppe und Aufzug") — the solid ``stair_step`` boxes are gone; a
+#: flight is ``stair_tread`` + ``stair_riser`` per step and two sloped
+#: ``stair_stringer`` boards, the first extras that carry a ``rotation``
+#: (Euler XYZ, degrees, about the box centre). Every extra may carry a
+#: ``texture_kind`` — a flight's from ``map3d.stairs[i].texture_kind``, the
+#: elevator's opaque parts from ``map3d.elevator_kind`` — tiled by the
+#: renderers exactly like a wall; without it the ``style`` colours apply.
+SCENE_RECIPE_VERSION = 13
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -245,6 +254,16 @@ STAIR_PAD_THICKNESS = 0.05
 # Clearance between a pad's edge and the first/last tread, so the marker never
 # overlaps the flight it belongs to.
 STAIR_PAD_GAP_M = 0.05
+# The parts of ONE step (v13). A tread is a board lying on the step, a riser
+# the thin plate that closes its front; both span the width BETWEEN the two
+# stringers. A stringer (Wange) is a sloped board of ``STAIR_STRINGER_DEPTH_M``
+# whose TOP EDGE runs through the rear-bottom corners of the treads — from
+# (0, base − tread thickness) to (run, target − tread thickness) — so the
+# board touches every step along one edge and shares no face with it.
+STAIR_TREAD_THICKNESS = 0.04
+STAIR_RISER_THICKNESS = 0.03
+STAIR_STRINGER_DEPTH_M = 0.16
+STAIR_STRINGER_THICKNESS = 0.05
 # How many flights one location may carry. Beyond this an author is drawing
 # something other than a building; the sanitizer caps the stored list at the
 # same number.
@@ -2027,6 +2046,10 @@ def _elevator(map3d: Dict[str, Any], levels: List[int],
     if not isinstance(pos, (list, tuple)) or len(pos) != 2:
         return []
     ex, ez = _num(pos[0]), _num(pos[1])
+    # ``map3d.elevator_kind`` (v13): the surface-texture kind of the lift's
+    # OPAQUE parts — columns, roof, pads, cabin. Glass stays glass.
+    kind = str((map3d or {}).get("elevator_kind") or "").strip()
+    tex: Dict[str, Any] = {"texture_kind": kind} if kind else {}
     top_level = max([0] + list(levels))
     # The shaft reaches the floor of the storey ABOVE the topmost one, which is
     # always a declared storey (``top_level`` ≥ 0) and therefore unchanged by
@@ -2041,9 +2064,9 @@ def _elevator(map3d: Dict[str, Any], levels: List[int],
             out.append(_box("elevator_shaft",
                             ex + sx * (outer - column) / 2, shaft_top / 2,
                             ez + sz * (outer - column) / 2,
-                            column, shaft_top, column))
+                            column, shaft_top, column, **tex))
     out.append(_box("elevator_shaft", ex, shaft_top + ELEVATOR_ROOF_THICKNESS / 2,
-                    ez, outer, ELEVATOR_ROOF_THICKNESS, outer))
+                    ez, outer, ELEVATOR_ROOF_THICKNESS, outer, **tex))
     # Open side = the dominant axis of the elevator's offset, pointing at the
     # building centre; the other three sides are glazed.
     if abs(ex) >= abs(ez):
@@ -2073,12 +2096,13 @@ def _elevator(map3d: Dict[str, Any], levels: List[int],
         out.append(_box("elevator_pad", ex,
                         storey_floor_y(level, storey) + PROP_CLEARANCE
                         - ELEVATOR_PAD_THICKNESS / 2,
-                        ez, pad, ELEVATOR_PAD_THICKNESS, pad, level=level))
+                        ez, pad, ELEVATOR_PAD_THICKNESS, pad, level=level,
+                        **tex))
     cabin = ELEVATOR_CABIN_M
     cabin_h = max(ELEVATOR_CABIN_STOREY_FRAC * storey, 0.3)
     out.append(_box("elevator_cabin", ex,
                     storey_floor_y(0, storey) + cabin_h / 2, ez,
-                    cabin, cabin_h, cabin, level=0))
+                    cabin, cabin_h, cabin, level=0, **tex))
     return out
 
 
@@ -2094,13 +2118,16 @@ def _stair_flights(map3d: Dict[str, Any],
     landings must be the SAME numbers in all three. So this returns one entry
     per flight and nobody derives a stair from a stair primitive again:
 
-    * ``extras`` — the ``stair_step`` boxes and the two ``stair_pad`` markers;
+    * ``extras`` — the ``stair_tread``/``stair_riser`` boxes of every step,
+      the two sloped ``stair_stringer`` boards and the two ``stair_pad``
+      markers;
     * ``block`` — the ``stairs[]`` payload entry;
     * ``hole`` — ``{"level", "ring", "center"}``: the rectangle this flight
       opens in the floor of the storey it ARRIVES on.
 
     ``map3d.stairs`` is a list of ``{"at": [x, z], "from_level": int,
-    "dir_deg": 0|90|180|270}`` in LOCAL METRES, like ``map3d.elevator``. ``at``
+    "dir_deg": 0|90|180|270, "texture_kind"?: str}`` in LOCAL METRES, like
+    ``map3d.elevator``. ``at``
     is the FOOT — where the first tread begins — and a flight ALWAYS ends one
     storey up, at ``from_level + 1``; that is what makes a multi-storey climb a
     CHAIN of flights rather than one authored ramp.
@@ -2113,8 +2140,27 @@ def _stair_flights(map3d: Dict[str, Any],
       (``rise_m / steps``) then divides the climb evenly, so the last tread
       lands EXACTLY on the upper floor instead of a hand's breadth under or
       over it;
-    * step *i* is a SOLID box from the lower floor up to its own tread — a
-      staircase one can stand on anywhere, not a set of floating slabs;
+    * step *i* is a TREAD (a board ``STAIR_TREAD_THICKNESS`` thick whose top
+      is the step height) plus a RISER (a plate ``STAIR_RISER_THICKNESS``
+      thick at the step's front, from the tread below up to the underside of
+      its own tread), both ``STAIR_WIDTH_M − 2·STAIR_STRINGER_THICKNESS``
+      wide — the width between the stringers;
+    * two STRINGERS, one per side at ``±(STAIR_WIDTH_M − thickness)/2``
+      across: a board ``hypot(run, climb)`` long, ``STAIR_STRINGER_DEPTH_M``
+      deep, pitched by ``atan2(climb, run)``, its top edge on the line
+      through the treads' rear-bottom corners. The board hangs BELOW that
+      line, so its centre is the line's midpoint pushed down along the
+      line's normal by half the depth. It is the one extra with a
+      ``rotation`` — Euler XYZ in degrees about the box centre: a flight
+      along ±x pitches about z (``rz = ±θ``), one along ±z about x
+      (``rx = ∓θ``), the sign chosen so the far end is the high end.
+      Its foot end sinks ``cosθ·depth`` under the lower floor over the
+      first ``sinθ·depth`` metres and its head end reaches
+      ``sinθ·depth`` past the run under the upper floor — inside the hole
+      the flight cuts there (a box cannot be cut square);
+    * ``texture_kind`` — the flight's own (``map3d.stairs[i].texture_kind``)
+      on every one of its boxes, pads included; absent when unset, and the
+      renderers fall back to ``style.stair_color``;
     * a pad's TOP is its storey's floor plus ``PROP_CLEARANCE``, the same law
       ``elevator_pad`` follows, and it sits one pad-half plus a gap clear of
       the flight.
@@ -2171,18 +2217,52 @@ def _stair_flights(map3d: Dict[str, Any],
         rise = climb / steps
         run = steps * STAIR_TREAD_M
         extras: List[Dict[str, Any]] = []
-        # The tread runs ALONG the climb, the width ACROSS it — which of the
-        # two is the x size therefore depends on the direction, and nothing
-        # else does.
-        size_x = STAIR_TREAD_M if dx else STAIR_WIDTH_M
-        size_z = STAIR_TREAD_M if dz else STAIR_WIDTH_M
+        kind = str(item.get("texture_kind") or "").strip()
+        tagged: Dict[str, Any] = {"level": from_level, "stair": idx}
+        if kind:
+            tagged["texture_kind"] = kind
+
+        def _sz(along: float, across: float,
+                _dx: float = dx) -> Tuple[float, float]:
+            """Box x/z sizes for an extent ALONG the climb and one ACROSS it —
+            which of the two is the x size depends on the direction, and
+            nothing else does."""
+            return (along, across) if _dx else (across, along)
+
+        thick = STAIR_STRINGER_THICKNESS
+        inner = STAIR_WIDTH_M - 2 * thick
+        tt = STAIR_TREAD_THICKNESS
         for i in range(steps):
+            top = base + (i + 1) * rise
+            tx, tz = _sz(STAIR_TREAD_M, inner)
             along = (i + 0.5) * STAIR_TREAD_M
-            height = (i + 1) * rise
-            extras.append(_box("stair_step", ax + dx * along,
-                               base + height / 2, az + dz * along,
-                               size_x, height, size_z,
-                               level=from_level, stair=idx))
+            extras.append(_box("stair_tread", ax + dx * along, top - tt / 2,
+                               az + dz * along, tx, tt, tz, **tagged))
+            rx_, rz_ = _sz(STAIR_RISER_THICKNESS, inner)
+            along = i * STAIR_TREAD_M + STAIR_RISER_THICKNESS / 2
+            riser_h = rise - tt
+            extras.append(_box("stair_riser", ax + dx * along,
+                               top - tt - riser_h / 2, az + dz * along,
+                               rx_, riser_h, rz_, **tagged))
+        # THE STRINGERS: top edge from (0, base − tt) to (run, target − tt) in
+        # the (along, y) plane, the board hanging below it.
+        theta = math.atan2(climb, run)
+        length = math.hypot(run, climb)
+        depth = STAIR_STRINGER_DEPTH_M
+        s_along = run / 2 + math.sin(theta) * depth / 2
+        s_y = base - tt + climb / 2 - math.cos(theta) * depth / 2
+        deg_t = math.degrees(theta)
+        rotation = ([0.0, 0.0, _r(dx * deg_t)] if dx
+                    else [_r(-dz * deg_t), 0.0, 0.0])
+        sx_, sz_ = _sz(length, thick)
+        for side in (-1, 1):
+            across = side * (STAIR_WIDTH_M - thick) / 2
+            extras.append(_box("stair_stringer",
+                               ax + dx * s_along + px * across, s_y,
+                               az + dz * s_along + pz * across,
+                               sx_, depth, sz_, rotation=rotation,
+                               side=("left" if side < 0 else "right"),
+                               **tagged))
         gap = STAIR_PAD_M / 2 + STAIR_PAD_GAP_M
         # THE LANDINGS. ``foot``/``head`` are these pad centres with the pad's
         # TOP as the y — the height one stands at, so a renderer takes the
@@ -2195,11 +2275,11 @@ def _stair_flights(map3d: Dict[str, Any],
         extras.append(_box("stair_pad", foot[0],
                            foot_top - STAIR_PAD_THICKNESS / 2, foot[2],
                            STAIR_PAD_M, STAIR_PAD_THICKNESS, STAIR_PAD_M,
-                           level=from_level, stair=idx, end="foot"))
+                           end="foot", **tagged))
         extras.append(_box("stair_pad", head[0],
                            head_top - STAIR_PAD_THICKNESS / 2, head[2],
                            STAIR_PAD_M, STAIR_PAD_THICKNESS, STAIR_PAD_M,
-                           level=from_level + 1, stair=idx, end="head"))
+                           end="head", **{**tagged, "level": from_level + 1}))
         # THE FOOTPRINT: the ``STAIR_WIDTH_M × run`` rectangle from ``at``
         # along the climb — the floor the flight really eats, and the ONE
         # outline the plan preview draws (it used to re-derive it).

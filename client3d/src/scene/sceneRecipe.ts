@@ -588,7 +588,7 @@ function plateMaterial(plate: ScenePlate,
  *  fallback for a payload composed before the field existed. */
 const DOOR_COLOR_FALLBACK = '#4a3a2e';
 
-/** Colour of a staircase (`stair_step`, `stair_pad`) when the payload carries
+/** Colour of a staircase (`stair_*`) when the payload carries
  *  no `style.stair_color` — the server's own constant (`scene_recipe.STYLE`),
  *  repeated here ONLY as the fallback for a payload composed before the field
  *  existed. Without it a staircase would wear the elevator's grey and the two
@@ -630,20 +630,33 @@ function wallMaterial(wall: SceneWall, style: ScenePayload['style']):
 
 /** Material of an extra box: the part kind picks colour and opacity from the
  *  payload's style vocabulary — glass translucent, cabin semi-transparent,
- *  pad and shaft opaque. */
-function extraMaterial(extra: SceneExtra,
-                       style: ScenePayload['style']): THREE.MeshStandardMaterial {
+ *  pad and shaft opaque. An extra with a `texture_kind` (v13) tiles the
+ *  kind's texture instead, resolved like a WALL's (no floor fallback), and
+ *  returns the tile size the box's uvs are scaled by — the same pair
+ *  `wallMaterial` hands `buildWall`. Glass never tiles. */
+function extraMaterial(extra: SceneExtra, style: ScenePayload['style']):
+    { mat: THREE.MeshStandardMaterial; tileM: number } {
   const glass = extra.kind.endsWith('_glass');
   const cabin = extra.kind === 'elevator_cabin';
-  const stair = extra.kind === 'stair_step' || extra.kind === 'stair_pad';
+  const stair = extra.kind.startsWith('stair_');
   const color = glass ? style.glass_color
     : stair ? (style.stair_color ?? STAIR_COLOR_FALLBACK)
       : extra.kind === 'elevator_pad' ? style.elevator_pad_color
         : cabin ? style.elevator_cabin_color : style.elevator_frame_color;
   const opacity = glass ? (style.elevator_glass_opacity ?? style.glass_opacity ?? 0.22)
     : cabin ? (style.elevator_cabin_opacity ?? 1) : 1;
-  return std({ color: hex(color), transparent: opacity < 1, opacity,
-               roughness: glass ? 0.3 : 0.85 });
+  const surf = glass ? null : tiledTexture(extra.texture_kind, 'wall');
+  if (surf) {
+    const mat = surfaceMaterial(THREE, {
+      material: surfaceMaterialSpec(extra.texture_kind),
+      map: surf.tex, color: hex(color),
+      transparent: opacity < 1, opacity,
+    }) as THREE.MeshStandardMaterial;
+    return { mat, tileM: surf.tileM };
+  }
+  return { mat: std({ color: hex(color), transparent: opacity < 1, opacity,
+                      roughness: glass ? 0.3 : 0.85 }),
+           tileM: 0 };
 }
 
 /** Material of the placeholder for a prop without a mesh: matte, half
@@ -874,6 +887,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   const kinds = new Set<string>(['floor']);
   for (const p of scene.plates) if (p.texture_kind) kinds.add(p.texture_kind);
   for (const w of scene.walls) if (w.texture_kind) kinds.add(w.texture_kind);
+  for (const e of scene.extras) if (e.texture_kind) kinds.add(e.texture_kind);
   await Promise.all([...kinds].map(preloadSurfaceTexture));
   if (stale()) return null;
 
@@ -1166,8 +1180,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   liftGroup.name = 'extrasLift';
   const stairGroups = new Map<number, THREE.Group>();
   for (const extra of scene.extras) {
-    const box = buildExtra(THREE, extra, extraMaterial(extra, style));
-    const isStair = extra.kind === 'stair_step' || extra.kind === 'stair_pad';
+    const { mat: extraMat, tileM: extraTile } = extraMaterial(extra, style);
+    const box = buildExtra(THREE, extra, extraMat, extraTile);
+    const isStair = extra.kind.startsWith('stair_');
     if (extra.kind.startsWith('elevator_')) {
       liftGroup.add(box);
     } else if (isStair && extra.stair !== undefined) {
@@ -1204,7 +1219,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // The flight AS DATA: the two landings finished (the server states where one
   // stands, this only turns the point into the world frame), plus the run it
   // covers — the axis a guided climb follows and the floor it eats. Nothing
-  // here derives a staircase from the `stair_step`/`stair_pad` boxes any more,
+  // here derives a staircase from the `stair_*` boxes any more,
   // and no pair can be half missing: a block always carries both ends.
   const stairs: StairWorldLink[] = scene.stairs.map((s) => {
     const foot = tileToWorld(tile, s.foot[0], s.foot[2], s.foot[1]);

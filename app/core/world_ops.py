@@ -953,6 +953,11 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
         ex, ez = _metre(ev[0]), _metre(ev[1])
         if ex is not None and ez is not None:
             out["elevator"] = [ex, ez]
+    # The lift's surface-texture kind (v13): its opaque parts (columns, roof,
+    # pads, cabin) tile with it, the glass stays glass; unset = style colours.
+    ek = raw.get("elevator_kind")
+    if isinstance(ek, str) and ek.strip():
+        out["elevator_kind"] = ek.strip()[:60]
     # Staircases (Nachtrag "Treppen (v4)"): one entry per FLIGHT, i.e. per
     # storey jump — a climb from the ground floor to the second is two of
     # them. ``at`` is the foot in LOCAL METRES like every other plan
@@ -980,8 +985,13 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
                 continue
             if deg not in scene_recipe.STAIR_DIRS_DEG:
                 continue
-            flights.append({"at": [sx, sz], "from_level": lvl,
-                            "dir_deg": deg})
+            flight = {"at": [sx, sz], "from_level": lvl, "dir_deg": deg}
+            # The flight's own surface-texture kind (v13) — treads, risers,
+            # stringers and pads tile with it; unset = style colour.
+            tk = item.get("texture_kind")
+            if isinstance(tk, str) and tk.strip():
+                flight["texture_kind"] = tk.strip()[:60]
+            flights.append(flight)
         if flights:
             out["stairs"] = flights
     # Floor texture per LEVEL: surface-texture kind for each storey's floor

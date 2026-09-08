@@ -61,8 +61,8 @@ export interface ScenePlate {
  * ONE FLIGHT OF STAIRS AS DATA (§ B1 `stairs`, addendum "Treppen v2").
  *
  * A flight spans exactly ONE storey (`to_level === from_level + 1`), and it
- * arrives in the payload three times over: as the `stair_step`/`stair_pad`
- * boxes in `extras`, as the hole it cuts into the floor above
+ * arrives in the payload three times over: as the `stair_tread` /
+ * `stair_riser` / `stair_stringer` / `stair_pad` boxes in `extras`, as the hole it cuts into the floor above
  * (`plates[].holes`), and as this block. THE BLOCK IS THE ONE A CONSUMER
  * READS: the run, the step count, the two landings and the floor the flight
  * eats are numbers here, so neither renderer measures a staircase back out of
@@ -178,19 +178,31 @@ export interface SceneWall {
   outward_normal: [number, number]
 }
 
-/** Typed box primitive (elevator: shaft/glass/pad/cabin) — centre plus size,
- *  finished in world metres. */
+/** Typed box primitive (elevator: shaft/glass/pad/cabin; staircase:
+ *  tread/riser/stringer/pad) — centre plus size, finished in world metres. */
 export interface SceneExtra {
   kind: string
   center: [number, number, number]
+  /** The box's OWN extent — before `rotation`, if it has one. */
   size: [number, number, number]
+  /** Which side: a glass pane's compass side, a stringer's `left`/`right`
+   *  (looking up the flight). */
   side?: string
   level?: number
-  /** Index of the staircase this piece belongs to (`stair_step`, `stair_pad`),
-   *  i.e. its position in the location's `map3d.stairs` list. It GROUPS the
-   *  pieces of ONE payload — foot pad, head pad and the steps between them —
-   *  and nothing more: the index is not stable across saves, so it must never
-   *  be kept as an identity beyond the payload it arrived in. */
+  /** XYZ Euler in DEGREES about the centre (v13) — today only the stair
+   *  STRINGER carries one (pitched by the flight's angle). Absent = axis
+   *  aligned. */
+  rotation?: [number, number, number]
+  /** Surface-texture kind to tile the box with (v13) — a flight's own
+   *  (`map3d.stairs[i].texture_kind`) on all its pieces, the elevator's
+   *  opaque parts' (`map3d.elevator_kind`); never on glass. Tiled exactly like
+   *  a wall (`applyWorldScaleWallUVs`); absent = the `style` colour. */
+  texture_kind?: string
+  /** Index of the staircase this piece belongs to (`stair_*`), i.e. its
+   *  position in the location's `map3d.stairs` list. It GROUPS the pieces of
+   *  ONE payload — foot pad, head pad, treads, risers and stringers — and
+   *  nothing more: the index is not stable across saves, so it must never be
+   *  kept as an identity beyond the payload it arrived in. */
   stair?: number
   /** Which end of a staircase a `stair_pad` marks: `foot` = lower landing on
    *  `level`, `head` = upper landing on `level`. The pad's TOP face is the
@@ -508,8 +520,8 @@ export interface SceneStyle {
   elevator_cabin_color?: string
   elevator_cabin_opacity?: number
   elevator_glass_opacity?: number
-  /** Colour of the steps and the trigger pads of a staircase (`stair_step`,
-   *  `stair_pad`). A staircase is masonry, not machinery — warm stone rather
+  /** Colour of every piece of a staircase (`stair_*`) that carries no
+   *  `texture_kind`. A staircase is masonry, not machinery — warm stone rather
    *  than the elevator's cold grey, so the two vertical connections read
    *  apart at a glance. Callers keep a fallback: an older payload does not
    *  carry it. */

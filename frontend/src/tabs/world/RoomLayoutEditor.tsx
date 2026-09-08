@@ -2833,6 +2833,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       {elevatorSel && map3d?.elevator ? (
         <PlanElevatorStrip
           at={map3d.elevator}
+          kind={map3d.elevator_kind || ''}
+          surfaceKinds={surfaceKinds}
+          onKind={(kind) => onMap3d?.('elevator_kind', kind || undefined)}
           view={view}
           mode={clickMode}
           onMode={setClickMode}
@@ -2855,6 +2858,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           view={view}
           mode={clickMode}
           onMode={setClickMode}
+          surfaceKinds={surfaceKinds}
           onPatch={(next) => {
             const list = map3d.stairs || []
             if (!next) {

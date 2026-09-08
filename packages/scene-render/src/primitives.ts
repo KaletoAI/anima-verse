@@ -217,16 +217,31 @@ export function buildWall(THREE: typeof import('three'),
 }
 
 /**
- * Typed extra box (the elevator's shaft, glass, pads and cabin) — centre plus
- * size, already in world metres. Each part is its OWN payload entry, so this
- * builds one box per entry; which part it is only decides the material, and
- * that is the caller's.
+ * One extra box (elevator part, stair part) from its finished primitive:
+ * centre plus size in world metres.
+ *
+ * `tileM` is the world size of one texture tile in metres, for an extra that
+ * carries a `texture_kind`: the tiling then goes into the uvs by the SAME
+ * routine a wall uses (`applyWorldScaleWallUVs`), so a tread's narrow front
+ * and its broad top get the same metres per tile, and the caller leaves its
+ * texture repeat at (1, 1). 0 (untextured) keeps the box's default uvs.
+ *
+ * `rotation` (v13, the stair STRINGER) is an XYZ Euler in DEGREES about the
+ * box centre — three's own default order, applied verbatim. `size` is the
+ * box's OWN extent before the turn.
  */
 export function buildExtra(THREE: typeof import('three'),
-                           extra: SceneExtra, material: Material): Mesh {
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(extra.size[0], extra.size[1], extra.size[2]), material)
+                           extra: SceneExtra, material: Material,
+                           tileM = 0): Mesh {
+  const geometry = new THREE.BoxGeometry(extra.size[0], extra.size[1], extra.size[2])
+  applyWorldScaleWallUVs(geometry, extra.size[0], extra.size[1], extra.size[2], tileM)
+  const mesh = new THREE.Mesh(geometry, material)
   mesh.position.set(extra.center[0], extra.center[1], extra.center[2])
+  if (extra.rotation) {
+    const d = Math.PI / 180
+    mesh.rotation.set(extra.rotation[0] * d, extra.rotation[1] * d,
+                      extra.rotation[2] * d)
+  }
   return mesh
 }
 
