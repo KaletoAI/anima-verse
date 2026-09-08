@@ -39,7 +39,32 @@
  *       allow(20) → true   (a frame with no pending nested count is new)
  *     MirrorBudget(0) → allow(1) is false. MirrorBudget(Infinity) →
  *     allow(n) is always true.
- * [9] OPTIONAL local cross-check (skipped, not failed, when the file is
+ * [9] COHERENCE — the faces of one group must agree on a side. With
+ *     `len` = |Σ (b-a)×(c-a)| and `weight` = Σ |(b-a)×(c-a)|, a group whose
+ *     `len / weight` is under 0.5 has no plane: two opposite skins of one pane
+ *     cancel, and sliver noise points nowhere. Hand-derived on the unit square
+ *     in z = 0 — a(0,0,0) b(1,0,0) c(1,1,0) d(0,1,0), faces (a,b,c)(a,c,d),
+ *     two face vectors (0,0,1) of length 1 each, so weight 2 and Σ (0,0,2) per
+ *     copy wound counter-clockwise, and (0,0,-2) per copy wound the other way:
+ *       1 ccw + 1 cw  → Σ 0,       weight 4 → ratio 0     → null
+ *       2 ccw + 1 cw  → Σ (0,0,2), weight 6 → ratio 1/3   → null
+ *       3 ccw + 1 cw  → Σ (0,0,4), weight 8 → ratio 0.5   → a plane,
+ *                        centroid (0.5, 0.5, 0), normal (0, 0, 1)
+ *     The square alone is ratio 1 (as the rectangle of [1] is).
+ * [10] An index past the end of `positions` reads `undefined` and poisons the
+ *     sums with NaN. A NaN plane is not a plane:
+ *     planeOfFaces([0,0,0, 1,0,0, 0,1,0], [0, 1, 99], [[0, 3]]) → null.
+ * [11] The centroid is AREA-weighted, not the plain mean of the triangle
+ *     centroids. In the plane z = 0, one large and one small triangle:
+ *       a(0,0,0) b(2,0,0) c(0,2,0) → (b-a)×(c-a) = (0,0,4), centroid (2/3, 2/3, 0)
+ *       d(4,0,0) e(5,0,0) f(4,1,0) → (e-d)×(f-d) = (0,0,1), centroid (13/3, 1/3, 0)
+ *       x = (4·2/3 + 1·13/3) / 5 = (8/3 + 13/3) / 5 = 7/5 = 1.4
+ *       y = (4·2/3 + 1·1/3)  / 5 = (8/3 + 1/3)  / 5 = 3/5 = 0.6
+ *     → centroid (1.4, 0.6, 0), normal (0, 0, 1). The unweighted mean would be
+ *     (2.5, 0.5, 0) — that is what makes the case discriminating.
+ * [12] The clamp of [7] on the NON-indexed path as well: the six vertices of
+ *     [5] with ranges [[0, 9999]] → the answer of [1].
+ * [13] OPTIONAL local cross-check (skipped, not failed, when the file is
  *     absent): MIRROR_FIXTURE_GLB=<path to a prop's model_<ts>.glb> and
  *     MIRROR_FIXTURE_JSON=<its .json sidecar> — for every area whose id
  *     starts with `glass`, the plane measured from the GLB's material group
@@ -204,7 +229,45 @@ async function main() {
   const inf = new MirrorBudget(Infinity)
   check('unlimited budget always grants', inf.allow(1) && inf.allow(2) && inf.allow(3))
 
-  console.log('\n[9] optional local fixture')
+  console.log('\n[9] the faces of a group must agree on a side')
+  // The unit square in z = 0, counter-clockwise seen from +z. Both its faces
+  // have the face vector (0,0,1), so ONE copy is weight 2 and sum (0,0,2).
+  const sq = [0, 0, 0,  1, 0, 0,  1, 1, 0,  0, 1, 0]
+  const ccw = [0, 1, 2,  0, 2, 3]
+  const cw = [0, 2, 1,  0, 3, 2]
+  check('one skin plus its mirror image → ratio 0 → null',
+        planeOfFaces(sq, [...ccw, ...cw], [[0, 12]]) === null,
+        JSON.stringify(planeOfFaces(sq, [...ccw, ...cw], [[0, 12]])))
+  check('2 ccw + 1 cw → ratio 2/6 = 1/3 is under 0.5 → null',
+        planeOfFaces(sq, [...ccw, ...ccw, ...cw], [[0, 18]]) === null,
+        JSON.stringify(planeOfFaces(sq, [...ccw, ...ccw, ...cw], [[0, 18]])))
+  const p9 = planeOfFaces(sq, [...ccw, ...ccw, ...ccw, ...cw], [[0, 24]])
+  check('3 ccw + 1 cw → ratio 4/8 = 0.5 is still a plane, (0.5,0.5,0)/(0,0,1)',
+        p9 && vecNear(p9.point, [0.5, 0.5, 0]) && vecNear(p9.normal, [0, 0, 1]),
+        JSON.stringify(p9))
+  check('the square on its own is ratio 1',
+        planeOfFaces(sq, ccw, [[0, 6]]) !== null)
+
+  console.log('\n[10] an index past the buffer is not a plane')
+  const p10 = planeOfFaces([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 1, 99], [[0, 3]])
+  check('a vertex read out of bounds → null, never a NaN plane', p10 === null,
+        JSON.stringify(p10))
+
+  console.log('\n[11] the centroid is AREA-weighted, not a plain mean')
+  const tris = [0, 0, 0,  2, 0, 0,  0, 2, 0,   4, 0, 0,  5, 0, 0,  4, 1, 0]
+  const p11 = planeOfFaces(tris, null, [[0, 6]])
+  check('centroid (1.4, 0.6, 0) — the plain mean would be (2.5, 0.5, 0)',
+        p11 && vecNear(p11.point, [1.4, 0.6, 0]), JSON.stringify(p11))
+  check('normal (0, 0, 1)', p11 && vecNear(p11.normal, [0, 0, 1]),
+        JSON.stringify(p11))
+
+  console.log('\n[12] the clamp holds on the non-indexed path too')
+  const p12 = planeOfFaces(flat, null, [[0, 9999]])
+  check('range [0,9999] over 6 vertices → the rectangle of [1]',
+        p12 && vecNear(p12.point, [0.1, 0.3, 0.2])
+        && vecNear(p12.normal, [0, 0, 1]), JSON.stringify(p12))
+
+  console.log('\n[13] optional local fixture')
   const glbPath = process.env.MIRROR_FIXTURE_GLB
   const jsonPath = process.env.MIRROR_FIXTURE_JSON
   if (!glbPath) {

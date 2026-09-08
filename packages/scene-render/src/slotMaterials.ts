@@ -31,13 +31,17 @@
  * objects exist.
  */
 import type { Material, Mesh, Object3D, Texture } from 'three'
+import { attachMirror, disposeMirror } from './mirrorSurface'
+import type { MirrorOptions } from './mirrorSurface'
 import type { SceneSlotValues } from './types'
 
 /** THE LOOKS a `material` slot can be set to — the list's home is here,
- *  because a preset that no renderer draws is not a preset. `app/core/props.py`
- *  mirrors it as `SLOT_PRESETS` so the storage layer can refuse an unknown
- *  one; change both or neither. */
-export const MATERIAL_PRESETS = ['glass'] as const
+ *  because a preset that no renderer draws is not a preset. `glass` is a
+ *  translucent pane, `mirror` a planar reflector on the pane's OWN faces
+ *  (`mirrorSurface.ts`). `app/core/props.py` mirrors the list as
+ *  `SLOT_PRESETS` so the storage layer can refuse an unknown one; change both
+ *  or neither. */
+export const MATERIAL_PRESETS = ['glass', 'mirror'] as const
 export type MaterialPreset = (typeof MATERIAL_PRESETS)[number]
 
 /** What "glass" MEANS, numerically. One declaration for both renderers, for
@@ -105,12 +109,18 @@ const slotNameOf = (raw: string | undefined): string => {
  * material they traverse, so a slot written first rides into their clones for
  * free, while a slot written afterwards would have to be written again after
  * every one of them.
+ *
+ * `mirror` is the app's COST policy for `mirror` panes (texture size,
+ * reflections per frame, the distance past which a pane keeps its last
+ * texture) — absent means the defaults of `MIRROR_PRESET` with neither a
+ * per-frame nor a distance limit.
  */
 export function applySlotMaterials(
   THREE: typeof import('three'),
   root: Object3D,
   slots: SceneSlotValues | undefined,
   loadTexture: SlotTextureLoader,
+  mirror?: MirrorOptions,
 ): Material[] {
   const wanted = new Map<string, { image?: string; preset?: string }>()
   for (const [name, value] of Object.entries(slots || {})) {
@@ -120,14 +130,23 @@ export function applySlotMaterials(
   if (!wanted.size) return []
 
   const clones: Material[] = []
-  const fill = (src: Material): Material => {
+  const fill = (src: Material, mesh: Mesh, materialIndex: number | null): Material => {
     const cur = src as SlotMaterial
-    const value = wanted.get(slotNameOf(cur.name))
+    const slot = slotNameOf(cur.name)
+    const value = wanted.get(slot)
     if (!value) return src
     const image = (value.image || '').trim()
     const preset = (value.preset || '').trim().toLowerCase()
     const isPreset = (MATERIAL_PRESETS as readonly string[]).includes(preset)
     if (!image && !isPreset) return src
+    if (!image && preset === 'mirror') {
+      // A reflector on the pane's OWN faces: the module measures the plane
+      // from this material's face group and hooks the mesh's render callback.
+      // Nothing measurable = the mesh stays exactly as it was modelled.
+      const mirrored = attachMirror(THREE, mesh, src, materialIndex, slot, mirror)
+      if (mirrored) clones.push(mirrored)
+      return mirrored ?? src
+    }
     const mat = src.clone() as SlotMaterial
     if (image) {
       // A picture that never arrives (deleted from the gallery, a 404 out of
@@ -150,9 +169,11 @@ export function applySlotMaterials(
       // grey placeholder surface would darken every picture hung on it.
       mat.color?.set(0xffffff)
     } else {
-      // The only preset today. Kept as an `if` rather than a lookup table so
-      // the next one has to declare what IT writes instead of inheriting a
-      // shape that happened to fit glass.
+      // `glass` — the only preset that is a handful of material dials
+      // (`mirror` needs a shader and a render pass and lives in
+      // `mirrorSurface.ts`). Kept as an `if` rather than a lookup table so the
+      // next one has to declare what IT writes instead of inheriting a shape
+      // that happened to fit glass.
       mat.transparent = true
       mat.opacity = GLASS_PRESET.opacity
       mat.roughness = GLASS_PRESET.roughness
@@ -172,18 +193,20 @@ export function applySlotMaterials(
     const mesh = o as Mesh
     if (!mesh.isMesh) return
     mesh.material = Array.isArray(mesh.material)
-      ? mesh.material.map(fill)
-      : fill(mesh.material)
+      ? mesh.material.map((m, i) => fill(m, mesh, i))
+      : fill(mesh.material, mesh, null)
   })
   return clones
 }
 
 /** Free what `applySlotMaterials` created — the clones AND the textures it
  *  loaded for them (unlike the cut/clip clones, whose maps belong to the
- *  loader cache, a slot texture is this placement's own). */
+ *  loader cache, a slot texture is this placement's own), plus the render
+ *  target and the mesh hook of every `mirror` pane among them. */
 export function disposeSlotMaterials(mats: Material[] | undefined): void {
   for (const m of mats || []) {
-    (m as SlotMaterial).map?.dispose?.()
+    disposeMirror(m)          // a no-op for a picture or a glass clone
+    ;(m as SlotMaterial).map?.dispose?.()
     m.dispose?.()
   }
 }

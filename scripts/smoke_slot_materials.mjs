@@ -164,9 +164,8 @@ async function main() {
   const clones3 = applySlotMaterials(THREE, g3, { glass: { preset: 'glass' } },
                                      loadTexture)
   const m3 = g3.meshes[0].material
-  check('glass is the preset the package knows',
-        MATERIAL_PRESETS.length === 1 && MATERIAL_PRESETS[0] === 'glass',
-        MATERIAL_PRESETS.join(','))
+  check('glass is the first preset the package knows',
+        MATERIAL_PRESETS[0] === 'glass', MATERIAL_PRESETS.join(','))
   check('the pane is transparent', m3.transparent === true)
   check('opacity/roughness/metalness are the declared constants',
         m3.opacity === GLASS_PRESET.opacity
@@ -196,7 +195,7 @@ async function main() {
     ['a value with neither image nor preset touches nothing', 'picture',
      { picture: {} }, false],
     ['an unknown preset touches nothing', 'glass',
-     { glass: { preset: 'mirror' } }, false],
+     { glass: { preset: 'chrome' } }, false],
     ['the match is case-insensitive on the MATERIAL name', 'Picture',
      { picture: { image: '/world/locations/l/gallery/a.png' } }, true],
     ['...and on the SLOT name', 'picture',
@@ -336,6 +335,66 @@ async function main() {
           { picture_1: { image: '/world/locations/demo/gallery/x.png' } },
           loadTexture).length === 1
         && gSpaced.meshes[0].material !== spaced)
+
+  console.log('\n[9] preset "mirror" turns the pane into a reflector on its own faces')
+  // The mirror path constructs a handful of three classes; each stub below
+  // records what it was given and nothing more. `renderMirror` is never CALLED
+  // here (the hook is only installed), so only the constructor path has to run.
+  class StubVec3 { constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z }
+    set(x, y, z) { this.x = x; this.y = y; this.z = z; return this } copy(v) { return this.set(v.x, v.y, v.z) } }
+  class StubRT { constructor(w, h, o) { this.width = w; this.height = h; this.options = o; this.texture = { rt: this }; this.disposed = false } dispose() { this.disposed = true } }
+  class StubShaderMaterial extends FakeMaterial {
+    constructor(params) { super('shader'); this.isShaderMaterial = true; Object.assign(this, params); this.uniforms = params.uniforms }
+    clone() { const m = new StubShaderMaterial({ ...this, uniforms: { ...this.uniforms } }); m.userData = JSON.parse(JSON.stringify(this.userData)); return m }
+  }
+  const THREE2 = {
+    ...THREE, HalfFloatType: 'half-token',
+    Vector3: StubVec3, Vector4: StubVec3, Matrix4: class { set() { return this } multiply() { return this } copy() { return this } extractRotation() { return this } },
+    Matrix3: class { getNormalMatrix() { return this } }, Plane: class { setFromNormalAndCoplanarPoint() { return this } applyMatrix4() { return this } },
+    Color: class { constructor(hex) { this.hex = hex } }, WebGLRenderTarget: StubRT, ShaderMaterial: StubShaderMaterial,
+    UniformsUtils: { clone: (u) => JSON.parse(JSON.stringify(u)) },
+  }
+  // A mesh with TWO material groups: the frame (group 0) and the pane
+  // (group 1, the rectangle of scripts/smoke_mirror_plane.mjs [1]).
+  const mirrorFrame = new FakeMaterial('wood')
+  const mirrorPane = new FakeMaterial('slot_glass_1')
+  const mirrorGeometry = {
+    attributes: { position: { array: new Float32Array([0, 0, 5, 1, 0, 5, 0, 1, 5,
+      -0.15, -0.2, 0.2, 0.35, -0.2, 0.2, 0.35, 0.8, 0.2, -0.15, 0.8, 0.2]), count: 7 } },
+    index: { array: new Uint16Array([0, 1, 2, 3, 4, 5, 3, 5, 6]), count: 9 },
+    groups: [{ start: 0, count: 3, materialIndex: 0 }, { start: 3, count: 6, materialIndex: 1 }],
+  }
+  const before = () => {}
+  const mirrorMesh = { isMesh: true, material: [mirrorFrame, mirrorPane], geometry: mirrorGeometry,
+                       onBeforeRender: before, visible: true }
+  const g9 = { traverse(cb) { cb(mirrorMesh) } }
+  const clones9 = applySlotMaterials(THREE2, g9, { glass_1: { preset: 'mirror' } }, loadTexture,
+                                     { textureSize: 256, maxPerFrame: 1, maxDistanceM: 9 })
+  const mirrorMat = mirrorMesh.material[1]
+  check('the pane material became a ShaderMaterial', mirrorMat.isShaderMaterial === true)
+  check('...marked with its slot name (JSON-safe, survives Material.copy)', mirrorMat.userData.__mirror === 'glass_1')
+  check('...and counted as a slot clone', mirrorMat.userData.__slotClone === true)
+  check('the frame material is the very same object', mirrorMesh.material[0] === mirrorFrame)
+  check('the source pane material was not written to', mirrorPane.map === null && !mirrorPane.isShaderMaterial)
+  check('the render target uses the option size', mirrorMat.uniforms.tDiffuse.value.rt.width === 256, String(mirrorMat.uniforms.tDiffuse.value.rt?.width))
+  check('the mesh got a render hook chained in front of its own', typeof mirrorMesh.onBeforeRender === 'function' && mirrorMesh.onBeforeRender !== before)
+  check('exactly one clone is returned', clones9.length === 1 && clones9[0] === mirrorMat)
+  const rt9 = mirrorMat.uniforms.tDiffuse.value.rt
+  disposeSlotMaterials(clones9)
+  check('dispose frees the render target and the material', rt9.disposed === true && mirrorMat.disposed === true)
+  check('after dispose the mesh hook is the original again', mirrorMesh.onBeforeRender === before)
+
+  console.log('\n[10] a pane without measurable faces stays as modelled')
+  const flatPane = new FakeMaterial('glass')
+  const degenerate = { isMesh: true, material: flatPane, geometry: {
+    attributes: { position: { array: new Float32Array([1, 1, 1, 1, 1, 1, 1, 1, 1]), count: 3 } }, index: null, groups: [] },
+    onBeforeRender: before, visible: true }
+  const clones10 = applySlotMaterials(THREE2, { traverse(cb) { cb(degenerate) } }, { glass: { preset: 'mirror' } }, loadTexture)
+  check('material untouched, nothing returned', degenerate.material === flatPane && clones10.length === 0)
+  check('...and no hook was installed', degenerate.onBeforeRender === before)
+
+  console.log('\n[11] the preset list names mirror after glass')
+  check('MATERIAL_PRESETS = [glass, mirror]', JSON.stringify(MATERIAL_PRESETS) === '["glass","mirror"]', JSON.stringify(MATERIAL_PRESETS))
 
   console.log(`\n${failures.length
     ? 'FAILED: ' + failures.join(', ') : 'all checks passed'}`)
