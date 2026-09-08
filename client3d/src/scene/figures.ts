@@ -1257,7 +1257,6 @@ export class Figure {
    *  this runs, `currentKind` IS the bridge — the target only arrives when it
    *  has finished. */
   private transition: THREE.AnimationAction | null = null;
-  private pending: { kind: ClipKind; terrainClip: boolean; sink: number } | null = null;
   /** How fast the running bridge lets the figure get going, and when it
    *  started — whoever steers reads both to ramp the speed. */
   private bridgeAccel = 0;
@@ -1322,14 +1321,17 @@ export class Figure {
     // begins. Chained on the mixer's own event rather than on a timer, so a
     // clip's real length decides — the sidecar's duration is the server's
     // number and says nothing about this rig's playback.
+    // A bridge runs ONCE; when it ends, only the gate is released — WHAT plays
+    // next is decided by the next frame, not by what was wanted when the
+    // bridge started. Remembering a target here meant a figure whose key had
+    // been let go still showed a step of the walking clip before it stopped.
+    // The frame loop calls `play` for every visible figure anyway, so the gap
+    // is one frame and the answer is always the current one.
     this.mixer.addEventListener('finished', (e) => {
       if ((e as unknown as { action?: THREE.AnimationAction }).action !== this.transition) return;
       this.transition = null;
       this.bridgeUntil = 0;
       this.bridgeAccel = 0;
-      const next = this.pending;
-      this.pending = null;
-      if (next) this.play(next.kind, next.terrainClip, next.sink);
     });
     // Offenes Clip-Vokabular (Vertrag § A8): JEDES geladene Kind bekommt eine
     // Action unter seinem EIGENEN Namen. Vorher wurden nur die sieben
@@ -1394,21 +1396,17 @@ export class Figure {
    *  because a swimmer lies flat and a treader hangs upright. */
   play(rawKind: ClipKind, terrainClip = false, sink = 0) {
     const kind = (rawKind || locomotionClip('idle')).toLowerCase();
-    if (this.transition) {
-      // A bridge is running. Let it finish and go WHEREVER the last word says
-      // — cutting it short is the abruptness this exists to remove, and a
-      // figure that changes its mind mid-standup still has to finish standing
-      // up first.
-      this.pending = { kind, terrainClip, sink };
-      return;
-    }
+    // A bridge is running: let it finish. Cutting it short is the abruptness
+    // this exists to remove, and a figure that changes its mind mid-standup
+    // still has to finish standing up first. What comes after is not decided
+    // here — the frame after the bridge asks again.
+    if (this.transition) return;
     const rule = clipTransition(this.currentKind, kind);
     const via = rule?.kind ?? '';
     // Only a bridge this rig actually carries: a rule pointing at a clip the
     // figure does not have must cost nothing, not stall it between states.
     if (rule && via && via !== kind && this.actions.has(via)) {
       const bridge = this.actions.get(via)!;
-      this.pending = { kind, terrainClip, sink };
       this.transition = bridge;
       bridge.reset();
       bridge.setLoop(THREE.LoopOnce, 1);
