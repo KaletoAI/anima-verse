@@ -15,6 +15,11 @@
  * the arithmetic with hand-derived numbers and can cross-check a local prop
  * against its sidecar (§ B5a — numbers, never screenshots).
  *
+ * THE COST CAP IS APP-WIDE, not per pane: `MirrorOptions.maxPerFrame` picks a
+ * counter shared by every mirror attached with that value, so N mirrors in
+ * view cost at most N_max scene renders per frame and the rest keep last
+ * frame's texture. See `sharedMirrorBudget`.
+ *
  * EXPECTED NOISE: a mirror pane that also goes through `applyDepthCut` gets
  * its material cloned, and `UniformsUtils.clone` refuses to copy a render
  * target's texture — three logs `UniformsUtils: Textures of render targets
@@ -199,13 +204,19 @@ export function planeOfFaces(
 }
 
 /**
- * How many reflections a frame may render, across every mirror of the app.
+ * How many reflections a frame may render — ONE counter, for however many
+ * mirrors share the instance. A budget per pane would cap nothing: the guard
+ * that matters is the one every pane of the page asks, so see
+ * `sharedMirrorBudget` below, which is what `attachMirror` uses.
  *
  * The frame is `renderer.info.render.frame`, and every reflection IS a nested
  * `renderer.render`, which bumps that counter by one before the next hook of
  * the same top-level frame runs. So "the same frame" is `frame === expected`
  * where `expected` is the last frame seen plus the nested renders granted
- * since; anything else is a new frame and resets the count.
+ * since; anything else is a new frame and resets the count. That is exactly
+ * what makes ONE shared instance work across panes: pane A's grant leaves
+ * `expected` at `frame + 1`, and pane B's hook — running after A's nested
+ * render — is handed that very number.
  */
 export class MirrorBudget {
   private used = 0
@@ -220,6 +231,31 @@ export class MirrorBudget {
     this.expected = frame + 1
     return true
   }
+}
+
+/** One budget per DISTINCT limit, for the whole page.
+ *
+ *  A `MirrorBudget` per pane is inert: each nested reflection bumps
+ *  `renderer.info.render.frame`, so a pane's private counter always sees a
+ *  "new frame" after the pane before it rendered, resets, and grants. Ten
+ *  mirrors in view would render ten scenes per frame no matter what number the
+ *  app passed. Every mirror of one app is attached with the same
+ *  `maxPerFrame`, so keying the instance by that value is what turns the
+ *  option into the app-wide cap its documentation promises — and a second app
+ *  (or a deliberate second tier) with a different number gets its own counter
+ *  rather than fighting over one.
+ *
+ *  `Infinity` is a perfectly good key: it is the "no limit" entry, and it
+ *  grants unconditionally. */
+const sharedBudgets = new Map<number, MirrorBudget>()
+
+export function sharedMirrorBudget(maxPerFrame: number): MirrorBudget {
+  let budget = sharedBudgets.get(maxPerFrame)
+  if (!budget) {
+    budget = new MirrorBudget(maxPerFrame)
+    sharedBudgets.set(maxPerFrame, budget)
+  }
+  return budget
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -237,7 +273,13 @@ export interface MirrorOptions {
   /** Edge of the square render target in pixels (default 512). */
   textureSize?: number
   /** Reflections rendered per frame across ALL mirrors (default unlimited).
-   *  A mirror over budget keeps its last texture. */
+   *  A mirror over budget keeps its last texture — which is last frame's
+   *  reflection, not a black pane.
+   *
+   *  The counter is SHARED by every mirror attached with the same value
+   *  (`sharedMirrorBudget`), which is what makes this an app-wide cap rather
+   *  than a per-pane one: an app passes one number for all its mirrors, and
+   *  the eleventh pane in view is the one that goes without. */
   maxPerFrame?: number
   /** Beyond this camera distance in metres a mirror keeps its last texture
    *  (default unlimited). */
@@ -447,7 +489,7 @@ export function attachMirror(
 
   const state: MirrorState = {
     mesh, slot, plane, rt, textureMatrix, material,
-    budget: new MirrorBudget(maxPerFrame),
+    budget: sharedMirrorBudget(maxPerFrame),
     maxPerFrame,
     maxDistanceM: opts.maxDistanceM ?? Number.POSITIVE_INFINITY,
     cameras: new WeakMap(),

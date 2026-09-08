@@ -60,7 +60,7 @@ async function main() {
   // The mirror's own module, for the two questions `applySlotMaterials` alone
   // cannot answer: WHICH faces were measured, and does a second attach on the
   // same pane free the first.
-  const { attachMirror, disposeMirror, mirrorPlaneOf } =
+  const { attachMirror, disposeMirror, mirrorPlaneOf, sharedMirrorBudget } =
     await import('../packages/scene-render/src/mirrorSurface.ts')
 
   /** Run `fn` with console.warn captured; returns everything it said. */
@@ -397,9 +397,12 @@ async function main() {
   check('exactly one clone is returned', clones9.length === 1 && clones9[0] === mirrorMat)
   // WHICH faces were measured. Group 1 is the rectangle of
   // scripts/smoke_mirror_plane.mjs [1] — centroid (0.1, 0.3, 0.2), normal
-  // (0, 0, ±1). Group 0 is a triangle at z = 5; measuring the WHOLE mesh
-  // instead of the pane's own group would put the centroid near z ≈ 1.8 and
-  // is exactly the defect this assertion exists for.
+  // (0, 0, ±1). Group 0 is a triangle at z = 5 whose twice-area is 1.0,
+  // against the rectangle's 1.0; measuring the WHOLE mesh instead of the
+  // pane's own group would therefore put the centroid at
+  // z = (1.0·5 + 1.0·0.2) / 2 = 2.6 — and NOT be caught by the coherence
+  // gate, since both groups face +z (ratio 1). This assertion is the only
+  // thing between "the right faces" and "all the faces".
   const info9 = mirrorPlaneOf(mirrorMat)
   const nearAt = (a, b) => Math.abs(a - b) <= 1e-6
   check('the plane is the PANE\'s group, not the whole mesh',
@@ -464,6 +467,40 @@ async function main() {
   disposeMirror(second)
   check('ONE dispose is enough to unhook the mesh (no stale state left over)',
         reMesh.onBeforeRender === before)
+
+  console.log('\n[13] the per-frame cap is ONE counter for the whole app')
+  // A budget per pane caps nothing: every reflection is a nested render that
+  // bumps `renderer.info.render.frame`, so a pane's private counter always
+  // sees a "new frame" after the pane before it and resets. Ten mirrors would
+  // render ten scenes per frame whatever number the app passed. So the
+  // instance is keyed by the LIMIT and shared.
+  check('the same limit hands back the same budget',
+        sharedMirrorBudget(1) === sharedMirrorBudget(1))
+  check('a different limit is a different budget',
+        sharedMirrorBudget(1) !== sharedMirrorBudget(2))
+  check('unlimited is a key like any other',
+        sharedMirrorBudget(Infinity) === sharedMirrorBudget(Infinity)
+        && sharedMirrorBudget(Infinity) !== sharedMirrorBudget(1))
+  // Two panes on two different meshes, attached the way one app attaches all
+  // of its mirrors: the same option value, therefore the same counter.
+  const paneA = new FakeMaterial('slot_glass_1')
+  const meshA = { isMesh: true, material: [new FakeMaterial('wood'), paneA],
+                  geometry: mirrorGeometry, onBeforeRender: before, visible: true }
+  const paneB = new FakeMaterial('slot_glass_1')
+  const meshB = { isMesh: true, material: paneB, geometry: {
+    attributes: { position: { array: new Float32Array([-0.15, -0.2, 0.2, 0.35, -0.2, 0.2,
+      0.35, 0.8, 0.2, -0.15, 0.8, 0.2]), count: 4 } },
+    index: { array: new Uint16Array([0, 1, 2, 0, 2, 3]), count: 6 }, groups: [] },
+    onBeforeRender: before, visible: true }
+  const matA = attachMirror(THREE2, meshA, paneA, 1, 'glass_1', { maxPerFrame: 1 })
+  const matB = attachMirror(THREE2, meshB, paneB, null, 'glass_1', { maxPerFrame: 1 })
+  check('both panes report the same cap', mirrorPlaneOf(matA)?.maxPerFrame === 1
+        && mirrorPlaneOf(matB)?.maxPerFrame === 1,
+        `${mirrorPlaneOf(matA)?.maxPerFrame}/${mirrorPlaneOf(matB)?.maxPerFrame}`)
+  check('...on two DIFFERENT meshes (each pane measured its own group)',
+        meshA.material[1] === matA && meshB.material === matB && matA !== matB)
+  disposeMirror(matA)
+  disposeMirror(matB)
 
   console.log(`\n${failures.length
     ? 'FAILED: ' + failures.join(', ') : 'all checks passed'}`)

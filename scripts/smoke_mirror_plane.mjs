@@ -39,6 +39,16 @@
  *       allow(20) → true   (a frame with no pending nested count is new)
  *     MirrorBudget(0) → allow(1) is false. MirrorBudget(Infinity) →
  *     allow(n) is always true.
+ *
+ *     THAT SEQUENCE IS THE TWO-MIRROR READING, which is the point of the
+ *     class: one budget of 2 shared by panes A, B, C, all three hooked in the
+ *     SAME top-level frame 10. A's hook asks allow(10) → true, and its nested
+ *     render bumps the renderer's counter to 11; B's hook asks allow(11) →
+ *     true (the budget expected exactly that) and bumps it to 12; C's hook
+ *     asks allow(12) → false, so C keeps last frame's texture. A budget per
+ *     pane would grant all three — each private counter would see a "new
+ *     frame" and reset — which is why `sharedMirrorBudget` keys ONE instance
+ *     per limit for the whole page.
  * [9] COHERENCE — the faces of one group must agree on a side. With
  *     `len` = |Σ (b-a)×(c-a)| and `weight` = Σ |(b-a)×(c-a)|, a group whose
  *     `len / weight` is under 0.9 has no plane: two opposite skins of one pane
@@ -215,7 +225,7 @@ async function main() {
     process.exit(run.status ?? 1)
   }
 
-  const { planeOfFaces, MirrorBudget } =
+  const { planeOfFaces, MirrorBudget, sharedMirrorBudget } =
     await import('../packages/scene-render/src/mirrorSurface.ts')
 
   const failures = []
@@ -273,6 +283,17 @@ async function main() {
   check('budget 0 grants nothing', new MirrorBudget(0).allow(1) === false)
   const inf = new MirrorBudget(Infinity)
   check('unlimited budget always grants', inf.allow(1) && inf.allow(2) && inf.allow(3))
+  // The two-mirror reading, executable: the hooks of panes A, B and C in ONE
+  // top-level frame 10, all asking the SAME budget of 2. A budget per pane
+  // would grant all three, because each private counter would see a new frame
+  // after the pane before it rendered — that is the whole reason
+  // `sharedMirrorBudget` keys one instance per limit.
+  const shared = sharedMirrorBudget(2)
+  const abc = [shared.allow(10), shared.allow(11), shared.allow(12)]
+  check('panes A, B, C on one shared budget of 2 → true, true, false',
+        JSON.stringify(abc) === '[true,true,false]', JSON.stringify(abc))
+  check('the same limit IS the same counter, a different limit is not',
+        sharedMirrorBudget(2) === shared && sharedMirrorBudget(3) !== shared)
 
   console.log('\n[9] the faces of a group must agree on a side')
   // The unit square in z = 0, counter-clockwise seen from +z. Both its faces
