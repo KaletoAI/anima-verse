@@ -24,11 +24,17 @@ def pair_verb_name() -> str:
     return VERB_NAME
 
 
-def _on_invited(inviter: str = "", invitee: str = "", pose_key: str = "",
-                **_kwargs) -> None:
-    """An invitation was recorded. A player answers it in the UI; an NPC has
-    to be given a turn, with a hint that names the verb and the arguments —
-    consent is a tool call, never a keyword match on its prose."""
+def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
+                pose_key: str = "", **_kwargs) -> None:
+    """An invitation was recorded. A player answers it in the UI; an ordinary
+    NPC is given a turn with a hint that names the verb and the arguments —
+    consent is a tool call, never a keyword match on its prose.
+
+    A TEMPORARY NPC has no thought turns (``thoughts_enabled`` is off, so
+    ``bump`` refuses it) and no will system to consult: it says yes at once,
+    and the engine's own state check decides whether the pair can start
+    (asleep, travelling, occupied -> ``cannot``).
+    """
     if not inviter or not invitee:
         return
     try:
@@ -37,6 +43,16 @@ def _on_invited(inviter: str = "", invitee: str = "", pose_key: str = "",
             return
     except Exception:
         return
+    try:
+        from app.models.character import is_temporary_npc
+        if invite_id and is_temporary_npc(invitee):
+            from app.core.interaction_engine import resolve_invite
+            res = resolve_invite(invite_id, accept=True)
+            logger.info("interaction invite %s: temporary NPC %s says yes -> %s",
+                        invite_id, invitee, res.get("status"))
+            return
+    except Exception as e:
+        logger.debug("temporary-NPC acceptance failed for %s: %s", invitee, e)
     try:
         from app.core.agent_loop import get_agent_loop
         get_agent_loop().bump(

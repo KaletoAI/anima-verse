@@ -6,7 +6,8 @@ description: Pair-interaction verb — two present characters play a pair animat
 enabled_default: true
 
 # The core records an invitation and emits `interaction.invited`; this module
-# turns that into a turn for an NPC invitee and supplies the `pair_verb_name`
+# turns that into a turn for an ordinary NPC invitee (a temporary NPC, which
+# has no turns, says yes at once) and supplies the `pair_verb_name`
 # capability, so no core file has to name the verb (R1).
 on_load: register.py
 

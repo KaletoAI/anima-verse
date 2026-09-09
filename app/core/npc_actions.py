@@ -351,9 +351,10 @@ def _apply_talk(name: str, answer: Dict[str, Any],
     """Apply the answer's ``say`` or ``pair`` — ``{"said_to": …}``,
     ``{"invited": …}`` or ``{}``.
 
-    ``say`` wins over ``pair`` (one turn, one act). A line is dropped when the
-    NPC changes room in the same turn (one does not walk out while opening a
-    conversation) or when the addressee is not among the partners the prompt
+    ``say`` wins over ``pair`` (one turn, one act). A turn that changes room
+    does NEITHER: one does not walk out while opening a conversation, and a
+    partner left behind in the old room could never bind the pair. A line is
+    dropped as well when the addressee is not among the partners the prompt
     offered. The line goes into the perception stream like any spoken line,
     the room's energy starts over, and the ordinary cascade takes it from
     there — the addressee answers through the respond lane (task
@@ -362,12 +363,13 @@ def _apply_talk(name: str, answer: Dict[str, Any],
     """
     if not variables.get("talk_allowed"):
         return {}
+    if moved:
+        logger.info("npc_action(%s): changes room this turn — nothing is said "
+                    "or proposed", name)
+        return {}
     present = {p["name"].casefold(): p["name"] for p in variables.get("present") or []}
     say = answer.get("say")
     if isinstance(say, dict) and str(say.get("line") or "").strip():
-        if moved:
-            logger.info("npc_action(%s): changes room this turn — the line is dropped", name)
-            return {}
         to = present.get(str(say.get("to") or "").strip().casefold(), "")
         if not to:
             logger.info("npc_action(%s): say to %r, who is not here — dropped",

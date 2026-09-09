@@ -26,7 +26,9 @@ Hand-derived expectations, case by case:
       the model produces anyway is ignored — no utterance is written.
   (d) A ``say`` and a room change in the SAME answer. The room change wins:
       the NPC stands in the new room afterwards and no utterance is written,
-      because the sentence was meant for the room it just left.
+      because the sentence was meant for the room it just left. A ``pair`` in
+      such a turn is dropped for the same reason — the partner would be in
+      the room the NPC has just left, so the invitation could never bind.
   (e) Mode ``turns`` with a valid ``pair`` key. ``create_invite`` writes an
       invitation, and the hook ``_on_invited`` makes a temporary NPC accept
       right away, so ``resolve_invite`` is called with ``accept=True`` (the
@@ -54,7 +56,8 @@ Hand-derived expectations, case by case:
   (k) Both templates render through ``render_task`` (StrictUndefined) for the
       variable sets ``prompt_vars`` produces — a house with and without a
       conversation, a home area — and for ``npc_scenes.prompt_vars``, without
-      raising.
+      raising. Without a pair clip installed there are no pair keys, and then
+      the prompt must not propose a pair the application would only reject.
 
 Usage:  ./.venv/bin/python scripts/smoke_npc_conversation.py
 """
@@ -290,6 +293,26 @@ check("nothing was said", (res.get("said_to") if res else None, len(utterances()
       ("", 1))
 force_set_status(A, room="taproom")
 
+# … and a pair proposal in such a turn binds nothing either. No pair clip
+# lives in the throwaway ANIMATION_CLIPS_DIR, so the catalog offers no pair
+# pose of its own: "shaking hands" is a real catalog key (``solo: false``)
+# and ``handshake`` is the clip it names.
+_real_partner_poses = interaction_engine.partner_poses
+interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
+PAIR_KEY = "shaking hands"
+isolate(A)
+LLM = FakeLLM('{"room": "kitchen", "activity": "Sie holt Rueben.",'
+              ' "pair": {"with": "Halvard", "pose": "%s"}}' % PAIR_KEY)
+res = npc_actions.run_action_for(A, llm=LLM)
+# Back into the taproom BEFORE the count: an open invitation of an inviter
+# who stands elsewhere is filtered out at read time, and that filter would
+# hide the very row this asks about.
+force_set_status(A, room="taproom")
+check("nobody was invited while walking out",
+      ((res.get("invited") if res else None),
+       interaction_engine.pending_invites_for(B)), ("", []))
+interaction_engine.partner_poses = _real_partner_poses
+
 # ── (f) the mode switch ────────────────────────────────────────────────────
 print("(f) mode off / scene indoors: no talk; scene outdoors with a home: talk")
 set_npc_config(conversation_mode="off")
@@ -330,9 +353,46 @@ v = npc_actions.prompt_vars(A)
 s, u = render_task("npc_action", **v)
 check("talk: the system part names say and pair", ('"say"' in s, '"pair"' in s), (True, True))
 check("talk: the user part lists the partner", "Halvard" in u, True)
+check("talk without pair keys: no pair is proposed",
+      ("two-person pose" in s, "Pair pose keys" in u), (False, False))
 v = npc_actions.prompt_vars(C)
 s, _u = render_task("npc_action", **v)
 check("no talk: the system part does not offer say", '"say"' in s, False)
+
+# ── (e) a pair proposal: invitation created, the hook answers yes ──────────
+print("(e) pair: the invite is created and a temporary NPC accepts at once")
+import plugins.interact.register  # noqa: E402,F401 — registers the hook
+
+interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
+STARTED = []
+_real_start = interaction_engine.start_interaction
+interaction_engine.start_interaction = lambda a, b, pose: (STARTED.append((a, b, pose)) or
+                                                           {"id": "fake", "kind": "handshake"})
+PAIR_KEY = npc_actions._pair_pose_keys()[0] if npc_actions._pair_pose_keys() else ""
+check("the catalog offers at least one pair key", bool(PAIR_KEY), True)
+v = npc_actions.prompt_vars(A)
+s, u = render_task("npc_action", **v)
+check("with a pair key the prompt proposes a pair",
+      ("two-person pose" in s, PAIR_KEY in u), (True, True))
+isolate(A)
+LLM = FakeLLM('{"room": "taproom", "activity": "Sie tritt vor.",'
+              ' "pair": {"with": "Halvard", "pose": "%s"}}' % PAIR_KEY)
+res = npc_actions.run_action_for(A, llm=LLM)
+check("the turn reports the invitation", res.get("invited") if res else None, B)
+check("the interaction was started for the pair", STARTED, [(A, B, PAIR_KEY)])
+check("no bump was needed", LOOP.bumps, [])
+check("no open invitation is left", interaction_engine.pending_invites_for(B), [])
+
+# an ordinary character invitee keeps the bump path
+LOOP.bumps.clear(); STARTED.clear()
+save_character_current_location(FULL, LOC_ID)
+force_set_status(FULL, room="taproom")
+interaction_engine.create_invite(A, FULL, PAIR_KEY)
+check("an ordinary character is bumped, not auto-accepted",
+      ([b[0] for b in LOOP.bumps], STARTED), ([FULL], []))
+interaction_engine.clear_invites_for(FULL)
+interaction_engine.start_interaction = _real_start
+interaction_engine.partner_poses = _real_partner_poses
 
 # ── result ──────────────────────────────────────────────────────────────────
 print()
