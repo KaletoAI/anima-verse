@@ -1150,6 +1150,9 @@ def _apply_world_data_sync(data: Any):
         if "image_prompt_night" not in room:
             room["image_prompt_night"] = ""
 
+    # ``add_location`` brings the ground and the corridor rooms itself — the
+    # world-dev apply writes the room list through it and needs no call of
+    # its own.
     result = add_location(
         name=name,
         description=description,
@@ -2466,6 +2469,8 @@ def _apply_json_sync(data: Any):
                 room["image_prompt_day"] = room.pop("image_prompt")
             if "image_prompt_night" not in room:
                 room["image_prompt_night"] = ""
+        # Same as the location apply above: ``add_location`` is the one write
+        # path, and it syncs ground + corridor rooms.
         result = add_location(
             name=payload["name"],
             description=payload.get("description", ""),

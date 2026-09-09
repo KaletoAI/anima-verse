@@ -897,7 +897,8 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     """
     import uuid
     from app.models.world import (
-        GROUND_ROOM_ID, _load_world_data, _save_world_data, get_gallery_dir,
+        GROUND_ROOM_ID, _load_world_data, _save_world_data, ensure_floor_rooms,
+        get_gallery_dir,
     )
 
     try:
@@ -946,6 +947,11 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     # bypass them.
     _remap_room_refs(loc, room_id_map)
     sanitize_warnings = _sanitize_imported_location(loc)
+    # The corridor of every used storey, after the sanitizers settled the room
+    # layouts: a pack exported from a world that predates them carries none,
+    # and the reserved ids are the server's to bring (spec § 2.2). Nobody
+    # stands in a location that is being created, so nothing is evicted.
+    ensure_floor_rooms(loc.setdefault("rooms", []), loc.get("map3d"))
 
     loc["name"] = _free_location_name((loc.get("name") or "Imported location").strip())
     if loc.get("image_prompt_day") or loc.get("image_prompt_night"):

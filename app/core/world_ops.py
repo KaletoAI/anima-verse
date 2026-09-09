@@ -1928,7 +1928,10 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                   or terrain is not None
                   or map3d is not None or npc_slots is not None)
     if _has_extra and location:
-        from app.models.world import _load_world_data, _save_world_data
+        from app.models.world import (
+            _load_world_data, _save_world_data, ensure_floor_rooms,
+            evict_rooms_to_ground,
+        )
         wdata = _load_world_data()
         for _l in wdata.get("locations", []):
             if _l.get("id") == location.get("id"):
@@ -1974,6 +1977,13 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                         _l["map3d"] = _m3
                     else:
                         _l.pop("map3d", None)
+                    # The corridors are re-synced against the map3d that was
+                    # just stored — this is the write the ground-floor opt-in
+                    # (``map3d.ground_corridor``) travels through.
+                    _removed = ensure_floor_rooms(
+                        _l.setdefault("rooms", []), _l.get("map3d"))
+                    if _removed:
+                        evict_rooms_to_ground(str(_l.get("id") or ""), _removed)
                 if npc_slots is not None:
                     # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
                     # Sanitized by the one function the spawn logic reads them
@@ -2051,7 +2061,10 @@ def update_location_with_extras(location_id: str,
                   or terrain is not None
                   or map3d is not None or npc_slots is not None)
     if _has_extra:
-        from app.models.world import _load_world_data, _save_world_data
+        from app.models.world import (
+            _load_world_data, _save_world_data, ensure_floor_rooms,
+            evict_rooms_to_ground,
+        )
         wdata = _load_world_data()
         for _l in wdata.get("locations", []):
             if _l.get("id") == location_id:
@@ -2097,6 +2110,13 @@ def update_location_with_extras(location_id: str,
                         _l["map3d"] = _m3
                     else:
                         _l.pop("map3d", None)
+                    # The corridors are re-synced against the map3d that was
+                    # just stored — this is the write the ground-floor opt-in
+                    # (``map3d.ground_corridor``) travels through.
+                    _removed = ensure_floor_rooms(
+                        _l.setdefault("rooms", []), _l.get("map3d"))
+                    if _removed:
+                        evict_rooms_to_ground(str(_l.get("id") or ""), _removed)
                 if npc_slots is not None:
                     # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
                     # Sanitized by the one function the spawn logic reads them

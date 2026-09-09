@@ -566,6 +566,9 @@ def apply_layout(normalized: Dict[str, Any]) -> Dict[str, Any]:
     if entry_room:
         body["entry_room"] = entry_room
 
+    # The corridor rooms need no call of their own here: the whole room list
+    # and the map3d go through ``update_location_with_extras`` → ``add_location``,
+    # and both of those sync them (spec § 2.2).
     update_location_with_extras(location_id, body)
     result = {
         "location_id": location_id,

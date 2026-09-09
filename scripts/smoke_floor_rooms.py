@@ -14,6 +14,7 @@ Part 1 — ids (§ 2.1):
     floor_room_level("__floor__x")  -> None  not an int, not a corridor
     floor_room_level("__ground__")  -> None  the ground is not a corridor
     is_floor_room("abc12345")       -> False
+    is_floor_room("__floor__-1")    -> True   the prefix plus a whole number
 
 Part 2 — which storeys get a corridor (§ 2.2, floor_levels):
     rooms: k1 (layout level -1), eg (layout level 0), ground (props only)
@@ -30,6 +31,10 @@ Part 2b — ensure_floor_rooms is a two-way sync:
                                         and returns [] (nothing removed)
     run twice                        -> second run appends nothing (idempotent)
     previous had __floor__-1 named "Kellerflur" -> the name comes back
+    previous entry with description "dark"       -> the description comes back too
+                                        (the editor submits whole lists; a
+                                        corridor it never sent must not lose
+                                        the text an author wrote for it)
     rooms carry __floor__2 but no room on level 2 -> entry removed,
                                         returns ["__floor__2"]
     an authored __floor__-1 (id present, room on -1) -> left untouched
@@ -39,6 +44,10 @@ Part 3 — get_floor_name (§ 2.1): English defaults, lang "" = English
     level -1 -> "Corridor (basement)"
     level -2 -> "Corridor (basement -2)"
     level 1  -> "Corridor (floor 1)"
+    floor_room_display_name({"id": "__floor__-1", "name": ""})
+             -> "Corridor (basement)"   no name of its own = the default of its level
+    floor_room_display_name({"id": "__floor__-1", "name": "Kellerflur"})
+             -> "Kellerflur"            an authored name always wins
 """
 import sys
 from pathlib import Path
@@ -74,6 +83,7 @@ def main():
     check("level of __floor__x", world.floor_room_level("__floor__x"), None)
     check("level of ground", world.floor_room_level(world.GROUND_ROOM_ID), None)
     check("is_floor_room(abc12345)", world.is_floor_room("abc12345"), False)
+    check("is_floor_room(__floor__-1)", world.is_floor_room("__floor__-1"), True)
 
     print("Part 2 — floor_levels")
     ground = {"id": world.GROUND_ROOM_ID, "name": "", "layout": {"props": []}}
@@ -96,6 +106,10 @@ def main():
     rs2 = [room("k1", -1)]
     world.ensure_floor_rooms(rs2, {}, previous=[{"id": "__floor__-1", "name": "Kellerflur"}])
     check("name restored", rs2[1]["name"], "Kellerflur")
+    rs2b = [room("k1", -1)]
+    world.ensure_floor_rooms(rs2b, {}, previous=[
+        {"id": "__floor__-1", "name": "X", "description": "dark"}])
+    check("description restored", rs2b[1]["description"], "dark")
     rs3 = [room("k1", -1), {"id": "__floor__2", "level": 2, "name": ""}]
     removed = world.ensure_floor_rooms(rs3, {})
     check("stale corridor removed", [r["id"] for r in rs3], ["k1", "__floor__-1"])
@@ -109,6 +123,13 @@ def main():
     check("-1", world.get_floor_name(-1), "Corridor (basement)")
     check("-2", world.get_floor_name(-2), "Corridor (basement -2)")
     check("1", world.get_floor_name(1), "Corridor (floor 1)")
+    check("display name default",
+          world.floor_room_display_name({"id": "__floor__-1", "name": ""}),
+          "Corridor (basement)")
+    check("display name authored",
+          world.floor_room_display_name({"id": "__floor__-1",
+                                         "name": "Kellerflur"}),
+          "Kellerflur")
 
     print("FAILED" if FAILS else "ALL OK")
     sys.exit(1 if FAILS else 0)

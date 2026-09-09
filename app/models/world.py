@@ -1092,17 +1092,29 @@ def ensure_floor_rooms(rooms: List[Dict[str, Any]],
     ``previous`` — the editor submits whole lists and must not wipe a name),
     corridors of storeys no room stands on any more are removed. Returns the
     removed ids so the caller can move characters/utterances off them
-    (:func:`ground_room_target`). An entry that is already there is never
+    (:func:`evict_rooms_to_ground`). An entry that is already there is never
     touched.
     """
     wanted = floor_levels(rooms, map3d)
-    present = {floor_room_level(str(r.get("id") or "")): r
-               for r in rooms if isinstance(r, dict) and is_floor_room(str(r.get("id") or ""))}
+    present: Dict[Optional[int], Dict[str, Any]] = {}
     removed: List[str] = []
-    for lv, entry in list(present.items()):
+    # The stale entries are collected BY INDEX during the scan: two corridor
+    # entries that happen to be equal dicts would make ``list.remove`` drop
+    # the wrong one.
+    stale: List[int] = []
+    for idx, r in enumerate(rooms):
+        if not isinstance(r, dict):
+            continue
+        rid = str(r.get("id") or "")
+        if not is_floor_room(rid):
+            continue
+        lv = floor_room_level(rid)
+        present[lv] = r
         if lv not in wanted:
-            rooms.remove(entry)
-            removed.append(entry["id"])
+            stale.append(idx)
+            removed.append(rid)
+    for idx in reversed(stale):
+        del rooms[idx]
     prev_by_id = {str(r.get("id") or ""): r
                   for r in (previous or []) if isinstance(r, dict)}
     for lv in sorted(wanted):
@@ -1140,6 +1152,30 @@ def floor_room_display_name(room: Dict[str, Any], lang: str = "") -> str:
         return name
     lv = floor_room_level(str((room or {}).get("id") or ""))
     return get_floor_name(lv if lv is not None else 0, lang)
+
+
+def evict_rooms_to_ground(location_id: str, room_ids: List[str]) -> Dict[str, int]:
+    """Move everyone standing in one of ``room_ids`` of ``location_id`` onto
+    the ground — used when a corridor room disappears because its storey lost
+    its last room. The server does not know a roomless character's storey, so
+    the ground is the one honest place (spec § 2.4)."""
+    counts = {"characters": 0, "utterances": 0}
+    ids = [r for r in room_ids if r]
+    if not (location_id and ids):
+        return counts
+    marks = ",".join("?" for _ in ids)
+    with transaction() as conn:
+        cur = conn.execute(
+            f"UPDATE character_state SET current_room=? "
+            f"WHERE current_location=? AND current_room IN ({marks})",
+            (GROUND_ROOM_ID, location_id, *ids))
+        counts["characters"] = cur.rowcount or 0
+        cur = conn.execute(
+            f"UPDATE utterances SET room_id=? "
+            f"WHERE location_id=? AND room_id IN ({marks})",
+            (GROUND_ROOM_ID, location_id, *ids))
+        counts["utterances"] = cur.rowcount or 0
+    return counts
 
 
 def migrate_ground_rooms_once() -> Dict[str, int]:
@@ -1549,6 +1585,14 @@ def add_location(name: str, description: str,
                 # The ground is not the author's to delete — a submitted list
                 # without it gets it back, keeping the name it had.
                 ensure_ground_room(rooms, list(old_rooms_by_id.values()))
+                # The corridors follow the storeys this list uses: a storey
+                # that gained its first room gets one, a storey that lost its
+                # last one loses it — and whoever stood in that corridor is
+                # put on the ground, because no storey holds them any more.
+                removed = ensure_floor_rooms(
+                    rooms, location.get("map3d"), list(old_rooms_by_id.values()))
+                if removed:
+                    evict_rooms_to_ground(str(location.get("id") or ""), removed)
                 location["rooms"] = rooms
                 location.pop("activities", None)
             if image_prompt_day is not None:
@@ -1583,7 +1627,7 @@ def add_location(name: str, description: str,
             _save_world_data(data)
             return location
 
-    # Neue Location — prompt_changed fuer alle Rooms mit Prompts setzen
+    # New location — set prompt_changed for every room that has prompts.
     if rooms is not None:
         for room in rooms:
             if room.get("image_prompt_day") or room.get("image_prompt_night"):
@@ -1592,6 +1636,9 @@ def add_location(name: str, description: str,
     # migration has already run.
     new_rooms = list(rooms or [])
     ensure_ground_room(new_rooms)
+    # A brand-new location has no ``map3d`` yet, so it never opts into a
+    # ground-floor corridor here; the first write that brings one syncs it.
+    ensure_floor_rooms(new_rooms, None)
     new_location = {
         "id": _generate_location_id(),
         "name": name,
