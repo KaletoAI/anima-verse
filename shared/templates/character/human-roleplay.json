@@ -205,6 +205,7 @@
       "id": "traits",
       "label": "Status",
       "label_de": "Status",
+      "special": "stats",
       "column": 3,
       "row": 2,
       "fields": []

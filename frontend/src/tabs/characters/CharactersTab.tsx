@@ -20,6 +20,7 @@ import { type TmplSection } from './TemplateSectionForm'
 import { TemplateTab } from './TemplateTab'
 import { BodyEditor } from './BodyEditor'
 import { DefaultExpressionField } from './DefaultExpressionField'
+import { StatsPanel } from './StatsPanel'
 import { FieldModel3D } from './FieldModel3D'
 import { FieldModelRefs } from './FieldModelRefs'
 import { TemplateSelector } from './TemplateSelector'
@@ -124,6 +125,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
   'placement', 'body_editor', 'default_expression', 'model_refs', 'model3d_gen',
+  'stats',
 ])
 
 function sectionIsRenderable(s: TmplSectionRaw): boolean {
@@ -897,6 +899,19 @@ export function CharactersTab() {
                         />
                       ),
                       default_expression: <DefaultExpressionField character={selected} />,
+                      stats: (
+                        <StatsPanel
+                          character={selected}
+                          queueField={queueField}
+                          draftStatus={
+                            templateDraft.profile.status_effects as
+                              | Record<string, unknown>
+                              | undefined
+                          }
+                          discardSignal={discardSignal}
+                          savedSignal={savedSignal}
+                        />
+                      ),
                       model_refs: <FieldModelRefs character={selected} kinds={['tpose']} />,
                       model3d_gen: <FieldModel3D character={selected} />,
                     }}

@@ -2620,6 +2620,9 @@
     "Dismiss all": "Alle verwerfen",
     "Dismiss all {n} open candidates?": "Alle {n} offenen Kandidaten verwerfen?",
     "Yes, dismiss": "Ja, verwerfen",
-    "Dismissed {n} candidates": "{n} Kandidaten verworfen"
+    "Dismissed {n} candidates": "{n} Kandidaten verworfen",
+    "Stat": "Statuswert",
+    "Value": "Wert",
+    "This character has no status values.": "Dieser Character hat keine Statuswerte."
   }
 }
