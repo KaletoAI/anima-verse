@@ -454,6 +454,18 @@ async def lifespan(app: FastAPI):
     except Exception as _gre:
         logger.debug("ground-room migration failed: %s", _gre)
 
+    # Migration: every used storey of a location gets its corridor room, so
+    # an unlinked door upstairs or downstairs leads into a hallway instead of
+    # into the open (2026-09-09-etagen-flur-design.md § 3.5). Runs after the
+    # ground-room migration. Idempotent, world_kv-marked.
+    try:
+        from app.models.world import migrate_floor_rooms_once
+        _fr = migrate_floor_rooms_once()
+        if any(_fr.values()):
+            logger.info("Floor-room migration: %s", _fr)
+    except Exception as _fre:
+        logger.debug("floor-room migration failed: %s", _fre)
+
     # Migration: a stored exit point becomes a door opening on the nearest
     # wall — the doors are the way in and out now
     # (plan-betreten-und-tueren.md § 6). Idempotent (the exit is removed),

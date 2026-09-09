@@ -170,6 +170,19 @@ Part 6c — a level -1 room filling the square (x -5 y -5 w 10 d 10) plus
     rooms are __ground__ and __floor__-1 has nothing an author could draw a
     layout for, so "rooms_without_layout" must stay silent. Red probe: the
     same location plus a normal room without a layout -> the finding fires.
+
+Part 7 — the migration's door count (§ 3.5, count_corridor_doors). It is what
+    the boot log reports per location as "doors that now lead into a
+    corridor": a door or passage nobody linked, in a drawn room standing on a
+    storey that gets a corridor. Pure — the migration itself touches rows and
+    is not run here.
+      cellar_fixture(): k1 and k2 carry an unlinked door on level -1, eg one
+        on level 0, and level 0 owns no corridor without the opt-in     -> 2
+      the same fixture with map3d.ground_corridor true: eg's door joins  -> 3
+      one room on -1 with a plain unlinked door                         -> 1
+        (the probe below is a real one)
+      the same door with to "outside": it is linked, the hull keeps it   -> 0
+      the same opening as a window: a window is no way through          -> 0
 """
 import logging
 import sys
@@ -452,6 +465,26 @@ def main():
           [p["kind"] for p in sc5.get("problems") or []
            if p.get("kind") == "rooms_without_layout"],
           ["rooms_without_layout"])
+
+    print("Part 7 — count_corridor_doors")
+    check("cellar fixture", world.count_corridor_doors(cellar_fixture()), 2)
+    opt_in = cellar_fixture()
+    opt_in["map3d"] = dict(opt_in["map3d"], ground_corridor=True)
+    check("ground floor opts in", world.count_corridor_doors(opt_in), 3)
+
+    def one_cellar_door(**opening):
+        """One room on level -1 whose single door carries `opening`."""
+        loc = location([rm("k1", -1, -4, -4, 3, 3),
+                        {"id": world.GROUND_ROOM_ID, "name": ""}])
+        loc["rooms"][0]["layout"]["openings"][0].update(opening)
+        return loc
+
+    check("a plain unlinked door counts",
+          world.count_corridor_doors(one_cellar_door()), 1)
+    check("a linked door does not",
+          world.count_corridor_doors(one_cellar_door(to="outside")), 0)
+    check("a window does not",
+          world.count_corridor_doors(one_cellar_door(type="window")), 0)
 
     print("FAILED" if FAILS else "ALL OK")
     sys.exit(1 if FAILS else 0)

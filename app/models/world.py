@@ -1298,6 +1298,85 @@ def migrate_ground_rooms_once() -> Dict[str, int]:
     return counts
 
 
+def count_corridor_doors(location: Dict[str, Any]) -> int:
+    """Doors of ``location`` that now lead into a corridor (spec § 3.5).
+
+    Pure. A door or passage nobody linked (`to` empty), drawn in an ordinary
+    room that stands on a storey owning a corridor, used to cut a hole into
+    the building hull and is an interior door from now on (decision 2 — there
+    are no balcony doors). The migration reports the number per location so
+    the change of meaning is visible in the boot log.
+    """
+    rooms = location.get("rooms") or []
+    levels = floor_levels(rooms, location.get("map3d"))
+    n = 0
+    for r in rooms:
+        if not isinstance(r, dict):
+            continue
+        lay = r.get("layout")
+        if not isinstance(lay, dict) or not lay:
+            continue
+        rid = str(r.get("id") or "")
+        if rid == GROUND_ROOM_ID or is_floor_room(rid):
+            continue
+        try:
+            level = int(lay.get("level") or 0)
+        except (TypeError, ValueError):
+            level = 0
+        if level not in levels:
+            continue
+        for op in lay.get("openings") or []:
+            if not isinstance(op, dict):
+                continue
+            if str(op.get("type") or "door").lower() not in ("door", "passage"):
+                continue
+            if not str(op.get("to") or "").strip():
+                n += 1
+    return n
+
+
+def migrate_floor_rooms_once() -> Dict[str, int]:
+    """One-time, idempotent: give every used storey its corridor room.
+
+    No character moves — nobody stood in a corridor before it existed. Storey
+    0 only joins on the location's opt-in, so at first nowhere. Per location
+    the log states how many corridors were added and how many doors change
+    meaning (spec § 3.5, decision 2). Guarded by a world_kv marker, so a
+    second boot returns zeros without touching a row.
+    """
+    counts = {"locations": 0, "corridors": 0, "doors": 0}
+    if get_world_setting("migration.floor_rooms_v1", "") == "done":
+        return counts
+    try:
+        data = _load_world_data()
+        changed = False
+        for loc in data.get("locations", []):
+            rooms = loc.setdefault("rooms", [])
+            before = len(rooms)
+            ensure_floor_rooms(rooms, loc.get("map3d"))
+            added = len(rooms) - before
+            doors = count_corridor_doors(loc)
+            if added or doors:
+                logger.info(
+                    "floor-room migration: location %s (%s): %d corridor(s) "
+                    "added, %d door(s) now lead into a corridor",
+                    loc.get("id"), loc.get("name", ""), added, doors)
+                counts["locations"] += 1
+                counts["corridors"] += added
+                counts["doors"] += doors
+            changed = changed or bool(added)
+        if changed:
+            _save_world_data(data)
+        set_world_setting("migration.floor_rooms_v1", "done")
+        logger.info(
+            "floor-room migration: %d location(s) got %d corridor room(s), "
+            "%d door(s) now lead into a corridor", counts["locations"],
+            counts["corridors"], counts["doors"])
+    except Exception as e:
+        logger.warning("floor-room migration failed: %s", e)
+    return counts
+
+
 # === Exit point -> door opening (plan-betreten-und-tueren.md § 6) ===
 # The editor's standard door — OPENING_DEFAULT in
 # frontend/src/tabs/world/planGeometry.ts. Change both or neither.
