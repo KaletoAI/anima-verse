@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # type-only — the composer is imported where it is used
 logger = get_logger("world")
 
 from app.models.world import (
-    GROUND_ROOM_ID,
+    GROUND_ROOM_ID, is_floor_room, valid_entry_room,
     list_locations, add_location, location_visible_to_character,
     visibility_context,
     rename_location, resolve_location, get_location_by_id,
@@ -821,6 +821,10 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
         val = raw.get(key)
         if isinstance(val, str) and val.strip():
             out[key] = val.strip()
+    # Ground-floor corridor opt-in (spec § 2.3): only the explicit True is
+    # stored — absent means "the complement of the rooms is the yard".
+    if raw.get("ground_corridor") is True:
+        out["ground_corridor"] = True
     # ``rotation`` — the building yaw on the map tile — is GONE with v6
     # (Nr. 5): it turned the mesh around the very axis the model sidecar's
     # own orientation fix (``fix_euler`` y) already turns, so it was a second
@@ -1846,6 +1850,10 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
     """Apply the layout sanitizer to every room dict in place (rooms pass
     through add_location verbatim otherwise). Invalid layouts are dropped.
 
+    A CORRIDOR ROOM CARRIES NO LAYOUT AT ALL (spec § 2.1): its storey plate
+    and hull are the location's, so anything a call puts under ``layout``
+    there is dropped and logged.
+
     THE GROUND ROOM CARRIES A REDUCED LAYOUT (§ A13a): props and markers only,
     positioned in LOCATION-LOCAL metres. It still has no geometry of its own —
     a rect, an outline or an opening on the ground would put walls, a plate
@@ -1858,6 +1866,13 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
         return rooms
     for room in rooms:
         if not isinstance(room, dict) or "layout" not in room:
+            continue
+        if is_floor_room(str(room.get("id") or "")):
+            # A corridor has no geometry of its own (spec § 2.1): whatever an
+            # API call put here is dropped, and logged so the author finds it.
+            logger.info("room %s: layout dropped — corridor rooms carry none",
+                        room.get("id"))
+            room.pop("layout", None)
             continue
         if room.get("id") == GROUND_ROOM_ID:
             ground = sanitize_ground_layout(room.get("layout"))
@@ -1908,6 +1923,26 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(rooms, list):
         raise HTTPException(status_code=400, detail="rooms must be a list")
     _sanitize_rooms_layout(rooms)
+    # THE CORRIDOR IDS BELONG TO THE SERVER (spec § 2.1): ``ensure_floor_rooms``
+    # creates and removes those rooms, an author never does. Only a place that
+    # already carries such a room may send it back — that is the editor
+    # returning a list it was handed. Which place that is follows the very rule
+    # ``add_location`` decides create-vs-update by: the exact name, and nothing
+    # at all when the caller demands a new place.
+    _reserved = [str(r.get("id") or "") for r in rooms
+                 if isinstance(r, dict) and is_floor_room(str(r.get("id") or ""))]
+    if _reserved:
+        _stored = None if data.get("create_new") else next(
+            (_loc for _loc in list_locations()
+             if _loc.get("name") == location_name), None)
+        _known = {str(r.get("id") or "")
+                  for r in ((_stored or {}).get("rooms") or [])
+                  if isinstance(r, dict)}
+        for _rid in _reserved:
+            if _rid not in _known:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"room id {_rid!r} is reserved for the storey corridor")
 
     location = add_location(location_name, description, rooms=rooms,
                             image_prompt_day=image_prompt_day,
@@ -1956,7 +1991,11 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                 if knowledge_item_id is not None:
                     _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
                 if entry_room is not None:
-                    _l["entry_room"] = (entry_room or "").strip()
+                    # Only a room this place really has, and of the reserved
+                    # corridors only the ground floor's hallway (spec § 4) —
+                    # nobody arrives in a basement corridor.
+                    _l["entry_room"] = valid_entry_room(
+                        _l.get("rooms") or [], entry_room)
                 if default_door_prop_id is not None:
                     # THE PLACE'S OWN DOOR (2026-08-27): every door opening
                     # that names no prop of its own gets this one, unless it
@@ -2089,7 +2128,11 @@ def update_location_with_extras(location_id: str,
                 if knowledge_item_id is not None:
                     _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
                 if entry_room is not None:
-                    _l["entry_room"] = (entry_room or "").strip()
+                    # Only a room this place really has, and of the reserved
+                    # corridors only the ground floor's hallway (spec § 4) —
+                    # nobody arrives in a basement corridor.
+                    _l["entry_room"] = valid_entry_room(
+                        _l.get("rooms") or [], entry_room)
                 if default_door_prop_id is not None:
                     # THE PLACE'S OWN DOOR (2026-08-27): every door opening
                     # that names no prop of its own gets this one, unless it

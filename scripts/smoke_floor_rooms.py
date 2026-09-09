@@ -48,6 +48,12 @@ Part 3 — get_floor_name (§ 2.1): English defaults, lang "" = English
              -> "Corridor (basement)"   no name of its own = the default of its level
     floor_room_display_name({"id": "__floor__-1", "name": "Kellerflur"})
              -> "Kellerflur"            an authored name always wins
+
+Part 4 — entry room (§ 4): __floor__0 may be the arrival room, no other corridor
+    valid_entry_room([eg, __floor__0], "__floor__0")  -> "__floor__0"
+    valid_entry_room([k1, __floor__-1], "__floor__-1") -> ""
+    valid_entry_room([eg], "zzz")                      -> ""   unknown room
+    valid_entry_room([eg], "eg")                       -> "eg"
 """
 import sys
 from pathlib import Path
@@ -130,6 +136,14 @@ def main():
           world.floor_room_display_name({"id": "__floor__-1",
                                          "name": "Kellerflur"}),
           "Kellerflur")
+
+    print("Part 4 — valid_entry_room")
+    check("hallway ok", world.valid_entry_room(
+        [room("eg", 0), {"id": "__floor__0"}], "__floor__0"), "__floor__0")
+    check("basement corridor refused", world.valid_entry_room(
+        [room("k1", -1), {"id": "__floor__-1"}], "__floor__-1"), "")
+    check("unknown", world.valid_entry_room([room("eg", 0)], "zzz"), "")
+    check("plain", world.valid_entry_room([room("eg", 0)], "eg"), "eg")
 
     print("FAILED" if FAILS else "ALL OK")
     sys.exit(1 if FAILS else 0)

@@ -1154,6 +1154,22 @@ def floor_room_display_name(room: Dict[str, Any], lang: str = "") -> str:
     return get_floor_name(lv if lv is not None else 0, lang)
 
 
+def valid_entry_room(rooms: List[Dict[str, Any]], entry_room: str) -> str:
+    """The entry room an author may declare: a room of the list, and of the
+    corridors only the ground floor's (one arrives in the hallway, never in a
+    basement corridor — spec § 4)."""
+    rid = str(entry_room or "").strip()
+    if not rid:
+        return ""
+    ids = {str(r.get("id") or "") for r in rooms if isinstance(r, dict)}
+    if rid not in ids:
+        return ""
+    lv = floor_room_level(rid)
+    if lv is not None and lv != 0:
+        return ""
+    return rid
+
+
 def evict_rooms_to_ground(location_id: str, room_ids: List[str]) -> Dict[str, int]:
     """Move everyone standing in one of ``room_ids`` of ``location_id`` onto
     the ground — used when a corridor room disappears because its storey lost
@@ -1552,34 +1568,35 @@ def add_location(name: str, description: str,
             # Bei ID-basiertem Update den (ggf. neuen) Namen mitschreiben.
             if location_id and name:
                 location["name"] = name
+            removed_corridors: List[str] = []
             if rooms is not None:
-                # Alte Rooms als Lookup fuer prompt_changed-Vergleich UND
-                # Server-State-Erhalt (items, prompt_changed, etc.). Die FE
-                # schickt beim Raum-Edit nur die Felder die sie kennt — Items,
-                # die separat ueber /inventory/rooms platziert wurden, fehlen
-                # in der FE-Liste und wuerden sonst beim Save geloescht.
+                # The old rooms as a lookup for the prompt_changed comparison
+                # AND for keeping server state (items, prompt_changed, ...).
+                # On a room edit the frontend sends only the fields it knows —
+                # items placed separately via /inventory/rooms are missing
+                # from its list and would otherwise be dropped on save.
                 old_rooms_by_id = {r["id"]: r for r in location.get("rooms", []) if r.get("id")}
-                # Felder die NICHT vom Raum-Editor verwaltet werden — bei
-                # Update aus dem Bestand uebernehmen wenn nicht mitgegeben.
+                # Fields the room editor does NOT manage — taken from the
+                # stored room on update when they are not submitted.
                 _server_state_fields = ("items",)
                 for room in rooms:
                     old_room = old_rooms_by_id.get(room.get("id"))
                     if old_room:
-                        # Server-State-Felder erhalten falls FE sie weggelassen hat
+                        # Keep the server-state fields the frontend left out
                         for fld in _server_state_fields:
                             if fld not in room and fld in old_room:
                                 room[fld] = old_room[fld]
-                        # Nur prompt_changed setzen wenn sich Prompts tatsaechlich geaendert haben
+                        # Set prompt_changed only when the prompts really changed
                         day_changed = room.get("image_prompt_day", "") != old_room.get("image_prompt_day", "")
                         night_changed = room.get("image_prompt_night", "") != old_room.get("image_prompt_night", "")
                         if day_changed or night_changed:
                             room["prompt_changed"] = True
                         else:
-                            # Bestehenden prompt_changed-Status beibehalten
+                            # Keep the existing prompt_changed state
                             if old_room.get("prompt_changed"):
                                 room["prompt_changed"] = True
                     else:
-                        # Neuer Raum — Flag setzen wenn Prompts vorhanden
+                        # New room — set the flag when it carries prompts
                         if room.get("image_prompt_day") or room.get("image_prompt_night"):
                             room.setdefault("prompt_changed", True)
                 # The ground is not the author's to delete — a submitted list
@@ -1589,10 +1606,8 @@ def add_location(name: str, description: str,
                 # that gained its first room gets one, a storey that lost its
                 # last one loses it — and whoever stood in that corridor is
                 # put on the ground, because no storey holds them any more.
-                removed = ensure_floor_rooms(
+                removed_corridors = ensure_floor_rooms(
                     rooms, location.get("map3d"), list(old_rooms_by_id.values()))
-                if removed:
-                    evict_rooms_to_ground(str(location.get("id") or ""), removed)
                 location["rooms"] = rooms
                 location.pop("activities", None)
             if image_prompt_day is not None:
@@ -1625,6 +1640,14 @@ def add_location(name: str, description: str,
             if not location.get("id"):
                 location["id"] = _generate_location_id()
             _save_world_data(data)
+            # Only now: whoever stood in a corridor that just vanished is
+            # moved onto the ground. The room list is stored FIRST, exactly
+            # like the ground migration writes — the character rows are
+            # corrected against a list that really lost that corridor, never
+            # against one a failed save left untouched.
+            if removed_corridors:
+                evict_rooms_to_ground(str(location.get("id") or ""),
+                                      removed_corridors)
             return location
 
     # New location — set prompt_changed for every room that has prompts.
