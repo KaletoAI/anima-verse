@@ -399,6 +399,9 @@ def _sub_npc_wanderers():
 # only schedules it. The 60 s below are the CHECK frequency; the real rhythm is
 # the per-NPC GAME cooldown `npc.action_interval_game_minutes`.
 from app.core.npc_actions import _sub_npc_actions  # noqa: E402
+# Director scenes (spec-npc-conversation § 4): one JSON call per due room in
+# mode `scene`; per-room GAME cooldown `npc.scene_interval_game_minutes`.
+from app.core.npc_scenes import _sub_npc_scenes  # noqa: E402
 
 # The improvements queue feeds ONE step into the TaskQueue when the user has
 # been idle long enough, and rescans standing entries. Its own gates
@@ -434,6 +437,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_npc_windows,               120,                   "npc_windows"),
     (_sub_npc_wanderers,             300,                   "npc_wanderers"),
     (_sub_npc_actions,               60,                    "npc_actions"),
+    (_sub_npc_scenes,                60,                    "npc_scenes"),
     (_sub_improvements,              30,                    "improvements"),
 ]
 

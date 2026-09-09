@@ -109,6 +109,12 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # `chat_stream` (resolve_llm's npc_* rule), i.e. the RP model.
     "npc_talk":           {"label": "NPC conversation reply", "priority": Priority.LOW, "category": "chat"},
 
+    # Director scene (spec-npc-conversation § 4): 2–4 lines for one room in
+    # one small JSON call — the cheap alternative to turn-by-turn replies.
+    # No `gate` (gate keys are booleans; the sub-task reads
+    # npc.conversation_mode itself). Route it at a SMALL model.
+    "npc_scene":          {"label": "NPC scene (director)", "priority": Priority.LOW, "category": "helper"},
+
     # Summaries
     "consolidation":         {"label": "Consolidation (3-Tier)",   "priority": Priority.LOW, "category": "helper"},
     "relationship_summary":  {"label": "Relationship Summary",     "priority": Priority.LOW, "category": "helper", "gate": "relationships.summary_enabled"},
@@ -487,6 +493,14 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": False, "min_context": 8192,
         "model_class": "small", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": True, "latency_sensitive": True,
+    },
+    "npc_scene": {
+        # A few sheets and six lines in, a small JSON object out. Every name
+        # the model returns is matched against the participant list and every
+        # pose against the catalog, so hallucination_risk is low.
+        "tools": False, "vision": False, "json": True, "min_context": 4096,
+        "model_class": "small", "arch": "any", "hallucination_risk": "low",
+        "creative": True, "language_de": True, "latency_sensitive": False,
     },
 
     # --- Summaries ----------------------------------------------------------

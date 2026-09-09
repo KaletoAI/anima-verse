@@ -394,6 +394,99 @@ interaction_engine.clear_invites_for(FULL)
 interaction_engine.start_interaction = _real_start
 interaction_engine.partner_poses = _real_partner_poses
 
+# ── (g) scene mode: one call writes the exchange ───────────────────────────
+print("(g) scene: three lines, one from a stranger, activities, one excluded cascade")
+from app.core import npc_scenes  # noqa: E402
+from app.core.game_time import GameDuration  # noqa: E402
+from app.core.timeutils import set_game_time  # noqa: E402
+set_npc_config(conversation_mode="scene")
+npc_actions._last_action.clear()
+LOOP.resets.clear(); LOOP.dispatches.clear()
+force_set_status(A, room="taproom"); force_set_status(B, room="taproom")
+save_character_current_location(FULL, MILL_ID); force_set_status(FULL, room="floor")
+cands = npc_scenes.candidate_rooms()
+check("the taproom with A and B is the one candidate",
+      [(l, r, sorted(n)) for l, r, n in cands], [(LOC_ID, "taproom", sorted([A, B]))])
+before = len(utterances())
+SCENE = FakeLLM('{"lines": [{"speaker": "Gudrun", "line": "Halvard, hilf mir mit dem Fass."},'
+                ' {"speaker": "Carl", "line": "Ich bin nicht hier."},'
+                ' {"speaker": "Halvard", "line": "Gleich, das Holz zuerst."}],'
+                ' "pair": null, "activities": {"Gudrun": "Sie rollt das Fass zur Tuer."}}')
+res = npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE)
+check("two lines survived, the stranger's fell", res, {"lines": 2, "activities": 1, "pair": False})
+rows = utterances()[before:]
+check("two new utterances in answer order", [(r["speaker"], r["content"]) for r in rows],
+      [(A, "Halvard, hilf mir mit dem Fass."), (B, "Gleich, das Holz zuerst.")])
+check("stamps are monotone", rows[0]["ts"] < rows[1]["ts"], True)
+check("each addressed to the other", [list(r.get("addressees") or []) for r in rows], [[B], [A]])
+check("marked as scene lines", [(r.get("meta") or {}).get("source") for r in rows],
+      ["npc_scene", "npc_scene"])
+check("A's activity was written, verb first", get_effective_activity(A), "Rollt das Fass zur Tuer.")
+check("the room energy was reset once", LOOP.resets, [(LOC_ID, "taproom", B)])
+check("one cascade, participants excluded, last line",
+      [(d["speaker"], d["content"], sorted(d.get("exclude") or [])) for d in LOOP.dispatches],
+      [(B, "Gleich, das Holz zuerst.", sorted([A, B]))])
+check("the prompt carried both sheets and the room hint",
+      ("tends the bar" in SCENE.calls[0]["user"], "chops wood" in SCENE.calls[0]["user"],
+       "serving guests" in SCENE.calls[0]["user"]), (True, True, True))
+# The recent block is the last six rows of the room, narrator traces
+# included: A's only spoken line (a) lies seven room changes back by now,
+# so the check reads the newest row instead — the narrator's exit trace of
+# (g)'s own setup — and the block header that frames it.
+_recent_rows = perception_store.get_room_utterances(LOC_ID, "taproom", limit=50)[:-2]
+check("and the previous room lines (newest row, narrator relabelled)",
+      ("Spoken here before" in SCENE.calls[0]["user"],
+       f"- Narrator: {_recent_rows[-1]['content']}" in SCENE.calls[0]["user"],
+       "Storyteller" in SCENE.calls[0]["user"]), (True, True, False))
+check("the window is six rows: the (a) line has dropped out",
+      "das letzte Fass muss weg" in SCENE.calls[0]["user"], False)
+check("the budget is capped", SCENE.calls[0]["kwargs"].get("max_tokens"), 600)
+check("the room is on cooldown now", npc_scenes.candidate_rooms(), [])
+set_game_time(game_time() + GameDuration.of(minutes=46))
+check("46 game minutes later it is due again",
+      [(l, r) for l, r, _n in npc_scenes.candidate_rooms()], [(LOC_ID, "taproom")])
+
+# ── (h) who is never a scene ───────────────────────────────────────────────
+print("(h) one NPC alone, or no avatar at the place: no scene")
+force_set_status(B, room="kitchen")
+check("A alone in the taproom -> nothing", npc_scenes.candidate_rooms(), [])
+force_set_status(B, room="taproom")
+check("the mill (C, D, no avatar) is never a candidate",
+      [(l, r) for l, r, _n in npc_scenes.candidate_rooms()], [(LOC_ID, "taproom")])
+set_npc_config(conversation_mode="turns")
+check("mode turns -> no scene candidates at all", npc_scenes.candidate_rooms(), [])
+set_npc_config(conversation_mode="scene")
+npc_scenes._last_scene.clear()
+SCENE = FakeLLM("no json here", "still none")
+check("twice broken JSON -> nothing", npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE), None)
+check("two calls (one repair)", len(SCENE.calls), 2)
+check("and the cooldown was stamped anyway", f"{LOC_ID}/taproom" in npc_scenes._last_scene, True)
+
+# ── (i) the scene may bind a pair ──────────────────────────────────────────
+print("(i) scene: a pair is started directly")
+# The throwaway clip dir has no pair clip, so the catalog offers no pair key
+# of its own — the same stand-in as in (d)/(e).
+interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
+STARTED.clear()
+interaction_engine.start_interaction = lambda a, b, pose: (STARTED.append((a, b, pose)) or {"id": "fake"})
+npc_scenes._last_scene.clear()
+SCENE = FakeLLM('{"lines": [{"speaker": "Gudrun", "line": "Komm."}, {"speaker": "Halvard", "line": "Gut."}],'
+                ' "pair": {"a": "Gudrun", "b": "Halvard", "pose": "%s"}, "activities": {}}' % PAIR_KEY)
+res = npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE)
+check("the pair was started", STARTED, [(A, B, PAIR_KEY)])
+check("reported", res.get("pair") if res else None, True)
+interaction_engine.start_interaction = _real_start
+interaction_engine.partner_poses = _real_partner_poses
+set_npc_config(conversation_mode="turns")
+
+# ── (k2) the scene template renders ────────────────────────────────────────
+print("(k2) npc_scene renders under StrictUndefined")
+v = npc_scenes.prompt_vars(LOC_ID, "taproom", [A, B])
+s, u = render_task("npc_scene", **v)
+check("system and user render", (bool(s.strip()), bool(u.strip())), (True, True))
+check("the system part spells out lines, pair and activities",
+      ('"lines"' in s, '"pair"' in s, '"activities"' in s), (True, True, True))
+
 # ── result ──────────────────────────────────────────────────────────────────
 print()
 print(f"{CHECKED} checks, {len(FAILURES)} failed")
