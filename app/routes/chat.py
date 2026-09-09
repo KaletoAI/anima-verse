@@ -1969,14 +1969,15 @@ def _extract_context_from_last_chat(agent_name: str,
     def _extract_for_character(
         target_name: str, target_config: Optional[Dict[str, Any]],
         source_text: str, is_avatar: bool):
-        """Ein LLM-Call fuer EINEN Character aus EINER Quelle.
+        """One LLM call for ONE character from ONE source.
 
-        - is_avatar=False: Quelle = Character-Antwort. Extrahiert Agent-Outfit,
-          Pose (pose_key/pose_flavor) und Stat-Deltas (status_effects).
-        - is_avatar=True:  Quelle = User-Eingabe. Extrahiert nur Avatar-Outfit.
+        - is_avatar=False: source = character reply. Extracts the agent's
+          outfit, pose (key from the menu + display detail) and stat deltas
+          (status_effects).
+        - is_avatar=True:  source = user input. Extracts only the avatar outfit.
 
-        Laeuft unter der Tool-LLM-Config von target_name — Logs + LLM-Wahl
-        sind korrekt dem jeweiligen Character zugeordnet.
+        Runs under target_name's tool-LLM config — logs and LLM choice are
+        attributed to the respective character.
         """
         if not source_text.strip():
             return
@@ -2040,10 +2041,14 @@ def _extract_context_from_last_chat(agent_name: str,
             except Exception as _se:
                 logger.debug("Stat-Liste fuer Extraktor [%s] fehlgeschlagen: %s", target_name, _se)
 
+        from app.core.npc_actions import _solo_pose_keys
+        pose_keys = _solo_pose_keys() if not is_avatar else []
+
         from app.core.prompt_templates import render_task
         sys_prompt, user_prompt = render_task(
             "extraction_chat_state",
             target_name=target_name,
+            pose_keys=pose_keys,
             piece_list=piece_list,
             source_label=source_label,
             source_text=source_text,
@@ -2094,22 +2099,28 @@ def _extract_context_from_last_chat(agent_name: str,
         # "Talking" + "sleeps"). The is_player_controlled check stops that.
         from app.models.account import is_player_controlled as _is_pc
         if not is_avatar and not _is_pc(target_name):
-            # Pose: through the canonical setter — it resolves the catalog key,
-            # sanitizes the flavor and no-ops when neither changed.
-            extracted_pose = (data.get("pose") or "").strip()
-            if extracted_pose:
+            # Key + detail (plan-pose-key-detail.md): a key from the shown
+            # menu is written exactly; an empty or unknown key keeps the
+            # current pose and only refreshes the display detail — a gesture
+            # must never overturn the body shape.
+            extracted_pose = str(data.get("pose") or "").strip()
+            extracted_detail = str(data.get("detail") or "").strip()
+            if extracted_pose or extracted_detail:
                 from app.core.pose_catalog import PairPoseWithoutPartner
-                from app.models.character import set_pose_intent
+                from app.models.character import set_pose_key_detail
                 try:
-                    set_pose_intent(target_name, extracted_pose)
-                    logger.info("Chat context [%s]: pose -> %r", target_name,
-                                extracted_pose[:80])
+                    written = set_pose_key_detail(
+                        target_name, extracted_pose, extracted_detail,
+                        unknown="keep")
+                    logger.info("Chat context [%s]: pose %r detail %r -> %r",
+                                target_name, extracted_pose[:40],
+                                extracted_detail[:80], written)
                 except PairPoseWithoutPartner as e:
                     logger.info("Chat context [%s]: pose %r discarded — '%s' "
                                 "is a two-person pose", target_name,
                                 extracted_pose[:80], e)
 
-            # Stats: Malus/Bonus dieser Szene auf status_effects anwenden
+            # Stats: apply this scene's malus/bonus to status_effects.
             stats_raw = data.get("stats")
             if isinstance(stats_raw, dict) and stats_raw:
                 try:

@@ -32,7 +32,7 @@ shared/templates/llm/
 | Template | Task | Caller | Purpose |
 |---|---|---|---|
 | `extraction_memory.md` | `extraction` | `memory_service.extract_memories_from_exchange` | After each chat turn: extract semantic facts + commitments |
-| `extraction_chat_context.md` | `extraction` | `routes/chat._extract_context_from_last_chat` | Pull activity / outfit changes out of user-chat replies |
+| `extraction_chat_state.md` | `extraction_chat_state` | `routes/chat._extract_context_from_last_chat` | Pull removed outfit pieces, the pose key from the shown menu + free detail, and stat deltas out of a chat reply |
 | `consolidation_daily.md` | `consolidation` | `memory_service._consolidate_episodics_to_daily` | Compress one day's episodic memories into a 3-5 sentence summary |
 | `consolidation_weekly.md` | `consolidation` | `memory_service._consolidate_daily_to_weekly` | Compress a week's daily summaries (5-8 sentences) |
 | `consolidation_monthly.md` | `consolidation` | `memory_service._consolidate_weekly_to_monthly` | Compress a month's weekly summaries (5-10 sentences) |

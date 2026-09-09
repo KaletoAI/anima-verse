@@ -34,6 +34,15 @@ Stage 2 — set_pose_key_detail against a one-row world ('demo'):
   "leaning against counter" — the text must not appear twice in the flavor
 - ("dancing together", "") -> raises PairPoseWithoutPartner (catalog pair
   entry, no running interaction)
+
+Stage 3 — the extraction template, derived BY HAND from the template text:
+- rendered with is_avatar=False and pose_keys ["standing", "sitting"], the
+  system prompt lists exactly "standing, sitting", names both answer fields
+  "pose" and "detail", states the no-expression rule ("no facial expression")
+  and the language rule ("same language"), and no longer carries the old
+  scene example "standing at window"
+- rendered with is_avatar=True the system prompt names neither "pose" nor
+  "detail" (only the outfit is extracted from user input)
 """
 import shutil
 import sys
@@ -131,9 +140,27 @@ def stage2():
         pass
 
 
+def stage3():
+    from app.core.prompt_templates import render_task
+    common = dict(target_name="demo", piece_list="", source_label="Character reply",
+                  source_text="x", context_text="", outfit_locked=False,
+                  stats_enabled=False, stat_list="")
+    sys_p, _ = render_task("extraction_chat_state", is_avatar=False,
+                           pose_keys=["standing", "sitting"], **common)
+    check("standing, sitting" in sys_p, "stage3 key list missing")
+    check('"pose"' in sys_p and '"detail"' in sys_p, "stage3 fields missing")
+    check("no facial expression" in sys_p, "stage3 no-expression rule missing")
+    check("same language" in sys_p, "stage3 language rule missing")
+    check("standing at window" not in sys_p, "stage3 old scene example still present")
+    sys_a, _ = render_task("extraction_chat_state", is_avatar=True,
+                           pose_keys=["standing", "sitting"], **common)
+    check('"pose"' not in sys_a and '"detail"' not in sys_a, "stage3 avatar prompt extracts pose")
+
+
 try:
     stage1()
     stage2()
+    stage3()
 finally:
     shutil.rmtree(_tmp, ignore_errors=True)
 

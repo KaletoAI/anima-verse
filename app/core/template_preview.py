@@ -645,7 +645,7 @@ def _drive_extraction_chat_state(agent: str, avatar: str) -> PreviewResult:
         piece_list = "\n".join(f"- {n}" for n in _names)
     except Exception:
         piece_list = ""
-    # Stat-Liste wie im Extraktor (dynamisch aus dem Template)
+    # Stat list as in the extractor (read dynamically from the template)
     stats_enabled = False
     stat_list = ""
     try:
@@ -674,8 +674,10 @@ def _drive_extraction_chat_state(agent: str, avatar: str) -> PreviewResult:
                     stats_enabled = True
     except Exception:
         pass
+    from app.core.npc_actions import _solo_pose_keys
     sys, user = render_task("extraction_chat_state",
         target_name=agent,
+        pose_keys=_solo_pose_keys(),
         piece_list=piece_list,
         source_label="Character reply",
         source_text=asst_msg,

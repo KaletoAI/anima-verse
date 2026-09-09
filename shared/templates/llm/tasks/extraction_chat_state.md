@@ -1,6 +1,6 @@
 ---
 task: extraction_chat_state
-purpose: Extract state changes from a chat reply or user input — removed outfit pieces, current pose, and status-value deltas (chat.py _extract_for_character)
+purpose: Extract state changes from a chat reply or user input — removed outfit pieces, current pose KEY + free detail, and status-value deltas (chat.py _extract_for_character)
 placeholders:
   target_name: Character whose state is being extracted
   piece_list: Bullet list of currently equipped piece names (one per line, "- Name") — empty when no pieces equipped
@@ -11,6 +11,7 @@ placeholders:
   is_avatar: bool — when true, only outfit is extracted (no pose, no stats)
   stats_enabled: bool — when true, status-value deltas are extracted
   stat_list: Bullet list of the available status values with description + range (one per line) — dynamic per character template
+  pose_keys: The catalog's solo pose keys — the ONLY values "pose" may take (list of strings)
 ---
 ## system
 You are a strict information extractor. Reply ONLY with valid JSON, no commentary.
@@ -27,7 +28,11 @@ Rules for "removed":
 {% endif %}
 {%- if not is_avatar %}
 
-Determine "pose": what {{ target_name }} is physically doing right now, as a short phrase (2-6 words, e.g. "sitting on couch reading", "standing at window"). Body posture and main action only — no mood, no clothing.
+Determine "pose": the BODY SHAPE {{ target_name }} is in right now, as ONE of these keys copied exactly:
+{{ pose_keys | join(", ") }}
+Leave "pose" empty ("") when the text does not show a body shape or none of the keys fits — never invent a key, never write a phrase here.
+
+Determine "detail": what {{ target_name }} is doing in that shape, in 2-6 words (what a bystander would see: the object handled, the direction faced) — no facial expression, no mood, no clothing, no speech, no other character's name. Write "detail" in the same language as the {{ source_label }} below. Empty ("") when nothing is shown.
 {% if stats_enabled %}
 Evaluate "stats": how this single scene beat affects {{ target_name }}'s status values. The available values are:
 {{ stat_list }}
@@ -44,7 +49,7 @@ Rules for "stats":
 Extraction APPLIES ONLY TO the {{ source_label }}. The "Context" block (if present) is provided to disambiguate references (e.g. "yes, gladly" only makes sense once you see the request that triggered it) — do NOT extract from the context.
 
 Reply schema:
-{ {%- if not is_avatar -%}"pose": "<short phrase>"{% if stats_enabled %}, "stats": {"<value>": <delta>, ...}{% endif %}{% if not outfit_locked and piece_list %}, {% endif %}{%- endif -%}{% if not outfit_locked and piece_list %}"removed": ["<exact piece name>", ...]{% endif %} }
+{ {%- if not is_avatar -%}"pose": "<one of the keys, or empty>", "detail": "<2-6 words, or empty>"{% if stats_enabled %}, "stats": {"<value>": <delta>, ...}{% endif %}{% if not outfit_locked and piece_list %}, {% endif %}{%- endif -%}{% if not outfit_locked and piece_list %}"removed": ["<exact piece name>", ...]{% endif %} }
 
 ## user
 /no_think

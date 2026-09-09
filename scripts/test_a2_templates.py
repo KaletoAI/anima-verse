@@ -30,7 +30,7 @@ from current output):
 4. The `extraction_chat_state` reply schema stays syntactically valid JSON in
    ALL 8 flag combinations of (is_avatar, stats_enabled, outfit_locked,
    piece_list). The schema line is a JSON *shape* with placeholder tokens, so
-   the check substitutes the three known tokens with valid literals and then
+   the check substitutes the known tokens with valid literals and then
    parses. Comma logic is what actually breaks here: with `piece_list` empty,
    the `"removed"` key must be gone AND the comma before it must be gone too —
    `{"pose": "x", }` would parse in no JSON parser.
@@ -141,7 +141,8 @@ for task in ("consolidation_today", "consolidation_history_summary"):
 
 print("5) extraction_chat_state schema is valid JSON in all 8 flag combinations")
 SUBST = [
-    ('"<short phrase>"', '"standing"'),
+    ('"<one of the keys, or empty>"', '"standing"'),
+    ('"<2-6 words, or empty>"', '"reads a book"'),
     ('{"<value>": <delta>, ...}', '{"stamina": -5}'),
     ('["<exact piece name>", ...]', '["shirt"]'),
 ]
@@ -154,6 +155,7 @@ for is_avatar in (False, True):
                 system, user = render_task(
                     "extraction_chat_state",
                     target_name="Beta", piece_list=pieces,
+                    pose_keys=["standing", "sitting"],
                     source_label="reply", source_text="t", context_text="",
                     outfit_locked=locked, is_avatar=is_avatar,
                     stats_enabled=stats_enabled,
