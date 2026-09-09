@@ -576,6 +576,30 @@ def resolve_to_catalog(text: str, axis: str, _embed=None) -> Tuple[str, str]:
     return get_default_key(axis), "fallback"
 
 
+def split_key_detail(text: str, axis: str = "pose") -> Tuple[str, str]:
+    """``"<alias>: <detail>"`` → ``(key, detail)`` — the shape every LLM
+    producer hands over since the key/detail split (plan-pose-key-detail.md).
+
+    The head before the FIRST colon must be a catalog alias (key or synonym,
+    case and padding tolerated) and is canonicalised to its key. A text that
+    is an alias as a whole is ``(key, "")``. Anything else is ``("", text)``
+    — the whole text stays the detail, a head that is not an alias is not a
+    key the caller may trust. Never raises."""
+    raw = (text or "").strip()
+    if not raw:
+        return "", ""
+    index = _alias_index(axis)
+    head, sep, tail = raw.partition(":")
+    if sep:
+        key = index.get(head.strip().lower(), "")
+        if key:
+            return key, tail.strip()
+    key = index.get(raw.lower(), "")
+    if key:
+        return key, ""
+    return "", raw
+
+
 # ── Candidates: free text the catalog could not absorb ───────────────────
 def record_candidate(axis: str, raw_text: str, nearest_key: str,
                      distance: Optional[float]) -> None:

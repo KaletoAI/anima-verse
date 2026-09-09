@@ -1916,6 +1916,51 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
                               place, old_place)
 
 
+def set_pose_key_detail(character_name: str, key: str, detail: str, *,
+                        unknown: str = "resolve") -> str:
+    """Pose from a (key, detail) pair — the shape every LLM producer hands
+    over (plan-pose-key-detail.md). Returns the key written, ``""`` when
+    nothing was written.
+
+    ``key`` names a catalog alias → written exactly, ``detail`` becomes the
+    display flavor. An empty or unknown key follows ``unknown``:
+
+    * ``"resolve"`` — the net: the whole text goes through ``set_pose_intent``
+      and its resolver, a miss records a candidate. For the marker and the
+      SetActivity tool, where a silently dropped pose is worse than a
+      candidate row.
+    * ``"keep"`` — the current key stays; a non-empty detail only refreshes
+      the flavor. For the chat-state extraction, where a gesture must never
+      overturn the pose. Nothing is written without a current key.
+
+    ``PairPoseWithoutPartner`` propagates unchanged."""
+    if not character_name:
+        return ""
+    from app.core.pose_catalog import split_key_detail
+    # The key field itself may carry "<alias>: <detail>" (a model that
+    # ignored the second field) — the split canonicalises the alias and
+    # salvages that detail when the detail field is empty.
+    canonical, extra = split_key_detail(key or "")
+    text_detail = (detail or "").strip() or extra
+    if canonical:
+        set_pose_intent(character_name, canonical, flavor=text_detail)
+        return canonical
+    if unknown == "keep":
+        current = get_character_pose_key(character_name) or ""
+        if current and text_detail:
+            set_pose_intent(character_name, current, flavor=text_detail)
+            return current
+        return ""
+    # The ORIGINAL fields, not text_detail: with no canonical key the split
+    # handed the whole key text back as the detail, and joining it to itself
+    # would resolve (and display) the text twice.
+    text = " ".join(p for p in ((key or "").strip(), (detail or "").strip()) if p)
+    if not text:
+        return ""
+    set_pose_intent(character_name, text)
+    return get_character_pose_key(character_name) or ""
+
+
 def _seat_for_pose(character_name: str, key: str, prefer: str = "") -> Optional[dict]:
     """The place step of the setter: assign for a key, release for none.
     ``PlaceUnavailable`` (an insisted, taken place) propagates — it is the
