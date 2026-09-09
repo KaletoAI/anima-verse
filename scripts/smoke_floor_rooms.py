@@ -138,11 +138,12 @@ Part 6b — corridors[] through compose_scene on cellar_fixture():
     needs |x|, |z| <= 5 - v, and standing above the rooms the hull distance
     is at most z + 1 over a room, so v <= z + 1 <= 6 - v, i.e. v <= 3. v = 3
     is reached exactly on the row z = 2.0 for every x with |x| <= 2 (outline
-    3.0; the hull distance is 3.0 vertically over a room and
-    sqrt((x -+ 1)^2 + 9) >= 3 beside one). Between the rooms (|x| < 1,
-    -4 <= z <= -1) the hull distance is at most 1, and the rows z = 1.5 / 2.5
-    score 2.5 or less (e.g. (0, 1.5): min(3.5, sqrt(1 + 6.25) = 2.69) = 2.69;
-    (0, 2.5): outline 2.5). So the maximum 3.0 ties along z = 2.0,
+    3.0; the hull distance is 3.0 vertically over a room, and between the two
+    it is sqrt((1 - |x|)^2 + 9) >= 3). Between the rooms and beside them
+    (|x| < 1, -4 <= z <= -1) the hull distance is at most 1, and the
+    neighbouring rows stay under 3.0: (0, 1.5) -> min(3.5, sqrt(1 + 6.25)
+    = 2.69) = 2.69, over a room at z = 1.5 the hull gives 2.5, and (0, 2.5)
+    -> outline 2.5. So the maximum 3.0 ties along z = 2.0,
     x in {-2.0, ..., 2.0}, and the tie rule (smallest x, then smallest z)
     picks [-2.0, 2.0].
     no "corridor_without_floor" problem
