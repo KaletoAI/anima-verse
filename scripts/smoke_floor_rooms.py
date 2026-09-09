@@ -114,6 +114,55 @@ Part 5b — a PARTY WALL, same contour and storey (§ 3.1): the corridor is the
       doorways on level -1 -> 1, its rooms -> ["k1", "k3"], outside False
       no "__floor__-1" anywhere in that doorway's rooms
       hull leaves on level -1 -> 0   (an interior gap pierces no hull)
+
+Part 6 — the corridor anchor (§ 3.2), floor_anchor() is pure:
+    outline = the 10 x 10 square, one hull = k1's shell x -4..-1, z -4..-1
+    (a) no lift, no pads -> grid rule. Clearance of a candidate = min distance
+        to any hull edge or outline edge. Outline clearance >= 3.5 needs
+        x, z in [-1.5, 1.5]; in that box the hull distance is
+        sqrt((x+1)^2 + (z+1)^2) for x, z > -1, and only (1.5, 1.5) reaches
+        3.536 >= 3.5. Every other grid point scores below 3.5 (e.g. (1.0, 1.5)
+        -> hull 3.20; (2.0, 2.0) -> outline 3.0). So: anchor [1.5, 1.5], free.
+    (b) lift at (3, -3): inside the outline, outside the hull -> [3, -3]
+        (rule 1)
+    (c) lift at (-2.5, -2.5): inside the hull -> ignored; pad at (2, 3)
+        -> [2, 3]
+    (d) hull = the whole square -> no free point -> centroid [0, 0], free False
+    (e) no outline -> (None, False)
+
+Part 6b — corridors[] through compose_scene on cellar_fixture():
+    one entry {room_id "__floor__-1", level -1, anchor [-2.0, 2.0]}.
+    Derivation: the level -1 hulls are k1 (x -4..-1, z -4..-1) and k2
+    (x 1..4, z -4..-1). Clearance(x, z) = min(outline clearance
+    5 - max(|x|, |z|), dist to k1, dist to k2). For a value v the outline
+    needs |x|, |z| <= 5 - v, and standing above the rooms the hull distance
+    is at most z + 1 over a room, so v <= z + 1 <= 6 - v, i.e. v <= 3. v = 3
+    is reached exactly on the row z = 2.0 for every x with |x| <= 2 (outline
+    3.0; the hull distance is 3.0 vertically over a room and
+    sqrt((x -+ 1)^2 + 9) >= 3 beside one). Between the rooms (|x| < 1,
+    -4 <= z <= -1) the hull distance is at most 1, and the rows z = 1.5 / 2.5
+    score 2.5 or less (e.g. (0, 1.5): min(3.5, sqrt(1 + 6.25) = 2.69) = 2.69;
+    (0, 2.5): outline 2.5). So the maximum 3.0 ties along z = 2.0,
+    x in {-2.0, ..., 2.0}, and the tie rule (smallest x, then smallest z)
+    picks [-2.0, 2.0].
+    no "corridor_without_floor" problem
+    …and the same fixture with ONE staircase, at [3, 3], dir_deg 0 (= +z),
+    from_level -1: rule 2 beats the raster. A pad sits a pad-half plus the
+    pad gap clear of the flight (STAIR_PAD_M / 2 + STAIR_PAD_GAP_M
+    = 0.45 + 0.05 = 0.5 m), so the FOOT — the landing on level -1 — is
+    [3, 3] - (0, 1) * 0.5 = [3.0, 2.5], inside the contour and clear of both
+    cellar rooms. The HEAD lands on level 0, which owns no corridor here.
+      corridors anchor -> [3.0, 2.5]
+
+Part 6c — a level -1 room filling the square (x -5 y -5 w 10 d 10) plus
+    __floor__-1: every free-point candidate lies in that room's hull, so the
+    grid finds nothing and rule 4 falls back to the outline centroid.
+      corridors -> one entry, anchor [0, 0]
+      problems  -> exactly ONE "corridor_without_floor", level -1
+    And the corridor is out of the room census (§ 3.4): a location whose only
+    rooms are __ground__ and __floor__-1 has nothing an author could draw a
+    layout for, so "rooms_without_layout" must stay silent. Red probe: the
+    same location plus a normal room without a layout -> the finding fires.
 """
 import logging
 import sys
@@ -184,6 +233,27 @@ def party_wall_fixture():
                      rm("k3", -1, -1, -4, 3, 3, edge=None),
                      {"id": world.GROUND_ROOM_ID, "name": ""},
                      {"id": "__floor__-1", "level": -1, "name": ""}])
+
+
+SQUARE = [[-5, -5], [5, -5], [5, 5], [-5, 5]]
+K1_HULL = [[-4, -4], [-1, -4], [-1, -1], [-4, -1]]
+
+
+def full_floor_fixture(extra_rooms=()):
+    """One level -1 room covering the whole contour, plus its corridor."""
+    return location([rm("big", -1, -5, -5, 10, 10, edge=None),
+                     {"id": world.GROUND_ROOM_ID, "name": ""},
+                     {"id": "__floor__-1", "level": -1, "name": ""}]
+                    + list(extra_rooms))
+
+
+def stair_fixture():
+    """cellar_fixture() plus one flight climbing out of the cellar."""
+    loc = cellar_fixture()
+    loc["map3d"] = dict(loc["map3d"],
+                        stairs=[{"at": [3, 3], "from_level": -1,
+                                 "dir_deg": 0}])
+    return loc
 
 
 def hull_leaves(sc, level):
@@ -317,6 +387,59 @@ def main():
     check("party wall not outside",
           cellar[0]["outside"] if cellar else None, False)
     check("hull untouched on level -1", hull_leaves(sc2, -1), 0)
+
+    print("Part 6 — the corridor anchor")
+    check("(a) freest grid point",
+          scene_recipe.floor_anchor(SQUARE, [K1_HULL], None, []),
+          ([1.5, 1.5], True))
+    check("(b) the lift wins",
+          scene_recipe.floor_anchor(SQUARE, [K1_HULL], [3, -3], []),
+          ([3.0, -3.0], True))
+    check("(c) lift in a room, stair pad next",
+          scene_recipe.floor_anchor(SQUARE, [K1_HULL], [-2.5, -2.5],
+                                    [[2, 3]]),
+          ([2.0, 3.0], True))
+    check("(d) rooms fill the storey",
+          scene_recipe.floor_anchor(SQUARE, [SQUARE], None, []),
+          ([0.0, 0.0], False))
+    check("(e) no outline, no anchor",
+          scene_recipe.floor_anchor([], [], None, []), (None, False))
+
+    print("Part 6b — corridors[] in the payload")
+    check("corridors", sc["corridors"],
+          [{"room_id": "__floor__-1", "level": -1, "anchor": [-2.0, 2.0]}])
+    check("no corridor_without_floor",
+          [p for p in sc.get("problems") or []
+           if p.get("kind") == "corridor_without_floor"], [])
+
+    sc2b = scene_recipe.compose_scene(stair_fixture())
+    check("stair foot beats the raster",
+          [c["anchor"] for c in sc2b["corridors"]], [[3.0, 2.5]])
+
+    print("Part 6c — no floor left for the corridor")
+    sc3 = scene_recipe.compose_scene(full_floor_fixture())
+    check("centroid anchor", [c["anchor"] for c in sc3["corridors"]],
+          [[0.0, 0.0]])
+    check("corridor_without_floor levels",
+          [p.get("level") for p in sc3.get("problems") or []
+           if p.get("kind") == "corridor_without_floor"], [-1])
+
+    # The corridor is not a room somebody forgot to draw (§ 3.4).
+    sc4 = scene_recipe.compose_scene(location(
+        [{"id": world.GROUND_ROOM_ID, "name": ""},
+         {"id": "__floor__-1", "level": -1, "name": ""}]))
+    check("corridor alone: no rooms_without_layout",
+          [p["kind"] for p in sc4.get("problems") or []
+           if p.get("kind") == "rooms_without_layout"], [])
+    # Red probe: a NORMAL room without a layout still speaks up.
+    sc5 = scene_recipe.compose_scene(location(
+        [{"id": world.GROUND_ROOM_ID, "name": ""},
+         {"id": "__floor__-1", "level": -1, "name": ""},
+         room("r9")]))
+    check("undrawn room: rooms_without_layout",
+          [p["kind"] for p in sc5.get("problems") or []
+           if p.get("kind") == "rooms_without_layout"],
+          ["rooms_without_layout"])
 
     print("FAILED" if FAILS else "ALL OK")
     sys.exit(1 if FAILS else 0)

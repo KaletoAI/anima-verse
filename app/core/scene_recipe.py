@@ -536,6 +536,130 @@ def _point_in_polygon(x: float, z: float, poly: List[List[float]]) -> bool:
     return inside
 
 
+# The raster rule 3 of § 3.2 walks: fine enough to find the free middle of a
+# corridor strip, coarse enough that a 60 x 60 m storey stays a few thousand
+# candidates.
+ANCHOR_GRID_M = 0.5
+
+
+def _point_segment_distance(px: float, pz: float, a: List[float],
+                            b: List[float]) -> float:
+    """Distance from a point to the SEGMENT a-b in the XZ plane."""
+    ax, az, bx, bz = a[0], a[1], b[0], b[1]
+    dx, dz = bx - ax, bz - az
+    seg = dx * dx + dz * dz
+    t = 0.0 if seg <= 0 else max(0.0, min(1.0, ((px - ax) * dx
+                                                + (pz - az) * dz) / seg))
+    cx, cz = ax + t * dx, az + t * dz
+    return math.hypot(px - cx, pz - cz)
+
+
+def _ring_clearance(px: float, pz: float, ring: List[List[float]]) -> float:
+    """Distance from a point to the NEAREST EDGE of a closed ring — unsigned,
+    so it says the same thing just inside and just outside it."""
+    return min(_point_segment_distance(px, pz, ring[i],
+                                       ring[(i + 1) % len(ring)])
+               for i in range(len(ring)))
+
+
+def floor_anchor(outline: List[List[float]],
+                 hulls: List[List[List[float]]],
+                 elevator: Optional[List[float]],
+                 pads: List[List[float]]) -> Tuple[Optional[List[float]], bool]:
+    """Where figures of a storey's corridor stand (spec § 3.2). PURE.
+
+    1. the lift's holding point, if inside the outline and in no hull;
+    2. else the first stair pad with the same property;
+    3. else the ANCHOR_GRID_M raster point inside the outline and outside
+       every hull with the largest clearance to any edge — ties fall to the
+       smallest x, then the smallest z;
+    4. else (rooms fill the storey) the outline's centroid, flagged False.
+    Returns (None, False) without an outline.
+    """
+    if len(outline) < 3:
+        return None, False
+
+    def free(x: float, z: float) -> bool:
+        return _point_in_polygon(x, z, outline) and not any(
+            _point_in_polygon(x, z, h) for h in hulls)
+
+    for cand in ([elevator] if elevator else []) + list(pads):
+        if isinstance(cand, (list, tuple)) and len(cand) >= 2 \
+                and free(_num(cand[0]), _num(cand[1])):
+            return [_r(_num(cand[0])), _r(_num(cand[1]))], True
+    xs = [p[0] for p in outline]
+    zs = [p[1] for p in outline]
+    best: Optional[Tuple[float, float, float]] = None
+    # x ascending outside, z ascending inside, and a STRICT ">" keeps the
+    # first of a tie — that is the tie rule of § 3.2 Nr. 3 spelled as a loop.
+    x = math.floor(min(xs) / ANCHOR_GRID_M) * ANCHOR_GRID_M
+    while x <= max(xs) + 1e-9:
+        z = math.floor(min(zs) / ANCHOR_GRID_M) * ANCHOR_GRID_M
+        while z <= max(zs) + 1e-9:
+            # The outline's own clearance is an UPPER BOUND for the
+            # candidate's (the total is a minimum over it and the hulls), so a
+            # cell that cannot beat the leader on that alone needs neither the
+            # inside tests nor the hull distances. Same winner, less work.
+            near = _ring_clearance(x, z, outline)
+            if (best is None or near > best[0] + 1e-9) and free(x, z):
+                clear = min([near]
+                            + [_ring_clearance(x, z, h) for h in hulls])
+                if best is None or clear > best[0] + 1e-9:
+                    best = (clear, x, z)
+            z += ANCHOR_GRID_M
+        x += ANCHOR_GRID_M
+    if best:
+        return [_r(best[1]), _r(best[2])], True
+    n = len(outline)
+    return [_r(sum(xs) / n), _r(sum(zs) / n)], False
+
+
+def _corridors(location: Dict[str, Any], map3d: Dict[str, Any],
+               corridor_levels: Set[int],
+               room_hulls: Dict[int, List[List[List[float]]]],
+               flights: List[Dict[str, Any]],
+               ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """``corridors[]`` and its finding (§ 3.2/§ 3.4): one anchor per storey
+    corridor, sorted by level, plus the ``corridor_without_floor`` problems.
+
+    ``corridor_levels`` are the storeys whose corridor room is STORED — the
+    same set the door rule reads, never a second census. A storey without a
+    resolved footprint has no plate to stand on either, so it contributes no
+    entry: its corridor exists as state and nothing else.
+    """
+    from app.models.world import floor_room_id
+    corridors: List[Dict[str, Any]] = []
+    problems: List[Dict[str, Any]] = []
+    lift = (map3d or {}).get("elevator")
+    holding = ([_num(lift[0]), _num(lift[1])]
+               if isinstance(lift, (list, tuple)) and len(lift) == 2 else None)
+    for lv in sorted(corridor_levels):
+        # A pad of THIS storey: the foot of a flight starting here, the head
+        # of one arriving here — the landings the flight already computed
+        # (``block``), never a stair measured a second time.
+        pads = [[f["block"]["foot"][0], f["block"]["foot"][2]] for f in flights
+                if f["block"]["from_level"] == lv] + \
+               [[f["block"]["head"][0], f["block"]["head"][2]] for f in flights
+                if f["block"]["to_level"] == lv]
+        anchor, free_spot = floor_anchor(_outline_world(map3d, lv),
+                                         room_hulls.get(lv, []), holding, pads)
+        if anchor is None:
+            continue
+        corridors.append({"room_id": floor_room_id(lv), "level": lv,
+                          "anchor": anchor})
+        if not free_spot:
+            problems.append({
+                "kind": "corridor_without_floor",
+                "location_id": str(location.get("id") or ""),
+                "level": lv,
+                "message": "The rooms of this storey leave no floor for its "
+                           "corridor: figures in the corridor will stand "
+                           "inside a room. Shrink a room, or draw the "
+                           "corridor's storey wider.",
+            })
+    return corridors, problems
+
+
 def clip_ring_to_outline(ring: List[List[float]],
                          outline: List[List[float]]) -> List[List[float]]:
     """The part of a hole ring that lies INSIDE one plate's outline (§ B1).
@@ -1830,7 +1954,7 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
     as a whole sentence.
     """
     out: List[Dict[str, Any]] = []
-    from app.models.world import GROUND_ROOM_ID
+    from app.models.world import GROUND_ROOM_ID, is_floor_room
     # TWO DIFFERENT QUESTIONS, TWO DIFFERENT CONTOURS (review 2026-09-06).
     # ``rooms_without_layout`` asks "is there a drawn building at all, standing
     # over nothing?" — ANY storey's contour answers that, and a location whose
@@ -1844,9 +1968,13 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
                    | set(_level_outline_levels(map3d))))
     # The GROUND room is out: it is the location's open surface and NEVER
     # carries a layout (the sanitizer strips one), so counting it would blame
-    # the author for a room that cannot be drawn.
+    # the author for a room that cannot be drawn. A STOREY CORRIDOR is out for
+    # the very same reason (§ 3.4): the server puts it there, its plate and
+    # hull are the location's, and no author can draw it a floor plan.
     rooms = [r for r in (location.get("rooms") or [])
-             if isinstance(r, dict) and str(r.get("id") or "") != GROUND_ROOM_ID]
+             if isinstance(r, dict)
+             and str(r.get("id") or "") != GROUND_ROOM_ID
+             and not is_floor_room(str(r.get("id") or ""))]
     # …and its RECIPE is out of the count for the same reason: a yard full of
     # props (§ A13a) composes a recipe, but it is not a room somebody can
     # enter, so it must not silence this finding.
@@ -3933,6 +4061,12 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # a bake of the swallowed variant would then move nothing. Two copies of
     # the SAME variant do collide, and that is right: their block is the same
     # block, so one entry says everything two would.
+    # THE STOREY CORRIDORS (§ 3.2) — after the flights, because a stair
+    # landing is one of the anchor candidates, and off the very set of levels
+    # the door rule above already read from the stored rooms.
+    corridors, corridor_problems = _corridors(location, map3d, corridor_levels,
+                                              room_hulls, flights)
+
     from app.core.model_surface import block_sig
     surface_sigs = {
         f"{m.get('role')}:{m.get('id')}:{m.get('room_id', '')}:{m.get('variant', 0)}":
@@ -3996,11 +4130,16 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "doorways": doorways,
         "outdoor_rooms": [r.get("room_id") or "" for r in recipes
                           if r.get("always_visible")],
+        # ONE ANCHOR PER STOREY CORRIDOR (§ 3.2): where a client stands the
+        # figures of that corridor and where lift and stair lead "into the
+        # corridor". Sorted by level, empty where a storey has no corridor
+        # room or no footprint to put one in.
+        "corridors": corridors,
         # What the composer found wrong and did NOT repair behind the
         # author's back (§ 4.3). Always present, empty when all is well;
         # editor and 3D client only display it.
         "problems": _problems(location, map3d, shell_levels, doorways,
-                              recipes, flights),
+                              recipes, flights) + corridor_problems,
     }
     if boundary:
         out["boundary_openings"] = boundary

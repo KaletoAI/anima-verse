@@ -27,6 +27,9 @@ CONTRACT_KEYS = {
     "signature", "rooms", "boundary", "extent_m", "k", "storey_m", "levels",
     "style", "plates", "floor_plan", "walls", "extras", "stairs", "models",
     "figures", "markers", "doorways", "outdoor_rooms", "problems",
+    # One anchor per storey corridor (§ 3.2) — always there, empty where a
+    # location has no corridor room or no footprint to put one in.
+    "corridors",
 }
 # Present only when the data calls for them: a location without a drawn
 # boundary opening ships no ``boundary_openings``, and only an area location

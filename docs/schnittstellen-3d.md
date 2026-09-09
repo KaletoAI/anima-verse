@@ -4729,9 +4729,48 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # (`walls`-Eintrag mit `leaf`)
   problems: [ { kind, location_id?, room_id?, message } ],
                                            # IMMER da, leer = alles sauber
-  outdoor_rooms: [ room_id, … ]
+  outdoor_rooms: [ room_id, … ],
+
+  # --- Etagen-Flure (2026-09-09) ---
+  corridors: [ { room_id, level, anchor: [x, z] } ],
+                                           # IMMER da, leer = kein Flur-Raum
+                                           # room_id = "__floor__<level>"
+                                           # anchor  = Meter im Szenen-Rahmen
+                                           #           wie markers[].at
+                                           # nach level sortiert
 }
 ```
+
+**`corridors[]` — der Anker jedes Etagen-Flurs** (Spezifikation
+`docs/superpowers/specs/2026-09-09-etagen-flur-design.md` § 3.2). Jede benutzte
+Etage einer Location besitzt einen reservierten Flur-Raum `__floor__<level>`
+(wie `__ground__` die Grundfläche). Er hat kein eigenes Layout: seine Platte
+und seine Hülle sind die der Location — also hat er auch keine Mitte, die ein
+Client aus einem Grundriss lesen könnte. **`corridors[]` liefert diese Mitte
+fertig: Clients stellen Flur-Figuren hier auf und führen Lift/Treppe hierher;
+sie berechnen keinen eigenen Punkt.**
+
+Der Anker ist deterministisch und entsteht in genau dieser Reihenfolge
+(`scene_recipe.floor_anchor`, rein):
+
+1. der **Fahrstuhl-Haltepunkt** (`map3d.elevator`), wenn er innerhalb des
+   aufgelösten Etagengrundrisses (`outline_source_level`) und außerhalb jeder
+   Raumhülle dieser Etage liegt;
+2. sonst das erste **Treppen-Pad** dieser Etage mit derselben Bedingung — der
+   Fuß einer hier startenden, der Kopf einer hier ankommenden Treppe, genau die
+   Landungen aus `stairs[]`, keine zweite Treppen-Rechnung;
+3. sonst der Punkt eines **0,5-m-Rasters** über der Bounding-Box des
+   Etagengrundrisses, der im Grundriss und außerhalb aller Raumhüllen liegt und
+   den größten Abstand zur nächsten Kante (Hülle oder Grundriss) hat;
+   Gleichstand → kleinstes x, dann kleinstes z;
+4. sonst — die Räume füllen die Etage vollständig — der **Mittelpunkt des
+   Grundrisses**, plus der Befund `corridor_without_floor` (mit `level`) in
+   `problems[]`: der Flur existiert dann als Zustand, seine Figuren stehen aber
+   sichtbar in einem Raum. Nichts wird still repariert.
+
+Ohne aufgelösten Etagengrundriss gibt es weder Platte noch Anker: die Etage
+liefert **keinen** `corridors[]`-Eintrag, ihr Flur existiert nur als Zustand.
+Handrechnung zu allen vier Stufen: `scripts/smoke_floor_rooms.py` Teil 6/6b/6c.
 
 **`doorways[]` — jede begehbare Schwelle der Location als fertiges
 Primitiv** (`plan-betreten-und-tueren.md` § 4.1). Eine Schwelle ist EXAKT die
