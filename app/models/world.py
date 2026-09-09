@@ -460,6 +460,34 @@ def _generate_room_id() -> str:
 GROUND_ROOM_ID = "__ground__"
 
 
+# THE CORRIDOR OF A STOREY IS A ROOM TOO (spec 2026-09-09-etagen-flur, § 2).
+# Same reasoning as the ground: a reserved id per storey, stored in rooms[],
+# so every consumer sees an ordinary room. The level rides in the id because
+# a character's storey must be knowable from its room alone.
+FLOOR_ROOM_PREFIX = "__floor__"
+
+
+def floor_room_id(level: int) -> str:
+    """Reserved id of the corridor room of ``level`` (``__floor__-1``)."""
+    return f"{FLOOR_ROOM_PREFIX}{int(level)}"
+
+
+def floor_room_level(room_id: str) -> Optional[int]:
+    """The storey a corridor id names, None for every other id."""
+    rid = str(room_id or "")
+    if not rid.startswith(FLOOR_ROOM_PREFIX):
+        return None
+    try:
+        return int(rid[len(FLOOR_ROOM_PREFIX):])
+    except ValueError:
+        return None
+
+
+def is_floor_room(room_id: str) -> bool:
+    """True for a reserved corridor id — the cheap test every consumer uses."""
+    return floor_room_level(room_id) is not None
+
+
 # === Raum-Hilfsfunktionen ===
 
 def get_location_rooms(location: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1028,6 +1056,90 @@ def ensure_ground_room(rooms: List[Dict[str, Any]],
     if isinstance(layout, dict) and layout:
         entry["layout"] = layout
     rooms.append(entry)
+
+
+def floor_levels(rooms: List[Dict[str, Any]],
+                 map3d: Optional[Dict[str, Any]]) -> Set[int]:
+    """Storeys that own a corridor: every storey a layout room stands on,
+    except 0 — the ground floor's complement is the yard unless the location
+    opts in (``map3d.ground_corridor``). The ground's reduced layout carries
+    no level and never counts (spec § 2.2)."""
+    used: Set[int] = set()
+    for r in rooms or []:
+        if not isinstance(r, dict):
+            continue
+        rid = str(r.get("id") or "")
+        if rid == GROUND_ROOM_ID or is_floor_room(rid):
+            continue
+        lay = r.get("layout")
+        if not isinstance(lay, dict) or not lay:
+            continue
+        try:
+            used.add(int(lay.get("level") or 0))
+        except (TypeError, ValueError):
+            used.add(0)
+    opt_in = bool((map3d or {}).get("ground_corridor"))
+    return {lv for lv in used if lv != 0 or opt_in}
+
+
+def ensure_floor_rooms(rooms: List[Dict[str, Any]],
+                       map3d: Optional[Dict[str, Any]],
+                       previous: Optional[List[Dict[str, Any]]] = None
+                       ) -> List[str]:
+    """Two-way sync of the corridor rooms in a location's room list, in place.
+
+    Missing corridors of used storeys are appended LAST (name/description from
+    ``previous`` — the editor submits whole lists and must not wipe a name),
+    corridors of storeys no room stands on any more are removed. Returns the
+    removed ids so the caller can move characters/utterances off them
+    (:func:`ground_room_target`). An entry that is already there is never
+    touched.
+    """
+    wanted = floor_levels(rooms, map3d)
+    present = {floor_room_level(str(r.get("id") or "")): r
+               for r in rooms if isinstance(r, dict) and is_floor_room(str(r.get("id") or ""))}
+    removed: List[str] = []
+    for lv, entry in list(present.items()):
+        if lv not in wanted:
+            rooms.remove(entry)
+            removed.append(entry["id"])
+    prev_by_id = {str(r.get("id") or ""): r
+                  for r in (previous or []) if isinstance(r, dict)}
+    for lv in sorted(wanted):
+        if lv in present:
+            continue
+        old = prev_by_id.get(floor_room_id(lv)) or {}
+        rooms.append({"id": floor_room_id(lv), "level": lv,
+                      "name": str(old.get("name") or ""),
+                      "description": str(old.get("description") or ""),
+                      "activities": []})
+    return removed
+
+
+def get_floor_name(level: int, lang: str = "") -> str:
+    """Default display name of a storey's corridor (spec § 2.1).
+
+    Like the ground, an unnamed corridor answers with a translated default so
+    the reserved id never surfaces in a prompt or a chip.
+    """
+    from app.core.i18n import t
+    lv = int(level)
+    if lv == 0:
+        return t("Hallway", lang)
+    if lv == -1:
+        return t("Corridor (basement)", lang)
+    if lv < -1:
+        return t("Corridor (basement {n})", lang).format(n=lv)
+    return t("Corridor (floor {n})", lang).format(n=lv)
+
+
+def floor_room_display_name(room: Dict[str, Any], lang: str = "") -> str:
+    """Name of a corridor room: the author's if there is one, else the default."""
+    name = str((room or {}).get("name") or "").strip()
+    if name:
+        return name
+    lv = floor_room_level(str((room or {}).get("id") or ""))
+    return get_floor_name(lv if lv is not None else 0, lang)
 
 
 def migrate_ground_rooms_once() -> Dict[str, int]:

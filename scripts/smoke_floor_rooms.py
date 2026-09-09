@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Smoke check: every used storey of a location owns a corridor room.
+
+Usage:  ./.venv/bin/python scripts/smoke_floor_rooms.py
+
+Pure functions, no server, no world.db. Every expectation below is derived
+BY HAND from docs/superpowers/specs/2026-09-09-etagen-flur-design.md § 2,
+never recorded from output.
+
+Part 1 — ids (§ 2.1):
+    floor_room_id(-1)  -> "__floor__-1"     the level rides in the id, sign included
+    floor_room_id(0)   -> "__floor__0"
+    floor_room_level("__floor__-1") -> -1
+    floor_room_level("__floor__x")  -> None  not an int, not a corridor
+    floor_room_level("__ground__")  -> None  the ground is not a corridor
+    is_floor_room("abc12345")       -> False
+
+Part 2 — which storeys get a corridor (§ 2.2, floor_levels):
+    rooms: k1 (layout level -1), eg (layout level 0), ground (props only)
+      map3d {}                       -> {-1}       storey 0 only on opt-in
+      map3d {ground_corridor: true}  -> {-1, 0}    opt-in AND a room on 0
+    rooms: only k1 (level -1), map3d {ground_corridor: true}
+                                     -> {-1}       opt-in without a room on 0 is nothing
+    rooms: eg without layout         -> set()      no layout, no used storey
+    the ground's reduced layout (props, no level) never counts as a storey
+
+Part 2b — ensure_floor_rooms is a two-way sync:
+    [] with k1                       -> appends {"id": "__floor__-1", "level": -1,
+                                        "name": "", "description": "", "activities": []}
+                                        and returns [] (nothing removed)
+    run twice                        -> second run appends nothing (idempotent)
+    previous had __floor__-1 named "Kellerflur" -> the name comes back
+    rooms carry __floor__2 but no room on level 2 -> entry removed,
+                                        returns ["__floor__2"]
+    an authored __floor__-1 (id present, room on -1) -> left untouched
+
+Part 3 — get_floor_name (§ 2.1): English defaults, lang "" = English
+    level 0  -> "Hallway"
+    level -1 -> "Corridor (basement)"
+    level -2 -> "Corridor (basement -2)"
+    level 1  -> "Corridor (floor 1)"
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.models import world  # noqa: E402
+
+FAILS = 0
+
+
+def check(label, actual, expected):
+    global FAILS
+    ok = actual == expected
+    print(("  ok   " if ok else "  FAIL ") + f"{label}: {actual!r}"
+          + ("" if ok else f"  (expected {expected!r})"))
+    if not ok:
+        FAILS += 1
+
+
+def room(rid, level=None, layout=True, name=""):
+    r = {"id": rid, "name": name, "description": "", "activities": []}
+    if layout and level is not None:
+        r["layout"] = {"level": level, "x": -4, "y": -4, "w": 3, "d": 3}
+    return r
+
+
+def main():
+    print("Part 1 — ids")
+    check("floor_room_id(-1)", world.floor_room_id(-1), "__floor__-1")
+    check("floor_room_id(0)", world.floor_room_id(0), "__floor__0")
+    check("level of __floor__-1", world.floor_room_level("__floor__-1"), -1)
+    check("level of __floor__x", world.floor_room_level("__floor__x"), None)
+    check("level of ground", world.floor_room_level(world.GROUND_ROOM_ID), None)
+    check("is_floor_room(abc12345)", world.is_floor_room("abc12345"), False)
+
+    print("Part 2 — floor_levels")
+    ground = {"id": world.GROUND_ROOM_ID, "name": "", "layout": {"props": []}}
+    rooms = [room("k1", -1), room("eg", 0), ground]
+    check("no opt-in", world.floor_levels(rooms, {}), {-1})
+    check("opt-in", world.floor_levels(rooms, {"ground_corridor": True}), {-1, 0})
+    check("opt-in without room on 0",
+          world.floor_levels([room("k1", -1)], {"ground_corridor": True}), {-1})
+    check("no layout", world.floor_levels([room("eg", layout=False)], {}), set())
+
+    print("Part 2b — ensure_floor_rooms")
+    rs = [room("k1", -1)]
+    removed = world.ensure_floor_rooms(rs, {})
+    check("appended", [r["id"] for r in rs], ["k1", "__floor__-1"])
+    check("entry shape", rs[1], {"id": "__floor__-1", "level": -1, "name": "",
+                                 "description": "", "activities": []})
+    check("nothing removed", removed, [])
+    world.ensure_floor_rooms(rs, {})
+    check("idempotent", [r["id"] for r in rs], ["k1", "__floor__-1"])
+    rs2 = [room("k1", -1)]
+    world.ensure_floor_rooms(rs2, {}, previous=[{"id": "__floor__-1", "name": "Kellerflur"}])
+    check("name restored", rs2[1]["name"], "Kellerflur")
+    rs3 = [room("k1", -1), {"id": "__floor__2", "level": 2, "name": ""}]
+    removed = world.ensure_floor_rooms(rs3, {})
+    check("stale corridor removed", [r["id"] for r in rs3], ["k1", "__floor__-1"])
+    check("removed ids", removed, ["__floor__2"])
+    rs4 = [room("k1", -1), {"id": "__floor__-1", "level": -1, "name": "Mine"}]
+    world.ensure_floor_rooms(rs4, {})
+    check("present entry untouched", rs4[1]["name"], "Mine")
+
+    print("Part 3 — get_floor_name")
+    check("0", world.get_floor_name(0), "Hallway")
+    check("-1", world.get_floor_name(-1), "Corridor (basement)")
+    check("-2", world.get_floor_name(-2), "Corridor (basement -2)")
+    check("1", world.get_floor_name(1), "Corridor (floor 1)")
+
+    print("FAILED" if FAILS else "ALL OK")
+    sys.exit(1 if FAILS else 0)
+
+
+if __name__ == "__main__":
+    main()
