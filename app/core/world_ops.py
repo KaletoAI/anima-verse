@@ -1990,12 +1990,6 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                     _l["activity_hint"] = (activity_hint or "").strip()
                 if knowledge_item_id is not None:
                     _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
-                if entry_room is not None:
-                    # Only a room this place really has, and of the reserved
-                    # corridors only the ground floor's hallway (spec § 4) —
-                    # nobody arrives in a basement corridor.
-                    _l["entry_room"] = valid_entry_room(
-                        _l.get("rooms") or [], entry_room)
                 if default_door_prop_id is not None:
                     # THE PLACE'S OWN DOOR (2026-08-27): every door opening
                     # that names no prop of its own gets this one, unless it
@@ -2023,6 +2017,15 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                         _l.setdefault("rooms", []), _l.get("map3d"))
                     if _removed:
                         evict_rooms_to_ground(str(_l.get("id") or ""), _removed)
+                if entry_room is not None:
+                    # AFTER the map3d block, never before: only a room this
+                    # place really has counts, and the ground-floor hallway
+                    # comes into existence in that very block. One request may
+                    # switch ``ground_corridor`` on AND declare ``__floor__0``
+                    # the arrival room (spec § 4) — of the reserved corridors
+                    # only that one, nobody arrives in a basement corridor.
+                    _l["entry_room"] = valid_entry_room(
+                        _l.get("rooms") or [], entry_room)
                 if npc_slots is not None:
                     # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
                     # Sanitized by the one function the spawn logic reads them
@@ -2127,12 +2130,6 @@ def update_location_with_extras(location_id: str,
                     _l["activity_hint"] = (activity_hint or "").strip()
                 if knowledge_item_id is not None:
                     _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
-                if entry_room is not None:
-                    # Only a room this place really has, and of the reserved
-                    # corridors only the ground floor's hallway (spec § 4) —
-                    # nobody arrives in a basement corridor.
-                    _l["entry_room"] = valid_entry_room(
-                        _l.get("rooms") or [], entry_room)
                 if default_door_prop_id is not None:
                     # THE PLACE'S OWN DOOR (2026-08-27): every door opening
                     # that names no prop of its own gets this one, unless it
@@ -2160,6 +2157,15 @@ def update_location_with_extras(location_id: str,
                         _l.setdefault("rooms", []), _l.get("map3d"))
                     if _removed:
                         evict_rooms_to_ground(str(_l.get("id") or ""), _removed)
+                if entry_room is not None:
+                    # AFTER the map3d block, never before: only a room this
+                    # place really has counts, and the ground-floor hallway
+                    # comes into existence in that very block. One request may
+                    # switch ``ground_corridor`` on AND declare ``__floor__0``
+                    # the arrival room (spec § 4) — of the reserved corridors
+                    # only that one, nobody arrives in a basement corridor.
+                    _l["entry_room"] = valid_entry_room(
+                        _l.get("rooms") or [], entry_room)
                 if npc_slots is not None:
                     # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
                     # Sanitized by the one function the spawn logic reads them
