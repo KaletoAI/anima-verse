@@ -1,8 +1,9 @@
-"""SetActivity package — sets the character's current free-text pose/activity.
+"""SetActivity package — sets the character's current pose key + detail.
 
-Hands the text to the canonical setter ``set_pose_intent``, which maps it onto
-a pose catalog key + sanitized flavor (and the matched image variant). The tool
-name is SetActivity (template frontmatter); the skill_id stays ``set_pose``.
+Takes a catalog pose key plus a short display detail and hands both to
+``set_pose_key_detail``: a known key is written exactly with the detail as its
+flavor, an unknown or empty one falls back to the resolver net. The tool name
+is SetActivity (template frontmatter); the skill_id stays ``set_pose``.
 SINGLETON is declared in plugin.yaml — on multiple calls within one stream only
 the last one sticks.
 """
@@ -13,7 +14,7 @@ from app.plugins.context import PluginContext
 
 
 class SetPoseSkill(PluginSkill):
-    """Sets the pose from free text (no state flag, pose pipeline only)."""
+    """Sets the pose from key + detail (no state flag, pose pipeline only)."""
 
     SKILL_ID = "set_pose"
 
@@ -30,22 +31,25 @@ class SetPoseSkill(PluginSkill):
         if not character_name:
             return "Error: character_name missing."
         try:
-            pose = (data.get("pose") or data.get("input") or "").strip()
-            if not pose:
+            key = str(data.get("pose") or "").strip()
+            detail = str(data.get("detail") or "").strip()
+            if not key and not detail:
+                # Bare text ("standing: wartet" or just "wartet") — the
+                # split decides what is key and what is detail.
+                from app.core.pose_catalog import split_key_detail
+                key, detail = split_key_detail(str(data.get("input") or ""))
+            if not key and not detail:
                 return "Error: no pose given."
             from app.core.pose_catalog import PairPoseWithoutPartner
-            from app.models.character import (get_character_pose_key,
-                                              set_pose_intent)
-            # Catalog key + flavor + image variant, all in the setter
+            from app.models.character import set_pose_key_detail
+            # A known key is written exactly with the detail as display text;
+            # an unknown one goes through the resolver net (a candidate row
+            # beats a silently dropped pose — the tool phase does not loop
+            # back for a second choice).
             try:
-                set_pose_intent(character_name, pose)
+                written = set_pose_key_detail(character_name, key, detail,
+                                              unknown="resolve")
             except PairPoseWithoutPartner as e:
-                # The text landed on a two-person pose. Say so instead of
-                # writing half a pair. The turn is usually over by the time
-                # this is read (the tool phase does not loop back for a
-                # second choice), so this answer is for the LOG and for the
-                # models that do get another pass — the prompt is what stops
-                # the wrong choice being made in the first place.
                 from app.core.hooks import get_provider
                 _verb = get_provider("pair_verb_name")
                 _name = _verb() if _verb else ""
@@ -54,8 +58,8 @@ class SetPoseSkill(PluginSkill):
                        if _name else "There is no way to start it here. ")
                 return (f"'{e}' is a two-person action, not something "
                         f"{character_name} does alone. {how}For a solo pose, "
-                        f"describe what {character_name} does on their own.")
-            return f"{character_name}: {get_character_pose_key(character_name) or pose}"
+                        f"pass a pose key from the list plus a short detail.")
+            return f"{character_name}: {written or key or detail}"
         except Exception as e:
             self.ctx.logger.exception("%s [%s] failed: %s", self.name, character_name, e)
             return f"Error in {self.name}: {e}"

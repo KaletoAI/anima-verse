@@ -1,6 +1,6 @@
 name: set_pose
 version: "1.0.0"
-description: Sets the character's current free-text activity/pose (pose_intent + pose variant)
+description: Sets the character's current pose (catalog key + display detail)
 
 skills:
   - skill_id: set_pose

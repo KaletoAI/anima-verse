@@ -59,6 +59,16 @@ route module imports offline; 'demo' row from stage 2 is reused):
 - a reply without a marker -> None
 - the marker line itself must not be read as a mood: _extract_mood on
   "**I do sitting: liest ein Buch**" returns None
+
+Stage 5 — the SetActivity skill, derived BY HAND from its execute():
+- {"agent_name": "demo", "pose": "sitting", "detail": "liest"} -> key
+  sitting, flavor "liest", return text "demo: sitting"
+- {"agent_name": "demo", "input": "standing: wartet"} (bare text) -> key
+  standing, flavor "wartet" (split_key_detail on the text)
+- {"agent_name": "demo", "pose": "dancing together"} -> the two-person
+  refusal text ("two-person action") and the pose stays standing
+- the skill description names both fields and the key rule ("pose key")
+  and no longer says "Free-text"
 """
 import shutil
 import sys
@@ -209,11 +219,45 @@ def stage4():
           "stage4 f marker read as mood")
 
 
+def stage5():
+    from app.core import db as _db
+    from app.core.prompt_templates import load_skill_meta
+    from app.plugins.context import PluginContext
+    from app.plugins.loader import discover_packages
+    from plugins.set_pose.skill import SetPoseSkill
+    # The loader is what mounts plugins/*/templates/llm into the Jinja
+    # search path — without it load_skill_meta cannot see the package file.
+    discover_packages()
+    skill = SetPoseSkill({"enabled": True}, PluginContext("set_pose"))
+
+    def state(field):
+        row = _db.get_connection().execute(
+            f"SELECT {field} FROM character_state WHERE character_name='demo'"
+        ).fetchone()
+        return row[0] if row else None
+
+    out = skill.execute('{"agent_name": "demo", "pose": "sitting", "detail": "liest"}')
+    check(out == "demo: sitting", f"stage5 a out {out!r}")
+    check(state("pose_key") == "sitting" and state("pose_flavor") == "liest",
+          f"stage5 a state {state('pose_key')!r}/{state('pose_flavor')!r}")
+    skill.execute('{"agent_name": "demo", "input": "standing: wartet"}')
+    check(state("pose_key") == "standing" and state("pose_flavor") == "wartet",
+          f"stage5 b state {state('pose_key')!r}/{state('pose_flavor')!r}")
+    out = skill.execute('{"agent_name": "demo", "pose": "dancing together"}')
+    check("two-person action" in out, f"stage5 c out {out!r}")
+    check(state("pose_key") == "standing", f"stage5 c key {state('pose_key')!r}")
+    meta = load_skill_meta("set_pose")
+    check("pose key" in meta["description"] and '"detail"' in meta["description"],
+          "stage5 d description lacks key/detail")
+    check("Free-text" not in meta["description"], "stage5 d description still free-text")
+
+
 try:
     stage1()
     stage2()
     stage3()
     stage4()
+    stage5()
 finally:
     shutil.rmtree(_tmp, ignore_errors=True)
 

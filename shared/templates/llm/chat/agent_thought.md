@@ -93,9 +93,7 @@ Decide based on this and other relevant factors — your rhythm is a guideline, 
 
 === Places and activities here ===
 {{ activity_hint_block }}
-This is just inspiration for the location. Use SetActivity to set what you are
-doing right now (free text) — e.g. "leaning against the windowsill" or
-"sketching in a notebook".
+Use SetActivity to set what you are doing right now: {"pose": "<one of the pose keys above>", "detail": "<what you do, 2-6 words>"} — e.g. {"pose": "sitting", "detail": "sketching in a notebook"}.
 {% endif %}
 {% if room_items_block %}
 

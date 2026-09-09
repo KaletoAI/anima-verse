@@ -476,9 +476,9 @@ class ThoughtRunner:
                 _tool_fmt, agent_tools, appearance, usage, model_name=tool_model_name,
                 is_roleplay=_is_rp_pa(character_name))
 
-            # Kontext-Sektionen mit Budget aufbauen (Prio-Reihenfolge)
+            # Build the context sections within budget (priority order)
             _ctx_parts = []
-            # Prio 1: Essentials (immer)
+            # Prio 1: essentials (always)
             _ctx_parts.append(
                 f"Character: {character_name}.\n"
                 f"Aufgabe: {_td.get('task', '')}\n"
@@ -486,16 +486,33 @@ class ThoughtRunner:
                 f"({_td.get('game_date', '')}).\n"
                 f"Wetter: {_td.get('game_weather', '')}"
             )
-            # Prio 2: Tool-Instruktionen (immer)
+            # Prio 2: tool instructions (always)
             _ctx_parts.append(tool_instr_block)
-            # Prio 3: Aktuelle Situation
+            # Prio 3: current situation
             _ctx_parts.append(
                 f"Aktuelle Situation:\n"
                 f"- Ort: {_td.get('location_name', 'Unbekannt')}\n"
                 f"- Aktivitaet: {_td.get('activity', 'Keine')}\n"
                 f"- Stimmung: {_td.get('feeling', 'Neutral')}"
             )
-            # Prio 4: Assignments (max ~800 Zeichen)
+            # Prio 3b: the room's place offer — the pose keys SetActivity
+            # takes. The chat route's tool phase shows the same block
+            # (chat.py _current_activity_hint); without it the tool LLM
+            # has no menu to copy a key from.
+            try:
+                from app.core import places as _places
+                from app.models.character import (get_character_current_location,
+                                                  get_character_current_room)
+                _offer = _places.room_offer(
+                    character_name,
+                    get_character_current_location(character_name) or "",
+                    get_character_current_room(character_name) or "")
+                if _offer:
+                    _ctx_parts.append(_offer[:900])
+            except Exception as _oe:
+                logger.debug("tool context: place offer failed for %s: %s",
+                             character_name, _oe)
+            # Prio 4: assignments (max ~800 chars)
             if _td.get("assignment_section"):
                 _ctx_parts.append(_td["assignment_section"][:800])
             # Prio 5: Nearby characters. Cap raised 400 -> 800 for the
@@ -505,17 +522,17 @@ class ThoughtRunner:
             # the prompts that need it.
             if _td.get("nearby_hint"):
                 _ctx_parts.append(_td["nearby_hint"][:800])
-            # Prio 6: Persoenlichkeit (gekuerzt)
+            # Prio 6: personality (shortened)
             if _td.get("personality"):
                 _ctx_parts.append(f"Persoenlichkeit: {_td['personality'][:400]}")
-            # Prio 7: Memory (gekuerzt, max ~1200 Zeichen)
+            # Prio 7: memory (shortened, max ~1200 chars)
             if _td.get("memory_section"):
                 _ctx_parts.append(_td["memory_section"][:1200])
-            # Prio 8: Story Arc (gekuerzt, max ~800 Zeichen)
+            # Prio 8: story arc (shortened, max ~800 chars)
             if _td.get("arc_context"):
                 _ctx_parts.append(_td["arc_context"][:800])
 
-            # Abschluss: Instruktion
+            # Closing: the instruction
             _ctx_parts.append(
                 f"Available tools: {', '.join(available_tool_names)}\n"
                 f"Based on the task and current situation, decide which tools to call. "
