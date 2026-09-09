@@ -32,11 +32,22 @@ Hand-derived expectations, case by case:
   (e) Mode ``turns`` with a valid ``pair`` key. ``create_invite`` writes an
       invitation, and the hook ``_on_invited`` makes a temporary NPC accept
       right away, so ``resolve_invite`` is called with ``accept=True`` (the
-      engine start is monkeypatched and returns ``started``). A full character
-      as the invitee keeps today's ``bump`` path — that is the regression.
+      engine start is monkeypatched and returns ``started``). The ROW says so
+      the moment ``create_invite`` returns (``accepted``) — a caller that
+      reports "asked" without reading it back would promise an answer that
+      has already been given. And when the engine cannot bind the pair
+      (``start_interaction`` raises ``ValueError``) it puts the question back
+      on ``pending`` for a second answer that a temporary NPC never gives, so
+      the hook cancels it: nothing stays open. A full character as the
+      invitee keeps today's ``bump`` path — that is the regression.
   (f) ``mode == "off"`` produces no conversation block at all and a ``say`` is
       ignored. ``mode == "scene"`` behaves the same way inside a house. Out in
       the open with an ``npc_home``, ``talk_allowed`` is True again.
+  (f3) The HOME variant of ``npc_action`` WITH a conversation: an NPC with a
+      circle home, a second temporary NPC 10 m away (inside the 20 m hearing
+      radius) and the avatar 100 m away (inside the 150 m spawn radius).
+      ``talk_allowed`` is True, the partner is offered, and both prompt parts
+      render — the home branch of the talk block, which no other case reaches.
   (g) Mode ``scene``: a room with A and B, the avatar at the location, and an
       answer of three lines, one of them from a stranger "C". Only the two
       known speakers are written, in answer order with one shared timestamp
@@ -59,7 +70,9 @@ Hand-derived expectations, case by case:
       variable sets ``prompt_vars`` produces — a house with and without a
       conversation, a home area — and for ``npc_scenes.prompt_vars``, without
       raising. Without a pair clip installed there are no pair keys, and then
-      the prompt must not propose a pair the application would only reject.
+      neither prompt may propose a pair the application would only reject:
+      the scene's pair rule and its key list disappear, and only the shape
+      line's ``"pair": null`` stays. With a pair key both come back.
 
 Usage:  ./.venv/bin/python scripts/smoke_npc_conversation.py
 """
@@ -345,6 +358,33 @@ save_character_current_location(AVATAR, LOC_ID)
 force_set_status(AVATAR, room="kitchen")
 check("avatar back at the Roadhouse", npc_actions.avatar_at_place(A), True)
 
+# ── (f3) the HOME variant of the prompt, with a conversation ───────────────
+print("(f3) outdoors with a home area: the home prompt carries the talk block")
+from app.core.npc_home import circle_home  # noqa: E402
+from app.models.character import get_character_profile  # noqa: E402
+
+F = make_npc("Frode", location_id="", room_id="", task="mends the fence")
+set_character_pos(E, 1000.0, 1000.0)
+set_character_pos(F, 1010.0, 1000.0)      # 10 m — inside the 20 m hearing radius
+set_character_pos(AVATAR, 1100.0, 1000.0)  # 100 m — inside the 150 m spawn radius
+_prof = get_character_profile(E) or {}
+_prof["npc_home"] = circle_home(LOC_ID, 1000.0, 1000.0, 30.0)
+save_character_profile(E, _prof)
+set_npc_config(conversation_mode="turns")
+v = npc_actions.prompt_vars(E)
+check("home: talk is allowed with F in earshot", v.get("talk_allowed"), True)
+check("home: F is the partner offered",
+      [p["name"] for p in v.get("present") or []], [F])
+s, u = render_task("npc_action", **v)
+check("home: system and user render",
+      (bool(s.strip()), bool(u.strip())), (True, True))
+check("home: the system part offers say", '"say"' in s, True)
+check("home: the user part lists F", F in u, True)
+check("home: and it really is the home variant (no room question)",
+      ("room ids" in s, "within 30 m" in u), (False, True))
+save_character_current_location(AVATAR, LOC_ID)
+force_set_status(AVATAR, room="kitchen")
+
 # ── (k1) the action template renders for every variable set ───────────────
 print("(k1) npc_action renders with and without the talk block")
 for label, npc in (("talk", A), ("no talk", C)):
@@ -368,8 +408,20 @@ import plugins.interact.register  # noqa: E402,F401 — registers the hook
 interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
 STARTED = []
 _real_start = interaction_engine.start_interaction
-interaction_engine.start_interaction = lambda a, b, pose: (STARTED.append((a, b, pose)) or
-                                                           {"id": "fake", "kind": "handshake"})
+
+
+def _record_start(a, b, pose):
+    STARTED.append((a, b, pose))
+    return {"id": "fake", "kind": "handshake"}
+
+
+def _raise_seat_taken(_a, _b, _pose):
+    """What the engine raises when the pair cannot bind right now — the case
+    in which it puts the question BACK on `pending`."""
+    raise ValueError("seat taken")
+
+
+interaction_engine.start_interaction = _record_start
 PAIR_KEY = npc_actions._pair_pose_keys()[0] if npc_actions._pair_pose_keys() else ""
 check("the catalog offers at least one pair key", bool(PAIR_KEY), True)
 v = npc_actions.prompt_vars(A)
@@ -384,6 +436,22 @@ check("the turn reports the invitation", res.get("invited") if res else None, B)
 check("the interaction was started for the pair", STARTED, [(A, B, PAIR_KEY)])
 check("no bump was needed", LOOP.bumps, [])
 check("no open invitation is left", interaction_engine.pending_invites_for(B), [])
+
+# The row itself must say so: the hook answers INSIDE create_invite, so a
+# caller that reports "asked" without reading the row back tells the player
+# to wait for an answer that was already given.
+_inv_id = interaction_engine.create_invite(A, B, PAIR_KEY)
+check("the row is accepted the moment create_invite returns",
+      (interaction_engine.get_invite(_inv_id) or {}).get("status"), "accepted")
+
+# A dead end: the engine keeps a "not yet" question open for a second answer
+# — which a temporary NPC never gives, so the hook must close it itself.
+interaction_engine.start_interaction = _raise_seat_taken
+_dead_id = interaction_engine.create_invite(A, B, PAIR_KEY)
+check("a cannot that nobody re-answers is cancelled, not left open",
+      ((interaction_engine.get_invite(_dead_id) or {}).get("status"),
+       interaction_engine.pending_invites_for(B)), ("cancelled", []))
+interaction_engine.start_interaction = _record_start
 
 # an ordinary character invitee keeps the bump path
 LOOP.bumps.clear(); STARTED.clear()
@@ -441,6 +509,10 @@ check("and the previous room lines, movement traces excluded",
        "- Narrator:" in SCENE.calls[0]["user"],
        "Storyteller" in SCENE.calls[0]["user"]), (True, True, False, False))
 check("the budget is capped", SCENE.calls[0]["kwargs"].get("max_tokens"), 600)
+check("the call names the room and no participant",
+      (SCENE.calls[0]["kwargs"].get("label"),
+       SCENE.calls[0]["kwargs"].get("agent_name")),
+      (f"NPC scene {LOC_ID}/taproom", ""))
 check("the room is on cooldown now", npc_scenes.candidate_rooms(), [])
 set_game_time(game_time() + GameDuration.of(minutes=46))
 check("46 game minutes later it is due again",
@@ -495,6 +567,17 @@ s, u = render_task("npc_scene", **v)
 check("system and user render", (bool(s.strip()), bool(u.strip())), (True, True))
 check("the system part spells out lines, pair and activities",
       ('"lines"' in s, '"pair"' in s, '"activities"' in s), (True, True, True))
+# Without a pair clip there are no pair keys, and then the prompt must not
+# offer a pair the application would only reject — the shape line's
+# `"pair": null` stays, the rule and the key list go.
+check("without pair keys nothing proposes a pair",
+      ("pair pose keys" in s.lower(), "Pair pose keys" in u), (False, False))
+interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
+v = npc_scenes.prompt_vars(LOC_ID, "taproom", [A, B])
+s, u = render_task("npc_scene", **v)
+check("with a pair key the rule and the key list render",
+      ("pair pose keys" in s.lower(), "Pair pose keys" in u), (True, True))
+interaction_engine.partner_poses = _real_partner_poses
 
 # ── result ──────────────────────────────────────────────────────────────────
 print()

@@ -385,6 +385,8 @@ def _apply_talk(name: str, answer: Dict[str, Any],
                                addressees=[to], location_id=loc, room_id=room,
                                source="npc_action")
         if uid is None:
+            logger.info("npc_action(%s): line to %s not recorded — nothing was "
+                        "said this turn", name, to)
             return {}
         try:
             from app.core.agent_loop import get_agent_loop
@@ -411,6 +413,8 @@ def _apply_talk(name: str, answer: Dict[str, Any],
         if create_invite(name, partner, pose):
             logger.info("npc_action(%s): invites %s to %s", name, partner, pose)
             return {"invited": partner}
+        logger.info("npc_action(%s): invitation to %s for %s not recorded — "
+                    "nothing was proposed this turn", name, partner, pose)
     return {}
 
 
@@ -605,11 +609,15 @@ def _ask(llm: Callable[..., Any], name: str, system_prompt: str,
     per NPC per interval (feedback_validate_llm_guards).
 
     Shared with the director scene (``npc_scenes``), which passes its own
-    ``task``, ``label`` and budget — the JSON-or-repair rule is the same.
+    ``task``, ``label`` and budget — the JSON-or-repair rule is the same. It
+    also passes an EMPTY ``name``: the scene is about the room, not about one
+    participant, so no character override may apply and the label carries no
+    name in brackets.
     """
+    suffix = f" ({name})" if name else ""
     response = llm(task=task, system_prompt=system_prompt,
                    user_prompt=user_prompt, agent_name=name,
-                   label=f"{label} ({name})",
+                   label=f"{label}{suffix}",
                    max_tokens=max_tokens)
     raw = str(getattr(response, "content", "") or "")
     obj = _parse_json(raw)
@@ -619,8 +627,9 @@ def _ask(llm: Callable[..., Any], name: str, system_prompt: str,
     repair = (f"{raw[:2000]}\n\n"
               "That was not valid JSON. Return the SAME content as a single "
               "valid JSON object — no markdown, no code fence, no explanation.")
+    repair_suffix = f" ({name}, repair)" if name else " (repair)"
     response = llm(task=task, system_prompt=system_prompt, user_prompt=repair,
-                   agent_name=name, label=f"{label} ({name}, repair)",
+                   agent_name=name, label=f"{label}{repair_suffix}",
                    max_tokens=max_tokens)
     return _parse_json(str(getattr(response, "content", "") or ""))
 

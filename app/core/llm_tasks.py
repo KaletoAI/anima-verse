@@ -490,7 +490,9 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         # NPCs are not a supported setup. creative True, language_de True —
         # it speaks the world's language. latency_sensitive True: the reply
         # sits in the respond lane while the player watches the room.
-        "tools": False, "vision": False, "json": False, "min_context": 8192,
+        # min_context like chat_stream: it is the SAME chat prompt (sheet,
+        # room perception, memories) — only the model class is smaller.
+        "tools": False, "vision": False, "json": False, "min_context": 16384,
         "model_class": "small", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": True, "latency_sensitive": True,
     },

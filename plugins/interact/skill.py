@@ -121,18 +121,27 @@ class InteractSkill(PluginSkill):
             blocked = IE.check_can_pair(actor, partner)
             if blocked:
                 return f"Cannot: {blocked}"
-            if not IE.create_invite(actor, partner, key):
+            invite_id = IE.create_invite(actor, partner, key)
+            if not invite_id:
                 return f"Cannot ask {partner} right now."
-            return self._ask(actor, partner, key)
+            return self._ask(actor, partner, key, invite_id)
         except ValueError as e:
             return f"Cannot: {e}"
         except Exception as e:
             self.ctx.logger.exception("%s [%s] failed: %s", self.name, actor, e)
             return f"Error in {self.name}: {e}"
 
-    def _ask(self, actor: str, partner: str, key: str) -> str:
+    def _ask(self, actor: str, partner: str, key: str,
+             invite_id: str = "") -> str:
         """Hand the recorded question to whoever has to answer it: the player
-        sees it in the UI, an NPC is nudged to answer in its own turn."""
+        sees it in the UI, an NPC is nudged to answer in its own turn.
+
+        A TEMPORARY NPC has already answered by the time we get here: the
+        hook in ``register.py`` resolves the invitation synchronously inside
+        ``create_invite``. Telling the actor "X was asked" would be a lie the
+        very next line contradicts, so the row is read back and the sentence
+        says what actually happened.
+        """
         try:
             from app.models.account import is_player_controlled
             is_avatar = is_player_controlled(partner)
@@ -143,7 +152,33 @@ class InteractSkill(PluginSkill):
             # IS the question, and /play/interact/respond is the answer.
             return (f"{actor} asks {partner} to {key} together "
                     f"— waiting for their answer.")
+        answered = self._answered_at_once(partner, invite_id, key)
+        if answered:
+            return answered
         # An NPC invitee gets its turn from this package's own hook handler
         # (register.py), which the core fires on every recorded invitation —
         # so the route and this verb nudge it in exactly one place.
         return f"{actor} asks {partner} to {key} together."
+
+    def _answered_at_once(self, partner: str, invite_id: str,
+                          key: str) -> str:
+        """The sentence for an invitation that is ALREADY answered, or ``""``
+        when it is still open (or the invitee is not a temporary NPC)."""
+        if not invite_id:
+            return ""
+        try:
+            from app.models.character import is_temporary_npc
+            if not is_temporary_npc(partner):
+                return ""
+            from app.core import interaction_engine as IE
+            status = str((IE.get_invite(invite_id) or {}).get("status") or "")
+        except Exception as e:  # noqa: BLE001 — never lose the verb over this
+            self.ctx.logger.debug("reading invite %s failed: %s", invite_id, e)
+            return ""
+        if status in ("accepted", "started"):
+            return f"{partner} agrees; the {key} begins."
+        if status == "approaching":
+            return f"{partner} agrees and comes over for the {key}."
+        if status in ("declined", "stale", "cancelled"):
+            return f"{partner} cannot right now."
+        return ""

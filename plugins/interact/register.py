@@ -33,7 +33,9 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
     A TEMPORARY NPC has no thought turns (``thoughts_enabled`` is off, so
     ``bump`` refuses it) and no will system to consult: it says yes at once,
     and the engine's own state check decides whether the pair can start
-    (asleep, travelling, occupied -> ``cannot``).
+    (asleep, travelling, occupied -> ``cannot``). A ``cannot`` that leaves the
+    question OPEN is closed here: the engine keeps "not yet" questions alive
+    for a second answer, and a temporary NPC never gives one.
     """
     if not inviter or not invitee:
         return
@@ -46,10 +48,22 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
     try:
         from app.models.character import is_temporary_npc
         if invite_id and is_temporary_npc(invitee):
-            from app.core.interaction_engine import resolve_invite
-            res = resolve_invite(invite_id, accept=True)
+            from app.core import interaction_engine as IE
+            res = IE.resolve_invite(invite_id, accept=True)
             logger.info("interaction invite %s: temporary NPC %s says yes -> %s",
                         invite_id, invitee, res.get("status"))
+            # "cannot" with the row back on `pending` is the engine's "ask
+            # again in a minute" (a taken seat, a missing clip). For a
+            # temporary NPC nobody ever will: it has no thought turns, so the
+            # question would sit open until the sweep. Close it here.
+            if res.get("status") == "cannot":
+                row = IE.get_invite(invite_id) or {}
+                if row.get("status") == "pending":
+                    logger.info("interaction invite %s: %s cannot (%s) and "
+                                "nobody re-answers a temporary NPC — cancelled",
+                                invite_id, invitee,
+                                res.get("reason") or "no reason given")
+                    IE.cancel_invite(invite_id)
             return
     except Exception as e:
         logger.debug("temporary-NPC acceptance failed for %s: %s", invitee, e)

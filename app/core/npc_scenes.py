@@ -254,8 +254,11 @@ def run_scene_for(location_id: str, room_id: str, names: List[str], *,
     _last_scene[_room_key(location_id, room_id)] = game_time()
     variables = prompt_vars(location_id, room_id, names)
     system_prompt, user_prompt = render_task(TASK, **variables)
-    answer = npc_actions._ask(llm, names[0] if names else "", system_prompt,
-                              user_prompt, task=TASK, label="NPC scene",
+    # agent_name="": the scene belongs to the ROOM, not to participant 0 — a
+    # per-character model override must not decide how the room talks. The
+    # label names the room instead, so the LLM log says which one it was.
+    answer = npc_actions._ask(llm, "", system_prompt, user_prompt, task=TASK,
+                              label=f"NPC scene {location_id}/{room_id}",
                               max_tokens=_MAX_ANSWER_TOKENS)
     if answer is None:
         logger.info("npc_scene(%s/%s): no usable answer", location_id, room_id)
@@ -276,4 +279,6 @@ def _sub_npc_scenes() -> None:
         if done:
             logger.info("npc_scenes: %d scene(s) written", done)
     except Exception as e:  # noqa: BLE001
-        logger.debug("npc_scenes sub error: %s", e)
+        # Not debug: a candidate scan that breaks makes scene mode silently
+        # inert — the same reasoning as in `_sub_npc_actions`.
+        logger.warning("npc_scenes sub error: %s", e)

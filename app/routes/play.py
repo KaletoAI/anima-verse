@@ -1806,6 +1806,13 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     asked for the same thing (the avatar's proposal is then its consent),
     otherwise "asked". 400 on an unknown pose, 409 with the engine's reason
     when the two cannot pair up at all.
+
+    An "asked" carries how the question stands the moment it was recorded:
+    a temporary NPC answers SYNCHRONOUSLY inside ``create_invite`` (the
+    interact package's hook), so the row can already be accepted or dead
+    before this returns. ``invite_status`` is that row's own status and
+    ``answered`` says the question is no longer open — without them the UI
+    would keep waiting for an answer that was given.
     """
     from app.core import interaction_engine as IE
     avatar = _require_avatar()
@@ -1830,9 +1837,16 @@ def _play_interact_sync(body: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=409, detail=blocked)
     # create_invite emits ``interaction.invited``; the package that owns the
     # pair verb gives an NPC invitee its turn. Nothing to do here.
-    if not IE.create_invite(avatar, partner, pose):
+    invite_id = IE.create_invite(avatar, partner, pose)
+    if not invite_id:
         raise HTTPException(status_code=409, detail="could not ask")
-    return {"ok": True, "status": "asked", "partner": partner, "pose": pose}
+    row = IE.get_invite(invite_id) or {}
+    invite_status = str(row.get("status") or "")
+    out = {"ok": True, "status": "asked", "partner": partner, "pose": pose,
+           "invite_status": invite_status}
+    if invite_status and invite_status != "pending":
+        out["answered"] = True
+    return out
 
 
 @router.post("/play/interact/respond")

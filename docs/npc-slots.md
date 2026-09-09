@@ -145,6 +145,10 @@ one of her. An authored `count_min: 3` would report a gap that can never close.
 | `npc.action_tick_enabled` | `true` | Let living NPCs change room and activity on their own, guided by a small LLM turn. |
 | `npc.action_interval_game_minutes` | `30` | Minimum game time between two action turns of the SAME NPC. |
 | `npc.action_batch` | `2` | How many NPCs at most get an action turn in one check — the cap on what the tick costs per minute. |
+| `npc.conversation_mode` | `turns` | How temporary NPCs talk to each other at a place the avatar is at. `turns`: the action tick may open a conversation and the replies run one turn at a time (task `npc_talk`). `scene`: one small director call writes a short exchange per room (task `npc_scene`). `off`: NPCs only answer when addressed. |
+| `npc.scene_interval_game_minutes` | `45` | Minimum GAME time between two director scenes in the SAME room (scene mode). |
+| `npc.scene_batch` | `1` | How many rooms at most get a director scene in one check. |
+| `npc.scene_max_npcs` | `3` | Participants of one director scene. |
 
 ## The action tick and roaming
 
@@ -218,6 +222,19 @@ With the avatar in the SAME room and active within
 `chat.avatar_floor_timeout_minutes`, the player-priority rule still holds: an
 opener gets one answer, then the stage is the player's. Next door the cascade
 runs to the room backstop.
+
+An exchange the avatar OVERHEARS counts as "in chat" for both speakers. The
+in-chat rule asks the perception stream for the last speech act a character
+shared with an avatar, and a line the avatar perceives is exactly that — so
+every NPC that says something in the player's earshot sits in the agent loop's
+HOT window for the next 10 REAL minutes (`_IN_CHAT_HOT_MIN` in
+`app/core/agent_loop.py`). Inside that window the action tick skips those NPCs
+(no room change, no new opener), the director drops them from its participant
+list (so a room whose only two NPCs just talked gets no new scene), and the
+TTL and time-window sweeps defer them instead of pooling them. That is
+deliberate — nobody walks out of a running scene and nobody is swept away
+mid-sentence. The practical effect in the player's own room is about one
+exchange per 10 minutes.
 
 A pair invitation to a temporary NPC is accepted at once (the interact
 package's hook); the engine's own state check decides whether the pair can
