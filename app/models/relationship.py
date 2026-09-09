@@ -28,6 +28,33 @@ MAX_HISTORY_ENTRIES = 20
 # Weekly decay amount when no interaction occurs (applied externally)
 DECAY_PER_WEEK = 1
 
+# Human-readable label per relationship type (used in every prompt section)
+TYPE_LABELS = {
+    "friend": "Friend",
+    "romantic": "Romantic interest",
+    "rival": "Rival",
+    "acquaintance": "Acquaintance",
+    "enemy": "Enemy",
+    "neutral": "Known",
+}
+
+
+def sentiment_label(value: float) -> str:
+    """Map an asymmetric sentiment (-1..1) to the word used in prompts."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = 0.0
+    if v > 0.5:
+        return "very positive"
+    if v > 0.1:
+        return "positive"
+    if v < -0.5:
+        return "very negative"
+    if v < -0.1:
+        return "negative"
+    return "neutral"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -589,21 +616,12 @@ def build_relationship_prompt_section(character_name: str
     rels.sort(key=lambda r: r.get("strength", 0), reverse=True)
     rels = rels[:8]
 
-    type_labels = {
-        "friend": "Friend",
-        "romantic": "Romantic interest",
-        "rival": "Rival",
-        "acquaintance": "Acquaintance",
-        "enemy": "Enemy",
-        "neutral": "Known",
-    }
-
     lines = ["\nYour relationships with other characters:"]
     for rel in rels:
         a = rel.get("character_a", "")
         b = rel.get("character_b", "")
         other = b if a.lower() == character_name.lower() else a
-        rtype = type_labels.get(rel.get("type", "neutral"), "Known")
+        rtype = TYPE_LABELS.get(rel.get("type", "neutral"), "Known")
         strength = int(rel.get("strength", 0))
 
         # Determine this character's sentiment toward the other
@@ -612,16 +630,7 @@ def build_relationship_prompt_section(character_name: str
         else:
             my_sentiment = rel.get("sentiment_b_to_a", 0)
 
-        if my_sentiment > 0.5:
-            feeling = "very positive"
-        elif my_sentiment > 0.1:
-            feeling = "positive"
-        elif my_sentiment < -0.5:
-            feeling = "very negative"
-        elif my_sentiment < -0.1:
-            feeling = "negative"
-        else:
-            feeling = "neutral"
+        feeling = sentiment_label(my_sentiment)
 
         lines.append(f"- {other}: {rtype} (closeness {strength}/100, feeling: {feeling})")
 
