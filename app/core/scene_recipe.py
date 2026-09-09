@@ -1526,9 +1526,12 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     the door leads onto it.
 
     ``floor_levels`` are the storeys that OWN a corridor room (§ 3.1): there,
-    a door whose author named no ``to`` opens into that corridor instead of
-    out of the building, so it gets the corridor as its second room and stops
-    being an exterior door. A storey without a corridor keeps the old rule.
+    a door or passage whose author named no ``to`` opens into that corridor
+    instead of out of the building, so it gets the corridor as its SECOND
+    room and stops being an exterior door. A storey without a corridor keeps
+    the old rule. The corridor is only ever the second room of a gap NO OTHER
+    ROOM claims, which is why it is appended after the dedup, next to
+    ``outside`` — a party wall's mirrored copy names its own room and wins.
 
     A window is no way out (``_WALKABLE_TYPES``), a room without a shell has
     no threshold, and the order is deterministic (level, position, rooms):
@@ -1544,17 +1547,11 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     """
     from app.models.world import GROUND_ROOM_ID, floor_room_id
 
-    def _rooms_of(room_id: str, to: str, level: int) -> List[str]:
+    def _rooms_of(room_id: str, to: str) -> List[str]:
         out = [room_id]
         if to and to.lower() != "outside" and to != GROUND_ROOM_ID \
                 and to != room_id:
             out.append(to)
-        elif not to and level in floor_levels:
-            # A door nobody linked leads into the storey's corridor where
-            # there is one (spec § 3.1) — it is a door in a hallway wall, not
-            # a hole in the building hull. ``to: "outside"`` stays the
-            # explicit exterior door.
-            out.append(floor_room_id(level))
         return out
 
     tol = SHARE_TOL_M + 1e-4
@@ -1594,7 +1591,12 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
                     # do not re-derive it either — same rule as ``width_m``.
                     "height_m": _r(min(_opening_height(op, wall_h), wall_h)),
                     "base_y": base,
-                    "rooms": _rooms_of(room_id, to, level),
+                    "rooms": _rooms_of(room_id, to),
+                    # INTERNAL, dropped below: did the AUTHOR leave this
+                    # opening's ``to`` empty? The corridor rule reads it after
+                    # the dedup, and a merge keeps it only while EVERY
+                    # candidate of the gap was unlabelled.
+                    "_unlabelled": not to,
                     # INTERNAL, stripped in compose_scene — see the docstring.
                     "_door_prop": {
                         "id": door_prop_id(op, default_door_prop_id),
@@ -1674,6 +1676,10 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
             keep = {k: base_entry[k] for k in ("along", "rooms", "_door_prop")}
             keep["rooms"] = keep["rooms"] + [r for r in entry["rooms"]
                                              if r not in keep["rooms"]]
+            # One labelled candidate is enough to make the gap a labelled one,
+            # whichever of the two won the geometry.
+            keep["_unlabelled"] = (bool(base_entry.get("_unlabelled"))
+                                   and bool(entry.get("_unlabelled")))
             base_entry.update(entry)
             base_entry.update(keep)
             base[1] = centre
@@ -1681,15 +1687,25 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
             for room_id in entry["rooms"]:
                 if room_id not in base_entry["rooms"]:
                     base_entry["rooms"].append(room_id)
+            base_entry["_unlabelled"] = (bool(base_entry.get("_unlabelled"))
+                                         and bool(entry.get("_unlabelled")))
 
     out = [entry for entry, _c in kept]
     for entry in out:
-        # ``outside`` is decided HERE, on the finished geometry, and never on
-        # what an author typed into ``to``: after the dedup a single room means
-        # no second room's wall meets this gap AND no corridor claims it, i.e.
-        # it opens out of the building — onto the ground. A door someone left
-        # unlabelled on a storey without a corridor is therefore a proper
-        # exterior door, not a doorway to nowhere.
+        # THE CORRIDOR IS THE SECOND ROOM OF A GAP NOBODY ELSE CLAIMS (§ 3.1),
+        # so it is decided HERE, after the dedup — never while an entry is
+        # built. On a party wall the neighbour's mirrored copy arrives stamped
+        # with its own ``to`` (``room_recipe._mirrored_openings``), and only
+        # the finished entry knows whether that copy met this gap.
+        if (entry.pop("_unlabelled", False) and len(entry["rooms"]) == 1
+                and entry["level"] in floor_levels):
+            entry["rooms"].append(floor_room_id(entry["level"]))
+        # ``outside`` is decided HERE too, on the finished geometry, and never
+        # on what an author typed into ``to``: after the dedup a single room
+        # means no second room's wall meets this gap AND no corridor claims
+        # it, i.e. it opens out of the building — onto the ground. A door or
+        # passage someone left unlabelled on a storey without a corridor is
+        # therefore a proper exterior door, not a doorway to nowhere.
         entry["outside"] = len(entry["rooms"]) == 1
     out.sort(key=lambda e: (e["level"], e["at_world"], e["rooms"]))
     return out

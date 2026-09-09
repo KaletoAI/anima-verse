@@ -95,6 +95,25 @@ Part 5 — the door rule (§ 3.1), through compose_scene on a hand-built
     hull's leaf is at stake here.
     The same location WITHOUT the __floor__-1 entry (red probe, old rule):
       k1 outside True, hull leaves on level -1 -> 2
+    The same location with EG'S OPENING REMOVED (companion probe): no doorway
+    on level 0 leads outside any more, so problems DO carry
+    "no_building_entrance" — the assertion above states something real.
+
+Part 5b — a PARTY WALL, same contour and storey (§ 3.1): the corridor is the
+    second room only of a gap no other room claims, so it must lose against a
+    neighbour — which is decided after the gap dedup, not while a doorway is
+    built.
+      k1  level -1  x -4 y -4 w 3 d 3   door on its EAST edge ("E", at 0.5,
+                                        0.9 x 2.0), no `to`
+      k3  level -1  x -1 y -4 w 3 d 3   no opening of its own
+      __floor__-1 present, so the corridor rule is armed
+    Both rects meet on the line x = -1 (k1 runs x -4..-1, k3 x -1..2, both
+    z -4..-1), so room_recipe._mirrored_openings hands k3 a copy of that door
+    stamped `to: "k1"`. The two candidates are the same gap and the dedup
+    melts them into ONE doorway carrying both rooms:
+      doorways on level -1 -> 1, its rooms -> ["k1", "k3"], outside False
+      no "__floor__-1" anywhere in that doorway's rooms
+      hull leaves on level -1 -> 0   (an interior gap pierces no hull)
 """
 import logging
 import sys
@@ -128,27 +147,43 @@ def room(rid, level=None, layout=True, name=""):
     return r
 
 
-def cellar_fixture(with_corridor=True):
-    """Two cellar rooms and a ground-floor room, each with one unlinked door.
+def rm(rid, level, x, y, w, d, edge="S"):
+    """A rectangular room with ONE unlinked door on the named edge.
 
     Shaped like ``scripts/smoke_scene_recipe.py::fixture``: plan coordinates
-    are local metres, the contour is the location's own square, and the
-    legacy edge letter "S" is the room's south wall.
+    are local metres, and the legacy edge letters are N/E/S/W. ``edge=None``
+    gives a room without any opening.
     """
-    def rm(rid, level, x, y, w, d):
-        return {"id": rid, "name": rid, "layout": {
-            "level": level, "x": x, "y": y, "w": w, "d": d,
-            "openings": [{"edge": "S", "at": 0.5, "width_m": 0.9,
-                          "height_m": 2.0, "type": "door"}]}}
+    layout = {"level": level, "x": x, "y": y, "w": w, "d": d}
+    if edge:
+        layout["openings"] = [{"edge": edge, "at": 0.5, "width_m": 0.9,
+                               "height_m": 2.0, "type": "door"}]
+    return {"id": rid, "name": rid, "layout": layout}
 
+
+def location(rooms):
+    """The 10 x 10 contour of Part 5 around a list of rooms."""
+    return {"id": "loc1", "name": "Cellar house", "rooms": list(rooms),
+            "map3d": {"outline": [[-5, -5], [5, -5], [5, 5], [-5, 5]],
+                      "storey_height_m": 3}}
+
+
+def cellar_fixture(with_corridor=True, eg_door=True):
+    """Two cellar rooms and a ground-floor room, each with one unlinked door."""
     rooms = [rm("k1", -1, -4, -4, 3, 3), rm("k2", -1, 1, -4, 3, 3),
-             rm("eg", 0, -4, -4, 4, 3),
+             rm("eg", 0, -4, -4, 4, 3, edge="S" if eg_door else None),
              {"id": world.GROUND_ROOM_ID, "name": ""}]
     if with_corridor:
         rooms.append({"id": "__floor__-1", "level": -1, "name": ""})
-    return {"id": "loc1", "name": "Cellar house", "rooms": rooms,
-            "map3d": {"outline": [[-5, -5], [5, -5], [5, 5], [-5, 5]],
-                      "storey_height_m": 3}}
+    return location(rooms)
+
+
+def party_wall_fixture():
+    """Two cellar rooms sharing the wall x = -1, the door drawn by k1."""
+    return location([rm("k1", -1, -4, -4, 3, 3, edge="E"),
+                     rm("k3", -1, -1, -4, 3, 3, edge=None),
+                     {"id": world.GROUND_ROOM_ID, "name": ""},
+                     {"id": "__floor__-1", "level": -1, "name": ""}])
 
 
 def hull_leaves(sc, level):
@@ -264,6 +299,24 @@ def main():
     dw0 = {d["rooms"][0]: d for d in sc0["doorways"]}
     check("no corridor: k1 outside", dw0["k1"]["outside"], True)
     check("no corridor: hull leaves level -1", hull_leaves(sc0, -1), 2)
+
+    # Companion probe: without eg's door nobody can get into the building any
+    # more, so the finding above is a real assertion and not a tautology.
+    sc1 = scene_recipe.compose_scene(cellar_fixture(eg_door=False))
+    check("no front door: entrance problem",
+          [p["kind"] for p in sc1.get("problems") or []
+           if p.get("kind") == "no_building_entrance"],
+          ["no_building_entrance"])
+
+    print("Part 5b — a party wall beats the corridor")
+    sc2 = scene_recipe.compose_scene(party_wall_fixture())
+    cellar = [d for d in sc2["doorways"] if d["level"] == -1]
+    check("one doorway for the shared gap", len(cellar), 1)
+    check("party wall rooms", cellar[0]["rooms"] if cellar else None,
+          ["k1", "k3"])
+    check("party wall not outside",
+          cellar[0]["outside"] if cellar else None, False)
+    check("hull untouched on level -1", hull_leaves(sc2, -1), 0)
 
     print("FAILED" if FAILS else "ALL OK")
     sys.exit(1 if FAILS else 0)
