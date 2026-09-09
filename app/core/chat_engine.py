@@ -506,6 +506,88 @@ def build_chat_context(
     }
 
 
+def execute_tool_matches(ctx: Dict[str, Any], responder: str,
+                         matches: List[tuple], *, rp_text: str,
+                         incoming_message: str) -> None:
+    """Run the tool calls of ONE reply under the respond lane's rules.
+
+    Shared by the rp_first tool phase (matches from the tool LLM's decision)
+    and the single chat mode (matches written INLINE by the chat model, see
+    ``run_chat_turn``). The rules: an unknown tool name is logged and
+    skipped; a CONTENT_TOOL is skipped (this path has no chat retry to feed
+    its result back); a SUPPRESS_IN_PERSON verb is skipped while the medium
+    is in_person (one does not walk away in the turn one answers in); a
+    DEFERRED tool runs in a daemon thread with the RP text injected;
+    everything else runs right here. Nothing raises out of this function.
+    """
+    from app.core.streaming import _inject_rp_context
+    _deferred_set = ctx.get("deferred_tools") or set()
+    _content_set = ctx.get("content_tools") or set()
+    _deferred_matches: List[tuple] = []
+    for _name, _inp in matches:
+        _fn = ctx["tools_dict"].get(_name)
+        if not _fn:
+            # The model called a tool this character does not have (name
+            # mismatch or not enabled). Silently dropping it used to show up
+            # as "tool call in the log, never executed" — logged so the
+            # reason is visible.
+            logger.warning("run_chat_turn[%s]: Tool-Call '%s' ohne Executor "
+                           "(nicht verfügbar/Name-Mismatch) — übersprungen "
+                           "(verfügbar: %s)", responder, _name,
+                           ", ".join(sorted(ctx["tools_dict"].keys())))
+            continue
+        if _name in _content_set:
+            logger.info("run_chat_turn[%s]: Content-Tool %s übersprungen "
+                        "(kein Retry-Pfad in run_chat_turn)", responder, _name)
+            continue
+        if _name in _deferred_set:
+            _deferred_matches.append((_name, _inp))
+            continue
+        # A (plan-follow-room-conversation-bug): whoever ANSWERS in an
+        # in-person conversation does not walk away in the same turn.
+        # The tool LLM otherwise derives a movement verb from RP prose
+        # ("stands up, Move east") while the character was just
+        # speaking. Which verbs count is declared by the skills
+        # (SUPPRESS_IN_PERSON flag); teleport (spell) is a deliberate
+        # act and NOT affected.
+        from app.core.streaming import _suppress_in_person_tool_names
+        if _name in _suppress_in_person_tool_names() and ctx.get("medium") == "in_person":
+            logger.info("run_chat_turn[%s]: %s unterdrückt — Antwort im selben "
+                        "in-person-Turn (man geht nicht weg, während man spricht)",
+                        responder, _name)
+            continue
+        try:
+            _fn(_inp)
+            logger.info("run_chat_turn[%s]: Tool ausgeführt → %s", responder, _name)
+        except Exception as _te:
+            logger.warning("run_chat_turn[%s]: Tool %s fehlgeschlagen: %s",
+                           responder, _name, _te)
+    if _deferred_matches:
+        # Post-RP execution in a daemon thread: does not block the chat
+        # answer (a skill's execute may contain LLM calls for the prompt
+        # build); the skills enqueue into the task queue themselves.
+        _tools_dict = ctx["tools_dict"]
+
+        def _run_deferred(matches=_deferred_matches, rp=rp_text,
+                          ui=incoming_message, who=responder):
+            for _dname, _dinp in matches:
+                try:
+                    _tools_dict[_dname](_inject_rp_context(_dinp, rp, ui))
+                    logger.info("run_chat_turn[%s]: Deferred Tool ausgeführt → %s",
+                                who, _dname)
+                except Exception as _de:
+                    logger.error("run_chat_turn[%s]: Deferred Tool %s fehlgeschlagen: %s",
+                                 who, _dname, _de)
+
+        import threading
+        # bind_trace instead of copying the whole context: the
+        # deferred tools deliberately run WITHOUT the caller's
+        # perception shadow, they only need the turn's trace id.
+        from app.core.turn_trace import bind_trace
+        threading.Thread(target=bind_trace(_run_deferred),
+                         daemon=True).start()
+
+
 def run_chat_turn(
     owner_id: str,
     responder: str,
@@ -605,8 +687,35 @@ def run_chat_turn(
         logger.error("run_chat_turn LLM error for %s: %s", responder, e)
         return ""
 
+    # SINGLE chat mode: the chat model writes its tool calls INLINE
+    # (``<tool name="…">…</tool>``), exactly as the streaming path's
+    # ``_stream_single`` expects. They are read from the RAW text before the
+    # cleanup strips them, and executed after the return like the rp_first
+    # phase (2026-09-09: without this a temporary NPC's whole answer was the
+    # tag, recorded verbatim as its utterance, and the room imitated it).
+    _inline_matches: List[tuple] = []
+    if ctx.get("mode") == "single" and ctx.get("tools_dict"):
+        try:
+            from app.core.tool_formats import find_tool_calls
+            from app.core.streaming import _dedupe_singleton_tools
+            _inline_matches = _dedupe_singleton_tools(find_tool_calls(
+                ctx.get("tool_format", "tag"), raw, ctx["tools_dict"]))
+        except Exception as _me:  # noqa: BLE001 — the answer still goes out
+            logger.warning("run_chat_turn[%s]: inline tool scan failed: %s",
+                           responder, _me)
+            _inline_matches = []
+
     clean = clean_response(raw)
     if not clean:
+        if _inline_matches:
+            # The character DID something, it just said nothing: the tool
+            # call was the whole reply. Run it now — there is no reply to
+            # hand back first, so nothing waits on this.
+            logger.info("run_chat_turn[%s]: reply is tool calls only (%s)",
+                        responder, ", ".join(n for n, _ in _inline_matches))
+            execute_tool_matches(ctx, responder, _inline_matches, rp_text="",
+                                 incoming_message=incoming_message)
+            return ""
         logger.warning("run_chat_turn: leere Antwort von %s", responder)
         return ""
 
@@ -652,72 +761,8 @@ def run_chat_turn(
                 label=f"Tool: {speaker} → {responder}")
             _ttext = getattr(_tresp, "content", "") or ""
             _matches = find_tool_calls(ctx.get("tool_format", "tag"), _ttext, ctx["tools_dict"])
-            _deferred_set = ctx.get("deferred_tools") or set()
-            _content_set = ctx.get("content_tools") or set()
-            _deferred_matches: List[tuple] = []
-            for _name, _inp in _matches:
-                _fn = ctx["tools_dict"].get(_name)
-                if not _fn:
-                    # Tool-LLM hat ein Tool aufgerufen, das dieser Character gar
-                    # nicht hat (Name-Mismatch oder nicht aktiviert) → still
-                    # verworfen war als "Tool-Call im Log, aber nie ausgeführt"
-                    # sichtbar. Jetzt geloggt, damit der Grund auftaucht.
-                    logger.warning("run_chat_turn[%s]: Tool-Call '%s' ohne Executor "
-                                   "(nicht verfügbar/Name-Mismatch) — übersprungen "
-                                   "(verfügbar: %s)", responder, _name,
-                                   ", ".join(sorted(ctx["tools_dict"].keys())))
-                    continue
-                if _name in _content_set:
-                    logger.info("run_chat_turn[%s]: Content-Tool %s übersprungen "
-                                "(kein Retry-Pfad in run_chat_turn)", responder, _name)
-                    continue
-                if _name in _deferred_set:
-                    _deferred_matches.append((_name, _inp))
-                    continue
-                # A (plan-follow-room-conversation-bug): whoever ANSWERS in an
-                # in-person conversation does not walk away in the same turn.
-                # The tool LLM otherwise derives a movement verb from RP prose
-                # ("stands up, Move east") while the character was just
-                # speaking. Which verbs count is declared by the skills
-                # (SUPPRESS_IN_PERSON flag); teleport (spell) is a deliberate
-                # act and NOT affected.
-                from app.core.streaming import _suppress_in_person_tool_names
-                if _name in _suppress_in_person_tool_names() and ctx.get("medium") == "in_person":
-                    logger.info("run_chat_turn[%s]: %s unterdrückt — Antwort im selben "
-                                "in-person-Turn (man geht nicht weg, während man spricht)",
-                                responder, _name)
-                    continue
-                try:
-                    _fn(_inp)
-                    logger.info("run_chat_turn[%s]: Tool ausgeführt → %s", responder, _name)
-                except Exception as _te:
-                    logger.warning("run_chat_turn[%s]: Tool %s fehlgeschlagen: %s",
-                                   responder, _name, _te)
-            if _deferred_matches:
-                # Post-RP execution in a daemon thread: does not block the
-                # chat answer (a skill's execute may contain LLM calls for the
-                # prompt build); the skills enqueue into the task queue
-                # themselves.
-                _tools_dict = ctx["tools_dict"]
-
-                def _run_deferred(matches=_deferred_matches, rp=clean,
-                                  ui=incoming_message, who=responder):
-                    for _dname, _dinp in matches:
-                        try:
-                            _tools_dict[_dname](_inject_rp_context(_dinp, rp, ui))
-                            logger.info("run_chat_turn[%s]: Deferred Tool ausgeführt → %s",
-                                        who, _dname)
-                        except Exception as _de:
-                            logger.error("run_chat_turn[%s]: Deferred Tool %s fehlgeschlagen: %s",
-                                         who, _dname, _de)
-
-                import threading
-                # bind_trace instead of copying the whole context: the
-                # deferred tools deliberately run WITHOUT the caller's
-                # perception shadow, they only need the turn's trace id.
-                from app.core.turn_trace import bind_trace
-                threading.Thread(target=bind_trace(_run_deferred),
-                                 daemon=True).start()
+            execute_tool_matches(ctx, responder, _matches, rp_text=clean,
+                                 incoming_message=incoming_message)
             return _extract_markers(_ttext, clean) or ""
         except Exception as _e:
             logger.warning("run_chat_turn rp_first tool-phase failed: %s", _e)
@@ -770,7 +815,8 @@ def run_chat_turn(
     # relationship, intent, mood/location/activity adoption, expression
     # regeneration, history summary — opt-in, player chat via the loop only).
     # plan-room-conversation-feature-parity §D.
-    if _needs_tool_phase or post_process:
+    _needs_inline_tools = bool(_inline_matches)
+    if _needs_tool_phase or _needs_inline_tools or post_process:
         try:
             import contextvars
             import threading
@@ -790,6 +836,18 @@ def run_chat_turn(
             def _bg_after_reply():
                 _markers = (_caller_ctx.run(_run_tool_phase)
                             if _needs_tool_phase else "")
+                if _needs_inline_tools:
+                    # Single mode: the fallback markers (**I do …**) sit
+                    # in the chat text itself, so they are read from the
+                    # raw answer for the post-processing below.
+                    _caller_ctx.run(execute_tool_matches, ctx, responder,
+                                    _inline_matches, rp_text=clean,
+                                    incoming_message=incoming_message)
+                    try:
+                        from app.core.streaming import _extract_markers
+                        _markers = _extract_markers(raw, clean) or ""
+                    except Exception as _xe:  # noqa: BLE001
+                        logger.debug("marker extraction failed: %s", _xe)
                 if not post_process:
                     return
                 try:
@@ -839,7 +897,13 @@ def clean_response(full_response: str) -> str:
     # _strip_tool_hallucinations; ohne dies leakten Marker in Utterance/History.
     from app.models.intents import strip_intent_markers
     clean = strip_intent_markers(clean)
-    # Strip tool hallucinations
+    # Strip tool hallucinations — and INLINE tool calls of the single chat
+    # mode, which run_chat_turn has already read from the raw text: the
+    # same two patterns routes/chat._strip_tool_hallucinations uses, so
+    # a tag never reaches an utterance or a history whichever path wrote it.
+    if "<tool" in clean:
+        clean = re.sub(r'<tool\s+name="[^"]*">[\s\S]*?</tool>', '', clean)
+        clean = re.sub(r'<tool\s+name="[^"]*">[^<]*', '', clean)
     clean = re.sub(r'<tool_call>.*?</tool_call>', '', clean, flags=re.DOTALL)
     clean = re.sub(r'</?tool_(?:call|result)>', '', clean)
     # LLM-Tokenizer-Artefakte entfernen — JEDES <|...|> (auch lowercase wie
