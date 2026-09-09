@@ -404,7 +404,8 @@ def build_chat_context(
         medium=medium,
         respond_opportunity=respond_opportunity,
         winding_down=winding_down,
-        present_characters=present_characters)
+        present_characters=present_characters,
+        incoming_text=user_input)
 
     # Zustands-Filter (drunk/exhausted/…): deren prompt_modifier wird nur im
     # Thought-Pfad angewandt. Hier (Chat-Antwort) ergänzen, damit der Character

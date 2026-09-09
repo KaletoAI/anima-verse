@@ -1064,7 +1064,8 @@ async def chat(request: Request) -> StreamingResponse:
         selected_skills=selected_skills,
         has_tool_llm=_has_tool_llm,
         medium=medium,
-        room_item_ids=room_item_ids)
+        room_item_ids=room_item_ids,
+        incoming_text=_effective_user_input)
 
     # --- Spell-Cast Sofort-Hinweis im System-Prompt ---
     # _spell_hint wurde oben (vor dem if not current_agent: return) befuellt
@@ -2168,7 +2169,8 @@ def _build_full_system_prompt(character_name: str,
     room_item_ids: Optional[list] = None,
     respond_opportunity: bool = False,
     winding_down: bool = False,
-    present_characters: Optional[list] = None) -> str:
+    present_characters: Optional[list] = None,
+    incoming_text: str = "") -> str:
     """Build the chat-stream / talk-to system prompt.
 
     Loads all data sections (character/soul template, partner template,
@@ -2179,6 +2181,9 @@ def _build_full_system_prompt(character_name: str,
     Args:
         skip_partner: True for group chat — partner section is skipped
             (participants get listed in the GROUP CONVERSATION block instead).
+        incoming_text: The message the LLM is about to answer, exactly as
+            it will see it. Only its size and shape reach the prompt;
+            callers that have no incoming message leave it empty.
     """
     from app.core.prompt_templates import render
 
@@ -2654,6 +2659,14 @@ def _build_full_system_prompt(character_name: str,
     from app.models.world_setup import get_world_setup_text
     world_setup = get_world_setup_text()
 
+    # ---- Reply shape --------------------------------------------------
+    # Facts about this moment only (role, mood, relationship, size of the
+    # incoming line). How to read them for reply length is the template's
+    # job, not Python's. Never raises — a missing fact just drops a line.
+    from app.core.reply_shape import build_reply_shape_section
+    reply_shape_section = build_reply_shape_section(
+        character_name, _partner_name, incoming_text)
+
     return render(
         "chat/chat_stream.md",
         character_name=character_name,
@@ -2692,5 +2705,6 @@ def _build_full_system_prompt(character_name: str,
         history_summary_block=history_summary_block,
         recent_activity_section=recent_activity_section,
         condition_reminder=condition_reminder,
+        reply_shape_section=reply_shape_section,
         respond_opportunity=respond_opportunity,
         winding_down=winding_down)

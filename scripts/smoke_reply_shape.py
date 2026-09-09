@@ -37,6 +37,31 @@ Bullet composition: one line per fact, in the fixed order incoming /
 on_duty / mood / relationship / attention / discretion, joined with "\\n",
 no trailing newline; no fact at all -> "".
 
+Render check [R] (chat/chat_stream.md, StrictUndefined): the template's
+REPLY LENGTH block reads, by hand,
+
+    === REPLY LENGTH ===
+    <five rule lines>
+    {% if reply_shape_section %}
+    This moment:
+    {{ reply_shape_section }}
+    {% endif %}
+
+so the header is unconditional and the facts are conditional. Rendering
+the template twice with an otherwise identical context therefore yields:
+with reply_shape_section "" -> header yes, "This moment:" no; with
+"- Your mood: annoyed." -> header yes, "This moment:" yes and the bullet
+verbatim. The old fixed sentence "one turn is a few sentences at most"
+was replaced by the block and must appear in NEITHER render. The context
+is built from jinja2.meta.find_undeclared_variables (every variable the
+template mentions) filled with "" — under StrictUndefined a forgotten
+variable raises, which is exactly what this block guards. "" is a valid
+value for the boolean flags too because the template only truth-tests
+them; partner_mode "room" + present_characters "Bob" + medium
+"in_person" pick concrete branches so the render is not an empty shell.
+The app's own Jinja environment (app.core.prompt_templates) is used —
+it builds without a world, so no paths.init() is needed.
+
 Usage:  ./.venv/bin/python scripts/smoke_reply_shape.py
 """
 import sys
@@ -207,6 +232,42 @@ def test_sentiment_label():
     print("[15] sentiment_label")
 
 
+def test_template_render():
+    # [R] the ONE render call must supply reply_shape_section — StrictUndefined
+    # turns a forgotten variable into a crash on every chat turn.
+    from jinja2 import meta
+
+    from app.core.prompt_templates import _env, render
+
+    source = _env.loader.get_source(_env, "chat/chat_stream.md")[0]
+    names = meta.find_undeclared_variables(_env.parse(source))
+    assert "reply_shape_section" in names, \
+        "[R] chat_stream.md does not reference reply_shape_section"
+
+    def _render(section: str) -> str:
+        ctx = {name: "" for name in names}
+        ctx.update(partner_mode="room", present_characters="Bob",
+                   medium="in_person", reply_shape_section=section)
+        return render("chat/chat_stream.md", **ctx)
+
+    without = _render("")
+    with_facts = _render("- Your mood: annoyed.")
+
+    check("[R] header without facts", "=== REPLY LENGTH ===" in without, True)
+    check("[R] header with facts", "=== REPLY LENGTH ===" in with_facts, True)
+    check("[R] no 'This moment:' without facts", "This moment:" in without, False)
+    check("[R] 'This moment:' with facts", "This moment:" in with_facts, True)
+    check("[R] no bullet without facts",
+          "- Your mood: annoyed." in without, False)
+    check("[R] bullet with facts",
+          "- Your mood: annoyed." in with_facts, True)
+    # the old fixed length sentence is gone for good
+    for label, text in (("without", without), ("with", with_facts)):
+        check(f"[R] old sentence gone ({label})",
+              "one turn is a few sentences at most" in text, False)
+    print("[R] chat_stream.md renders with and without the section")
+
+
 def main():
     test_constants()
     test_classify_incoming()
@@ -216,6 +277,7 @@ def main():
     test_compose_long_relationship()
     test_compose_no_partner()
     test_sentiment_label()
+    test_template_render()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 
