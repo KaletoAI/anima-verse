@@ -595,29 +595,33 @@ def _parse_json(raw: str) -> Optional[Dict[str, Any]]:
 
 
 def _ask(llm: Callable[..., Any], name: str, system_prompt: str,
-         user_prompt: str) -> Optional[Dict[str, Any]]:
+         user_prompt: str, *, task: str = TASK, label: str = "NPC action",
+         max_tokens: int = _MAX_ANSWER_TOKENS) -> Optional[Dict[str, Any]]:
     """One turn plus EXACTLY one repair attempt (the model gets its own broken
     answer back and is asked for valid JSON). ``None`` after that.
 
-    Both turns are capped at ``_MAX_ANSWER_TOKENS``: the answer is two short
+    Both turns are capped at ``max_tokens``: the answer is a few short
     fields, and an uncapped budget is what lets a chatty model write an essay
     per NPC per interval (feedback_validate_llm_guards).
+
+    Shared with the director scene (``npc_scenes``), which passes its own
+    ``task``, ``label`` and budget — the JSON-or-repair rule is the same.
     """
-    response = llm(task=TASK, system_prompt=system_prompt,
+    response = llm(task=task, system_prompt=system_prompt,
                    user_prompt=user_prompt, agent_name=name,
-                   label=f"NPC action ({name})",
-                   max_tokens=_MAX_ANSWER_TOKENS)
+                   label=f"{label} ({name})",
+                   max_tokens=max_tokens)
     raw = str(getattr(response, "content", "") or "")
     obj = _parse_json(raw)
     if obj is not None:
         return obj
-    logger.info("npc_action(%s): unparsable answer, one repair attempt", name)
+    logger.info("%s(%s): unparsable answer, one repair attempt", task, name)
     repair = (f"{raw[:2000]}\n\n"
               "That was not valid JSON. Return the SAME content as a single "
               "valid JSON object — no markdown, no code fence, no explanation.")
-    response = llm(task=TASK, system_prompt=system_prompt, user_prompt=repair,
-                   agent_name=name, label=f"NPC action ({name}, repair)",
-                   max_tokens=_MAX_ANSWER_TOKENS)
+    response = llm(task=task, system_prompt=system_prompt, user_prompt=repair,
+                   agent_name=name, label=f"{label} ({name}, repair)",
+                   max_tokens=max_tokens)
     return _parse_json(str(getattr(response, "content", "") or ""))
 
 

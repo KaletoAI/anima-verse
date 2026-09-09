@@ -45,9 +45,10 @@ Hand-derived expectations, case by case:
   (h) Mode ``scene`` with only a single NPC in the room makes no call — a
       scene needs two voices. A room without the avatar at the location makes
       no call either, because nobody is there to watch it.
-  (i) Mode ``scene`` with a valid ``pair`` key calls
-      ``start_interaction(A, B, key)`` (monkeypatched). The scene binds the
-      pair directly instead of going through an invitation.
+  (i) Mode ``scene`` with a valid ``pair`` key creates an invitation; the
+      interact hook accepts it at once for a temporary NPC, so
+      ``start_interaction(A, B, key)`` (monkeypatched) is called and no
+      invitation stays open.
   (j) ``build_chat_context`` resolves the chat model through
       ``chat_llm_task``: a temporary NPC answers through ``npc_talk``, a full
       character through ``chat_stream``. An unknown name is treated as an
@@ -417,7 +418,8 @@ check("two lines survived, the stranger's fell", res, {"lines": 2, "activities":
 rows = utterances()[before:]
 check("two new utterances in answer order", [(r["speaker"], r["content"]) for r in rows],
       [(A, "Halvard, hilf mir mit dem Fass."), (B, "Gleich, das Holz zuerst.")])
-check("stamps are monotone", rows[0]["ts"] < rows[1]["ts"], True)
+check("one stamp, ascending ids", (rows[0]["ts"] == rows[1]["ts"], rows[0]["id"] < rows[1]["id"]),
+      (True, True))
 check("each addressed to the other", [list(r.get("addressees") or []) for r in rows], [[B], [A]])
 check("marked as scene lines", [(r.get("meta") or {}).get("source") for r in rows],
       ["npc_scene", "npc_scene"])
@@ -429,17 +431,14 @@ check("one cascade, participants excluded, last line",
 check("the prompt carried both sheets and the room hint",
       ("tends the bar" in SCENE.calls[0]["user"], "chops wood" in SCENE.calls[0]["user"],
        "serving guests" in SCENE.calls[0]["user"]), (True, True, True))
-# The recent block is the last six rows of the room, narrator traces
-# included: A's only spoken line (a) lies seven room changes back by now,
-# so the check reads the newest row instead — the narrator's exit trace of
-# (g)'s own setup — and the block header that frames it.
-_recent_rows = perception_store.get_room_utterances(LOC_ID, "taproom", limit=50)[:-2]
-check("and the previous room lines (newest row, narrator relabelled)",
+# The recent block is the last six SPOKEN rows: the storyteller's movement
+# traces (six of them since (a) by now) are filtered out, so A's line from
+# (a) is still in the window and no trace shows up.
+check("and the previous room lines, movement traces excluded",
       ("Spoken here before" in SCENE.calls[0]["user"],
-       f"- Narrator: {_recent_rows[-1]['content']}" in SCENE.calls[0]["user"],
-       "Storyteller" in SCENE.calls[0]["user"]), (True, True, False))
-check("the window is six rows: the (a) line has dropped out",
-      "das letzte Fass muss weg" in SCENE.calls[0]["user"], False)
+       "das letzte Fass muss weg" in SCENE.calls[0]["user"],
+       "- Narrator:" in SCENE.calls[0]["user"],
+       "Storyteller" in SCENE.calls[0]["user"]), (True, True, False, False))
 check("the budget is capped", SCENE.calls[0]["kwargs"].get("max_tokens"), 600)
 check("the room is on cooldown now", npc_scenes.candidate_rooms(), [])
 set_game_time(game_time() + GameDuration.of(minutes=46))
@@ -461,6 +460,11 @@ SCENE = FakeLLM("no json here", "still none")
 check("twice broken JSON -> nothing", npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE), None)
 check("two calls (one repair)", len(SCENE.calls), 2)
 check("and the cooldown was stamped anyway", f"{LOC_ID}/taproom" in npc_scenes._last_scene, True)
+npc_scenes._last_scene.clear()
+before = len(utterances())
+SCENE = FakeLLM('{"lines": {"speaker": "Gudrun"}, "pair": null, "activities": {}}')
+check("lines as an object -> nothing", npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE), None)
+check("and no new utterance", len(utterances()), before)
 
 # ── (i) the scene may bind a pair ──────────────────────────────────────────
 print("(i) scene: a pair is started directly")
@@ -473,8 +477,12 @@ npc_scenes._last_scene.clear()
 SCENE = FakeLLM('{"lines": [{"speaker": "Gudrun", "line": "Komm."}, {"speaker": "Halvard", "line": "Gut."}],'
                 ' "pair": {"a": "Gudrun", "b": "Halvard", "pose": "%s"}, "activities": {}}' % PAIR_KEY)
 res = npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE)
-check("the pair was started", STARTED, [(A, B, PAIR_KEY)])
+# The scene INVITES; the interact package's hook (imported in (e)) makes the
+# temporary invitee accept synchronously inside create_invite, so the
+# monkeypatched start records the pair and no invitation stays open.
+check("the pair was started through the invitation", STARTED, [(A, B, PAIR_KEY)])
 check("reported", res.get("pair") if res else None, True)
+check("no open invitation is left", interaction_engine.pending_invites_for(B), [])
 interaction_engine.start_interaction = _real_start
 interaction_engine.partner_poses = _real_partner_poses
 set_npc_config(conversation_mode="turns")

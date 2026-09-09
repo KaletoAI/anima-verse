@@ -3,7 +3,8 @@
 Mode ``scene`` of ``npc.conversation_mode``: instead of one NPC opening a
 conversation and the others answering turn by turn, ONE small JSON call per
 room writes the whole short exchange — two to four lines, optionally a pair
-pose and new activities. The lines land in the perception stream like spoken
+pose (an invitation, answered at once by a temporary NPC and walked over if
+needed) and new activities. The lines land in the perception stream like spoken
 lines (an avatar in the room reads them, a character present may chime in),
 but the participants themselves get NO cascade: they have already said their
 part, and a respond turn on top would be the expensive path this mode exists
@@ -17,12 +18,11 @@ rhythm is a per-room GAME cooldown (``npc.scene_interval_game_minutes``),
 stamped BEFORE the call so a babbling model buys quiet, not retries; at most
 ``npc.scene_batch`` rooms per check.
 """
-from datetime import timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.game_time import GameDuration, GameTime
 from app.core.log import get_logger
-from app.core.timeutils import game_time, utc_now
+from app.core.timeutils import game_time, utc_now_iso
 
 logger = get_logger("npc_scenes")
 
@@ -37,6 +37,7 @@ _MAX_LINES = 4
 _MAX_LINE_CHARS = 300
 _MAX_ANSWER_TOKENS = 600
 _RECENT_LINES = 6
+_RECENT_FETCH = 24
 
 
 def _cfg_int(key: str, default: int, lo: int) -> int:
@@ -138,9 +139,15 @@ def prompt_vars(location_id: str, room_id: str,
             "goals": str(p.get("npc_goals") or "").strip(),
             "activity": get_effective_activity(name) or "",
         })
+    # The last SPOKEN lines: the storyteller's movement traces (every room
+    # change writes one) would crowd out the conversation within a few
+    # comings and goings, so they are skipped and the window is measured
+    # over what is left.
+    spoken = [row for row in perception_store.get_room_utterances(
+                  location_id, room_id, limit=_RECENT_FETCH)
+              if (row.get("meta") or {}).get("source") != "movement"]
     recent = []
-    for row in perception_store.get_room_utterances(location_id, room_id,
-                                                    limit=_RECENT_LINES):
+    for row in spoken[-_RECENT_LINES:]:
         speaker = row.get("speaker") or ""
         label = "Narrator" if speaker == STORYTELLER_SPEAKER else speaker
         recent.append({"speaker": label, "line": row.get("content") or ""})
@@ -165,7 +172,10 @@ def _apply(location_id: str, room_id: str, names: List[str],
     from app.models.character import force_set_status
     by_fold = {n.casefold(): n for n in names}
     lines: List[Tuple[str, str]] = []
-    for item in (answer.get("lines") or [])[: _MAX_LINES * 2]:
+    raw_lines = answer.get("lines")
+    if not isinstance(raw_lines, list):
+        raw_lines = []
+    for item in raw_lines[: _MAX_LINES * 2]:
         if not isinstance(item, dict):
             continue
         speaker = by_fold.get(str(item.get("speaker") or "").strip().casefold(), "")
@@ -178,14 +188,15 @@ def _apply(location_id: str, room_id: str, names: List[str],
         logger.info("npc_scene(%s/%s): no usable line — nothing written",
                     location_id, room_id)
         return None
-    base = utc_now()
-    for i, (speaker, line) in enumerate(lines):
+    # ONE stamp for the whole exchange: the store orders by ts, then id, so
+    # the ids keep the answer order and no line is dated into the future.
+    stamp = utc_now_iso()
+    for speaker, line in lines:
         others = [n for n in names if n != speaker]
         record_utterance(speaker=speaker, content=line, volume="normal",
                          addressees=others if len(names) == 2 else [],
                          location_id=location_id, room_id=room_id,
-                         source="npc_scene",
-                         ts=(base + timedelta(seconds=i)).isoformat(timespec="seconds"))
+                         source="npc_scene", ts=stamp)
     written = 0
     acts = answer.get("activities")
     if isinstance(acts, dict):
@@ -201,12 +212,15 @@ def _apply(location_id: str, room_id: str, names: List[str],
         b = by_fold.get(str(pair.get("b") or "").strip().casefold(), "")
         pose = npc_actions._pose_from_answer({"pose": pair.get("pose")}, pair_keys)
         if a and b and a != b and pose:
+            # An invitation, not a direct start: two free NPCs in a room are
+            # usually farther apart than MAX_START_DISTANCE_M, and the
+            # invite path (a temporary NPC accepts at once, resolve_invite
+            # walks the partner over) is what bridges that.
             try:
-                from app.core.interaction_engine import start_interaction
-                start_interaction(a, b, pose)
-                paired = True
-            except Exception as e:  # noqa: BLE001 — a seat taken, too far apart
-                logger.info("npc_scene(%s/%s): pair %s/%s not started: %s",
+                from app.core.interaction_engine import create_invite
+                paired = bool(create_invite(a, b, pose))
+            except Exception as e:  # noqa: BLE001
+                logger.info("npc_scene(%s/%s): pair %s/%s not invited: %s",
                             location_id, room_id, a, b, e)
     try:
         from app.core.agent_loop import get_agent_loop
@@ -230,6 +244,7 @@ def run_scene_for(location_id: str, room_id: str, names: List[str], *,
     """One director call for one room; applies the answer. ``None`` when the
     answer was unusable (twice unparsable, or no line by a participant). The
     cooldown is stamped BEFORE the call."""
+    from app.core import npc_actions
     from app.core.prompt_templates import render_task
     if llm is None:
         from app.core.llm_router import llm_call
@@ -237,30 +252,13 @@ def run_scene_for(location_id: str, room_id: str, names: List[str], *,
     _last_scene[_room_key(location_id, room_id)] = game_time()
     variables = prompt_vars(location_id, room_id, names)
     system_prompt, user_prompt = render_task(TASK, **variables)
-    label = names[0] if names else ""
-    answer = _ask(llm, label, system_prompt, user_prompt)
+    answer = npc_actions._ask(llm, names[0] if names else "", system_prompt,
+                              user_prompt, task=TASK, label="NPC scene",
+                              max_tokens=_MAX_ANSWER_TOKENS)
     if answer is None:
         logger.info("npc_scene(%s/%s): no usable answer", location_id, room_id)
         return None
     return _apply(location_id, room_id, names, answer, variables["pair_keys"])
-
-
-def _ask(llm: Callable[..., Any], name: str, system_prompt: str,
-         user_prompt: str) -> Optional[Dict[str, Any]]:
-    """One turn plus exactly one repair attempt — the action tick's rule."""
-    from app.core import npc_actions
-    response = llm(task=TASK, system_prompt=system_prompt, user_prompt=user_prompt,
-                   agent_name=name, label="NPC scene", max_tokens=_MAX_ANSWER_TOKENS)
-    raw = str(getattr(response, "content", "") or "")
-    obj = npc_actions._parse_json(raw)
-    if obj is not None:
-        return obj
-    repair = (f"{raw[:2000]}\n\nThat was not valid JSON. Return the SAME content "
-              "as a single valid JSON object — no markdown, no code fence, no explanation.")
-    response = llm(task=TASK, system_prompt=system_prompt, user_prompt=repair,
-                   agent_name=name, label="NPC scene (repair)",
-                   max_tokens=_MAX_ANSWER_TOKENS)
-    return npc_actions._parse_json(str(getattr(response, "content", "") or ""))
 
 
 def _sub_npc_scenes() -> None:

@@ -7,7 +7,7 @@ placeholders:
   room_hint: What one does in this room (may be empty)
   game_time_label: The world's date and time as a label
   participants: List of {name, role, standing_task, dialogue_style, arrival_reason, goals, activity}
-  recent: The last lines spoken in this room, oldest first — list of {speaker, line}; may be empty
+  recent: The last spoken lines of this room, movement traces excluded, oldest first — list of {speaker, line}; may be empty
   pair_keys: Catalog keys of two-person poses the answer's `pair` may name
 ---
 ## system
