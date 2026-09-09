@@ -102,6 +102,13 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # sends it to `chat_stream` and every idle NPC costs a chat turn.
     "npc_action":         {"label": "NPC action tick", "priority": Priority.LOW, "category": "helper", "gate": "npc.action_tick_enabled"},
 
+    # Replies of temporary NPCs (spec-npc-conversation § 2): the SAME chat
+    # prompt as chat_stream, resolved under its own name so a fast model can
+    # be routed for background figures. No gate — an addressed NPC answers
+    # whatever the conversation mode says. Unrouted it falls back to
+    # `chat_stream` (resolve_llm's npc_* rule), i.e. the RP model.
+    "npc_talk":           {"label": "NPC conversation reply", "priority": Priority.LOW, "category": "chat"},
+
     # Summaries
     "consolidation":         {"label": "Consolidation (3-Tier)",   "priority": Priority.LOW, "category": "helper"},
     "relationship_summary":  {"label": "Relationship Summary",     "priority": Priority.LOW, "category": "helper", "gate": "relationships.summary_enabled"},
@@ -470,6 +477,16 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": True, "min_context": 2048,
         "model_class": "small", "arch": "any", "hallucination_risk": "low",
         "creative": True, "language_de": True, "latency_sensitive": False,
+    },
+    "npc_talk": {
+        # One in-character reply from a background NPC. tools False: in
+        # rp_first the tool phase runs on `intent`, and single-mode temporary
+        # NPCs are not a supported setup. creative True, language_de True —
+        # it speaks the world's language. latency_sensitive True: the reply
+        # sits in the respond lane while the player watches the room.
+        "tools": False, "vision": False, "json": False, "min_context": 8192,
+        "model_class": "small", "arch": "any", "hallucination_risk": "medium",
+        "creative": True, "language_de": True, "latency_sensitive": True,
     },
 
     # --- Summaries ----------------------------------------------------------

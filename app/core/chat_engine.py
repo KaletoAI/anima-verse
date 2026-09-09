@@ -186,6 +186,29 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
         f"If nothing applies, respond with: NONE")
 
 
+def chat_llm_task(character_name: str) -> str:
+    """The routing task a character's CHAT replies resolve their model through.
+
+    Temporary NPCs answer through ``npc_talk`` so an admin can put them on a
+    fast model (spec-npc-conversation § 2); everyone else stays on
+    ``chat_stream``. ONE place, because every reply path — the respond lane,
+    a chime, the exit beat, TalkTo, group chat — builds its context here.
+    Unrouted, ``npc_talk`` falls back to ``chat_stream`` through the
+    ``npc_*`` rule in ``llm_router.resolve_llm``, so a world that never
+    opened the routing tab keeps working. Fails open to ``chat_stream``: an
+    unreadable sheet is an ordinary character, not a broken chat.
+    """
+    if not character_name:
+        return "chat_stream"
+    try:
+        from app.models.character import is_temporary_npc
+        if is_temporary_npc(character_name):
+            return "npc_talk"
+    except Exception as e:  # noqa: BLE001 — a reply must never fail on this
+        logger.debug("chat_llm_task(%s): %s", character_name, e)
+    return "chat_stream"
+
+
 def build_chat_context(
     owner_id: str,
     character_name: str,
@@ -235,7 +258,8 @@ def build_chat_context(
     from app.routes.chat import _build_full_system_prompt, _strip_tool_hallucinations
 
     agent_config = get_character_config(character_name)
-    _chat_instance = resolve_llm("chat_stream", agent_name=character_name)
+    _chat_instance = resolve_llm(chat_llm_task(character_name),
+                                 agent_name=character_name)
     lang_instruction = get_character_language_instruction(character_name)
     # For web chat: player's active character is the conversation partner identity.
     # For telegram: use account name (telegram has no character-switching).
