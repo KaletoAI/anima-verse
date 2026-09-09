@@ -4727,8 +4727,11 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # type = "door" | "passage"; eine
                                            # `door` hat ein Blatt im Loch
                                            # (`walls`-Eintrag mit `leaf`)
-  problems: [ { kind, location_id?, room_id?, message } ],
+  problems: [ { kind, location_id?, room_id?, level?, message } ],
                                            # IMMER da, leer = alles sauber
+                                           # level = die betroffene Etage, wo
+                                           # der Befund eine hat
+                                           # (corridor_without_floor)
   outdoor_rooms: [ room_id, … ],
 
   # --- Etagen-Flure (2026-09-09) ---

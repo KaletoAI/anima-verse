@@ -147,6 +147,12 @@ Part 6b — corridors[] through compose_scene on cellar_fixture():
     x in {-2.0, ..., 2.0}, and the tie rule (smallest x, then smallest z)
     picks [-2.0, 2.0].
     no "corridor_without_floor" problem
+    …and the SIGNATURE moves with the corridor (review 2026-09-09): a corridor
+    room has no layout, so it reaches neither map3d nor a room recipe nor a
+    room meta — without its own term in the hash a client polling `signature`
+    would keep the old corridors[] AND the old door rule.
+      signature(with_corridor=True) != signature(with_corridor=False)
+      the same fixture composed twice -> the same signature
     …and the same fixture with ONE staircase, at [3, 3], dir_deg 0 (= +z),
     from_level -1: rule 2 beats the raster. A pad sits a pad-half plus the
     pad gap clear of the flight (STAIR_PAD_M / 2 + STAIR_PAD_GAP_M
@@ -413,6 +419,11 @@ def main():
           [p for p in sc.get("problems") or []
            if p.get("kind") == "corridor_without_floor"], [])
 
+    check("the corridor moves the signature",
+          sc["signature"] != sc0["signature"], True)
+    check("composing twice is stable",
+          scene_recipe.compose_scene(cellar_fixture())["signature"],
+          sc["signature"])
     sc2b = scene_recipe.compose_scene(stair_fixture())
     check("stair foot beats the raster",
           [c["anchor"] for c in sc2b["corridors"]], [[3.0, 2.5]])

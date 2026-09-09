@@ -62,6 +62,10 @@ from app.core.model_store import DEFAULT_TIER, variant_urls
 from app.core.room_recipe import (SHARE_TOL_M, _WALKABLE_TYPES,
                                   compose_recipe, layout_rotation,
                                   room_transform)
+# The ONE point-to-segment rule of the world (``polygon_distance`` reads the
+# same one) — imported, never copied. ``world_geometry`` pulls in nothing of
+# ours, so this stays a plain module import.
+from app.core.world_geometry import point_segment_distance
 
 logger = get_logger(__name__)
 
@@ -542,23 +546,12 @@ def _point_in_polygon(x: float, z: float, poly: List[List[float]]) -> bool:
 ANCHOR_GRID_M = 0.5
 
 
-def _point_segment_distance(px: float, pz: float, a: List[float],
-                            b: List[float]) -> float:
-    """Distance from a point to the SEGMENT a-b in the XZ plane."""
-    ax, az, bx, bz = a[0], a[1], b[0], b[1]
-    dx, dz = bx - ax, bz - az
-    seg = dx * dx + dz * dz
-    t = 0.0 if seg <= 0 else max(0.0, min(1.0, ((px - ax) * dx
-                                                + (pz - az) * dz) / seg))
-    cx, cz = ax + t * dx, az + t * dz
-    return math.hypot(px - cx, pz - cz)
-
-
 def _ring_clearance(px: float, pz: float, ring: List[List[float]]) -> float:
     """Distance from a point to the NEAREST EDGE of a closed ring — unsigned,
     so it says the same thing just inside and just outside it."""
-    return min(_point_segment_distance(px, pz, ring[i],
-                                       ring[(i + 1) % len(ring)])
+    return min(point_segment_distance(px, pz, ring[i][0], ring[i][1],
+                                      ring[(i + 1) % len(ring)][0],
+                                      ring[(i + 1) % len(ring)][1])
                for i in range(len(ring)))
 
 
@@ -3447,7 +3440,8 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
                room_metas: Dict[str, Dict[str, Any]],
                ground_kind: str = "",
                door_prop_sigs: Optional[Dict[str, str]] = None,
-               surface_sigs: Optional[Dict[str, str]] = None) -> str:
+               surface_sigs: Optional[Dict[str, str]] = None,
+               corridor_levels: Optional[Set[int]] = None) -> str:
     """Change detection for the whole scene — a SUPERSET of the room recipe's
     signature: the room signatures already cover layouts, neighbour openings
     and prop sidecars, and the model metas add every anchor dial (floors,
@@ -3484,7 +3478,15 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     no sidecar the room signature reads, so without ``surface_sigs`` a running
     client would keep walking the old floor. ``surface_sigs`` is the ONLY
     place a lattice enters this hash — the room metas hand theirs over to it
-    and travel here without it."""
+    and travel here without it.
+
+    THE STOREY CORRIDORS are in here because NOTHING else in this hash sees
+    them (§ 3.2, review finding 2026-09-09): a corridor room carries no
+    layout, so it composes no recipe, owns no room meta and is not part of
+    ``map3d``. Without them a corridor appearing or vanishing left the
+    signature exactly where it was, and a polling client kept the old
+    ``corridors[]`` — and the old door rule with it, which turns unlinked
+    doors into hull holes or interior gaps."""
     import hashlib
     import json
     from app.core.game_time import get_calendar
@@ -3516,6 +3518,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
                                     or "").strip(),
         "door_props": door_prop_sigs or {},
         "surfaces": surface_sigs or {},
+        "corridors": sorted(corridor_levels or ()),
     }
     return hashlib.md5(json.dumps(payload, sort_keys=True,
                                   default=str).encode()).hexdigest()
@@ -4049,6 +4052,12 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # ``stairs`` block and the hole in the floor the flight arrives on.
     flights = _stair_flights(map3d, storey)
 
+    # THE STOREY CORRIDORS (§ 3.2) — after the flights, because a stair
+    # landing is one of the anchor candidates, and off the very set of levels
+    # the door rule above already read from the stored rooms.
+    corridors, corridor_problems = _corridors(location, map3d, corridor_levels,
+                                              room_hulls, flights)
+
     # One short hash per placement that ships a lattice — the only form in
     # which a lattice enters the scene signature (``_signature`` drops it from
     # the room metas). A room's lattice reaches the hash through no other
@@ -4061,12 +4070,6 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # a bake of the swallowed variant would then move nothing. Two copies of
     # the SAME variant do collide, and that is right: their block is the same
     # block, so one entry says everything two would.
-    # THE STOREY CORRIDORS (§ 3.2) — after the flights, because a stair
-    # landing is one of the anchor candidates, and off the very set of levels
-    # the door rule above already read from the stored rooms.
-    corridors, corridor_problems = _corridors(location, map3d, corridor_levels,
-                                              room_hulls, flights)
-
     from app.core.model_surface import block_sig
     surface_sigs = {
         f"{m.get('role')}:{m.get('id')}:{m.get('room_id', '')}:{m.get('variant', 0)}":
@@ -4076,7 +4079,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     out = {
         "signature": _signature(location, plan_width_m, recipes,
                                 building_meta, room_metas, ground_kind,
-                                door_prop_sigs, surface_sigs),
+                                door_prop_sigs, surface_sigs,
+                                corridor_levels),
         "rooms": room_blocks,
         # The location's FOOTPRINT as a polygon in the scene frame (contract
         # v6 Nr. 1 + Nr. 4): the drawn ``map3d.boundary`` where there is one,

@@ -177,9 +177,13 @@ def polygon_plan_width_m(points: Any) -> float:
     return round(max(bounds[2] - bounds[0], bounds[3] - bounds[1]), 2)
 
 
-def _point_segment_distance(px: float, pz: float, ax: float, az: float,
-                            bx: float, bz: float) -> float:
-    """Distance from point to the closed segment a→b."""
+def point_segment_distance(px: float, pz: float, ax: float, az: float,
+                           bx: float, bz: float) -> float:
+    """Distance from point to the closed segment a→b.
+
+    Public because it is the primitive under BOTH distance rules of the
+    world: ``polygon_distance`` here and the corridor anchor's edge clearance
+    in ``scene_recipe`` (§ 3.2) — one derivation, two callers."""
     dx, dz = bx - ax, bz - az
     length_sq = dx * dx + dz * dz
     if length_sq < 1e-18:
@@ -212,7 +216,7 @@ def polygon_distance(x: float, z: float, points: Any) -> float:
     j = len(pts) - 1
     for i, (xi, zi) in enumerate(pts):
         xj, zj = pts[j]
-        best = min(best, _point_segment_distance(x, z, xj, zj, xi, zi))
+        best = min(best, point_segment_distance(x, z, xj, zj, xi, zi))
         j = i
     return best
 
