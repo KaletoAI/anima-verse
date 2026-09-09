@@ -70,6 +70,7 @@ OPENING_DEFAULTS: Dict[str, Tuple[float, float]] = {
 #: The complete warning vocabulary. A warning NEVER blocks an apply.
 WARNING_CODES = (
     "unknown_room",            # `id` names no room of this location — dropped
+    "reserved_room",           # `id` names a reserved corridor — dropped
     "duplicate_room",          # the same room twice — the later one dropped
     "nameless_room",           # neither `id` nor `name` — dropped
     "invalid_layout",          # x/y/w/d unusable — dropped
@@ -250,7 +251,8 @@ def sanitize_layout(data: Any, *,
     all; everything else is a warning, because a plan in progress is a normal
     state and not a defect.
     """
-    from app.models.world import GROUND_ROOM_ID, _generate_room_id
+    from app.models.world import (
+        GROUND_ROOM_ID, _generate_room_id, is_floor_room)
     from app.core.world_ops import _sanitize_map3d, _sanitize_room_layout
 
     if not isinstance(data, dict):
@@ -292,6 +294,13 @@ def sanitize_layout(data: Any, *,
             # everything anyway.
             _warn(warnings, "unknown_room", room_id,
                   "The ground is not a room with a floor plan. "
+                  "The entry was dropped.")
+            continue
+        if is_floor_room(room_id):
+            # The corridor of a storey is the complement of that storey's
+            # rooms — the server derives it, nobody draws it (spec § 2.2).
+            _warn(warnings, "reserved_room", room_id,
+                  "The corridor of a storey carries no layout. "
                   "The entry was dropped.")
             continue
         if not room_id and name and name.lower() in known_names:

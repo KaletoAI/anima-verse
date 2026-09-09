@@ -624,16 +624,25 @@ def _validate_room_description(text: str) -> str:
 
 def add_room(location_id: str, room_name: str, description: str = "",
              image_prompt_day: str = "", image_prompt_night: str = "") -> Optional[Dict[str, Any]]:
-    """Fuegt einen neuen Raum zu einem Ort hinzu. Gibt den Raum zurueck oder None bei Fehler."""
-    # Validierung
+    """Adds a new room to a location. Returns the room, or None on error.
+
+    A corridor room counts with its DISPLAY name: unnamed, it answers with the
+    translated default of its storey, and a second room carrying that word
+    would shadow it everywhere the corridor is named (spec § 4).
+    """
+    # Validation
     description = _validate_room_description(description)
     data = _load_world_data()
     for loc in data.get("locations", []):
         if loc.get("id") == location_id:
             rooms = loc.setdefault("rooms", [])
-            # Duplikat-Check (case-insensitive)
-            if any(r.get("name", "").lower() == room_name.lower() for r in rooms):
-                logger.warning("Raum '%s' existiert bereits in Location %s", room_name, location_id)
+            # Duplicate check (case-insensitive), including the corridors'
+            # default names.
+            taken = {r.get("name", "").lower() for r in rooms}
+            taken |= {floor_room_display_name(r).lower() for r in rooms
+                      if is_floor_room(str(r.get("id") or ""))}
+            if room_name.lower() in taken:
+                logger.warning("Room '%s' already exists in location %s", room_name, location_id)
                 return None
             new_room = {
                 "id": _generate_room_id(),
@@ -647,7 +656,7 @@ def add_room(location_id: str, room_name: str, description: str = "",
                 new_room["prompt_changed"] = True
             rooms.append(new_room)
             _save_world_data(data)
-            logger.info("Raum '%s' hinzugefuegt zu Location %s (id=%s)", room_name, location_id, new_room["id"])
+            logger.info("Room '%s' added to location %s (id=%s)", room_name, location_id, new_room["id"])
             return new_room
     return None
 
@@ -1338,10 +1347,12 @@ def count_corridor_doors(location: Dict[str, Any]) -> int:
 def migrate_floor_rooms_once() -> Dict[str, int]:
     """One-time, idempotent: give every used storey its corridor room.
 
-    No character moves — nobody stood in a corridor before it existed. Storey
-    0 only joins on the location's opt-in, so at first nowhere. Per location
-    the log states how many corridors were added and how many doors change
-    meaning (spec § 3.5, decision 2). Guarded by a world_kv marker, so a
+    Normally no character moves — nobody stood in a corridor before it
+    existed; only a hand-authored or imported ``__floor__X`` on a storey
+    without rooms is removed, and then its occupants land on the ground.
+    Storey 0 only joins on the location's opt-in, so at first nowhere. Per
+    location the log states how many corridors were added and how many doors
+    change meaning (spec § 3.5, decision 2). Guarded by a world_kv marker, so a
     second boot returns zeros without touching a row.
     """
     counts = {"locations": 0, "corridors": 0, "doors": 0}
@@ -1351,16 +1362,32 @@ def migrate_floor_rooms_once() -> Dict[str, int]:
         data = _load_world_data()
         changed = False
         for loc in data.get("locations", []):
-            rooms = loc.setdefault("rooms", [])
+            rooms = loc.get("rooms")
+            if not isinstance(rooms, list):
+                # A blob with ``rooms: null`` must not abort the whole run.
+                loc["rooms"] = rooms = []
             before = len(rooms)
-            ensure_floor_rooms(rooms, loc.get("map3d"))
-            added = len(rooms) - before
+            removed = ensure_floor_rooms(rooms, loc.get("map3d"))
+            # The removals are added back in: a location that loses one stale
+            # corridor and gains one real one has the same room count, and
+            # the bare length delta would report "0 added".
+            added = len(rooms) - before + len(removed)
+            lid = loc.get("id")
+            if removed:
+                # A hand-authored or imported ``__floor__X`` on a storey no
+                # room stands on: it goes, and whoever stood in it lands on
+                # the ground (spec § 2.4).
+                logger.warning(
+                    "floor-room migration: location %s: corridor room(s) on "
+                    "storeys without rooms removed: %s", lid, ", ".join(removed))
+                evict_rooms_to_ground(lid, removed)
+                changed = True
             doors = count_corridor_doors(loc)
             if added or doors:
                 logger.info(
                     "floor-room migration: location %s (%s): %d corridor(s) "
                     "added, %d door(s) now lead into a corridor",
-                    loc.get("id"), loc.get("name", ""), added, doors)
+                    lid, loc.get("name", ""), added, doors)
                 counts["locations"] += 1
                 counts["corridors"] += added
                 counts["doors"] += doors

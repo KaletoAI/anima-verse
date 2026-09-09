@@ -479,7 +479,7 @@ def _format_layout_rooms(loc: Optional[Dict[str, Any]]) -> str:
     "leave the kitchen where it is" is something the model can actually obey by
     copying them back out.
     """
-    from app.models.world import GROUND_ROOM_ID
+    from app.models.world import GROUND_ROOM_ID, is_floor_room
     if not loc:
         return "— (no location selected)"
     lines: List[str] = []
@@ -487,7 +487,10 @@ def _format_layout_rooms(loc: Optional[Dict[str, Any]]) -> str:
         if not isinstance(room, dict):
             continue
         room_id = str(room.get("id") or "")
-        if room_id == GROUND_ROOM_ID:
+        # Neither the ground nor a storey's corridor carries a plan of its
+        # own — the server derives both, so the model must not be offered
+        # them as rooms it may place (spec § 4).
+        if room_id == GROUND_ROOM_ID or is_floor_room(room_id):
             continue
         head = f"- `{room_id}` — **{room.get('name') or room_id}**"
         lay = room.get("layout") if isinstance(room.get("layout"), dict) else {}

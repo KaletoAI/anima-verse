@@ -898,7 +898,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     import uuid
     from app.models.world import (
         GROUND_ROOM_ID, _load_world_data, _save_world_data, ensure_floor_rooms,
-        get_gallery_dir,
+        get_gallery_dir, is_floor_room,
     )
 
     try:
@@ -932,8 +932,12 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         # exactly this one and the code addresses it by the constant. Renaming
         # it would leave the import with a nameless ordinary room and NO
         # ground. It maps to itself, which makes the model3d remap a no-op for
-        # its files as well.
-        new_id = old_id if old_id == GROUND_ROOM_ID else uuid.uuid4().hex[:8]
+        # its files as well. A corridor id carries its storey the same way
+        # (``__floor__-1``): renamed, the pack's corridor would arrive as an
+        # ordinary room AND ``ensure_floor_rooms`` would append a second,
+        # empty one below (spec § 4).
+        reserved = old_id == GROUND_ROOM_ID or is_floor_room(old_id)
+        new_id = old_id if reserved else uuid.uuid4().hex[:8]
         room_id_map[old_id] = new_id
         room["id"] = new_id
         # Rooms can carry prompt_changed flag; re-trigger generation on import.

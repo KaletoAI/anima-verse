@@ -64,8 +64,8 @@ def build_avatar_rooms(avatar: str, location: Optional[Dict[str, Any]],
     """
     from app.models.rules import check_access
     from app.models.world import (
-        GROUND_ROOM_ID, floor_room_level, get_entry_room_id, get_floor_name,
-        get_ground_name)
+        GROUND_ROOM_ID, floor_room_display_name, floor_room_level,
+        get_entry_room_id, get_ground_name)
 
     loc_id = (location or {}).get("id", "") or ""
     entry_id = get_entry_room_id(location) if location else ""
@@ -74,14 +74,16 @@ def build_avatar_rooms(avatar: str, location: Optional[Dict[str, Any]],
         rid = room.get("id", "") or ""
         name = room.get("name", "") or ""
         floor_lv = floor_room_level(rid)
-        if rid == GROUND_ROOM_ID and not name:
+        if rid == GROUND_ROOM_ID and not name.strip():
             # The ground room may stay unnamed — then it falls back to the
-            # same translated word in every location.
+            # same translated word in every location. A name of blanks is no
+            # name, exactly as ``get_ground_name`` reads it.
             name = get_ground_name(loc_id, lang)
-        elif floor_lv is not None and not name:
-            # Same for a corridor: unnamed, it answers with the translated
-            # default of its storey, never with the reserved id.
-            name = get_floor_name(floor_lv, lang)
+        elif floor_lv is not None:
+            # Same for a corridor, and the fallback lives in ONE place: the
+            # author's name if there is one, else the translated default of
+            # its storey — never the reserved id.
+            name = floor_room_display_name(room, lang)
         lay = room.get("layout") if isinstance(room.get("layout"), dict) else None
         if rid == GROUND_ROOM_ID:
             level: Optional[int] = 0

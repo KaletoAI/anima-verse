@@ -1,18 +1,18 @@
-"""DescribeRoom Skill - Character kann Raum-Beschreibungen aendern und neue Raeume anlegen.
+"""DescribeRoom skill - a character may change room descriptions and add rooms.
 
-Erlaubt Characters, Raeume an ihren erlaubten Locations zu beschreiben und
-neue Raeume hinzuzufuegen (bis zu max_custom_rooms pro Location).
+Lets characters describe the rooms of the locations they are allowed to design
+and add new ones (up to max_custom_rooms per location).
 
-Die Location wird als Parameter uebergeben (nicht mehr an aktuelle Position gebunden).
-Funktioniert als Chat-Tool und via Intent (proaktiv).
+The location travels as a parameter (it is no longer tied to the character's
+current position). Works as a chat tool and via intent (proactively).
 
-Jeder Raum hat eine `description` (inhaltliche Beschreibung) und einen optionalen
-`image_prompt` (englischer Prompt fuer die Bildgenerierung). Nach dem Speichern
-wird automatisch ein neues Raum-Bild generiert.
+Every room has a `description` (its content) and an optional `image_prompt`
+(an English prompt for image generation). After saving, a new room image is
+generated automatically.
 """
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .base import BaseSkill, ToolSpec
 
@@ -22,29 +22,38 @@ from app.core.tool_formats import format_example
 logger = get_logger("describe_room")
 
 from app.models.world import (
+    GROUND_ROOM_ID,
+    floor_room_display_name,
     get_location_by_id,
+    get_location_rooms,
     get_room_by_id,
     get_room_by_name,
+    is_floor_room,
     update_room_description,
     add_room)
 
 
 class DescribeRoomSkill(BaseSkill):
-    """Skill zum Aendern/Erstellen von Raum-Beschreibungen an erlaubten Locations.
+    """Skill for changing/creating room descriptions at allowed locations.
 
-    Input-Format (JSON):
+    Input format (JSON):
         {
-            "location_id": "hex-id des Orts",
-            "room": "Raumname (bestehend oder neu)",
-            "description": "Inhaltliche Beschreibung des Raums (Sprache des Users)",
+            "location_id": "hex id of the location",
+            "room": "room name (existing or new)",
+            "description": "what the room is like (the user's language)",
             "image_prompt": "English image generation prompt for the room scene (used as day view)"
         }
 
-    - Alle Raeume einer erlaubten Location koennen beschrieben werden
-    - Pro Aufruf wird genau EIN Raum bearbeitet
-    - Neue Raeume koennen angelegt werden (bis max_custom_rooms der Location)
-    - Wenn der Raum nicht existiert, wird er automatisch erstellt
-    - Nach dem Speichern wird automatisch ein Raum-Bild generiert
+    - Every room of an allowed location can be described
+    - Exactly ONE room is edited per call
+    - New rooms can be created (up to the location's max_custom_rooms)
+    - A room that does not exist is created automatically
+    - After saving, a room image is generated automatically
+
+    The reserved rooms are described, never created: the ground and the
+    corridor of a storey are rooms like any other here, but a name that hits a
+    corridor's display name lands ON the corridor and does not count against
+    max_custom_rooms (spec 2026-09-09-etagen-flur § 4).
     """
 
     SKILL_ID = "describe_room"
@@ -115,66 +124,72 @@ class DescribeRoomSkill(BaseSkill):
         if not character_name:
             return "Fehler: Agent-Name fehlt."
 
-        # JSON-Input parsen
+        # Parse the JSON input
         location_id = ctx.get("location_id", "").strip()
         room_name = ctx.get("room", "").strip()
         new_description = ctx.get("description", "").strip()
         new_image_prompt = ctx.get("image_prompt", "").strip()
 
-        # Fallback: Legacy-Format "Raumname: Beschreibung" im input-Feld
+        # Fallback: legacy format "room name: description" in the input field
         input_text = ctx.get("input", "").strip()
         if not location_id and not room_name and input_text:
-            # Versuche altes Format zu parsen
+            # Try to parse the old format
             return self._execute_legacy(input_text, character_name)
 
         if not location_id:
-            logger.warning("location_id fehlt im Tool-Input (agent=%s)", character_name)
+            logger.warning("location_id missing in the tool input (agent=%s)", character_name)
             return "Fehler: location_id fehlt."
         if not room_name:
-            logger.warning("room fehlt im Tool-Input (agent=%s, location=%s)", character_name, location_id)
+            logger.warning("room missing in the tool input (agent=%s, location=%s)", character_name, location_id)
             return "Fehler: room (Raumname) fehlt."
         if not new_description and not new_image_prompt:
-            logger.warning("description und image_prompt fehlen (agent=%s, room=%s)", character_name, room_name)
+            logger.warning("description and image_prompt are both missing (agent=%s, room=%s)", character_name, room_name)
             return "Fehler: description oder image_prompt muss angegeben werden."
 
-        # Beschreibung bereinigen: Character-Referenzen, Tool-Tags, JSON entfernen
+        # Clean the description: drop character references, tool tags, JSON
         if new_description:
             new_description = self._sanitize_room_description(new_description, character_name)
             if not new_description and not new_image_prompt:
-                logger.warning("Beschreibung nach Bereinigung leer (agent=%s, room=%s)", character_name, room_name)
+                logger.warning("description empty after cleaning (agent=%s, room=%s)", character_name, room_name)
                 return "Fehler: Beschreibung wurde bereinigt und ist leer — sie enthielt keine gueltige Raum-Beschreibung."
 
-        # Berechtigung pruefen
+        # Check the permission
         allowed_ids = self._get_allowed_location_ids(character_name)
         if location_id not in allowed_ids:
             logger.warning(
-                "Location '%s' nicht erlaubt fuer %s (erlaubt: %s)",
+                "location '%s' not allowed for %s (allowed: %s)",
                 location_id, character_name, allowed_ids)
             return f"Fehler: Location '{location_id}' ist fuer {character_name} nicht erlaubt."
 
-        # Location laden
+        # Load the location
         location = get_location_by_id(location_id)
         if not location:
-            logger.warning("Location '%s' nicht gefunden (agent=%s)", location_id, character_name)
+            logger.warning("location '%s' not found (agent=%s)", location_id, character_name)
             return f"Fehler: Location '{location_id}' nicht gefunden."
 
         location_name = location.get("name", "?")
         rooms = get_location_rooms(location)
 
-        # Raum suchen (fuzzy)
+        # Look the room up (fuzzy)
         room = get_room_by_name(location, room_name)
+        if not room:
+            # An unnamed corridor answers with the translated default of its
+            # storey, which the name lookup above cannot see. A hit lands the
+            # description ON the corridor instead of creating a second room
+            # carrying its word.
+            room = self._match_floor_room(location, room_name, character_name)
 
         if room:
-            # Bestehenden Raum aktualisieren
-            actual_room_name = room.get("name", room_name)
+            # Update the existing room
+            actual_room_name = room.get("name") or room_name
             if actual_room_name.lower() != room_name.lower():
                 logger.info(
-                    "Fuzzy-Match: '%s' -> bestehender Raum '%s' (%s)",
+                    "fuzzy match: '%s' -> existing room '%s' (%s)",
                     room_name, actual_room_name, location_name)
             old_desc = room.get("description", "")
             room_id = room.get("id", "")
 
-            # Beschreibung und/oder Image-Prompt aktualisieren
+            # Update the description and/or the image prompt
             final_description = new_description if new_description else old_desc
             success = update_room_description(location_id, room_id, final_description,
                 image_prompt_day=new_image_prompt if new_image_prompt else None
@@ -183,11 +198,11 @@ class DescribeRoomSkill(BaseSkill):
                 return "Fehler: Raum-Beschreibung konnte nicht aktualisiert werden."
 
             logger.info(
-                "%s hat Raum '%s' (%s) aktualisiert: desc='%s', image_prompt='%s'",
+                "%s updated the room '%s' (%s): desc='%s', image_prompt='%s'",
                 character_name, actual_room_name, location_name,
                 final_description[:60], (new_image_prompt or "")[:60])
 
-            # Bild generieren
+            # Generate the image
             self._trigger_room_image(location_id, room_id)
 
             parts = [f"Raum aktualisiert: {actual_room_name} ({location_name})"]
@@ -198,11 +213,18 @@ class DescribeRoomSkill(BaseSkill):
             parts.append("Bildgenerierung gestartet.")
             return "\n".join(parts)
         else:
-            # Neuen Raum anlegen
+            # Create a new room. The reserved rooms do not count: the ground
+            # and the corridors are the server's, not the character's, and a
+            # location with three storeys must not be "full" because of them.
             cfg = self._get_effective_config(character_name)
             max_custom = cfg.get("max_custom_rooms", 3)
-            if max_custom > 0 and len(rooms) >= max_custom:
-                room_names_list = [r.get("name", "") for r in rooms if r.get("name")]
+            custom_rooms = [
+                r for r in rooms
+                if str(r.get("id") or "") != GROUND_ROOM_ID
+                and not is_floor_room(str(r.get("id") or ""))
+            ]
+            if max_custom > 0 and len(custom_rooms) >= max_custom:
+                room_names_list = [r.get("name", "") for r in custom_rooms if r.get("name")]
                 return (
                     f"Fehler: Maximum von {max_custom} Raeumen in '{location_name}' erreicht. "
                     f"Vorhandene Raeume: {', '.join(room_names_list)}"
@@ -214,11 +236,11 @@ class DescribeRoomSkill(BaseSkill):
                 return f"Fehler: Raum '{room_name}' konnte nicht angelegt werden."
 
             logger.info(
-                "%s hat neuen Raum '%s' in '%s' angelegt: desc='%s', image_prompt='%s'",
+                "%s created the new room '%s' in '%s': desc='%s', image_prompt='%s'",
                 character_name, room_name, location_name,
                 new_description[:60], (new_image_prompt or "")[:60])
 
-            # Bild generieren
+            # Generate the image
             room_id = new_room.get("id", "")
             if room_id:
                 self._trigger_room_image(location_id, room_id)
@@ -231,6 +253,31 @@ class DescribeRoomSkill(BaseSkill):
             if room_id:
                 parts.append("Bildgenerierung gestartet.")
             return "\n".join(parts)
+
+    @staticmethod
+    def _match_floor_room(location: Dict[str, Any], room_name: str,
+                          character_name: str) -> Optional[Dict[str, Any]]:
+        """The corridor room whose DISPLAY name the character just used.
+
+        A corridor is usually unnamed and answers with the translated default
+        of its storey ("Hallway", "Corridor (floor 2)"), so the name lookup
+        over ``rooms[].name`` never finds it. Both the character's own
+        language and English are compared, because a model writes the word it
+        read in the prompt. None when no corridor carries that name.
+        """
+        wanted = room_name.strip().lower()
+        corridors = [r for r in (location.get("rooms") or [])
+                     if isinstance(r, dict) and is_floor_room(str(r.get("id") or ""))]
+        if not (wanted and corridors):
+            return None
+        from app.models.character import get_character_profile
+        lang = (get_character_profile(character_name) or {}).get("language", "")
+        for room in corridors:
+            names = {floor_room_display_name(room, "").lower(),
+                     floor_room_display_name(room, lang).lower()}
+            if wanted in names:
+                return room
+        return None
 
     @staticmethod
     def _trigger_room_image(location_id: str, room_id: str):

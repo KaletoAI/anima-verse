@@ -437,7 +437,9 @@ def _names_every_room(location_id: str, room_ids: List[str]) -> bool:
     """True when ``room_ids`` covers every room of the location.
 
     Only then does a room-limited rule stop the LOCATION itself; otherwise the
-    character can route to a room the rule does not name.
+    character can route to a room the rule does not name. Corridor rooms count
+    like the ground: a location-wide rule has to name them, and the RulesTab
+    lists them.
     """
     from app.models.world import get_location_by_id
     loc = get_location_by_id(location_id) or {}
