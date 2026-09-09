@@ -505,6 +505,9 @@
 >     — sie sagt dann nichts über den Raum, und es entscheidet die
 >     Ankunftsregel (`world.get_arrival_room_id`: der erklärte `entry_room`,
 >     sonst die Grundfläche). Seit § A13 kommt niemand mehr raumlos an.
+>     **Seit § A13b** darf der erklärte `entry_room` auch der Flur des
+>     Erdgeschosses (`__floor__0`) sein — von den reservierten Fluren NUR
+>     dieser (`world.valid_entry_room`); in einem Kellerflur kommt niemand an.
 >     **Das Verlassen entscheidet EINE Funktion**
 >     (`boundary_entry.may_leave`). Drei Wege hinaus, und es genügt, dass
 >     EINER zutrifft: über eine autorisierte Öffnung DIESER Kante aus dem
@@ -1615,6 +1618,9 @@ Platzierung zeigt.
   Breite, eine in die Ecke geklemmte verliert den überstehenden Teil, statt
   auf die Nachbarkante zu wandern. Quelle ist ausschließlich der gelieferte
   `doorways`-Block, nie ein zweites Mal die Öffnungen.
+  **Seit § A13b:** eine Tür ohne `to` auf einer Etage mit Flur ist keine
+  Außentür und öffnet die Hülle nicht; nur `to: "outside"` oder eine
+  Hüllentür (§ A13c, Phase 3) tut das.
   **Die frühere Fallback-Tür** (0,8 m mittig im südlichsten Wandstück, wenn
   keine Tür nah genug lag) **ist ersatzlos weg** — ein Gebäude ohne Außentür
   bleibt zu und wird als `problems[]`-Befund gemeldet (§ B1).
@@ -2872,6 +2878,103 @@ wörtlich gültig.
   einzige, die nicht welteindeutig ist; aus demselben Grund weist
   `GET /play/rooms/__ground__/recipe` mit 400 ab: den Hof liefert
   `GET /play/locations/{id}/scene`.
+
+### A13b. Der Flur einer Etage ist ein Raum — neu 2026-09-09
+
+Spezifikation `docs/superpowers/specs/2026-09-09-etagen-flur-design.md`. **Was
+auf einer Etage kein Raum ist, ist ihr Flur — nicht der Hof.** Jede GENUTZTE
+Etage einer Location trägt deshalb einen zweiten **reservierten Raum** mit
+fester Id `__floor__<level>` (`world.floor_room_id` / `floor_room_level` /
+`is_floor_room`), gebaut nach demselben Gesetz wie die Grundfläche aus § A13:
+der Server bringt ihn mit, der Autor legt ihn nie an, löscht ihn nie und kann
+ihn nur benennen. Vorher hatte die Fläche zwischen den Räumen einer Etage
+zwar Platte und Wände (§ A6), aber keine Identität: eine Tür ohne Ziel riss
+dort ein Loch in die Hülle, und wer auf dieser Etage keinen Raum hatte, fiel
+auf die Grundfläche zurück — die per Definition Etage 0 ist.
+
+- **Wann er existiert.** „Genutzt" heißt: mindestens ein Raum MIT Layout steht
+  auf dieser Etage (`world.floor_levels`; die reduzierte Grundflächen-Ebene aus
+  § A13a trägt kein `level` und zählt nie mit). Jede Etage ≠ 0 bekommt ihren
+  Flur immer, **Etage 0 nur auf Opt-in**: ohne `map3d.ground_corridor` bleibt
+  das Erdgeschoss-Komplement der Hof (gespeichert wird nur das ausdrückliche
+  `true`, `world_ops._sanitize_map3d`). Der Abgleich läuft bei JEDEM
+  Location-Schreiben und in beide Richtungen (`world.ensure_floor_rooms`): eine
+  Etage, die ihren ersten Raum bekommt, bekommt den Flur, eine, die ihren
+  letzten verliert, verliert ihn — und wer in dem verschwundenen Flur stand,
+  landet auf der Grundfläche (`evict_rooms_to_ground`: Charaktere UND
+  Äußerungen, erst NACH dem Speichern, nie gegen eine Liste, die den Flur noch
+  hat). Ein vorhandener Eintrag wird nie angefasst; ein Flur, den eine
+  eingereichte Raumliste vergessen hat, kommt mit seinem gespeicherten Namen
+  zurück. Den Bestand holt die Einmal-Migration (`migrate_floor_rooms_once`,
+  Marker `migration.floor_rooms_v1`) nach — sie nennt **je Location im
+  Boot-Log**, wie viele Flure sie angelegt hat und wie viele Türen jetzt in
+  einen Flur führen.
+- **Keine Geometrie, kein Layout.** Der Flur ist das Komplement der Räume
+  seiner Etage: seine Platte und seine Hülle sind die der Location, er hat
+  weder Rechteck noch Umriss noch Öffnungen. Ein für ihn gesendetes `layout`
+  wird verworfen und protokolliert (`world_ops._sanitize_rooms_layout`), der
+  Grundriss-Apply verwirft einen Flur-Eintrag mit der Warnung `reserved_room`
+  (`layout_apply`), und eine reservierte Id auf einem NEUEN Raum weist die
+  Location-Schreibroute mit **400** ab („reserved for the storey corridor").
+  Der Befund `rooms_without_layout` (§ B1) überspringt ihn wie die
+  Grundfläche, und `GET /play/rooms/{room_id}/recipe` antwortet für Grund- wie
+  Flur-Ids mit **400**: beide liefert `GET /play/locations/{id}/scene`.
+- **Name am Raum**, wie bei jedem anderen; ohne Namen greift überall derselbe
+  übersetzte Standard (`world.get_floor_name` über
+  `floor_room_display_name`): Etage 0 „Hallway", Etage −1 „Corridor
+  (basement)", tiefer „Corridor (basement {n})", darüber „Corridor (floor
+  {n})". Die reservierte Id erscheint damit in keinem Prompt und in keinem
+  Chip.
+- **Die Türregel: eine Tür ohne Ziel führt in den Flur**
+  (`scene_recipe._doorways`). Auf einer Etage MIT Flur bekommt eine
+  `door`/`passage`, deren Autor kein `to` gesetzt hat, den Flur als ZWEITEN
+  Raum — entschieden NACH der Deduplizierung und nur, wenn kein Nachbar
+  dieselbe Lücke beansprucht (die
+  gespiegelte Kopie einer Trennwand-Tür nennt ihren eigenen Raum und gewinnt).
+  Damit ist `outside` dort `false`: **kein Loch in der Hülle** (§ A6) und kein
+  Befund `no_building_entrance`. Die ausdrückliche Außentür heißt weiterhin
+  `to: "outside"`, und eine Etage OHNE Flur behält die alte Regel — eine
+  unbeschriftete Tür ist dort eine richtige Außentür.
+- **Der Anker steht im Rezept, nicht im Raum.** Ein Flur hat keinen Grundriss,
+  also keine Mitte, die ein Client herleiten könnte:
+  `GET /play/locations/{id}/scene` liefert sie fertig in `corridors[]`
+  (`{room_id, level, anchor}`), deterministisch in vier Stufen —
+  Fahrstuhl-Haltepunkt, sonst Treppen-Pad dieser Etage, sonst der freieste
+  Punkt eines 0,5-m-Rasters (Gleichstand: kleinstes x, dann kleinstes z), sonst
+  der Mittelpunkt des Grundrisses plus dem Befund `corridor_without_floor` in
+  `problems[]`. Wortlaut, Bedingungen und Handrechnung stehen in **§ B1**; die
+  Szenen-`signature` nimmt die Flur-Etagen als eigenes Token auf, damit ein neu
+  entstandener oder verschwundener Flur die Clients wirklich neu laden lässt.
+- **Ankommen:** `entry_room` darf von den reservierten Fluren **nur
+  `__floor__0`** sein — man kommt in der Diele an, nie in einem Kellerflur;
+  jede andere Flur-Id wird beim Speichern verworfen (`world.valid_entry_room`,
+  geprüft NACH dem Flur-Abgleich, damit ein Schreibvorgang das Opt-in und die
+  Diele als Ankunftsraum in einem Zug setzen kann). Alles Weitere zur
+  Ankunftsregel: § A13 und § B1 Nr. 13.
+- **Spielmechanik gewöhnlich.** Betreten, Hörweite, Anstand und Regeln
+  behandeln den Flur wie jeden anderen Raum: er wird über seine Id betreten,
+  `check_access` prüft ihn mit, eine ortsweite Block-Regel sperrt ihn mit —
+  eine raumgenaue muss ihn nennen, genau wie die Grundfläche.
+- **Die anderen Server-Verbraucher behandeln ihn wie die Grundfläche.**
+  Export/Import behalten die reservierte Id unverändert (`content_io`;
+  umbenannt käme der Flur als gewöhnlicher Raum an, und `ensure_floor_rooms`
+  hängte einen zweiten, leeren daneben), die Raumliste des World-Dev-Prompts
+  lässt ihn weg (er ist kein Planziel), und `describe_room` legt nie einen an
+  und zählt ihn nicht gegen `max_custom_rooms`, DARF ihn aber beschreiben:
+  gematcht wird über seinen Anzeigenamen in der Sprache des Charakters
+  (Englisch bleibt im Vergleich, weil ein Modell das Wort schreibt, das es
+  gelesen hat).
+- **Für Renderer heißt das** (Phase 2, noch nicht gebaut): einen Flur erkennt
+  man an `is_floor` und `level` des Spieler-Payloads (§ A14), **nie** an der
+  Konstante — die reservierten Ids bleiben Server-Sache wie bei der
+  Grundfläche. Figuren dieses Raums stehen am `anchor` aus `corridors[]`,
+  Fahrstuhl und Treppe führen dorthin, der Etagenfilter zählt den Flur als
+  Raum seiner Etage, und ein gesperrter Flur ist kein Wechselziel — wie eine
+  gesperrte Grundfläche.
+- **Die Haustür in der Diele ist Phase 3.** Ein Flur hat keine Wände und damit
+  keine Öffnungen; ein Erdgeschoss mit Diele braucht seine Außentür an der
+  HÜLLE (`map3d.hull_openings`) — das beschreibt **§ A13c**, sobald es gebaut
+  ist.
 
 ---
 
