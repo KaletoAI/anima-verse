@@ -662,6 +662,18 @@ def _dismiss_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     return {"status": "success", "axis": axis}
 
 
+@router.post("/candidates/dismiss_all")
+async def dismiss_all_candidates(request: Request,
+                                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Dismisses every open candidate of one axis at once — the reset after
+    the producers changed what they record."""
+    import asyncio
+    body = await request.json()
+    axis = _axis(body.get("axis") or "pose")
+    n = await asyncio.to_thread(pose_catalog.dismiss_all_candidates, axis)
+    return {"status": "success", "axis": axis, "dismissed": n}
+
+
 # ── Rendered expression images ───────────────────────────────────────────
 
 @router.post("/expression-images/clear")

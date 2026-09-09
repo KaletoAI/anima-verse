@@ -667,6 +667,22 @@ def set_candidate_status(axis: str, raw_text: str, status: str) -> bool:
         return False
 
 
+def dismiss_all_candidates(axis: str) -> int:
+    """Marks every OPEN candidate of ``axis`` as dismissed; returns how many
+    rows changed. The reset after a producer change: rows recorded under the
+    old free-text rules describe nothing about the new ones."""
+    from app.core.db import transaction
+    try:
+        with transaction() as conn:
+            cur = conn.execute(
+                "UPDATE pose_candidates SET status='dismissed' "
+                "WHERE axis=? AND status='open'", (axis,))
+            return int(cur.rowcount or 0)
+    except Exception as e:
+        logger.warning("dismiss_all_candidates failed: %s", e)
+        return 0
+
+
 # ── Flavor: what survives of the free text next to the catalog key ───────
 _FLAVOR_MAX_CHARS = 120
 

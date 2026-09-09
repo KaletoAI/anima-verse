@@ -11,7 +11,7 @@
  * filled from the clips that actually exist (/assets/animation-clips).
  *
  * Catalog:    GET/POST /poses · PUT/DELETE /poses/{key}   (?axis=…)
- * Candidates: GET /poses/candidates · POST /poses/candidates/approve|dismiss
+ * Candidates: GET /poses/candidates · POST /poses/candidates/approve|dismiss|dismiss_all
  * Images:     POST /poses/expression-images/clear
  *
  * The image cache is keyed by the catalog KEY, not by the prompt text, so
@@ -148,6 +148,7 @@ export function PosesTab() {
   // list in the narrow left column and would otherwise squeeze the list.
   const [showGroups, setShowGroups] = useState(false)
   const [confirmDismiss, setConfirmDismiss] = useState<string | null>(null)
+  const [confirmDismissAll, setConfirmDismissAll] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const [busy, setBusy] = useState(false)
 
@@ -389,6 +390,21 @@ export function PosesTab() {
     },
     [axis, busy, t, toast],
   )
+
+  const dismissAll = useCallback(async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const r = await apiPost<{ dismissed: number }>('/poses/candidates/dismiss_all', { axis })
+      setCandidates([])
+      setConfirmDismissAll(false)
+      toast(t('Dismissed {n} candidates').replace('{n}', String(r.dismissed)))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }, [axis, busy, t, toast])
 
   const clearExpressionImages = useCallback(async () => {
     if (busy) return
@@ -816,9 +832,53 @@ export function PosesTab() {
               flex: '0 1 auto', minHeight: 0, maxHeight: '35vh',
             }}
           >
-            <h4 style={{ margin: '0 0 4px' }}>
-              {t('Candidates')} ({candidates.length})
-            </h4>
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 8, marginBottom: 4,
+              }}
+            >
+              <h4 style={{ margin: 0 }}>
+                {t('Candidates')} ({candidates.length})
+              </h4>
+              {candidates.length > 0 && !confirmDismissAll && (
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  disabled={busy}
+                  onClick={() => setConfirmDismissAll(true)}
+                >
+                  {t('Dismiss all')}
+                </button>
+              )}
+            </div>
+            {confirmDismissAll && candidates.length > 0 && (
+              <div
+                style={{
+                  display: 'flex', gap: 6, alignItems: 'center',
+                  flexWrap: 'wrap', marginBottom: 6,
+                }}
+              >
+                <span style={{ fontSize: '0.82em' }}>
+                  {t('Dismiss all {n} open candidates?').replace('{n}', String(candidates.length))}
+                </span>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm ga-btn-danger"
+                  disabled={busy}
+                  onClick={dismissAll}
+                >
+                  {t('Yes, dismiss')}
+                </button>
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  onClick={() => setConfirmDismissAll(false)}
+                >
+                  {t('Cancel')}
+                </button>
+              </div>
+            )}
             <p className="ga-sched-muted" style={{ marginTop: 0 }}>
               {t('Free text that landed on the default key. Approve it as its own entry, attach it as a synonym, or dismiss it. "Seen" counts first sightings per server run.')}
             </p>

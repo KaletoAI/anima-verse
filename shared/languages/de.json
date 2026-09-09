@@ -2616,6 +2616,10 @@
     "Stair colour": "Treppenfarbe",
     "Elevator colours": "Fahrstuhlfarben",
     "Surface texture of this flight — treads, risers, stringers and both landing pads tile with it. Nothing chosen keeps the plain stair colour.": "Oberflächentextur dieses Laufs — Auftritte, Setzstufen, Wangen und beide Podest-Pads kacheln damit. Ohne Auswahl bleibt die einfache Treppenfarbe.",
-    "Surface texture of the elevator's opaque parts — columns, roof, landing pads and cabin. The glass stays glass. Nothing chosen keeps the plain elevator colours.": "Oberflächentextur der undurchsichtigen Fahrstuhlteile — Säulen, Dach, Etagen-Pads und Kabine. Das Glas bleibt Glas. Ohne Auswahl bleiben die einfachen Fahrstuhlfarben."
+    "Surface texture of the elevator's opaque parts — columns, roof, landing pads and cabin. The glass stays glass. Nothing chosen keeps the plain elevator colours.": "Oberflächentextur der undurchsichtigen Fahrstuhlteile — Säulen, Dach, Etagen-Pads und Kabine. Das Glas bleibt Glas. Ohne Auswahl bleiben die einfachen Fahrstuhlfarben.",
+    "Dismiss all": "Alle verwerfen",
+    "Dismiss all {n} open candidates?": "Alle {n} offenen Kandidaten verwerfen?",
+    "Yes, dismiss": "Ja, verwerfen",
+    "Dismissed {n} candidates": "{n} Kandidaten verworfen"
   }
 }

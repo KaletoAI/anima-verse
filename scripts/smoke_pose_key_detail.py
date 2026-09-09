@@ -69,6 +69,11 @@ Stage 5 — the SetActivity skill, derived BY HAND from its execute():
   refusal text ("two-person action") and the pose stays standing
 - the skill description names both fields and the key rule ("pose key")
   and no longer says "Free-text"
+
+Stage 6 — dismiss all, derived BY HAND: after stages 2 and 4 the open list
+holds "quantum flux" and "leaning against counter"; dismiss_all_candidates
+("pose") returns 2, the open list is empty, list_candidates(status=
+"dismissed") holds both texts; a second call returns 0.
 """
 import shutil
 import sys
@@ -252,12 +257,26 @@ def stage5():
     check("Free-text" not in meta["description"], "stage5 d description still free-text")
 
 
+def stage6():
+    from app.core.pose_catalog import dismiss_all_candidates, list_candidates
+    open_before = sorted(x["raw_text"] for x in list_candidates("pose"))
+    check(open_before == ["leaning against counter", "quantum flux"],
+          f"stage6 precondition {open_before}")
+    n = dismiss_all_candidates("pose")
+    check(n == 2, f"stage6 dismissed {n}")
+    check(list_candidates("pose") == [], "stage6 open list not empty")
+    gone = sorted(x["raw_text"] for x in list_candidates("pose", status="dismissed"))
+    check(gone == ["leaning against counter", "quantum flux"], f"stage6 dismissed list {gone}")
+    check(dismiss_all_candidates("pose") == 0, "stage6 second call changed rows")
+
+
 try:
     stage1()
     stage2()
     stage3()
     stage4()
     stage5()
+    stage6()
 finally:
     shutil.rmtree(_tmp, ignore_errors=True)
 
