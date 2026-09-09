@@ -435,6 +435,7 @@ class ThoughtRunner:
         # ``system_prompt_override``. Other callers (e.g. world-dev debug
         # endpoint) get the slim prompt built fresh here, with optional
         # context_hint prepended as a "Trigger" block.
+        ctx = None          # thought context, only built when we render ourselves
         if system_prompt_override:
             system_prompt = system_prompt_override
         else:
@@ -498,20 +499,30 @@ class ThoughtRunner:
             # Prio 3b: the room's place offer — the pose keys SetActivity
             # takes. The chat route's tool phase shows the same block
             # (chat.py _current_activity_hint); without it the tool LLM
-            # has no menu to copy a key from.
+            # has no menu to copy a key from. It is the SAME string the
+            # thought context already built, and the cap falls on a LINE
+            # boundary so a pose key is never cut in half.
             try:
-                from app.core import places as _places
-                from app.models.character import (get_character_current_location,
-                                                  get_character_current_room)
-                _offer = _places.room_offer(
-                    character_name,
-                    get_character_current_location(character_name) or "",
-                    get_character_current_room(character_name) or "")
+                if ctx is not None:
+                    _offer = ctx.get("activity_hint_block") or ""
+                else:
+                    # AgentLoop path: the caller rendered the prompt itself,
+                    # so no context dict reached us — one builder, called once.
+                    from app.core.thought_context import _build_activity_hint_block
+                    from app.models.character import (get_character_current_location,
+                                                      get_character_current_room)
+                    _offer = _build_activity_hint_block(
+                        character_name,
+                        get_character_current_location(character_name) or "",
+                        get_character_current_room(character_name) or "")
                 if _offer:
-                    _ctx_parts.append(_offer[:900])
+                    _cut = _offer[:900]
+                    if len(_offer) > 900 and "\n" in _cut:
+                        _cut = _cut[:_cut.rfind("\n")]
+                    _ctx_parts.append(_cut)
             except Exception as _oe:
-                logger.debug("tool context: place offer failed for %s: %s",
-                             character_name, _oe)
+                logger.warning("tool context: place offer failed for %s: %s",
+                               character_name, _oe)
             # Prio 4: assignments (max ~800 chars)
             if _td.get("assignment_section"):
                 _ctx_parts.append(_td["assignment_section"][:800])

@@ -179,10 +179,13 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
         f"the action was \"only described\" narratively — that IS the signal.\n"
         f"{tool_decision_guardrails(tools_dict)}"
         f"Also emit fallback markers the character forgot (only if NOT already wrapped "
-        f"in **...** in the RP): **I feel <emotion>**, **I do <activity>**, and "
+        f"in **...** in the RP): **I feel <emotion>**, "
+        f"**I do <pose key>: <what you do, 2-6 words>**, and "
         f"**I am at <location>** ONLY when the RP explicitly describes physically moving "
-        f"to a NEW place. Use the character's language; match exact names from the lists "
-        f"in your system prompt.\n"
+        f"to a NEW place. The pose key is one of the keys listed after a place (or under "
+        f"'Anywhere here'), copied exactly; the part after the colon is the detail (what a "
+        f"bystander would see), and may be left out. Use the character's language; match "
+        f"exact names from the lists in your system prompt.\n"
         f"If nothing applies, respond with: NONE")
 
 

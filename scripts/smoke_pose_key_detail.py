@@ -54,6 +54,9 @@ route module imports offline; 'demo' row from stage 2 is reused):
   and the candidate "leaning against counter" is counted ONE more time
   (stage 2 saw that text already; (axis, raw_text) is unique, so a repeat
   bumps the count instead of adding a row); returns the marker text
+- the SAME keyless marker again -> None: the raw text already equals the
+  stored flavor, so no second resolver pass runs and the candidate count of
+  "leaning against counter" stays at 2 (1 from stage 2 e2 + 1 from case c)
 - "**I do dancing together: mit Kai**" -> pair key without a partner ->
   None, and the pose stays "standing"
 - a reply without a marker -> None
@@ -216,6 +219,10 @@ def stage4():
     check(state("pose_flavor") == "leaning against counter", f"stage4 c flavor {state('pose_flavor')!r}")
     check(cand_count("leaning against counter") == before + 1,
           "stage4 c no candidate recorded")
+    r = _extract_activity("demo", "**I do leaning against counter**")
+    check(r is None, f"stage4 c2 returned {r!r}")
+    check(cand_count("leaning against counter") == before + 1,
+          f"stage4 c2 candidate bumped to {cand_count('leaning against counter')}")
     r = _extract_activity("demo", "**I do dancing together: mit Kai**")
     check(r is None, f"stage4 d returned {r!r}")
     check(state("pose_key") == "standing", f"stage4 d key {state('pose_key')!r}")

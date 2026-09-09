@@ -200,6 +200,7 @@ export function PosesTab() {
     setIsNew(false)
     setApproveOf('')
     setConfirmDismiss(null)
+    setConfirmDismissAll(false)
     setGroupFilter('')
   }, [axis])
 

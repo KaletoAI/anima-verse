@@ -156,7 +156,11 @@ def _build_group_system_prompt(character_name: str,
         f"but never SPEAK FOR them.\n"
         f"7. Do NOT prefix your response with your own name. Just respond directly.\n"
         f"8. Do NOT use **I am at** tags (you stay at this location during a group chat).\n"
-        f"   You MAY still use **I feel <emotion>** and **I do <activity>** tags if your mood or activity changes."
+        f"   You MAY still use **I feel <emotion>** and "
+        f"**I do <pose key>: <what you do, 2-6 words>** tags if your mood or activity changes.\n"
+        f"   The pose key is one of the keys listed after a place (or under \"Anywhere here\"), "
+        f"copied exactly; the part after the colon is the detail (what a bystander would see), "
+        f"and may be left out."
         + ("" if _char_tools else "\n9. Do NOT use [INTENT:] tags.")
     )
 

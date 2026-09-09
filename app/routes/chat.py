@@ -1794,6 +1794,9 @@ def _extract_activity(agent_name: str, response: str) -> Optional[str]:
                                       get_character_pose_key,
                                       set_pose_key_detail)
     key, detail = split_key_detail(raw)
+    if not key and raw.lower() == (get_character_pose_flavor(agent_name) or "").lower():
+        # The same free text again: no second resolver pass, no candidate bump.
+        return None
     if key and key == (get_character_pose_key(agent_name) or "") \
             and detail.lower() == (get_character_pose_flavor(agent_name) or "").lower():
         return None
