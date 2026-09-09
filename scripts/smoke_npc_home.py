@@ -124,9 +124,13 @@ types.json``): grass is passable, deep_water is not.
   (d) THE ACTION TURN HAS A SECOND VARIANT. An NPC with ``npc_home`` is
       asked ONLY what it is doing (``{"activity": "…"}`` — there is no room
       list and no room in the answer). The application is the activity plus
-      a WALK: ``force_set_status`` writes the sentence, and a point journey
-      to a fresh ``random_point`` of the same circle is started.
+      a WALK: ``force_set_status`` writes the sentence AND, because the
+      answer names no pose key and the turn is a walk (no ``say``), the key
+      ``walking`` — the roaming walker is walking by construction, the
+      resolver is not asked. Then a point journey to a fresh ``random_point``
+      of the same circle is started.
         * the result is {"name", "room": "", "activity", "moved": True};
+        * ``pose_key`` in ``character_state`` is "walking";
         * ``profile["journey"]["target"]`` is '' and its ``target_point``
           lies inside the circle (that is what a point journey is);
         * no room was written — the NPC stands in the open, ``current_room``
@@ -282,6 +286,7 @@ from app.models.character import (POOLED_STATUS,  # noqa: E402
                                   get_character_current_location,
                                   get_character_current_room,
                                   get_character_pos,
+                                  get_character_pose_key,
                                   get_character_profile,
                                   get_character_status,
                                   get_effective_activity,
@@ -671,6 +676,8 @@ check("the answer was applied",
        "moved": True})
 check("the activity really is written", get_effective_activity(D),
       "lauert im Unterholz")
+check("and the walker is written as walking, unresolved",
+      get_character_pose_key(D), "walking")
 check("exactly one LLM call", len(LLM.calls), 1)
 check("the prompt names the home", "within 20 m of Forest Clearing"
       in LLM.calls[0]["user"], True)

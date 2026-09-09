@@ -670,6 +670,10 @@ def _apply_home_answer(name: str, answer: Dict[str, Any],
 
     ``None`` when the answer names no activity at all: it is the only field,
     so an empty one is an unusable answer, not a silent walk.
+
+    A turn that names no pose key and no ``say`` is written with the key
+    ``walking``: such a turn ends in the walk below, so the walker is walking
+    by construction and its sentence is never handed to the resolver.
     """
     from app.core.npc_home import random_point
     from app.core.travel_engine import start_journey_to_point
@@ -684,6 +688,12 @@ def _apply_home_answer(name: str, answer: Dict[str, Any],
     profile = get_character_profile(name) or {}
     home = profile.get("npc_home") or {}
     pose = _pose_from_answer(answer, _solo_pose_keys())
+    if not pose and not answer.get("say"):
+        # A silent roaming turn ends in a walk (below): the walker is
+        # walking by construction, so the sentence never has to go through
+        # the resolver — the "geht den Waldweg entlang" candidates came
+        # from exactly this path (plan-pose-key-detail.md A4).
+        pose = "walking"
     if not force_set_status(name, activity=activity, pose=pose or None):
         # The sentence named a two-person pose (nobody to share it with out
         # here) — the NPC keeps its old activity but still takes its walk.
