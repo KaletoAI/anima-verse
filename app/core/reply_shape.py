@@ -1,7 +1,7 @@
 """Facts about THIS moment that shape how long a reply should be.
 
 This module only collects and formats FACTS — how big the incoming line was,
-whether the character is on the job, its mood, how it stands to the partner.
+what role the character carries, its mood, how it stands to the partner.
 The interpretation ("a brief line deserves a brief answer") lives exactly once
 in the chat template (``shared/templates/llm/chat/chat_stream.md``); no
 threshold and no length instruction is written here.
@@ -119,7 +119,7 @@ def compose_reply_shape(facts: Dict[str, Any]) -> str:
 
     on_duty = (facts.get("on_duty") or "").strip()
     if on_duty:
-        line = f"- You are on the job: {on_duty}."
+        line = f"- Your role: {on_duty}."
         activity = (facts.get("activity") or "").strip()
         if activity:
             line += f" Right now: {activity}."

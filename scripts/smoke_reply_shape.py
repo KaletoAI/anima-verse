@@ -131,7 +131,7 @@ def test_compose_empty():
 
 
 def test_compose_full():
-    # [12] brief line, on duty with activity, mood, stranger, low attention,
+    # [12] brief line, role with activity, mood, stranger, low attention,
     #      high discretion — every bullet the composer knows except the
     #      relationship variant covered by [13]
     got = compose_reply_shape({
@@ -142,7 +142,7 @@ def test_compose_full():
     })
     expected = (
         "- The incoming line is brief.\n"
-        "- You are on the job: innkeeper. Right now: serving drinks.\n"
+        "- Your role: innkeeper. Right now: serving drinks.\n"
         "- Your mood: annoyed.\n"
         "- You have no relationship with Bob yet — a stranger.\n"
         "- Bob draws your attention: little.\n"
@@ -182,10 +182,10 @@ def test_compose_no_partner():
     check("[14] normal question", compose_reply_shape({"incoming_kind": "normal",
                                                        "incoming_question": True}),
           "- The incoming line is a question of normal length.")
-    # on duty without activity: no "Right now" tail
-    check("[14] duty only", compose_reply_shape({"on_duty": "guard"}),
-          "- You are on the job: guard.")
-    # an activity without duty is not a fact of its own
+    # a role without activity: no "Right now" tail
+    check("[14] role only", compose_reply_shape({"on_duty": "guard"}),
+          "- Your role: guard.")
+    # an activity without a role is not a fact of its own
     check("[14] activity only", compose_reply_shape({"activity": "sweeping"}), "")
     # attention wording for the middle tier; a known partner without a
     # relationship is always a stranger (the loader passes None, never nothing)
