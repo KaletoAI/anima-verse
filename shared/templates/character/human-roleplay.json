@@ -112,6 +112,18 @@
           "editor_visible": false
         },
         {
+          "key": "dialogue_style",
+          "label": "Dialogue style",
+          "label_de": "Sprechweise",
+          "type": "text",
+          "in_prompt": true,
+          "prompt_label": "How you speak",
+          "prompt_self_only": true,
+          "llm_generable": true,
+          "placeholder": "e.g. short, dry, never more than two sentences",
+          "placeholder_de": "z.B. kurz, trocken, nie mehr als zwei Sätze"
+        },
+        {
           "key": "character_presence",
           "label": "Presence",
           "label_de": "Ausstrahlung",
