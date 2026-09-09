@@ -413,6 +413,40 @@ def get_rule(rule_id: str) -> Optional[Dict[str, Any]]:
 # BLOCK RULES: check access
 # ============================================================
 
+def rule_action(rule: Dict[str, Any]) -> str:
+    """The direction a block rule guards: ``enter`` or ``leave``.
+
+    Read leniently: the RulesTab writes the direction into ``target.action``,
+    the event path onto the rule itself. Both shapes have to bite, or a rule
+    authored in the UI would be checked against the wrong direction.
+    """
+    target = rule.get("target") or {}
+    action = (rule.get("action") or target.get("action") or "").strip()
+    return action or "enter"
+
+
+def _rule_rooms(target: Dict[str, Any]) -> List[str]:
+    """The room ids a rule names — RulesTab ``rooms``, event path ``room_ids``."""
+    rooms = target.get("room_ids") or target.get("rooms") or []
+    if not isinstance(rooms, list):
+        return []
+    return [str(r) for r in rooms if r]
+
+
+def _names_every_room(location_id: str, room_ids: List[str]) -> bool:
+    """True when ``room_ids`` covers every room of the location.
+
+    Only then does a room-limited rule stop the LOCATION itself; otherwise the
+    character can route to a room the rule does not name.
+    """
+    from app.models.world import get_location_by_id
+    loc = get_location_by_id(location_id) or {}
+    rooms = [r.get("id", "") for r in (loc.get("rooms") or []) if r.get("id")]
+    if not rooms:
+        return True
+    return all(rid in room_ids for rid in rooms)
+
+
 def check_access(character_name: str,
     location_id: str,
     room_id: str = "",
@@ -429,7 +463,7 @@ def check_access(character_name: str,
     for rule in load_rules():
         if rule.get("type") != "block":
             continue
-        if rule.get("action", "enter") != action:
+        if rule_action(rule) != action:
             continue
 
         # Character filter: a rule may be limited to one character
@@ -444,13 +478,26 @@ def check_access(character_name: str,
         target = rule.get("target", {})
         scope = target.get("scope", "")
         t_loc = (target.get("location_id") or target.get("location") or "").strip()
-        t_rooms = target.get("room_ids") or target.get("rooms") or []
+        t_rooms = _rule_rooms(target)
 
         matched = False
-        if scope == "location" and t_loc and t_loc == location_id:
-            matched = True
-        elif scope == "room" and t_loc == location_id and room_id in t_rooms:
-            matched = True
+        if scope in ("location", "room") and t_loc and t_loc == location_id:
+            # A named room list NARROWS the rule to those rooms — the scope
+            # word only says which field carries the target. The RulesTab
+            # offers the room multi-select under scope "location" ("no
+            # selection means the whole location"), so ignoring the list here
+            # locked every other room of the place as well.
+            if not t_rooms:
+                # Whole location — but a "room" scope without rooms names
+                # nothing and stays inert.
+                matched = scope == "location"
+            elif room_id:
+                matched = room_id in t_rooms
+            else:
+                # Location-level question without a room: the rule stops the
+                # location itself only when it covers EVERY room (same idea as
+                # any_room below) — otherwise a reachable room remains.
+                matched = _names_every_room(location_id, t_rooms)
         elif scope == "any_room":
             # Applies to every room. Two cases:
             #  a) with a concrete room_id -> check that room directly.
@@ -512,27 +559,29 @@ def check_leave(character_name: str, *,
                 room_only: bool = False,
                 target_location_id: str = "",
                 target_room_id: str = "") -> Tuple[bool, str]:
-    """Prueft Block-Rules mit ``action="leave"`` fuer den aktuellen Standort.
+    """Check block rules with ``action="leave"`` for the current standpoint.
 
-    Wird vor jedem Move aufgerufen (SetLocation-Skill, Walk-Step,
-    Scheduler, Chat-Narrative-Extract). Greift, wenn der Character
-    seinen aktuellen Raum oder Ort gar nicht erst verlassen darf —
-    Pinning/Confine-Use-Case.
+    Called before every move (SetLocation skill, walk step, scheduler,
+    chat narrative extract). It bites when the character may not leave its
+    current room or place at all — the pinning/confine use case.
 
-    ``room_only=True`` betrachtet ausschliesslich Rules mit ``scope="room"``
-    — fuer Same-Location-Raumwechsel, bei denen die Location nicht
-    verlassen wird, ein anderer Raum innerhalb derselben Location aber
-    trotzdem durch eine Raum-Pinning-Rule blockiert sein kann.
+    ``room_only=True`` looks at room-level rules alone — for a room change
+    inside the same location, where the location is not left but another
+    room of it may still be closed by a room pinning rule.
 
-    Confine-Set-Semantik (``scope="room"`` mit mehreren ``room_ids``):
-        Wechsel ZWISCHEN Raeumen desselben Sets ist erlaubt (freie
-        Bewegung innerhalb des Confinements). Nur Wechsel nach AUSSEN
-        wird blockiert. Dafuer muss das Ziel bekannt sein —
-        ``target_location_id`` / ``target_room_id`` mitgeben, sonst wird
-        konservativ blockiert (z.B. im Walk-Step ohne bekanntes Zielraum).
+    A rule is room-level as soon as it NAMES rooms, whichever scope word
+    carries them (the RulesTab writes ``scope="location"`` plus a room
+    selection, the event path ``scope="room"`` plus ``room_ids``).
 
-    Gleiche Idee bei ``scope="location"``: Same-Location-Raumwechsel
-    (target_location_id == cur_loc) wird nicht als "leave" gewertet.
+    Confine-set semantics (a rule naming several rooms):
+        Moving BETWEEN rooms of the same set is allowed (free movement
+        inside the confinement). Only leaving the set is blocked. That
+        needs a known target — pass ``target_location_id`` /
+        ``target_room_id``, otherwise the block is conservative (e.g. in a
+        walk step without a known target room).
+
+    Same idea for a whole-location rule: a room change inside the same
+    location (target_location_id == cur_loc) does not count as "leave".
     """
     from app.core.activity_engine import evaluate_condition
     from app.models.character import (
@@ -545,7 +594,7 @@ def check_leave(character_name: str, *,
     for rule in load_rules():
         if rule.get("type") != "block":
             continue
-        if rule.get("action", "enter") != "leave":
+        if rule_action(rule) != "leave":
             continue
         rule_char = (rule.get("character") or "").strip()
         if rule_char and rule_char != character_name:
@@ -553,18 +602,21 @@ def check_leave(character_name: str, *,
 
         target = rule.get("target", {}) or {}
         scope = target.get("scope", "")
-        rule_room_ids = target.get("room_ids") or []
+        t_loc = (target.get("location_id") or target.get("location") or "").strip()
+        rule_room_ids = _rule_rooms(target)
         matched = False
-        if scope == "room" and cur_room and target.get("location_id") == cur_loc \
-                and cur_room in rule_room_ids:
-            # Confine-Set: Wechsel innerhalb von room_ids (gleiche Location)
-            # ist freie Bewegung — nur Verlassen des Sets blockiert.
+        if scope in ("room", "location") and rule_room_ids and cur_room \
+                and t_loc == cur_loc and cur_room in rule_room_ids:
+            # A named room list makes the rule room-level, whichever scope word
+            # carries it. Confine set: moving WITHIN room_ids (same location)
+            # is free movement — only leaving the set is blocked.
             if target_location_id and target_location_id == cur_loc \
                     and target_room_id and target_room_id in rule_room_ids:
                 continue
             matched = True
-        elif scope == "location" and not room_only and target.get("location_id") == cur_loc:
-            # Same-Location-Raumwechsel ist kein "leave" der Location.
+        elif scope == "location" and not rule_room_ids and not room_only \
+                and t_loc == cur_loc:
+            # A room change inside the same location is not "leaving" it.
             if target_location_id and target_location_id == cur_loc:
                 continue
             matched = True

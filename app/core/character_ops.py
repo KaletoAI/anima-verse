@@ -484,7 +484,7 @@ def build_debug_activity(character_name: str) -> Dict[str, Any]:
     block_rules: List[Dict[str, Any]] = []
     force_rule: Optional[Dict[str, Any]] = None
     try:
-        from app.models.rules import load_rules, check_force_rules
+        from app.models.rules import load_rules, check_force_rules, rule_action
         from app.core.activity_engine import evaluate_condition
         for r in (load_rules() or []):
             if (r.get("type") or "") != "block":
@@ -512,7 +512,7 @@ def build_debug_activity(character_name: str) -> Dict[str, Any]:
                     cond_met = False
             block_rules.append({
                 "id": r.get("id", ""), "name": r.get("name", ""),
-                "action": r.get("action", ""), "target": target,
+                "action": rule_action(r), "target": target,
                 "message": r.get("message", ""), "event_id": r.get("event_id", ""),
                 "condition": cond,
                 "condition_met": bool(cond_met),

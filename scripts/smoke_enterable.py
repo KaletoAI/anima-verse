@@ -60,6 +60,25 @@ Part 3 — a rule that forbids LEAVING says nothing about the rooms INSIDE
   leaves every chip exactly as Part 2 left it:
     hall -> True, cellar -> locked, __ground__ -> locked.
 
+Part 4 — a rule in the shape the RulesTab writes it: scope "location" WITH a
+  room selection, and the direction inside the target. The room list NARROWS
+  the rule — the tab's own hint says "no selection means the whole location",
+  so a selection must mean the opposite. Adding
+    block rule "Locked wing"  target {scope location, location A,
+                              rooms ["cellar"], action enter}, "always",
+                              message "The wing is locked."
+  says nothing new about hall or __ground__ (the ground is not in the list),
+  and check_access answers, per room of A:
+    hall       -> True                        no rule names it
+    cellar     -> False                       named by two rules now
+    __ground__ -> False, "Guards keep you off the yard."  (part 2's rule)
+  The LOCATION question (no room given) stays open as well: the rule covers
+  one of A's three rooms, so entering A is allowed —
+    check_access("demo_avatar", A) -> (True, "")
+  and only a rule that names ALL THREE rooms closes the place itself:
+    check_access after adding rooms ["hall", "cellar", "__ground__"]
+                                   -> (False, "The whole house is locked.")
+
   (The grid compass this check once covered — neighbours, per-direction
   gates, the step route — is GONE since E3 Task 5: the world is a metre
   plane and the avatar travels to a NAMED place over POST /play/travel,
@@ -89,7 +108,7 @@ db.init_schema()
 from app.core.world_ops import build_avatar_rooms  # noqa: E402
 from app.models.account import set_active_character  # noqa: E402
 from app.models.character import save_character_profile  # noqa: E402
-from app.models.rules import add_rule  # noqa: E402
+from app.models.rules import add_rule, check_access  # noqa: E402
 from app.models.world import (  # noqa: E402
     GROUND_ROOM_ID, _load_world_data, _save_world_data, add_location,
     get_location_by_id, update_location_position)
@@ -211,6 +230,30 @@ def main() -> int:
           {GROUND_ROOM_ID: (False, "Guards keep you off the yard."),
            "cellar": (False, "The cellar door is locked."),
            "hall": (True, "")})
+
+    print("\n[4] scope 'location' WITH a room list narrows to those rooms")
+    add_rule({"type": "block", "name": "Locked wing", "condition": "always",
+              "message": "The wing is locked.",
+              "target": {"scope": "location", "location": A,
+                         "rooms": ["cellar"], "action": "enter"}})
+    r = rooms()
+    check("hall stays open",
+          (r["hall"]["enterable"], r["hall"]["reason"]), (True, ""))
+    check("the ground keeps its own rule's message",
+          (r[GROUND_ROOM_ID]["enterable"], r[GROUND_ROOM_ID]["reason"]),
+          (False, "Guards keep you off the yard."))
+    check("the named room is locked", r["cellar"]["enterable"], False)
+    check("the location itself stays enterable",
+          check_access("demo_avatar", A), (True, ""))
+
+    add_rule({"type": "block", "name": "Locked house", "condition": "always",
+              "message": "The whole house is locked.",
+              "target": {"scope": "location", "location": A,
+                         "rooms": ["hall", "cellar", GROUND_ROOM_ID],
+                         "action": "enter"}})
+    check("a rule naming every room closes the location",
+          check_access("demo_avatar", A),
+          (False, "The whole house is locked."))
 
     print()
     if FAILURES:
