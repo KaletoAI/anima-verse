@@ -1483,7 +1483,8 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
 # ── Doorways ────────────────────────────────────────────────────────────
 
 def _doorways(recipes: List[Dict[str, Any]], storey: float,
-              default_door_prop_id: str = "") -> List[Dict[str, Any]]:
+              default_door_prop_id: str = "",
+              floor_levels: Set[int] = frozenset()) -> List[Dict[str, Any]]:
     """Every walkable threshold of the location as a finished primitive
     (plan-betreten-und-tueren.md § 4.1).
 
@@ -1524,6 +1525,11 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     never appears in ``rooms``: it has no walls, and ``outside`` already says
     the door leads onto it.
 
+    ``floor_levels`` are the storeys that OWN a corridor room (§ 3.1): there,
+    a door whose author named no ``to`` opens into that corridor instead of
+    out of the building, so it gets the corridor as its second room and stops
+    being an exterior door. A storey without a corridor keeps the old rule.
+
     A window is no way out (``_WALKABLE_TYPES``), a room without a shell has
     no threshold, and the order is deterministic (level, position, rooms):
     consumers diff whole payloads.
@@ -1536,13 +1542,19 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     entry's ``along``, i.e. against the wall of ``rooms[0]`` — which is why
     the dedup above never lets a mirrored copy replace either of the two.
     """
-    from app.models.world import GROUND_ROOM_ID
+    from app.models.world import GROUND_ROOM_ID, floor_room_id
 
-    def _rooms_of(room_id: str, to: str) -> List[str]:
+    def _rooms_of(room_id: str, to: str, level: int) -> List[str]:
         out = [room_id]
         if to and to.lower() != "outside" and to != GROUND_ROOM_ID \
                 and to != room_id:
             out.append(to)
+        elif not to and level in floor_levels:
+            # A door nobody linked leads into the storey's corridor where
+            # there is one (spec § 3.1) — it is a door in a hallway wall, not
+            # a hole in the building hull. ``to: "outside"`` stays the
+            # explicit exterior door.
+            out.append(floor_room_id(level))
         return out
 
     tol = SHARE_TOL_M + 1e-4
@@ -1582,7 +1594,7 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
                     # do not re-derive it either — same rule as ``width_m``.
                     "height_m": _r(min(_opening_height(op, wall_h), wall_h)),
                     "base_y": base,
-                    "rooms": _rooms_of(room_id, to),
+                    "rooms": _rooms_of(room_id, to, level),
                     # INTERNAL, stripped in compose_scene — see the docstring.
                     "_door_prop": {
                         "id": door_prop_id(op, default_door_prop_id),
@@ -1674,9 +1686,10 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     for entry in out:
         # ``outside`` is decided HERE, on the finished geometry, and never on
         # what an author typed into ``to``: after the dedup a single room means
-        # no second room's wall meets this gap, i.e. it opens out of the
-        # building — onto the ground. A door someone left unlabelled is
-        # therefore a proper exterior door, not a doorway to nowhere.
+        # no second room's wall meets this gap AND no corridor claims it, i.e.
+        # it opens out of the building — onto the ground. A door someone left
+        # unlabelled on a storey without a corridor is therefore a proper
+        # exterior door, not a doorway to nowhere.
         entry["outside"] = len(entry["rooms"]) == 1
     out.sort(key=lambda e: (e["level"], e["at_world"], e["rooms"]))
     return out
@@ -3688,7 +3701,14 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # Thresholds as finished primitives (plan-betreten-und-tueren.md § 4.1) —
     # composed BEFORE the shell, because the shell takes its holes from them
     # (§ 4.2). One derivation, two consumers: this block and the payload.
-    doorways = _doorways(recipes, storey, default_door_prop_id)
+    # Which storeys own a corridor room (§ 3.1) — read off the STORED rooms,
+    # not recomputed from ``floor_levels()``: the corridor entry the write
+    # path put there is the truth about what a door can lead into.
+    from app.models.world import floor_room_level, is_floor_room
+    corridor_levels = {floor_room_level(str(r.get("id") or ""))
+                       for r in rooms if is_floor_room(str(r.get("id") or ""))}
+    doorways = _doorways(recipes, storey, default_door_prop_id,
+                         floor_levels=corridor_levels)
 
     # Indoor room hulls per level, world metres — where they run on the
     # contour line, the contour wall yields (one wall, one owner).

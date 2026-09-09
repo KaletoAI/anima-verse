@@ -66,6 +66,35 @@ Part 4b — sanitizers (§ 2.1/§ 2.3): the write path keeps the two invariants
     _sanitize_map3d({"ground_corridor": False})  -> no such key
     _sanitize_rooms_layout([{"id": "__floor__-1", "layout": {"x": 0}}])
              -> the entry has no "layout" key left
+
+Part 5 — the door rule (§ 3.1), through compose_scene on a hand-built
+    location. A door nobody linked leads into the storey's corridor where
+    there is one, so it stops being an exterior door and cuts no hole into
+    the building hull.
+    Contour 10 x 10 (corners (-5,-5) (5,-5) (5,5) (-5,5)), storey 3 m; each
+    room carries ONE door on its south edge ("S", at 0.5, 0.9 x 2.0 m) and
+    none of them names a `to`:
+      k1  level -1  x -4 y -4 w 3 d 3   (world x -4..-1, z -4..-1)
+      k2  level -1  x  1 y -4 w 3 d 3   (world x  1.. 4, z -4..-1)
+      eg  level  0  x -4 y -4 w 4 d 3   (world x -4.. 0, z -4..-1)
+    rooms[] also carries __ground__ and __floor__-1, the way the server
+    stores them (Task 2). The two cellar doors sit on the same line z = -1
+    but 5 m apart (centres x -2.5 and 2.5, 0.9 m wide), so the gap dedup
+    never merges them into one threshold.
+      k1 doorway rooms -> ["k1", "__floor__-1"], outside False
+      k2 doorway rooms -> ["k2", "__floor__-1"], outside False
+      eg doorway rooms -> ["eg"],                outside True
+                                        (level 0 has no corridor room)
+      hull leaves on level -1 -> 0      no hole in the hull downstairs
+      hull leaves on level  0 -> 1      the front door
+      problems carry no "no_building_entrance": eg's door is still one
+    HULL vs ROOM wall: a piece cut from a ROOM's shell carries a "room_id"
+    (_room_walls), a piece of the building hull carries none
+    (_contour_walls) — that is how the leaf count tells the two apart. Each
+    of the three doors always puts a leaf into its own room wall; only the
+    hull's leaf is at stake here.
+    The same location WITHOUT the __floor__-1 entry (red probe, old rule):
+      k1 outside True, hull leaves on level -1 -> 2
 """
 import logging
 import sys
@@ -78,6 +107,7 @@ from app.models import world  # noqa: E402
 # storage dir stays unset), so the sanitizers are callable without a world.db.
 from app.core.world_ops import (  # noqa: E402
     _sanitize_map3d, _sanitize_rooms_layout)
+from app.core import scene_recipe  # noqa: E402
 
 FAILS = 0
 
@@ -96,6 +126,36 @@ def room(rid, level=None, layout=True, name=""):
     if layout and level is not None:
         r["layout"] = {"level": level, "x": -4, "y": -4, "w": 3, "d": 3}
     return r
+
+
+def cellar_fixture(with_corridor=True):
+    """Two cellar rooms and a ground-floor room, each with one unlinked door.
+
+    Shaped like ``scripts/smoke_scene_recipe.py::fixture``: plan coordinates
+    are local metres, the contour is the location's own square, and the
+    legacy edge letter "S" is the room's south wall.
+    """
+    def rm(rid, level, x, y, w, d):
+        return {"id": rid, "name": rid, "layout": {
+            "level": level, "x": x, "y": y, "w": w, "d": d,
+            "openings": [{"edge": "S", "at": 0.5, "width_m": 0.9,
+                          "height_m": 2.0, "type": "door"}]}}
+
+    rooms = [rm("k1", -1, -4, -4, 3, 3), rm("k2", -1, 1, -4, 3, 3),
+             rm("eg", 0, -4, -4, 4, 3),
+             {"id": world.GROUND_ROOM_ID, "name": ""}]
+    if with_corridor:
+        rooms.append({"id": "__floor__-1", "level": -1, "name": ""})
+    return {"id": "loc1", "name": "Cellar house", "rooms": rooms,
+            "map3d": {"outline": [[-5, -5], [5, -5], [5, 5], [-5, 5]],
+                      "storey_height_m": 3}}
+
+
+def hull_leaves(sc, level):
+    """Door leaves in the BUILDING HULL on one storey — a hull piece carries
+    no ``room_id``, a room's own wall piece does (see the docstring)."""
+    return sum(1 for w in sc["walls"] if w.get("leaf")
+               and not w.get("room_id") and w.get("level") == level)
 
 
 def main():
@@ -164,18 +224,46 @@ def main():
 
     print("Part 4b — sanitizers")
     # Dropping a corridor layout is logged for the author — not here, where it
-    # is the expected outcome and would only litter the run.
-    logging.getLogger("world").setLevel(logging.WARNING)
-    check("opt-in True kept",
-          _sanitize_map3d({"ground_corridor": True}).get("ground_corridor"),
-          True)
-    for bad in ("yes", 1, False):
-        check(f"opt-in {bad!r} dropped",
-              "ground_corridor" in _sanitize_map3d({"ground_corridor": bad}),
-              False)
-    corridor = [{"id": "__floor__-1", "layout": {"x": 0}}]
-    _sanitize_rooms_layout(corridor)
-    check("corridor layout dropped", corridor[0], {"id": "__floor__-1"})
+    # is the expected outcome and would only litter the run. The previous
+    # level comes back afterwards, so the parts below keep their logging.
+    world_log = logging.getLogger("world")
+    previous_level = world_log.level
+    world_log.setLevel(logging.WARNING)
+    try:
+        check("opt-in True kept",
+              _sanitize_map3d({"ground_corridor": True}).get("ground_corridor"),
+              True)
+        for bad in ("yes", 1, False):
+            check(f"opt-in {bad!r} dropped",
+                  "ground_corridor" in _sanitize_map3d({"ground_corridor": bad}),
+                  False)
+        corridor = [{"id": "__floor__-1", "layout": {"x": 0}}]
+        _sanitize_rooms_layout(corridor)
+        check("corridor layout dropped", corridor[0], {"id": "__floor__-1"})
+    finally:
+        world_log.setLevel(previous_level)
+
+    print("Part 5 — the door rule in the scene recipe")
+    sc = scene_recipe.compose_scene(cellar_fixture())
+    dw = {d["rooms"][0]: d for d in sc["doorways"]}
+    check("k1 doorway rooms", dw["k1"]["rooms"], ["k1", "__floor__-1"])
+    check("k1 not outside", dw["k1"]["outside"], False)
+    check("k2 doorway rooms", dw["k2"]["rooms"], ["k2", "__floor__-1"])
+    check("k2 not outside", dw["k2"]["outside"], False)
+    check("eg doorway rooms", dw["eg"]["rooms"], ["eg"])
+    check("eg outside", dw["eg"]["outside"], True)
+    check("hull leaves level -1", hull_leaves(sc, -1), 0)
+    check("hull leaves level 0", hull_leaves(sc, 0), 1)
+    check("no entrance problem",
+          [p for p in sc.get("problems") or []
+           if p.get("kind") == "no_building_entrance"], [])
+
+    # Red probe: the same location without the corridor room keeps the old
+    # rule — an unlinked door is an exterior door and pierces the hull.
+    sc0 = scene_recipe.compose_scene(cellar_fixture(with_corridor=False))
+    dw0 = {d["rooms"][0]: d for d in sc0["doorways"]}
+    check("no corridor: k1 outside", dw0["k1"]["outside"], True)
+    check("no corridor: hull leaves level -1", hull_leaves(sc0, -1), 2)
 
     print("FAILED" if FAILS else "ALL OK")
     sys.exit(1 if FAILS else 0)
