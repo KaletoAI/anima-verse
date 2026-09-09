@@ -1568,15 +1568,18 @@ def play_room_recipe(room_id: str):
     into placement-relative world transforms. 404 = the room has no layout
     (client auto-grid as before). Contract:
     shared/backend-note-room-recipe.md."""
-    from app.models.world import GROUND_ROOM_ID, find_location_by_room
+    from app.models.world import (
+        GROUND_ROOM_ID, find_location_by_room, is_floor_room)
     from app.core.room_recipe import compose_recipe
-    # The ground id is the ONE room id every location carries, so a lookup by
-    # room id alone would answer for whichever location comes first. The yard
-    # is reachable through its location: GET /play/locations/{id}/scene.
-    if room_id == GROUND_ROOM_ID:
+    # The reserved ids are the ones EVERY location may carry — the ground and
+    # the corridor of a storey — so a lookup by room id alone would answer for
+    # whichever location comes first. Both are reachable through their
+    # location: GET /play/locations/{id}/scene.
+    if room_id == GROUND_ROOM_ID or is_floor_room(room_id):
         raise HTTPException(
             status_code=400,
-            detail="The ground is not addressable by room id — read it from "
+            detail="Reserved rooms (ground, corridors) are not addressable by "
+                   "room id — read them from "
                    "GET /play/locations/{id}/scene")
     loc = find_location_by_room(room_id)
     room = None

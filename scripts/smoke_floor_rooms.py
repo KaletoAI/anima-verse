@@ -54,13 +54,30 @@ Part 4 — entry room (§ 4): __floor__0 may be the arrival room, no other corri
     valid_entry_room([k1, __floor__-1], "__floor__-1") -> ""
     valid_entry_room([eg], "zzz")                      -> ""   unknown room
     valid_entry_room([eg], "eg")                       -> "eg"
+
+Part 4b — sanitizers (§ 2.1/§ 2.3): the write path keeps the two invariants
+    the corridor rooms rest on. The ground-floor opt-in is a FLAG, not a truthy
+    value — only the literal True is stored, so "yes" or 1 never switches a
+    hallway on by accident; and a corridor carries NO layout, because its plate
+    and hull are the location's.
+    _sanitize_map3d({"ground_corridor": True})["ground_corridor"] -> True
+    _sanitize_map3d({"ground_corridor": "yes"})  -> no such key
+    _sanitize_map3d({"ground_corridor": 1})      -> no such key
+    _sanitize_map3d({"ground_corridor": False})  -> no such key
+    _sanitize_rooms_layout([{"id": "__floor__-1", "layout": {"x": 0}}])
+             -> the entry has no "layout" key left
 """
+import logging
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.models import world  # noqa: E402
+# Pure import too — world_ops opens no world at import time (checked: the
+# storage dir stays unset), so the sanitizers are callable without a world.db.
+from app.core.world_ops import (  # noqa: E402
+    _sanitize_map3d, _sanitize_rooms_layout)
 
 FAILS = 0
 
@@ -144,6 +161,21 @@ def main():
         [room("k1", -1), {"id": "__floor__-1"}], "__floor__-1"), "")
     check("unknown", world.valid_entry_room([room("eg", 0)], "zzz"), "")
     check("plain", world.valid_entry_room([room("eg", 0)], "eg"), "eg")
+
+    print("Part 4b — sanitizers")
+    # Dropping a corridor layout is logged for the author — not here, where it
+    # is the expected outcome and would only litter the run.
+    logging.getLogger("world").setLevel(logging.WARNING)
+    check("opt-in True kept",
+          _sanitize_map3d({"ground_corridor": True}).get("ground_corridor"),
+          True)
+    for bad in ("yes", 1, False):
+        check(f"opt-in {bad!r} dropped",
+              "ground_corridor" in _sanitize_map3d({"ground_corridor": bad}),
+              False)
+    corridor = [{"id": "__floor__-1", "layout": {"x": 0}}]
+    _sanitize_rooms_layout(corridor)
+    check("corridor layout dropped", corridor[0], {"id": "__floor__-1"})
 
     print("FAILED" if FAILS else "ALL OK")
     sys.exit(1 if FAILS else 0)

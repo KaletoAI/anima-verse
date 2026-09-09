@@ -2883,11 +2883,16 @@ fertig, samt der Begründung in der Sprache des Spielers; kein Renderer leitet
 je eine Sperre selbst ab.
 
 - **`GET /play/scene` → `rooms[]`** (der Spieler-Payload, § A13) — jeder
-  Eintrag `{id, name, is_entry, is_ground, enterable, reason}`. `enterable`
-  kommt aus demselben `check_access`, mit dem `POST /play/enter-room`
-  ablehnt (`world_ops.build_avatar_rooms`), also können angebotener und
-  akzeptierter Raum nicht auseinanderlaufen; `reason` ist der Satz der Regel
-  und leer genau dann, wenn der Raum offen ist.
+  Eintrag `{id, name, is_entry, is_ground, is_floor, level, enterable,
+  reason}`. `enterable` kommt aus demselben `check_access`, mit dem
+  `POST /play/enter-room` ablehnt (`world_ops.build_avatar_rooms`), also
+  können angebotener und akzeptierter Raum nicht auseinanderlaufen; `reason`
+  ist der Satz der Regel und leer genau dann, wenn der Raum offen ist.
+  `is_floor` markiert den Flur einer Etage (§ A13b) so, wie `is_ground` die
+  Grundfläche markiert. `level` ist die Etage des Raums: sein Layout-Level,
+  `0` für die Grundfläche, `null` für einen Raum ohne Layout — Clients
+  brauchen die Etage eines geometrielosen Raums und leiten sie nicht selbst
+  her.
 - **`POST /play/pos` → Absage-Payload** — die Reihenfolge der Gates ist die
   Begründung, die der Spieler liest: EXIT (`may_leave` + `check_leave`) vor
   ENTRY (Öffnungs-Nähe, `accessible_when`, `check_access`), erste Absage

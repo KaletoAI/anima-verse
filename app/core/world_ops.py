@@ -45,11 +45,16 @@ def build_avatar_rooms(avatar: str, location: Optional[Dict[str, Any]],
                        lang: str = "") -> List[Dict[str, Any]]:
     """The rooms of ``location`` with the lock state for ONE avatar.
 
-    Entry: ``{id, name, is_entry, is_ground, enterable, reason}``. ``is_ground``
-    marks the location's ground so a client can label it without knowing the
-    reserved id — it is a room like any other: addressed by this id, entered
-    through ``/play/enter-room``, and CHECKED like any other, so a rule may
-    lock it too.
+    Entry: ``{id, name, is_entry, is_ground, is_floor, level, enterable,
+    reason}``. ``is_ground`` marks the location's ground so a client can label
+    it without knowing the reserved id — it is a room like any other:
+    addressed by this id, entered through ``/play/enter-room``, and CHECKED
+    like any other, so a rule may lock it too. ``is_floor`` marks the corridor
+    of a storey the same way (spec 2026-09-09-etagen-flur § 3.3), and
+    ``level`` names the storey a room stands on: the layout level, 0 for the
+    ground, ``None`` for a room without a layout. The client is told the
+    storey instead of deriving it — a room with no geometry has none to
+    derive it from.
 
     ``enterable`` comes from the same ``check_access`` that route refuses
     with, so a room the UI offers and a room the server accepts can never
@@ -59,7 +64,8 @@ def build_avatar_rooms(avatar: str, location: Optional[Dict[str, Any]],
     """
     from app.models.rules import check_access
     from app.models.world import (
-        GROUND_ROOM_ID, get_entry_room_id, get_ground_name)
+        GROUND_ROOM_ID, floor_room_level, get_entry_room_id, get_floor_name,
+        get_ground_name)
 
     loc_id = (location or {}).get("id", "") or ""
     entry_id = get_entry_room_id(location) if location else ""
@@ -67,13 +73,28 @@ def build_avatar_rooms(avatar: str, location: Optional[Dict[str, Any]],
     for room in ((location.get("rooms") if location else None) or []):
         rid = room.get("id", "") or ""
         name = room.get("name", "") or ""
+        floor_lv = floor_room_level(rid)
         if rid == GROUND_ROOM_ID and not name:
             # The ground room may stay unnamed — then it falls back to the
             # same translated word in every location.
             name = get_ground_name(loc_id, lang)
+        elif floor_lv is not None and not name:
+            # Same for a corridor: unnamed, it answers with the translated
+            # default of its storey, never with the reserved id.
+            name = get_floor_name(floor_lv, lang)
+        lay = room.get("layout") if isinstance(room.get("layout"), dict) else None
+        if rid == GROUND_ROOM_ID:
+            level: Optional[int] = 0
+        elif floor_lv is not None:
+            level = floor_lv
+        elif lay:
+            level = int(lay.get("level") or 0)
+        else:
+            level = None
         enterable, reason = check_access(avatar, loc_id, room_id=rid)
         out.append({"id": rid, "name": name, "is_entry": rid == entry_id,
                     "is_ground": rid == GROUND_ROOM_ID,
+                    "is_floor": floor_lv is not None, "level": level,
                     "enterable": enterable, "reason": reason})
     return out
 
@@ -1968,6 +1989,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
             evict_rooms_to_ground,
         )
         wdata = _load_world_data()
+        _evict_corridors: List[str] = []
         for _l in wdata.get("locations", []):
             if _l.get("id") == location.get("id"):
                 if danger_level is not None:
@@ -2012,11 +2034,12 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                         _l.pop("map3d", None)
                     # The corridors are re-synced against the map3d that was
                     # just stored — this is the write the ground-floor opt-in
-                    # (``map3d.ground_corridor``) travels through.
-                    _removed = ensure_floor_rooms(
+                    # (``map3d.ground_corridor``) travels through. Whoever
+                    # stood in a corridor that just vanished is moved only
+                    # AFTER the save below, against a room list that really
+                    # lost it — same order as ``add_location``.
+                    _evict_corridors += ensure_floor_rooms(
                         _l.setdefault("rooms", []), _l.get("map3d"))
-                    if _removed:
-                        evict_rooms_to_ground(str(_l.get("id") or ""), _removed)
                 if entry_room is not None:
                     # AFTER the map3d block, never before: only a room this
                     # place really has counts, and the ground-floor hallway
@@ -2039,6 +2062,9 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                         _l.pop("npc_slots", None)
                 break
         _save_world_data(wdata)
+        if _evict_corridors:
+            evict_rooms_to_ground(str(location.get("id") or ""),
+                                  _evict_corridors)
         # The seat inventory reads this layout — drop the cached one.
         from app.core import places; places.invalidate()
         location = get_location_by_id(location["id"])
@@ -2108,6 +2134,7 @@ def update_location_with_extras(location_id: str,
             evict_rooms_to_ground,
         )
         wdata = _load_world_data()
+        _evict_corridors: List[str] = []
         for _l in wdata.get("locations", []):
             if _l.get("id") == location_id:
                 if danger_level is not None:
@@ -2152,11 +2179,12 @@ def update_location_with_extras(location_id: str,
                         _l.pop("map3d", None)
                     # The corridors are re-synced against the map3d that was
                     # just stored — this is the write the ground-floor opt-in
-                    # (``map3d.ground_corridor``) travels through.
-                    _removed = ensure_floor_rooms(
+                    # (``map3d.ground_corridor``) travels through. Whoever
+                    # stood in a corridor that just vanished is moved only
+                    # AFTER the save below, against a room list that really
+                    # lost it — same order as ``add_location``.
+                    _evict_corridors += ensure_floor_rooms(
                         _l.setdefault("rooms", []), _l.get("map3d"))
-                    if _removed:
-                        evict_rooms_to_ground(str(_l.get("id") or ""), _removed)
                 if entry_room is not None:
                     # AFTER the map3d block, never before: only a room this
                     # place really has counts, and the ground-floor hallway
@@ -2179,6 +2207,8 @@ def update_location_with_extras(location_id: str,
                         _l.pop("npc_slots", None)
                 break
         _save_world_data(wdata)
+        if _evict_corridors:
+            evict_rooms_to_ground(location_id, _evict_corridors)
         from app.core import places; places.invalidate()
 
     updated = get_location_by_id(location_id)

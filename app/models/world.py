@@ -949,12 +949,21 @@ def get_room_name(location_id: str, room_id: str, lang: str = "") -> str:
     The GROUND room is the one id that must never surface — it is reserved,
     not authored, and would read as gibberish in a prompt or a narrated line.
     Unnamed, it answers with the translated default; ``get_ground_name`` owns
-    that default, here and everywhere else (plan-grundflaeche.md § 3).
+    that default, here and everywhere else (plan-grundflaeche.md § 3). The
+    corridor of a storey is reserved the same way and answers the same way —
+    the author's name if there is one, else the default of its level.
     """
     if not (location_id and room_id):
         return ""
     if room_id == GROUND_ROOM_ID:
         return get_ground_name(location_id, lang)
+    lv = floor_room_level(room_id)
+    if lv is not None:
+        loc = get_location_by_id(location_id) or {}
+        for room in (loc.get("rooms") or []):
+            if str(room.get("id") or "") == room_id:
+                return floor_room_display_name(room, lang)
+        return get_floor_name(lv, lang)
     try:
         loc = get_location_by_id(location_id) or {}
         for room in (loc.get("rooms") or []):
@@ -1558,14 +1567,15 @@ def add_location(name: str, description: str,
             if not room.get("id"):
                 room["id"] = _generate_room_id()
 
-    # Suche zum Updaten: per ID wenn gegeben (eindeutig), sonst per Name.
+    # Find the location to update: by ID when one is given (unambiguous),
+    # otherwise by name.
     def _is_target(loc: Dict[str, Any]) -> bool:
         return (loc.get("id") == location_id) if location_id else (loc.get("name") == name)
 
     for location in ([] if create_new else locations):
         if _is_target(location):
             location["description"] = description
-            # Bei ID-basiertem Update den (ggf. neuen) Namen mitschreiben.
+            # An ID-based update writes the (possibly new) name along.
             if location_id and name:
                 location["name"] = name
             removed_corridors: List[str] = []
