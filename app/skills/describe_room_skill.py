@@ -260,18 +260,22 @@ class DescribeRoomSkill(BaseSkill):
         """The corridor room whose DISPLAY name the character just used.
 
         A corridor is usually unnamed and answers with the translated default
-        of its storey ("Hallway", "Corridor (floor 2)"), so the name lookup
-        over ``rooms[].name`` never finds it. Both the character's own
-        language and English are compared, because a model writes the word it
-        read in the prompt. None when no corridor carries that name.
+        of its storey ("Diele", "Flur (2. Stock)"), so the name lookup over
+        ``rooms[].name`` never finds it. The language is resolved with the
+        SAME expression the system prompt was built from
+        (``system_prompt_builder`` → ``get_character_language(...) or "de"``),
+        or a character without a language field would read "Diele" in the
+        prompt while only "Hallway" is compared here. English stays in the
+        compared set: a model writes the word it read, and not every prompt
+        path is localized. None when no corridor carries that name.
         """
         wanted = room_name.strip().lower()
         corridors = [r for r in (location.get("rooms") or [])
                      if isinstance(r, dict) and is_floor_room(str(r.get("id") or ""))]
         if not (wanted and corridors):
             return None
-        from app.models.character import get_character_profile
-        lang = (get_character_profile(character_name) or {}).get("language", "")
+        from app.models.character import get_character_language
+        lang = get_character_language(character_name) or "de"
         for room in corridors:
             names = {floor_room_display_name(room, "").lower(),
                      floor_room_display_name(room, lang).lower()}
@@ -567,10 +571,18 @@ class DescribeRoomSkill(BaseSkill):
         )
 
     def _build_locations_hint(self, character_name: str) -> str:
-        """Baut eine Liste der erlaubten Locations mit ID und Name fuer die Tool-Beschreibung."""
+        """The allowed locations with id and rooms, for the tool description.
+
+        A corridor is listed with its DISPLAY name — unnamed it has no other
+        one, and a room the model is never shown is a room it cannot describe
+        (spec 2026-09-09-etagen-flur § 4). The language is the character's own,
+        the same expression the system prompt uses.
+        """
         if not character_name:
             return ""
         try:
+            from app.models.character import get_character_language
+            lang = get_character_language(character_name) or "de"
             allowed_ids = self._get_allowed_location_ids(character_name)
             if not allowed_ids:
                 return ""
@@ -580,7 +592,12 @@ class DescribeRoomSkill(BaseSkill):
                 if loc:
                     name = loc.get("name", "?")
                     rooms = get_location_rooms(loc)
-                    room_names = [r.get("name", "") for r in rooms if r.get("name")]
+                    room_names = []
+                    for r in rooms:
+                        if is_floor_room(str(r.get("id") or "")):
+                            room_names.append(floor_room_display_name(r, lang))
+                        elif r.get("name"):
+                            room_names.append(r.get("name"))
                     if room_names:
                         hints.append(f"{loc_id} = {name} (rooms: {', '.join(room_names)})")
                     else:
@@ -588,7 +605,7 @@ class DescribeRoomSkill(BaseSkill):
             if hints:
                 return " Allowed locations: " + "; ".join(hints) + "."
         except Exception as e:
-            logger.debug("Konnte Location-Hints nicht laden: %s", e)
+            logger.debug("could not load the location hints: %s", e)
         return ""
 
     def as_tool(self, character_name: str = "") -> ToolSpec:

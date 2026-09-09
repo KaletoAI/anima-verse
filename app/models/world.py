@@ -628,7 +628,11 @@ def add_room(location_id: str, room_name: str, description: str = "",
 
     A corridor room counts with its DISPLAY name: unnamed, it answers with the
     translated default of its storey, and a second room carrying that word
-    would shadow it everywhere the corridor is named (spec § 4).
+    would shadow it everywhere the corridor is named (spec § 4). That
+    comparison runs in ENGLISH (lang ""), because this function knows no
+    language — a caller that showed the localized name has to match it
+    language-aware BEFORE calling here, the way ``describe_room_skill``
+    does, or a German "Diele" would still land as a new room.
     """
     # Validation
     description = _validate_room_description(description)
