@@ -43,6 +43,22 @@ Stage 3 — the extraction template, derived BY HAND from the template text:
   scene example "standing at window"
 - rendered with is_avatar=True the system prompt names neither "pose" nor
   "detail" (only the outfit is extracted from user input)
+
+Stage 4 — the marker parser _extract_activity, derived BY HAND (the chat
+route module imports offline; 'demo' row from stage 2 is reused):
+- "…text… **I do sitting: liest ein Buch**"  -> key sitting, flavor
+  "liest ein Buch", returns "sitting: liest ein Buch"
+- the SAME marker again -> None (key and detail equal the stored pair)
+- "**I do leaning against counter**" (no key) -> the net: with embed None
+  the resolver falls back to "standing", flavor "leaning against counter",
+  and the candidate "leaning against counter" is counted ONE more time
+  (stage 2 saw that text already; (axis, raw_text) is unique, so a repeat
+  bumps the count instead of adding a row); returns the marker text
+- "**I do dancing together: mit Kai**" -> pair key without a partner ->
+  None, and the pose stays "standing"
+- a reply without a marker -> None
+- the marker line itself must not be read as a mood: _extract_mood on
+  "**I do sitting: liest ein Buch**" returns None
 """
 import shutil
 import sys
@@ -157,10 +173,47 @@ def stage3():
     check('"pose"' not in sys_a and '"detail"' not in sys_a, "stage3 avatar prompt extracts pose")
 
 
+def stage4():
+    from app.core import db as _db
+    from app.routes.chat import _extract_activity, _extract_mood
+    from app.core.pose_catalog import list_candidates
+
+    def state(field):
+        row = _db.get_connection().execute(
+            f"SELECT {field} FROM character_state WHERE character_name='demo'"
+        ).fetchone()
+        return row[0] if row else None
+
+    r = _extract_activity("demo", "Ich setze mich. **I do sitting: liest ein Buch**")
+    check(r == "sitting: liest ein Buch", f"stage4 a returned {r!r}")
+    check(state("pose_key") == "sitting", f"stage4 a key {state('pose_key')!r}")
+    check(state("pose_flavor") == "liest ein Buch", f"stage4 a flavor {state('pose_flavor')!r}")
+    r = _extract_activity("demo", "Noch immer. **I do sitting: liest ein Buch**")
+    check(r is None, f"stage4 b returned {r!r}")
+    def cand_count(text):
+        return next((c["count"] for c in list_candidates("pose")
+                     if c["raw_text"] == text), 0)
+
+    before = cand_count("leaning against counter")
+    r = _extract_activity("demo", "**I do leaning against counter**")
+    check(r == "leaning against counter", f"stage4 c returned {r!r}")
+    check(state("pose_key") == "standing", f"stage4 c key {state('pose_key')!r}")
+    check(state("pose_flavor") == "leaning against counter", f"stage4 c flavor {state('pose_flavor')!r}")
+    check(cand_count("leaning against counter") == before + 1,
+          "stage4 c no candidate recorded")
+    r = _extract_activity("demo", "**I do dancing together: mit Kai**")
+    check(r is None, f"stage4 d returned {r!r}")
+    check(state("pose_key") == "standing", f"stage4 d key {state('pose_key')!r}")
+    check(_extract_activity("demo", "Nur Text.") is None, "stage4 e no marker")
+    check(_extract_mood("demo", "**I do sitting: liest ein Buch**") is None,
+          "stage4 f marker read as mood")
+
+
 try:
     stage1()
     stage2()
     stage3()
+    stage4()
 finally:
     shutil.rmtree(_tmp, ignore_errors=True)
 

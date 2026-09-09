@@ -1774,32 +1774,43 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
 
 
 def _extract_activity(agent_name: str, response: str) -> Optional[str]:
-    """Extracts the free pose from the LLM answer (marker ``**I do X**``).
+    """Reads the ``**I do <key>: <detail>**`` marker of a reply.
 
-    Hands the text to the canonical setter, which maps it onto a pose catalog
-    key + sanitized flavor. Returns the extracted text or None.
+    The key must be a catalog alias (``split_key_detail``); it is written
+    exactly with the detail as display text. A marker without a usable key
+    goes through the net (``unknown="resolve"``): resolver + candidate row,
+    because a silently dropped pose is worse than a row in the Poses tab.
+    Returns the marker text, or None when there is no marker, nothing
+    changed, or the text names a two-person pose.
     """
     match = re.search(r'\*\*I\s+do\s+(.+?)\*\*', response, re.IGNORECASE)
     if not match:
         return None
-    raw_activity = match.group(1).strip().rstrip('.!,')
-    old_activity = get_effective_activity(agent_name)
-    if not raw_activity or raw_activity.lower() == (old_activity or "").lower():
+    raw = match.group(1).strip().rstrip('.!,')
+    if not raw:
         return None
-    from app.core.pose_catalog import PairPoseWithoutPartner
-    from app.models.character import set_pose_intent
+    from app.core.pose_catalog import PairPoseWithoutPartner, split_key_detail
+    from app.models.character import (get_character_pose_flavor,
+                                      get_character_pose_key,
+                                      set_pose_key_detail)
+    key, detail = split_key_detail(raw)
+    if key and key == (get_character_pose_key(agent_name) or "") \
+            and detail.lower() == (get_character_pose_flavor(agent_name) or "").lower():
+        return None
     try:
-        set_pose_intent(agent_name, raw_activity)
+        written = set_pose_key_detail(agent_name, key, detail, unknown="resolve")
     except PairPoseWithoutPartner as e:
         # RP prose claiming a two-person action is exactly what the pair verb
         # is for — narrating it does not make it happen. The pose is dropped;
         # the text itself stays in the answer.
         logger.info("Pose %s discarded: '%s' resolves to the two-person pose "
                     "'%s' — a pair is started via InteractWith",
-                    agent_name, raw_activity, e)
+                    agent_name, raw, e)
         return None
-    logger.info("Pose %s: %s -> %s", agent_name, old_activity, raw_activity)
-    return raw_activity
+    if not written:
+        return None
+    logger.info("Pose %s: %r -> %s (%r)", agent_name, raw, written, detail[:60])
+    return raw
 
 
 def _apply_removed_pieces(character_name: str,
