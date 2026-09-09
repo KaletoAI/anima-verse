@@ -376,11 +376,12 @@ def game_label(game_ts: Any, lang: str = "en") -> str:
 
     ``""`` for an empty stamp (rows written before the column existed) and
     for anything that is not a canonical ``Y0002-D109T14:00:00`` string. The
-    SERVER renders the label — clients never parse a game stamp themselves.
+    SERVER renders the label — clients never parse a game stamp themselves,
+    and the clock part already carries the configured display format.
     """
     from app.core.game_time import GameTime
     try:
-        return GameTime.parse(game_ts).label(lang)
+        return GameTime.parse(game_ts).display_label(lang)
     except (ValueError, TypeError):
         return ""
 

@@ -516,9 +516,8 @@ function renderTable() {
         const barW = Math.max(2, Math.round((r.duration_s / maxDur) * 80));
         let time = '';
         if (r.starttime) {
-            const _d = new Date(r.starttime);
-            time = isNaN(_d.getTime()) ? r.starttime.replace('T', ' ').slice(5, 16)
-                : _d.toLocaleString('de-DE', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'});
+            time = AdminClock.stamp(r.starttime, {month: '2-digit', day: '2-digit'})
+                || r.starttime.replace('T', ' ').slice(5, 16);
         }
         const sysColor = COLORS.get(r.system);
         const sysLabel = r.system || '—';
@@ -671,9 +670,8 @@ function renderActivityFeed() {
         const icon = ACT_ICONS[e.type] || '•';
         let time = '';
         if (e.timestamp) {
-            const _d = new Date(e.timestamp);
-            time = isNaN(_d.getTime()) ? e.timestamp.replace('T', ' ').slice(5, 16)
-                : _d.toLocaleString('de-DE', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'});
+            time = AdminClock.stamp(e.timestamp, {month: '2-digit', day: '2-digit'})
+                || e.timestamp.replace('T', ' ').slice(5, 16);
         }
         const imgUrl = e.meta && e.meta.image_url ? e.meta.image_url : '';
         return `<div class="activity-item">

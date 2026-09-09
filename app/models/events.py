@@ -501,9 +501,10 @@ def event_game_label(event: Dict[str, Any], lang: str = "en") -> str:
     """Full world label of an event for API payloads ("" without a stamp).
 
     The clients render, they never compute (docs/schnittstellen-3d.md) — so
-    the server ships the finished string, not a stamp plus formatting rules.
+    the server ships the finished string, not a stamp plus formatting rules,
+    the configured clock format included.
     """
     try:
-        return GameTime.parse(event.get("game_ts") or "").label(lang)
+        return GameTime.parse(event.get("game_ts") or "").display_label(lang)
     except (ValueError, TypeError):
         return ""

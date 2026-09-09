@@ -68,9 +68,10 @@ export function createHud(opts: { username: string; avatar: string; onLogout: ()
       statusEl.className = 'hud-status ' + (ok ? 'ok' : 'err');
       statusEl.title = ok ? 'Verbunden' : 'Backend nicht erreichbar';
     },
-    /** The world clock as the SERVER rendered it (`game_time.label` of the
-     *  worldmap payload, § A11) — the client shows the string, it never
-     *  derives a time of its own. Empty payload → the slot stays empty. */
+    /** The world clock as the SERVER rendered it (`game_time.label_display` of
+     *  the worldmap payload, § A11 — the clock part already in the configured
+     *  display format) — the client shows the string, it never derives a time
+     *  of its own. Empty payload → the slot stays empty. */
     setClock(label: string) {
       clockEl.textContent = label ? '🕰 ' + label : '';
     },

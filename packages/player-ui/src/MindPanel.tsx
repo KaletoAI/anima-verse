@@ -14,6 +14,8 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
+import { formatDate, formatDateTime, formatTime, sameZoneDay } from './clockFormat'
+import { clockSettings, useClockSettings } from './clockSettings'
 import { EmptyState } from './EmptyState'
 import { MindThoughtsSection } from './MindThoughtsSection'
 
@@ -98,31 +100,28 @@ interface EvolutionItem {
 }
 
 // ---------------------------------------------------------------------------
-// Format-Helfer
+// Format helpers
+//
+// These are SYSTEM stamps, so they follow the configured world timezone and
+// clock format rather than the viewer's browser locale — read synchronously
+// here, subscribed to in the panel component below.
 // ---------------------------------------------------------------------------
 function clockOf(ts: string): string {
-  const d = new Date(ts)
-  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return formatTime(ts, clockSettings())
 }
 function dayOf(ts: string): string {
-  const d = new Date(ts)
-  return isNaN(d.getTime()) ? '' : d.toLocaleDateString()
+  return formatDate(ts, clockSettings())
 }
-/** „seit“-Stempel: heute nur Uhrzeit, sonst Datum + Uhrzeit. */
+/** "since" stamp: time only when it happened today, otherwise date + time. */
 function sinceOf(ts: string | null | undefined): string {
   if (!ts) return ''
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return ''
-  const sameDay = d.toDateString() === new Date().toDateString()
-  return sameDay ? clockOf(ts) : `${d.toLocaleDateString()} ${clockOf(ts)}`
+  return sameZoneDay(ts, new Date(), clockSettings()) ? clockOf(ts) : stampOf(ts)
 }
 /** Full stamp (always date + time) — list entries span multiple days; a
- *  mixed „today = time-only“ format makes the list look unsorted. */
+ *  mixed "today = time-only" format makes the list look unsorted. */
 function stampOf(ts: string | null | undefined): string {
   if (!ts) return ''
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return ''
-  return `${d.toLocaleDateString()} ${clockOf(ts)}`
+  return formatDateTime(ts, clockSettings())
 }
 function stars(n: number): string {
   return '★'.repeat(Math.max(0, Math.min(5, Math.round(n))))
@@ -900,6 +899,9 @@ export function MindPanel({ character, alwaysLabels = false, withThoughts = fals
    *  and the endpoint behind the section is admin-gated anyway. */
   withThoughts?: boolean
 }) {
+  // Subscribe to the shared clock settings so the stamp helpers above
+  // re-render once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const [section, setSection] = useState<SectionId>('today')
   const [narrowRaw, setNarrowRaw] = useState(false)

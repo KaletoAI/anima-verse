@@ -12,6 +12,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
 import { usePoll } from '../../player/usePolling'
 import { FilterChipRow } from '../../components/FilterChipRow'
+import { clockSettings, formatDateTime, formatTime,
+  useClockSettings } from '../../lib/clockFormat'
 import { fetchQueue, fetchStatus, fetchTypes, saveSettings } from './api'
 import { STEP_STATUS_LABELS } from './types'
 import type {
@@ -50,25 +52,24 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** A system stamp (technical, not game time) rendered as a wall clock. */
+/** A system stamp (technical, not game time) rendered as a wall clock — in the
+ *  configured world timezone and clock format. */
 function clockTime(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString()
+  return formatTime(iso, clockSettings())
 }
 
-/** The same stamp WITH its date, in the locale's short form and without
- *  seconds — for a list that spans days, where a bare clock time cannot say
- *  which day it belongs to. The running queue keeps `clockTime`: there every
- *  stamp is from now, and the compact row must not widen. */
+/** The same stamp WITH its date, in the locale's short form — for a list that
+ *  spans days, where a bare clock time cannot say which day it belongs to. The
+ *  running queue keeps `clockTime`: there every stamp is from now, and the
+ *  compact row must not widen. */
 function clockDateTime(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime())
-    ? '' : d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+  return formatDateTime(iso, clockSettings(), { dateStyle: 'short' })
 }
 
 export function QueueView() {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const [types, setTypes] = useState<ImprovementType[]>([])

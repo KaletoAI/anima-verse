@@ -5,6 +5,7 @@
  */
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import { TERRAIN_TYPES } from '../world/worldTypes'
+import { clockSettings, formatDate, formatTime } from '../../lib/clockFormat'
 
 export type { SurfaceMaterialSpec }
 
@@ -145,10 +146,11 @@ export function madeWith(v: TexVersion, t: (en: string) => string): string {
   return v.source === 'uploaded' ? t('uploaded') : '—'
 }
 
+/** Compact system stamp — day/month + time of day, in the configured world
+ *  timezone and clock format. */
 export function dateShort(iso: string): string {
   if (!iso) return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, {
-    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-  })
+  const clock = clockSettings()
+  const day = formatDate(iso, clock, { day: '2-digit', month: '2-digit' })
+  return day ? `${day} ${formatTime(iso, clock)}` : ''
 }

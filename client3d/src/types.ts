@@ -319,10 +319,16 @@ export interface GameTimeInfo {
   minute: number;
   /** hour of day 0..24 as a fraction — what the sun position is set from */
   hour_fraction: number;
-  /** e.g. "Summer, day 17 · 14:23 · Year 3" */
+  /** e.g. "Summer, day 17 · 14:23 · Year 3" — clock part ALWAYS 24h; this is
+   *  the string prompts and logs read. Show `label_display` instead. */
   label: string;
-  /** "HH:MM" */
+  /** "HH:MM" — 24h, like `label`. */
   time: string;
+  /** `label` with the clock part in the configured display format
+   *  (`server.time_format`, e.g. "Summer, day 17 · 2:23 PM · Year 3"). */
+  label_display: string;
+  /** `time` in the configured display format, e.g. "2:23 PM". */
+  time_display: string;
   is_night: boolean;
   day_bucket: string;
 }

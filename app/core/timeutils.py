@@ -26,15 +26,17 @@ string, ``factor``):
 freeze stops the game clock (``on_freeze_change``); the sleep mode does not.
 
 Server stores/sends timezone-aware UTC ISO strings (``…+00:00``) for system
-stamps; the frontend converts to local time. Works regardless of the server's
-timezone.
+stamps; the clients render them in the configured display timezone
+(``display_timezone_name``) and clock format (``display_time_format``), both
+carried in the ``/world/game-time`` payload. Works regardless of the server's
+own timezone.
 """
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.game_time import (EPOCH, GameDuration, GameTime,
-                                calendar_to_dict)
+                                calendar_to_dict, display_time_format)
 from app.core.log import get_logger
 
 logger = get_logger("timeutils")
@@ -50,19 +52,54 @@ def utc_now_iso(timespec: str = "seconds") -> str:
     return datetime.now(timezone.utc).isoformat(timespec=timespec)
 
 
+# Zone names already reported as unusable — the warning below is once per name,
+# not once per formatted stamp.
+_tz_warned: set = set()
+
 def _world_tz():
-    """Configured world timezone (``server.timezone``, IANA name). Drives the
-    *display*/world clock + day boundaries — NOT storage (which stays UTC).
-    Falls back to UTC when unset / invalid."""
+    """Configured display timezone (``server.timezone``, IANA name).
+
+    Drives how SYSTEM stamps are *displayed* — never storage (which stays UTC)
+    and never game time (a ``GameTime`` has no zone at all). Falls back to UTC
+    when unset or unknown."""
+    name = ""
     try:
         from app.core import config
         name = (config.get("server.timezone") or "").strip()
-        if name:
-            from zoneinfo import ZoneInfo
-            return ZoneInfo(name)
-    except Exception:
-        pass
-    return timezone.utc
+        if not name:
+            return timezone.utc
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(name)
+    except Exception as exc:
+        # An unknown zone name used to fail silently: every system stamp then
+        # read as UTC with nothing in the log to explain why.
+        if name and name not in _tz_warned:
+            _tz_warned.add(name)
+            logger.warning("server.timezone %r is not a usable IANA zone (%s) — "
+                           "showing system stamps in UTC", name, exc)
+        return timezone.utc
+
+
+def clock_body_attrs() -> str:
+    """``data-`` attributes for the ``<body>`` of a server-rendered admin page.
+
+    The page's ``static/admin/clock-format.js`` reads the clock format and the
+    display timezone from here instead of fetching them, so the first rendered
+    row already carries the configured shape."""
+    from html import escape
+    return (f'data-clock-format="{escape(display_time_format(), quote=True)}" '
+            f'data-clock-timezone="{escape(display_timezone_name(), quote=True)}"')
+
+
+def display_timezone_name() -> str:
+    """IANA name of the display timezone, or ``"UTC"``. Handed to the clients so
+    they format SYSTEM stamps in the configured zone instead of the browser's."""
+    return getattr(_world_tz(), "key", None) or "UTC"
+
+
+# ``display_time_format`` lives next to the clock it formats (game_time.py) and
+# is re-exported here, because "the configured display settings" is what callers
+# look for in this module.
 
 
 def local_now() -> datetime:
@@ -249,6 +286,10 @@ def get_game_clock_info(lang: str = "en") -> Dict[str, Any]:
         "factor": a["factor"],
         "frozen": bool(a["frozen"]),
         "calendar": calendar_to_dict(lang=lang),
+        # Display settings — the clients format both clocks with these. The
+        # zone applies to `system_now` only; game time has none.
+        "time_format": display_time_format(),
+        "timezone": display_timezone_name(),
     }
 
 

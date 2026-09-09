@@ -14,6 +14,7 @@ import { SurfaceMaterialPreview } from './SurfaceMaterialPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { CLASS_DEFAULTS, CLASS_DIALS, CLASS_HINTS, SURFACE_PROMPT_CONTEXT,
   dateShort, madeWith } from './surfaceTypes'
+import { useClockSettings } from '../../lib/clockFormat'
 import type { TexGroup, TexVersion } from './surfaceTypes'
 
 interface SurfaceKindDetailProps {
@@ -45,6 +46,9 @@ export function SurfaceKindDetail({
   group, pending, cacheBump, armedDel, onSize, onSelect, onRemove, onZoom,
   onUpload, onMeta, worldSeasons = [], currentSeason = '', generateForm,
 }: SurfaceKindDetailProps) {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const mat = (group.material || {}) as Record<string, unknown>
   // The version the 3D client gets — the preview must show THAT one.

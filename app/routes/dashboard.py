@@ -232,8 +232,12 @@ def activity_feed(hours: int = Query(24, ge=0)):
 @router.get("", response_class=HTMLResponse)
 @router.get("/", response_class=HTMLResponse)
 def dashboard_page():
-    """Rendert die Dashboard-HTML-Seite."""
-    return HTMLResponse(content=_build_dashboard_html())
+    """Renders the dashboard HTML page."""
+    from app.core.timeutils import clock_body_attrs
+    # The clock settings reach the page's JS through <body data-…>, substituted
+    # per request so a changed setting needs no more than a reload.
+    html = _build_dashboard_html().replace("{clock_attrs}", clock_body_attrs())
+    return HTMLResponse(content=html)
 
 
 def _build_dashboard_html() -> str:
@@ -246,7 +250,7 @@ def _build_dashboard_html() -> str:
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <link rel="stylesheet" href="/static/admin/dashboard.css">
 </head>
-<body>
+<body {clock_attrs}>
 
 <div class="header">
     <h1>System Load Dashboard</h1>
@@ -354,6 +358,7 @@ def _build_dashboard_html() -> str:
     </div>
 </div>
 
+<script src="/static/admin/clock-format.js"></script>
 <script src="/static/admin/dashboard.js"></script>
 </body>
 </html>'''

@@ -22,6 +22,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { useEnlarge } from '../../components/ZoomButton'
+import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 
 interface RefInfo {
   filename?: string
@@ -180,6 +181,9 @@ export function FieldModelRefs({
   kinds?: RefKind[]
   refreshKey?: string
 }) {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
@@ -381,7 +385,7 @@ export function FieldModelRefs({
                 <div className="ga-hint">{t('No render yet')}</div>
               )}
               {ri?.created_at ? (
-                <div className="ga-hint">{new Date(ri.created_at).toLocaleString()}</div>
+                <div className="ga-hint">{formatDateTime(ri.created_at, clockSettings())}</div>
               ) : null}
               {kind === 'tpose' &&
               VIEW_ORDER.some((v) => info.views?.[v]?.enabled) ? (

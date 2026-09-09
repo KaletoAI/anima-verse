@@ -517,7 +517,7 @@ def _travel_block(name: str, lang: str = "en"):
             "target_name": target_name,
             "eta_game": st["eta_game"],
             "eta_hhmm": eta.time_hhmm(),
-            "eta_label": eta.label(lang),
+            "eta_label": eta.display_label(lang),
             "progress_m": st["progress_m"],
             "total_m": st["total_m"],
             "arrived": st["arrived"],
@@ -2495,7 +2495,7 @@ def play_news(user=Depends(get_current_user)):
         from app.models.events import event_game_label, list_events
         loc = get_character_current_location(avatar) or ""
         lang = get_character_language(avatar) or "de"
-        out["edition_label"] = game_time().label(lang)
+        out["edition_label"] = game_time().display_label(lang)
         items = []
         for e in (list_events(location_id=loc) or []):
             if e.get("resolved"):

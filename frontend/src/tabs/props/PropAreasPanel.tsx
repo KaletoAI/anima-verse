@@ -42,6 +42,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { PictureVariantDialog } from './PictureVariantDialog'
+import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { AREA_KINDS, PRESET_LABELS, areaKindOf } from './propTypes'
 import type { PropArea, PropAreasInfo, PropFull, PropSlotValues,
   PropVariant } from './propTypes'
@@ -112,6 +113,9 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
    *  defaults changed). */
   onVariantsChanged: () => void
 }) {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(prop.id)
@@ -287,7 +291,8 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
           : blenderReason
             ? `⚠ ${t('Blender is not available')}: ${blenderReason}`
             : `✓ ${t('Blender available')}`}
-        {info?.last_run ? ` · ${t('last run')} ${info.last_run.slice(0, 16).replace('T', ' ')}` : ''}
+        {info?.last_run
+          ? ` · ${t('last run')} ${formatDateTime(info.last_run, clockSettings())}` : ''}
       </div>
       {info?.error ? (
         <div className="ga-hint" style={{ display: 'block', color: 'var(--danger, #f85149)' }}>

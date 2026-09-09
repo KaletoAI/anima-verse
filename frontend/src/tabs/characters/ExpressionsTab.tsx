@@ -13,6 +13,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { openLightbox } from '../../components/Lightbox'
+import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 
 interface Expression {
   file: string
@@ -36,6 +37,9 @@ interface ExpressionsResp {
 }
 
 export function ExpressionsTab({ character }: { character: string }) {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const [items, setItems] = useState<Expression[] | null>(null)
@@ -87,7 +91,7 @@ export function ExpressionsTab({ character }: { character: string }) {
 
   if (!character) return <div className="ga-form"><div className="ga-placeholder">{t('No character selected')}</div></div>
   const files = items || []
-  const fmtDate = (iso: string) => (iso ? iso.replace('T', ' ').replace(/(\+\d\d:\d\d|Z)$/, '').slice(0, 16) : '')
+  const fmtDate = (iso: string) => formatDateTime(iso, clockSettings())
   const piecesText = (p: Record<string, string>) => Object.values(p || {}).filter(Boolean).join(', ')
 
   return (

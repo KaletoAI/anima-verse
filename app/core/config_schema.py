@@ -66,9 +66,22 @@ SECTIONS = {
                 "type": "str",
                 "label": "World Timezone",
                 "default": "Europe/Berlin",
-                "description": "IANA timezone (e.g. Europe/Berlin) for the in-world clock the "
-                               "characters see and for day boundaries. Storage stays UTC — this "
-                               "only affects displayed/world time. Empty = UTC.",
+                "description": "IANA timezone (e.g. Europe/Berlin) the SYSTEM clock is shown "
+                               "in — header system time, log and queue stamps. Storage stays "
+                               "UTC. GAME time is a world calendar and has NO timezone, so "
+                               "this never changes what the characters see. Empty or an "
+                               "unknown name = UTC.",
+            },
+            "time_format": {
+                "type": "select",
+                "label": "Time of day format",
+                "choices": ["24h", "24h_seconds", "12h", "12h_seconds"],
+                "default": "24h",
+                "description": "How a time of day is displayed: 24h '14:23', 24h_seconds "
+                               "'14:23:05', 12h '2:23 PM', 12h_seconds '2:23:05 PM'. "
+                               "Applies to BOTH header clocks (system and game time) and to "
+                               "the timestamps in the admin pages. Display only — prompts "
+                               "and stored stamps keep their own shape.",
             },
             "log_retention_days": {
                 "type": "int",

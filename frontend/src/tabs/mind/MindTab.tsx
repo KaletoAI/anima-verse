@@ -4,6 +4,8 @@ import { apiGet } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { MindPanel } from '../../player/MindPanel'
 import { DecencyExemptToggle } from '../../components/DecencyExemptToggle'
+import { clockSettings, formatDate, formatTime, sameZoneDay,
+  useClockSettings } from '../../lib/clockFormat'
 
 /**
  * Mind tab — debug any (non-avatar) character's inner state in the Game-Admin.
@@ -33,26 +35,32 @@ interface DebugActivity {
   force_rule?: { rule_name?: string; rule_id?: string; go_to?: string } | null
 }
 
-// ISO → short local time (HH:MM, date only when it is not today). Defensive.
+// A SYSTEM stamp → short time of day in the configured world timezone and
+// clock format; the date is added only when it is not today. Defensive.
 function fmtTs(iso?: string): string {
   if (!iso) return ''
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  const today = new Date()
-  const sameDay = d.toDateString() === today.toDateString()
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`
+  const clock = clockSettings()
+  const time = formatTime(iso, clock)
+  if (!time) return iso
+  if (sameZoneDay(iso, new Date(), clock)) return time
+  return `${formatDate(iso, clock, { month: 'short', day: 'numeric' })} ${time}`
 }
 
 /** The clock part of a rendered world-calendar label ("Summer, day 17 · 14:23
  *  · Year 3" → "14:23"). The SERVER renders the label; this only picks the
  *  short form for the inline badge — no game stamp is ever parsed here. */
 function fmtGameClock(gameLabel?: string): string {
-  const m = /\b(\d{2}:\d{2})\b/.exec(gameLabel || '')
-  return m ? m[1] : ''
+  // The label arrives with its clock part already in the configured display
+  // format (the 12h shapes carry an AM/PM suffix), so this only cuts it out —
+  // no reformatting, no game-stamp parsing.
+  const m = /\b(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?)/.exec(gameLabel || '')
+  return m ? m[1].trim() : ''
 }
 
 export function MindTab() {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const [characters, setCharacters] = useState<string[]>([])

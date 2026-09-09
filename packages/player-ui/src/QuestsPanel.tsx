@@ -16,6 +16,8 @@ import { useI18n } from './I18nProvider'
 import { apiGet } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
+import { formatDate, formatTime } from './clockFormat'
+import { clockSettings, useClockSettings } from './clockSettings'
 
 interface ArcBeat {
   /** Running number of the beat inside the arc, 1-based — the server sends an int. */
@@ -43,12 +45,13 @@ interface StoryArcsResp {
 /** How tense an arc can get — the server's scale, mirrored as bar segments. */
 const TENSION_MAX = 5
 
-/** Same compact stamp the phone and the scene recap use: day/month + clock. */
+/** Same compact stamp the phone and the scene recap use: day/month + clock,
+ *  in the configured world timezone and clock format. */
 function fmtTime(ts: string): string {
   if (!ts) return ''
-  const d = new Date(ts)
-  if (isNaN(d.getTime())) return ''
-  return d.toLocaleString([], { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })
+  const clock = clockSettings()
+  const day = formatDate(ts, clock, { day: '2-digit', month: '2-digit' })
+  return day ? `${day} ${formatTime(ts, clock)}` : ''
 }
 
 function TensionBar({ value, label }: { value: number; label: string }) {
@@ -63,6 +66,9 @@ function TensionBar({ value, label }: { value: number; label: string }) {
 }
 
 export function QuestsPanel({ pollIntervalMs = 15000 }: { pollIntervalMs?: number } = {}) {
+  // Subscribe to the shared clock settings so the stamp helpers above
+  // re-render once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { data } = usePoll<StoryArcsResp>(
     'play-story-arcs', () => apiGet<StoryArcsResp>('/play/story-arcs'),

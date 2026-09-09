@@ -2122,7 +2122,7 @@ async function startApp(username: string, role: string) {
       mapPolledAt = polledAt;
       mapStamp += 1;
       hud.setOnline(true);
-      hud.setClock(map.game_time?.label ?? '');
+      hud.setClock(map.game_time?.label_display ?? map.game_time?.label ?? '');
       takeRoomsFrom(map);
       updatePins(map);
       refreshSelection(map);

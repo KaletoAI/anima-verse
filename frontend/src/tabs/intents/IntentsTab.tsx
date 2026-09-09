@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } from '../../lib/refs'
+import { clockSettings, formatGameTime, useClockSettings } from '../../lib/clockFormat'
 
 /**
  * Game-Admin "Intents" tab — the unified "Vorhaben & Aufgaben" store
@@ -64,9 +65,17 @@ const DURATION_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 10080, label: '7 days' },
 ]
 
+/** A canonical GAME stamp ("Y0002-D109T14:23:45") → "Y0002-D109 14:23", the
+ *  clock part in the configured format. These are world-calendar stamps, not
+ *  system time: no `Date` is involved and there is no timezone to apply. */
+function gameStampLabel(stamp: string | undefined): string {
+  const m = /^(.*)T(\d{2}):(\d{2})/.exec(stamp || '')
+  if (!m) return (stamp || '').slice(0, 16).replace('T', ' ')
+  return `${m[1]} ${formatGameTime(parseInt(m[2], 10), parseInt(m[3], 10), clockSettings().format)}`
+}
+
 function expiresAtLabel(iso: string | undefined): string {
-  if (!iso) return ''
-  return iso.slice(0, 16).replace('T', ' ')
+  return gameStampLabel(iso)
 }
 
 const PRIORITY_LABELS: Record<number, string> = {
@@ -82,12 +91,15 @@ const POLL_INTERVAL_MS = 15_000
 function triggerSummary(it: Intent, locName: (id: string) => string): string {
   const k = it.trigger?.kind || 'standing'
   if (k === 'at_location') return `@ ${locName(it.trigger?.location_id || it.location_id || '')}`
-  if (k === 'at_time') return `⏰ ${(it.trigger?.run_date || '').slice(0, 16).replace('T', ' ')}`
+  if (k === 'at_time') return `⏰ ${gameStampLabel(it.trigger?.run_date)}`
   if (k === 'now') return 'now'
   return 'standing'
 }
 
 export function IntentsTab() {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format arrives.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const [intents, setIntents] = useState<Intent[] | null>(null)

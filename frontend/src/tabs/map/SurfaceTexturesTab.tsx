@@ -27,9 +27,13 @@ import { SurfaceBlendEditor } from './SurfaceBlendEditor'
 import { SurfaceGenerateForm } from './SurfaceGenerateForm'
 import { SurfaceKindDetail } from './SurfaceKindDetail'
 import { KIND_DATALIST_ID, KNOWN_KINDS, SURFACE_PROMPT_CONTEXT, dateShort, madeWith, unslugKind } from './surfaceTypes'
+import { useClockSettings } from '../../lib/clockFormat'
 import type { BackendInfo, Blend, TexGroup, TexVersion } from './surfaceTypes'
 
 export function SurfaceTexturesTab() {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const [textures, setTextures] = useState<TexGroup[]>([])

@@ -22,6 +22,8 @@ import { apiGet, apiPost, apiDelete } from './api'
 import { usePoll } from './usePolling'
 import { Icon } from './icons'
 import { EmptyState } from './EmptyState'
+import { formatDateTime } from './clockFormat'
+import { clockSettings, useClockSettings } from './clockSettings'
 
 interface ImgInfo {
   prompt: string; model: string; backend: string; from_character: string
@@ -75,13 +77,17 @@ export interface GalleryPanelProps {
   regenDialog?: (ctl: GalleryRegenControl) => ReactNode
 }
 
+/** An image's SYSTEM stamp in the configured world timezone and clock format;
+ *  an unparsable value is shown as it came. */
 function fmt(ts: string): string {
   if (!ts) return ''
-  const d = new Date(ts)
-  return isNaN(d.getTime()) ? ts.replace('T', ' ') : d.toLocaleString()
+  return formatDateTime(ts, clockSettings()) || ts.replace('T', ' ')
 }
 
 export function GalleryPanel({ regenDialog }: GalleryPanelProps = {}) {
+  // Subscribe to the shared clock settings so the stamp helpers above
+  // re-render once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t, lang } = useI18n()
   const [self, setSelf] = useState<string>('')
   const [galleries, setGalleries] = useState<GalleryRef[] | null>(null)

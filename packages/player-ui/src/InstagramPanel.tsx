@@ -21,6 +21,8 @@ import { useToast } from './Toast'
 import { useLightbox } from './Lightbox'
 import { useEnlarge } from './ZoomButton'
 import { Icon } from './icons'
+import { formatDateTime } from './clockFormat'
+import { clockSettings, useClockSettings } from './clockSettings'
 
 interface Reaction {
   emoji?: string
@@ -137,10 +139,11 @@ export interface InstagramPanelProps {
   animateDialog?: (ctl: InstagramAnimateControl) => ReactNode
 }
 
+/** A post's SYSTEM stamp in the configured world timezone and clock format;
+ *  an unparsable value is shown as it came. */
 function fmt(ts?: string): string {
   if (!ts) return ''
-  const d = new Date(ts)
-  return isNaN(d.getTime()) ? ts.replace('T', ' ') : d.toLocaleString()
+  return formatDateTime(ts, clockSettings()) || ts.replace('T', ' ')
 }
 
 // Caption with #hashtag / @mention highlighting (escaped via React text nodes).
@@ -165,6 +168,9 @@ function metaTitle(m?: ImageMeta): string {
 }
 
 export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanelProps = {}) {
+  // Subscribe to the shared clock settings so the stamp helpers above
+  // re-render once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const [posts, setPosts] = useState<Post[] | null>(null)

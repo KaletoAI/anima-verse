@@ -8,6 +8,8 @@
  */
 import type { ReactNode } from 'react'
 import { useI18n } from './I18nProvider'
+import { formatTime } from './clockFormat'
+import { clockSettings, useClockSettings } from './clockSettings'
 
 export interface SceneLine {
   /** Perception row id — stable across polls, unique within one history.
@@ -28,9 +30,9 @@ export interface SceneLine {
 }
 
 function clockOf(ts: string): string {
-  // ISO -> HH:MM:SS, best-effort.
-  const d = new Date(ts)
-  return isNaN(d.getTime()) ? ts : d.toLocaleTimeString()
+  // A SYSTEM stamp in the configured world timezone and clock format (so
+  // whether seconds show is the admin's setting, not this file's decision).
+  return formatTime(ts, clockSettings()) || ts
 }
 
 function addresseesOf(line: SceneLine): string[] {
@@ -74,6 +76,9 @@ export function SceneView({ lines, emptyHint, thinking, onOpenImage,
    *  Left out = no pointer handlers are attached at all. */
   onRowHover?: (id: number | null) => void
 }) {
+  // Subscribe to the shared clock settings so the stamp helpers above
+  // re-render once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const thinkers = thinking || []
   if (!lines.length && !thinkers.length) {

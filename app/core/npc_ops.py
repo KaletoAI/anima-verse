@@ -489,7 +489,7 @@ def npc_summary(name: str) -> Dict[str, Any]:
         "location_name": get_location_name(location_id) if location_id else "",
         "room_id": get_character_current_room(name) or "",
         "expires_at": expires_at,
-        "expires_label": (GameTime.parse(expires_at).label()
+        "expires_label": (GameTime.parse(expires_at).display_label()
                           if _is_stamp(expires_at) else ""),
         # WHEN it ends is not HOW LONG is left. The stamp answers a question
         # nobody asks about an NPC that was spawned for two hours — the list

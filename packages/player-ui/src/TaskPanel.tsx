@@ -15,6 +15,8 @@ import { useI18n } from './I18nProvider'
 import { useQueue, elapsedSeconds, type LLMTaskInfo, type TrackedTaskInfo, type RecentTaskInfo } from './useQueue'
 import { EmptyState } from './EmptyState'
 import { Icon, type IconName } from './icons'
+import { formatTime } from './clockFormat'
+import { clockSettings, useClockSettings } from './clockSettings'
 
 /**
  * Abbrechen-Knopf einer laufenden/wartenden Zeile (A6 des
@@ -113,12 +115,9 @@ function RecentRow({ r }: { r: RecentTaskInfo }) {
   const color = failed ? '#e05656' : cancelled ? 'var(--text-muted, #8b949e)' : '#3fa45a'
   const title = r.label || (r.agent_name || r.task_type || t('Task'))
   const dur = r.duration_s != null ? fmtDur(Math.round(r.duration_s)) : ''
-  // Uhrzeit (lokal, HH:MM) des Eintrags — created_at ist UTC-ISO vom Server.
-  const clock = (() => {
-    if (!r.created_at) return ''
-    const d = new Date(r.created_at)
-    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  })()
+  // Time of day of the entry — created_at is a UTC ISO stamp from the server,
+  // rendered in the configured world timezone and clock format.
+  const clock = formatTime(r.created_at, clockSettings())
   const meta = [clock, dur, r.provider, r.model].filter(Boolean).join(' · ')
   // Zwei Zeilen wie LLMRow/TrackedRow: Titel mit Ellipsis, Meta darunter mit
   // wordBreak — bei schmaler Panel-Breite bricht die Meta-Zeile um, statt
@@ -196,6 +195,9 @@ function TrackedRow({ tk, nowMs, onCancel, cancelling }: {
 }
 
 export function TaskPanel() {
+  // Subscribe to the shared clock settings so the stamp helpers above
+  // re-render once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   // Shared /queue/status feed via the poll hub (one fetch, visibility pause,
   // error backoff). GenerationIndicator subscribes to the same key.

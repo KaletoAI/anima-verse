@@ -12,12 +12,12 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
 import { fetchSteps, retryStep } from './api'
 import type { Improvement, Step } from './types'
+import { clockSettings, formatTime, useClockSettings } from '../../lib/clockFormat'
 
-/** A system stamp (technical, not game time) rendered as a wall clock. */
+/** A system stamp (technical, not game time) rendered as a wall clock — in the
+ *  configured world timezone and clock format. */
 function clockTime(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString()
+  return formatTime(iso, clockSettings())
 }
 
 /** Green for a finished step, red for one that ended badly, muted for the
@@ -48,6 +48,9 @@ export function EntryDetail({
   /** A retry moved a step back into the queue — the counters changed. */
   onChanged: () => void
 }) {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const [steps, setSteps] = useState<Step[] | null>(null)

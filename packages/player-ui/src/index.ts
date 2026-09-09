@@ -1,4 +1,6 @@
 export * from './api';
+export * from './clockFormat';
+export * from './clockSettings';
 export * from './I18nProvider';
 export * from './usePolling';
 export * from './EmptyState';

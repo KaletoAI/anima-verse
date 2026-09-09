@@ -13,6 +13,7 @@ import { useCallback, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiPost } from '../lib/api'
 import { useToast } from '../lib/Toast'
+import { clockSettings, formatDateTime, useClockSettings } from '../lib/clockFormat'
 
 /** The named resolution tiers, in fallback order (app/core/model_store.TIERS).
  *  `full` is the modelled quality and the default for everything that exists,
@@ -334,6 +335,9 @@ export function ModelGalleryRow({
   /** A job of this gallery is running — no second one on top. */
   shrinkPending?: boolean
 }) {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const selectedFor = model.selected_for || []
   const madeFor = model.tier || DEFAULT_MODEL_TIER
@@ -369,7 +373,7 @@ export function ModelGalleryRow({
         {selectedFor.length ? '⭐' : ''}
       </span>
       <span style={{ fontSize: '0.82em' }}>
-        {(model.created_at || '').replace('T', ' ').slice(0, 16) || model.filename}
+        {formatDateTime(model.created_at, clockSettings()) || model.filename}
       </span>
       <span className="ga-tag ga-tag-tier"
         title={t('The tier this file was generated or uploaded for.')}>

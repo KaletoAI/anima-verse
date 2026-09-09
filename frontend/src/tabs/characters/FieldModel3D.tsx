@@ -16,6 +16,7 @@ import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { Model3DViewer } from './Model3DViewer'
 import { OutfitBatchDialog } from './OutfitBatchDialog'
+import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 
 /** What Blender measured in the actual geometry — as opposed to what the
  *  file's header claims. Absent until the model has been measured. */
@@ -131,6 +132,9 @@ const DEFAULT_CLIP_KIND = 'idle'
 const CLIP_NONE = 'none'
 
 export function FieldModel3D({ character }: { character: string }) {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
@@ -590,7 +594,7 @@ export function FieldModel3D({ character }: { character: string }) {
             {sizeMb ? ` · ${sizeMb} MB` : ''}
             {model.texture_url ? ` · +${t('texture')}` : ''}
             {model.backend ? ` · ${model.backend}` : ''}
-            {model.created_at ? ` · ${new Date(model.created_at).toLocaleString()}` : ''}
+            {model.created_at ? ` · ${formatDateTime(model.created_at, clockSettings())}` : ''}
             {model.source_filename ? ` · ${model.source_filename}` : ''}
           </div>
           {/* What is actually IN the file, measured by Blender — the line

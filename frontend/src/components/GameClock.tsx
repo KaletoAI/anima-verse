@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
+import { applyClockSettings, formatGameTime, formatTime, useClockSettings,
+  type TimeFormat } from '../lib/clockFormat'
 
 /**
  * Header clock: shows SYSTEM time and GAME time side by side.
@@ -14,6 +16,12 @@ import { apiGet, apiPost } from '../lib/api'
  *
  * Clicking the game clock opens an in-app popover to set the game time
  * (season / day / time / year) and the tick factor (admin only).
+ *
+ * Both clocks are rendered in the configured display format, and the SYSTEM
+ * clock in the configured world timezone — NOT the viewer's browser zone, so
+ * every admin reads the same wall clock. The payload carries both settings;
+ * `applyClockSettings` feeds them to the panels, which then need no request of
+ * their own.
  */
 interface CalendarSeason {
   key: string
@@ -51,6 +59,10 @@ interface ClockInfo {
   factor: number
   frozen: boolean
   calendar: CalendarInfo
+  /** `server.time_format` — how a time of day reads. */
+  time_format?: string
+  /** `server.timezone` (IANA) — the zone `system_now` is displayed in. */
+  timezone?: string
 }
 
 const DAY_SECONDS = 24 * 60 * 60
@@ -62,6 +74,7 @@ interface GameParts {
   dayOfSeason: number
   hour: number
   minute: number
+  second: number
   weekday: number | null
 }
 
@@ -92,6 +105,7 @@ function gameParts(totalSeconds: number, cal: CalendarInfo): GameParts {
     dayOfSeason: dayOfYear0 - seasonStart + 1,
     hour: Math.floor(secOfDay / 3600),
     minute: Math.floor((secOfDay % 3600) / 60),
+    second: secOfDay % 60,
     weekday: cal.week_days.length ? dayIndex % cal.week_days.length : null,
   }
 }
@@ -100,17 +114,16 @@ function two(n: number): string {
   return n < 10 ? `0${n}` : String(n)
 }
 
-function fmtClock(d: Date): string {
-  return `${two(d.getHours())}:${two(d.getMinutes())}`
-}
-
 /** Same shape as `GameTime.label()` on the server: `<Weekday, >Season, day N ·
- *  HH:MM · Year n`. The season names arrive localized, "day" goes through t(). */
-function fmtGameLabel(p: GameParts, cal: CalendarInfo, dayWord: string): string {
+ *  HH:MM · Year n`. The season names arrive localized, "day" goes through t(),
+ *  and the clock part follows the configured format. Game time has no timezone,
+ *  so the hour and minute go to the formatter as plain numbers. */
+function fmtGameLabel(p: GameParts, cal: CalendarInfo, dayWord: string,
+                      format: TimeFormat): string {
   const season = cal.seasons[p.seasonIndex]?.name || ''
   let head = season ? `${season}, ${dayWord} ${p.dayOfSeason}` : `${dayWord} ${p.dayOfSeason}`
   if (p.weekday !== null) head = `${cal.week_days[p.weekday]}, ${head}`
-  const chunks = [head, `${two(p.hour)}:${two(p.minute)}`]
+  const chunks = [head, formatGameTime(p.hour, p.minute, format, p.second)]
   if (cal.year_label) chunks.push(cal.year_label.replace('{n}', String(p.year)))
   return chunks.join(' · ')
 }
@@ -123,6 +136,7 @@ export function GameClock({ readOnly = false, showSystem = true }: {
   showSystem?: boolean
 } = {}) {
   const { t, lang } = useI18n()
+  const clock = useClockSettings()
   const [info, setInfo] = useState<ClockInfo | null>(null)
   const fetchedAt = useRef<number>(0)
   const [, setTick] = useState(0)
@@ -140,6 +154,7 @@ export function GameClock({ readOnly = false, showSystem = true }: {
       const d = await apiGet<ClockInfo>(`/world/game-time?lang=${encodeURIComponent(lang)}`)
       fetchedAt.current = Date.now()
       setInfo(d)
+      applyClockSettings(d)
     } catch {
       setInfo(null)
     }
@@ -147,15 +162,18 @@ export function GameClock({ readOnly = false, showSystem = true }: {
 
   useEffect(() => { void load() }, [load])
 
-  // Re-render every 10s (minute-precision display) + refetch on focus and
-  // every 5 min (picks up freeze/factor changes made elsewhere).
+  // Re-render as often as the display claims precision: every second when the
+  // configured format shows seconds, every 10s otherwise (a clock that only
+  // ticks every 10s must not print a seconds digit). Plus a refetch on focus
+  // and every 5 min (picks up freeze/factor changes made elsewhere).
+  const showsSeconds = clock.format === '24h_seconds' || clock.format === '12h_seconds'
   useEffect(() => {
-    const tick = setInterval(() => setTick((n) => n + 1), 10_000)
+    const tick = setInterval(() => setTick((n) => n + 1), showsSeconds ? 1_000 : 10_000)
     const refetch = setInterval(() => { void load() }, 300_000)
     const onFocus = () => { void load() }
     window.addEventListener('focus', onFocus)
     return () => { clearInterval(tick); clearInterval(refetch); window.removeEventListener('focus', onFocus) }
-  }, [load])
+  }, [load, showsSeconds])
 
   // Close the popover on outside click.
   useEffect(() => {
@@ -175,7 +193,7 @@ export function GameClock({ readOnly = false, showSystem = true }: {
     ? info.game.total_seconds
     : info.game.total_seconds + (elapsedMs / 1000) * info.factor
   const parts = gameParts(gameSeconds, cal)
-  const gameLabel = fmtGameLabel(parts, cal, t('day'))
+  const gameLabel = fmtGameLabel(parts, cal, t('day'), clock.format)
   const sysNow = new Date(new Date(info.system_now).getTime() + elapsedMs)
   const seasonKey = editSeason || cal.seasons[parts.seasonIndex]?.key || ''
   const seasonDays = cal.seasons.find((s) => s.key === seasonKey)?.days ?? 30
@@ -212,6 +230,7 @@ export function GameClock({ readOnly = false, showSystem = true }: {
         `/world/game-time?lang=${encodeURIComponent(lang)}`, body)
       fetchedAt.current = Date.now()
       setInfo(d)
+      applyClockSettings(d)
       setOpen(false)
     } catch {
       // keep the popover open so the user can retry
@@ -231,8 +250,8 @@ export function GameClock({ readOnly = false, showSystem = true }: {
   return (
     <div ref={rootRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85em' }}>
       {showSystem && (
-        <span style={{ opacity: 0.6 }} title={t('System time')}>
-          🖥 {fmtClock(sysNow)}
+        <span style={{ opacity: 0.6 }} title={`${t('System time')} · ${clock.timeZone}`}>
+          🖥 {formatTime(sysNow, clock)}
         </span>
       )}
       {readOnly ? (

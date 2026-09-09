@@ -1674,7 +1674,11 @@ def _agent_loop_bump_sync(user, body: Any):
 def agent_loop_page(user=Depends(require_admin)):
     """Minimal HTML panel for the AgentLoop: status + pause toggle + recent turns."""
     from fastapi.responses import HTMLResponse as _HTMLResp
-    return _HTMLResp(_AGENT_LOOP_HTML, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+    from app.core.timeutils import clock_body_attrs
+    # The clock settings are substituted per request — the constant is built at
+    # import time, before a world config exists.
+    html = _AGENT_LOOP_HTML.replace("{clock_attrs}", clock_body_attrs())
+    return _HTMLResp(html, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 
 _AGENT_LOOP_HTML = """<!DOCTYPE html>
@@ -1684,7 +1688,7 @@ _AGENT_LOOP_HTML = """<!DOCTYPE html>
 <title>Agent Loop</title>
 <link rel="stylesheet" href="/static/admin/agent-loop.css">
 </head>
-<body>
+<body {clock_attrs}>
 <h1>Agent Loop</h1>
 <div class="bar">
   <button id="btn-pause" onclick="togglePause()">Pause</button>
@@ -1716,6 +1720,7 @@ _AGENT_LOOP_HTML = """<!DOCTYPE html>
   <table id="recent-table"><thead><tr><th>Agent</th><th>Started</th><th>Dur</th><th>Outcome</th><th>Tools / Intents</th><th>Preview</th></tr></thead><tbody></tbody></table>
 </div>
 
+<script src="/static/admin/clock-format.js"></script>
 <script src="/static/admin/agent-loop.js"></script>
 </body>
 </html>

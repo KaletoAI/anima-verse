@@ -23,6 +23,7 @@ import {
   rescanImprovement, resumeImprovement, runNow, setOrder,
 } from './api'
 import { STEP_STATUS_LABELS } from './types'
+import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import type { Improvement, ImprovementType } from './types'
 
 /** The ENTRY statuses (not the step ones) — 'open' is a state, not a verb. */
@@ -32,14 +33,16 @@ const ENTRY_STATUS_LABELS: Record<string, string> = {
   done: 'Done',
 }
 
-/** A system stamp (technical, not game time) rendered as a wall clock. */
+/** A system stamp (technical, not game time) rendered as date + wall clock,
+ *  in the configured world timezone and clock format. */
 function clockTime(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString()
+  return formatDateTime(iso, clockSettings())
 }
 
 export function EntriesView() {
+  // Subscribe to the shared clock settings so the stamps above re-render
+  // once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const [entries, setEntries] = useState<Improvement[] | null>(null)

@@ -598,6 +598,47 @@ GameDuration.ZERO = GameDuration(0)
 
 
 # ---------------------------------------------------------------------------
+# Clock format — how a time of day is DISPLAYED
+# ---------------------------------------------------------------------------
+#
+# One setting (`server.time_format`) decides the shape everywhere a time of day
+# is shown: both header clocks, the admin pages, every panel stamp. It is a
+# display decision only — prompts, logs and persisted stamps keep their 24h
+# shape, so a model never has to read "2:23 PM".
+
+TIME_FORMATS = ("24h", "24h_seconds", "12h", "12h_seconds")
+
+
+def format_time_of_day(hour: int, minute: int, time_format: str = "24h",
+                       second: int = 0) -> str:
+    """Hour/minute (0-23) → the configured shape.
+
+    The twin of ``formatGameTime`` in ``packages/player-ui/src/clockFormat.ts``
+    — the four shapes must stay in step, so change both or neither. In the 12h
+    shapes hour 0 reads as 12 AM and hour 12 as 12 PM, and the hour is not
+    zero-padded there; 24h always pads.
+    """
+    tail = f":{int(second):02d}" if time_format in ("24h_seconds", "12h_seconds") else ""
+    h = int(hour)
+    if time_format in ("12h", "12h_seconds"):
+        suffix = "AM" if h % 24 < 12 else "PM"
+        h12 = 12 if h % 12 == 0 else h % 12
+        return f"{h12}:{int(minute):02d}{tail} {suffix}"
+    return f"{h:02d}:{int(minute):02d}{tail}"
+
+
+def display_time_format() -> str:
+    """Configured clock format (``server.time_format``), one of
+    :data:`TIME_FORMATS`; ``24h`` when unset or unknown."""
+    try:
+        from app.core import config
+        value = (config.get("server.time_format") or "").strip()
+    except Exception:
+        value = ""
+    return value if value in TIME_FORMATS else "24h"
+
+
+# ---------------------------------------------------------------------------
 # GameTime
 # ---------------------------------------------------------------------------
 
@@ -820,17 +861,28 @@ class GameTime:
         """Human label, e.g. ``Summer, day 17 · 14:23 · Year 3``.
 
         Weekday name is prefixed when the world has weeks; the year part is
-        omitted when ``year_label`` is empty. One function, deterministic —
-        every surface (header, prompt, log) shows the same string.
+        omitted when ``year_label`` is empty. The clock part is ALWAYS 24h:
+        this is the string prompts and logs get, and a model reading "2:23 PM"
+        instead of "14:23" would be a change of prompt, not of display. The
+        display twin is :meth:`display_label`.
         """
         return self._label(lang, _cal(calendar), with_time=True)
+
+    def display_label(self, lang: str = "en",
+                      calendar: Optional[Calendar] = None) -> str:
+        """Same label for a UI payload — clock part in the configured format
+        (``server.time_format``). Everything a client SHOWS goes through here;
+        everything a model READS goes through :meth:`label`."""
+        return self._label(lang, _cal(calendar), with_time=True,
+                           time_format=display_time_format())
 
     def date_label(self, lang: str = "en",
                    calendar: Optional[Calendar] = None) -> str:
         """Same as :meth:`label` without the clock time."""
         return self._label(lang, _cal(calendar), with_time=False)
 
-    def _label(self, lang: str, cal: Calendar, with_time: bool) -> str:
+    def _label(self, lang: str, cal: Calendar, with_time: bool,
+               time_format: str = "24h") -> str:
         p = self.parts(cal)
         season = cal.seasons[p.season_index].name_for(lang) if cal.seasons else ""
         head = f"{season}, day {p.day_of_season}" if season else f"day {p.day_of_season}"
@@ -838,7 +890,7 @@ class GameTime:
             head = f"{cal.week_days[p.day_index % len(cal.week_days)]}, {head}"
         chunks = [head]
         if with_time:
-            chunks.append(f"{p.hour:02d}:{p.minute:02d}")
+            chunks.append(format_time_of_day(p.hour, p.minute, time_format, p.second))
         if cal.year_label:
             try:
                 chunks.append(cal.year_label.format(n=p.year))
@@ -973,6 +1025,13 @@ class GameTime:
             "label": self._label(lang, cal, with_time=True),
             "date_label": self._label(lang, cal, with_time=False),
             "time": f"{p.hour:02d}:{p.minute:02d}",
+            # Display twins — the clock part in the configured format
+            # (`server.time_format`). Clients render THESE; `label`/`time`
+            # stay 24h because prompts and logs read them.
+            "label_display": self._label(lang, cal, with_time=True,
+                                         time_format=display_time_format()),
+            "time_display": format_time_of_day(
+                p.hour, p.minute, display_time_format(), p.second),
             "is_night": self.is_night(cal),
             "day_bucket": self.day_bucket(cal),
             "atmosphere": (season.atmosphere(lang) if season

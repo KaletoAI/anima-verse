@@ -22,7 +22,7 @@ def _game_label(stamp: Any, lang: str) -> str:
     """
     from app.core.game_time import GameTime
     try:
-        return GameTime.parse(stamp or "").label(lang)
+        return GameTime.parse(stamp or "").display_label(lang)
     except (ValueError, TypeError):
         return ""
 

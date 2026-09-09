@@ -130,9 +130,10 @@ function render() {
     }
     let startedShort = '';
     if (r.started_at) {
-      const _d = new Date(r.started_at);
-      startedShort = isNaN(_d.getTime()) ? r.started_at.replace('T', ' ').split('.')[0]
-        : _d.toLocaleString('de-DE', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'});
+      // Seconds now follow the configured format (24h_seconds / 12h_seconds)
+      // instead of always showing — one setting, one shape on every page.
+      startedShort = AdminClock.stamp(r.started_at, {month: '2-digit', day: '2-digit'})
+        || r.started_at.replace('T', ' ').split('.')[0];
     }
     tr.innerHTML = `<td>${escapeHtml(r.agent)}</td><td>${escapeHtml(startedShort)}</td><td>${r.duration_s}s</td><td class="${cls}">${escapeHtml(r.outcome)}</td><td>${tagsCell}</td><td>${preview}</td>`;
     tbody.appendChild(tr);

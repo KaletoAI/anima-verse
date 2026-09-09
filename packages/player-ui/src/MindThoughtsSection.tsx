@@ -16,6 +16,8 @@ import { Fragment, useCallback, useEffect, useState } from 'react'
 import type React from 'react'
 import { useI18n } from './I18nProvider'
 import { apiGet } from './api'
+import { formatDate, formatTime } from './clockFormat'
+import { clockSettings, useClockSettings } from './clockSettings'
 
 export interface ThoughtEntry {
   ts: string
@@ -41,20 +43,27 @@ const PAGE = 50
 
 // Same time vocabulary as the Timeline next door (MindPanel) — local copies,
 // because importing from MindPanel would close an import cycle.
+// SYSTEM stamps — shown in the configured world timezone and clock format,
+// not in the viewer's browser locale.
 function clockOf(ts: string): string {
-  const d = new Date(ts)
-  return Number.isNaN(d.getTime()) ? ts : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return formatTime(ts, clockSettings()) || ts
 }
 function dayOf(ts: string): string {
-  const d = new Date(ts)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString([], { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' })
+  return formatDate(ts, clockSettings(),
+    { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' })
 }
 /** The clock part of the server-rendered world-calendar label ("Summer, day
- *  17 · 14:23 · Year 3" → "14:23") for the narrow time column. The full label
- *  goes into the tooltip; nothing here parses a game stamp. */
+ *  17 · 14:23 · Year 3" → "14:23") for the narrow time column, re-rendered in
+ *  the configured clock format. The label always arrives in 24h — it is the
+ *  same string prompts get — so the hour and minute are read out of it and
+ *  formatted here. The full label goes into the tooltip; nothing here parses a
+ *  game stamp. */
 function gameClockOf(gameLabel?: string): string {
-  const m = /\b(\d{2}:\d{2})\b/.exec(gameLabel || '')
-  return m ? m[1] : ''
+  // The label arrives with its clock part already in the configured display
+  // format (the 12h shapes carry an AM/PM suffix), so this only cuts it out —
+  // no reformatting, no game-stamp parsing.
+  const m = /\b(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?)/.exec(gameLabel || '')
+  return m ? m[1].trim() : ''
 }
 const sepStyle: React.CSSProperties = {
   margin: '6px 0 2px', fontSize: '0.74em', opacity: 0.55, letterSpacing: 0.4,
@@ -69,6 +78,9 @@ function splitTrigger(content: string): { trigger: string; text: string } {
 }
 
 export function MindThoughtsSection({ character }: { character: string }) {
+  // Subscribe to the shared clock settings so the stamp helpers above
+  // re-render once the server-configured format and timezone arrive.
+  useClockSettings()
   const { t } = useI18n()
   const [entries, setEntries] = useState<ThoughtEntry[]>([])
   const [hasMore, setHasMore] = useState(false)
