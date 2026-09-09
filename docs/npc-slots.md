@@ -196,3 +196,29 @@ no location id and no room, so it passes its area's label plus an explicit
 than left blank, so the model does not invent an interior for an NPC that lives
 on open ground. A plugin that spawns NPCs somewhere the world model has no id
 for uses the same door.
+
+## NPC conversations
+
+Temporary NPCs talk to each other only at a place the avatar is at — inside a
+location any room of it, outdoors within `npc.spawn_radius_m` of the NPC — and
+only to other temporary NPCs. `npc.conversation_mode` picks how:
+
+| mode | what happens | LLM task |
+| --- | --- | --- |
+| `turns` (default) | The action tick may add `say` (an opening line to someone within earshot) or `pair` (a two-person pose) to its answer, guided by the NPC's goals, reason for being here and dialogue style. The line enters the perception stream, the room's chime budget starts over, and the addressee answers through the ordinary respond lane. | opener: `npc_action`; replies: `npc_talk` |
+| `scene` | One director call per room (at most every `scene_interval_game_minutes` game minutes) writes a 2–4 line exchange for up to `scene_max_npcs` NPCs, plus an optional pair pose (recorded as an invitation the partner accepts at once) and new activities. The participants get no cascade of their own; a full character present may still chime in. Outdoors the `turns` opener applies. Storyteller movement traces are left out of the lines the director sees. | `npc_scene` |
+| `off` | NPCs only answer when addressed. | `npc_talk` |
+
+**Every chat reply of a temporary NPC** — answer, chime, exit beat, TalkTo —
+resolves its model through the task `npc_talk` (`chat_engine.chat_llm_task`).
+Route `npc_talk` and `npc_scene` at a fast model in `/admin/settings → LLM
+Routing`; unrouted, `npc_*` falls back to `chat_stream`, i.e. the RP model.
+
+With the avatar in the SAME room and active within
+`chat.avatar_floor_timeout_minutes`, the player-priority rule still holds: an
+opener gets one answer, then the stage is the player's. Next door the cascade
+runs to the room backstop.
+
+A pair invitation to a temporary NPC is accepted at once (the interact
+package's hook); the engine's own state check decides whether the pair can
+start.

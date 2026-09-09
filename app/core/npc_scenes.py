@@ -164,9 +164,11 @@ def prompt_vars(location_id: str, room_id: str,
 
 def _apply(location_id: str, room_id: str, names: List[str],
            answer: Dict[str, Any], pair_keys: List[str]) -> Optional[Dict[str, Any]]:
-    """Writes what survived validation: the lines of known speakers (in
-    answer order, monotone system stamps), the activities, the pair; then ONE
-    cascade for the last line with every participant excluded."""
+    """Writes what survived validation: the lines of known speakers (one
+    shared system stamp for the whole exchange, the ids keep the answer
+    order), the activities, the pair as an invitation the partner's hook
+    answers; then ONE cascade for the last line with every participant
+    excluded."""
     from app.core import npc_actions
     from app.core.perception import record_utterance
     from app.models.character import force_set_status

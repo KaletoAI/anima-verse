@@ -39,9 +39,10 @@ Hand-derived expectations, case by case:
       the open with an ``npc_home``, ``talk_allowed`` is True again.
   (g) Mode ``scene``: a room with A and B, the avatar at the location, and an
       answer of three lines, one of them from a stranger "C". Only the two
-      known speakers are written, in answer order with monotonic timestamps,
-      A's activity is written too, and exactly ONE dispatch goes out with
-      ``exclude={A, B}``. A second run inside the cooldown calls no LLM.
+      known speakers are written, in answer order with one shared timestamp
+      and ascending ids, A's activity is written too, and exactly ONE dispatch
+      goes out with ``exclude={A, B}``. A second run inside the cooldown calls
+      no LLM.
   (h) Mode ``scene`` with only a single NPC in the room makes no call — a
       scene needs two voices. A room without the avatar at the location makes
       no call either, because nobody is there to watch it.
@@ -467,7 +468,7 @@ check("lines as an object -> nothing", npc_scenes.run_scene_for(LOC_ID, "taproom
 check("and no new utterance", len(utterances()), before)
 
 # ── (i) the scene may bind a pair ──────────────────────────────────────────
-print("(i) scene: a pair is started directly")
+print("(i) scene: a pair is proposed as an invitation the NPC accepts at once")
 # The throwaway clip dir has no pair clip, so the catalog offers no pair key
 # of its own — the same stand-in as in (d)/(e).
 interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
