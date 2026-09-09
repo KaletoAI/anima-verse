@@ -55,6 +55,7 @@ TWO RULES SIT BETWEEN THE ANSWER AND THAT SETTER (2026-09-08):
   it.
 """
 import json
+import math
 import re
 from typing import Any, Callable, Dict, List, Optional
 
@@ -79,10 +80,14 @@ _DEFAULT_BATCH = 2
 # to 120 chars anyway; this only keeps a runaway answer out of the write.
 _MAX_ACTIVITY_CHARS = 200
 
-# Completion budget of one turn. The answer is two short fields (a room id and
-# one sentence) — roughly 40 tokens — so this is a generous cap and still an
-# upper bound on what a babbling model can cost per NPC per interval.
-_MAX_ANSWER_TOKENS = 200
+# Completion budget of one turn. The answer is three short fields (a room id,
+# one sentence, a pose key) plus an optional opening line — well under 100
+# tokens — so this is a generous cap and still an upper bound on what a
+# babbling model can cost per NPC per interval.
+_MAX_ANSWER_TOKENS = 320
+
+# The longest opening line (`say.line`) we put into the perception stream.
+_MAX_LINE_CHARS = 300
 
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.S)
 
@@ -231,6 +236,182 @@ def _in_party(name: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Conversations (spec-npc-conversation § 3)
+# ---------------------------------------------------------------------------
+
+_MODES = ("off", "turns", "scene")
+
+
+def conversation_mode() -> str:
+    """``npc.conversation_mode`` — ``off``, ``turns`` or ``scene``; an unknown
+    value reads as the default ``turns``."""
+    from app.core import config
+    mode = str(config.get("npc.conversation_mode", "turns") or "turns").strip().lower()
+    return mode if mode in _MODES else "turns"
+
+
+def avatar_at_place(name: str) -> bool:
+    """True when a player-controlled avatar is at this NPC's place.
+
+    Inside a location "the place" is the LOCATION — any room of it, so a
+    conversation may already be running next door when the player walks in.
+    For a location-less NPC (a home area) it is the circle of
+    ``npc.spawn_radius_m`` around its point: the same radius that made the
+    NPC exist. No avatar in the world at all → False.
+    """
+    from app.models.account import get_all_avatars
+    from app.models.character import (get_character_current_location,
+                                      get_character_pos)
+    avatars = [a for a in get_all_avatars() if a]
+    if not avatars:
+        return False
+    loc = get_character_current_location(name) or ""
+    if loc:
+        return any((get_character_current_location(a) or "") == loc
+                   for a in avatars)
+    pos = get_character_pos(name)
+    if not pos:
+        return False
+    from app.core.npc_spawn import spawn_radius_m
+    radius = spawn_radius_m()
+    for a in avatars:
+        apos = get_character_pos(a)
+        if apos and math.hypot(apos["x"] - pos["x"], apos["z"] - pos["z"]) <= radius:
+            return True
+    return False
+
+
+def present_partners(name: str) -> List[Dict[str, str]]:
+    """The OTHER temporary NPCs this one could address right now:
+    ``{name, role, task, activity}`` each.
+
+    Earshot follows the perception model — the same room inside a location
+    (``room_entry._list_characters_in_room``), the hearing circle outside
+    (``perception.nearby_in_the_open``). Only temporary NPCs: avatars and
+    ordinary characters are never offered (spec § 8). Asleep, travelling or
+    mid-interaction ones are left out — they could not answer.
+    """
+    from app.models.character import (get_character_current_location,
+                                      get_character_current_room,
+                                      get_character_profile,
+                                      get_effective_activity,
+                                      is_character_sleeping, is_temporary_npc)
+    loc = get_character_current_location(name) or ""
+    if loc:
+        room = get_character_current_room(name) or ""
+        if not room:
+            return []
+        from app.core.room_entry import _list_characters_in_room
+        names = _list_characters_in_room(loc, room, exclude=name)
+    else:
+        from app.core.perception import nearby_in_the_open
+        names = nearby_in_the_open(name)
+    out: List[Dict[str, str]] = []
+    for other in names:
+        if other == name or not is_temporary_npc(other):
+            continue
+        prof = get_character_profile(other) or {}
+        if is_character_sleeping(other) or prof.get("journey") or _is_busy(other, prof):
+            continue
+        out.append({"name": other,
+                    "role": str(prof.get("npc_slot_role") or "").strip(),
+                    "task": str(prof.get("standing_task") or "").strip(),
+                    "activity": get_effective_activity(other) or ""})
+    return out
+
+
+def talk_allowed(name: str, profile: Dict[str, Any]) -> bool:
+    """May THIS turn open a conversation? Mode ``turns`` everywhere; mode
+    ``scene`` only for an NPC with a home area (the director scene knows
+    rooms only, § 4); ``off`` never — and always only with an avatar at the
+    place.
+    """
+    mode = conversation_mode()
+    if mode == "off":
+        return False
+    home = profile.get("npc_home")
+    if mode == "scene" and not (isinstance(home, dict) and home):
+        return False
+    return avatar_at_place(name)
+
+
+def _pair_pose_keys() -> List[str]:
+    """Catalog keys that have a complete pair clip — the menu for ``pair``."""
+    try:
+        from app.core.interaction_engine import partner_poses
+        return [key for key, _kind in partner_poses()]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("pair pose keys unavailable: %s", e)
+        return []
+
+
+def _apply_talk(name: str, answer: Dict[str, Any],
+                variables: Dict[str, Any], *, moved: bool) -> Dict[str, str]:
+    """Apply the answer's ``say`` or ``pair`` — ``{"said_to": …}``,
+    ``{"invited": …}`` or ``{}``.
+
+    ``say`` wins over ``pair`` (one turn, one act). A line is dropped when the
+    NPC changes room in the same turn (one does not walk out while opening a
+    conversation) or when the addressee is not among the partners the prompt
+    offered. The line goes into the perception stream like any spoken line,
+    the room's energy starts over, and the ordinary cascade takes it from
+    there — the addressee answers through the respond lane (task
+    ``npc_talk``). ``pair`` records an invitation; the interact package's
+    hook answers it for a temporary NPC.
+    """
+    if not variables.get("talk_allowed"):
+        return {}
+    present = {p["name"].casefold(): p["name"] for p in variables.get("present") or []}
+    say = answer.get("say")
+    if isinstance(say, dict) and str(say.get("line") or "").strip():
+        if moved:
+            logger.info("npc_action(%s): changes room this turn — the line is dropped", name)
+            return {}
+        to = present.get(str(say.get("to") or "").strip().casefold(), "")
+        if not to:
+            logger.info("npc_action(%s): say to %r, who is not here — dropped",
+                        name, say.get("to"))
+            return {}
+        line = str(say["line"]).strip()[:_MAX_LINE_CHARS]
+        from app.core.perception import record_utterance
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room)
+        loc = get_character_current_location(name) or ""
+        room = get_character_current_room(name) or ""
+        uid = record_utterance(speaker=name, content=line, volume="normal",
+                               addressees=[to], location_id=loc, room_id=room,
+                               source="npc_action")
+        if uid is None:
+            return {}
+        try:
+            from app.core.agent_loop import get_agent_loop
+            loop = get_agent_loop()
+            loop.reset_room_energy(loc, room, name)
+            loop.dispatch_room_reactions(speaker=name, content=line,
+                                         volume="normal", location_id=loc,
+                                         room_id=room, addressees=[to],
+                                         is_avatar=False)
+        except Exception as e:  # noqa: BLE001 — the line is recorded either way
+            logger.warning("npc_action(%s): cascade failed: %s", name, e)
+        logger.info("npc_action(%s): opens a conversation with %s", name, to)
+        return {"said_to": to}
+    pair = answer.get("pair")
+    if isinstance(pair, dict):
+        partner = present.get(str(pair.get("with") or "").strip().casefold(), "")
+        pose = _pose_from_answer({"pose": pair.get("pose")},
+                                 variables.get("pair_keys") or [])
+        if not partner or not pose:
+            logger.info("npc_action(%s): pair %r/%r unusable — dropped",
+                        name, pair.get("with"), pair.get("pose"))
+            return {}
+        from app.core.interaction_engine import create_invite
+        if create_invite(name, partner, pose):
+            logger.info("npc_action(%s): invites %s to %s", name, partner, pose)
+            return {"invited": partner}
+    return {}
+
+
 def candidates() -> List[str]:
     """The NPCs that get an action turn in THIS check, at most ``action_batch``.
 
@@ -304,7 +485,11 @@ def prompt_vars(name: str) -> Dict[str, Any]:
 
     BOTH variants always fill the SAME key set, the unused half empty:
     ``home`` is the switch the template branches on, and a key that exists in
-    only one branch is a crash waiting for the other one.
+    only one branch is a crash waiting for the other one. The conversation
+    keys (``npc_goals``, ``arrival_reason``, ``dialogue_style``,
+    ``talk_allowed``, ``present``, ``pair_keys``) are part of that set:
+    ``talk_allowed`` is the switch for the talk block, and it is only True
+    when there is somebody to talk to (``present`` non-empty).
 
     ``location_id`` rides along as bookkeeping the template ignores: it is the
     place the room list was taken from, and :func:`run_action_for` compares it
@@ -319,6 +504,17 @@ def prompt_vars(name: str) -> Dict[str, Any]:
                                   get_room_activity_hint, get_room_name)
 
     profile = get_character_profile(name) or {}
+    talk = talk_allowed(name, profile)
+    present = present_partners(name) if talk else []
+    talk = talk and bool(present)
+    extra = {
+        "npc_goals": str(profile.get("npc_goals") or "").strip(),
+        "arrival_reason": str(profile.get("arrival_reason") or "").strip(),
+        "dialogue_style": str(profile.get("dialogue_style") or "").strip(),
+        "talk_allowed": talk,
+        "present": present,
+        "pair_keys": _pair_pose_keys() if talk else [],
+    }
     home = profile.get("npc_home")
     if isinstance(home, dict) and home:
         from app.core.npc_home import describe
@@ -337,6 +533,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
                 "rooms": [],
                 "home": label,
                 "pose_keys": _solo_pose_keys(),
+                **extra,
             }
         logger.warning("npc_action(%s): unreadable npc_home %r — asked as an "
                        "ordinary room NPC", name, home)
@@ -374,6 +571,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
         "rooms": rooms,
         "home": "",
         "pose_keys": _solo_pose_keys(),
+        **extra,
     }
 
 
@@ -441,9 +639,9 @@ def _resolve_room(raw: Any, rooms: List[Dict[str, Any]]) -> str:
     return ""
 
 
-def _apply_home_answer(name: str,
-                       answer: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Apply the ROAMING variant's answer: the activity, then a walk.
+def _apply_home_answer(name: str, answer: Dict[str, Any],
+                       variables: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Apply the ROAMING variant's answer: the activity, then a talk or a walk.
 
     The answer carries one field. The destination is drawn here, not asked:
     ``npc_home.random_point`` knows the shape, the painted terrain and the
@@ -478,6 +676,13 @@ def _apply_home_answer(name: str,
         logger.info("npc_action(%s): the roaming activity %r was not written "
                     "— walking anyway", name, activity[:60])
 
+    talk = _apply_talk(name, answer, variables, moved=False)
+    if talk.get("said_to"):
+        # Opening a conversation and walking off are two acts; this turn is
+        # the conversation. The next turn draws the walk as usual.
+        return {"name": name, "room": "", "activity": activity, "moved": False,
+                "said_to": talk["said_to"], "invited": ""}
+
     pos = get_character_pos(name)
     here = (pos["x"], pos["z"]) if pos else None
     point = random_point(home, min_dist_from=here)
@@ -493,7 +698,8 @@ def _apply_home_answer(name: str,
                         reason)
     logger.debug("npc_action(%s): %s%s", name, "roams " if moved else "",
                  activity)
-    return {"name": name, "room": "", "activity": activity, "moved": moved}
+    return {"name": name, "room": "", "activity": activity, "moved": moved,
+            "said_to": "", "invited": talk.get("invited", "")}
 
 
 def run_action_for(name: str, *,
@@ -501,7 +707,9 @@ def run_action_for(name: str, *,
                    ) -> Optional[Dict[str, Any]]:
     """Give ONE NPC its action turn and apply the answer.
 
-    Returns what was written (``name``/``room``/``activity``/``moved``), or
+    Returns what was written (``name``/``room``/``activity``/``moved``/``pose``,
+    plus ``said_to``/``invited`` — the partner a conversation was opened with
+    or a pair pose proposed to, empty when nothing of the kind happened), or
     ``None`` when the answer was unusable — unparsable twice, a room the
     location does not have, or a move the block rules deny. An unusable answer
     writes NOTHING, the activity included: it was composed for a room that
@@ -538,7 +746,7 @@ def run_action_for(name: str, *,
         # THE ROAMING VARIANT. No room to validate and no location to compare:
         # this NPC's place is its home area, and that cannot change during a
         # turn (only pooling clears it, and a pooled NPC is no candidate).
-        return _apply_home_answer(name, answer)
+        return _apply_home_answer(name, answer, variables)
 
     # THE PLACE MUST STILL BE THE PLACE. A turn takes seconds and the world
     # keeps running through it — a journey settling, an admin move, a party
@@ -580,11 +788,13 @@ def run_action_for(name: str, *,
                                pose=pose or None)
     if not written:
         return None
+    talk = _apply_talk(name, answer, variables, moved=moved)
     logger.debug("npc_action(%s): %s%s%s", name,
                  f"-> {room} " if moved else "",
                  f"[{pose}] " if pose else "", activity)
     return {"name": name, "room": room, "activity": activity, "moved": moved,
-            "pose": pose}
+            "pose": pose, "said_to": talk.get("said_to", ""),
+            "invited": talk.get("invited", "")}
 
 
 # ---------------------------------------------------------------------------

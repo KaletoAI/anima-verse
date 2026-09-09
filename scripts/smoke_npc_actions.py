@@ -32,9 +32,9 @@ Hand-derived expectations, case by case:
       return carries `pose` "" (no key named — see (m)). Exactly ONE LLM
       call. The user prompt really carries the assembled room list: both
       room ids, both activity hints and the standing task are in it. The
-      call carries `max_tokens=200`: the answer is two short fields, and an
-      uncapped budget is what lets a chatty model write an essay per NPC per
-      interval (feedback_validate_llm_guards).
+      call carries `max_tokens=320`: the answer is three short fields plus an
+      optional opening line, and an uncapped budget is what lets a chatty
+      model write an essay per NPC per interval (feedback_validate_llm_guards).
 
   (b) A FOREIGN ROOM ID IS DISCARDED WHOLE. `"cellar"` is not a room of the
       NPC's location, so the answer is thrown away — return None, the room
@@ -307,7 +307,7 @@ check("and both activity hints",
        "cooking and washing up" in _user), (True, True))
 check("and the standing task", "tends the bar" in _user, True)
 check("the completion budget is capped", LLM.calls[0]["kwargs"].get("max_tokens"),
-      200)
+      320)
 
 # ── (b) a foreign room id is discarded whole ────────────────────────────────
 print("(b) a room the location does not have is discarded whole")
@@ -349,7 +349,7 @@ check("and cost exactly two calls", len(LLM.calls), 2)
 check("the second call is the repair turn",
       "valid JSON" in LLM.calls[1]["user"], True)
 check("and it is capped just like the first",
-      LLM.calls[1]["kwargs"].get("max_tokens"), 200)
+      LLM.calls[1]["kwargs"].get("max_tokens"), 320)
 check("nothing was written", (get_character_current_room(A),
                               get_effective_activity(A)),
       ("taproom", "Sie wischt den Tresen."))

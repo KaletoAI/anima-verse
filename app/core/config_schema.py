@@ -895,6 +895,28 @@ SECTIONS = {
                 "min": 1, "max": 20,
                 "description": "How many NPCs at most get an action turn in one check. "
                                "The cap on how much the tick can cost per minute."},
+            "conversation_mode": {
+                "type": "select", "label": "NPC conversations",
+                "choices": ["off", "turns", "scene"], "default": "turns",
+                "description": "How temporary NPCs talk to each other at a place the "
+                               "avatar is at. turns: the action tick may open a "
+                               "conversation and the replies run one turn at a time "
+                               "(task npc_talk). scene: one small director call writes a "
+                               "short exchange per room (task npc_scene). off: NPCs only "
+                               "answer when addressed."},
+            "scene_interval_game_minutes": {
+                "type": "int", "label": "Scene interval (game min)", "default": 45,
+                "min": 1, "max": 1440,
+                "description": "Minimum GAME time between two director scenes in the "
+                               "SAME room (scene mode)."},
+            "scene_batch": {
+                "type": "int", "label": "Rooms per scene tick", "default": 1,
+                "min": 1, "max": 10,
+                "description": "How many rooms at most get a director scene in one check."},
+            "scene_max_npcs": {
+                "type": "int", "label": "NPCs per scene", "default": 3,
+                "min": 2, "max": 5,
+                "description": "Participants of one director scene."},
         },
     },
     "story_engine": {

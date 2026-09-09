@@ -145,7 +145,9 @@ def make_npc(name: str, *, location_id: str = LOC_ID, room_id: str = "taproom",
     return name
 
 
-AVATAR = "Player"
+# NOT "Player": that name is in `_RESERVED_NAMES` and `save_character_profile`
+# silently skips it — the avatar would never exist and every place would be empty.
+AVATAR = "Runa"
 save_character_profile(AVATAR, {"character_name": AVATAR,
                                 "template": "human-roleplay"}, create_new=True)
 _uid = create_user("demo", "smoke-password", allowed_characters=[AVATAR])
@@ -210,7 +212,11 @@ def isolate(*keep: str) -> None:
 
 
 def utterances(location_id=LOC_ID, room_id="taproom"):
-    return perception_store.get_room_utterances(location_id, room_id, limit=50)
+    """The SPOKEN lines of a room. The storyteller's movement traces
+    (``source="movement"``, written by every placement and room change) are
+    not speech and are left out — the checks count what somebody said."""
+    rows = perception_store.get_room_utterances(location_id, room_id, limit=50)
+    return [r for r in rows if (r.get("meta") or {}).get("source") != "movement"]
 
 
 # ── (j) the chat task of a temporary NPC ────────────────────────────────────
@@ -219,6 +225,114 @@ A = make_npc("Gudrun")
 check("temporary NPC -> npc_talk", chat_llm_task(A), "npc_talk")
 check("ordinary character -> chat_stream", chat_llm_task(FULL), "chat_stream")
 check("unknown name -> chat_stream", chat_llm_task("nobody"), "chat_stream")
+
+# ── (a) the tick opens a conversation ───────────────────────────────────────
+print("(a) a say to a present NPC becomes one utterance and one cascade")
+B = make_npc("Halvard", task="chops wood", role="woodcutter")
+isolate(A)
+LLM = FakeLLM('{"room": "taproom", "activity": "Sie poliert Glaeser.", "pose": "",'
+              ' "say": {"to": "Halvard", "line": "Halvard, das letzte Fass muss weg."}}')
+res = npc_actions.run_action_for(A, llm=LLM)
+check("the turn reports whom it spoke to", res.get("said_to") if res else None, B)
+rows = utterances()
+check("exactly one utterance in the taproom", len(rows), 1)
+check("spoken by A", rows[0]["speaker"], A)
+check("addressed to B", list(rows[0].get("addressees") or []), [B])
+check("marked as the tick's line", (rows[0].get("meta") or {}).get("source"),
+      "npc_action")
+check("the room energy was reset once", LOOP.resets, [(LOC_ID, "taproom", A)])
+check("and the cascade was called once with B addressed",
+      [(d["speaker"], d["addressees"], d["is_avatar"]) for d in LOOP.dispatches],
+      [(A, [B], False)])
+_user = LLM.calls[0]["user"]
+check("the prompt lists B with role", ("Halvard" in _user, "woodcutter" in _user),
+      (True, True))
+check("and carries A's goals, reason and style",
+      ("sell the last barrel" in _user, "has run this place" in _user,
+       "short, dry sentences" in _user), (True, True, True))
+check("the answer budget grew for the line", LLM.calls[0]["kwargs"].get("max_tokens"), 320)
+check("the activity was still written", get_effective_activity(A), "Poliert Glaeser.")
+
+# ── (b) an absent addressee is discarded ────────────────────────────────────
+print("(b) a say to someone not in the room writes nothing")
+LOOP.resets.clear(); LOOP.dispatches.clear()
+isolate(A)
+LLM = FakeLLM('{"room": "taproom", "activity": "Sie wischt den Tresen.",'
+              ' "say": {"to": "Ingrid", "line": "Ingrid!"}}')
+res = npc_actions.run_action_for(A, llm=LLM)
+check("no addressee reported", res.get("said_to") if res else None, "")
+check("still one utterance (the old one)", len(utterances()), 1)
+check("no cascade", LOOP.dispatches, [])
+check("but the activity was written", get_effective_activity(A), "Wischt den Tresen.")
+
+# ── (c) no avatar at the place → no talk block ─────────────────────────────
+print("(c) without an avatar at the place there is no conversation")
+C = make_npc("Sigrun", location_id=MILL_ID, room_id="floor", task="grinds flour")
+D = make_npc("Ragnar", location_id=MILL_ID, room_id="floor", task="hauls sacks")
+isolate(C)
+LLM = FakeLLM('{"room": "floor", "activity": "Sie mahlt.", "say": {"to": "Ragnar", "line": "He!"}}')
+npc_actions.run_action_for(C, llm=LLM)
+check("the prompt has no partner list", "Ragnar" in LLM.calls[0]["user"], False)
+check("no utterance at the mill", len(utterances(MILL_ID, "floor")), 0)
+check("no cascade", LOOP.dispatches, [])
+check("talk_allowed says no", npc_actions.talk_allowed(C, {}), False)
+check("but present_partners alone would list Ragnar",
+      [p["name"] for p in npc_actions.present_partners(C)], [D])
+
+# ── (d) no talking while walking out ───────────────────────────────────────
+print("(d) a say in the same turn as a room change is dropped")
+isolate(A)
+LLM = FakeLLM('{"room": "kitchen", "activity": "Sie holt Rueben.",'
+              ' "say": {"to": "Halvard", "line": "Bis gleich."}}')
+res = npc_actions.run_action_for(A, llm=LLM)
+check("the move happened", get_character_current_room(A), "kitchen")
+check("nothing was said", (res.get("said_to") if res else None, len(utterances())),
+      ("", 1))
+force_set_status(A, room="taproom")
+
+# ── (f) the mode switch ────────────────────────────────────────────────────
+print("(f) mode off / scene indoors: no talk; scene outdoors with a home: talk")
+set_npc_config(conversation_mode="off")
+check("off -> not allowed", npc_actions.talk_allowed(A, {}), False)
+set_npc_config(conversation_mode="scene")
+check("scene indoors -> not allowed", npc_actions.talk_allowed(A, {}), False)
+check("scene with a home area -> allowed (avatar within spawn radius)",
+      npc_actions.talk_allowed(A, {"npc_home": {"kind": "circle"}}), True)
+set_npc_config(conversation_mode="turns")
+check("turns -> allowed", npc_actions.talk_allowed(A, {}), True)
+isolate(A)
+set_npc_config(conversation_mode="off")
+LLM = FakeLLM('{"room": "taproom", "activity": "Sie poliert.", "say": {"to": "Halvard", "line": "Na?"}}')
+res = npc_actions.run_action_for(A, llm=LLM)
+check("off: the say is ignored", (res.get("said_to") if res else None, len(utterances())), ("", 1))
+set_npc_config(conversation_mode="turns")
+
+# ── (f2) outdoors the avatar has to be within the spawn radius ─────────────
+print("(f2) outdoors: avatar within npc.spawn_radius_m of the NPC's point")
+from app.models.character import set_character_pos  # noqa: E402
+E = make_npc("Eirik", location_id="", room_id="", task="watches the road")
+set_character_pos(E, 1000.0, 1000.0)          # far from every location
+set_character_pos(AVATAR, 1100.0, 1000.0)     # 100 m away, radius default 150
+check("100 m away -> at the place", npc_actions.avatar_at_place(E), True)
+set_character_pos(AVATAR, 1200.0, 1000.0)     # 200 m away
+check("200 m away -> not at the place", npc_actions.avatar_at_place(E), False)
+save_character_current_location(AVATAR, LOC_ID)
+force_set_status(AVATAR, room="kitchen")
+check("avatar back at the Roadhouse", npc_actions.avatar_at_place(A), True)
+
+# ── (k1) the action template renders for every variable set ───────────────
+print("(k1) npc_action renders with and without the talk block")
+for label, npc in (("talk", A), ("no talk", C)):
+    v = npc_actions.prompt_vars(npc)
+    s, u = render_task("npc_action", **v)
+    check(f"{label}: system and user render", (bool(s.strip()), bool(u.strip())), (True, True))
+v = npc_actions.prompt_vars(A)
+s, u = render_task("npc_action", **v)
+check("talk: the system part names say and pair", ('"say"' in s, '"pair"' in s), (True, True))
+check("talk: the user part lists the partner", "Halvard" in u, True)
+v = npc_actions.prompt_vars(C)
+s, _u = render_task("npc_action", **v)
+check("no talk: the system part does not offer say", '"say"' in s, False)
 
 # ── result ──────────────────────────────────────────────────────────────────
 print()

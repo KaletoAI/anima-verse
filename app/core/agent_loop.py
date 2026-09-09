@@ -373,6 +373,23 @@ class AgentLoop:
                 return open_world_cell_key(pos["x"], pos["z"])
         return "/"
 
+    def reset_room_energy(self, location_id: str, room_id: str,
+                          who: str = "") -> None:
+        """A NEW conversation is a new beat: the chime budget of the bucket
+        starts over and the one-off exit may fire again.
+
+        The avatar does this implicitly with every line (``dispatch_room_
+        reactions``, ``is_avatar``). The NPC action tick does it explicitly
+        when it OPENS a conversation (spec-npc-conversation § 3): without it a
+        room the avatar merely stands next to falls silent after its first
+        cascade and never speaks again, because nothing else ever resets the
+        counter. The player-priority floor is untouched — with an active
+        avatar in the room the effective backstop is still 1.
+        """
+        key = self._room_key(location_id, room_id, who)
+        self._room_ai_turns[key] = 0
+        self._room_winddown_done.discard(key)
+
     def _rooms_with_pending_obligatory(self) -> set:
         """Room keys (loc/room) with a pending MANDATORY answer in the
         respond lane, or with a respond turn currently running. These rooms
