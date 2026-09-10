@@ -126,7 +126,14 @@ logger = get_logger(__name__)
 #: ``texture_kind`` — a flight's from ``map3d.stairs[i].texture_kind``, the
 #: elevator's opaque parts from ``map3d.elevator_kind`` — tiled by the
 #: renderers exactly like a wall; without it the ``style`` colours apply.
-SCENE_RECIPE_VERSION = 13
+#: 14 (2026-09-09): EVERY STOREY HAS A CORRIDOR (spec
+#: 2026-09-09-etagen-flur-design) — the payload always carries a
+#: ``corridors[]`` block (empty where no storey owns one), and the
+#: ``no_building_entrance`` sentence names the door on the building
+#: outline as the second way to seal a hallway ground floor. Unchanged
+#: data therefore yields a different payload, so a cached scene has to
+#: be re-fetched.
+SCENE_RECIPE_VERSION = 14
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -611,18 +618,32 @@ def _corridors(location: Dict[str, Any], map3d: Dict[str, Any],
                corridor_levels: Set[int],
                room_hulls: Dict[int, List[List[List[float]]]],
                flights: List[Dict[str, Any]],
+               plot: List[List[float]],
                ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """``corridors[]`` and its finding (§ 3.2/§ 3.4): one anchor per storey
     corridor, sorted by level, plus the ``corridor_without_floor`` problems.
 
     ``corridor_levels`` are the storeys whose corridor room is STORED — the
-    same set the door rule reads, never a second census. A storey without a
-    resolved footprint has no plate to stand on either, so it contributes no
-    entry: its corridor exists as state and nothing else.
+    same set the door rule reads, never a second census.
 
-    Each entry carries the resolved storey outline it was measured on, so a
-    client can test a point against the building on that storey without
-    owning a second resolution of ``level_outlines``.
+    THE FOOTPRINT IS RESOLVED EXACTLY AS THE PLATE'S IS (review 2026-09-09):
+    ``_outline_world(map3d, lv) or plot``, with ``plot`` the DRAWN boundary
+    (:func:`_drawn_boundary`). Spec § 3.2 makes plate and anchor share one
+    condition — "no outline AND no boundary → no plate and no anchor" — so a
+    building that was only given a boundary gets both, not a plate without a
+    corridor. Reading the outline alone left such a storey's corridor out of
+    the payload while its plate was drawn, and every figure of that corridor
+    stood in the yard. A storey with neither is the only one that contributes
+    no entry: its corridor exists as state and nothing else.
+
+    The WALLS do not share that fallback: :func:`_hull_doorways` and
+    :func:`_contour_walls` stay outline-only, because a boundary is a plot
+    line and not a shell — no contour, no wall to cut a door into.
+
+    Each entry carries the resolved storey outline it was measured on
+    (whichever of the two it came from), so a client can test a point against
+    the building on that storey without owning a second resolution of
+    ``level_outlines``.
     """
     from app.models.world import floor_room_id
     corridors: List[Dict[str, Any]] = []
@@ -633,12 +654,16 @@ def _corridors(location: Dict[str, Any], map3d: Dict[str, Any],
     for lv in sorted(corridor_levels):
         # A pad of THIS storey: the foot of a flight starting here, the head
         # of one arriving here — the landings the flight already computed
-        # (``block``), never a stair measured a second time.
-        pads = [[f["block"]["foot"][0], f["block"]["foot"][2]] for f in flights
-                if f["block"]["from_level"] == lv] + \
-               [[f["block"]["head"][0], f["block"]["head"][2]] for f in flights
-                if f["block"]["to_level"] == lv]
-        outline = _outline_world(map3d, lv)
+        # (``block``), never a stair measured a second time. ONE PASS OVER
+        # ``flights`` so the order is the order of ``map3d.stairs`` (§ 3.2
+        # rule 2), not "every foot, then every head".
+        pads = []
+        for f in flights:
+            if f["block"]["from_level"] == lv:
+                pads.append([f["block"]["foot"][0], f["block"]["foot"][2]])
+            elif f["block"]["to_level"] == lv:
+                pads.append([f["block"]["head"][0], f["block"]["head"][2]])
+        outline = _outline_world(map3d, lv) or plot
         anchor, free_spot = floor_anchor(outline, room_hulls.get(lv, []),
                                          holding, pads)
         if anchor is None:
@@ -4300,7 +4325,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # landing is one of the anchor candidates, and off the very set of levels
     # the door rule above already read from the stored rooms.
     corridors, corridor_problems = _corridors(location, map3d, corridor_levels,
-                                              room_hulls, flights)
+                                              room_hulls, flights,
+                                              _drawn_boundary(map3d))
 
     # One short hash per placement that ships a lattice — the only form in
     # which a lattice enters the scene signature (``_signature`` drops it from

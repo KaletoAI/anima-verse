@@ -176,6 +176,27 @@ Part 6c — a level -1 room filling the square (x -5 y -5 w 10 d 10) plus
     layout for, so "rooms_without_layout" must stay silent. Red probe: the
     same location plus a normal room without a layout -> the finding fires.
 
+Part 6d — A BOUNDARY IS A FOOTPRINT TOO (review 2026-09-09). ``_plates``
+    resolves a storey's shape as `_outline_world(map3d, level) or plot`, the
+    drawn `map3d.boundary`; `_corridors` read the outline alone, so a building
+    that was only given a boundary drew its cellar plate and shipped NO
+    corridor entry — every figure of that corridor stood in the yard. Spec
+    § 3.2 ties the two together: "no outline AND no boundary → no plate and no
+    anchor", so a boundary alone must yield an anchor.
+    Fixture = cellar_fixture() with `map3d.outline` DELETED and the very same
+    10 x 10 square drawn as `map3d.boundary`. Nothing else moves, so every
+    number of Part 6b holds verbatim — the hulls are k1 and k2, the footprint
+    is the same square, and the maximum clearance 3.0 ties along z = 2.0 with
+    the tie rule picking the smallest x:
+      corridors -> one entry, room_id "__floor__-1", level -1,
+                   anchor [-2.0, 2.0], outline the square
+      no "corridor_without_floor"
+    And the WALLS keep their outline-only rule: a boundary is a plot line, not
+    a shell, so `_hull_doorways`/`_contour_walls` build nothing from it.
+      contour wall pieces on level -1 -> 0
+    Red probe: neither outline nor boundary -> no plate and no entry.
+      corridors -> []
+
 Part 7 — the migration's door count (§ 3.5, count_corridor_doors). It is what
     the boot log reports per location as "doors that now lead into a
     corridor": a door or passage nobody linked, in a drawn room standing on a
@@ -188,6 +209,11 @@ Part 7 — the migration's door count (§ 3.5, count_corridor_doors). It is what
         (the probe below is a real one)
       the same door with to "outside": it is linked, the hull keeps it   -> 0
       the same opening as a window: a window is no way through          -> 0
+    …and the boot log NAMES them (corridor_door_rooms, review 2026-09-09):
+    the same walk, one entry per room in `rooms[]` order, the name where the
+    room has one and the id where it has not. cellar_fixture()'s k1 and k2 are
+    named after their ids, eg's door sits on the corridor-less level 0.
+      cellar_fixture() -> ["k1", "k2"]
 
 Part 8 — the hull door (§ 6), through compose_scene. A corridor has no walls,
     so a ground floor whose complement is a hallway carries its front door on
@@ -355,6 +381,18 @@ def full_floor_fixture(extra_rooms=()):
                      {"id": world.GROUND_ROOM_ID, "name": ""},
                      {"id": "__floor__-1", "level": -1, "name": ""}]
                     + list(extra_rooms))
+
+
+def boundary_only_fixture(square=True):
+    """cellar_fixture() with the square DRAWN AS THE BOUNDARY, not as the
+    contour — ``map3d.outline`` is gone. ``square=False`` drops both."""
+    loc = cellar_fixture()
+    m3 = dict(loc["map3d"])
+    m3.pop("outline", None)
+    if square:
+        m3["boundary"] = [list(pt) for pt in SQUARE]
+    loc["map3d"] = m3
+    return loc
 
 
 def hull_fixture(levels=(0,), eg_door=True, outline=None, edge=0,
@@ -607,6 +645,24 @@ def main():
            if p.get("kind") == "rooms_without_layout"],
           ["rooms_without_layout"])
 
+    print("Part 6d — a drawn boundary is a footprint too")
+    sc6 = scene_recipe.compose_scene(boundary_only_fixture())
+    check("boundary-only corridors",
+          [(c["room_id"], c["level"], c["anchor"]) for c in sc6["corridors"]],
+          [("__floor__-1", -1, [-2.0, 2.0])])
+    check("boundary is the entry's outline",
+          [c["outline"] for c in sc6["corridors"]], [SQUARE])
+    check("no corridor_without_floor",
+          [p["kind"] for p in sc6.get("problems") or []
+           if p.get("kind") == "corridor_without_floor"], [])
+    # A boundary is no shell: the contour walls stay outline-only.
+    check("no contour walls from a boundary",
+          sum(1 for w in sc6["walls"] if not w.get("room_id")), 0)
+    # Red probe: no outline AND no boundary -> no plate, no anchor (§ 3.2).
+    check("no footprint at all -> no entry",
+          scene_recipe.compose_scene(boundary_only_fixture(square=False))
+          ["corridors"], [])
+
     print("Part 7 — count_corridor_doors")
     check("cellar fixture", world.count_corridor_doors(cellar_fixture()), 2)
     opt_in = cellar_fixture()
@@ -626,6 +682,9 @@ def main():
           world.count_corridor_doors(one_cellar_door(to="outside")), 0)
     check("a window does not",
           world.count_corridor_doors(one_cellar_door(type="window")), 0)
+
+    check("corridor_door_rooms names them",
+          world.corridor_door_rooms(cellar_fixture()), ["k1", "k2"])
 
     print("Part 8 — the hull door")
     op = {"edge": 0, "at": 0.5, "width_m": 1.0, "height_m": 2.1,

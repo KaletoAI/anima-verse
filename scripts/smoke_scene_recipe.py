@@ -5381,7 +5381,7 @@ def test_surface_specs() -> None:
     the numbers of the lattice are the bake's, and the recipe hands them on
     character for character:
 
-    * ``SCENE_RECIPE_VERSION`` is 13, so every client re-fetches once — the
+    * ``SCENE_RECIPE_VERSION`` is 14, so every client re-fetches once — the
       constant is the payload's own code version and moves with EVERY change
       to what the composer answers for unchanged data (6 = these baked
       surfaces, 7 = markers speaking place types, 8 = the prop marker naming
@@ -5395,7 +5395,10 @@ def test_surface_specs() -> None:
       and lying marker's ``root_offset`` moved without any world data moving,
       and the signature does not hash the catalog; 13 = a flight is treads,
       risers and two pitched stringers instead of a solid wedge, and every
-      extra may carry a ``texture_kind``, 2026-09-09);
+      extra may carry a ``texture_kind``, 2026-09-09; 14 = the payload always
+      carries a ``corridors[]`` block and the ``no_building_entrance``
+      sentence names the door on the building outline as the second cure,
+      2026-09-09);
     * a room whose meta carries ``surface`` gives the block to its ``room``
       spec unchanged, and a room whose meta carries none gets no field;
     * a prop tagged ``walkable`` gets ``walkable: True`` and — only if its
@@ -5406,8 +5409,8 @@ def test_surface_specs() -> None:
     """
     print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 13 (treads, risers, stringers + texture_kind on extras)",
-          scene_recipe.SCENE_RECIPE_VERSION == 13,
+    check("code_version 14 (the corridors[] block + the entrance sentence)",
+          scene_recipe.SCENE_RECIPE_VERSION == 14,
           str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────

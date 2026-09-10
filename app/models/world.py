@@ -17,7 +17,7 @@ import re
 import threading
 import uuid
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
@@ -1348,6 +1348,44 @@ def count_corridor_doors(location: Dict[str, Any]) -> int:
     return n
 
 
+def corridor_door_rooms(location: Dict[str, Any]) -> List[str]:
+    """The ROOMS behind :func:`count_corridor_doors`, in ``rooms[]`` order.
+
+    Pure, and deliberately the same walk: the migration log says how many
+    doors changed meaning, and a bare number leaves the author hunting for
+    them. Each entry is the room's name, or its id when it was never named —
+    what the floor-plan editor prints in its room list. A room with two such
+    doors appears ONCE: the author opens a room, not a door.
+    """
+    rooms = location.get("rooms") or []
+    levels = floor_levels(rooms, location.get("map3d"))
+    out: List[str] = []
+    for r in rooms:
+        if not isinstance(r, dict):
+            continue
+        lay = r.get("layout")
+        if not isinstance(lay, dict) or not lay:
+            continue
+        rid = str(r.get("id") or "")
+        if rid == GROUND_ROOM_ID or is_floor_room(rid):
+            continue
+        try:
+            level = int(lay.get("level") or 0)
+        except (TypeError, ValueError):
+            level = 0
+        if level not in levels:
+            continue
+        for op in lay.get("openings") or []:
+            if not isinstance(op, dict):
+                continue
+            if str(op.get("type") or "door").lower() not in ("door", "passage"):
+                continue
+            if not str(op.get("to") or "").strip():
+                out.append(str(r.get("name") or "").strip() or rid)
+                break
+    return out
+
+
 def migrate_floor_rooms_once() -> Dict[str, int]:
     """One-time, idempotent: give every used storey its corridor room.
 
@@ -1365,6 +1403,7 @@ def migrate_floor_rooms_once() -> Dict[str, int]:
     try:
         data = _load_world_data()
         changed = False
+        evicted: List[Tuple[str, List[str]]] = []
         for loc in data.get("locations", []):
             rooms = loc.get("rooms")
             if not isinstance(rooms, list):
@@ -1380,24 +1419,33 @@ def migrate_floor_rooms_once() -> Dict[str, int]:
             if removed:
                 # A hand-authored or imported ``__floor__X`` on a storey no
                 # room stands on: it goes, and whoever stood in it lands on
-                # the ground (spec § 2.4).
+                # the ground (spec § 2.4). The eviction itself waits for the
+                # save below — see there.
                 logger.warning(
                     "floor-room migration: location %s: corridor room(s) on "
                     "storeys without rooms removed: %s", lid, ", ".join(removed))
-                evict_rooms_to_ground(lid, removed)
+                evicted.append((lid, removed))
                 changed = True
             doors = count_corridor_doors(loc)
             if added or doors:
                 logger.info(
                     "floor-room migration: location %s (%s): %d corridor(s) "
-                    "added, %d door(s) now lead into a corridor",
-                    lid, loc.get("name", ""), added, doors)
+                    "added, %d door(s) now lead into a corridor%s",
+                    lid, loc.get("name", ""), added, doors,
+                    (": " + ", ".join(corridor_door_rooms(loc))) if doors else "")
                 counts["locations"] += 1
                 counts["corridors"] += added
                 counts["doors"] += doors
             changed = changed or bool(added)
         if changed:
             _save_world_data(data)
+        # AFTER THE SAVE, like every write path: the room is gone from the
+        # blob first, then the characters standing in it are moved. The other
+        # way round a crash in between would leave a character pointing at a
+        # room that is still stored — and the eviction would have to run
+        # again to find it.
+        for lid, removed in evicted:
+            evict_rooms_to_ground(lid, removed)
         set_world_setting("migration.floor_rooms_v1", "done")
         logger.info(
             "floor-room migration: %d location(s) got %d corridor room(s), "

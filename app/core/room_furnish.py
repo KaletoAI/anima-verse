@@ -360,8 +360,15 @@ def _target(job_id: str) -> Tuple[str, str]:
 
 def _load_room(job_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     from app.models.world import (find_location_by_room, get_location_by_id,
-                                  get_room_by_id)
+                                  get_room_by_id, is_floor_room)
     room_id, location_id = _target(job_id)
+    # A STOREY'S CORRIDOR IS THE COMPLEMENT OF ITS ROOMS (§ A13b): it has no
+    # layout, no rectangle and no surface a solver could place on — furnishing
+    # it is an idea, not a feature (spec § 9). Refused here, where every
+    # furnish route enters, rather than crashing in :func:`_geometry`.
+    if is_floor_room(room_id):
+        raise FurnishError("The corridor of a storey is not a furnish target",
+                           400)
     loc = get_location_by_id(location_id) if location_id \
         else find_location_by_room(room_id)
     room = get_room_by_id(loc, room_id) if loc else None
