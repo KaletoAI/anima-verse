@@ -13,6 +13,7 @@ import { apiGet, apiPost } from '../../lib/api'
 import { SceneView, type SceneLine } from '../../components/SceneView'
 import { openLightbox } from '../../components/Lightbox'
 import { ListPane } from '../../components/ListPane'
+import { roomLabel } from '../world/worldTypes'
 
 interface RoomInfo { room_id: string; name: string; present: string[] }
 interface LocInfo { location_id: string; name: string; rooms: RoomInfo[]; present_no_room: string[] }
@@ -141,7 +142,7 @@ export function ObserverTab() {
                 <option value="">{t('(whole location)')}</option>
                 {(currentLoc?.rooms || []).map((r) => (
                   <option key={r.room_id} value={r.room_id}>
-                    {r.name} {(r.present || []).length ? `· ${(r.present || []).join(', ')}` : ''}
+                    {roomLabel({ id: r.room_id, name: r.name }, t)} {(r.present || []).length ? `· ${(r.present || []).join(', ')}` : ''}
                   </option>
                 ))}
               </select>
@@ -161,7 +162,7 @@ export function ObserverTab() {
         <div className="ga-form-hint">{t('Inject an utterance (test earshot, no LLM).')}</div>
         <div className="ga-form-hint" style={{ opacity: 0.7 }}>
           {locId
-            ? `${t('Injects into')}: ${currentLoc?.name || locId}${roomId ? ' / ' + (currentLoc?.rooms.find((r) => r.room_id === roomId)?.name || roomId) : ' (' + t('whole location') + ')'}`
+            ? `${t('Injects into')}: ${currentLoc?.name || locId}${roomId ? ' / ' + roomLabel({ id: roomId, name: currentLoc?.rooms.find((r) => r.room_id === roomId)?.name }, t) : ' (' + t('whole location') + ')'}`
             : t('No location selected → uses the speaker’s current location/room.')}
         </div>
         <label className="ga-form-row">

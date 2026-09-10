@@ -5,6 +5,7 @@ import { apiGet } from '../../lib/api'
 import { usePersistentState } from '../../lib/usePersistentState'
 import { ModelPicker, type PickerOption } from '../../components/ModelPicker'
 import type { LocationRef } from '../../lib/refs'
+import { roomLabel } from '../world/worldTypes'
 
 /**
  * "+ New NPC" — runs the temporary-NPC pipeline and shows its four stages
@@ -258,7 +259,7 @@ export function NewNpcDialog({
                 <option value="">{t('(any room)')}</option>
                 {rooms.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.name || r.id}
+                    {roomLabel(r, t)}
                   </option>
                 ))}
               </select>

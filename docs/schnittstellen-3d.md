@@ -5012,9 +5012,21 @@ Der Anker ist deterministisch und entsteht in genau dieser Reihenfolge
    `problems[]`: der Flur existiert dann als Zustand, seine Figuren stehen aber
    sichtbar in einem Raum. Nichts wird still repariert.
 
-Ohne aufgelösten Etagengrundriss gibt es weder Platte noch Anker: die Etage
-liefert **keinen** `corridors[]`-Eintrag, ihr Flur existiert nur als Zustand.
-Handrechnung zu allen vier Stufen: `scripts/smoke_floor_rooms.py` Teil 6/6b/6c.
+**Der Grundriss wird genauso aufgelöst wie der der Platte** (Befund
+2026-09-09): `level_outlines`-Kaskade, und wo die nichts hergibt, die
+GEZEICHNETE Boundary (`map3d.boundary`) — dieselbe Reihenfolge wie in
+`_plates`. Ein Gebäude, das nur eine Boundary hat, bekommt damit Platte UND
+Anker; vorher zeichnete es die Platte und lieferte keinen Eintrag, und jede
+Figur dieses Flurs stand im Hof. Erst wenn BEIDES fehlt, gibt es weder Platte
+noch Anker: die Etage liefert **keinen** `corridors[]`-Eintrag, ihr Flur
+existiert nur als Zustand. Die WÄNDE teilen diesen Rückfall nicht — eine
+Boundary ist eine Grundstücksgrenze und keine Hülle, also bauen
+`_hull_doorways`/`_contour_walls` weiterhin nur aus dem Umriss.
+`SCENE_RECIPE_VERSION` 13 → **14**: derselbe Datenstand liefert seither einen
+`corridors[]`-Block (leer, wo keine Etage einen Flur hat) und den erweiterten
+`no_building_entrance`-Satz, also muss jede Szenensignatur sich bewegen.
+Handrechnung zu allen vier Stufen und zum Boundary-Rückfall:
+`scripts/smoke_floor_rooms.py` Teil 6/6b/6c/6d.
 
 **`doorways[]` — jede begehbare Schwelle der Location als fertiges
 Primitiv** (`plan-betreten-und-tueren.md` § 4.1). Eine Schwelle ist EXAKT die
@@ -7757,8 +7769,10 @@ zusätzlich `default_door_prop_id` (ein Feld der LOCATION, das keine
 Raumsignatur abdeckt) und die Mesh-Signatur jedes aufgelösten Tür-Props (die
 URL bleibt beim Neu-Erzeugen gleich).
 
-**Nachtrag 2026-09-09 (§ A13c)** — er gehört NICHT zur v5-Runde oben und hat
-den Rezept-Stand nicht bewegt (kein bestehender Payload ändert sich):
+**Nachtrag 2026-09-09 (§ A13c)** — er gehört NICHT zur v5-Runde oben; am
+`swing` selbst ändert sich für keine bestehende Tür etwas (die Rezept-Version
+steht seither trotzdem auf 14, wegen `corridors[]` und des
+`no_building_entrance`-Satzes, § B1):
 „außen" ist seither das `outward_normal` DES EINTRAGS, wo er eines mitbringt,
 sonst weiter `_door_outward`. Gerechnet wird das Vorzeichen aus dem Skalarprodukt
 `(uz·nx − ux·nz)` (bei rechter Angel gespiegelt) statt aus der Angel allein.

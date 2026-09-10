@@ -194,13 +194,22 @@ export function PlanInspectorLevel({
               Only the explicit `true` is stored — clearing removes the key,
               like the two area switches below. */}
           {level === 0 ? (
-            <label className="ga-check-row" style={{ fontSize: '0.82em' }}
-              title={t('Doors without a target lead into the hallway; mark the front door with target "outside".')}>
-              <input type="checkbox" checked={!!map3d?.ground_corridor}
-                onChange={(e) => onMap3d('ground_corridor',
-                  e.target.checked ? true : undefined)} />
-              <span>{t('Ground floor has a hallway between the rooms')}</span>
-            </label>
+            <>
+              <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+                title={t('Doors without a target lead into the hallway; mark the front door with target "outside".')}>
+                <input type="checkbox" checked={!!map3d?.ground_corridor}
+                  onChange={(e) => onMap3d('ground_corridor',
+                    e.target.checked ? true : undefined)} />
+                <span>{t('Ground floor has a hallway between the rooms')}</span>
+              </label>
+              {/* WHAT THE SWITCH DOES TO EVERY DOOR, in the open: it changes
+                  the meaning of an unlinked door on this storey, and only the
+                  explicit target "outside" still cuts the shell. A tooltip
+                  nobody hovers is no warning (spec § 2.3). */}
+              <span className="ga-hint" style={{ fontSize: '0.78em' }}>
+                {t('Doors without a target lead into the hallway; mark the front door with target "outside".')}
+              </span>
+            </>
           ) : null}
 
           {/* ── THE FRONT DOOR OF A HALLWAY STOREY (§ 6) ─────────────

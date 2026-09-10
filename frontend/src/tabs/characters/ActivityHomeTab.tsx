@@ -1,6 +1,7 @@
 import { useI18n } from '../../i18n/I18nProvider'
 import { Field } from '../../components/Field'
 import type { LocationRef } from '../../lib/refs'
+import { roomLabel } from '../world/worldTypes'
 import { FieldSet } from './FieldSet'
 import { DailyScheduleGrid } from './DailyScheduleGrid'
 import type { ScheduleSlot } from './CharactersTab'
@@ -80,7 +81,7 @@ export function ActivityHomeTab({
             {(locations.find((l) => l.id === homeLoc.home_location)?.rooms || []).map(
               (r) => (
                 <option key={r.id} value={r.id || ''}>
-                  {r.name || r.id}
+                  {roomLabel(r, t)}
                 </option>
               ),
             )}

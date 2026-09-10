@@ -254,7 +254,9 @@ export function TravelPanel({
                   ? (r.reason || t('locked'))
                   : r.is_ground
                     ? t('The ground of this location — the area no room takes up')
-                    : r.is_entry ? t('Entry / exit room') : ''}
+                    : r.is_floor
+                      ? t('Corridor of this storey')
+                      : r.is_entry ? t('Entry / exit room') : ''}
                 style={{
                   padding: '2px 8px', borderRadius: 10, fontSize: '0.8em', height: 'fit-content',
                   cursor: cur || locked ? 'default' : 'pointer',
@@ -266,7 +268,7 @@ export function TravelPanel({
                   opacity: locked ? 0.45 : cur ? 1 : 0.85,
                   textDecoration: locked ? 'line-through' : 'none',
                 }}>
-                {locked ? '🔒 ' : r.is_ground ? '🌐 ' : ''}{r.name}{r.is_entry ? ' ⌂' : ''}
+                {locked ? '🔒 ' : r.is_ground ? '🌐 ' : r.is_floor ? '🚶 ' : ''}{r.name}{r.is_entry ? ' ⌂' : ''}
               </button>
             )
           })}

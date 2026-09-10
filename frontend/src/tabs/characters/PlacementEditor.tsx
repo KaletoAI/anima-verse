@@ -2,6 +2,7 @@ import { type Dispatch, type SetStateAction } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { Field } from '../../components/Field'
 import type { LocationRef, RoomRef } from '../../lib/refs'
+import { roomLabel } from '../world/worldTypes'
 import type { CurrentLocation, DraftPlacement } from './CharactersTab'
 
 // Canonical moods — kept in sync with shared/config/moods.json. Updating
@@ -85,7 +86,7 @@ export function PlacementEditor({
             <option value="">— {t('any room')} —</option>
             {rooms.map((r) => (
               <option key={r.id} value={r.id || ''}>
-                {r.name || r.id}
+                {roomLabel(r, t)}
               </option>
             ))}
           </select>

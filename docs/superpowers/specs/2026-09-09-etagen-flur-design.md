@@ -237,8 +237,12 @@ Diele**, nicht in einem Raum. Deshalb:
   door_prop?, hinge?}]` — dieselben Felder wie eine Raumöffnung
   (`_sanitize_opening`), `edge` = Kantenindex des **aufgelösten**
   Etagengrundrisses (§ A6 `level_outlines`-Kaskade), `at` Bruchteil entlang
-  der Kante. Max. 8 je Location. Sanitizer verwirft Einträge auf Etagen ohne
-  Flur.
+  der Kante. Max. 8 je Location. Umgesetzt anders als hier zunächst geplant
+  und besser so: der Sanitizer verwirft nichts, der Composer übergeht einen
+  Eintrag auf einer Etage ohne Flur und meldet ihn als
+  `hull_opening_without_corridor` (bzw. `hull_opening_off_the_outline`, wenn
+  die genannte Kante fehlt) — nichts wird still repariert, und der Autor kann
+  die Etage nachträglich zur Flur-Etage machen, ohne die Tür neu zu zeichnen.
 - Server: `_contour_walls` erhält je Hüllentür einen `outside_doors`-Eintrag
   (Punkt auf der Kante, Normale = Außennormale der Kante, keine Projektion
   nötig); `doorways[]` bekommt den Eintrag mit `rooms: [__floor__L]`,

@@ -20,7 +20,7 @@
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { clamp, edgeSegment, r4 } from './planGeometry'
-import type { Map3D, Room, SceneProblem } from './worldTypes'
+import { roomLabel, type Map3D, type Room, type SceneProblem } from './worldTypes'
 
 interface Props {
   /** The plot exists (`map3d.boundary`, ≥ 3 points) — the legend draws its
@@ -187,7 +187,7 @@ export function PlanFindings({
                   onChange={(e) => write({ room: e.target.value || undefined })}>
                   <option value="">{t('No room link')}</option>
                   {placedRooms.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name || r.id}</option>
+                    <option key={r.id} value={r.id}>{roomLabel(r, t)}</option>
                   ))}
                 </select>
                 <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
