@@ -1434,6 +1434,23 @@ class ImageService:
             # Bare glob: try as a backend glob, fall back to default selection.
             _soft_backend = _target_spec
 
+        # No target from the caller: fall back to the per-character render match
+        # (Characters -> Image, "Backend match"). This is what makes an
+        # unwired path — a chat photo, a TakePhoto turn — follow the character's
+        # chosen backend instead of the cost/round-robin default. It stays a
+        # SOFT glob: a pattern that matches nothing still renders via the
+        # ordinary selection.
+        _soft_from_character = False
+        if not explicit_backend and not _soft_backend and character_name:
+            try:
+                _char_render = (get_character_profile(character_name)
+                                or {}).get("outfit_imagegen") or {}
+                if isinstance(_char_render, dict):
+                    _soft_backend = (_char_render.get("workflow") or "").strip()
+                    _soft_from_character = bool(_soft_backend)
+            except Exception:
+                _soft_backend = ""
+
         # Will this render carry an input/reference image? Reference slots are
         # only resolved AFTER the backend is known (the slot budget is the
         # backend's), so decide it here from the request. A set_profile render
@@ -1457,12 +1474,15 @@ class ImageService:
         elif _soft_backend:
             backend = self._wait_for_explicit_backend(
                 _soft_backend, has_input_image=_has_input_image)
+            _match_source = ("character match" if _soft_from_character
+                             else "render match")
             if backend:
-                logger.info("Backend (Render-Match '%s'): %s", _soft_backend, backend.name)
+                logger.info("Backend (%s '%s'): %s",
+                            _match_source, _soft_backend, backend.name)
             else:
                 logger.warning(
-                    "Render-Match '%s' trifft kein verfuegbares Backend — "
-                    "Fallback auf Standard-Auswahl", _soft_backend)
+                    "%s '%s' matches no available backend — falling back to "
+                    "the default selection", _match_source, _soft_backend)
 
         if not backend:
             backend = self._wait_for_backend(character_name, _has_input_image)

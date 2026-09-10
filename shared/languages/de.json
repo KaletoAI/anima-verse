@@ -439,7 +439,7 @@
     "Duration": "Dauer",
     "Duration in hours": "Dauer in Stunden",
     "Duration in minutes": "Dauer in Minuten",
-    "e.g. \"Flux*\" or an exact backend name. Matched against image-backend names; the server picks an available match at render time. Empty = global default.": "z.B. \"Flux*\" oder ein exakter Backend-Name. Wird gegen die Image-Backend-Namen gematcht; der Server wählt beim Rendern ein verfügbares Match. Leer = globaler Default.",
+    "e.g. \"Flux*\" or an exact backend name. Matched against image-backend names; the server picks an available match at render time. Applies to every render of this character that names no backend itself — outfit and variant previews as well as chat photos. Empty = global default.": "z.B. \"Flux*\" oder ein exakter Backend-Name. Wird gegen die Image-Backend-Namen gematcht; der Server wählt beim Rendern ein verfügbares Match. Gilt für jeden Render dieses Charakters, der selbst kein Backend nennt — Outfit- und Varianten-Vorschauen ebenso wie Chat-Fotos. Leer = globaler Standard.",
     "e.g. \"Modern-day Berlin. Adults only. Slice-of-life with occasional supernatural twists. Characters speak everyday German; English fine for slang.\"": "z.B. \"Modernes Berlin. Nur Erwachsene. Slice-of-life mit gelegentlich übernatürlichen Wendungen. Characters sprechen Alltags-Deutsch; Englisch ok für Slang.\"",
     "e.g. 'Drunk — clouded memory'": "z.B. 'Drunk — clouded memory'",
     "e.g. 'holding a hammer' or 'black leather jacket, slim fit'": "z.B. 'mit einem Hammer in der Hand' oder 'schwarze Lederjacke, slim fit'",

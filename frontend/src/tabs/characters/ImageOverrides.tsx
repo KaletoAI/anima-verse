@@ -9,7 +9,11 @@ import { Field } from '../../components/Field'
  *  - Backend match: a glob over image-backend names (e.g. "Flux*"). The server
  *    resolves it to a concrete backend at render time, picking among matches by
  *    availability — independent of the global fallback. A model picker is
- *    intentionally absent (the model comes from the backend).
+ *    intentionally absent (the model comes from the backend). It governs every
+ *    render of this character that names no backend of its own: the outfit and
+ *    variant previews, and — since it is the soft fallback in
+ *    ImageService.generate_from_input — chat photos and TakePhoto turns, which
+ *    would otherwise land on the cheapest backend by round-robin.
  *  - T-pose backend match: a second glob used ONLY for the T-pose reference
  *    renders (the image->3D input), e.g. a pose-controlled backend alias.
  *  - LoRA override: LoRAs always applied for this character.
@@ -288,7 +292,7 @@ export function ImageOverrides({
           <Field
             label={t('Backend match (glob)')}
             help="imagegen_target"
-            hint={t('e.g. "Flux*" or an exact backend name. Matched against image-backend names; the server picks an available match at render time. Empty = global default.') + ' ' + savedHint}
+            hint={t('e.g. "Flux*" or an exact backend name. Matched against image-backend names; the server picks an available match at render time. Applies to every render of this character that names no backend itself — outfit and variant previews as well as chat photos. Empty = global default.') + ' ' + savedHint}
           >
             <input
               className="ga-input"
