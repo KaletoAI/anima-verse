@@ -1202,9 +1202,12 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     doorway — ``level``, ``at`` (middle of the clear opening), ``normal`` (the
     door's outward unit normal), ``width`` and ``top_y`` (the world height the
     door's head reaches) — all of it derived from the ``doorways`` block the
-    payload itself ships, never a second time from the openings. The hole
-    lands on the door's OWN storey: a hull opens where a door is, and a
-    building without one stays shut and is reported instead (``_problems``).
+    payload itself ships, never a second time from the openings. A door drawn
+    ON the contour (``map3d.hull_openings``, § 6) adds ``hit`` — the (edge
+    index, position) it was authored at — and skips the projection entirely.
+    The hole lands on the door's OWN storey: a hull opens where a door is,
+    and a building without one stays shut and is reported instead
+    (``_problems``).
     The old fallback — one 0.8 m door mid in the southernmost piece whenever
     no door projected close enough — is gone.
 
@@ -1275,7 +1278,11 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         for door in doors:
             if int(door.get("level") or 0) != level:
                 continue
-            hit = _contour_hit(pts, door["at"], door["normal"])
+            # A door AUTHORED on the contour hands its edge and its position
+            # along it over ready-made (§ 6): it lies ON the line, so there is
+            # nothing to project it onto.
+            hit = door.get("hit") or _contour_hit(pts, door["at"],
+                                                  door["normal"])
             if not hit:
                 continue
             i, t = hit
@@ -1842,6 +1849,132 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
     return out
 
 
+def _hull_doorways(map3d: Dict[str, Any], storey: float,
+                   corridor_levels: Set[int],
+                   default_door_prop_id: str = "",
+                   ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """The doors drawn on the BUILDING OUTLINE itself (§ 6) as doorways, plus
+    the findings of the ones that lead nowhere.
+
+    A corridor has no walls, hence no openings (§ 3.4) — so a ground floor
+    whose whole front is hallway had no way of carrying a front door.
+    ``map3d.hull_openings`` is that door: an opening authored ON the contour
+    instead of on a room wall (``world_ops._sanitize_map3d``), with ``edge``
+    an INDEX into the storey's resolved outline (:func:`_outline_world`, i.e.
+    through the ``level_outlines`` cascade) and ``at`` the fraction along that
+    edge. The clamps are a room door's: the clear width is the authored one
+    cut back to the edge, pushed far enough in that the hole stays on it, and
+    the clear height is clamped against the wall so the lintel over it starts
+    where every other lintel does.
+
+    THE ENTRY IS A NORMAL OUTSIDE DOORWAY and everything downstream treats it
+    as one: it opens into the storey's corridor (that one room), it is
+    ``outside`` — which is what lets it satisfy ``no_building_entrance`` on
+    level 0 without a word of its own — it carries the ``_door_prop`` of a
+    room door, and the shell takes its hole from it like from every other
+    outside door (§ 4.2). ``hull: True`` marks it for the consumer that asks
+    whose wall this threshold was cut from: nobody's, it IS the wall.
+
+    NO PROJECTION (spec § 6). A room door is ray-cast onto the contour
+    (:func:`_contour_hit`) because it stands somewhere inside the building; a
+    hull door is authored on the contour, so the edge and the position along
+    it are GIVEN. Both travel to :func:`_contour_walls` in the internal
+    ``_hull_hit`` key, which :func:`compose_scene` strips like ``_door_prop``
+    — the hole then lands on the very edge the author drew on, with no
+    tolerance in between and no second derivation of a number we already have.
+
+    THE OUTWARD NORMAL IS THE EDGE'S, measured with the same shoelace
+    :func:`_contour_walls` takes the winding from: a ring whose signed double
+    area is positive has the outside of the directed edge (ux, uz) at
+    (uz, −ux), and a ring wound the other way flips both. There is no room
+    hull to ask here (:func:`_door_outward`), because no room was pierced.
+
+    An opening on a storey WITHOUT a corridor room is dropped and REPORTED
+    (``hull_opening_without_corridor``, once per storey): it would open the
+    hull onto a storey where nobody can arrive. A window is no way through (``_WALKABLE_TYPES``),
+    so it never becomes a threshold either — the hull knows no sill.
+    """
+    from app.models.world import floor_room_id
+    out: List[Dict[str, Any]] = []
+    problems: List[Dict[str, Any]] = []
+    reported: Set[int] = set()
+    wall_h = _wall_height(storey)
+    for op in (map3d or {}).get("hull_openings") or []:
+        if not isinstance(op, dict):
+            continue
+        if str(op.get("type") or "door").lower() not in _WALKABLE_TYPES:
+            continue
+        try:
+            level = int(op.get("level") or 0)
+        except (TypeError, ValueError):
+            continue
+        if level not in corridor_levels:
+            # ONCE PER STOREY, not once per door: the finding carries nothing
+            # but the level, so a second entry would be the same sentence
+            # twice in the editor's list.
+            if level in reported:
+                continue
+            reported.add(level)
+            problems.append({
+                "kind": "hull_opening_without_corridor",
+                "level": level,
+                "message": "A door on the building outline opens into the "
+                           "storey's corridor, and this storey has none: "
+                           "switch the hallway on, or remove the door.",
+            })
+            continue
+        pts = _outline_world(map3d, level)
+        if len(pts) < 3:
+            continue
+        edge = op.get("edge")
+        if isinstance(edge, bool) or not isinstance(edge, int) \
+                or not 0 <= edge < len(pts):
+            continue
+        a = pts[edge]
+        frame = _edge_frame(a, pts[(edge + 1) % len(pts)])
+        if not frame:
+            continue
+        ux, uz, length = frame
+        area2 = 0.0
+        for i, (x1, z1) in enumerate(pts):
+            x2, z2 = pts[(i + 1) % len(pts)]
+            area2 += x1 * z2 - x2 * z1
+        ccw = area2 > 0
+        nx, nz = (uz if ccw else -uz), (-ux if ccw else ux)
+        half = min(_num(op.get("width_m")), length) / 2
+        t = min(max(_num(op.get("at")), 0.0), 1.0) * length
+        t = min(max(t, half), length - half)
+        out.append({
+            "level": level,
+            "at_world": [_r(a[0] + ux * t), _r(a[1] + uz * t)],
+            "along": [_r(ux), _r(uz)],
+            "type": str(op.get("type") or "door").lower(),
+            "width_m": _r(2 * half),
+            "height_m": _r(min(_opening_height(op, wall_h), wall_h)),
+            "base_y": _r(storey_floor_y(level, storey)),
+            "rooms": [floor_room_id(level)],
+            "outside": True,
+            "hull": True,
+            # The edge's own outward normal — see the docstring. It is in the
+            # PAYLOAD because a hull door has no room whose hull a consumer
+            # could read the side off (``_door_outward``).
+            "outward_normal": [_r(nx), _r(nz)],
+            # INTERNAL, stripped in compose_scene: the finished contour hit,
+            # so the shell cuts on the authored edge instead of ray-casting a
+            # point that already lies on it.
+            "_hull_hit": (edge, t),
+            # INTERNAL, stripped in compose_scene — as on a room door.
+            "_door_prop": {
+                "id": door_prop_id(op, default_door_prop_id),
+                "hinge": ("right"
+                          if str(op.get("hinge") or "").strip().lower()
+                          == "right" else "left"),
+                "leaf": door_has_leaf(op),
+            },
+        })
+    return out, problems
+
+
 def threshold_base_y(sides: List[Tuple[float, Optional[float]]]) -> float:
     """The height a threshold LIES AT: the standing height of the rooms it
     joins (finding 2026-08-16, floating thresholds).
@@ -1932,7 +2065,10 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
       that is what makes the hull a building. A contour holding nothing but
       outdoor zones or ``no_walls`` rooms is not one: such a room cannot carry
       a door at all, so there would be nothing for the author to fix;
-    * not ONE doorway on level 0 leads outside.
+    * not ONE doorway on level 0 leads outside. A DOOR ON THE OUTLINE counts
+      like any other (§ 6): it is an ``outside`` doorway on its storey, so a
+      ground floor whose whole front is hallway is answered by drawing one —
+      no second rule here.
 
     Then nobody can get in, and since the "one door mid in the south wall"
     fallback is gone (§ 4.2) nothing hides it any more. The composer only
@@ -3870,6 +4006,15 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                        for r in rooms if is_floor_room(str(r.get("id") or ""))}
     doorways = _doorways(recipes, storey, default_door_prop_id,
                          floor_levels=corridor_levels)
+    # …and the doors drawn on the CONTOUR itself (§ 6), appended after the
+    # dedup above and never part of it: a hull door pierces no room's wall, so
+    # there is no gap it could be the second candidate of.
+    hull_doors, hull_problems = _hull_doorways(map3d, storey, corridor_levels,
+                                               default_door_prop_id)
+    doorways.extend(hull_doors)
+    # One order for the whole block again — consumers diff whole payloads, and
+    # the sort key is the one :func:`_doorways` uses.
+    doorways.sort(key=lambda e: (e["level"], e["at_world"], e["rooms"]))
 
     # Indoor room hulls per level, world metres — where they run on the
     # contour line, the contour wall yields (one wall, one owner).
@@ -3893,8 +4038,14 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # ``top_y`` is read HERE, before :func:`threshold_base_y` lifts ``base_y``
     # onto a declared walking surface: the door's head stands over the wall's
     # own foot, which is what the wall it pierces is built from.
+    # A HULL DOOR BRINGS BOTH ALREADY: its normal is the contour edge's, not
+    # the normal of a room wall it was cut out of, and its hit on that edge is
+    # the authored (edge, t) — no ray to cast (:func:`_hull_doorways`).
     outside_doors = [{"level": d["level"], "at": d["at_world"],
-                      "width": d["width_m"], "normal": _door_outward(d),
+                      "width": d["width_m"],
+                      "normal": d.get("outward_normal") or _door_outward(d),
+                      **({"hit": d["_hull_hit"]}
+                         if d.get("_hull_hit") else {}),
                       "top_y": _num(d["base_y"]) + _num(d["height_m"]),
                       # …and whether the hull's hole gets a LEAF: a door has
                       # one, an open passage has not — and neither has a door
@@ -4033,6 +4184,9 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     models.extend(door_props)
     for door in doorways:
         door.pop("_door_prop", None)
+        # …and with it the hull door's finished contour hit: the shell has
+        # been cut, and the payload states a threshold, not how it was made.
+        door.pop("_hull_hit", None)
 
     # Per-room recipe vocabulary in LOCAL METRES — the 2D editor's ghost
     # openings draw from here instead of re-deriving the mirroring locally
@@ -4156,8 +4310,9 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # What the composer found wrong and did NOT repair behind the
         # author's back (§ 4.3). Always present, empty when all is well;
         # editor and 3D client only display it.
-        "problems": _problems(location, map3d, shell_levels, doorways,
-                              recipes, flights) + corridor_problems,
+        "problems": (_problems(location, map3d, shell_levels, doorways,
+                               recipes, flights)
+                     + corridor_problems + hull_problems),
     }
     if boundary:
         out["boundary_openings"] = boundary

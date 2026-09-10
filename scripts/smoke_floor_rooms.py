@@ -188,6 +188,67 @@ Part 7 — the migration's door count (§ 3.5, count_corridor_doors). It is what
         (the probe below is a real one)
       the same door with to "outside": it is linked, the hull keeps it   -> 0
       the same opening as a window: a window is no way through          -> 0
+
+Part 8 — the hull door (§ 6), through compose_scene. A corridor has no walls,
+    so a ground floor whose complement is a hallway carries its front door on
+    the BUILDING OUTLINE. Fixture = cellar_fixture() plus
+      map3d.ground_corridor true AND a __floor__0 entry in rooms[] — together
+        they are what makes level 0 a corridor storey,
+      eg's own door given to "outside": with the hallway on, an unlinked door
+        would lead into the corridor (§ 3.1) and cut no hull at all,
+      ONE hull opening {level 0, edge 0, at 0.5, 1.0 x 2.1 m, door}.
+
+    THE WINDING, by the shoelace _contour_walls measures it with (the sum of
+    x1*z2 - x2*z1 around the ring): the 10 x 10 square (-5,-5) (5,-5) (5,5)
+    (-5,5) gives 50 + 50 + 50 + 50 = 200 > 0, so `ccw` holds and the outward
+    side of a directed edge (ux, uz) is (uz, -ux) — the very formula
+    _hull_doorways uses. Edge 0 runs (-5,-5) -> (5,-5), so ux, uz = 1, 0,
+    length 10 and the outward normal is [0, -1]: away from the square, which
+    lies at z > -5. (Fixture ground truth, not the assumption in the brief:
+    both give the same sign here.)
+    at 0.5 -> t = 5, and the clamp into [half, length - half] = [0.5, 9.5]
+    leaves it there, so at_world = (-5, -5) + (1, 0) * 5 = [0, -5].
+      hull doorway: rooms ["__floor__0"], outside True, hull True, along
+        [1, 0], width_m 1.0, height_m min(2.1, wall 3 - 0.15 = 2.85) = 2.1,
+        base_y storey_floor_y(0, 3) = 0.0, and no internal key left over
+
+    WHICH CONTOUR EDGES ARE CUT ON LEVEL 0 — the two outside doors sit on
+    OPPOSITE sides of the building:
+      the hull door cuts edge 0 (z = -5) at t 4.5..5.5, i.e. x -0.5..0.5;
+      eg's front door cuts edge 2 (z = +5). eg is x -4..0, z -4..-1 and its
+        opening sits on the letter edge "S" = a room rect's BR->BL side
+        (room_recipe._normalize_opening), i.e. the line z = -1. So the door
+        looks along +z from (-2, -1), and _contour_hit walks it to (-2, +5):
+        a 0.9 m cut, x -2.45..-1.55.
+    Per edge then, with MIN_WALL_PIECE_M = 0.06 dropping nothing:
+      edge 0: full pieces (0, 4.5) and (5.5, 10) -> 4.5 m each
+        (x -5..-0.5 and x 0.5..5);
+      edge 2, running (5,5) -> (-5,5): the cut lies at t 6.55..7.45, so the
+        full pieces are 6.55 m (x 5..-1.55) and 2.55 m (x -2.45..-5).
+    Both doors carry a leaf (neither names door_prop "none"), so each cut also
+    holds one lintel and one leaf:
+      the hull door's leaf runs from the wall foot 0.0 to its head 2.1 over
+        x -0.5..0.5, and its lintel starts at that head and is
+        foot + wall - top_y = 0 + 2.85 - 2.1 = 0.75 m tall.
+      hull leaves on level 0 -> 2, their centres x -2.0 and 0.0
+      hull leaves on level -1 -> 0   (the cellar doors lead into __floor__-1)
+
+    A hull opening on level 2, where no room and therefore no corridor stands:
+      no doorway of its own, and problems[] carries
+      "hull_opening_without_corridor" with level 2.
+
+    THE HULL DOOR IS AN ENTRANCE: the same fixture WITHOUT eg's opening keeps
+    no_building_entrance silent, because the hull door is then the only
+    outside door on level 0 — and dropping the hull opening as well makes the
+    finding fire, which is what turns the first half into an assertion.
+
+    THE SANITIZER (world_ops._sanitize_map3d): a hull opening is a room
+    opening (_sanitize_opening) plus the storey it stands on, and a building
+    contour is a polygon —
+      a valid entry survives, defaulting to level 0,
+      "2" as a level is parsed to the int 2,
+      edge "S" is dropped: letters name a rectangle's sides, not a contour,
+      a nine-entry list keeps the first eight.
 """
 import logging
 import sys
@@ -272,6 +333,24 @@ def full_floor_fixture(extra_rooms=()):
                     + list(extra_rooms))
 
 
+def hull_fixture(levels=(0,), eg_door=True):
+    """cellar_fixture() with the ground floor's hallway switched on and a door
+    drawn on the building outline for each level in ``levels``."""
+    loc = cellar_fixture(eg_door=eg_door)
+    loc["rooms"].append({"id": "__floor__0", "level": 0, "name": ""})
+    if eg_door:
+        # With the hallway on, an UNLINKED door leads into the corridor
+        # (§ 3.1) — eg keeps its own front door, so the hull is cut twice.
+        eg = next(r for r in loc["rooms"] if r["id"] == "eg")
+        eg["layout"]["openings"][0]["to"] = "outside"
+    loc["map3d"] = dict(loc["map3d"], ground_corridor=True,
+                        hull_openings=[{"level": lv, "edge": 0, "at": 0.5,
+                                        "width_m": 1.0, "height_m": 2.1,
+                                        "sill_m": 0.0, "type": "door"}
+                                       for lv in levels])
+    return loc
+
+
 def stair_fixture():
     """cellar_fixture() plus one flight climbing out of the cellar."""
     loc = cellar_fixture()
@@ -286,6 +365,18 @@ def hull_leaves(sc, level):
     no ``room_id``, a room's own wall piece does (see the docstring)."""
     return sum(1 for w in sc["walls"] if w.get("leaf")
                and not w.get("room_id") and w.get("level") == level)
+
+
+def hull_line(sc, level, z):
+    """The BUILDING-HULL pieces standing on the contour line z = ``z`` of one
+    storey — a hull piece carries no ``room_id`` (see hull_leaves)."""
+    return [w for w in sc["walls"]
+            if not w.get("room_id") and w.get("level") == level
+            and w["from"][1] == z and w["to"][1] == z]
+
+
+def piece_len(w):
+    return round(abs(w["to"][0] - w["from"][0]), 4)
 
 
 def main():
@@ -491,6 +582,94 @@ def main():
           world.count_corridor_doors(one_cellar_door(to="outside")), 0)
     check("a window does not",
           world.count_corridor_doors(one_cellar_door(type="window")), 0)
+
+    print("Part 8 — the hull door")
+    op = {"edge": 0, "at": 0.5, "width_m": 1.0, "height_m": 2.1,
+          "type": "door"}
+    # The dropped letter edge is logged for the author; here it is the
+    # expected outcome and would only litter the run (as in Part 4b).
+    world_log = logging.getLogger("world")
+    previous_level = world_log.level
+    world_log.setLevel(logging.WARNING)
+    try:
+        check("hull opening stored",
+              _sanitize_map3d({"hull_openings": [op]}).get("hull_openings"),
+              [{"edge": 0, "at": 0.5, "width_m": 1.0, "height_m": 2.1,
+                "sill_m": 0.0, "type": "door", "level": 0}])
+        check("level parsed",
+              [o["level"] for o in _sanitize_map3d(
+                  {"hull_openings": [dict(op, level="2")]})["hull_openings"]],
+              [2])
+        check("letter edge dropped",
+              "hull_openings" in _sanitize_map3d(
+                  {"hull_openings": [dict(op, edge="S")]}), False)
+        check("at most eight",
+              len(_sanitize_map3d({"hull_openings": [op] * 9})
+                  ["hull_openings"]), 8)
+    finally:
+        world_log.setLevel(previous_level)
+
+    sc6 = scene_recipe.compose_scene(hull_fixture())
+    hull_dw = [d for d in sc6["doorways"] if d.get("hull")]
+    check("one hull doorway", len(hull_dw), 1)
+    h = hull_dw[0] if hull_dw else {}
+    check("hull doorway",
+          {k: h.get(k) for k in ("level", "at_world", "along",
+                                 "outward_normal", "rooms", "outside", "hull",
+                                 "type", "width_m", "height_m", "base_y")},
+          {"level": 0, "at_world": [0.0, -5.0], "along": [1.0, 0.0],
+           "outward_normal": [0.0, -1.0], "rooms": ["__floor__0"],
+           "outside": True, "hull": True, "type": "door", "width_m": 1.0,
+           "height_m": 2.1, "base_y": 0.0})
+    check("no internal key survives", [k for k in h if k.startswith("_")], [])
+
+    south = hull_line(sc6, 0, -5.0)
+    north = hull_line(sc6, 0, 5.0)
+    check("edge 0 full pieces",
+          sorted(piece_len(w) for w in south
+                 if not w.get("leaf") and not w.get("lintel")),
+          [4.5, 4.5])
+    check("edge 2 full pieces",
+          sorted(piece_len(w) for w in north
+                 if not w.get("leaf") and not w.get("lintel")),
+          [2.55, 6.55])
+    check("the hull door's lintel",
+          [(w["base_y"], w["height"], piece_len(w))
+           for w in south if w.get("lintel")], [(2.1, 0.75, 1.0)])
+    check("the hull door's leaf",
+          [(sorted([w["from"][0], w["to"][0]]), w["base_y"], w["height"])
+           for w in south if w.get("leaf")], [([-0.5, 0.5], 0.0, 2.1)])
+    check("hull leaves level 0", hull_leaves(sc6, 0), 2)
+    check("their centres",
+          sorted(round((w["from"][0] + w["to"][0]) / 2, 4)
+                 for w in sc6["walls"] if w.get("leaf")
+                 and not w.get("room_id") and w["level"] == 0),
+          [-2.0, 0.0])
+    check("hull leaves level -1", hull_leaves(sc6, -1), 0)
+
+    sc7 = scene_recipe.compose_scene(hull_fixture(levels=(0, 2)))
+    check("still one hull doorway",
+          len([d for d in sc7["doorways"] if d.get("hull")]), 1)
+    check("hull_opening_without_corridor",
+          [(p.get("kind"), p.get("level")) for p in sc7.get("problems") or []
+           if p.get("kind") == "hull_opening_without_corridor"],
+          [("hull_opening_without_corridor", 2)])
+    check("the corridor storey is quiet",
+          [p["kind"] for p in sc6.get("problems") or []
+           if p.get("kind") == "hull_opening_without_corridor"], [])
+
+    # The hull door IS the building entrance: without eg's opening it is the
+    # only outside door on level 0 …
+    sc8 = scene_recipe.compose_scene(hull_fixture(eg_door=False))
+    check("the hull door lets one in",
+          [p["kind"] for p in sc8.get("problems") or []
+           if p.get("kind") == "no_building_entrance"], [])
+    # … and red probe: drop it too and nobody can get in any more.
+    sc9 = scene_recipe.compose_scene(hull_fixture(levels=(), eg_door=False))
+    check("no door at all: entrance problem",
+          [p["kind"] for p in sc9.get("problems") or []
+           if p.get("kind") == "no_building_entrance"],
+          ["no_building_entrance"])
 
     print("FAILED" if FAILS else "ALL OK")
     sys.exit(1 if FAILS else 0)

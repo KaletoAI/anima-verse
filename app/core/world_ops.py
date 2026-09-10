@@ -1136,6 +1136,43 @@ def _sanitize_map3d(raw: Any) -> Dict[str, Any]:
             entries.append(entry)
         if entries:
             out["boundary_openings"] = entries
+    # DOORS ON THE BUILDING OUTLINE (§ 6 of the storey-corridor spec): a
+    # corridor is the complement of the rooms of its storey, so it has no
+    # walls and no openings — a ground floor whose front is all hallway had no
+    # place to put a front door. This is that door: the SAME fields a room
+    # opening carries (``_sanitize_opening``) plus the storey it sits on, at
+    # most 8 per location.
+    # ``edge`` is an INDEX into the resolved storey outline (edge i = point
+    # i → i+1, ``scene_recipe._outline_world``), never a rectangle's N/S/E/W:
+    # those letters name the sides of a room rect, and a building contour is a
+    # polygon. An entry carrying one is DROPPED and logged, exactly like a
+    # boundary opening — it would otherwise sit on an edge nobody chose.
+    # Whether that storey OWNS a corridor is not knowable here (it is a fact
+    # of the room list, not of ``map3d``): the composer ignores such an
+    # opening and reports ``hull_opening_without_corridor``.
+    ho = raw.get("hull_openings")
+    if isinstance(ho, list):
+        hull_openings = []
+        for op in ho[:8]:
+            clean = _sanitize_opening(op)
+            if clean is None:
+                continue
+            edge = clean["edge"]
+            if isinstance(edge, bool) or not isinstance(edge, int):
+                logger.info("hull opening dropped: edge %r is no edge index "
+                            "into the storey outline", edge)
+                continue
+            lvl = op.get("level")
+            try:
+                clean["level"] = (int(float(lvl))
+                                  if lvl is not None and f"{lvl}".strip() != ""
+                                  else 0)
+            except (TypeError, ValueError):
+                logger.info("hull opening dropped: %r is no storey", lvl)
+                continue
+            hull_openings.append(clean)
+        if hull_openings:
+            out["hull_openings"] = hull_openings
     return out
 
 
