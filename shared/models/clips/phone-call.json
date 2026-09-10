@@ -1,0 +1,40 @@
+{
+ "kind": "phone-call",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 60.0,
+ "frames": 99,
+ "duration_s": 3.3,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": -4.84,
+  "in_place": true,
+  "loop": {
+   "min_s": 3.0,
+   "cut_frames": [
+    0,
+    99
+   ],
+   "cut_s": [
+    0.0,
+    3.3
+   ],
+   "seam_distance": 0.572,
+   "blend_frames": 8
+  },
+  "hips_scale": [
+   1.1568
+  ],
+  "rig_floor_shift_cm": 1.46,
+  "rig_floor_min_cm": -0.85
+ },
+ "source": {
+  "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
+  "takes": [
+   "80_26"
+  ],
+  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+ }
+}

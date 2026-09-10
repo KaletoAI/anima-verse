@@ -1,3 +1,10 @@
 {
-  "transitions": []
+  "transitions": [
+    {
+      "from": "mob1-stand-relaxed-idle-v2",
+      "to": "mob1-walk",
+      "kind": "mob1-stand-relaxed-to-walk",
+      "accel": 1.0
+    }
+  ]
 }
