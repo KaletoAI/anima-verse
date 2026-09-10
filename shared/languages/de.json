@@ -2631,6 +2631,23 @@
     "This character has no status values.": "Dieser Character hat keine Statuswerte.",
     "A door on the building outline opens into the storey's corridor, and this storey has none: switch the hallway on, or remove the door.": "Eine Tür auf der Gebäudekontur führt in den Flur der Etage, und diese Etage hat keinen: Die Diele einschalten oder die Tür entfernen.",
     "The rooms of this storey leave no floor for its corridor: figures in the corridor will stand inside a room. Shrink a room, or draw the corridor's storey wider.": "Die Räume dieser Etage lassen ihrem Flur keine Fläche: Figuren im Flur stehen in einem Raum. Einen Raum verkleinern oder die Etage des Flurs breiter zeichnen.",
-    "A door on the building outline points at an edge this storey's footprint no longer has: move the door onto an existing edge of the storey, or remove it.": "Eine Tür auf der Gebäudekontur zeigt auf eine Kante, die der Grundriss dieser Etage nicht mehr hat: Die Tür auf eine vorhandene Kante der Etage schieben oder sie entfernen."
+    "A door on the building outline points at an edge this storey's footprint no longer has: move the door onto an existing edge of the storey, or remove it.": "Eine Tür auf der Gebäudekontur zeigt auf eine Kante, die der Grundriss dieser Etage nicht mehr hat: Die Tür auf eine vorhandene Kante der Etage schieben oder sie entfernen.",
+    "Aligned to surface": "An der Fläche ausgerichtet",
+    "How these props are turned. Random = every one its own way (plants, rocks). Aligned to surface = at the angle, measured against the nearest edge of the area or the direction of the road. Changing the mode never moves a prop, it only turns it.": "Wie diese Props gedreht werden. Zufällig = jedes auf seine Weise (Pflanzen, Steine). An der Fläche ausgerichtet = im angegebenen Winkel, gemessen an der nächsten Kante der Fläche oder an der Richtung der Straße. Ein Moduswechsel verschiebt nie ein Prop, er dreht es nur.",
+    "0° = along the edge or road, 90° = facing the middle, 270° = facing outward": "0° = längs der Kante oder Straße, 90° = zur Mitte gewandt, 270° = nach außen gewandt",
+    "Position": "Position",
+    "Where these props stand. Spread over the area = anywhere on the ground, as many as the density says. Along the edge = an evenly spaced row along the rim, one every “Spacing (m)”, set inward by the inset — the density has no effect. Centred = exactly one, at the point farthest from the edge.": "Wo diese Props stehen. Über die Fläche verteilt = irgendwo auf dem Boden, so viele wie die Dichte sagt. An der Kante entlang = eine gleichmäßige Reihe am Rand, eines alle „Abstand (m)“, um den Einzug nach innen versetzt — die Dichte wirkt nicht. Mittig = genau eines, am Punkt mit dem größten Abstand zur Kante.",
+    "Spread over the area": "Über die Fläche verteilt",
+    "Along the edge": "An der Kante entlang",
+    "Centred": "Mittig",
+    "Spacing (m)": "Abstand (m)",
+    "The distance between two instances along the edge, in metres — one station every so many metres.": "Der Abstand zwischen zwei Exemplaren entlang der Kante, in Metern — alle so viele Meter eine Station.",
+    "Inset (m)": "Einzug (m)",
+    "How far inside the edge the row stands, in metres. 0 = right on the rim.": "Wie weit innerhalb der Kante die Reihe steht, in Metern. 0 = genau auf dem Rand.",
+    "Which model variant of the prop the one instance shows, as its position in the prop’s variant list (0 = the first). Empty = the shared variant formula decides.": "Welche Modellvariante des Props das eine Exemplar zeigt, als Position in der Variantenliste des Props (0 = die erste). Leer = die gemeinsame Variantenformel entscheidet.",
+    "by formula": "per Formel",
+    "New mix every (game min)": "Neue Mischung alle (Spielmin.)",
+    "The row draws a new random mix every this many GAME minutes — parked cars that are not the same cars tomorrow. Empty = never, the placement stays as it is.": "Die Zeile zieht alle so viele SPIEL-Minuten eine neue Zufallsmischung — geparkte Autos, die morgen nicht dieselben sind. Leer = nie, die Platzierung bleibt, wie sie ist.",
+    "never": "nie"
   }
 }

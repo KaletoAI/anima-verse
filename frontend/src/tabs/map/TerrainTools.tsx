@@ -45,9 +45,9 @@ import {
   WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M, isWaterKind, waterKindDefaults,
 } from './mapTypes'
 import type {
-  AlongSide, FlowAlong, HeightArea, ScatterYawMode, TerrainAlongEntry,
-  TerrainArea, TerrainRelief, TerrainScatterEntry, TerrainStroke, TerrainType,
-  TerrainWater, TerrainWaterProfile,
+  AlongSide, FlowAlong, HeightArea, ScatterPlaceMode, ScatterYawMode,
+  TerrainAlongEntry, TerrainArea, TerrainRelief, TerrainScatterEntry,
+  TerrainStroke, TerrainType, TerrainWater, TerrainWaterProfile,
 } from './mapTypes'
 
 /**
@@ -145,6 +145,15 @@ const SCATTER_FALLBACK_HEIGHT_M = 2
  *  scatter row may keep between its own props; the server clamps to it rather
  *  than refusing, so this is the knob's range and not a rejection threshold. */
 export const SCATTER_SPACING_MAX_M = 100
+
+/** Server mirror — `app/models/terrain.SCATTER_OFFSET_MAX_M`. How far inside
+ *  the rim an edge row may be set; the server clamps to it rather than
+ *  refusing, so it is the knob's range. */
+const SCATTER_OFFSET_MAX_M = 100
+
+/** Server mirror — `app/models/terrain.RESHUFFLE_MIN_MAX`. The longest
+ *  reshuffle interval in GAME minutes; clamped there too. */
+const RESHUFFLE_MIN_MAX = 100000
 
 /** The URL a scatter `model` stores: exactly the `model_url` the prop library
  *  hands out on the server (`app/core/props.py`), and exactly what the 3D
@@ -482,6 +491,16 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
     else if (!(typeof e.yaw_deg === 'number' && Number.isFinite(e.yaw_deg))) {
       e.yaw_deg = 0
     }
+    // The placement decides which of its two companions the row may carry:
+    // the inset belongs to an edge row, the pinned variant to a centre one.
+    // A field the mode does not use is REMOVED and not merely hidden, so a
+    // switch back and forth never leaves the server a stray number.
+    if (e.place !== 'edge' && e.place !== 'center') delete e.place
+    if (e.place !== 'edge') delete e.offset_m
+    if (e.place !== 'center') delete e.variant
+    if (!(typeof e.reshuffle_min === 'number' && e.reshuffle_min >= 1)) {
+      delete e.reshuffle_min
+    }
     onChange(out)
   }
   return (
@@ -525,13 +544,20 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                 {known ? null : <option value={model}>{model}</option>}
               </select>
             </label>
-            <ScatterNum
-              label={t('per 100 m²')}
-              title={t('How many of these stand on 100 m² of this area. 0 = none.')}
-              value={Number.isFinite(e.density_per_100m2) ? e.density_per_100m2 : 0}
-              step={0.5}
-              onCommit={(v) => patch(i, { density_per_100m2: v ?? 0 })}
-            />
+            {/* HOW MANY — only a row SPREAD over the ground is counted by
+                area. An edge row is spaced along the rim and a centred row is
+                exactly one, so the density would be a number acting on
+                nothing; it stays in the entry (the server requires it) but
+                its knob goes away. */}
+            {e.place ? null : (
+              <ScatterNum
+                label={t('per 100 m²')}
+                title={t('How many of these stand on 100 m² of this area. 0 = none.')}
+                value={Number.isFinite(e.density_per_100m2) ? e.density_per_100m2 : 0}
+                step={0.5}
+                onCommit={(v) => patch(i, { density_per_100m2: v ?? 0 })}
+              />
+            )}
             <ScatterNum
               label={t('height (m)')}
               title={model && prop
@@ -548,24 +574,31 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                 between them, and the two rows that make it say two different
                 distances. Empty and 0 are the same answer — no constraint —
                 so the field carries no placeholder to inherit. */}
-            <ScatterNum
-              label={t('Min. spacing (m)')}
-              title={t('Instances of this entry keep at least this distance from each other. 0 = none.')}
-              value={typeof e.min_spacing_m === 'number' ? e.min_spacing_m : null}
-              step={0.5}
-              onCommit={(v) => patch(i, {
-                min_spacing_m: v && v > 0
-                  ? Math.min(v, SCATTER_SPACING_MAX_M) : undefined,
-              })}
-            />
-            {/* HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-09). Random is
-                the absent key — the wood every scatter has been so far;
-                fixed and 90° steps are for things with a front, buildings
-                along a grid above all. The angle field appears only with a
-                mode, because without one it would be a number that acts on
-                nothing. Positions never move: only the yaw draw is read
-                differently, so switching modes turns props in place. */}
-            <label title={t('How these props are turned. Random = every one its own way (plants, rocks). Fixed = all at the angle. 90° steps = the angle plus a random quarter turn, for buildings along a grid. Changing the mode never moves a prop, it only turns it.')}>
+            {e.place === 'center' ? null : (
+              <ScatterNum
+                label={e.place === 'edge'
+                  ? t('Spacing (m)') : t('Min. spacing (m)')}
+                title={e.place === 'edge'
+                  ? t('The distance between two instances along the edge, in metres — one station every so many metres.')
+                  : t('Instances of this entry keep at least this distance from each other. 0 = none.')}
+                value={typeof e.min_spacing_m === 'number' ? e.min_spacing_m : null}
+                step={0.5}
+                onCommit={(v) => patch(i, {
+                  min_spacing_m: v && v > 0
+                    ? Math.min(v, SCATTER_SPACING_MAX_M) : undefined,
+                })}
+              />
+            )}
+            {/* HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-10). Random is the
+                absent key — the wood every scatter has been so far; aligned
+                is for things with a front, and it reads the angle against
+                the LOCAL surface axis: the nearest polygon edge, or the
+                direction of the centre line on a stroke area. The angle
+                field appears only with a mode, because without one it would
+                be a number that acts on nothing. Positions never move: only
+                the yaw draw is read differently, so switching modes turns
+                props in place. */}
+            <label title={t('How these props are turned. Random = every one its own way (plants, rocks). Aligned to surface = at the angle, measured against the nearest edge of the area or the direction of the road. Changing the mode never moves a prop, it only turns it.')}>
               {t('turn')}
               <select
                 className="ga-input"
@@ -579,21 +612,80 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
               >
                 <option value="">{t('Random')}</option>
                 {SCATTER_YAW_MODES.map((m) => (
-                  <option key={m} value={m}>
-                    {m === 'aligned' ? t('Aligned') : m}
-                  </option>
+                  <option key={m} value={m}>{t('Aligned to surface')}</option>
                 ))}
               </select>
             </label>
             {e.yaw_mode ? (
               <ScatterNum
                 label={t('angle (°)')}
-                title={t('The base angle in degrees, 0..360: 0 faces south (+z), 90 east (+x) — the same bearing the flow direction uses. With 90° steps each prop adds 0, 90, 180 or 270 to it.')}
+                title={t('0° = along the edge or road, 90° = facing the middle, 270° = facing outward')}
                 value={typeof e.yaw_deg === 'number' ? e.yaw_deg : 0}
                 step={15}
                 onCommit={(v) => patch(i, { yaw_deg: ((v ?? 0) % 360 + 360) % 360 })}
               />
             ) : null}
+            {/* WHERE THE ROW STANDS (2026-09-10). Spread is the absent key —
+                what every scatter did so far. The two other modes are the
+                shapes an author draws by hand today: a row along the rim
+                (a fence, parked cars) and the ONE thing in the middle of a
+                square (a fountain, a monument). */}
+            <label title={t('Where these props stand. Spread over the area = anywhere on the ground, as many as the density says. Along the edge = an evenly spaced row along the rim, one every “Spacing (m)”, set inward by the inset — the density has no effect. Centred = exactly one, at the point farthest from the edge.')}>
+              {t('Position')}
+              <select
+                className="ga-input"
+                value={e.place || ''}
+                onChange={(ev) => {
+                  const place = ev.target.value as ScatterPlaceMode | ''
+                  // `patch` drops what the new mode does not use, so the
+                  // switch only has to say the mode.
+                  patch(i, { place: place || undefined })
+                }}
+              >
+                <option value="">{t('Spread over the area')}</option>
+                <option value="edge">{t('Along the edge')}</option>
+                <option value="center">{t('Centred')}</option>
+              </select>
+            </label>
+            {e.place === 'edge' ? (
+              <ScatterNum
+                label={t('Inset (m)')}
+                title={t('How far inside the edge the row stands, in metres. 0 = right on the rim.')}
+                value={typeof e.offset_m === 'number' ? e.offset_m : null}
+                placeholder="0"
+                step={0.1}
+                onCommit={(v) => patch(i, {
+                  offset_m: v !== null && v > 0
+                    ? Math.min(v, SCATTER_OFFSET_MAX_M) : undefined,
+                })}
+              />
+            ) : null}
+            {e.place === 'center' ? (
+              <ScatterNum
+                label={t('Variant')}
+                title={t('Which model variant of the prop the one instance shows, as its position in the prop’s variant list (0 = the first). Empty = the shared variant formula decides.')}
+                value={typeof e.variant === 'number' ? e.variant : null}
+                placeholder={t('by formula')}
+                step={1}
+                onCommit={(v) => patch(i, {
+                  variant: v !== null && v >= 0 ? Math.floor(v) : undefined,
+                })}
+              />
+            ) : null}
+            {/* HOW OFTEN THE ROW IS DRAWN ANEW — in GAME minutes, so a frozen
+                world freezes the mix with it. Empty is the state every row
+                has had so far: one draw, for good. */}
+            <ScatterNum
+              label={t('New mix every (game min)')}
+              title={t('The row draws a new random mix every this many GAME minutes — parked cars that are not the same cars tomorrow. Empty = never, the placement stays as it is.')}
+              value={typeof e.reshuffle_min === 'number' ? e.reshuffle_min : null}
+              placeholder={t('never')}
+              step={1}
+              onCommit={(v) => patch(i, {
+                reshuffle_min: v !== null && v >= 1
+                  ? Math.min(Math.floor(v), RESHUFFLE_MIN_MAX) : undefined,
+              })}
+            />
             <button type="button" className="ga-btn ga-btn-sm"
               title={t('Remove this scatter')}
               onClick={() => onChange(entries.filter((_, k) => k !== i))}>
@@ -649,6 +741,9 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
     if (e.yaw_mode !== 'random') delete e.yaw_mode
     if (!(typeof e.start_m === 'number' && e.start_m >= 0)) delete e.start_m
     if (!(typeof e.variant === 'number' && e.variant >= 0)) delete e.variant
+    if (!(typeof e.reshuffle_min === 'number' && e.reshuffle_min >= 1)) {
+      delete e.reshuffle_min
+    }
     onChange(out)
   }
   const sideWords = (side: AlongSide): string => (side === 'left' ? t('left')
@@ -756,6 +851,20 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
               step={1}
               onCommit={(v) => patch(i, {
                 variant: v !== null && v >= 0 ? Math.floor(v) : undefined,
+              })}
+            />
+            {/* The same reshuffle knob the scatter rows carry, in GAME
+                minutes: a row of parked cars that is a different row every
+                hour. Empty = never, the row every line has had so far. */}
+            <ScatterNum
+              label={t('New mix every (game min)')}
+              title={t('The row draws a new random mix every this many GAME minutes — parked cars that are not the same cars tomorrow. Empty = never, the placement stays as it is.')}
+              value={typeof e.reshuffle_min === 'number' ? e.reshuffle_min : null}
+              placeholder={t('never')}
+              step={1}
+              onCommit={(v) => patch(i, {
+                reshuffle_min: v !== null && v >= 1
+                  ? Math.min(Math.floor(v), RESHUFFLE_MIN_MAX) : undefined,
               })}
             />
             <button type="button" className="ga-btn ga-btn-sm"
