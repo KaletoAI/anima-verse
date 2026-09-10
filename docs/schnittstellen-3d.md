@@ -2897,8 +2897,9 @@ auf die Grundfläche zurück — die per Definition Etage 0 ist.
   § A13a trägt kein `level` und zählt nie mit). Jede Etage ≠ 0 bekommt ihren
   Flur immer, **Etage 0 nur auf Opt-in**: ohne `map3d.ground_corridor` bleibt
   das Erdgeschoss-Komplement der Hof (gespeichert wird nur das ausdrückliche
-  `true`, `world_ops._sanitize_map3d`). Der Abgleich läuft bei JEDEM
-  Location-Schreiben und in beide Richtungen (`world.ensure_floor_rooms`): eine
+  `true`, `world_ops._sanitize_map3d`). Der Abgleich läuft bei jedem
+  Schreiben, das die Raumliste oder `map3d` anfasst, und in beide Richtungen
+  (`world.ensure_floor_rooms`): eine
   Etage, die ihren ersten Raum bekommt, bekommt den Flur, eine, die ihren
   letzten verliert, verliert ihn — und wer in dem verschwundenen Flur stand,
   landet auf der Grundfläche (`evict_rooms_to_ground`: Charaktere UND
@@ -2929,12 +2930,15 @@ auf die Grundfläche zurück — die per Definition Etage 0 ist.
   (`scene_recipe._doorways`). Auf einer Etage MIT Flur bekommt eine
   `door`/`passage`, deren Autor kein `to` gesetzt hat, den Flur als ZWEITEN
   Raum — entschieden NACH der Deduplizierung und nur, wenn kein Nachbar
-  dieselbe Lücke beansprucht (die
-  gespiegelte Kopie einer Trennwand-Tür nennt ihren eigenen Raum und gewinnt).
-  Damit ist `outside` dort `false`: **kein Loch in der Hülle** (§ A6) und kein
-  Befund `no_building_entrance`. Die ausdrückliche Außentür heißt weiterhin
-  `to: "outside"`, und eine Etage OHNE Flur behält die alte Regel — eine
-  unbeschriftete Tür ist dort eine richtige Außentür.
+  dieselbe Lücke beansprucht (die gespiegelte Kopie einer Trennwand-Tür nennt
+  ihren eigenen Raum und gewinnt).
+  Damit ist `outside` dort `false`: **kein Loch in der Hülle** (§ A6); eine
+  solche Tür zählt damit auch nicht mehr als Gebäudeeingang — ein Erdgeschoss
+  mit Diele meldet also `no_building_entrance` (§ B1), bis eine seiner Türen
+  `to: "outside"` trägt oder es seine Hüllentür aus § A13c (Phase 3) hat. Auf
+  Etagen ≠ 0 fragt der Befund ohnehin nie. Die ausdrückliche Außentür heißt
+  weiterhin `to: "outside"`, und eine Etage OHNE Flur behält die alte Regel —
+  eine unbeschriftete Tür ist dort eine richtige Außentür.
 - **Der Anker steht im Rezept, nicht im Raum.** Ein Flur hat keinen Grundriss,
   also keine Mitte, die ein Client herleiten könnte:
   `GET /play/locations/{id}/scene` liefert sie fertig in `corridors[]`
@@ -4922,9 +4926,13 @@ zweite Ableitung.
 - **`outside` ist GEOMETRIE, kein Autorentext:** nach der Deduplizierung
   heißt genau ein Raum, dass keine zweite Raumwand an dieser Lücke steht —
   sie führt also aus dem Gebäude, auf die Grundfläche. Eine unbeschriftete
-  Tür ist damit eine richtige Außentür, kein Durchgang ins Nichts. Die
-  GRUNDFLÄCHE steht nie in `rooms`: sie hat keine Wände, und `outside` sagt
-  es bereits.
+  Tür ist damit eine richtige Außentür, kein Durchgang ins Nichts.
+  **Ausnahme seit § A13b:** hat die Etage einen Flur-Raum, so beansprucht
+  dieser die unbeschriftete Lücke als zweiten Raum — sie ist dann eine
+  Flurtür, und `outside` bleibt `false`. Eine richtige Außentür ist eine
+  unbeschriftete Tür also nur noch auf einer Etage OHNE Flur; sonst sagt das
+  `to: "outside"`. Die GRUNDFLÄCHE steht nie in `rooms`: sie hat keine Wände,
+  und `outside` sagt es bereits.
 - Ein Fenster ist kein Weg hinaus, ein Raum ohne Hülle (Outdoor-Zone,
   `no_walls`, entartete Kontur) hat keine Schwelle, und die Reihenfolge ist
   deterministisch (Etage, Position, Räume) — Konsumenten diffen ganze
@@ -4936,7 +4944,9 @@ stellt nur fest; **Floor-Plan-Editor und 3D-Client zeigen es an, mehr nicht**
 der stabile Schlüssel, `message` der englische Server-Satz (eine Oberfläche
 darf einen `kind`, den sie kennt, übersetzen und fällt sonst auf den Text
 zurück; Zahlen stehen NIE im `message`, sondern in eigenen Feldern, weil der
-Satz als Ganzes übersetzt wird). Heute gibt es drei:
+Satz als Ganzes übersetzt wird). Hier beschrieben sind vier — die
+Etagen-Grundriss-Befunde stehen in § A6, `room_outside_boundary` und
+`boundary_self_intersection` in der v6-Präambel Nr. 9:
 
 - **`no_building_entrance`** — die Location hat eine Kontur, mindestens ein
   Raum MIT HÜLLE steht auf Etage 0 (eine Kontur über lauter
@@ -4959,6 +4969,11 @@ Satz als Ganzes übersetzt wird). Heute gibt es drei:
   wandloser Raum OHNE Öffnungen ist erlaubt (offene Zone, Pavillon) und
   bleibt still — nur die Kombination meldet sich, einmal pro Location mit
   `room_count` der betroffenen Räume.
+- **`corridor_without_floor`** (2026-09-09, § A13b) — die Räume einer Etage
+  lassen ihrem Flur keine freie Fläche: der Anker fällt auf den Mittelpunkt
+  des Etagengrundrisses zurück (Stufe 4 oben), Flur-Figuren stehen also
+  sichtbar in einem Raum. `level` nennt die betroffene Etage; repariert wird
+  nichts.
 
 **Damit wandern in den Server:** Wand-Splitting um Öffnungen inkl.
 Fenster-Brüstung/-Sturz/Glas UND Tür-Sturz als eigene `walls`-Einträge
