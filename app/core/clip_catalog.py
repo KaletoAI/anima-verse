@@ -285,12 +285,16 @@ def existing_kinds(clip_set: str = "", source: str = "free") -> List[str]:
 def import_take(take_id: str, kind: str, *, clip_set: str = "",
                 start_s: float = 0.0, end_s: Optional[float] = None,
                 loop_s: Optional[float] = None, in_place: bool = True,
-                overwrite: bool = False, speed: float = 1.0) -> Dict[str, Any]:
+                overwrite: bool = False, speed: float = 1.0,
+                yaw_deg: float = 0.0) -> Dict[str, Any]:
     """Converts one catalog take into the FREE library and records the trace.
 
     A PAIR take always imports BOTH halves — one clip kind, two files — with
     the A role first regardless of which half was selected; ``in_place`` is
     meaningless there (the two roots carry the contact geometry) and ignored.
+
+    ``yaw_deg`` is the orientation dial (``cmu_clip._frame_takes``) — the
+    angle the import preview was turned to before it was accepted.
 
     Raises ``cmu_import.ClipImportError`` for everything refusable; the
     "kind exists" case raises ``ClipKindExists`` so the route can answer 409.
@@ -311,7 +315,8 @@ def import_take(take_id: str, kind: str, *, clip_set: str = "",
     res = cmu_import.convert_take(
         kind, take_a, take_b, clip_set=cset, start_s=start_s, end_s=end_s,
         loop_s=loop_s, in_place=bool(in_place) and not take_b,
-        source_fps=take.get("framerate") or None, speed=float(speed or 1.0))
+        source_fps=take.get("framerate") or None, speed=float(speed or 1.0),
+        yaw_deg=float(yaw_deg or 0.0))
     status = record_import(take_id, kind, cset, "free")
 
     # The pose dropdown and the animation-set fallback both read from the

@@ -18,6 +18,7 @@ nothing in ``app/`` imports from ``scripts/``.
 """
 import importlib.util
 import json
+import math
 import ssl
 import urllib.error
 import urllib.request
@@ -160,10 +161,15 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
                  anchor_s: Optional[float] = None, in_place: bool = False,
                  loop_s: Optional[float] = None,
                  source_fps: Optional[float] = None, fps: int = 30,
-                 speed: float = 1.0,
+                 speed: float = 1.0, yaw_deg: float = 0.0,
                  rig: Optional[Path] = None, cache: Optional[Path] = None,
                  timeout_s: int = 900) -> Dict[str, Any]:
     """Retargets one take (or a pair) and writes the clip files.
+
+    ``yaw_deg`` turns the finished clip about the vertical (the import's
+    orientation dial, ``cmu_clip._frame_takes``): the normalisation aligns the
+    root's FORWARD axis, which for a take that starts lying is the belly
+    direction, so a lying clip needs the angle chosen by eye.
 
     Returns ``{"kind", "set", "dir", "sidecar", "outputs", "seconds"}``;
     ``outputs`` maps the Blender slot (``<kind>``/``<kind>__a``/…/``sidecar``)
@@ -197,7 +203,7 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
               "end_s": end_s, "anchor_s": anchor_s,
               "source_fps": float(source_fps or catalog_framerate(take_a)),
               "in_place": bool(in_place), "loop_s": loop_s,
-              "speed": float(speed or 1.0),
+              "speed": float(speed or 1.0), "yaw_deg": float(yaw_deg or 0.0),
               "source_takes": takes}
 
     st = runner.status()
@@ -252,6 +258,39 @@ def loop_window(take: str, *, start_s: float = 0.0, end_s: Optional[float] = Non
             "window_end_s": round(start_s + j / fps, 3),
             "seam_distance": None if d is None else round(d, 3),
             "frames": j - i}
+
+
+def framing_yaw_delta(take: str, at_s: float = 0.0, fps: int = 30) -> Dict[str, Any]:
+    """How far an import's frame of reference turns against the TRIAL clip's.
+
+    A solo take is framed on its FIRST KEPT FRAME: the root's forward axis is
+    turned onto +Z (``cmu_clip._frame_takes``). The trial clip in the catalog
+    is the whole take framed on frame 0, an import is framed on the first
+    frame of ITS window — and between the two the actor has usually turned.
+    Measured on 140_03, an actor who gets up: 0.1 deg at 0.5 s, 1.5 deg at
+    2 s, 92.4 deg at 3 s. A preview that ignored this would show the orientation
+    dial against the wrong body, which is worse than showing none.
+
+    Returns ``{"delta_deg"}`` — turn the trial clip by that many degrees to see
+    what the import will produce. ``at_s`` is the first second the import keeps
+    (the loop cut's start when one is made, else ``start_s``).
+    """
+    cmu = _cmu()
+    asf, amc = take_files(take)
+    sk, frames = cmu.load_clip(asf, amc)
+    src = catalog_framerate(take)
+
+    def forward_deg(i: int) -> float:
+        fx, fz = cmu.forward_xz(cmu.solve_frame(sk, frames[i]))
+        return math.degrees(math.atan2(fx, fz))
+
+    idx = cmu.resample_indices(len(frames), src, fps, max(0.0, float(at_s)), None, 1.0)
+    first = idx[0] if idx else 0
+    # trial = Ry(-theta_0) . take, import = Ry(-theta_w) . take, so
+    # import = Ry(theta_0 - theta_w) . trial.
+    delta = forward_deg(0) - forward_deg(first)
+    return {"take": take, "at_s": round(float(at_s), 3),
+            "frame": first, "delta_deg": round((delta + 180.0) % 360.0 - 180.0, 2)}
 
 
 LOOP_SUGGEST_MIN_S = (0.8, 1.5, 3.0, 6.0)

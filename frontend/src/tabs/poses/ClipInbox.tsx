@@ -27,6 +27,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ClipPreview } from './ClipPreview'
+import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -387,6 +388,15 @@ export function ClipInbox({ onCreatePose }: {
   /** The import body for ONE take of the selected file. Without an argument
    *  it is what the form currently shows; with one it is that take with its
    *  own partner and its own name, which is what a batch needs. */
+  /** THE ORIENTATION DIAL, degrees, baked by the import (`yaw_deg`) — the
+   *  same field the CMU catalog import has. The conversion aims the root's
+   *  FORWARD axis at +Z, which is the facing of an upright actor and the
+   *  belly direction of a lying one, so a lying take needs its angle chosen
+   *  by eye. The PROBE never bakes it (see `runProbe`): the preview turns the
+   *  clip live, which is instant and costs no Blender run per notch. */
+  const [yawDeg, setYawDeg] = useState(0)
+  const [footprint, setFootprint] = useState('')
+
   const formBody = useCallback((only?: Take): Record<string, unknown> | null => {
     if (!entry) return null
     const myTake = only ? String(only.index) : take
@@ -408,6 +418,7 @@ export function ClipInbox({ onCreatePose }: {
       loop_s: loopOn && !isPair ? Number(loopS) || 1 : null,
       speed: Number(speed) || 1,
       in_place: inPlace && !isPair,
+      yaw_deg: yawDeg || 0,
       offset_b_m: isPair ? [Number(offSide) || 0, Number(offUp) || 0, Number(offFwd) || 0] : null,
       overwrite,
       target,
@@ -415,10 +426,15 @@ export function ClipInbox({ onCreatePose }: {
     }
   }, [clipSet, endS, entry, inPlace, isPair, kind, loopOn, loopS, offFwd, offSide, offUp, speed,
       overwrite, redistributable, restFile, restTake, second, secondTake, src, startS, take,
-      target])
+      target, yawDeg])
 
   const runProbe = useCallback(async () => {
+    // The ONE exception to "the probe plays the very body the import sends":
+    // the orientation dial is applied live in the viewer, so baking it here
+    // as well would turn the clip twice. Everything else is the import's own
+    // body, unchanged.
     const body = formBody()
+    if (body) body.yaw_deg = 0
     if (!body || probing) return
     setProbing(true)
     try {
@@ -925,7 +941,37 @@ export function ClipInbox({ onCreatePose }: {
             </div>
             {probe && !imported ? (
               <>
-                <ClipPreview key={`probe:${probe.seq}`} urls={probe.urls} height={300} />
+                <ClipPreview key={`probe:${probe.seq}`} urls={probe.urls} height={300}
+                  importYaw={yawDeg} footprint={footprint} />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <SliderInput
+                    label={t('Turn the clip')}
+                    unit="°"
+                    title={t('Degrees the import bakes into the clip. The conversion aims the root’s FORWARD axis at +Z, which is the facing of a standing actor and the belly direction of a lying one — so a lying take needs its angle set here.')}
+                    min={-180}
+                    max={180}
+                    step={5}
+                    fineStep={1}
+                    value={yawDeg}
+                    onChange={setYawDeg}
+                    sliderWidth="auto"
+                    sliderStyle={{ flex: 1, minWidth: 90 }}
+                    style={{ display: 'flex', flex: '1 1 260px' }}
+                  />
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span className="ga-hint">{t('Turn against')}</span>
+                    <select className="ga-input" value={footprint}
+                      onChange={(e) => setFootprint(e.target.value)}>
+                      <option value="">{t('grid only')}</option>
+                      <option value="lie">{t('bed / lying surface')}</option>
+                      <option value="seat">{t('seat')}</option>
+                    </select>
+                  </label>
+                </div>
                 <div className="ga-hint">{t('Preview of the current settings')} ({probe.seconds.toFixed(1)} s)</div>
               </>
             ) : null}

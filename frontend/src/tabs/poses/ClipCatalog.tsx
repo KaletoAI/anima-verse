@@ -30,6 +30,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ClipPreview, type PlayWindow } from './ClipPreview'
+import { SliderInput } from '../../components/SliderInput'
 import { Sparkline } from './Sparkline'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
@@ -179,6 +180,22 @@ export function ClipCatalog({ onCreatePose }: {
   const [loopSuggestions, setLoopSuggestions] = useState<Array<{ start_s: number; end_s: number; length_s: number; min_s: number; seam_distance: number }>>([])
   const [loopCut, setLoopCut] = useState<{ start: number; end: number; seam: number | null } | null>(null)
   const [inPlace, setInPlace] = useState(true)
+  /** THE ORIENTATION DIAL, degrees, baked by the import (`yaw_deg`).
+   *  The converter normalises a solo take so the ROOT's forward axis points
+   *  +Z at the first kept frame — the body's facing while the actor stands,
+   *  the direction the BELLY faces once they lie down. A lying take therefore
+   *  comes out at whatever angle it happens to, and this is where the angle
+   *  is put right, against the footprint below. */
+  const [yawDeg, setYawDeg] = useState(0)
+  /** which place footprint the preview outlines to turn against */
+  const [footprint, setFootprint] = useState('')
+  /** How far the IMPORT's frame of reference turns against the trial clip the
+   *  preview plays (server: `cmu_import.framing_yaw_delta`). A solo take is
+   *  framed on its first KEPT frame; the trial clip is the whole take framed
+   *  on frame 0, so once the window starts later — and the actor has turned
+   *  meanwhile — the two differ (140_03: 92° at 3 s). The preview adds this to
+   *  the dial, so the angle is set on the body the import will actually write. */
+  const [frameYaw, setFrameYaw] = useState(0)
   const [overwrite, setOverwrite] = useState(false)
   const [importing, setImporting] = useState(false)
   const [lastImported, setLastImported] = useState('')
@@ -385,6 +402,7 @@ export function ClipCatalog({ onCreatePose }: {
         loop_s: loopOn ? Number(loopS) || 1 : null,
         speed: Number(speed) || 1,
         in_place: inPlace,
+        yaw_deg: yawDeg || 0,
         overwrite,
         target: 'free',
       }
@@ -411,7 +429,7 @@ export function ClipCatalog({ onCreatePose }: {
       setImporting(false)
     }
   }, [clipSet, endS, importing, inPlace, kind, loadClips, loopOn, loopS, speed,
-      overwrite, selected, startS, t, toast])
+      overwrite, selected, startS, t, toast, yawDeg])
 
   // ── facet definitions (label + the values offered) ──
   useEffect(() => {
@@ -455,6 +473,25 @@ export function ClipCatalog({ onCreatePose }: {
     }, 400)
     return () => { cancelled = true; clearTimeout(handle) }
   }, [selected, startS, endS, loopOn, loopS])
+
+  // The framing delta follows the window, so it is fetched with the same
+  // debounce as the loop cut — typing a start second must not fire a read of
+  // the source per keystroke.
+  useEffect(() => {
+    if (!selected || selected.pair) { setFrameYaw(0); return }
+    const at = playWindow?.start ?? (Number(startS) || 0)
+    let cancelled = false
+    const handle = setTimeout(async () => {
+      try {
+        const r = await apiGet<{ delta_deg: number }>(
+          `/assets/clip-catalog/${encodeURIComponent(selected.id)}/frame-yaw?at_s=${at}`)
+        if (!cancelled) setFrameYaw(r.delta_deg || 0)
+      } catch {
+        if (!cancelled) setFrameYaw(0)      // no originals on disk — no delta
+      }
+    }, 350)
+    return () => { cancelled = true; clearTimeout(handle) }
+  }, [selected, playWindow, startS])
 
   const facetDefs = useMemo<FacetDef[]>(() => {
       const f = catalog?.facets || {}
@@ -742,7 +779,50 @@ export function ClipCatalog({ onCreatePose }: {
 
             {selected.clip && selected.clip_urls && (selected.clip_urls.solo || selected.clip_urls.a) ? (
               <>
-                <ClipPreview urls={selected.clip_urls} height={280} window={playWindow} speed={Number(speed) || 1} />
+                <ClipPreview urls={selected.clip_urls} height={280} window={playWindow}
+                  speed={Number(speed) || 1} importYaw={yawDeg + frameYaw} footprint={footprint} />
+                {/* THE ORIENTATION DIAL. It turns the preview live and is
+                    baked by the import — the same rotation on both sides
+                    (scripts/smoke_clip_yaw.py). The footprint beside it is
+                    what the angle is set AGAINST: a sleeper has to lie along
+                    the bed, and without an outline on the ground there is
+                    nothing to judge that by. */}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <SliderInput
+                    label={t('Turn the clip')}
+                    unit="°"
+                    title={t('Degrees the import bakes into the clip. The converter aims the root’s FORWARD axis at +Z, which is the facing of a standing actor and the belly direction of a lying one — so a lying take needs its angle set here.')}
+                    min={-180}
+                    max={180}
+                    step={5}
+                    fineStep={1}
+                    value={yawDeg}
+                    onChange={setYawDeg}
+                    sliderWidth="auto"
+                    sliderStyle={{ flex: 1, minWidth: 90 }}
+                    style={{ display: 'flex', flex: '1 1 260px' }}
+                  />
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span className="ga-hint">{t('Turn against')}</span>
+                    <select className="ga-input" value={footprint}
+                      onChange={(e) => setFootprint(e.target.value)}>
+                      <option value="">{t('grid only')}</option>
+                      <option value="lie">{t('bed / lying surface')}</option>
+                      <option value="seat">{t('seat')}</option>
+                    </select>
+                  </label>
+                </div>
+                {frameYaw ? (
+                  <div className="ga-hint">
+                    {t('The window starts later than the take, where the actor is turned by')}
+                    {` ${(-frameYaw).toFixed(1)}° — `}
+                    {t('the preview is turned with it, so it shows the import’s own framing.')}
+                  </div>
+                ) : null}
                 {loopOn && !selected.pair ? (
                   <div className="ga-hint">
                     {loopCut

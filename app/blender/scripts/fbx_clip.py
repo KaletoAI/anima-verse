@@ -12,8 +12,10 @@ Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
                             their real node rotations relative to that pose
                             — twist included — instead of the positional
                             reconstruction below
-    params   kind, fps, start_s, end_s, anchor_s, in_place, loop_s — as in
-             cmu_clip; plus
+    params   kind, fps, start_s, end_s, anchor_s, in_place, loop_s, yaw_deg —
+             as in cmu_clip (``yaw_deg`` is the orientation dial and works
+             here for the same reason: both formats share ``run_takes``);
+             plus
              bone_map       name of the skeleton family ("unity-humanoid",
                             "mixamo-noprefix"; "auto" detects it from the
                             node names)

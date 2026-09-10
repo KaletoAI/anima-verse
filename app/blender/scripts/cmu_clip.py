@@ -24,6 +24,9 @@ Invoked through ``app.blender.runner.run("cmu_clip", inputs=…, params=…)``:
                             takes the subject page lists as 60)
              speed          playback factor baked into the clip (0.5 = half
                             speed); start_s/end_s stay source seconds
+             yaw_deg        turn the finished clip about the vertical by this
+                            many degrees (default 0) — the orientation dial
+                            of the import, see ``_frame_takes``
 
 The FBX files and the ``<kind>.json`` sidecar land in the runner's out dir.
 
@@ -248,19 +251,38 @@ def _cut_loop(take, fps, min_s):
     return i, j, d
 
 
+def _with_yaw(geometry, args):
+    """Records the dial in the geometry — provenance, absent when it was 0."""
+    if float(args.get("yaw_deg") or 0.0):
+        geometry["yaw_deg"] = round(float(args["yaw_deg"]), 1)
+    return geometry
+
+
 def _frame_takes(takes, args):
-    """Puts the takes into the clip's frame of reference; returns sidecar geometry."""
+    """Puts the takes into the clip's frame of reference; returns sidecar geometry.
+
+    ``yaw_deg`` turns the finished frame further about the vertical — the
+    importer's ORIENTATION DIAL. The normalisation below is only meaningful
+    for a take that starts UPRIGHT: it aligns the root's forward axis, which
+    for a lying actor is the direction the belly faces, not the body's long
+    axis, and the body then lands at whatever angle it happens to (measured
+    over the shipped lying clips: +8°, +70°, +90°, +178° — no convention at
+    all). The dial is where that angle is chosen by eye against the place
+    marker in the import preview, and the sidecar keeps the number.
+    """
     floor = min(t.lowest() for t in takes)
+    yaw = math.radians(float(args.get("yaw_deg") or 0.0))
     if len(takes) == 1:
         take = takes[0]
         fx, fz = _cmu.forward_xz(take.poses[0])
-        # Rotate so the root faces +Z at the first frame.
-        theta = math.atan2(fx, fz)
+        # Rotate so the root faces +Z at the first frame, then by the dial.
+        theta = math.atan2(fx, fz) - yaw
         r = _ry(-theta)
         x0, z0 = take.root_xz(0)
         p = r @ Vector((x0, 0.0, z0))
         _apply_rigid(take, -theta, (-p.x, -p.z), floor, bool(args.get("in_place")))
-        return {"floor_shift_cm": round(-floor, 2), "in_place": bool(args.get("in_place"))}
+        return _with_yaw({"floor_shift_cm": round(-floor, 2),
+                          "in_place": bool(args.get("in_place"))}, args)
 
     a = next(t for t in takes if t.role == "a")
     b = next(t for t in takes if t.role == "b")
@@ -275,14 +297,14 @@ def _frame_takes(takes, args):
     ax, az = a.root_xz(ai)
     bx, bz = b.root_xz(ai)
     mid = ((ax + bx) / 2, (az + bz) / 2)
-    # Angle that turns the A→B direction onto +X.
-    theta = math.atan2(bz - az, bx - ax)
+    # Angle that turns the A→B direction onto +X, plus the dial.
+    theta = math.atan2(bz - az, bx - ax) + yaw
     r = _ry(theta)
     m = r @ Vector((mid[0], 0.0, mid[1]))
     for t in (a, b):
         _apply_rigid(t, theta, (-m.x, -m.z), floor, False)
     dist = math.dist(a.root_xz(ai), b.root_xz(ai))
-    return {
+    return _with_yaw({
         "anchor_frame": ai,
         "anchor_s": round(ai / fps, 3),
         "root_distance_m": round(dist / 100, 3),
@@ -293,7 +315,7 @@ def _frame_takes(takes, args):
             "b": {"start_xz_m": [round(v / 100, 3) for v in b.root_xz(0)],
                   "anchor_xz_m": [round(v / 100, 3) for v in b.root_xz(ai)]},
         },
-    }
+    }, args)
 
 
 # The floor is the lowest point of the WHOLE body, not of the feet: a lying

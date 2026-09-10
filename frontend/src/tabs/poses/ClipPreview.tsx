@@ -106,7 +106,8 @@ function rootAt(path: { times: ArrayLike<number>; xyz: Float32Array }, t: number
 export interface PlayWindow { start: number; end: number }
 
 export function ClipPreview({ kind = '', set = '', height = 300, urls, window: win, speed = 1,
-  group, rootDrop = 0, yawOffset = 0, onYawOffset }:
+  group, rootDrop = 0, yawOffset = 0, onYawOffset,
+  importYaw, footprint = '' }:
   { kind?: string
     /** which figure set to play the kind from — empty picks the neutral clip
      *  (and falls back to any set, the way the viewers do) */
@@ -120,7 +121,20 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
     /** degrees the clip frame turns against the marker facing */
     yawOffset?: number
     /** given = the pose is a pair one and the yaw offset is dialled here */
-    onYawOffset?: (deg: number) => void }) {
+    onYawOffset?: (deg: number) => void
+    /** THE IMPORT DIAL (degrees): the angle an import will BAKE into the clip
+     *  (`yaw_deg`, `cmu_clip._frame_takes`). Given — even as 0 — the preview
+     *  turns the clip by it and draws the clip's forward axis as an arrow, so
+     *  the angle is chosen against something instead of guessed. Turning the
+     *  clip here and baking the same number there is the same rotation: both
+     *  are the right-handed turn about the vertical, `rotation.y = a` and
+     *  `Matrix.Rotation(a, "Y")` (pinned by scripts/smoke_clip_yaw.py). */
+    importYaw?: number
+    /** place type whose FOOTPRINT is outlined on the ground as the reference
+     *  to turn against — the bed a sleeper has to lie along. Flat on the
+     *  ground and outside the clip frame: the marker stays put, the clip
+     *  turns. Empty = no reference, just the grid. */
+    footprint?: string }) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [status, setStatus] = useState<string>('')
@@ -143,6 +157,11 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   yawRef.current = yawOffset
   const dropRef = useRef(rootDrop)
   dropRef.current = rootDrop
+  // The import dial turns the clip in the RUNNING scene, like the pair's yaw
+  // offset above — dragging it must not reload figure and clips.
+  const importYawRef = useRef(importYaw || 0)
+  importYawRef.current = importYaw || 0
+  const dialled = importYaw !== undefined
   const box = markerBox(group)
   // Does the loaded clip actually have two halves? Only then is there a pair
   // to seat — a kind without an A/B pair plays solo whatever the pose says.
@@ -217,6 +236,34 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         // anchor: a small cross at the origin, +X marked (A → B)
         const axis = new THREE.AxesHelper(0.5)
         frame.add(axis)
+        // THE IMPORT REFERENCE. The footprint of the place the clip is meant
+        // for, outlined flat on the ground — the bed a sleeper has to lie
+        // along. It is NOT in the clip frame: the marker stays put and the
+        // clip turns against it, the same division the pair's marker makes.
+        const foot = footprint ? markerBox(footprint) : undefined
+        if (foot) {
+          const [fw, , fd] = foot.size
+          const half = [fw / 2, fd / 2]
+          const pts = [[-half[0], -half[1]], [half[0], -half[1]],
+                       [half[0], half[1]], [-half[0], half[1]], [-half[0], -half[1]]]
+          const geom = new THREE.BufferGeometry().setFromPoints(
+            pts.map(([x, z]) => new THREE.Vector3(x, 0.01, z)))
+          const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0x8fd0ff }))
+          scene.add(line)
+          disposers.push(() => {
+            geom.dispose();
+            (line.material as { dispose: () => void }).dispose()
+          })
+        }
+        // The clip's own forward axis (+Z of the clip frame), turned by the
+        // dial with everything else — what the angle is actually set on.
+        if (dialled) {
+          const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1),
+                                              new THREE.Vector3(0, 0.02, 0),
+                                              1.0, 0xffc857, 0.18, 0.11)
+          frame.add(arrow)
+          disposers.push(() => arrow.dispose())
+        }
         // The virtual marker — a pair only, and only for a place type with a
         // body. It does NOT turn with the clip frame: the marker faces south,
         // and seeing the couple turn against it is the point of the slider.
@@ -336,14 +383,19 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           const end = w && w.end > start ? Math.min(w.end, fullDuration) : fullDuration
           const duration = Math.max(end - start, 1 / 30)
           const time = start + (((performance.now() - started) / 1000) * speedRef.current) % duration
+          // The import dial turns the clip frame as a whole — exactly what
+          // baking `yaw_deg` will do to the file (smoke_clip_yaw.py [2]).
+          const dial = (importYawRef.current || 0) * Math.PI / 180
           if (seat) {
             // Server formula, both terms: the frame turns by facing − 90° +
             // yaw_offset, and its origin sits `root_drop × 1.70` under the
             // MARKED SURFACE, which is the box top.
             // The server's rule (`places.pair_yaw`, shared mirror) with the
             // preview's virtual marker facing SOUTH (compass 0).
-            frame.rotation.y = pairYaw(0, yawRef.current || 0)
+            frame.rotation.y = pairYaw(0, yawRef.current || 0) + dial
             frame.position.y = seat.size[1] - (dropRef.current || 0) * FIGURE_H
+          } else {
+            frame.rotation.y = dial
           }
           for (const p of players) {
             p.mixer.setTime(time)
@@ -373,7 +425,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
       cancelAnimationFrame(raf)
       disposers.forEach((d) => d())
     }
-  }, [kind, set, height, urlKey, group, t])
+  }, [kind, set, height, urlKey, group, footprint, dialled, t])
 
   // What the marker under the pair is — only while one is actually seated
   // on it.
@@ -381,6 +433,13 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
     ? ` · ${t('marker')} ${box.size[0].toFixed(2)} × ${box.size[1].toFixed(2)}`
       + ` × ${box.size[2].toFixed(2)} m, ${t('facing south')}`
       + `, ${t('drop')} ${(rootDrop * FIGURE_H).toFixed(2)} m`
+    : ''
+  // The import reference, named in metres — a footprint one cannot measure is
+  // no reference (the 1.70 m figure and the 1 m grid are already said above).
+  const fp = footprint ? markerBox(footprint) : undefined
+  const footNote = fp
+    ? ` · ${t('footprint')} ${footprint} ${fp.size[0].toFixed(2)} × ${fp.size[2].toFixed(2)} m,`
+      + ` ${t('facing south')}`
     : ''
 
   return (
@@ -391,7 +450,8 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           ? (Number.isFinite(info.dist)
             ? `${t('A ↔ B')}: ${info.dist.toFixed(2)} m · ${info.time.toFixed(1)} / ${info.duration.toFixed(1)} s`
               + ` · ${t('figures 1.70 m, grid 1 m, +X = A → B')}` + markerNote
-            : `${info.time.toFixed(1)} / ${info.duration.toFixed(1)} s · ${t('figure 1.70 m, grid 1 m, in place')}`)
+            : `${info.time.toFixed(1)} / ${info.duration.toFixed(1)} s · ${t('figure 1.70 m, grid 1 m, in place')}`
+              + footNote + (dialled ? ` · ${t('arrow = the clip’s forward axis')}` : ''))
           : '')}
       </div>
       {onYawOffset ? (

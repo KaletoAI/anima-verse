@@ -803,6 +803,7 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
                in_place: bool = False, overwrite: bool = False,
                offset_b_m: Optional[List[float]] = None,
                loops: Optional[bool] = None, speed: float = 1.0,
+               yaw_deg: float = 0.0,
                target: str = "licensed", redistributable: bool = False,
                out_dir: Optional[Path] = None, rig: Optional[Path] = None,
                fps: int = 30, timeout_s: int = 900,
@@ -819,6 +820,10 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
 
     Everything refusable raises ``ClipImportError``; "the kind is already
     there" raises ``ClipKindExists`` so a route can answer 409.
+
+    ``yaw_deg`` is the orientation dial shared with the CMU import
+    (``cmu_clip._frame_takes``): the clip is turned about the vertical by that
+    many degrees after the frame of reference is built.
 
     ``preview`` runs the very same conversion into the inbox's ``.preview``
     folder (kind ``preview``), touches no library and no cache, and returns
@@ -955,7 +960,7 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
               "rest_from": rest_from,
               "rest_name": rest_path.name if rest_path is not None else "",
               "offset_b_m": [float(v) for v in (offset_b_m or (0, 0, 0))][:3],
-              "speed": float(speed or 1.0),
+              "speed": float(speed or 1.0), "yaw_deg": float(yaw_deg or 0.0),
               "bone_map": "auto", "source_name": names}
 
     st = runner.status()

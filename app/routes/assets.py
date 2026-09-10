@@ -334,7 +334,8 @@ async def post_clip_catalog_import(take_id: str, request: Request,
     """Imports one take into the FREE clip library — synchronously.
 
     Body: ``{kind, set?, start_s?, end_s?, loop_s?, in_place?, overwrite?,
-    target?}``. The conversion is a Blender run of a few seconds, so it answers
+    target?, yaw_deg?}``. ``yaw_deg`` turns the finished clip about the
+    vertical — the orientation the import preview was dialled to. The conversion is a Blender run of a few seconds, so it answers
     directly instead of going through the queue; the caller sees either the new
     clip or the converter's own message.
 
@@ -376,7 +377,7 @@ def _post_clip_catalog_import_sync(take_id: str, _: Dict[str, Any],
             loop_s=_num("loop_s"),
             in_place=bool(body.get("in_place", True)),
             overwrite=bool(body.get("overwrite")),
-            speed=_num("speed") or 1.0)
+            speed=_num("speed") or 1.0, yaw_deg=_num("yaw_deg") or 0.0)
     except clip_catalog.ClipKindExists as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ClipImportError as e:
@@ -533,7 +534,9 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
     """Imports one inbox file — or a pair — into a clip library, synchronously.
 
     Body: ``{kind, files: [src] | [src_a, src_b], rest_file?, set?, start_s?,
-    end_s?, loop_s?, in_place?, overwrite?, target?, redistributable?}``.
+    end_s?, loop_s?, in_place?, overwrite?, target?, redistributable?,
+    yaw_deg?}``. ``yaw_deg`` is the orientation dial — the angle the preview
+    was turned to before the import was accepted.
 
     A SOURCE is ``{name, take}``: ``name`` a path relative to the inbox
     (``pack/walk.fbx``), ``take`` the index of the animation inside it —
@@ -585,7 +588,7 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
             offset_b_m=[float(v) for v in (body.get("offset_b_m") or [0, 0, 0])][:3]
             if isinstance(body.get("offset_b_m"), list) else None,
             loops=None if body.get("loops") is None else bool(body.get("loops")),
-            speed=_num("speed") or 1.0,
+            speed=_num("speed") or 1.0, yaw_deg=_num("yaw_deg") or 0.0,
             target=target, redistributable=redistributable, preview=preview)
     except fbx_import.ClipKindExists as e:
         raise HTTPException(status_code=409, detail=str(e))
