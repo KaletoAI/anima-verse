@@ -3398,6 +3398,13 @@ async function main() {
   // of its storey's rooms, so the door is cut out of the BUILDING OUTLINE and
   // `rooms[0]` is that wall-less corridor. For this module it is an outside
   // door like any other — which is the point of the checks below.
+  // Its `outward_normal` [0,-1] is exactly `(along.z, -along.x)` of (1,0),
+  // i.e. the room-door construction: the fixture does NOT exercise the
+  // reversed-winding case, where the two come apart. Nothing is lost by that
+  // here — the client never reads the field (the server pre-computes the
+  // door-prop swing from it, § B1 "Woher `swing` kommt"), and the reversed
+  // ring is hand-derived on the server side in `scripts/smoke_floor_rooms.py`
+  // Part 8.
   console.log('\ndoorMarkers — the payload IS the doorway, nothing is derived');
   const doorScene = {
     extent_m: 10,

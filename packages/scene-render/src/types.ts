@@ -680,9 +680,14 @@ export interface SceneProblem {
    *  stick out, in recipe order. */
   room_ids?: string[]
   /** The STOREY a finding is about — `room_outside_level_outline` and
-   *  `stair_outside_level_outline`, both of which only a building that
-   *  narrows as it rises can earn. */
+   *  `stair_outside_level_outline` (both of which only a building that
+   *  narrows as it rises can earn), `corridor_without_floor` (§ A13b) and
+   *  the two hull-door kinds `hull_opening_without_corridor` /
+   *  `hull_opening_off_the_outline` (§ A13c). */
   level?: number
+  /** `hull_opening_off_the_outline` (§ A13c): the outline edge the door names
+   *  and the storey's footprint does not have. */
+  edge?: number
   /** `elevator_outside_level_outline`: the storeys the shaft misses. */
   levels?: number[]
 }

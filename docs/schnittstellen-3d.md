@@ -3077,7 +3077,11 @@ deshalb nicht in einem Raum, sondern in der Hülle.
   den `doorways[]`-Eintrag, wie sie jeden anderen nehmen; nichts davon prüft,
   ob `rooms[0]` ein Raum mit Rechteck ist, und das Sperr-Gatter (§ A14) fragt
   ohnehin nur Raum-Ids — ein gesperrter Flur färbt seine Hüllentür rot und
-  hält ihr Blatt zu, wie bei jedem anderen Raum. Die Schwelle hängt an der
+  hält ihr Blatt zu, wie bei jedem anderen Raum. Mit derselben Ausnahme wie
+  dort: der Raum, in dem der Avatar gerade STEHT, ist von der Sperr-Optik
+  ausgenommen, also bleibt die Hüllentür aus dem gesperrten Flur heraus
+  gesehen offen — eine Regel gegen das Betreten sagt nichts über das
+  Verlassen. Die Schwelle hängt an der
   **Etagengruppe der Kachel**, nicht an einer Raumgruppe — eine Hüllentür
   braucht also keine. Wer aus dem Flur ins Freie läuft, geht durch sie
   (`roomDoor('__floor__<level>')` findet sie als dessen Außentür), und wer
@@ -7732,8 +7736,10 @@ Die letzte Zeile ist der Fall der Smoke-Fixtur (Südtür von Raum „a": `at_wor
 ### Woher `swing` kommt
 
 `swing` ist das Vorzeichen, mit dem eine POSITIVE Drehung um y das Blatt nach
-AUSSEN öffnet — „außen" ist `_door_outward` = `(uz, −ux)`, die Normale weg von
-dem Raum, aus dessen Wand das Loch geschnitten wurde (`rooms[0]`).
+AUSSEN öffnet — „außen" ist bei RAUMTÜREN `_door_outward` = `(uz, −ux)`, die
+Normale weg von dem Raum, aus dessen Wand das Loch geschnitten wurde
+(`rooms[0]`). Hüllentüren tragen ihre Normale selbst — siehe den Nachtrag
+2026-09-09 unten.
 
 Dreht man die gesetzte Gruppe um φ, wandert ein Weltversatz (vx, vz) mit
 
@@ -7745,21 +7751,22 @@ Das freie Ende des Blattes liegt bei `v = +along` (linke Angel) bzw.
 `v = −along` (rechte). Also ist die Ableitung genau `(uz, −ux)` = außen für
 links → **+1**, und ihr Gegenteil für rechts → **−1**.
 
-**Nachtrag 2026-09-09 (§ A13c):** „außen" ist seither das
-`outward_normal` DES EINTRAGS, wo er eines mitbringt, sonst weiter
-`_door_outward`. Gerechnet wird das Vorzeichen aus dem Skalarprodukt
+`SCENE_RECIPE_VERSION` 4 → **5**: dieselben Daten liefern andere `models`/
+`walls`, also muss jede Szenensignatur sich bewegen. In der Signatur stehen
+zusätzlich `default_door_prop_id` (ein Feld der LOCATION, das keine
+Raumsignatur abdeckt) und die Mesh-Signatur jedes aufgelösten Tür-Props (die
+URL bleibt beim Neu-Erzeugen gleich).
+
+**Nachtrag 2026-09-09 (§ A13c)** — er gehört NICHT zur v5-Runde oben und hat
+den Rezept-Stand nicht bewegt (kein bestehender Payload ändert sich):
+„außen" ist seither das `outward_normal` DES EINTRAGS, wo er eines mitbringt,
+sonst weiter `_door_outward`. Gerechnet wird das Vorzeichen aus dem Skalarprodukt
 `(uz·nx − ux·nz)` (bei rechter Angel gespiegelt) statt aus der Angel allein.
 Für eine Raumtür ist `n` per Konstruktion `(uz, −ux)`, das Produkt also +1 —
 die Regel oben und jede bestehende Zahl bleiben unverändert. Nur eine
 **Hüllentür** kann davon abweichen: ihr `n` ist die Außennormale der
 Konturkante, und auf einer andersherum gewickelten Kontur öffnet dasselbe
 Blatt bei umgekehrtem Vorzeichen nach außen.
-
-`SCENE_RECIPE_VERSION` 4 → **5**: dieselben Daten liefern andere `models`/
-`walls`, also muss jede Szenensignatur sich bewegen. In der Signatur stehen
-zusätzlich `default_door_prop_id` (ein Feld der LOCATION, das keine
-Raumsignatur abdeckt) und die Mesh-Signatur jedes aufgelösten Tür-Props (die
-URL bleibt beim Neu-Erzeugen gleich).
 
 ### Slots: welche Fläche eines Props sich füllen lässt
 
