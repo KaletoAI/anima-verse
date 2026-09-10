@@ -962,16 +962,22 @@ immer sichtbar, nur Locations verstecken sich.
 
 **`areas[].meta.scatter` — die Streuung (Vertrag für BEIDE Renderer):**
 
-Eine **Liste** je Fläche, höchstens 8 Einträge, jeder Eintrag genau sechs
-Felder (Server-Whitelist `app/models/terrain._sanitize_scatter_list`):
+Eine **Liste** je Fläche, höchstens 8 Einträge, jeder Eintrag aus höchstens
+zehn Feldern (Server-Whitelist `app/models/terrain._sanitize_scatter_list`):
 
 ```
 scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = keine
+                                        #   (nur bei spread; edge/center rechnen ohne sie)
             model?: str,                # /assets/props/<id>/model; fehlt = eingebautes Büschel
             height_m?: float,           # ZIELHÖHE: das Prop wird uniform darauf skaliert
             min_spacing_m?: float,      # Mindestabstand der EIGENEN Instanzen, 0..100 m
-            yaw_mode?: "fixed" | "quarter",   # Ausrichtung; fehlt = zufällig (2026-09-09)
-            yaw_deg?: float}, … ]       # Basiswinkel 0..360, nur MIT yaw_mode gespeichert
+                                        #   (bei place=edge: der STATIONSABSTAND am Rand)
+            yaw_mode?: "aligned",       # Drehung relativ zur Flächenachse; fehlt = zufällig
+            yaw_deg?: float,            # Basiswinkel 0..360, nur MIT yaw_mode gespeichert
+            place?: "edge" | "center",  # fehlt = spread (die gestreute Fläche wie bisher)
+            offset_m?: float,           # 0..100 m nach INNEN, nur MIT place=edge; fehlt = 0
+            variant?: int,              # Listenposition der Variante, nur MIT place=center
+            reshuffle_min?: int}, … ]   # Neuwurf alle n SPIEL-Minuten, 1..100000; fehlt = nie
 ```
 
 - **Fehlende oder leere Liste = es wächst nichts.** Es gibt keine Vorgabe.
@@ -1001,8 +1007,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
 
   ```
   fehlt:    yaw = r · 2π                                   (jeder Scatter bisher)
-  fixed:    yaw = yaw_deg · π/180
-  quarter:  yaw = yaw_deg · π/180 + floor(r · 4) · π/2     (Gebäude am Raster)
+  aligned:  yaw = Achse + yaw_deg · π/180                  (Achse: Nachtrag 2026-09-10)
   ```
 
   Bogenmaß um +y, Blickrichtung `(sin yaw, cos yaw)` — 0° = +z (Süden),
@@ -1012,6 +1017,165 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   (eine Zahl, die auf nichts wirkt); ein unbekannter Modus verliert beide
   Schlüssel. Zahlen von Hand: `client3d/scripts/smoke_scatter_math.mjs`
   Abschnitt (Q), Whitelist in `scripts/smoke_terrain_areas.py` [11y].
+- **Achse, Randreihe, Mitte, Fremdabstand und Neuwurf (Nachtrag
+  2026-09-10).** Eine Streuung kennt seit diesem Tag drei Platzierungen statt
+  einer, dreht relativ zum RAND statt nach der Weltpeilung, hält Abstand zu
+  dem, was frühere Reihen schon gepflanzt haben, und darf sich mit der
+  Spieluhr neu würfeln. Der Server whitelistet nur
+  (`_sanitize_scatter_entry`), gerechnet wird ausschließlich im geteilten
+  Paket (`@anima/scene-render` → `scatterAxis.ts`, `occupancy.ts`,
+  `scatter.ts`, `stroke.ts`); beide Renderer rufen dieselben Funktionen mit
+  denselben Argumenten in derselben Reihenfolge auf. **Kein neues
+  Payload-Feld.**
+
+  **Die Flächenachse** ist die Bezugsrichtung, gegen die gedreht wird, und
+  sie ist so orientiert, dass `Achse + 90°` IN die Fläche schaut. Für eine
+  gemalte Fläche ist es die Kante des Rings, die dem Punkt am nächsten liegt
+  (`ringEdgeAxis`, kleinste Punkt-Segment-Distanz; Gleichstand geht an die
+  zuerst geprüfte Kante — das ist die schließende Kante vom letzten zum
+  ersten Punkt, danach die Ringreihenfolge; weniger als drei Punkte → 0).
+  Für eine Kante A→B:
+
+  ```
+  heading = atan2(dx, dz)                    mit d = (B − A)/|B − A|
+  n       = Blickvektor von heading + 90° = (dz, −dx)/|B − A|
+  Achse   = heading        wenn M + n·ε im Ring liegt   (M = Kantenmitte)
+          = heading + π    sonst
+  ```
+
+  `ε` ist `AXIS_INSIDE_EPS_M` = 1e-4 m (0,1 mm — weit unter dem Zentimeter,
+  den der Server speichert, weit über dem Float-Rauschen einer
+  Kilometer-Welt), der Innen-Test ist der Even-odd-Wurf von `pointInRing`.
+  Die Antwort hängt also NICHT daran, in welcher Umlaufrichtung jemand die
+  Form gezeichnet hat. Eine Strich-Fläche hat keine Innenseite: ihre Achse
+  ist die Laufrichtung des nächsten Segments der DEKORIERTEN Mittellinie
+  (`lineAxis` über `strokeCentreLine`, kein Innen-Test, weniger als zwei
+  Punkte → 0) — dieselbe Richtung, die die `along`-Reihen längst lesen.
+
+  **`yaw_mode: "aligned"`** ist der einzige Modus: `yaw = Achse +
+  yaw_deg · π/180`, auf [0, 2π) normiert. Damit heißt derselbe Winkel an
+  jeder Kante und auf jeder Form dasselbe: **0° = parallel zum Rand** (ein
+  Auto steht am Bordstein in Fahrtrichtung), **90° = schaut in die Fläche**
+  (eine Bank am Platzrand blickt zur Mitte), **270° = schaut nach außen**
+  (eine Hausfront wendet sich der Straße zu). Der Yaw-Zug fällt in JEDEM
+  Modus (drei Zahlen je Kandidat, wie bisher), ein Moduswechsel bewegt also
+  weiterhin kein Prop. Die Achse wird nur unter `aligned` erfragt, nur für
+  einen ÜBERLEBENDEN und erst NACH dem Zug — sie ist eine reine Funktion der
+  Position, ändert also keine Antwort, und ein verworfener Kandidat bezahlt
+  den Lauf über die Ringkanten nicht.
+
+  **Die abgelösten Modi `fixed`/`quarter`** haben nirgends mehr einen Leser;
+  eine einmalige Boot-Migration (`migrate_scatter_yaw_mode_once`, idempotent,
+  schreibt nur geänderte Flächen) hat sie in gespeicherten Flächen zu
+  `aligned` gemacht und `yaw_deg` stehen gelassen. Der WERT blieb, seine
+  BEDEUTUNG wechselte: aus einer Weltpeilung wurde ein Winkel relativ zur
+  Fläche — eine Reihe mit `fixed 90°` schaut seither nicht mehr nach Osten,
+  sondern in die Fläche.
+
+  **`place: "edge"` — die Reihe am Rand** (`ringStations` +
+  `scatterEdgeInstances`). Die Bogenlänge läuft über den GESCHLOSSENEN Ring
+  (die letzte Kante zurück zum Anfangspunkt eingeschlossen), Station k liegt
+  bei
+
+  ```
+  s_k   = start + k · spacing,   s_k < L,   start = spacing/2
+  spacing = min_spacing_m        (in diesem Modus der STATIONSABSTAND)
+  Punkt = P(s_k) + n_in · offset_m,   n_in = Blickvektor von Achse + 90°
+  ```
+
+  auf der Kante, deren halboffene Spanne `[cum_i, cum_i+1)` `s_k` enthält;
+  `s = L` ist wieder `s = 0` und keine Station, und ein Scatter-Eintrag hat
+  kein `start_m`. **`density_per_100m2` wirkt hier nicht** (gespeichert wird
+  sie trotzdem, ein Moduswechsel verliert also nichts). Je Station EIN Zug
+  aus dem Reihen-Strom `scatterSeed(area_id, index, epoche)`, immer und vor
+  jedem Verdikt; danach in dieser Reihenfolge: im Ring → Occluder →
+  Grundrisse (`clearM`) → Belegung, und der Überlebende wird in die Belegung
+  eingetragen. Der Ring-Test prüft den um `ε` nach innen geschobenen Punkt —
+  bei `offset_m` 0 liegt eine Station AUF dem Rand, und der Even-odd-Wurf
+  zählt einen Randpunkt an der einen Kante als innen, an der anderen als
+  außen; ohne den Schubs verschwände die halbe Reihe ohne sichtbaren Grund
+  (Befund 2026-09-10). Stationen, die der Versatz aus der Form hinausschiebt
+  (eine spitze Ecke, ein Versatz breiter als ein schmaler Arm), fallen weg —
+  eine **Subtraktion**: das Ordinal zählt sie mit, die Variante der übrigen
+  Stationen bleibt (`(FNV-1a(seed) + Ordinal) mod n`). Die Reihe wird EINMAL
+  für den ganzen Ring gerechnet, das Kamerafenster filtert der Aufrufer,
+  genau wie bei `along`.
+
+  **`place: "center"` — die eine Mitte** (`polylabel` +
+  `scatterCenterInstance`). Der Punkt ist der **Pol der Unzugänglichkeit**,
+  der Punkt mit dem größten Abstand zum Rand — nicht der Schwerpunkt, der
+  bei einem L 12 cm vor der Innenwand und bei einer Sichel ganz außerhalb
+  der Form liegt. Mapbox' Polylabel (2016), ausgeschrieben statt abhängig:
+  die Bounding-Box wird in Quadratzellen der Kantenlänge
+  `min(Breite, Höhe)` gekachelt, jede Zelle trägt die vorzeichenbehaftete
+  Distanz `d` ihrer Mitte und die Schranke `max = d + h·√2`, die kein Punkt
+  in ihr überschreiten kann; eine Prioritätswarteschlange gibt die
+  aussichtsreichste Zelle aus, und geviertelt wird nur, solange
+  `cell.max − bestD > precision` gilt — bei `cell.max − bestD ≤ precision`
+  ist die Zelle fertig. `precision` ist 0,5 m (ein Prop, kein
+  Vermessungspunkt), Startwerte sind Schwerpunkt und Box-Mitte, und
+  `POLYLABEL_MAX_CELLS` = 100000 geöffnete Zellen ist ein Wächter, kein
+  Budget. Ein Ring mit weniger als drei Punkten und ein Pol ohne Abstand zum
+  Rand setzen nichts. Sonst: EIN Zug aus demselben Strom, Achse am Pol
+  (`axisAt` des Aufrufers — bei Strich-Flächen `lineAxis` —, sonst
+  `ringEdgeAxis`), Verdikte Occluder → Grundrisse → Belegung, dann
+  eintragen. Variante: `variant` gesetzt → diese Listenposition, auf
+  `[0, n−1]` geklemmt; sonst dieselbe Formel mit Ordinal 0.
+
+  **`reshuffle_min` — der Neuwurf mit der SPIELUHR.** Eine Zeile mit dem Feld
+  wird alle n Spielminuten neu gewürfelt:
+
+  ```
+  epoche = floor(game_time.total_seconds / (reshuffle_min · 60))   (reshuffleEpoch)
+  Seed   = <bisheriger Seed>:e<epoche>                             (seedEpochSuffix)
+  ```
+
+  also `terrain:scatter:<area_id>:<index>:<cx>,<cz>:e<epoche>` je Zelle,
+  `terrain:scatter:<area_id>:<index>:e<epoche>` für `edge`/`center` und
+  `terrain:along:<area_id>:<index>:e<epoche>` für eine Reihe an der Linie.
+  **Ohne das Feld hängt gar kein Suffix an**, die Seeds sind Byte für Byte
+  die alten. `total_seconds` kommt aus dem Wurzelfeld `game_time` des
+  Worldmap-Payloads (§ A1.3) — kein neues Feld, kein neuer Server-Code —, und
+  weil es die SPIEL-Uhr ist, steht der Neuwurf in einer eingefrorenen Welt
+  still und läuft bei größerem Tick-Faktor schneller. Beide Renderer rechnen
+  die Epoche aus demselben Wert: der Client baut sein Scatter-Fenster neu,
+  sobald für irgendeine Zeile die Epoche wechselt; die Editor-Vorschau ist
+  eine Momentaufnahme des Ladezeitpunkts (kein Timer — ein Reload holt die
+  nächste Epoche).
+
+  **Der Fremdabstand** (`OccupancyGrid`, `occupancy.ts`) ist der Gedanke des
+  `min_spacing_m` über ZEILEN- und Flächengrenzen hinweg: jede überlebende
+  Instanz wird mit ihrer halben Ausdehnung abgelegt, und ein späterer
+  Kandidat fällt weg, solange sein eigener Kreis einen abgelegten schneidet:
+
+  ```
+  geblockt  <=>  hypot(x − ax, z − az) < r + ar   für ein abgelegtes (ax, az, ar)
+  ```
+
+  **Echt kleiner**, wie beim Eigenabstand und bei der Grundriss-Freihaltung:
+  zwei Props, die sich genau berühren, stehen beide. Die Radien sind die
+  halben Ausdehnungen (`occupyR`, sonst `clearM`) — der 3D-Client gibt die
+  gemessene halbe Breite, der Editor `h · 0.5`; ein Autorenfeld dafür gibt es
+  nicht, der Abstand ist die Summe der halben Breiten und sonst nichts. Die
+  **Reihenfolge** ist die des Payloads: Flächen von unten nach oben, je
+  Fläche erst `meta.stroke.along[]` nach Index, dann `meta.scatter[]` nach
+  Index; innerhalb einer Zelle also erst alle along-Instanzen, dann die
+  `edge`/`center`-Zeilen, dann die gestreuten. Die Prüfung ist das LETZTE
+  Verdikt, nach Ring, Occludern, Grundrissen und Eigenabstand — wieder eine
+  reine **Subtraktion**, Ordinal und Variante der Überlebenden bleiben. Das
+  Raster ist **rein additiv** (nichts wird je entfernt, sonst könnte eine
+  späte Zeile einen Platz wieder freigeben, gegen den sich eine frühe schon
+  entschieden hat), und es gehört **einer Zelle**: der Aufrufer legt es je
+  Zelle an und wirft es mit ihr weg — **die Naht-Ausnahme des Eigenabstands
+  gilt also unverändert auch für den Fremdabstand**. `scatterCellInstances`
+  fragt für jeden Kandidaten der Zelle, trägt aber nur Überlebende INNERHALB
+  des gemalten Rings ein: ein Prop, das niemand zeichnet, darf der nächsten
+  Fläche nichts wegnehmen.
+
+  Zahlen von Hand: `client3d/scripts/smoke_scatter_math.mjs` Abschnitte (Q)
+  Drehung, (R) Achse, (T) Pol, (U) Stationen, (V) Belegung, (W) Epoche und
+  (X) Rand- und Mitte-Sampler; Whitelist und Migration
+  `scripts/smoke_terrain_areas.py` [11y]/[11p]/[11m].
 - **`meta.stroke.along[]` — die Strich-Streuung (Nachtrag 2026-09-09).** Eine
   mit dem LINIENWERKZEUG gezeichnete Fläche trägt in ihrem Rezept zusätzlich
   Reihen von Props ENTLANG ihrer Mittellinie — Laternen, Alleebäume, parkende
@@ -1027,7 +1191,8 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
             yaw_mode?: "random",# fehlt = fest; random = je Instanz ein Zug aus dem Reihen-Seed
             start_m?: float,    # Bogenlänge der ersten Station, 0..spacing; fehlt = spacing/2
             height_m?: float,   # Zielhöhe wie beim Scatter
-            variant?: int}, …]  # Listenposition der Modell-Variante; fehlt = Formel
+            variant?: int,      # Listenposition der Modell-Variante; fehlt = Formel
+            reshuffle_min?: int}, …]  # Neuwurf alle n SPIEL-Minuten, 1..100000; fehlt = nie
   ```
 
   Die Auslieferung hängt dieselben Prop-Fakten an wie an einen Scatter-Eintrag
@@ -1059,7 +1224,11 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   übrigen Instanzen ändert sich nicht. Die eigene Fläche prüft NICHT (der
   Versatz sagt, ob die Reihe auf dem Asphalt oder daneben steht). Variante:
   `variant` gesetzt → alle diese Listenposition (auf n geklemmt), sonst
-  `(FNV-1a(seed) + Nummer) mod n`.
+  `(FNV-1a(seed) + Nummer) mod n`. Seit 2026-09-10 kommt als LETZTES Verdikt
+  die Belegung dazu (`occupied`, geprüft mit `occupyR`; ein Überlebender wird
+  dort eingetragen), und mit `reshuffle_min` trägt der Reihen-Seed die
+  Epoche — beides in exakt der Form des Nachtrags oben, denn along-Reihen
+  laufen in derselben Zelle vor den Scatter-Zeilen.
 
   **Client:** `ground.ts buildScatter` führt jede Reihe durch denselben
   `ScatterProp`-Bau wie eine Scatter-Zeile (LOD, Impostor, Wind, Bodenprobe,
@@ -1144,7 +1313,10 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   weg. Der Wald unter dem darübergemalten Fluss wächst nicht mehr durchs
   Wasser. Getestet mit derselben Even-odd-Regel wie der eigene Ring
   (`pointInRing`, Server-Semantik `point_in_polygon`), und weil der Yaw auch
-  hier vorher gezogen wird, ist es wieder eine reine **Subtraktion**.
+  hier vorher gezogen wird, ist es wieder eine reine **Subtraktion**. Seit
+  2026-09-10 folgt darauf noch die Belegung (Nachtrag oben): was frühere
+  Zeilen DERSELBEN Zelle gepflanzt haben, blockt genauso — als letztes
+  Verdikt und ebenfalls nur subtrahierend.
 - **Grundflächen platzierter Locations werden ausgespart** (Befund B18):
   ein Kandidat im Footprint-Quadrat (Zentrum, `yaw_deg`, `plan_width_m` —
   das GEHOBENE Feld) fällt weg. Weil der Yaw vorher gezogen wird, ist das
