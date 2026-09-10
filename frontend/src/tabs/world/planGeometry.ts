@@ -204,10 +204,25 @@ export const edgePointOnEdge = (outline: Pt[], i: number, at: number): { x: numb
   return { x: a[0] + (b[0] - a[0]) * at, y: a[1] + (b[1] - a[1]) * at }
 }
 
-/** Nearest polygon edge + fraction along it for a room-local point. */
-export function nearestPolygonEdge(outline: Pt[], p: Pt): { edge: number; at: number } {
-  let best = { edge: 0, at: 0.5 }
-  let bestD = Infinity
+/**
+ * The outline edge a point lies CLOSEST to, the fraction along that edge and
+ * how far the point is from it — the whole conversion behind a click on a
+ * contour. `edge` is the index of the segment point i → point i+1 (the ring
+ * auto-closes), `at` the foot point's clamped fraction along it, `dist` the
+ * metres between `p` and that foot point. An outline with no edges answers
+ * `{edge: 0, at: 0.5, dist: Infinity}` — a caller with nothing to aim at.
+ *
+ * hand-checked on the square [[-5,-5],[5,-5],[5,5],[-5,5]], whose edges run
+ * 0: (-5,-5)→(5,-5), 1: (5,-5)→(5,5), 2: (5,5)→(-5,5), 3: (-5,5)→(-5,-5):
+ *   (0, -4.8) → edge 0, foot (0,-5):  at = (0−(−5))/10 = 0.5, dist = 0.2
+ *   (4.9, 2)  → edge 1, foot (5, 2):  at = (2−(−5))/10 = 0.7, dist = 0.1
+ *   (-5.3, 0) → edge 3, foot (-5,0):  at = (0−5)/(−10) = 0.5, dist = 0.3
+ * (`scripts/smoke_plan_hull_door.mjs` runs exactly these three.)
+ */
+export function nearestOutlineEdge(
+  outline: Pt[], p: Pt): { edge: number; at: number; dist: number } {
+  let best = { edge: 0, at: 0.5, dist: Infinity }
+  let bestD2 = Infinity
   for (let i = 0; i < outline.length; i++) {
     const { a, b } = edgeSegment(outline, i)
     const dx = b[0] - a[0]
@@ -216,13 +231,57 @@ export function nearestPolygonEdge(outline: Pt[], p: Pt): { edge: number; at: nu
     const at = len2 > 0 ? clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2, 0, 1) : 0.5
     const qx = a[0] + dx * at
     const qy = a[1] + dy * at
-    const dist = (p[0] - qx) ** 2 + (p[1] - qy) ** 2
-    if (dist < bestD) {
-      bestD = dist
-      best = { edge: i, at: r4(at) }
+    const d2 = (p[0] - qx) ** 2 + (p[1] - qy) ** 2
+    if (d2 < bestD2) {
+      bestD2 = d2
+      best = { edge: i, at: r4(at), dist: r4(Math.sqrt(d2)) }
     }
   }
   return best
+}
+
+/** Nearest polygon edge + fraction along it for a room-local point. */
+export function nearestPolygonEdge(outline: Pt[], p: Pt): { edge: number; at: number } {
+  const { edge, at } = nearestOutlineEdge(outline, p)
+  return { edge, at }
+}
+
+/** At most 8 doors on the building outline per location — the server's own
+ *  cap (`world_ops._sanitize_map3d`), stated here so both the tool and the
+ *  button can stop before a ninth entry is silently dropped on save. */
+export const HULL_OPENING_MAX = 8
+
+/** How close two doors may come on ONE contour edge before the editor refuses
+ *  to author the second (§ 6): the composer cuts both holes and hangs both
+ *  leaves, and two leaves in one stretch of wall stack. Metres ALONG the
+ *  edge — the gap between the two centres, not between their reveals, so a
+ *  pair of ordinary 1 m doors can still stand side by side. */
+export const HULL_DOOR_MIN_GAP_M = 1.0
+
+/**
+ * WHICH already-existing door blocks a hull door at (`edge`, `at`) — the index
+ * in `doors`, or −1 when the spot is free.
+ *
+ * `doors` are points in the SAME frame as `outline` (location-local metres):
+ * the composed `doorways[].at_world` of every door that leads outside on this
+ * storey. Each is projected onto the outline with `nearestOutlineEdge`, and a
+ * projection that lands on `edge` within `HULL_DOOR_MIN_GAP_M` metres of the
+ * new door's centre is the refusal. The projection is the NEAREST point, not
+ * the server's ray along the door's outward normal (`scene_recipe
+ * ._contour_hit`) — for a room standing against the hull, which is every room
+ * with an outside door worth speaking of, the two agree.
+ */
+export function hullDoorConflict(
+  outline: Pt[], edge: number, at: number, doors: Pt[]): number {
+  if (outline.length < 3) return -1
+  const { a, b } = edgeSegment(outline, edge % outline.length)
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1])
+  for (let i = 0; i < doors.length; i++) {
+    const hit = nearestOutlineEdge(outline, doors[i])
+    if (hit.edge !== edge) continue
+    if (Math.abs(hit.at - at) * len < HULL_DOOR_MIN_GAP_M) return i
+  }
+  return -1
 }
 
 /** ONE reading convention for both edge vocabularies: letters map onto the

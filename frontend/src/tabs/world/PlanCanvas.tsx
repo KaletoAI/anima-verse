@@ -234,6 +234,15 @@ interface Props {
   onMap3d?: <K extends keyof Map3D>(key: K, value: Map3D[K] | undefined) => void
   /** Write the plot polygon (the 🟩 tool drags its vertices). */
   writeBoundary: (points: Pt[]) => void
+  /** A click with the hull-door tool armed, in LOCAL METRES. The canvas hands
+   *  over the point and nothing else: which contour edge that is, whether a
+   *  door already stands there and what the entry looks like is the editor's
+   *  business (`RoomLayoutEditor.placeHullDoor`) — this file only knows where
+   *  the pointer was. */
+  onPlaceHullDoor: (p: Pt) => void
+  /** The selected door on the contour (index in `map3d.hull_openings`). */
+  hullSel: number | null
+  onSelectHull: (i: number) => void
   /** Which opening of the OWNING room a mirrored ghost belongs to. */
   ownerOpeningIndex: (ownerId: string, point: { x: number; y: number }) => number
 }
@@ -254,7 +263,7 @@ export function PlanCanvas({
   startCurveDrag, startGhostDrag, furnish, reviewing, ghostSel, setGhostSel,
   aids, underlay, bUnderlay, underlayUrl, snapshotFrame, drawTarget,
   figureAt, setFigurePos, onMap3d,
-  writeBoundary, ownerOpeningIndex,
+  writeBoundary, onPlaceHullDoor, hullSel, onSelectHull, ownerOpeningIndex,
 }: Props) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -296,7 +305,7 @@ export function PlanCanvas({
       // the room handlers out of the way.
       if (clickMode !== 'outline' && clickMode !== 'draw-room'
           && clickMode !== 'elevator' && clickMode !== 'boundary-door'
-          && clickMode !== 'stairs') {
+          && clickMode !== 'stairs' && clickMode !== 'hull-door') {
         planLog('canvas click ignored: no drawing/placement mode armed',
           { clickMode, target: (e.target as HTMLElement).tagName })
         return
@@ -345,6 +354,13 @@ export function PlanCanvas({
           setSelectedBoundary(cur.length)
         }
         setClickMode('')
+      } else if (clickMode === 'hull-door') {
+        // A DOOR IN THE BUILDING SHELL (§ 6): the click names a point,
+        // the editor turns it into the nearest contour edge plus the
+        // fraction along it and refuses a spot another door already holds.
+        // The mode is cleared THERE, not here — a refused click leaves
+        // the tool armed so the next one can land.
+        onPlaceHullDoor(pointerM(e.clientX, e.clientY))
       } else if (clickMode === 'stairs') {
         // ONE FLIGHT PER STOREY JUMP: the click sets the FOOT, the storey
         // being edited is where it starts, and it always arrives one level
@@ -1103,6 +1119,46 @@ export function PlanCanvas({
         })}
       </svg>
     ) : null}
+    {/* DOORS ON THE BUILDING CONTOUR (§ 6) — the front door of a storey
+        whose hallway IS its front. Same glyph, same width-in-metres and same
+        rotation-to-the-edge as a room opening, because it is the same hole:
+        only the wall it sits in belongs to the shell instead of to a room.
+        Drawn from the RESOLVED storey footprint, which is the outline the
+        `edge` index means; an entry pointing past its end draws nothing and
+        is reported by the composer (`hull_opening_off_the_outline`). */}
+    {levelOutlinePts.length >= 3
+      ? (map3d?.hull_openings || []).map((op, i) => {
+        if ((op.level || 0) !== level) return null
+        if (!(op.edge >= 0 && op.edge < levelOutlinePts.length)) return null
+        const pt = edgePointOnEdge(levelOutlinePts, op.edge, op.at)
+        const seg = edgeSegment(levelOutlinePts, op.edge)
+        const deg = Math.atan2(seg.b[1] - seg.a[1],
+                               seg.b[0] - seg.a[0]) * 180 / Math.PI
+        const sel = hullSel === i
+        const col = sel ? '#fff' : (OPENING_COLOR[op.type] || '#e0a356')
+        return (
+          <div
+            key={`hull-${i}`}
+            title={`${op.type} · ${op.width_m}×${op.height_m} m · ${t('on the building contour')}`}
+            onClick={(ev) => {
+              if (clickMode || armedProp) return
+              ev.stopPropagation()
+              onSelectHull(i)
+            }}
+            style={{
+              position: 'absolute',
+              left: `${fx(pt.x) * 100}%`, top: `${fz(pt.y) * 100}%`,
+              width: `max(14px, ${(op.width_m / view.size) * 100}%)`,
+              height: 24,
+              transform: `translate(-50%, -50%) rotate(${deg}deg)`,
+              cursor: clickMode ? 'crosshair' : 'pointer',
+            }}
+          >
+            <OpeningGlyph type={op.type} col={col} />
+          </div>
+        )
+      })
+      : null}
     {/* Empty plan: say where the pen is, not just that there is nothing.
         "Below" used to mean a chip row past the scale bar and three other
         blocks; the ⬠ buttons in the banner sit right above the canvas.

@@ -59,8 +59,9 @@ import {
   CLOSE_TOL_PX, MIN_ROOM_M, MIN_WINDOW_EDGE_M, OPENING_DEFAULT,
   PLAN_MAX_M, SNAP_TOL_PX, absOutline, buildSnapTargets, clamp,
   edgePointOnEdge, edgeSegment, exteriorEdges, localToRoom,
-  atOrigin, levelOutline, nearestPolygonEdge, normalizeOpeningEdge,
-  outlineOf,
+  atOrigin, levelOutline, nearestOutlineEdge, nearestPolygonEdge,
+  normalizeOpeningEdge, outlineOf, hullDoorConflict, HULL_DOOR_MIN_GAP_M,
+  HULL_OPENING_MAX,
   outlineSourceLevel, r4, rM,
   rotateAbout, storedAt,
   sharedEdges, snapDrawPoint, snapMoveOffset, snapToGrid,
@@ -375,6 +376,25 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // Selected boundary pass-through (index into map3d.boundary_openings) —
   // highlights its bar on the frame and its edit row below the plan.
   const [selectedBoundary, setSelectedBoundary] = useState<number | null>(null)
+  // Selected door on the building contour (index into map3d.hull_openings) —
+  // its glyph on the contour and its strip in the Storey tab. Storey-scoped
+  // like the pass-through is plot-scoped, so picking a room does not clear
+  // it; both surfaces that read it check the storey themselves.
+  const [hullSel, setHullSel] = useState<number | null>(null)
+  // Why the last hull-door click did NOT land. Shown in the status line under
+  // the plan — right where the click happened, and never a window.alert.
+  const [hullHint, setHullHint] = useState('')
+  /** Pick a door on the contour AND SHOW ITS STRIP: it is edited in the Storey
+   *  tab, so a click on the glyph out on the plan has to open that tab —
+   *  otherwise selecting a door looks like it did nothing (the same move the
+   *  status line makes for the findings). */
+  const selectHull = useCallback((i: number | null) => {
+    setHullSel(i)
+    if (i !== null) {
+      setInspTab('level')
+      setInspCollapsedStored(false)
+    }
+  }, [setInspCollapsedStored])
   // The pose catalog: its place types feed the 🎯 picker, its poses the
   // preview cycler of the selected marker.
   const poseCatalog = usePoseCatalog()
@@ -770,6 +790,65 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     ? !!map3d?.outline?.length
     : outlineSourceLevel(map3d?.level_outlines, level) === level
 
+  /**
+   * A CLICK BECOMES A DOOR IN THE BUILDING SHELL (§ 6).
+   *
+   * What is stored is the contour edge plus the fraction along it — the same
+   * pair a boundary pass-through stores, read back by the composer against
+   * the SAME resolved storey outline the plan draws here, so no projection
+   * happens twice and no renderer re-derives the spot.
+   *
+   * TWO REFUSALS, both inline and both leaving the tool armed:
+   *  * the server's cap of 8 per location — a ninth entry would be dropped on
+   *    save without a word;
+   *  * a door that ALREADY stands on that stretch of contour. The composer
+   *    does not deduplicate them (Task 13): it would cut two holes and hang
+   *    two leaves in one wall, which is exactly the mess "the editor prevents
+   *    it" refers to. Every door leading outside on this storey counts —
+   *    a room's front door as much as another hull door — and each is
+   *    projected onto the contour by `hullDoorConflict`.
+   */
+  const placeHullDoor = useCallback((p: Pt) => {
+    const outline = levelOutlinePts
+    if (outline.length < 3 || !onMap3d) return
+    const cur = map3d?.hull_openings || []
+    if (cur.length >= HULL_OPENING_MAX) {
+      setHullHint(t('At most {n} doors on the outline per location.')
+        .replace('{n}', String(HULL_OPENING_MAX)))
+      return
+    }
+    const hit = nearestOutlineEdge(outline, p)
+    // The doors that are already there, as the SERVER composed them: every
+    // threshold of this storey that leads out of the building — a room's
+    // front door as much as a hull door that has already been through the
+    // composer.
+    const outsideDoors: Pt[] = (scene?.doorways || [])
+      .filter((d) => d.outside && (d.level || 0) === level)
+      .map((d) => [d.at_world[0], d.at_world[1]] as Pt)
+    // …PLUS the hull doors of the draft itself. The scene payload is
+    // debounced, so two quick clicks on the same spot would both land while
+    // the first one is still on its way to the server — and this editor
+    // already knows exactly where it put them.
+    for (const op of cur) {
+      if ((op.level || 0) !== level) continue
+      if (!(op.edge >= 0 && op.edge < outline.length)) continue
+      const q = edgePointOnEdge(outline, op.edge, op.at)
+      outsideDoors.push([q.x, q.y])
+    }
+    if (hullDoorConflict(outline, hit.edge, hit.at, outsideDoors) >= 0) {
+      setHullHint(t('A door already leads outside here — move at least {n} m along the contour, or edit the one that stands there.')
+        .replace('{n}', String(HULL_DOOR_MIN_GAP_M)))
+      return
+    }
+    setHullHint('')
+    onMap3d('hull_openings', [...cur, {
+      level, edge: hit.edge, at: r4(hit.at), ...OPENING_DEFAULT,
+    }])
+    selectHull(cur.length)
+    setClickMode('')
+  }, [level, levelOutlinePts, map3d?.hull_openings, onMap3d, scene,
+    selectHull, t])
+
   const view = useMemo<PlanView>(() => {
     const pts: Pt[] = [...boundaryM]
     for (const r of rooms) {
@@ -1077,6 +1156,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     setDrawTarget('')
     setArmedProp('')
     setPropGhost(null)
+    // A refusal explains the click that was just cancelled — it goes with it.
+    setHullHint('')
   }, [])
 
   /** Drop ONE ghost and everything standing on it (decision E1). Returns how
@@ -1950,6 +2031,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     }
     setOutlineDraft([])
     setHoverSnap(null)
+    setHullHint('')
     if (m === 'outline') setOutlineLevel(level)
     setClickMode(m)
     planLog('armed', { mode: m, ...(m === 'outline' ? { level } : {}) })
@@ -2378,6 +2460,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         stairCount={map3d?.stairs?.length || 0}
         editLevel={level}
         building={!!onMap3d}
+        canHullDoor={level === 0 && !!map3d?.ground_corridor
+          && levelOutlinePts.length >= 3}
         canSuggest={placedHere.length > 0}
         canFitToModel={!groundSel && !!(selectedRoom?.id
           && (modelDims[selectedRoom.id]?.widthM || 0) > 0)}
@@ -2497,6 +2581,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         setFigurePos={setFigurePos}
         onMap3d={onMap3d}
         writeBoundary={writeBoundary}
+        onPlaceHullDoor={placeHullDoor}
+        hullSel={hullSel}
+        onSelectHull={selectHull}
         ownerOpeningIndex={ownerOpeningIndex}
       />
       </div>
@@ -2509,6 +2596,14 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           is left is a pointer: how many findings are waiting, and a click
           that opens them. */}
       <div className="ga-plan-status">
+        {/* WHY THE LAST CLICK ON THE CONTOUR DID NOT LAND (§ 6). Right under
+            the plan the click happened on, and it stays until the tool is
+            armed again or a door does land — never a window.alert. */}
+        {hullHint ? (
+          <span className="ga-hint" style={{ color: '#e0a356' }}>
+            ⚠ {hullHint}
+          </span>
+        ) : null}
         {findings ? (
           <button
             type="button"
@@ -2564,6 +2659,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             onForkOutline={() => writeLevelOutline(level,
               levelOutlinePts.map((p) => [p[0], p[1]] as [number, number]))}
             onDropOutline={() => writeLevelOutline(level, null)}
+            levelOutline={levelOutlinePts}
+            drawingHull={clickMode === 'hull-door'}
+            onDrawHull={() => armMode('hull-door')}
+            hullSel={hullSel}
+            onSelectHull={selectHull}
           />
         )}
         findings={(

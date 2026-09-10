@@ -18,7 +18,7 @@ import { STAIR_MAX } from './planGeometry'
 /** Click-to-place modes of the floor-plan editor ('' = plain selection). */
 export type PlanMode = '' | 'marker' | 'marker-move' | 'outline'
   | 'elevator' | 'stairs' | 'door' | 'window' | 'draw-room' | 'curve'
-  | 'boundary-door' | 'boundary'
+  | 'boundary-door' | 'boundary' | 'hull-door'
 
 function Tool({ icon, title, onClick, active = false, danger = false,
   disabled = false, small = false }: {
@@ -72,6 +72,13 @@ interface PlanToolbarProps {
   editLevel: number
   /** Show the building group at all (the editor got an onMap3d writer). */
   building: boolean
+  /** A door may be put ON THE CONTOUR of the storey being edited (§ 6): its
+   *  corridor is what the door leads into, and only the ground floor's
+   *  hallway is opted into. Unlike the other tools this one is HIDDEN rather
+   *  than disabled where it does not apply — a storey without a hallway has
+   *  no contour door to explain, and the level inspector is where the switch
+   *  that would create one lives. */
+  canHullDoor: boolean
   canSuggest: boolean
   /** The selected room has a 3D model with a declared real width — only then
    *  can the floor plan be fitted to it. */
@@ -105,7 +112,8 @@ interface PlanToolbarProps {
 
 export function PlanToolbar({
   mode, hasSelection, selectionRotation, hasOutline, hasBoundary,
-  outlineDraftLen, hasElevator, stairCount, editLevel, building, canSuggest,
+  outlineDraftLen, hasElevator, stairCount, editLevel, building, canHullDoor,
+  canSuggest,
   canFitToModel, canCurve, ground, groundHint, noSelectionHint, onFitToModel,
   propsOpen, onMode, onRotate, onUnplace,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
@@ -209,6 +217,14 @@ export function PlanToolbar({
             onClick={() => onMode('boundary-door')}
             title={t('Entry/exit at the location edge — click near a boundary edge; a road crossing the cell gets one on each side. Edit edge, width and linked room below the plan.')}
           />
+          {canHullDoor ? (
+            <Tool
+              icon="🏠"
+              active={mode === 'hull-door'}
+              onClick={() => onMode('hull-door')}
+              title={t('Front door ON THE BUILDING CONTOUR — for a storey whose hallway is its front: the corridor has no walls of its own, so the door is cut into the shell. Click near a contour edge; size, hinge and door prop are edited in the Storey tab.')}
+            />
+          ) : null}
         </>
       ) : null}
 

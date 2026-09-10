@@ -19,9 +19,10 @@
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { DoorPropSelect } from './DoorPropPicker'
+import { PlanHullOpeningStrip } from './PlanHullOpeningStrip'
 import { SurfaceKindSelect } from './SurfaceKindSelect'
-import { outlineSourceLevel } from './planGeometry'
-import type { Map3D, SurfaceKind } from './worldTypes'
+import { HULL_OPENING_MAX, outlineSourceLevel } from './planGeometry'
+import type { HullOpening, Map3D, SurfaceKind } from './worldTypes'
 
 interface Props {
   level: number
@@ -45,13 +46,43 @@ interface Props {
   onForkOutline: () => void
   /** Drop this storey's own entry — it inherits again. */
   onDropOutline: () => void
+  /** The RESOLVED footprint of this storey in local metres — what a hull
+   *  door's `edge` indexes, and what the plan draws for this storey. */
+  levelOutline: Array<[number, number]>
+  /** The hull-door tool is armed right now. */
+  drawingHull: boolean
+  /** Arm it — the next click on the plan lands a door on the contour. */
+  onDrawHull: () => void
+  /** The selected hull door, as an index into `map3d.hull_openings`. */
+  hullSel: number | null
+  onSelectHull: (i: number | null) => void
 }
 
 export function PlanInspectorLevel({
   level, map3d, onMap3d, surfaceKinds, defaultDoorPropId, onDefaultDoorProp,
   drawingOutline, canForkOutline, onDrawOutline, onForkOutline, onDropOutline,
+  levelOutline, drawingHull, onDrawHull, hullSel, onSelectHull,
 }: Props) {
   const { t } = useI18n()
+  const hullAll = map3d?.hull_openings || []
+  /** The doors of THIS storey, each with its index in the stored list — every
+   *  write below addresses that index, so the other storeys' entries survive
+   *  untouched. */
+  const hullHere = hullAll
+    .map((op, i) => ({ op, i }))
+    .filter(({ op }) => (op.level || 0) === level)
+  /** WHO MAY GET A DOOR ON THE OUTLINE (§ 6): the storey needs a corridor, and
+   *  the ground floor is the one storey whose corridor is opted into. Every
+   *  storey above has one automatically — but it is reached by the stairs
+   *  inside the house, not through the facade, so the tool stays off there. */
+  const canAddHull = level === 0 && !!map3d?.ground_corridor
+  const writeHull = (i: number, patch: Partial<HullOpening> | null) => {
+    const next = hullAll
+      .map((op, j) => (j === i && patch ? { ...op, ...patch } : op))
+      .filter((_op, j) => !(patch === null && j === i))
+    if (patch === null) onSelectHull(null)
+    onMap3d?.('hull_openings', next.length ? next : undefined)
+  }
   const own = (map3d?.level_outlines || {})[String(level)]
   const hasOwn = Array.isArray(own) && own.length >= 3
   // Where the shape comes from when this storey does not say. The ground
@@ -170,6 +201,74 @@ export function PlanInspectorLevel({
                   e.target.checked ? true : undefined)} />
               <span>{t('Ground floor has a hallway between the rooms')}</span>
             </label>
+          ) : null}
+
+          {/* ── THE FRONT DOOR OF A HALLWAY STOREY (§ 6) ─────────────
+              A corridor is the complement of the rooms, so it has no wall of
+              its own: a ground floor that IS one long hallway had nowhere to
+              put its front door, and the composer said `no_building_entrance`
+              with nothing the author could do about it. This door sits on the
+              CONTOUR instead — the shell is cut, the leaf hangs in the cut,
+              and the doorway leads into the corridor.
+              The LIST shows whenever this storey has one, also when the
+              hallway switch was turned off afterwards — otherwise its entries
+              would be unreachable rather than gone. */}
+          {canAddHull || hullHere.length ? (
+            <>
+              <div className="ga-plan-panel-title" style={{ marginTop: 4 }}>
+                {t('Doors on the outline')}
+              </div>
+              {hullHere.length === 0 ? (
+                <span className="ga-hint" style={{ fontSize: '0.78em' }}>
+                  {t('The hallway has no walls of its own — its front door sits on the building contour.')}
+                </span>
+              ) : null}
+              {!canAddHull && hullHere.length ? (
+                <span className="ga-hint" style={{ fontSize: '0.78em' }}>
+                  {t('This storey has no hallway any more: the composer ignores these doors and reports them. Remove them, or switch the hallway back on.')}
+                </span>
+              ) : null}
+              {hullHere.map(({ op, i }) => (
+                <div
+                  key={i}
+                  onClick={() => onSelectHull(i)}
+                  style={{ display: 'flex', gap: 6, alignItems: 'center',
+                    fontSize: '0.82em', padding: '2px 4px', borderRadius: 4,
+                    cursor: 'pointer',
+                    background: hullSel === i
+                      ? 'rgba(224,163,86,0.15)' : undefined }}
+                >
+                  <span>{`🚪 ${t('Edge')} ${op.edge} · ${Math.round(op.at * 100)} % · ${op.width_m} m`}</span>
+                </div>
+              ))}
+              {canAddHull ? (
+                <button
+                  type="button"
+                  className={`ga-btn ga-btn-sm${drawingHull ? ' ga-btn-primary' : ''}`}
+                  disabled={!drawingHull && (levelOutline.length < 3
+                    || hullAll.length >= HULL_OPENING_MAX)}
+                  title={levelOutline.length < 3
+                    ? t('Draw the building contour first — a door on the outline needs an outline.')
+                    : hullAll.length >= HULL_OPENING_MAX
+                      ? t('At most {n} doors on the outline per location.')
+                        .replace('{n}', String(HULL_OPENING_MAX))
+                      : t('Then click the plan near a contour edge: the door lands on the nearest one. Esc cancels.')}
+                  onClick={onDrawHull}
+                >
+                  {drawingHull ? t('Click the contour…') : t('Door on the outline')}
+                </button>
+              ) : null}
+              {hullSel !== null && hullAll[hullSel]
+                && (hullAll[hullSel].level || 0) === level ? (
+                <PlanHullOpeningStrip
+                  opening={hullAll[hullSel]}
+                  index={hullSel}
+                  outline={levelOutline}
+                  defaultDoorPropId={defaultDoorPropId}
+                  onPatch={(patch) => writeHull(hullSel, patch)}
+                />
+              ) : null}
+            </>
           ) : null}
 
           {/* ── Whole-location switches ─────────────────────────────── */}

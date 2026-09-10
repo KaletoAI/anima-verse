@@ -35,7 +35,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { PropFull } from '../props/propTypes'
-import type { RoomOpening } from './worldTypes'
 
 /** THE convention (plan-door-props-texture-slots.md): a door prop is tagged
  *  `door` or filed under that category. Free strings on both sides — there is
@@ -115,12 +114,22 @@ export function DoorPropSelect({ value, onChange, emptyLabel, title, width,
 
 type DoorPropMode = 'default' | 'none' | 'custom'
 
+/** The three fields this control owns — the ONLY thing it needs to know about
+ *  the opening it hangs a door in. Stated structurally so the hull door
+ *  (`HullOpening`, which has no `to` and no letter edge) uses the very same
+ *  control as a room opening instead of a copy of it. */
+export interface DoorPropFields {
+  prop_id?: string
+  door_prop?: 'none'
+  hinge?: 'left' | 'right'
+}
+
 export function OpeningDoorProp({ opening, defaultPropId, onPatch }: {
-  opening: RoomOpening
+  opening: DoorPropFields
   /** The location's own default, so the first option can say WHICH door it
    *  is instead of leaving the reader to go and look. */
   defaultPropId?: string
-  onPatch: (patch: Partial<RoomOpening>) => void
+  onPatch: (patch: DoorPropFields) => void
 }) {
   const { t } = useI18n()
   const props = usePropLibrary()

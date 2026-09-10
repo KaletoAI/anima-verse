@@ -194,6 +194,30 @@ export interface RoomOpening {
   hinge?: 'left' | 'right'
 }
 
+/**
+ * A door in the building's SHELL, on the contour of one storey (§ 6) — what a
+ * hallway storey needs, because its corridor room has no walls to hang a door
+ * in. Stored in `map3d.hull_openings` and sanitized by the SAME whitelist a
+ * room opening goes through (`world_ops._sanitize_opening`), which is why the
+ * fields below are the room opening's.
+ *
+ * TWO FIELDS ARE NOT THE ROOM OPENING'S, and both are what the hull is:
+ *  * `edge` is an INDEX into the RESOLVED storey outline (edge i = point
+ *    i → i+1, through the `level_outlines` cascade — the very shape the
+ *    editor draws for that storey), never a rectangle's N/S/E/W; the server
+ *    drops a letter;
+ *  * `to` is gone: a hull door always joins the storey's corridor and the
+ *    outside, so there is nothing to aim it at.
+ * And `type` knows no window: a window is not walkable, so the composer would
+ * skip it (`scene_recipe._WALKABLE_TYPES`) and leave an unrendered entry.
+ */
+export type HullOpening = Omit<RoomOpening, 'edge' | 'to' | 'type'> & {
+  /** The storey the door sits on. */
+  level: number
+  edge: number
+  type: 'door' | 'passage'
+}
+
 export interface Room {
   id?: string
   name?: string
@@ -300,6 +324,12 @@ export interface Map3D {
    *  still carries one. */
   boundary_openings?: Array<{ edge: number; at: number
     width_m: number; type?: 'passage'; room?: string }>
+  /** Doors in the BUILDING SHELL of one storey (§ 6 of the storey-corridor
+   *  spec) — the front door of a storey whose front IS the corridor. A
+   *  corridor is the complement of the rooms, so it has no wall of its own to
+   *  carry an opening; this one sits on the CONTOUR instead. At most 8 per
+   *  location. */
+  hull_openings?: HullOpening[]
   /** Drawn building outline (AV3D-12): the house's floor plan INSIDE the
    *  plot, as polygon points in LOCAL METRES around the anchor pin (v6 Nr. 2,
    *  same frame as `boundary`), auto-closed — the client renders floor plates

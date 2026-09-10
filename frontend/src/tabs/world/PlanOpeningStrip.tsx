@@ -12,6 +12,47 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { OpeningDoorProp } from './DoorPropPicker'
 import type { Room, RoomOpening } from './worldTypes'
 
+/**
+ * ONE metre field of an opening strip, with the blur/`key` discipline the
+ * header describes. Exported because the HULL door (PlanHullOpeningStrip) is
+ * edited with the same numbers: the two strips differ in what an opening
+ * MEANS, never in what one may type into its width.
+ */
+export function OpeningNumField({ label, value, min, max, title, onCommit }: {
+  label: string
+  value: number
+  min: number
+  max: number
+  title?: string
+  onCommit: (v: number) => void
+}) {
+  return (
+    <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
+      title={title}>
+      {label}
+      <input
+        key={`${label}-${value}`}
+        className="ga-input"
+        type="number"
+        min={min}
+        max={max}
+        step={0.1}
+        style={{ width: 64 }}
+        defaultValue={value}
+        onBlur={(e) => {
+          const n = parseFloat(e.target.value)
+          if (Number.isFinite(n) && n !== value) {
+            onCommit(Math.round(n * 1000) / 1000)
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        }}
+      />
+    </label>
+  )
+}
+
 interface Props {
   opening: RoomOpening
   /** Index in the room's `openings`, for the door picker's key — the "Custom,
@@ -37,28 +78,13 @@ export function PlanOpeningStrip({
   const numField = (
     field: 'width_m' | 'height_m' | 'sill_m', label: string, max: number,
   ) => (
-    <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}>
-      {label}
-      <input
-        key={`${field}-${op[field]}`}
-        className="ga-input"
-        type="number"
-        min={field === 'sill_m' ? 0 : 0.4}
-        max={max}
-        step={0.1}
-        style={{ width: 64 }}
-        defaultValue={op[field]}
-        onBlur={(e) => {
-          const n = parseFloat(e.target.value)
-          if (Number.isFinite(n) && n !== op[field]) {
-            onPatch({ [field]: Math.round(n * 1000) / 1000 })
-          }
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-        }}
-      />
-    </label>
+    <OpeningNumField
+      label={label}
+      value={op[field]}
+      min={field === 'sill_m' ? 0 : 0.4}
+      max={max}
+      onCommit={(v) => onPatch({ [field]: v })}
+    />
   )
 
   return (
