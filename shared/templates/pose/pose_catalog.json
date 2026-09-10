@@ -860,7 +860,7 @@
         "leaning on counter",
         "leaning against doorframe"
       ],
-      "animation": "idle",
+      "animation": "leaning",
       "solo": true,
       "group": "stand"
     },
