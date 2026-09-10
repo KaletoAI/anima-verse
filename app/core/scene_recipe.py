@@ -1074,6 +1074,27 @@ def _wall_height(storey: float) -> float:
     return max(WALL_MIN_HEIGHT, storey - WALL_HEAD_ROOM)
 
 
+def _ring_ccw(pts: List[List[float]]) -> bool:
+    """Does this closed ring have a POSITIVE shoelace sum in the XZ plane?
+
+    The ONE answer to "which side of an edge is outside": the contour walls
+    take the outward normal of an edge from it (``nx, nz = (uz, −ux)`` where
+    it holds, the mirrored pair where it does not) and a door drawn on that
+    contour (:func:`_hull_doorways`) takes its own from the very same call, so
+    shell and door can never disagree about which way a hole faces.
+
+    ``ccw`` is the name this file has always used for it. In MAP view (x east,
+    z south) a positive sum is a clockwise ring — ``world_geometry
+    .polygon_signed_area`` says so and stores every boundary that way — but
+    the name is not worth renaming across the geometry it labels.
+    """
+    area2 = 0.0
+    for i, (x1, z1) in enumerate(pts):
+        x2, z2 = pts[(i + 1) % len(pts)]
+        area2 += x1 * z2 - x2 * z1
+    return area2 > 0
+
+
 def _edge_frame(a: List[float], b: List[float]) -> Optional[Tuple[float, float, float]]:
     """(ux, uz, length) of the directed edge a→b; None when degenerate."""
     dx = b[0] - a[0]
@@ -1263,12 +1284,8 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
         pts = _outline_world(map3d, level)
         if len(pts) < 3:
             continue
-        # Winding decides which side is outside (shoelace in the XZ plane).
-        area2 = 0.0
-        for i, (x1, z1) in enumerate(pts):
-            x2, z2 = pts[(i + 1) % len(pts)]
-            area2 += x1 * z2 - x2 * z1
-        ccw = area2 > 0
+        # Winding decides which side is outside (:func:`_ring_ccw`).
+        ccw = _ring_ccw(pts)
 
         # Edge index → the (span, head height, has a leaf, the leaf is a PROP)
         # the doors of THIS storey cut out of it. Hit-tested against this
@@ -1483,6 +1500,25 @@ def door_has_leaf(opening: Dict[str, Any]) -> bool:
     if str(opening.get("type") or "door").lower() != "door":
         return False
     return str(opening.get("door_prop") or "").strip().lower() != "none"
+
+
+def _door_prop_of(op: Dict[str, Any],
+                  default_door_prop_id: str = "") -> Dict[str, Any]:
+    """The INTERNAL ``_door_prop`` of ONE opening: which prop fills the hole
+    (:func:`door_prop_id`), which jamb it hinges on, and whether anything
+    hangs in it at all (:func:`door_has_leaf`).
+
+    One answer for a room door (:func:`_doorways`) and for a door on the
+    building outline (:func:`_hull_doorways`) alike — :func:`_door_prop_models`
+    and the shell both read it off the doorway, so the two derivations must
+    not drift apart.
+    """
+    return {
+        "id": door_prop_id(op, default_door_prop_id),
+        "hinge": ("right" if str(op.get("hinge") or "").strip().lower()
+                  == "right" else "left"),
+        "leaf": door_has_leaf(op),
+    }
 
 
 def _room_walls(recipe: Dict[str, Any], storey: float,
@@ -1735,18 +1771,12 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
                     # the dedup, and a merge keeps it only while EVERY
                     # candidate of the gap was unlabelled.
                     "_unlabelled": not to,
-                    # INTERNAL, stripped in compose_scene — see the docstring.
-                    "_door_prop": {
-                        "id": door_prop_id(op, default_door_prop_id),
-                        "hinge": ("right"
-                                  if str(op.get("hinge") or "").strip().lower()
-                                  == "right" else "left"),
-                        # …and whether anything hangs here AT ALL: the hull
-                        # builder reads it from here rather than looking the
-                        # opening up a second time, the same way it reads the
-                        # type and the width.
-                        "leaf": door_has_leaf(op),
-                    },
+                    # INTERNAL, stripped in compose_scene — see the
+                    # docstring. Whether anything hangs here AT ALL is part of
+                    # it: the hull builder reads that from here rather than
+                    # looking the opening up a second time, the same way it
+                    # reads the type and the width.
+                    "_door_prop": _door_prop_of(op, default_door_prop_id),
                 }
                 # The CENTRE before the edge clamp: that point is identical on
                 # both faces of a shared wall (up to the wall's own offset),
@@ -1889,10 +1919,31 @@ def _hull_doorways(map3d: Dict[str, Any], storey: float,
     (uz, −ux), and a ring wound the other way flips both. There is no room
     hull to ask here (:func:`_door_outward`), because no room was pierced.
 
+    ``along`` IS THE EDGE DIRECTION a→b, not the direction of a room wall,
+    and ``rooms[0]`` is the CORRIDOR — a room without walls. Both matter to a
+    consumer: the hinge is read against that edge direction, so an author's
+    "left" is the end the outline's own winding comes from, and the leaf hangs
+    in a piece of the HULL (``_contour_walls``) instead of in a room wall,
+    because the corridor has none to hang it in.
+
+    NOT DEDUPLICATED against room doors. A hull door pierces no room's wall,
+    so there is no gap it could be the second candidate of, and it is appended
+    after :func:`_doorways` has finished (``compose_scene``). Drawn on the
+    same stretch of contour a room's outside door already projects onto, the
+    two holes overlap and two leaves stack in one opening — the editor is what
+    keeps that from being authored; the composer states no finding about it,
+    because "close to another door" has no threshold that is not arbitrary.
+
     An opening on a storey WITHOUT a corridor room is dropped and REPORTED
     (``hull_opening_without_corridor``, once per storey): it would open the
-    hull onto a storey where nobody can arrive. A window is no way through (``_WALKABLE_TYPES``),
-    so it never becomes a threshold either — the hull knows no sill.
+    hull onto a storey where nobody can arrive. One that names an edge the
+    storey's footprint does not have — an outline redrawn with fewer corners,
+    a cascade that now resolves elsewhere, a degenerate edge — is dropped and
+    REPORTED too (``hull_opening_off_the_outline``, once per opening, with the
+    edge it names): the author's door would otherwise vanish without a word.
+    A WINDOW is the one silent case: it is not a threshold by definition
+    (``_WALKABLE_TYPES``) and the hull knows no sill, so there is nothing to
+    report and nothing to fix.
     """
     from app.models.world import floor_room_id
     out: List[Dict[str, Any]] = []
@@ -1902,6 +1953,8 @@ def _hull_doorways(map3d: Dict[str, Any], storey: float,
     for op in (map3d or {}).get("hull_openings") or []:
         if not isinstance(op, dict):
             continue
+        # A window is no way through, and that is a definition rather than a
+        # defect: no finding, nothing for the author to fix.
         if str(op.get("type") or "door").lower() not in _WALKABLE_TYPES:
             continue
         try:
@@ -1923,23 +1976,31 @@ def _hull_doorways(map3d: Dict[str, Any], storey: float,
                            "switch the hallway on, or remove the door.",
             })
             continue
+        # THE EDGE HAS TO EXIST — no footprint, no such index, or an edge of
+        # no length: all three mean the door stands nowhere, and all three are
+        # reported rather than swallowed (§ 4.3, "findings instead of silent
+        # repairs"). The author drew this door; a redrawn outline must not
+        # make it disappear in silence.
         pts = _outline_world(map3d, level)
-        if len(pts) < 3:
-            continue
         edge = op.get("edge")
-        if isinstance(edge, bool) or not isinstance(edge, int) \
-                or not 0 <= edge < len(pts):
+        frame = None
+        if len(pts) >= 3 and isinstance(edge, int) \
+                and not isinstance(edge, bool) and 0 <= edge < len(pts):
+            frame = _edge_frame(pts[edge], pts[(edge + 1) % len(pts)])
+        if frame is None:
+            problems.append({
+                "kind": "hull_opening_off_the_outline",
+                "level": level,
+                "edge": edge,
+                "message": "A door on the building outline points at an edge "
+                           "this storey's footprint no longer has: move the "
+                           "door onto an existing edge of the storey, or "
+                           "remove it.",
+            })
             continue
         a = pts[edge]
-        frame = _edge_frame(a, pts[(edge + 1) % len(pts)])
-        if not frame:
-            continue
         ux, uz, length = frame
-        area2 = 0.0
-        for i, (x1, z1) in enumerate(pts):
-            x2, z2 = pts[(i + 1) % len(pts)]
-            area2 += x1 * z2 - x2 * z1
-        ccw = area2 > 0
+        ccw = _ring_ccw(pts)
         nx, nz = (uz if ccw else -uz), (-ux if ccw else ux)
         half = min(_num(op.get("width_m")), length) / 2
         t = min(max(_num(op.get("at")), 0.0), 1.0) * length
@@ -1964,13 +2025,7 @@ def _hull_doorways(map3d: Dict[str, Any], storey: float,
             # point that already lies on it.
             "_hull_hit": (edge, t),
             # INTERNAL, stripped in compose_scene — as on a room door.
-            "_door_prop": {
-                "id": door_prop_id(op, default_door_prop_id),
-                "hinge": ("right"
-                          if str(op.get("hinge") or "").strip().lower()
-                          == "right" else "left"),
-                "leaf": door_has_leaf(op),
-            },
+            "_door_prop": _door_prop_of(op, default_door_prop_id),
         })
     return out, problems
 
@@ -3165,9 +3220,20 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
     ``door.swing`` is the sign of "a POSITIVE rotation about y opens the leaf
     outward". Turning the placed group by φ moves a world offset (vx, vz) with
     ``d/dφ|₀ = (vz, −vx)``, and the free end of the leaf sits at ``v = +along``
-    (left hinge) or ``v = −along`` (right hinge); ``(uz, −ux)`` IS
-    :func:`_door_outward`, the normal away from the room the hole was cut out
-    of. Hence +1 for a left hinge, −1 for a right one.
+    (left hinge) or ``v = −along`` (right hinge). So the free end travels along
+    ``(uz, −ux)``, and the sign is whether THAT points out: +1 where it agrees
+    with the doorway's outward direction, −1 where it opposes it, and the
+    right hinge turns both around.
+
+    WHICH WAY IS OUT IS THE DOORWAY'S OWN ANSWER where it carries one. For a
+    room door it is ``(uz, −ux)`` itself (:func:`_door_outward`: a room hull is
+    wound clockwise by contract), so the sign stays +1 for a left hinge and −1
+    for a right one, exactly as before. A door on the BUILDING OUTLINE (§ 6)
+    ships its ``outward_normal``, and on a contour wound the other way that is
+    the OPPOSITE perpendicular — reading the side off ``along`` alone would
+    swing such a leaf into the house. The hole is the same hole either way;
+    the leaf simply hangs on the other jamb and turns the other way to open
+    outward, which is what the sign says.
 
     ``door.leaf_bbox`` (spec-picture-props.md § 6) rides along when the
     PRIMARY variant's file carries one — the ``leaf`` node's box in raw model
@@ -3196,6 +3262,12 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
         hinge = "right" if info.get("hinge") == "right" else "left"
         along = door.get("along") or [1.0, 0.0]
         ux, uz = _num(along[0]), _num(along[1])
+        # Outward is what the ENTRY says where it says it (a hull door brings
+        # its contour edge's normal); otherwise it is the room's own side.
+        nx, nz = door.get("outward_normal") or _door_outward(door)
+        swing = 1 if (uz * _num(nx) - ux * _num(nz)) > 0 else -1
+        if hinge == "right":
+            swing = -swing
         width = _num(door.get("width_m"))
         edge = (width / 2) * (1.0 if hinge == "right" else -1.0)
         yaw = math.degrees(math.atan2(-uz, ux)) + (180.0 if hinge == "right"
@@ -3234,8 +3306,7 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
             # right-hinged door 180° onto the same jamb, so `hinge` only feeds
             # the swing sign. With `fix_euler` 0 that is (min.x, min.y,
             # centre z), the earlier R12 wording.
-            "door": {"opening": index, "hinge": hinge,
-                     "swing": 1 if hinge == "left" else -1,
+            "door": {"opening": index, "hinge": hinge, "swing": swing,
                      **({"leaf_bbox": primary["leaf_bbox"]}
                         if isinstance(primary.get("leaf_bbox"), dict) else {})},
             # An opening names no variant (V1), so its panes come from the

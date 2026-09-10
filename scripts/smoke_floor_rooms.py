@@ -242,6 +242,30 @@ Part 8 — the hull door (§ 6), through compose_scene. A corridor has no walls,
     outside door on level 0 — and dropping the hull opening as well makes the
     finding fire, which is what turns the first half into an assertion.
 
+    A hull opening on EDGE 7 of a footprint that has four edges (the outline
+    could have been redrawn with fewer corners, or the level_outlines cascade
+    could now resolve elsewhere): no doorway, and problems[] carries
+    "hull_opening_off_the_outline" with level 0 and edge 7 — a door the author
+    drew must never vanish in silence.
+
+    THE SAME HULL DOOR ON A RING LISTED THE OTHER WAY ROUND. Reversing the
+    square gives (-5,5) (5,5) (5,-5) (-5,-5) with shoelace -200, so `ccw` is
+    False and the outward side of (ux, uz) is (-uz, ux). The z = -5 line is
+    edge 2 there, running (5,-5) -> (-5,-5), i.e. ux, uz = -1, 0 — so the
+    outward normal is (-0, -1) = [0, -1], the same physical direction, as it
+    must be; at 0.5 -> t = 5 -> at_world = (5,-5) + (-1,0)*5 = [0, -5], the
+    same hole, only `along` is now [-1, 0].
+    THE LEAF therefore hangs on the other jamb: hinge "left" is the end
+    `along` comes from, x = +0.5 instead of x = -0.5, and turning the group
+    positively about y moves its free end along (uz, -ux) = (0, +1) — INTO
+    the building. So `door.swing` is -1 where the other ring gives +1: what
+    is preserved is not the sign but the BEHAVIOUR, and the sign is how the
+    renderer is told which way to turn. The old rule read the outward side off
+    `along` alone and answered +1 here, swinging the leaf into the house.
+      swing * (along_z, -along_x) == outward_normal, on BOTH rings -> [0, -1]
+    The prop library is stubbed for this probe (no world, no props on disk),
+    the way smoke_scene_recipe stubs it.
+
     THE SANITIZER (world_ops._sanitize_map3d): a hull opening is a room
     opening (_sanitize_opening) plus the storey it stands on, and a building
     contour is a polygon —
@@ -333,7 +357,8 @@ def full_floor_fixture(extra_rooms=()):
                     + list(extra_rooms))
 
 
-def hull_fixture(levels=(0,), eg_door=True):
+def hull_fixture(levels=(0,), eg_door=True, outline=None, edge=0,
+                 prop_id=""):
     """cellar_fixture() with the ground floor's hallway switched on and a door
     drawn on the building outline for each level in ``levels``."""
     loc = cellar_fixture(eg_door=eg_door)
@@ -343,11 +368,15 @@ def hull_fixture(levels=(0,), eg_door=True):
         # (§ 3.1) — eg keeps its own front door, so the hull is cut twice.
         eg = next(r for r in loc["rooms"] if r["id"] == "eg")
         eg["layout"]["openings"][0]["to"] = "outside"
+    opening = {"edge": edge, "at": 0.5, "width_m": 1.0, "height_m": 2.1,
+               "sill_m": 0.0, "type": "door"}
+    if prop_id:
+        opening["prop_id"] = prop_id
     loc["map3d"] = dict(loc["map3d"], ground_corridor=True,
-                        hull_openings=[{"level": lv, "edge": 0, "at": 0.5,
-                                        "width_m": 1.0, "height_m": 2.1,
-                                        "sill_m": 0.0, "type": "door"}
+                        hull_openings=[dict(opening, level=lv)
                                        for lv in levels])
+    if outline:
+        loc["map3d"]["outline"] = [list(pt) for pt in outline]
     return loc
 
 
@@ -377,6 +406,21 @@ def hull_line(sc, level, z):
 
 def piece_len(w):
     return round(abs(w["to"][0] - w["from"][0]), 4)
+
+
+def hull_door(sc):
+    """The one doorway drawn on the building outline."""
+    return next(d for d in sc["doorways"] if d.get("hull"))
+
+
+def swing_out(sc):
+    """Where the leaf's free end TRAVELS once the renderer applies `swing`:
+    turning (+along) about y moves it along (along_z, -along_x), times the
+    sign. It must be the doorway's outward normal, whatever the winding."""
+    door = next(m["door"] for m in sc["models"] if m.get("door"))
+    along = hull_door(sc)["along"]
+    return [round(door["swing"] * along[1], 4) + 0.0,
+            round(-door["swing"] * along[0], 4) + 0.0]
 
 
 def main():
@@ -670,6 +714,41 @@ def main():
           [p["kind"] for p in sc9.get("problems") or []
            if p.get("kind") == "no_building_entrance"],
           ["no_building_entrance"])
+
+    sc10 = scene_recipe.compose_scene(hull_fixture(edge=7))
+    check("edge 7: no hull doorway",
+          [d for d in sc10["doorways"] if d.get("hull")], [])
+    check("hull_opening_off_the_outline",
+          [(p.get("kind"), p.get("level"), p.get("edge"))
+           for p in sc10.get("problems") or []
+           if p.get("kind") == "hull_opening_off_the_outline"],
+          [("hull_opening_off_the_outline", 0, 7)])
+
+    # The prop library is the ONE accessor the recipe asks (as in
+    # smoke_scene_recipe.stub_library) — stubbed, so no world is needed.
+    from app.core import props as prop_store
+    real_get_prop = prop_store.get_prop
+    prop_store.get_prop = lambda pid: {"id": pid, "has_model": False}
+    try:
+        left = scene_recipe.compose_scene(hull_fixture(prop_id="d1"))
+        flip = scene_recipe.compose_scene(
+            hull_fixture(prop_id="d1", outline=SQUARE[::-1], edge=2))
+    finally:
+        prop_store.get_prop = real_get_prop
+    check("the clockwise ring keeps the hole and the outward normal",
+          [(hull_door(flip)["at_world"], hull_door(flip)["along"],
+            hull_door(flip)["outward_normal"])],
+          [([0.0, -5.0], [-1.0, 0.0], [0.0, -1.0])])
+    check("counter-clockwise: left hinge swings +1",
+          [(m["room_id"], m["door"]["hinge"], m["door"]["swing"])
+           for m in left["models"] if m.get("door")],
+          [("__floor__0", "left", 1)])
+    check("clockwise: the other jamb, the other sign",
+          [(m["room_id"], m["door"]["hinge"], m["door"]["swing"])
+           for m in flip["models"] if m.get("door")],
+          [("__floor__0", "left", -1)])
+    check("the leaf opens outward on either ring",
+          [swing_out(left), swing_out(flip)], [[0.0, -1.0], [0.0, -1.0]])
 
     print("FAILED" if FAILS else "ALL OK")
     sys.exit(1 if FAILS else 0)
