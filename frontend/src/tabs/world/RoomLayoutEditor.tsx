@@ -717,7 +717,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     const lead = [where, room].filter(Boolean).join(' · ')
     return lead ? `${lead}: ${t(p.message)}` : t(p.message)
   }
-  const placedRooms = rooms.filter((r) => hasRect(r.layout) && r.id)
+  const placedRooms = rooms.filter((r) => hasRect(r.layout) && r.id
+    && !isFloorRoom(r.id))
   const levels = Array.from(
     new Set(rooms.filter((r) => hasRect(r.layout)).map((r) => r.layout!.level || 0)),
   ).sort((a, b) => a - b)
@@ -2832,7 +2833,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           index={openingSel}
           otherRooms={rooms.filter((r) => r.id && r.id !== selectedRoom.id
             && !isFloorRoom(r.id))}
-          corridorName={corridorOfLevel(selectedRoom.layout?.level || 0)}
+          // A WINDOW leads nowhere: only a door and a passage are routed into
+          // the storey's corridor (§ A13b), so only they may say so.
+          corridorName={selectedRoom.layout.openings[openingSel].type === 'window'
+            ? '' : corridorOfLevel(selectedRoom.layout?.level || 0)}
           defaultDoorPropId={defaultDoorPropId}
           onPatch={(patch) => {
             const list = (selectedRoom.layout?.openings || [])

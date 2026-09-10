@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { type Location } from './worldTypes'
+import { isFloorRoom, type Location } from './worldTypes'
 
 /**
  * ImageSetDialog — generates a whole image SET for one location with ONE
@@ -50,7 +50,9 @@ export function ImageSetDialog({ location, onClose }: {
       .catch(() => setOptions([]))
   }, [])
 
-  const rooms = location.rooms || []
+  // A storey's CORRIDOR (§ A13b) is no render target: it has no geometry and
+  // no prompts of its own — its picture is the location's.
+  const rooms = (location.rooms || []).filter((r) => !isFloorRoom(r.id))
   const jobs = useMemo(() => {
     const types = [
       ...(incDay ? (['day'] as const) : []),

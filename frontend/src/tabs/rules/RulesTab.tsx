@@ -8,6 +8,7 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
+import { roomLabel } from '../world/worldTypes'
 
 type RuleType = 'block' | 'force' | 'discover'
 type TargetScope = 'location' | 'any_room' | 'danger_level'
@@ -512,9 +513,12 @@ function RuleForm({ draft, locations, characters, onUpdate }: RuleFormProps) {
                   onUpdate('target_rooms', next)
                 }}
               >
+                {/* The two RESERVED rooms (§ A13a/§ A13b) may be unnamed —
+                    `roomLabel` names them the way the world editor does, so a
+                    rule targets "Hallway", never a raw `__floor__0`. */}
                 {rooms.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.name || r.id}
+                    {roomLabel(r, t)}
                   </option>
                 ))}
               </select>
