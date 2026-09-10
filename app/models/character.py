@@ -1496,6 +1496,22 @@ def save_character_current_location(character_name: str = "", location: str = ""
             add_known_location(character_name, location)
         except Exception:
             pass
+        # …and everything ELSE within sight of where it now stands. Discovery
+        # by sight otherwise only ever ran off a MOVING point (the travel
+        # ticker, the avatar's own position report), which closes a circle a
+        # character cannot get out of on its own: travelling needs a known
+        # target, and learning a target needs travelling. A character that is
+        # placed — created, dragged, sent by a rule, teleported — has moved
+        # in every sense that matters to what it can see, so the same sight
+        # rule applies. Range 0 switches it off (see discovery module).
+        try:
+            from app.core.discovery import discover_in_range
+            _pos = get_character_pos(character_name)
+            if _pos:
+                discover_in_range(character_name, _pos["x"], _pos["z"])
+        except Exception:
+            logger.debug("sight discovery after placing %s failed",
+                         character_name, exc_info=True)
     # Decency compliance: reads decency/style_hint of the current room (or
     # the location as a fallback) and reconciles equipped_pieces with it.
     # Only on a real location change and not with _skip_compliance.
