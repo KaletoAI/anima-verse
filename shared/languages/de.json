@@ -2651,6 +2651,11 @@
     "Random shift of every station along the edge, in metres either way — parked cars that do not stand like a fence. 0 or empty = evenly spaced. At most the spacing.": "Zufällige Verschiebung jeder Station entlang der Kante, in Metern nach beiden Seiten — parkende Autos, die nicht wie ein Zaun stehen. 0 oder leer = gleichmäßig verteilt. Höchstens der Abstand.",
     "Random shift of every station along the line, in metres either way — parked cars that do not stand like a fence. 0 or empty = evenly spaced. At most the spacing.": "Zufällige Verschiebung jeder Station entlang der Linie, in Metern nach beiden Seiten — parkende Autos, die nicht wie ein Zaun stehen. 0 oder leer = gleichmäßig verteilt. Höchstens der Abstand.",
     "How far inside the edge the row stands, in metres. 0 = right on the rim.": "Wie weit innerhalb der Kante die Reihe steht, in Metern. 0 = genau auf dem Rand.",
+    "sides": "Seiten",
+    "All sides": "Alle Seiten",
+    "One side (longest)": "Eine Seite (die längste)",
+    "Opposite sides (two longest)": "Gegenüberliegende Seiten (die zwei längsten)",
+    "Which polygon edges count: every edge, only the longest one, or the two longest (a rectangle’s long sides). Sets the axis for aligned turns and the edges an edge row runs along. Road strokes ignore it.": "Welche Polygonkanten zählen: jede Kante, nur die längste oder die zwei längsten (die Langseiten eines Rechtecks). Bestimmt die Achse für ausgerichtete Drehungen und die Kanten, an denen eine Randreihe entlangläuft. Straßenstriche ignorieren es.",
     "New mix every (game min)": "Neue Mischung alle (Spielmin.)",
     "The row draws a new random mix every this many GAME minutes — parked cars that are not the same cars tomorrow. Empty = never, the placement stays as it is.": "Die Zeile zieht alle so viele SPIEL-Minuten eine neue Zufallsmischung — geparkte Autos, die morgen nicht dieselben sind. Leer = nie, die Platzierung bleibt, wie sie ist.",
     "never": "nie"

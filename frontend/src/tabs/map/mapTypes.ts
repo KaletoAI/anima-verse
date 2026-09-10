@@ -203,6 +203,12 @@ export interface TerrainScatterEntry {
    *  placement (Task 8, 2026-09-10); absent = the shared variant formula
    *  mixes the instances. The sampler clamps it to the variants that exist. */
   variant?: number
+  /** WHICH POLYGON EDGES COUNT (Task 10, 2026-09-10): `longest` = the one
+   *  longest edge, `opposite` = the two longest (a rectangle's long sides);
+   *  absent = every edge. Sets the axis an `aligned` turn measures against
+   *  and the edges an `edge` row runs along; stored in every placement like
+   *  `variant`; a stroke area ignores it. */
+  sides?: ScatterSidesMode
   /** Reshuffle every this many GAME minutes (1..100000): the seed grows an
    *  epoch tail (`reshuffleEpoch`) and the row is a different draw every
    *  interval. Absent = never. */
@@ -297,6 +303,9 @@ export type ScatterYawMode = 'aligned'
 export const SCATTER_YAW_MODES: readonly ScatterYawMode[] = ['aligned']
 /** Server mirror — `app/models/terrain.SCATTER_PLACE_MODES`. */
 export type ScatterPlaceMode = 'edge' | 'center'
+/** Server mirror — `app/models/terrain.SCATTER_SIDES_MODES`. */
+export type ScatterSidesMode = 'longest' | 'opposite'
+export const SCATTER_SIDES_MODES: readonly ScatterSidesMode[] = ['longest', 'opposite']
 
 /** One kind of ground in the effective catalog (§ A1.5). `passable`,
  *  `speed_factor` and the two clip keys come from HERE and nowhere else —
@@ -681,6 +690,8 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
     if (variant !== undefined && variant >= 0 && Number.isInteger(variant)) {
       entry.variant = variant
     }
+    // The sides word belongs to every placement, like the pin (Task 10).
+    if (e.sides === 'longest' || e.sides === 'opposite') entry.sides = e.sides
     const reshuffle = num(e.reshuffle_min)
     if (reshuffle !== undefined && reshuffle >= 1 && Number.isInteger(reshuffle)) {
       entry.reshuffle_min = reshuffle

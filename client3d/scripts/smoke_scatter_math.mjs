@@ -1256,6 +1256,26 @@
  *      test: [(0,0),(10,0),(10,10)] at (9, 0.2) -> the first segment (0.2 m
  *      against 1.0 m to the second), axis = atan2(1, 0) = π/2; at (10.3, 5)
  *      the second, axis = atan2(0, 1) = 0. One point is no line -> 0.
+ * (R6) THE EDGE SELECTION — `ringSelectedEdges(ring, sides)` (Task 10,
+ *      2026-09-10). Edge i is ring[i] -> ring[(i+1) mod n], the closing edge
+ *      is n − 1. `undefined` / "all" / a word nobody knows -> every index;
+ *      "longest" -> the longest edge, a tie to the SMALLER index; "opposite"
+ *      -> the two longest, ascending, ties to the smaller indices. RECT:
+ *      lengths 10, 4, 10, 4 -> longest [0] (edge 2 ties, 0 is smaller),
+ *      opposite [0, 2], all [0, 1, 2, 3]. The L-shape (0,0) (10,0) (10,4)
+ *      (4,4) (4,10) (0,10): lengths 10, 4, 6, 6, 4, 10 -> longest [0] (tie
+ *      with edge 5), opposite [0, 5]. Two points are no ring -> [].
+ * (R7) `ringEdgeAxis(ring, x, z, edges)` measures ONLY the listed edges.
+ *      RECT at (5, 3.5): all -> the top edge, 0.5 m away, π/2 (R3); [0] ->
+ *      the bottom edge is the only one measured, 3.5 m away -> 3π/2; [0, 2]
+ *      -> the top again, π/2; [] -> nothing to measure -> 0. The tie rule
+ *      is the loop's: at the centre (5, 2) under [0, 2] the bottom edge is
+ *      checked first -> 3π/2, as in (R4). ABSENT `edges` is today's answer
+ *      byte for byte, at every one of the four (R3) points and at the tie.
+ *      `areaAxis(null, RECT, "longest")(5, 3.5)` -> 3π/2, without a sides
+ *      word -> π/2 (the area's axis of before); with a LINE the word is
+ *      ignored: `areaAxis(CORNER, RECT, "longest")(10.3, 5)` -> 0, the (R5)
+ *      answer of the line.
  *
  * ============================================================================
  * (T) THE POLE OF INACCESSIBILITY — `polylabel` (Mapbox 2016)
@@ -1340,6 +1360,27 @@
  *      stream that throws on its first draw stays silent and the output is
  *      (U1), byte for byte. The real stream is `seededRandom(seed + ':jitter')`:
  *      seed 'r' with jitter 2 equals the run fed `seededRandom('r:jitter')`.
+ * (U5) THE SIDES (Task 10, 2026-09-10). `sides` "longest" / "opposite"
+ *      replaces the closed-ring walk by ONE RUN PER SELECTED EDGE (R6), in
+ *      ascending edge index, each run starting afresh at s = start on ITS
+ *      edge and ending at the first s >= its length; `ordinal` counts on
+ *      across the runs, and the jitter stream is shared — one draw per
+ *      candidate, run after run. RECT, spacing 7, offset 1:
+ *        longest  -> edge 0 alone: s = 3.5 < 10 -> (3.5, 0) -> (3.5, 1),
+ *                    axis 3π/2, ordinal 0; s = 10.5 >= 10 ends it. ONE station.
+ *        opposite -> edge 0: (3.5, 1), ordinal 0; then edge 2, (10,4) ->
+ *                    (0,4): s = 3.5 -> P = (6.5, 4), axis π/2, n_in (0, −1)
+ *                    -> (6.5, 3), ordinal 1. TWO stations.
+ *        spacing 4, opposite -> start 2: edge 0: s = 2, 6 -> (2, 1), (6, 1),
+ *                    ordinals 0, 1; 10 >= 10 ends; edge 2: s = 2 -> (8, 3),
+ *                    s = 6 -> (4, 3), ordinals 2, 3. `maxPoints` 3 keeps the
+ *                    first three — the guard counts across the runs.
+ *        "all" and an absent word -> (U1), byte for byte.
+ *      Jitter across the runs — opposite, jitter 2, stream [1, 0, 0.5, 1]:
+ *      edge 0: j = +2 -> s = 5.5 -> (5.5, 1), ordinal 0; j = −2 -> 5.5 + 7
+ *      − 2 = 10.5 >= 10 ends the edge (two draws); edge 2: j = 0 -> s = 3.5
+ *      -> (6.5, 3), ordinal 1; j = +2 -> 12.5 >= 10 ends it. FOUR draws for
+ *      two stations, and a three-number stream is one short.
  *
  * ============================================================================
  * (V) THE OCCUPANCY GRID — `OccupancyGrid` and the fifth verdict
@@ -1477,6 +1518,19 @@
  *      (10, 0.5) to (7, 0.5), (6.5, 4) to (6.5, 1), (0, 3.5) to (3, 3.5) —
  *      all inside; at offset 5, (3.5, 5) and (6.5, −1) are outside and the
  *      row is two.
+ * (X10) THE SIDES (Task 10): `sides` is handed straight to `ringStations`
+ *      (U5), and everything else stays — one yaw draw per station, the
+ *      verdicts, the variant over the ordinal. RECT, spacing 7, offset 1,
+ *      aligned 0: longest -> [(3.5, 1) yaw 3π/2]; opposite -> [(3.5, 1)
+ *      3π/2, (6.5, 3) π/2], a counting stream sees TWO draws; with 3
+ *      variants the two carry the variants of ordinals 0 and 1; "all" is
+ *      (X1) byte for byte. The L-shape under opposite (edges 0 and 5),
+ *      spacing 6, offset 1: start 3 -> edge 0: s = 3, 9 -> (3, 1), (9, 1),
+ *      axis 3π/2; edge 5, (0,10) -> (0,0): d = (0, −1), heading = π, n =
+ *      (dz, −dx) = (−1, 0), the midpoint (0, 5) − (ε, 0) is outside -> axis
+ *      = 2π -> 0, n_in = facing of π/2 = (1, 0); s = 3 -> P = (0, 7) ->
+ *      (1, 7), s = 9 -> (0, 1) -> (1, 1). Four instances, yaws 3π/2, 3π/2,
+ *      0, 0, all inside the L.
  *
  * `center`: `polylabel(ring)`, one yaw draw, axis = `axisAt(x, z)` when the
  * caller hands one in (a stroke area's centre line), else `ringEdgeAxis`;
@@ -3328,7 +3382,7 @@ async function main() {
   // (R) THE SURFACE AXIS
   console.log('\n(R) the surface axis — ringEdgeAxis / lineAxis');
   const {
-    ringEdgeAxis, lineAxis, polylabel, ringStations,
+    ringEdgeAxis, lineAxis, areaAxis, ringSelectedEdges, polylabel, ringStations,
     scatterEdgeInstances, scatterCenterInstance,
   } = await loadBundled(AXIS_SRC);
   const RECT = [[0, 0], [10, 0], [10, 4], [0, 4]];
@@ -3357,6 +3411,36 @@ async function main() {
   check('R5 lineAxis at (10.3, 5): the second segment, 0', lineAxis(CORNER, 10.3, 5),
     0, 1e-12);
   check('R5 one point is no line: 0', lineAxis([[3, 3]], 0, 0), 0);
+  // (R6) the edge selection
+  const L_SHAPE = [[0, 0], [10, 0], [10, 4], [4, 4], [4, 10], [0, 10]];
+  check('R6 RECT: longest is [0] — edge 2 ties, the smaller index wins',
+    ringSelectedEdges(RECT, 'longest'), [0]);
+  check('R6 RECT: opposite is [0, 2]', ringSelectedEdges(RECT, 'opposite'), [0, 2]);
+  check('R6 RECT: absent, "all" and an unknown word are every edge',
+    [ringSelectedEdges(RECT), ringSelectedEdges(RECT, 'all'), ringSelectedEdges(RECT, 'sideways')],
+    [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]]);
+  check('R6 the L-shape: longest [0] (tie with 5), opposite [0, 5]',
+    [ringSelectedEdges(L_SHAPE, 'longest'), ringSelectedEdges(L_SHAPE, 'opposite')], [[0], [0, 5]]);
+  check('R6 two points are no ring', ringSelectedEdges([[0, 0], [10, 0]], 'longest'), []);
+  // (R7) the axis over the selected edges
+  check('R7 (5, 3.5) over every edge: the top, π/2', ringEdgeAxis(RECT, 5, 3.5, [0, 1, 2, 3]),
+    Math.PI / 2, 1e-12);
+  check('R7 (5, 3.5) over [0]: the bottom edge alone, 3π/2', ringEdgeAxis(RECT, 5, 3.5, [0]),
+    3 * Math.PI / 2, 1e-12);
+  check('R7 (5, 3.5) over [0, 2]: the top, π/2', ringEdgeAxis(RECT, 5, 3.5, [0, 2]),
+    Math.PI / 2, 1e-12);
+  check('R7 an empty list measures nothing: 0', ringEdgeAxis(RECT, 5, 3.5, []), 0);
+  check('R7 the tie at the centre under [0, 2] goes to edge 0: 3π/2',
+    ringEdgeAxis(RECT, 5, 2, [0, 2]), 3 * Math.PI / 2, 1e-12);
+  check('R7 absent edges are today\'s answer at the four points and the tie',
+    [...AXIS_PTS, [5, 2]].map(([x, z]) => ringEdgeAxis(RECT, x, z)),
+    [3 * Math.PI / 2, Math.PI, Math.PI / 2, 0, 3 * Math.PI / 2], 1e-12);
+  check('R7 areaAxis with "longest" answers the bottom edge at (5, 3.5)',
+    areaAxis(null, RECT, 'longest')(5, 3.5), 3 * Math.PI / 2, 1e-12);
+  check('R7 …without a sides word the area\'s own: π/2',
+    areaAxis(null, RECT)(5, 3.5), Math.PI / 2, 1e-12);
+  check('R7 …and a line ignores the word: the (R5) answer 0',
+    areaAxis(CORNER, RECT, 'longest')(10.3, 5), 0, 1e-12);
 
   // (T) THE POLE OF INACCESSIBILITY
   console.log('\n(T) the pole of inaccessibility — polylabel');
@@ -3380,7 +3464,6 @@ async function main() {
     poleRect.d >= 1.5 && poleRect.d <= 2 + 1e-9, true);
   check('T1 …and d is the ring distance of the answered point',
     poleRect.d, edgeDistance(RECT, poleRect.x, poleRect.z), 1e-9);
-  const L_SHAPE = [[0, 0], [10, 0], [10, 4], [4, 4], [4, 10], [0, 10]];
   const poleL = polylabel(L_SHAPE);
   check('T2 the L-shape: the pole lies in the ring', pointInRing(poleL.x, poleL.z, L_SHAPE), true);
   check('T2 …with d >= 1.9', poleL.d >= 1.9, true);
@@ -3439,6 +3522,26 @@ async function main() {
   checkNot('U4 …and it is not the yaw stream of the seed',
     ringStations(RECT, { ...U_OPTS, jitterM: 2, seed: 'r' }).map((s) => s.x),
     ringStations(RECT, { ...U_OPTS, jitterM: 2, jitterRng: seededRandom('r') }).map((s) => s.x));
+  // (U5) the sides
+  const u5 = (extra) => ringStations(RECT, { ...U_OPTS, ...extra })
+    .map((s) => [s.x, s.z, s.axis, s.ordinal]);
+  check('U5 longest: edge 0 alone, one station (3.5, 1), axis 3π/2, ordinal 0',
+    u5({ sides: 'longest' }), [[3.5, 1, 3 * Math.PI / 2, 0]], 1e-12);
+  check('U5 opposite: (3.5, 1) on edge 0, then (6.5, 3) on edge 2, ordinals 0 and 1',
+    u5({ sides: 'opposite' }), [[3.5, 1, 3 * Math.PI / 2, 0], [6.5, 3, Math.PI / 2, 1]], 1e-12);
+  check('U5 spacing 4, opposite: two per edge, ordinals counting on 0..3',
+    u5({ sides: 'opposite', spacingM: 4 }),
+    [[2, 1, 3 * Math.PI / 2, 0], [6, 1, 3 * Math.PI / 2, 1], [8, 3, Math.PI / 2, 2], [4, 3, Math.PI / 2, 3]], 1e-12);
+  check('U5 …and maxPoints 3 keeps the first three across the runs',
+    u5({ sides: 'opposite', spacingM: 4, maxPoints: 3 }).map((s) => s[3]), [0, 1, 2]);
+  check('U5 "all" is U1 byte for byte', ringStations(RECT, { ...U_OPTS, sides: 'all' }), u1);
+  check('U5 …and so is an absent word', ringStations(RECT, { ...U_OPTS, sides: undefined }), u1);
+  check('U5 the jitter stream runs on across the edges: (5.5, 1), (6.5, 3)',
+    u5({ sides: 'opposite', jitterM: 2, jitterRng: stream([1, 0, 0.5, 1]) }),
+    [[5.5, 1, 3 * Math.PI / 2, 0], [6.5, 3, Math.PI / 2, 1]], 1e-12);
+  check('U5 …four draws for two stations — a three-number stream is one short',
+    (() => { try { u5({ sides: 'opposite', jitterM: 2, jitterRng: stream([1, 0, 0.5]) }); return 'no throw'; } catch (e) { return e.message; } })(),
+    'scatter drew more numbers than the case feeds');
 
   // (V) THE OCCUPANCY GRID
   console.log('\n(V) the occupancy grid — OccupancyGrid and the fifth verdict');
@@ -3610,6 +3713,24 @@ async function main() {
   check('X8 an offset wider than the shape still falls: 5 m on a 4 m strip keeps two',
     scatterEdgeInstances(RECT, { ...EDGE, offsetM: 5 }).map((p) => [p.x, p.z]),
     [[5, 0.5], [5, 3.5]], 1e-9);
+  // (X10) the sides
+  check('X10 longest: the one station of edge 0, facing 3π/2',
+    scatterEdgeInstances(RECT, { ...EDGE, sides: 'longest' }).map((p) => [p.x, p.z, p.yaw]),
+    [[3.5, 1, 3 * Math.PI / 2]], 1e-12);
+  check('X10 opposite: edge 0 then edge 2, facing 3π/2 and π/2',
+    scatterEdgeInstances(RECT, { ...EDGE, sides: 'opposite' }).map((p) => [p.x, p.z, p.yaw]),
+    [[3.5, 1, 3 * Math.PI / 2], [6.5, 3, Math.PI / 2]], 1e-12);
+  let sideDraws = 0;
+  check('X10 …two draws for the two stations',
+    [scatterEdgeInstances(RECT, { ...EDGE, sides: 'opposite', rng: () => { sideDraws += 1; return 0.5; } }).length, sideDraws],
+    [2, 2]);
+  check('X10 …carrying the variants of ordinals 0 and 1',
+    scatterEdgeInstances(RECT, { ...EDGE, sides: 'opposite', variantCount: 3 }).map((p) => p.variant),
+    [0, 1].map((k) => scatterVariantIndex('x', k, 3)));
+  check('X10 "all" is X1 byte for byte', scatterEdgeInstances(RECT, { ...EDGE, sides: 'all' }), x1);
+  check('X10 the L-shape under opposite: two on the bottom, two on the left wall',
+    scatterEdgeInstances(L_SHAPE, { ...EDGE, sides: 'opposite', spacingM: 6 }).map((p) => [p.x, p.z, p.yaw]),
+    [[3, 1, 3 * Math.PI / 2], [9, 1, 3 * Math.PI / 2], [1, 7, 0], [1, 1, 0]], 1e-12);
   const CENTRE = { seed: 'x', yawMode: 'aligned', yawDeg: 0, variantCount: 3, variant: 2 };
   const x5 = scatterCenterInstance(RECT, CENTRE);
   check('X5 one instance at (5, 2) ± 0.5', [x5.length, x5[0]?.x, x5[0]?.z], [1, 5, 2], 0.5);

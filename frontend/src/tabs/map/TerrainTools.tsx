@@ -47,7 +47,7 @@ import {
   WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M, isWaterKind, waterKindDefaults,
 } from './mapTypes'
 import type {
-  AlongSide, FlowAlong, HeightArea, ScatterPlaceMode, ScatterYawMode,
+  AlongSide, FlowAlong, HeightArea, ScatterPlaceMode, ScatterSidesMode, ScatterYawMode,
   TerrainAlongEntry, TerrainArea, TerrainRelief, TerrainScatterEntry,
   TerrainStroke, TerrainType, TerrainWater, TerrainWaterProfile,
 } from './mapTypes'
@@ -527,12 +527,16 @@ function ScatterVariantSelect({ value, count, onChange }: {
  * Every change writes straight through, like the kind and the layer next to
  * it — the numbers commit on blur, the pickers on choice. `colorOf` is the
  * same index colour the preview draws with, so a row and its dots can be told
- * apart by eye.
+ * apart by eye. `isStroke` says whether the area was drawn as a line
+ * (`meta.stroke`): a stroke has no polygon sides to choose, so the "sides"
+ * pick (Task 10) is not offered there — the renderers ignore the word on a
+ * stroke anyway.
  */
-function ScatterEditor({ entries, props, colorOf, onChange }: {
+function ScatterEditor({ entries, props, colorOf, isStroke, onChange }: {
   entries: TerrainScatterEntry[]
   props: PropRef[]
   colorOf: (index: number) => string
+  isStroke: boolean
   onChange: (entries: TerrainScatterEntry[]) => void
 }) {
   const { t } = useI18n()
@@ -577,6 +581,10 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
       e.spacing_jitter_m = e.min_spacing_m
     }
     if (!(typeof e.variant === 'number' && e.variant >= 0)) delete e.variant
+    // The sides word belongs to every placement (Task 10) — it acts on the
+    // axis of an aligned turn as much as on an edge row — so a mode switch
+    // never removes it; only "All sides" (the empty pick) does.
+    if (e.sides !== 'longest' && e.sides !== 'opposite') delete e.sides
     if (!(typeof e.reshuffle_min === 'number' && e.reshuffle_min >= 1)) {
       delete e.reshuffle_min
     }
@@ -749,6 +757,28 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                     ? Math.min(v, SCATTER_OFFSET_MAX_M) : undefined,
                 })}
               />
+            ) : null}
+            {/* WHICH EDGES COUNT (Task 10, 2026-09-10) — the pick is shown
+                where it acts: under an aligned turn (the axis) or on an
+                edge row (the stations), and never on a stroke area, which
+                has a line instead of sides. The empty pick is the absent
+                key: every edge, the row of before. */}
+            {!isStroke && (e.yaw_mode === 'aligned' || e.place === 'edge') ? (
+              <label title={t('Which polygon edges count: every edge, only the longest one, or the two longest (a rectangle’s long sides). Sets the axis for aligned turns and the edges an edge row runs along. Road strokes ignore it.')}>
+                {t('sides')}
+                <select
+                  className="ga-input"
+                  value={e.sides || ''}
+                  onChange={(ev) => {
+                    const sides = ev.target.value as ScatterSidesMode | ''
+                    patch(i, { sides: sides || undefined })
+                  }}
+                >
+                  <option value="">{t('All sides')}</option>
+                  <option value="longest">{t('One side (longest)')}</option>
+                  <option value="opposite">{t('Opposite sides (two longest)')}</option>
+                </select>
+              </label>
             ) : null}
             {/* WHICH MESH — only a row with a prop has variants to pick
                 from; the tuft is one tuft. */}
@@ -2135,7 +2165,7 @@ export function TerrainAreaChip({
       </div>
       {scatterOpen && known ? (
         <ScatterEditor entries={scatter} props={props} colorOf={scatterColor}
-          onChange={onScatter} />
+          isStroke={!!stroke} onChange={onScatter} />
       ) : null}
       {/* WHO LIVES HERE (spec § E3.2) — folded away like the scatter, and for
           the same reason: most areas are ground, not a home. The NAME comes

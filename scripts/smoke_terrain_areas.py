@@ -143,6 +143,16 @@ Throwaway storage. Hand-derived expectations:
                                        stand off from, the point IS the
                                        area's inmost one
         no place, offset_m 2 + variant 1 -> offset dropped, variant 1 stays
+      THE SIDES (Task 10, 2026-09-10): `sides` says which polygon edges an
+      aligned turn measures against and an edge row runs along — "longest"
+      (the one longest edge) or "opposite" (the two longest); absent = every
+      edge. Stored in EVERY mode like `variant` (it acts on the axis of a
+      spread and a centred row as well as on the edge row's stations), junk
+      loses the key, and stroke areas simply ignore it in the renderers:
+        sides "longest" / "opposite"  -> kept, on a spread, edge and centred row
+        sides "all" / "" / "  " / 7 / None / "sideways" -> the key is dropped
+                                       ("all" IS the absence)
+        sides " opposite "            -> "opposite" (stripped)
       and reshuffle_min, after how many GAME MINUTES a placement re-rolls —
       the same rule on a scatter entry and on an along row ([11z]):
         30      -> 30      1 -> 1 (the floor: below a minute there is no
@@ -905,6 +915,26 @@ check("an offset beside place 'center' is dropped",
       _place({"place": "center", "offset_m": 2}), {**PLAIN, "place": "center"})
 check("without a place the offset goes and the variant stays",
       _place({"offset_m": 2, "variant": 1}), {**PLAIN, "variant": 1})
+
+# THE SIDES (Task 10, 2026-09-10): which polygon edges count — stored in
+# EVERY placement like `variant`, because it acts on the axis of an aligned
+# turn as well as on the edges an edge row runs along.
+check("SCATTER_SIDES_MODES are the two words the package knows",
+      terrain.SCATTER_SIDES_MODES, ("longest", "opposite"))
+for mode in ("longest", "opposite"):
+    check(f"sides {mode!r} survives on a spread row",
+          _place({"sides": mode}), {**PLAIN, "sides": mode})
+    check(f"sides {mode!r} survives on an edge row",
+          _place({"place": "edge", "sides": mode}),
+          {**PLAIN, "place": "edge", "sides": mode})
+    check(f"sides {mode!r} survives on a centred row",
+          _place({"place": "center", "sides": mode}),
+          {**PLAIN, "place": "center", "sides": mode})
+check("sides is stripped", _place({"sides": " opposite "}),
+      {**PLAIN, "sides": "opposite"})
+for bad in ("all", "", "  ", 7, None, "sideways"):
+    check(f"sides {bad!r} loses the key (its absence IS every edge)",
+          _place({"sides": bad}), PLAIN)
 
 # THE SPACING JITTER (Task 9, 2026-09-10): `spacing_jitter_m` is the half-width
 # of the random shift every station of an EDGE row takes, so it lives only

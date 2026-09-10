@@ -88,6 +88,46 @@ function edgeAxis(ring: readonly ScatterPoint2[], ax: number, az: number,
 }
 
 /**
+ * WHICH EDGES OF THE RING COUNT — the row's `sides` word (Task 10,
+ * 2026-09-10), answered as EDGE INDICES: edge `i` runs from `ring[i]` to
+ * `ring[(i + 1) mod n]`, so the closing edge is `n − 1`. The indices are the
+ * RAW ring's — a repeated point makes a zero-length edge that is never the
+ * longest, and `ringEdges` keeps the same numbering for the station walk.
+ *
+ *     absent / "all" / unknown   every edge, 0..n − 1
+ *     "longest"                  the longest edge; a tie -> the SMALLER index
+ *     "opposite"                 the two longest, ascending; ties -> the
+ *                                smaller indices (a rectangle's long sides)
+ *
+ * Fewer than three points enclose nothing and answer `[]`. A word the
+ * package does not know is "all" — the server whitelists the two words, so
+ * nothing else ever arrives, and the safe reading of junk is the row of
+ * before.
+ */
+export function ringSelectedEdges(ring: readonly ScatterPoint2[],
+                                  sides?: string): number[] {
+  const n = ring?.length ?? 0
+  if (n < 3) return []
+  const all = Array.from({ length: n }, (_, i) => i)
+  if (sides !== 'longest' && sides !== 'opposite') return all
+  const lens = all.map((i) => {
+    const [ax, az] = ring[i]
+    const [bx, bz] = ring[(i + 1) % n]
+    const len = Math.hypot(bx - ax, bz - az)
+    return Number.isFinite(len) ? len : 0
+  })
+  let a = 0
+  for (let i = 1; i < n; i += 1) if (lens[i] > lens[a]) a = i
+  if (sides === 'longest') return [a]
+  let b = -1
+  for (let i = 0; i < n; i += 1) {
+    if (i === a) continue
+    if (b < 0 || lens[i] > lens[b]) b = i
+  }
+  return a < b ? [a, b] : [b, a]
+}
+
+/**
  * The AXIS of the ring edge nearest to `(x, z)` — what an `aligned` prop on a
  * painted polygon turns relative to (user decision 1, 2026-09-10: the nearest
  * edge per instance, not the longest edge of the shape).
@@ -98,14 +138,22 @@ function edgeAxis(ring: readonly ScatterPoint2[], ax: number, az: number,
  * prop standing exactly mid-way between two parallel edges reads one answer
  * on every renderer. Fewer than three points enclose
  * nothing and answer 0, the "angle alone" axis.
+ *
+ * `edges` (Task 10) narrows the search to the listed edge indices of
+ * `ringSelectedEdges` — the same loop, the same tie rule, only the edges
+ * outside the list are never measured; absent = every edge, byte for byte
+ * the answer of before, and an empty list measures nothing and answers 0.
  */
 export function ringEdgeAxis(ring: readonly ScatterPoint2[],
-                             x: number, z: number): number {
+                             x: number, z: number,
+                             edges?: readonly number[]): number {
   const n = ring?.length ?? 0
   if (n < 3) return 0
   let best = Infinity
   let bi = -1
   for (let i = 0, j = n - 1; i < n; j = i, i += 1) {
+    // the edge from ring[j] to ring[i] carries the index j
+    if (edges && !edges.includes(j)) continue
     const d = segmentDistance(x, z, ring[j][0], ring[j][1], ring[i][0], ring[i][1])
     if (d < best) { best = d; bi = i }
   }
@@ -145,13 +193,20 @@ export function lineAxis(line: ReadonlyArray<readonly [number, number]>,
  * over `strokeCentreLine`), a painted polygon to its own rim
  * (`ringEdgeAxis`). `line` is `null` on a polygon. Both renderers choose
  * through here, so neither can align a road's bushes to the ribbon's rim.
+ *
+ * Since Task 10 the axis is the ROW's, not the area's: `sides` narrows the
+ * rim edges a polygon's rows measure against (`ringSelectedEdges`, chosen
+ * once here, not per point); absent = every edge, the area's axis of
+ * before. A stroke area has no sides to choose — its line ignores the word.
  */
 export function areaAxis(line: ReadonlyArray<readonly [number, number]> | null,
-                         ring: readonly ScatterPoint2[]
+                         ring: readonly ScatterPoint2[],
+                         sides?: string,
 ): (x: number, z: number) => number {
-  return line
-    ? (x, z) => lineAxis(line, x, z)
-    : (x, z) => ringEdgeAxis(ring, x, z)
+  if (line) return (x, z) => lineAxis(line, x, z)
+  const edges = (sides === 'longest' || sides === 'opposite')
+    ? ringSelectedEdges(ring, sides) : undefined
+  return (x, z) => ringEdgeAxis(ring, x, z, edges)
 }
 
 /** The answer of `polylabel`: the point and its distance to the ring. */
@@ -331,6 +386,11 @@ export interface RingStationOptions {
   seed?: string
   /** the jitter stream, for the smoke check only */
   jitterRng?: () => number
+  /** WHICH EDGES THE ROW RUNS ALONG (Task 10, 2026-09-10): absent or
+   *  `"all"` = the closed ring, one walk, byte for byte the row of before;
+   *  `"longest"` / `"opposite"` = one run per selected edge
+   *  (`ringSelectedEdges`), in ascending edge index */
+  sides?: string
 }
 
 /** One station of `ringStations`: where it stands, which way the rim runs
@@ -354,33 +414,42 @@ interface RingEdge {
   len: number
   start: number
   end: number
+  /** the edge's index in the RAW ring, as `ringSelectedEdges` numbers it:
+   *  the index of its start point — the LAST of a run of repeated points,
+   *  so that `ring[index + 1]` really is the far end of the edge */
+  index: number
 }
 
 /** The ring as CLOSED edges (the last one back to the first point), junk and
  *  zero-length edges dropped — a repeated closing point adds no edge. */
 function ringEdges(ring: readonly ScatterPoint2[]): RingEdge[] {
-  const pts: ScatterPoint2[] = []
+  const pts: { x: number; z: number; index: number }[] = []
+  let i = 0
   for (const p of ring ?? []) {
     if (!p || p.length < 2) return []
     const [x, z] = p
     if (!Number.isFinite(x) || !Number.isFinite(z)) return []
     const prev = pts[pts.length - 1]
-    if (prev && Math.abs(prev[0] - x) < RING_EPS && Math.abs(prev[1] - z) < RING_EPS) continue
-    pts.push([x, z])
+    if (prev && Math.abs(prev.x - x) < RING_EPS && Math.abs(prev.z - z) < RING_EPS) {
+      prev.index = i
+    } else {
+      pts.push({ x, z, index: i })
+    }
+    i += 1
   }
   const first = pts[0]
   const last = pts[pts.length - 1]
-  if (pts.length > 1 && Math.abs(first[0] - last[0]) < RING_EPS
-    && Math.abs(first[1] - last[1]) < RING_EPS) pts.pop()
+  if (pts.length > 1 && Math.abs(first.x - last.x) < RING_EPS
+    && Math.abs(first.z - last.z) < RING_EPS) pts.pop()
   if (pts.length < 3) return []
   const edges: RingEdge[] = []
   let cum = 0
-  for (let i = 0; i < pts.length; i += 1) {
-    const [ax, az] = pts[i]
-    const [bx, bz] = pts[(i + 1) % pts.length]
+  for (let k = 0; k < pts.length; k += 1) {
+    const { x: ax, z: az, index } = pts[k]
+    const { x: bx, z: bz } = pts[(k + 1) % pts.length]
     const len = Math.hypot(bx - ax, bz - az)
     if (!(len > RING_EPS)) continue
-    edges.push({ ax, az, bx, bz, len, start: cum, end: cum + len })
+    edges.push({ ax, az, bx, bz, len, start: cum, end: cum + len, index })
     cum += len
   }
   return edges
@@ -418,6 +487,14 @@ function ringEdges(ring: readonly ScatterPoint2[]): RingEdge[] {
  * offset wider than the shape) is handed back like any other, ordinal
  * included, and the caller subtracts it (`scatterEdgeInstances`) — geometry
  * here, verdicts there, exactly the split the box sampler has.
+ *
+ * THE SIDES (Task 10, 2026-09-10). `sides` "longest" / "opposite" replaces
+ * the one walk over the closed ring by ONE RUN PER SELECTED EDGE
+ * (`ringSelectedEdges`), in ascending edge index: each run starts afresh at
+ * `s = start` on ITS edge and ends at the first `s >= its length`, with the
+ * jitter formula above restarted per run — but from the SAME stream, one
+ * draw per candidate, run after run — and `ordinal` counting on across the
+ * runs. Absent or "all" is the closed walk, byte for byte.
  */
 export function ringStations(ring: readonly ScatterPoint2[],
                              opts: RingStationOptions): RingStation[] {
@@ -427,44 +504,64 @@ export function ringStations(ring: readonly ScatterPoint2[],
   if (!Number.isFinite(offset) || offset < 0) return []
   const edges = ringEdges(ring)
   if (edges.length < 3) return []
-  const total = edges[edges.length - 1].end
   const start = (typeof opts.startM === 'number' && Number.isFinite(opts.startM)
     && opts.startM >= 0) ? Math.min(opts.startM, spacing) : spacing / 2
   const max = opts.maxPoints ?? SCATTER_MAX_PER_ENTRY
   const jitter = Number(opts.jitterM)
   const jitterRnd = jitter > 0
     ? (opts.jitterRng ?? seededRandom(`${opts.seed ?? ''}:jitter`)) : null
-  const axes: number[] = new Array<number>(edges.length).fill(NaN)
+  const axes = new Map<number, number>()
   const out: RingStation[] = []
-  let e = 0
-  let s = 0
-  for (let k = 0; ; k += 1) {
-    if (jitterRnd) {
-      const j = (2 * jitterRnd() - 1) * jitter
-      s = k === 0 ? start + j : s + spacing + j
-      if (s < 0) s = 0
-    } else {
-      s = start + k * spacing
+  /** One walk over `run` (edges with a contiguous arc length from 0),
+   *  filing into `out` — the whole ring, or one selected edge. */
+  const walk = (run: readonly RingEdge[], total: number): void => {
+    let e = 0
+    let s = 0
+    for (let k = 0; ; k += 1) {
+      if (jitterRnd) {
+        const j = (2 * jitterRnd() - 1) * jitter
+        s = k === 0 ? start + j : s + spacing + j
+        if (s < 0) s = 0
+      } else {
+        s = start + k * spacing
+      }
+      if (!(s < total - RING_EPS)) break
+      if (out.length >= max) break
+      while (e < run.length - 1 && s >= run[e].end) e += 1
+      const edge = run[e]
+      let t = (s - edge.start) / edge.len
+      t = t < 0 ? 0 : (t > 1 ? 1 : t)
+      const px = edge.ax + t * (edge.bx - edge.ax)
+      const pz = edge.az + t * (edge.bz - edge.az)
+      // The inside test of an edge costs a walk over the ring, so every edge
+      // is asked once, when its first station arrives.
+      let axis = axes.get(edge.index)
+      if (axis === undefined) {
+        axis = edgeAxis(ring, edge.ax, edge.az, edge.bx, edge.bz)
+        axes.set(edge.index, axis)
+      }
+      const inward = axis + Math.PI / 2
+      out.push({
+        x: px + Math.sin(inward) * offset,
+        z: pz + Math.cos(inward) * offset,
+        axis,
+        // k on the one closed walk; across the runs of a sides row it is the
+        // count so far — the same number, continued
+        ordinal: out.length,
+      })
     }
-    if (!(s < total - RING_EPS)) break
+  }
+  const sides = opts.sides
+  if (sides !== 'longest' && sides !== 'opposite') {
+    walk(edges, edges[edges.length - 1].end)
+    return out
+  }
+  const selected = ringSelectedEdges(ring, sides)
+  for (const index of selected) {
+    const edge = edges.find((c) => c.index === index)
+    if (!edge) continue
+    walk([{ ...edge, start: 0, end: edge.len }], edge.len)
     if (out.length >= max) break
-    while (e < edges.length - 1 && s >= edges[e].end) e += 1
-    const edge = edges[e]
-    let t = (s - edge.start) / edge.len
-    t = t < 0 ? 0 : (t > 1 ? 1 : t)
-    const px = edge.ax + t * (edge.bx - edge.ax)
-    const pz = edge.az + t * (edge.bz - edge.az)
-    // The inside test of an edge costs a walk over the ring, so every edge
-    // is asked once, when its first station arrives.
-    if (Number.isNaN(axes[e])) axes[e] = edgeAxis(ring, edge.ax, edge.az, edge.bx, edge.bz)
-    const axis = axes[e]
-    const inward = axis + Math.PI / 2
-    out.push({
-      x: px + Math.sin(inward) * offset,
-      z: pz + Math.cos(inward) * offset,
-      axis,
-      ordinal: k,
-    })
   }
   return out
 }

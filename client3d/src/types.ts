@@ -661,6 +661,11 @@ export interface TerrainScatterEntry {
    *  placement (clamped to the count by the sampler); absent = the shared
    *  variant formula mixes the instances. */
   variant?: number;
+  /** WHICH POLYGON EDGES COUNT (Task 10, 2026-09-10): `longest` = the one
+   *  longest edge, `opposite` = the two longest; absent = every edge. Sets
+   *  the axis an `aligned` turn measures against (`areaAxis`) and the edges
+   *  an `edge` row runs along (`ringStations`); a stroke area ignores it. */
+  sides?: 'longest' | 'opposite';
   /** Reshuffle every this many GAME minutes: the seed grows an epoch tail
    *  (`reshuffleEpoch`), so the row is a different draw every interval.
    *  Absent = never. */

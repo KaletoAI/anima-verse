@@ -94,7 +94,7 @@ export type {
 } from './scatter'
 
 export {
-  ringEdgeAxis, lineAxis, areaAxis, polylabel, ringStations,
+  ringEdgeAxis, ringSelectedEdges, lineAxis, areaAxis, polylabel, ringStations,
   scatterEdgeInstances, scatterCenterInstance,
 } from './scatterAxis'
 export type {

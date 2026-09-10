@@ -963,7 +963,7 @@ immer sichtbar, nur Locations verstecken sich.
 **`areas[].meta.scatter` — die Streuung (Vertrag für BEIDE Renderer):**
 
 Eine **Liste** je Fläche, höchstens 8 Einträge, jeder Eintrag aus höchstens
-zehn Feldern (Server-Whitelist `app/models/terrain._sanitize_scatter_list`):
+elf Feldern (Server-Whitelist `app/models/terrain._sanitize_scatter_list`):
 
 ```
 scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = keine
@@ -978,6 +978,8 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
             spacing_jitter_m?: float,   # Abstands-Streuung ±v m je Station, 0..min_spacing_m,
                                         #   nur MIT place=edge UND min_spacing_m; fehlt = gleichmäßig
             variant?: int,              # Listenposition der Modell-Variante, JEDE Zeile; fehlt = Formel
+            sides?: "longest" | "opposite",  # welche Polygonkanten zählen (Achse UND Randreihe), JEDE Zeile;
+                                        #   fehlt = alle Kanten; Strich-Flächen ignorieren es
             reshuffle_min?: int}, … ]   # Neuwurf alle n SPIEL-Minuten, 1..100000; fehlt = nie
 ```
 
@@ -1053,6 +1055,41 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   (`lineAxis` über `strokeCentreLine`, kein Innen-Test, weniger als zwei
   Punkte → 0) — dieselbe Richtung, die die `along`-Reihen längst lesen.
 
+  **Die Seitenwahl `sides` (Nachtrag 2026-09-10, Task 10)** macht die Achse
+  zur Sache der ZEILE, nicht der Fläche: sie sagt, WELCHE Kanten des
+  Polygons zählen — und das für die Achse einer `aligned`-Drehung UND für
+  die Kanten, an denen eine `edge`-Reihe entlangläuft (Nutzer-Entscheid).
+  Kanten sind indiziert wie der Ring gezeichnet ist: Kante `i` läuft von
+  `ring[i]` nach `ring[(i+1) mod n]`, die schließende Kante ist `n−1`
+  (`ringSelectedEdges(ring, sides)`, geteiltes Paket):
+
+  ```
+  fehlt / "all":  alle Kanten                     (die Zeile wie bisher, byte-gleich)
+  "longest":      die längste Kante;               Gleichstand → kleinerer Index
+  "opposite":     die zwei längsten, aufsteigend;  Gleichstände → kleinere Indizes
+  ```
+
+  Ein 10×4-Rechteck `(0,0) (10,0) (10,4) (0,4)` hat die Kantenlängen 10, 4,
+  10, 4 → `longest` = [0] (Kante 2 gleich lang, 0 ist kleiner), `opposite`
+  = [0, 2] — die Langseiten. Die L-Form `(0,0) (10,0) (10,4) (4,4) (4,10)
+  (0,10)` hat 10, 4, 6, 6, 4, 10 → `longest` = [0] (Gleichstand mit 5),
+  `opposite` = [0, 5]. `ringEdgeAxis(ring, x, z, edges)` misst dann NUR die
+  gewählten Kanten — dieselbe Schleife, dieselbe Gleichstandsregel, die
+  übrigen Kanten werden nie vermessen: am Punkt `(5, 3.5)` des Rechtecks
+  antworten alle Kanten mit der Oberkante (π/2, 0,5 m entfernt), `longest`
+  mit der Unterkante (3π/2, die einzige gemessene), `opposite` wieder mit
+  der Oberkante. `areaAxis(line, ring, sides)` reicht das Wort durch, und
+  beide Renderer fragen die Achse seither JE ZEILE ab (`ground.ts
+  axisOfRow`, `mapMath.ts` am Kopf jeder Zeile) statt einmal je Fläche;
+  eine Zeile ohne das Wort liest die Flächenachse wie bisher. **Eine
+  Strich-Fläche ignoriert `sides`** — ihre Achse ist die Mittellinie, die
+  hat keine Seiten; der Editor bietet die Wahl dort nicht an. Der Server
+  speichert das Feld in JEDER Platzierung (wie `variant`), Junk und `"all"`
+  verlieren den Schlüssel. Zahlen von Hand:
+  `client3d/scripts/smoke_scatter_math.mjs` (R6, R7), Whitelist
+  `scripts/smoke_terrain_areas.py` [11p]; die Aufrufreihenfolge beider
+  Renderer pinnt `scripts/smoke_scatter_preview.mjs` (K5).
+
   **`yaw_mode: "aligned"`** ist der einzige Modus: `yaw = Achse +
   yaw_deg · π/180`, auf [0, 2π) normiert. Damit heißt derselbe Winkel an
   jeder Kante und auf jeder Form dasselbe: **0° = parallel zum Rand** (ein
@@ -1119,6 +1156,21 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Stationen bleibt (`variant` der Zeile, sonst `(FNV-1a(seed) + Ordinal)
   mod n`). Die Reihe wird EINMAL für den ganzen Ring gerechnet, das
   Kamerafenster filtert der Aufrufer, genau wie bei `along`.
+
+  **Mit `sides` (Nachtrag 2026-09-10, Task 10) läuft die Reihe nicht mehr
+  um den geschlossenen Ring, sondern je gewählter Kante EINEN eigenen
+  Lauf** (`ringStations(ring, {…, sides})`), in aufsteigendem Kantenindex:
+  jeder Lauf beginnt neu bei `s = start` auf SEINER Kante und endet beim
+  ersten `s ≥ Kantenlänge`; die Jitter-Formel startet je Lauf neu, zieht
+  aber aus DEMSELBEN Strom weiter (ein Zug je Kandidat, Lauf für Lauf —
+  dieselbe Zeile unter `all` und unter `opposite` ist eine andere, aber
+  ebenso deterministische Folge), und das `ordinal` zählt über alle Läufe
+  durch, die Varianten-Formel also mit. Rechteck, Abstand 7, Einzug 1:
+  `longest` → nur Kante 0, `s = 3.5` → `(3.5, 1)`, Ordinal 0 (`10.5 ≥ 10`
+  beendet den Lauf); `opposite` → Kante 0: `(3.5, 1)`, dann Kante 2 von
+  (10,4) nach (0,4): `s = 3.5` → `(6.5, 4)` → `(6.5, 3)`, Ordinal 1.
+  `fehlt`/`"all"` ist der Ringlauf von oben, byte-gleich. Zahlen von Hand:
+  `client3d/scripts/smoke_scatter_math.mjs` (U5, X10).
 
   **`place: "center"` — die eine Mitte** (`polylabel` +
   `scatterCenterInstance`). Der Punkt ist der **Pol der Unzugänglichkeit**,

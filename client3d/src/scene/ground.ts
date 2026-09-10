@@ -1698,8 +1698,11 @@ export function createGround(): Ground {
    * the very same order with the very same calls, which is what makes a
    * preview cell the world's cell byte for byte.
    *
-   * The AXIS of an `aligned` row is the area's — the centre line of a stroke
-   * area, the nearest rim edge of a painted one (`axisAt`) — and a row with
+   * The AXIS of an `aligned` row is the ROW's (Task 10, 2026-09-10): the
+   * centre line of a stroke area, the nearest rim edge of a painted one —
+   * narrowed to the row's `sides` (the longest edge, the two longest) where
+   * the row names them (`areaAxis`, asked per row through `axisOfRow`; a row
+   * without the word reads the area's axis of before) — and a row with
    * `reshuffle_min` seeds with its epoch of the game clock (`reshuffleEpoch`
    * over `gameSeconds`); every other seed is what it always was.
    *
@@ -1749,7 +1752,10 @@ export function createGround(): Ground {
     // whole-line/whole-rim row's stations to the grid of their own cell.
     const { grid, gridOf } = cellOccupancy(grids);
     const line = strokeLineOf(area);
-    const axisAt = areaAxis(line, ring);
+    /** The axis a row turns against — the area's line or rim, narrowed to
+     *  the row's `sides` (a stroke's line ignores the word). Asked per row,
+     *  not per area: the selection is the row's, and the call is cheap. */
+    const axisOfRow = (entry: TerrainScatterEntry) => areaAxis(line, ring, entry.sides);
     const rows: GrownRow[] = [];
     // 1. THE ROWS ALONG THE LINE, by index. A row without a model plants
     //    nothing — on the map as in the world.
@@ -1794,6 +1800,8 @@ export function createGround(): Ground {
             spacingM: Number(entry.min_spacing_m),
             offsetM: entry.offset_m,
             jitterM: entry.spacing_jitter_m,
+            // which edges the row runs along (Task 10); absent = the ring
+            sides: entry.sides,
             yawMode: entry.yaw_mode,
             yawDeg: entry.yaw_deg,
             footprints,
@@ -1807,6 +1815,7 @@ export function createGround(): Ground {
           })),
         });
       } else if (entry.place === 'center') {
+        const axisAt = axisOfRow(entry);
         rows.push({
           entry,
           index,
@@ -1830,6 +1839,7 @@ export function createGround(): Ground {
     // 3. THE SPREAD ROWS, by index — the cell sampler, cell by cell.
     scatterList.forEach((entry, index) => {
       if (entry.place === 'edge' || entry.place === 'center') return;
+      const axisAt = axisOfRow(entry);
       rows.push({
         entry,
         index,

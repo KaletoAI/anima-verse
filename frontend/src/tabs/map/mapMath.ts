@@ -1528,7 +1528,11 @@ export function scatterWindowInstances(jobs: readonly ScatterPreviewJob[],
   // -> spread, area after area.
   for (const job of jobs) {
     const line = job.line
-    const axisAt = areaAxis(line, job.ring)
+    // THE AXIS IS THE ROW'S (Task 10, 2026-09-10): `sides` narrows the rim
+    // edges an aligned row measures against; an along row carries no such
+    // word, and its line would ignore one anyway.
+    const sides = 'sides' in job.entry ? job.entry.sides : undefined
+    const axisAt = areaAxis(line, job.ring, sides)
     const epoch = reshuffleEpoch(seconds, job.entry.reshuffle_min)
     const clearM = job.clearM
     if (job.kind === 'along') {
@@ -1560,6 +1564,8 @@ export function scatterWindowInstances(jobs: readonly ScatterPreviewJob[],
         spacingM: job.minSpacingM,
         offsetM: e.offset_m,
         jitterM: e.spacing_jitter_m,
+        // which edges the row runs along (Task 10); absent = the ring
+        sides: e.sides,
         yawMode: e.yaw_mode,
         yawDeg: e.yaw_deg,
         footprints,
@@ -1693,8 +1699,9 @@ export function scatterThinnedByArea(jobs: readonly ScatterPreviewJob[],
  * `ScatterPreviewInstance`.
  *
  * THE TURN AND THE CLOCK ARE THE WINDOW'S (fix wave 2026-09-10): every
- * thinned row is sampled with its `yaw_mode`/`yaw_deg` against the area's
- * axis (`areaAxis`, the nearest rim edge or the stroke's centre line) and
+ * thinned row is sampled with its `yaw_mode`/`yaw_deg` against the row's
+ * axis (`areaAxis`, the nearest rim edge — narrowed to the row's `sides` —
+ * or the stroke's centre line) and
  * with the seed of its epoch (`reshuffleEpoch` over `gameSeconds`), exactly
  * as `scatterWindowInstances` samples it — these instances feed the "Props
  * from above" sprites, and an `aligned 0°` car row must not show random
@@ -1738,7 +1745,7 @@ export function scatterThinnedInstances(jobs: readonly ScatterPreviewJob[],
       clearM: job.clearM,
       yawMode: e.yaw_mode,
       yawDeg: e.yaw_deg,
-      axisAt: areaAxis(job.line, job.ring),
+      axisAt: areaAxis(job.line, job.ring, e.sides),
       // The overview thins the WHOLE area to a dot budget, and the spacing
       // travels with it: a thinned picture is the PREFIX of the same run, so
       // every dot in it is a prop the world really plants at that distance

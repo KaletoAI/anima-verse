@@ -101,6 +101,10 @@ SCATTER_PLACE_MODES = ("edge", "center")
 #: ceiling an along row keeps from its centre line (:data:`ALONG_OFFSET_MAX_M`)
 #: and for the same reason: it is wider than any painted shape anybody draws.
 SCATTER_OFFSET_MAX_M = 100.0
+#: WHICH POLYGON EDGES COUNT for a scatter row (Task 10, 2026-09-10): the
+#: one longest edge, or the two longest (a rectangle's long sides). Absent =
+#: every edge; the renderers' ``ringSelectedEdges`` knows exactly these words.
+SCATTER_SIDES_MODES = ("longest", "opposite")
 #: The longest period a row may re-roll its placement on, in GAME minutes.
 #: 100000 minutes is 69 game days — a row that re-rolls less often than that
 #: never visibly re-rolls at all — and the cap keeps the epoch the renderers
@@ -272,6 +276,14 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
       car model, a wood one species. Absent = the shared formula over the
       cell seed varies the instances, as every scatter did before. The
       renderers clamp the position to the variants the prop really has.
+    * ``sides`` — WHICH POLYGON EDGES COUNT (Task 10, 2026-09-10):
+      ``longest`` (the one longest edge) or ``opposite`` (the two longest —
+      a rectangle's long sides). It sets the axis an ``aligned`` turn is
+      measured against AND the edges an ``edge`` row runs along, so like
+      ``variant`` it is stored in EVERY placement; absent = every edge, the
+      row of before. Anything else loses the key (``all`` IS the absence).
+      A stroke area has no sides to choose — the renderers ignore the word
+      there, the whitelist does not know what shape the row sits on.
     * ``reshuffle_min`` — after how many GAME MINUTES the placement re-rolls
       (:func:`_reshuffle_min`); no key = never, the behaviour of every scatter
       before the field existed.
@@ -319,6 +331,9 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
     variant = _variant_index(raw.get("variant"))
     if variant is not None:
         out["variant"] = variant
+    sides = raw.get("sides")
+    if isinstance(sides, str) and sides.strip() in SCATTER_SIDES_MODES:
+        out["sides"] = sides.strip()
     reshuffle = _reshuffle_min(raw.get("reshuffle_min"))
     if reshuffle is not None:
         out["reshuffle_min"] = reshuffle

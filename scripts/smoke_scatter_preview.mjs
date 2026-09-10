@@ -1421,7 +1421,9 @@ async function main() {
     /scatterCenterInstance\([\s\S]{0,700}?axisAt,/.test(src),
     /scatterCellInstances\(\{[\s\S]{0,1200}?axisAt,/.test(src),
     src.includes('const { grid, gridOf } = cellOccupancy(grids)'),
-    src.includes('const axisAt = areaAxis(line, '),
+    // the axis comes from the package helper WITH the row's sides word
+    // (Task 10) — never the bare per-area call of before
+    /areaAxis\(line, (ring|job\.ring), (entry\.sides|sides)\)/.test(src),
     !src.includes('new OccupancyGrid()'),
   ];
   check('K5 ground.ts hands grid, clearance, tag and axis to every sampler call, from the package helpers',
@@ -1453,6 +1455,28 @@ async function main() {
   check('K5 …and so does mapMath.ts',
     pinsOf(mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('),
       mathSrc.indexOf('function scatterThinnedByArea(')), /jitterM: e\.spacing_jitter_m,/g), 2);
+  // THE SIDES (Task 10, 2026-09-10): the axis is the ROW's, not the
+  // area's — `areaAxis(line, ring, <row>.sides)` is asked once per row in
+  // both orchestrations (ground.ts through its `axisOfRow(entry)` at the
+  // centre and the spread row, mapMath.ts at the top of every job), it is
+  // the ONLY `areaAxis(` call in each, and the edge call hands the same word
+  // to the station walk (`sides: entry.sides` / `sides: e.sides`) — one
+  // edge call, one pin. The thinned overview asks it per row as well.
+  const groundBuild = groundSrc.slice(groundSrc.indexOf('function buildScatter('));
+  check('K5 ground.ts asks the axis per row with the row\'s sides and hands sides to the edge call',
+    [pinsOf(groundBuild, /areaAxis\(line, ring, entry\.sides\)/g),
+      pinsOf(groundBuild, /areaAxis\(/g),
+      pinsOf(groundBuild, /const axisAt = axisOfRow\(entry\)/g),
+      pinsOf(groundBuild, /sides: entry\.sides,/g)], [1, 1, 2, 1]);
+  const mathWindow = mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('),
+    mathSrc.indexOf('function scatterThinnedByArea('));
+  check('K5 …and so does mapMath.ts',
+    [pinsOf(mathWindow, /areaAxis\(line, job\.ring, sides\)/g),
+      pinsOf(mathWindow, /areaAxis\(/g),
+      pinsOf(mathWindow, /sides: e\.sides,/g)], [1, 1, 1]);
+  check('K5 …and its thinned overview asks the axis per row too',
+    pinsOf(mathSrc.slice(mathSrc.indexOf('function scatterThinnedInstances(')),
+      /areaAxis\(job\.line, job\.ring, e\.sides\)/g), 1);
   // (K7) …and the preview really runs it: a jittered lamp row's dots are
   // `strokeStations` with the same jitter under the row seed, and they are
   // not the unjittered stations of (K).
