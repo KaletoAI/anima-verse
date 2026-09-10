@@ -896,7 +896,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
     const lo = AT_AXES[axis].min
     const v = Number.isFinite(n) ? Math.min(Math.max(n, lo), AT_MAX) : 0
     const at = [...markers[i].at] as [number, number, number]
-    at[axis] = Math.round(v * 10000) / 10000
+    // Centimetre grain (2026-09-10): a marker is placed by eye and read back
+    // in metres with two decimals, so a finer fraction only hides noise.
+    at[axis] = Math.round(v * 100) / 100
     patchMarker(i, { at })
   }
   // A place is added TO BE EDITED — the card opposite the list follows it, so
@@ -1303,8 +1305,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                       ariaLabel={t(axis.label)}
                       min={axis.min}
                       max={AT_MAX}
-                      step={0.005}
-                      fineStep={0.001}
+                      step={0.01}
                       value={selMarker.at[ax]}
                       onChange={(v) => setMarkerAt(selIdx, ax as 0 | 1 | 2, v)}
                       sliderWidth="auto"
