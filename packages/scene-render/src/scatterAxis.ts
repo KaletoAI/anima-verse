@@ -137,6 +137,21 @@ export function lineAxis(line: ReadonlyArray<readonly [number, number]>,
   return axis
 }
 
+/**
+ * THE AXIS OF AN AREA, as the function every sampler of that area is handed
+ * (`axisAt`): a STROKE area aligns to its decorated centre line (`lineAxis`
+ * over `strokeCentreLine`), a painted polygon to its own rim
+ * (`ringEdgeAxis`). `line` is `null` on a polygon. Both renderers choose
+ * through here, so neither can align a road's bushes to the ribbon's rim.
+ */
+export function areaAxis(line: ReadonlyArray<readonly [number, number]> | null,
+                         ring: readonly ScatterPoint2[]
+): (x: number, z: number) => number {
+  return line
+    ? (x, z) => lineAxis(line, x, z)
+    : (x, z) => ringEdgeAxis(ring, x, z)
+}
+
 /** The answer of `polylabel`: the point and its distance to the ring. */
 export interface PoleOfInaccessibility {
   x: number

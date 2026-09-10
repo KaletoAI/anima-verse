@@ -51,15 +51,15 @@
  *     not an area at all — the server fails closed the same way)
  */
 import {
-  cleanRing, polygonArea, scatterCellAt, scatterCellCountInBox,
+  cleanRing, polygonArea, scatterCellCountInBox,
   scatterCellInstances, scatterCellSeed, scatterCellsInBox, scatterClearM,
   scatterInstances, scatterSeed, scatterWantedCount, worldToLocalXZ,
   SCATTER_CELL_M, SCATTER_CELLS_MAX, SCATTER_MAX_PER_CELL,
   alongSeed, strokeCentreLine, strokeStations,
-  lineAxis, ringEdgeAxis, scatterEdgeInstances, scatterCenterInstance,
-  reshuffleEpoch, OccupancyGrid,
+  areaAxis, scatterEdgeInstances, scatterCenterInstance,
+  reshuffleEpoch, cellOccupancy,
 } from '@anima/scene-render'
-import type { Point2, ScatterFootprint, ScatterOccupancy } from '@anima/scene-render'
+import type { CellGrids, Point2, ScatterFootprint } from '@anima/scene-render'
 import { readAlong, readScatter, readStrokePoints } from './mapTypes'
 import type { FlowAlong, TerrainAlongEntry, TerrainArea, TerrainScatterEntry,
   TerrainWaterKnot, TerrainWaterProfile } from './mapTypes'
@@ -1471,30 +1471,19 @@ export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
     if (job.kind !== 'spread' || !draws(job)) continue
     for (const cell of cellsOf(job)) drawn.set(`${cell[0]},${cell[1]}`, cell)
   }
-  // ONE GRID PER CELL, made when the first survivor of the cell is filed or
-  // the first candidate asks; a row computed for its whole line or rim files
-  // every station into the grid of the cell it stands in (`grid` below routes
-  // by `scatterCellAt`), so a cell is judged the same whether the row was
-  // computed for it alone or for the whole shape.
-  const grids = new Map<string, OccupancyGrid>()
-  const gridOf = (cx: number, cz: number): OccupancyGrid => {
-    const key = `${cx},${cz}`
-    let g = grids.get(key)
-    if (!g) { g = new OccupancyGrid(); grids.set(key, g) }
-    return g
-  }
-  const grid: ScatterOccupancy = {
-    blocks: (x, z, r) => gridOf(scatterCellAt(x), scatterCellAt(z)).blocks(x, z, r),
-    add: (x, z, r) => gridOf(scatterCellAt(x), scatterCellAt(z)).add(x, z, r),
-  }
+  // ONE GRID PER CELL (`cellOccupancy`, shared package): a row computed for
+  // its whole line or rim files every station into the grid of the cell it
+  // stands in (`grid`), a spread row takes its cell's own (`gridOf`) — so a
+  // cell is judged the same whether the row was computed for it alone or
+  // for the whole shape, here and in the 3D client.
+  const grids: CellGrids = new Map()
+  const { grid, gridOf } = cellOccupancy(grids)
   // THE ROWS, in the order `scatterPreviewJobs` collected them — the order
   // every cell's grid is filled in on both renderers: along -> edge/center
   // -> spread, area after area.
   for (const job of jobs) {
     const line = job.line
-    const axisAt = line
-      ? (x: number, z: number) => lineAxis(line, x, z)
-      : (x: number, z: number) => ringEdgeAxis(job.ring, x, z)
+    const axisAt = areaAxis(line, job.ring)
     const epoch = reshuffleEpoch(seconds, job.entry.reshuffle_min)
     const clearM = job.clearM
     if (job.kind === 'along') {

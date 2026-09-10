@@ -1326,6 +1326,16 @@
  *      outside it — a phantom the ring filter drops. Afterwards blocks(6.4,
  *      6.4, 0.1) is true and blocks(32, 32, 0.1) is false: a prop nobody
  *      draws occupies nothing.
+ * (V6) THE ROUTING ADAPTER of a pass, `cellOccupancy(grids)`: `grid.add`
+ *      files a point into the grid of ITS cell (`scatterCellAt`, 64 m) —
+ *      (10, 10) lands in "0,0" and nowhere else; `grid.blocks` asks the grid
+ *      of the QUERIED point's cell and no other, without making one: (10.5,
+ *      10) is cell (0,0), 0.5 < 1 + 1, blocked; (70, 10) is cell (1,0),
+ *      empty, false, and "1,0" still does not exist. A point at (63.5, 10) filed in (0,0)
+ *      is 0.7 m from (64.2, 10), yet that lies in (1,0) and is NOT blocked —
+ *      the cell is the unit, on the rim of a cell as in its middle; (63.6,
+ *      10) beside it is. `gridOf(0, 0)` is the grid the adapter filed into,
+ *      `gridOf(1, 0)` makes the second one — two grids in the map.
  *
  * ============================================================================
  * (W) THE EPOCH — `reshuffleEpoch` and the seed suffix
@@ -3317,7 +3327,7 @@ async function main() {
 
   // (V) THE OCCUPANCY GRID
   console.log('\n(V) the occupancy grid — OccupancyGrid and the fifth verdict');
-  const { OccupancyGrid } = await loadTs(OCCUPANCY_SRC);
+  const { OccupancyGrid, cellOccupancy } = await loadBundled(OCCUPANCY_SRC);
   const grid = new OccupancyGrid();
   check('V1 an empty grid blocks nothing', grid.blocks(0, 0, 1), false);
   grid.add(0, 0, 1);
@@ -3363,6 +3373,22 @@ async function main() {
     [[6.4, 6.4]], 1e-9);
   check('V5 …files it', v5.blocks(6.4, 6.4, 0.1), true);
   check('V5 …and not the phantom outside the painted shape', v5.blocks(32, 32, 0.1), false);
+  // (V6) the routing adapter of a pass — see the header
+  const v6Grids = new Map();
+  const v6 = cellOccupancy(v6Grids);
+  v6.grid.add(10, 10, 1);
+  check('V6 a station in cell (0,0) is filed in grid "0,0" and in no other',
+    [[...v6Grids.keys()], v6Grids.get('0,0').blocks(10, 10, 0.1)], [['0,0'], true]);
+  check('V6 blocks asks the cell of the QUERIED point: (10.5, 10) is (0,0), 0.5 < 2, blocked',
+    v6.grid.blocks(10.5, 10, 1), true);
+  check('V6 …(70, 10) is cell (1,0), nobody there, and no grid is made for asking',
+    [v6.grid.blocks(70, 10, 1), v6Grids.has('1,0')], [false, false]);
+  v6.grid.add(63.5, 10, 1);
+  check('V6 (64.2, 10) is 0.7 m from it but over the border: its own cell answers',
+    [v6.grid.blocks(64.2, 10, 1), v6.grid.blocks(63.6, 10, 1)], [false, true]);
+  check('V6 gridOf hands the very grid the adapter filed into, and makes one on demand',
+    [v6.gridOf(0, 0) === v6Grids.get('0,0'), v6Grids.has('1,0'),
+      v6.gridOf(1, 0) === v6Grids.get('1,0'), v6Grids.size], [true, false, true, 2]);
 
   // (W) THE EPOCH
   console.log('\n(W) the epoch — reshuffleEpoch and the seed suffix');

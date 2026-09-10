@@ -70,14 +70,14 @@ import { buildAreaGeometry,
   propBoxFootprints, propGroundFit, rayGroundHit,
   scatterCellAt, scatterCellInstances, scatterCellSeed, scatterClearM,
   scatterSeed, scatterEdgeInstances, scatterCenterInstance,
-  lineAxis, ringEdgeAxis, reshuffleEpoch, OccupancyGrid,
+  areaAxis, reshuffleEpoch, cellOccupancy,
   SCATTER_CELL_M,
   alongSeed, strokeCentreLine, strokeStations,
   strokeWidthM,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
   waterfallsFrom,
   worldHeightRange } from '@anima/scene-render';
-import type { Point2, ScatterFootprint, ScatterInstance, ScatterOccupancy,
+import type { CellGrids, Point2, ScatterFootprint, ScatterInstance,
   TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
   TerrainLayerIndex, TerrainLayerTile, WorldHeightField,
   WorldHeightTileStats,
@@ -1692,7 +1692,7 @@ export function createGround(): Ground {
    * computed for its whole line or rim files its stations into the grid of
    * the cell each one stands in (`grid` routes by `scatterCellAt`), so a cell
    * reads the same whether a row was computed for it alone or for the whole
-   * shape — and the map editor's preview (`mapMath.scatterWindowDots`) walks
+   * shape (`cellOccupancy`, shared package) — and the map editor's preview (`mapMath.scatterWindowDots`) walks
    * the very same order with the very same calls, which is what makes a
    * preview cell the world's cell byte for byte.
    *
@@ -1712,7 +1712,7 @@ export function createGround(): Ground {
    */
   function buildScatter(area: TerrainArea, ring: Point2[],
                         occluders: Point2[][], sink: { dispose(): void }[],
-                        grids: Map<string, OccupancyGrid>,
+                        grids: CellGrids,
   ): ScatterProp[] {
     const out: ScatterProp[] = [];
     // ONE wind question per area, not per entry: how hard it BLOWS hangs on
@@ -1741,23 +1741,13 @@ export function createGround(): Ground {
     const inWindow = new Set(cells.map(([cx, cz]) => `${cx},${cz}`));
     const windowed = (pts: ScatterInstance[]): ScatterInstance[] => pts.filter(
       (p) => inWindow.has(`${scatterCellAt(p.x)},${scatterCellAt(p.z)}`));
-    // ONE GRID PER CELL, made when a cell's first candidate asks. `grids` is
-    // the pass's map, shared by every area, so the second area of a cell is
-    // judged against what the first one planted there.
-    const gridOf = (cx: number, cz: number): OccupancyGrid => {
-      const key = `${cx},${cz}`;
-      let g = grids.get(key);
-      if (!g) { g = new OccupancyGrid(); grids.set(key, g); }
-      return g;
-    };
-    const grid: ScatterOccupancy = {
-      blocks: (x, z, r) => gridOf(scatterCellAt(x), scatterCellAt(z)).blocks(x, z, r),
-      add: (x, z, r) => gridOf(scatterCellAt(x), scatterCellAt(z)).add(x, z, r),
-    };
+    // ONE GRID PER CELL (`cellOccupancy`, shared package): `grids` is the
+    // pass's map, shared by every area, so the second area of a cell is
+    // judged against what the first one planted there. `grid` routes a
+    // whole-line/whole-rim row's stations to the grid of their own cell.
+    const { grid, gridOf } = cellOccupancy(grids);
     const line = strokeLineOf(area);
-    const axisAt = line
-      ? (x: number, z: number) => lineAxis(line, x, z)
-      : (x: number, z: number) => ringEdgeAxis(ring, x, z);
+    const axisAt = areaAxis(line, ring);
     const rows: GrownRow[] = [];
     // 1. THE ROWS ALONG THE LINE, by index. A row without a model plants
     //    nothing — on the map as in the world.
@@ -2606,7 +2596,7 @@ export function createGround(): Ground {
   function rebuildScatter(): void {
     // The grids of THIS pass — one per cell, shared by every area, thrown
     // away with the pass (`buildScatter`).
-    const grids = new Map<string, OccupancyGrid>();
+    const grids: CellGrids = new Map();
     builtEpochSig = epochSig();
     for (const a of areaMeshes) {
       disposeProps(a.scatter);
@@ -2708,7 +2698,7 @@ export function createGround(): Ground {
     const nextOwned: { dispose(): void }[] = [];
     /** the occupancy of this pass — one grid per cell over every area, see
      *  `buildScatter` */
-    const grids = new Map<string, OccupancyGrid>();
+    const grids: CellGrids = new Map();
     builtEpochSig = epochSig();
     /** every painted shape as the undergrowth field reads it — collected in
      *  LIST ORDER, because that is the stacking order its occluders rely on */

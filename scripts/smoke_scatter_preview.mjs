@@ -367,6 +367,23 @@
  *      wood stands between 85 % and 100 % of 8 973 — and an exact count of a
  *      seeded sample alone would be a recording. Against the 16 dots of
  *      before that is still a factor above 250.
+ * (I6b) THE EQUALITY RULE OF A MIXED PICTURE (2026-09-10). The monster is
+ *      thinned, the wood and the grass are drawn — and the monster lies
+ *      UNDER both in paint order, so in the world its tufts are planted
+ *      first and the wood's are judged against them. Its ground inside the
+ *      wood's ring is occluded (nothing filed there), but every drawn cell on
+ *      the wood's rim also holds monster ground OUTSIDE the ring, and a wood
+ *      tuft within 0.8 m of a monster tuft there is subtracted. So the window
+ *      over ALL rows with `drawIds` = the true areas must equal the client
+ *      call by hand: per drawn cell one grid, the monster's seven rows
+ *      sampled first (against the wood and grass rings as occluders, no dot
+ *      emitted), then the wood's two rows and the grass row emitting — and
+ *      it must DIFFER from the old call over the true jobs alone, which is
+ *      exactly what a run without the monster's rows reproduces (the red
+ *      counter-probe). A thinned row contributes no dot: every dot carries a
+ *      wood or grass row index and lies in one of their boxes, and the mixed
+ *      picture is a SUBSET of the true-jobs-only one — the monster only ever
+ *      subtracts.
  * (I7) THE BADGE, on the one area that was approximated. Its rows keep
  *      floor(w · 4 000 / 2 005 020): 283, 28, 851, 851, 283, 283, 1 418 =
  *      3 997 dots of 2 005 020 props -> "0.20", hung on its centroid
@@ -440,7 +457,9 @@
  *
  * THE ORDER (K5) is pinned in BOTH sources: the samplers are called along ->
  * edge -> center -> spread, every call carries the cell's `occupied` grid
- * with `occupyR` = the row's clearance and the area's `axisAt`.
+ * with `occupyR` = the row's clearance and the area's `axisAt` — and both
+ * come out of the package helpers `cellOccupancy(grids)` / `areaAxis(line,
+ * ring)`, never out of a grid or an axis choice built in the app.
  */
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1039,6 +1058,53 @@ async function main() {
   // THE HEADLINE, and the reason the round exists: 16 dots became thousands.
   check('I6 …which is more than 250 times the 16 dots of before',
     wood / 16 > 250, true);
+  // (I6b) THE EQUALITY RULE — see the header.
+  const mixedDots = scatterWindowDots(wj, MIX_RECT, [],
+    { drawIds: new Set(mPlan.trueIds) });
+  const [gMinX, gMinZ, gMaxX, gMaxZ] = wj.filter((j) => j.areaId === 'ta_2a0854a6')[0].box;
+  const woodCells = scatterCellsInBoxOf(wMinX, wMinZ, wMaxX, wMaxZ, MIX_RECT);
+  const grassCells = scatterCellsInBoxOf(gMinX, gMinZ, gMaxX, gMaxZ, MIX_RECT);
+  /** the client call by hand: one grid per drawn cell, rows in paint order */
+  const clientMixed = (withMonster) => {
+    const grids = new Map();
+    const gridOf = (cx, cz) => {
+      const key = `${cx},${cz}`;
+      if (!grids.has(key)) grids.set(key, new OccupancyGrid());
+      return grids.get(key);
+    };
+    const row = (ring, id, i, d, occluders, cells, entry) => cells.flatMap(([cx, cz]) =>
+      cellInstances({
+        ring, cx, cz, densityPer100m2: d, seed: cellSeed(id, i, cx, cz),
+        clearM: 0.4, occluders, occupied: gridOf(cx, cz), occupyR: 0.4,
+      }).map((p) => ({ x: p.x, z: p.z, entry })));
+    const drawnCells = [...new Map([...woodCells, ...grassCells]
+      .map((c) => [`${c[0]},${c[1]}`, c])).values()];
+    if (withMonster) {
+      MONSTER_D.forEach((d, i) => row(MONSTER_RING, 'ta_57f3df57', i, d,
+        [FOREST_RING, GRASS_RING], drawnCells, i));
+    }
+    return [
+      ...row(FOREST_RING, 'ta_63926f52', 0, 5, [GRASS_RING], woodCells, 0),
+      ...row(FOREST_RING, 'ta_63926f52', 1, 5, [GRASS_RING], woodCells, 1),
+      ...row(GRASS_RING, 'ta_2a0854a6', 0, 50, [], grassCells, 0),
+    ];
+  };
+  check('I6b the mixed window with drawIds IS the client call with the monster planted first',
+    JSON.stringify(mixedDots), JSON.stringify(clientMixed(true)));
+  differs('I6b …and not the old call over the true jobs alone',
+    JSON.stringify(mixedDots), JSON.stringify(exactDots));
+  check('I6b …which is exactly the run without the monster\'s rows (red counter-probe)',
+    JSON.stringify(exactDots), JSON.stringify(clientMixed(false)));
+  const inBox = (d) => (d.x >= wMinX && d.x <= wMaxX && d.z >= wMinZ && d.z <= wMaxZ)
+    || (d.x >= gMinX && d.x <= gMaxX && d.z >= gMinZ && d.z <= gMaxZ);
+  const exactKeys = new Set(exactDots.map((d) => `${d.x},${d.z},${d.entry}`));
+  check('I6b a thinned row contributes no dot: wood/grass rows only, in their boxes',
+    [mixedDots.every((d) => d.entry === 0 || d.entry === 1), mixedDots.every(inBox)],
+    [true, true]);
+  check('I6b …and the monster only subtracts: fewer dots, every one of the true-only run',
+    [mixedDots.length < exactDots.length,
+      mixedDots.every((d) => exactKeys.has(`${d.x},${d.z},${d.entry}`))],
+    [true, true]);
   // (I7) THE BADGE, on the one area that was approximated. Its rows keep
   // floor(w · 4 000 / 2 005 020) each: 283, 28, 851, 851, 283, 283, 1 418 =
   // 3 997 dots of 2 005 020 props -> "0.20".
@@ -1271,20 +1337,22 @@ async function main() {
     orderOf(mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('))), true);
   // Four sampler calls per file, every one with the cell's grid and the
   // row's clearance as its radius; the two samplers that take an axis
-  // (center, spread) get the area's.
+  // (center, spread) get the area's — and both the grids and the axis come
+  // out of the ONE package helper each (`cellOccupancy`, `areaAxis`), so
+  // there is no glue to drift.
   const wired = (src) => [
     (src.match(/occupied: grid/g) || []).length >= 4,
     (src.match(/occupyR: clearM/g) || []).length >= 4,
     /scatterCenterInstance\([\s\S]{0,700}?axisAt,/.test(src),
     /scatterCellInstances\(\{[\s\S]{0,1200}?axisAt,/.test(src),
+    src.includes('const { grid, gridOf } = cellOccupancy(grids)'),
+    src.includes('const axisAt = areaAxis(line, '),
+    !src.includes('new OccupancyGrid()'),
   ];
-  check('K5 ground.ts hands grid, clearance and axis to every sampler call',
-    wired(groundSrc), [true, true, true, true]);
+  check('K5 ground.ts hands grid, clearance and axis to every sampler call, from the package helpers',
+    wired(groundSrc), [true, true, true, true, true, true, true]);
   check('K5 …and so does mapMath.ts',
-    wired(mathSrc), [true, true, true, true]);
-  check('K5 both build ONE grid per cell',
-    [groundSrc.includes('new OccupancyGrid()'), mathSrc.includes('new OccupancyGrid()')],
-    [true, true]);
+    wired(mathSrc), [true, true, true, true, true, true, true]);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

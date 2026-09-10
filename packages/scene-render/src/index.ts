@@ -94,7 +94,7 @@ export type {
 } from './scatter'
 
 export {
-  ringEdgeAxis, lineAxis, polylabel, ringStations,
+  ringEdgeAxis, lineAxis, areaAxis, polylabel, ringStations,
   scatterEdgeInstances, scatterCenterInstance,
 } from './scatterAxis'
 export type {
@@ -102,7 +102,8 @@ export type {
   ScatterEdgeOptions, ScatterCenterOptions,
 } from './scatterAxis'
 
-export { OccupancyGrid } from './occupancy'
+export { OccupancyGrid, cellOccupancy } from './occupancy'
+export type { CellGrids, CellOccupancy } from './occupancy'
 
 export {
   STROKE_STYLES, isStrokeStyle, strokeSeed, decorateStroke,

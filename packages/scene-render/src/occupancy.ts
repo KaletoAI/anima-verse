@@ -28,10 +28,13 @@
  * sampler here relies on — a removal would let a later row un-block a spot an
  * earlier row had already decided against.
  *
- * No import, so the smoke loads this file through the same plain transpile
- * as `scatter.ts`. Structurally it is the `ScatterOccupancy` the samplers
- * accept (declared there, for the same no-import reason).
+ * Structurally it is the `ScatterOccupancy` the samplers accept (declared in
+ * `scatter.ts`, which stays import-free); this file imports the cell mapping
+ * from there for `cellOccupancy`, so the smoke bundles it (`loadBundled`)
+ * rather than transpiling it on its own.
  */
+import { scatterCellAt } from './scatter'
+import type { ScatterOccupancy } from './scatter'
 
 /** The bucket edge in metres. 8 m is a few props wide: a candidate's search
  *  covers ±ceil((r + rMax)/8) buckets, one or two for anything tree-sized, and
@@ -88,5 +91,53 @@ export class OccupancyGrid {
       }
     }
     return false
+  }
+}
+
+/** The grids of one rebuild pass, keyed `"cx,cz"` — see `cellOccupancy`. */
+export type CellGrids = Map<string, OccupancyGrid>
+
+/** What `cellOccupancy` hands a renderer: the grid of a named cell, and one
+ *  `ScatterOccupancy` that routes to the grid of whatever cell a point is in. */
+export interface CellOccupancy {
+  /** the grid of cell (cx, cz), made on first use */
+  gridOf(cx: number, cz: number): OccupancyGrid
+  /** the routing adapter for a row computed for its whole line or rim */
+  grid: ScatterOccupancy
+}
+
+/**
+ * ONE GRID PER CELL, FOR A WHOLE PASS — the glue both renderers need between
+ * the grids and the samplers, kept here so it exists once (§ A9; the clip
+ * shader precedent).
+ *
+ * A `spread` row samples cell by cell and takes the cell's own grid
+ * (`gridOf`). A row computed for its WHOLE line or rim (`strokeStations`,
+ * `scatterEdgeInstances`, `scatterCenterInstance`) does not know cells, so
+ * it takes `grid`: every `add` files the point into the grid of the cell it
+ * stands in, every `blocks` asks the grid of the cell the QUERIED point is in
+ * — and no other. The cell is the unit of the sampling, and a station just
+ * over a cell border is therefore judged by its own cell's grid, exactly as
+ * the cell sampler would judge a candidate there; that is what makes a cell
+ * read the same whether a row was computed for it alone or for the shape.
+ *
+ * `blocks` on a cell nobody has filed anything in answers false without
+ * making a grid; `add` makes the grid. `grids` is the caller's map for the
+ * pass — one per rebuild, shared by every area, thrown away with it.
+ */
+export function cellOccupancy(grids: CellGrids): CellOccupancy {
+  const gridOf = (cx: number, cz: number): OccupancyGrid => {
+    const key = `${cx},${cz}`
+    let g = grids.get(key)
+    if (!g) { g = new OccupancyGrid(); grids.set(key, g) }
+    return g
+  }
+  return {
+    gridOf,
+    grid: {
+      blocks: (x, z, r) => grids.get(`${scatterCellAt(x)},${scatterCellAt(z)}`)
+        ?.blocks(x, z, r) ?? false,
+      add: (x, z, r) => gridOf(scatterCellAt(x), scatterCellAt(z)).add(x, z, r),
+    },
   }
 }
