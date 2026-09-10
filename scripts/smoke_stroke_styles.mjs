@@ -166,7 +166,8 @@ async function loadMapMath() {
       stdin: {
         contents: `export * from ${JSON.stringify(SRC)};\n`
           + "export { seededRandom, strokeStations, strokeCentreLine, alongSeed,"
-          + " scatterVariantIndex, scatterSeedHash } from '@anima/scene-render';\n",
+          + " scatterVariantIndex, scatterSeedHash, OccupancyGrid }"
+          + " from '@anima/scene-render';\n",
         resolveDir: ROOT, sourcefile: 'smoke-entry.mjs', loader: 'js',
       },
       outfile: file, bundle: true, format: 'esm',
@@ -221,7 +222,7 @@ function compare(a, b, eps) {
 
 const { decorateStroke, strokeSeed, strokeToPolygon, MAX_DECORATED_POINTS,
   STROKE_STYLES, isStrokeStyle, seededRandom, strokeStations, strokeCentreLine,
-  alongSeed, scatterVariantIndex } = await loadMapMath();
+  alongSeed, scatterVariantIndex, OccupancyGrid } = await loadMapMath();
 
 /** The rule's own rounding — `Math.round(v·100)/100`, `+0` to kill −0. */
 const r2 = (v) => Math.round(v * 100) / 100 + 0;
@@ -481,6 +482,16 @@ check('...and the deflection inside the window rides it',
 //   [S11] `strokeCentreLine` of a straight recipe is the clicked points;
 //        of a wavy one it is `decorateStroke` with the toolbar defaults
 //        (10 m, 2 m) when the recipe authors no numbers.
+//   [S12] `occupied` (2026-09-10): a grid holding (37.5, 3) with radius 0.5
+//        and `occupyR` 1 blocks station 1 alone (0 < 1.5; the next station
+//        is 25 m away), the survivors keep the ordinals' variants exactly as
+//        under the footprint of [S8], and they are FILED in turn:
+//        blocks(12.5, 3, 0.1) is true afterwards (0 < 1.1). `occupyR` absent
+//        = `clearM`: clearM 1 and a grid holding (37.9, 3) r 0.1 blocks the
+//        station 0.4 m away (0.4 < 1.1); with neither, the radius is 0 and
+//        0.4 < 0.1 is false — it stands.
+//   [S13] `alongSeed` with an epoch: ('a', 2, 5) -> 'terrain:along:a:2:e5';
+//        without one, or with undefined / NaN, the seed of [S] unchanged.
 console.log('\n[S] strokeStations');
 const ROW = { line: [[0, 0], [100, 0]], spacingM: 25, offsetM: 3, seed: 'terrain:along:a:0' };
 const s1 = strokeStations(ROW);
@@ -544,7 +555,26 @@ check('S11 a wavy recipe without numbers is decorateStroke at 10 m / 2 m',
   decorateStroke([[0, 0], [100, 0]], 'wavy', 10, 2).points);
 check('S11 an unknown style reads as straight',
   strokeCentreLine({ points: [[0, 0], [100, 0]], style: 'zigzag' }), [[0, 0], [100, 0]]);
+const occupiedAt = (x, z, r) => { const g = new OccupancyGrid(); g.add(x, z, r); return g; };
+const s12 = occupiedAt(37.5, 3, 0.5);
+const s12Run = strokeStations({ ...ROW, variantCount: 3, occupied: s12, occupyR: 1 });
+check('S12 the occupied station 1 falls, the rest stands', s12Run.map((p) => p.x),
+  [12.5, 62.5, 87.5]);
+check('S12 …with the variants of the ordinals, as under the footprint of S8',
+  s12Run.map((p) => p.variant), [free[0].variant, free[2].variant, free[3].variant]);
+check('S12 …and the survivors are filed', s12.blocks(12.5, 3, 0.1), true);
+check('S12 occupyR absent = clearM: 0.4 < 1 + 0.1 blocks',
+  strokeStations({ ...ROW, clearM: 1, occupied: occupiedAt(37.9, 3, 0.1) }).map((p) => p.x),
+  [12.5, 62.5, 87.5]);
+check('S12 …and with neither the radius is 0: the station stands',
+  strokeStations({ ...ROW, occupied: occupiedAt(37.9, 3, 0.1) }).map((p) => p.x),
+  [12.5, 37.5, 62.5, 87.5]);
 check('S the seed is area- and row-stable', alongSeed('ta_1', 2), 'terrain:along:ta_1:2');
+check('S13 …and carries the epoch when the row reshuffles',
+  alongSeed('a', 2, 5), 'terrain:along:a:2:e5');
+check('S13 …but nothing for undefined or NaN',
+  [alongSeed('a', 2, undefined), alongSeed('a', 2, NaN)],
+  ['terrain:along:a:2', 'terrain:along:a:2']);
 check('S a zero-length line places nothing',
   strokeStations({ ...ROW, line: [[5, 5], [5, 5]] }), []);
 check('S a negative offset places nothing', strokeStations({ ...ROW, offsetM: -1 }), []);

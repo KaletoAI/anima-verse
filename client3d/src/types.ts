@@ -637,12 +637,13 @@ export interface TerrainScatterEntry {
    *  density ends up thinner than the density asks for, which is the honest
    *  answer to "40 trees per 100 m2, 4 m apart". */
   min_spacing_m?: number;
-  /** How the instances are TURNED (§ A9, 2026-09-09): absent = random,
-   *  `fixed` = every instance at `yaw_deg`, `quarter` = `yaw_deg` plus a
-   *  random multiple of 90°. Handed to the shared sampler (`scatterYaw`). */
-  yaw_mode?: 'fixed' | 'quarter';
-  /** The base angle of `yaw_mode` in degrees (0..360); stored only beside a
-   *  mode. */
+  /** How the instances are TURNED (§ A9, 2026-09-10): absent = random,
+   *  `aligned` = `yaw_deg` relative to the local surface axis (the nearest
+   *  polygon edge, or a stroke's centre line). Handed to the shared sampler
+   *  (`scatterYaw`). */
+  yaw_mode?: 'aligned';
+  /** The angle of `yaw_mode` in degrees (0..360): 0 parallel to the rim, 90
+   *  facing in, 270 facing out; stored only beside a mode. */
   yaw_deg?: number;
   /** The REAL height of the prop behind `model`, in metres, from its library
    *  record — added by `GET /play/terrain`, never stored and never authored.

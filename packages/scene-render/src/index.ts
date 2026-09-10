@@ -78,6 +78,7 @@ export type { AreaGeometry, Point2 } from './groundAreas'
 export {
   propGroundFit, scatterInstances, scatterSeed, scatterWantedCount,
   scatterSeedHash, scatterVariantIndex, scatterYaw,
+  reshuffleEpoch, seedEpochSuffix, scatterOccupyR,
   seededRandom, pointInRing, pointInFootprint, worldToLocalXZ,
   footprintBlocks, footprintDistance, scatterClearM,
   propBoxFootprint, propBoxFootprints,
@@ -88,9 +89,20 @@ export {
 } from './scatter'
 export type {
   PropGroundFit, ScatterCellOptions, ScatterEntry, ScatterFootprint,
-  ScatterInstance, ScatterPoint2, ScatterPropBox, ScatterSampleOptions,
-  ScatterYawMode,
+  ScatterInstance, ScatterOccupancy, ScatterPlaceMode, ScatterPoint2,
+  ScatterPropBox, ScatterSampleOptions, ScatterYawMode,
 } from './scatter'
+
+export {
+  ringEdgeAxis, lineAxis, polylabel, ringStations,
+  scatterEdgeInstances, scatterCenterInstance,
+} from './scatterAxis'
+export type {
+  PoleOfInaccessibility, RingStation, RingStationOptions,
+  ScatterEdgeOptions, ScatterCenterOptions,
+} from './scatterAxis'
+
+export { OccupancyGrid } from './occupancy'
 
 export {
   STROKE_STYLES, isStrokeStyle, strokeSeed, decorateStroke,

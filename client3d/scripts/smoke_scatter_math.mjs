@@ -17,7 +17,11 @@
  * proves nothing.
  *
  * NEITHER module has an import (see their headers), so a plain esbuild
- * transpile is enough — no bundler, no stand-ins.
+ * transpile is enough — no bundler, no stand-ins. The one exception is
+ * `scatterAxis.ts` (sections R, T, U, X), which imports the ring primitives
+ * from `scatter.ts` and is therefore BUNDLED (`loadBundled`) — a second
+ * import-free copy of `pointInRing` is exactly what this package exists to
+ * prevent.
  *
  * WHERE SECTION (K) WENT (2026-08-16). This file used to carry a section on
  * the automatic UNDERGROWTH, which was a second layer of the same builder and
@@ -1144,33 +1148,240 @@
  *      mutant draws about 4× the billboards the rule now draws at 190 m.
  *
  * ============================================================================
- * (Q) THE TURN — `scatterYaw` (§ A9, 2026-09-09)
+ * (Q) THE TURN — `scatterYaw` (§ A9, 2026-09-09; `aligned` 2026-09-10)
  * ============================================================================
  * The third draw of every candidate, `r`, becomes the instance's yaw by the
- * entry's mode:
+ * entry's mode. Since 2026-09-10 there is ONE authored mode, and it is
+ * RELATIVE to the local surface axis (section R) — the absolute `fixed` and
+ * `quarter` of the day before are gone without a reader:
  *
  *     random (no mode)  r · 2π
- *     fixed             deg · π/180
- *     quarter           deg · π/180 + floor(r · 4) · π/2
+ *     aligned           axis + deg · π/180        normalised to [0, 2π)
+ *
+ * Yaw convention: rotation about +y, facing vector (sin yaw, cos yaw), 0 = +z,
+ * π/2 = +x. The axis is handed in as the fourth argument (`axisRad`, default
+ * 0), so the function itself stays pure arithmetic.
  *
  * (Q1) r = 0.25, no mode        -> 0.25 · 2π = π/2 = 1.5707963…
- *      the same r, mode "spin"  -> unknown mode reads as random, π/2 again.
- * (Q2) fixed, deg 90            -> π/2 whatever r is (r = 0 and r = 0.99).
- *      fixed, deg absent / NaN  -> 0.
- * (Q3) quarter, deg 30: r in [0, 0.25) adds nothing, [0.25, 0.5) adds π/2,
- *      [0.5, 0.75) π, [0.75, 1) 3π/2 -> for r = 0, 0.3, 0.6, 0.9 the yaws are
- *      π/6, π/6 + π/2, π/6 + π, π/6 + 3π/2 = 0.5235988, 2.0943951, 3.6651914,
- *      5.2359878. r = 1 exactly is clamped below 1 -> still 3π/2, never a
- *      fifth step; r = 0.25 exactly is the second step (floor(1.0) = 1).
+ *      the same r, mode "spin"  -> unknown mode reads as random, π/2 again;
+ *      so does the retired "fixed" — there is no reader for it.
+ * (Q2) aligned, axis π/2, deg 0  -> π/2 whatever r is (r = 0 and r = 0.99).
+ *      aligned, axis π/2, deg 90 -> π/2 + π/2 = π.
+ *      aligned, axis π/2, deg absent / NaN -> the axis alone, π/2.
+ *      aligned, axis absent, deg 90 -> 0 + π/2 = π/2.
+ * (Q3) NORMALISED: axis 3π/2, deg 90 -> 2π -> 0; axis 3π/2, deg 270 ->
+ *      3π -> π. A renderer reads the number as an angle either way, but the
+ *      smokes below compare it, and (X) expects "0 (mod 2π)".
  * (Q4) THE STREAM IS UNTOUCHED. The SQUARE of (C) sampled with the fed stream
  *      [0.5, 0.5, 0.25] gives ONE instance at (10, 10) with yaw π/2 under no
- *      mode; the SAME stream under fixed 180 gives the same (10, 10) with yaw
- *      π, and under quarter 0 the point again with floor(0.25 · 4) · π/2 =
- *      π/2. Three modes, one position — a mode turns props in place.
+ *      mode; the SAME stream under aligned/deg 90 with an `axisAt` answering
+ *      π/2 gives the same (10, 10) with yaw π. Two modes, one position — a
+ *      mode turns props in place. Without `axisAt` the axis is 0 -> π/2.
  * (Q5) …and through the CELL sampler the same law: `scatterCellInstances`
- *      with yawMode "fixed" / yawDeg 45 answers only yaws of π/4 for a cell
- *      of the SQUARE at density 1 (the seed of (K) draws whatever it draws,
- *      every instance still reads π/4).
+ *      with yawMode "aligned" / yawDeg 45 and `axisAt` answering π/4 reads
+ *      only yaws of π/2 for a cell of the SQUARE at density 1 (the seed of (K)
+ *      draws whatever it draws, every instance still reads π/2).
+ *      `axisAt` is asked about the SURVIVOR's own position: an `axisAt` of
+ *      "1 for x > 10, else 0" turns every instance right of x = 10 by 1 and
+ *      the rest not at all. And it is asked ONLY for survivors — the draw
+ *      happens for every candidate (three numbers, (D)), the axis is a pure
+ *      function of the position and costs a walk over the ring's edges, so
+ *      the (N3) fixture with its occluder asks it 4 times, not 5.
+ *
+ * ============================================================================
+ * (R) THE SURFACE AXIS — `ringEdgeAxis` / `lineAxis` (`scatterAxis.ts`)
+ * ============================================================================
+ * The axis of a polygon edge A -> B is oriented so that `axis + 90°` faces
+ * INTO the polygon: d = (B − A)/|B − A|, heading = atan2(dx, dz); the facing
+ * vector of heading + 90° is (sin(h + π/2), cos(h + π/2)) = (cos h, −sin h)
+ * = (dz, −dx); if the edge's midpoint M pushed by ε along that vector lies in
+ * the ring (`pointInRing`), the axis is heading, else heading + π (i.e. −d).
+ * Nearest edge = least point-segment distance; a tie goes to the FIRST edge in
+ * the ring (strict `<`). Answers are normalised to [0, 2π).
+ *
+ * THE FIXTURE, the 10 × 4 rectangle RECT = (0,0) (10,0) (10,4) (0,4), (x, z):
+ *
+ * (R1) point (5, 0.5): nearest is the bottom edge (z = 0), (0,0) -> (10,0),
+ *      d = (1, 0), heading = atan2(1, 0) = π/2; heading + 90° = π -> facing
+ *      (sin π, cos π) = (0, −1), which is −z = OUT of the rectangle -> −d,
+ *      axis = atan2(−1, 0) = −π/2 -> normalised 3π/2. Check: 3π/2 + π/2 = 2π
+ *      ≡ 0 -> facing (0, 1) = +z, into the rectangle. ✔
+ * (R2) point (9.5, 2): the right edge (x = 10), (10,0) -> (10,4), d = (0, 1),
+ *      heading = atan2(0, 1) = 0; + 90° = π/2 -> facing (1, 0) = +x = out
+ *      -> −d, axis = atan2(0, −1) = π. Check: π + π/2 = 3π/2 -> facing
+ *      (sin 3π/2, cos 3π/2) = (−1, 0) = −x, into the rectangle. ✔
+ * (R3) point (5, 3.5): the top edge, (10,4) -> (0,4), d = (−1, 0), heading
+ *      = atan2(−1, 0) = −π/2; + 90° = 0 -> facing (0, 1) = +z = out -> −d
+ *      = (1, 0), axis = π/2. Check: π/2 + π/2 = π -> (0, −1), into. ✔
+ *      point (0.5, 2): the left edge, (0,4) -> (0,0), d = (0, −1), heading
+ *      = atan2(0, −1) = π; + 90° = 3π/2 -> facing (−1, 0) = −x = out -> −d
+ *      = (0, 1), axis = atan2(0, 1) = 0. Check: 0 + π/2 -> (1, 0), into. ✔
+ *      So the four edges read 3π/2, π, π/2, 0 — and the SAME four for the
+ *      ring in the opposite winding: the inside test is winding-blind.
+ * (R4) the tie at the centre (5, 2): 2 m to the bottom AND to the top edge,
+ *      5 m to the sides -> the first edge in the ring wins -> 3π/2.
+ *      A ring of two points is no ring -> 0.
+ * (R5) `lineAxis` is the walking direction of the nearest segment, no inside
+ *      test: [(0,0),(10,0),(10,10)] at (9, 0.2) -> the first segment (0.2 m
+ *      against 1.0 m to the second), axis = atan2(1, 0) = π/2; at (10.3, 5)
+ *      the second, axis = atan2(0, 1) = 0. One point is no line -> 0.
+ *
+ * ============================================================================
+ * (T) THE POLE OF INACCESSIBILITY — `polylabel` (Mapbox 2016)
+ * ============================================================================
+ * Quadtree cells over the bounding box, a priority queue on
+ * `max = d + h · √2` (the farthest any point of the cell can be from the
+ * boundary), the centroid cell as the first best, and a cell is not split
+ * when `cell.max − bestD <= precision` — it cannot beat the best by more than
+ * the tolerance. `d` is the signed distance to the ring: positive inside,
+ * negative outside, measured with the very point-segment distance of
+ * `footprintDistance`.
+ *
+ * (T1) RECT: the centroid is (5, 2), 2 m from top and bottom, 5 m from the
+ *      sides -> d = 2, and nothing in a 4 m wide strip can be farther than
+ *      2 m from its long edges, so no cell ever beats it (strict `>`):
+ *      exactly (5, 2), d = 2. The brief allows ± precision 0.5 on the
+ *      point; d is checked in [2 − 0.5, 2] — above 2 is impossible.
+ * (T2) THE L-SHAPE (0,0) (10,0) (10,4) (4,4) (4,10) (0,10): the area is
+ *      10·4 + 4·6 = 64, the centroid x = (40·5 + 24·2)/64 = 4.5,
+ *      z = (40·2 + 24·7)/64 = 3.875 — INSIDE, but only 0.125 m under the
+ *      inner top edge (10,4) -> (4,4). Both arms are 4 m wide, so the
+ *      largest inscribed circle has radius 2 (in either arm, or at the
+ *      corner square around (2, 2)). Expected: the point lies in the ring,
+ *      d >= 1.9 (2 within the default precision 0.5 easily), and
+ *      d_polylabel >= d_centroid − precision, both distances taken by the
+ *      smoke's OWN segment walk (0.125 for the centroid).
+ * (T3) fewer than three points -> { x: 0, z: 0, d: 0 }.
+ *
+ * ============================================================================
+ * (U) STATIONS ALONG THE RING — `ringStations`
+ * ============================================================================
+ * Arc length is accumulated over the CLOSED ring (the last edge back to the
+ * start included); station k sits at s = start + k · spacing for s < L
+ * (start = spacing/2 unless authored, an authored start clamped to the
+ * spacing as `strokeStations` clamps it), on the edge whose half-open span
+ * [cum_i, cum_i+1) holds s, and it is pushed INWARD by `offsetM` along the
+ * facing vector of `axis + 90°` — `n_in` — with the edge's axis of (R).
+ * `ordinal` = k, counting stations a caller later rejects. The function does
+ * NOT drop a pushed point that misses the ring — that is the caller's
+ * subtraction (X).
+ *
+ * RECT, spacing 7, offset 1: L = 10 + 4 + 10 + 4 = 28, start = 3.5,
+ * stations at s ∈ {3.5, 10.5, 17.5, 24.5} (31.5 >= 28 ends it):
+ *
+ * (U1) s = 3.5, edge 1 (0..10): P = (3.5, 0), axis 3π/2, n_in = facing of
+ *      2π = (0, 1) -> (3.5, 1).
+ *      s = 10.5, edge 2 (10..14, x = 10): P = (10, 0.5), axis π, n_in =
+ *      facing of 3π/2 = (−1, 0) -> (9, 0.5).
+ *      s = 17.5, edge 3 (14..24, z = 4, from (10,4) to (0,4)): P = (6.5, 4),
+ *      axis π/2, n_in = facing of π = (0, −1) -> (6.5, 3).
+ *      s = 24.5, edge 4 (24..28, x = 0, from (0,4) to (0,0)): P = (0, 3.5),
+ *      axis 0, n_in = facing of π/2 = (1, 0) -> (1, 3.5).
+ *      Ordinals 0..3; all four pushed points lie in the ring.
+ * (U2) startM 0: s = 0 is the corner (0, 0) on edge 1 -> (0, 1); then s = 7
+ *      -> (7, 1); s = 14 is the START of edge 3 (half-open), P = (10, 4),
+ *      n_in (0, −1) -> (10, 3); s = 21 -> P = (3, 4) -> (3, 3).
+ *      startM past the spacing clamps to it: startM 100 -> start 7 ->
+ *      s = 7, 14, 21, three stations, ordinals 0..2.
+ * (U3) a repeated closing point adds no edge and no station; spacing 0 or a
+ *      two-point ring places nothing; offsetM absent = 0 -> the stations sit
+ *      ON the ring: (3.5, 0), (10, 0.5), (6.5, 4), (0, 3.5).
+ *
+ * ============================================================================
+ * (V) THE OCCUPANCY GRID — `OccupancyGrid` and the fifth verdict
+ * ============================================================================
+ * Rows keep clear of what EARLIER rows placed: a survivor is filed with a
+ * radius, and a later candidate is blocked when `dist < r + ar` for any
+ * filed (ax, az, ar) — strictly less, like `min_spacing`. Buckets of 8 m; the
+ * search reaches ±ceil((r + rMax)/8) buckets with rMax the largest radius
+ * ever filed, so a big occupant is found from far away.
+ *
+ * (V1) add(0, 0, 1): blocks(1.5, 0, 1) -> 1.5 < 2, true; blocks(2, 0, 1) ->
+ *      2 < 2 is false (strict); blocks(0, 20, 1) -> false; an empty grid
+ *      blocks nothing.
+ * (V2) add(50, 50, 30): blocks(20, 50, 1) -> 30 < 31, true — (20, 50) is in
+ *      bucket 2, the occupant in bucket 6, and ceil(31/8) = 4 buckets reach
+ *      it. A search of the neighbouring bucket alone would miss it.
+ * (V3) THE SAMPLER: the (N3) fixture (5 candidates, 3 variants, seed 'A',
+ *      the fed stream) with a grid holding (2, 4) r 0.5 and `occupyR` 1:
+ *      c0 stands at exactly (2, 4), 0 < 1.5 -> blocked; every other survivor
+ *      is metres away. Result: c1 (5,5) v1, c2 (10,10) v2, c3 (15,6) v0,
+ *      c4 (8,16) v1 — the positions and the variants of the unblocked run,
+ *      only subtracted. Afterwards the survivors are filed: blocks(5, 5, 0.1)
+ *      is true (0 < 1.1). `occupyR` absent = `clearM`: clearM 1 and a grid
+ *      holding (2.4, 4) r 0.1 blocks c0 (0.4 < 1.1); with neither, the radius
+ *      is 0 and 0.4 < 0.1 is false — c0 stands.
+ * (V4) THE ORDER: occupancy is asked AFTER min_spacing, and a candidate it
+ *      removes is NOT filed in the spacing buckets. The (S) fixture at
+ *      spacing 4 with (1, 1) occupied (r 0.5, occupyR 1): c0 (1,1) blocked;
+ *      c1 (3,3) is then measured against NOBODY -> kept; c2 (5,1) to (3,3):
+ *      √8 = 2.83 < 4 -> dropped; c3 (8,4) to (3,3): √26 = 5.10 -> kept;
+ *      c4 (1,5) to (3,3): √8 -> dropped. -> [(3,3) yaw 0, (8,4) yaw τ/4].
+ *      Had c0 been filed before occupancy removed it, c1 would have been
+ *      crowded by a ghost and the list would read (5,1), (8,4), (1,5).
+ * (V5) THE CELL SAMPLER files only what the painted shape KEEPS. A cell of
+ *      0..64 with the SQUARE (0..20) as the area ring, density 0.05 ->
+ *      round(40.96 · 0.05) = 2 candidates, stream [0.1, 0.1, 0; 0.5, 0.5, 0]
+ *      -> c0 (6.4, 6.4) inside the square, c1 (32, 32) in the cell but
+ *      outside it — a phantom the ring filter drops. Afterwards blocks(6.4,
+ *      6.4, 0.1) is true and blocks(32, 32, 0.1) is false: a prop nobody
+ *      draws occupies nothing.
+ *
+ * ============================================================================
+ * (W) THE EPOCH — `reshuffleEpoch` and the seed suffix
+ * ============================================================================
+ * epoch = floor(totalSeconds / (reshuffleMin · 60)); `undefined` when the
+ * row authors no interval (absent, 0, negative, junk) or the clock is not a
+ * number. A seed grows the suffix `:e<epoch>` ONLY for a finite epoch —
+ * without the field every seed is byte for byte what it was.
+ *
+ * (W1) reshuffleEpoch(3599, 60) = floor(3599/3600) = 0; (3600, 60) = 1;
+ *      (7199, 60) = 1; (x, undefined) / (x, 0) / (x, −5) / (NaN, 60) ->
+ *      undefined.
+ * (W2) scatterCellSeed('a', 1, 2, 3) = 'terrain:scatter:a:1:2,3';
+ *      scatterCellSeed('a', 1, 2, 3, 7) = 'terrain:scatter:a:1:2,3:e7';
+ *      scatterSeed('a', 1) = 'terrain:scatter:a:1', with 7 -> ':e7';
+ *      an undefined or NaN epoch adds nothing.
+ *
+ * ============================================================================
+ * (X) THE EDGE AND CENTRE SAMPLERS — `scatterEdgeInstances`,
+ *     `scatterCenterInstance`
+ * ============================================================================
+ * `edge`: the stations of (U), one yaw draw per station ALWAYS (the stream
+ * is the row's seed), `yaw = aligned ? axis + deg : r · 2π`, then the
+ * verdicts ring (of the PUSHED point) -> occluders -> footprints -> occupied,
+ * and a survivor is filed. Variant = (FNV-1a(seed) + ordinal) mod n.
+ *
+ * (X1) RECT, spacing 7, offset 1, aligned, deg 0 -> the four (U1) points with
+ *      yaws 3π/2, π, π/2, 0; deg 90 -> each + π/2, normalised: 0, 3π/2, π,
+ *      π/2.
+ * (X2) a footprint square (3,0.5) (4,0.5) (4,1.5) (3,1.5) around (3.5, 1)
+ *      with clearM 0.2: only station 0 falls (the next survivor, (9, 0.5),
+ *      is 5 m from the square). With 3 variants the survivors carry the
+ *      variants of ordinals 1..3 — `scatterVariantIndex(seed, k, 3)` for
+ *      k = 1, 2, 3 — ordinal 0 is simply missing. A counting stream sees
+ *      FOUR draws for the three survivors: the rejected station drew its
+ *      number too.
+ * (X3) no mode -> yaw = r · 2π from `seededRandom(seed)`, one draw per
+ *      station, same four positions.
+ * (X4) a grid holding (9, 0.5) r 0.5 with occupyR 1 removes station 1 and
+ *      files the other three: blocks(3.5, 1, 0.1) is true afterwards.
+ *      Fewer than three ring points -> [].
+ *
+ * `center`: `polylabel(ring)`, one yaw draw, axis = `axisAt(x, z)` when the
+ * caller hands one in (a stroke area's centre line), else `ringEdgeAxis`;
+ * verdicts occluders -> footprints -> occupied; the variant is the pinned
+ * one clamped to [0, n − 1], else the formula with ordinal 0.
+ *
+ * (X5) RECT, aligned, deg 0, 3 variants, variant 2 -> ONE instance at
+ *      (5, 2) ± 0.5, yaw = the axis of the nearest edge of (5, 2): 2 m to
+ *      top and bottom, 5 m to the sides, the tie goes to the FIRST edge
+ *      (bottom) -> 3π/2; variant 2. variant 9 at n = 3 -> 2 (clamped);
+ *      no pin -> scatterVariantIndex(seed, 0, 3); n = 1 -> no variant key.
+ * (X6) `axisAt` answering 1 is used instead of the ring: yaw 1 (+ deg 0),
+ *      and it was asked at (5, 2) ± 0.5. No mode -> seededRandom(seed)() · 2π.
+ * (X7) an occluder over the middle, a footprint over it, or a grid holding
+ *      (5, 2) r 1 -> []. A two-point ring -> [].
  *
  * ============================================================================
  * (J) THE DETAIL DISTANCES AS A SETTING — `client3d/src/game/prefs.ts`
@@ -1223,6 +1434,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC = join(ROOT, 'packages/scene-render/src/scatter.ts');
+const AXIS_SRC = join(ROOT, 'packages/scene-render/src/scatterAxis.ts');
+const OCCUPANCY_SRC = join(ROOT, 'packages/scene-render/src/occupancy.ts');
 const LOD_SRC = join(ROOT, 'client3d/src/scene/scatterLod.ts');
 const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
 const PREFS_SRC = join(ROOT, 'client3d/src/game/prefs.ts');
@@ -1251,12 +1464,32 @@ async function loadTs(src, mutate) {
   }
 }
 
+/** A module WITH imports — `scatterAxis.ts` pulls the ring primitives from
+ *  `scatter.ts` — bundled by esbuild from the real source tree, so the import
+ *  resolves against the very file section (C) loads. */
+async function loadBundled(src) {
+  const esbuild = await import('esbuild');
+  const dir = await mkdtemp(join(tmpdir(), 'scattermath-'));
+  try {
+    const file = join(dir, 'module.mjs');
+    await esbuild.build({
+      entryPoints: [src], outfile: file, bundle: true, format: 'esm',
+      platform: 'neutral', logLevel: 'silent', absWorkingDir: ROOT,
+    });
+    return await import(`file://${file}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 /** Section (D)'s mutant: the yaw is drawn only for an ACCEPTED candidate, so a
  *  rejected one costs two numbers instead of three and shifts everything
  *  behind it. See the header for the derivation. */
 function yawOnAcceptance(source) {
   return source
-    .replace('    const yaw = scatterYaw(rnd(), opts.yawMode, opts.yawDeg)\n', '')
+    .replace('    const turn = rnd()\n', '')
+    .replace('    const yaw = scatterYaw(turn, opts.yawMode, opts.yawDeg, '
+      + 'axisAt ? axisAt(x, z) : 0)\n', '')
     .replace(
       'out.push(mixing\n'
       + '      ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, index, variants) }\n'
@@ -1470,7 +1703,7 @@ function stream(values) {
 async function main() {
   const {
     propGroundFit, pointInFootprint, pointInRing, scatterInstances, scatterSeed,
-    scatterYaw,
+    scatterYaw, reshuffleEpoch, seededRandom,
     scatterWantedCount, scatterCellAt, scatterCellInstances, scatterCellRing,
     scatterCellSeed, scatterCellSpan, scatterCellsInBox, wantedScatterCells,
     scatterSeedHash, scatterVariantIndex,
@@ -2912,36 +3145,289 @@ async function main() {
     instanceShare(160, setCfg), 1 - (120 / 260) * 0.75);
 
   // (Q) THE TURN
+  console.log('\n(Q) the turn — scatterYaw, aligned to an axis');
   check('Q1 no mode: r = 0.25 is a quarter turn', scatterYaw(0.25), Math.PI / 2);
   check('Q1 an unknown mode reads as random', scatterYaw(0.25, 'spin', 90), Math.PI / 2);
-  check('Q2 fixed 90 is π/2 for r = 0', scatterYaw(0, 'fixed', 90), Math.PI / 2);
-  check('Q2 …and for r = 0.99', scatterYaw(0.99, 'fixed', 90), Math.PI / 2);
-  check('Q2 fixed without an angle is 0', scatterYaw(0.7, 'fixed'), 0);
-  check('Q2 fixed with a NaN angle is 0', scatterYaw(0.7, 'fixed', NaN), 0);
-  check('Q3 quarter 30 over r = 0 / 0.3 / 0.6 / 0.9',
-    [0, 0.3, 0.6, 0.9].map((r) => scatterYaw(r, 'quarter', 30)),
-    [0.5235988, 2.0943951, 3.6651914, 5.2359878], 1e-6);
-  check('Q3 r = 1 exactly is still the fourth step, never a fifth',
-    scatterYaw(1, 'quarter', 0), 3 * Math.PI / 2);
-  check('Q3 r = 0.25 exactly is the second step',
-    scatterYaw(0.25, 'quarter', 0), Math.PI / 2);
-  const turnCase = (mode, deg) => scatterInstances({
+  check('Q1 …and so does the retired "fixed" — no reader for it',
+    scatterYaw(0.25, 'fixed', 90), Math.PI / 2);
+  check('Q2 aligned, axis π/2, deg 0 is π/2 for r = 0',
+    scatterYaw(0, 'aligned', 0, Math.PI / 2), Math.PI / 2);
+  check('Q2 …and for r = 0.99', scatterYaw(0.99, 'aligned', 0, Math.PI / 2), Math.PI / 2);
+  check('Q2 aligned, axis π/2, deg 90 is π',
+    scatterYaw(0.5, 'aligned', 90, Math.PI / 2), Math.PI);
+  check('Q2 aligned without an angle is the axis alone',
+    [scatterYaw(0.7, 'aligned', undefined, Math.PI / 2),
+      scatterYaw(0.7, 'aligned', NaN, Math.PI / 2)], [Math.PI / 2, Math.PI / 2]);
+  check('Q2 aligned without an axis is the angle alone',
+    scatterYaw(0.7, 'aligned', 90), Math.PI / 2);
+  check('Q3 3π/2 + 90° normalises to 0',
+    scatterYaw(0, 'aligned', 90, 3 * Math.PI / 2), 0);
+  check('Q3 3π/2 + 270° = 3π normalises to π',
+    scatterYaw(0, 'aligned', 270, 3 * Math.PI / 2), Math.PI, 1e-9);
+  const turnCase = (mode, deg, axisAt) => scatterInstances({
     ring: SQUARE, areaM2: 400, densityPer100m2: 0.25, seed: 'q',
-    rng: stream([0.5, 0.5, 0.25]), yawMode: mode, yawDeg: deg,
+    rng: stream([0.5, 0.5, 0.25]), yawMode: mode, yawDeg: deg, axisAt,
   });
   check('Q4 no mode: (10, 10) with yaw π/2', turnCase(undefined, undefined),
     [{ x: 10, z: 10, yaw: Math.PI / 2 }]);
-  check('Q4 fixed 180: the same point, yaw π', turnCase('fixed', 180),
-    [{ x: 10, z: 10, yaw: Math.PI }]);
-  check('Q4 quarter 0: the same point, floor(0.25 · 4) = 1 step -> π/2',
-    turnCase('quarter', 0), [{ x: 10, z: 10, yaw: Math.PI / 2 }]);
+  check('Q4 aligned 90 on an axis of π/2: the same point, yaw π',
+    turnCase('aligned', 90, () => Math.PI / 2), [{ x: 10, z: 10, yaw: Math.PI }]);
+  check('Q4 aligned 90 without axisAt: the same point, axis 0 -> π/2',
+    turnCase('aligned', 90), [{ x: 10, z: 10, yaw: Math.PI / 2 }]);
   const cellYaws = scatterCellInstances({
     ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 1,
-    seed: scatterCellSeed('area', 0, 0, 0), yawMode: 'fixed', yawDeg: 45,
+    seed: scatterCellSeed('area', 0, 0, 0), yawMode: 'aligned', yawDeg: 45,
+    axisAt: () => Math.PI / 4,
   }).map((p) => p.yaw);
   check('Q5 the cell sampler places something on the square', cellYaws.length > 0, true);
-  check('Q5 …and every instance reads π/4',
-    cellYaws.every((y) => Math.abs(y - Math.PI / 4) < 1e-9), true);
+  check('Q5 …and every instance reads π/4 + π/4 = π/2',
+    cellYaws.every((y) => Math.abs(y - Math.PI / 2) < 1e-9), true);
+  const sided = scatterCellInstances({
+    ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 1,
+    seed: scatterCellSeed('area', 0, 0, 0), yawMode: 'aligned', yawDeg: 0,
+    axisAt: (x) => (x > 10 ? 1 : 0),
+  });
+  check('Q5 axisAt is asked about the survivor\'s own position',
+    sided.every((p) => p.yaw === (p.x > 10 ? 1 : 0)), true);
+  let axisCalls = 0;
+  const asked = scatterInstances({
+    ...MIX, occluders: [OCC_MIDDLE], rng: stream(MIX_STREAM),
+    yawMode: 'aligned', yawDeg: 0, axisAt: () => { axisCalls += 1; return 0; },
+  });
+  check('Q5 …and only for survivors: the (N3) occluder run asks 4 times, not 5',
+    [asked.length, axisCalls], [4, 4]);
+
+  // (R) THE SURFACE AXIS
+  console.log('\n(R) the surface axis — ringEdgeAxis / lineAxis');
+  const {
+    ringEdgeAxis, lineAxis, polylabel, ringStations,
+    scatterEdgeInstances, scatterCenterInstance,
+  } = await loadBundled(AXIS_SRC);
+  const RECT = [[0, 0], [10, 0], [10, 4], [0, 4]];
+  const RECT_CW = [[0, 0], [0, 4], [10, 4], [10, 0]];
+  check('R1 (5, 0.5): the bottom edge, axis 3π/2', ringEdgeAxis(RECT, 5, 0.5),
+    3 * Math.PI / 2, 1e-12);
+  check('R2 (9.5, 2): the right edge, axis π', ringEdgeAxis(RECT, 9.5, 2), Math.PI, 1e-12);
+  check('R3 (5, 3.5): the top edge, axis π/2', ringEdgeAxis(RECT, 5, 3.5),
+    Math.PI / 2, 1e-12);
+  check('R3 (0.5, 2): the left edge, axis 0', ringEdgeAxis(RECT, 0.5, 2), 0, 1e-12);
+  const AXIS_PTS = [[5, 0.5], [9.5, 2], [5, 3.5], [0.5, 2]];
+  check('R3 axis + 90° faces INTO the rectangle at every one of the four',
+    AXIS_PTS.every(([x, z]) => {
+      const a = ringEdgeAxis(RECT, x, z) + Math.PI / 2;
+      return pointInRing(x + Math.sin(a) * 0.1, z + Math.cos(a) * 0.1, RECT);
+    }), true);
+  check('R3 …and the opposite winding reads the same four',
+    AXIS_PTS.map(([x, z]) => ringEdgeAxis(RECT_CW, x, z)),
+    AXIS_PTS.map(([x, z]) => ringEdgeAxis(RECT, x, z)), 1e-12);
+  check('R4 the tie at the centre goes to the first edge: 3π/2',
+    ringEdgeAxis(RECT, 5, 2), 3 * Math.PI / 2, 1e-12);
+  check('R4 two points are no ring: 0', ringEdgeAxis([[0, 0], [10, 0]], 5, 1), 0);
+  const CORNER = [[0, 0], [10, 0], [10, 10]];
+  check('R5 lineAxis at (9, 0.2): the first segment, π/2', lineAxis(CORNER, 9, 0.2),
+    Math.PI / 2, 1e-12);
+  check('R5 lineAxis at (10.3, 5): the second segment, 0', lineAxis(CORNER, 10.3, 5),
+    0, 1e-12);
+  check('R5 one point is no line: 0', lineAxis([[3, 3]], 0, 0), 0);
+
+  // (T) THE POLE OF INACCESSIBILITY
+  console.log('\n(T) the pole of inaccessibility — polylabel');
+  /** The smoke's OWN distance to the ring's edges — the derivation's ruler,
+   *  never the module's. */
+  const edgeDistance = (ring, x, z) => {
+    let best = Infinity;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const [ax, az] = ring[j];
+      const [bx, bz] = ring[i];
+      const dx = bx - ax;
+      const dz = bz - az;
+      const t = Math.min(1, Math.max(0, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
+      best = Math.min(best, Math.hypot(x - (ax + t * dx), z - (az + t * dz)));
+    }
+    return best;
+  };
+  const poleRect = polylabel(RECT);
+  check('T1 the rectangle: (5, 2) within the precision', [poleRect.x, poleRect.z], [5, 2], 0.5);
+  check('T1 …with d in [1.5, 2] — 2 is the most any point can have',
+    poleRect.d >= 1.5 && poleRect.d <= 2 + 1e-9, true);
+  check('T1 …and d is the ring distance of the answered point',
+    poleRect.d, edgeDistance(RECT, poleRect.x, poleRect.z), 1e-9);
+  const L_SHAPE = [[0, 0], [10, 0], [10, 4], [4, 4], [4, 10], [0, 10]];
+  const poleL = polylabel(L_SHAPE);
+  check('T2 the L-shape: the pole lies in the ring', pointInRing(poleL.x, poleL.z, L_SHAPE), true);
+  check('T2 …with d >= 1.9', poleL.d >= 1.9, true);
+  check('T2 …and d is the ring distance of the answered point',
+    poleL.d, edgeDistance(L_SHAPE, poleL.x, poleL.z), 1e-9);
+  check('T2 the centroid (4.5, 3.875) is only 0.125 m from the inner edge',
+    edgeDistance(L_SHAPE, 4.5, 3.875), 0.125, 1e-9);
+  check('T2 …and the pole beats it by more than the precision',
+    poleL.d >= edgeDistance(L_SHAPE, 4.5, 3.875) - 0.5, true);
+  check('T2 a finer precision only gets closer to 2', polylabel(L_SHAPE, 0.05).d >= 1.95, true);
+  check('T3 fewer than three points', polylabel([[0, 0], [1, 1]]), { x: 0, z: 0, d: 0 });
+
+  // (U) STATIONS ALONG THE RING
+  console.log('\n(U) stations along the ring — ringStations');
+  const U_OPTS = { spacingM: 7, offsetM: 1 };
+  const u1 = ringStations(RECT, U_OPTS);
+  check('U1 four stations at the pushed points', u1.map((s) => [s.x, s.z]),
+    [[3.5, 1], [9, 0.5], [6.5, 3], [1, 3.5]], 1e-9);
+  check('U1 …with the axes 3π/2, π, π/2, 0', u1.map((s) => s.axis),
+    [3 * Math.PI / 2, Math.PI, Math.PI / 2, 0], 1e-12);
+  check('U1 …ordinals 0..3', u1.map((s) => s.ordinal), [0, 1, 2, 3]);
+  check('U1 …all four in the ring', u1.every((s) => pointInRing(s.x, s.z, RECT)), true);
+  check('U2 startM 0: the corner first, then (7, 1), (10, 3), (3, 3)',
+    ringStations(RECT, { ...U_OPTS, startM: 0 }).map((s) => [s.x, s.z]),
+    [[0, 1], [7, 1], [10, 3], [3, 3]], 1e-9);
+  check('U2 startM past the spacing clamps to it: three stations',
+    ringStations(RECT, { ...U_OPTS, startM: 100 }).map((s) => [s.x, s.z, s.ordinal]),
+    [[7, 1, 0], [10, 3, 1], [3, 3, 2]], 1e-9);
+  check('U3 a repeated closing point adds nothing',
+    ringStations([...RECT, [0, 0]], U_OPTS).map((s) => [s.x, s.z]),
+    u1.map((s) => [s.x, s.z]), 1e-9);
+  check('U3 spacing 0 places nothing', ringStations(RECT, { spacingM: 0, offsetM: 1 }), []);
+  check('U3 two points place nothing', ringStations([[0, 0], [10, 0]], U_OPTS), []);
+  check('U3 no offset: the stations sit on the ring',
+    ringStations(RECT, { spacingM: 7 }).map((s) => [s.x, s.z]),
+    [[3.5, 0], [10, 0.5], [6.5, 4], [0, 3.5]], 1e-9);
+
+  // (V) THE OCCUPANCY GRID
+  console.log('\n(V) the occupancy grid — OccupancyGrid and the fifth verdict');
+  const { OccupancyGrid } = await loadTs(OCCUPANCY_SRC);
+  const grid = new OccupancyGrid();
+  check('V1 an empty grid blocks nothing', grid.blocks(0, 0, 1), false);
+  grid.add(0, 0, 1);
+  check('V1 1.5 < 1 + 1 blocks', grid.blocks(1.5, 0, 1), true);
+  check('V1 2 < 2 does not — strict', grid.blocks(2, 0, 1), false);
+  check('V1 20 m away does not', grid.blocks(0, 20, 1), false);
+  grid.add(50, 50, 30);
+  check('V2 a big occupant is found four buckets away: 30 < 31', grid.blocks(20, 50, 1), true);
+  check('V2 …and not from 31 m: 31 < 31 is false', grid.blocks(19, 50, 1), false);
+  const occupiedAt = (x, z, r) => { const g = new OccupancyGrid(); g.add(x, z, r); return g; };
+  const v3 = occupiedAt(2, 4, 0.5);
+  const v3Run = scatterInstances({
+    ...MIX, rng: stream(MIX_STREAM), occupied: v3, occupyR: 1,
+  });
+  check('V3 the occupied c0 falls, the rest keeps position and variant', v3Run,
+    [{ x: 5, z: 5, yaw: TAU * 0.25, variant: 1 },
+      { x: 10, z: 10, yaw: Math.PI, variant: 2 },
+      { x: 15, z: 6, yaw: 0, variant: 0 },
+      { x: 8, z: 16, yaw: 0, variant: 1 }]);
+  check('V3 …and the survivors are filed with occupyR', v3.blocks(5, 5, 0.1), true);
+  check('V3 occupyR absent = clearM: 0.4 < 1 + 0.1 blocks c0',
+    scatterInstances({
+      ...MIX, rng: stream(MIX_STREAM), occupied: occupiedAt(2.4, 4, 0.1), clearM: 1,
+    }).map((p) => p.x), [5, 10, 15, 8]);
+  check('V3 …with neither, the radius is 0 and c0 stands',
+    scatterInstances({
+      ...MIX, rng: stream(MIX_STREAM), occupied: occupiedAt(2.4, 4, 0.1),
+    }).map((p) => p.x), [2, 5, 10, 15, 8]);
+  const S_STREAM = [0.10, 0.10, 0.00, 0.30, 0.30, 0.00, 0.50, 0.10, 0.50,
+    0.80, 0.40, 0.25, 0.10, 0.50, 0.00];
+  const SQ10 = [[0, 0], [10, 0], [10, 10], [0, 10]];
+  check('V4 occupancy after min_spacing, and a removed candidate is not filed',
+    scatterInstances({
+      ring: SQ10, areaM2: 100, densityPer100m2: 5, seed: 's', triesPerPoint: 1,
+      minSpacingM: 4, rng: stream(S_STREAM), occupied: occupiedAt(1, 1, 0.5), occupyR: 1,
+    }), [{ x: 3, z: 3, yaw: 0 }, { x: 8, z: 4, yaw: TAU * 0.25 }], 1e-9);
+  const v5 = new OccupancyGrid();
+  const v5Run = scatterCellInstances({
+    ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 0.05, seed: 'v5',
+    rng: stream([0.1, 0.1, 0, 0.5, 0.5, 0]), occupied: v5, occupyR: 1,
+  });
+  check('V5 the cell keeps the one point inside the square', v5Run.map((p) => [p.x, p.z]),
+    [[6.4, 6.4]], 1e-9);
+  check('V5 …files it', v5.blocks(6.4, 6.4, 0.1), true);
+  check('V5 …and not the phantom outside the painted shape', v5.blocks(32, 32, 0.1), false);
+
+  // (W) THE EPOCH
+  console.log('\n(W) the epoch — reshuffleEpoch and the seed suffix');
+  check('W1 3599 s at 60 min is epoch 0', reshuffleEpoch(3599, 60), 0);
+  check('W1 3600 s is epoch 1', reshuffleEpoch(3600, 60), 1);
+  check('W1 7199 s is still epoch 1', reshuffleEpoch(7199, 60), 1);
+  check('W1 no interval, 0, negative or a junk clock is undefined',
+    [reshuffleEpoch(3600), reshuffleEpoch(3600, 0), reshuffleEpoch(3600, -5),
+      reshuffleEpoch(NaN, 60)], [undefined, undefined, undefined, undefined]);
+  check('W2 the cell seed without an epoch is what it was',
+    scatterCellSeed('a', 1, 2, 3), 'terrain:scatter:a:1:2,3');
+  check('W2 …and with epoch 7 carries :e7',
+    scatterCellSeed('a', 1, 2, 3, 7), 'terrain:scatter:a:1:2,3:e7');
+  check('W2 the entry seed likewise',
+    [scatterSeed('a', 1), scatterSeed('a', 1, 7)], ['terrain:scatter:a:1', 'terrain:scatter:a:1:e7']);
+  check('W2 an undefined or NaN epoch adds nothing',
+    [scatterCellSeed('a', 1, 2, 3, undefined), scatterCellSeed('a', 1, 2, 3, NaN),
+      scatterSeed('a', 1, NaN)],
+    ['terrain:scatter:a:1:2,3', 'terrain:scatter:a:1:2,3', 'terrain:scatter:a:1']);
+
+  // (X) THE EDGE AND CENTRE SAMPLERS
+  console.log('\n(X) the edge and centre samplers');
+  const EDGE = { spacingM: 7, offsetM: 1, seed: 'x', yawMode: 'aligned', yawDeg: 0 };
+  const x1 = scatterEdgeInstances(RECT, EDGE);
+  check('X1 aligned 0: the four (U1) points', x1.map((p) => [p.x, p.z]),
+    [[3.5, 1], [9, 0.5], [6.5, 3], [1, 3.5]], 1e-9);
+  check('X1 …with the yaws 3π/2, π, π/2, 0', x1.map((p) => p.yaw),
+    [3 * Math.PI / 2, Math.PI, Math.PI / 2, 0], 1e-12);
+  check('X1 aligned 90: each + π/2, normalised',
+    scatterEdgeInstances(RECT, { ...EDGE, yawDeg: 90 }).map((p) => p.yaw),
+    [0, 3 * Math.PI / 2, Math.PI, Math.PI / 2], 1e-12);
+  const X_BLOCK = { points: [[3, 0.5], [4, 0.5], [4, 1.5], [3, 1.5]] };
+  const x2 = scatterEdgeInstances(RECT, {
+    ...EDGE, variantCount: 3, footprints: [X_BLOCK], clearM: 0.2,
+  });
+  check('X2 the footprint drops station 0 alone', x2.map((p) => [p.x, p.z]),
+    [[9, 0.5], [6.5, 3], [1, 3.5]], 1e-9);
+  check('X2 …and the survivors carry the variants of ordinals 1..3',
+    x2.map((p) => p.variant), [1, 2, 3].map((k) => scatterVariantIndex('x', k, 3)));
+  check('X2 …the unblocked run carries 0..3 of the same formula',
+    scatterEdgeInstances(RECT, { ...EDGE, variantCount: 3 }).map((p) => p.variant),
+    [0, 1, 2, 3].map((k) => scatterVariantIndex('x', k, 3)));
+  let edgeDraws = 0;
+  const x2Counted = scatterEdgeInstances(RECT, {
+    ...EDGE, footprints: [X_BLOCK], clearM: 0.2, rng: () => { edgeDraws += 1; return 0.5; },
+  });
+  check('X2 four draws for three survivors — the rejected station drew too',
+    [x2Counted.length, edgeDraws], [3, 4]);
+  const x3Ref = seededRandom('x');
+  check('X3 no mode: one seeded draw per station, positions unmoved',
+    scatterEdgeInstances(RECT, { spacingM: 7, offsetM: 1, seed: 'x' })
+      .map((p) => [p.x, p.z, p.yaw]),
+    [[3.5, 1], [9, 0.5], [6.5, 3], [1, 3.5]].map(([x, z]) => [x, z, x3Ref() * TAU]), 1e-9);
+  const x4 = occupiedAt(9, 0.5, 0.5);
+  check('X4 an occupied station 1 falls',
+    scatterEdgeInstances(RECT, { ...EDGE, occupied: x4, occupyR: 1 }).map((p) => p.x),
+    [3.5, 6.5, 1], 1e-9);
+  check('X4 …and the survivors are filed', x4.blocks(3.5, 1, 0.1), true);
+  check('X4 two points place nothing', scatterEdgeInstances([[0, 0], [10, 0]], EDGE), []);
+  const CENTRE = { seed: 'x', yawMode: 'aligned', yawDeg: 0, variantCount: 3, variant: 2 };
+  const x5 = scatterCenterInstance(RECT, CENTRE);
+  check('X5 one instance at (5, 2) ± 0.5', [x5.length, x5[0]?.x, x5[0]?.z], [1, 5, 2], 0.5);
+  check('X5 …facing the axis of the first (bottom) edge: 3π/2', x5[0]?.yaw,
+    3 * Math.PI / 2, 1e-12);
+  check('X5 …with the pinned variant 2', x5[0]?.variant, 2);
+  check('X5 variant 9 at n = 3 clamps to 2',
+    scatterCenterInstance(RECT, { ...CENTRE, variant: 9 })[0]?.variant, 2);
+  check('X5 no pin: the formula with ordinal 0',
+    scatterCenterInstance(RECT, { ...CENTRE, variant: undefined })[0]?.variant,
+    scatterVariantIndex('x', 0, 3));
+  check('X5 one variant carries no variant key',
+    Object.keys(scatterCenterInstance(RECT, { ...CENTRE, variantCount: 1 })[0] ?? {}),
+    ['x', 'z', 'yaw']);
+  const askedAt = [];
+  check('X6 axisAt wins over the ring',
+    scatterCenterInstance(RECT, {
+      ...CENTRE, axisAt: (x, z) => { askedAt.push([x, z]); return 1; },
+    })[0]?.yaw, 1, 1e-12);
+  check('X6 …and was asked at the pole', askedAt, [[5, 2]], 0.5);
+  check('X6 no mode: the seeded draw',
+    scatterCenterInstance(RECT, { seed: 'x' })[0]?.yaw, seededRandom('x')() * TAU, 1e-12);
+  check('X7 an occluder over the middle empties it',
+    scatterCenterInstance(RECT, { ...CENTRE, occluders: [[[4, 1], [6, 1], [6, 3], [4, 3]]] }), []);
+  check('X7 a footprint over the middle empties it',
+    scatterCenterInstance(RECT, {
+      ...CENTRE, footprints: [{ points: [[4, 1], [6, 1], [6, 3], [4, 3]] }],
+    }), []);
+  check('X7 an occupied middle empties it',
+    scatterCenterInstance(RECT, { ...CENTRE, occupied: occupiedAt(5, 2, 1) }), []);
+  check('X7 two points place nothing', scatterCenterInstance([[0, 0], [10, 0]], CENTRE), []);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

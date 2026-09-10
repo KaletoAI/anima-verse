@@ -66,39 +66,74 @@ export interface ScatterEntry {
    *  other (`ScatterSampleOptions.minSpacingM`). Absent or 0 = no constraint,
    *  which is what every scatter authored before this field is. */
   min_spacing_m?: number
-  /** How the instances are TURNED (2026-09-09): absent = random, `fixed` =
-   *  every instance at `yaw_deg`, `quarter` = `yaw_deg` plus a random
-   *  multiple of 90°. Read by `scatterYaw`. */
+  /** How the instances are TURNED (2026-09-10): absent = random, `aligned`
+   *  = `yaw_deg` RELATIVE to the local surface axis — the nearest edge of the
+   *  painted polygon, or the centre line of a stroke area (`scatterAxis.ts`).
+   *  Read by `scatterYaw`. */
   yaw_mode?: ScatterYawMode
-  /** The base angle of `yaw_mode`, in degrees (0..360). Meaningless without
-   *  a mode, and the server stores it only beside one. */
+  /** The angle of `yaw_mode`, in degrees (0..360): 0 = parallel to the rim,
+   *  90 = facing into the area, 270 = facing out. Meaningless without a
+   *  mode, and the server stores it only beside one. */
   yaw_deg?: number
+  /** WHERE the instances go (2026-09-10): absent = spread over the ground at
+   *  `density_per_100m2`; `edge` = an even row along the rim, `min_spacing_m`
+   *  apart and `offset_m` inward (`scatterEdgeInstances`); `center` = ONE
+   *  instance at the pole of inaccessibility (`scatterCenterInstance`). The
+   *  density is stored but has no effect on either. */
+  place?: ScatterPlaceMode
+  /** How far an `edge` row stands INSIDE the rim, metres (>= 0); absent = 0.
+   *  The server stores it only beside `place: "edge"`. */
+  offset_m?: number
+  /** The pinned list position of the model variant a `center` instance
+   *  shows, clamped to the variants that exist; absent = the variant formula
+   *  with ordinal 0. Stored only beside `place: "center"`. */
+  variant?: number
+  /** RESHUFFLE every this many GAME minutes (>= 1): the seed carries the
+   *  epoch `floor(game_total_seconds / (reshuffle_min · 60))` and every
+   *  instance of the row is re-drawn when it changes (`reshuffleEpoch`).
+   *  Absent = never, and then the seed is byte for byte what it always was. */
+  reshuffle_min?: number
 }
 
-/** The two authored turn modes of a scatter entry — see `scatterYaw`. */
-export type ScatterYawMode = 'fixed' | 'quarter'
+/** The one authored turn mode of a scatter entry — see `scatterYaw`. The
+ *  absolute modes `fixed`/`quarter` of 2026-09-09 were retired the day after
+ *  (user decision 5, 2026-09-10) and have no reader here. */
+export type ScatterYawMode = 'aligned'
+
+/** The two authored placements besides the default spread — see
+ *  `ScatterEntry.place`. */
+export type ScatterPlaceMode = 'edge' | 'center'
 
 /**
- * WHICH WAY AN INSTANCE STANDS, from the candidate's yaw draw `r` (0..1) and
- * the entry's turn mode (§ A9, 2026-09-09):
+ * WHICH WAY AN INSTANCE STANDS, from the candidate's yaw draw `r` (0..1), the
+ * entry's turn mode and the LOCAL SURFACE AXIS at its position (§ A9,
+ * 2026-09-10):
  *
  *     random  (no mode)  yaw = r · 2π                       — every scatter before this
- *     fixed              yaw = deg · π/180
- *     quarter            yaw = deg · π/180 + floor(r · 4) · π/2
+ *     aligned            yaw = axis + deg · π/180           normalised to [0, 2π)
+ *
+ * The axis is the nearest edge of the painted polygon or the centre line of
+ * a stroke area (`scatterAxis.ts ringEdgeAxis` / `lineAxis`), oriented so
+ * that `axis + 90°` faces into the area — so `deg` 0 stands parallel to the
+ * rim, 90 looks in, 270 looks out, on every edge of every shape. The sampler
+ * hands the axis in (`axisAt`); this function stays arithmetic.
  *
  * The DRAW is the same in every mode — three numbers per candidate, always
- * (see `scatterInstances`) — so an entry switched from random to fixed keeps
- * every prop exactly where it stood and only turns it. A mode this build does
- * not know reads as random, a non-finite angle as 0. In radians, about +y,
- * the same rotation `ground.ts` applies (`setFromAxisAngle(up, yaw)`): 0
- * faces +z, π/2 faces +x — the bearing convention of the flow direction.
- * `r` is clamped below 1 so a draw of exactly 1 cannot become a fifth step.
+ * (see `scatterInstances`) — so an entry switched from random to aligned
+ * keeps every prop exactly where it stood and only turns it. A mode this
+ * build does not know reads as random (the retired absolute modes
+ * `fixed`/`quarter` included — no reader), a non-finite angle as 0, a
+ * non-finite axis as 0. In radians, about +y, the same rotation `ground.ts`
+ * applies (`setFromAxisAngle(up, yaw)`): 0 faces +z, π/2 faces +x — the
+ * bearing convention of the flow direction.
  */
-export function scatterYaw(r: number, mode?: string, deg?: number): number {
-  if (mode !== 'fixed' && mode !== 'quarter') return r * Math.PI * 2
+export function scatterYaw(r: number, mode?: string, deg?: number,
+                           axisRad: number = 0): number {
+  if (mode !== 'aligned') return r * Math.PI * 2
   const base = Number.isFinite(Number(deg)) ? (Number(deg) * Math.PI) / 180 : 0
-  if (mode === 'fixed') return base
-  return base + Math.floor(Math.min(Math.max(r, 0), 0.999999) * 4) * (Math.PI / 2)
+  const axis = Number.isFinite(axisRad) ? axisRad : 0
+  const tau = Math.PI * 2
+  return (((axis + base) % tau) + tau) % tau
 }
 
 /** One placed instance: where it stands and which way it faces (radians). */
@@ -144,9 +179,43 @@ export const SCATTER_TRIES_PER_POINT = 12
  * the seed (the id does not change) — the points move only because the ring
  * they are sampled in moved, which is what an author expects when they redraw
  * a shape.
+ *
+ * With an `epoch` (`reshuffleEpoch`) the seed grows a `:e<epoch>` tail and the
+ * row is a different draw every interval; without one it is byte for byte the
+ * seed it always was — `seedEpochSuffix`.
  */
-export function scatterSeed(areaId: string, index: number): string {
-  return `terrain:scatter:${areaId}:${index}`
+export function scatterSeed(areaId: string, index: number, epoch?: number): string {
+  return `terrain:scatter:${areaId}:${index}${seedEpochSuffix(epoch)}`
+}
+
+/**
+ * The `:e<epoch>` tail of a reshuffled seed — EMPTY for anything but a finite
+ * number, so a row without `reshuffle_min` keeps its seed unchanged and every
+ * world that never touched the field is sampled exactly as before.
+ */
+export function seedEpochSuffix(epoch?: number): string {
+  return Number.isFinite(epoch) ? `:e${epoch}` : ''
+}
+
+/**
+ * WHICH EPOCH a reshuffling row is in — the game clock in intervals:
+ *
+ *     epoch = floor(totalSeconds / (reshuffleMin · 60))
+ *
+ * `totalSeconds` is `game_time.total_seconds` of the worldmap payload (the
+ * GAME clock, so a frozen world keeps its props and a fast one turns them
+ * over faster — no new server code for it); `reshuffleMin` the row's
+ * `reshuffle_min`. `undefined` when the row authors no interval (absent, 0,
+ * negative, junk) — and then the seed gets no tail at all — or when the clock
+ * is not a number, which reads as "never" rather than as an epoch called NaN.
+ */
+export function reshuffleEpoch(totalSeconds: number,
+                               reshuffleMin?: number): number | undefined {
+  const minutes = Number(reshuffleMin)
+  if (!Number.isFinite(minutes) || minutes <= 0) return undefined
+  const total = Number(totalSeconds)
+  if (!Number.isFinite(total)) return undefined
+  return Math.floor(total / (minutes * 60))
 }
 
 /**
@@ -509,6 +578,26 @@ export function propBoxFootprints(
   return out
 }
 
+/**
+ * What the samplers ask of an occupancy store — the SHAPE of `OccupancyGrid`
+ * (`occupancy.ts`), spelled out here rather than imported because this module
+ * has no imports (see the header). `scatterCellInstances` hands its inner run
+ * a thin wrapper of this shape, see there.
+ */
+export interface ScatterOccupancy {
+  /** would a circle of radius `r` at `(x, z)` overlap something filed? */
+  blocks(x: number, z: number, r: number): boolean
+  /** file a survivor's circle */
+  add(x: number, z: number, r: number): void
+}
+
+/** The radius a survivor is filed with and judged by: the authored
+ *  `occupyR`, else the half-extent `clearM`, else a point (0). */
+export function scatterOccupyR(occupyR?: number, clearM?: number): number {
+  const r = Number(occupyR ?? clearM)
+  return Number.isFinite(r) && r > 0 ? r : 0
+}
+
 /** What `scatterInstances` needs to know. */
 export interface ScatterSampleOptions {
   /** The CLEANED world ring the area is drawn from (`cleanRing`), `[x, z]` in
@@ -599,6 +688,29 @@ export interface ScatterSampleOptions {
   /** The entry's turn mode and base angle — `scatterYaw`. Absent = random. */
   yawMode?: string
   yawDeg?: number
+  /**
+   * The local surface axis at a point, radians (`ringEdgeAxis` / `lineAxis`
+   * in `scatterAxis.ts`) — what `aligned` turns RELATIVE to. Asked only under
+   * `aligned`, only for a SURVIVOR and always AFTER its yaw draw: the axis is
+   * a pure function of the position, so asking it later changes no answer,
+   * and a rejected candidate never pays the walk over the ring's edges.
+   * Absent under `aligned` = axis 0, i.e. the angle alone.
+   */
+  axisAt?: (x: number, z: number) => number
+  /**
+   * What EARLIER rows have already planted in this cell (`OccupancyGrid`,
+   * `occupancy.ts`): the FIFTH verdict, asked after the spacing and last of
+   * all. A candidate whose circle of `occupyR` overlaps a filed one is
+   * subtracted like any other rejection, and every survivor is filed in turn
+   * — so the rows of a cell keep their distance in the order they are
+   * sampled (areas bottom to top, per area the along rows, then the scatter
+   * rows). Absent = nothing to keep clear of, and the run is byte for byte
+   * what it was.
+   */
+  occupied?: ScatterOccupancy
+  /** The radius a survivor is filed with AND judged by, metres; absent =
+   *  `clearM` (the half-extent), and with neither a point of radius 0. */
+  occupyR?: number
 }
 
 /**
@@ -637,11 +749,13 @@ export function scatterWantedCount(areaM2: number, densityPer100m2: number,
  *   wanted = min( round(areaM2 / 100 * density), maxPoints )
  *   x   = minX + r · (maxX − minX)
  *   z   = minZ + r · (maxZ − minZ)
- *   yaw = scatterYaw(r, mode, deg)   — r · 2π unless the entry authors a turn
+ *   yaw = scatterYaw(r, mode, deg, axisAt(x, z))   — r · 2π unless the entry
+ *                                                    authors an aligned turn
  *   reject when the point is outside the ring, inside a covering area
  *     (`occluders`), within `clearM` of any footprint (`footprintBlocks` —
- *     the plain "inside" test when no clearance is given) or closer than
- *     `minSpacingM` to an instance this run has already accepted
+ *     the plain "inside" test when no clearance is given), closer than
+ *     `minSpacingM` to an instance this run has already accepted, or
+ *     overlapping what an earlier row planted (`occupied`, by `occupyR`)
  *
  * THE SPACING BUYS ITS DISTANCE WITH PROPS, NOT WITH TRIES. The budget is the
  * same `wanted * triesPerPoint` it always was, so an entry whose spacing
@@ -719,6 +833,11 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
   // whether the instances say anything about it at all (see `variantCount`).
   const variants = Math.floor(Number(opts.variantCount))
   const mixing = Number.isFinite(variants) && variants > 1
+  // The turn: the axis is asked only under `aligned`, only for a survivor.
+  const axisAt = opts.yawMode === 'aligned' ? opts.axisAt : undefined
+  // What earlier rows planted, and the radius this row's survivors take up.
+  const occupied = opts.occupied
+  const occupyR = scatterOccupyR(opts.occupyR, opts.clearM)
   const out: ScatterInstance[] = []
   let tries = wanted * (opts.triesPerPoint ?? SCATTER_TRIES_PER_POINT)
   // THE CANDIDATE ORDINAL, counted over every point the stream draws — the
@@ -733,7 +852,10 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
     candidate += 1
     const x = minX + rnd() * (maxX - minX)
     const z = minZ + rnd() * (maxZ - minZ)
-    const yaw = scatterYaw(rnd(), opts.yawMode, opts.yawDeg)
+    // THE THIRD DRAW — taken before any verdict (see above) and turned into
+    // an angle only for a survivor: the axis an aligned turn adds is a
+    // function of the position, never of the stream.
+    const turn = rnd()
     if (!pointInRing(x, z, ring)) continue
     // Covered by an area painted OVER this one: that ground is not visible,
     // so nothing grows on it. Same shape of rejection as the footprint below —
@@ -748,10 +870,10 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
       if (footprintBlocks(fp, x, z, clearM)) { covered = true; break }
     }
     if (covered) continue
-    // …and the LAST subtraction: too close to one of this entry's own props.
-    // Everything is drawn and every other verdict is in, so a candidate the
-    // spacing takes away is a candidate removed and nothing more — the props
-    // beside it keep their places and their variants.
+    // …too close to one of this entry's own props. Everything is drawn and
+    // every other verdict is in, so a candidate the spacing takes away is a
+    // candidate removed and nothing more — the props beside it keep their
+    // places and their variants.
     if (buckets) {
       const bx = Math.floor(x / spacing)
       const bz = Math.floor(z / spacing)
@@ -771,11 +893,21 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
         }
       }
       if (crowded) continue
-      const key = `${bx},${bz}`
+    }
+    // …and the LAST subtraction: what an earlier row planted here. Asked
+    // after the spacing and BEFORE the survivor is filed anywhere, so a
+    // candidate the occupancy takes away crowds nobody in this row either.
+    if (occupied && occupied.blocks(x, z, occupyR)) continue
+    // A survivor: filed in this row's spacing buckets and in the occupancy
+    // every later row of the cell is judged by.
+    if (buckets) {
+      const key = `${Math.floor(x / spacing)},${Math.floor(z / spacing)}`
       const bucket = buckets.get(key)
       if (bucket) bucket.push([x, z])
       else buckets.set(key, [[x, z]])
     }
+    if (occupied) occupied.add(x, z, occupyR)
+    const yaw = scatterYaw(turn, opts.yawMode, opts.yawDeg, axisAt ? axisAt(x, z) : 0)
     out.push(mixing
       ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, index, variants) }
       : { x, z, yaw })
@@ -900,11 +1032,13 @@ export function scatterCellAt(v: number): number {
  *
  * SAME WORLD, SAME CELL, SAME TREES — wherever the camera stands and whenever
  * it comes back. That is what makes a windowed sampler a picture of a world
- * rather than a picture of a walk.
+ * rather than a picture of a walk. A row that RESHUFFLES adds its epoch
+ * (`reshuffleEpoch`, `seedEpochSuffix`): the same trees within an interval,
+ * other trees in the next — and no tail at all for a row that never does.
  */
 export function scatterCellSeed(areaId: string, index: number,
-                                cx: number, cz: number): string {
-  return `terrain:scatter:${areaId}:${index}:${cx},${cz}`
+                                cx: number, cz: number, epoch?: number): string {
+  return `terrain:scatter:${areaId}:${index}:${cx},${cz}${seedEpochSuffix(epoch)}`
 }
 
 /** The ring of one cell — its own box, in world metres. */
@@ -1036,6 +1170,13 @@ export interface ScatterCellOptions {
   /** The entry's turn mode and base angle — `scatterYaw`. Absent = random. */
   yawMode?: string
   yawDeg?: number
+  /** the local surface axis, exactly as in `ScatterSampleOptions` */
+  axisAt?: (x: number, z: number) => number
+  /** what earlier rows planted in THIS cell, exactly as in
+   *  `ScatterSampleOptions` — but filled only with the points the painted
+   *  shape keeps, see `scatterCellInstances` */
+  occupied?: ScatterOccupancy
+  occupyR?: number
 }
 
 /**
@@ -1057,6 +1198,7 @@ export interface ScatterCellOptions {
 export function scatterCellInstances(opts: ScatterCellOptions): ScatterInstance[] {
   const ring = opts.ring ?? []
   if (ring.length < 3) return []
+  const occupied = opts.occupied
   const points = scatterInstances({
     ring: scatterCellRing(opts.cx, opts.cz),
     areaM2: SCATTER_CELL_M * SCATTER_CELL_M,
@@ -1083,6 +1225,16 @@ export function scatterCellInstances(opts: ScatterCellOptions): ScatterInstance[
     rng: opts.rng,
     yawMode: opts.yawMode,
     yawDeg: opts.yawDeg,
+    axisAt: opts.axisAt,
+    // The occupancy is ASKED for every candidate of the cell but FILLED only
+    // with the points the painted shape keeps (the filter below): a survivor
+    // of the cell's box that lies outside this area is never drawn, and a
+    // prop nobody draws must not keep the next area's props away.
+    occupied: occupied ? {
+      blocks: (x, z, r) => occupied.blocks(x, z, r),
+      add: (x, z, r) => { if (pointInRing(x, z, ring)) occupied.add(x, z, r) },
+    } : undefined,
+    occupyR: opts.occupyR,
   })
   // …and the painted shape decides which of them are ITS props. The filter
   // runs AFTER the sampling, never as a smaller box: the stream of a cell must

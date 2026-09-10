@@ -10,13 +10,14 @@
  * `mapMath` re-exports it. `decorateStroke` is deterministic (the seed is the
  * clicked points), which is what lets two renderers agree on one line.
  *
- * The only import is `seededRandom` from `./scatter`, so
+ * The only imports are the scatter primitives from `./scatter`, so
  * `scripts/smoke_stroke_styles.mjs` bundles this file with esbuild exactly as
  * it bundled mapMath before.
  */
-import { footprintBlocks, pointInRing, scatterVariantIndex, seededRandom,
-  SCATTER_MAX_PER_ENTRY } from './scatter'
-import type { ScatterFootprint, ScatterInstance, ScatterPoint2 } from './scatter'
+import { footprintBlocks, pointInRing, scatterOccupyR, scatterVariantIndex,
+  seedEpochSuffix, seededRandom, SCATTER_MAX_PER_ENTRY } from './scatter'
+import type { ScatterFootprint, ScatterInstance, ScatterOccupancy,
+  ScatterPoint2 } from './scatter'
 
 /** Two stroke points closer than this are the same click, not a segment. */
 const STROKE_EPS = 1e-9
@@ -465,11 +466,15 @@ export interface AlongEntry {
   start_m?: number
   height_m?: number
   variant?: number
+  /** reshuffle every this many GAME minutes — see `ScatterEntry.reshuffle_min` */
+  reshuffle_min?: number
 }
 
-/** The seed of one row — area- AND row-stable, like `scatterSeed`. */
-export function alongSeed(areaId: string, index: number): string {
-  return `terrain:along:${areaId}:${index}`
+/** The seed of one row — area- AND row-stable, like `scatterSeed`, and with
+ *  the same `:e<epoch>` tail for a row that reshuffles (`reshuffleEpoch`);
+ *  none without one. */
+export function alongSeed(areaId: string, index: number, epoch?: number): string {
+  return `terrain:along:${areaId}:${index}${seedEpochSuffix(epoch)}`
 }
 
 export interface StrokeStationOptions {
@@ -499,6 +504,10 @@ export interface StrokeStationOptions {
    *  absent = `scatterVariantIndex` over the instance ordinal. */
   variant?: number
   maxPoints?: number
+  /** What earlier rows planted in this cell and the radius a survivor takes
+   *  up — the last verdict, exactly as in `ScatterSampleOptions`. */
+  occupied?: ScatterOccupancy
+  occupyR?: number
 }
 
 /**
@@ -529,9 +538,11 @@ export interface StrokeStationOptions {
  * a road subtracts exactly the lamps it covers and leaves the numbering, and
  * with it the variant of every other lamp, exactly as it was (the rule the
  * scatter sampler follows for the same reason). Rejected: an instance inside
- * a covering area (`occluders`) or blocked by a footprint (`footprintBlocks`
- * with `clearM`). The line's own ribbon is NOT a rejection — the offset is
- * what says whether a row stands on the asphalt or beside it.
+ * a covering area (`occluders`), blocked by a footprint (`footprintBlocks`
+ * with `clearM`) or overlapping what an earlier row planted (`occupied`,
+ * judged by `occupyR`; a survivor is filed there in turn). The line's own
+ * ribbon is NOT a rejection — the offset is what says whether a row stands
+ * on the asphalt or beside it.
  *
  * Variants: with `variantCount` > 1 every instance carries one — the pinned
  * `variant` (clamped to the count) when the row names one, else
@@ -579,6 +590,8 @@ export function strokeStations(opts: StrokeStationOptions): ScatterInstance[] {
   const pinned = (typeof opts.variant === 'number' && Number.isFinite(opts.variant)
     && opts.variant >= 0) ? Math.min(Math.floor(opts.variant), variants - 1) : -1
   const max = opts.maxPoints ?? SCATTER_MAX_PER_ENTRY
+  const occupied = opts.occupied
+  const occupyR = scatterOccupyR(opts.occupyR, opts.clearM)
   const TAU = Math.PI * 2
 
   const out: ScatterInstance[] = []
@@ -617,6 +630,8 @@ export function strokeStations(opts: StrokeStationOptions): ScatterInstance[] {
         if (footprintBlocks(fp, x, z, opts.clearM)) { covered = true; break }
       }
       if (covered) continue
+      if (occupied && occupied.blocks(x, z, occupyR)) continue
+      if (occupied) occupied.add(x, z, occupyR)
       out.push(mixing
         ? { x, z, yaw, variant: pinned >= 0 ? pinned
           : scatterVariantIndex(opts.seed, index, variants) }
