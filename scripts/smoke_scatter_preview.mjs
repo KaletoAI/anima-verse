@@ -473,7 +473,10 @@
  * and epoch-independent row seed, so both renderers excuse the same row
  * from the same entries) and the area's `axisAt` — and grid and axis come
  * out of the package helpers `cellOccupancy(grids)` / `areaAxis(line,
- * ring)`, never out of a grid or an axis choice built in the app.
+ * ring)`, never out of a grid or an axis choice built in the app. On a
+ * STROKE area the edge call additionally carries the band's KERBS as its
+ * explicit edge list (`edges: line ? ribbonSelectedEdges(ring, sides) :
+ * undefined`, Task 11) — the same expression in both sources, once each.
  *
  * THE CLEARANCE OF A JOB (K6, fix wave 2026-09-10; Task 9 retired the
  * authored height the same day) is the client's own target-height rule
@@ -1477,6 +1480,15 @@ async function main() {
   check('K5 …and its thinned overview asks the axis per row too',
     pinsOf(mathSrc.slice(mathSrc.indexOf('function scatterThinnedInstances(')),
       /areaAxis\(job\.line, job\.ring, e\.sides\)/g), 1);
+  // THE ROAD SIDES (Task 11, 2026-09-10): on a STROKE area the ring is the
+  // band around the centre line, so the edge call is handed the band's
+  // kerbs (`ribbonSelectedEdges`) as its explicit edge list — one call in
+  // each source, the same expression, and NOTHING on a painted polygon
+  // (`line` is null there and the word alone decides, as in Task 10).
+  check('K5 ground.ts hands the road sides of a stroke to the edge call',
+    pinsOf(groundBuild, /edges: line \? ribbonSelectedEdges\(ring, entry\.sides\) : undefined,/g), 1);
+  check('K5 …and so does mapMath.ts',
+    pinsOf(mathWindow, /edges: line \? ribbonSelectedEdges\(job\.ring, e\.sides\) : undefined,/g), 1);
   // (K7) …and the preview really runs it: a jittered lamp row's dots are
   // `strokeStations` with the same jitter under the row seed, and they are
   // not the unjittered stations of (K).

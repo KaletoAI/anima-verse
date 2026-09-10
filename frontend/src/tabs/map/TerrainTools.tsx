@@ -527,16 +527,15 @@ function ScatterVariantSelect({ value, count, onChange }: {
  * Every change writes straight through, like the kind and the layer next to
  * it — the numbers commit on blur, the pickers on choice. `colorOf` is the
  * same index colour the preview draws with, so a row and its dots can be told
- * apart by eye. `isStroke` says whether the area was drawn as a line
- * (`meta.stroke`): a stroke has no polygon sides to choose, so the "sides"
- * pick (Task 10) is not offered there — the renderers ignore the word on a
- * stroke anyway.
+ * apart by eye. The "sides" pick (Task 10) is offered on EVERY area: on a
+ * painted polygon it names the rim edges, on a stroke the two kerbs of the
+ * band the line is widened into (Task 11) — a road has sides like nothing
+ * else does.
  */
-function ScatterEditor({ entries, props, colorOf, isStroke, onChange }: {
+function ScatterEditor({ entries, props, colorOf, onChange }: {
   entries: TerrainScatterEntry[]
   props: PropRef[]
   colorOf: (index: number) => string
-  isStroke: boolean
   onChange: (entries: TerrainScatterEntry[]) => void
 }) {
   const { t } = useI18n()
@@ -758,13 +757,13 @@ function ScatterEditor({ entries, props, colorOf, isStroke, onChange }: {
                 })}
               />
             ) : null}
-            {/* WHICH EDGES COUNT (Task 10, 2026-09-10) — the pick is shown
-                where it acts: under an aligned turn (the axis) or on an
-                edge row (the stations), and never on a stroke area, which
-                has a line instead of sides. The empty pick is the absent
-                key: every edge, the row of before. */}
-            {!isStroke && (e.yaw_mode === 'aligned' || e.place === 'edge') ? (
-              <label title={t('Which polygon edges count: every edge, only the longest one, or the two longest (a rectangle’s long sides). Sets the axis for aligned turns and the edges an edge row runs along. Road strokes ignore it.')}>
+            {/* WHICH EDGES COUNT (Task 10, 2026-09-10; roads Task 11) — the
+                pick is shown where it acts: under an aligned turn (the axis)
+                or on an edge row (the stations). On a stroke area the sides
+                are the two KERBS of the band around the line. The empty pick
+                is the absent key: every edge, the row of before. */}
+            {(e.yaw_mode === 'aligned' || e.place === 'edge') ? (
+              <label title={t('Which polygon edges count: every edge, only the longest one, or the two longest (a rectangle’s long sides). Sets the axis for aligned turns and the edges an edge row runs along. On a road stroke: every edge of the ribbon including both ends, one road side (the longer), or both road sides.')}>
                 {t('sides')}
                 <select
                   className="ga-input"
@@ -2165,7 +2164,7 @@ export function TerrainAreaChip({
       </div>
       {scatterOpen && known ? (
         <ScatterEditor entries={scatter} props={props} colorOf={scatterColor}
-          isStroke={!!stroke} onChange={onScatter} />
+          onChange={onScatter} />
       ) : null}
       {/* WHO LIVES HERE (spec § E3.2) — folded away like the scatter, and for
           the same reason: most areas are ground, not a home. The NAME comes

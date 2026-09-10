@@ -143,12 +143,13 @@ Throwaway storage. Hand-derived expectations:
                                        stand off from, the point IS the
                                        area's inmost one
         no place, offset_m 2 + variant 1 -> offset dropped, variant 1 stays
-      THE SIDES (Task 10, 2026-09-10): `sides` says which polygon edges an
-      aligned turn measures against and an edge row runs along — "longest"
-      (the one longest edge) or "opposite" (the two longest); absent = every
-      edge. Stored in EVERY mode like `variant` (it acts on the axis of a
-      spread and a centred row as well as on the edge row's stations), junk
-      loses the key, and stroke areas simply ignore it in the renderers:
+      THE SIDES (Task 10, 2026-09-10): `sides` says which edges an aligned
+      turn measures against and an edge row runs along — "longest" (the one
+      longest edge) or "opposite" (the two longest); absent = every edge. On
+      a stroke area the same words pick the ROAD SIDES of the band (Task 11).
+      Stored in EVERY mode like `variant` (it acts on the axis of a spread
+      and a centred row as well as on the edge row's stations), junk loses
+      the key, and the whitelist never asks what shape the row sits on:
         sides "longest" / "opposite"  -> kept, on a spread, edge and centred row
         sides "all" / "" / "  " / 7 / None / "sideways" -> the key is dropped
                                        ("all" IS the absence)

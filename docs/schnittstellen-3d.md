@@ -978,8 +978,9 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
             spacing_jitter_m?: float,   # Abstands-Streuung ±v m je Station, 0..min_spacing_m,
                                         #   nur MIT place=edge UND min_spacing_m; fehlt = gleichmäßig
             variant?: int,              # Listenposition der Modell-Variante, JEDE Zeile; fehlt = Formel
-            sides?: "longest" | "opposite",  # welche Polygonkanten zählen (Achse UND Randreihe), JEDE Zeile;
-                                        #   fehlt = alle Kanten; Strich-Flächen ignorieren es
+            sides?: "longest" | "opposite",  # welche Kanten zählen (Achse UND Randreihe), JEDE Zeile;
+                                        #   fehlt = alle Kanten; auf einer Strich-Fläche
+                                        #   sind es die Straßenseiten des Bandes
             reshuffle_min?: int}, … ]   # Neuwurf alle n SPIEL-Minuten, 1..100000; fehlt = nie
 ```
 
@@ -1081,14 +1082,39 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   der Oberkante. `areaAxis(line, ring, sides)` reicht das Wort durch, und
   beide Renderer fragen die Achse seither JE ZEILE ab (`ground.ts
   axisOfRow`, `mapMath.ts` am Kopf jeder Zeile) statt einmal je Fläche;
-  eine Zeile ohne das Wort liest die Flächenachse wie bisher. **Eine
-  Strich-Fläche ignoriert `sides`** — ihre Achse ist die Mittellinie, die
-  hat keine Seiten; der Editor bietet die Wahl dort nicht an. Der Server
+  eine Zeile ohne das Wort liest die Flächenachse wie bisher. Der Server
   speichert das Feld in JEDER Platzierung (wie `variant`), Junk und `"all"`
   verlieren den Schlüssel. Zahlen von Hand:
   `client3d/scripts/smoke_scatter_math.mjs` (R6, R7), Whitelist
   `scripts/smoke_terrain_areas.py` [11p]; die Aufrufreihenfolge beider
   Renderer pinnt `scripts/smoke_scatter_preview.mjs` (K5).
+
+  **Auf einer STRICH-FLÄCHE sind die Seiten die STRASSENSEITEN** (Nachtrag
+  2026-09-10, Task 11 — „es ging immer um Straßen"). Der Ring einer
+  Strich-Fläche ist keine gemalte Form, sondern das gemiterte BAND, das
+  `strokeToPolygon` um die Mittellinie legt: Seite A vorwärts, Seite B
+  zurück, `2n` Punkte. Damit liegen die Kanten fest —
+
+  ```
+  Seite A       0 … n−2          Straßenende    n−1
+  Seite B       n … 2n−2         Straßenanfang  2n−1   (die schließende Kante)
+  ```
+
+  — und `ribbonSelectedEdges(ring, sides)` (geteiltes Paket) antwortet:
+  `fehlt`/`"all"`/Junk = alle Kanten (die Zeile wie bisher), `"longest"` =
+  die LÄNGERE Seite (Summe ihrer Kantenlängen; bei Gleichstand Seite A),
+  `"opposite"` = beide Seiten OHNE die zwei Enden. Eine gerade Straße
+  `[(0,0),(100,0)]` der Breite 6 ist das Band (0,−3) (100,−3) (100,3)
+  (0,3): `longest` = [0] (beide Seiten 100 m, Gleichstand → A),
+  `opposite` = [0, 2]. Bei einer Kurve `[(0,0),(50,0),(50,50)]` ist das Band
+  (0,−3) (53,−3) (53,50) (47,50) (47,3) (0,3): Seite A misst 53 + 53 = 106,
+  Seite B 47 + 47 = 94 → `longest` = [0, 1], die ÄUSSERE Bordkante. **Die
+  Achse einer Strich-Fläche bleibt die Mittellinie** (`lineAxis`), das Wort
+  wirkt dort also nur auf die Kanten einer `edge`-Reihe. Beide Renderer
+  reichen die Auswahl identisch an den Kantenaufruf durch
+  (`edges: line ? ribbonSelectedEdges(ring, sides) : undefined`), gepinnt in
+  `scripts/smoke_scatter_preview.mjs` (K5); Zahlen von Hand:
+  `client3d/scripts/smoke_scatter_math.mjs` (R8, U6, X11).
 
   **`yaw_mode: "aligned"`** ist der einzige Modus: `yaw = Achse +
   yaw_deg · π/180`, auf [0, 2π) normiert. Damit heißt derselbe Winkel an
@@ -1171,6 +1197,28 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   (10,4) nach (0,4): `s = 3.5` → `(6.5, 4)` → `(6.5, 3)`, Ordinal 1.
   `fehlt`/`"all"` ist der Ringlauf von oben, byte-gleich. Zahlen von Hand:
   `client3d/scripts/smoke_scatter_math.mjs` (U5, X10).
+
+  **EIN LAUF JE KETTE, nicht je Kante** (Nachtrag 2026-09-10, Task 11). Ein
+  Lauf gehört nicht einer Kante, sondern einer KETTE zusammenhängender
+  Kanten, und läuft über deren KUMULIERTE Bogenlänge — genau wie der
+  geschlossene Ring. Die Option `edges` (eine explizite Kantenliste des
+  Aufrufers; sie schlägt `sides`) wird in Ringreihenfolge gelesen und an
+  jeder Lücke geschnitten: jede maximale Gruppe AUFEINANDERFOLGENDER
+  Indizes ist ein Lauf, über die schließende Kante hinweg wird nie
+  zusammengefasst. Genau das braucht eine Straße: eine dekorierte
+  Bordkante besteht aus hunderten winziger Bandkanten, die EINE Reihe
+  tragen — sonst begänne an jeder Kante eine neue Reihe. Gerade Straße
+  (Band oben), Abstand 25, Einzug 1, `opposite`: Seite A trägt `s = 12.5,
+  37.5, 62.5, 87.5` → `(12.5, −2)` … `(87.5, −2)` (Achse 3π/2, Einschub nach
+  +z), Seite B läuft zurück → `(87.5, 2)`, `(62.5, 2)`, `(37.5, 2)`,
+  `(12.5, 2)` (Achse π/2), Ordinale 0..7, auf den beiden Enden steht
+  nichts. **Dieselbe Straße mit einem Klick mehr** (`[(0,0),(40,0),(100,0)]`,
+  Seite A = Kanten 0 und 1) liest DIESELBEN acht Stationen; ein Lauf je
+  Kante läge bei 12.5, 37.5, 52.5, 77.5. Für Polygone bleibt `sides` ein
+  Lauf je gewählter Kante: „die längste" und „die zwei längsten" benennen
+  einzelne Seiten, und zwei zufällig benachbarte sind zwei Seiten, keine
+  längere. Zahlen von Hand:
+  `client3d/scripts/smoke_scatter_math.mjs` (U6, X11).
 
   **`place: "center"` — die eine Mitte** (`polylabel` +
   `scatterCenterInstance`). Der Punkt ist der **Pol der Unzugänglichkeit**,

@@ -101,9 +101,11 @@ SCATTER_PLACE_MODES = ("edge", "center")
 #: ceiling an along row keeps from its centre line (:data:`ALONG_OFFSET_MAX_M`)
 #: and for the same reason: it is wider than any painted shape anybody draws.
 SCATTER_OFFSET_MAX_M = 100.0
-#: WHICH POLYGON EDGES COUNT for a scatter row (Task 10, 2026-09-10): the
-#: one longest edge, or the two longest (a rectangle's long sides). Absent =
-#: every edge; the renderers' ``ringSelectedEdges`` knows exactly these words.
+#: WHICH EDGES COUNT for a scatter row (Task 10, 2026-09-10): the one longest
+#: edge, or the two longest (a rectangle's long sides) — on a stroke area the
+#: longer road side of the band, or both (Task 11). Absent = every edge; the
+#: renderers' ``ringSelectedEdges`` / ``ribbonSelectedEdges`` know exactly
+#: these words.
 SCATTER_SIDES_MODES = ("longest", "opposite")
 #: The longest period a row may re-roll its placement on, in GAME minutes.
 #: 100000 minutes is 69 game days — a row that re-rolls less often than that
@@ -276,14 +278,16 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
       car model, a wood one species. Absent = the shared formula over the
       cell seed varies the instances, as every scatter did before. The
       renderers clamp the position to the variants the prop really has.
-    * ``sides`` — WHICH POLYGON EDGES COUNT (Task 10, 2026-09-10):
+    * ``sides`` — WHICH EDGES COUNT (Task 10, 2026-09-10):
       ``longest`` (the one longest edge) or ``opposite`` (the two longest —
       a rectangle's long sides). It sets the axis an ``aligned`` turn is
       measured against AND the edges an ``edge`` row runs along, so like
       ``variant`` it is stored in EVERY placement; absent = every edge, the
       row of before. Anything else loses the key (``all`` IS the absence).
-      A stroke area has no sides to choose — the renderers ignore the word
-      there, the whitelist does not know what shape the row sits on.
+      On a STROKE area the same two words mean the ROAD SIDES of the band
+      the line is widened into — the longer kerb, or both without the two
+      ends (Task 11, 2026-09-10); the whitelist does not need to know what
+      shape the row sits on, the renderers read the ring they have.
     * ``reshuffle_min`` — after how many GAME MINUTES the placement re-rolls
       (:func:`_reshuffle_min`); no key = never, the behaviour of every scatter
       before the field existed.

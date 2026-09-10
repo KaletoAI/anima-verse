@@ -21,7 +21,10 @@
  * `scatterAxis.ts` (sections R, T, U, X), which imports the ring primitives
  * from `scatter.ts` and is therefore BUNDLED (`loadBundled`) — a second
  * import-free copy of `pointInRing` is exactly what this package exists to
- * prevent.
+ * prevent. For the same reason the ROAD BAND of (R8) comes out of the
+ * renderers' own `strokeToPolygon` (`loadStrokeToPolygon`, bundled from
+ * `frontend/src/tabs/map/mapMath.ts`): a road's sides are only the sides of
+ * the ring the renderers really draw.
  *
  * WHERE SECTION (K) WENT (2026-08-16). This file used to carry a section on
  * the automatic UNDERGROWTH, which was a second layer of the same builder and
@@ -1276,6 +1279,37 @@
  *      word -> π/2 (the area's axis of before); with a LINE the word is
  *      ignored: `areaAxis(CORNER, RECT, "longest")(10.3, 5)` -> 0, the (R5)
  *      answer of the line.
+ * (R8) THE ROAD SIDES OF A RIBBON — `ribbonSelectedEdges(ring, sides)`
+ *      (Task 11, 2026-09-10). A road is a STROKE area, and its ring is the
+ *      mitred band `strokeToPolygon` lays around the centre line: side A
+ *      forward, side B back, `2n` points. Its edges are therefore
+ *
+ *          side A     0 … n−2        road end     n−1
+ *          side B     n … 2n−2       road start   2n−1  (the closing edge)
+ *
+ *      and the SIDES of a road are those two chains — never "the longest
+ *      edge" of the polygon, which on a road is one arbitrary piece of one
+ *      kerb. THE FIXTURE IS THE RENDERERS' OWN BAND: the smoke bundles
+ *      `strokeToPolygon` out of `frontend/src/tabs/map/mapMath.ts` rather
+ *      than restating it — a second copy of the band rule is exactly what
+ *      would rot. The straight road [(0,0),(100,0)] at width 6 is
+ *      ROAD = (0,−3) (100,−3) (100,3) (0,3): the segment normal of d = (1,0)
+ *      is (dz, −dx) = (0,−1), side A takes it at +3 (z = −3) and runs
+ *      forward, side B at −3 (z = +3) and comes back. n = 2, so
+ *          absent / "all" / a word nobody knows -> [0, 1, 2, 3]
+ *          "longest"  -> [0]      side A; both sides are 100 m, a tie goes to A
+ *          "opposite" -> [0, 2]   both sides, the two ends left out
+ *      THE LONGER SIDE IS THE OUTER ONE OF A BEND. [(0,0),(50,0),(50,50)] at
+ *      width 6 miters both joins (miter length 3/cos45° = 4.2426 <= 2·6, the
+ *      corner point (50,0) ± (3,3)) to the band (0,−3) (53,−3) (53,50)
+ *      (47,50) (47,3) (0,3): n = 3, side A = edges 0, 1 = 53 + 53 = 106,
+ *      side B = edges 3, 4 = 47 + 47 = 94 -> "longest" = [0, 1], the outer
+ *      kerb; "opposite" = [0, 1, 3, 4]. The mirrored bend
+ *      [(0,0),(50,0),(50,−50)] turns the other way — band (0,−3) (47,−3)
+ *      (47,−50) (53,−50) (53,3) (0,3), side A 47 + 47 = 94, side B 53 + 53
+ *      = 106 -> "longest" = [3, 4]. So the answer is measured, not "always A".
+ *      A ring with an ODD number of points is no band -> every edge; fewer
+ *      than three points -> [] as in (R6).
  *
  * ============================================================================
  * (T) THE POLE OF INACCESSIBILITY — `polylabel` (Mapbox 2016)
@@ -1381,6 +1415,44 @@
  *      − 2 = 10.5 >= 10 ends the edge (two draws); edge 2: j = 0 -> s = 3.5
  *      -> (6.5, 3), ordinal 1; j = +2 -> 12.5 >= 10 ends it. FOUR draws for
  *      two stations, and a three-number stream is one short.
+ * (U6) THE CHAIN RUNS — `edges` on `ringStations` (Task 11, 2026-09-10).
+ *      A selected ROAD SIDE (R8) is not one edge but a CHAIN of them — a
+ *      decorated road has hundreds of tiny ones — and its stations are ONE
+ *      run over the chain's CUMULATIVE arc length, `s = start + k · spacing`
+ *      from the chain's beginning, exactly as the closed ring is walked.
+ *      `edges` is an explicit list of edge indices and beats `sides`; it is
+ *      read in RING order, every maximal group of CONSECUTIVE indices is one
+ *      run, and the list never wraps around the closing edge.
+ *
+ *      ROAD (R8), spacing 25, offset 1, start = spacing/2 = 12.5:
+ *        SIDE A, edge 0 from (0,−3) to (100,−3): heading = atan2(100, 0)
+ *        = π/2, the facing of heading + 90° is (0,−1) and (50, −3.0001) lies
+ *        OUTSIDE the band -> axis = π/2 + π = 3π/2; n_in = facing of
+ *        3π/2 + π/2 = 2π = (0, 1) = +z, into the band. s = 12.5, 37.5, 62.5,
+ *        87.5 (112.5 >= 100 ends the run) -> (12.5, −2), (37.5, −2),
+ *        (62.5, −2), (87.5, −2).
+ *        SIDE B, edge 2 from (100,3) to (0,3): heading = atan2(−100, 0)
+ *        = −π/2, facing of heading + 90° = (0, 1) and (50, 3.0001) is
+ *        outside -> axis = π/2; n_in = facing of π = (0,−1) = −z.
+ *        s = 12.5 -> x = 100 − 12.5 = 87.5 -> (87.5, 2), then (62.5, 2),
+ *        (37.5, 2), (12.5, 2).
+ *        "opposite" -> those eight, side A first, ordinals 0..7; "longest"
+ *        -> the four of side A; and NOTHING stands on the two road ends
+ *        (no station at x = 0 or x = 100).
+ *      THE CHAIN IS ONE RUN. The same road clicked with a point in the
+ *      middle, [(0,0),(40,0),(100,0)] at width 6, is the band (0,−3) (40,−3)
+ *      (100,−3) (100,3) (40,3) (0,3) — side A = edges 0, 1 (40 m and 60 m),
+ *      side B = edges 3, 4 (60 m and 40 m) — and reads THE SAME EIGHT
+ *      stations. A run per edge would answer 12.5, 37.5 on the first edge
+ *      and 52.5, 77.5 on the second; the cumulative length of the chain is
+ *      what keeps a road's row independent of where somebody clicked.
+ *      `edges` covering EVERY edge is the closed-ring walk byte for byte:
+ *      L = 100 + 6 + 100 + 6 = 212, s = 12.5 … 87.5 on side A, then 112.5 —
+ *      the 6 m end edge spans [100, 106) and is never hit — 6.5 m into side
+ *      B -> (93.5, 2), 137.5 -> (68.5, 2), 162.5 -> (43.5, 2), 187.5 ->
+ *      (18.5, 2); 212.5 >= 212 ends it. Eight stations either way, and only
+ *      the whole rim puts one at 93.5.
+ *      An index no edge carries is skipped; an empty list places nothing.
  *
  * ============================================================================
  * (V) THE OCCUPANCY GRID — `OccupancyGrid` and the fifth verdict
@@ -1531,6 +1603,12 @@
  *      = 2π -> 0, n_in = facing of π/2 = (1, 0); s = 3 -> P = (0, 7) ->
  *      (1, 7), s = 9 -> (0, 1) -> (1, 1). Four instances, yaws 3π/2, 3π/2,
  *      0, 0, all inside the L.
+ * (X11) THE ROAD SIDES (Task 11): `edges` travels through the sampler to
+ *      (U6) untouched. The ROAD under `ribbonSelectedEdges(ROAD, "opposite")`,
+ *      spacing 25, offset 1, aligned 0°: the eight stations of (U6), each
+ *      facing the axis of ITS kerb — 3π/2 on side A, π/2 on side B — all
+ *      eight inside the band (the offset pushes inward), eight draws from
+ *      the row's stream. Under "longest" the four of side A.
  *
  * `center`: `polylabel(ring)`, one yaw draw, axis = `axisAt(x, z)` when the
  * caller hands one in (a stroke area's centre line), else `ringEdgeAxis`;
@@ -1600,6 +1678,7 @@ const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC = join(ROOT, 'packages/scene-render/src/scatter.ts');
 const AXIS_SRC = join(ROOT, 'packages/scene-render/src/scatterAxis.ts');
 const OCCUPANCY_SRC = join(ROOT, 'packages/scene-render/src/occupancy.ts');
+const MAPMATH_SRC = join(ROOT, 'frontend/src/tabs/map/mapMath.ts');
 const LOD_SRC = join(ROOT, 'client3d/src/scene/scatterLod.ts');
 const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
 const PREFS_SRC = join(ROOT, 'client3d/src/game/prefs.ts');
@@ -1641,6 +1720,30 @@ async function loadBundled(src) {
       platform: 'neutral', logLevel: 'silent', absWorkingDir: ROOT,
     });
     return await import(`file://${file}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** The renderers' own band rule — `strokeToPolygon` out of the map editor's
+ *  `mapMath.ts`, bundled through a stdin entry because the module is a
+ *  frontend file with imports of its own. Section (R8) needs the ring a road
+ *  really has, and restating the miter rule here would be the second copy
+ *  this repo keeps deleting. */
+async function loadStrokeToPolygon() {
+  const esbuild = await import('esbuild');
+  const dir = await mkdtemp(join(tmpdir(), 'scattermath-'));
+  try {
+    const file = join(dir, 'mapMath.mjs');
+    await esbuild.build({
+      stdin: {
+        contents: `export { strokeToPolygon } from ${JSON.stringify(MAPMATH_SRC)};\n`,
+        resolveDir: ROOT, sourcefile: 'smoke-entry.mjs', loader: 'js',
+      },
+      outfile: file, bundle: true, format: 'esm',
+      platform: 'neutral', logLevel: 'silent', absWorkingDir: ROOT,
+    });
+    return (await import(`file://${file}`)).strokeToPolygon;
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3382,9 +3485,10 @@ async function main() {
   // (R) THE SURFACE AXIS
   console.log('\n(R) the surface axis — ringEdgeAxis / lineAxis');
   const {
-    ringEdgeAxis, lineAxis, areaAxis, ringSelectedEdges, polylabel, ringStations,
-    scatterEdgeInstances, scatterCenterInstance,
+    ringEdgeAxis, lineAxis, areaAxis, ringSelectedEdges, ribbonSelectedEdges,
+    polylabel, ringStations, scatterEdgeInstances, scatterCenterInstance,
   } = await loadBundled(AXIS_SRC);
+  const strokeToPolygon = await loadStrokeToPolygon();
   const RECT = [[0, 0], [10, 0], [10, 4], [0, 4]];
   const RECT_CW = [[0, 0], [0, 4], [10, 4], [10, 0]];
   check('R1 (5, 0.5): the bottom edge, axis 3π/2', ringEdgeAxis(RECT, 5, 0.5),
@@ -3441,6 +3545,34 @@ async function main() {
     areaAxis(null, RECT)(5, 3.5), Math.PI / 2, 1e-12);
   check('R7 …and a line ignores the word: the (R5) answer 0',
     areaAxis(CORNER, RECT, 'longest')(10.3, 5), 0, 1e-12);
+  // (R8) the road sides of a ribbon
+  const ROAD = strokeToPolygon([[0, 0], [100, 0]], 6);
+  check('R8 the straight road at width 6 is the band (0,−3) (100,−3) (100,3) (0,3)',
+    ROAD, [[0, -3], [100, -3], [100, 3], [0, 3]]);
+  check('R8 absent, "all" and an unknown word are every edge of the band',
+    [ribbonSelectedEdges(ROAD), ribbonSelectedEdges(ROAD, 'all'),
+      ribbonSelectedEdges(ROAD, 'sideways')],
+    [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]]);
+  check('R8 longest: side A [0] — both sides are 100 m, the tie goes to A',
+    ribbonSelectedEdges(ROAD, 'longest'), [0]);
+  check('R8 opposite: both kerbs [0, 2], the two ends left out',
+    ribbonSelectedEdges(ROAD, 'opposite'), [0, 2]);
+  const BEND = strokeToPolygon([[0, 0], [50, 0], [50, 50]], 6);
+  check('R8 the bend miters to (0,−3) (53,−3) (53,50) (47,50) (47,3) (0,3)',
+    BEND, [[0, -3], [53, -3], [53, 50], [47, 50], [47, 3], [0, 3]]);
+  check('R8 …its longer side is the OUTER kerb, 106 m against 94: [0, 1]',
+    ribbonSelectedEdges(BEND, 'longest'), [0, 1]);
+  check('R8 …and opposite is both kerbs, ends left out: [0, 1, 3, 4]',
+    ribbonSelectedEdges(BEND, 'opposite'), [0, 1, 3, 4]);
+  const BEND_R = strokeToPolygon([[0, 0], [50, 0], [50, -50]], 6);
+  check('R8 the mirrored bend: (0,−3) (47,−3) (47,−50) (53,−50) (53,3) (0,3)',
+    BEND_R, [[0, -3], [47, -3], [47, -50], [53, -50], [53, 3], [0, 3]]);
+  check('R8 …so longest is side B [3, 4] — the answer is measured, not "always A"',
+    ribbonSelectedEdges(BEND_R, 'longest'), [3, 4]);
+  check('R8 an odd number of points is no band: every edge',
+    ribbonSelectedEdges([[0, 0], [10, 0], [10, 4]], 'longest'), [0, 1, 2]);
+  check('R8 fewer than three points are no ring',
+    ribbonSelectedEdges([[0, 0], [10, 0]], 'opposite'), []);
 
   // (T) THE POLE OF INACCESSIBILITY
   console.log('\n(T) the pole of inaccessibility — polylabel');
@@ -3542,6 +3674,41 @@ async function main() {
   check('U5 …four draws for two stations — a three-number stream is one short',
     (() => { try { u5({ sides: 'opposite', jitterM: 2, jitterRng: stream([1, 0, 0.5]) }); return 'no throw'; } catch (e) { return e.message; } })(),
     'scatter drew more numbers than the case feeds');
+  // (U6) the chain runs — `edges`, the road sides of (R8)
+  const ROAD_OPTS = { spacingM: 25, offsetM: 1 };
+  const road = (ring, sides) => ringStations(ring, {
+    ...ROAD_OPTS, edges: ribbonSelectedEdges(ring, sides),
+  }).map((s) => [s.x, s.z, s.axis, s.ordinal]);
+  const SIDE_A = [[12.5, -2], [37.5, -2], [62.5, -2], [87.5, -2]]
+    .map(([x, z], k) => [x, z, 3 * Math.PI / 2, k]);
+  const SIDE_B = [[87.5, 2], [62.5, 2], [37.5, 2], [12.5, 2]]
+    .map(([x, z], k) => [x, z, Math.PI / 2, k + 4]);
+  check('U6 opposite: four on side A, then four on side B, ordinals 0..7',
+    road(ROAD, 'opposite'), [...SIDE_A, ...SIDE_B], 1e-12);
+  check('U6 longest: side A alone', road(ROAD, 'longest'), SIDE_A, 1e-12);
+  check('U6 no station stands on a road end',
+    road(ROAD, 'opposite').every(([x]) => x > 0 && x < 100), true);
+  const SPLIT = strokeToPolygon([[0, 0], [40, 0], [100, 0]], 6);
+  check('U6 the road clicked at x = 40 is the six-point band',
+    SPLIT, [[0, -3], [40, -3], [100, -3], [100, 3], [40, 3], [0, 3]]);
+  check('U6 …and its two-edge chains read THE SAME eight stations',
+    road(SPLIT, 'opposite'), [...SIDE_A, ...SIDE_B], 1e-12);
+  check('U6 …which a run per edge would not: 52.5 and 77.5 on the second edge',
+    ringStations(SPLIT, { ...ROAD_OPTS, edges: [1] }).map((s) => s.x),
+    [52.5, 77.5], 1e-12);
+  const rim = ringStations(ROAD, ROAD_OPTS);
+  check('U6 the whole rim: side A, then side B from 6.5 m in — 93.5, not 87.5',
+    rim.map((s) => [s.x, s.z, s.ordinal]),
+    [[12.5, -2, 0], [37.5, -2, 1], [62.5, -2, 2], [87.5, -2, 3],
+      [93.5, 2, 4], [68.5, 2, 5], [43.5, 2, 6], [18.5, 2, 7]], 1e-12);
+  check('U6 …and an `edges` list of every edge is that walk byte for byte',
+    ringStations(ROAD, { ...ROAD_OPTS, edges: ribbonSelectedEdges(ROAD, 'all') }), rim);
+  check('U6 `edges` beats `sides`',
+    ringStations(ROAD, { ...ROAD_OPTS, edges: [2], sides: 'longest' }).map((s) => s.x),
+    [87.5, 62.5, 37.5, 12.5], 1e-12);
+  check('U6 an index no edge carries is skipped, an empty list places nothing',
+    [ringStations(ROAD, { ...ROAD_OPTS, edges: [0, 99] }).length,
+      ringStations(ROAD, { ...ROAD_OPTS, edges: [] }).length], [4, 0]);
 
   // (V) THE OCCUPANCY GRID
   console.log('\n(V) the occupancy grid — OccupancyGrid and the fifth verdict');
@@ -3731,6 +3898,23 @@ async function main() {
   check('X10 the L-shape under opposite: two on the bottom, two on the left wall',
     scatterEdgeInstances(L_SHAPE, { ...EDGE, sides: 'opposite', spacingM: 6 }).map((p) => [p.x, p.z, p.yaw]),
     [[3, 1, 3 * Math.PI / 2], [9, 1, 3 * Math.PI / 2], [1, 7, 0], [1, 1, 0]], 1e-12);
+  // (X11) the road sides — `edges` through the sampler
+  const ROAD_ROW = { seed: 'x', spacingM: 25, offsetM: 1, yawMode: 'aligned', yawDeg: 0 };
+  const roadRow = (sides) => scatterEdgeInstances(ROAD, {
+    ...ROAD_ROW, edges: ribbonSelectedEdges(ROAD, sides),
+  }).map((p) => [p.x, p.z, p.yaw]);
+  check('X11 opposite: the eight stations of U6, each facing its own kerb',
+    roadRow('opposite'),
+    [...[12.5, 37.5, 62.5, 87.5].map((x) => [x, -2, 3 * Math.PI / 2]),
+      ...[87.5, 62.5, 37.5, 12.5].map((x) => [x, 2, Math.PI / 2])], 1e-12);
+  check('X11 longest: the four of side A',
+    roadRow('longest'), [12.5, 37.5, 62.5, 87.5].map((x) => [x, -2, 3 * Math.PI / 2]), 1e-12);
+  let roadDraws = 0;
+  check('X11 …eight draws for the eight stations',
+    [scatterEdgeInstances(ROAD, {
+      ...ROAD_ROW, edges: ribbonSelectedEdges(ROAD, 'opposite'),
+      rng: () => { roadDraws += 1; return 0.5; },
+    }).length, roadDraws], [8, 8]);
   const CENTRE = { seed: 'x', yawMode: 'aligned', yawDeg: 0, variantCount: 3, variant: 2 };
   const x5 = scatterCenterInstance(RECT, CENTRE);
   check('X5 one instance at (5, 2) ± 0.5', [x5.length, x5[0]?.x, x5[0]?.z], [1, 5, 2], 0.5);

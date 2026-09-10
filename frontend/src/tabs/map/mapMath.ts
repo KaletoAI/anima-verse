@@ -56,7 +56,7 @@ import {
   scatterInstances, scatterSeed, scatterWantedCount, worldToLocalXZ,
   SCATTER_CELL_M, SCATTER_CELLS_MAX, SCATTER_MAX_PER_CELL,
   alongSeed, strokeCentreLine, strokeStations,
-  areaAxis, scatterEdgeInstances, scatterCenterInstance,
+  areaAxis, ribbonSelectedEdges, scatterEdgeInstances, scatterCenterInstance,
   reshuffleEpoch, cellOccupancy,
 } from '@anima/scene-render'
 import type { CellGrids, Point2, ScatterFootprint } from '@anima/scene-render'
@@ -1530,7 +1530,8 @@ export function scatterWindowInstances(jobs: readonly ScatterPreviewJob[],
     const line = job.line
     // THE AXIS IS THE ROW'S (Task 10, 2026-09-10): `sides` narrows the rim
     // edges an aligned row measures against; an along row carries no such
-    // word, and its line would ignore one anyway.
+    // word, and its line would ignore one anyway. On a stroke area the word
+    // still picks the band's road sides for an edge row (Task 11, below).
     const sides = 'sides' in job.entry ? job.entry.sides : undefined
     const axisAt = areaAxis(line, job.ring, sides)
     const epoch = reshuffleEpoch(seconds, job.entry.reshuffle_min)
@@ -1566,6 +1567,9 @@ export function scatterWindowInstances(jobs: readonly ScatterPreviewJob[],
         jitterM: e.spacing_jitter_m,
         // which edges the row runs along (Task 10); absent = the ring
         sides: e.sides,
+        // …and on a ROAD (Task 11) those are the band's kerbs, not the
+        // longest edge of the ring around it
+        edges: line ? ribbonSelectedEdges(job.ring, e.sides) : undefined,
         yawMode: e.yaw_mode,
         yawDeg: e.yaw_deg,
         footprints,

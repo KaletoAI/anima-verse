@@ -128,6 +128,55 @@ export function ringSelectedEdges(ring: readonly ScatterPoint2[],
 }
 
 /**
+ * WHICH EDGES OF A ROAD BAND COUNT — the row's `sides` word on a STROKE area
+ * (Task 11, 2026-09-10: "it was always about roads"). The ring of a stroke
+ * area is not a shape somebody painted but the mitred RIBBON `strokeToPolygon`
+ * lays around the centre line: side A forward, side B back, `2n` points. Its
+ * edges are therefore
+ *
+ *     side A     0 … n − 2        road end     n − 1
+ *     side B     n … 2n − 2       road start   2n − 1   (the closing edge)
+ *
+ * and a road's SIDES are those two chains — `ringSelectedEdges` would answer
+ * "the longest edge", which on a decorated road is one arbitrary piece of one
+ * kerb.
+ *
+ *     absent / "all" / unknown   every edge, the ring of before
+ *     "longest"                  the LONGER side, by the sum of its edge
+ *                                lengths — the outer kerb of a bend; a tie
+ *                                goes to side A
+ *     "opposite"                 both sides, ascending, WITHOUT the two ends
+ *
+ * A ring of an odd number of points is no band and answers every edge (a
+ * ring with fewer than four points cannot be one either, and three points
+ * are odd); fewer than three points enclose nothing and answer `[]`, as in
+ * `ringSelectedEdges`.
+ */
+export function ribbonSelectedEdges(ring: readonly ScatterPoint2[],
+                                    sides?: string): number[] {
+  const len = ring?.length ?? 0
+  if (len < 3) return []
+  const everyEdge = (): number[] => Array.from({ length: len }, (_, i) => i)
+  if (sides !== 'longest' && sides !== 'opposite') return everyEdge()
+  if (len % 2 !== 0) return everyEdge()
+  const n = len / 2
+  const edgeLength = (i: number): number => {
+    const [ax, az] = ring[i]
+    const [bx, bz] = ring[(i + 1) % len]
+    const l = Math.hypot(bx - ax, bz - az)
+    return Number.isFinite(l) ? l : 0
+  }
+  const sideA: number[] = []
+  const sideB: number[] = []
+  let lenA = 0
+  let lenB = 0
+  for (let i = 0; i <= n - 2; i += 1) { sideA.push(i); lenA += edgeLength(i) }
+  for (let i = n; i <= 2 * n - 2; i += 1) { sideB.push(i); lenB += edgeLength(i) }
+  if (sides === 'opposite') return [...sideA, ...sideB]
+  return lenB > lenA ? sideB : sideA
+}
+
+/**
  * The AXIS of the ring edge nearest to `(x, z)` — what an `aligned` prop on a
  * painted polygon turns relative to (user decision 1, 2026-09-10: the nearest
  * edge per instance, not the longest edge of the shape).
@@ -391,6 +440,13 @@ export interface RingStationOptions {
    *  `"longest"` / `"opposite"` = one run per selected edge
    *  (`ringSelectedEdges`), in ascending edge index */
   sides?: string
+  /** THE EDGES AS THE CALLER PICKED THEM (Task 11, 2026-09-10) — an explicit
+   *  list of edge indices that BEATS `sides`, read in ring order, where every
+   *  maximal group of CONSECUTIVE indices is ONE run over its cumulative arc
+   *  length. That is how a road's kerb is walked: `ribbonSelectedEdges` hands
+   *  in a chain of hundreds of tiny band edges, and they carry one row, not
+   *  one row each. An empty list places nothing. */
+  edges?: readonly number[]
 }
 
 /** One station of `ringStations`: where it stands, which way the rim runs
@@ -495,6 +551,17 @@ function ringEdges(ring: readonly ScatterPoint2[]): RingEdge[] {
  * jitter formula above restarted per run — but from the SAME stream, one
  * draw per candidate, run after run — and `ordinal` counting on across the
  * runs. Absent or "all" is the closed walk, byte for byte.
+ *
+ * THE CHAINS (Task 11, 2026-09-10). A run is not an edge but a CHAIN of
+ * connected edges, walked over its CUMULATIVE arc length exactly as the
+ * closed ring is. `edges` (a caller's explicit list, beating `sides`) is read
+ * in ring order and cut into maximal groups of CONSECUTIVE indices, one run
+ * each, never wrapping around the closing edge — which is what a road's kerb
+ * needs: `ribbonSelectedEdges` picks hundreds of tiny band edges that are ONE
+ * side and must carry ONE row, so where somebody clicked the centre line
+ * cannot move a single prop. `sides` on a polygon stays one run per selected
+ * edge: "the longest edge" and "the two longest" name single sides, and two
+ * of them that happen to touch are still two sides, not one longer one.
  */
 export function ringStations(ring: readonly ScatterPoint2[],
                              opts: RingStationOptions): RingStation[] {
@@ -551,18 +618,45 @@ export function ringStations(ring: readonly ScatterPoint2[],
       })
     }
   }
+  /** One walk per CHAIN, with the chain's own arc length rebased to 0 — the
+   *  full ring is the chain of every edge, and its sums are the very ones
+   *  `ringEdges` accumulated, in the same order. */
+  const walkChains = (chains: readonly (readonly RingEdge[])[]): void => {
+    for (const chain of chains) {
+      let cum = 0
+      const run = chain.map((edge) => {
+        const rebased = { ...edge, start: cum, end: cum + edge.len }
+        cum += edge.len
+        return rebased
+      })
+      if (!(cum > RING_EPS)) continue
+      walk(run, cum)
+      if (out.length >= max) break
+    }
+  }
+  const picked = opts.edges
+  if (picked) {
+    // Ring order, cut where the selection skips an edge: an edge whose
+    // predecessor in the ring was not picked opens a new chain.
+    const wanted = new Set(picked)
+    const chains: RingEdge[][] = []
+    let open: RingEdge[] | null = null
+    for (const edge of edges) {
+      if (!wanted.has(edge.index)) { open = null; continue }
+      if (open) open.push(edge)
+      else { open = [edge]; chains.push(open) }
+    }
+    walkChains(chains)
+    return out
+  }
   const sides = opts.sides
   if (sides !== 'longest' && sides !== 'opposite') {
     walk(edges, edges[edges.length - 1].end)
     return out
   }
-  const selected = ringSelectedEdges(ring, sides)
-  for (const index of selected) {
-    const edge = edges.find((c) => c.index === index)
-    if (!edge) continue
-    walk([{ ...edge, start: 0, end: edge.len }], edge.len)
-    if (out.length >= max) break
-  }
+  // A polygon's picked edges are single sides — one run each, never merged.
+  walkChains(ringSelectedEdges(ring, sides)
+    .map((index) => edges.filter((c) => c.index === index)))
   return out
 }
 

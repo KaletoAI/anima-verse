@@ -70,7 +70,7 @@ import { buildAreaGeometry,
   propBoxFootprints, propGroundFit, rayGroundHit,
   scatterCellAt, scatterCellInstances, scatterCellSeed, scatterClearM,
   scatterSeed, scatterEdgeInstances, scatterCenterInstance,
-  areaAxis, reshuffleEpoch, cellOccupancy,
+  areaAxis, ribbonSelectedEdges, reshuffleEpoch, cellOccupancy,
   SCATTER_CELL_M,
   alongSeed, strokeCentreLine, strokeStations,
   strokeWidthM,
@@ -1704,7 +1704,10 @@ export function createGround(): Ground {
    * the row names them (`areaAxis`, asked per row through `axisOfRow`; a row
    * without the word reads the area's axis of before) — and a row with
    * `reshuffle_min` seeds with its epoch of the game clock (`reshuffleEpoch`
-   * over `gameSeconds`); every other seed is what it always was.
+   * over `gameSeconds`); every other seed is what it always was. On a STROKE
+   * area the same word picks the ROAD SIDES of the band for an `edge` row
+   * (`ribbonSelectedEdges`, Task 11) — one run per kerb, however many tiny
+   * edges the decoration cut it into — while the axis stays the centre line.
    *
    * WHAT IS DRAWN OF IT is not decided here either: the finished entry is
    * handed straight to `binProp` with the camera of the last tick, so a
@@ -1802,6 +1805,9 @@ export function createGround(): Ground {
             jitterM: entry.spacing_jitter_m,
             // which edges the row runs along (Task 10); absent = the ring
             sides: entry.sides,
+            // …and on a ROAD (Task 11) those are the band's kerbs, not the
+            // longest edge of the ring around it
+            edges: line ? ribbonSelectedEdges(ring, entry.sides) : undefined,
             yawMode: entry.yaw_mode,
             yawDeg: entry.yaw_deg,
             footprints,
