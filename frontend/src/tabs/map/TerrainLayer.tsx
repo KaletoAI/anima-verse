@@ -68,7 +68,6 @@ import type { ScatterFootprint } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useMapView } from './MapCanvas'
 import {
-  alongPreviewDots,
   decorateStroke, flowArrow, flowArrowsAlong, flowAxisPoints, scatterAreaCosts,
   scatterAreaPlan, scatterPreviewJobs, scatterThinnedByArea,
   scatterThinnedPercentText, scatterWindowDots, strokeToPolygon,
@@ -224,6 +223,11 @@ export interface TerrainLayerProps {
    *  about pins, and a location without a boundary has no area and simply does
    *  not appear in this list. */
   footprints: readonly ScatterFootprint[]
+  /** The game clock as of the last worldmap load (`game_time.total_seconds`)
+   *  — the epoch of every reshuffling row (`reshuffleEpoch`). A SNAPSHOT: the
+   *  preview shows the epoch of the load, a reload fetches the next one;
+   *  nothing polls for it. `NaN` = no clock, no epoch. */
+  gameSeconds: number
 }
 
 export function TerrainLayer({
@@ -231,7 +235,7 @@ export function TerrainLayer({
   centerline, centerlineWidthM, centerlineDeco, draft, draftCursor, draftLine,
   draftWidthM, draftDeco,
   draftColor, draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert,
-  scatterPreview, footprints,
+  scatterPreview, footprints, gameSeconds,
 }: TerrainLayerProps) {
   const { view, w, h } = useMapView()
   const { t } = useI18n()
@@ -306,31 +310,25 @@ export function TerrainLayer({
   // of the same ids was built, and a joined key compares by value for free.
   const trueKey = plan.trueIds.join('\n')
   useEffect(() => { setLastTrue(trueKey) }, [trueKey])
-  const trueJobs = useMemo(() => {
-    const ids = new Set(trueKey ? trueKey.split('\n') : [])
-    return ids.size ? jobs.filter((j) => ids.has(j.areaId)) : NO_JOBS
-  }, [jobs, trueKey])
-  const thinJobs = useMemo(() => {
-    const ids = new Set(trueKey ? trueKey.split('\n') : [])
-    return jobs.filter((j) => !ids.has(j.areaId))
-  }, [jobs, trueKey])
-  const windowDots = useMemo(() => (trueJobs.length
-    ? scatterWindowDots(trueJobs, rect, footprints) : NO_DOTS),
-  [footprints, rect, trueJobs])
+  const trueIds = useMemo(
+    () => new Set(trueKey ? trueKey.split('\n') : []), [trueKey])
+  const thinJobs = useMemo(
+    () => jobs.filter((j) => !trueIds.has(j.areaId)), [jobs, trueIds])
+  // THE WINDOW GETS EVERY ROW, and is told which areas it draws: the rows
+  // along every line and rim are drawn whole whatever the plan says (a few
+  // hundred stations, never thinned), and a thinned area's spread rows are
+  // sampled in the drawn cells for the occupancy alone — so a drawn cell is
+  // the client's cell, byte for byte (`scatterWindowDots`).
+  const windowDots = useMemo(() => (jobs.length
+    ? scatterWindowDots(jobs, rect, footprints, { gameSeconds, drawIds: trueIds })
+    : NO_DOTS),
+  [footprints, gameSeconds, jobs, rect, trueIds])
   const thinned = useMemo(() => (thinJobs.length
     ? scatterThinnedByArea(thinJobs, footprints) : NO_THINNED),
   [footprints, thinJobs])
-  // …and the rows along every drawn line, in the same preview switch: the
-  // stations are cheap (a few hundred per line) and never thinned.
-  const alongDots = useMemo(() => (scatterPreview && part !== 'ground'
-    ? alongPreviewDots(areas, footprints) : NO_DOTS),
-  [areas, footprints, part, scatterPreview])
   const scatterDots = useMemo(
-    () => {
-      const base = thinned.dots.length ? [...windowDots, ...thinned.dots] : windowDots
-      return alongDots.length ? [...base, ...alongDots] : base
-    },
-    [alongDots, thinned, windowDots],
+    () => (thinned.dots.length ? [...windowDots, ...thinned.dots] : windowDots),
+    [thinned, windowDots],
   )
   /** …and, for every APPROXIMATED area, how much of it the dots on it are —
    *  the honest half of a sample that cannot show it all. An area drawn

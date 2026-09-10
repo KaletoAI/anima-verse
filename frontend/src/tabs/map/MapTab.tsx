@@ -591,6 +591,10 @@ export function MapTab() {
 
   const [locations, setLocations] = useState<EditorLocation[] | null>(null)
   const [bounds, setBounds] = useState<MapBounds | null>(null)
+  /** The game clock of the last worldmap load — the epoch the reshuffling
+   *  scatter rows are previewed in (`TerrainLayer.gameSeconds`). A snapshot
+   *  by ruling: no timer, a reload fetches the next epoch. */
+  const [gameSeconds, setGameSeconds] = useState(NaN)
   const [view, setView] = useState<View>({ cx: 0, cz: 0, pxPerM: FIT_FALLBACK_PX_PER_M })
   const [selId, setSelId] = useState('')
   const [snapOn, setSnapOn] = useState(true)
@@ -856,6 +860,8 @@ export function MapTab() {
     try {
       const wm = await apiGet<WorldmapPayload>('/play/worldmap?all=1')
       setBounds(wm.world_bounds || null)
+      const total = wm.game_time?.total_seconds
+      setGameSeconds(typeof total === 'number' && Number.isFinite(total) ? total : NaN)
       // The two walk limits ride along with the map (§ A1.3) — the relief
       // editor warns with the very numbers the server judges steps with.
       if (Number.isFinite(wm.max_slope_deg) && (wm.max_slope_deg as number) > 0) {
@@ -2662,6 +2668,7 @@ export function MapTab() {
     onEdgeInsert: insertVertex,
     scatterPreview: scatterOn,
     footprints: scatterFootprints,
+    gameSeconds,
   }
 
   const trayEntry = (loc: EditorLocation) => {

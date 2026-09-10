@@ -69,13 +69,15 @@ import { buildAreaGeometry,
   heightAt as worldHeightAt, pickVariant, pointInRing,
   propBoxFootprints, propGroundFit, rayGroundHit,
   scatterCellAt, scatterCellInstances, scatterCellSeed, scatterClearM,
+  scatterSeed, scatterEdgeInstances, scatterCenterInstance,
+  lineAxis, ringEdgeAxis, reshuffleEpoch, OccupancyGrid,
   SCATTER_CELL_M,
   alongSeed, strokeCentreLine, strokeStations,
   strokeWidthM,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
   waterfallsFrom,
   worldHeightRange } from '@anima/scene-render';
-import type { Point2, ScatterFootprint, ScatterInstance,
+import type { Point2, ScatterFootprint, ScatterInstance, ScatterOccupancy,
   TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
   TerrainLayerIndex, TerrainLayerTile, WorldHeightField,
   WorldHeightTileStats,
@@ -893,6 +895,16 @@ export interface Ground {
    * one — a settings field that only answers on the next beat reads as broken.
    */
   setScatterLod(cfg: ScatterLodCfg): void;
+  /**
+   * The GAME clock in seconds (`game_time.total_seconds` of the worldmap
+   * payload), from every poll. A scatter row that authors `reshuffle_min`
+   * takes its epoch from it (`reshuffleEpoch`); the ground re-samples its
+   * window when ANY row's epoch turns and does nothing otherwise — a whole
+   * window rebuild per turn, the same one a crossed cell border costs, and no
+   * per-row diff (ruling 2026-09-10). A world without reshuffling rows never
+   * rebuilds for the clock.
+   */
+  setGameSeconds(total: number): void;
   /** One sample per DRAWN scatter mesh for the performance readout's tier
    *  split (`game/perfstats.tierCounts`): the tier URLs of the entry and the
    *  URL that mesh really stands on (`''` while the placeholder tuft stands).
@@ -1049,6 +1061,18 @@ function readAlongList(area: TerrainArea): TerrainAlongEntry[] {
   const raw = area.meta?.stroke?.along;
   if (!Array.isArray(raw)) return [];
   return raw.filter((e): e is TerrainAlongEntry => !!e && typeof e === 'object');
+}
+
+/** The decorated centre line of a STROKE area — the line its `along` rows
+ *  stand on and the axis every `aligned` row of it turns relative to
+ *  (`lineAxis`); `null` on a painted polygon, whose axis is its own rim
+ *  (`ringEdgeAxis`). The same test the editor makes (`readStrokePoints`): a
+ *  ribbon width and at least two clicked points, or it is no stroke. */
+function strokeLineOf(area: TerrainArea): Array<[number, number]> | null {
+  const stroke = area.meta?.stroke;
+  if (!stroke || !(Number(stroke.width_m) > 0)) return null;
+  if (!Array.isArray(stroke.points) || stroke.points.length < 2) return null;
+  return strokeCentreLine(stroke);
 }
 
 /** What a scatter row and an along row have in common once their instances
@@ -1365,6 +1389,30 @@ export function createGround(): Ground {
    */
   let scatterCells: [number, number][] = [];
   let scatterSig = '';
+  /** The GAME clock of the last worldmap poll (`setGameSeconds`), seconds;
+   *  NaN until the first one, which reads as "no epoch" (`reshuffleEpoch`). */
+  let gameSeconds = NaN;
+  /** The epochs the standing scatter was sampled in (`epochSig`), so a poll
+   *  can tell a turned epoch from the same one again. */
+  let builtEpochSig = '';
+
+  /** The epoch of every row that reshuffles, as one string — empty when no
+   *  row authors an interval, so a world without any never rebuilds for the
+   *  clock. Row identity is area + list + index, exactly the seed's. */
+  function epochSig(): string {
+    const parts: string[] = [];
+    for (const area of payload?.areas ?? []) {
+      readAlongList(area).forEach((e, i) => {
+        const epoch = reshuffleEpoch(gameSeconds, e.reshuffle_min);
+        if (epoch !== undefined) parts.push(`${area.id}/a${i}:${epoch}`);
+      });
+      readScatterList(area).forEach((e, i) => {
+        const epoch = reshuffleEpoch(gameSeconds, e.reshuffle_min);
+        if (epoch !== undefined) parts.push(`${area.id}/s${i}:${epoch}`);
+      });
+    }
+    return parts.join('|');
+  }
   /** Disposables this module created, split by LIFETIME: the base plane's go
    *  when the frame moves, the areas' when the terrain is refetched. One
    *  shared bag would keep every material of every edit alive until teardown —
@@ -1628,6 +1676,31 @@ export function createGround(): Ground {
    * one of them; a prop with a single variant produces the single entry it
    * always produced, down to the same objects in the same order.
    *
+   * WHERE A ROW STANDS AND WHAT IT KEEPS CLEAR OF (plan "Scatter-Erweiterung",
+   * 2026-09-10). A row is one of four kinds — `along` on a stroke's centre
+   * line (`strokeStations`), `edge` on the rim (`scatterEdgeInstances`),
+   * `center` at the pole of inaccessibility (`scatterCenterInstance`), and
+   * `spread` over the cells (`scatterCellInstances`) — and the rows are built
+   * IN THAT ORDER: the along rows by index, then the edge/center rows by
+   * index, then the spread rows by index; area after area in paint order
+   * (`rebuildAreas`, `rebuildScatter`). That order is the order every cell's
+   * OCCUPANCY is filled in: one `OccupancyGrid` per cell, shared by every
+   * area of the pass (`grids`), every survivor filed with the row's own
+   * clearance (`occupyR = clearM`, the measured half-width when a mesh has
+   * landed) and every later candidate judged against it — the grid goes INTO
+   * the sampler as its last verdict, nothing is filtered afterwards. A row
+   * computed for its whole line or rim files its stations into the grid of
+   * the cell each one stands in (`grid` routes by `scatterCellAt`), so a cell
+   * reads the same whether a row was computed for it alone or for the whole
+   * shape — and the map editor's preview (`mapMath.scatterWindowDots`) walks
+   * the very same order with the very same calls, which is what makes a
+   * preview cell the world's cell byte for byte.
+   *
+   * The AXIS of an `aligned` row is the area's — the centre line of a stroke
+   * area, the nearest rim edge of a painted one (`axisAt`) — and a row with
+   * `reshuffle_min` seeds with its epoch of the game clock (`reshuffleEpoch`
+   * over `gameSeconds`); every other seed is what it always was.
+   *
    * WHAT IS DRAWN OF IT is not decided here either: the finished entry is
    * handed straight to `binProp` with the camera of the last tick, so a
    * rebuild (a terrain refetch, a new relief, a crossed cell border) comes into
@@ -1638,7 +1711,8 @@ export function createGround(): Ground {
    * bare ground.
    */
   function buildScatter(area: TerrainArea, ring: Point2[],
-                        occluders: Point2[][], sink: { dispose(): void }[]
+                        occluders: Point2[][], sink: { dispose(): void }[],
+                        grids: Map<string, OccupancyGrid>,
   ): ScatterProp[] {
     const out: ScatterProp[] = [];
     // ONE wind question per area, not per entry: how hard it BLOWS hangs on
@@ -1658,56 +1732,42 @@ export function createGround(): Ground {
     });
     if (!cells.length) return out;
     // THE ROWS THIS AREA GROWS — its scatter over the ground and, on a drawn
-    // line, the rows along it (§ A9 addendum 2026-09-09). Both are the same
+    // line, the rows along it (§ A9 addendum 2026-09-09). All are the same
     // kind of thing from here on (a prop, a height, tiers, wind, sink); only
-    // WHERE the instances stand differs, and that is the `sample` below —
-    // the cell sampler for a scatter row, `strokeStations` for an along row.
-    // The along stations are computed for the whole line (a few hundred at
-    // most) and kept where they fall into a window cell, so a row comes and
-    // goes with the camera exactly like a wood does.
+    // WHERE the instances stand differs, and that is the `sample` below. The
+    // along, edge and center rows are computed for the whole line or rim (a
+    // few hundred at most) and kept where they fall into a window cell, so a
+    // row comes and goes with the camera exactly like a wood does.
     const inWindow = new Set(cells.map(([cx, cz]) => `${cx},${cz}`));
-    const rows: GrownRow[] = readScatterList(area).map((entry, index) => ({
-      entry,
-      index,
-      sample: (variantCount, clearM) => {
-        const pts: ScatterInstance[] = [];
-        const density = Number(entry.density_per_100m2 ?? 0);
-        for (const [cx, cz] of cells) {
-          for (const p of scatterCellInstances({
-            ring,
-            cx,
-            cz,
-            densityPer100m2: density,
-            seed: scatterCellSeed(area.id, index, cx, cz),
-            footprints,
-            clearM,
-            occluders,
-            // HOW FAR THIS ROW'S OWN PROPS STAY APART (authored, 2026-08-23).
-            // Straight through from the entry — the sampler is the one place
-            // that knows where the props already stand, and the map editor's
-            // preview hands the very same number to the very same call.
-            minSpacingM: Number(entry.min_spacing_m) > 0
-              ? Number(entry.min_spacing_m) : undefined,
-            variantCount,
-            // HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-09) — the sampler
-            // answers the finished yaw, so nothing below knows about modes.
-            yawMode: entry.yaw_mode,
-            yawDeg: entry.yaw_deg,
-          })) pts.push(p);
-        }
-        return pts;
-      },
-    }));
-    const stroke = area.meta?.stroke;
-    const along = readAlongList(area);
-    if (stroke && along.length) {
-      const line = strokeCentreLine(stroke);
-      along.forEach((entry, index) => {
+    const windowed = (pts: ScatterInstance[]): ScatterInstance[] => pts.filter(
+      (p) => inWindow.has(`${scatterCellAt(p.x)},${scatterCellAt(p.z)}`));
+    // ONE GRID PER CELL, made when a cell's first candidate asks. `grids` is
+    // the pass's map, shared by every area, so the second area of a cell is
+    // judged against what the first one planted there.
+    const gridOf = (cx: number, cz: number): OccupancyGrid => {
+      const key = `${cx},${cz}`;
+      let g = grids.get(key);
+      if (!g) { g = new OccupancyGrid(); grids.set(key, g); }
+      return g;
+    };
+    const grid: ScatterOccupancy = {
+      blocks: (x, z, r) => gridOf(scatterCellAt(x), scatterCellAt(z)).blocks(x, z, r),
+      add: (x, z, r) => gridOf(scatterCellAt(x), scatterCellAt(z)).add(x, z, r),
+    };
+    const line = strokeLineOf(area);
+    const axisAt = line
+      ? (x: number, z: number) => lineAxis(line, x, z)
+      : (x: number, z: number) => ringEdgeAxis(ring, x, z);
+    const rows: GrownRow[] = [];
+    // 1. THE ROWS ALONG THE LINE, by index. A row without a model plants
+    //    nothing — on the map as in the world.
+    if (line) {
+      readAlongList(area).forEach((entry, index) => {
         if (!entry.model) return;
         rows.push({
           entry,
           index,
-          sample: (variantCount, clearM) => strokeStations({
+          sample: (variantCount, clearM) => windowed(strokeStations({
             line,
             spacingM: entry.spacing_m,
             offsetM: entry.offset_m,
@@ -1715,17 +1775,100 @@ export function createGround(): Ground {
             yawDeg: entry.yaw_deg,
             yawMode: entry.yaw_mode,
             startM: entry.start_m,
-            seed: alongSeed(area.id, index),
+            seed: alongSeed(area.id, index, reshuffleEpoch(gameSeconds, entry.reshuffle_min)),
             footprints,
             clearM,
             occluders,
             variantCount,
             variant: entry.variant,
-          }).filter((p) => inWindow.has(
-            `${scatterCellAt(p.x)},${scatterCellAt(p.z)}`)),
+            occupied: grid,
+            occupyR: clearM,
+          })),
         });
       });
     }
+    const scatterList = readScatterList(area);
+    // 2. THE ROWS ON THE RIM AND AT THE CENTRE, by index.
+    scatterList.forEach((entry, index) => {
+      if (entry.place === 'edge') {
+        rows.push({
+          entry,
+          index,
+          sample: (variantCount, clearM) => windowed(scatterEdgeInstances(ring, {
+            seed: scatterSeed(area.id, index, reshuffleEpoch(gameSeconds, entry.reshuffle_min)),
+            // on an edge row the authored spacing is the station spacing
+            spacingM: Number(entry.min_spacing_m),
+            offsetM: entry.offset_m,
+            yawMode: entry.yaw_mode,
+            yawDeg: entry.yaw_deg,
+            footprints,
+            clearM,
+            occluders,
+            variantCount,
+            occupied: grid,
+            occupyR: clearM,
+          })),
+        });
+      } else if (entry.place === 'center') {
+        rows.push({
+          entry,
+          index,
+          sample: (variantCount, clearM) => windowed(scatterCenterInstance(ring, {
+            seed: scatterSeed(area.id, index, reshuffleEpoch(gameSeconds, entry.reshuffle_min)),
+            yawMode: entry.yaw_mode,
+            yawDeg: entry.yaw_deg,
+            axisAt,
+            variant: entry.variant,
+            footprints,
+            clearM,
+            occluders,
+            variantCount,
+            occupied: grid,
+            occupyR: clearM,
+          })),
+        });
+      }
+    });
+    // 3. THE SPREAD ROWS, by index — the cell sampler, cell by cell.
+    scatterList.forEach((entry, index) => {
+      if (entry.place === 'edge' || entry.place === 'center') return;
+      rows.push({
+        entry,
+        index,
+        sample: (variantCount, clearM) => {
+          const pts: ScatterInstance[] = [];
+          const density = Number(entry.density_per_100m2 ?? 0);
+          const epoch = reshuffleEpoch(gameSeconds, entry.reshuffle_min);
+          for (const [cx, cz] of cells) {
+            for (const p of scatterCellInstances({
+              ring,
+              cx,
+              cz,
+              densityPer100m2: density,
+              seed: scatterCellSeed(area.id, index, cx, cz, epoch),
+              footprints,
+              clearM,
+              occluders,
+              // HOW FAR THIS ROW'S OWN PROPS STAY APART (authored, 2026-08-23).
+              // Straight through from the entry — the sampler is the one place
+              // that knows where the props already stand, and the map editor's
+              // preview hands the very same number to the very same call.
+              minSpacingM: Number(entry.min_spacing_m) > 0
+                ? Number(entry.min_spacing_m) : undefined,
+              variantCount,
+              // HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-09) — the sampler
+              // answers the finished yaw, so nothing below knows about modes.
+              yawMode: entry.yaw_mode,
+              yawDeg: entry.yaw_deg,
+              axisAt,
+              occupied: gridOf(cx, cz),
+              occupyR: clearM,
+            })) pts.push(p);
+          }
+          return pts;
+        },
+      });
+    });
     rows.forEach(({ entry, sample }) => {
       // An entry WITH a model gets its cone at the height the mesh will have —
       // the cone is that prop's stand-in, and a knee-high one that turns into
@@ -2461,10 +2604,14 @@ export function createGround(): Ground {
    * in the very same places.
    */
   function rebuildScatter(): void {
+    // The grids of THIS pass — one per cell, shared by every area, thrown
+    // away with the pass (`buildScatter`).
+    const grids = new Map<string, OccupancyGrid>();
+    builtEpochSig = epochSig();
     for (const a of areaMeshes) {
       disposeProps(a.scatter);
       drain(a.scatterOwned);
-      a.scatter = buildScatter(a.area, a.ring, a.occluders, a.scatterOwned);
+      a.scatter = buildScatter(a.area, a.ring, a.occluders, a.scatterOwned, grids);
       for (const prop of a.scatter) {
         group.add(prop.low);
         if (prop.high) group.add(prop.high);
@@ -2559,6 +2706,10 @@ export function createGround(): Ground {
 
     const next: AreaMesh[] = [];
     const nextOwned: { dispose(): void }[] = [];
+    /** the occupancy of this pass — one grid per cell over every area, see
+     *  `buildScatter` */
+    const grids = new Map<string, OccupancyGrid>();
+    builtEpochSig = epochSig();
     /** every painted shape as the undergrowth field reads it — collected in
      *  LIST ORDER, because that is the stacking order its occluders rely on */
     const undergrowthAreas: UndergrowthArea[] = [];
@@ -2614,7 +2765,7 @@ export function createGround(): Ground {
       // time the camera's cell window moves, while the drape material above
       // lives in `nextOwned` and stands until the terrain itself changes.
       const scatterOwned: { dispose(): void }[] = [];
-      const scatter = buildScatter(area, built.ring, occluders, scatterOwned);
+      const scatter = buildScatter(area, built.ring, occluders, scatterOwned, grids);
       next.push({ scatter, area, ring: built.ring, occluders, scatterOwned });
       // …and what grows here without anybody having said so (§ A9). The FIELD
       // grows it, per 64 m cell around the anchor (`scene/undergrowth.ts`), so
@@ -3410,6 +3561,13 @@ export function createGround(): Ground {
       for (const a of areaMeshes) {
         for (const prop of a.scatter) binProp(prop, lodCam);
       }
+    },
+    setGameSeconds(total) {
+      if (!Number.isFinite(total)) return;
+      gameSeconds = total;
+      // A turned epoch is a moved window: the same whole rebuild a crossed
+      // cell border costs, and nothing at all while every epoch stands.
+      if (areaMeshes.length && epochSig() !== builtEpochSig) rebuildScatter();
     },
     scatterTiers() {
       const out: { variants: Record<string, string>; url: string }[] = [];

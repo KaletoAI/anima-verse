@@ -610,6 +610,9 @@ export interface TerrainAlongEntry {
   height_m?: number;
   /** A pinned model-variant list position for the whole row. */
   variant?: number;
+  /** Reshuffle every this many GAME minutes (`reshuffleEpoch`); absent =
+   *  the row never moves. */
+  reshuffle_min?: number;
   prop_height_m?: number;
   sway_factor?: number;
   ground_offset_m?: number;
@@ -645,6 +648,21 @@ export interface TerrainScatterEntry {
   /** The angle of `yaw_mode` in degrees (0..360): 0 parallel to the rim, 90
    *  facing in, 270 facing out; stored only beside a mode. */
   yaw_deg?: number;
+  /** WHERE the row stands (2026-09-10): absent = spread over the ground
+   *  (`scatterCellInstances`), `edge` = a station every `min_spacing_m`
+   *  along the rim (`scatterEdgeInstances`), `center` = the one pole of
+   *  inaccessibility (`scatterCenterInstance`). */
+  place?: 'edge' | 'center';
+  /** How far an `edge` row stands INSIDE the rim, metres; stored only with
+   *  `place: "edge"`; absent = 0. */
+  offset_m?: number;
+  /** A pinned model-variant list position for a `center` row (clamped to
+   *  the count); stored only with `place: "center"`. */
+  variant?: number;
+  /** Reshuffle every this many GAME minutes: the seed grows an epoch tail
+   *  (`reshuffleEpoch`), so the row is a different draw every interval.
+   *  Absent = never. */
+  reshuffle_min?: number;
   /** The REAL height of the prop behind `model`, in metres, from its library
    *  record — added by `GET /play/terrain`, never stored and never authored.
    *  It is the target height when the entry authors none, so a tree scatters

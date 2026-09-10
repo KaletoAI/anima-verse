@@ -597,6 +597,7 @@ export function MapDraftPreview({
                 onEdgeInsert={NOOP}
                 scatterPreview={false}
                 footprints={NO_FOOTPRINTS}
+                gameSeconds={NaN}
               />
               {heightAreas.length ? (
                 <HeightLayer

@@ -145,6 +145,10 @@ export interface WorldmapPayload {
    *  `app/core/relief.py` falls back to. */
   max_step_height_m?: number
   max_slope_deg?: number
+  /** The world clock (§ A11). The editor reads ONE field of it: the game
+   *  seconds the reshuffling scatter rows take their epoch from
+   *  (`reshuffleEpoch`) — a snapshot as of this load, never polled. */
+  game_time?: { total_seconds?: number }
 }
 
 /**
@@ -177,18 +181,35 @@ export interface TerrainScatterEntry {
    *  whose spacing does not fit its density simply ends up thinner
    *  (`@anima/scene-render` → `minSpacingM`). */
   min_spacing_m?: number
-  /** How the instances are TURNED (§ A9, 2026-09-09): absent = random,
-   *  `fixed` = every instance at `yaw_deg`, `quarter` = `yaw_deg` plus a
-   *  random multiple of 90° — for buildings along a grid. The server stores
-   *  `yaw_deg` only beside a mode. */
+  /** How the instances are TURNED (§ A9, 2026-09-10): absent = random,
+   *  `aligned` = `yaw_deg` relative to the local surface axis — the nearest
+   *  polygon edge, or the centre line of a stroke area — so 0 stands parallel
+   *  to the rim, 90 looks into the area, 270 out. The server stores `yaw_deg`
+   *  only beside a mode. */
   yaw_mode?: ScatterYawMode
-  /** The base angle of `yaw_mode` in degrees, 0..360. */
+  /** The angle of `yaw_mode` in degrees, 0..360. */
   yaw_deg?: number
+  /** WHERE the row stands (2026-09-10): absent = spread over the ground,
+   *  `edge` = a station every `min_spacing_m` along the rim, `offset_m`
+   *  inside it; `center` = the one pole of inaccessibility of the shape. */
+  place?: ScatterPlaceMode
+  /** How far an `edge` row stands INSIDE the rim, metres (0..100); stored
+   *  only with `place: "edge"`; absent = 0. */
+  offset_m?: number
+  /** A pinned model-variant list position for a `center` row; stored only
+   *  with `place: "center"`. */
+  variant?: number
+  /** Reshuffle every this many GAME minutes (1..100000): the seed grows an
+   *  epoch tail (`reshuffleEpoch`) and the row is a different draw every
+   *  interval. Absent = never. */
+  reshuffle_min?: number
 }
 
 /** Server mirror — `app/models/terrain.SCATTER_YAW_MODES`. */
-export type ScatterYawMode = 'fixed' | 'quarter'
-export const SCATTER_YAW_MODES: readonly ScatterYawMode[] = ['fixed', 'quarter']
+export type ScatterYawMode = 'aligned'
+export const SCATTER_YAW_MODES: readonly ScatterYawMode[] = ['aligned']
+/** Server mirror — `app/models/terrain.SCATTER_PLACE_MODES`. */
+export type ScatterPlaceMode = 'edge' | 'center'
 
 /** One kind of ground in the effective catalog (§ A1.5). `passable`,
  *  `speed_factor` and the two clip keys come from HERE and nowhere else —
@@ -297,6 +318,9 @@ export interface TerrainAlongEntry {
   /** A pinned model-variant list position for the whole row (a lamp row is
    *  one lamp); absent = the shared variant formula over the station. */
   variant?: number
+  /** Reshuffle every this many GAME minutes — see
+   *  `TerrainScatterEntry.reshuffle_min`. Absent = never. */
+  reshuffle_min?: number
 }
 
 /** What a freshly added row starts as: a lamp every 20 m, on the line, right
@@ -334,6 +358,10 @@ export function readAlong(stroke: unknown): TerrainAlongEntry[] {
     const variant = num(e.variant)
     if (variant !== undefined && variant >= 0 && Number.isInteger(variant)) {
       entry.variant = variant
+    }
+    const reshuffle = num(e.reshuffle_min)
+    if (reshuffle !== undefined && reshuffle >= 1 && Number.isInteger(reshuffle)) {
+      entry.reshuffle_min = reshuffle
     }
     out.push(entry)
   }
@@ -533,10 +561,30 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
     if (Number.isFinite(height) && height > 0) entry.height_m = height
     if (Number.isFinite(spacing) && spacing > 0) entry.min_spacing_m = spacing
     if (typeof e.model === 'string' && e.model) entry.model = e.model
-    if (e.yaw_mode === 'fixed' || e.yaw_mode === 'quarter') {
+    if (e.yaw_mode === 'aligned') {
       entry.yaw_mode = e.yaw_mode
       const yaw = Number(e.yaw_deg)
       entry.yaw_deg = Number.isFinite(yaw) ? yaw : 0
+    }
+    // The placement and what belongs to it alone: the offset to an edge row,
+    // the pinned variant to a centre row — the pairing the server stores.
+    const num = (v: unknown): number | undefined =>
+      (typeof v === 'number' && Number.isFinite(v)) ? v : undefined
+    if (e.place === 'edge' || e.place === 'center') {
+      entry.place = e.place
+      const offset = num(e.offset_m)
+      if (e.place === 'edge' && offset !== undefined && offset > 0) {
+        entry.offset_m = offset
+      }
+      const variant = num(e.variant)
+      if (e.place === 'center' && variant !== undefined && variant >= 0
+        && Number.isInteger(variant)) {
+        entry.variant = variant
+      }
+    }
+    const reshuffle = num(e.reshuffle_min)
+    if (reshuffle !== undefined && reshuffle >= 1 && Number.isInteger(reshuffle)) {
+      entry.reshuffle_min = reshuffle
     }
     out.push(entry)
   }

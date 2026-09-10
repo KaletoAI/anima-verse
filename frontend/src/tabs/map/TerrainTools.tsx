@@ -580,7 +580,7 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                 <option value="">{t('Random')}</option>
                 {SCATTER_YAW_MODES.map((m) => (
                   <option key={m} value={m}>
-                    {m === 'fixed' ? t('Fixed') : t('90° steps')}
+                    {m === 'aligned' ? t('Aligned') : m}
                   </option>
                 ))}
               </select>

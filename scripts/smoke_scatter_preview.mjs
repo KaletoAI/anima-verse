@@ -248,16 +248,23 @@
  *     that 0.40 as a literal — if the builder ever estimates differently, the
  *     lists stop matching, which is the point of pinning it.
  * (F1) Cell (0,0) has NO footprint and NO occluder over it, and it lies whole
- *      inside the area, so its 205 candidates are all accepted: 205 dots, the
- *      authored density to the dot (205 / 40.96 = 5.005 per 100 m2 against an
- *      authored 5 — the rounding of 204.8, nothing else).
+ *      inside the area, so its 205 candidates pass every verdict but the last
+ *      one: the cell's OCCUPANCY (2026-09-10). A survivor is filed with the
+ *      tuft's 0.4 m clearance and a later candidate whose own 0.4 m circle
+ *      overlaps one — closer than 0.8 m, strictly — is subtracted. So the cell
+ *      draws its 205 candidates LESS the ones within 0.8 m of an earlier
+ *      survivor: that rule, applied by hand over the same stream without the
+ *      grid, is the expected count; it bites here (fewer than 205), and it
+ *      never adds — the dots are a subset of the free run.
  * (F2) Cell (1,0) carries the footprint, cell (2,0) the occluder, so both draw
  *      FEWER than 205 — a preview that ignored either would show 205 there
  *      too, and this is the red counter-probe that says the exclusions really
  *      ran.
  * (F3) THE PIN: `scatterWindowDots` over the three cells === the concatenation
  *      of three direct `scatterCellInstances` calls with
- *      `scatterCellSeed('ta_pin', 0, cx, 0)`, byte for byte (JSON).
+ *      `scatterCellSeed('ta_pin', 0, cx, 0)`, each with a fresh
+ *      `OccupancyGrid` of its own (one grid per cell, and this is the only
+ *      row), byte for byte (JSON).
  * (F4) …and no instance carries a `variant` key on EITHER side: the map
  *      editor reads no variant maps (`readScatter` whitelists four fields),
  *      so a mix would itself be a mismatch with what the builder asks for.
@@ -349,10 +356,17 @@
  * (I6) WHAT IS DRAWN NOW. Each cell draws its 205 candidates over 4 096 m2 and
  *      keeps the ones inside the ring, so one row is expected at
  *      205 · 89 646.28 / 4 096 = 4 486.7 and both at 8 973 — the authored
- *      8 964 to within the rounding of 204.8 to 205. Pinned as a ±5 % band
- *      around that hand-derived expectation, because an exact count of a
- *      seeded sample would be a recording. Against the 16 dots of before that
- *      is a factor above 250.
+ *      8 964 to within the rounding of 204.8 to 205 — BEFORE the cell's
+ *      occupancy (2026-09-10): the two rows are tufts (0.4 m clearance), and
+ *      a candidate within 0.8 m of anything planted earlier in its cell — a
+ *      survivor of row 0, then of row 1 — is subtracted. The count is pinned
+ *      EXACTLY against that rule applied by hand over the free streams of
+ *      both rows, cell by cell; and as a band: the thinning is a few percent
+ *      (at 5 per 100 m2 a 0.8 m disc holds 0.1 expected props, so row 0
+ *      loses about 5 % and row 1, judged against both, about 14 %), so the
+ *      wood stands between 85 % and 100 % of 8 973 — and an exact count of a
+ *      seeded sample alone would be a recording. Against the 16 dots of
+ *      before that is still a factor above 250.
  * (I7) THE BADGE, on the one area that was approximated. Its rows keep
  *      floor(w · 4 000 / 2 005 020): 283, 28, 851, 851, 283, 283, 1 418 =
  *      3 997 dots of 2 005 020 props -> "0.20", hung on its centroid
@@ -360,8 +374,75 @@
  * (I8) `scatterThinnedDots` is `scatterThinnedByArea` without its badges,
  *      byte for byte — one sample, two readings of it. RED COUNTER-PROBE: the
  *      new picture is not the old 16 dots.
+ *
+ * ============================================================================
+ * (K) THE MANDATED ORDER — along, edge, spread in ONE cell (2026-09-10)
+ * ============================================================================
+ * Both renderers plant a cell in one order and against one occupancy grid:
+ * the `along` rows of the area by index, then its `edge`/`center` rows by
+ * index, then its `spread` rows by index — area after area in paint order.
+ * The preview (`scatterWindowDots`) must therefore be the SAME points the
+ * shared functions answer when called by hand in that order.
+ *
+ * THE FIXTURE: one stroke area `ta_row`, a straight road (10,30)->(50,30),
+ * 10 m wide, so its ribbon is the rectangle (10,25)-(50,25)-(50,35)-(10,35).
+ * All of it lies in cell (0,0) = [0,64)², the ONE cell of the viewport
+ * 0..63 by 0..63. Three rows:
+ *
+ *   along[0]   a 4 m lamp every 8 m ON the line (offset 0)
+ *   scatter[0] place edge: a 2 m tree every 10 m of rim, 2 m inside it,
+ *              aligned at 90° (looking into the ribbon); density 0 — the
+ *              density has no effect on an edge row and MUST NOT drop it
+ *   scatter[1] spread: 2 m bushes at 40 per 100 m2, aligned at 0°,
+ *              reshuffling every 10 game minutes
+ *
+ * THE LAMPS (K1). L = 40, spacing 8, start = 4: s = 4, 12, 20, 28, 36 ->
+ * x = 14, 22, 30, 38, 46 at z = 30. Facing the walking direction, π/2.
+ * Editor clearance h·0.5 = 2 m; 8 m apart, so none blocks another. The
+ * lamps are the 3rd colour (2 scatter rows + row 0 -> `entry` 2).
+ *
+ * THE TREES (K2). Perimeter 40 + 10 + 40 + 10 = 100, spacing 10, start 5:
+ * s = 5, 15, …, 95 — ten stations k = 0..9. The axis of every edge faces so
+ * that axis + 90° points INTO the ribbon (`ringEdgeAxis` convention):
+ *   bottom (10,25)->(50,25): heading π/2, the +90° facing (0,−1) is outside
+ *          -> axis 3π/2, inward 0 -> (0, +1): stations pushed to z = 27
+ *   right  (50,25)->(50,35): heading 0, facing (+1,0) outside -> axis π,
+ *          inward 3π/2 -> (−1, 0): s = 45 is (50,30) -> (48,30)
+ *   top    (50,35)->(10,35): heading 3π/2, facing (0,+1) outside -> axis
+ *          π/2, inward π -> (0,−1): stations pushed to z = 33
+ *   left   (10,35)->(10,25): heading π, facing (−1,0) outside -> axis 0,
+ *          inward π/2 -> (+1, 0): s = 95 is (10,30) -> (12,30)
+ * k: 0 (15,27) 1 (25,27) 2 (35,27) 3 (45,27) 4 (48,30) 5 (45,33) 6 (35,33)
+ *    7 (25,33) 8 (15,33) 9 (12,30).
+ * Tree clearance h·0.5 = 1 m. The lamps stand first, with 2 m: k = 4 is 2 m
+ * from the lamp at (46,30), 2 < 1 + 2 -> BLOCKED; k = 9 is 2 m from (14,30)
+ * -> BLOCKED. Every other station keeps its distance: (15,27) to (14,30) is
+ * √10 = 3.16 > 3, (45,27) to (46,30) the same. EIGHT trees survive, ordinals
+ * 0 1 2 3 5 6 7 8 — and each keeps the variant of its ORDINAL
+ * (`scatterVariantIndex(seed, k, 3)`), not of its place among the survivors.
+ * Yaw: bottom 3π/2 + π/2 = 2π -> 0, top π/2 + π/2 = π.
+ *
+ * THE BUSHES (K3). The spread row samples the whole cell and keeps the ribbon's
+ * share (`scatterCellInstances`); with the grid it is the SAME stream MINUS
+ * the candidates that overlap something planted before them: a lamp within
+ * 1 + 2 = 3 m, a tree within 1 + 1 = 2 m, or an earlier bush of the row within
+ * 1 + 1 = 2 m (a survivor is filed too). So the occupied run is a SUBSET of
+ * the unoccupied one, strictly smaller here, every survivor keeps those
+ * distances, every dropped point breaks one of them against a lamp, a tree or
+ * a bush that survived BEFORE it — and a survivor keeps the variant it had.
+ * The bushes are aligned at 0°: on a stroke area the axis is the walking
+ * direction of the centre line (`lineAxis`), π/2 for every one of them.
+ *
+ * THE EPOCH (K4). `reshuffle_min` 10 -> epoch = floor(seconds / 600):
+ * game second 1 234 is epoch 2 and the seed grows `:e2`; 599 is epoch 0 and
+ * 600 epoch 1 — a different picture; no clock at all is the seed without a
+ * tail. The lamps author no interval and never move.
+ *
+ * THE ORDER (K5) is pinned in BOTH sources: the samplers are called along ->
+ * edge -> center -> spread, every call carries the cell's `occupied` grid
+ * with `occupyR` = the row's clearance and the area's `axisAt`.
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -369,6 +450,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SRC = join(ROOT, 'frontend/src/tabs/map/mapMath.ts');
 const SCATTER_SRC = join(ROOT, 'packages/scene-render/src/scatter.ts');
+const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
 
 /** Bundled and imported — `mapMath` pulls in the workspace package
  *  `@anima/scene-render`, which esbuild resolves and inlines. */
@@ -379,6 +461,31 @@ async function loadBundled(src, prefix) {
     const file = join(dir, 'module.mjs');
     await esbuild.build({
       entryPoints: [src], outfile: file, bundle: true, format: 'esm',
+      platform: 'neutral', logLevel: 'silent', absWorkingDir: ROOT,
+    });
+    return await import(`file://${file}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** The shared functions the CLIENT calls, straight out of the package — the
+ *  other side of the (K) equality. Bundled from a stdin entry because the
+ *  outline samplers live in a second module beside `scatter.ts`. */
+async function loadShared() {
+  const esbuild = await import('esbuild');
+  const dir = await mkdtemp(join(tmpdir(), 'scattershared-'));
+  try {
+    const file = join(dir, 'shared.mjs');
+    await esbuild.build({
+      stdin: {
+        contents: "export { strokeStations, strokeCentreLine, alongSeed,"
+          + " scatterEdgeInstances, scatterSeed, scatterCellInstances,"
+          + " scatterCellSeed, OccupancyGrid, lineAxis, reshuffleEpoch,"
+          + " scatterVariantIndex, scatterClearM } from '@anima/scene-render';\n",
+        resolveDir: ROOT, sourcefile: 'smoke-shared.mjs', loader: 'js',
+      },
+      outfile: file, bundle: true, format: 'esm',
       platform: 'neutral', logLevel: 'silent', absWorkingDir: ROOT,
     });
     return await import(`file://${file}`);
@@ -435,8 +542,29 @@ async function main() {
   } = await loadBundled(SRC, 'scatterpreview-');
   const {
     scatterWantedCount, SCATTER_MAX_PER_ENTRY, scatterCellInstances,
-    scatterCellSeed, SCATTER_CELL_M, SCATTER_CELLS_MAX,
+    scatterCellSeed, SCATTER_CELL_M, SCATTER_CELLS_MAX, scatterCellsInBox,
   } = await loadBundled(SCATTER_SRC, 'scattercount-');
+  /** the cells of a box clipped to a viewport — what the window walks */
+  const scatterCellsInBoxOf = (bMinX, bMinZ, bMaxX, bMaxZ, rect) => scatterCellsInBox(
+    Math.max(rect.min_x, bMinX), Math.max(rect.min_z, bMinZ),
+    Math.min(rect.max_x, bMaxX), Math.min(rect.max_z, bMaxZ));
+  const {
+    strokeStations, strokeCentreLine, alongSeed, scatterEdgeInstances,
+    scatterSeed, scatterCellSeed: cellSeed, scatterCellInstances: cellInstances,
+    OccupancyGrid, lineAxis, reshuffleEpoch, scatterVariantIndex, scatterClearM,
+  } = await loadShared();
+  /** THE OCCUPANCY RULE BY HAND (F1, I6): walk a free run in stream order and
+   *  keep a point unless it stands closer than `r + r` to one already kept
+   *  (or to anything in `planted` before it) — what the grid does inside the
+   *  sampler, spelled out. */
+  const keepClear = (points, r, planted = []) => {
+    const kept = [];
+    for (const p of points) {
+      const all = planted.concat(kept);
+      if (all.every((q) => Math.hypot(p.x - q.x, p.z - q.z) >= 2 * r)) kept.push(p);
+    }
+    return kept;
+  };
 
   console.log('(A) the reporting world — four areas, sixteen rows');
   /** area m2 + the authored densities, in the server's bottom-to-top order */
@@ -543,7 +671,7 @@ async function main() {
   /** the tuft's clearance, by hand: 0.8 m tall, as wide as it is tall,
    *  half of that kept clear -> 0.40 m */
   const CLEAR_M = 0.4;
-  const cellDirect = (cx, cz) => scatterCellInstances({
+  const cellDirect = (cx, cz, occupied = new OccupancyGrid()) => scatterCellInstances({
     ring: AREA_RING,
     cx,
     cz,
@@ -552,7 +680,12 @@ async function main() {
     footprints: FOOTPRINTS,
     clearM: CLEAR_M,
     occluders: [COVER_RING],
+    // the ONE grid of the cell, and this is its only row (F3)
+    occupied: occupied ?? undefined,
+    occupyR: CLEAR_M,
   }).map((p) => ({ x: p.x, z: p.z, entry: 0 }));
+  /** …and the same cell WITHOUT the grid — the free stream (F1) */
+  const cellFree = (cx, cz) => cellDirect(cx, cz, null);
 
   console.log('\n(E) the mode switch — PER AREA, on what THAT area would cost');
   const jobs = scatterPreviewJobs(AREAS);
@@ -641,10 +774,15 @@ async function main() {
   console.log('\n(F) the 1:1 pin — the preview draws the client\'s instances');
   const dots = scatterWindowDots(jobs, RECT, FOOTPRINTS);
   const inCell = (cx) => dots.filter((d) => d.x >= cx * 64 && d.x < (cx + 1) * 64);
-  check('F1 the untouched cell draws its full 205 — the authored density',
-    [inCell(0).length,
-      Math.round((inCell(0).length / ((64 * 64) / 100)) * 1000) / 1000],
+  const free0 = cellFree(0, 0);
+  const ruled0 = keepClear(free0, CLEAR_M);
+  check('F1 the untouched cell offers its full 205 — the authored density',
+    [free0.length, Math.round((free0.length / ((64 * 64) / 100)) * 1000) / 1000],
     [205, 5.005]);
+  check('F1 …and draws them less the ones within 0.8 m of an earlier survivor',
+    [inCell(0).length, inCell(0).length < 205,
+      inCell(0).every((d) => free0.some((f) => f.x === d.x && f.z === d.z))],
+    [ruled0.length, true, true]);
   check('F2 the footprint and the covering area SUBTRACT from the other two',
     [inCell(1).length < 205, inCell(2).length < 205,
       inCell(1).length > 0, inCell(2).length > 0],
@@ -874,10 +1012,29 @@ async function main() {
   const trueJobs = wj.filter((j) => mPlan.trueIds.includes(j.areaId));
   const thinJobs = wj.filter((j) => !mPlan.trueIds.includes(j.areaId));
   const exactDots = scatterWindowDots(trueJobs, MIX_RECT, []);
-  const wood = exactDots.filter((d) => d.entry === 0 || d.entry === 1).length;
+  // The wood's dots are the ones in ITS box: the grass patch (entry 0 as
+  // well) lies above that box, so the box tells the two apart.
+  const [wMinX, wMinZ, wMaxX, wMaxZ] = trueJobs
+    .filter((j) => j.areaId === 'ta_63926f52').map((j) => j.box)[0];
+  const wood = exactDots.filter((d) => d.x >= wMinX && d.x <= wMaxX
+    && d.z >= wMinZ && d.z <= wMaxZ).length;
   const expectWood = Math.round((205 * FOREST_M2 * 2) / 4096);
-  check('I6 the wood now draws its own trees, within 5 % of the expected 8 973',
-    [expectWood, wood > expectWood * 0.95 && wood < expectWood * 1.05],
+  // …and the occupancy rule by hand over both rows, cell by cell: row 0's
+  // survivors first, row 1 judged against those and its own.
+  let ruledWood = 0;
+  for (const [cx, cz] of scatterCellsInBoxOf(wMinX, wMinZ, wMaxX, wMaxZ, MIX_RECT)) {
+    const freeRow = (i) => cellInstances({
+      ring: FOREST_RING, cx, cz, densityPer100m2: 5,
+      seed: cellSeed('ta_63926f52', i, cx, cz), clearM: 0.4,
+    });
+    const first = keepClear(freeRow(0), 0.4);
+    const second = keepClear(freeRow(1), 0.4, first);
+    ruledWood += first.length + second.length;
+  }
+  check('I6 the wood draws its trees less the 0.8 m overlaps, exactly by the rule',
+    wood, ruledWood);
+  check('I6 …which is 85..100 % of the 8 973 the free streams offer',
+    [expectWood, wood > expectWood * 0.85 && wood < expectWood],
     [8973, true]);
   // THE HEADLINE, and the reason the round exists: 16 dots became thousands.
   check('I6 …which is more than 250 times the 16 dots of before',
@@ -962,6 +1119,172 @@ async function main() {
   // hectares, and that is the number a "5 per 100 m2" row is read against.
   check('J9 the reporting world’s wood reads as itself',
     formatAreaM2(89646.28), `89${NBSP}646 m² (8.96 ha)`);
+
+  console.log('\n(K) the mandated order — along, edge, spread in ONE cell');
+  const ROAD_RING = [[10, 25], [50, 25], [50, 35], [10, 35]];
+  const ROAD_LINE = [[10, 30], [50, 30]];
+  const ROAD = {
+    id: 'ta_row', kind: 'road', polygon: ROAD_RING,
+    meta: {
+      stroke: {
+        points: ROAD_LINE, width_m: 10,
+        along: [{ model: '/lamp', spacing_m: 8, offset_m: 0, height_m: 4 }],
+      },
+      scatter: [
+        { density_per_100m2: 0, model: '/tree', height_m: 2, min_spacing_m: 10,
+          place: 'edge', offset_m: 2, yaw_mode: 'aligned', yaw_deg: 90 },
+        { density_per_100m2: 40, model: '/bush', height_m: 2,
+          yaw_mode: 'aligned', yaw_deg: 0, reshuffle_min: 10 },
+      ],
+    },
+  };
+  const ONE_CELL = { min_x: 0, min_z: 0, max_x: 63, max_z: 63 };
+  const GAME_S = 1234;
+  const dot = (entry) => (p) => ({ x: p.x, z: p.z, entry });
+  const near = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+
+  // THE CLIENT SIDE BY HAND: the three calls in the mandated order, one grid.
+  const clientRows = (seconds, variantCount) => {
+    const grid = new OccupancyGrid();
+    const line = strokeCentreLine(ROAD.meta.stroke);
+    const axisAt = (x, z) => lineAxis(line, x, z);
+    const lamps = strokeStations({
+      line, spacingM: 8, offsetM: 0, seed: alongSeed('ta_row', 0),
+      footprints: [], occluders: [], clearM: scatterClearM(4),
+      occupied: grid, occupyR: scatterClearM(4), variantCount,
+    });
+    const trees = scatterEdgeInstances(ROAD_RING, {
+      seed: scatterSeed('ta_row', 0), spacingM: 10, offsetM: 2,
+      yawMode: 'aligned', yawDeg: 90, footprints: [], occluders: [],
+      clearM: scatterClearM(2), occupied: grid, occupyR: scatterClearM(2),
+      variantCount,
+    });
+    const bushes = cellInstances({
+      ring: ROAD_RING, cx: 0, cz: 0, densityPer100m2: 40,
+      seed: cellSeed('ta_row', 1, 0, 0, reshuffleEpoch(seconds, 10)),
+      footprints: [], occluders: [], clearM: scatterClearM(2),
+      yawMode: 'aligned', yawDeg: 0, axisAt,
+      occupied: grid, occupyR: scatterClearM(2), variantCount,
+    });
+    return { lamps, trees, bushes };
+  };
+  const client = clientRows(GAME_S);
+
+  // (K1) the lamps
+  check('K1 five lamps at x = 14 22 30 38 46, z = 30, all facing π/2',
+    client.lamps.map((p) => [p.x, p.z, p.yaw]),
+    [14, 22, 30, 38, 46].map((x) => [x, 30, Math.PI / 2]));
+  check('K1 …the tree row is an edge row and the road grows both rows',
+    scatterPreviewJobs([ROAD]).map((j) => [j.kind, j.index]),
+    [['along', 0], ['edge', 0], ['spread', 1]]);
+  // (K2) the trees — eight of ten stations, by hand
+  check('K2 eight trees: the two stations 2 m from a lamp are subtracted',
+    client.trees.map((p) => [p.x, p.z]),
+    [[15, 27], [25, 27], [35, 27], [45, 27], [45, 33], [35, 33], [25, 33], [15, 33]]);
+  check('K2 …bottom rim looks in at 0, top rim at π',
+    client.trees.map((p) => Math.round(p.yaw * 1e9) / 1e9),
+    [0, 0, 0, 0, Math.PI, Math.PI, Math.PI, Math.PI].map((v) => Math.round(v * 1e9) / 1e9));
+  const mixed = clientRows(GAME_S, 3);
+  check('K2 …with three variants the same eight stand',
+    mixed.trees.map((p) => [p.x, p.z]), client.trees.map((p) => [p.x, p.z]));
+  check('K2 …each carrying the variant of its ORDINAL 0 1 2 3 5 6 7 8',
+    mixed.trees.map((p) => p.variant),
+    [0, 1, 2, 3, 5, 6, 7, 8].map((k) => scatterVariantIndex(scatterSeed('ta_row', 0), k, 3)));
+  // (K3) the bushes — the same stream, minus what overlaps
+  const free = cellInstances({
+    ring: ROAD_RING, cx: 0, cz: 0, densityPer100m2: 40,
+    seed: cellSeed('ta_row', 1, 0, 0, reshuffleEpoch(GAME_S, 10)),
+    clearM: scatterClearM(2), yawMode: 'aligned', yawDeg: 0,
+    axisAt: (x, z) => lineAxis(strokeCentreLine(ROAD.meta.stroke), x, z),
+    variantCount: 3,
+  });
+  const key = (p) => `${p.x},${p.z}`;
+  const kept = new Set(mixed.bushes.map(key));
+  check('K3 the occupied run is strictly smaller than the free one',
+    mixed.bushes.length < free.length && free.length > 0, true);
+  check('K3 …and a subset of it, in stream order',
+    free.filter((p) => kept.has(key(p))).map(key), mixed.bushes.map(key));
+  const clearOf = (p, planted) => planted.every((q) => near(p, q) >= 2)
+    && client.lamps.every((q) => near(p, q) >= 3);
+  check('K3 every survivor keeps 3 m from a lamp, 2 m from a tree and a bush',
+    mixed.bushes.every((p, i) => clearOf(p,
+      client.trees.concat(mixed.bushes.slice(0, i)))), true);
+  check('K3 …and every dropped candidate broke one of those distances',
+    free.filter((p) => !kept.has(key(p))).every((p) => {
+      const before = mixed.bushes.filter((q) => free.findIndex((f) => key(f) === key(q))
+        < free.findIndex((f) => key(f) === key(p)));
+      return !clearOf(p, client.trees.concat(before));
+    }), true);
+  check('K3 a survivor keeps the variant it had without the grid',
+    mixed.bushes.map((p) => p.variant),
+    mixed.bushes.map((p) => free.find((f) => key(f) === key(p)).variant));
+  check('K3 on a stroke area every bush is aligned to the line, π/2',
+    mixed.bushes.every((p) => Math.abs(p.yaw - Math.PI / 2) < 1e-12), true);
+  // THE PREVIEW, against it
+  const roadJobs = scatterPreviewJobs([ROAD]);
+  const preview = scatterWindowDots(roadJobs, ONE_CELL, [], { gameSeconds: GAME_S });
+  const clientDots = [
+    ...client.lamps.map(dot(2)), ...client.trees.map(dot(0)), ...client.bushes.map(dot(1)),
+  ];
+  check('K3 the preview IS the client call — same points, same order, same colours',
+    preview, clientDots);
+  check('K3 …and not the picture without the grid',
+    preview.filter((d) => d.entry === 1).length < free.length, true);
+  // (K4) the epoch
+  check('K4 game second 1 234 is epoch 2 of a 10-minute interval; 599 is 0, 600 is 1',
+    [reshuffleEpoch(1234, 10), reshuffleEpoch(599, 10), reshuffleEpoch(600, 10)],
+    [2, 0, 1]);
+  const at = (seconds) => scatterWindowDots(roadJobs, ONE_CELL, [], { gameSeconds: seconds })
+    .filter((d) => d.entry === 1);
+  differs('K4 the bushes of epoch 0 are not the bushes of epoch 1', at(599), at(600));
+  check('K4 …within an epoch they stand still', at(600), at(1199));
+  check('K4 …and no clock at all is the seed without a tail',
+    scatterWindowDots(roadJobs, ONE_CELL, []).filter((d) => d.entry === 1),
+    cellInstances({
+      ring: ROAD_RING, cx: 0, cz: 0, densityPer100m2: 40,
+      seed: cellSeed('ta_row', 1, 0, 0), clearM: 1, yawMode: 'aligned', yawDeg: 0,
+      occupied: (() => {
+        const g = new OccupancyGrid();
+        for (const p of client.lamps) g.add(p.x, p.z, 2);
+        for (const p of client.trees) g.add(p.x, p.z, 1);
+        return g;
+      })(),
+      occupyR: 1,
+    }).map(dot(1)));
+  check('K4 the lamps never move with the clock',
+    [at(599).length > 0, scatterWindowDots(roadJobs, ONE_CELL, [], { gameSeconds: 599 })
+      .filter((d) => d.entry === 2)].flat(),
+    [true, ...client.lamps.map(dot(2))]);
+  // (K5) the order, pinned in both sources
+  const groundSrc = await readFile(GROUND_SRC, 'utf8');
+  const mathSrc = await readFile(SRC, 'utf8');
+  const orderOf = (src) => {
+    const i = src.indexOf('strokeStations({');
+    const e = src.indexOf('scatterEdgeInstances(', i);
+    const c = src.indexOf('scatterCenterInstance(', e);
+    const s = src.indexOf('scatterCellInstances({', c);
+    return i >= 0 && e > i && c > e && s > c;
+  };
+  check('K5 ground.ts calls the samplers along -> edge -> center -> spread',
+    orderOf(groundSrc.slice(groundSrc.indexOf('function buildScatter('))), true);
+  check('K5 …and so does mapMath.ts',
+    orderOf(mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('))), true);
+  // Four sampler calls per file, every one with the cell's grid and the
+  // row's clearance as its radius; the two samplers that take an axis
+  // (center, spread) get the area's.
+  const wired = (src) => [
+    (src.match(/occupied: grid/g) || []).length >= 4,
+    (src.match(/occupyR: clearM/g) || []).length >= 4,
+    /scatterCenterInstance\([\s\S]{0,700}?axisAt,/.test(src),
+    /scatterCellInstances\(\{[\s\S]{0,1200}?axisAt,/.test(src),
+  ];
+  check('K5 ground.ts hands grid, clearance and axis to every sampler call',
+    wired(groundSrc), [true, true, true, true]);
+  check('K5 …and so does mapMath.ts',
+    wired(mathSrc), [true, true, true, true]);
+  check('K5 both build ONE grid per cell',
+    [groundSrc.includes('new OccupancyGrid()'), mathSrc.includes('new OccupancyGrid()')],
+    [true, true]);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

@@ -2128,6 +2128,14 @@ async function startApp(username: string, role: string) {
       mapStamp += 1;
       hud.setOnline(true);
       hud.setClock(map.game_time?.label_display ?? map.game_time?.label ?? '');
+      // The GAME clock in seconds goes to the ground on every poll: a scatter
+      // row that reshuffles takes its epoch from it (`reshuffleEpoch`), and
+      // the ground re-samples only when an epoch really turns — the same
+      // snapshot the sun reads its hour from (`takeGameHour`), read here so
+      // the turn is seen within a poll rather than a minute.
+      if (typeof map.game_time?.total_seconds === 'number') {
+        terrainGround.setGameSeconds(map.game_time.total_seconds);
+      }
       takeRoomsFrom(map);
       updatePins(map);
       refreshSelection(map);

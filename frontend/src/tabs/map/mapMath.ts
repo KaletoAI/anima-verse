@@ -51,16 +51,18 @@
  *     not an area at all — the server fails closed the same way)
  */
 import {
-  cleanRing, polygonArea, scatterCellCountInBox, scatterCellInstances,
-  scatterCellSeed, scatterCellsInBox, scatterClearM, scatterInstances,
-  scatterSeed, scatterWantedCount, worldToLocalXZ,
+  cleanRing, polygonArea, scatterCellAt, scatterCellCountInBox,
+  scatterCellInstances, scatterCellSeed, scatterCellsInBox, scatterClearM,
+  scatterInstances, scatterSeed, scatterWantedCount, worldToLocalXZ,
   SCATTER_CELL_M, SCATTER_CELLS_MAX, SCATTER_MAX_PER_CELL,
   alongSeed, strokeCentreLine, strokeStations,
+  lineAxis, ringEdgeAxis, scatterEdgeInstances, scatterCenterInstance,
+  reshuffleEpoch, OccupancyGrid,
 } from '@anima/scene-render'
-import type { Point2, ScatterFootprint } from '@anima/scene-render'
+import type { Point2, ScatterFootprint, ScatterOccupancy } from '@anima/scene-render'
 import { readAlong, readScatter, readStrokePoints } from './mapTypes'
-import type { FlowAlong, TerrainArea, TerrainWaterKnot,
-  TerrainWaterProfile } from './mapTypes'
+import type { FlowAlong, TerrainAlongEntry, TerrainArea, TerrainScatterEntry,
+  TerrainWaterKnot, TerrainWaterProfile } from './mapTypes'
 
 /** Viewport state: world point at the canvas centre + zoom. */
 export interface View {
@@ -1049,8 +1051,15 @@ export const SCATTER_TRUE_TOTAL = 16000
 export const SCATTER_TRUE_ON = 0.8
 export const SCATTER_TRUE_OFF = 1.2
 
+/** Which of the four kinds of row a job is. It is the ORDER the occupancy
+ *  of a cell is filled in (along, then edge/center, then spread — per area,
+ *  in paint order) and whether the budget may ever thin it: only `spread`
+ *  rows cost anything, the other three are a few hundred stations at most
+ *  and are always drawn. */
+export type ScatterRowKind = 'along' | 'edge' | 'center' | 'spread'
+
 /**
- * One entry of one area, with everything BOTH preview modes need — collected
+ * One row of one area, with everything BOTH preview modes need — collected
  * once per data change, because neither mode may re-clean a ring or re-measure
  * an area on a pan.
  *
@@ -1059,13 +1068,22 @@ export const SCATTER_TRUE_OFF = 1.2
  * carries. The first is what the overview's share budget is split by, the
  * second what the window's cost is counted in — and both come from the ONE
  * shared count rule (`scatterWantedCount`), so no mode can disagree with the
- * world about how thick the ground is.
+ * world about how thick the ground is. Both are 0 for every row that is not
+ * `spread`: a row along a line or a rim has stations, not a density.
  */
 export interface ScatterPreviewJob {
-  /** the area this row belongs to — half of every cell seed */
+  /** the area this row belongs to — half of every seed */
   areaId: string
-  /** the row's index in `meta.scatter` — the other half, and the dot colour */
+  /** the row's index in ITS list — `meta.stroke.along` for an `along` row,
+   *  `meta.scatter` otherwise — the other half of the seed */
   index: number
+  kind: ScatterRowKind
+  /** the dot colour: a scatter row its own index, an along row the scatter
+   *  count plus its index, so a road's lamps and its bushes can be told apart */
+  dot: number
+  /** the row as read (`readScatter` / `readAlong`) — what the sampler of
+   *  its kind is handed */
+  entry: TerrainScatterEntry | TerrainAlongEntry
   /** the CLEANED world ring of the area */
   ring: Point2[]
   /** its bounding box in world metres, `[minX, minZ, maxX, maxZ]` */
@@ -1074,14 +1092,20 @@ export interface ScatterPreviewJob {
   areaM2: number
   /** the cleaned rings of every area painted ABOVE this one */
   occluders: Point2[][]
-  /** instances per 100 m2, as authored */
+  /** the decorated centre line of a STROKE area (`strokeCentreLine`) — the
+   *  axis its rows align to and the line its `along` rows stand on; `null`
+   *  on a painted polygon, whose axis is its own rim (`ringEdgeAxis`) */
+  line: Array<[number, number]> | null
+  /** instances per 100 m2, as authored (0 unless `spread`) */
   density: number
   /** the instance's horizontal half-extent (`scatterClearM`) — the ESTIMATE,
-   *  see `scatterPreviewJobs` */
+   *  see `scatterPreviewJobs`; also the radius a survivor takes up in the
+   *  cell's occupancy (`occupyR`) */
   clearM: number
   /** the least distance this row's own props keep from each other, as
    *  authored (`min_spacing_m`); 0 = no constraint. Carried on the job so
-   *  BOTH preview modes hand the sampler the number the 3D world hands it. */
+   *  BOTH preview modes hand the sampler the number the 3D world hands it.
+   *  On an `edge` row it is the station spacing along the rim. */
   minSpacingM: number
   /** true props over the whole area, uncapped */
   wanted: number
@@ -1090,8 +1114,12 @@ export interface ScatterPreviewJob {
 }
 
 /**
- * Every scattering row of every area, ready to draw — the shared half of the
- * two modes.
+ * Every row of every area, ready to draw — the shared half of the two modes,
+ * IN THE ORDER THE OCCUPANCY IS FILLED: areas bottom to top, per area the
+ * `along` rows by index, then the `edge`/`center` rows by index, then the
+ * `spread` rows by index (plan "Scatter-Erweiterung", global constraints).
+ * `scatterWindowDots` walks this list as it is, and `ground.ts` builds its
+ * rows in the same order, so a cell's grid is filled identically on both.
  *
  * `areas` arrives BOTTOM TO TOP (the server's `z_order` order), so an area's
  * occluders are the rings after its own index: only the ground an area
@@ -1110,7 +1138,11 @@ export function scatterPreviewJobs(areas: readonly TerrainArea[]
   const jobs: ScatterPreviewJob[] = []
   areas.forEach((a, ai) => {
     const entries = readScatter(a.meta)
-    if (!entries.length) return
+    const stroke = a.meta?.stroke
+    /** the clicked points of a stroke area, or null on a painted polygon */
+    const strokePts = readStrokePoints(a.meta)
+    const along = strokePts ? readAlong(stroke) : []
+    if (!entries.length && !along.length) return
     const ring = rings[ai]
     if (ring.length < 3) return
     const areaM2 = polygonArea(ring)
@@ -1125,7 +1157,44 @@ export function scatterPreviewJobs(areas: readonly TerrainArea[]
       if (z < minZ) minZ = z
       if (z > maxZ) maxZ = z
     }
+    // The decorated centre line of a stroke area — the ONE line its rows
+    // stand on and align to, regenerated exactly as the ribbon was widened.
+    const line = strokePts
+      ? strokeCentreLine(stroke as Parameters<typeof strokeCentreLine>[0]) : null
+    const shared = {
+      areaId: a.id, ring, box: [minX, minZ, maxX, maxZ] as [number, number, number, number],
+      areaM2, occluders, line,
+    }
+    // The rows along the line first — a row without a model plants nothing,
+    // on the map as in the world.
+    along.forEach((e, i) => {
+      if (!e.model) return
+      jobs.push({
+        ...shared, index: i, kind: 'along', dot: entries.length + i, entry: e,
+        density: 0, clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m) : 2),
+        minSpacingM: 0, wanted: 0, perCell: 0,
+      })
+    })
+    const scatterJob = (e: TerrainScatterEntry, i: number,
+      kind: ScatterRowKind): ScatterPreviewJob => ({
+      ...shared, index: i, kind, dot: i, entry: e,
+      density: kind === 'spread' ? e.density_per_100m2 : 0,
+      clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m)
+        : (e.model ? 2 : 0.8)),
+      // NOT an approximation, unlike the clearance above: the spacing is a
+      // plain authored distance, so the preview subtracts exactly the props
+      // the world subtracts.
+      minSpacingM: Number(e.min_spacing_m) > 0 ? Number(e.min_spacing_m) : 0,
+      wanted: 0,
+      perCell: 0,
+    })
+    // …then the rows on the rim and at the centre, by index…
     entries.forEach((e, i) => {
+      if (e.place === 'edge' || e.place === 'center') jobs.push(scatterJob(e, i, e.place))
+    })
+    // …then the spread rows, by index.
+    entries.forEach((e, i) => {
+      if (e.place === 'edge' || e.place === 'center') return
       // Arithmetic, not a sample: what this row plants follows from the area
       // and the density alone, and both modes have to know it before the first
       // point is drawn. NO CEILING on the area count — `SCATTER_MAX_PER_ENTRY`
@@ -1135,19 +1204,7 @@ export function scatterPreviewJobs(areas: readonly TerrainArea[]
       const wanted = scatterWantedCount(areaM2, e.density_per_100m2, Infinity)
       if (wanted < 1) return
       jobs.push({
-        areaId: a.id,
-        index: i,
-        ring,
-        box: [minX, minZ, maxX, maxZ],
-        areaM2,
-        occluders,
-        density: e.density_per_100m2,
-        clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m)
-          : (e.model ? 2 : 0.8)),
-        // NOT an approximation, unlike the clearance above: the spacing is a
-        // plain authored distance, so the preview subtracts exactly the props
-        // the world subtracts.
-        minSpacingM: Number(e.min_spacing_m) > 0 ? Number(e.min_spacing_m) : 0,
+        ...scatterJob(e, i, 'spread'),
         wanted,
         // The window's unit of cost — the count the CELL sampler asks for,
         // from the same rule and with the same per-cell guard it applies.
@@ -1228,6 +1285,9 @@ export function scatterAreaCosts(jobs: readonly ScatterPreviewJob[],
   const order: string[] = []
   const by = new Map<string, ScatterAreaCost>()
   for (const job of jobs) {
+    // Only a spread row has a density to pay for; the rows along a line or a
+    // rim are a few hundred stations and are never thinned (or costed).
+    if (job.kind !== 'spread') continue
     let cost = by.get(job.areaId)
     if (!cost) {
       let x = 0
@@ -1340,23 +1400,42 @@ export function scatterAreaPlan(costs: readonly ScatterAreaCost[],
 export interface ScatterDot {
   x: number
   z: number
-  /** the row's index in `meta.scatter` */
+  /** the row's colour index (`ScatterPreviewJob.dot`): a scatter row its
+   *  index in `meta.scatter`, an along row the scatter count plus its own */
   entry: number
 }
 
 /**
  * THE TRUE-DENSITY PREVIEW: the very instances the 3D client plants, over the
- * cells the rectangle covers.
+ * cells the rectangle covers — and the rows along every line and rim, whole.
  *
- * Every point in here comes out of `scatterCellInstances` with the CELL seed
- * (`scatterCellSeed(areaId, row, cx, cz)`), the area's cleaned ring as the
- * filter, the occluders above it and the same footprint clearance — i.e. the
- * identical call `client3d/src/scene/ground.ts buildScatter` makes for the
- * same cell. The two windows differ (a camera square there, a viewport here);
- * the CELLS do not, and a cell is the whole unit of the raster, so wherever
- * the two overlap they are the same props to the metre.
+ * Every spread point in here comes out of `scatterCellInstances` with the
+ * CELL seed (`scatterCellSeed(areaId, row, cx, cz, epoch)`), the area's
+ * cleaned ring as the filter, the occluders above it and the same footprint
+ * clearance — i.e. the identical call `client3d/src/scene/ground.ts
+ * buildScatter` makes for the same cell. The two windows differ (a camera
+ * square there, a viewport here); the CELLS do not, and a cell is the whole
+ * unit of the raster, so wherever the two overlap they are the same props to
+ * the metre. The along, edge and center rows are computed for the whole line
+ * or rim, as the client computes them, and drawn whole.
  *
- * Cells are enumerated per area and only inside its own bounding box, so a
+ * THE OCCUPANCY (plan "Scatter-Erweiterung", 2026-09-10): what earlier rows
+ * planted in a cell keeps later rows out of it — one `OccupancyGrid` per
+ * cell, filled in the order of `jobs` (which IS the mandated order, see
+ * `scatterPreviewJobs`), every survivor filed with the row's `clearM`. The
+ * grid goes INTO the sampler as its last verdict; nothing is filtered after
+ * the fact, so every rejection still only subtracts. A cell whose spread rows
+ * are drawn is filled by EVERY row that reaches it — the spread rows of a
+ * thinned area included, sampled there for the grid and not for a dot — so
+ * its picture is the client's, byte for byte (`ScatterWindowOptions.drawIds`).
+ *
+ * The AXIS of an `aligned` row is the area's: the centre line of a stroke
+ * area (`lineAxis`), the nearest rim edge of a painted polygon
+ * (`ringEdgeAxis`) — handed to every sampler of the area as `axisAt`. A row
+ * with `reshuffle_min` seeds with its epoch (`reshuffleEpoch` over
+ * `opts.gameSeconds`); every other seed is what it always was.
+ *
+ * Cells are enumerated per row and only inside its own bounding box, so a
  * viewport over empty ground walks nothing.
  *
  * `footprints` is BOTH kinds of placed thing, built by the caller
@@ -1367,60 +1446,60 @@ export interface ScatterDot {
  * two sources.
  */
 export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
-  rect: MapBounds, footprints: readonly ScatterFootprint[]): ScatterDot[] {
+  rect: MapBounds, footprints: readonly ScatterFootprint[],
+  opts: ScatterWindowOptions = {}): ScatterDot[] {
   const out: ScatterDot[] = []
-  for (const job of jobs) {
+  const seconds = opts.gameSeconds ?? NaN
+  const drawIds = opts.drawIds
+  const draws = (job: ScatterPreviewJob): boolean => !drawIds || drawIds.has(job.areaId)
+  /** the cells of one spread row inside the viewport — the cells it DRAWS */
+  const cellsOf = (job: ScatterPreviewJob): [number, number][] => {
     const [bMinX, bMinZ, bMaxX, bMaxZ] = job.box
     const minX = Math.max(rect.min_x, bMinX)
     const minZ = Math.max(rect.min_z, bMinZ)
     const maxX = Math.min(rect.max_x, bMaxX)
     const maxZ = Math.min(rect.max_z, bMaxZ)
-    if (maxX < minX || maxZ < minZ) continue
-    for (const [cx, cz] of scatterCellsInBox(minX, minZ, maxX, maxZ)) {
-      for (const p of scatterCellInstances({
-        ring: job.ring,
-        cx,
-        cz,
-        densityPer100m2: job.density,
-        seed: scatterCellSeed(job.areaId, job.index, cx, cz),
-        footprints,
-        clearM: job.clearM,
-        minSpacingM: job.minSpacingM,
-        occluders: job.occluders,
-      })) out.push({ x: p.x, z: p.z, entry: job.index })
-    }
+    if (maxX < minX || maxZ < minZ) return []
+    return scatterCellsInBox(minX, minZ, maxX, maxZ)
   }
-  return out
-}
-
-/** An APPROXIMATED area, as its own badge: where to hang it, how many dots it
- *  got and how many props those stand for. The text is
- *  `scatterThinnedPercentText(drawn, wanted)` — the layer writes it, this is
- *  the arithmetic behind it. */
-/**
- * The stations of every row along every drawn line, as preview dots
- * (§ A9 addendum 2026-09-09) — the very points the 3D world plants, from the
- * ONE shared function (`strokeStations`) over the ONE shared centre line
- * (`strokeCentreLine`). A row's dot colour continues the area's scatter
- * colours (`entry` = scatter rows + row index), so a road's lamps and its
- * scatter can be told apart.
- *
- * Never thinned: a line carries a few hundred stations at most, and the
- * budget question of the scatter overview does not arise.
- */
-export function alongPreviewDots(areas: readonly TerrainArea[],
-  footprints: readonly ScatterFootprint[]): ScatterDot[] {
-  const rings = areas.map((a) => cleanRing(a.polygon))
-  const out: ScatterDot[] = []
-  areas.forEach((a, ai) => {
-    const stroke = a.meta?.stroke
-    const rows = readAlong(stroke)
-    if (!rows.length || !readStrokePoints(a.meta)) return
-    const line = strokeCentreLine(stroke as Parameters<typeof strokeCentreLine>[0])
-    const occluders = rings.slice(ai + 1).filter((r) => r.length >= 3)
-    const base = readScatter(a.meta).length
-    rows.forEach((e, i) => {
-      if (!e.model) return
+  // THE DRAWN CELLS: every cell a drawn spread row samples. A thinned area's
+  // spread rows are sampled in exactly these and nowhere else — for the
+  // occupancy alone, never for a dot — so a drawn cell's grid is filled by
+  // every row the world fills it with, and its dots are the world's.
+  const drawn = new Map<string, [number, number]>()
+  for (const job of jobs) {
+    if (job.kind !== 'spread' || !draws(job)) continue
+    for (const cell of cellsOf(job)) drawn.set(`${cell[0]},${cell[1]}`, cell)
+  }
+  // ONE GRID PER CELL, made when the first survivor of the cell is filed or
+  // the first candidate asks; a row computed for its whole line or rim files
+  // every station into the grid of the cell it stands in (`grid` below routes
+  // by `scatterCellAt`), so a cell is judged the same whether the row was
+  // computed for it alone or for the whole shape.
+  const grids = new Map<string, OccupancyGrid>()
+  const gridOf = (cx: number, cz: number): OccupancyGrid => {
+    const key = `${cx},${cz}`
+    let g = grids.get(key)
+    if (!g) { g = new OccupancyGrid(); grids.set(key, g) }
+    return g
+  }
+  const grid: ScatterOccupancy = {
+    blocks: (x, z, r) => gridOf(scatterCellAt(x), scatterCellAt(z)).blocks(x, z, r),
+    add: (x, z, r) => gridOf(scatterCellAt(x), scatterCellAt(z)).add(x, z, r),
+  }
+  // THE ROWS, in the order `scatterPreviewJobs` collected them — the order
+  // every cell's grid is filled in on both renderers: along -> edge/center
+  // -> spread, area after area.
+  for (const job of jobs) {
+    const line = job.line
+    const axisAt = line
+      ? (x: number, z: number) => lineAxis(line, x, z)
+      : (x: number, z: number) => ringEdgeAxis(job.ring, x, z)
+    const epoch = reshuffleEpoch(seconds, job.entry.reshuffle_min)
+    const clearM = job.clearM
+    if (job.kind === 'along') {
+      if (!line) continue
+      const e = job.entry as TerrainAlongEntry
       for (const p of strokeStations({
         line,
         spacingM: e.spacing_m,
@@ -1429,14 +1508,86 @@ export function alongPreviewDots(areas: readonly TerrainArea[],
         yawDeg: e.yaw_deg,
         yawMode: e.yaw_mode,
         startM: e.start_m,
-        seed: alongSeed(a.id, i),
+        seed: alongSeed(job.areaId, job.index, epoch),
         footprints,
-        occluders,
-        clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m) : 2),
-      })) out.push({ x: p.x, z: p.z, entry: base + i })
-    })
-  })
+        clearM,
+        occluders: job.occluders,
+        variant: e.variant,
+        occupied: grid,
+        occupyR: clearM,
+      })) out.push({ x: p.x, z: p.z, entry: job.dot })
+    } else if (job.kind === 'edge') {
+      const e = job.entry as TerrainScatterEntry
+      for (const p of scatterEdgeInstances(job.ring, {
+        seed: scatterSeed(job.areaId, job.index, epoch),
+        spacingM: job.minSpacingM,
+        offsetM: e.offset_m,
+        yawMode: e.yaw_mode,
+        yawDeg: e.yaw_deg,
+        footprints,
+        clearM,
+        occluders: job.occluders,
+        occupied: grid,
+        occupyR: clearM,
+      })) out.push({ x: p.x, z: p.z, entry: job.dot })
+    } else if (job.kind === 'center') {
+      const e = job.entry as TerrainScatterEntry
+      for (const p of scatterCenterInstance(job.ring, {
+        seed: scatterSeed(job.areaId, job.index, epoch),
+        yawMode: e.yaw_mode,
+        yawDeg: e.yaw_deg,
+        axisAt,
+        variant: e.variant,
+        footprints,
+        clearM,
+        occluders: job.occluders,
+        occupied: grid,
+        occupyR: clearM,
+      })) out.push({ x: p.x, z: p.z, entry: job.dot })
+    } else {
+      const e = job.entry as TerrainScatterEntry
+      const drawing = draws(job)
+      const cells = drawing ? cellsOf(job) : [...drawn.values()].filter(([cx, cz]) => {
+        const [bMinX, bMinZ, bMaxX, bMaxZ] = job.box
+        const x0 = cx * SCATTER_CELL_M
+        const z0 = cz * SCATTER_CELL_M
+        return bMaxX >= x0 && bMinX <= x0 + SCATTER_CELL_M
+          && bMaxZ >= z0 && bMinZ <= z0 + SCATTER_CELL_M
+      })
+      for (const [cx, cz] of cells) {
+        for (const p of scatterCellInstances({
+          ring: job.ring,
+          cx,
+          cz,
+          densityPer100m2: job.density,
+          seed: scatterCellSeed(job.areaId, job.index, cx, cz, epoch),
+          footprints,
+          clearM,
+          minSpacingM: job.minSpacingM,
+          occluders: job.occluders,
+          yawMode: e.yaw_mode,
+          yawDeg: e.yaw_deg,
+          axisAt,
+          occupied: gridOf(cx, cz),
+          occupyR: clearM,
+        })) if (drawing) out.push({ x: p.x, z: p.z, entry: job.dot })
+      }
+    }
+  }
   return out
+}
+
+/** What `scatterWindowDots` needs beside the rows and the viewport. */
+export interface ScatterWindowOptions {
+  /** `game_time.total_seconds` of the worldmap payload — the clock the
+   *  reshuffling rows take their epoch from (`reshuffleEpoch`). Absent = no
+   *  epoch, every seed as it always was. */
+  gameSeconds?: number
+  /** the areas whose SPREAD rows are drawn (the plan's `trueIds`); the
+   *  spread rows of every other area are sampled in the drawn cells for the
+   *  occupancy only. Absent = every area is drawn. The along, edge and
+   *  center rows are drawn whatever this says — they are never thinned. */
+  drawIds?: ReadonlySet<string>
 }
 
 export interface ScatterAreaBadge {
@@ -1486,6 +1637,9 @@ export function scatterThinnedByArea(jobs: readonly ScatterPreviewJob[],
   const order: string[] = []
   const by = new Map<string, ScatterAreaBadge>()
   jobs.forEach((job, i) => {
+    // The along, edge and center rows are drawn whole by the window
+    // (`scatterWindowDots`) — they have no density to thin.
+    if (job.kind !== 'spread') return
     let badge = by.get(job.areaId)
     if (!badge) {
       let x = 0
