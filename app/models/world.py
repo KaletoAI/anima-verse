@@ -2198,7 +2198,16 @@ def move_orphan_gallery_files() -> Dict[str, int]:
 
 
 def delete_location(identifier: str) -> bool:
-    """Delete a location by id or name. True when something was removed."""
+    """Delete a location by id or name. True when something was removed.
+
+    Deleting the record is only half the job: characters point AT places, and
+    a dangling pointer is not inert. A daily-schedule slot naming the deleted
+    id used to reach the thought prompt as a raw hex string the character was
+    told to be at; a ``known_locations`` entry kept offering it as a travel
+    target the engine then refused; a ``home_location`` pointing nowhere sends
+    the auto-sleep down its no-path branch every single time. So every
+    reference goes with the place — see :func:`purge_location_references`.
+    """
     data = _load_world_data()
     locations = data.get("locations", [])
     target_ids = {loc.get("id") for loc in locations
@@ -2210,33 +2219,172 @@ def delete_location(identifier: str) -> bool:
     if len(new_locations) < len(locations):
         data["locations"] = new_locations
         _save_world_data(data)
+        # AFTER the write: the reference sweep reads the world list to decide
+        # what is dangling, so it has to see the place already gone.
+        purge_location_references(target_ids)
         return True
     return False
 
 
-_TRANSIT_KEYS = ("passable", "template_location_id", "variant_seed")
+def cleanup_orphan_location_references() -> Dict[str, int]:
+    """Sweep character pointers that name places the world does not have.
 
+    The counterpart of :func:`purge_location_references` for what is ALREADY
+    dangling: every place deleted before the delete path swept up after
+    itself left its id behind in travel knowledge, daily plans and home
+    fields. Idempotent by content and cheap when there is nothing to do —
+    a read of the pointers, and a write only where one is dead.
 
-def _log_characters_at(location_ids: Set[str]) -> None:
-    """Name every character whose ``current_location`` points at a deleted id.
-
-    The migration removes places; a character standing there would silently
-    hang in nowhere. It is not moved automatically — where it belongs is an
-    authoring decision — but it is named, so an admin can place it anew.
+    Deliberately blind to WHICH place vanished and when: a pointer is either
+    resolvable against the current world or it is not.
     """
+    live = {(loc.get("id") or "").strip()
+            for loc in list_locations() or []}
+    live.discard("")
+    if not live:
+        # No locations at all — either an empty world or an unreadable list.
+        # Purging every pointer against that would be vandalism, not hygiene.
+        return {"known": 0, "schedule": 0, "home": 0, "standing": 0}
+    dangling: Set[str] = set()
     try:
-        from app.models.character import (get_character_profile,
+        from app.models.character import (get_character_config,
+                                          get_character_daily_schedule,
+                                          get_known_locations,
                                           list_available_characters)
         for name in list_available_characters(include_pooled=True) or []:
             try:
-                lid = (get_character_profile(name) or {}).get("current_location")
-            except Exception:
-                continue
-            if lid and lid in location_ids:
-                logger.warning("character %s stood at deleted transit place %s",
-                               name, lid)
-    except Exception as e:  # never let hygiene break the boot
-        logger.debug("transit-place character report failed: %s", e)
+                dangling.update(i for i in (get_known_locations(name) or [])
+                                if i and i not in live)
+                for slot in (get_character_daily_schedule(name)
+                             or {}).get("slots") or []:
+                    place = (slot.get("location") or "").strip()
+                    if place and place not in live:
+                        dangling.add(place)
+                home = ((get_character_config(name) or {})
+                        .get("home_location") or "").strip()
+                if home and home not in live and not home.startswith("__"):
+                    # "__offmap__" is a sentinel, not a place — it resolves
+                    # to no location on purpose and must survive the sweep.
+                    dangling.add(home)
+            except Exception as e:
+                logger.debug("orphan scan failed for %s: %s", name, e)
+    except Exception as e:
+        logger.warning("orphan location scan unavailable: %s", e)
+        return {"known": 0, "schedule": 0, "home": 0, "standing": 0}
+    if not dangling:
+        return {"known": 0, "schedule": 0, "home": 0, "standing": 0}
+    logger.info("Found %d place id(s) referenced but no longer in the world",
+                len(dangling))
+    return purge_location_references(dangling)
+
+
+def purge_location_references(location_ids: Set[str]) -> Dict[str, int]:
+    """Drop every character-side pointer to the given (deleted) places.
+
+    Three pointers, all of them silent when they dangle:
+
+    * ``known_locations`` — the travel-target list. A dead id stays offered
+      in "Places you can go" while ``start_journey`` refuses it, so the
+      character walks into a wall it was shown.
+    * ``daily_schedules`` slots — the rhythm hint. The slot's ROLE survives
+      the purge (it is still true); only the place is cleared, and a slot
+      left with neither place, role nor sleep flag drops out entirely.
+    * ``home_location`` / ``home_room`` — where auto-sleep walks to.
+
+    ``current_location`` is deliberately NOT rewritten: where a character
+    standing in a deleted place belongs is an authoring decision, so it is
+    reported by name and left for an admin.
+
+    Returns a per-kind count of what was touched. Never raises — a failed
+    sweep must not take the deletion down with it.
+    """
+    touched = {"known": 0, "schedule": 0, "home": 0, "standing": 0}
+    ids = {i for i in (location_ids or set()) if i}
+    if not ids:
+        return touched
+    try:
+        from app.models.character import (
+            get_character_config, get_character_daily_schedule,
+            get_character_profile, get_known_locations,
+            list_available_characters, save_character_config,
+            save_character_daily_schedule, set_known_locations)
+    except Exception as e:  # pragma: no cover — import-time only
+        logger.warning("location reference purge unavailable: %s", e)
+        return touched
+
+    for name in list_available_characters(include_pooled=True) or []:
+        # --- the travel-target list -------------------------------------
+        try:
+            known = get_known_locations(name) or []
+            keep = [i for i in known if i not in ids]
+            if len(keep) != len(known):
+                set_known_locations(name, keep)
+                touched["known"] += 1
+        except Exception as e:
+            logger.debug("known_locations purge failed for %s: %s", name, e)
+
+        # --- the daily rhythm -------------------------------------------
+        try:
+            schedule = get_character_daily_schedule(name) or {}
+            slots = schedule.get("slots") or []
+            changed = False
+            kept_slots = []
+            for slot in slots:
+                if (slot.get("location") or "").strip() in ids:
+                    slot = dict(slot, location="")
+                    changed = True
+                if (slot.get("location") or slot.get("role")
+                        or slot.get("sleep")):
+                    kept_slots.append(slot)
+                else:
+                    changed = True
+            if changed:
+                schedule["slots"] = kept_slots
+                if save_character_daily_schedule(name, schedule):
+                    touched["schedule"] += 1
+                else:
+                    # The template gate refused the write (a temporary NPC
+                    # takes its rhythm from its spawn window instead). Its
+                    # block is never rendered either, so the stale rows are
+                    # unread — worth a line, not a workaround.
+                    logger.info(
+                        "daily schedule of %s still names a deleted place — "
+                        "its template switches 'activity_home_enabled' off, "
+                        "so the rows stay and are never read", name)
+        except Exception as e:
+            logger.debug("daily_schedule purge failed for %s: %s", name, e)
+
+        # --- where auto-sleep walks to ----------------------------------
+        try:
+            cfg = get_character_config(name) or {}
+            if (cfg.get("home_location") or "").strip() in ids:
+                save_character_config(name, dict(cfg, home_location="",
+                                                 home_room=""))
+                touched["home"] += 1
+        except Exception as e:
+            logger.debug("home_location purge failed for %s: %s", name, e)
+
+        # --- standing in the deleted place: reported, never moved -------
+        try:
+            here = (get_character_profile(name) or {}).get("current_location")
+            if here and here in ids:
+                touched["standing"] += 1
+                logger.warning(
+                    "character %s stood in the deleted place %s — place it "
+                    "anew, nothing was moved automatically", name, here)
+        except Exception as e:
+            logger.debug("standing check failed for %s: %s", name, e)
+
+    if any(touched.values()):
+        logger.info(
+            "Deleted %d place(s): cleared travel knowledge for %d character(s), "
+            "daily plans for %d, home for %d; %d stood there",
+            len(ids), touched["known"], touched["schedule"], touched["home"],
+            touched["standing"])
+    return touched
+
+
+_TRANSIT_KEYS = ("passable", "template_location_id", "variant_seed")
 
 
 def migrate_transit_places_once() -> Dict[str, int]:
@@ -2296,7 +2444,11 @@ def migrate_transit_places_once() -> Dict[str, int]:
         data["locations"] = survivors
         _save_world_data(data)
         if victim_ids:
-            _log_characters_at(victim_ids)
+            # The migration deletes places like any other delete does, so it
+            # owes the same reference sweep — otherwise it hands the world a
+            # fresh set of dangling travel targets and daily-plan slots at
+            # every boot it runs.
+            purge_location_references(victim_ids)
         logger.info("transit places removed: %d locations, %d galleries, %d fields",
                     len(victims), deleted_galleries, fields_stripped)
     return {"deleted_locations": len(victims),

@@ -345,6 +345,20 @@ async def lifespan(app: FastAPI):
     except Exception as _tpe:
         logger.warning("transit-place migration failed: %s", _tpe)
 
+    # Location hygiene: characters keep pointing at places that were deleted
+    # before the delete path swept up after itself — a dead id in the travel
+    # knowledge is a target the journey engine then refuses, and one in a
+    # daily plan used to reach the thought prompt as the raw hex string the
+    # character was told to be at.
+    try:
+        from app.models.world import cleanup_orphan_location_references
+        _loc_stats = cleanup_orphan_location_references()
+        if any(_loc_stats.values()):
+            logger.info("Dangling location references cleaned at startup: %s",
+                        _loc_stats)
+    except Exception as _lre:
+        logger.warning("location-reference cleanup failed: %s", _lre)
+
     # Background hygiene: prune dead file references in background_images +
     # gallery_meta.json + prompts.json. Deletes no files.
     from app.models.world import cleanup_orphan_backgrounds

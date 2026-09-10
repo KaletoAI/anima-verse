@@ -15,7 +15,7 @@ import re
 from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now, game_time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -1165,6 +1165,31 @@ def _build_activity_hint_block(character_name: str,
         logger.debug("activity hint block failed for %s: %s", character_name, e)
         return ""
 
+# Orphaned daily-schedule places already reported, as (character, place).
+# This block is rebuilt on every thought turn of every character — without
+# the memo the same dead id would be logged every ~30 seconds, forever.
+_warned_orphan_slots: set = set()
+
+
+def _warn_orphan_slot(character_name: str, loc: str) -> None:
+    """Report a daily-schedule slot pointing at a deleted place — ONCE.
+
+    Deleting a location does not touch the daily schedules that named it
+    (``world.delete_location`` cleans them up since this was found, but
+    plans written before that still carry dead ids). Loud enough to be
+    actionable: the slot is silently dropped from the prompt, so without
+    this line the plan would look like it simply has a gap.
+    """
+    key = (character_name, loc)
+    if key in _warned_orphan_slots:
+        return
+    _warned_orphan_slots.add(key)
+    logger.warning(
+        "Daily schedule of %s points at the deleted place %r — the slot is "
+        "dropped from the prompt; fix it in the character's daily-plan tab",
+        character_name, loc)
+
+
 def _build_daily_schedule_block(character_name: str) -> str:
     """Soft hint about the character's typical rhythm at the current hour.
 
@@ -1172,6 +1197,13 @@ def _build_daily_schedule_block(character_name: str) -> str:
     Hours without a slot are intentionally left blank — the agent is free
     to choose. Sleep stays a hint; the energy-based rule decides whether
     it actually triggers. Returns '' if there is no usable hint.
+
+    A slot naming a place the world no longer has is dropped (its role, if
+    any, survives) and reported once — the raw id used to reach the prompt
+    as the character's destination, which no verb accepts. A slot the
+    character is not currently AT says so: that sentence is the whole
+    coupling between rhythm and travel, and it stays a nudge — enforcement
+    was removed on purpose (``scheduler_manager._resync_daily_schedules``).
 
     A template can switch the whole subject off (``activity_home_enabled:
     false`` — a temporary NPC takes its rhythm from the slot window it was
@@ -1200,6 +1232,10 @@ def _build_daily_schedule_block(character_name: str) -> str:
                     loc_id_to_name[lid] = lname
         except Exception:
             pass
+        # A slot may hold either the id or the name — the editor writes back
+        # whichever it could canonicalise. Both have to count as resolvable,
+        # or a name-keyed plan would read as orphaned.
+        known_names = set(loc_id_to_name.values())
 
         slot_by_hour: Dict[int, Dict[str, Any]] = {}
         for s in slots:
@@ -1214,6 +1250,38 @@ def _build_daily_schedule_block(character_name: str) -> str:
         # in-world hour as soon as the world clock was offset or sped up.
         cur_h = game_time().hour
         next_h = (cur_h + 1) % 24
+        # Where the character actually IS, as a display name — the same shape
+        # a resolved slot has, so "am I already there?" is one comparison.
+        here_name = ""
+        try:
+            from app.models.character import get_character_current_location
+            here_id = (get_character_current_location(character_name)
+                       or "").strip()
+            here_name = loc_id_to_name.get(here_id, "") if here_id else ""
+        except Exception:
+            pass
+
+        def _resolve(loc: str) -> Optional[str]:
+            """Display name for a slot's place — ``None`` when it points at a
+            place the world does not have any more.
+
+            Deleting a location leaves every daily-schedule slot that named it
+            behind, and the old ``.get(loc, loc)`` handed the raw id straight
+            into the prompt: the character was told to be at "c68dc34a" at
+            09:00, a string no verb accepts and no place it could reach.
+            Dropping the place is the honest answer; the ROLE beside it is
+            still true and stays.
+            """
+            if loc in loc_id_to_name:
+                return loc_id_to_name[loc]
+            if loc in known_names:
+                return loc
+            if not loc_id_to_name:
+                # The world list itself was unreadable — every place would
+                # look orphaned. Fail open and pass the slot through unjudged.
+                return loc
+            _warn_orphan_slot(character_name, loc)
+            return None
 
         def _fmt(slot: Dict[str, Any], hour: int) -> str:
             if slot.get("sleep"):
@@ -1222,7 +1290,17 @@ def _build_daily_schedule_block(character_name: str) -> str:
             role = (slot.get("role") or "").strip()
             parts = []
             if loc:
-                parts.append(f"location: {loc_id_to_name.get(loc, loc)}")
+                name = _resolve(loc)
+                if name:
+                    # Whether the character is ALREADY there decides what the
+                    # hint is worth: standing in the right place it confirms,
+                    # standing elsewhere it is the one nudge that turns a
+                    # rhythm into a journey — nothing forces the trip, the
+                    # character still chooses.
+                    away = ("" if not here_name or name == here_name
+                            else " — you are not there right now; getting "
+                                 "there takes in-world time")
+                    parts.append(f"location: {name}{away}")
             if role:
                 parts.append(f"role: {role}")
             if not parts:
