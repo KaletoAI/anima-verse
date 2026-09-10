@@ -197,6 +197,14 @@ export function ClipInbox({ onCreatePose }: {
   /** playback factor baked into the clip: 0.5 = half speed, twice as long */
   const [speed, setSpeed] = useState('1')
   const [inPlace, setInPlace] = useState(true)
+  /** Put the head upright on the neck (`_cmu.level_head`). Generated
+   *  animations get the head wholesale wrong — the Meshy biped this was built
+   *  for hangs its head 108° forward for the whole take, crown 17 cm BELOW
+   *  the neck base while the figure stands — and the retarget passes that on
+   *  faithfully, because a hanging head is what the source says. Unlike the
+   *  turn dial this one changes the conversion, so the preview shows it only
+   *  after a fresh probe. */
+  const [levelHead, setLevelHead] = useState(false)
   /** partner offset for pairs whose halves are not in one world space —
    *  packs say things like "set the male model to -0.3 on the forward axis" */
   const [offFwd, setOffFwd] = useState('0')
@@ -419,14 +427,15 @@ export function ClipInbox({ onCreatePose }: {
       speed: Number(speed) || 1,
       in_place: inPlace && !isPair,
       yaw_deg: yawDeg || 0,
+      level_head: levelHead,
       offset_b_m: isPair ? [Number(offSide) || 0, Number(offUp) || 0, Number(offFwd) || 0] : null,
       overwrite,
       target,
       redistributable: target === 'free' ? redistributable : false,
     }
-  }, [clipSet, endS, entry, inPlace, isPair, kind, loopOn, loopS, offFwd, offSide, offUp, speed,
-      overwrite, redistributable, restFile, restTake, second, secondTake, src, startS, take,
-      target, yawDeg])
+  }, [clipSet, endS, entry, inPlace, isPair, kind, levelHead, loopOn, loopS, offFwd, offSide,
+      offUp, speed, overwrite, redistributable, restFile, restTake, second, secondTake, src,
+      startS, take, target, yawDeg])
 
   const runProbe = useCallback(async () => {
     // The ONE exception to "the probe plays the very body the import sends":
@@ -863,6 +872,19 @@ export function ClipInbox({ onCreatePose }: {
               <span>
                 {t('In place (strip the horizontal root travel)')}
                 {isPair ? ` — ${t('pairs keep their contact geometry')}` : ''}
+              </span>
+            </label>
+
+            {/* The head levelling BAKES, so — unlike the turn dial above — the
+                preview only shows it after the next probe. */}
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="checkbox" checked={levelHead}
+                onChange={(e) => setLevelHead(e.target.checked)} />
+              <span>
+                {t('Level the head (take the source’s head lean out)')}
+                <span className="ga-hint" style={{ marginLeft: 6 }}>
+                  {t('for a source that holds the head wrong the whole take; its own head motion stays')}
+                </span>
               </span>
             </label>
 

@@ -27,6 +27,11 @@ Invoked through ``app.blender.runner.run("cmu_clip", inputs=…, params=…)``:
              yaw_deg        turn the finished clip about the vertical by this
                             many degrees (default 0) — the orientation dial
                             of the import, see ``_frame_takes``
+             level_head     put the head upright on the neck (default False):
+                            the median sagittal pitch of the kept frames is
+                            taken out of every frame, so a source that hangs
+                            its head for the whole take stands straight and
+                            keeps its own head motion (``_cmu.level_head``)
 
 The FBX files and the ``<kind>.json`` sidecar land in the runner's out dir.
 
@@ -619,7 +624,14 @@ def run_takes(takes, args, fps, source):
                      "cut_s": [round(i / fps, 3), round(j / fps, 3)],
                      "seam_distance": None if d is None else round(d, 3),
                      "blend_frames": LOOP_BLEND_FRAMES}
+    # Head levelling BEFORE the frame of reference, AFTER the loop cut: the
+    # median that is taken out has to be the median of the frames the clip
+    # actually keeps (``_cmu.level_head``).
+    head_pitch = [_cmu.level_head(t.poses) for t in takes] if args.get("level_head") else []
     geometry = _frame_takes(takes, args)
+    if any(v is not None for v in head_pitch):
+        # a list per take, like ``hips_scale`` below — every actor has a head
+        geometry["head_pitch_deg"] = head_pitch
     if loop_info:
         geometry["loop"] = loop_info
     out_dir = Path(args["out_dir"])

@@ -535,8 +535,9 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
 
     Body: ``{kind, files: [src] | [src_a, src_b], rest_file?, set?, start_s?,
     end_s?, loop_s?, in_place?, overwrite?, target?, redistributable?,
-    yaw_deg?}``. ``yaw_deg`` is the orientation dial — the angle the preview
-    was turned to before the import was accepted.
+    yaw_deg?, level_head?}``. ``yaw_deg`` is the orientation dial — the angle
+    the preview was turned to before the import was accepted; ``level_head``
+    puts a source's mis-placed head upright on the neck.
 
     A SOURCE is ``{name, take}``: ``name`` a path relative to the inbox
     (``pack/walk.fbx``), ``take`` the index of the animation inside it —
@@ -589,6 +590,7 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
             if isinstance(body.get("offset_b_m"), list) else None,
             loops=None if body.get("loops") is None else bool(body.get("loops")),
             speed=_num("speed") or 1.0, yaw_deg=_num("yaw_deg") or 0.0,
+            level_head=bool(body.get("level_head")),
             target=target, redistributable=redistributable, preview=preview)
     except fbx_import.ClipKindExists as e:
         raise HTTPException(status_code=409, detail=str(e))

@@ -426,6 +426,107 @@ def forward_xz(pose: Pose) -> Tuple[float, float]:
     return (f[0] / n, f[2] / n)
 
 
+# ------------------------------------------------------------ head levelling
+
+#: The joints that travel with the head. The FIRST is the pivot — the neck
+#: base, where a head is put back on straight — and it keeps its position;
+#: everything after it swings about it.
+HEAD_CHAIN = ("lowerneck", "upperneck", "head")
+
+
+def torso_frame(pose: "Pose") -> Optional[Tuple[Vec3, Vec3, Vec3]]:
+    """``(right, up, forward)`` of the body at this frame, or None when the
+    take has no torso to measure against. ``up`` is the pelvis-to-chest axis,
+    ``right`` the hip axis made perpendicular to it, ``forward`` the way the
+    chest looks.
+
+    It is an ANATOMICAL frame, not a coordinate basis: ``right × up`` is
+    ``−forward``, because CMU's ``+X`` is the actor's LEFT (a body facing
+    ``+Z`` has its right hand at ``−X``). Hence ``forward = up × right``, and
+    a caller who needs a handed basis has to say which handedness it wants
+    rather than assume this one."""
+    try:
+        root, chest = pose.pos["root"], pose.pos["thorax"]
+        lf, rf = pose.pos["lfemur"], pose.pos["rfemur"]
+    except KeyError:
+        return None
+    up = normalize([chest[i] - root[i] for i in range(3)])
+    right = [rf[i] - lf[i] for i in range(3)]
+    d = dot(right, up)
+    right = normalize([right[i] - up[i] * d for i in range(3)])
+    return right, up, cross(up, right)
+
+
+def head_pitch_deg(pose: "Pose",
+                   frame: Optional[Tuple[Vec3, Vec3, Vec3]] = None) -> Optional[float]:
+    """How far the head leans out of the spine, in degrees: the SAGITTAL angle
+    of the neck base → crown vector away from the torso axis. 0 = the crown
+    continues the spine, positive = tipped forward, ±180 = hanging.
+
+    Measured on joint POSITIONS, not on a bone rotation, so it means the same
+    for a CMU take and for a foreign FBX retarget — and so it can be measured
+    again on the finished clip, which is what the smoke check does.
+    """
+    frame = frame or torso_frame(pose)
+    if frame is None:
+        return None
+    base = pose.pos.get("lowerneck")
+    crown = pose.pos.get("head")
+    if crown is None:
+        crown = pose.pos.get("upperneck")
+    if base is None or crown is None:
+        return None
+    _right, up, fwd = frame
+    v = [crown[i] - base[i] for i in range(3)]
+    return math.degrees(math.atan2(dot(v, fwd), dot(v, up)))
+
+
+def level_head(poses: Sequence["Pose"]) -> Optional[float]:
+    """Puts the head upright on the neck, IN PLACE. Returns the correction
+    applied in degrees, or None when there is nothing to measure or nothing
+    to fix.
+
+    The MEDIAN sagittal pitch over the frames is taken out of every frame —
+    the same constant everywhere, about the body's own medio-lateral axis at
+    that frame. So the head ends up standing where a head stands while every
+    bit of its own motion survives: nod, turn, the lot. Only where the head
+    chain POINTS changes, never the relation inside it, because the whole
+    chain swings rigidly about the neck base.
+
+    That is the honest repair for a source whose head is simply mis-placed —
+    a generated animation that hangs its head 100 deg forward for the whole
+    take (measured on a Meshy AI biped: −107.7 deg where the library's own
+    standing clips sit at −4.4 deg). It is NOT a fix for a retarget error: a
+    clip whose head is right needs no median taken out, and gets none.
+    """
+    frames = [torso_frame(p) for p in poses]
+    pitches = [head_pitch_deg(p, f) for p, f in zip(poses, frames)]
+    good = sorted(v for v in pitches if v is not None)
+    if not good:
+        return None
+    median = good[len(good) // 2]
+    if abs(median) < 0.05:              # already upright — write nothing
+        return None
+    # A right-handed turn about ``right`` moves the chain from ``up`` towards
+    # ``right × up``, which is MINUS forward (the frame is anatomical, see
+    # ``torso_frame``) — so it REDUCES the pitch, and the angle that takes the
+    # median out is the median itself, not its negative.
+    theta = math.radians(median)
+    for pose, frame in zip(poses, frames):
+        if frame is None:
+            continue
+        r = axis_angle(frame[0], theta)
+        pivot = pose.pos.get(HEAD_CHAIN[0])
+        for name in HEAD_CHAIN:
+            if name in pose.rot:
+                pose.rot[name] = mat_mul(r, pose.rot[name])
+            if pivot is not None and name in pose.pos:
+                p = pose.pos[name]
+                d = mat_vec(r, [p[i] - pivot[i] for i in range(3)])
+                pose.pos[name] = (pivot[0] + d[0], pivot[1] + d[1], pivot[2] + d[2])
+    return round(-median, 2)
+
+
 # ------------------------------------------------------------ loop cutting
 
 # The bones whose rotation decides how well two frames "close" into a cycle.

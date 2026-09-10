@@ -803,7 +803,7 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
                in_place: bool = False, overwrite: bool = False,
                offset_b_m: Optional[List[float]] = None,
                loops: Optional[bool] = None, speed: float = 1.0,
-               yaw_deg: float = 0.0,
+               yaw_deg: float = 0.0, level_head: bool = False,
                target: str = "licensed", redistributable: bool = False,
                out_dir: Optional[Path] = None, rig: Optional[Path] = None,
                fps: int = 30, timeout_s: int = 900,
@@ -824,6 +824,13 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
     ``yaw_deg`` is the orientation dial shared with the CMU import
     (``cmu_clip._frame_takes``): the clip is turned about the vertical by that
     many degrees after the frame of reference is built.
+
+    ``level_head`` puts the head upright on the neck (``_cmu.level_head``):
+    the median sagittal head pitch of the kept frames is taken out of every
+    frame. Generated animations get this wrong wholesale — a Meshy AI biped
+    measured −107.7 deg where the library's own standing clips sit at −4.4 —
+    and the retarget passes it on faithfully, because a hanging head is what
+    the source says.
 
     ``preview`` runs the very same conversion into the inbox's ``.preview``
     folder (kind ``preview``), touches no library and no cache, and returns
@@ -961,6 +968,7 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
               "rest_name": rest_path.name if rest_path is not None else "",
               "offset_b_m": [float(v) for v in (offset_b_m or (0, 0, 0))][:3],
               "speed": float(speed or 1.0), "yaw_deg": float(yaw_deg or 0.0),
+              "level_head": bool(level_head),
               "bone_map": "auto", "source_name": names}
 
     st = runner.status()
