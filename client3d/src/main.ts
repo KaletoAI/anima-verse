@@ -4846,7 +4846,17 @@ async function startApp(username: string, role: string) {
         return pointInPolygon(local.x, local.z, outline);
       },
       groundId: ground,
-      floorIdOf: (lv) => unlockedId(getGameState().floorRoomIds[String(lv)] ?? ''),
+      // ONLY A CORRIDOR THE TILE KNOWS (review 2026-09-09). `floorRoomIds`
+      // comes from the STORED rooms, `tile.roomLevels` from `corridors[]` —
+      // and a storey without a resolvable footprint has the first without the
+      // second (no anchor, no entry, spec § 3.2). Proposing such a corridor
+      // would move the avatar into a room the scene cannot draw it in: no
+      // centre, no outline, no plate. Without an entry the old fall-through
+      // stands (the room list, and on storey 0 the ground).
+      floorIdOf: (lv) => {
+        const id = getGameState().floorRoomIds[String(lv)] ?? '';
+        return id && tile.roomLevels.has(id) ? unlockedId(id) : '';
+      },
     });
     const level = ownLevel ?? tile.levelFilter;
     const before = roomWalk;

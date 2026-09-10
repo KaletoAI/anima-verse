@@ -868,6 +868,13 @@
  * a storey's corridor precedence over every distance, because that is the
  * room you stand in when you step off a landing, whatever room centre happens
  * to be nearer.
+ * WHICH CORRIDORS EXIST IS THE CALLER'S QUESTION (review 2026-09-09), not
+ * this module's: `main.ts` answers `floorIdOf` only for a corridor the
+ * mounted tile knows (`tile.roomLevels.has(id)`, i.e. one the payload's
+ * `corridors[]` brought), because a storey without a resolvable footprint has
+ * a STORED corridor and no entry. The pure rule is unchanged — an absent
+ * corridor is the `floorIdOf: () => ''` case already checked below, and both
+ * probes ("locked corridor", "no hallway -> ground") cover it.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
