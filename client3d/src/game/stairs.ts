@@ -352,6 +352,13 @@ export function stairLegs(
  * from a landing instead of a lift stop — including the tie to the LOWER id,
  * so the destination of a symmetric floor cannot flicker between two rooms.
  *
+ * WITH ONE ROOM AHEAD OF EVERY DISTANCE: the storey's CORRIDOR (§ A13b).
+ * Stepping off a landing puts you in the corridor, not in the room whose
+ * centre happens to be nearest — a landing lies in the corridor by
+ * construction (the anchor is a lift stop or a stair pad outside every room
+ * hull), so measuring here would name a room the figure is standing outside
+ * of. The caller marks it with `floor`; this module never reads an id.
+ *
  * `null` means the storey has no room the server could be asked for, and the
  * caller must not offer the ride at all — the same reason `elevatorLevels`
  * drops a storey without rooms.
@@ -359,8 +366,11 @@ export function stairLegs(
 export function nearestRoomAt(
   level: number,
   pos: { x: number; z: number },
-  rooms: readonly { id: string; level: number; center: { x: number; z: number } }[],
+  rooms: readonly { id: string; level: number; center: { x: number; z: number };
+                    floor?: boolean }[],
 ): string | null {
+  const corridor = rooms.find((r) => r.level === level && r.floor);
+  if (corridor) return corridor.id;
   let best: string | null = null;
   let bestDist = Infinity;
   for (const r of rooms) {

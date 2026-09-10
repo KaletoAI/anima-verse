@@ -854,6 +854,20 @@
  * has to make the same statement — a point inside a ring is not on that plate,
  * so the height falls through to the rung below it. Derived by hand from the
  * contract example further down ("THE STAIRWELL").
+ *
+ * --- THE STOREY CORRIDOR (§ A13b, 2026-09-09) -----------------------------
+ * Every used storey owns a reserved corridor room, the complement of its
+ * rooms — so stepping out of a room no longer means "no candidate at all".
+ * `roomWalkCandidates` states the whole rule: a rectangle that holds the
+ * figure wins; otherwise the figure is in its OWN storey's corridor, and only
+ * on storey 0 does the outline decide between the hallway (inside the
+ * building) and the ground (outside it). A corridor that is locked or absent
+ * changes nothing — the old fall-through stands, and the cellar has no ground
+ * to fall onto.
+ * The same room is where the lift and the stairs open: `nearestRoomAt` gives
+ * a storey's corridor precedence over every distance, because that is the
+ * room you stand in when you step off a landing, whatever room centre happens
+ * to be nearer.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -974,7 +988,7 @@ async function main() {
   const { planClickWalk, reachedGoal, goalDir, walkStalled,
     GOAL_ARRIVE_M, STALL_STEP_M } = clickmove;
   const { talkTargetNear, TALK_RANGE } = proximity;
-  const { nearestRoomSwitch, idleRoomWalk } = roomwalk;
+  const { nearestRoomSwitch, idleRoomWalk, roomWalkCandidates } = roomwalk;
   const { elevatorAt, elevatorLevels, elevatorOptions, elevatorSoleOption,
     elevatorTargetRoom, ELEVATOR_RANGE } = elevator;
   const { wallSegments, clampAgainstWalls, bodyRadius, BODY_RADIUS_M,
@@ -1984,6 +1998,50 @@ async function main() {
       // (2,3): to a = sqrt(13) = 3.606, to b = sqrt(1+1) = 1.414 -> b
       check('nearest by XZ distance, not by axis', near.state.candidate, 'b');
     }
+  }
+
+  console.log('roomWalkCandidates — the corridor is the fallback of its storey (§ A13b)');
+  {
+    const rooms = [{ id: 'k1', level: -1, center: { x: -2.5, z: -2.5 } },
+                   { id: 'k2', level: -1, center: { x: 2.5, z: -2.5 } }];
+    const base = { current: 'k1', ownLevel: -1, pos: { x: 0, z: 2 }, rooms,
+      insideRect: () => false, insideLevelOutline: () => true, groundId: '__ground__',
+      floorIdOf: (lv) => (lv === -1 ? '__floor__-1' : '') };
+    // outside both rectangles on storey -1 -> the corridor, level -1, centre = pos
+    check('cellar -> corridor', roomWalkCandidates(base).map((r) => r.id), ['__floor__-1']);
+    check('corridor carries the storey', roomWalkCandidates(base)[0].level, -1);
+    check('corridor stands where the figure does', roomWalkCandidates(base)[0].center,
+      { x: 0, z: 2 });
+    // inside k2's rectangle -> k2 alone, the corridor is no candidate
+    check('inside k2', roomWalkCandidates({ ...base, insideRect: (id) => id === 'k2' }).map((r) => r.id), ['k2']);
+    // storey 0 with a hallway: inside the plate outline -> hallway, outside -> ground
+    const g = { ...base, ownLevel: 0, floorIdOf: (lv) => (lv === 0 ? '__floor__0' : '') };
+    check('hallway inside outline', roomWalkCandidates(g).map((r) => r.id), ['__floor__0']);
+    check('yard outside outline', roomWalkCandidates({ ...g, insideLevelOutline: () => false }).map((r) => r.id), ['__ground__']);
+    // storey 0 without a hallway (no opt-in) -> the ground, as before
+    check('no hallway -> ground', roomWalkCandidates({ ...g, floorIdOf: () => '' }).map((r) => r.id), ['__ground__']);
+    // locked corridor -> falls through to the room list (the old behaviour), never the corridor
+    check('locked corridor', roomWalkCandidates({ ...base, floorIdOf: () => '' }).map((r) => r.id), ['k1', 'k2']);
+    // a LOCKED ground on storey 0 is no fallback either — the same fall-through
+    check('locked ground', roomWalkCandidates({ ...g, floorIdOf: () => '', groundId: '' }).map((r) => r.id), ['k1', 'k2']);
+    // no storey known yet (no room at all) reads as the ground storey, as it always has
+    check('no storey -> ground rule', roomWalkCandidates({ ...base, ownLevel: undefined }).map((r) => r.id), ['__ground__']);
+    // no scene yet -> nothing
+    check('no rooms', roomWalkCandidates({ ...base, rooms: [] }), []);
+  }
+  console.log('nearestRoomAt / elevatorTargetRoom — the lift opens into the corridor');
+  {
+    const rooms = [{ id: 'k1', level: -1, center: { x: -2.5, z: -2.5 } },
+                   { id: '__floor__-1', level: -1, center: { x: 3, z: -3 }, floor: true },
+                   { id: 'eg', level: 0, center: { x: -2, z: -2.5 } }];
+    const stops = [{ level: -1, pos: { x: 3, z: -3 } }, { level: 0, pos: { x: 3, z: -3 } }];
+    // stop at (3,-3): k1 is hypot(5.5, 0.5) = 5.52 m away, the corridor 0 m —
+    // and even from k1's own centre (where the corridor is 5.52 m off) the
+    // corridor wins, because a storey's corridor beats every distance.
+    check('lift -> corridor', elevatorTargetRoom(-1, stops, rooms), '__floor__-1');
+    check('corridor wins regardless of distance', nearestRoomAt(-1, { x: -2.5, z: -2.5 }, rooms), '__floor__-1');
+    check('storey without corridor -> nearest room', elevatorTargetRoom(0, stops, rooms), 'eg');
+    check('levels served count the corridor', elevatorLevels(stops, rooms), [-1, 0]);
   }
 
   console.log('room-walk hook — storey source, lost figure, gated request (task 6)');

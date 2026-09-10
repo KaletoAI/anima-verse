@@ -21,12 +21,13 @@ import {
 } from './game/clickmove';
 import { talkTargetNear, type TalkCandidate } from './game/proximity';
 import { nearestOffer, type OfferKind } from './game/offers';
-import { idleRoomWalk, nearestRoomSwitch, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
+import { idleRoomWalk, nearestRoomSwitch, roomWalkCandidates, type RoomWalkRoom, type RoomWalkState } from './game/roomwalk';
 import { elevatorAt, elevatorLevels, elevatorSoleOption, elevatorTargetRoom,
   type ElevatorStop } from './game/elevator';
 import { nearestRoomAt, stairChain, stairLegTo, stairLegs, stairsAt,
   type StairLink, type StairPrompt } from './game/stairs';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
+import { pointInPolygon } from './game/polygon';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
 import { doorDistance, doorTargetAngle, easeAngle, DOOR_SWING_RATE } from './game/doorSwing';
@@ -4494,14 +4495,22 @@ async function startApp(username: string, role: string) {
    *  the room walk and of the elevator. Keyed by ID on purpose: `roomCenters`
    *  holds every centre TWICE (under id and under name, one shared instance),
    *  and one room must not stand for two candidates. No centre = no layout to
-   *  walk into. */
+   *  walk into — which since § A13b includes the storey CORRIDORS, whose
+   *  centre is the server's anchor.
+   *
+   *  A corridor is marked as one (`floor`), because the lift and the stairs
+   *  open into it whatever room centre is nearer (`stairs.nearestRoomAt`).
+   *  Which rooms those are comes off the player payload over the bus
+   *  (`is_floor`), never from the reserved id — the same arrangement the
+   *  ground room has. */
   function interiorRooms(tile: Tile): RoomWalkRoom[] {
+    const floorIds = new Set(Object.values(getGameState().floorRoomIds));
     const rooms: RoomWalkRoom[] = [];
     for (const r of tile.loc.rooms) {
       const c = tile.roomCenters.get(r.id);
       if (c) {
         rooms.push({ id: r.id, level: tile.roomLevels.get(r.id) ?? 0,
-                     center: { x: c.x, z: c.z } });
+                     center: { x: c.x, z: c.z }, floor: floorIds.has(r.id) });
       }
     }
     return rooms;
@@ -4780,43 +4789,61 @@ async function startApp(username: string, role: string) {
     const rooms = unlockedRooms(interiorRooms(tile).filter(
       (r) => interiorUp || tile.alwaysVisibleRooms.has(r.id)),
     state.lockedRooms, current ?? '');
-    // The ground is a TARGET, not a gap (plan-grundflaeche.md § 8, stage 2).
-    // The rooms of a place do not cover it, so whoever steps out of a room
-    // stands outside every rectangle — and that used to mean "no candidate",
-    // which left the avatar in the room it had left, for the server, the
-    // prompt and the chat window alike. The ground is the one room with an id
-    // and no geometry: it cannot be found by distance, it is what remains
-    // when no rectangle holds the figure. Its id comes from the scene payload
-    // (`is_ground`) over the bus — the reserved constant stays the server's.
+    // The ground and the storey CORRIDOR are TARGETS, not gaps
+    // (plan-grundflaeche.md § 8 stage 2; § A13b). The rooms of a place do not
+    // cover it, so whoever steps out of a room stands outside every rectangle
+    // — and that used to mean "no candidate", which left the avatar in the
+    // room it had left, for the server, the prompt and the chat window alike.
+    // Both are rooms with an id and no geometry: they cannot be found by
+    // distance, they are what remains when no rectangle holds the figure, and
+    // which of the two it is, is a storey question. Their ids come from the
+    // scene payload (`is_ground`, `is_floor`) over the bus — the reserved
+    // constants stay the server's.
     //
     // Whether a rectangle holds the figure decides which room it is in; among
     // several (overlapping outdoor zones) the nearest centre still wins, and
     // the hold below is unchanged, so the boundary between "in" and "out"
     // flickers no more than the boundary between two rooms does.
     //
-    // Only where there ARE rooms: a tile whose scene has not arrived (no
-    // rectangles, no centres) proposes nothing at all, exactly as before —
-    // adopting a room out of nothing is what the guard above prevents.
-    // …and a LOCKED ground is no fallback either: it is a room like every
-    // other one, so a rule on it bars the step out onto it just the same.
-    const groundId = getGameState().groundRoomId;
-    const ground = (groundId === current || !isLocked(state.lockedRooms, groundId))
-      ? groundId : '';
-    const inside = rooms.filter((r) => insideRoomRect(tile, r.id, pos));
-    const candidates = inside.length ? inside
-      : (rooms.length && ground
-        ? [{ id: ground, level: 0, center: { x: pos.x, z: pos.z } }]
-        : rooms);
-    // The storey is the FIGURE'S OWN, never the displayed one: `levelFilter`
+    // …and a LOCKED ground or corridor is no fallback either: they are rooms
+    // like every other one, so a rule on them bars the step out onto them just
+    // the same. The room the avatar is IN survives, exactly as `unlockedRooms`
+    // lets it survive above.
+    //
+    // THE STOREY IS THE FIGURE'S OWN, never the displayed one: `levelFilter`
     // is the in-world storey BUTTON, pure view state. Glancing at the first
     // floor from the hall must not post the avatar up there, and a room set by
     // the HUD chip must not be pulled back down because the view shows the
     // ground floor. Without a room yet, the displayed storey is the only
-    // answer there is. The ground has no plate, so `roomLevels` does not know
-    // it — it is the ground storey by definition.
+    // answer the SWITCH has (the fall-back rule reads such a figure as being
+    // on storey 0, which is where a figure without a room stands). The ground
+    // has no plate, so `roomLevels` does not know it — it is the ground storey
+    // by definition; a corridor it does know, from `corridors[]`.
+    const groundId = getGameState().groundRoomId;
+    const unlockedId = (id: string) =>
+      (id && (id === current || !isLocked(state.lockedRooms, id))) ? id : '';
+    const ground = unlockedId(groundId);
     const ownLevel = current
       ? tile.roomLevels.get(current) ?? (current === ground ? 0 : undefined)
       : undefined;
+    // The rule itself is pure and checked by hand
+    // (`client3d/scripts/smoke_walk_math.mjs`); everything this closure passes
+    // in is a measurement on the mounted tile. `insideLevelOutline` asks the
+    // storey's own footprint as the server resolved it — the one the corridor
+    // anchor was computed on — because that is the line between the hallway
+    // and the yard on storey 0, where there is no plate to ask.
+    const candidates = roomWalkCandidates({
+      current, ownLevel, pos: { x: pos.x, z: pos.z }, rooms,
+      insideRect: (id) => insideRoomRect(tile, id, pos),
+      insideLevelOutline: (lv) => {
+        const outline = tile.corridors.find((c) => c.level === lv)?.outline;
+        if (!outline) return false;
+        const local = worldToTile(tile, pos.x, pos.z);
+        return pointInPolygon(local.x, local.z, outline);
+      },
+      groundId: ground,
+      floorIdOf: (lv) => unlockedId(getGameState().floorRoomIds[String(lv)] ?? ''),
+    });
     const level = ownLevel ?? tile.levelFilter;
     const before = roomWalk;
     const out = nearestRoomSwitch(current, { x: pos.x, z: pos.z }, candidates,

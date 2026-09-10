@@ -37,6 +37,10 @@ export interface ElevatorRoom {
   id: string;
   level: number;
   center: { x: number; z: number };
+  /** True for the storey's CORRIDOR (§ A13b) — the room the lift opens into,
+   *  which `nearestRoomAt` takes ahead of every distance. Absent on a normal
+   *  room; the reserved id stays the server's business. */
+  floor?: boolean;
 }
 
 /** What the HUD needs to draw the storey choice. */

@@ -29,6 +29,11 @@ export interface RoomWalkRoom {
   level: number;
   /** room centre in world metres (XZ; the height plays no part) */
   center: { x: number; z: number };
+  /** True for the storey's CORRIDOR (§ A13b). The walk rule does not read it —
+   *  a corridor holds no rectangle, so it is reached through `floorIdOf` —
+   *  but the SAME room list feeds the lift and the stairs, where a corridor
+   *  wins over every distance (`stairs.nearestRoomAt`). */
+  floor?: boolean;
 }
 
 /** A fresh, empty clock. A function and not a shared constant: the state is
@@ -98,4 +103,64 @@ export function nearestRoomSwitch(
     return { next: best, state: { candidate: best, sinceMs: nowMs } };
   }
   return { next: current, state };
+}
+
+/** Everything the candidate rule below needs, so it can be stated once and
+ *  checked without a scene. The two predicates and `floorIdOf` are the
+ *  caller's window onto the mounted tile — geometry stays where it is
+ *  measured, this module only decides. */
+export interface CandidateInput {
+  /** room the SERVER has the avatar in (null = none yet) */
+  current: string | null;
+  /** storey of THAT room, undefined while it is unknown */
+  ownLevel: number | undefined;
+  /** where the figure is drawn, world metres */
+  pos: { x: number; z: number };
+  /** rooms with a rectangle on the shown interior, already lock-filtered */
+  rooms: RoomWalkRoom[];
+  /** does a room's rectangle hold `pos` */
+  insideRect: (id: string) => boolean;
+  /** does the storey's building outline hold `pos` (false = no outline known) */
+  insideLevelOutline: (level: number) => boolean;
+  /** the ground room's id, '' when it is locked */
+  groundId: string;
+  /** the storey corridor's id, '' when the storey has none or it is locked */
+  floorIdOf: (level: number) => string;
+}
+
+/**
+ * The rooms the walk heuristic may switch between, given where the figure
+ * stands (§ A13b).
+ *
+ * THE ROOMS OF A PLACE DO NOT COVER IT. Whoever steps out of a room stands
+ * outside every rectangle, and that used to leave the avatar in the room it
+ * had left — for the server, the prompt and the chat window alike. Two rooms
+ * with an id and no geometry answer for that gap, and they cannot be found by
+ * distance: the storey's CORRIDOR inside the building, the GROUND outside it.
+ * Which of them it is, is a storey question and a containment question, in
+ * that order:
+ *
+ * - a rectangle holds the figure -> those rooms, and nothing else; a corridor
+ *   is never a candidate while the figure is in a real room;
+ * - otherwise, on a storey that is not 0: its corridor. There is no ground to
+ *   fall onto from a cellar or a first floor, so without a corridor (none
+ *   stored, or locked) the old fall-through stands;
+ * - on storey 0 the building's outline decides: inside it the hallway (which
+ *   only exists on opt-in), outside it the ground.
+ *
+ * A storey nobody knows yet reads as 0, the same assumption the door gate and
+ * the storey follow make about a figure without a room. Without rooms at all
+ * (the scene has not arrived) nothing is proposed — adopting a room out of
+ * nothing is how a figure drifts out of the room it just entered.
+ */
+export function roomWalkCandidates(i: CandidateInput): RoomWalkRoom[] {
+  const inside = i.rooms.filter((r) => i.insideRect(r.id));
+  if (inside.length) return inside;
+  if (!i.rooms.length) return [];
+  const level = i.ownLevel ?? 0;
+  const here = { x: i.pos.x, z: i.pos.z };
+  const floor = i.floorIdOf(level);
+  if (level !== 0) return floor ? [{ id: floor, level, center: here }] : i.rooms;
+  if (floor && i.insideLevelOutline(0)) return [{ id: floor, level: 0, center: here }];
+  return i.groundId ? [{ id: i.groundId, level: 0, center: here }] : i.rooms;
 }
