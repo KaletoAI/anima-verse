@@ -5450,6 +5450,38 @@ async function main() {
   setClipTransitions([{ from: 'sit', to: 'walk', kind: 'run', accel: 2 }]);
   check('…and the lookup carries it', clipTransition('sit', 'walk').accel, 2);
 
+  // --- WHAT THAT VALUE IS WORTH WHILE THE BRIDGE PLAYS -------------------
+  // `bridgePace(accel, elapsed)` is the fraction of its speed a figure has
+  // while a bridge clip runs, and the whole rule is
+  //
+  //     accel <= 0            ->  0            (held for the whole clip)
+  //     otherwise             ->  min(1, max(0.02, accel · elapsed))
+  //
+  // Derived by hand: an `accel` of 1 reaches full speed after 1 s and is at
+  // a quarter after 0.25 s; 0.5 takes two seconds; 4 is at 0.04 after 10 ms.
+  // The floor of 0.02 is not cosmetic — 0 is the answer of a HELD bridge, and
+  // the two must stay apart at every point of the ramp, including t = 0.
+  //
+  // The pair `Figure.paceLimit` builds from it — 1 while no bridge runs, this
+  // number while one does — is what `npcs.tick` scales its step by, and it is
+  // the ONLY brake on the step: a held figure neither walks nor turns, and
+  // that is what makes a 7-second getting-up clip play out without the body
+  // drifting towards the key (the bug of 2026-09-10).
+  const { bridgePace } = walk;
+  check('a rule without a speed-up holds the figure at t = 0', bridgePace(0, 0), 0);
+  check('…and still holds it seven seconds in', bridgePace(0, 7), 0);
+  check('junk and a negative value hold it too',
+    [bridgePace('nonsense', 3), bridgePace(-1, 3), bridgePace(NaN, 3)].join(','), '0,0,0');
+  check('a ramping rule is never exactly 0 at the start', bridgePace(1, 0), 0.02);
+  check('…nor for a value below the floor', bridgePace(4, 0.001), 0.02);
+  check('accel 4 after 10 ms', bridgePace(4, 0.01), 0.04);
+  check('accel 1 after a quarter second', bridgePace(1, 0.25), 0.25);
+  check('accel 1 reaches full speed after one second', bridgePace(1, 1), 1);
+  check('accel 0.5 is half way after one second', bridgePace(0.5, 1), 0.5);
+  check('…and full after two', bridgePace(0.5, 2), 1);
+  check('full speed is the cap, not a stage', bridgePace(1, 30), 1);
+  check('a clock that runs backwards is no speed', bridgePace(1, -5), 0.02);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }

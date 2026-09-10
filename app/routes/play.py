@@ -3509,9 +3509,16 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     place_id = str(body.get("place_id") or "").strip()
     pose = str(body.get("pose") or "").strip().lower()
     activity = str(body.get("activity") or "").strip()
-    # Setting an activity while asleep wakes the avatar — the sleeping flag
-    # otherwise overrides the displayed activity ("Sleeping").
-    if (activity or place_id) and is_character_sleeping(avatar):
+    # Every shape of this endpoint is the avatar acting on its own body, and
+    # that wakes it — the same rule ``/play/enter-room`` and the journey start
+    # apply. CLEARING the pose is the case that matters most: it IS the
+    # stand-up (the 3D client posts it on the first steering key), and while
+    # the flag stood the avatar kept its "Sleeping" activity, so
+    # ``get_effective_pose_key`` went on answering ``sleeping`` and the
+    # worldmap went on sending the sleeping clip. The client overrides that
+    # for as long as a key is held; the moment it is let go, the sleeping clip
+    # came back down on a figure that was standing up.
+    if is_character_sleeping(avatar):
         set_is_sleeping(avatar, False)
         try:
             wake_from_offmap(avatar)

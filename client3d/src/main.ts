@@ -3707,6 +3707,10 @@ async function startApp(username: string, role: string) {
    *  had said (the sitting clip above all) a frame after each poll delivered
    *  it. */
   let steerClipOverride = false;
+  /** Is a bridge clip holding the steered figure on the spot right now?
+   *  Only so the turn it did NOT make is made the frame the hold ends —
+   *  see the steering hook below. */
+  let bridgeHeld = false;
 
   function cancelRoute() {
     if (!route) return;
@@ -3981,20 +3985,44 @@ async function startApp(username: string, role: string) {
       // would leave the figure between two states.
       if (npcs.bridgePace(avatarName) > 0) npcs.cancelBridge(avatarName);
     }
-    // HOW MUCH of its speed the figure has while a bridge clip runs. 0 is a
-    // rule that holds it on the spot — getting out of a seat; a fraction is a
-    // rule that lets it get going while the clip plays — starting to walk,
-    // ramping to full speed over `1 / accel` seconds. 1 outside a bridge.
-    let bridgePace = 1;
-    if (steering && dir && npcs.isBridging(avatarName)) {
-      bridgePace = npcs.bridgePace(avatarName);
-      // TURN. The facing normally follows the STEP, so a figure held still
-      // keeps the way it looked and swung round on its first step. A figure
-      // that is about to walk turns AT ONCE — it has to leave in the direction
-      // that was asked for. One that is held turns smoothly; there is time.
-      // Sitting DOWN never gets here: nobody steers, and the seat decides.
-      npcs.faceTowards(avatarName, dir.x, dir.z, bridgePace > 0);
-      if (bridgePace <= 0) dir = null;
+    // A BRIDGE CLIP THAT HOLDS THE FIGURE HOLDS ALL OF IT — the step and the
+    // FACING. A rule without a speed-up (`accel` 0) means the body belongs to
+    // the clip for its whole length: getting out of bed is animated lying
+    // down, and turning that body towards the keys drags the whole
+    // seven-second clip round with it. This REVISES the "one that is held
+    // turns smoothly; there is time" of plan-posen-plaetze.md § 4 (2026-09-08)
+    // — what it was written against, a figure that leaves in the wrong
+    // direction, is answered instead by the snap in the branch below, the
+    // frame the hold ends. A RAMPING bridge (`accel` > 0) is the other case:
+    // it is about to walk off, so it turns at once and keeps steering.
+    // Sitting DOWN never gets here: nobody steers, and the seat decides.
+    //
+    // HOW FAST it may go while it does is not decided here any more: the step
+    // scales by the figure's own pace (`npcs.tick`), which is also the only
+    // place that covers the NPCs nobody steers.
+    //
+    // The question is asked for the clip the figure is ABOUT to be given
+    // (`paceLimitFor`), not for the bridge that already runs: `npcs.tick`
+    // plays that clip at the END of the frame, so a lookup of the running
+    // bridge answers "nothing holds you" in the very frame one starts — and
+    // that one frame was a goal written, a body turned towards the key and a
+    // step taken out of a pose the figure had not left yet.
+    if (steering && dir) {
+      const limit = npcs.paceLimitFor(avatarName, locomotionClip('walk'));
+      if (limit <= 0) {
+        bridgeHeld = true;
+        dir = null;
+      } else if (limit < 1) {
+        npcs.faceTowards(avatarName, dir.x, dir.z, true);
+        bridgeHeld = false;
+      }
+    }
+    if (bridgeHeld && dir) {
+      // The hold has just ended and the keys are still down: the figure leaves
+      // in the direction that was asked for, at once — this is the turn the
+      // held bridge did not make.
+      npcs.faceTowards(avatarName, dir.x, dir.z, true);
+      bridgeHeld = false;
     }
     if (!dir) {
       // Standing still is when the FINAL report of a walk goes out — the
@@ -4047,7 +4075,7 @@ async function startApp(username: string, role: string) {
       if (routeStalled >= STALL_FRAMES) cancelRoute();
     }
     walkGoal.set(x, roomFloorY(here, x, z) ?? groundY(x, z), z);
-    npcs.setPlayerTarget(avatarName, walkGoal, pace * bridgePace);
+    npcs.setPlayerTarget(avatarName, walkGoal, pace);
     // The report is about where the figure IS, not where it is being sent:
     // `setPlayerTarget` only moves the goal, `tick()` walks the figure there.
     // Reporting the goal would put the server up to one lead ahead of the

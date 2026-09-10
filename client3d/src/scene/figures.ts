@@ -14,7 +14,8 @@ import type { RestCorrection, RestPose } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
-import { clipTransition, locomotionClip, setClipTransitions, setLocomotionClips } from '../game/walk';
+import { bridgePace, clipTransition, locomotionClip, setClipTransitions,
+  setLocomotionClips } from '../game/walk';
 
 /**
  * Animierte 3D-Figuren für NPCs (AV3D-5): Modelle kommen vom Server
@@ -1419,6 +1420,13 @@ export class Figure {
       this.bridgeUntil = performance.now() + bridge.getClip().duration * 1000 + 500;
       this.bridgeAccel = rule.accel;
       this.bridgeStart = performance.now();
+      // A bridge that HOLDS the figure holds ALL of it: the way it looks is
+      // the clip's from here on, so a turn ordered in the very frame this
+      // starts is taken back. Without this the yaw kept easing towards a
+      // target nobody may write any more — the figure lay in its bed and
+      // rotated towards the key for the whole seven seconds of getting up.
+      // A ramping bridge keeps its turn: it is about to walk off.
+      if (rule.accel <= 0) this.targetYaw = this.root.rotation.y;
       // Loud on purpose: a bridge is rare (a state change), and when one fires
       // in a loop — the figure keeps starting over — this line is what says
       // WHICH origin keeps coming back. Without it the loop is only visible as
@@ -1517,11 +1525,37 @@ export class Figure {
    *  case, where the figure has to get going while the clip runs rather than
    *  wait for it. */
   get bridgePace(): number {
-    if (!this.bridging || this.bridgeAccel <= 0) return 0;
-    const elapsed = (performance.now() - this.bridgeStart) / 1000;
-    // Never exactly 0: a pace of 0 reads as "no pace given" further down and
-    // would silently become full speed.
-    return Math.min(1, Math.max(0.02, this.bridgeAccel * elapsed));
+    if (!this.bridging) return 0;
+    return bridgePace(this.bridgeAccel, (performance.now() - this.bridgeStart) / 1000);
+  }
+
+  /** HOW MUCH of its speed this figure may use RIGHT NOW — 1 while no bridge
+   *  runs, and the running bridge's own pace while one does (0 = held on the
+   *  spot). This is the number the walking loop scales its step by, for every
+   *  figure alike: whoever steers decides WHERE a figure goes, but a figure
+   *  that is getting out of a pose does not go anywhere, and the step is the
+   *  one place that rule can be complete. Reading `bridgePace` there instead
+   *  would stop every figure that has no bridge at all. */
+  get paceLimit(): number {
+    return this.bridging ? this.bridgePace : 1;
+  }
+
+  /** The same answer, but for a figure that is about to be ASKED for `kind`
+   *  this very frame: the running bridge's pace, or the pace of the bridge
+   *  that switching to `kind` WOULD open, or 1 when neither holds it.
+   *
+   *  Whoever steers asks this instead of `paceLimit`, because the two happen
+   *  in the wrong order for it: the clip is asked for at the END of the frame
+   *  (`npcs.tick` plays it after the step), so on the frame a bridge starts,
+   *  `paceLimit` still answers "nothing holds you" — and that one frame is a
+   *  goal written, a body turned and a step taken out of a pose the figure
+   *  has not left yet. The rule read here is the very one `play` will apply. */
+  paceLimitFor(kind: string): number {
+    if (this.bridging) return this.bridgePace;
+    const rule = clipTransition(this.currentKind, (kind || '').toLowerCase());
+    const via = rule?.kind ?? '';
+    if (!rule || !via || via === kind || !this.actions.has(via)) return 1;
+    return bridgePace(rule.accel, 0);
   }
 
   /** Put the instance at `groundY − drop`. The anchor itself stays what the

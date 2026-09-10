@@ -319,6 +319,31 @@ export function clipTransition(from: string | null | undefined,
   return wildTo || wildFrom;
 }
 
+/** The smallest pace a RAMPING bridge hands out. Never exactly 0: a pace of 0
+ *  is the answer of a bridge that HOLDS the figure, and the two must stay
+ *  apart at every point of the ramp. */
+const BRIDGE_MIN_PACE = 0.02;
+
+/**
+ * HOW MUCH of its normal speed a figure has while a bridge clip plays —
+ * `accel` seconds' worth per second, capped at its full speed.
+ *
+ * 0 for a rule without a speed-up: the figure stays on the spot for the whole
+ * clip and does not turn either (standing up out of a seat, getting up out of
+ * bed — the body is the clip's, not the steering's). A positive `accel` is
+ * the "starting to walk" case, where the figure has to get going while the
+ * clip runs: it reaches full speed after `1 / accel` seconds.
+ *
+ * The caller says WHETHER a bridge is running; this answers only how fast it
+ * lets the figure be. `Figure.paceLimit` is the pair of the two, and it is
+ * that pair — never this function — that `npcs.tick` scales its step by.
+ */
+export function bridgePace(accel: number, elapsedS: number): number {
+  if (!Number.isFinite(accel) || accel <= 0) return 0;
+  const e = Number.isFinite(elapsedS) && elapsedS > 0 ? elapsedS : 0;
+  return Math.min(1, Math.max(BRIDGE_MIN_PACE, accel * e));
+}
+
 /**
  * Takes the server's mapping over. A role that is missing, empty or not a
  * string keeps its own name — junk in the payload must not leave a figure

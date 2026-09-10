@@ -521,16 +521,20 @@ export class NpcManager {
 
   /** How fast this figure may move while a bridge clip runs: 0 holds it on
    *  the spot (standing up), a fraction between 0 and 1 lets it get going
-   *  while the clip plays (starting to walk). 0 when nothing bridges — the
-   *  caller checks `isBridging` for that difference. */
+   *  while the clip plays (starting to walk). 0 when nothing bridges at all —
+   *  so this answers "is a bridge letting it go", never "may it walk";
+   *  `paceLimitFor` is the question the steering asks. */
   bridgePace(name: string): number {
     return this.npcs.get(name)?.figure?.bridgePace ?? 0;
   }
 
-  /** Is this figure playing a BRIDGE clip (standing up, sitting down)? The
-   *  avatar's steering asks before it takes a step — see `Figure.bridging`. */
-  isBridging(name: string): boolean {
-    return this.npcs.get(name)?.figure?.bridging ?? false;
+  /** How fast this figure may move if it is asked for `kind` this frame — 1
+   *  when nothing holds it, 0 while a bridge without a speed-up plays or is
+   *  about to, the ramp in between. See `Figure.paceLimitFor`: the steering
+   *  hook asks it BEFORE it writes a goal, because the clip that opens the
+   *  bridge is not asked for until the end of the same frame. */
+  paceLimitFor(name: string, kind: string): number {
+    return this.npcs.get(name)?.figure?.paceLimitFor(kind) ?? 1;
   }
 
   setPlayerAnimation(name: string, animation: string | null) {
@@ -1264,7 +1268,17 @@ export class NpcManager {
       // old walk stands, minus the boost.
       const reckoning = npc.travelling && npc.name !== this.playerDriven;
       const reckonRate = reckoning ? npc.reckon?.rateMS ?? null : null;
-      if (moving) {
+      // A BRIDGE CLIP HOLDS THE FIGURE, and it holds it HERE — at the step,
+      // the one place every figure's movement goes through. The gate used to
+      // sit in the avatar's steering hook alone, which left two holes: the
+      // frame that STARTS the bridge had already written its goal (the clip
+      // is asked for further down, after the step), and an NPC getting out of
+      // a seat was never held at all. 1 while nothing bridges, 0 while a rule
+      // without a speed-up plays, and the ramp in between (`Figure.paceLimit`)
+      // — so the ramp is applied exactly once, and no longer a second time by
+      // the caller's `pace`.
+      const paceLimit = npc.figure?.paceLimit ?? 1;
+      if (moving && paceLimit > 0) {
         // ONE pace for every figure, the player's included: `WALK_SPEED` is
         // metres a second and a metre is a metre (E4). `npc.pace` is what the
         // GROUND allows on top of that (1 for everybody but the avatar) —
@@ -1284,7 +1298,7 @@ export class NpcManager {
             WALK_SPEED * dt * npc.pace * (!reckoning && dist > RUN_DISTANCE ? 1.8 : 1));
         }
         const dir = delta.clone().normalize();
-        npc.root.position.addScaledVector(dir, step);
+        npc.root.position.addScaledVector(dir, step * paceLimit);
         npc.figure?.faceTowards(dir);
       }
       // WHAT THE GROUND SAYS UNDER THE FIGURE, once — the clips below and the
