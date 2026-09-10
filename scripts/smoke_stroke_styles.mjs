@@ -192,6 +192,19 @@ function check(label, actual, expected, eps = 1e-9) {
       + `\n       actual   ${JSON.stringify(actual)}`);
   }
 }
+/** A fed random stream for the jitter cases of [S14] — the pattern of
+ *  `client3d/scripts/smoke_scatter_math.mjs`: it throws when the sampler
+ *  draws more numbers than the case derived by hand, so a stream that must
+ *  stay closed is fed nothing at all. */
+function stream(values) {
+  let i = 0;
+  return () => {
+    if (i >= values.length) throw new Error('stations drew more numbers than the case feeds');
+    const v = values[i];
+    i += 1;
+    return v;
+  };
+}
 /** A red counter-probe: the two answers must NOT agree. */
 function differs(label, a, b) {
   const ok = JSON.stringify(a) !== JSON.stringify(b);
@@ -492,6 +505,21 @@ check('...and the deflection inside the window rides it',
 //        0.4 < 0.1 is false — it stands.
 //   [S13] `alongSeed` with an epoch: ('a', 2, 5) -> 'terrain:along:a:2:e5';
 //        without one, or with undefined / NaN, the seed of [S] unchanged.
+//   [S14] THE SPACING JITTER (Task 9, 2026-09-10): with `jitterM` > 0 every
+//        station draws r_k from a SEPARATE stream (the row seed + ':jitter',
+//        never the yaw stream) and j_k = (2·r_k − 1)·jitterM,
+//        s_0 = start + j_0, s_k = s_{k−1} + spacing + j_k, s_k < 0 -> 0,
+//        the walk ends at the first s_k past L (the ending candidate draws
+//        too — its j is needed to know it ends). [S1]'s line, spacing 25,
+//        jitter 5, stream [0, 1, 0.5, 0.25, 0.5]: j = [−5, +5, 0, −2.5, 0];
+//        start 12.5 -> s = 7.5, 37.5, 62.5, 85, and the fifth candidate
+//        110 > 100 ends it after five draws. z = +3 and yaw π/2 as in [S1].
+//        A four-number stream is one short and throws. `random` yaw and
+//        jitter together: the yaws are [S10]'s numbers exactly (the yaw
+//        stream is untouched), the x are the jittered ones. Jitter 0 or
+//        absent never opens the stream (a stream fed nothing stays silent)
+//        and is [S1] byte for byte. The real stream: seed 'terrain:along:a:0'
+//        with jitter 5 equals the run fed seededRandom('terrain:along:a:0:jitter').
 console.log('\n[S] strokeStations');
 const ROW = { line: [[0, 0], [100, 0]], spacingM: 25, offsetM: 3, seed: 'terrain:along:a:0' };
 const s1 = strokeStations(ROW);
@@ -575,6 +603,24 @@ check('S13 …and carries the epoch when the row reshuffles',
 check('S13 …but nothing for undefined or NaN',
   [alongSeed('a', 2, undefined), alongSeed('a', 2, NaN)],
   ['terrain:along:a:2', 'terrain:along:a:2']);
+const s14 = strokeStations({ ...ROW, jitterM: 5, jitterRng: stream([0, 1, 0.5, 0.25, 0.5]) });
+check('S14 jitter 5, stream [0, 1, .5, .25, .5]: x = 7.5, 37.5, 62.5, 85',
+  s14.map((p) => [p.x, p.z, p.yaw]), [7.5, 37.5, 62.5, 85].map((x) => [x, 3, Math.PI / 2]));
+check('S14 the ending candidate draws too: a four-number stream is one short',
+  (() => { try { strokeStations({ ...ROW, jitterM: 5, jitterRng: stream([0, 1, 0.5, 0.25]) }); return 'no throw'; } catch (e) { return e.message; } })(),
+  'stations drew more numbers than the case feeds');
+check('S14 random yaw + jitter: S10\'s yaws on the jittered x',
+  strokeStations({ ...ROW, yawMode: 'random', jitterM: 5, jitterRng: stream([0, 1, 0.5, 0.25, 0.5]) })
+    .map((p) => [p.x, p.yaw]), [7.5, 37.5, 62.5, 85].map((x, k) => [x, rndRow[k].yaw]));
+check('S14 jitter 0 never opens the stream: S1 byte for byte',
+  strokeStations({ ...ROW, jitterM: 0, jitterRng: stream([]) }), s1);
+check('S14 …and so is an absent jitter', strokeStations({ ...ROW, jitterRng: stream([]) }), s1);
+check('S14 the real stream is seededRandom(seed + \':jitter\')',
+  strokeStations({ ...ROW, jitterM: 5 }),
+  strokeStations({ ...ROW, jitterM: 5, jitterRng: seededRandom('terrain:along:a:0:jitter') }));
+differs('S14 …and it is not the yaw stream of the seed',
+  strokeStations({ ...ROW, jitterM: 5 }).map((p) => p.x),
+  strokeStations({ ...ROW, jitterM: 5, jitterRng: seededRandom('terrain:along:a:0') }).map((p) => p.x));
 check('S a zero-length line places nothing',
   strokeStations({ ...ROW, line: [[5, 5], [5, 5]] }), []);
 check('S a negative offset places nothing', strokeStations({ ...ROW, offsetM: -1 }), []);

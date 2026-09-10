@@ -464,6 +464,9 @@ export interface AlongEntry {
   yaw_deg?: number
   yaw_mode?: 'random'
   start_m?: number
+  /** the half-width of the random shift every station takes along the
+   *  line, 0..spacing_m; absent = the even row (Task 9, 2026-09-10) */
+  spacing_jitter_m?: number
   height_m?: number
   variant?: number
   /** reshuffle every this many GAME minutes — see `ScatterEntry.reshuffle_min` */
@@ -492,8 +495,15 @@ export interface StrokeStationOptions {
   yawMode?: string
   /** Arc length of the first station; absent = half a spacing. */
   startM?: number
-  /** `alongSeed(areaId, index)` — the stream of the random turn and the
-   *  offset of the variant formula. */
+  /** THE SPACING JITTER (Task 9, 2026-09-10): the half-width in metres of
+   *  the random shift every station takes along the line; absent or 0 =
+   *  the even row, byte for byte, and no stream is opened. */
+  jitterM?: number
+  /** the jitter stream, for the smoke check only */
+  jitterRng?: () => number
+  /** `alongSeed(areaId, index, epoch)` — the stream of the random turn and
+   *  the offset of the variant formula; the jitter stream is
+   *  `seed + ':jitter'`, its own. */
   seed: string
   footprints?: readonly ScatterFootprint[]
   clearM?: number
@@ -520,6 +530,16 @@ export interface StrokeStationOptions {
  *
  *     s_k = start + k · spacing,   0 <= s_k <= L        (start = spacing/2 unless authored)
  *
+ * or, with a spacing jitter (`jitterM` > 0, Task 9), shifted per station by
+ * a draw from the row's OWN jitter stream (`seed + ':jitter'` — the yaw
+ * stream of `random` is untouched, so the turns stay when the spacing
+ * starts to breathe):
+ *
+ *     j_k = (2 · r_k − 1) · jitterM
+ *     s_0 = start + j_0,   s_k = s_{k−1} + spacing + j_k,   s_k < 0 → 0
+ *
+ * ONE DRAW PER CANDIDATE, the ending one included; without a jitter the
+ * stream is never opened and the row is the even one, byte for byte. It sits
  * on the segment that contains s_k, with that segment's unit direction
  * (dx, dz). The right-hand normal, walking in drawing order, is (−dz, dx) and
  * the left-hand one (dz, −dx) — on a north-up map with z growing southwards
@@ -597,12 +617,22 @@ export function strokeStations(opts: StrokeStationOptions): ScatterInstance[] {
   const occupyR = scatterOccupyR(opts.occupyR, opts.clearM)
   const occupyTag = opts.occupyTag ?? opts.seed
   const TAU = Math.PI * 2
+  const jitter = Number(opts.jitterM)
+  const jitterRnd = jitter > 0
+    ? (opts.jitterRng ?? seededRandom(`${opts.seed}:jitter`)) : null
 
   const out: ScatterInstance[] = []
   let seg = 1
   let ordinal = 0
+  let s = 0
   for (let k = 0; ; k++) {
-    const s = start + k * spacing
+    if (jitterRnd) {
+      const j = (2 * jitterRnd() - 1) * jitter
+      s = k === 0 ? start + j : s + spacing + j
+      if (s < 0) s = 0
+    } else {
+      s = start + k * spacing
+    }
     if (s > total + STROKE_EPS) break
     if (out.length >= max) break
     while (seg < line.length - 1 && cum[seg] < s - STROKE_EPS) seg++

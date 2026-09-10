@@ -606,6 +606,9 @@ export interface TerrainAlongEntry {
   yaw_mode?: 'random';
   /** Arc length of the first station; absent = half a spacing. */
   start_m?: number;
+  /** The half-width of the random shift every station takes along the
+   *  line, 0..spacing_m (`strokeStations` `jitterM`); absent = the even row. */
+  spacing_jitter_m?: number;
   /** Target height, as on a scatter entry. */
   height_m?: number;
   /** A pinned model-variant list position for the whole row. */
@@ -656,6 +659,10 @@ export interface TerrainScatterEntry {
   /** How far an `edge` row stands INSIDE the rim, metres; stored only with
    *  `place: "edge"`; absent = 0. */
   offset_m?: number;
+  /** The half-width of the random shift every station of an `edge` row
+   *  takes along the rim, 0..min_spacing_m (`ringStations` `jitterM`);
+   *  stored only with `place: "edge"` and a spacing; absent = the even row. */
+  spacing_jitter_m?: number;
   /** A pinned model-variant list position for the whole row, whatever its
    *  placement (clamped to the count by the sampler); absent = the shared
    *  variant formula mixes the instances. */

@@ -976,6 +976,8 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
             yaw_deg?: float,            # Basiswinkel 0..360, nur MIT yaw_mode gespeichert
             place?: "edge" | "center",  # fehlt = spread (die gestreute Fläche wie bisher)
             offset_m?: float,           # 0..100 m nach INNEN, nur MIT place=edge; fehlt = 0
+            spacing_jitter_m?: float,   # Abstands-Streuung ±v m je Station, 0..min_spacing_m,
+                                        #   nur MIT place=edge UND min_spacing_m; fehlt = gleichmäßig
             variant?: int,              # Listenposition der Modell-Variante, JEDE Zeile; fehlt = Formel
             reshuffle_min?: int}, … ]   # Neuwurf alle n SPIEL-Minuten, 1..100000; fehlt = nie
 ```
@@ -1085,7 +1087,25 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
 
   auf der Kante, deren halboffene Spanne `[cum_i, cum_i+1)` `s_k` enthält;
   `s = L` ist wieder `s = 0` und keine Station, und ein Scatter-Eintrag hat
-  kein `start_m`. **`density_per_100m2` wirkt hier nicht** (gespeichert wird
+  kein `start_m`. **Mit `spacing_jitter_m` (Nachtrag 2026-09-10, Task 9)
+  atmet der Abstand:** jede Station zieht EINEN Wert `r_k` aus einem EIGENEN
+  Strom `seededRandom(seed + ':jitter')` — `seed` ist der Zeilen-Seed samt
+  Epoche, „New mix" würfelt also auch die Abstände neu; der Yaw-Strom der
+  Zeile bleibt unberührt — und
+
+  ```
+  j_k = (2 · r_k − 1) · spacing_jitter_m
+  s_0 = start + j_0,   s_k = s_{k−1} + spacing + j_k,   s_k < 0 → 0,   Ende bei s_k ≥ L
+  ```
+
+  Ein Zug je Kandidat, auch für den abschließenden (sein `j` entscheidet,
+  dass Schluss ist) und auch für Stationen, die ein Verdikt später
+  subtrahiert. Ohne das Feld (oder 0) wird der Strom nicht geöffnet und die
+  Reihe ist byte-gleich die gleichmäßige. Der Server speichert das Feld nur
+  MIT `place: "edge"` UND `min_spacing_m`, geklemmt auf `0..min_spacing_m`
+  mit zwei Nachkommastellen. Zahlen von Hand:
+  `client3d/scripts/smoke_scatter_math.mjs` (U4), Whitelist
+  `scripts/smoke_terrain_areas.py` [11p]. **`density_per_100m2` wirkt hier nicht** (gespeichert wird
   sie trotzdem, ein Moduswechsel verliert also nichts). Je Station EIN Zug
   aus dem Reihen-Strom `scatterSeed(area_id, index, epoche)`, immer und vor
   jedem Verdikt; danach in dieser Reihenfolge: im Ring → Occluder →
@@ -1198,6 +1218,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
             yaw_deg?: float,    # Drehung RELATIV zur Laufrichtung, 0..360; fehlt = 0
             yaw_mode?: "random",# fehlt = fest; random = je Instanz ein Zug aus dem Reihen-Seed
             start_m?: float,    # Bogenlänge der ersten Station, 0..spacing; fehlt = spacing/2
+            spacing_jitter_m?: float,  # Abstands-Streuung ±v m je Station, 0..spacing; fehlt = gleichmäßig
             height_m?: float,   # Zielhöhe wie beim Scatter
             variant?: int,      # Listenposition der Modell-Variante; fehlt = Formel
             reshuffle_min?: int}, …]  # Neuwurf alle n SPIEL-Minuten, 1..100000; fehlt = nie
@@ -1225,6 +1246,14 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Seite. `alternate` = Station k rechts (gerade) / links (ungerade); `both`
   = je Station zwei Instanzen (rechts, dann links). `random` zieht den Yaw aus
   `terrain:along:<area_id>:<index>`, ein Zug je Instanz, sonst nichts.
+  **`spacing_jitter_m` (Nachtrag 2026-09-10, Task 9)** streut die Stationen
+  genau wie bei der Rand-Reihe: `j_k = (2·r_k − 1) · spacing_jitter_m`,
+  `s_0 = start + j_0`, `s_k = s_{k−1} + spacing + j_k`, `s_k < 0 → 0`, Ende
+  hinter `L`; `r_k` aus dem EIGENEN Strom `seededRandom(seed + ':jitter')`
+  (Zeilen-Seed samt Epoche), ein Zug je Kandidat, der Yaw-Strom von `random`
+  bleibt unberührt; ohne das Feld byte-gleich die gleichmäßige Reihe. Der
+  Server klemmt es auf `0..spacing_m`. Zahlen von Hand:
+  `scripts/smoke_stroke_styles.mjs` [S14], Whitelist [11z].
 
   **Subtraktion wie beim Scatter:** Instanz in einer SPÄTEREN Fläche
   (Occluder) oder von einem Grundriss geblockt (`footprintBlocks`, `clearM`)

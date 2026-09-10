@@ -93,6 +93,12 @@ Throwaway storage. Hand-derived expectations:
         100      -> 100.0        (exactly at the limit, untouched)
         0 / -1 / NaN / inf / "wide" / None -> the KEY IS DROPPED, which is
                                   how both renderers read "no constraint".
+      [11p] adds the placement fields and, since Task 9 (2026-09-10), the
+      SPACING JITTER: spacing_jitter_m survives only beside place "edge" AND
+      a min_spacing_m, clamped to 0..min_spacing_m (the clamped one) with two
+      decimals — 2.5 -> 2.5, 2.456 -> 2.46, -1 -> 0.0, 15 beside 10 -> 10.0,
+      120 beside 150 -> 100.0; no spacing, place "center", a spread row and
+      junk lose the key. [11z] has the along twin: 0..spacing_m, same rules.
       [11y] THE TURN (2026-09-09; ONE mode since 2026-09-10): yaw_mode
       "aligned" survives together with yaw_deg, normalised to [0, 360) with
       two decimals and defaulting to 0.0 beside a mode; a bare yaw_deg
@@ -895,6 +901,42 @@ check("an offset beside place 'center' is dropped",
 check("without a place the offset goes and the variant stays",
       _place({"offset_m": 2, "variant": 1}), {**PLAIN, "variant": 1})
 
+# THE SPACING JITTER (Task 9, 2026-09-10): `spacing_jitter_m` is the half-width
+# of the random shift every station of an EDGE row takes, so it lives only
+# beside `place == "edge"` AND a `min_spacing_m` (the station spacing it is
+# measured against) — the pairing rule of `offset_m`. Clamped, never refused:
+# 0 <= v <= min_spacing_m, two decimals.
+EDGE10 = {**PLAIN, "place": "edge", "min_spacing_m": 10.0}
+check("a jitter beside an edge row's spacing survives",
+      _place({"place": "edge", "min_spacing_m": 10, "spacing_jitter_m": 2.5}),
+      {**EDGE10, "spacing_jitter_m": 2.5})
+check("a jitter keeps two decimals",
+      _place({"place": "edge", "min_spacing_m": 10,
+              "spacing_jitter_m": 2.456})["spacing_jitter_m"], 2.46)
+check("a negative jitter is clamped to 0, never refused",
+      _place({"place": "edge", "min_spacing_m": 10,
+              "spacing_jitter_m": -1})["spacing_jitter_m"], 0.0)
+check("a jitter past the spacing is clamped to the spacing",
+      _place({"place": "edge", "min_spacing_m": 10,
+              "spacing_jitter_m": 15})["spacing_jitter_m"], 10.0)
+check("…measured against the CLAMPED spacing (150 -> 100, so 120 -> 100)",
+      _place({"place": "edge", "min_spacing_m": 150,
+              "spacing_jitter_m": 120})["spacing_jitter_m"],
+      terrain.MIN_SPACING_MAX_M)
+check("a jitter without a spacing is dropped (nothing to measure it against)",
+      _place({"place": "edge", "spacing_jitter_m": 2}),
+      {**PLAIN, "place": "edge"})
+check("a jitter beside place 'center' is dropped",
+      _place({"place": "center", "min_spacing_m": 10, "spacing_jitter_m": 2}),
+      {**PLAIN, "place": "center", "min_spacing_m": 10.0})
+check("a jitter on a spread row is dropped",
+      _place({"min_spacing_m": 10, "spacing_jitter_m": 2}),
+      {**PLAIN, "min_spacing_m": 10.0})
+for bad in (float("nan"), float("inf"), "wide", None, [2]):
+    check(f"jitter {bad!r} loses the key",
+          _place({"place": "edge", "min_spacing_m": 10,
+                  "spacing_jitter_m": bad}), EDGE10)
+
 check("a reshuffle period survives", _place({"reshuffle_min": 30}),
       {**PLAIN, "reshuffle_min": 30})
 check("one minute is the floor", _place({"reshuffle_min": 1})["reshuffle_min"], 1)
@@ -1009,6 +1051,21 @@ check("yaw wraps, random is the only stored mode",
        {"spacing_m": 20.0, "offset_m": 0.0}])
 check("start_m is clamped to the spacing",
       along_of([{"spacing_m": 10, "start_m": 15}])[0]["start_m"], 10.0)
+# THE SPACING JITTER (Task 9): 0 <= spacing_jitter_m <= spacing_m, two
+# decimals, clamped against the CLAMPED spacing; junk loses the key.
+check("a jitter survives, rounded, clamped to 0..spacing",
+      [r.get("spacing_jitter_m") for r in along_of(
+          [{"spacing_m": 25, "spacing_jitter_m": 5},
+           {"spacing_m": 25, "spacing_jitter_m": 1.234},
+           {"spacing_m": 25, "spacing_jitter_m": 30},
+           {"spacing_m": 25, "spacing_jitter_m": -3},
+           {"spacing_m": 900, "spacing_jitter_m": 600}])],
+      [5.0, 1.23, 25.0, 0.0, 500.0])
+check("junk jitter loses the key",
+      [r.get("spacing_jitter_m") for r in along_of(
+          [{"spacing_jitter_m": float("nan")}, {"spacing_jitter_m": "wide"},
+           {"spacing_jitter_m": None}, {"spacing_jitter_m": [2]}, {}])],
+      [None, None, None, None, None])
 check("a variant must be a whole number >= 0; a bool is not one",
       [r.get("variant") for r in along_of([{"variant": 2.0}, {"variant": -1},
                                            {"variant": 1.5}, {"variant": True}])],

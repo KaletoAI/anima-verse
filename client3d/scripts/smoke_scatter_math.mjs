@@ -1315,6 +1315,29 @@
  * (U3) a repeated closing point adds no edge and no station; spacing 0 or a
  *      two-point ring places nothing; offsetM absent = 0 -> the stations sit
  *      ON the ring: (3.5, 0), (10, 0.5), (6.5, 4), (0, 3.5).
+ * (U4) THE SPACING JITTER (Task 9, 2026-09-10). With `jitterM` > 0 every
+ *      station draws ONE number r_k from a SEPARATE stream — the row seed
+ *      plus ':jitter', never the yaw stream — and
+ *
+ *          j_k = (2 · r_k − 1) · jitterM
+ *          s_0 = start + j_0,   s_k = s_{k−1} + spacing + j_k,
+ *          s_k < 0 -> 0,   the walk ends at the first s_k >= L
+ *
+ *      (the ending candidate draws too: its j is needed to know it ends).
+ *      RECT, spacing 7, offset 1, jitter 2, stream [1, 0, 0.5, 1, 0.5]:
+ *      j = [+2, −2, 0, +2, 0]; start 3.5 -> s = 5.5, 10.5, 17.5, 26.5, and
+ *      the fifth candidate 33.5 >= 28 ends the walk after five draws.
+ *      Points by the (U1) rule: s = 5.5 on edge 1 -> (5.5, 0) -> (5.5, 1);
+ *      s = 10.5 on edge 2 -> (10, 0.5) -> (9, 0.5); s = 17.5 on edge 3 ->
+ *      (6.5, 4) -> (6.5, 3); s = 26.5 on edge 4, t = 2.5/4 -> P = (0, 1.5)
+ *      -> (1, 1.5). Ordinals 0..3, axes as in (U1).
+ *      THE CLAMP: jitter 5, stream [0, 0.5, 0.5, 0.5, 0.5]: s_0 = 3.5 − 5 =
+ *      −1.5 -> 0, the corner (0, 0) -> (0, 1); then 7, 14, 21 (j = 0) -> the
+ *      (U2) points (7, 1), (10, 3), (3, 3); 28 >= 28 ends it.
+ *      WITHOUT jitter (absent or 0) the stream is never opened — an injected
+ *      stream that throws on its first draw stays silent and the output is
+ *      (U1), byte for byte. The real stream is `seededRandom(seed + ':jitter')`:
+ *      seed 'r' with jitter 2 equals the run fed `seededRandom('r:jitter')`.
  *
  * ============================================================================
  * (V) THE OCCUPANCY GRID — `OccupancyGrid` and the fifth verdict
@@ -3404,6 +3427,28 @@ async function main() {
   check('U3 no offset: the stations sit on the ring',
     ringStations(RECT, { spacingM: 7 }).map((s) => [s.x, s.z]),
     [[3.5, 0], [10, 0.5], [6.5, 4], [0, 3.5]], 1e-9);
+  // (U4) the spacing jitter — its own stream, one draw per candidate
+  const u4 = ringStations(RECT, { ...U_OPTS, jitterM: 2, jitterRng: stream([1, 0, 0.5, 1, 0.5]) });
+  check('U4 jitter 2, stream [1, 0, .5, 1, .5]: s = 5.5, 10.5, 17.5, 26.5',
+    u4.map((s) => [s.x, s.z]), [[5.5, 1], [9, 0.5], [6.5, 3], [1, 1.5]], 1e-9);
+  check('U4 …ordinals 0..3, axes as in U1',
+    u4.map((s) => [s.ordinal, s.axis]),
+    [[0, 3 * Math.PI / 2], [1, Math.PI], [2, Math.PI / 2], [3, 0]], 1e-12);
+  check('U4 the ending candidate draws too: a four-number stream is one short',
+    (() => { try { ringStations(RECT, { ...U_OPTS, jitterM: 2, jitterRng: stream([1, 0, 0.5, 1]) }); return 'no throw'; } catch (e) { return e.message; } })(),
+    'scatter drew more numbers than the case feeds');
+  check('U4 a negative first station clamps to 0: the corner, then the U2 points',
+    ringStations(RECT, { ...U_OPTS, jitterM: 5, jitterRng: stream([0, 0.5, 0.5, 0.5, 0.5]) })
+      .map((s) => [s.x, s.z]), [[0, 1], [7, 1], [10, 3], [3, 3]], 1e-9);
+  check('U4 jitter 0 never opens the stream and is U1 byte for byte',
+    ringStations(RECT, { ...U_OPTS, jitterM: 0, jitterRng: stream([]) }), u1);
+  check('U4 …and so is an absent jitter', ringStations(RECT, { ...U_OPTS, jitterRng: stream([]) }), u1);
+  check('U4 the real stream is seededRandom(seed + \':jitter\')',
+    ringStations(RECT, { ...U_OPTS, jitterM: 2, seed: 'r' }),
+    ringStations(RECT, { ...U_OPTS, jitterM: 2, jitterRng: seededRandom('r:jitter') }));
+  checkNot('U4 …and it is not the yaw stream of the seed',
+    ringStations(RECT, { ...U_OPTS, jitterM: 2, seed: 'r' }).map((s) => s.x),
+    ringStations(RECT, { ...U_OPTS, jitterM: 2, jitterRng: seededRandom('r') }).map((s) => s.x));
 
   // (V) THE OCCUPANCY GRID
   console.log('\n(V) the occupancy grid — OccupancyGrid and the fifth verdict');

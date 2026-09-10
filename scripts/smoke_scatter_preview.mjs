@@ -1440,6 +1440,32 @@ async function main() {
   check('K5 …and its thinned overview to its one',
     pinsOf(mathSrc.slice(mathSrc.indexOf('function scatterThinnedInstances(')),
       /variant: e\.variant,/g), 1);
+  // THE SPACING JITTER (Task 9, 2026-09-10) goes to the two station
+  // samplers — the along call and the edge call — in both sources:
+  // `jitterM: entry.spacing_jitter_m` in the client, `jitterM:
+  // e.spacing_jitter_m` in the editor; the centre and the spread sampler
+  // have no stations to jitter.
+  check('K5 ground.ts hands the spacing jitter to the along and the edge call',
+    pinsOf(groundSrc.slice(groundSrc.indexOf('function buildScatter(')),
+      /jitterM: entry\.spacing_jitter_m,/g), 2);
+  check('K5 …and so does mapMath.ts',
+    pinsOf(mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('),
+      mathSrc.indexOf('function scatterThinnedByArea(')), /jitterM: e\.spacing_jitter_m,/g), 2);
+  // (K7) …and the preview really runs it: a jittered lamp row's dots are
+  // `strokeStations` with the same jitter under the row seed, and they are
+  // not the unjittered stations of (K).
+  const JITTERED = {
+    ...ROAD, id: 'ta_jit',
+    meta: { stroke: { points: ROAD_LINE, width_m: 10,
+      along: [{ model: '/lamp', spacing_m: 8, offset_m: 0, spacing_jitter_m: 2 }] } },
+  };
+  const jitDots = scatterWindowDots(scatterPreviewJobs([JITTERED]), ONE_CELL, []);
+  check('K7 the preview\'s jittered lamps are strokeStations with jitterM 2 under the row seed',
+    jitDots.map((d) => [d.x, d.z]),
+    strokeStations({ line: strokeCentreLine(JITTERED.meta.stroke), spacingM: 8, offsetM: 0,
+      jitterM: 2, seed: alongSeed('ta_jit', 0), clearM: scatterClearM(2) }).map((p) => [p.x, p.z]));
+  differs('K7 …and not the even stations of (K)',
+    jitDots.map((d) => d.x), client.lamps.map((p) => p.x));
 
   // (K6) the clearance of a job follows the client's target height
   const HEIGHTS = {

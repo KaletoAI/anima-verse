@@ -265,6 +265,13 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
       with two decimals, clamped rather than refused (a knob). Stored only
       beside ``place == "edge"``: anywhere else it would be a number that acts
       on nothing, exactly like a ``yaw_deg`` without its mode.
+    * ``spacing_jitter_m`` — the half-width of the random shift every station
+      of an EDGE row takes along the rim (Task 9, 2026-09-10): the renderers
+      walk ``s_k = s_{k-1} + spacing + j_k`` with ``j_k`` drawn from the row's
+      own jitter stream in ``[-v, +v]``. Stored only beside ``place == "edge"``
+      AND a ``min_spacing_m`` (the station spacing it is measured against),
+      clamped to ``0..min_spacing_m`` (the clamped one) with two decimals —
+      a knob, never refused; junk loses the key, and no key is the even row.
     * ``variant`` — the LIST POSITION of the model variant EVERY instance of
       this row shows, a whole number >= 0 (:func:`_variant_index`), for every
       placement since 2026-09-10 (Task 8): a car row along the kerb is one
@@ -307,6 +314,10 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
         if offset is not None:
             out["offset_m"] = round(min(max(offset, 0.0),
                                         SCATTER_OFFSET_MAX_M), 2)
+        jitter = _finite(raw.get("spacing_jitter_m"))
+        if jitter is not None and "min_spacing_m" in out:
+            out["spacing_jitter_m"] = round(
+                min(max(jitter, 0.0), out["min_spacing_m"]), 2)
     variant = _variant_index(raw.get("variant"))
     if variant is not None:
         out["variant"] = variant
@@ -464,6 +475,11 @@ def _sanitize_along_entry(raw: Any) -> Dict[str, Any]:
       anything else loses the key, and no key is the fixed turn above.
     * ``start_m`` — the arc length of the first station, 0..spacing; junk
       loses the key, no key is half a spacing (the row is centred on the line).
+    * ``spacing_jitter_m`` — the half-width of the random shift every station
+      takes along the line (Task 9, 2026-09-10), 0..spacing (the clamped one)
+      with two decimals, clamped rather than refused; junk loses the key, and
+      no key is the even row. The same knob a scatter entry carries beside
+      ``place == "edge"``.
     * ``height_m`` / ``model`` — exactly as on a scatter entry. A row without
       a model places NOTHING (there is no tuft along a road).
     * ``variant`` — the LIST POSITION of the model variant every station
@@ -500,6 +516,10 @@ def _sanitize_along_entry(raw: Any) -> Dict[str, Any]:
     start = _finite(raw.get("start_m"))
     if start is not None and start >= 0:
         out["start_m"] = round(min(start, out["spacing_m"]), 2)
+    jitter = _finite(raw.get("spacing_jitter_m"))
+    if jitter is not None:
+        out["spacing_jitter_m"] = round(
+            min(max(jitter, 0.0), out["spacing_m"]), 2)
     height = _finite(raw.get("height_m"))
     if height is not None and height > 0:
         out["height_m"] = round(height, 3)

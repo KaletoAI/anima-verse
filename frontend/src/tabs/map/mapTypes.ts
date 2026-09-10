@@ -196,6 +196,10 @@ export interface TerrainScatterEntry {
   /** How far an `edge` row stands INSIDE the rim, metres (0..100); stored
    *  only with `place: "edge"`; absent = 0. */
   offset_m?: number
+  /** The half-width of the random shift every station of an `edge` row
+   *  takes along the rim, 0..`min_spacing_m` (Task 9, 2026-09-10); stored
+   *  only with `place: "edge"` and a spacing; absent = the even row. */
+  spacing_jitter_m?: number
   /** A pinned model-variant list position for the whole row, whatever its
    *  placement (Task 8, 2026-09-10); absent = the shared variant formula
    *  mixes the instances. The sampler clamps it to the variants that exist. */
@@ -397,6 +401,9 @@ export interface TerrainAlongEntry {
   yaw_mode?: 'random'
   /** Arc length of the first station, 0..spacing; absent = half a spacing. */
   start_m?: number
+  /** The half-width of the random shift every station takes along the
+   *  line, 0..`spacing_m`; absent = the even row. */
+  spacing_jitter_m?: number
   /** Target height, as on a scatter entry. */
   height_m?: number
   /** A pinned model-variant list position for the whole row (a lamp row is
@@ -441,6 +448,8 @@ export function readAlong(stroke: unknown): TerrainAlongEntry[] {
     if (e.yaw_mode === 'random') entry.yaw_mode = 'random'
     const start = num(e.start_m)
     if (start !== undefined && start >= 0) entry.start_m = start
+    const jitter = num(e.spacing_jitter_m)
+    if (jitter !== undefined && jitter > 0) entry.spacing_jitter_m = jitter
     const height = num(e.height_m)
     if (height !== undefined && height > 0) entry.height_m = height
     const variant = num(e.variant)
@@ -665,6 +674,13 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
       const offset = num(e.offset_m)
       if (e.place === 'edge' && offset !== undefined && offset > 0) {
         entry.offset_m = offset
+      }
+      // The jitter is measured against the station spacing, so it is read
+      // only where there is one — the server's pairing.
+      const jitter = num(e.spacing_jitter_m)
+      if (e.place === 'edge' && entry.min_spacing_m !== undefined
+        && jitter !== undefined && jitter > 0) {
+        entry.spacing_jitter_m = jitter
       }
     }
     const variant = num(e.variant)

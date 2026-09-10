@@ -1767,6 +1767,7 @@ export function createGround(): Ground {
             yawDeg: entry.yaw_deg,
             yawMode: entry.yaw_mode,
             startM: entry.start_m,
+            jitterM: entry.spacing_jitter_m,
             seed: alongSeed(area.id, index, reshuffleEpoch(gameSeconds, entry.reshuffle_min)),
             footprints,
             clearM,
@@ -1792,6 +1793,7 @@ export function createGround(): Ground {
             // on an edge row the authored spacing is the station spacing
             spacingM: Number(entry.min_spacing_m),
             offsetM: entry.offset_m,
+            jitterM: entry.spacing_jitter_m,
             yawMode: entry.yaw_mode,
             yawDeg: entry.yaw_deg,
             footprints,

@@ -84,6 +84,11 @@ export interface ScatterEntry {
   /** How far an `edge` row stands INSIDE the rim, metres (>= 0); absent = 0.
    *  The server stores it only beside `place: "edge"`. */
   offset_m?: number
+  /** The half-width of the random shift every station of an `edge` row
+   *  takes along the rim, 0..min_spacing_m (`RingStationOptions.jitterM`,
+   *  Task 9, 2026-09-10); absent = the even row. Stored only beside
+   *  `place: "edge"` and a `min_spacing_m`. */
+  spacing_jitter_m?: number
   /** The pinned list position of the model variant a `center` instance
    *  shows, clamped to the variants that exist; absent = the variant formula
    *  with ordinal 0. Stored only beside `place: "center"`. */

@@ -290,10 +290,14 @@ function WidthField({ widthM, onWidth }: {
  * `min` is the smallest number that MEANS something (0 for nearly all of
  * them, 0.1 for a station distance, where 0 would place nothing at all): a
  * smaller one is refused and the field snaps back to what still holds.
+ * `max`, where given, is a bound another field sets (a jitter is measured
+ * against its spacing): a larger number is CLAMPED to it, as the server
+ * clamps, so the field never claims more than what will be stored.
  */
-function ScatterNum({ label, title, value, step, min = 0, placeholder, onCommit }: {
+function ScatterNum({ label, title, value, step, min = 0, max, placeholder, onCommit }: {
   label: string; title: string; value: number | null; step: number
   min?: number
+  max?: number
   placeholder?: string
   onCommit: (v: number | null) => void
 }) {
@@ -306,7 +310,7 @@ function ScatterNum({ label, title, value, step, min = 0, placeholder, onCommit 
     if (text === '') { if (value !== null) onCommit(null); return }
     const v = parseFloat(text)
     if (!Number.isFinite(v) || v < min) return
-    const r = Math.round(v * 1000) / 1000
+    const r = Math.round(Math.min(v, max ?? Infinity) * 1000) / 1000
     if (r !== value) onCommit(r)
   }
   return (
@@ -314,7 +318,7 @@ function ScatterNum({ label, title, value, step, min = 0, placeholder, onCommit 
       {label}
       <input
         className="ga-input"
-        type="number" min={min} step={step}
+        type="number" min={min} max={max} step={step}
         placeholder={placeholder}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
@@ -575,6 +579,15 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
     // — "Random" is its absence.
     if (e.place !== 'edge' && e.place !== 'center') delete e.place
     if (e.place !== 'edge') delete e.offset_m
+    // The spacing jitter is measured against the station spacing, so it
+    // goes with the edge mode AND with the spacing (the server's pairing),
+    // and it never exceeds the spacing it breathes around.
+    if (e.place !== 'edge' || !(typeof e.min_spacing_m === 'number' && e.min_spacing_m > 0)
+      || !(typeof e.spacing_jitter_m === 'number' && e.spacing_jitter_m > 0)) {
+      delete e.spacing_jitter_m
+    } else if (e.spacing_jitter_m > e.min_spacing_m) {
+      e.spacing_jitter_m = e.min_spacing_m
+    }
     if (!(typeof e.variant === 'number' && e.variant >= 0)) delete e.variant
     if (!(typeof e.reshuffle_min === 'number' && e.reshuffle_min >= 1)) {
       delete e.reshuffle_min
@@ -668,6 +681,23 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                 })}
               />
             )}
+            {/* HOW MUCH THE SPACING BREATHES (Task 9). Only an edge row has
+                stations to shift; the bound is the spacing itself, and a
+                switch away from the edge removes the field with its value
+                (`patch`), never merely hides it. */}
+            {e.place === 'edge' && typeof e.min_spacing_m === 'number' && e.min_spacing_m > 0 ? (
+              <ScatterNum
+                label={t('± (m)')}
+                title={t('Random shift of every station along the edge, in metres either way — parked cars that do not stand like a fence. 0 or empty = evenly spaced. At most the spacing.')}
+                value={typeof e.spacing_jitter_m === 'number' ? e.spacing_jitter_m : null}
+                placeholder="0"
+                step={0.1}
+                max={e.min_spacing_m}
+                onCommit={(v) => patch(i, {
+                  spacing_jitter_m: v !== null && v > 0 ? v : undefined,
+                })}
+              />
+            ) : null}
             {/* HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-10). Random is the
                 absent key — the wood every scatter has been so far; aligned
                 is for things with a front, and it reads the angle against
@@ -826,6 +856,12 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
     if (!(typeof e.yaw_deg === 'number' && Number.isFinite(e.yaw_deg))) delete e.yaw_deg
     if (e.yaw_mode !== 'random') delete e.yaw_mode
     if (!(typeof e.start_m === 'number' && e.start_m >= 0)) delete e.start_m
+    // the jitter breathes around the spacing and never exceeds it
+    if (!(typeof e.spacing_jitter_m === 'number' && e.spacing_jitter_m > 0)) {
+      delete e.spacing_jitter_m
+    } else if (e.spacing_jitter_m > e.spacing_m) {
+      e.spacing_jitter_m = e.spacing_m
+    }
     if (!(typeof e.variant === 'number' && e.variant >= 0)) delete e.variant
     if (!(typeof e.reshuffle_min === 'number' && e.reshuffle_min >= 1)) {
       delete e.reshuffle_min
@@ -872,6 +908,19 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
               onCommit={(v) => patch(i, {
                 spacing_m: Math.min(ALONG_SPACING_MAX_M,
                   Math.max(ALONG_SPACING_MIN_M, v ?? NEW_ALONG_ENTRY.spacing_m)),
+              })}
+            />
+            {/* HOW MUCH THE SPACING BREATHES (Task 9) — the twin of the edge
+                row's field; the bound is the spacing. */}
+            <ScatterNum
+              label={t('± (m)')}
+              title={t('Random shift of every station along the line, in metres either way — parked cars that do not stand like a fence. 0 or empty = evenly spaced. At most the spacing.')}
+              value={typeof e.spacing_jitter_m === 'number' ? e.spacing_jitter_m : null}
+              placeholder="0"
+              step={0.1}
+              max={e.spacing_m}
+              onCommit={(v) => patch(i, {
+                spacing_jitter_m: v !== null && v > 0 ? v : undefined,
               })}
             />
             <ScatterNum

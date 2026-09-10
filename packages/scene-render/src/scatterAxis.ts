@@ -321,6 +321,16 @@ export interface RingStationOptions {
   startM?: number
   /** a guard, not a budget; defaults to `SCATTER_MAX_PER_ENTRY` */
   maxPoints?: number
+  /** THE SPACING JITTER (Task 9, 2026-09-10): the half-width in metres of
+   *  the random shift every station takes along the rim; absent or 0 = the
+   *  even row, byte for byte, and no stream is opened */
+  jitterM?: number
+  /** the row seed WITH epoch (`scatterSeed(area, index, epoch)`) — the
+   *  jitter stream is `seededRandom(seed + ':jitter')`, its own, so a "New
+   *  mix" re-rolls the distances as well as the turns */
+  seed?: string
+  /** the jitter stream, for the smoke check only */
+  jitterRng?: () => number
 }
 
 /** One station of `ringStations`: where it stands, which way the rim runs
@@ -385,6 +395,18 @@ function ringEdges(ring: readonly ScatterPoint2[]): RingEdge[] {
  *
  *     s_k = start + k · spacing,   s_k < L        (start = spacing/2 unless authored)
  *
+ * or, with a spacing jitter (`jitterM` > 0, Task 9), with a random shift
+ * per station from the row's OWN jitter stream (`seed + ':jitter'` — never
+ * the yaw stream, so the turns of a row do not change when its spacing
+ * starts to breathe):
+ *
+ *     j_k = (2 · r_k − 1) · jitterM
+ *     s_0 = start + j_0,   s_k = s_{k−1} + spacing + j_k,   s_k < 0 → 0
+ *
+ * ONE DRAW PER CANDIDATE, the ending one included (its j is what says it
+ * ends), so a station a caller later subtracts leaves every later station
+ * where it stood. Without a jitter the stream is never opened and the
+ * output is the even row, byte for byte. The station sits
  * on the edge whose half-open span [cum_i, cum_i+1) holds s_k, and it is
  * pushed along `n_in`, the facing vector of `axis + 90°` — INTO the area by
  * the axis convention — by `offsetM`:
@@ -409,11 +431,21 @@ export function ringStations(ring: readonly ScatterPoint2[],
   const start = (typeof opts.startM === 'number' && Number.isFinite(opts.startM)
     && opts.startM >= 0) ? Math.min(opts.startM, spacing) : spacing / 2
   const max = opts.maxPoints ?? SCATTER_MAX_PER_ENTRY
+  const jitter = Number(opts.jitterM)
+  const jitterRnd = jitter > 0
+    ? (opts.jitterRng ?? seededRandom(`${opts.seed ?? ''}:jitter`)) : null
   const axes: number[] = new Array<number>(edges.length).fill(NaN)
   const out: RingStation[] = []
   let e = 0
+  let s = 0
   for (let k = 0; ; k += 1) {
-    const s = start + k * spacing
+    if (jitterRnd) {
+      const j = (2 * jitterRnd() - 1) * jitter
+      s = k === 0 ? start + j : s + spacing + j
+      if (s < 0) s = 0
+    } else {
+      s = start + k * spacing
+    }
     if (!(s < total - RING_EPS)) break
     if (out.length >= max) break
     while (e < edges.length - 1 && s >= edges[e].end) e += 1
@@ -463,8 +495,11 @@ interface OutlineSampleOptions {
   rng?: () => number
 }
 
-/** What `scatterEdgeInstances` needs to know. */
-export interface ScatterEdgeOptions extends OutlineSampleOptions, RingStationOptions {}
+/** What `scatterEdgeInstances` needs to know — the row's `seed` is the
+ *  required one of the outline options, and `ringStations` reads it for
+ *  the jitter stream. */
+export interface ScatterEdgeOptions
+  extends OutlineSampleOptions, Omit<RingStationOptions, 'seed'> {}
 
 /** What `scatterCenterInstance` needs to know. */
 export interface ScatterCenterOptions extends OutlineSampleOptions {
