@@ -1367,6 +1367,31 @@
  * (X4) a grid holding (9, 0.5) r 0.5 with occupyR 1 removes station 1 and
  *      files the other three: blocks(3.5, 1, 0.1) is true afterwards.
  *      Fewer than three ring points -> [].
+ * (X8) OFFSET 0 KEEPS THE WHOLE ROW (review finding, 2026-09-10). A station
+ *      at offset 0 lies ON the rim, and the even-odd cast counts a boundary
+ *      point as inside on some edges and outside on others (`x <
+ *      intersection`) — on RECT it kept (3.5, 0) and (0, 3.5) and dropped
+ *      (10, 0.5) and (6.5, 4). So the ring verdict tests the pushed point
+ *      NUDGED INWARD by ε = 1e-4 m along n_in: (3.5, ε), (10 − ε, 0.5),
+ *      (6.5, 4 − ε), (ε, 3.5) — all four strictly inside -> all four
+ *      survive, at their rim positions (3.5, 0) (10, 0.5) (6.5, 4) (0, 3.5),
+ *      with `offsetM` absent as well as 0.
+ *      THE CONCAVE CORNER of the L-shape (0,0) (10,0) (10,4) (4,4) (4,10)
+ *      (0,10): L = 10 + 4 + 6 + 6 + 4 + 10 = 40; the corner (4, 4) is at
+ *      s = 20, the START of edge 4 (4,4) -> (4,10). spacing 20, startM 20
+ *      (clamped to the spacing) -> exactly one station, s = 20 (40 is not
+ *      < 40), P = (4, 4). Edge 4: d = (0, 1), heading = 0, n = (dz, −dx) =
+ *      (1, 0); the midpoint (4, 7) + (ε, 0) = (4 + ε, 7) is OUTSIDE the
+ *      vertical arm (x ∈ [0, 4]) -> −d, axis = π, n_in = facing of 3π/2 =
+ *      (−1, 0). The nudged point (4 − ε, 4) lies in the column x < 4, where
+ *      the L spans z ∈ [0, 10] — strictly inside (even-odd: only the edges
+ *      (4,4)->(4,10) at x = 4 and (0,10)->(0,0) at x = 0 cross z = 4, and
+ *      4 − ε < 4 toggles once). -> ONE instance at (4, 4), yaw π under
+ *      aligned/deg 0. An offset wider than the shape still lands outside
+ *      and still falls: RECT at offset 3 pushes (3.5, 0) to (3.5, 3),
+ *      (10, 0.5) to (7, 0.5), (6.5, 4) to (6.5, 1), (0, 3.5) to (3, 3.5) —
+ *      all inside; at offset 5, (3.5, 5) and (6.5, −1) are outside and the
+ *      row is two.
  *
  * `center`: `polylabel(ring)`, one yaw draw, axis = `axisAt(x, z)` when the
  * caller hands one in (a stroke area's centre line), else `ringEdgeAxis`;
@@ -3397,6 +3422,17 @@ async function main() {
     [3.5, 6.5, 1], 1e-9);
   check('X4 …and the survivors are filed', x4.blocks(3.5, 1, 0.1), true);
   check('X4 two points place nothing', scatterEdgeInstances([[0, 0], [10, 0]], EDGE), []);
+  const rimRow = [[3.5, 0], [10, 0.5], [6.5, 4], [0, 3.5]];
+  check('X8 offset 0 keeps all four stations, on the rim',
+    scatterEdgeInstances(RECT, { ...EDGE, offsetM: 0 }).map((p) => [p.x, p.z]), rimRow, 1e-9);
+  check('X8 …and so does an absent offset',
+    scatterEdgeInstances(RECT, { spacingM: 7, seed: 'x' }).map((p) => [p.x, p.z]), rimRow, 1e-9);
+  check('X8 the concave corner of the L-shape at offset 0 survives, facing π',
+    scatterEdgeInstances(L_SHAPE, { ...EDGE, spacingM: 20, startM: 20, offsetM: 0 })
+      .map((p) => [p.x, p.z, p.yaw]), [[4, 4, Math.PI]], 1e-9);
+  check('X8 an offset wider than the shape still falls: 5 m on a 4 m strip keeps two',
+    scatterEdgeInstances(RECT, { ...EDGE, offsetM: 5 }).map((p) => [p.x, p.z]),
+    [[5, 0.5], [5, 3.5]], 1e-9);
   const CENTRE = { seed: 'x', yawMode: 'aligned', yawDeg: 0, variantCount: 3, variant: 2 };
   const x5 = scatterCenterInstance(RECT, CENTRE);
   check('X5 one instance at (5, 2) ± 0.5', [x5.length, x5[0]?.x, x5[0]?.z], [1, 5, 2], 0.5);

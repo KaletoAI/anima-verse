@@ -483,11 +483,17 @@ function coveredBy(footprints: readonly ScatterFootprint[], x: number, z: number
  *     aligned    axis of the station's edge + yaw_deg      (`scatterYaw`)
  *     random     r · 2π
  *
- * Verdicts, in order, on the PUSHED point: inside the ring (a corner station
- * or an offset wider than the shape lands outside — subtracted, ordinal
- * kept), then the occluders, the footprints with `clearM`, and what earlier
- * rows planted (`occupied`, judged by `occupyR`); a survivor is filed there in
- * turn. Variant: `(FNV-1a(seed) + ordinal) mod n`, the shared formula over
+ * Verdicts, in order, on the PUSHED point: inside the ring, then the
+ * occluders, the footprints with `clearM`, and what earlier rows planted
+ * (`occupied`, judged by `occupyR`); a survivor is filed there in turn. The
+ * ring verdict tests the point NUDGED INWARD by `AXIS_INSIDE_EPS_M` along
+ * `n_in`: at offset 0 a station lies ON the rim, and the even-odd cast counts
+ * a boundary point as inside on some edges and outside on others — half a
+ * row would vanish for no visible reason (review finding, 2026-09-10). A
+ * station is on the rim by construction, so "inside" means its inward side;
+ * a station pushed clear out of the shape (an offset wider than a narrow
+ * arm, a sharp corner at a large offset) still lands outside and is
+ * subtracted, ordinal kept. Variant: `(FNV-1a(seed) + ordinal) mod n`, the shared formula over
  * the station's ordinal, so the survivors of a partly covered rim keep the
  * variants they had. The camera window is the caller's filter, as it is for
  * the `along` rows: the row is computed ONCE for the whole rim.
@@ -507,7 +513,9 @@ export function scatterEdgeInstances(ring: readonly ScatterPoint2[],
   for (const station of stations) {
     const turn = rnd()
     const { x, z } = station
-    if (!pointInRing(x, z, ring)) continue
+    const inward = station.axis + Math.PI / 2
+    if (!pointInRing(x + Math.sin(inward) * AXIS_INSIDE_EPS_M,
+      z + Math.cos(inward) * AXIS_INSIDE_EPS_M, ring)) continue
     if (hiddenBy(occluders, x, z)) continue
     if (coveredBy(footprints, x, z, opts.clearM)) continue
     if (occupied && occupied.blocks(x, z, occupyR)) continue
