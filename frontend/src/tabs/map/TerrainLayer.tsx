@@ -397,6 +397,8 @@ export function TerrainLayer({
         key: `s${c.i}`, x: inst.x, z: inst.z,
         yawDeg: (inst.yaw * 180) / Math.PI, url: c.url,
         targetHeightM: propSpriteTargetH(e.height_m, e.prop_height_m),
+        // The 3D client instances a scattered mesh on its FILE ORIGIN.
+        anchor: 'origin',
       })
       urlAt.set(c.i, c.url)
     }

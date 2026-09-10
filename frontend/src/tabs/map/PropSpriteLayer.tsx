@@ -23,7 +23,7 @@ import type { PropSprite } from '../world/topDownSnapshot'
 import { useMapView } from './MapCanvas'
 import { worldToScreen } from './mapMath'
 import type { ScreenPt } from './mapMath'
-import { propSpriteSizeM, propSpriteTransform } from './propSpriteMath'
+import { propSpriteAnchorShift, propSpriteSizeM, propSpriteTransform } from './propSpriteMath'
 import type { PropSpriteMap } from './usePropSprites'
 
 /** One thing to draw from above: where it stands, how it is turned, which
@@ -35,6 +35,12 @@ export interface PropSpriteInstance {
   yawDeg: number
   url: string
   targetHeightM: number
+  /** What the point IS to the mesh: its file ORIGIN (a scatter or along
+   *  instance, as the 3D client instances it) or its box CENTRE (a world
+   *  prop, as `place()` hangs it). The picture is centred on the box, so an
+   *  origin-anchored sprite is shifted by the box's centre offset
+   *  (`propSpriteAnchorShift`). */
+  anchor: 'origin' | 'centre'
 }
 
 /** ONE sprite: the picture centred on `p`, sized in map pixels from the
@@ -72,11 +78,15 @@ export function PropSpriteLayer({ instances, sprites }: {
       {instances.map((inst) => {
         const sprite = sprites.get(inst.url)
         if (!sprite) return null
-        const s = worldToScreen(inst.x, inst.z, view, w, h)
+        const size = propSpriteSizeM(sprite, inst.targetHeightM)
+        // The picture's centre in world metres: the point, plus — for a mesh
+        // standing on its origin — its box centre turned with the instance.
+        const shift = propSpriteAnchorShift(sprite.cxM, sprite.czM, size.scale,
+          inst.yawDeg, inst.anchor)
+        const s = worldToScreen(inst.x + shift.dx, inst.z + shift.dz, view, w, h)
         // Half the picture's diagonal: a sprite standing at 45° is not dropped
         // just before its corner would leave the screen.
-        const r = (propSpriteSizeM(sprite, inst.targetHeightM).fieldM * view.pxPerM)
-          * Math.SQRT1_2
+        const r = (size.fieldM * view.pxPerM) * Math.SQRT1_2
         if (s.x + r < 0 || s.y + r < 0 || s.x - r > w || s.y - r > h) return null
         return (
           <PropSpriteImage key={inst.key} p={s} yawDeg={inst.yawDeg} sprite={sprite}

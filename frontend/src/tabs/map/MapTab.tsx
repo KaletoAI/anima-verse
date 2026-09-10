@@ -42,7 +42,7 @@ import { PropsPalette } from '../world/PropsPalette'
 import type { PropFull } from '../props/propTypes'
 import {
   readAlong, readAreaLabel, readNpcSlots, readRelief, readScatter, readWater,
-  readWaterProfile, storedScatterEntry,
+  readWaterProfile, stripScatterEnrichment,
 } from './mapTypes'
 import {
   applyPending, dropConflicts, emptyBuffer, hasConflicts, keepRejected,
@@ -545,9 +545,7 @@ const strokeDeco = (s: TerrainStroke): StrokeDeco => ({
  *  spellings of it. */
 function storedStroke(s: TerrainStroke): TerrainStroke {
   const bare: TerrainStroke = { points: s.points, width_m: s.width_m }
-  // The rows along it without the prop facts the server added for the
-  // preview (`storedScatterEntry`) — authored fields only, as everywhere.
-  if (s.along?.length) bare.along = s.along.map(storedScatterEntry)
+  if (s.along?.length) bare.along = s.along
   if (!s.style || s.style === 'straight') return bare
   const deco = strokeDeco(s)
   return {
@@ -1096,8 +1094,15 @@ export function MapTab() {
       }
       const tBuf = pendTerrainRef.current
       if (pendingCount(tBuf)) {
+        // THE ONE strip of the prop facts the server added to every scatter
+        // and along entry for the preview (`stripScatterEnrichment`): here,
+        // on the request body, and nowhere earlier — the local copy keeps the
+        // facts, so an unsaved edit previews at the prop's real height.
+        const tBody = toBulkBody(tBuf)
+        tBody.upserts = tBody.upserts.map((u) => ('meta' in u
+          ? { ...u, meta: stripScatterEnrichment(u.meta) } : u))
         const r = await apiPut<BulkSaveResp<TerrainArea>>(
-          '/world/terrain-areas/bulk', toBulkBody(tBuf))
+          '/world/terrain-areas/bulk', tBody)
         const minted = mintedIds(r)
         if (minted.size) setSelArea((cur) => minted.get(cur) || cur)
         updPendTerrain(() => keepRejected(tBuf, r?.rejected || []))
@@ -2393,9 +2398,7 @@ export function MapTab() {
     const a = selectedArea
     if (!a) return
     const meta: TerrainMeta = { ...a.meta }
-    // Authored fields only: the prop facts the server added for the preview
-    // (`storedScatterEntry`) are its to add again, not ours to send back.
-    if (entries.length) meta.scatter = entries.map(storedScatterEntry)
+    if (entries.length) meta.scatter = entries
     else delete meta.scatter
     stageArea(a, { meta })
   }, [selectedArea, stageArea])

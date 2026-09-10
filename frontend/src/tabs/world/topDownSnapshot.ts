@@ -259,6 +259,14 @@ export interface PropSprite {
   widthM: number
   heightM: number
   depthM: number
+  /** The box's horizontal CENTRE relative to the file origin, metres at
+   *  scale 1. The picture is centred on the box; a placement that stands the
+   *  mesh on its ORIGIN (a scatter instance — `ground.ts groundedGeometry`
+   *  scales and lifts, never recentres) draws the picture shifted by this,
+   *  scaled and turned with the instance (`propSpriteAnchorShift`). A world
+   *  prop hangs on the centre (`place()` recentres) and ignores it. */
+  cxM: number
+  czM: number
 }
 
 /** Pixels on a sprite's side. Props are small on the map — a tree at the
@@ -289,8 +297,10 @@ export function propSpriteSync(modelUrl: string): PropSprite | null | undefined 
  * is what the 3D client instances for a scatter row (`propAssets.loadGlb` +
  * the row's own scale), so the sprite is the very silhouette the world
  * shows. The camera is centred on the box's horizontal centre, which is the
- * point `place()` hangs a placed prop on — a sprite drawn at the placement
- * anchor therefore covers the ground the prop covers.
+ * point `place()` hangs a placed prop on — a sprite drawn at a world prop's
+ * anchor therefore covers the ground the prop covers. A scatter instance
+ * stands on the file ORIGIN instead, so the picture's centre offset
+ * (`cxM`, `czM`) is handed back for the layer to shift it by.
  */
 export function renderPropTopDown(modelUrl: string): Promise<PropSprite | null> {
   const done = propSpriteDone.get(modelUrl)
@@ -350,6 +360,7 @@ async function renderPropTopDownNow(modelUrl: string): Promise<PropSprite | null
     return {
       url: renderer.domElement.toDataURL('image/png'),
       widthM: size.x, heightM: size.y, depthM: size.z,
+      cxM: centre.x, czM: centre.z,
     }
   } finally {
     // Nothing of this mesh is cached — only its picture is — so the geometry

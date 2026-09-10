@@ -214,24 +214,42 @@ export interface TerrainScatterEntry {
   model_variants?: Record<string, string>[]
   /** …and the prop's REAL height in metres from its library record, the
    *  target height a renderer falls back to when `height_m` is not authored.
-   *  `storedScatterEntry` strips all three before a write. */
+   *  `stripScatterEnrichment` takes all of them off the WRITE BODY; the
+   *  local copy keeps them, so the preview never loses them mid-edit. */
   prop_height_m?: number
 }
 
-/** The three fields a scatter or along entry carries from the SERVER only
- *  (`with_scatter_props`) — facts about the prop, not about the painting.
- *  They ride into the editor for the preview and are stripped again on the
- *  way back (`storedScatterEntry`), so a write never claims them. */
-export const SCATTER_PAYLOAD_KEYS = ['variants', 'model_variants', 'prop_height_m'] as const
+/** Every key a scatter or along entry carries from the SERVER only
+ *  (`with_scatter_props`) — facts about the prop, not about the painting:
+ *  the three the editor reads, plus the two it passes through untouched
+ *  (`sway_factor`, `ground_offset_m`). They ride into the editor for the
+ *  preview and come off the request body at the ONE place every area write
+ *  passes through (`stripScatterEnrichment`), so a write never claims them. */
+export const SCATTER_PAYLOAD_KEYS = [
+  'variants', 'model_variants', 'prop_height_m', 'sway_factor', 'ground_offset_m',
+] as const
 
-/** The entry as it is WRITTEN: the authored fields alone. The server would
- *  drop the payload-only keys anyway (`_sanitize_scatter_entry` whitelists),
- *  but the editor must not send facts as if it had authored them. */
-export function storedScatterEntry<T extends TerrainScatterEntry | TerrainAlongEntry>(
-  entry: T,
-): T {
-  const out = { ...entry }
-  for (const key of SCATTER_PAYLOAD_KEYS) delete (out as unknown as Record<string, unknown>)[key]
+/** An area's `meta` as it is WRITTEN: every scatter and along entry with the
+ *  authored fields alone. The server would drop the payload-only keys anyway
+ *  (`_sanitize_scatter_entry` whitelists), but the editor must not send facts
+ *  as if it had authored them. Applied to the request body ONLY — the local
+ *  copy keeps the facts, because the preview reads them until the refetch. */
+export function stripScatterEnrichment(meta: unknown): unknown {
+  if (!meta || typeof meta !== 'object') return meta
+  const bare = (entry: unknown): unknown => {
+    if (!entry || typeof entry !== 'object') return entry
+    const out = { ...(entry as Record<string, unknown>) }
+    for (const key of SCATTER_PAYLOAD_KEYS) delete out[key]
+    return out
+  }
+  const out = { ...(meta as Record<string, unknown>) }
+  if (Array.isArray(out.scatter)) out.scatter = out.scatter.map(bare)
+  const stroke = out.stroke
+  if (stroke && typeof stroke === 'object'
+    && Array.isArray((stroke as { along?: unknown }).along)) {
+    out.stroke = { ...(stroke as Record<string, unknown>),
+      along: ((stroke as { along: unknown[] }).along).map(bare) }
+  }
   return out
 }
 

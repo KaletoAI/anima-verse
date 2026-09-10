@@ -104,6 +104,28 @@ export function propSpriteTargetH(entryH?: number, propH?: number): number {
   return PROP_SPRITE_FALLBACK_HEIGHT_M
 }
 
+/** WHERE THE PICTURE'S CENTRE STANDS relative to the placement point, in
+ *  world metres, for a mesh placed ON ITS FILE ORIGIN — a scatter or along
+ *  instance (`ground.ts groundedGeometry` scales and lifts, never recentres).
+ *  The box centre's offset from the origin (`cxM`, `czM` at scale 1) is
+ *  scaled with the instance and turned by its yaw, with the contract's own
+ *  rotation (the § A1.1 mapping `mapMath` states: `x = lx·cos + lz·sin`,
+ *  `z = −lx·sin + lz·cos`, i.e. local +z at yaw 90° faces +x). A WORLD PROP
+ *  hangs on its box centre (`place()` recentres) and shifts by nothing —
+ *  the caller passes `anchor: 'centre'` and gets (0, 0). */
+export function propSpriteAnchorShift(cxM: number, czM: number, scale: number,
+  yawDeg: number, anchor: 'origin' | 'centre'): { dx: number; dz: number } {
+  if (anchor === 'centre') return { dx: 0, dz: 0 }
+  const lx = Number(cxM) * scale
+  const lz = Number(czM) * scale
+  if (!Number.isFinite(lx) || !Number.isFinite(lz)) return { dx: 0, dz: 0 }
+  const rad = (Number(yawDeg) || 0) * Math.PI / 180
+  return {
+    dx: lx * Math.cos(rad) + lz * Math.sin(rad),
+    dz: -lx * Math.sin(rad) + lz * Math.cos(rad),
+  }
+}
+
 /** The SVG rotation that turns the picture's top (local −z) onto the
  *  direction pin of `WorldPropLayer` — see the module docstring. A yaw that
  *  is not a number turns nothing. */

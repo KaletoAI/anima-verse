@@ -93,6 +93,27 @@
  *      the bare URL, every other position names its STORE index). `variant`
  *      null takes the server's `variant_auto`; a `missing` placement has no
  *      mesh at all.
+ *
+ * ============================================================================
+ * (D) THE ANCHOR — origin for a scatter instance, box centre for a world prop
+ * ============================================================================
+ * The picture is centred on the model's BOX. A world prop hangs on that box
+ * centre (`place()` recentres, `packages/scene-render/src/place.ts`), so its
+ * picture sits on the placement point. A SCATTER instance stands the mesh on
+ * its FILE ORIGIN (`ground.ts groundedGeometry` scales and lifts in y only),
+ * so its picture's centre is the origin PLUS the box centre's offset, scaled
+ * with the instance and turned by its yaw — the contract's own rotation
+ * (`mapMath` header): x = lx·cos yaw + lz·sin yaw, z = −lx·sin yaw + lz·cos yaw.
+ *
+ * (D1) box centre (1, 0.5) at scale 1, scale 2, yaw 0:
+ *        local (2, 1) → world shift (2, 1).
+ * (D2) the same at yaw 90 (cos 0, sin 1):
+ *        x = 2·0 + 1·1 = 1,  z = −2·1 + 1·0 = −2 → (1, −2).
+ *      Check against the convention: local +z faces (sin 90, cos 90) = +x,
+ *      and the local z-part (1) indeed lands on +x; local +x turns to −z.
+ * (D3) yaw 180: (−2, −1) — the mirror of D1.
+ * (D4) a WORLD PROP source (anchor 'centre') shifts by nothing, whatever
+ *      the box says: (0, 0).
  */
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -141,6 +162,7 @@ async function main() {
   const {
     PROP_SPRITE_MAX, propSpriteFieldM, propSpriteScale, propSpriteSizeM,
     propSpriteRotateDeg, propSpriteTransform, propSpriteTargetH,
+    propSpriteAnchorShift,
     scatterModelUrl, scatterVariantCount, worldPropModelUrl,
   } = m;
 
@@ -235,6 +257,20 @@ async function main() {
   check('C6 a missing placement has no mesh', worldPropModelUrl(wp({ missing: true })), '');
   check('C6 a position past the list wraps (4 of 3 → 1 → store 3)',
     worldPropModelUrl(wp({ variant: 4 })), '/assets/props/p1/model?variant=3&tier=full');
+
+  console.log('(D) the anchor');
+  const shift = (yaw, anchor = 'origin') => {
+    const v = propSpriteAnchorShift(1, 0.5, 2, yaw, anchor);
+    return [r9(v.dx), r9(v.dz)];
+  };
+  check('D1 centre (1, 0.5) · scale 2, yaw 0 → shift (2, 1)', shift(0), [2, 1]);
+  check('D2 yaw 90 → (1, −2): the local z-part lands on +x', shift(90), [1, -2]);
+  check('D3 yaw 180 → (−2, −1)', shift(180), [-2, -1]);
+  check('D4 a world prop (anchor centre) shifts by nothing', shift(90, 'centre'), [0, 0]);
+  check('D4 …a centre that is not a number shifts by nothing; a junk yaw turns nothing',
+    [(() => { const v = propSpriteAnchorShift(NaN, 0, 2, 0, 'origin'); return [v.dx, v.dz]; })(),
+      shift(NaN)],
+    [[0, 0], [2, 1]]);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
