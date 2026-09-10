@@ -146,6 +146,14 @@ const SCATTER_FALLBACK_HEIGHT_M = 2
  *  than refusing, so this is the knob's range and not a rejection threshold. */
 export const SCATTER_SPACING_MAX_M = 100
 
+/** What a row switched to "Along the edge" starts spacing its stations at,
+ *  in metres, and the smallest distance the field accepts. The sampler walks
+ *  no station at all without a positive spacing
+ *  (`@anima/scene-render` → `scatterAxis`), so the mode brings its own
+ *  sensible number instead of an empty row nobody can explain. */
+const EDGE_SPACING_DEFAULT_M = 10
+const EDGE_SPACING_MIN_M = 0.1
+
 /** Server mirror — `app/models/terrain.SCATTER_OFFSET_MAX_M`. How far inside
  *  the rim an edge row may be set; the server clamps to it rather than
  *  refusing, so it is the knob's range. */
@@ -277,9 +285,13 @@ function WidthField({ widthM, onWidth }: {
  * An empty field is a real state and commits as `null`: "no target height" is
  * not the same as "0 m tall". `placeholder` is what the empty field then
  * inherits — the number shown greyed out is the one that really applies.
+ * `min` is the smallest number that MEANS something (0 for nearly all of
+ * them, 0.1 for a station distance, where 0 would place nothing at all): a
+ * smaller one is refused and the field snaps back to what still holds.
  */
-function ScatterNum({ label, title, value, step, placeholder, onCommit }: {
+function ScatterNum({ label, title, value, step, min = 0, placeholder, onCommit }: {
   label: string; title: string; value: number | null; step: number
+  min?: number
   placeholder?: string
   onCommit: (v: number | null) => void
 }) {
@@ -291,7 +303,7 @@ function ScatterNum({ label, title, value, step, placeholder, onCommit }: {
     const text = draft.trim()
     if (text === '') { if (value !== null) onCommit(null); return }
     const v = parseFloat(text)
-    if (!Number.isFinite(v) || v < 0) return
+    if (!Number.isFinite(v) || v < min) return
     const r = Math.round(v * 1000) / 1000
     if (r !== value) onCommit(r)
   }
@@ -300,7 +312,7 @@ function ScatterNum({ label, title, value, step, placeholder, onCommit }: {
       {label}
       <input
         className="ga-input"
-        type="number" min={0} step={step}
+        type="number" min={min} step={step}
         placeholder={placeholder}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
@@ -583,6 +595,7 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                   : t('Instances of this entry keep at least this distance from each other. 0 = none.')}
                 value={typeof e.min_spacing_m === 'number' ? e.min_spacing_m : null}
                 step={0.5}
+                min={e.place === 'edge' ? EDGE_SPACING_MIN_M : 0}
                 onCommit={(v) => patch(i, {
                   min_spacing_m: v && v > 0
                     ? Math.min(v, SCATTER_SPACING_MAX_M) : undefined,
@@ -631,15 +644,22 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                 (a fence, parked cars) and the ONE thing in the middle of a
                 square (a fountain, a monument). */}
             <label title={t('Where these props stand. Spread over the area = anywhere on the ground, as many as the density says. Along the edge = an evenly spaced row along the rim, one every “Spacing (m)”, set inward by the inset — the density has no effect. Centred = exactly one, at the point farthest from the edge.')}>
-              {t('Position')}
+              {t('position')}
               <select
                 className="ga-input"
                 value={e.place || ''}
                 onChange={(ev) => {
                   const place = ev.target.value as ScatterPlaceMode | ''
                   // `patch` drops what the new mode does not use, so the
-                  // switch only has to say the mode.
-                  patch(i, { place: place || undefined })
+                  // switch only has to say the mode — except for the edge
+                  // row's STATION DISTANCE: the sampler walks no stations at
+                  // all without one, so a row switched to the rim would
+                  // silently plant nothing. It starts at a car length plus a
+                  // gap, the same order as an along row's 20 m.
+                  patch(i, (place === 'edge'
+                    && !(typeof e.min_spacing_m === 'number' && e.min_spacing_m > 0))
+                    ? { place, min_spacing_m: EDGE_SPACING_DEFAULT_M }
+                    : { place: place || undefined })
                 }}
               >
                 <option value="">{t('Spread over the area')}</option>

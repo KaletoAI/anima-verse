@@ -2635,7 +2635,7 @@
     "Aligned to surface": "An der Fläche ausgerichtet",
     "How these props are turned. Random = every one its own way (plants, rocks). Aligned to surface = at the angle, measured against the nearest edge of the area or the direction of the road. Changing the mode never moves a prop, it only turns it.": "Wie diese Props gedreht werden. Zufällig = jedes auf seine Weise (Pflanzen, Steine). An der Fläche ausgerichtet = im angegebenen Winkel, gemessen an der nächsten Kante der Fläche oder an der Richtung der Straße. Ein Moduswechsel verschiebt nie ein Prop, er dreht es nur.",
     "0° = along the edge or road, 90° = facing the middle, 270° = facing outward": "0° = längs der Kante oder Straße, 90° = zur Mitte gewandt, 270° = nach außen gewandt",
-    "Position": "Position",
+    "position": "Position",
     "Where these props stand. Spread over the area = anywhere on the ground, as many as the density says. Along the edge = an evenly spaced row along the rim, one every “Spacing (m)”, set inward by the inset — the density has no effect. Centred = exactly one, at the point farthest from the edge.": "Wo diese Props stehen. Über die Fläche verteilt = irgendwo auf dem Boden, so viele wie die Dichte sagt. An der Kante entlang = eine gleichmäßige Reihe am Rand, eines alle „Abstand (m)“, um den Einzug nach innen versetzt — die Dichte wirkt nicht. Mittig = genau eines, am Punkt mit dem größten Abstand zur Kante.",
     "Spread over the area": "Über die Fläche verteilt",
     "Along the edge": "An der Kante entlang",
