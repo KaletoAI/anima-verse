@@ -57,8 +57,7 @@
         "auf dem stuhl sitzen",
         "auf der couch sitzen",
         "auf dem sofa sitzen",
-        "auf der bank sitzen",
-        "am tisch sitzen"
+        "auf der bank sitzen"
       ],
       "animation": "sit",
       "group": "seat",
@@ -354,7 +353,8 @@
         "büffeln"
       ],
       "animation": "sit",
-      "group": "seat"
+      "group": "seat",
+      "solo": true
     },
     "singing": {
       "prompt": "standing upright, mouth open, one hand near chest, other hand gesturing",
@@ -833,6 +833,77 @@
       "group": "stand",
       "places": 2,
       "yaw_offset": 0
+    },
+    "cleaning surface": {
+      "prompt": "cleaning the surface of an object",
+      "synonyms": [
+        "wischt die theke ab",
+        "wischt den tisch ab",
+        "putzt die theke",
+        "wischt den tresen ab",
+        "den tresen abwischen",
+        "die theke abwischen",
+        "oberfläche abwischen"
+      ],
+      "animation": "cleaning-table",
+      "solo": true,
+      "group": "stand"
+    },
+    "leaning": {
+      "prompt": "leaning back against a wall or counter, one shoulder on the surface, arms loosely crossed, one foot crossed over the other",
+      "synonyms": [
+        "anlehnen",
+        "lehnt sich an",
+        "an der wand lehnen",
+        "an der theke lehnen",
+        "am türrahmen lehnen / leaning against wall",
+        "leaning on counter",
+        "leaning against doorframe"
+      ],
+      "animation": "idle",
+      "solo": true,
+      "group": "stand"
+    },
+    "lounging": {
+      "prompt": "slouched deep into a sofa, back sunk into the cushions, legs stretched out, arms spread along the backrest",
+      "synonyms": [
+        "zurückgelehnt sitzen",
+        "lümmeln",
+        "fläzen",
+        "sich zurücklehnen / leaning back on couch",
+        "settling back slouching on sofa"
+      ],
+      "animation": "sit",
+      "solo": true,
+      "group": "seat"
+    },
+    "using_phone": {
+      "prompt": "standing with head bowed over a phone held in both hands at chest height, thumbs on the screen",
+      "synonyms": [
+        "am handy",
+        "aufs handy schauen",
+        "am handy scrollen",
+        "telefonieren im stehen / holding phone",
+        "reading phone",
+        "scrolling phone",
+        "texting"
+      ],
+      "animation": "using_phone",
+      "solo": true,
+      "group": "stand"
+    },
+    "sitting at table": {
+      "prompt": "sitting upright at a table, forearms resting on the tabletop, hands loosely folded in front",
+      "synonyms": [
+        "am schreibtisch sitzen",
+        "am tresen sitzen / sitting at desk",
+        "sitting at table",
+        "sitting at the counter",
+        "am tisch sitzen"
+      ],
+      "animation": "sit",
+      "solo": true,
+      "group": "seat"
     }
   }
 }
