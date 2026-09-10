@@ -61,6 +61,7 @@ import {
 } from '@anima/scene-render'
 import type { CellGrids, Point2, ScatterFootprint } from '@anima/scene-render'
 import { readAlong, readScatter, readStrokePoints } from './mapTypes'
+import { scatterVariantCount } from './propSpriteMath'
 import type { FlowAlong, TerrainAlongEntry, TerrainArea, TerrainScatterEntry,
   TerrainWaterKnot, TerrainWaterProfile } from './mapTypes'
 
@@ -1405,6 +1406,26 @@ export interface ScatterDot {
   entry: number
 }
 
+/** One previewed prop WITH what the sampler said about it beyond the point
+ *  (2026-09-10, "Props from above"): its turn, its model variant and the row
+ *  that grew it. `ScatterDot` is the projection of this to the three fields
+ *  the dot preview and the smokes compare — the two functions per mode below
+ *  hand out either shape, and the instances are sampled ONCE. */
+export interface ScatterPreviewInstance extends ScatterDot {
+  /** the contract's yaw in RADIANS: facing (sin yaw, cos yaw), 0 = +z */
+  yaw: number
+  /** the position in the row's variant list — present only when the row's
+   *  prop has more than one mesh (`variantCount` > 1), as the sampler says */
+  variant?: number
+  /** the row itself — its entry names the mesh and the target height */
+  job: ScatterPreviewJob
+}
+
+/** The three fields the dot preview compares — see `ScatterPreviewInstance`. */
+function toDot(inst: ScatterPreviewInstance): ScatterDot {
+  return { x: inst.x, z: inst.z, entry: inst.entry }
+}
+
 /**
  * THE TRUE-DENSITY PREVIEW: the very instances the 3D client plants, over the
  * cells the rectangle covers — and the rows along every line and rim, whole.
@@ -1448,7 +1469,18 @@ export interface ScatterDot {
 export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
   rect: MapBounds, footprints: readonly ScatterFootprint[],
   opts: ScatterWindowOptions = {}): ScatterDot[] {
-  const out: ScatterDot[] = []
+  return scatterWindowInstances(jobs, rect, footprints, opts).map(toDot)
+}
+
+/** `scatterWindowDots` with everything the sampler said — see
+ *  `ScatterPreviewInstance`. Every sampler is told the row's variant count
+ *  (`scatterVariantCount`, the client's `readVariantMaps().length`), so an
+ *  instance carries the variant the 3D world draws; a count of 1 is what
+ *  the sampler was always handed and changes no point. */
+export function scatterWindowInstances(jobs: readonly ScatterPreviewJob[],
+  rect: MapBounds, footprints: readonly ScatterFootprint[],
+  opts: ScatterWindowOptions = {}): ScatterPreviewInstance[] {
+  const out: ScatterPreviewInstance[] = []
   const seconds = opts.gameSeconds ?? NaN
   const drawIds = opts.drawIds
   const draws = (job: ScatterPreviewJob): boolean => !drawIds || drawIds.has(job.areaId)
@@ -1478,6 +1510,13 @@ export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
   // for the whole shape, here and in the 3D client.
   const grids: CellGrids = new Map()
   const { grid, gridOf } = cellOccupancy(grids)
+  /** one sampled instance, as the preview keeps it */
+  const keep = (p: { x: number; z: number; yaw: number; variant?: number },
+    job: ScatterPreviewJob): void => {
+    const inst: ScatterPreviewInstance = { x: p.x, z: p.z, entry: job.dot, yaw: p.yaw, job }
+    if (p.variant !== undefined) inst.variant = p.variant
+    out.push(inst)
+  }
   // THE ROWS, in the order `scatterPreviewJobs` collected them — the order
   // every cell's grid is filled in on both renderers: along -> edge/center
   // -> spread, area after area.
@@ -1502,9 +1541,10 @@ export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
         clearM,
         occluders: job.occluders,
         variant: e.variant,
+        variantCount: scatterVariantCount(e),
         occupied: grid,
         occupyR: clearM,
-      })) out.push({ x: p.x, z: p.z, entry: job.dot })
+      })) keep(p, job)
     } else if (job.kind === 'edge') {
       const e = job.entry as TerrainScatterEntry
       for (const p of scatterEdgeInstances(job.ring, {
@@ -1516,9 +1556,10 @@ export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
         footprints,
         clearM,
         occluders: job.occluders,
+        variantCount: scatterVariantCount(e),
         occupied: grid,
         occupyR: clearM,
-      })) out.push({ x: p.x, z: p.z, entry: job.dot })
+      })) keep(p, job)
     } else if (job.kind === 'center') {
       const e = job.entry as TerrainScatterEntry
       for (const p of scatterCenterInstance(job.ring, {
@@ -1527,12 +1568,13 @@ export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
         yawDeg: e.yaw_deg,
         axisAt,
         variant: e.variant,
+        variantCount: scatterVariantCount(e),
         footprints,
         clearM,
         occluders: job.occluders,
         occupied: grid,
         occupyR: clearM,
-      })) out.push({ x: p.x, z: p.z, entry: job.dot })
+      })) keep(p, job)
     } else {
       const e = job.entry as TerrainScatterEntry
       const drawing = draws(job)
@@ -1557,9 +1599,10 @@ export function scatterWindowDots(jobs: readonly ScatterPreviewJob[],
           yawMode: e.yaw_mode,
           yawDeg: e.yaw_deg,
           axisAt,
+          variantCount: scatterVariantCount(e),
           occupied: gridOf(cx, cz),
           occupyR: clearM,
-        })) if (drawing) out.push({ x: p.x, z: p.z, entry: job.dot })
+        })) if (drawing) keep(p, job)
       }
     }
   }
@@ -1597,6 +1640,12 @@ export interface ScatterThinnedDraw {
   badges: ScatterAreaBadge[]
 }
 
+/** …and the same half with the sampler's whole answer per point. */
+export interface ScatterThinnedInstances {
+  instances: ScatterPreviewInstance[]
+  badges: ScatterAreaBadge[]
+}
+
 /**
  * THE OVERVIEW PREVIEW: the given areas' scatter, thinned to `budget` dots
  * proportionally (`scatterPreviewShares`), with ONE BADGE PER AREA saying what
@@ -1621,8 +1670,17 @@ export interface ScatterThinnedDraw {
 export function scatterThinnedByArea(jobs: readonly ScatterPreviewJob[],
   footprints: readonly ScatterFootprint[],
   budget: number = SCATTER_PREVIEW_MAX): ScatterThinnedDraw {
+  const { instances, badges } = scatterThinnedInstances(jobs, footprints, budget)
+  return { dots: instances.map(toDot), badges }
+}
+
+/** `scatterThinnedByArea` with everything the sampler said — see
+ *  `ScatterPreviewInstance`. */
+export function scatterThinnedInstances(jobs: readonly ScatterPreviewJob[],
+  footprints: readonly ScatterFootprint[],
+  budget: number = SCATTER_PREVIEW_MAX): ScatterThinnedInstances {
   const shares = scatterPreviewShares(jobs.map((j) => j.wanted), budget)
-  const dots: ScatterDot[] = []
+  const instances: ScatterPreviewInstance[] = []
   const order: string[] = []
   const by = new Map<string, ScatterAreaBadge>()
   jobs.forEach((job, i) => {
@@ -1656,12 +1714,15 @@ export function scatterThinnedByArea(jobs: readonly ScatterPreviewJob[],
       // from its neighbours.
       minSpacingM: job.minSpacingM,
       maxPoints: share,
+      variantCount: scatterVariantCount(job.entry),
     })) {
-      dots.push({ x: p.x, z: p.z, entry: job.index })
+      const inst: ScatterPreviewInstance = { x: p.x, z: p.z, entry: job.index, yaw: p.yaw, job }
+      if (p.variant !== undefined) inst.variant = p.variant
+      instances.push(inst)
       badge.drawn += 1
     }
   })
-  return { dots, badges: order.map((id) => by.get(id) as ScatterAreaBadge) }
+  return { instances, badges: order.map((id) => by.get(id) as ScatterAreaBadge) }
 }
 
 /** The dots of `scatterThinnedByArea` without its badges — the plain overview,

@@ -32,7 +32,8 @@ import type { NpcSlot } from '../world/worldTypes'
 import { fmtHeight, heightColor } from './HeightLayer'
 import { minFalloffFor, reliefStepNotice, tooSteep } from './heightMath'
 import {
-  STROKE_STYLES, flowCompass, formatAreaM2, polygonAreaM2, type StrokeStyle,
+  STROKE_STYLES, flowCompass, formatAreaM2, polygonAreaM2, scatterThinnedPercentText,
+  type StrokeStyle,
 } from './mapMath'
 import { typeColor } from './TerrainLayer'
 import {
@@ -2272,6 +2273,14 @@ export interface MapDisplayPanelProps {
   onOpen: (open: boolean) => void
   scatterPreview: boolean
   onScatterPreview: (on: boolean) => void
+  /** "Props from above": every placed prop and every previewed instance as
+   *  its model seen from above. Gated on the roof zoom like the roofs. */
+  propSprites: boolean
+  onPropSprites: (on: boolean) => void
+  propSpritesZoomedOut: boolean
+  /** How many instances got a picture of how many wanted one, when the
+   *  sprite budget thinned them; null = every one drawn. */
+  propSpriteBudget: { drawn: number; wanted: number } | null
   locations: boolean
   onLocations: (on: boolean) => void
   roofs: boolean
@@ -2304,12 +2313,13 @@ export interface MapDisplayPanelProps {
  * the panel hides.
  */
 export function MapDisplayPanel({
-  open, onOpen, scatterPreview, onScatterPreview, locations, onLocations,
+  open, onOpen, scatterPreview, onScatterPreview, propSprites, onPropSprites,
+  propSpritesZoomedOut, propSpriteBudget, locations, onLocations,
   roofs, onRoofs, contours, onContours, roofsZoomedOut, roofMinPxPerM,
 }: MapDisplayPanelProps) {
   const { t } = useI18n()
   // What is NOT at its default — a marker for the header, a sentence for the
-  // tooltip. Both are built from the same four questions, in the order the
+  // tooltip. Both are built from the same five questions, in the order the
   // switches stand in.
   const marks: string[] = []
   const said: string[] = []
@@ -2317,6 +2327,22 @@ export function MapDisplayPanel({
     marks.push('🌲')
     said.push(t('Scatter preview is on'))
   }
+  if (propSprites && propSpritesZoomedOut) {
+    marks.push('🪑 ' + t('(zoom in)'))
+    said.push(t('Zoom in to at least {n} px per metre to see the props from above')
+      .replace('{n}', String(roofMinPxPerM)))
+  } else if (propSprites) {
+    marks.push('🪑')
+    said.push(t('Props from above are on'))
+  }
+  /** The budget note beside the switch: "~x % of n" in the badges' own
+   *  wording, only while the budget bit. */
+  const spriteNote = propSprites && !propSpritesZoomedOut && propSpriteBudget
+    && propSpriteBudget.wanted > 0 && propSpriteBudget.drawn < propSpriteBudget.wanted
+    ? t('~{p}% of {n}')
+      .replace('{p}', scatterThinnedPercentText(propSpriteBudget.drawn, propSpriteBudget.wanted))
+      .replace('{n}', String(propSpriteBudget.wanted))
+    : ''
   if (!locations) {
     marks.push('📍 ' + t('off'))
     said.push(t('The locations are switched off — the map draws no footprints'))
@@ -2354,6 +2380,21 @@ export function MapDisplayPanel({
             <input type="checkbox" checked={scatterPreview}
               onChange={(e) => onScatterPreview(e.target.checked)} />
             🌲 {t('Scatter preview')}
+          </label>
+          {/* The props as pictures instead of dots and markers — the roof
+              view's counterpart for everything that is not a building. Same
+              zoom gate as the roofs: below it nothing is rendered and the
+              switch says so. */}
+          <label className="ga-map-toolbar-check"
+            title={propSpritesZoomedOut
+              ? t('Zoom in to at least {n} px per metre to see the props from above')
+                .replace('{n}', String(roofMinPxPerM))
+              : t('Show every placed prop and every previewed scatter instance as its model seen from above, turned as it stands and sized in true metres. A dot or a footprint stays only until the picture has loaded.')}>
+            <input type="checkbox" checked={propSprites}
+              onChange={(e) => onPropSprites(e.target.checked)} />
+            🪑 {t('Props from above')}
+            {propSpritesZoomedOut ? ' ' + t('(zoom in)') : ''}
+            {spriteNote ? ' ' + spriteNote : ''}
           </label>
           {/* Locations are a VIEW too, and the one that can be IN THE WAY: a
               footprint is drawn with an opaque picture, so ground and relief

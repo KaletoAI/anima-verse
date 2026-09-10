@@ -203,6 +203,71 @@ export interface TerrainScatterEntry {
    *  epoch tail (`reshuffleEpoch`) and the row is a different draw every
    *  interval. Absent = never. */
   reshuffle_min?: number
+  /** PAYLOAD ONLY — what the PROP behind `model` knows, added by the server
+   *  when the areas are handed out (`terrain.with_scatter_props`) and never
+   *  stored: the resolution-tier map of the PRIMARY model variant… */
+  variants?: Record<string, string>
+  /** …one such map per ACTIVE variant, shipped only when the prop really has
+   *  more than one (element 0 IS `variants`) — the list the shared variant
+   *  formula indexes, and the one the "Props from above" sprites read their
+   *  mesh URL from… */
+  model_variants?: Record<string, string>[]
+  /** …and the prop's REAL height in metres from its library record, the
+   *  target height a renderer falls back to when `height_m` is not authored.
+   *  `storedScatterEntry` strips all three before a write. */
+  prop_height_m?: number
+}
+
+/** The three fields a scatter or along entry carries from the SERVER only
+ *  (`with_scatter_props`) — facts about the prop, not about the painting.
+ *  They ride into the editor for the preview and are stripped again on the
+ *  way back (`storedScatterEntry`), so a write never claims them. */
+export const SCATTER_PAYLOAD_KEYS = ['variants', 'model_variants', 'prop_height_m'] as const
+
+/** The entry as it is WRITTEN: the authored fields alone. The server would
+ *  drop the payload-only keys anyway (`_sanitize_scatter_entry` whitelists),
+ *  but the editor must not send facts as if it had authored them. */
+export function storedScatterEntry<T extends TerrainScatterEntry | TerrainAlongEntry>(
+  entry: T,
+): T {
+  const out = { ...entry }
+  for (const key of SCATTER_PAYLOAD_KEYS) delete (out as unknown as Record<string, unknown>)[key]
+  return out
+}
+
+/** The MESHES one row may draw — one tier map per active model variant of
+ *  its prop, the primary first: `ground.ts readVariantMaps`, mirrored. The
+ *  list is never empty: without `model_variants` it is the one `variants`
+ *  map, and without that an empty map — so `length` is the variant count
+ *  every sampler is told (`variantCount`), 1 for a prop with one mesh. */
+export function scatterVariantMaps(entry: TerrainScatterEntry | TerrainAlongEntry,
+): Record<string, string>[] {
+  const list = entry.model_variants
+  if (Array.isArray(list) && list.length) return list
+  return [entry.variants || {}]
+}
+
+/** The three payload-only prop facts, read through a check like every other
+ *  field: a tier map is an object of non-empty strings, a height is > 0. */
+function readPropFacts(e: Record<string, unknown>,
+  entry: TerrainScatterEntry | TerrainAlongEntry): void {
+  const tierMap = (v: unknown): Record<string, string> | undefined => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined
+    const out: Record<string, string> = {}
+    for (const [tier, url] of Object.entries(v as Record<string, unknown>)) {
+      if (typeof url === 'string' && url) out[tier] = url
+    }
+    return Object.keys(out).length ? out : undefined
+  }
+  const variants = tierMap(e.variants)
+  if (variants) entry.variants = variants
+  if (Array.isArray(e.model_variants)) {
+    const maps = e.model_variants.map(tierMap)
+      .filter((m): m is Record<string, string> => !!m)
+    if (maps.length) entry.model_variants = maps
+  }
+  const height = Number(e.prop_height_m)
+  if (Number.isFinite(height) && height > 0) entry.prop_height_m = height
 }
 
 /** Server mirror — `app/models/terrain.SCATTER_YAW_MODES`. */
@@ -321,6 +386,10 @@ export interface TerrainAlongEntry {
   /** Reshuffle every this many GAME minutes — see
    *  `TerrainScatterEntry.reshuffle_min`. Absent = never. */
   reshuffle_min?: number
+  /** PAYLOAD ONLY, as on a scatter entry — see `TerrainScatterEntry`. */
+  variants?: Record<string, string>
+  model_variants?: Record<string, string>[]
+  prop_height_m?: number
 }
 
 /** What a freshly added row starts as: a lamp every 20 m, on the line, right
@@ -363,6 +432,7 @@ export function readAlong(stroke: unknown): TerrainAlongEntry[] {
     if (reshuffle !== undefined && reshuffle >= 1 && Number.isInteger(reshuffle)) {
       entry.reshuffle_min = reshuffle
     }
+    readPropFacts(e, entry)
     out.push(entry)
   }
   return out
@@ -586,6 +656,7 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
     if (reshuffle !== undefined && reshuffle >= 1 && Number.isInteger(reshuffle)) {
       entry.reshuffle_min = reshuffle
     }
+    readPropFacts(e, entry)
     out.push(entry)
   }
   return out

@@ -26,6 +26,7 @@ import { apiGet } from '../../lib/api'
 import type { Mesh, Object3D } from 'three'
 import type { SceneModelSpec } from './worldTypes'
 import { placeModelSpec } from '@anima/scene-render'
+import { propSpriteFieldM } from '../map/propSpriteMath'
 
 interface CachedModel {
   obj: Object3D
@@ -239,6 +240,131 @@ export async function renderTopDownSnapshot(opts: {
   } finally {
     // Cached model clones share geometry with the cache — dispose ONLY the
     // GL context, not the scene contents.
+    renderer.dispose()
+    renderer.forceContextLoss()
+  }
+}
+
+// ── Prop sprites: ONE top-down picture per mesh URL ─────────────────────────
+
+/** A prop mesh seen straight from above: the picture, and the model's
+ *  bounding box at scale 1 in metres — what the map's "Props from above"
+ *  layer scales the picture by (`propSpriteMath`). The picture is SQUARE and
+ *  holds `propSpriteFieldM(widthM, depthM)` metres on a side, centred on the
+ *  box's horizontal centre, with image top = local −z and image right =
+ *  local +x — the frame of the roof snapshots above, so the layer turns it
+ *  by the one rotation it already knows. */
+export interface PropSprite {
+  url: string
+  widthM: number
+  heightM: number
+  depthM: number
+}
+
+/** Pixels on a sprite's side. Props are small on the map — a tree at the
+ *  zoom gate is a handful of pixels — and the distinct meshes are few, so a
+ *  modest picture keeps every render cheap and every data URL short. */
+const PROP_SPRITE_PX = 256
+
+/** Rendered or failed, by URL — a failure is cached as `null` too: "asked,
+ *  no picture" must not be asked again on every pan. */
+const propSpriteDone = new Map<string, PropSprite | null>()
+const propSpritePending = new Map<string, Promise<PropSprite | null>>()
+/** ONE render at a time, as the roofs do: every render opens a WebGL
+ *  context, and two live ones is exactly what the module avoids. A rejected
+ *  link must not break the chain for the rest of the session. */
+let propSpriteChain: Promise<void> = Promise.resolve()
+
+/** The finished answer for a URL, without asking: the picture, `null` for a
+ *  known failure, `undefined` while nothing has been asked or finished. */
+export function propSpriteSync(modelUrl: string): PropSprite | null | undefined {
+  return propSpriteDone.get(modelUrl)
+}
+
+/**
+ * The top-down picture of ONE prop mesh, by URL — cached for the session,
+ * rendered one at a time.
+ *
+ * The mesh is taken AS THE FILE STANDS (no orientation fix, no scale): that
+ * is what the 3D client instances for a scatter row (`propAssets.loadGlb` +
+ * the row's own scale), so the sprite is the very silhouette the world
+ * shows. The camera is centred on the box's horizontal centre, which is the
+ * point `place()` hangs a placed prop on — a sprite drawn at the placement
+ * anchor therefore covers the ground the prop covers.
+ */
+export function renderPropTopDown(modelUrl: string): Promise<PropSprite | null> {
+  const done = propSpriteDone.get(modelUrl)
+  if (done !== undefined) return Promise.resolve(done)
+  let p = propSpritePending.get(modelUrl)
+  if (p) return p
+  p = new Promise<PropSprite | null>((resolve) => {
+    propSpriteChain = propSpriteChain.then(async () => {
+      let sprite: PropSprite | null = null
+      try {
+        sprite = await renderPropTopDownNow(modelUrl)
+      } catch {
+        sprite = null
+      }
+      propSpriteDone.set(modelUrl, sprite)
+      propSpritePending.delete(modelUrl)
+      resolve(sprite)
+    })
+  })
+  propSpritePending.set(modelUrl, p)
+  return p
+}
+
+async function renderPropTopDownNow(modelUrl: string): Promise<PropSprite | null> {
+  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
+  const gltf = await new GLTFLoader().loadAsync(modelUrl)
+  const THREE = await import('three')
+  const obj = gltf.scene
+  obj.updateMatrixWorld(true)
+  const box = new THREE.Box3().setFromObject(obj)
+  const size = box.getSize(new THREE.Vector3())
+  const centre = box.getCenter(new THREE.Vector3())
+  const fieldM = propSpriteFieldM(size.x, size.z)
+  if (!(fieldM > 0) || !(size.y > 0) || !Number.isFinite(size.y)) return null
+
+  const scene = new THREE.Scene()
+  scene.background = null
+  scene.add(new THREE.AmbientLight(0xffffff, 2.4))
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2.4))
+  scene.add(obj)
+
+  // Straight down, up = -Z: image top = local −z, image right = local +x —
+  // the frame of the roof snapshots, and the one the map layer turns.
+  const half = fieldM / 2
+  const camera = new THREE.OrthographicCamera(-half, half, half, -half, 0.01,
+    size.y + 100)
+  camera.position.set(centre.x, box.max.y + 50, centre.z)
+  camera.up.set(0, 0, -1)
+  camera.lookAt(centre.x, box.min.y, centre.z)
+
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true, alpha: true, preserveDrawingBuffer: true,
+  })
+  try {
+    renderer.setSize(PROP_SPRITE_PX, PROP_SPRITE_PX)
+    renderer.render(scene, camera)
+    return {
+      url: renderer.domElement.toDataURL('image/png'),
+      widthM: size.x, heightM: size.y, depthM: size.z,
+    }
+  } finally {
+    // Nothing of this mesh is cached — only its picture is — so the geometry
+    // and materials go with the context.
+    obj.traverse((o: Object3D) => {
+      const mesh = o as Mesh
+      if (!mesh.isMesh) return
+      mesh.geometry?.dispose()
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      for (const m of mats) {
+        const tex = (m as { map?: { dispose?: () => void } })?.map
+        tex?.dispose?.()
+        m?.dispose?.()
+      }
+    })
     renderer.dispose()
     renderer.forceContextLoss()
   }

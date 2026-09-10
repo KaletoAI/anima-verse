@@ -19,6 +19,11 @@
  * `prop_boxes` and the shared `propBoxFootprint` — the same shape the scatter
  * keeps clear and the 3D client stands the mesh in. A marker says WHERE a
  * bench is, only the rectangle says whether it fits between two houses.
+ *
+ * With "Props from above" on, the placement's MODEL seen from above stands
+ * under the marker instead of the rectangle (`PropSpriteImage`, same anchor,
+ * same live turn) — and the direction pin stays: it is the check that the
+ * picture is turned right, so it is never covered and never dropped.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { propBoxFootprint } from '@anima/scene-render'
@@ -28,6 +33,8 @@ import {
   worldToScreen,
 } from './mapMath'
 import type { WorldProp, WorldPropBox } from './mapTypes'
+import { PropSpriteImage } from './PropSpriteLayer'
+import type { PropSpriteMap } from './usePropSprites'
 
 /** Movement below this is a click, not a drag (the placement layer's slop). */
 const CLICK_SLOP_PX = 4
@@ -74,11 +81,19 @@ interface WorldPropLayerProps {
    *  tool: a footprint is an authoring aid, and outside that tool the map is
    *  about locations. */
   showBoxes?: boolean
+  /** "Props from above": per placement id the mesh URL it shows and the
+   *  height it is scaled to, plus the pictures that have landed so far
+   *  (`usePropSprites`). A placement whose picture is there draws it under
+   *  its marker and no footprint rectangle; absent = markers as ever. */
+  sprites?: {
+    of: ReadonlyMap<string, { url: string; targetHeightM: number }>
+    pictures: PropSpriteMap
+  }
 }
 
 export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
                                 snapM, ghostPt, boxes,
-                                showBoxes }: WorldPropLayerProps) {
+                                showBoxes, sprites }: WorldPropLayerProps) {
   const { view, w, h } = useMapView()
   const [drag, setDrag] = useState<{ id: string; x: number; z: number } | null>(null)
 
@@ -198,7 +213,11 @@ export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
         // point and the LIVE turn, through the one rotation the sampler and
         // the 3D client run on (`propBoxFootprint`). Nothing is measured here;
         // this layer only draws what the server resolved.
-        const half = showBoxes ? halves.get(wp.id) : undefined
+        // The picture of THIS placement, once it has landed — and then no
+        // rectangle: the sprite covers the very ground the box describes.
+        const want = sprites?.of.get(wp.id)
+        const sprite = want ? sprites?.pictures.get(want.url) : undefined
+        const half = showBoxes && !sprite ? halves.get(wp.id) : undefined
         const foot = half && Math.min(half.hw, half.hd) * 2 * view.pxPerM
           >= BOX_MIN_PX
           ? propBoxFootprint({ x: wx, z: wz, yaw_deg: wp.yaw_deg || 0,
@@ -210,6 +229,10 @@ export function WorldPropLayer({ worldProps, selectedId, onSelect, onMove,
         return (
           <g key={wp.id} style={{ cursor: 'move' }}
              onPointerDown={(e) => startDrag(e, wp)}>
+            {sprite && want ? (
+              <PropSpriteImage p={p} yawDeg={wp.yaw_deg || 0} sprite={sprite}
+                targetHeightM={want.targetHeightM} pxPerM={view.pxPerM} />
+            ) : null}
             {foot ? (
               <path d={worldPolyToPath(foot.points, view, w, h)}
                     fill="none" stroke={col} strokeWidth={1}

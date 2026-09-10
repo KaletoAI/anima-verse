@@ -35,11 +35,14 @@ import {
 import { propBoxFootprints } from '@anima/scene-render'
 import { loadPropAssets, type PropRef } from '../../lib/refs'
 import { WorldPropLayer } from './WorldPropLayer'
+import { usePropSprites } from './usePropSprites'
+import { propSpriteTargetH, worldPropModelUrl } from './propSpriteMath'
+import type { PropSpriteBudget } from './TerrainLayer'
 import { PropsPalette } from '../world/PropsPalette'
 import type { PropFull } from '../props/propTypes'
 import {
   readAlong, readAreaLabel, readNpcSlots, readRelief, readScatter, readWater,
-  readWaterProfile,
+  readWaterProfile, storedScatterEntry,
 } from './mapTypes'
 import {
   applyPending, dropConflicts, emptyBuffer, hasConflicts, keepRejected,
@@ -542,7 +545,9 @@ const strokeDeco = (s: TerrainStroke): StrokeDeco => ({
  *  spellings of it. */
 function storedStroke(s: TerrainStroke): TerrainStroke {
   const bare: TerrainStroke = { points: s.points, width_m: s.width_m }
-  if (s.along?.length) bare.along = s.along
+  // The rows along it without the prop facts the server added for the
+  // preview (`storedScatterEntry`) — authored fields only, as everywhere.
+  if (s.along?.length) bare.along = s.along.map(storedScatterEntry)
   if (!s.style || s.style === 'straight') return bare
   const deco = strokeDeco(s)
   return {
@@ -664,6 +669,24 @@ export function MapTab() {
   const [tileStepM, setTileStepM] = useState(0)
   /** The top-down scatter preview — a VIEW, so it survives every mode. */
   const [scatterOn, setScatterOn] = useState(false)
+  /** "Props from above" — every placed prop and every previewed instance as
+   *  its model seen from above (`PropSpriteLayer`). A VIEW like the scatter
+   *  preview beside it, session state like it; gated on the roof zoom below
+   *  (`propSpritesActive`), so zoomed out the dots and markers stay. */
+  const [propSpritesOn, setPropSpritesOn] = useState(false)
+  // The roofs' zoom gate, for the props too: one budget floor for every
+  // picture the map renders from a model. Below it the switch stays on and
+  // says "(zoom in)", and nothing is rendered.
+  const propSpritesZoomedOut = propSpritesOn && view.pxPerM < ROOF_MIN_PX_PER_M
+  const propSpritesActive = propSpritesOn && !propSpritesZoomedOut
+  /** What the scatter layer reports when its sprite budget bit — shown
+   *  beside the switch as "~x % of n". */
+  const [propSpriteBudget, setPropSpriteBudget] = useState<PropSpriteBudget | null>(null)
+  const reportPropSpriteBudget = useCallback((info: PropSpriteBudget | null) => {
+    // Same numbers, same object — a report per render must not re-render.
+    setPropSpriteBudget((prev) => (prev && info && prev.drawn === info.drawn
+      && prev.wanted === info.wanted ? prev : info))
+  }, [])
   /** The prop library for the scatter model picker of the area chip — fetched
    *  once, only the props that actually have a mesh. A failed fetch leaves the
    *  picker with the tuft alone; it must never block painting ground. */
@@ -1846,6 +1869,33 @@ export function MapTab() {
   // angle keeps exactly the ground it covers). A scatter instance is not
   // "placed" and contributes nothing here; only what an author put down by
   // hand does. The 3D client joins the identical two halves in `ground.ts`.
+  /** The prop library's REAL heights by id — what a world prop's sprite is
+   *  scaled to (the record's `height_m`, the height the scatter inherits when
+   *  it authors none). */
+  const propHeights = useMemo(() => {
+    const out = new Map<string, number>()
+    for (const p of propList) if (Number(p.height_m) > 0) out.set(p.id, Number(p.height_m))
+    return out
+  }, [propList])
+  /** "Props from above" for the WORLD PROPS: per placement the mesh URL it
+   *  shows (`worldPropModelUrl`, the server's variant rule) and its target
+   *  height. Empty below the zoom gate, so nothing is rendered there. */
+  const wpSpriteOf = useMemo(() => {
+    const out = new Map<string, { url: string; targetHeightM: number }>()
+    if (!propSpritesActive) return out
+    for (const wp of worldProps) {
+      const url = worldPropModelUrl(wp)
+      if (!url) continue
+      out.set(wp.id, { url, targetHeightM: propSpriteTargetH(undefined, propHeights.get(wp.prop_id)) })
+    }
+    return out
+  }, [propHeights, propSpritesActive, worldProps])
+  const wpSpriteUrls = useMemo(() => [...wpSpriteOf.values()].map((v) => v.url), [wpSpriteOf])
+  const wpSprites = usePropSprites(wpSpriteUrls, propSpritesActive)
+  const wpSpriteProps = useMemo(() => (propSpritesActive
+    ? { of: wpSpriteOf, pictures: wpSprites } : undefined),
+  [propSpritesActive, wpSpriteOf, wpSprites])
+
   const scatterFootprints = useMemo(() => [...placed.flatMap((l) => {
     const local = boundaryLocal(l)
     if (!local || l.pos_x == null || l.pos_z == null) return []
@@ -2343,7 +2393,9 @@ export function MapTab() {
     const a = selectedArea
     if (!a) return
     const meta: TerrainMeta = { ...a.meta }
-    if (entries.length) meta.scatter = entries
+    // Authored fields only: the prop facts the server added for the preview
+    // (`storedScatterEntry`) are its to add again, not ours to send back.
+    if (entries.length) meta.scatter = entries.map(storedScatterEntry)
     else delete meta.scatter
     stageArea(a, { meta })
   }, [selectedArea, stageArea])
@@ -2669,6 +2721,8 @@ export function MapTab() {
     scatterPreview: scatterOn,
     footprints: scatterFootprints,
     gameSeconds,
+    propSprites: propSpritesActive,
+    onPropSpriteBudget: reportPropSpriteBudget,
   }
 
   const trayEntry = (loc: EditorLocation) => {
@@ -2733,6 +2787,10 @@ export function MapTab() {
           onOpen={setDisplayOpen}
           scatterPreview={scatterOn}
           onScatterPreview={setScatterOn}
+          propSprites={propSpritesOn}
+          onPropSprites={setPropSpritesOn}
+          propSpritesZoomedOut={propSpritesZoomedOut}
+          propSpriteBudget={propSpriteBudget}
           locations={locsOn}
           onLocations={toggleLocs}
           roofs={roofOn}
@@ -3026,6 +3084,9 @@ export function MapTab() {
                 // map picture, not a tool overlay — the 6 px rule keeps the
                 // overview clean.
                 showBoxes
+                // "Props from above": the model under the marker instead of
+                // the rectangle, once its picture has landed.
+                sprites={wpSpriteProps}
               />
             </g>
           </MapCanvas>

@@ -398,10 +398,20 @@ def get_terrain_areas_route() -> Dict[str, Any]:
       it too, with both levels equal and ``flow_dir_deg: null``.
 
     Both are output only and are never written back into the authored fields.
+
+    The scatter and along entries carry the PROP FACTS the 3D client's
+    ``/play/terrain`` carries too (``terrain.with_scatter_props``: ``variants``,
+    ``model_variants``, ``prop_height_m``, …) — payload only, never stored.
+    The editor's "Props from above" view draws every previewed instance as
+    its mesh at the prop's real height, and the mesh and the height are
+    facts about the prop the editor must not guess; ``terrain_sig`` already
+    hashes the enriched block. The editor strips them before a write
+    (``storedScatterEntry``), and the sanitizer would drop them anyway.
     """
     from app.core.heightfield import with_effective_water_level
     from app.models import terrain
-    return {"areas": with_effective_water_level(terrain.list_areas()),
+    return {"areas": with_effective_water_level(
+                terrain.with_scatter_props(terrain.list_areas())),
             "sig": terrain.terrain_sig()}
 
 

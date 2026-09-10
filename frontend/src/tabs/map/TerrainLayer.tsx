@@ -69,13 +69,17 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { useMapView } from './MapCanvas'
 import {
   decorateStroke, flowArrow, flowArrowsAlong, flowAxisPoints, scatterAreaCosts,
-  scatterAreaPlan, scatterPreviewJobs, scatterThinnedByArea,
-  scatterThinnedPercentText, scatterWindowDots, strokeToPolygon,
-  visibleWorldRect, worldPolyToPath, worldToScreen,
-  type FlowArrow, type ScatterDot, type ScatterPreviewJob,
-  type ScatterThinnedDraw, type StrokeDeco,
+  scatterAreaPlan, scatterPreviewJobs, scatterPreviewShares,
+  scatterThinnedInstances, scatterThinnedPercentText, scatterWindowInstances,
+  strokeToPolygon, visibleWorldRect, worldPolyToPath, worldToScreen,
+  type FlowArrow, type ScatterPreviewInstance, type ScatterPreviewJob,
+  type ScatterThinnedInstances, type StrokeDeco,
 } from './mapMath'
 import { PolygonHandles } from './PolygonHandles'
+import { PropSpriteLayer } from './PropSpriteLayer'
+import { usePropSprites } from './usePropSprites'
+import type { PropSpriteInstance } from './PropSpriteLayer'
+import { PROP_SPRITE_MAX, propSpriteTargetH, scatterModelUrl } from './propSpriteMath'
 import { isWaterKind, readStrokePoints, readWater } from './mapTypes'
 import type { TerrainArea, TerrainType } from './mapTypes'
 
@@ -131,8 +135,26 @@ const LABEL_BG = '#0d1117'
  *  would be a new identity every time and defeat the memos that exist to keep
  *  the inactive mode from doing any work at all. */
 const NO_JOBS: ScatterPreviewJob[] = []
-const NO_DOTS: ScatterDot[] = []
-const NO_THINNED: ScatterThinnedDraw = { dots: NO_DOTS, badges: [] }
+const NO_DOTS: ScatterPreviewInstance[] = []
+const NO_THINNED: ScatterThinnedInstances = { instances: NO_DOTS, badges: [] }
+
+/** How many of the previewed instances got a sprite, of how many wanted
+ *  one — what the Display panel says beside the switch when the budget bit. */
+export interface PropSpriteBudget {
+  drawn: number
+  wanted: number
+}
+
+/** The sprite candidates of one render, already thinned to the budget, and
+ *  which instance (by index into the preview list) each one stands for. */
+interface SpritePick {
+  sprites: PropSpriteInstance[]
+  /** instance index -> its sprite URL */
+  urlAt: Map<number, string>
+  drawn: number
+  wanted: number
+}
+const NO_PICK: SpritePick = { sprites: [], urlAt: new Map(), drawn: 0, wanted: 0 }
 
 /** The colour a kind is drawn in — catalog first, grey when unknown. */
 export function typeColor(types: Record<string, TerrainType>, kind: string): string {
@@ -228,6 +250,14 @@ export interface TerrainLayerProps {
    *  preview shows the epoch of the load, a reload fetches the next one;
    *  nothing polls for it. `NaN` = no clock, no epoch. */
   gameSeconds: number
+  /** Draw the previewed instances as their MODELS seen from above
+   *  (`PropSpriteLayer`) instead of dots — a dot stays only while an
+   *  instance's picture has not landed yet. The caller gates this on the
+   *  zoom (`ROOF_MIN_PX_PER_M`): below it the value is simply false. */
+  propSprites?: boolean
+  /** Told how many instances got a sprite of how many wanted one whenever
+   *  the budget (`PROP_SPRITE_MAX`) thinned them, `null` when it did not. */
+  onPropSpriteBudget?: (info: PropSpriteBudget | null) => void
 }
 
 export function TerrainLayer({
@@ -235,7 +265,8 @@ export function TerrainLayer({
   centerline, centerlineWidthM, centerlineDeco, draft, draftCursor, draftLine,
   draftWidthM, draftDeco,
   draftColor, draftWillClose, onVertexMove, onVertexDelete, onEdgeInsert,
-  scatterPreview, footprints, gameSeconds,
+  scatterPreview, footprints, gameSeconds, propSprites = false,
+  onPropSpriteBudget,
 }: TerrainLayerProps) {
   const { view, w, h } = useMapView()
   const { t } = useI18n()
@@ -320,16 +351,69 @@ export function TerrainLayer({
   // sampled in the drawn cells for the occupancy alone — so a drawn cell is
   // the client's cell, byte for byte (`scatterWindowDots`).
   const windowDots = useMemo(() => (jobs.length
-    ? scatterWindowDots(jobs, rect, footprints, { gameSeconds, drawIds: trueIds })
+    ? scatterWindowInstances(jobs, rect, footprints, { gameSeconds, drawIds: trueIds })
     : NO_DOTS),
   [footprints, gameSeconds, jobs, rect, trueIds])
   const thinned = useMemo(() => (thinJobs.length
-    ? scatterThinnedByArea(thinJobs, footprints) : NO_THINNED),
+    ? scatterThinnedInstances(thinJobs, footprints) : NO_THINNED),
   [footprints, thinJobs])
   const scatterDots = useMemo(
-    () => (thinned.dots.length ? [...windowDots, ...thinned.dots] : windowDots),
+    () => (thinned.instances.length ? [...windowDots, ...thinned.instances] : windowDots),
     [thinned, windowDots],
   )
+  /**
+   * "PROPS FROM ABOVE": which of those instances get a picture. Every
+   * instance whose row names a mesh is a candidate (`scatterModelUrl` — the
+   * client's variant rule over the sampler's own variant); beyond
+   * `PROP_SPRITE_MAX` the candidates are thinned PER ROW to their share, by
+   * the very key the dots are budgeted with (`scatterPreviewShares`), and a
+   * row keeps the PREFIX of its stream — so a thinned picture is still the
+   * world's first n props of that row, not a second sample.
+   */
+  const pick = useMemo((): SpritePick => {
+    if (!propSprites || !scatterDots.length) return NO_PICK
+    const cands: Array<{ i: number; url: string; job: ScatterPreviewJob }> = []
+    const jobsOf: ScatterPreviewJob[] = []
+    const count = new Map<ScatterPreviewJob, number>()
+    scatterDots.forEach((inst, i) => {
+      const url = scatterModelUrl(inst.job.entry, inst.variant)
+      if (!url) return
+      cands.push({ i, url, job: inst.job })
+      const n = count.get(inst.job)
+      if (n === undefined) { jobsOf.push(inst.job); count.set(inst.job, 1) } else count.set(inst.job, n + 1)
+    })
+    if (!cands.length) return NO_PICK
+    const shares = scatterPreviewShares(jobsOf.map((j) => count.get(j) as number), PROP_SPRITE_MAX)
+    const left = new Map(jobsOf.map((j, k) => [j, shares[k]]))
+    const sprites: PropSpriteInstance[] = []
+    const urlAt = new Map<number, string>()
+    for (const c of cands) {
+      const n = left.get(c.job) as number
+      if (n < 1) continue
+      left.set(c.job, n - 1)
+      const inst = scatterDots[c.i]
+      const e = c.job.entry
+      sprites.push({
+        key: `s${c.i}`, x: inst.x, z: inst.z,
+        yawDeg: (inst.yaw * 180) / Math.PI, url: c.url,
+        targetHeightM: propSpriteTargetH(e.height_m, e.prop_height_m),
+      })
+      urlAt.set(c.i, c.url)
+    }
+    return { sprites, urlAt, drawn: sprites.length, wanted: cands.length }
+  }, [propSprites, scatterDots])
+  const spriteUrls = useMemo(() => pick.sprites.map((s) => s.url), [pick])
+  const sprites = usePropSprites(spriteUrls, propSprites)
+  // The budget note, reported upwards only from the part that draws the
+  // dots — the ground part of a split layer has no instances and would
+  // otherwise clear what its sibling said.
+  const budgetDrawn = pick.drawn
+  const budgetWanted = pick.wanted
+  useEffect(() => {
+    if (!onPropSpriteBudget || part === 'ground') return
+    onPropSpriteBudget(propSprites && budgetDrawn < budgetWanted
+      ? { drawn: budgetDrawn, wanted: budgetWanted } : null)
+  }, [budgetDrawn, budgetWanted, onPropSpriteBudget, part, propSprites])
   /** …and, for every APPROXIMATED area, how much of it the dots on it are —
    *  the honest half of a sample that cannot show it all. An area drawn
    *  exactly gets none, and neither does one whose share rounded to nothing:
@@ -468,9 +552,17 @@ export function TerrainLayer({
           SAME instances the 3D world plants, cell for cell. Inert to the
           pointer: this is a view, and a click on it has to reach the canvas
           underneath, which is where the area hit test lives. */}
+      {pick.sprites.length ? (
+        <PropSpriteLayer instances={pick.sprites} sprites={sprites} />
+      ) : null}
       {scatterDots.length ? (
         <g pointerEvents="none">
           {scatterDots.map((d, i) => {
+            // A dot only while the instance has no picture yet: the sprite
+            // is the instance, drawn, and a dot on top of it would be the
+            // same prop twice.
+            const url = pick.urlAt.get(i)
+            if (url && sprites.get(url)) return null
             const s = worldToScreen(d.x, d.z, view, w, h)
             return (
               <circle key={`s${i}`} cx={s.x} cy={s.y} r={SCATTER_DOT_R}
