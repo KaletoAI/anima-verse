@@ -314,36 +314,6 @@
         },
         "llm_compose": false
       },
-      "map": {
-        "styles": {
-          "natural": {
-            "prompt_style": "a single hand-painted map tile of {subject} seen from an oblique top-down angle with a slight tilt for depth, soft gouache, the subject closely framed and filling the entire frame edge to edge with no border or frame around it, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
-            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed, frame, border, framed, vignette, grid lines, map pins, icons, straight-down view, blueprint, schematic, side view, horizon, sky, zoomed out",
-            "prompt_instruction": ""
-          },
-          "keywords": {
-            "prompt_style": "{subject}, hand-painted map tile, gouache, oblique top-down angle with a slight tilt, subject fills the entire frame edge to edge, muted terracotta and teal palette, full-bleed, no border, no frame",
-            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed, frame, border, framed, vignette, grid lines, map pins, icons, straight-down view, blueprint, schematic, side view, horizon, sky, zoomed out",
-            "prompt_instruction": ""
-          }
-        },
-        "llm_compose": true
-      },
-      "mapfit": {
-        "styles": {
-          "natural": {
-            "prompt_style": "a hand-painted map tile in soft gouache that continues the surrounding terrain seamlessly, a muted terracotta, weathered teal, sun-bleached linen and warm brass palette",
-            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed, frame, border, framed, vignette, grid lines, map pins, icons, straight-down view, blueprint, schematic, side view, horizon, sky, zoomed out",
-            "prompt_instruction": ""
-          },
-          "keywords": {
-            "prompt_style": "hand-painted map tile, gouache, seamless continuation of the surrounding terrain, muted terracotta and teal palette",
-            "prompt_negative": "photograph, photorealistic, raw photo, 3d render, cgi, anime, manga, cel shading, harsh contrast, hdr, lens flare, text, words, watermark, signature, logo, blurry, low quality, oversaturated, deformed, frame, border, framed, vignette, grid lines, map pins, icons, straight-down view, blueprint, schematic, side view, horizon, sky, zoomed out",
-            "prompt_instruction": ""
-          }
-        },
-        "llm_compose": true
-      },
       "building": {
         "styles": {
           "natural": {
@@ -647,8 +617,6 @@
     },
     "postprocess_enabled": false,
     "postprocess_trigger_url": "",
-    "unet_weight_dtype": "",
-    "map_tile_vision_analysis": false,
     "location_image_width": 512,
     "location_image_height": 512,
     "lora_triggers": [
@@ -670,8 +638,7 @@
         ],
         "missing_on": []
       }
-    ],
-    "mapfit_imagegen_default": ""
+    ]
   },
   "log_level": "INFO",
   "storage_dir": "./storage",
@@ -717,8 +684,6 @@
   "cooldown_hours": 6,
   "max_beats": 5,
   "beat_images": true,
-  "item_image_width": 256,
-  "item_image_height": 256,
   "available_themes": "default,minimal,dark",
   "prompt": "photorealistic modern smartphone, isolated on white, screen is pure chroma green, centered, no person, no reflection, top-down product photo",
   "skills": {
@@ -742,8 +707,7 @@
     "entry_roll_cooldown_minutes": 10,
     "entry_roll_jitter_seconds": 3,
     "resolution_proactive": true,
-    "resolved_image_linger_minutes": 30,
-    "event_image_denoise_strength": 0.7
+    "resolved_image_linger_minutes": 30
   },
   "thoughts": {
     "min_turn_gap_seconds": 30,
