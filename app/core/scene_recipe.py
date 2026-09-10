@@ -2196,9 +2196,14 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
             # The GROUND FLOOR is what the rule is about: a door on an upper
             # storey opens the hull up there and still leaves nobody a way in
             # from outside, so the wording must not claim there is no door.
+            # …and BOTH ways of drawing one are named: a ground floor whose
+            # whole front is hallway has no room wall to put a door in, and
+            # its front door goes on the building outline (§ A13c).
             "message": "No outside door on the ground floor: this building "
                        "cannot be entered from outside. Draw a door leading "
-                       "outside on one of its ground-floor rooms.",
+                       "outside on one of its ground-floor rooms, or a door "
+                       "on the building outline of the hallway storey "
+                       "(map3d.hull_openings).",
         })
     # Openings drawn into a room whose walls are off: the recipe carries them,
     # but no wall is ever split there, so nothing of them is built.

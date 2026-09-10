@@ -981,7 +981,7 @@
     "No outfit-suitable items in inventory. Create some in the \"Inventory (outfit pieces)\" tab.": "Keine outfit-tauglichen Items im Inventar. Lege im Reiter „Inventar (Outfit-Teile)\" welche an.",
     "No outfit_types yet": "Noch keine outfit_types",
     "No outfits configured.": "Keine Outfits konfiguriert.",
-    "No outside door on the ground floor: this building cannot be entered from outside. Draw a door leading outside on one of its ground-floor rooms.": "Keine Außentür im Erdgeschoss: Dieses Gebäude kann nicht von außen betreten werden. In einem seiner Erdgeschoss-Räume eine nach außen führende Tür zeichnen.",
+    "No outside door on the ground floor: this building cannot be entered from outside. Draw a door leading outside on one of its ground-floor rooms, or a door on the building outline of the hallway storey (map3d.hull_openings).": "Keine Außentür im Erdgeschoss: Dieses Gebäude kann nicht von außen betreten werden. In einem seiner Erdgeschoss-Räume eine nach außen führende Tür zeichnen — oder eine Tür auf der Gebäudekontur der Flur-Etage (map3d.hull_openings).",
     "No overrides": "Keine Overrides",
     "No pass-through drawn: characters may enter anywhere along the boundary. Draw openings to channel entry.": "Kein Durchgang gezeichnet: Charaktere können überall an der Grenze eintreten. Durchgänge zeichnen, um den Zutritt zu lenken.",
     "no pieces": "keine Kleidungsstücke",
@@ -2627,6 +2627,8 @@
     "Dismissed {n} candidates": "{n} Kandidaten verworfen",
     "Stat": "Statuswert",
     "Value": "Wert",
-    "This character has no status values.": "Dieser Character hat keine Statuswerte."
+    "This character has no status values.": "Dieser Character hat keine Statuswerte.",
+    "A door on the building outline opens into the storey's corridor, and this storey has none: switch the hallway on, or remove the door.": "Eine Tür auf der Gebäudekontur führt in den Flur der Etage, und diese Etage hat keinen: Die Diele einschalten oder die Tür entfernen.",
+    "A door on the building outline points at an edge this storey's footprint no longer has: move the door onto an existing edge of the storey, or remove it.": "Eine Tür auf der Gebäudekontur zeigt auf eine Kante, die der Grundriss dieser Etage nicht mehr hat: Die Tür auf eine vorhandene Kante der Etage schieben oder sie entfernen."
   }
 }

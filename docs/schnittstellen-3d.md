@@ -1620,7 +1620,8 @@ Platzierung zeigt.
   `doorways`-Block, nie ein zweites Mal die Öffnungen.
   **Seit § A13b:** eine Tür ohne `to` auf einer Etage mit Flur ist keine
   Außentür und öffnet die Hülle nicht; nur `to: "outside"` oder eine
-  Hüllentür (§ A13c, Phase 3) tut das.
+  Hüllentür (§ A13c) tut das — die auf dem Umriss gezeichnete Tür bringt
+  ihren Konturtreffer selbst mit und wird nicht projiziert.
   **Die frühere Fallback-Tür** (0,8 m mittig im südlichsten Wandstück, wenn
   keine Tür nah genug lag) **ist ersatzlos weg** — ein Gebäude ohne Außentür
   bleibt zu und wird als `problems[]`-Befund gemeldet (§ B1).
@@ -2935,7 +2936,7 @@ auf die Grundfläche zurück — die per Definition Etage 0 ist.
   Damit ist `outside` dort `false`: **kein Loch in der Hülle** (§ A6); eine
   solche Tür zählt damit auch nicht mehr als Gebäudeeingang — ein Erdgeschoss
   mit Diele meldet also `no_building_entrance` (§ B1), bis eine seiner Türen
-  `to: "outside"` trägt oder es seine Hüllentür aus § A13c (Phase 3) hat. Auf
+  `to: "outside"` trägt oder es seine Hüllentür aus § A13c hat. Auf
   Etagen ≠ 0 fragt der Befund ohnehin nie. Die ausdrückliche Außentür heißt
   weiterhin `to: "outside"`, und eine Etage OHNE Flur behält die alte Regel —
   eine unbeschriftete Tür ist dort eine richtige Außentür.
@@ -2975,10 +2976,117 @@ auf die Grundfläche zurück — die per Definition Etage 0 ist.
   Fahrstuhl und Treppe führen dorthin, der Etagenfilter zählt den Flur als
   Raum seiner Etage, und ein gesperrter Flur ist kein Wechselziel — wie eine
   gesperrte Grundfläche.
-- **Die Haustür in der Diele ist Phase 3.** Ein Flur hat keine Wände und damit
-  keine Öffnungen; ein Erdgeschoss mit Diele braucht seine Außentür an der
-  HÜLLE (`map3d.hull_openings`) — das beschreibt **§ A13c**, sobald es gebaut
-  ist.
+- **Die Haustür in der Diele steht in § A13c.** Ein Flur hat keine Wände und
+  damit keine Öffnungen; ein Erdgeschoss mit Diele trägt seine Außentür an der
+  HÜLLE (`map3d.hull_openings`).
+
+---
+
+### A13c. Hüllentüren — neu 2026-09-09
+
+Spezifikation `docs/superpowers/specs/2026-09-09-etagen-flur-design.md` § 6.
+**Eine Hüllentür ist eine Tür, die auf dem Gebäudeumriss selbst gezeichnet
+ist und in den Flur der Etage führt.** Sie schließt die Lücke, die § A13b
+aufmacht: der Flur ist das Komplement der Räume seiner Etage, hat also weder
+Rechteck noch Wände noch Öffnungen — ein Erdgeschoss, dessen ganze Front Diele
+ist, hatte damit keine Wand, in die seine Haustür gehört. Die Tür sitzt
+deshalb nicht in einem Raum, sondern in der Hülle.
+
+- **Gespeichert wird sie in `map3d.hull_openings`**, einer Liste von
+  `{level, edge, at, width_m, height_m, type, door_prop?, hinge?}` —
+  dieselben Felder wie eine Raumöffnung, plus die Etage. Der Sanitizer
+  (`world_ops._sanitize_map3d`) reicht jeden Eintrag durch `_sanitize_opening`
+  und setzt danach drei eigene Regeln: **höchstens 8** je Location, `level`
+  ganzzahlig (unlesbar ⇒ Eintrag verworfen und protokolliert), und `edge` MUSS
+  ein **Kantenindex** sein. Ein Buchstabe („N/S/E/W") wird verworfen und
+  protokolliert, wie bei den Grenz-Durchgängen: die Buchstaben benennen die
+  Seiten eines Raum-Rechtecks, eine Gebäudekontur ist ein Polygon. `edge` ist
+  der Index in den **aufgelösten** Etagengrundriss (`level_outlines`-Kaskade,
+  § A6; Kante i = Punkt i → i+1), `at` der Bruchteil entlang dieser Kante.
+  Ob die Etage überhaupt einen Flur hat, weiß der Sanitizer nicht — das ist
+  eine Tatsache der Raumliste, nicht von `map3d` — deshalb entscheidet das
+  erst der Composer, mit einem Befund.
+- **Geschnitten wird auf der autorierten Kante, ohne Projektion.** Eine
+  Raumtür wird entlang ihrer eigenen Außennormale auf die Kontur geschossen
+  (`_contour_hit`), weil sie irgendwo im Gebäude steht; eine Hüllentür steht
+  schon auf der Kontur, Kante und Position sind GEGEBEN. Der Composer
+  (`scene_recipe._hull_doorways`) reicht beides intern als fertigen Treffer an
+  `_contour_walls` weiter — das Loch landet exakt auf der gezeichneten Kante,
+  ohne Toleranz und ohne dieselbe Zahl zweimal herzuleiten. Geklemmt wird wie
+  bei jeder Raumöffnung: die lichte Breite gegen die Kantenlänge, die Position
+  so weit hinein, dass das Loch ganz auf der Kante bleibt, die lichte Höhe
+  gegen die Wandhöhe (darüber der Sturz als eigener `walls`-Eintrag).
+- **Im Payload ist sie ein gewöhnlicher `doorways[]`-Eintrag** (§ B1) mit zwei
+  zusätzlichen Feldern:
+  - `hull: true` — diese Schwelle ist aus der HÜLLE geschnitten, nicht aus
+    einer Raumwand. Wer fragt, wessen Wand das war: niemandes, sie IST die
+    Wand.
+  - `outward_normal: [nx, nz]` — die Außennormale der Kante, mit derselben
+    Flächenformel gemessen, aus der `_contour_walls` seine Windung nimmt. Sie
+    steht im Payload, weil es hier keinen durchbohrten Raum gibt, an dessen
+    Hülle ein Konsument die Außenseite ablesen könnte.
+
+  `along` ist die **Kantenrichtung a→b**, nicht die Richtung einer Raumwand,
+  und `rooms` enthält genau einen Eintrag: den **Flur** der Etage — einen Raum
+  ohne Wände. `outside` ist `true`. Beides zusammen bestimmt Angel und Blatt:
+  ein autoriertes „left" ist das Ende, aus dem die Windung des Umrisses kommt,
+  und das Türblatt hängt in einem Stück der HÜLLE statt in einer Raumwand,
+  weil der Flur keine hat. Der Türschwung folgt `outward_normal` (§ B1
+  `models[].door.swing`) — eine anders gewickelte Kontur dreht das Vorzeichen
+  mit, damit das Blatt in beiden Fällen nach außen aufgeht.
+- **Nicht gegen Raumtüren dedupliziert.** Eine Hüllentür durchbohrt keine
+  Raumwand, ist also nie der zweite Kandidat derselben Lücke; sie wird
+  angehängt, nachdem die Raumtüren fertig verschmolzen sind. Wird sie auf
+  dieselbe Strecke gezeichnet, auf die schon die Außentür eines Raums
+  projiziert, überlappen sich die Löcher und zwei Blätter stapeln sich — das
+  verhindert der Editor (1-Meter-Regel unten); der Composer stellt dazu
+  KEINEN Befund, weil „zu nah an einer anderen Tür" keine nicht-willkürliche
+  Schwelle hat.
+- **Zwei Befunde** (§ B1 `problems[]`, beide mit `level`):
+  - `hull_opening_without_corridor` — die Etage hat keinen Flur-Raum (auf
+    Etage 0 also: das Opt-in `map3d.ground_corridor` fehlt). Die Tür würde die
+    Hülle auf eine Etage öffnen, auf der niemand ankommen kann; sie wird
+    verworfen. Einmal je Etage, nicht je Tür — der Satz trüge sonst zweimal
+    dasselbe.
+  - `hull_opening_off_the_outline` — die Tür nennt eine Kante, die der
+    Etagengrundriss nicht (mehr) hat: kein Umriss, ein Index außerhalb, oder
+    eine Kante der Länge 0. Einmal je Tür, mit der genannten `edge`, damit ein
+    neu gezeichneter Umriss die Tür des Autors nicht wortlos verschwinden
+    lässt.
+
+  Ein **Fenster** ist der eine stille Fall: es ist per Definition keine
+  Schwelle (`_WALKABLE_TYPES`), und die Hülle kennt keine Brüstung — es gibt
+  nichts zu melden und nichts zu reparieren.
+- **`no_building_entrance` zählt sie mit.** Eine Hüllentür auf Etage 0 ist
+  eine `outside`-Schwelle auf Etage 0 wie jede andere, also beantwortet sie
+  den Befund ohne eine eigene Regel. Ein Erdgeschoss mit Diele meldet ihn
+  damit so lange, bis es entweder eine Raumtür mit `to: "outside"` oder eine
+  Hüllentür hat (§ A13b, Türregel).
+- **Editor** (Grundriss-Werkbank): im Streifen der Etage ein Werkzeug „Door on
+  the building outline", sichtbar **nur auf Etage 0 und nur mit
+  eingeschaltetem `ground_corridor`** — auf jeder anderen Etage gibt es keine
+  Diele, in die die Tür führen könnte, und das Opt-in liegt im Etagen-Reiter,
+  nicht im Plan. Ein Klick auf die Kontur wird zum nächstliegenden
+  Kantenlot und setzt `edge`/`at`; der Streifen bearbeitet danach Typ, Breite,
+  Höhe, Kante, `at`, Tür-Prop und Angel. Zwei Ablehnungen, beide als Hinweis
+  unter dem Plan (kein `window.alert`): mehr als **8** Türen, oder eine Tür
+  **näher als 1 m** an einer anderen nach außen führenden Tür derselben Etage
+  (Hüllentüren des Entwurfs eingeschlossen — die Vorschau ist entprellt, sonst
+  landeten zwei schnelle Klicks beide).
+- **Renderer lesen nur.** Türmarker, Schwelle, Türblatt und Türschwung nehmen
+  den `doorways[]`-Eintrag, wie sie jeden anderen nehmen; nichts davon prüft,
+  ob `rooms[0]` ein Raum mit Rechteck ist, und das Sperr-Gatter (§ A14) fragt
+  ohnehin nur Raum-Ids — ein gesperrter Flur färbt seine Hüllentür rot und
+  hält ihr Blatt zu, wie bei jedem anderen Raum. Die Schwelle hängt an der
+  **Etagengruppe der Kachel**, nicht an einer Raumgruppe — eine Hüllentür
+  braucht also keine. Wer aus dem Flur ins Freie läuft, geht durch sie
+  (`roomDoor('__floor__<level>')` findet sie als dessen Außentür), und wer
+  durch sie hineinläuft, steht im Flur — das entscheidet die
+  Raumwechsel-Regel aus § A13b (kein Rechteck hält die Figur, Etage 0, innen
+  im Etagenumriss), nicht die Tür. Das Angebot „Betreten" gehört dagegen
+  weiter zur Location-GRENZE (`boundary_openings`, § A1.3 / § B1 Nr. 13) und
+  ändert sich nicht: eine Hüllentür liegt innerhalb des Fußabdrucks, sie ist
+  eine Schwelle zum Durchlaufen, kein Ortswechsel.
 
 ---
 
@@ -4825,7 +4933,8 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
 
   # --- Türschwellen & Befunde (2026-08-05) ---
   doorways: [ { level, at_world: [x,z], along: [ux,uz], type, width_m,
-                height_m, base_y, rooms: [room_id, …], outside } ],
+                height_m, base_y, rooms: [room_id, …], outside,
+                hull?, outward_normal?: [nx,nz] } ],
                                            # IMMER da, leer = keine Tür
                                            # base_y = STEH-Höhe der Raumseite
                                            # height_m = lichte Höhe; darüber
@@ -4834,11 +4943,22 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # type = "door" | "passage"; eine
                                            # `door` hat ein Blatt im Loch
                                            # (`walls`-Eintrag mit `leaf`)
-  problems: [ { kind, location_id?, room_id?, level?, message } ],
+                                           # hull = aus der HÜLLE geschnitten,
+                                           # nicht aus einer Raumwand
+                                           # (§ A13c); dann ist `along` die
+                                           # Kantenrichtung a→b und `rooms`
+                                           # nur der Flur der Etage
+                                           # outward_normal = Außennormale
+                                           # der Kante; nur an einer
+                                           # Hüllentür, sonst fehlen beide
+  problems: [ { kind, location_id?, room_id?, level?, edge?, message } ],
                                            # IMMER da, leer = alles sauber
                                            # level = die betroffene Etage, wo
                                            # der Befund eine hat
-                                           # (corridor_without_floor)
+                                           # (corridor_without_floor,
+                                           #  hull_opening_*)
+                                           # edge = die genannte Konturkante
+                                           # (hull_opening_off_the_outline)
   outdoor_rooms: [ room_id, … ],
 
   # --- Etagen-Flure (2026-09-09) ---
@@ -4943,6 +5063,17 @@ zweite Ableitung.
   unbeschriftete Tür also nur noch auf einer Etage OHNE Flur; sonst sagt das
   `to: "outside"`. Die GRUNDFLÄCHE steht nie in `rooms`: sie hat keine Wände,
   und `outside` sagt es bereits.
+- **`hull` und `outward_normal` — die Tür auf dem Gebäudeumriss** (§ A13c,
+  2026-09-09). `hull: true` heißt: diese Schwelle ist aus der HÜLLE
+  geschnitten, nicht aus einer Raumwand — `map3d.hull_openings`, die Haustür
+  eines Erdgeschosses, dessen Front ganz Diele ist. Dann ist `along` die
+  Richtung der Konturkante a→b, `rooms` enthält allein den **Flur** dieser
+  Etage (einen Raum ohne Wände, `rooms[0]` besitzt hier also keine Wand),
+  `outside` ist `true`, und `outward_normal` nennt die Außennormale der
+  Kante — es gibt keinen durchbohrten Raum, an dessen Hülle ein Konsument sie
+  ablesen könnte. An einer Raumtür fehlen beide Felder; dort ist die
+  Außenrichtung `(along.z, −along.x)` per Konstruktion. Eine Hüllentür wird
+  **nicht** gegen die Außentür eines Raums dedupliziert (§ A13c).
 - Ein Fenster ist kein Weg hinaus, ein Raum ohne Hülle (Outdoor-Zone,
   `no_walls`, entartete Kontur) hat keine Schwelle, und die Reihenfolge ist
   deterministisch (Etage, Position, Räume) — Konsumenten diffen ganze
@@ -4954,16 +5085,19 @@ stellt nur fest; **Floor-Plan-Editor und 3D-Client zeigen es an, mehr nicht**
 der stabile Schlüssel, `message` der englische Server-Satz (eine Oberfläche
 darf einen `kind`, den sie kennt, übersetzen und fällt sonst auf den Text
 zurück; Zahlen stehen NIE im `message`, sondern in eigenen Feldern, weil der
-Satz als Ganzes übersetzt wird). Hier beschrieben sind vier — die
-Etagen-Grundriss-Befunde stehen in § A6, `room_outside_boundary` und
-`boundary_self_intersection` in der v6-Präambel Nr. 9:
+Satz als Ganzes übersetzt wird). Hier beschrieben sind sechs — die
+Etagen-Grundriss-Befunde stehen in § A6, `room_outside_boundary` in der
+v6-Präambel Nr. 9 und die Selbstschnitt-Warnung
+(`boundary_self_intersection`) in deren Nr. 1, wo sie ohne Namen steht:
 
 - **`no_building_entrance`** — die Location hat eine Kontur, mindestens ein
   Raum MIT HÜLLE steht auf Etage 0 (eine Kontur über lauter
   Outdoor-/`no_walls`-Räumen ist kein Gebäude, dort könnte der Autor gar keine
   Tür setzen), und **keine einzige** Türschwelle auf Etage 0 führt nach
   draußen. Dann kommt niemand hinein, und seit die Fallback-Tür weg ist
-  (§ A6) verdeckt das auch nichts mehr.
+  (§ A6) verdeckt das auch nichts mehr. Eine **Hüllentür** auf Etage 0 zählt
+  wie jede andere Außentür (§ A13c): der Satz nennt deshalb beide Wege, die
+  Raumwand und den Gebäudeumriss der Flur-Etage.
 - **`rooms_without_layout`** (Diagnose 2026-08-15) — die Location hat eine
   Kontur und Räume, aber **kein einziger** Raum liefert ein Recipe (Layout
   fehlt oder ist entartet). Ohne Recipe gibt es auch keine Hülle, also bleibt
@@ -4984,6 +5118,16 @@ Etagen-Grundriss-Befunde stehen in § A6, `room_outside_boundary` und
   des Etagengrundrisses zurück (Stufe 4 oben), Flur-Figuren stehen also
   sichtbar in einem Raum. `level` nennt die betroffene Etage; repariert wird
   nichts.
+- **`hull_opening_without_corridor`** (2026-09-09, § A13c) — auf der Etage
+  steht eine Tür auf dem Gebäudeumriss, aber die Etage hat keinen Flur (auf
+  Etage 0: das Opt-in `map3d.ground_corridor` fehlt). Die Tür führt damit
+  nirgendwohin und wird verworfen. `level` nennt die Etage; **einmal je
+  Etage**, nicht je Tür.
+- **`hull_opening_off_the_outline`** (2026-09-09, § A13c) — eine Tür auf dem
+  Gebäudeumriss nennt eine Kante, die der aufgelöste Etagengrundriss nicht
+  (mehr) hat: kein Umriss, ein Index außerhalb, oder eine Kante der Länge 0.
+  **Einmal je Tür**, mit `level` und der genannten `edge` — ein neu
+  gezeichneter Umriss soll die Tür des Autors nicht wortlos verschlucken.
 
 **Damit wandern in den Server:** Wand-Splitting um Öffnungen inkl.
 Fenster-Brüstung/-Sturz/Glas UND Tür-Sturz als eigene `walls`-Einträge
@@ -7600,6 +7744,16 @@ d/dφ (vx·cos φ + vz·sin φ, −vx·sin φ + vz·cos φ) |φ=0 = (vz, −vx)
 Das freie Ende des Blattes liegt bei `v = +along` (linke Angel) bzw.
 `v = −along` (rechte). Also ist die Ableitung genau `(uz, −ux)` = außen für
 links → **+1**, und ihr Gegenteil für rechts → **−1**.
+
+**Nachtrag 2026-09-09 (§ A13c):** „außen" ist seither das
+`outward_normal` DES EINTRAGS, wo er eines mitbringt, sonst weiter
+`_door_outward`. Gerechnet wird das Vorzeichen aus dem Skalarprodukt
+`(uz·nx − ux·nz)` (bei rechter Angel gespiegelt) statt aus der Angel allein.
+Für eine Raumtür ist `n` per Konstruktion `(uz, −ux)`, das Produkt also +1 —
+die Regel oben und jede bestehende Zahl bleiben unverändert. Nur eine
+**Hüllentür** kann davon abweichen: ihr `n` ist die Außennormale der
+Konturkante, und auf einer andersherum gewickelten Kontur öffnet dasselbe
+Blatt bei umgekehrtem Vorzeichen nach außen.
 
 `SCENE_RECIPE_VERSION` 4 → **5**: dieselben Daten liefern andere `models`/
 `walls`, also muss jede Szenensignatur sich bewegen. In der Signatur stehen
