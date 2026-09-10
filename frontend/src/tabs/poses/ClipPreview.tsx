@@ -65,6 +65,30 @@ function markerBox(group?: string): MarkerBox | undefined {
   return MARKER_BOX[(group || '').trim().toLowerCase()]
 }
 
+/** The room a SOLO figure takes at a place, metres ACROSS × ALONG the
+ *  marker's facing — the reference the import dial is set against.
+ *
+ *  Read off the beds a world actually has, not guessed: a `lie` marker of
+ *  capacity 2 puts its two slots 0.60–0.80 m apart ACROSS its facing (measured
+ *  on two of them, facing 180 with the row along world X and facing 270 with
+ *  the row along world Z). Two sleepers that far apart lie SIDE BY SIDE, so
+ *  their bodies run ALONG the facing — and a solo figure is yawed to the
+ *  facing, which points its clip's +Z along it. A lying clip therefore has to
+ *  lie along its OWN forward axis, which is what this outline shows.
+ *
+ *  It is 90° away from `MARKER_BOX.lie`, and both are right for their case:
+ *  a PAIR is seated by `pair_yaw`, which puts A → B along the facing, so a
+ *  lying couple lands across the bed. Whether a lying pair should do that is
+ *  a question about the pair seating, not about this outline. */
+const FOOTPRINT: Record<string, [number, number]> = {
+  lie: [1.0, 2.0],
+  seat: [0.5, 0.5],
+}
+
+function footprintOf(group?: string): [number, number] | undefined {
+  return FOOTPRINT[(group || '').trim().toLowerCase()]
+}
+
 interface ApiClip { kind: string; role?: string; set?: string; url: string }
 
 /** Explicit clip URLs instead of a kind lookup — how the CMU catalog browser
@@ -240,9 +264,9 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         // for, outlined flat on the ground — the bed a sleeper has to lie
         // along. It is NOT in the clip frame: the marker stays put and the
         // clip turns against it, the same division the pair's marker makes.
-        const foot = footprint ? markerBox(footprint) : undefined
+        const foot = footprint ? footprintOf(footprint) : undefined
         if (foot) {
-          const [fw, , fd] = foot.size
+          const [fw, fd] = foot
           const half = [fw / 2, fd / 2]
           const pts = [[-half[0], -half[1]], [half[0], -half[1]],
                        [half[0], half[1]], [-half[0], half[1]], [-half[0], -half[1]]]
@@ -436,10 +460,10 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
     : ''
   // The import reference, named in metres — a footprint one cannot measure is
   // no reference (the 1.70 m figure and the 1 m grid are already said above).
-  const fp = footprint ? markerBox(footprint) : undefined
+  const fp = footprint ? footprintOf(footprint) : undefined
   const footNote = fp
-    ? ` · ${t('footprint')} ${footprint} ${fp.size[0].toFixed(2)} × ${fp.size[2].toFixed(2)} m,`
-      + ` ${t('facing south')}`
+    ? ` · ${t('footprint')} ${footprint} ${fp[0].toFixed(2)} × ${fp[1].toFixed(2)} m`
+      + ` (${t('across × along the facing')}), ${t('facing south')}`
     : ''
 
   return (
