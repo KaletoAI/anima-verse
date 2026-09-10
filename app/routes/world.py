@@ -406,7 +406,7 @@ def get_terrain_areas_route() -> Dict[str, Any]:
     its mesh at the prop's real height, and the mesh and the height are
     facts about the prop the editor must not guess; ``terrain_sig`` already
     hashes the enriched block. The editor strips them before a write
-    (``storedScatterEntry``), and the sanitizer would drop them anyway.
+    (``stripScatterEnrichment``), and the sanitizer would drop them anyway.
     """
     from app.core.heightfield import with_effective_water_level
     from app.models import terrain

@@ -92,9 +92,11 @@ function edgeAxis(ring: readonly ScatterPoint2[], ax: number, az: number,
  * painted polygon turns relative to (user decision 1, 2026-09-10: the nearest
  * edge per instance, not the longest edge of the shape).
  *
- * Nearest = least point-segment distance; a tie goes to the FIRST edge in the
- * ring (strict `<`), so a prop standing exactly mid-way between two parallel
- * edges reads one answer on every renderer. Fewer than three points enclose
+ * Nearest = least point-segment distance; a tie goes to the edge checked
+ * FIRST (strict `<`) — and the loop opens with the CLOSING edge, from the
+ * last point back to the first, then walks the ring in order (§ A9) — so a
+ * prop standing exactly mid-way between two parallel edges reads one answer
+ * on every renderer. Fewer than three points enclose
  * nothing and answer 0, the "angle alone" axis.
  */
 export function ringEdgeAxis(ring: readonly ScatterPoint2[],
@@ -449,6 +451,9 @@ interface OutlineSampleOptions {
   occluders?: readonly (readonly ScatterPoint2[])[]
   occupied?: ScatterOccupancy
   occupyR?: number
+  /** the row's identity in the occupancy — see `ScatterSampleOptions`;
+   *  absent = `seed` */
+  occupyTag?: string
   variantCount?: number
   /** the random stream, for the smoke check only */
   rng?: () => number
@@ -522,6 +527,7 @@ export function scatterEdgeInstances(ring: readonly ScatterPoint2[],
   const occluders = opts.occluders ?? []
   const occupied = opts.occupied
   const occupyR = scatterOccupyR(opts.occupyR, opts.clearM)
+  const occupyTag = opts.occupyTag ?? opts.seed
   const variants = Math.floor(Number(opts.variantCount))
   const mixing = Number.isFinite(variants) && variants > 1
   const out: ScatterInstance[] = []
@@ -533,8 +539,8 @@ export function scatterEdgeInstances(ring: readonly ScatterPoint2[],
       z + Math.cos(inward) * AXIS_INSIDE_EPS_M, ring)) continue
     if (hiddenBy(occluders, x, z)) continue
     if (coveredBy(footprints, x, z, opts.clearM)) continue
-    if (occupied && occupied.blocks(x, z, occupyR)) continue
-    if (occupied) occupied.add(x, z, occupyR)
+    if (occupied && occupied.blocks(x, z, occupyR, occupyTag)) continue
+    if (occupied) occupied.add(x, z, occupyR, occupyTag)
     const yaw = scatterYaw(turn, opts.yawMode, opts.yawDeg, station.axis)
     out.push(mixing
       ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, station.ordinal, variants) }
@@ -551,8 +557,9 @@ export function scatterEdgeInstances(ring: readonly ScatterPoint2[],
  * random turn), the yaw under `aligned` relative to `axisAt(x, z)` when the
  * caller hands an axis in (a stroke area's centre line) and to
  * `ringEdgeAxis` of the ring otherwise — the nearest edge of the pole, with a
- * tie going to the first edge. Verdicts: the occluders, the footprints with
- * `clearM`, what earlier rows planted; the survivor is filed. The variant is
+ * tie going to the closing edge. Verdicts: the occluders, the footprints with
+ * `clearM`, what OTHER rows planted; the survivor is filed under the row's
+ * tag. The variant is
  * the pinned `variant` clamped to the count when the row names one, else the
  * formula with ordinal 0. A ring that encloses nothing (fewer than three
  * points, or a pole with no distance to the rim) centres nothing.
@@ -568,8 +575,9 @@ export function scatterCenterInstance(ring: readonly ScatterPoint2[],
   if (hiddenBy(opts.occluders ?? [], x, z)) return []
   if (coveredBy(opts.footprints ?? [], x, z, opts.clearM)) return []
   const occupyR = scatterOccupyR(opts.occupyR, opts.clearM)
-  if (opts.occupied && opts.occupied.blocks(x, z, occupyR)) return []
-  if (opts.occupied) opts.occupied.add(x, z, occupyR)
+  const occupyTag = opts.occupyTag ?? opts.seed
+  if (opts.occupied && opts.occupied.blocks(x, z, occupyR, occupyTag)) return []
+  if (opts.occupied) opts.occupied.add(x, z, occupyR, occupyTag)
   const axis = opts.yawMode === 'aligned'
     ? (opts.axisAt ? opts.axisAt(x, z) : ringEdgeAxis(ring, x, z))
     : 0

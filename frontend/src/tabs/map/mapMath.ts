@@ -61,7 +61,7 @@ import {
 } from '@anima/scene-render'
 import type { CellGrids, Point2, ScatterFootprint } from '@anima/scene-render'
 import { readAlong, readScatter, readStrokePoints } from './mapTypes'
-import { scatterVariantCount } from './propSpriteMath'
+import { propSpriteTargetH, scatterVariantCount } from './propSpriteMath'
 import type { FlowAlong, TerrainAlongEntry, TerrainArea, TerrainScatterEntry,
   TerrainWaterKnot, TerrainWaterProfile } from './mapTypes'
 
@@ -1099,9 +1099,9 @@ export interface ScatterPreviewJob {
   line: Array<[number, number]> | null
   /** instances per 100 m2, as authored (0 unless `spread`) */
   density: number
-  /** the instance's horizontal half-extent (`scatterClearM`) — the ESTIMATE,
-   *  see `scatterPreviewJobs`; also the radius a survivor takes up in the
-   *  cell's occupancy (`occupyR`) */
+  /** the instance's horizontal half-extent (`scatterClearM`) — the ESTIMATE
+   *  over the row's target height, see `scatterPreviewJobs`; also the radius
+   *  a survivor takes up in the cell's occupancy (`occupyR`) */
   clearM: number
   /** the least distance this row's own props keep from each other, as
    *  authored (`min_spacing_m`); 0 = no constraint. Carried on the job so
@@ -1131,7 +1131,11 @@ export interface ScatterPreviewJob {
  * as it is tall (`scatterClearM` with no measured extent) when it is kept
  * clear of a placed location. The 3D client measures the loaded geometry and
  * clears a little differently for very slim or very wide props — a handful of
- * instances at the rim of a footprint, never a different density.
+ * instances at the rim of a footprint, never a different density. The HEIGHT
+ * that estimate is built on is the client's own (`scatterTargetH`, mirrored
+ * as `propSpriteTargetH`): the authored `height_m`, else the prop's library
+ * height (`prop_height_m`, ridden in on the payload), else the flat 2 m — and
+ * a row without a model is the built-in tuft, 0.8 m.
  */
 export function scatterPreviewJobs(areas: readonly TerrainArea[]
 ): ScatterPreviewJob[] {
@@ -1172,7 +1176,7 @@ export function scatterPreviewJobs(areas: readonly TerrainArea[]
       if (!e.model) return
       jobs.push({
         ...shared, index: i, kind: 'along', dot: entries.length + i, entry: e,
-        density: 0, clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m) : 2),
+        density: 0, clearM: scatterClearM(propSpriteTargetH(e.height_m, e.prop_height_m)),
         minSpacingM: 0, wanted: 0, perCell: 0,
       })
     })
@@ -1180,8 +1184,8 @@ export function scatterPreviewJobs(areas: readonly TerrainArea[]
       kind: ScatterRowKind): ScatterPreviewJob => ({
       ...shared, index: i, kind, dot: i, entry: e,
       density: kind === 'spread' ? e.density_per_100m2 : 0,
-      clearM: scatterClearM(Number(e.height_m) > 0 ? Number(e.height_m)
-        : (e.model ? 2 : 0.8)),
+      clearM: scatterClearM(e.model ? propSpriteTargetH(e.height_m, e.prop_height_m)
+        : (Number(e.height_m) > 0 ? Number(e.height_m) : 0.8)),
       // NOT an approximation, unlike the clearance above: the spacing is a
       // plain authored distance, so the preview subtracts exactly the props
       // the world subtracts.
@@ -1443,7 +1447,10 @@ function toDot(inst: ScatterPreviewInstance): ScatterDot {
  * THE OCCUPANCY (plan "Scatter-Erweiterung", 2026-09-10): what earlier rows
  * planted in a cell keeps later rows out of it — one `OccupancyGrid` per
  * cell, filled in the order of `jobs` (which IS the mandated order, see
- * `scatterPreviewJobs`), every survivor filed with the row's `clearM`. The
+ * `scatterPreviewJobs`), every survivor filed with the row's `clearM` under
+ * the row's tag (`occupyTag`, the cell- and epoch-independent row seed —
+ * the client passes the same string), so a row keeps clear of OTHER rows
+ * and never of itself: within a row `min_spacing_m` is the distance. The
  * grid goes INTO the sampler as its last verdict; nothing is filtered after
  * the fact, so every rejection still only subtracts. A cell whose spread rows
  * are drawn is filled by EVERY row that reaches it — the spread rows of a
@@ -1544,6 +1551,7 @@ export function scatterWindowInstances(jobs: readonly ScatterPreviewJob[],
         variantCount: scatterVariantCount(e),
         occupied: grid,
         occupyR: clearM,
+        occupyTag: alongSeed(job.areaId, job.index),
       })) keep(p, job)
     } else if (job.kind === 'edge') {
       const e = job.entry as TerrainScatterEntry
@@ -1559,6 +1567,7 @@ export function scatterWindowInstances(jobs: readonly ScatterPreviewJob[],
         variantCount: scatterVariantCount(e),
         occupied: grid,
         occupyR: clearM,
+        occupyTag: scatterSeed(job.areaId, job.index),
       })) keep(p, job)
     } else if (job.kind === 'center') {
       const e = job.entry as TerrainScatterEntry
@@ -1574,6 +1583,7 @@ export function scatterWindowInstances(jobs: readonly ScatterPreviewJob[],
         occluders: job.occluders,
         occupied: grid,
         occupyR: clearM,
+        occupyTag: scatterSeed(job.areaId, job.index),
       })) keep(p, job)
     } else {
       const e = job.entry as TerrainScatterEntry
@@ -1602,6 +1612,7 @@ export function scatterWindowInstances(jobs: readonly ScatterPreviewJob[],
           variantCount: scatterVariantCount(e),
           occupied: gridOf(cx, cz),
           occupyR: clearM,
+          occupyTag: scatterSeed(job.areaId, job.index),
         })) if (drawing) keep(p, job)
       }
     }
@@ -1669,17 +1680,30 @@ export interface ScatterThinnedInstances {
  */
 export function scatterThinnedByArea(jobs: readonly ScatterPreviewJob[],
   footprints: readonly ScatterFootprint[],
-  budget: number = SCATTER_PREVIEW_MAX): ScatterThinnedDraw {
-  const { instances, badges } = scatterThinnedInstances(jobs, footprints, budget)
+  budget: number = SCATTER_PREVIEW_MAX, gameSeconds?: number): ScatterThinnedDraw {
+  const { instances, badges } = scatterThinnedInstances(jobs, footprints, budget, gameSeconds)
   return { dots: instances.map(toDot), badges }
 }
 
-/** `scatterThinnedByArea` with everything the sampler said — see
- *  `ScatterPreviewInstance`. */
+/**
+ * `scatterThinnedByArea` with everything the sampler said — see
+ * `ScatterPreviewInstance`.
+ *
+ * THE TURN AND THE CLOCK ARE THE WINDOW'S (fix wave 2026-09-10): every
+ * thinned row is sampled with its `yaw_mode`/`yaw_deg` against the area's
+ * axis (`areaAxis`, the nearest rim edge or the stroke's centre line) and
+ * with the seed of its epoch (`reshuffleEpoch` over `gameSeconds`), exactly
+ * as `scatterWindowInstances` samples it — these instances feed the "Props
+ * from above" sprites, and an `aligned 0°` car row must not show random
+ * turns just because its area is thinned. The yaw draw exists in every mode,
+ * so the positions stay the PREFIX of the same stream; only their reading
+ * changes. `gameSeconds` absent = no epoch, the seed as it always was.
+ */
 export function scatterThinnedInstances(jobs: readonly ScatterPreviewJob[],
   footprints: readonly ScatterFootprint[],
-  budget: number = SCATTER_PREVIEW_MAX): ScatterThinnedInstances {
+  budget: number = SCATTER_PREVIEW_MAX, gameSeconds?: number): ScatterThinnedInstances {
   const shares = scatterPreviewShares(jobs.map((j) => j.wanted), budget)
+  const seconds = gameSeconds ?? NaN
   const instances: ScatterPreviewInstance[] = []
   const order: string[] = []
   const by = new Map<string, ScatterAreaBadge>()
@@ -1700,14 +1724,18 @@ export function scatterThinnedInstances(jobs: readonly ScatterPreviewJob[],
     badge.wanted += job.wanted
     const share = shares[i]
     if (share < 1) return
+    const e = job.entry as TerrainScatterEntry
     for (const p of scatterInstances({
       ring: job.ring,
       areaM2: job.areaM2,
       densityPer100m2: job.density,
-      seed: scatterSeed(job.areaId, job.index),
+      seed: scatterSeed(job.areaId, job.index, reshuffleEpoch(seconds, e.reshuffle_min)),
       footprints,
       occluders: job.occluders,
       clearM: job.clearM,
+      yawMode: e.yaw_mode,
+      yawDeg: e.yaw_deg,
+      axisAt: areaAxis(job.line, job.ring),
       // The overview thins the WHOLE area to a dot budget, and the spacing
       // travels with it: a thinned picture is the PREFIX of the same run, so
       // every dot in it is a prop the world really plants at that distance
@@ -1730,8 +1758,8 @@ export function scatterThinnedInstances(jobs: readonly ScatterPreviewJob[],
  *  alone (and the shape of `ScatterDot` is what the two modes share). */
 export function scatterThinnedDots(jobs: readonly ScatterPreviewJob[],
   footprints: readonly ScatterFootprint[],
-  budget: number = SCATTER_PREVIEW_MAX): ScatterDot[] {
-  return scatterThinnedByArea(jobs, footprints, budget).dots
+  budget: number = SCATTER_PREVIEW_MAX, gameSeconds?: number): ScatterDot[] {
+  return scatterThinnedByArea(jobs, footprints, budget, gameSeconds).dots
 }
 
 /**

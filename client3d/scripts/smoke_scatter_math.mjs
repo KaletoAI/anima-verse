@@ -1290,11 +1290,13 @@
  * ============================================================================
  * (V) THE OCCUPANCY GRID — `OccupancyGrid` and the fifth verdict
  * ============================================================================
- * Rows keep clear of what EARLIER rows placed: a survivor is filed with a
- * radius, and a later candidate is blocked when `dist < r + ar` for any
- * filed (ax, az, ar) — strictly less, like `min_spacing`. Buckets of 8 m; the
- * search reaches ±ceil((r + rMax)/8) buckets with rMax the largest radius
- * ever filed, so a big occupant is found from far away.
+ * Rows keep clear of what OTHER rows placed: a survivor is filed with a
+ * radius under its row's tag, and a later candidate is blocked when
+ * `dist < r + ar` for any filed (ax, az, ar) of ANOTHER row — strictly less,
+ * like `min_spacing`. Buckets of 8 m; the search reaches ±ceil((r + rMax)/8)
+ * buckets with rMax the largest radius ever filed, so a big occupant is
+ * found from far away. The grids of (V1)–(V6) are filled WITHOUT a tag,
+ * which counts against everybody; (V7) is the tag.
  *
  * (V1) add(0, 0, 1): blocks(1.5, 0, 1) -> 1.5 < 2, true; blocks(2, 0, 1) ->
  *      2 < 2 is false (strict); blocks(0, 20, 1) -> false; an empty grid
@@ -1336,6 +1338,25 @@
  *      the cell is the unit, on the rim of a cell as in its middle; (63.6,
  *      10) beside it is. `gridOf(0, 0)` is the grid the adapter filed into,
  *      `gridOf(1, 0)` makes the second one — two grids in the map.
+ * (V7) FOREIGN ONLY (fix wave 2026-09-10). The first cut judged a row
+ *      against its own survivors with 2 · clearM, which capped a wood of 8 m
+ *      trees at one or two per 100 m² whatever the author wrote; within a
+ *      row the distance is `min_spacing_m` and nothing else.
+ *      · THE GRID: add(0, 0, 1, 'a') — blocks(1, 0, 1, 'a') is false (own
+ *        row), blocks(1, 0, 1, 'b') true, blocks(1, 0, 1) true (an untagged
+ *        query counts everything); add(5, 0, 1) untagged — blocks(5.5, 0, 1,
+ *        'a') true (an untagged entry counts against every row).
+ *      · THE SAMPLER, on the 10 m square at density 2 (round(1 · 2) = 2
+ *        candidates), seed 'same', `occupyR` 1, stream [0.30, 0.30, 0;
+ *        0.35, 0.30, 0] -> c0 (3, 3), c1 (3.5, 3): 0.5 < 2, yet both stand —
+ *        c0 is the row's own. A second run with seed 'other' at density 1,
+ *        stream [0.32, 0.30, 0] -> (3.2, 3), against the same grid: 0.2 < 2
+ *        to a foreign (3, 3) -> blocked, []. The same run with an explicit
+ *        `occupyTag` 'same' is excused -> [(3.2, 3)]: the tag, not the seed,
+ *        is the identity, and the default is the seed.
+ *      · THE ADAPTER passes the tag through: grid.add(30, 30, 1, 'a') —
+ *        grid.blocks(30.5, 30, 1, 'a') false, with 'b' true, and the cell's
+ *        own grid answers the same for 'a'.
  *
  * ============================================================================
  * (W) THE EPOCH — `reshuffleEpoch` and the seed suffix
@@ -3389,6 +3410,33 @@ async function main() {
   check('V6 gridOf hands the very grid the adapter filed into, and makes one on demand',
     [v6.gridOf(0, 0) === v6Grids.get('0,0'), v6Grids.has('1,0'),
       v6.gridOf(1, 0) === v6Grids.get('1,0'), v6Grids.size], [true, false, true, 2]);
+  // (V7) foreign only — see the header
+  const v7 = new OccupancyGrid();
+  v7.add(0, 0, 1, 'a');
+  check('V7 the own row does not block: (1, 0) under tag a is free',
+    v7.blocks(1, 0, 1, 'a'), false);
+  check('V7 …another row is blocked there, and so is an untagged query',
+    [v7.blocks(1, 0, 1, 'b'), v7.blocks(1, 0, 1)], [true, true]);
+  v7.add(5, 0, 1);
+  check('V7 an untagged entry counts against every row', v7.blocks(5.5, 0, 1, 'a'), true);
+  const v7Grid = new OccupancyGrid();
+  const sameRow = scatterInstances({
+    ring: SQ10, areaM2: 100, densityPer100m2: 2, seed: 'same', triesPerPoint: 1,
+    rng: stream([0.30, 0.30, 0, 0.35, 0.30, 0]), occupied: v7Grid, occupyR: 1,
+  });
+  check('V7 two candidates of one row 0.5 m apart both stand',
+    sameRow, [{ x: 3, z: 3, yaw: 0 }, { x: 3.5, z: 3, yaw: 0 }], 1e-9);
+  const otherRow = (occupyTag) => scatterInstances({
+    ring: SQ10, areaM2: 100, densityPer100m2: 1, seed: 'other', triesPerPoint: 1,
+    rng: stream([0.32, 0.30, 0]), occupied: v7Grid, occupyR: 1, occupyTag,
+  });
+  check('V7 …a candidate of ANOTHER row at the same spot is blocked', otherRow(), []);
+  check('V7 …unless it carries the first row\'s tag: the tag is the identity',
+    otherRow('same'), [{ x: 3.2, z: 3, yaw: 0 }], 1e-9);
+  v6.grid.add(30, 30, 1, 'a');
+  check('V7 the routing adapter passes the tag through on add and blocks',
+    [v6.grid.blocks(30.5, 30, 1, 'a'), v6.grid.blocks(30.5, 30, 1, 'b'),
+      v6Grids.get('0,0').blocks(30.5, 30, 1, 'a')], [false, true, false]);
 
   // (W) THE EPOCH
   console.log('\n(W) the epoch — reshuffleEpoch and the seed suffix');

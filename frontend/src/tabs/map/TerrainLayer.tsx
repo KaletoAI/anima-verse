@@ -354,9 +354,11 @@ export function TerrainLayer({
     ? scatterWindowInstances(jobs, rect, footprints, { gameSeconds, drawIds: trueIds })
     : NO_DOTS),
   [footprints, gameSeconds, jobs, rect, trueIds])
+  // …and the thinned areas turn and reshuffle like the window does: the
+  // same clock, so a sprite of a thinned row faces the way the world's does.
   const thinned = useMemo(() => (thinJobs.length
-    ? scatterThinnedInstances(thinJobs, footprints) : NO_THINNED),
-  [footprints, thinJobs])
+    ? scatterThinnedInstances(thinJobs, footprints, undefined, gameSeconds) : NO_THINNED),
+  [footprints, gameSeconds, thinJobs])
   const scatterDots = useMemo(
     () => (thinned.instances.length ? [...windowDots, ...thinned.instances] : windowDots),
     [thinned, windowDots],

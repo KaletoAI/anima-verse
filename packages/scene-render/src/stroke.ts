@@ -504,10 +504,12 @@ export interface StrokeStationOptions {
    *  absent = `scatterVariantIndex` over the instance ordinal. */
   variant?: number
   maxPoints?: number
-  /** What earlier rows planted in this cell and the radius a survivor takes
-   *  up — the last verdict, exactly as in `ScatterSampleOptions`. */
+  /** What OTHER rows planted in this cell, the radius a survivor takes up
+   *  and the row's own identity in the grid — the last verdict, exactly as
+   *  in `ScatterSampleOptions`; `occupyTag` absent = `seed`. */
   occupied?: ScatterOccupancy
   occupyR?: number
+  occupyTag?: string
 }
 
 /**
@@ -540,7 +542,8 @@ export interface StrokeStationOptions {
  * scatter sampler follows for the same reason). Rejected: an instance inside
  * a covering area (`occluders`), blocked by a footprint (`footprintBlocks`
  * with `clearM`) or overlapping what an earlier row planted (`occupied`,
- * judged by `occupyR`; a survivor is filed there in turn). The line's own
+ * judged by `occupyR`; a survivor is filed there in turn under `occupyTag`,
+ * and the row's own stations never block each other). The line's own
  * ribbon is NOT a rejection — the offset is what says whether a row stands
  * on the asphalt or beside it.
  *
@@ -592,6 +595,7 @@ export function strokeStations(opts: StrokeStationOptions): ScatterInstance[] {
   const max = opts.maxPoints ?? SCATTER_MAX_PER_ENTRY
   const occupied = opts.occupied
   const occupyR = scatterOccupyR(opts.occupyR, opts.clearM)
+  const occupyTag = opts.occupyTag ?? opts.seed
   const TAU = Math.PI * 2
 
   const out: ScatterInstance[] = []
@@ -630,8 +634,8 @@ export function strokeStations(opts: StrokeStationOptions): ScatterInstance[] {
         if (footprintBlocks(fp, x, z, opts.clearM)) { covered = true; break }
       }
       if (covered) continue
-      if (occupied && occupied.blocks(x, z, occupyR)) continue
-      if (occupied) occupied.add(x, z, occupyR)
+      if (occupied && occupied.blocks(x, z, occupyR, occupyTag)) continue
+      if (occupied) occupied.add(x, z, occupyR, occupyTag)
       out.push(mixing
         ? { x, z, yaw, variant: pinned >= 0 ? pinned
           : scatterVariantIndex(opts.seed, index, variants) }

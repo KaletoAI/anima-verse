@@ -1687,8 +1687,10 @@ export function createGround(): Ground {
    * OCCUPANCY is filled in: one `OccupancyGrid` per cell, shared by every
    * area of the pass (`grids`), every survivor filed with the row's own
    * clearance (`occupyR = clearM`, the measured half-width when a mesh has
-   * landed) and every later candidate judged against it — the grid goes INTO
-   * the sampler as its last verdict, nothing is filtered afterwards. A row
+   * landed) under the row's tag (`occupyTag`, the cell-independent row seed)
+   * and every later candidate of ANOTHER row judged against it — a row never
+   * blocks itself, within a row `min_spacing_m` is the distance — the grid
+   * goes INTO the sampler as its last verdict, nothing is filtered afterwards. A row
    * computed for its whole line or rim files its stations into the grid of
    * the cell each one stands in (`grid` routes by `scatterCellAt`), so a cell
    * reads the same whether a row was computed for it alone or for the whole
@@ -1773,6 +1775,7 @@ export function createGround(): Ground {
             variant: entry.variant,
             occupied: grid,
             occupyR: clearM,
+            occupyTag: alongSeed(area.id, index),
           })),
         });
       });
@@ -1797,6 +1800,7 @@ export function createGround(): Ground {
             variantCount,
             occupied: grid,
             occupyR: clearM,
+            occupyTag: scatterSeed(area.id, index),
           })),
         });
       } else if (entry.place === 'center') {
@@ -1815,6 +1819,7 @@ export function createGround(): Ground {
             variantCount,
             occupied: grid,
             occupyR: clearM,
+            occupyTag: scatterSeed(area.id, index),
           })),
         });
       }
@@ -1853,6 +1858,10 @@ export function createGround(): Ground {
               axisAt,
               occupied: gridOf(cx, cz),
               occupyR: clearM,
+              // THE ROW'S IDENTITY in the grid — cell- and epoch-independent,
+              // so the row is excused from its own survivors and nothing else
+              // (`occupancy.ts`, foreign only); the editor passes the same string.
+              occupyTag: scatterSeed(area.id, index),
             })) pts.push(p);
           }
           return pts;

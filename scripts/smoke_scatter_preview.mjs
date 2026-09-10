@@ -248,14 +248,18 @@
  *     that 0.40 as a literal — if the builder ever estimates differently, the
  *     lists stop matching, which is the point of pinning it.
  * (F1) Cell (0,0) has NO footprint and NO occluder over it, and it lies whole
- *      inside the area, so its 205 candidates pass every verdict but the last
- *      one: the cell's OCCUPANCY (2026-09-10). A survivor is filed with the
- *      tuft's 0.4 m clearance and a later candidate whose own 0.4 m circle
- *      overlaps one — closer than 0.8 m, strictly — is subtracted. So the cell
- *      draws its 205 candidates LESS the ones within 0.8 m of an earlier
- *      survivor: that rule, applied by hand over the same stream without the
- *      grid, is the expected count; it bites here (fewer than 205), and it
- *      never adds — the dots are a subset of the free run.
+ *      inside the area, so its 205 candidates pass every verdict — the
+ *      cell's OCCUPANCY included (2026-09-10, FOREIGN-ONLY since the fix
+ *      wave of the same day): a survivor is filed with the tuft's 0.4 m
+ *      clearance UNDER THE ROW'S TAG, and a later candidate is judged
+ *      against OTHER rows only. This is the only row, so nothing is ever
+ *      subtracted: the cell draws ALL 205, and the list is byte for byte the
+ *      run WITHOUT a grid — the output of before the occupancy existed. That
+ *      is the pin an existing world hangs on: a single row without
+ *      `min_spacing_m` reproduces its pre-strand instance set exactly. (The
+ *      first cut judged a row against itself, 2 · clearM within a row — for
+ *      8 m trees one or two per 100 m² whatever the author wrote, a wood
+ *      thinned by an order of magnitude.)
  * (F2) Cell (1,0) carries the footprint, cell (2,0) the occluder, so both draw
  *      FEWER than 205 — a preview that ignored either would show 205 there
  *      too, and this is the red counter-probe that says the exclusions really
@@ -264,7 +268,8 @@
  *      of three direct `scatterCellInstances` calls with
  *      `scatterCellSeed('ta_pin', 0, cx, 0)`, each with a fresh
  *      `OccupancyGrid` of its own (one grid per cell, and this is the only
- *      row), byte for byte (JSON).
+ *      row), byte for byte (JSON) — and, since the grid holds nothing
+ *      foreign, equally the three calls with NO grid at all (F1).
  * (F4) …and no instance carries a `variant` key on EITHER side: the map
  *      editor reads no variant maps (`readScatter` whitelists four fields),
  *      so a mix would itself be a mismatch with what the builder asks for.
@@ -357,16 +362,17 @@
  *      keeps the ones inside the ring, so one row is expected at
  *      205 · 89 646.28 / 4 096 = 4 486.7 and both at 8 973 — the authored
  *      8 964 to within the rounding of 204.8 to 205 — BEFORE the cell's
- *      occupancy (2026-09-10): the two rows are tufts (0.4 m clearance), and
- *      a candidate within 0.8 m of anything planted earlier in its cell — a
- *      survivor of row 0, then of row 1 — is subtracted. The count is pinned
- *      EXACTLY against that rule applied by hand over the free streams of
- *      both rows, cell by cell; and as a band: the thinning is a few percent
- *      (at 5 per 100 m2 a 0.8 m disc holds 0.1 expected props, so row 0
- *      loses about 5 % and row 1, judged against both, about 14 %), so the
- *      wood stands between 85 % and 100 % of 8 973 — and an exact count of a
- *      seeded sample alone would be a recording. Against the 16 dots of
- *      before that is still a factor above 250.
+ *      occupancy (2026-09-10, foreign-only): the two rows are tufts (0.4 m
+ *      clearance). Row 0 is judged against nothing — nothing foreign stands
+ *      in the cell yet and its own survivors do not count — and keeps its
+ *      free run whole; a candidate of row 1 within 0.8 m of a row-0 survivor
+ *      of its cell is subtracted. The count is pinned EXACTLY against that
+ *      rule applied by hand over the free streams of both rows, cell by
+ *      cell; and as a band: at 5 per 100 m2 a 0.8 m disc (2.01 m2) holds
+ *      0.1 expected row-0 props, so row 1 loses about 1 − e^−0.1 ≈ 10 % and
+ *      row 0 nothing — the wood stands between 90 % and 100 % of 8 973 — and
+ *      an exact count of a seeded sample alone would be a recording. Against
+ *      the 16 dots of before that is still a factor above 250.
  * (I6b) THE EQUALITY RULE OF A MIXED PICTURE (2026-09-10). The monster is
  *      thinned, the wood and the grass are drawn — and the monster lies
  *      UNDER both in paint order, so in the world its tufts are planted
@@ -377,7 +383,8 @@
  *      over ALL rows with `drawIds` = the true areas must equal the client
  *      call by hand: per drawn cell one grid, the monster's seven rows
  *      sampled first (against the wood and grass rings as occluders, no dot
- *      emitted), then the wood's two rows and the grass row emitting — and
+ *      emitted), then the wood's two rows and the grass row emitting, every
+ *      row under its own tag (`occupyTag`, the row seed, as the client) — and
  *      it must DIFFER from the old call over the true jobs alone, which is
  *      exactly what a run without the monster's rows reproduces (the red
  *      counter-probe). A thinned row contributes no dot: every dot carries a
@@ -441,12 +448,16 @@
  *
  * THE BUSHES (K3). The spread row samples the whole cell and keeps the ribbon's
  * share (`scatterCellInstances`); with the grid it is the SAME stream MINUS
- * the candidates that overlap something planted before them: a lamp within
- * 1 + 2 = 3 m, a tree within 1 + 1 = 2 m, or an earlier bush of the row within
- * 1 + 1 = 2 m (a survivor is filed too). So the occupied run is a SUBSET of
- * the unoccupied one, strictly smaller here, every survivor keeps those
- * distances, every dropped point breaks one of them against a lamp, a tree or
- * a bush that survived BEFORE it — and a survivor keeps the variant it had.
+ * the candidates that overlap something ANOTHER row planted before them: a
+ * lamp within 1 + 2 = 3 m or a tree within 1 + 1 = 2 m. The bushes of the row
+ * are filed too (under the row's tag) but never count against their own row:
+ * the row authors no `min_spacing_m`, so two bushes stand as close as the
+ * stream puts them, and at 40 per 100 m² (mean nearest-neighbour distance
+ * 0.5 / √0.4 ≈ 0.8 m) a pair closer than 2 m is a certainty — the red
+ * counter-probe that the self-blocking of the first cut is gone. So the
+ * occupied run is a SUBSET of the unoccupied one, strictly smaller here, every
+ * survivor keeps those two distances, every dropped point breaks one of them
+ * against a lamp or a tree — and a survivor keeps the variant it had.
  * The bushes are aligned at 0°: on a stroke area the axis is the walking
  * direction of the centre line (`lineAxis`), π/2 for every one of them.
  *
@@ -457,9 +468,62 @@
  *
  * THE ORDER (K5) is pinned in BOTH sources: the samplers are called along ->
  * edge -> center -> spread, every call carries the cell's `occupied` grid
- * with `occupyR` = the row's clearance and the area's `axisAt` — and both
- * come out of the package helpers `cellOccupancy(grids)` / `areaAxis(line,
+ * with `occupyR` = the row's clearance, the row's own `occupyTag` (the cell-
+ * and epoch-independent row seed, so both renderers excuse the same row
+ * from the same entries) and the area's `axisAt` — and grid and axis come
+ * out of the package helpers `cellOccupancy(grids)` / `areaAxis(line,
  * ring)`, never out of a grid or an axis choice built in the app.
+ *
+ * THE CLEARANCE OF A JOB (K6, fix wave 2026-09-10) is the client's own
+ * target-height rule (`scatterTargetH`, mirrored as `propSpriteTargetH`):
+ * the authored `height_m`, else the prop's library height `prop_height_m`
+ * (ridden in on the payload), else 2 m; a row without a model is the 0.8 m
+ * tuft. Half of that (`scatterClearM`), by hand:
+ *   along  /lamp, prop 6 m, no height     -> 6   · 0.5 = 3
+ *   spread /oak,  prop 8 m, no height     -> 8   · 0.5 = 4     (was 1 before)
+ *   spread /oak,  height 2, prop 8        -> 2   · 0.5 = 1     (authored wins)
+ *   spread /unknown, neither              -> 2   · 0.5 = 1
+ *   spread no model, no height            -> 0.8 · 0.5 = 0.4   (the tuft)
+ *   spread no model, height 1.6           -> 1.6 · 0.5 = 0.8
+ *
+ * ============================================================================
+ * (L) THE THINNED PICTURE TURNS AND RESHUFFLES LIKE THE WINDOW (fix wave)
+ * ============================================================================
+ * `scatterThinnedInstances` feeds the "Props from above" sprites of a thinned
+ * area, and until the fix it sampled without `yaw_mode`, without an axis and
+ * with a seed without epoch — an `aligned 0°` car row in a thinned lot showed
+ * random turns. Now it hands the sampler exactly what the window hands it.
+ *
+ * THE FIXTURE: a lot `ta_thin`, the rectangle (0,0)-(100,0)-(100,20)-(0,20)
+ * (2 000 m2), one spread row of 2 m cars at 5 per 100 m2 -> wanted
+ * round(20 · 5) = 100, `aligned` at 0°, reshuffling every 10 game minutes.
+ * Thinned to a budget of 40 the share is 40, and with no footprint and no
+ * occluder — the ring IS the box — every candidate stands: 40 instances.
+ *
+ * (L1) forty instances, all of row 0.
+ * (L2) THE AXIS BY HAND. `aligned 0°` on a polygon turns to the axis of the
+ *      NEAREST rim edge (`ringEdgeAxis`), oriented so that axis + 90° looks
+ *      inward. For this ring in drawing order (heading = atan2(dx, dz),
+ *      n = (dz, −dx)/len, the mid-point pushed along n is tested):
+ *        bottom (0,0)->(100,0):   heading π/2,  n (0,−1) outside -> axis 3π/2
+ *        right  (100,0)->(100,20): heading 0,   n (1, 0) outside -> axis π
+ *        top    (100,20)->(0,20): heading 3π/2, n (0, 1) outside -> axis π/2
+ *        left   (0,20)->(0,0):    heading π,    n (−1,0) outside -> axis 0
+ *      and the nearest edge of a point (x, z) inside is the least of
+ *      z (bottom), 100 − x (right), 20 − z (top), x (left) — a tie has
+ *      probability zero on a sampled point. So every instance's yaw is that
+ *      edge's axis, and a 20 m deep lot puts cars on both long edges: a yaw
+ *      of 3π/2 and one of π/2 both occur among the 40.
+ * (L3) THE POSITIONS ARE A READING OF THE SAME DRAW. The yaw draw exists in
+ *      every mode, so the thinned instances stand exactly where the free
+ *      `scatterInstances` run with the same seed and `maxPoints` 40 puts
+ *      them (byte for byte on x, z) — while the yaws are NOT the random
+ *      ones of that run (red counter-probe).
+ * (L4) THE EPOCH. `reshuffle_min` 10: game second 599 is epoch 0 and 600 is
+ *      epoch 1 — two pictures; 600 and 1 199 are one; 1 234 is epoch 2 and
+ *      the positions are the free run with the seed's `:e2` tail; no clock
+ *      at all is the seed without a tail, i.e. (L3)'s run. And (I8) still
+ *      holds: `scatterThinnedDots` is `scatterThinnedByArea` without badges.
  */
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -554,7 +618,7 @@ async function main() {
   const {
     scatterPreviewShares, scatterPreviewJobs, scatterAreaCosts,
     scatterAreaPlan, scatterWindowDots, scatterThinnedByArea,
-    scatterThinnedDots, scatterThinnedPercentText,
+    scatterThinnedDots, scatterThinnedInstances, scatterThinnedPercentText,
     SCATTER_AREA_TRUE_MAX, SCATTER_TRUE_TOTAL,
     SCATTER_TRUE_ON, SCATTER_TRUE_OFF,
     polygonAreaM2, formatAreaM2, AREA_HECTARE_M2,
@@ -562,6 +626,7 @@ async function main() {
   const {
     scatterWantedCount, SCATTER_MAX_PER_ENTRY, scatterCellInstances,
     scatterCellSeed, SCATTER_CELL_M, SCATTER_CELLS_MAX, scatterCellsInBox,
+    scatterInstances,
   } = await loadBundled(SCATTER_SRC, 'scattercount-');
   /** the cells of a box clipped to a viewport — what the window walks */
   const scatterCellsInBoxOf = (bMinX, bMinZ, bMaxX, bMaxZ, rect) => scatterCellsInBox(
@@ -572,18 +637,13 @@ async function main() {
     scatterSeed, scatterCellSeed: cellSeed, scatterCellInstances: cellInstances,
     OccupancyGrid, lineAxis, reshuffleEpoch, scatterVariantIndex, scatterClearM,
   } = await loadShared();
-  /** THE OCCUPANCY RULE BY HAND (F1, I6): walk a free run in stream order and
-   *  keep a point unless it stands closer than `r + r` to one already kept
-   *  (or to anything in `planted` before it) — what the grid does inside the
-   *  sampler, spelled out. */
-  const keepClear = (points, r, planted = []) => {
-    const kept = [];
-    for (const p of points) {
-      const all = planted.concat(kept);
-      if (all.every((q) => Math.hypot(p.x - q.x, p.z - q.z) >= 2 * r)) kept.push(p);
-    }
-    return kept;
-  };
+  /** THE OCCUPANCY RULE BY HAND (I6): walk a free run in stream order and
+   *  keep a point unless it stands closer than `r + r` to something ANOTHER
+   *  row planted before it (`planted`) — what the grid does inside the
+   *  sampler, spelled out. The run's own kept points never count: the
+   *  occupancy is foreign-only (fix wave 2026-09-10). */
+  const keepClearOf = (points, r, planted) => points.filter(
+    (p) => planted.every((q) => Math.hypot(p.x - q.x, p.z - q.z) >= 2 * r));
 
   console.log('(A) the reporting world — four areas, sixteen rows');
   /** area m2 + the authored densities, in the server's bottom-to-top order */
@@ -702,6 +762,8 @@ async function main() {
     // the ONE grid of the cell, and this is its only row (F3)
     occupied: occupied ?? undefined,
     occupyR: CLEAR_M,
+    // the row's identity in the grid, as both renderers pass it
+    occupyTag: scatterSeed('ta_pin', 0),
   }).map((p) => ({ x: p.x, z: p.z, entry: 0 }));
   /** …and the same cell WITHOUT the grid — the free stream (F1) */
   const cellFree = (cx, cz) => cellDirect(cx, cz, null);
@@ -794,14 +856,17 @@ async function main() {
   const dots = scatterWindowDots(jobs, RECT, FOOTPRINTS);
   const inCell = (cx) => dots.filter((d) => d.x >= cx * 64 && d.x < (cx + 1) * 64);
   const free0 = cellFree(0, 0);
-  const ruled0 = keepClear(free0, CLEAR_M);
   check('F1 the untouched cell offers its full 205 — the authored density',
     [free0.length, Math.round((free0.length / ((64 * 64) / 100)) * 1000) / 1000],
     [205, 5.005]);
-  check('F1 …and draws them less the ones within 0.8 m of an earlier survivor',
-    [inCell(0).length, inCell(0).length < 205,
-      inCell(0).every((d) => free0.some((f) => f.x === d.x && f.z === d.z))],
-    [ruled0.length, true, true]);
+  check('F1 …and draws ALL of them: the only row never blocks itself',
+    [inCell(0).length, JSON.stringify(inCell(0)) === JSON.stringify(free0)],
+    [205, true]);
+  // THE PRE-STRAND PIN: a single row without spacing, nothing foreign in the
+  // grid — the whole window is the run without any grid, byte for byte.
+  check('F1 …and the window is the pre-occupancy output, byte for byte',
+    JSON.stringify(dots),
+    JSON.stringify([...cellFree(0, 0), ...cellFree(1, 0), ...cellFree(2, 0)]));
   check('F2 the footprint and the covering area SUBTRACT from the other two',
     [inCell(1).length < 205, inCell(2).length < 205,
       inCell(1).length > 0, inCell(2).length > 0],
@@ -1038,22 +1103,23 @@ async function main() {
   const wood = exactDots.filter((d) => d.x >= wMinX && d.x <= wMaxX
     && d.z >= wMinZ && d.z <= wMaxZ).length;
   const expectWood = Math.round((205 * FOREST_M2 * 2) / 4096);
-  // …and the occupancy rule by hand over both rows, cell by cell: row 0's
-  // survivors first, row 1 judged against those and its own.
+  // …and the occupancy rule by hand over both rows, cell by cell: row 0 is
+  // its free run (nothing foreign, and its own survivors do not count), row 1
+  // is judged against row 0's survivors and nothing else.
   let ruledWood = 0;
   for (const [cx, cz] of scatterCellsInBoxOf(wMinX, wMinZ, wMaxX, wMaxZ, MIX_RECT)) {
     const freeRow = (i) => cellInstances({
       ring: FOREST_RING, cx, cz, densityPer100m2: 5,
       seed: cellSeed('ta_63926f52', i, cx, cz), clearM: 0.4,
     });
-    const first = keepClear(freeRow(0), 0.4);
-    const second = keepClear(freeRow(1), 0.4, first);
+    const first = freeRow(0);
+    const second = keepClearOf(freeRow(1), 0.4, first);
     ruledWood += first.length + second.length;
   }
-  check('I6 the wood draws its trees less the 0.8 m overlaps, exactly by the rule',
+  check('I6 the wood draws its trees less row 1\'s 0.8 m overlaps with row 0, exactly by the rule',
     wood, ruledWood);
-  check('I6 …which is 85..100 % of the 8 973 the free streams offer',
-    [expectWood, wood > expectWood * 0.85 && wood < expectWood],
+  check('I6 …which is 90..100 % of the 8 973 the free streams offer',
+    [expectWood, wood > expectWood * 0.9 && wood < expectWood],
     [8973, true]);
   // THE HEADLINE, and the reason the round exists: 16 dots became thousands.
   check('I6 …which is more than 250 times the 16 dots of before',
@@ -1076,6 +1142,7 @@ async function main() {
       cellInstances({
         ring, cx, cz, densityPer100m2: d, seed: cellSeed(id, i, cx, cz),
         clearM: 0.4, occluders, occupied: gridOf(cx, cz), occupyR: 0.4,
+        occupyTag: scatterSeed(id, i),
       }).map((p) => ({ x: p.x, z: p.z, entry })));
     const drawnCells = [...new Map([...woodCells, ...grassCells]
       .map((c) => [`${c[0]},${c[1]}`, c])).values()];
@@ -1217,20 +1284,22 @@ async function main() {
     const lamps = strokeStations({
       line, spacingM: 8, offsetM: 0, seed: alongSeed('ta_row', 0),
       footprints: [], occluders: [], clearM: scatterClearM(4),
-      occupied: grid, occupyR: scatterClearM(4), variantCount,
+      occupied: grid, occupyR: scatterClearM(4), occupyTag: alongSeed('ta_row', 0),
+      variantCount,
     });
     const trees = scatterEdgeInstances(ROAD_RING, {
       seed: scatterSeed('ta_row', 0), spacingM: 10, offsetM: 2,
       yawMode: 'aligned', yawDeg: 90, footprints: [], occluders: [],
       clearM: scatterClearM(2), occupied: grid, occupyR: scatterClearM(2),
-      variantCount,
+      occupyTag: scatterSeed('ta_row', 0), variantCount,
     });
     const bushes = cellInstances({
       ring: ROAD_RING, cx: 0, cz: 0, densityPer100m2: 40,
       seed: cellSeed('ta_row', 1, 0, 0, reshuffleEpoch(seconds, 10)),
       footprints: [], occluders: [], clearM: scatterClearM(2),
       yawMode: 'aligned', yawDeg: 0, axisAt,
-      occupied: grid, occupyR: scatterClearM(2), variantCount,
+      occupied: grid, occupyR: scatterClearM(2), occupyTag: scatterSeed('ta_row', 1),
+      variantCount,
     });
     return { lamps, trees, bushes };
   };
@@ -1270,17 +1339,17 @@ async function main() {
     mixed.bushes.length < free.length && free.length > 0, true);
   check('K3 …and a subset of it, in stream order',
     free.filter((p) => kept.has(key(p))).map(key), mixed.bushes.map(key));
-  const clearOf = (p, planted) => planted.every((q) => near(p, q) >= 2)
+  const clearOf = (p) => client.trees.every((q) => near(p, q) >= 2)
     && client.lamps.every((q) => near(p, q) >= 3);
-  check('K3 every survivor keeps 3 m from a lamp, 2 m from a tree and a bush',
-    mixed.bushes.every((p, i) => clearOf(p,
-      client.trees.concat(mixed.bushes.slice(0, i)))), true);
-  check('K3 …and every dropped candidate broke one of those distances',
-    free.filter((p) => !kept.has(key(p))).every((p) => {
-      const before = mixed.bushes.filter((q) => free.findIndex((f) => key(f) === key(q))
-        < free.findIndex((f) => key(f) === key(p)));
-      return !clearOf(p, client.trees.concat(before));
-    }), true);
+  check('K3 every survivor keeps 3 m from a lamp and 2 m from a tree',
+    mixed.bushes.every(clearOf), true);
+  check('K3 …and every dropped candidate broke one of those two distances',
+    free.filter((p) => !kept.has(key(p))).every((p) => !clearOf(p)), true);
+  // RED COUNTER-PROBE of the foreign-only rule: the row authors no spacing,
+  // so its own bushes crowd each other freely — a pair under 2 m exists.
+  check('K3 …while the bushes never keep 2 m from each other (no min_spacing_m)',
+    mixed.bushes.some((p, i) => mixed.bushes.slice(0, i).some((q) => near(p, q) < 2)),
+    true);
   check('K3 a survivor keeps the variant it had without the grid',
     mixed.bushes.map((p) => p.variant),
     mixed.bushes.map((p) => free.find((f) => key(f) === key(p)).variant));
@@ -1343,16 +1412,80 @@ async function main() {
   const wired = (src) => [
     (src.match(/occupied: grid/g) || []).length >= 4,
     (src.match(/occupyR: clearM/g) || []).length >= 4,
+    // the row's tag on every call: the along row under its along seed, the
+    // three scatter kinds under the scatter seed — cell- and epoch-free
+    (src.match(/occupyTag: alongSeed\(/g) || []).length === 1,
+    (src.match(/occupyTag: scatterSeed\(/g) || []).length === 3,
     /scatterCenterInstance\([\s\S]{0,700}?axisAt,/.test(src),
     /scatterCellInstances\(\{[\s\S]{0,1200}?axisAt,/.test(src),
     src.includes('const { grid, gridOf } = cellOccupancy(grids)'),
     src.includes('const axisAt = areaAxis(line, '),
     !src.includes('new OccupancyGrid()'),
   ];
-  check('K5 ground.ts hands grid, clearance and axis to every sampler call, from the package helpers',
-    wired(groundSrc), [true, true, true, true, true, true, true]);
+  check('K5 ground.ts hands grid, clearance, tag and axis to every sampler call, from the package helpers',
+    wired(groundSrc), [true, true, true, true, true, true, true, true, true]);
   check('K5 …and so does mapMath.ts',
-    wired(mathSrc), [true, true, true, true, true, true, true]);
+    wired(mathSrc), [true, true, true, true, true, true, true, true, true]);
+
+  // (K6) the clearance of a job follows the client's target height
+  const HEIGHTS = {
+    id: 'ta_h', kind: 'road', polygon: ROAD_RING,
+    meta: {
+      stroke: {
+        points: ROAD_LINE, width_m: 10,
+        along: [{ model: '/lamp', spacing_m: 8, offset_m: 0, prop_height_m: 6 }],
+      },
+      scatter: [
+        { density_per_100m2: 1, model: '/oak', prop_height_m: 8 },
+        { density_per_100m2: 1, model: '/oak', height_m: 2, prop_height_m: 8 },
+        { density_per_100m2: 1, model: '/unknown' },
+        { density_per_100m2: 1 },
+        { density_per_100m2: 1, height_m: 1.6 },
+      ],
+    },
+  };
+  check('K6 the job clearance is half the client\'s target height: 3 / 4 / 1 / 1 / 0.4 / 0.8',
+    scatterPreviewJobs([HEIGHTS]).map((j) => [j.kind, j.index, j.clearM]),
+    [['along', 0, 3], ['spread', 0, 4], ['spread', 1, 1], ['spread', 2, 1],
+      ['spread', 3, 0.4], ['spread', 4, 0.8]]);
+
+  console.log('\n(L) the thinned picture turns and reshuffles like the window');
+  const CAR_RING = [[0, 0], [100, 0], [100, 20], [0, 20]];
+  const CARS = {
+    id: 'ta_thin', kind: 'lot', polygon: CAR_RING,
+    meta: { scatter: [{ density_per_100m2: 5, model: '/car', height_m: 2,
+      yaw_mode: 'aligned', yaw_deg: 0, reshuffle_min: 10 }] },
+  };
+  const carJobs = scatterPreviewJobs([CARS]);
+  const thinCars = scatterThinnedInstances(carJobs, [], 40).instances;
+  check('L1 the lot wants 100 cars, the budget keeps 40, all of row 0',
+    [carJobs[0].wanted, thinCars.length, thinCars.every((p) => p.entry === 0)],
+    [100, 40, true]);
+  /** the nearest-edge axis of a point in the lot, by hand — see (L2) */
+  const lotAxis = (x, z) => {
+    const edges = [[z, 1.5 * Math.PI], [100 - x, Math.PI], [20 - z, 0.5 * Math.PI], [x, 0]];
+    return edges.reduce((best, e) => (e[0] < best[0] ? e : best))[1];
+  };
+  const r9 = (v) => Math.round(v * 1e9) / 1e9;
+  check('L2 every thinned car faces the axis of its nearest edge',
+    thinCars.map((p) => r9(p.yaw)), thinCars.map((p) => r9(lotAxis(p.x, p.z))));
+  check('L2 …and both long edges are hit: yaws 3π/2 and π/2 both occur',
+    [thinCars.some((p) => r9(p.yaw) === r9(1.5 * Math.PI)),
+      thinCars.some((p) => r9(p.yaw) === r9(0.5 * Math.PI))], [true, true]);
+  const freeCars = (epoch) => scatterInstances({
+    ring: CAR_RING, areaM2: 2000, densityPer100m2: 5,
+    seed: scatterSeed('ta_thin', 0, epoch), maxPoints: 40,
+  });
+  const xz = (list) => list.map((p) => [p.x, p.z]);
+  check('L3 the positions are the free run\'s with the same seed, byte for byte',
+    xz(thinCars), xz(freeCars()));
+  differs('L3 …while the yaws are not that run\'s random ones',
+    thinCars.map((p) => p.yaw), freeCars().map((p) => p.yaw));
+  const carsAt = (seconds) => xz(scatterThinnedInstances(carJobs, [], 40, seconds).instances);
+  differs('L4 epoch 0 (599 s) and epoch 1 (600 s) are two pictures', carsAt(599), carsAt(600));
+  check('L4 …within an epoch the cars stand still', carsAt(600), carsAt(1199));
+  check('L4 …1 234 s is epoch 2, the seed with its :e2 tail', carsAt(1234), xz(freeCars(2)));
+  check('L4 …and no clock at all is the seed without a tail', carsAt(undefined), xz(freeCars()));
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

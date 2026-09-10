@@ -1155,8 +1155,16 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   **Echt kleiner**, wie beim Eigenabstand und bei der Grundriss-Freihaltung:
   zwei Props, die sich genau berühren, stehen beide. Die Radien sind die
   halben Ausdehnungen (`occupyR`, sonst `clearM`) — der 3D-Client gibt die
-  gemessene halbe Breite, der Editor `h · 0.5`; ein Autorenfeld dafür gibt es
-  nicht, der Abstand ist die Summe der halben Breiten und sonst nichts. Die
+  gemessene halbe Breite, der Editor `h · 0.5` über dieselbe Zielhöhe wie
+  der Client (`height_m`, sonst `prop_height_m`, sonst 2 m); ein Autorenfeld
+  dafür gibt es nicht, der Abstand ist die Summe der halben Breiten und
+  sonst nichts. **Die eigene Zeile zählt nicht** (Fix 2026-09-10): jede
+  Instanz wird unter dem Tag ihrer Zeile abgelegt (`occupyTag`, der zell-
+  und epochenunabhängige Zeilen-Seed, in beiden Renderern derselbe String),
+  und `blocks` übergeht Einträge mit dem eigenen Tag — der Fremdabstand gilt
+  gegenüber ANDEREN Zeilen, innerhalb einer Zeile gilt allein
+  `min_spacing_m`; eine einzelne Zeile ohne fremde Einträge liefert damit
+  byte-gleich das Bild von vor dem Fremdabstand. Die
   **Reihenfolge** ist die des Payloads: Flächen von unten nach oben, je
   Fläche erst `meta.stroke.along[]` nach Index, dann `meta.scatter[]` nach
   Index; innerhalb einer Zelle also erst alle along-Instanzen, dann die

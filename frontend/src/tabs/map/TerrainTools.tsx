@@ -41,7 +41,7 @@ import {
   FLOW_SPEED_MAX_M_S, FLOW_SPEED_MIN_M_S, RELIEF_AMP_MAX_M, RELIEF_AMP_MIN_M,
   RELIEF_WAVE_DEFAULT_M, RELIEF_WAVE_MAX_M, RELIEF_WAVE_MIN_M,
   ALONG_OFFSET_MAX_M, ALONG_SIDES, ALONG_SPACING_MAX_M, ALONG_SPACING_MIN_M,
-  MAX_ALONG_ENTRIES, NEW_ALONG_ENTRY,
+  MAX_ALONG_ENTRIES, NEW_ALONG_ENTRY, SCATTER_PAYLOAD_KEYS,
   SCATTER_YAW_MODES, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
   WATER_DEPTH_MAX_M, WATER_DEPTH_MIN_M, isWaterKind, waterKindDefaults,
 } from './mapTypes'
@@ -467,6 +467,16 @@ function ScatterSwatch({ color, name, imageUrl }: {
   )
 }
 
+/** Take the payload-only prop facts (`SCATTER_PAYLOAD_KEYS`) off a local
+ *  scatter or along entry — what the editors do when a row is given a NEW
+ *  model, because those facts describe the old one. The two the type does
+ *  not declare (`sway_factor`, `ground_offset_m`) ride along untyped, hence
+ *  the string-keyed view. */
+function dropPropFacts(entry: TerrainScatterEntry | TerrainAlongEntry): void {
+  const bag = entry as unknown as Record<string, unknown>
+  for (const key of SCATTER_PAYLOAD_KEYS) delete bag[key]
+}
+
 /**
  * What an area GROWS — the list editor of finding B17.
  *
@@ -493,6 +503,12 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
     // drops `height_m`/`model` when they are not set, and so must this, or a
     // cleared field would travel as `null` and read back as junk.
     const e = out[i]
+    // A NEW MODEL is a new prop, and the payload-only facts on the local
+    // entry (`SCATTER_PAYLOAD_KEYS`: the variant maps, the library height,
+    // the sway factor, the ground offset) describe the OLD one. Dropped here,
+    // so the sprite and the inherited height do not show the previous prop
+    // until the refetch brings the new prop's facts.
+    if ('model' in next) dropPropFacts(e)
     if (!(typeof e.height_m === 'number' && e.height_m > 0)) delete e.height_m
     if (!(typeof e.min_spacing_m === 'number' && e.min_spacing_m > 0)) {
       delete e.min_spacing_m
@@ -755,6 +771,8 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
   const patch = (i: number, next: Partial<TerrainAlongEntry>) => {
     const out = entries.map((e, k) => (k === i ? { ...e, ...next } : e))
     const e = out[i]
+    // a new model is a new prop — see `ScatterEditor.patch`
+    if ('model' in next) dropPropFacts(e)
     if (!(typeof e.height_m === 'number' && e.height_m > 0)) delete e.height_m
     if (!e.model) delete e.model
     if (!e.side || e.side === 'right') delete e.side

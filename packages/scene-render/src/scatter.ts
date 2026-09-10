@@ -585,10 +585,12 @@ export function propBoxFootprints(
  * a thin wrapper of this shape, see there.
  */
 export interface ScatterOccupancy {
-  /** would a circle of radius `r` at `(x, z)` overlap something filed? */
-  blocks(x: number, z: number, r: number): boolean
-  /** file a survivor's circle */
-  add(x: number, z: number, r: number): void
+  /** would a circle of radius `r` at `(x, z)` overlap something filed by
+   *  ANOTHER row? Entries under the same `tag` are the row's own and do not
+   *  count; an untagged entry or query always counts (`occupancy.ts`). */
+  blocks(x: number, z: number, r: number, tag?: string): boolean
+  /** file a survivor's circle under the row's `tag` */
+  add(x: number, z: number, r: number, tag?: string): void
 }
 
 /** The radius a survivor is filed with and judged by: the authored
@@ -700,17 +702,26 @@ export interface ScatterSampleOptions {
   /**
    * What EARLIER rows have already planted in this cell (`OccupancyGrid`,
    * `occupancy.ts`): the FIFTH verdict, asked after the spacing and last of
-   * all. A candidate whose circle of `occupyR` overlaps a filed one is
-   * subtracted like any other rejection, and every survivor is filed in turn
-   * — so the rows of a cell keep their distance in the order they are
-   * sampled (areas bottom to top, per area the along rows, then the scatter
-   * rows). Absent = nothing to keep clear of, and the run is byte for byte
-   * what it was.
+   * all. A candidate whose circle of `occupyR` overlaps a filed one OF
+   * ANOTHER ROW is subtracted like any other rejection, and every survivor
+   * is filed in turn — so the rows of a cell keep their distance in the
+   * order they are sampled (areas bottom to top, per area the along rows,
+   * then the scatter rows). THIS ROW'S OWN survivors never block it: they
+   * are filed under `occupyTag` and the query carries the same tag, so
+   * within a row the authored `minSpacingM` is the only distance, and a
+   * single row with nothing foreign in the grid is byte for byte the run
+   * without a grid. Absent = nothing to keep clear of.
    */
   occupied?: ScatterOccupancy
   /** The radius a survivor is filed with AND judged by, metres; absent =
    *  `clearM` (the half-extent), and with neither a point of radius 0. */
   occupyR?: number
+  /** The ROW'S identity in the occupancy — what its survivors are filed
+   *  under and what its candidates are excused from. Both renderers pass the
+   *  row's cell- and epoch-independent seed (`scatterSeed(areaId, index)`);
+   *  absent = `seed`, which within one cell's grid names the row just as
+   *  well. */
+  occupyTag?: string
 }
 
 /**
@@ -838,6 +849,7 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
   // What earlier rows planted, and the radius this row's survivors take up.
   const occupied = opts.occupied
   const occupyR = scatterOccupyR(opts.occupyR, opts.clearM)
+  const occupyTag = opts.occupyTag ?? opts.seed
   const out: ScatterInstance[] = []
   let tries = wanted * (opts.triesPerPoint ?? SCATTER_TRIES_PER_POINT)
   // THE CANDIDATE ORDINAL, counted over every point the stream draws — the
@@ -894,10 +906,11 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
       }
       if (crowded) continue
     }
-    // …and the LAST subtraction: what an earlier row planted here. Asked
-    // after the spacing and BEFORE the survivor is filed anywhere, so a
-    // candidate the occupancy takes away crowds nobody in this row either.
-    if (occupied && occupied.blocks(x, z, occupyR)) continue
+    // …and the LAST subtraction: what an earlier row planted here — OTHER
+    // rows, never this one (`occupyTag`). Asked after the spacing and BEFORE
+    // the survivor is filed anywhere, so a candidate the occupancy takes
+    // away crowds nobody in this row either.
+    if (occupied && occupied.blocks(x, z, occupyR, occupyTag)) continue
     // A survivor: filed in this row's spacing buckets and in the occupancy
     // every later row of the cell is judged by.
     if (buckets) {
@@ -906,7 +919,7 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
       if (bucket) bucket.push([x, z])
       else buckets.set(key, [[x, z]])
     }
-    if (occupied) occupied.add(x, z, occupyR)
+    if (occupied) occupied.add(x, z, occupyR, occupyTag)
     const yaw = scatterYaw(turn, opts.yawMode, opts.yawDeg, axisAt ? axisAt(x, z) : 0)
     out.push(mixing
       ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, index, variants) }
@@ -1177,6 +1190,10 @@ export interface ScatterCellOptions {
    *  shape keeps, see `scatterCellInstances` */
   occupied?: ScatterOccupancy
   occupyR?: number
+  /** the row's identity in the occupancy, exactly as in
+   *  `ScatterSampleOptions` — the renderers pass the cell-independent
+   *  `scatterSeed(areaId, index)`; absent = this cell's `seed` */
+  occupyTag?: string
 }
 
 /**
@@ -1231,10 +1248,11 @@ export function scatterCellInstances(opts: ScatterCellOptions): ScatterInstance[
     // of the cell's box that lies outside this area is never drawn, and a
     // prop nobody draws must not keep the next area's props away.
     occupied: occupied ? {
-      blocks: (x, z, r) => occupied.blocks(x, z, r),
-      add: (x, z, r) => { if (pointInRing(x, z, ring)) occupied.add(x, z, r) },
+      blocks: (x, z, r, tag) => occupied.blocks(x, z, r, tag),
+      add: (x, z, r, tag) => { if (pointInRing(x, z, ring)) occupied.add(x, z, r, tag) },
     } : undefined,
     occupyR: opts.occupyR,
+    occupyTag: opts.occupyTag,
   })
   // …and the painted shape decides which of them are ITS props. The filter
   // runs AFTER the sampling, never as a smaller box: the stream of a cell must
