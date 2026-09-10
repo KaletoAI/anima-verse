@@ -93,18 +93,78 @@ Throwaway storage. Hand-derived expectations:
         100      -> 100.0        (exactly at the limit, untouched)
         0 / -1 / NaN / inf / "wide" / None -> the KEY IS DROPPED, which is
                                   how both renderers read "no constraint".
-      [11y] THE TURN (2026-09-09): yaw_mode "fixed" / "quarter" survives
-      together with yaw_deg, normalised to [0, 360) with two decimals and
-      defaulting to 0.0 beside a mode; a bare yaw_deg without a mode is
-      dropped (a number that acts on nothing), an unknown mode drops both:
-        {yaw_mode: "fixed", yaw_deg: 90}     -> both kept
-        {yaw_mode: "quarter"}                -> yaw_deg 0.0 added
-        {yaw_mode: "fixed", yaw_deg: 370}    -> yaw_deg 10.0
-        {yaw_mode: "fixed", yaw_deg: -90}    -> yaw_deg 270.0
-        {yaw_mode: "fixed", yaw_deg: 12.345} -> yaw_deg 12.35
-        {yaw_deg: 90}                        -> neither key
-        {yaw_mode: "spin", yaw_deg: 90}      -> neither key
-        {yaw_mode: "fixed", yaw_deg: "east"} -> yaw_deg 0.0 (junk angle = 0)
+      [11y] THE TURN (2026-09-09; ONE mode since 2026-09-10): yaw_mode
+      "aligned" survives together with yaw_deg, normalised to [0, 360) with
+      two decimals and defaulting to 0.0 beside a mode; a bare yaw_deg
+      without a mode is dropped (a number that acts on nothing), and an
+      unknown mode drops both — which is now what the RETIRED pair
+      "fixed"/"quarter" is, because no reader for it is left (the stored ones
+      move once, [11m]):
+        {yaw_mode: "aligned", yaw_deg: 90}     -> both kept
+        {yaw_mode: "aligned"}                  -> yaw_deg 0.0 added
+        {yaw_mode: "aligned", yaw_deg: 370}    -> yaw_deg 10.0  (370 - 360)
+        {yaw_mode: "aligned", yaw_deg: -90}    -> yaw_deg 270.0 (-90 + 360)
+        {yaw_mode: "aligned", yaw_deg: 12.345} -> yaw_deg 12.35
+        {yaw_deg: 90}                          -> neither key
+        {yaw_mode: "fixed", yaw_deg: 90}       -> neither key (retired)
+        {yaw_mode: "quarter"}                  -> neither key (retired)
+        {yaw_mode: "spin", yaw_deg: 90}        -> neither key
+        {yaw_mode: "aligned", yaw_deg: "east"} -> yaw_deg 0.0 (junk angle = 0)
+      [11p] THE PLACEMENT (2026-09-10, plan-scatter-erweiterung.md): WHERE an
+      entry puts its instances, and the two fields that exist only beside one
+      placement. Absence is the third placement (spread, the density-sampled
+      scatter of every entry before), so `place` has no stored default:
+        place "edge" / "center"      -> kept
+        place "spread"/""/"  "/7/None-> the key is dropped
+        place "edge", offset_m 3.456 -> 3.46  (two decimals, the metre grid
+                                       every length here is rounded on)
+        place "edge", offset_m -1    -> 0.0   (clamped, never refused — the
+                                       knob rule of min_spacing_m above)
+        place "edge", offset_m 500   -> 100.0 (SCATTER_OFFSET_MAX_M)
+        place "edge", offset_m NaN/"wide"/None/[2] -> the key is dropped
+        place "center", variant 2    -> 2
+        place "center", variant -1 / 1.5 / True / "2" / None -> dropped (a
+                                       list position is a whole number >= 0,
+                                       and True is not an index)
+        place "edge", variant 1      -> variant dropped: the variant belongs
+                                       to the ONE centred instance, a row
+                                       varies by the shared cell formula
+        place "center", offset_m 2   -> offset dropped: there is nothing to
+                                       stand off from, the point IS the
+                                       area's inmost one
+        no place, offset_m 2 + variant 1 -> both dropped
+      and reshuffle_min, after how many GAME MINUTES a placement re-rolls —
+      the same rule on a scatter entry and on an along row ([11z]):
+        30      -> 30      1 -> 1 (the floor: below a minute there is no
+                           period, and the epoch counts whole minutes)
+        2.9     -> 2       (TRUNCATED, not rounded — the renderers derive
+                           floor(game_seconds / (m·60)), which only ever sees
+                           whole minutes)
+        1e9     -> 100000  (RESHUFFLE_MIN_MAX = 69 game days; clamped, never
+                           refused)
+        10**400 -> 100000  (the json-integer analogue of [9]: an integer is
+                           clamped BEFORE it becomes a float, so the coercion
+                           cannot raise OverflowError on a 400-digit literal)
+        0 / -5 / 0.5 / "abc" / True / None / inf / NaN -> the key is dropped,
+                           which reads as "never re-rolls"
+      [11m] THE ONE-TIME MIGRATION (`migrate_scatter_yaw_mode_once`), because
+      nothing reads "fixed"/"quarter" any more. The rule is pure
+      (`_migrate_scatter_yaw_meta(meta) -> (meta, changed)`) and the DB walk
+      applies it per row:
+        {scatter: [{yaw_mode: "fixed", yaw_deg: 30}]} -> aligned, 30 kept,
+                                                         changed
+        {scatter: [{yaw_mode: "quarter"}]}            -> aligned, changed
+        {scatter: [{yaw_mode: "aligned"}]}            -> not changed
+        an entry without a mode / meta without scatter / a scatter that is
+        not a list / a meta that is not an object     -> not changed
+      and against the throwaway DB, with the areas planted by RAW INSERT
+      (no writer can produce the retired value any more):
+        two planted areas carry a retired mode, a third does not
+        first run  -> 2 rewritten; both read back "aligned" with their angles
+                      untouched, and the already-aligned second entry of the
+                      quarter area is unchanged
+        the third  -> its meta is exactly what was planted
+        second run -> 0 (idempotent by construction: nothing matches now)
       The list itself: a non-list raises (the field moved AS a
       list, so a bare object is an old client, not a guess), an entry that
       is not an object raises, more than MAX_SCATTER_ENTRIES (8) raises, an
@@ -732,23 +792,29 @@ check("model exactly at the limit survives",
       {"scatter": [{"density_per_100m2": 1.0, "model": _long[:-1]}]})
 print("[11y] the turn — yaw_mode / yaw_deg")
 _turn = lambda entry: scatter_of({"scatter": [{"density_per_100m2": 1, **entry}]})["scatter"][0]
-check("fixed + 90 survives as a pair",
-      _turn({"yaw_mode": "fixed", "yaw_deg": 90}),
-      {"density_per_100m2": 1.0, "yaw_mode": "fixed", "yaw_deg": 90.0})
+check("aligned + 90 survives as a pair",
+      _turn({"yaw_mode": "aligned", "yaw_deg": 90}),
+      {"density_per_100m2": 1.0, "yaw_mode": "aligned", "yaw_deg": 90.0})
 check("a mode without an angle gets 0.0",
-      _turn({"yaw_mode": "quarter"}),
-      {"density_per_100m2": 1.0, "yaw_mode": "quarter", "yaw_deg": 0.0})
-check("370 wraps to 10", _turn({"yaw_mode": "fixed", "yaw_deg": 370})["yaw_deg"], 10.0)
-check("-90 wraps to 270", _turn({"yaw_mode": "fixed", "yaw_deg": -90})["yaw_deg"], 270.0)
-check("two decimals", _turn({"yaw_mode": "fixed", "yaw_deg": 12.345})["yaw_deg"], 12.35)
+      _turn({"yaw_mode": "aligned"}),
+      {"density_per_100m2": 1.0, "yaw_mode": "aligned", "yaw_deg": 0.0})
+check("370 wraps to 10", _turn({"yaw_mode": "aligned", "yaw_deg": 370})["yaw_deg"], 10.0)
+check("-90 wraps to 270", _turn({"yaw_mode": "aligned", "yaw_deg": -90})["yaw_deg"], 270.0)
+check("two decimals", _turn({"yaw_mode": "aligned", "yaw_deg": 12.345})["yaw_deg"], 12.35)
 check("an angle without a mode is dropped",
       _turn({"yaw_deg": 90}), {"density_per_100m2": 1.0})
 check("an unknown mode drops both keys",
       _turn({"yaw_mode": "spin", "yaw_deg": 90}), {"density_per_100m2": 1.0})
+# The retirement, pinned from the writer's side: the two modes of 2026-09-09
+# are now junk like any other word, and no compatibility reader is left.
+check("the retired 'fixed' drops both keys",
+      _turn({"yaw_mode": "fixed", "yaw_deg": 90}), {"density_per_100m2": 1.0})
+check("the retired 'quarter' drops both keys",
+      _turn({"yaw_mode": "quarter"}), {"density_per_100m2": 1.0})
 check("a junk angle beside a mode is 0.0",
-      _turn({"yaw_mode": "fixed", "yaw_deg": "east"})["yaw_deg"], 0.0)
-check("SCATTER_YAW_MODES is the pair the sampler knows",
-      terrain.SCATTER_YAW_MODES, ("fixed", "quarter"))
+      _turn({"yaw_mode": "aligned", "yaw_deg": "east"})["yaw_deg"], 0.0)
+check("SCATTER_YAW_MODES is the one mode the sampler knows",
+      terrain.SCATTER_YAW_MODES, ("aligned",))
 check("an empty list is kept as sent", scatter_of({"scatter": []}),
       {"scatter": []})
 check("foreign meta keys survive next to scatter",
@@ -784,6 +850,127 @@ check("the list survives the save/read round trip",
                     "model": "/assets/props/fern/model"}],
        "note": "free form", "water_level": 0.0})
 terrain.delete_area(_scat["id"])
+
+print("[11p] the placement — place / offset_m / variant / reshuffle_min")
+_place = lambda entry: scatter_of(
+    {"scatter": [{"density_per_100m2": 1, **entry}]})["scatter"][0]
+PLAIN = {"density_per_100m2": 1.0}
+
+check("SCATTER_PLACE_MODES are the two the sampler knows",
+      terrain.SCATTER_PLACE_MODES, ("edge", "center"))
+check("place 'edge' survives", _place({"place": "edge"}),
+      {**PLAIN, "place": "edge"})
+check("place 'center' survives", _place({"place": "center"}),
+      {**PLAIN, "place": "center"})
+for bad in ("spread", "", "  ", 7, None):
+    check(f"place {bad!r} loses the key (its absence IS spread)",
+          _place({"place": bad}), PLAIN)
+check("an edge offset keeps two decimals",
+      _place({"place": "edge", "offset_m": 3.456}),
+      {**PLAIN, "place": "edge", "offset_m": 3.46})
+check("a negative offset is clamped to 0, never refused",
+      _place({"place": "edge", "offset_m": -1})["offset_m"], 0.0)
+check(f"an offset past {terrain.SCATTER_OFFSET_MAX_M} m is clamped",
+      _place({"place": "edge", "offset_m": 500})["offset_m"],
+      terrain.SCATTER_OFFSET_MAX_M)
+for bad in (float("nan"), "wide", None, [2]):
+    check(f"offset {bad!r} loses the key",
+          _place({"place": "edge", "offset_m": bad}), {**PLAIN, "place": "edge"})
+check("a centred entry keeps its variant",
+      _place({"place": "center", "variant": 2}),
+      {**PLAIN, "place": "center", "variant": 2})
+for bad in (-1, 1.5, True, "2", None):
+    check(f"variant {bad!r} on a centred entry loses the key",
+          _place({"place": "center", "variant": bad}),
+          {**PLAIN, "place": "center"})
+check("a variant beside place 'edge' is dropped",
+      _place({"place": "edge", "variant": 1}), {**PLAIN, "place": "edge"})
+check("an offset beside place 'center' is dropped",
+      _place({"place": "center", "offset_m": 2}), {**PLAIN, "place": "center"})
+check("without a place neither of the two is stored",
+      _place({"offset_m": 2, "variant": 1}), PLAIN)
+
+check("a reshuffle period survives", _place({"reshuffle_min": 30}),
+      {**PLAIN, "reshuffle_min": 30})
+check("one minute is the floor", _place({"reshuffle_min": 1})["reshuffle_min"], 1)
+check("a fraction is truncated, not rounded",
+      _place({"reshuffle_min": 2.9})["reshuffle_min"], 2)
+check(f"1e9 minutes clamp to {terrain.RESHUFFLE_MIN_MAX}",
+      _place({"reshuffle_min": 1e9})["reshuffle_min"], terrain.RESHUFFLE_MIN_MAX)
+check("a 400-digit integer clamps instead of raising OverflowError",
+      _place({"reshuffle_min": 10 ** 400})["reshuffle_min"],
+      terrain.RESHUFFLE_MIN_MAX)
+for bad in (0, -5, 0.5, "abc", True, None, float("inf"), float("nan")):
+    check(f"reshuffle_min {bad!r} loses the key (never re-rolls)",
+          _place({"reshuffle_min": bad}), PLAIN)
+
+print("[11m] the one-time migration — fixed/quarter become aligned")
+check("a fixed row becomes aligned and keeps its angle",
+      terrain._migrate_scatter_yaw_meta(
+          {"scatter": [{"yaw_mode": "fixed", "yaw_deg": 30.0}]}),
+      ({"scatter": [{"yaw_mode": "aligned", "yaw_deg": 30.0}]}, True))
+check("a quarter row becomes aligned as well",
+      terrain._migrate_scatter_yaw_meta(
+          {"scatter": [{"yaw_mode": "quarter", "yaw_deg": 0.0}]}),
+      ({"scatter": [{"yaw_mode": "aligned", "yaw_deg": 0.0}]}, True))
+check("an already migrated row is left alone",
+      terrain._migrate_scatter_yaw_meta({"scatter": [{"yaw_mode": "aligned"}]}),
+      ({"scatter": [{"yaw_mode": "aligned"}]}, False))
+check("an entry without a mode is no change",
+      terrain._migrate_scatter_yaw_meta({"scatter": [{"density_per_100m2": 1}]}),
+      ({"scatter": [{"density_per_100m2": 1}]}, False))
+check("meta without a scatter list is no change",
+      terrain._migrate_scatter_yaw_meta({"note": "free form"}),
+      ({"note": "free form"}, False))
+check("a scatter that is not a list is no change",
+      terrain._migrate_scatter_yaw_meta({"scatter": "trees"}),
+      ({"scatter": "trees"}, False))
+check("a meta that is not an object at all is no change",
+      terrain._migrate_scatter_yaw_meta("junk"), ("junk", False))
+
+from app.core.db import transaction as _transaction  # noqa: E402
+
+
+def plant_area(area_id, meta):
+    """One area written PAST the sanitizer — the pre-migration state, which
+    no writer in this codebase can produce any more."""
+    with _transaction() as conn:
+        conn.execute(
+            "INSERT INTO terrain_areas (id, kind, polygon, z_order, meta, "
+            "created_at, updated_at) VALUES (?, 'grass', ?, 0, ?, ?, ?)",
+            (area_id, json.dumps(SQUARE), json.dumps(meta),
+             "2026-09-10T00:00:00", "2026-09-10T00:00:00"))
+
+
+_MIG_FIXED = {"scatter": [{"density_per_100m2": 2.0, "yaw_mode": "fixed",
+                           "yaw_deg": 30.0}]}
+_MIG_MIXED = {"scatter": [{"density_per_100m2": 1.0, "yaw_mode": "quarter",
+                           "yaw_deg": 0.0},
+                          {"density_per_100m2": 1.0, "yaw_mode": "aligned",
+                           "yaw_deg": 5.0}]}
+_MIG_CLEAN = {"scatter": [{"density_per_100m2": 1.0}], "note": "untouched"}
+plant_area("ta_mig_fixed", _MIG_FIXED)
+plant_area("ta_mig_mixed", _MIG_MIXED)
+plant_area("ta_mig_clean", _MIG_CLEAN)
+check("the two areas with a retired mode are rewritten, the third is not",
+      terrain.migrate_scatter_yaw_mode_once(), 2)
+_mig_metas = {a["id"]: a["meta"] for a in terrain.list_areas()}
+check("the fixed area reads back as aligned, angle untouched",
+      _mig_metas.get("ta_mig_fixed"),
+      {"scatter": [{"density_per_100m2": 2.0, "yaw_mode": "aligned",
+                    "yaw_deg": 30.0}]})
+check("the quarter entry too, and its aligned neighbour is unchanged",
+      _mig_metas.get("ta_mig_mixed"),
+      {"scatter": [{"density_per_100m2": 1.0, "yaw_mode": "aligned",
+                    "yaw_deg": 0.0},
+                   {"density_per_100m2": 1.0, "yaw_mode": "aligned",
+                    "yaw_deg": 5.0}]})
+check("the area without a retired mode is exactly what was planted",
+      _mig_metas.get("ta_mig_clean"), _MIG_CLEAN)
+check("a second run finds nothing (idempotent by construction)",
+      terrain.migrate_scatter_yaw_mode_once(), 0)
+for _mig_id in ("ta_mig_fixed", "ta_mig_mixed", "ta_mig_clean"):
+    terrain.delete_area(_mig_id)
 
 print("[11z] meta.stroke.along whitelist — what stands along a drawn line")
 LINE = [[0, 0], [100, 0]]
@@ -821,6 +1008,12 @@ check("a variant must be a whole number >= 0; a bool is not one",
       [r.get("variant") for r in along_of([{"variant": 2.0}, {"variant": -1},
                                            {"variant": 1.5}, {"variant": True}])],
       [2, None, None, None])
+check("reshuffle_min follows the very rule a scatter entry follows",
+      [r.get("reshuffle_min") for r in along_of(
+          [{"reshuffle_min": 30}, {"reshuffle_min": 1}, {"reshuffle_min": 2.9},
+           {"reshuffle_min": 1e9}, {"reshuffle_min": 0},
+           {"reshuffle_min": -5}, {"reshuffle_min": "abc"}])],
+      [30, 1, 2, terrain.RESHUFFLE_MIN_MAX, None, None, None])
 check("an emptied list is dropped from the recipe",
       along_of([]), None)
 raises_value_error("a bare object instead of a list raises",

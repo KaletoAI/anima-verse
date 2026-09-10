@@ -37,7 +37,10 @@ import secrets
 from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
+from app.core.log import get_logger
 from app.core.timeutils import utc_now_iso
+
+logger = get_logger("terrain")
 
 #: Vertices ONE polygon may carry — the outline of a painted area, and by
 #: mirror (``app.models.heightfield``) of a height area.
@@ -77,11 +80,33 @@ MODEL_URL_MAX = 300
 #: a bigger number would not thin the wood any further, it would only make the
 #: rejection loop run out of tries.
 MIN_SPACING_MAX_M = 100.0
-#: How a scatter entry may TURN its instances (2026-09-09): ``fixed`` = every
-#: instance at ``yaw_deg``, ``quarter`` = ``yaw_deg`` plus a random multiple of
-#: 90°. No key = the random yaw of every scatter before this existed. The
-#: sampler reads the pair (`@anima/scene-render` → `scatterYaw`).
-SCATTER_YAW_MODES = ("fixed", "quarter")
+#: How a scatter entry may TURN its instances (2026-09-09; ONE mode since
+#: 2026-09-10): ``aligned`` = every instance at ``yaw_deg`` RELATIVE TO THE
+#: AREA AXIS — the direction of the polygon edge nearest to it, oriented so
+#: that ``axis + 90°`` looks into the area, which makes 0° "parallel to the
+#: rim" and 90° "facing inwards". No key = the random yaw of every scatter
+#: before this existed. The sampler reads mode and angle together
+#: (`@anima/scene-render` → `scatterYaw`). The mode replaced the earlier
+#: ``fixed`` / ``quarter`` on 2026-09-10, and no reader accepts those any
+#: more: stored areas are rewritten ONCE on boot
+#: (:func:`migrate_scatter_yaw_mode_once`).
+SCATTER_YAW_MODES = ("aligned",)
+#: WHERE an entry puts its instances (2026-09-10). ``edge`` = an even row along
+#: the outline, ``min_spacing_m`` apart and ``offset_m`` inside it; ``center``
+#: = exactly ONE instance, at the point of the area furthest from its outline.
+#: No key = spread, the density-sampled scatter every entry was before — the
+#: absence IS the third mode, so each of the three has exactly one spelling.
+SCATTER_PLACE_MODES = ("edge", "center")
+#: How far an ``edge`` row stands INSIDE the outline, in metres. The same
+#: ceiling an along row keeps from its centre line (:data:`ALONG_OFFSET_MAX_M`)
+#: and for the same reason: it is wider than any painted shape anybody draws.
+SCATTER_OFFSET_MAX_M = 100.0
+#: The longest period a row may re-roll its placement on, in GAME minutes.
+#: 100000 minutes is 69 game days — a row that re-rolls less often than that
+#: never visibly re-rolls at all — and the cap keeps the epoch the renderers
+#: derive (``floor(game_seconds / (reshuffle_min · 60))``) a small number in
+#: every client's seed. It holds for a scatter entry and an along row alike.
+RESHUFFLE_MIN_MAX = 100000
 #: What grows ALONG a drawn line (``meta.stroke.along``, § A9 addendum
 #: 2026-09-09): at most this many rows per stroke, like the scatter list.
 MAX_ALONG_ENTRIES = 8
@@ -153,8 +178,55 @@ def _finite(value: Any) -> Any:
     return num if math.isfinite(num) else None
 
 
+def _variant_index(raw: Any) -> Optional[int]:
+    """The LIST POSITION of a model variant — a whole number >= 0, or None.
+
+    Shared by a scatter entry and an along row, because it is the same fact
+    under one name. A bool is not an index (``True == 1`` in Python, and no
+    editor sends one), a fraction is not one either — half a variant does not
+    exist, so 1.5 loses the key rather than becoming 1. Integers are answered
+    without going through ``float``: a JSON body may carry a 400-digit literal,
+    and ``math.isfinite`` would raise OverflowError on it.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw >= 0 else None
+    if isinstance(raw, float) and math.isfinite(raw) and raw >= 0 \
+            and int(raw) == raw:
+        return int(raw)
+    return None
+
+
+def _reshuffle_min(raw: Any) -> Optional[int]:
+    """After how many GAME MINUTES a row re-rolls its placement, or None.
+
+    WHOLE minutes: the renderers derive the epoch
+    ``floor(game_seconds / (reshuffle_min · 60))`` and mix it into the cell
+    seed, so a fraction of a minute is only another way of writing the same
+    epoch boundary — a float is TRUNCATED with ``int()`` rather than refused.
+    Below one minute there is no period at all: 0, negatives and junk lose the
+    key, and no key means "never re-rolls", which is what every row did before
+    the field existed. Clamped to :data:`RESHUFFLE_MIN_MAX`, never refused —
+    a knob, like every other number in this module. An integer is clamped
+    before it ever becomes a float, so a 400-digit literal ends at the ceiling
+    instead of raising OverflowError.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        num: Any = raw
+    else:
+        num = _finite(raw)
+        if num is None:
+            return None
+    if num < 1:
+        return None
+    return int(min(num, RESHUFFLE_MIN_MAX))
+
+
 def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
-    """One entry of ``meta.scatter``, whitelisted to EXACTLY the four fields
+    """One entry of ``meta.scatter``, whitelisted to EXACTLY the fields
     the renderers read (``packages/scene-render/src/scatter.ts`` and the
     editor's preview + area dialog).
 
@@ -178,12 +250,28 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
       a scatter is not authored in millimetres, and the number travels to
       every client.
     * ``yaw_mode`` / ``yaw_deg`` — how the instances are TURNED (2026-09-09).
-      Absent mode = the random yaw every scatter has had; ``fixed`` turns
-      every instance to ``yaw_deg``; ``quarter`` to ``yaw_deg`` plus a random
-      multiple of 90° (buildings along a grid). ``yaw_deg`` is normalised to
+      Absent mode = the random yaw every scatter has had; ``aligned`` turns
+      every instance to ``yaw_deg`` measured against the AREA AXIS, so a row
+      of houses faces the rim it stands at. ``yaw_deg`` is normalised to
       0..360 with two decimals and is stored ONLY beside a mode — a bare angle
       on a random scatter would be a number that acts on nothing. A mode this
-      module does not know loses both keys.
+      module does not know loses both keys, and since 2026-09-10 that includes
+      the retired ``fixed`` / ``quarter``.
+    * ``place`` — WHERE the instances go: ``edge`` (an even row along the
+      outline) or ``center`` (a single instance at the point furthest from
+      it). Anything else loses the key, and NO key is the third mode, spread —
+      the density-sampled scatter of every entry before this existed.
+    * ``offset_m`` — how far an EDGE row stands inside the outline, 0..100 m
+      with two decimals, clamped rather than refused (a knob). Stored only
+      beside ``place == "edge"``: anywhere else it would be a number that acts
+      on nothing, exactly like a ``yaw_deg`` without its mode.
+    * ``variant`` — the LIST POSITION of the model variant the ONE centred
+      instance shows, a whole number >= 0. Stored only beside
+      ``place == "center"``, for the same reason: a spread or edge row varies
+      its instances by the shared formula over the cell seed.
+    * ``reshuffle_min`` — after how many GAME MINUTES the placement re-rolls
+      (:func:`_reshuffle_min`); no key = never, the behaviour of every scatter
+      before the field existed.
 
     Raises ValueError when the entry is not an object at all — a list of junk
     is an authoring mistake worth a 400, not something to silently drop.
@@ -206,14 +294,35 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
         if len(url) <= MODEL_URL_MAX:
             out["model"] = url
     out.update(_sanitize_yaw(raw, SCATTER_YAW_MODES))
+    place = raw.get("place")
+    place = place.strip() if isinstance(place, str) else ""
+    if place in SCATTER_PLACE_MODES:
+        out["place"] = place
+    else:
+        place = ""
+    if place == "edge":
+        offset = _finite(raw.get("offset_m"))
+        if offset is not None:
+            out["offset_m"] = round(min(max(offset, 0.0),
+                                        SCATTER_OFFSET_MAX_M), 2)
+    elif place == "center":
+        variant = _variant_index(raw.get("variant"))
+        if variant is not None:
+            out["variant"] = variant
+    reshuffle = _reshuffle_min(raw.get("reshuffle_min"))
+    if reshuffle is not None:
+        out["reshuffle_min"] = reshuffle
     return out
 
 
 def _sanitize_yaw(raw: Dict[str, Any], modes: tuple) -> Dict[str, Any]:
     """The ``yaw_mode`` / ``yaw_deg`` pair of a scatter or along entry, or
-    ``{}`` when the mode is absent or unknown. ``yaw_deg`` is normalised to
-    [0, 360) and defaults to 0.0 beside a mode, so a stored pair is always
-    complete and every reader sees the same two keys."""
+    ``{}`` when the mode is absent or unknown. ``modes`` is the caller's own
+    whitelist — ``aligned`` for a scatter entry, ``random`` for an along row —
+    and a mode outside it loses BOTH keys, which is what retires a mode: since
+    2026-09-10 that is how ``fixed`` and ``quarter`` are refused. ``yaw_deg``
+    is normalised to [0, 360) and defaults to 0.0 beside a mode, so a stored
+    pair is always complete and every reader sees the same two keys."""
     mode = raw.get("yaw_mode")
     if not isinstance(mode, str) or mode.strip() not in modes:
         return {}
@@ -359,6 +468,9 @@ def _sanitize_along_entry(raw: Any) -> Dict[str, Any]:
     * ``variant`` — the LIST POSITION of the model variant every station
       shows (a lamp row is one lamp); a whole number >= 0 survives, junk loses
       the key, and no key is the shared formula over the station index.
+    * ``reshuffle_min`` — after how many GAME MINUTES the row re-rolls
+      (:func:`_reshuffle_min`, the very rule a scatter entry follows); no key
+      = never.
     """
     if not isinstance(raw, dict):
         raise ValueError("along entry must be an object")
@@ -395,12 +507,12 @@ def _sanitize_along_entry(raw: Any) -> Dict[str, Any]:
         url = model.strip()
         if len(url) <= MODEL_URL_MAX:
             out["model"] = url
-    variant = raw.get("variant")
-    if isinstance(variant, bool):
-        variant = None
-    if isinstance(variant, (int, float)) and math.isfinite(variant) \
-            and variant >= 0 and int(variant) == variant:
-        out["variant"] = int(variant)
+    variant = _variant_index(raw.get("variant"))
+    if variant is not None:
+        out["variant"] = variant
+    reshuffle = _reshuffle_min(raw.get("reshuffle_min"))
+    if reshuffle is not None:
+        out["reshuffle_min"] = reshuffle
     return out
 
 
@@ -1002,6 +1114,70 @@ def delete_area(area_id: str) -> bool:
     if deleted:
         _note_relief_write()
     return deleted
+
+
+#: The scatter turn modes a stored area may still carry from before
+#: 2026-09-10. They are read NOWHERE else — the sanitizer refuses both — and
+#: the migration below is the only place the strings are allowed to appear.
+_RETIRED_YAW_MODES = ("fixed", "quarter")
+
+
+def _migrate_scatter_yaw_meta(meta: Any) -> tuple:
+    """Rewrite the retired scatter yaw modes of ONE area's meta IN PLACE;
+    returns ``(meta, changed)``.
+
+    Pure, and split out for exactly the reason
+    ``models.world.rewrite_building_types`` is: the DB walk below and the
+    smoke check call the same rule, so what the migration does is verified
+    without a world DB. ``fixed`` and ``quarter`` both become ``aligned`` and
+    ``yaw_deg`` is untouched — a ``fixed`` row asked for "this angle", which
+    is what ``aligned`` gives it against the area axis, and a ``quarter`` row
+    loses its random 90° steps, which is the point of the retirement.
+    """
+    if not isinstance(meta, dict):
+        return meta, False
+    entries = meta.get("scatter")
+    if not isinstance(entries, list):
+        return meta, False
+    changed = False
+    for entry in entries:
+        if isinstance(entry, dict) \
+                and entry.get("yaw_mode") in _RETIRED_YAW_MODES:
+            entry["yaw_mode"] = "aligned"
+            changed = True
+    return meta, changed
+
+
+def migrate_scatter_yaw_mode_once() -> int:
+    """Turn every stored ``fixed`` / ``quarter`` scatter yaw mode into
+    ``aligned``, once, on boot (plan-scatter-erweiterung.md, 2026-09-10).
+
+    There is no compatibility reader for the old pair anywhere — an area that
+    kept one would simply lose its turn on the next save — so the stored data
+    is moved instead. Idempotent by construction: afterwards nothing matches
+    any more, which is why it needs no marker and may run on every boot. Only
+    CHANGED rows are written. Returns the number of areas rewritten.
+    """
+    rows = get_connection().execute(
+        "SELECT id, meta FROM terrain_areas").fetchall()
+    pending = []
+    for row in rows:
+        try:
+            meta = json.loads(row[1] or "{}")
+        except (TypeError, ValueError):
+            # A row whose meta is not JSON carries no scatter this migration
+            # could rewrite; it is the readers' problem, not the migration's.
+            continue
+        meta, changed = _migrate_scatter_yaw_meta(meta)
+        if changed:
+            pending.append((json.dumps(meta, ensure_ascii=False), row[0]))
+    if pending:
+        with transaction() as conn:
+            conn.executemany(
+                "UPDATE terrain_areas SET meta=? WHERE id=?", pending)
+        logger.info("Scatter yaw modes migrated to 'aligned': %d areas",
+                    len(pending))
+    return len(pending)
 
 
 def area_stamps() -> Dict[str, str]:

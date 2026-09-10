@@ -186,6 +186,16 @@ async def lifespan(app: FastAPI):
     except Exception as _bte:
         logger.warning("building image-type migration failed: %s", _bte)
 
+    # The scatter turn modes "fixed"/"quarter" became the single "aligned"
+    # (plan-scatter-erweiterung.md, 2026-09-10). Nothing reads the old pair
+    # any more, so stored areas are rewritten once — the function logs how
+    # many and is idempotent, so it may run on every boot.
+    try:
+        from app.models.terrain import migrate_scatter_yaw_mode_once
+        migrate_scatter_yaw_mode_once()
+    except Exception as _sye:
+        logger.warning("scatter yaw-mode migration failed: %s", _sye)
+
     # The 2D map icon is gone (plan-rueckbau-2d-karte.md): delete every
     # gallery image typed "map"/"map_2d" and strip the map-icon keys from
     # every location. Content-idempotent, so it runs on every boot.
