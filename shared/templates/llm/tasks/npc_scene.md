@@ -17,6 +17,7 @@ Hard rules:
 - Answer with a SINGLE JSON object, no markdown, no code fence, no explanation.
 - The object has EXACTLY the keys `lines`, `pair`, `activities`.
 - `lines` is a list of 2 to 4 objects `{"speaker": "<name>", "line": "<spoken words>"}`. `speaker` is one of the participants' names, copied exactly. Every line is spoken aloud: one or two short sentences, in that character's own voice and dialogue style, in the SAME LANGUAGE as the standing tasks. No narration, no stage directions, no quotes around the words.
+- A line is what a character SAYS — never a statement of its goals, its reason for being here or its task. Those steer the words and are never spoken out loud: someone who wants company asks "Care for a drink?", they do not announce that they are looking for company.
 {% if pair_keys %}- `pair` is either `null` or `{"a": "<name>", "b": "<name>", "pose": "<one of the pair pose keys>"}` — two DIFFERENT participants doing something together that fits the exchange. Leave it `null` unless the exchange calls for it.
 {% endif %}- `activities` is an object mapping a participant's name to ONE short sentence of what they are doing afterwards, present tense, visible from outside, STARTING WITH THE VERB ("Rolls the barrel to the door.", not "She rolls…"). Only for participants whose activity changes; `{}` when nothing changes.
 
@@ -33,7 +34,7 @@ Place: {{ location_name }}, {{ room_name }}{% if room_hint %} — {{ room_hint }
 Time: {{ game_time_label }}
 
 Participants:
-{% for p in participants %}- {{ p.name }}{% if p.role %} ({{ p.role }}){% endif %}
+{% for p in participants %}- {{ p.name }}{{ " (" ~ p.role ~ ")" if p.role else "" }}
   Standing task: {{ p.standing_task }}
 {% if p.dialogue_style %}  Speaks: {{ p.dialogue_style }}
 {% endif %}{% if p.arrival_reason %}  Why here: {{ p.arrival_reason }}

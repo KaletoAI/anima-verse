@@ -380,6 +380,9 @@ check("home: system and user render",
       (bool(s.strip()), bool(u.strip())), (True, True))
 check("home: the system part offers say", '"say"' in s, True)
 check("home: the user part lists F", F in u, True)
+check("home: F stands on a list line of its own", f"\n- {F}" in u, True)
+check("home: the rule that goals are never spoken is in the system part",
+      "never spoken" in s, True)
 check("home: and it really is the home variant (no room question)",
       ("room ids" in s, "within 30 m" in u), (False, True))
 save_character_current_location(AVATAR, LOC_ID)
@@ -395,6 +398,9 @@ v = npc_actions.prompt_vars(A)
 s, u = render_task("npc_action", **v)
 check("talk: the system part names say and pair", ('"say"' in s, '"pair"' in s), (True, True))
 check("talk: the user part lists the partner", "Halvard" in u, True)
+check("talk: every room and every partner starts its own list line",
+      ("\n- taproom" in u, "\n- kitchen" in u, "\n- Halvard" in u), (True, True, True))
+check("talk: the goals are never spoken (rule in the system part)", "never spoken" in s, True)
 check("talk without pair keys: no pair is proposed",
       ("two-person pose" in s, "Pair pose keys" in u), (False, False))
 v = npc_actions.prompt_vars(C)
@@ -565,6 +571,9 @@ print("(k2) npc_scene renders under StrictUndefined")
 v = npc_scenes.prompt_vars(LOC_ID, "taproom", [A, B])
 s, u = render_task("npc_scene", **v)
 check("system and user render", (bool(s.strip()), bool(u.strip())), (True, True))
+check("each participant starts its own list line, the sheet below it",
+      (f"\n- {A}\n  Standing task:" in u, f"\n- {B}" in u), (True, True))
+check("the goals are never spoken (rule in the system part)", "never spoken" in s, True)
 check("the system part spells out lines, pair and activities",
       ('"lines"' in s, '"pair"' in s, '"activities"' in s), (True, True, True))
 # Without a pair clip there are no pair keys, and then the prompt must not

@@ -39,6 +39,7 @@ What makes a good answer:
 {% if talk_allowed %}
 This character is not alone. It MAY open a conversation or propose something to do together — but only when its goals, its reason for being here or its task make that natural. Most turns stay silent; a character does not chat every time it is asked.
 - To speak, add `"say": {"to": "<name from the list>", "line": "<what it says>"}`. `to` is copied exactly from the list. `line` is ONE or two short sentences, spoken aloud, in the character's own voice and dialogue style, in the same language as the standing task. No narration, no stage directions, no quotes around it.
+- `line` is what the character SAYS — never a statement of its goals, its reason for being here or its task. Those steer the words and are never spoken out loud: someone who wants company asks "Care for a drink?", they do not announce that they are looking for company.
 {% if pair_keys %}- To propose a two-person pose, add `"pair": {"with": "<name from the list>", "pose": "<one of the pair pose keys>"}` instead of `say`. Never both.
 {% endif %}- A character that changes room this turn says nothing.
 {% endif %}
@@ -63,6 +64,7 @@ What makes a good answer:
 {% if talk_allowed %}
 This character is not alone. It MAY open a conversation or propose something to do together — but only when its goals, its reason for being here or its task make that natural. Most turns stay silent; a character does not chat every time it is asked.
 - To speak, add `"say": {"to": "<name from the list>", "line": "<what it says>"}`. `to` is copied exactly from the list. `line` is ONE or two short sentences, spoken aloud, in the character's own voice and dialogue style, in the same language as the standing task. No narration, no stage directions, no quotes around it.
+- `line` is what the character SAYS — never a statement of its goals, its reason for being here or its task. Those steer the words and are never spoken out loud: someone who wants company asks "Care for a drink?", they do not announce that they are looking for company.
 {% if pair_keys %}- To propose a two-person pose, add `"pair": {"with": "<name from the list>", "pose": "<one of the pair pose keys>"}` instead of `say`. Never both.
 {% endif %}- A character that changes room this turn says nothing.
 {% endif %}
@@ -86,7 +88,7 @@ Time: {{ game_time_label }}
 Pose keys: {{ pose_keys | join(", ") }}
 
 {% if talk_allowed %}Within earshot:
-{% for p in present %}- {{ p.name }}{% if p.role %} ({{ p.role }}){% endif %}{% if p.task %} — {{ p.task }}{% endif %}{% if p.activity %}; right now: {{ p.activity }}{% endif %}
+{% for p in present %}- {{ p.name }}{{ " (" ~ p.role ~ ")" if p.role else "" }}{{ " — " ~ p.task if p.task else "" }}{{ "; right now: " ~ p.activity if p.activity else "" }}
 {% endfor %}{% if pair_keys %}Pair pose keys: {{ pair_keys | join(", ") }}
 {% endif %}{% endif %}
 Decide what {{ npc_name }} is doing now.
@@ -96,12 +98,12 @@ Right now: in {{ current_room_name }} ({{ current_room_id }}){% if current_activ
 Time: {{ game_time_label }}
 
 Rooms of this place:
-{% for room in rooms %}- {{ room.id }} — {{ room.name }}{% if room.hint %}: {{ room.hint }}{% endif %}{% if room.places %} [{{ room.places }}]{% endif %}
+{% for room in rooms %}- {{ room.id }} — {{ room.name }}{{ ": " ~ room.hint if room.hint else "" }}{{ " [" ~ room.places ~ "]" if room.places else "" }}
 {% endfor %}
 Pose keys: {{ pose_keys | join(", ") }}
 
 {% if talk_allowed %}Within earshot:
-{% for p in present %}- {{ p.name }}{% if p.role %} ({{ p.role }}){% endif %}{% if p.task %} — {{ p.task }}{% endif %}{% if p.activity %}; right now: {{ p.activity }}{% endif %}
+{% for p in present %}- {{ p.name }}{{ " (" ~ p.role ~ ")" if p.role else "" }}{{ " — " ~ p.task if p.task else "" }}{{ "; right now: " ~ p.activity if p.activity else "" }}
 {% endfor %}{% if pair_keys %}Pair pose keys: {{ pair_keys | join(", ") }}
 {% endif %}{% endif %}
 Decide where {{ npc_name }} is now and what they are doing.
