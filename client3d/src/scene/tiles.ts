@@ -634,6 +634,13 @@ export interface Tile {
   outlineWalls: { mesh: THREE.Mesh; level: number; mid: THREE.Vector2; normal: THREE.Vector2 }[];
   /** Etagen-Bodenplatten des Grundrisses (für Boden-Farbübernahme) */
   levelSlabs: Map<number, THREE.Mesh>;
+  /** THE PLATE OUTLINE PER STOREY, in TILE-LOCAL metres (§ A13b): the contour
+   *  of the storey's OWN plate — the one without a `room_id`, never a room's
+   *  floor plate. It is what a room WITHOUT geometry has instead of a hull —
+   *  the corridor of a storey is the complement of its rooms, so whoever needs
+   *  a walkable area for it falls back to this outline. Filled from
+   *  `scene.plates` on mount, empty for a tile without a recipe. */
+  levelOutlines: Map<number, [number, number][]>;
   /** THE FLOORS OF THE RECIPE, as the walk rule reads them (§ B1 addendum
    *  2026-08-20): one entry per built plate — its outline in TILE-LOCAL metres
    *  and its `top_y`. `tileWalkY` stands a figure on the highest one whose
@@ -897,7 +904,8 @@ export function buildTile(loc: WorldLocation): Tile {
     roomFloors: new Map(), roomSpots: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
-    outlineWalls: [], levelSlabs: new Map(), levelWallMats: new Map(),
+    outlineWalls: [], levelSlabs: new Map(), levelOutlines: new Map(),
+    levelWallMats: new Map(),
     levelRoomPlateMats: new Map(), walkPlates: [],
     declaredFloors: [], surfaces: [],
     levelFilter: 0, roomOutdoor: new Set(),

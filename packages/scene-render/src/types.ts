@@ -568,6 +568,31 @@ export interface SceneRoom {
   }
 }
 
+/** THE ANCHOR OF ONE STOREY CORRIDOR (§ A13b, § B1 `corridors`). Every USED
+ *  storey of a location carries a reserved corridor room `__floor__<level>`,
+ *  built by the same law as the ground room: what is not a room on that storey
+ *  is its corridor. It is the complement of the storey's rooms, so it has no
+ *  layout — no outline, no rectangle, no openings — and therefore no centre a
+ *  client could read out of a floor plan.
+ *
+ *  `anchor` IS that centre, server-computed and deterministic (lift stop →
+ *  stair pad → the freest point of a 0.5 m raster → the plan centre plus the
+ *  finding `corridor_without_floor`), in the same scene metres as
+ *  `markers[].at`. **The client places corridor figures here and never
+ *  computes a point of its own**; lift and staircase lead to the same spot.
+ *
+ *  A corridor is recognised by `is_floor` / `level` of the player payload
+ *  (§ A14) and by this block — NEVER by the reserved id, which stays the
+ *  server's business exactly as the ground room's does. */
+export interface SceneCorridor {
+  /** The corridor room's id — used as a key, never parsed. */
+  room_id: string
+  /** The storey this corridor is the complement of. */
+  level: number
+  /** Scene metres [x, z], same frame as `markers[].at`. */
+  anchor: [number, number]
+}
+
 /** ONE walkable threshold — a door or passage, served as a finished
  *  primitive (plan-betreten-und-tueren.md § 4.1). It is exactly the gap the
  *  opening cuts out of the wall, in WORLD metres around the tile centre and
@@ -593,7 +618,11 @@ export interface SceneDoorway {
   height_m: number
   /** Foot of the wall the gap belongs to. */
   base_y: number
-  /** The rooms it connects: 2 = party wall, 1 = door to the outside.
+  /** The rooms it connects: 2 = party wall, 1 = door to the outside, and
+   *  since § A13b a third reading — room + the CORRIDOR of its storey: a door
+   *  nobody linked, on a storey that has a corridor, leads into that corridor
+   *  instead of out of the building (so `outside` is false and the hull keeps
+   *  its skin).
    *  `rooms[0]` owns the wall this entry was cut out of. The GROUND room
    *  never appears — it has no walls, and `outside` already says so. */
   rooms: string[]
@@ -718,6 +747,9 @@ export interface ScenePayload {
    *  empty when the location is sound. */
   problems: SceneProblem[]
   outdoor_rooms: string[]
+  /** The anchor of every storey corridor (§ A13b) — always present, empty for
+   *  a location without a corridor room. Sorted by level. */
+  corridors: SceneCorridor[]
   /** Pass-throughs at the location edge (§ B1 Nr. 13) — only when authored. */
   boundary_openings?: SceneBoundaryOpening[]
   /** Detail mode of the LOCATION (v5.2 Nr. 10) — independent of whether a

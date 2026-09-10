@@ -34,7 +34,10 @@ export type { SceneLine }
 /** One room of the current location as `/play/scene` lists it. `is_ground`
  *  marks the location's ground — a room like any other, entered by its id;
  *  the flag only exists so a client can label it without knowing the
- *  reserved id.
+ *  reserved id. `is_floor` does the same for the CORRIDOR of a storey
+ *  (§ A13b), and `level` is the storey the room is on — `0` for the ground,
+ *  `null` for a room without a layout, so a client never has to derive the
+ *  storey of a room that has no geometry.
  *
  *  `enterable` + `reason` are the server's verdict for THIS avatar, from the
  *  same `check_access` `/play/enter-room` refuses with (task C1): a client may
@@ -43,6 +46,7 @@ export type { SceneLine }
  *  and it is empty exactly when the room is enterable. */
 export interface RoomInfo {
   id: string; name: string; is_entry: boolean; is_ground: boolean
+  is_floor: boolean; level: number | null
   enterable: boolean; reason: string
 }
 /** A neighbour location of the avatar's cell. `may_leave` is the server's own

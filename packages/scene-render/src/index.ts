@@ -131,6 +131,6 @@ export type { Waterfall, WaterfallAxis, WaterfallKnot } from './waterfall'
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, ModelTier,
   SceneMarker, SceneStyle, SceneOpening, SceneRoom, SceneFloor,
-  SceneBoundaryOpening, SceneCutPlane, SceneDoorway, SceneProblem,
+  SceneBoundaryOpening, SceneCorridor, SceneCutPlane, SceneDoorway, SceneProblem,
   SceneSlotValues, SceneStairs, SceneSurface,
 } from './types'

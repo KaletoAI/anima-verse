@@ -39,8 +39,14 @@ import { usePoll } from './usePolling'
 import { MapPanel, type LabelMode } from './MapPanel'
 import type { TravelInfo } from './ScenePanel'
 
+/** One room of the current location (`/play/scene → rooms[]`, § A14).
+ *  `is_ground` marks the location's ground, `is_floor` the corridor of a
+ *  storey (§ A13b) — both are rooms like any other, entered by their id, and
+ *  the flags exist so a client can label them without knowing the reserved
+ *  ids. `level` is the storey, `null` for a room without a layout. */
 interface RoomInfo {
   id: string; name: string; is_entry: boolean; is_ground: boolean
+  is_floor: boolean; level: number | null
   enterable: boolean; reason: string
 }
 

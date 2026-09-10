@@ -16,13 +16,15 @@ import {
   type SceneWall,
 } from '../api';
 import { roomDoor } from '../game/doors';
+import { WALK_CLEARANCE_M } from '../game/ground';
 import { markerLiftPoint } from '../game/placement';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';
 import {
   deriveRoomSpots, preloadSurfaceTexture, surfaceFor,
-  surfaceMaterialSpec, tileDirToWorld, tileToWorld, worldGroundSampler,
+  surfaceMaterialSpec, tileDirToWorld, tileGroundY, tileToWorld,
+  worldGroundSampler,
   worldWaterSampler,
   type PlacedSceneModel, type RoomFloor, type StairWorldLink, type SwingingDoor,
   type Tile, type VerticalTarget,
@@ -1095,6 +1097,47 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     tile.roomFloors.set(id, entry);
   }
 
+  // ── THE CORRIDORS (§ A13b): rooms without geometry ──────────────────────
+  // THE STOREY'S OWN PLATE, one per level: the contour plate the composer
+  // draws from the storey outline, which is the one WITHOUT a `room_id` — a
+  // room's floor plate is not the storey's. It carries both the storey's walk
+  // height and its outline, so it is looked up once here for the two readers
+  // below instead of being searched twice.
+  const storeyPlate = new Map<number, ScenePlate>();
+  for (const plate of scene.plates) {
+    const seen = storeyPlate.get(plate.level);
+    if (!seen || (seen.room_id && !plate.room_id)) storeyPlate.set(plate.level, plate);
+  }
+  // The plate contour per storey, for whoever needs a walkable area for a room
+  // that has no hull of its own (the corridor below). Storey 0 draws no plate
+  // since E5a and therefore has no entry.
+  for (const [level, plate] of storeyPlate) tile.levelOutlines.set(level, plate.outline);
+
+  // Every used storey carries a reserved corridor room — the complement of its
+  // rooms — and it has no layout at all. Level and stand come from the
+  // payload: `roomLevels` so the storey filter, the door gate and the storey
+  // follow treat a corridor like any room, `roomCenters` so the placement puts
+  // its figures on the server's anchor instead of in front of the building
+  // (the `else` branch of the placement is the yard huddle). No stands: a
+  // corridor has no raster, and an empty list says "known room, no spots"
+  // instead of leaving the reader to guess.
+  //
+  // ONE HEIGHT SOURCE, the same two the rooms of that storey stand on: a
+  // declared storey has its plate (`top_y` is tile-local, exactly as
+  // `walkPlates` carries it, plus the walk clearance every stand gets), storey
+  // 0 draws no plate any more and asks the ground rule `tileGroundY` — the one
+  // every figure outdoors is put on. Nothing is derived a second time here.
+  for (const c of scene.corridors) {
+    if (!c.room_id) continue;
+    tile.roomLevels.set(c.room_id, c.level);
+    const plate = storeyPlate.get(c.level);
+    const centre = tileToWorld(tile, c.anchor[0], c.anchor[1], 0);
+    centre.setY(plate ? tile.center.y + plate.top_y + WALK_CLEARANCE_M
+                      : tileGroundY(tile, centre));
+    tile.roomCenters.set(c.room_id, centre);
+    tile.roomSpots.set(c.room_id, []);
+  }
+
   // ── Walls ───────────────────────────────────────────────────────────────
   // Already split around every opening; the PANE in a hole is its own entry —
   // a window's glass band, a door's leaf. `outward_normal` comes with it and
@@ -2103,6 +2146,7 @@ export function unmountScene(tile: Tile): void {
   tile.alwaysVisibleRooms.clear();
   tile.outlineWalls = [];
   tile.levelSlabs.clear();
+  tile.levelOutlines.clear();
   tile.levelWallMats.clear();
   tile.levelRoomPlateMats.clear();
   tile.elevatorStops = undefined;

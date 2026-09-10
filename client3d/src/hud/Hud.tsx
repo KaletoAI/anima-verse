@@ -591,6 +591,20 @@ export function Hud({ avatar, username, role }: {
     setGameState({ groundRoomId });
   }, [groundRoomId]);
 
+  // The CORRIDOR of every storey of that place (§ A13b), by storey. Same case
+  // as the ground room above and travelling the same way: a corridor is what
+  // is NOT a room on its storey, so it carries no geometry either and is
+  // recognised by its flag, never by the server's reserved id. Keyed by the
+  // serialised map because a fresh object every poll would publish on every
+  // tick (the pattern the lock maps below use).
+  const floorRoomIds = Object.fromEntries((data?.rooms || [])
+    .filter((r) => r.is_floor && r.level !== null)
+    .map((r) => [String(r.level), r.id]));
+  const floorRoomKey = JSON.stringify(floorRoomIds);
+  useEffect(() => {
+    setGameState({ floorRoomIds: JSON.parse(floorRoomKey) as Record<string, string> });
+  }, [floorRoomKey]);
+
   // What this avatar may NOT walk into (task C2, plan-betreten-und-tueren.md
   // § 3 decision 2). The same poll already carries both verdicts — the rooms
   // of the current place and the four neighbour locations — so the lock state

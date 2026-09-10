@@ -14,8 +14,8 @@
  * owning a disjoint set of fields: `main.ts` with its mode helper
  * `game/embody.ts` (mode, selection, talk target, elevator, stairs), `CharacterPlaque.tsx` (one
  * field — clearing the selection) and `Hud.tsx` (what the `/play/scene` poll
- * says: `movementLocked` + `partyLeader` (E3-T3), `groundRoomId` and the two
- * lock maps of task C2).
+ * says: `movementLocked` + `partyLeader` (E3-T3), `groundRoomId`,
+ * `floorRoomIds` and the two lock maps of task C2).
  */
 import type { ElevatorState } from '../game/elevator';
 import type { MinimapState } from '../game/minimap';
@@ -44,6 +44,13 @@ export interface HudGameState {
    *  walk cannot find it by distance; it reads the id here instead of knowing
    *  the server's reserved constant. */
   groundRoomId: string;
+  /** The CORRIDOR room of each storey of the avatar's current location
+   *  (§ A13b), storey as a string key -> room id: `{ "-1": "…", "0": "…" }`.
+   *  Filled from the same `/play/scene` room list (`is_floor` + `level`), and
+   *  for the same reason as `groundRoomId`: a corridor is the complement of a
+   *  storey's rooms and therefore has no shape the room walk could find it by.
+   *  Empty until the first payload arrives. */
+  floorRoomIds: Record<string, string>;
   /** Rooms of the CURRENT location the server refuses this avatar, id -> its
    *  localized reason (`/play/scene → rooms[].enterable === false`, task C1).
    *  A key exists exactly for what is locked. The scene code binds it by id
@@ -160,7 +167,7 @@ export interface HudUiActions {
 
 const state: HudGameState = {
   mode: 'overview', selected: null, talkTarget: null,
-  movementLocked: false, partyLeader: '', groundRoomId: '',
+  movementLocked: false, partyLeader: '', groundRoomId: '', floorRoomIds: {},
   lockedRooms: {}, lockedLocations: {}, lockedLoc: '',
   elevator: null, elevatorOpen: false, stairs: null, enterOffer: null,
 };

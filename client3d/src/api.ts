@@ -4,7 +4,7 @@ import type {
 // Imported locally as well: the re-export further down only exposes the types
 // outwards, the parsing helpers here need them in their own scope.
 import type {
-  SceneBoundaryOpening, SceneDoorway, SceneExtra, SceneMarker,
+  SceneBoundaryOpening, SceneCorridor, SceneDoorway, SceneExtra, SceneMarker,
   SceneFloor, SceneModelSpec, ScenePayload, ScenePlate, SceneProblem,
   SceneRoom, SceneStairs, SceneWall, TerrainLayerBatch, TerrainLayerIndex,
   WorldHeightField,
@@ -709,7 +709,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
 export type {
   ScenePayload, ScenePlate, SceneWall, SceneExtra, SceneModelSpec, SceneFloor,
   SceneMarker, SceneStyle, SceneRoom, SceneStairs, ModelTier,
-  SceneBoundaryOpening, SceneDoorway, SceneProblem,
+  SceneBoundaryOpening, SceneCorridor, SceneDoorway, SceneProblem,
   /** used to be called ApiOpening here */
   SceneOpening,
 } from '@anima/scene-render';
@@ -769,6 +769,10 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     // client SHOWS them, it never re-derives or repairs one.
     problems: arr<SceneProblem>(data.problems),
     outdoor_rooms: arr<string>(data.outdoor_rooms),
+    // The anchor of every storey corridor (§ A13b / § B1 `corridors`): a
+    // corridor room has no layout, so its centre comes finished from the
+    // server. Straight through — nothing here derives a point.
+    corridors: arr<SceneCorridor>(data.corridors),
     // Boundary pass-throughs (§ B1 Nr. 13) — the entry proximity of the
     // "Betreten" offer reads them; absent stays absent (no empty-array alias).
     boundary_openings: Array.isArray(data.boundary_openings)
