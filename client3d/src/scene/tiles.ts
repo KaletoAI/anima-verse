@@ -464,6 +464,29 @@ export interface RoomFloor {
 }
 
 /**
+ * ONE STOREY CORRIDOR of the mounted scene (§ A13b) — the counterpart of
+ * `RoomFloor` for a room that has no floor plan at all.
+ *
+ * A corridor is the complement of its storey's rooms, so it has no hull to
+ * derive a centre from: the payload brings the centre as `corridors[].anchor`
+ * and the client only turns it into the tile's frame. What is kept here is
+ * exactly what `deriveCorridorCentres` needs to redo that at any time — the
+ * anchor in TILE-LOCAL metres and the top of the storey's own plate — because
+ * the stand has to be recomputed whenever the tile's datum moves, and a
+ * corridor is in no other list that the re-lift walks.
+ */
+export interface TileCorridor {
+  roomId: string;
+  level: number;
+  /** `corridors[].anchor` — tile-local metres, as the payload sends it. */
+  anchor: [number, number];
+  /** `top_y` of the storey's OWN plate, tile-local. Undefined exactly on
+   *  storey 0, which has drawn no plate since E5a — there the terrain is the
+   *  floor, as it is for every other storey-0 stand. */
+  plateTop?: number;
+}
+
+/**
  * ONE staircase of a scene, in WORLD coordinates — the payload's own `stairs`
  * block turned into the tile's frame (addendum "Treppen v2"), never measured
  * back out of the `stair_*` boxes.
@@ -639,8 +662,21 @@ export interface Tile {
    *  floor plate. It is what a room WITHOUT geometry has instead of a hull —
    *  the corridor of a storey is the complement of its rooms, so whoever needs
    *  a walkable area for it falls back to this outline. Filled from
-   *  `scene.plates` on mount, empty for a tile without a recipe. */
+   *  `scene.plates` on mount, empty for a tile without a recipe.
+   *
+   *  TWO THINGS IT IS NOT. STOREY 0 HAS NO ENTRY: it has drawn no plate since
+   *  E5a — its floor is the terrain — so the ground floor's contour has to be
+   *  taken from the payload's `boundary` / `floor_plan`, not from here. And
+   *  the outline is stored WITHOUT the plate's `holes`: it is the storey's
+   *  contour, not its walkable area, so a reader that cares about the
+   *  stairwell a flight cuts must take the rings from `walkPlates`. */
   levelOutlines: Map<number, [number, number][]>;
+  /** THE STOREY CORRIDORS of the mounted scene (§ A13b), one entry per
+   *  `corridors[]` entry of the payload. Their stands are written into
+   *  `roomCenters` like any room's, but a corridor has no `roomFloors` entry,
+   *  so it is this list the re-lift re-derives them from
+   *  (`deriveCorridorCentres`). Empty for a location without a corridor. */
+  corridors: TileCorridor[];
   /** THE FLOORS OF THE RECIPE, as the walk rule reads them (§ B1 addendum
    *  2026-08-20): one entry per built plate — its outline in TILE-LOCAL metres
    *  and its `top_y`. `tileWalkY` stands a figure on the highest one whose
@@ -905,6 +941,7 @@ export function buildTile(loc: WorldLocation): Tile {
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
     outlineWalls: [], levelSlabs: new Map(), levelOutlines: new Map(),
+    corridors: [],
     levelWallMats: new Map(),
     levelRoomPlateMats: new Map(), walkPlates: [],
     declaredFloors: [], surfaces: [],
@@ -945,6 +982,29 @@ export function buildTile(loc: WorldLocation): Tile {
   return tile;
 }
 
+/**
+ * THE STAND OF EVERY CORRIDOR of this tile (§ A13b) — what `deriveRoomSpots`
+ * is for a room with a floor plan, for the one kind of room that has none.
+ *
+ * The point comes from the server (`corridors[].anchor`) and is only turned
+ * into the tile's frame; the HEIGHT is the one every other stand of that
+ * storey gets, and it is the reason this is a function instead of two lines in
+ * the mount: a declared storey stands on its plate (`top_y` is tile-local,
+ * exactly as `walkPlates` carries it, plus the walk clearance), storey 0 asks
+ * the ground rule `tileGroundY`. Both terms move when the tile's datum moves
+ * or when the height tiles under it arrive, and a corridor is in none of the
+ * lists `reliftScene` walks — so mount and re-lift call THIS, and cannot drift
+ * apart.
+ */
+export function deriveCorridorCentres(tile: Tile): void {
+  for (const c of tile.corridors) {
+    const centre = tileToWorld(tile, c.anchor[0], c.anchor[1], 0);
+    centre.setY(c.plateTop !== undefined
+      ? tile.center.y + c.plateTop + WALK_CLEARANCE_M
+      : tileGroundY(tile, centre));
+    tile.roomCenters.set(c.roomId, centre);
+  }
+}
 
 /**
  * THE STANDS OF ONE ROOM, derived from the payload — the successor of the

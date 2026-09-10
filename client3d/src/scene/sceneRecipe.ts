@@ -16,15 +16,13 @@ import {
   type SceneWall,
 } from '../api';
 import { roomDoor } from '../game/doors';
-import { WALK_CLEARANCE_M } from '../game/ground';
 import { markerLiftPoint } from '../game/placement';
 import { applyOcclusionFade } from './occlusion';
 import { loadGlb } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';
 import {
-  deriveRoomSpots, preloadSurfaceTexture, surfaceFor,
-  surfaceMaterialSpec, tileDirToWorld, tileGroundY, tileToWorld,
-  worldGroundSampler,
+  deriveCorridorCentres, deriveRoomSpots, preloadSurfaceTexture, surfaceFor,
+  surfaceMaterialSpec, tileDirToWorld, tileToWorld, worldGroundSampler,
   worldWaterSampler,
   type PlacedSceneModel, type RoomFloor, type StairWorldLink, type SwingingDoor,
   type Tile, type VerticalTarget,
@@ -212,7 +210,10 @@ function dropPlacementGhost(rec: PlacedSceneModel): void {
  *    `roomFloors` and in `tile.declaredFloors`, written absolutely so no
  *    correction can apply twice;
  *  - and then every room's stands, centre, seats and ROOM markers, which
- *    `deriveRoomSpots` re-derives from the sampler as it stands now.
+ *    `deriveRoomSpots` re-derives from the sampler as it stands now;
+ *  - and every storey CORRIDOR's stand (§ A13b), which has no `roomFloors`
+ *    entry to be reached through and is re-derived from its own list
+ *    (`deriveCorridorCentres`).
  *
  * Nothing else in the scene is touched: plates, walls and the building/ground
  * model are not lifted by this law in the first place (§ A16.9).
@@ -311,6 +312,14 @@ export function reliftScene(tile: Tile, datumDelta = 0): boolean {
       deriveRoomSpots(tile, id, roomProps(placements, id));
     }
   }
+  // THE CORRIDORS TOO (§ A13b), and unconditionally: a corridor has no
+  // `roomFloors` entry, so the loop above never reaches it, and both terms its
+  // stand is made of move here — the datum for a storey plate, the sampler and
+  // the just-written lattice lifts for storey 0. Without this, a datum step of
+  // δ moved every room figure by δ and left the corridors behind. The list is
+  // one entry per storey, so re-deriving it is cheaper than deciding whether
+  // to.
+  deriveCorridorCentres(tile);
   return moved || seatsMoved;
 }
 
@@ -1122,21 +1131,24 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // corridor has no raster, and an empty list says "known room, no spots"
   // instead of leaving the reader to guess.
   //
-  // ONE HEIGHT SOURCE, the same two the rooms of that storey stand on: a
-  // declared storey has its plate (`top_y` is tile-local, exactly as
-  // `walkPlates` carries it, plus the walk clearance every stand gets), storey
-  // 0 draws no plate any more and asks the ground rule `tileGroundY` — the one
-  // every figure outdoors is put on. Nothing is derived a second time here.
+  // A DECLARED STOREY ALWAYS HAS ITS PLATE, so `plateTop === undefined` means
+  // storey 0 and nothing else: the composer emits a corridor only for a level
+  // whose footprint it could resolve (`_corridors` skips a level without an
+  // outline, because there is no anchor to compute), and every level != 0 with
+  // a footprint draws the storey plate from exactly that outline (`_plates`).
+  // Storey 0 draws none since E5a — there the terrain is the floor.
+  tile.corridors = [];
   for (const c of scene.corridors) {
     if (!c.room_id) continue;
     tile.roomLevels.set(c.room_id, c.level);
-    const plate = storeyPlate.get(c.level);
-    const centre = tileToWorld(tile, c.anchor[0], c.anchor[1], 0);
-    centre.setY(plate ? tile.center.y + plate.top_y + WALK_CLEARANCE_M
-                      : tileGroundY(tile, centre));
-    tile.roomCenters.set(c.room_id, centre);
     tile.roomSpots.set(c.room_id, []);
+    tile.corridors.push({ roomId: c.room_id, level: c.level, anchor: c.anchor,
+                          plateTop: storeyPlate.get(c.level)?.top_y });
   }
+  // A first stand right away, so a corridor figure never spends the model load
+  // in the yard; the pass after the placements (`deriveCorridorCentres` below)
+  // and every re-lift redo it against the ground as it is by then.
+  deriveCorridorCentres(tile);
 
   // ── Walls ───────────────────────────────────────────────────────────────
   // Already split around every opening; the PANE in a hole is its own entry —
@@ -1646,6 +1658,10 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     if (declared !== undefined) floor.declared = declared;
     deriveRoomSpots(tile, id, roomProps(placements, id));
   }
+  // …and the corridors in the same beat: a storey-0 corridor stands on the
+  // ground rule, which reads the baked lattices whose `lift` the placements
+  // above have only just been given (`reliftPlacement`).
+  deriveCorridorCentres(tile);
 
   // ── Verify (§ B5a): primitives against the target ───────────────────────
   // Only now measure: the tile matrices are set, every object hangs in its
@@ -2147,6 +2163,7 @@ export function unmountScene(tile: Tile): void {
   tile.outlineWalls = [];
   tile.levelSlabs.clear();
   tile.levelOutlines.clear();
+  tile.corridors = [];
   tile.levelWallMats.clear();
   tile.levelRoomPlateMats.clear();
   tile.elevatorStops = undefined;

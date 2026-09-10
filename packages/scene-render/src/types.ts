@@ -578,7 +578,7 @@ export interface SceneRoom {
  *  `anchor` IS that centre, server-computed and deterministic (lift stop →
  *  stair pad → the freest point of a 0.5 m raster → the plan centre plus the
  *  finding `corridor_without_floor`), in the same scene metres as
- *  `markers[].at`. **The client places corridor figures here and never
+ *  `markers[].at_world`. **The client places corridor figures here and never
  *  computes a point of its own**; lift and staircase lead to the same spot.
  *
  *  A corridor is recognised by `is_floor` / `level` of the player payload
@@ -589,7 +589,7 @@ export interface SceneCorridor {
   room_id: string
   /** The storey this corridor is the complement of. */
   level: number
-  /** Scene metres [x, z], same frame as `markers[].at`. */
+  /** Scene metres [x, z], same frame as `markers[].at_world`. */
   anchor: [number, number]
 }
 
