@@ -70,7 +70,7 @@
   },
   "street": {
     "name": "street",
-    "description": "the surface of street seen straight from above"
+    "description": "asphalt surface texture"
   },
   "tiled_floor": {
     "name": "tiled floor",
@@ -109,5 +109,9 @@
   "indoor_kitchen_wall": {
     "name": "indoor - kitchen - wall",
     "description": "A seamless tileable surface texture of kitchen tiles, viewed straight from above, flat even lighting, no perspective, no vignette, no drop shadows, no horizon, no objects or subjects, no border, material only."
+  },
+  "side_step": {
+    "name": "side step",
+    "description": "side step"
   }
 }

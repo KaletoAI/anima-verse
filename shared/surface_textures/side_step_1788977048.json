@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-09-09T18:04:08+00:00",
+  "source": "generated",
+  "backend": "Flux2-9B Normal",
+  "prompt": "A seamless tileable surface texture of a fussgängerweg (pedestrian path), viewed straight from above, flat even lighting, no perspective, no vignette, no drop shadows, no horizon, no objects or subjects, no border, high-quality material texture.",
+  "negative": "objects, people, animals, shadows, highlights, perspective, horizon, sky, depth of field, border, frame, seams, text, watermark, logo, vignette, gray, monochrome, flat color, blurry, low quality"
+}
