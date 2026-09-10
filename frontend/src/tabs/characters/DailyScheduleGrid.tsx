@@ -89,17 +89,26 @@ export function DailyScheduleGrid({
   const { toast } = useToast()
 
   // Unique locations by name (+ id→canonical map for dedup), mirroring the legacy grid.
-  const { uniqueLocs, idToCanonical } = useMemo(() => {
+  // `nameToCanonical` exists because a stored slot may hold the NAME instead of
+  // the id (older plans do): without it such a slot matched no row and sat in
+  // the grid invisibly, exactly like a slot naming a deleted place.
+  const { uniqueLocs, idToCanonical, nameToCanonical } = useMemo(() => {
     const byName = new Map<string, { id: string; name: string }>()
     const canon: Record<string, string> = {}
+    const byLabel: Record<string, string> = {}
     for (const loc of locations || []) {
       const name = (loc.name || loc.id || '').trim()
       if (!name) continue
       const id = loc.id || name
       if (!byName.has(name)) byName.set(name, { id, name })
       canon[id] = byName.get(name)!.id
+      byLabel[name] = byName.get(name)!.id
     }
-    return { uniqueLocs: Array.from(byName.values()), idToCanonical: canon }
+    return {
+      uniqueLocs: Array.from(byName.values()),
+      idToCanonical: canon,
+      nameToCanonical: byLabel,
+    }
   }, [locations])
 
   const [slots, setSlots] = useState<SlotMap>({})
@@ -108,22 +117,31 @@ export function DailyScheduleGrid({
   const [saving, setSaving] = useState(false)
   const [drag, setDrag] = useState({ active: false, key: '', startH: -1, curH: -1 })
 
+  // How many loaded slots named a place this world no longer has. Such a slot
+  // has no row to appear in, so it used to sit here invisibly and get written
+  // straight back on the next save — undeletable through this editor, while
+  // the character was still told to be there. Counted, dropped, and reported
+  // below; the role beside it (if any) survives.
+  const [orphanCount, setOrphanCount] = useState(0)
+
   // (Re)build the slot map whenever the loaded schedule changes.
   useEffect(() => {
     const map: SlotMap = {}
+    let orphans = 0
     for (const s of initialSlots || []) {
       const sleep = !!s.sleep
       const rawLoc = (s.location || '').trim()
-      map[s.hour] = {
-        location: sleep ? '' : idToCanonical[rawLoc] || rawLoc,
-        role: sleep ? '' : (s.role || '').trim(),
-        sleep,
-      }
+      const canonical = idToCanonical[rawLoc] || nameToCanonical[rawLoc] || ''
+      if (!sleep && rawLoc && !canonical) orphans++
+      const role = sleep ? '' : (s.role || '').trim()
+      if (!sleep && !canonical && !role) continue
+      map[s.hour] = { location: sleep ? '' : canonical, role, sleep }
     }
     setSlots(map)
+    setOrphanCount(orphans)
     setEnabled(initialEnabled)
     setDirty(false)
-  }, [initialSlots, initialEnabled, idToCanonical])
+  }, [initialSlots, initialEnabled, idToCanonical, nameToCanonical])
 
   const slotsRef = useRef(slots)
   slotsRef.current = slots
@@ -173,6 +191,7 @@ export function DailyScheduleGrid({
         slots: out,
       })
       setDirty(false)
+      setOrphanCount(0)
       toast(
         res.jobs_created !== undefined
           ? t('Schedule saved ({n} jobs)').replace('{n}', String(res.jobs_created))
@@ -195,6 +214,7 @@ export function DailyScheduleGrid({
       setSlots({})
       setEnabled(false)
       setDirty(false)
+      setOrphanCount(0)
       toast(t('Deleted'))
       onSaved?.()
     } catch (e) {
@@ -244,6 +264,14 @@ export function DailyScheduleGrid({
       <p className="ga-sched-muted">
         {t('Drag across a row to paint hours; click a filled cell to clear it. Empty hours = the character chooses.')}
       </p>
+      {orphanCount > 0 && (
+        <p className="ga-sched-warn">
+          {t('{n} hour(s) pointed at a place that no longer exists and were removed. Save to make that permanent.').replace(
+            '{n}',
+            String(orphanCount),
+          )}
+        </p>
+      )}
 
       <div className="tagesablauf-grid">
         <table className="tagesablauf-table">

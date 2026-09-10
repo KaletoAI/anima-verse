@@ -15,6 +15,7 @@
     "no boundary": "keine Boundary",
     "Seed missing boundaries ({n})": "Fehlende Boundaries anlegen ({n})",
     "{n} boundary(s) drawn": "{n} Boundary(s) gezeichnet",
+    "{n} hour(s) pointed at a place that no longer exists and were removed. Save to make that permanent.": "{n} Stunde(n) verwiesen auf einen Ort, den es nicht mehr gibt, und wurden entfernt. Zum dauerhaften Übernehmen speichern.",
     "[CURRENT]": "[AKTUELL]",
     "[RECENT]": "[KÜRZLICH]",
     "today {time}": "heute {time}",

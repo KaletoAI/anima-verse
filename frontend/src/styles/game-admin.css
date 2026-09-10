@@ -395,6 +395,20 @@ a.ga-btn {
   line-height: 1.5;
 }
 
+/* Same size and rhythm as the muted hint above it, but in the warning yellow
+   the furnish chips already use — this line reports something that was
+   silently dropped from the plan, so it must not read as ordinary help text. */
+.ga-sched-warn {
+  color: #d29922;
+  border: 1px solid #d29922;
+  background: rgba(210, 153, 34, 0.14);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  margin: 0 0 8px 0;
+  line-height: 1.5;
+}
+
 .ga-sched-table {
   width: 100%;
   font-size: 12px;
