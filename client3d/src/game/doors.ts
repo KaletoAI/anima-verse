@@ -59,7 +59,9 @@ export interface DoorMarker {
   baseY: number;
   /** The rooms this doorway joins, in payload order: two for a party wall,
    *  one for a door leading outside. `roomIds[0]` owns the wall it was cut
-   *  from; the ground room never appears. */
+   *  from — on a HULL door (§ A13c) nobody does, and the one room is the
+   *  storey's wall-less corridor the door opens into. The ground room never
+   *  appears. */
   roomIds: string[];
   /** true = leads out of the building, onto the ground. */
   outside: boolean;
@@ -113,6 +115,11 @@ export function doorMarkers(payload: ScenePayload | null | undefined,
  * was not even on a wall. Two consumers ask this: the floor probe of a diorama
  * (`tiles.ts` — a generated mesh has holes in hidden places but not at its
  * door) and the walk that leaves a building for the ground (`main.ts`).
+ *
+ * A CORRIDOR answers like every other room (§ A13c): a hull door lists the
+ * storey's hallway as its one room and is `outside`, so a figure walking from
+ * `__floor__0` into the yard is routed through the front door drawn on the
+ * building outline. Nothing here knows what a corridor is — it is an id.
  */
 export function roomDoor(payload: ScenePayload | null | undefined,
   roomId: string, origin: Point = { x: 0, z: 0 }): DoorMarker | null {

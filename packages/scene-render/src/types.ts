@@ -629,11 +629,25 @@ export interface SceneDoorway {
    *  nobody linked, on a storey that has a corridor, leads into that corridor
    *  instead of out of the building (so `outside` is false and the hull keeps
    *  its skin).
-   *  `rooms[0]` owns the wall this entry was cut out of. The GROUND room
-   *  never appears — it has no walls, and `outside` already says so. */
+   *  `rooms[0]` owns the wall this entry was cut out of — except on a HULL
+   *  door (see `hull`), where it is the wall-less corridor the door opens
+   *  into. The GROUND room never appears — it has no walls, and `outside`
+   *  already says so. */
   rooms: string[]
   /** true = leads out of the building (onto the ground). */
   outside: boolean
+  /** true = this threshold was cut out of the BUILDING OUTLINE itself and not
+   *  out of a room wall (§ A13c, `map3d.hull_openings`): a hallway has no
+   *  walls, so a ground floor whose front is all hallway carries its front
+   *  door here. Then `rooms` holds exactly the storey's corridor, `outside`
+   *  is true, and `along` is the direction of the outline EDGE (a→b) rather
+   *  than of a room wall. Absent on every room door. */
+  hull?: boolean
+  /** Unit normal pointing AWAY from the building, in the same frame as
+   *  `along` — shipped on a hull door (§ A13c), because no room was pierced
+   *  whose hull a consumer could read the outward side off. Absent on a room
+   *  door, where the outward side is `(along.z, -along.x)` by construction. */
+  outward_normal?: [number, number]
 }
 
 /** A finding the SERVER made about this location (plan-betreten-und-tueren.md

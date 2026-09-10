@@ -3391,6 +3391,13 @@ async function main() {
   //   d2  r2 to the outside, mid (3,-2),  along (1,0), width 0.6, base 0.10
   //   d3  party wall r2|r3, mid (5,-1), along (1,0),  width 0.9, base 0.10
   //   d4  storey 1, room up, mid (0,2), along (1,0),  width 1,   base 2.30
+  //   d5  HULL door of the hallway (§ A13c), mid (0,-3), along (1,0),
+  //       width 1.2, base 0.10, rooms ['__floor__0'], outside, hull
+  //
+  // d5 is the case that has no room wall at all: a hallway is the complement
+  // of its storey's rooms, so the door is cut out of the BUILDING OUTLINE and
+  // `rooms[0]` is that wall-less corridor. For this module it is an outside
+  // door like any other — which is the point of the checks below.
   console.log('\ndoorMarkers — the payload IS the doorway, nothing is derived');
   const doorScene = {
     extent_m: 10,
@@ -3407,6 +3414,9 @@ async function main() {
         rooms: ['r2', 'r3'], outside: false },
       { level: 1, at_world: [0, 2], along: [1, 0], width_m: 1, base_y: 2.3,
         rooms: ['up'], outside: true },
+      { level: 0, at_world: [0, -3], along: [1, 0], width_m: 1.2, base_y: 0.1,
+        rooms: ['__floor__0'], outside: true, hull: true,
+        outward_normal: [0, -1] },
     ],
     // Everything below is the material the module used to derive from. It is
     // still in the payload (other consumers need it) and must stay unread.
@@ -3425,7 +3435,7 @@ async function main() {
     ],
   };
   const dm0 = doorMarkers(doorScene, 0);
-  check('the ground floor has exactly its four doorways', dm0.length, 4);
+  check('the ground floor has exactly its five doorways', dm0.length, 5);
   check('the party wall arrives unchanged',
     { mid: dm0[0].mid, along: dm0[0].along, width: dm0[0].width,
       baseY: dm0[0].baseY, roomIds: dm0[0].roomIds, outside: dm0[0].outside },
@@ -3453,6 +3463,15 @@ async function main() {
   // Deriving it would put a marker at (-2,0); reading cannot.
   check('no marker is recomputed from rooms[].openings',
     dm0.filter((m) => Math.abs(m.mid.x + 2) < 1e-9).length, 0);
+  // THE HULL DOOR (§ A13c): drawn on the building outline, opening into the
+  // storey's hallway. Nothing here may filter it out for lacking a room wall
+  // — the entry is read exactly like the room doors above, and the threshold
+  // hangs on the tile's own group, not on a room's.
+  check('the hull door of the hallway is a threshold like any other',
+    { mid: dm0[4].mid, along: dm0[4].along, width: dm0[4].width,
+      baseY: dm0[4].baseY, roomIds: dm0[4].roomIds, outside: dm0[4].outside },
+    { mid: { x: 0, z: -3 }, along: { x: 1, z: 0 }, width: 1.2, baseY: 0.1,
+      roomIds: ['__floor__0'], outside: true });
 
   // THE WORLD OFFSET (the C1 lesson of the collision round): the payload is
   // TILE-LOCAL — world metres around the tile CENTRE — while the scene the
@@ -3480,6 +3499,13 @@ async function main() {
     { mid: { x: 5, z: -1 }, width: 0.9 });
   check('the tile centre applies here too',
     roomDoor(doorScene, 'r3', { x: 40, z: -20 }).mid, { x: 45, z: -21 });
+  // The hallway is where a figure leaving the building stands when no
+  // rectangle holds it (§ A13b), and its way out is the HULL door: a figure
+  // routed from `__floor__0` to the yard walks through this one.
+  check('the hallway takes its hull door as the way out',
+    { mid: roomDoor(doorScene, '__floor__0').mid,
+      width: roomDoor(doorScene, '__floor__0').width },
+    { mid: { x: 0, z: -3 }, width: 1.2 });
   check('a room without any doorway has none', roomDoor(doorScene, 'nope'), null);
   check('and neither has no room at all', roomDoor(doorScene, ''), null);
   check('no payload, no door', roomDoor(null, 'r1'), null);
@@ -3497,6 +3523,11 @@ async function main() {
   check('r1 and r3 share no wall', doorwayBetween(doorScene, 'r1', 'r3'), null);
   check('a room is not joined to itself', doorwayBetween(doorScene, 'r1', 'r1'), null);
   check('an unknown room joins nothing', doorwayBetween(doorScene, 'r1', 'nope'), null);
+  // A hull door names ONE room, so it joins the hallway to nothing indoors —
+  // a figure going from a room into the hallway leaves through the room's own
+  // door and walks in, exactly as it does towards the ground.
+  check('the hull door joins the hallway to no room',
+    doorwayBetween(doorScene, '__floor__0', 'r1'), null);
   check('the tile centre applies here too',
     doorwayBetween(doorScene, 'r2', 'r3', { x: 40, z: -20 }).mid, { x: 45, z: -21 });
 

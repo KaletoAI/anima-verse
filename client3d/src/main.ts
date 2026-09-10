@@ -1190,6 +1190,10 @@ async function startApp(username: string, role: string) {
     // server resolved (§ B doorways), and the client that used to lift it
     // against its own sampled room floors was mixing tile metres with world
     // metres — the floating thresholds of 2026-08-16.
+    // ONE GROUP PER STOREY, never per room: a threshold hangs on the tile, so
+    // a HULL door (§ A13c) — cut out of the building outline, with the
+    // storey's wall-less corridor as its only room — needs no room wall group
+    // to attach to and is laid like every other entry of `doorways[]`.
     const root = new THREE.Group();
     root.visible = false;
     const mats: DoorMarkMats = { open: DOOR_MARK_MAT.clone(),
