@@ -591,6 +591,12 @@ export interface SceneCorridor {
   level: number
   /** Scene metres [x, z], same frame as `markers[].at_world`. */
   anchor: [number, number]
+  /** THE RESOLVED STOREY FOOTPRINT the anchor was measured on, same frame and
+   *  same metres, without a closing duplicate point. A point inside it and in
+   *  none of the storey's rooms is in this corridor — the containment test the
+   *  client cannot do from `plates`, because storey 0 draws none (E5a) and the
+   *  ground-floor hallway is exactly where the question comes up. */
+  outline: [number, number][]
 }
 
 /** ONE walkable threshold — a door or passage, served as a finished

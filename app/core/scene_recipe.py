@@ -619,6 +619,10 @@ def _corridors(location: Dict[str, Any], map3d: Dict[str, Any],
     same set the door rule reads, never a second census. A storey without a
     resolved footprint has no plate to stand on either, so it contributes no
     entry: its corridor exists as state and nothing else.
+
+    Each entry carries the resolved storey outline it was measured on, so a
+    client can test a point against the building on that storey without
+    owning a second resolution of ``level_outlines``.
     """
     from app.models.world import floor_room_id
     corridors: List[Dict[str, Any]] = []
@@ -634,12 +638,22 @@ def _corridors(location: Dict[str, Any], map3d: Dict[str, Any],
                 if f["block"]["from_level"] == lv] + \
                [[f["block"]["head"][0], f["block"]["head"][2]] for f in flights
                 if f["block"]["to_level"] == lv]
-        anchor, free_spot = floor_anchor(_outline_world(map3d, lv),
-                                         room_hulls.get(lv, []), holding, pads)
+        outline = _outline_world(map3d, lv)
+        anchor, free_spot = floor_anchor(outline, room_hulls.get(lv, []),
+                                         holding, pads)
         if anchor is None:
             continue
+        # THE STOREY OUTLINE THE ANCHOR WAS MEASURED ON travels with the
+        # entry. A corridor is the complement of its storey's rooms, so
+        # "is this point in the corridor" is "is it in the building on this
+        # storey and in none of its rooms" — and the first half of that needs
+        # the storey's footprint. The client cannot take it from the plates:
+        # storey 0 draws none (E5a), and the ground-floor corridor is exactly
+        # where the question is asked. Verbatim points, same frame as
+        # ``anchor``, no closing duplicate.
         corridors.append({"room_id": floor_room_id(lv), "level": lv,
-                          "anchor": anchor})
+                          "anchor": anchor,
+                          "outline": [[_r(x), _r(z)] for x, z in outline]})
         if not free_spot:
             problems.append({
                 "kind": "corridor_without_floor",

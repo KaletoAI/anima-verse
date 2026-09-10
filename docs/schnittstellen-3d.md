@@ -4842,11 +4842,18 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
   outdoor_rooms: [ room_id, … ],
 
   # --- Etagen-Flure (2026-09-09) ---
-  corridors: [ { room_id, level, anchor: [x, z] } ],
+  corridors: [ { room_id, level, anchor: [x, z],
+                 outline: [[x, z], …] } ],
                                            # IMMER da, leer = kein Flur-Raum
                                            # room_id = "__floor__<level>"
                                            # anchor  = Meter im Szenen-Rahmen
                                            #           wie markers[].at
+                                           # outline = der aufgelöste
+                                           #           Etagengrundriss, auf dem
+                                           #           der Anker berechnet wurde
+                                           #           — Clients prüfen damit,
+                                           #           ob ein Punkt im Gebäude
+                                           #           dieser Etage liegt
                                            # nach level sortiert
 }
 ```
@@ -4858,7 +4865,10 @@ Etage einer Location besitzt einen reservierten Flur-Raum `__floor__<level>`
 und seine Hülle sind die der Location — also hat er auch keine Mitte, die ein
 Client aus einem Grundriss lesen könnte. **`corridors[]` liefert diese Mitte
 fertig: Clients stellen Flur-Figuren hier auf und führen Lift/Treppe hierher;
-sie berechnen keinen eigenen Punkt.**
+sie berechnen keinen eigenen Punkt.** Dazu kommt `outline`: der aufgelöste
+Etagengrundriss, auf dem der Anker berechnet wurde — Clients prüfen damit, ob
+ein Punkt im Gebäude dieser Etage liegt (die Platten taugen dafür nicht, denn
+Etage 0 zeichnet seit E5a keine).
 
 Der Anker ist deterministisch und entsteht in genau dieser Reihenfolge
 (`scene_recipe.floor_anchor`, rein):

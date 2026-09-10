@@ -131,7 +131,12 @@ Part 6 — the corridor anchor (§ 3.2), floor_anchor() is pure:
     (e) no outline -> (None, False)
 
 Part 6b — corridors[] through compose_scene on cellar_fixture():
-    one entry {room_id "__floor__-1", level -1, anchor [-2.0, 2.0]}.
+    one entry {room_id "__floor__-1", level -1, anchor [-2.0, 2.0],
+    outline [[-5, -5], [5, -5], [5, 5], [-5, 5]]}.
+    The outline is the storey footprint the anchor was measured on: the
+    fixture declares no level_outlines, so outline_source_level falls back to
+    map3d.outline, i.e. the location's own 10 x 10 contour, verbatim and
+    without a closing duplicate.
     Derivation: the level -1 hulls are k1 (x -4..-1, z -4..-1) and k2
     (x 1..4, z -4..-1). Clearance(x, z) = min(outline clearance
     5 - max(|x|, |z|), dist to k1, dist to k2). For a value v the outline
@@ -427,7 +432,8 @@ def main():
 
     print("Part 6b — corridors[] in the payload")
     check("corridors", sc["corridors"],
-          [{"room_id": "__floor__-1", "level": -1, "anchor": [-2.0, 2.0]}])
+          [{"room_id": "__floor__-1", "level": -1, "anchor": [-2.0, 2.0],
+            "outline": [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]]}])
     check("no corridor_without_floor",
           [p for p in sc.get("problems") or []
            if p.get("kind") == "corridor_without_floor"], [])

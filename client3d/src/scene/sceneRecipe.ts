@@ -1143,6 +1143,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     tile.roomLevels.set(c.room_id, c.level);
     tile.roomSpots.set(c.room_id, []);
     tile.corridors.push({ roomId: c.room_id, level: c.level, anchor: c.anchor,
+                          outline: c.outline,
                           plateTop: storeyPlate.get(c.level)?.top_y });
   }
   // A first stand right away, so a corridor figure never spends the model load

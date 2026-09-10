@@ -480,6 +480,12 @@ export interface TileCorridor {
   level: number;
   /** `corridors[].anchor` — tile-local metres, as the payload sends it. */
   anchor: [number, number];
+  /** `corridors[].outline` — the storey footprint the anchor was measured on,
+   *  tile-local, exactly as delivered. It answers "is this point inside the
+   *  building on this storey", which is what tells a step out of a room on an
+   *  upper floor (into the corridor) from a step out of the front door (onto
+   *  the yard). Not taken from `levelOutlines`: storey 0 has no entry there. */
+  outline: [number, number][];
   /** `top_y` of the storey's OWN plate, tile-local. Undefined exactly on
    *  storey 0, which has drawn no plate since E5a — there the terrain is the
    *  floor, as it is for every other storey-0 stand. */
