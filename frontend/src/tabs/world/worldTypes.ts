@@ -212,6 +212,10 @@ export interface Room {
    *  use case). Falls back to the room description when empty. */
   image_prompt_building?: string
   layout?: RoomLayout
+  /** The storey a RESERVED corridor room belongs to (§ A13b) — the server
+   *  writes it onto `__floor__<level>` entries and nowhere else. A corridor
+   *  has no layout to carry a level in. */
+  level?: number
 }
 
 // Optional 3D metadata for external 3D map clients (AV3D-1). The 2D UI
@@ -268,6 +272,11 @@ export interface Map3D {
    *  rooms compose like a building interior — no cutouts, no overlay zones.
    *  Only meaningful together with area_model. */
   area_detail?: boolean
+  /** OPT-IN: the ground floor has a corridor between its rooms (§ A13b).
+   *  Every other used storey gets its `__floor__<level>` room unconditionally;
+   *  on storey 0 the complement is the YARD unless this says otherwise. Only
+   *  the explicit `true` is stored — clearing the box removes the key. */
+  ground_corridor?: boolean
   // `relief` — the scene's OWN 17 × 17 height field — IS GONE ("Ein Boden"
   // E5a, decision 1 of the plan), and so is the `layout.relief_flat` opt-out
   // that went with it. There is no per-location relief left to roll: local
@@ -457,6 +466,57 @@ export const GROUND_ROOM_ID = '__ground__'
 export function groundRoomLabel(room: { name?: string } | null | undefined,
                                 t: (s: string) => string): string {
   return room?.name?.trim() || t('Yard')
+}
+
+/** The reserved id PREFIX of a storey's CORRIDOR room — what is not a room on
+ *  a storey is its corridor (§ A13b). Mirrors `app.models.world.floor_room_id`
+ *  (`__floor__<level>`); like the ground, the server brings the room, the
+ *  editor only recognises it. */
+export const FLOOR_ROOM_PREFIX = '__floor__'
+
+/** The storey a reserved corridor id belongs to — `null` for every other id.
+ *  The level is read from the id and nowhere else, so an id that does not
+ *  parse cleanly (`__floor__x`) is simply not a corridor. */
+export function floorRoomLevel(id: string | undefined | null): number | null {
+  if (!id || !id.startsWith(FLOOR_ROOM_PREFIX)) return null
+  const rest = id.slice(FLOOR_ROOM_PREFIX.length)
+  if (!/^-?\d+$/.test(rest)) return null
+  return parseInt(rest, 10)
+}
+
+/** Is this the reserved corridor room of a storey? */
+export function isFloorRoom(id: string | undefined | null): boolean {
+  return floorRoomLevel(id) !== null
+}
+
+/**
+ * THE display name of a storey's corridor — one source, everywhere.
+ *
+ * Like the ground room, the server creates it with an EMPTY name, so the
+ * default a user reads is a CLIENT default. The four source strings are the
+ * SAME English text `world.get_floor_name` uses, so one entry in
+ * `shared/languages/<lang>.json` translates the server's chips and the
+ * editor's labels alike — and the reserved id never surfaces.
+ */
+export function floorRoomLabel(room: { id?: string; name?: string } | null | undefined,
+                               t: (s: string) => string): string {
+  const own = room?.name?.trim()
+  if (own) return own
+  const level = floorRoomLevel(room?.id) ?? 0
+  if (level === 0) return t('Hallway')
+  if (level === -1) return t('Corridor (basement)')
+  const key = level < -1 ? 'Corridor (basement {n})' : 'Corridor (floor {n})'
+  return t(key).replace('{n}', String(level))
+}
+
+/** THE label of any room in the editor: the two reserved rooms answer with
+ *  their shared default, everything else with its name (and, unnamed, with
+ *  its id — an author-made id is readable, a reserved one is not). */
+export function roomLabel(room: { id?: string; name?: string } | null | undefined,
+                          t: (s: string) => string): string {
+  if (room?.id === GROUND_ROOM_ID) return groundRoomLabel(room, t)
+  if (isFloorRoom(room?.id)) return floorRoomLabel(room, t)
+  return room?.name?.trim() || room?.id || ''
 }
 
 /** A layout whose ROOM SHAPE is resolved: the rectangle is there, so every

@@ -6,7 +6,7 @@ import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { type ItemRef } from '../../lib/refs'
-import { DANGER_LEVELS, GROUND_ROOM_ID, MAP3D_STYLES, TERRAIN_TYPES, groundRoomLabel, type Location, type Map3D, type SurfaceKind } from './worldTypes'
+import { DANGER_LEVELS, GROUND_ROOM_ID, MAP3D_STYLES, TERRAIN_TYPES, floorRoomLevel, isFloorRoom, roomLabel, type Location, type Map3D, type SurfaceKind } from './worldTypes'
 import { RandomEventsEditor } from './RandomEventsEditor'
 import { NpcSlotsEditor } from './NpcSlotsEditor'
 import { LocationGallery } from './LocationGallery'
@@ -205,9 +205,12 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
             onChange={(e) => upd('entry_room', e.target.value)}
           >
             <option value="">— {t('arrive on the ground')} —</option>
-            {(draft.rooms || []).map((r) => (
+            {/* Of the reserved storey corridors ONLY the ground floor's may be
+                the entry room (§ A13b) — nobody arrives in a basement
+                corridor, and the server drops any other one on save. */}
+            {(draft.rooms || []).filter((r) => !isFloorRoom(r.id) || floorRoomLevel(r.id) === 0).map((r) => (
               <option key={r.id || r.name} value={r.id || ''}>
-                {r.id === GROUND_ROOM_ID ? groundRoomLabel(r, t) : (r.name || r.id || '?')}
+                {roomLabel(r, t) || '?'}
               </option>
             ))}
           </select>
@@ -572,10 +575,11 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
   const [previewPose, setPreviewPose] = useState<Record<string, string>>({})
 
   // The model-calibration strip belongs to a ROOM with a diorama. The yard is
-  // the location surface and has neither (§ A13a), so selecting it shows no
-  // strip at all.
+  // the location surface and has neither (§ A13a), a storey corridor is the
+  // complement of its rooms and has neither (§ A13b), so selecting either
+  // shows no strip at all.
   const floorSelRoom = (draft.rooms || []).find((r) => r.id === floorRoomSel
-    && r.id !== GROUND_ROOM_ID)
+    && r.id !== GROUND_ROOM_ID && !isFloorRoom(r.id))
   const tabFloor = (
     <div className="ga-form">
       {/* THE PLACE'S OWN DOOR MOVED INTO THE PLAN (§ W3). It used to stand

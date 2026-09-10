@@ -156,6 +156,22 @@ export function PlanInspectorLevel({
             </div>
           ) : null}
 
+          {/* THE GROUND FLOOR'S CORRIDOR (§ A13b) is the one storey that has
+              to be asked: every other used storey gets its corridor room
+              unconditionally, while here the complement of the rooms is the
+              YARD unless the author says the ground floor has a hallway.
+              Only the explicit `true` is stored — clearing removes the key,
+              like the two area switches below. */}
+          {level === 0 ? (
+            <label className="ga-check-row" style={{ fontSize: '0.82em' }}
+              title={t('Doors without a target lead into the hallway; mark the front door with target "outside".')}>
+              <input type="checkbox" checked={!!map3d?.ground_corridor}
+                onChange={(e) => onMap3d('ground_corridor',
+                  e.target.checked ? true : undefined)} />
+              <span>{t('Ground floor has a hallway between the rooms')}</span>
+            </label>
+          ) : null}
+
           {/* ── Whole-location switches ─────────────────────────────── */}
           <div className="ga-plan-panel-title" style={{ marginTop: 4 }}>
             {t('This location')}

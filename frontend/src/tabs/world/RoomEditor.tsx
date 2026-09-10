@@ -5,7 +5,7 @@ import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { type ItemRef } from '../../lib/refs'
-import { GROUND_ROOM_ID, type Location, type Room } from './worldTypes'
+import { GROUND_ROOM_ID, isFloorRoom, roomLabel, type Location, type Room } from './worldTypes'
 import { RoomItems } from './RoomItems'
 import { BuildingModelPanel } from './BuildingModelPanel'
 
@@ -60,20 +60,28 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
 
   // The ground is brought by the server and belongs to every location — the
   // author names it, but never creates or deletes it (plan-grundflaeche § 3).
-  // The server puts it back anyway; offering the button would just lie.
+  // The server puts it back anyway; offering the button would just lie. The
+  // corridor of a storey (§ A13b) is the same kind of RESERVED room and is
+  // treated identically everywhere below.
   const isGround = room.id === GROUND_ROOM_ID
+  const isFloor = isFloorRoom(room.id)
+  const isReserved = isGround || isFloor
 
   return (
     <>
       <DetailToolbar
-        title={`${location.name} / ${room.name || room.id || t('room')}`}
+        title={`${location.name} / ${roomLabel(room, t) || t('room')}`}
         onSave={save}
-        onDelete={isGround ? undefined : remove}
+        onDelete={isReserved ? undefined : remove}
         deleteLabel={t('Remove room')}
       />
       {isGround ? (
         <p className="ga-form-hint" style={{ margin: '4px 8px 0' }}>
           {t('This is the ground of the location — the area no room takes up. Every location has one; it can be named, but not removed.')}
+        </p>
+      ) : isFloor ? (
+        <p className="ga-form-hint" style={{ margin: '4px 8px 0' }}>
+          {t('The corridor of a storey is brought by the server. Name it, describe it — it has no layout of its own.')}
         </p>
       ) : null}
       <nav className="ga-subtabs">
@@ -82,7 +90,7 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
             nothing to offer there (user finding 2026-08-20). */}
         {([
           { id: 'general', label: 'General' },
-          ...(isGround ? [] : [{ id: '3d', label: '3D world' }]),
+          ...(isReserved ? [] : [{ id: '3d', label: '3D world' }]),
         ] as Array<{ id: 'general' | '3d'; label: string }>).map((tb) => (
           <button
             key={tb.id}
@@ -94,7 +102,7 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
           </button>
         ))}
       </nav>
-      {tab === '3d' && !isGround ? (
+      {tab === '3d' && !isReserved ? (
         <div className="ga-form">
           <BuildingModelPanel
             locationId={location.id}
@@ -207,8 +215,9 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
                 onChange={(e) => upd('image_prompt_night', e.target.value)}
               />
             </Field>
-            {/* No diorama for the yard — no source-image prompt either. */}
-            {isGround ? null : (
+            {/* No diorama for the yard and none for a corridor — no
+                source-image prompt either. */}
+            {isReserved ? null : (
               <Field
                 label={t('3D model prompt')}
                 help="image_prompt"

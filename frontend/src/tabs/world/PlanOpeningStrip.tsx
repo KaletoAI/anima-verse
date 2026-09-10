@@ -19,6 +19,10 @@ interface Props {
   index: number
   /** Every OTHER room of the location — where a door may lead. */
   otherRooms: Room[]
+  /** The display name of the corridor of THIS room's storey, when that storey
+   *  has one (§ A13b). Set = a door without a target leads into it, so the
+   *  empty option says so instead of reading like "leads nowhere". */
+  corridorName?: string
   /** The location's fallback door prop, named as the first option. */
   defaultDoorPropId: string
   /** Merge a patch into this opening, or remove it when null is passed. */
@@ -26,7 +30,7 @@ interface Props {
 }
 
 export function PlanOpeningStrip({
-  opening: op, index, otherRooms, defaultDoorPropId, onPatch,
+  opening: op, index, otherRooms, corridorName = '', defaultDoorPropId, onPatch,
 }: Props) {
   const { t } = useI18n()
 
@@ -77,7 +81,7 @@ export function PlanOpeningStrip({
       {numField('height_m', t('H (m)'), 10)}
       {numField('sill_m', t('Sill (m)'), 3)}
       <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: '0.82em' }}
-        title={t('Where a door/passage leads — another room or outside. Windows leave it empty.')}>
+        title={t('Where a door/passage leads — another room, the storey\'s corridor (no target) or outside. Windows leave it empty.')}>
         {t('to')}
         <select
           className="ga-input"
@@ -85,7 +89,9 @@ export function PlanOpeningStrip({
           value={op.to ?? ''}
           onChange={(e) => onPatch({ to: e.target.value || undefined })}
         >
-          <option value="">{t('— none —')}</option>
+          <option value="">
+            {corridorName ? `→ ${corridorName}` : t('— none —')}
+          </option>
           <option value="outside">{t('outside')}</option>
           {otherRooms.map((r) => (
             <option key={r.id} value={r.id}>{r.name || r.id}</option>

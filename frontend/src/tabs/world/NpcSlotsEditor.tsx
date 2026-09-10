@@ -3,7 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
-import { groundRoomLabel, type NpcSlot, type Room } from './worldTypes'
+import { roomLabel, type NpcSlot, type Room } from './worldTypes'
 
 // ── NPC slots of a location or of a painted area ──────────────────────────
 // What a place wants staffed (plan-npc-auto-spawn.md § 1). The server fills a
@@ -261,7 +261,7 @@ export function NpcSlotsEditor({
               <option value="">— {t('arrival room')} —</option>
               {roomList.filter((r) => !!r.id).map((r) => (
                 <option key={r.id} value={r.id || ''}>
-                  {r.name?.trim() || groundRoomLabel(r, t)}
+                  {roomLabel(r, t)}
                 </option>
               ))}
             </select>

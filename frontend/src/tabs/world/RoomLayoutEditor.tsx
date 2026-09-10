@@ -93,7 +93,7 @@ import type { PlanMode } from './PlanToolbar'
 import { getRoomModelDims, renderTopDownSnapshot } from './topDownSnapshot'
 import type { SurfaceMaterialSpec } from '@anima/scene-render'
 import type { Map3D, PlacedLayout, Room, RoomLayout, RoomOpening, RoomPropPlacement, SceneProblem, SceneRoom, ScenePayload, SceneStairs, SurfaceKind } from './worldTypes'
-import { GROUND_ROOM_ID, groundRoomLabel, hasRect, readMapWater } from './worldTypes'
+import { GROUND_ROOM_ID, floorRoomLabel, floorRoomLevel, groundRoomLabel, hasRect, isFloorRoom, readMapWater } from './worldTypes'
 import { groupKeys, newId, usePoseCatalog } from './placeTypes'
 import { composePlacements, dependentIndices, pickSupport, toSupportFrame, withPropHeights } from './placementCompose'
 import { pointInPolygon } from '../map/mapMath'
@@ -644,12 +644,21 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
    *  the same word the room tree uses, never a second name for one room. */
   const yardName = groundRoomLabel(groundRoom, t)
 
+  /** The display name of a storey's CORRIDOR room, or '' when that storey has
+   *  none (§ A13b). Where there is one, a door without a target opens into it
+   *  instead of through the shell, so the opening strip has to say its name. */
+  const corridorOfLevel = useCallback((lv: number) => {
+    const room = rooms.find((r) => floorRoomLevel(r.id) === lv)
+    return room ? floorRoomLabel(room, t) : ''
+  }, [rooms, t])
+
   /** Everything the plan DRAWS on this level: the rooms with a rectangle plus
    *  — on level 0, once a boundary exists — the yard. */
   const placed = useMemo<PlanShape[]>(() => {
     const out: PlanShape[] = []
     for (const room of rooms) {
       if (hasRect(room.layout) && room.id !== GROUND_ROOM_ID
+          && !isFloorRoom(room.id)
           && (room.layout.level || 0) === level) {
         out.push({ room, lay: room.layout, ground: false })
       }
@@ -675,16 +684,19 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
    *  why their plan is a speck near the pin. All levels, not just this one:
    *  the answer must not depend on which floor happens to be open. */
   const tinyRooms = useMemo(() => rooms.filter((r) =>
-    r.id !== GROUND_ROOM_ID && hasRect(r.layout)
+    r.id !== GROUND_ROOM_ID && !isFloorRoom(r.id) && hasRect(r.layout)
     && (r.layout.w < TINY_ROOM_M || r.layout.d < TINY_ROOM_M)), [rooms])
   // The yard is not a room to be drawn: it can never be "not on the plan",
-  // it simply is the location's surface (§ A13a).
-  const unplaced = rooms.filter((r) => !r.layout && r.id !== GROUND_ROOM_ID)
+  // it simply is the location's surface (§ A13a) — and neither is a storey
+  // corridor, which is the complement of the rooms of its storey (§ A13b) and
+  // has no layout by contract.
+  const unplaced = rooms.filter((r) => !r.layout && r.id !== GROUND_ROOM_ID
+    && !isFloorRoom(r.id))
   /** Does ANY room of this location have a floor plan — on any level? That is
    *  the question the server's `rooms_without_layout` finding asks, so the
    *  editor's nudge has to ask it the same way and not per level. */
   const anyRoomPlaced = rooms.some((r) => r.id !== GROUND_ROOM_ID
-    && hasRect(r.layout))
+    && !isFloorRoom(r.id) && hasRect(r.layout))
 
   /** One server finding in the editor's language. The SERVER owns the wording
    *  — its message is English source text, so it goes straight through `t()`
@@ -2818,7 +2830,9 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         <PlanOpeningStrip
           opening={selectedRoom.layout.openings[openingSel]}
           index={openingSel}
-          otherRooms={rooms.filter((r) => r.id && r.id !== selectedRoom.id)}
+          otherRooms={rooms.filter((r) => r.id && r.id !== selectedRoom.id
+            && !isFloorRoom(r.id))}
+          corridorName={corridorOfLevel(selectedRoom.layout?.level || 0)}
           defaultDoorPropId={defaultDoorPropId}
           onPatch={(patch) => {
             const list = (selectedRoom.layout?.openings || [])

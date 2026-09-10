@@ -7,7 +7,7 @@ import { ListPane } from '../../components/ListPane'
 import { ImportButton } from '../../components/ImportExport'
 import { loadItems, type ItemRef } from '../../lib/refs'
 import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
-import { DANGER_LEVELS, GROUND_ROOM_ID, groundRoomLabel, type Location, type Selection } from './worldTypes'
+import { DANGER_LEVELS, GROUND_ROOM_ID, floorRoomLevel, isFloorRoom, roomLabel, type Location, type Selection } from './worldTypes'
 import { LocationEditor } from './LocationEditor'
 import { RoomEditor } from './RoomEditor'
 import { LocationGallery } from './LocationGallery'
@@ -261,12 +261,14 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
   const dangerLabel = DANGER_LEVELS.find((d) => d.value === danger)?.label || ''
   // Sort the entry room to the top of the list.
   const eid = entryRoomId(location)
-  // Sort: the GROUND ("Außenbereich") always first (user 2026-08-25 — it is
-  // the location's own frame, not one room among rooms), then the entry room,
+  // Sort: the GROUND always first (user 2026-08-25 — it is the location's own
+  // frame, not one room among rooms), then the storey corridors (§ A13b, the
+  // same kind of reserved room, ascending by storey), then the entry room,
   // then the rest in their stored order.
   const rank = (r: { id?: string }) =>
-    r.id === GROUND_ROOM_ID ? -2 : r.id === eid ? -1 : 0
-  const rooms = [...(location.rooms || [])].sort((a, b) => rank(a) - rank(b))
+    r.id === GROUND_ROOM_ID ? -2 : isFloorRoom(r.id) ? -1.5 : r.id === eid ? -1 : 0
+  const rooms = [...(location.rooms || [])].sort((a, b) => rank(a) - rank(b)
+    || (floorRoomLevel(a.id) ?? 0) - (floorRoomLevel(b.id) ?? 0))
 
   return (
     <li>
@@ -302,11 +304,12 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
             const isRoomSelected =
               selection?.kind === 'room' && selection.locationId === location.id && selection.roomId === r.id
             const isEntry = !!r.id && r.id === eid
-            // The ground room may stay unnamed — show the ONE shared default
-            // instead of its reserved id (`groundRoomLabel`, so the tree and
+            // The two reserved rooms may stay unnamed — show the ONE shared
+            // default instead of the reserved id (`roomLabel`, so the tree and
             // the floor plan never name one room twice).
             const isGround = r.id === GROUND_ROOM_ID
-            const label = isGround ? groundRoomLabel(r, t) : (r.name || r.id)
+            const isFloor = isFloorRoom(r.id)
+            const label = roomLabel(r, t)
             return (
               <li key={r.id}>
                 <button
@@ -315,10 +318,11 @@ function LocationTreeRow({ location, selection, onSelect }: LocationTreeRowProps
                   onClick={() => onSelect({ kind: 'room', locationId: location.id, roomId: r.id || '' })}
                   title={isEntry ? t('Entry room')
                     : isGround ? t('The ground of this location — the area no room takes up')
-                      : undefined}
+                      : isFloor ? t('The corridor of this storey — the area no room of it takes up')
+                        : undefined}
                 >
                   <span className="ga-list-row-main">
-                    {isEntry ? '🚪' : isGround ? '🌐' : '↳'} {label}
+                    {isEntry ? '🚪' : isGround ? '🌐' : isFloor ? '🚶' : '↳'} {label}
                   </span>
                   {r.decency ? <span className="ga-source ga-source-world">{r.decency}</span> : null}
                 </button>
