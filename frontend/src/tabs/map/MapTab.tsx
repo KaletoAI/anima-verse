@@ -1875,8 +1875,8 @@ export function MapTab() {
   // "placed" and contributes nothing here; only what an author put down by
   // hand does. The 3D client joins the identical two halves in `ground.ts`.
   /** The prop library's REAL heights by id — what a world prop's sprite is
-   *  scaled to (the record's `height_m`, the height the scatter inherits when
-   *  it authors none). */
+   *  scaled to (the record's `height_m`, the same number a scatter row's
+   *  instances are scaled to). */
   const propHeights = useMemo(() => {
     const out = new Map<string, number>()
     for (const p of propList) if (Number(p.height_m) > 0) out.set(p.id, Number(p.height_m))
@@ -1891,7 +1891,7 @@ export function MapTab() {
     for (const wp of worldProps) {
       const url = worldPropModelUrl(wp)
       if (!url) continue
-      out.set(wp.id, { url, targetHeightM: propSpriteTargetH(undefined, propHeights.get(wp.prop_id)) })
+      out.set(wp.id, { url, targetHeightM: propSpriteTargetH(propHeights.get(wp.prop_id)) })
     }
     return out
   }, [propHeights, propSpritesActive, worldProps])

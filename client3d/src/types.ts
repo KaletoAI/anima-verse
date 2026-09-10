@@ -609,8 +609,6 @@ export interface TerrainAlongEntry {
   /** The half-width of the random shift every station takes along the
    *  line, 0..spacing_m (`strokeStations` `jitterM`); absent = the even row. */
   spacing_jitter_m?: number;
-  /** Target height, as on a scatter entry. */
-  height_m?: number;
   /** A pinned model-variant list position for the whole row. */
   variant?: number;
   /** Reshuffle every this many GAME minutes (`reshuffleEpoch`); absent =
@@ -624,7 +622,7 @@ export interface TerrainAlongEntry {
 }
 
 /** What an area GROWS — `meta.scatter[]`, one entry per prop kind. The server
- *  STORES exactly four fields (`app/models/terrain._sanitize_scatter_list`)
+ *  STORES the whitelisted fields below (`app/models/terrain._sanitize_scatter_list`)
  *  and adds `variants`, `prop_height_m` + `sway_factor` on delivery;
  *  `scene/ground.ts` reads them and hands them to the shared sampler. */
 export interface TerrainScatterEntry {
@@ -632,10 +630,6 @@ export interface TerrainScatterEntry {
   density_per_100m2: number;
   /** URL of a model to instance; absent = the built-in tuft */
   model?: string;
-  /** TARGET height in metres — the prop is scaled until its bounding box is
-   *  this tall, and the built-in tuft is built this high. Absent = the prop's
-   *  own `prop_height_m`, see there. */
-  height_m?: number;
   /** The least distance in metres this entry's OWN instances keep from each
    *  other — handed to the shared sampler as `minSpacingM`, which subtracts
    *  every candidate standing closer than this to a prop it already placed.
@@ -673,9 +667,10 @@ export interface TerrainScatterEntry {
   reshuffle_min?: number;
   /** The REAL height of the prop behind `model`, in metres, from its library
    *  record — added by `GET /play/terrain`, never stored and never authored.
-   *  It is the target height when the entry authors none, so a tree scatters
-   *  as a tree instead of at the flat fallback (`scatterTargetH`). Absent
-   *  (a foreign URL, no model, an old cached answer) = the fallback. */
+   *  It IS the target height (`scatterTargetH`; the row carries none of its
+   *  own since Task 9), so a tree scatters as a tree instead of at the flat
+   *  fallback. Absent (a foreign URL, no model, an old cached answer) = the
+   *  fallback. */
   prop_height_m?: number;
   /** How much of its ground's wind the prop behind `model` takes part in
    *  (0..1) — added by `GET /play/terrain` from the library record, never

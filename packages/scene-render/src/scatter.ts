@@ -53,15 +53,14 @@ export interface ScatterFootprint {
 export interface ScatterEntry {
   /** instances per 100 m2 of the painted area; 0 = nothing is scattered */
   density_per_100m2: number
-  /** URL of a prop mesh to instance; absent = the built-in tuft */
+  /** URL of a prop mesh to instance; absent = the built-in tuft. Its target
+   *  height is the prop's own library height, which the server ships as
+   *  `prop_height_m` (the 3D client's `scatterTargetH`; a model with no prop
+   *  record falls back to the flat default, the built-in tuft to its tuft
+   *  height) — NEVER the model's authored size, which is no size at all in a
+   *  world measured in metres, and since Task 9 (2026-09-10) never a height
+   *  authored on the row either. */
   model?: string
-  /** TARGET height in metres: the placed prop is scaled uniformly until its
-   *  bounding box is this tall. Absent = the prop's own library height, which
-   *  the server ships as `prop_height_m` (the 3D client's `scatterTargetH`
-   *  resolves the precedence; a model with no prop record falls back to its
-   *  flat default, the built-in tuft to its tuft height) — NEVER the model's
-   *  authored size, which is no size at all in a world measured in metres. */
-  height_m?: number
   /** The least distance in metres this entry's own instances keep from each
    *  other (`ScatterSampleOptions.minSpacingM`). Absent or 0 = no constraint,
    *  which is what every scatter authored before this field is. */
@@ -985,7 +984,7 @@ export interface PropGroundFit {
  * so the bounding box afterwards runs from y = 0 to y = targetH. Worked
  * example, the one from the finding: a 2 m tree modelled around its centre has
  * minY = −1, maxY = +1. Without a target height that is scale 1, offsetY +1 —
- * the metre it used to sink. With `height_m = 4` it is scale 2 (a 4 m tree)
+ * the metre it used to sink. With a target of 4 it is scale 2 (a 4 m tree)
  * and offsetY +2, because after scaling the lowest point is at −2.
  *
  * A degenerate box (a flat plane, a single point) has no height to scale, so

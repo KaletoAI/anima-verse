@@ -165,15 +165,14 @@ export interface WorldmapPayload {
 export interface TerrainScatterEntry {
   /** Instances per 100 m² of the painted area. 0 = nothing is scattered. */
   density_per_100m2: number
-  /** TARGET height in metres: a prop model is scaled uniformly until its
-   *  bounding box is this tall, and the built-in tuft is built this high.
-   *  Absent = the prop's OWN height from the library (the server ships it as
-   *  `prop_height_m`), and only where there is no prop record the 3D client's
-   *  flat 2 m (0.8 m for a tuft) — never the model's authored file size,
-   *  which is no size at all in a world measured in metres. */
-  height_m?: number
   /** URL of a prop mesh to instance — `/assets/props/<id>/model`, the same
-   *  URL the prop library hands out. Absent = the built-in tuft. */
+   *  URL the prop library hands out. Absent = the built-in tuft. The
+   *  instances are scaled to the prop's OWN height from the library (the
+   *  server ships it as `prop_height_m`), and only where there is no prop
+   *  record to the 3D client's flat 2 m (0.8 m for a tuft) — never the
+   *  model's authored file size, which is no size at all in a world measured
+   *  in metres, and since Task 9 (2026-09-10) never a height authored on
+   *  the row either. */
   model?: string
   /** The least distance in metres THIS entry's own instances keep from each
    *  other. Absent or 0 = no constraint. The sampler subtracts a candidate
@@ -217,8 +216,8 @@ export interface TerrainScatterEntry {
    *  formula indexes, and the one the "Props from above" sprites read their
    *  mesh URL from… */
   model_variants?: Record<string, string>[]
-  /** …and the prop's REAL height in metres from its library record, the
-   *  target height a renderer falls back to when `height_m` is not authored.
+  /** …and the prop's REAL height in metres from its library record, THE
+   *  target height of every instance (the row has none of its own).
    *  `stripScatterEnrichment` takes all of them off the WRITE BODY; the
    *  local copy keeps them, so the preview never loses them mid-edit. */
   prop_height_m?: number
@@ -404,8 +403,6 @@ export interface TerrainAlongEntry {
   /** The half-width of the random shift every station takes along the
    *  line, 0..`spacing_m`; absent = the even row. */
   spacing_jitter_m?: number
-  /** Target height, as on a scatter entry. */
-  height_m?: number
   /** A pinned model-variant list position for the whole row (a lamp row is
    *  one lamp); absent = the shared variant formula over the station. */
   variant?: number
@@ -450,8 +447,6 @@ export function readAlong(stroke: unknown): TerrainAlongEntry[] {
     if (start !== undefined && start >= 0) entry.start_m = start
     const jitter = num(e.spacing_jitter_m)
     if (jitter !== undefined && jitter > 0) entry.spacing_jitter_m = jitter
-    const height = num(e.height_m)
-    if (height !== undefined && height > 0) entry.height_m = height
     const variant = num(e.variant)
     if (variant !== undefined && variant >= 0 && Number.isInteger(variant)) {
       entry.variant = variant
@@ -639,9 +634,10 @@ export interface TerrainArea {
  * and the preview always see the same list.
  *
  * Every field is coerced, never trusted: a junk density is 0 (scatter nothing,
- * exactly how both renderers read it), and a height that is not a height or a
- * spacing that is not a spacing loses its key — so a model keeps its own size
- * and a row nobody spaced is sampled as it always was.
+ * exactly how both renderers read it), and a spacing that is not a spacing
+ * loses its key — so a row nobody spaced is sampled as it always was. A
+ * `height_m` still stored on an old row is not read at all (Task 9): the
+ * instances are the prop's own height.
  */
 export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[] {
   const raw = meta?.scatter
@@ -651,12 +647,10 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
     if (!item || typeof item !== 'object') continue
     const e = item as unknown as Record<string, unknown>
     const density = Number(e.density_per_100m2)
-    const height = Number(e.height_m)
     const spacing = Number(e.min_spacing_m)
     const entry: TerrainScatterEntry = {
       density_per_100m2: Number.isFinite(density) && density > 0 ? density : 0,
     }
-    if (Number.isFinite(height) && height > 0) entry.height_m = height
     if (Number.isFinite(spacing) && spacing > 0) entry.min_spacing_m = spacing
     if (typeof e.model === 'string' && e.model) entry.model = e.model
     if (e.yaw_mode === 'aligned') {

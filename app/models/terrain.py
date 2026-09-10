@@ -233,12 +233,6 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
     * ``density_per_100m2`` — instances per 100 m2 of the painted area. Always
       present: a junk, negative or absent density means "scatter nothing"
       (0.0), which is how both renderers read it.
-    * ``height_m`` — TARGET height of the placed prop in metres: the model is
-      scaled uniformly until its bounding box is this tall, and the built-in
-      tuft is built this high. Only a value > 0 is a height; anything else
-      loses the key, and then the RENDERER's default applies (2 m for a model,
-      0.8 m for the tuft) — never the model's authored size, which says
-      nothing in a world measured in metres.
     * ``model`` — URL of the prop mesh to instance (``/assets/props/<id>/model``,
       the very URL ``props.model_url`` hands out). A non-string, blank or
       over-long value loses the key and the tuft stands in its place.
@@ -282,6 +276,13 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
       (:func:`_reshuffle_min`); no key = never, the behaviour of every scatter
       before the field existed.
 
+    THERE IS NO ``height_m`` ANY MORE (Task 9, 2026-09-10): the target height
+    of a scattered prop is the prop's own library height, which the delivery
+    adds as ``prop_height_m`` (:func:`with_scatter_props`), and 2 m where no
+    prop record answers; the built-in tuft is 0.8 m. An authored height was
+    a second answer to a question the Props tab already answers, so the
+    whitelist drops it like any junk key and a stored one is not read.
+
     Raises ValueError when the entry is not an object at all — a list of junk
     is an authoring mistake worth a 400, not something to silently drop.
     """
@@ -291,9 +292,6 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "density_per_100m2": round(density, 3) if density and density > 0 else 0.0,
     }
-    height = _finite(raw.get("height_m"))
-    if height is not None and height > 0:
-        out["height_m"] = round(height, 3)
     spacing = _finite(raw.get("min_spacing_m"))
     if spacing is not None and spacing > 0:
         out["min_spacing_m"] = round(min(spacing, MIN_SPACING_MAX_M), 2)
@@ -480,8 +478,9 @@ def _sanitize_along_entry(raw: Any) -> Dict[str, Any]:
       with two decimals, clamped rather than refused; junk loses the key, and
       no key is the even row. The same knob a scatter entry carries beside
       ``place == "edge"``.
-    * ``height_m`` / ``model`` — exactly as on a scatter entry. A row without
-      a model places NOTHING (there is no tuft along a road).
+    * ``model`` — exactly as on a scatter entry. A row without a model places
+      NOTHING (there is no tuft along a road). As on a scatter entry there is
+      no ``height_m`` (Task 9): the station's height is the prop's own.
     * ``variant`` — the LIST POSITION of the model variant every station
       shows (a lamp row is one lamp); a whole number >= 0 survives, junk loses
       the key, and no key is the shared formula over the station index.
@@ -520,9 +519,6 @@ def _sanitize_along_entry(raw: Any) -> Dict[str, Any]:
     if jitter is not None:
         out["spacing_jitter_m"] = round(
             min(max(jitter, 0.0), out["spacing_m"]), 2)
-    height = _finite(raw.get("height_m"))
-    if height is not None and height > 0:
-        out["height_m"] = round(height, 3)
     model = raw.get("model")
     if isinstance(model, str) and model.strip():
         url = model.strip()

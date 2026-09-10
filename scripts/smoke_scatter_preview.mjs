@@ -413,7 +413,8 @@
  * All of it lies in cell (0,0) = [0,64)², the ONE cell of the viewport
  * 0..63 by 0..63. Three rows:
  *
- *   along[0]   a 4 m lamp every 8 m ON the line (offset 0)
+ *   along[0]   a 4 m lamp (its library height, `prop_height_m`) every 8 m
+ *              ON the line (offset 0)
  *   scatter[0] place edge: a 2 m tree every 10 m of rim, 2 m inside it,
  *              aligned at 90° (looking into the ribbon); density 0 — the
  *              density has no effect on an edge row and MUST NOT drop it
@@ -474,17 +475,18 @@
  * out of the package helpers `cellOccupancy(grids)` / `areaAxis(line,
  * ring)`, never out of a grid or an axis choice built in the app.
  *
- * THE CLEARANCE OF A JOB (K6, fix wave 2026-09-10) is the client's own
- * target-height rule (`scatterTargetH`, mirrored as `propSpriteTargetH`):
- * the authored `height_m`, else the prop's library height `prop_height_m`
- * (ridden in on the payload), else 2 m; a row without a model is the 0.8 m
- * tuft. Half of that (`scatterClearM`), by hand:
- *   along  /lamp, prop 6 m, no height     -> 6   · 0.5 = 3
- *   spread /oak,  prop 8 m, no height     -> 8   · 0.5 = 4     (was 1 before)
- *   spread /oak,  height 2, prop 8        -> 2   · 0.5 = 1     (authored wins)
- *   spread /unknown, neither              -> 2   · 0.5 = 1
- *   spread no model, no height            -> 0.8 · 0.5 = 0.4   (the tuft)
- *   spread no model, height 1.6           -> 1.6 · 0.5 = 0.8
+ * THE CLEARANCE OF A JOB (K6, fix wave 2026-09-10; Task 9 retired the
+ * authored height the same day) is the client's own target-height rule
+ * (`scatterTargetH`, mirrored as `propSpriteTargetH`): the prop's library
+ * height `prop_height_m` (ridden in on the payload), else 2 m; a row
+ * without a model is the 0.8 m tuft. A `height_m` still sitting on an
+ * old row is NOT read. Half of that (`scatterClearM`), by hand:
+ *   along  /lamp, prop 6 m                -> 6   · 0.5 = 3
+ *   spread /oak,  prop 8 m                -> 8   · 0.5 = 4
+ *   spread /oak,  stale height 2, prop 8  -> 8   · 0.5 = 4     (ignored)
+ *   spread /unknown, no prop              -> 2   · 0.5 = 1
+ *   spread no model                       -> 0.8 · 0.5 = 0.4   (the tuft)
+ *   spread no model, stale height 1.6     -> 0.8 · 0.5 = 0.4   (ignored)
  *
  * ============================================================================
  * (L) THE THINNED PICTURE TURNS AND RESHUFFLES LIKE THE WINDOW (fix wave)
@@ -1261,12 +1263,12 @@ async function main() {
     meta: {
       stroke: {
         points: ROAD_LINE, width_m: 10,
-        along: [{ model: '/lamp', spacing_m: 8, offset_m: 0, height_m: 4 }],
+        along: [{ model: '/lamp', spacing_m: 8, offset_m: 0, prop_height_m: 4 }],
       },
       scatter: [
-        { density_per_100m2: 0, model: '/tree', height_m: 2, min_spacing_m: 10,
+        { density_per_100m2: 0, model: '/tree', prop_height_m: 2, min_spacing_m: 10,
           place: 'edge', offset_m: 2, yaw_mode: 'aligned', yaw_deg: 90 },
-        { density_per_100m2: 40, model: '/bush', height_m: 2,
+        { density_per_100m2: 40, model: '/bush', prop_height_m: 2,
           yaw_mode: 'aligned', yaw_deg: 0, reshuffle_min: 10 },
       ],
     },
@@ -1484,16 +1486,16 @@ async function main() {
       ],
     },
   };
-  check('K6 the job clearance is half the client\'s target height: 3 / 4 / 1 / 1 / 0.4 / 0.8',
+  check('K6 the job clearance is half the prop\'s height, a stale height_m ignored: 3 / 4 / 4 / 1 / 0.4 / 0.4',
     scatterPreviewJobs([HEIGHTS]).map((j) => [j.kind, j.index, j.clearM]),
-    [['along', 0, 3], ['spread', 0, 4], ['spread', 1, 1], ['spread', 2, 1],
-      ['spread', 3, 0.4], ['spread', 4, 0.8]]);
+    [['along', 0, 3], ['spread', 0, 4], ['spread', 1, 4], ['spread', 2, 1],
+      ['spread', 3, 0.4], ['spread', 4, 0.4]]);
 
   console.log('\n(L) the thinned picture turns and reshuffles like the window');
   const CAR_RING = [[0, 0], [100, 0], [100, 20], [0, 20]];
   const CARS = {
     id: 'ta_thin', kind: 'lot', polygon: CAR_RING,
-    meta: { scatter: [{ density_per_100m2: 5, model: '/car', height_m: 2,
+    meta: { scatter: [{ density_per_100m2: 5, model: '/car', prop_height_m: 2,
       yaw_mode: 'aligned', yaw_deg: 0, reshuffle_min: 10 }] },
   };
   const carJobs = scatterPreviewJobs([CARS]);

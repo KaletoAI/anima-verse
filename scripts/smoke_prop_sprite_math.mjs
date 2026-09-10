@@ -26,9 +26,11 @@
  *      side at scale 1 is 4 · 1.05 = 4.2 m and, drawn, 4.2 · 2 = 8.4 m;
  *      at 10 px per metre that is 84 px — the w × d rectangle inside it is
  *      40 × 80 px.
- * (A3) the target height PRECEDENCE mirrors the client's `scatterTargetH`:
- *      authored `height_m` 3 wins over `prop_height_m` 8 (3); no authored
- *      height → the prop's own 8; neither → the flat 2 m fallback.
+ * (A3) the target height mirrors the client's `scatterTargetH` (Task 9,
+ *      2026-09-10: the prop's own height, nothing authored on the row):
+ *      `prop_height_m` 8 → 8; no prop record (undefined, 0, NaN) → the flat
+ *      2 m fallback. There is no `height_m` argument any more — a row that
+ *      still carries one in an old payload is not read.
  * (A4) junk is not a scale: a model with no height (0) scales by 0, so the
  *      layer draws nothing rather than a NaN-sized image.
  *
@@ -176,10 +178,12 @@ async function main() {
     [r9(size.fieldM), r9(size.fieldM * 10)], [8.4, 84]);
   check('A2 …the rectangle inside it 40 × 80 px',
     [size.widthM * 10, size.depthM * 10], [40, 80]);
-  check('A3 authored 3 beats the prop\'s 8; else the prop\'s; else 2',
-    [propSpriteTargetH(3, 8), propSpriteTargetH(undefined, 8),
-      propSpriteTargetH(undefined, undefined), propSpriteTargetH(0, NaN)],
-    [3, 8, 2, 2]);
+  check('A3 the prop\'s 8; without a prop record 2',
+    [propSpriteTargetH(8), propSpriteTargetH(undefined),
+      propSpriteTargetH(0), propSpriteTargetH(NaN)],
+    [8, 2, 2, 2]);
+  check('A3 …and it takes ONE argument: the row has no height of its own',
+    propSpriteTargetH.length, 1);
   check('A4 a heightless model scales by 0, never NaN',
     [propSpriteScale(0, 2), propSpriteScale(NaN, 2),
       propSpriteSizeM({ widthM: 2, heightM: 0, depthM: 4 }, 2).fieldM],

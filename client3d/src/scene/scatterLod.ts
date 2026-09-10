@@ -70,7 +70,7 @@ export const SCATTER_CULL_FAR = 120;
 export const SCATTER_MIN_SHARE = 0.25;
 
 /** Target height of a scattered GLB when NOBODY knows how tall it should be
- *  (metres) — no authored `height_m`, no prop record behind the URL.
+ *  (metres) — no prop record behind the URL.
  *
  *  A prop file carries whatever size its author chose, and "whatever the file
  *  says" is not a size in a world measured in metres — a tree exported in
@@ -84,20 +84,19 @@ export const SCATTER_MODEL_HEIGHT_M = 2.0;
 /**
  * How tall ONE scattered prop is drawn, in metres (§ A9).
  *
- * The precedence, and the whole point of it: the height AUTHORED on the
- * scatter row wins, because someone typed it for this ground. Otherwise the
- * prop's own library height governs — a tree is 8 m tall because the Props tab
- * says so, and every area that scatters it gets a tree instead of a shrub.
- * Only when neither exists (a foreign URL, a prop this world has no record
- * for) does the flat fallback apply. Before finding 12 the fallback WAS the
- * default and every wood stood at avatar height.
+ * The prop's own library height governs — a tree is 8 m tall because the
+ * Props tab says so, and every area that scatters it gets a tree instead of
+ * a shrub. Only when there is none (a foreign URL, a prop this world has no
+ * record for) does the flat fallback apply. Before finding 12 the fallback
+ * WAS the default and every wood stood at avatar height; until Task 9
+ * (2026-09-10) a height authored on the row could overrule the library, and
+ * that field is retired — a stale `height_m` on an old row is not read.
  *
- * Both inputs are "> 0 or nothing": undefined, null, NaN, 0 and negatives all
+ * The input is "> 0 or nothing": undefined, null, NaN, 0 and negatives all
  * read as "not given", written as `> 0` so NaN falls through instead of
  * scaling a mesh into a NaN matrix.
  */
-export function scatterTargetH(entryH?: number, propH?: number): number {
-  if (Number(entryH) > 0) return Number(entryH);
+export function scatterTargetH(propH?: number): number {
   if (Number(propH) > 0) return Number(propH);
   return SCATTER_MODEL_HEIGHT_M;
 }

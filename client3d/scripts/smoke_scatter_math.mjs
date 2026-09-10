@@ -52,7 +52,7 @@
  *         its base sits at 0. Before the fix the offset was 0 and half the
  *         2 m tree was underground — which is the finding, word for word.
  *
- * (A2) THE SAME TREE with height_m = 4:
+ * (A2) THE SAME TREE with a target height of 4:
  *      height = 1 - (-1) = 2, scale = 4/2 = 2,
  *      offsetY = -(-1) * 2 = +2.
  *      -> after scaling the lowest point is at -2, the lift puts it at 0 and
@@ -65,14 +65,14 @@
  * (A4) A PROP HANGING ABOVE ITS ORIGIN: minY = 0.5, maxY = 2.5.
  *      scale = 1, offsetY = -0.5 -> it comes DOWN onto the ground. The rule
  *      is "lowest point at 0", not "lift everything".
- *      With height_m = 1: height = 2, scale = 0.5,
+ *      With a target of 1: height = 2, scale = 0.5,
  *      offsetY = -0.5 * 0.5 = -0.25 -> box from 0 to 1.
  *
  * (A5) A FLAT PROP (a decal plane): minY = maxY = 0.7.
  *      height = 0, so no scale is possible however tall the target — scale
  *      stays 1 and offsetY = -0.7 lays it on the ground. An infinite scale
  *      would make it vanish.
- *      Checked with height_m = 3 as well: still scale 1, offsetY -0.7.
+ *      Checked with a target of 3 as well: still scale 1, offsetY -0.7.
  *
  * (A6) JUNK BOX (a geometry with no vertices gives NaN bounds): scale 1,
  *      offsetY 0 — the prop stands where the file put it rather than at NaN,
@@ -83,8 +83,8 @@
  *      minY = -1, maxY = 1 -> offsetY = +1 in every one of those cases.
  *
  * (A8) THE DEFAULT TARGET HEIGHT of a scattered model, 2.0 m (finding 1 of the
- *      E8 acceptance round). A scatter entry without `height_m` no longer
- *      hands `null` in — `client3d/src/scene/ground.ts` passes its
+ *      E8 acceptance round). A scatter entry whose prop has no record no
+ *      longer hands `null` in — `client3d/src/scene/ground.ts` passes its
  *      `SCATTER_MODEL_HEIGHT_M`, so "whatever the file says" is never a size
  *      in a world measured in metres. The arithmetic is (A2)'s with a
  *      different target:
@@ -844,30 +844,32 @@
  * scene and a camera.
  *
  * ============================================================================
- * (G) HOW TALL A SCATTERED PROP IS — `scatterTargetH` (finding 12)
+ * (G) HOW TALL A SCATTERED PROP IS — `scatterTargetH` (finding 12; Task 9)
  * ============================================================================
- * The height that goes into (A) is a precedence of three, and every step of it
- * is a decision somebody made:
+ * The height that goes into (A) is the prop's OWN, and nothing else — since
+ * Task 9 (2026-09-10) the row carries no height of its own:
  *
- *   1. `height_m` on the scatter row — someone typed it for THIS ground.
- *   2. `prop_height_m`, the prop's real height from the library, shipped by
+ *   1. `prop_height_m`, the prop's real height from the library, shipped by
  *      `GET /play/terrain` (`app/models/terrain.with_scatter_props`).
- *   3. `SCATTER_MODEL_HEIGHT_M` = 2.0 m — only where there is no prop at all.
+ *   2. `SCATTER_MODEL_HEIGHT_M` = 2.0 m — only where there is no prop at all.
  *
- * Before finding 12 step 2 did not exist and step 3 was the default, so an
+ * Before finding 12 step 1 did not exist and step 2 was the default, so an
  * 8.5 m tree from the library was drawn at 2 m: avatar height, which is the
- * screenshot in the finding.
+ * screenshot in the finding. Between finding 12 and Task 9 an authored
+ * `height_m` on the row could still overrule the library; that field is
+ * retired, and the function takes ONE argument.
  *
- * (G1) THE AUTHORED HEIGHT WINS: (4, 8.5) -> 4. The author of the area
- *      overrules the library, not the other way round.
- * (G2) THE REPORTED CASE: (undefined, 8.5) -> 8.5, not 2. Nothing authored,
- *      so the tree is as tall as the Props tab says.
- * (G3) NEITHER: (undefined, undefined) -> 2. The flat fallback survives for
- *      the URL no prop record answers for.
- * (G4) "NOT GIVEN" IS EVERY NON-POSITIVE AND EVERY NON-NUMBER, on both
- *      arguments, because both cross a JSON boundary:
- *        (0, 8.5) · (-3, 8.5) · (NaN, 8.5) · (null, 8.5) -> 8.5
- *        (undefined, 0) · (undefined, -1) · (undefined, NaN) -> 2
+ * (G1) THE PROP'S HEIGHT: (8.5) -> 8.5, not 2 — the tree is as tall as the
+ *      Props tab says.
+ * (G2) NO PROP: (undefined) -> 2. The flat fallback survives for the URL no
+ *      prop record answers for.
+ * (G3) "NOT GIVEN" IS EVERY NON-POSITIVE AND EVERY NON-NUMBER, because the
+ *      value crosses a JSON boundary: (0) · (-1) · (NaN) · (null) -> 2.
+ * (G4) ONE ARGUMENT: `scatterTargetH.length` is 1, and a stale `height_m`
+ *      handed in the old first position is read as the prop height it is
+ *      not — the pin that no caller may still pass a row height.
+ * (G5) the red counter-probe: a mutant that ignores the prop and always
+ *      answers the fallback says 2 for (8.5), which the real one does not.
  *        (NaN, NaN) -> 2, a FINITE answer — a NaN target height would scale
  *        the mesh into a NaN matrix and the prop would vanish, not shrink.
  * (G5) THE RED COUNTER-CHECK, built by mutating the source: the two lines are
@@ -1616,15 +1618,12 @@ function variantFromSurvivorIndex(source) {
     'scatterVariantIndex(opts.seed, out.length, variants)');
 }
 
-/** Section (G5)'s mutant: the precedence is turned around — the prop's library
- *  height is consulted before the height authored on the row, so an author who
- *  corrects one area's trees is overruled by the library. */
-function swapHeightPrecedence(source) {
+/** Section (G5)'s mutant: the prop's library height is never consulted and
+ *  every scattered prop is the flat fallback — the state before finding 12,
+ *  where an 8.5 m tree stood at avatar height. */
+function ignorePropHeight(source) {
   return source.replace(
-    '  if (Number(entryH) > 0) return Number(entryH);\n'
-    + '  if (Number(propH) > 0) return Number(propH);\n',
-    '  if (Number(propH) > 0) return Number(propH);\n'
-    + '  if (Number(entryH) > 0) return Number(entryH);\n');
+    '  if (Number(propH) > 0) return Number(propH);\n', '');
 }
 
 /** Section (H7)'s mutant: the prop's factor is ignored and the ground's
@@ -2736,38 +2735,29 @@ async function main() {
   check('F CULL is 120 m', SCATTER_CULL_FAR, 120);
   check('F the smallest share is a quarter', SCATTER_MIN_SHARE, 0.25);
 
-  console.log('\n(G) how tall a scattered prop is — the precedence of finding 12');
-  // The fallback of (A8) and step 3 of the precedence are the same number.
+  console.log('\n(G) how tall a scattered prop is — the prop\'s own height (finding 12, Task 9)');
+  // The fallback of (A8) and step 2 of the rule are the same number.
   check('G the flat fallback is 2 m', SCATTER_MODEL_HEIGHT_M, DEFAULT_TARGET_H);
-  // (G1) the authored height wins
-  check('G1 an authored 4 m beats the library\'s 8.5 m',
-    scatterTargetH(4, 8.5), 4);
-  // (G2) the reported case
-  check('G2 nothing authored -> the library\'s 8.5 m, not 2 m',
-    scatterTargetH(undefined, 8.5), 8.5);
-  // (G3) neither
-  check('G3 no prop at all -> the flat 2 m',
-    scatterTargetH(undefined, undefined), 2);
-  // (G4) "not given" on both arguments
+  // (G1) the prop's height
+  check('G1 the library\'s 8.5 m, not 2 m', scatterTargetH(8.5), 8.5);
+  // (G2) no prop
+  check('G2 no prop at all -> the flat 2 m', scatterTargetH(undefined), 2);
+  // (G3) "not given"
   // `JSON.stringify(NaN)` is "null", so the labels are written out — two
   // cases that read the same in the log are one case as far as a reader is
   // concerned.
-  for (const [bad, name] of [[0, '0'], [-3, '-3'], [NaN, 'NaN'], [null, 'null']]) {
-    check(`G4 an entry height of ${name} is no request`,
-      scatterTargetH(bad, 8.5), 8.5);
-  }
   for (const [bad, name] of [[0, '0'], [-1, '-1'], [NaN, 'NaN'], [null, 'null']]) {
-    check(`G4 a prop height of ${name} is no answer`,
-      scatterTargetH(undefined, bad), 2);
+    check(`G3 a prop height of ${name} is no answer`, scatterTargetH(bad), 2);
   }
-  check('G4 NaN on both sides still yields a FINITE height',
-    scatterTargetH(NaN, NaN), 2);
+  // (G4) one argument — the row has no height of its own any more
+  check('G4 scatterTargetH takes ONE argument', scatterTargetH.length, 1);
+  check('G4 a stale row height in the old first slot is read AS the prop height',
+    scatterTargetH(4, 8.5), 4);
   // (G5) the red counter-check
-  const swapped = await loadTs(LOD_SRC, swapHeightPrecedence);
-  check('G5 the "library first" mutant answers 8.5 m for an authored 4 m',
-    swapped.scatterTargetH(4, 8.5), 8.5);
-  checkNot('G5 …which is NOT what the real precedence answers',
-    scatterTargetH(4, 8.5), 8.5);
+  const ignoring = await loadTs(LOD_SRC, ignorePropHeight);
+  check('G5 the "always the fallback" mutant answers 2 m for a prop of 8.5 m',
+    ignoring.scatterTargetH(8.5), 2);
+  checkNot('G5 …which is NOT what the real rule answers', scatterTargetH(8.5), 2);
 
   console.log('\n(H) the wind factor — kind × prop, the one effective amplitude');
   check('H an absent factor means the FULL amount', SCATTER_SWAY_FACTOR_DEFAULT, 1);

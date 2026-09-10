@@ -1133,9 +1133,9 @@ export interface ScatterPreviewJob {
  * clears a little differently for very slim or very wide props — a handful of
  * instances at the rim of a footprint, never a different density. The HEIGHT
  * that estimate is built on is the client's own (`scatterTargetH`, mirrored
- * as `propSpriteTargetH`): the authored `height_m`, else the prop's library
- * height (`prop_height_m`, ridden in on the payload), else the flat 2 m — and
- * a row without a model is the built-in tuft, 0.8 m.
+ * as `propSpriteTargetH`): the prop's library height (`prop_height_m`,
+ * ridden in on the payload), else the flat 2 m — and a row without a model
+ * is the built-in tuft, 0.8 m. The row has no height of its own (Task 9).
  */
 export function scatterPreviewJobs(areas: readonly TerrainArea[]
 ): ScatterPreviewJob[] {
@@ -1176,7 +1176,7 @@ export function scatterPreviewJobs(areas: readonly TerrainArea[]
       if (!e.model) return
       jobs.push({
         ...shared, index: i, kind: 'along', dot: entries.length + i, entry: e,
-        density: 0, clearM: scatterClearM(propSpriteTargetH(e.height_m, e.prop_height_m)),
+        density: 0, clearM: scatterClearM(propSpriteTargetH(e.prop_height_m)),
         minSpacingM: 0, wanted: 0, perCell: 0,
       })
     })
@@ -1184,8 +1184,7 @@ export function scatterPreviewJobs(areas: readonly TerrainArea[]
       kind: ScatterRowKind): ScatterPreviewJob => ({
       ...shared, index: i, kind, dot: i, entry: e,
       density: kind === 'spread' ? e.density_per_100m2 : 0,
-      clearM: scatterClearM(e.model ? propSpriteTargetH(e.height_m, e.prop_height_m)
-        : (Number(e.height_m) > 0 ? Number(e.height_m) : 0.8)),
+      clearM: scatterClearM(e.model ? propSpriteTargetH(e.prop_height_m) : 0.8),
       // NOT an approximation, unlike the clearance above: the spacing is a
       // plain authored distance, so the preview subtracts exactly the props
       // the world subtracts.

@@ -1879,9 +1879,7 @@ export function createGround(): Ground {
       // the cone is that prop's stand-in, and a knee-high one that turns into
       // an 8 m tree is a pop where the sizes could simply agree. Only the
       // built-in tuft (no model at all) keeps the hip-high tuft size.
-      const h = entry.model
-        ? scatterTargetH(entry.height_m, entry.prop_height_m)
-        : (Number(entry.height_m) > 0 ? Number(entry.height_m) : TUFT_HEIGHT_M);
+      const h = entry.model ? scatterTargetH(entry.prop_height_m) : TUFT_HEIGHT_M;
       const model = typeof entry.model === 'string' ? entry.model : '';
       // THE MESHES THIS ROW MAY DRAW (§ B2 addendum). One tier map per active
       // model variant of the prop, the primary one first; a prop with a single
@@ -2039,9 +2037,9 @@ export function createGround(): Ground {
           // A prop whose two tiers resolve to the same file is ONE mesh, and so
           // is a tuft (both URLs empty) — see `hasHigh`.
           hasHigh: !!hiUrl && hiUrl !== loUrl,
-          // The authored height wins, the prop's real one governs when none was
-          // authored, the flat fallback is the last resort (§ A9).
-          targetH: scatterTargetH(entry.height_m, entry.prop_height_m),
+          // The prop's real height governs, the flat fallback is the last
+          // resort (§ A9); the row has no height of its own (Task 9).
+          targetH: scatterTargetH(entry.prop_height_m),
           sway: entrySway,
           near: sphere.center,
           wantLow: '',

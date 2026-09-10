@@ -113,14 +113,10 @@ export const MAX_Z_ORDER = 10000
 /** Server mirror — `app/models/terrain.MAX_SCATTER_ENTRIES`. */
 export const MAX_SCATTER_ENTRIES = 8
 
-/** What a freshly added scatter row starts as.
- *
- *  The target height is deliberately EMPTY (finding 12): an entry without
- *  `height_m` now takes the height the prop really has in the library, and a
- *  row seeded with 2 m would override exactly that — every tree ended up
- *  avatar-high because the seeded number was an authored answer nobody had
- *  given. The field shows the inherited height as its placeholder instead, so
- *  it is still visible and still an obvious knob to turn. */
+/** What a freshly added scatter row starts as. There is no target height to
+ *  seed (finding 12, and Task 9 retired the field): the instances are as
+ *  tall as the prop really is in the library — every tree once ended up
+ *  avatar-high because a seeded 2 m was an authored answer nobody had given. */
 const NEW_SCATTER_ENTRY: TerrainScatterEntry = {
   density_per_100m2: 1,
 }
@@ -135,13 +131,6 @@ const LEVEL_CHIPS_MAX = 12
 /** How many of them the collapsed form shows at EACH end — the source level and
  *  the mouth are what an author reads a river's profile against. */
 const LEVEL_CHIPS_HEAD = 3
-
-/** The target height a scatter row inherits when it authors none: the prop's
- *  own library height, and the 3D client's flat fallback where there is no
- *  prop (the built-in tuft, a hand-written URL). Mirrors
- *  `client3d/src/scene/scatterLod.scatterTargetH` — the editor only SHOWS the
- *  number, the renderers decide it. */
-const SCATTER_FALLBACK_HEIGHT_M = 2
 
 /** Server mirror — `app/models/terrain.MIN_SPACING_MAX_M`. The widest gap a
  *  scatter row may keep between its own props; the server clamps to it rather
@@ -284,9 +273,9 @@ function WidthField({ widthM, onWidth }: {
  * Enter (which is stopped here: the paint mode listens for it to finish a
  * line). It never writes itself — it hands the number up and shows whatever
  * comes back, so a value the server clamps is not left claimed by the field.
- * An empty field is a real state and commits as `null`: "no target height" is
- * not the same as "0 m tall". `placeholder` is what the empty field then
- * inherits — the number shown greyed out is the one that really applies.
+ * An empty field is a real state and commits as `null`: "no inset" is not the
+ * same as "0 m in". `placeholder` is what the empty field then inherits — the
+ * number shown greyed out is the one that really applies.
  * `min` is the smallest number that MEANS something (0 for nearly all of
  * them, 0.1 for a station distance, where 0 would place nothing at all): a
  * smaller one is refused and the field snaps back to what still holds.
@@ -550,18 +539,17 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
   const patch = (i: number, next: Partial<TerrainScatterEntry>) => {
     const out = entries.map((e, k) => (k === i ? { ...e, ...next } : e))
     // An absent key is not the same as an empty one — the server whitelist
-    // drops `height_m`/`model` when they are not set, and so must this, or a
-    // cleared field would travel as `null` and read back as junk.
+    // drops `model`/`min_spacing_m` when they are not set, and so must this,
+    // or a cleared field would travel as `null` and read back as junk.
     const e = out[i]
     // A NEW MODEL is a new prop, and the payload-only facts on the local
     // entry (`SCATTER_PAYLOAD_KEYS`: the variant maps, the library height,
     // the sway factor, the ground offset) describe the OLD one. Dropped here,
-    // so the sprite and the inherited height do not show the previous prop
-    // until the refetch brings the new prop's facts.
+    // so the sprite does not show the previous prop until the refetch brings
+    // the new prop's facts.
     // A new prop has its own variant list, so the pin names nothing any
     // more: back to Random.
     if ('model' in next) { dropPropFacts(e); delete e.variant }
-    if (!(typeof e.height_m === 'number' && e.height_m > 0)) delete e.height_m
     if (!(typeof e.min_spacing_m === 'number' && e.min_spacing_m > 0)) {
       delete e.min_spacing_m
     }
@@ -600,12 +588,6 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
         const model = e.model || ''
         const prop = props.find((p) => propModelUrl(p.id) === model)
         const known = !model || !!prop
-        // What the empty height field inherits — the prop's real height from
-        // the library (the same number the Props tab shows, the lean
-        // `/assets/props` listing already carries it), the flat fallback where
-        // there is no prop record.
-        const inherited = (prop && Number(prop.height_m) > 0)
-          ? Number(prop.height_m) : SCATTER_FALLBACK_HEIGHT_M
         return (
           <div className="ga-terrain-scatter-row" key={i}>
             {/* The row's colour — and, on hover/focus, the thing it plants.
@@ -649,17 +631,9 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                 onCommit={(v) => patch(i, { density_per_100m2: v ?? 0 })}
               />
             )}
-            <ScatterNum
-              label={t('height (m)')}
-              title={model && prop
-                ? t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the prop’s own height from the Props tab ({h} m).')
-                  .replace('{h}', String(inherited))
-                : t('Target height: the model is scaled until it is this tall, and it always stands ON the ground. Empty = the prop’s own height from the Props tab, and 2 m for a model this world has no prop for (0.8 m for a tuft).')}
-              value={typeof e.height_m === 'number' ? e.height_m : null}
-              placeholder={model ? String(inherited) : undefined}
-              step={0.5}
-              onCommit={(v) => patch(i, { height_m: v && v > 0 ? v : undefined })}
-            />
+            {/* HOW TALL is not a knob here (Task 9): the instances are as tall
+                as the prop is in the Props tab, and a model this world has no
+                prop for stands 2 m (the tuft 0.8 m). */}
             {/* HOW FAR THIS ROW'S OWN PROPS STAY APART. It is a per-ROW knob
                 and not a per-area one: a wood is trees far apart with ferns
                 between them, and the two rows that make it say two different
@@ -850,7 +824,6 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
     // a new model is a new prop, and the pin named the old one's list — see
     // `ScatterEditor.patch`
     if ('model' in next) { dropPropFacts(e); delete e.variant }
-    if (!(typeof e.height_m === 'number' && e.height_m > 0)) delete e.height_m
     if (!e.model) delete e.model
     if (!e.side || e.side === 'right') delete e.side
     if (!(typeof e.yaw_deg === 'number' && Number.isFinite(e.yaw_deg))) delete e.yaw_deg
@@ -877,8 +850,6 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
         const model = e.model || ''
         const prop = props.find((p) => propModelUrl(p.id) === model)
         const known = !model || !!prop
-        const inherited = (prop && Number(prop.height_m) > 0)
-          ? Number(prop.height_m) : SCATTER_FALLBACK_HEIGHT_M
         return (
           <div className="ga-terrain-scatter-row" key={i}>
             <ScatterSwatch
@@ -967,17 +938,6 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
                 onCommit={(v) => patch(i, { yaw_deg: ((v ?? 0) % 360 + 360) % 360 })}
               />
             )}
-            <ScatterNum
-              label={t('height (m)')}
-              title={model && prop
-                ? t('Target height: the model is scaled until it is this tall. Empty = the prop’s own height from the Props tab ({h} m).')
-                  .replace('{h}', String(inherited))
-                : t('Target height: the model is scaled until it is this tall. Empty = the prop’s own height from the Props tab.')}
-              value={typeof e.height_m === 'number' ? e.height_m : null}
-              placeholder={model ? String(inherited) : undefined}
-              step={0.5}
-              onCommit={(v) => patch(i, { height_m: v && v > 0 ? v : undefined })}
-            />
             {/* WHICH MESH — the same select a scatter row has; a lamp row
                 usually wants ONE. */}
             {model ? (

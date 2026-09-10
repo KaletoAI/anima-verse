@@ -467,7 +467,6 @@ export interface AlongEntry {
   /** the half-width of the random shift every station takes along the
    *  line, 0..spacing_m; absent = the even row (Task 9, 2026-09-10) */
   spacing_jitter_m?: number
-  height_m?: number
   variant?: number
   /** reshuffle every this many GAME minutes — see `ScatterEntry.reshuffle_min` */
   reshuffle_min?: number

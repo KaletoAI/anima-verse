@@ -96,10 +96,10 @@ export function propSpriteSizeM(dims: PropSpriteDims, targetHeightM: number): {
 }
 
 /** The target height of a scatter or along row — `scatterTargetH` of the 3D
- *  client, mirrored: the authored `height_m` wins, else the prop's own
- *  library height (`prop_height_m`), else the flat fallback. */
-export function propSpriteTargetH(entryH?: number, propH?: number): number {
-  if (Number(entryH) > 0) return Number(entryH)
+ *  client, mirrored: the prop's own library height (`prop_height_m`), else
+ *  the flat fallback. The row has no height of its own (Task 9, 2026-09-10);
+ *  a stale `height_m` on an old row is not read. */
+export function propSpriteTargetH(propH?: number): number {
   if (Number(propH) > 0) return Number(propH)
   return PROP_SPRITE_FALLBACK_HEIGHT_M
 }

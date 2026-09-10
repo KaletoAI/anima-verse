@@ -969,7 +969,6 @@ zehn Feldern (Server-Whitelist `app/models/terrain._sanitize_scatter_list`):
 scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = keine
                                         #   (nur bei spread; edge/center rechnen ohne sie)
             model?: str,                # /assets/props/<id>/model; fehlt = eingebautes Büschel
-            height_m?: float,           # ZIELHÖHE: das Prop wird uniform darauf skaliert
             min_spacing_m?: float,      # Mindestabstand der EIGENEN Instanzen, 0..100 m
                                         #   (bei place=edge: der STATIONSABSTAND am Rand)
             yaw_mode?: "aligned",       # Drehung relativ zur Flächenachse; fehlt = zufällig
@@ -1176,7 +1175,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   zwei Props, die sich genau berühren, stehen beide. Die Radien sind die
   halben Ausdehnungen (`occupyR`, sonst `clearM`) — der 3D-Client gibt die
   gemessene halbe Breite, der Editor `h · 0.5` über dieselbe Zielhöhe wie
-  der Client (`height_m`, sonst `prop_height_m`, sonst 2 m); ein Autorenfeld
+  der Client (`prop_height_m`, sonst 2 m); ein Autorenfeld
   dafür gibt es nicht, der Abstand ist die Summe der halben Breiten und
   sonst nichts. **Die eigene Zeile zählt nicht** (Fix 2026-09-10): jede
   Instanz wird unter dem Tag ihrer Zeile abgelegt (`occupyTag`, der zell-
@@ -1219,7 +1218,6 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
             yaw_mode?: "random",# fehlt = fest; random = je Instanz ein Zug aus dem Reihen-Seed
             start_m?: float,    # Bogenlänge der ersten Station, 0..spacing; fehlt = spacing/2
             spacing_jitter_m?: float,  # Abstands-Streuung ±v m je Station, 0..spacing; fehlt = gleichmäßig
-            height_m?: float,   # Zielhöhe wie beim Scatter
             variant?: int,      # Listenposition der Modell-Variante; fehlt = Formel
             reshuffle_min?: int}, …]  # Neuwurf alle n SPIEL-Minuten, 1..100000; fehlt = nie
   ```
@@ -1330,19 +1328,21 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   URLs und Einträge ohne `model` bekommen den Schlüssel nicht; ein Datensatz hat
   IMMER eine Höhe (ohne eigene Maße den 1-m-Platzhalterwürfel), „kein
   Schlüssel" heißt also „kein Prop", nicht „keine Höhe".
-- **`height_m` ist die Zielhöhe, nicht die Modellgröße:** das geladene Mesh
-  wird uniform skaliert, bis seine Bounding-Box so hoch ist. Die **Rangfolge
-  je Eintrag** ist (Befund 12 der Sichtabnahme):
-  `height_m` am Eintrag → `prop_height_m` des Props → **2,0 m** als letzte
-  Vorgabe. Also: was jemand für DIESEN Boden hingeschrieben hat, sonst wie
-  groß das Prop wirklich ist, und die flache Vorgabe nur noch dort, wo es gar
-  kein Prop gibt (fremde URL). Die Autorengröße der Datei gilt nie — „was die
+- **Zielhöhe = Prop-Höhe (Nachtrag 2026-09-10, Task 9):** das geladene Mesh
+  wird uniform skaliert, bis seine Bounding-Box so hoch ist wie
+  `prop_height_m` des Props — **2,0 m**, wo kein Prop-Datensatz antwortet
+  (fremde URL). Ein Höhenfeld am Eintrag (`height_m`) gibt es nicht mehr: die
+  Whitelist verwirft es, kein Renderer liest es, eine alt gespeicherte Zahl
+  wirkt nicht; die Höhe eines Props steht im Props-Tab und nur dort (bis
+  Task 9 konnte eine am Eintrag autorierte Höhe die Bibliothek überstimmen;
+  Befund 12 der Sichtabnahme hatte die Bibliothekshöhe als Rangstufe
+  eingeführt). Die Autorengröße der Datei gilt nie — „was die
   Datei sagt" ist in einer Meter-Welt keine Größe (Befund 1 der E8-Sichtabnahme:
   ein in Zentimetern exportierter Baum stand 2 cm hoch neben der 1,70-m-Figur;
   Befund 12 war die Gegenrichtung: mit der flachen Vorgabe stand jeder Baum
-  avatarhoch). Der Karten-Editor sät deshalb KEINE Höhe mehr in eine neue
-  Zeile, er zeigt die geerbte als Platzhalter.
-  Das eingebaute Büschel ohne `height_m` ist **0,8 m** hoch (hüfthoch statt
+  avatarhoch). Along-Stationen ohne `prop_height_m` (Prop ohne Datensatz)
+  fallen wie der Scatter auf 2 m zurück.
+  Das eingebaute Büschel ist **0,8 m** hoch (hüfthoch statt
   kniehoch). **Jedes Prop steht AUF dem Boden**: die Geometrie wird auf
   Unterkante = 0 geschoben, nachdem die Mesh-Transform innerhalb der GLB
   eingebacken ist (Befund B16).

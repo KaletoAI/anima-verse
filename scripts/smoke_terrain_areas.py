@@ -73,12 +73,14 @@ Throwaway storage. Hand-derived expectations:
  [11] meta.scatter whitelist (finding B17 — moved here from the terrain
       TYPE, where it lived as ONE block; an area carries a LIST, because a
       wood with two kinds of tree is one painted shape).
-      Per entry, exactly four fields survive: density_per_100m2 (float,
-      always present, junk/negative -> 0.0), height_m (float > 0, optional
-      — the TARGET height the prop is scaled to), model (non-empty
-      string, optional, never truncated) and min_spacing_m (float > 0,
-      optional — the least distance the row's OWN instances keep from each
-      other). Junk keys inside an entry are dropped.
+      Per entry, the base fields are: density_per_100m2 (float, always
+      present, junk/negative -> 0.0), model (non-empty string, optional,
+      never truncated) and min_spacing_m (float > 0, optional — the least
+      distance the row's OWN instances keep from each other). Junk keys
+      inside an entry are dropped — and since Task 9 (2026-09-10) that
+      includes `height_m`: the target height of a scattered prop is the
+      prop's own (`prop_height_m`, [12]), so a stored authored height would
+      be a number that acts on nothing. 3, "1.5" and 0 all lose the key.
       The spacing is a knob, so it is CLAMPED and never refused:
         2.5      -> 2.5          (a plain value survives)
         "3.456"  -> 3.46         (coerced, two decimals — a scatter is not
@@ -211,12 +213,13 @@ Throwaway storage. Hand-derived expectations:
         an unknown prop id                -> neither key
         an absolute/foreign URL, and the canonical path WITH a query string
                                           -> neither key (parsing is strict)
-        the tree AGAIN with height_m 3    -> prop_height_m still 8.5; the
-              enrichment reports the LIBRARY height and never echoes the
-              authored one, which is what makes the precedence a precedence
+        the tree AGAIN, sent with height_m 3 -> prop_height_m 8.5 and NO
+              height_m: the whitelist dropped the authored height on the
+              way in (Task 9), so the library height is the ONLY height an
+              entry ever carries
       The stored area is unchanged afterwards: a fresh read has exactly the
-      authored fields per entry (the entry with a height: exactly those
-      three).
+      authored fields per entry (the entry sent with a height: the same two
+      as the plain tree).
       Both lookups are cached TOGETHER per call: seven parsable mentions
       across two areas do FOUR props.active_variant_tiers and FOUR
       props.prop_scatter_facts reads — one per DISTINCT prop, and the sidecar
@@ -247,8 +250,9 @@ Throwaway storage. Hand-derived expectations:
       a "loose URL" mutant (anything containing /assets/props/) hands the
       foreign URL a variants map, a "no tier parameter" mutant builds
       "/assets/props/<id>/model" without "?tier=", and an "echo the entry"
-      mutant reports entry.height_m as prop_height_m (3 instead of 8.5) —
-      every answer differs from the real one at exactly the checked spot.
+      mutant reports a `height_m` on the entry as prop_height_m (3 instead
+      of 8.5; the mutant is fed the raw dict, past the whitelist) — every
+      answer differs from the real one at exactly the checked spot.
 
  [13] `sway_factor` — how much of its ground's wind ONE prop takes part in
       (2026-08-14). It lives on the PROP sidecar, not on the scatter entry and
@@ -730,10 +734,10 @@ def scatter_of(meta):
 
 
 check("a valid list is kept verbatim",
-      scatter_of({"scatter": [{"density_per_100m2": 12.5, "height_m": 4.0,
+      scatter_of({"scatter": [{"density_per_100m2": 12.5,
                                "min_spacing_m": 3.0,
                                "model": "/assets/props/tree/model"}]}),
-      {"scatter": [{"density_per_100m2": 12.5, "height_m": 4.0,
+      {"scatter": [{"density_per_100m2": 12.5,
                     "min_spacing_m": 3.0,
                     "model": "/assets/props/tree/model"}]})
 check("several entries on one area — the point of the move",
@@ -751,11 +755,11 @@ for bad in (-5, "lots", float("nan"), float("inf"), None):
           scatter_of({"scatter": [{"density_per_100m2": bad}]}),
           {"scatter": [{"density_per_100m2": 0.0}]})
 check("numeric strings are coerced",
-      scatter_of({"scatter": [{"density_per_100m2": "2.5", "height_m": "1.5"}]}),
-      {"scatter": [{"density_per_100m2": 2.5, "height_m": 1.5}]})
-for bad in (0, -1, float("inf"), float("nan"), "tall"):
-    check(f"height {bad!r} loses the key",
-          scatter_of({"scatter": [{"density_per_100m2": 1, "height_m": bad}]}),
+      scatter_of({"scatter": [{"density_per_100m2": "2.5", "min_spacing_m": "1.5"}]}),
+      {"scatter": [{"density_per_100m2": 2.5, "min_spacing_m": 1.5}]})
+for gone in (3, "1.5", 0):
+    check(f"height_m {gone!r} is no longer stored — the prop's own height rules (Task 9)",
+          scatter_of({"scatter": [{"density_per_100m2": 1, "height_m": gone}]}),
           {"scatter": [{"density_per_100m2": 1.0}]})
 check("a spacing survives as authored",
       scatter_of({"scatter": [{"density_per_100m2": 1, "min_spacing_m": 2.5}]}),
@@ -851,9 +855,10 @@ _scat = terrain.save_area(
                            "model": "/assets/props/fern/model"}],
               "note": "free form"}})
 # ``water_level`` rides along because "water" is a water kind here (see [1]).
-check("the list survives the save/read round trip",
+# The authored ``height_m`` does NOT: the write path drops it (Task 9).
+check("the list survives the save/read round trip, without the height",
       next(a["meta"] for a in terrain.list_areas() if a["id"] == _scat["id"]),
-      {"scatter": [{"density_per_100m2": 9.0, "height_m": 6.0,
+      {"scatter": [{"density_per_100m2": 9.0,
                     "min_spacing_m": 1.25,
                     "model": "/assets/props/fern/model"}],
        "note": "free form", "water_level": 0.0})
@@ -1030,12 +1035,12 @@ def along_of(rows):
                                  )["meta"]["stroke"].get("along")
 
 
-check("a full row survives with its numbers rounded",
+check("a full row survives with its numbers rounded — and without height_m (Task 9)",
       along_of([{"model": "/assets/props/lamp/model", "spacing_m": 25.004,
                  "offset_m": 3.5, "side": "alternate", "yaw_deg": 90,
                  "start_m": 5, "height_m": 6, "variant": 1}]),
       [{"spacing_m": 25.0, "offset_m": 3.5, "side": "alternate",
-        "yaw_deg": 90.0, "start_m": 5.0, "height_m": 6.0,
+        "yaw_deg": 90.0, "start_m": 5.0,
         "model": "/assets/props/lamp/model", "variant": 1}])
 check("an empty row gets the defaults and nothing else",
       along_of([{}]), [{"spacing_m": 20.0, "offset_m": 0.0}])
@@ -1181,14 +1186,14 @@ check("foreign URL -> no prop_height_m key",
       "prop_height_m" in entries[5], False)
 check("canonical path with a query -> no prop_height_m key",
       "prop_height_m" in entries[6], False)
-check("an authored height does not change the reported library height",
-      (entries[7].get("height_m"), entries[7].get("prop_height_m")), (3.0, 8.5))
+check("the entry sent with a height carries the library height and no height_m",
+      (entries[7].get("height_m"), entries[7].get("prop_height_m")), (None, 8.5))
 _stored = next(a["meta"]["scatter"] for a in terrain.list_areas()
                if a["id"] == _va["id"])
 check("a fresh read carries neither key (payload only)",
       [sorted(e) for e in (_stored[0], _stored[1], _stored[7])],
       [["density_per_100m2", "model"], ["density_per_100m2", "model"],
-       ["density_per_100m2", "height_m", "model"]])
+       ["density_per_100m2", "model"]])
 
 # [12b] THE MODEL VARIANTS of a scattered prop (§ B2 addendum). A prop with
 # several meshes of the same object ships one tier map per ACTIVE variant that
