@@ -101,6 +101,16 @@ Hand-derived expectations:
       travel_failed reasons in-fiction, and ``unplaced_target`` reads
       exactly like ``unknown_target``.
 
+ [13] ``blocks.known_locations_section`` offers the travel targets the
+      ENGINE would accept, and says so plainly when there are none. With
+      HOME + MARKET known it lists both, marks only HOME "(you are here)"
+      and closes on the verb plus the everyday occasions for a trip; with
+      HOME alone it names no verb at all (there is nothing to point it at)
+      and states that no other place is known yet. SECRET is placed and
+      walkable and missing from the list for the ONE reason that it is not
+      known — the same reason ``start_journey`` answers ``unknown_target``
+      for it, which is what pins list and engine to one gate.
+
 Usage:  ./.venv/bin/python scripts/smoke_set_location_v2.py
 """
 import json
@@ -536,6 +546,46 @@ check("prompt: unplaced reads exactly like unknown",
 check_true("prompt: no_route has its own wording",
            "passable route" in build_recent_activity_section("npc_water"),
            build_recent_activity_section("npc_water"))
+
+# ── [13] the travel-target section ──────────────────────────────────────
+print("[13] blocks.known_locations_section: a target list, or the honest "
+      "absence of one")
+from plugins.movement.blocks import known_locations_section  # noqa: E402
+
+new_npc("list_npc", HOME, 0.0, 0.0, [HOME, MARKET])
+listed = known_locations_section("list_npc")
+check_true("the section is rendered", listed.startswith("=== Places you can go ==="),
+           listed)
+check_true("it names the place the character stands in",
+           "- Smoke Home (you are here)" in listed, listed)
+check_true("… and the one it could travel to", "- Smoke Market" in listed, listed)
+check_true("the market is NOT marked as 'here'",
+           "Smoke Market (you are here)" not in listed, listed)
+check_true("the verb is named when there is a target",
+           "SetLocation" in listed, listed)
+check_true("… with everyday occasions, not just flight",
+           "ordinary part of a day" in listed, listed)
+
+# Knows only the ground under its own feet: naming a travel verb would send
+# the character against a wall, so the section has to say so instead.
+new_npc("stuck_npc", HOME, 0.0, 0.0, [HOME])
+stuck = known_locations_section("stuck_npc")
+check_true("a one-place list still renders",
+           stuck.startswith("=== Places you can go ==="), stuck)
+check_true("… naming that one place as 'here'",
+           "- Smoke Home (you are here)" in stuck, stuck)
+check_true("no travel verb without a target",
+           "SetLocation" not in stuck, stuck)
+check_true("… it states the actual situation instead",
+           "know no other place yet" in stuck, stuck)
+
+# The gate is shared with start_journey: what the section offers, the engine
+# accepts — and what it withholds, the engine refuses. SECRET is placed and
+# walkable, and missing from BOTH only because it is not known.
+check_true("the section withholds the unknown place",
+           "Smoke Secret" not in listed, listed)
+check("… and the engine refuses it for the same character",
+      travel_engine.start_journey("list_npc", SECRET)[1], "unknown_target")
 
 print()
 if FAILURES:

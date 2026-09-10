@@ -73,9 +73,16 @@ def travel_section(character_name: str) -> str:
 def known_locations_section(character_name: str) -> str:
     """Visibility-filtered location list the character can travel to.
 
-    Uses ``list_locations_for_character`` (respects knowledge-item gating).
-    Marks the current location with a chevron so the LLM doesn't propose
-    "moving" there. Cap at 12 locations to keep the prompt slim.
+    Uses ``list_locations_for_character`` (knowledge-item gating AND
+    ``known_locations``, the same gate ``travel_engine.start_journey``
+    applies — so nothing is offered here that the journey would refuse).
+    Marks the current location with "(you are here)" so the LLM doesn't
+    propose "moving" there. Cap at 12 locations to keep the prompt slim.
+
+    The closing line depends on whether there is anywhere ELSE to go: with
+    somewhere to travel to it names the everyday occasions for a trip, and
+    with nothing but the character's own place on the list it says exactly
+    that instead of pointing at a verb that has no target.
     """
     try:
         current_location_id = _current_location_id(character_name)
@@ -85,19 +92,41 @@ def known_locations_section(character_name: str) -> str:
             return ""
         lines: List[str] = []
         count = 0
+        elsewhere = 0
         for loc in locs:
             if count >= 12:
                 break
             lid = (loc.get("id") or "").strip()
             name = (loc.get("name") or lid or "?").strip()
-            marker = " (you are here)" if lid and lid == current_location_id else ""
+            here = bool(lid) and lid == current_location_id
+            marker = " (you are here)" if here else ""
             lines.append(f"- {name}{marker}")
+            if not here:
+                elsewhere += 1
             count += 1
         if not lines:
             return ""
+        if not elsewhere:
+            # The only place on the list is the one under the character's own
+            # feet. Naming a travel verb here would send it against a wall —
+            # say what the situation actually is instead, so the character can
+            # act on it (ask to be taken along, follow someone out).
+            closing = ("You know no other place yet — someone would have to "
+                       "take you along, or you would have to come across one.")
+        else:
+            # The old wording only said HOW to travel, and the verb's own hint
+            # named flight and privacy as the occasions; between the two, going
+            # anywhere read as an emergency measure. Ordinary reasons are what
+            # a day is made of, so they are the ones spelled out here.
+            closing = ("Use SetLocation to travel to one of these named "
+                       "places. Going somewhere is an ordinary part of a day "
+                       "— work, a class, an errand, visiting someone, heading "
+                       "home — not only something you do when you are driven "
+                       "away. The system walks you there as game time passes, "
+                       "so set off when the hour or your own plans call for "
+                       "it.")
         return ("=== Places you can go ===\n" + "\n".join(lines) + "\n"
-                "Use SetLocation to travel to one of these named places "
-                "(the system walks you there as game time passes).")
+                + closing)
     except Exception as e:
         logger.debug("known_locations section failed for %s: %s", character_name, e)
         return ""
