@@ -196,8 +196,9 @@ export interface TerrainScatterEntry {
   /** How far an `edge` row stands INSIDE the rim, metres (0..100); stored
    *  only with `place: "edge"`; absent = 0. */
   offset_m?: number
-  /** A pinned model-variant list position for a `center` row; stored only
-   *  with `place: "center"`. */
+  /** A pinned model-variant list position for the whole row, whatever its
+   *  placement (Task 8, 2026-09-10); absent = the shared variant formula
+   *  mixes the instances. The sampler clamps it to the variants that exist. */
   variant?: number
   /** Reshuffle every this many GAME minutes (1..100000): the seed grows an
    *  epoch tail (`reshuffleEpoch`) and the row is a different draw every
@@ -654,8 +655,9 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
       const yaw = Number(e.yaw_deg)
       entry.yaw_deg = Number.isFinite(yaw) ? yaw : 0
     }
-    // The placement and what belongs to it alone: the offset to an edge row,
-    // the pinned variant to a centre row — the pairing the server stores.
+    // The placement and what belongs to it alone: the offset to an edge row
+    // — the pairing the server stores. The pinned variant belongs to EVERY
+    // row (Task 8), so it is read beside the placement, not inside it.
     const num = (v: unknown): number | undefined =>
       (typeof v === 'number' && Number.isFinite(v)) ? v : undefined
     if (e.place === 'edge' || e.place === 'center') {
@@ -664,11 +666,10 @@ export function readScatter(meta: TerrainMeta | undefined): TerrainScatterEntry[
       if (e.place === 'edge' && offset !== undefined && offset > 0) {
         entry.offset_m = offset
       }
-      const variant = num(e.variant)
-      if (e.place === 'center' && variant !== undefined && variant >= 0
-        && Number.isInteger(variant)) {
-        entry.variant = variant
-      }
+    }
+    const variant = num(e.variant)
+    if (variant !== undefined && variant >= 0 && Number.isInteger(variant)) {
+      entry.variant = variant
     }
     const reshuffle = num(e.reshuffle_min)
     if (reshuffle !== undefined && reshuffle >= 1 && Number.isInteger(reshuffle)) {

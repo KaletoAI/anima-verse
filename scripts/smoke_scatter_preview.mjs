@@ -1426,6 +1426,20 @@ async function main() {
     wired(groundSrc), [true, true, true, true, true, true, true, true, true]);
   check('K5 …and so does mapMath.ts',
     wired(mathSrc), [true, true, true, true, true, true, true, true, true]);
+  // THE ROW'S PINNED VARIANT (Task 8, 2026-09-10) goes to every one of the
+  // four calls — `variant: entry.variant` in the client, `variant: e.variant`
+  // in the editor — so a car row on the kerb is one car model on both sides,
+  // and the thinned overview hands it to its one box-sampler call as well.
+  const pinsOf = (src, re) => (src.match(re) || []).length;
+  check('K5 ground.ts hands the row\'s pinned variant to all four sampler calls',
+    pinsOf(groundSrc.slice(groundSrc.indexOf('function buildScatter(')),
+      /variant: entry\.variant,/g), 4);
+  check('K5 …and so does mapMath.ts',
+    pinsOf(mathSrc.slice(mathSrc.indexOf('function scatterWindowDots('),
+      mathSrc.indexOf('function scatterThinnedByArea(')), /variant: e\.variant,/g), 4);
+  check('K5 …and its thinned overview to its one',
+    pinsOf(mathSrc.slice(mathSrc.indexOf('function scatterThinnedInstances(')),
+      /variant: e\.variant,/g), 1);
 
   // (K6) the clearance of a job follows the client's target height
   const HEIGHTS = {

@@ -1924,6 +1924,8 @@
     "Auto lets the placement id pick a mesh, so a row of the same prop is not the same mesh twice. A pinned variant may have its own size — the footprint rectangle follows it once the change is saved.": "Auto lässt die Platzierungs-ID das Mesh wählen, damit eine Reihe desselben Props nicht zweimal dasselbe Mesh zeigt. Eine festgelegte Variante kann eine eigene Größe haben — das Grundflächen-Rechteck folgt ihr, sobald die Änderung gespeichert ist.",
     "Auto ({v})": "Auto ({v})",
     "Variant {n}": "Variante {n}",
+    "Variant {n} (missing)": "Variante {n} (fehlt)",
+    "Which of the prop’s model variants this row plants. Random = the shared formula mixes the variants per instance.": "Welche Modell-Variante des Props diese Zeile pflanzt. Zufällig = die gemeinsame Formel mischt die Varianten je Instanz.",
     "Remove this placement": "Diese Platzierung entfernen",
     "{name}: no room diorama (optional).": "{name}: kein Raum-Diorama (optional).",
     "Which of the prop’s model variants THIS placement shows. 1 is the primary one — the mesh every consumer gets by default.": "Welche Modell-Variante des Props DIESE Platzierung zeigt. 1 ist die primäre — das Mesh, das jeder Abnehmer standardmäßig bekommt.",
@@ -2649,8 +2651,6 @@
     "The distance between two instances along the edge, in metres — one station every so many metres.": "Der Abstand zwischen zwei Exemplaren entlang der Kante, in Metern — alle so viele Meter eine Station.",
     "Inset (m)": "Einzug (m)",
     "How far inside the edge the row stands, in metres. 0 = right on the rim.": "Wie weit innerhalb der Kante die Reihe steht, in Metern. 0 = genau auf dem Rand.",
-    "Which model variant of the prop the one instance shows, as its position in the prop’s variant list (0 = the first). Empty = the shared variant formula decides.": "Welche Modellvariante des Props das eine Exemplar zeigt, als Position in der Variantenliste des Props (0 = die erste). Leer = die gemeinsame Variantenformel entscheidet.",
-    "by formula": "per Formel",
     "New mix every (game min)": "Neue Mischung alle (Spielmin.)",
     "The row draws a new random mix every this many GAME minutes — parked cars that are not the same cars tomorrow. Empty = never, the placement stays as it is.": "Die Zeile zieht alle so viele SPIEL-Minuten eine neue Zufallsmischung — geparkte Autos, die morgen nicht dieselben sind. Leer = nie, die Platzierung bleibt, wie sie ist.",
     "never": "nie"

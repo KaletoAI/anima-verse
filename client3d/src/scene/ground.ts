@@ -1798,6 +1798,7 @@ export function createGround(): Ground {
             clearM,
             occluders,
             variantCount,
+            variant: entry.variant,
             occupied: grid,
             occupyR: clearM,
             occupyTag: scatterSeed(area.id, index),
@@ -1851,6 +1852,9 @@ export function createGround(): Ground {
               minSpacingM: Number(entry.min_spacing_m) > 0
                 ? Number(entry.min_spacing_m) : undefined,
               variantCount,
+              // THE VARIANT THE ROW PINS (§ A9, Task 8) — one species for
+              // the whole wood; absent = the formula, the sampler's own.
+              variant: entry.variant,
               // HOW THE ROW TURNS ITS PROPS (§ A9, 2026-09-09) — the sampler
               // answers the finished yaw, so nothing below knows about modes.
               yawMode: entry.yaw_mode,

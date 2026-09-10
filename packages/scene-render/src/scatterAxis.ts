@@ -20,7 +20,7 @@
  * `yaw_deg` 0 is "parallel to the rim", 90 "looking into the area", 270
  * "looking out", on every edge and from every side.
  */
-import { footprintBlocks, pointInRing, scatterOccupyR, scatterVariantIndex,
+import { footprintBlocks, pointInRing, scatterOccupyR, scatterPinnedVariant, scatterVariantIndex,
   scatterYaw, seededRandom, SCATTER_MAX_PER_ENTRY } from './scatter'
 import type { ScatterFootprint, ScatterInstance, ScatterOccupancy,
   ScatterPoint2 } from './scatter'
@@ -455,6 +455,10 @@ interface OutlineSampleOptions {
    *  absent = `seed` */
   occupyTag?: string
   variantCount?: number
+  /** the variant the row pins, clamped to `[0, n − 1]`
+   *  (`scatterPinnedVariant`); absent = the variant formula — over the
+   *  station's ordinal on the rim, over ordinal 0 at the centre */
+  variant?: number
   /** the random stream, for the smoke check only */
   rng?: () => number
 }
@@ -468,9 +472,6 @@ export interface ScatterCenterOptions extends OutlineSampleOptions {
    *  a stroke area hands in `lineAxis` over its centre line; absent =
    *  `ringEdgeAxis` of `ring` */
   axisAt?: (x: number, z: number) => number
-  /** a pinned list position of the variant, clamped to `[0, n − 1]`;
-   *  absent = the variant formula with ordinal 0 */
-  variant?: number
 }
 
 /** Covered by an area painted OVER this one? */
@@ -513,10 +514,12 @@ function coveredBy(footprints: readonly ScatterFootprint[], x: number, z: number
  * station is on the rim by construction, so "inside" means its inward side;
  * a station pushed clear out of the shape (an offset wider than a narrow
  * arm, a sharp corner at a large offset) still lands outside and is
- * subtracted, ordinal kept. Variant: `(FNV-1a(seed) + ordinal) mod n`, the shared formula over
- * the station's ordinal, so the survivors of a partly covered rim keep the
- * variants they had. The camera window is the caller's filter, as it is for
- * the `along` rows: the row is computed ONCE for the whole rim.
+ * subtracted, ordinal kept. Variant: the pinned `variant` clamped to the
+ * count when the row names one (`scatterPinnedVariant`), else
+ * `(FNV-1a(seed) + ordinal) mod n`, the shared formula over the station's
+ * ordinal, so the survivors of a partly covered rim keep the variants they
+ * had. The camera window is the caller's filter, as it is for the `along`
+ * rows: the row is computed ONCE for the whole rim.
  */
 export function scatterEdgeInstances(ring: readonly ScatterPoint2[],
                                      opts: ScatterEdgeOptions): ScatterInstance[] {
@@ -530,6 +533,7 @@ export function scatterEdgeInstances(ring: readonly ScatterPoint2[],
   const occupyTag = opts.occupyTag ?? opts.seed
   const variants = Math.floor(Number(opts.variantCount))
   const mixing = Number.isFinite(variants) && variants > 1
+  const pinned = mixing ? scatterPinnedVariant(opts.variant, variants) : -1
   const out: ScatterInstance[] = []
   for (const station of stations) {
     const turn = rnd()
@@ -543,7 +547,7 @@ export function scatterEdgeInstances(ring: readonly ScatterPoint2[],
     if (occupied) occupied.add(x, z, occupyR, occupyTag)
     const yaw = scatterYaw(turn, opts.yawMode, opts.yawDeg, station.axis)
     out.push(mixing
-      ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, station.ordinal, variants) }
+      ? { x, z, yaw, variant: pinned >= 0 ? pinned : scatterVariantIndex(opts.seed, station.ordinal, variants) }
       : { x, z, yaw })
   }
   return out
@@ -584,8 +588,7 @@ export function scatterCenterInstance(ring: readonly ScatterPoint2[],
   const yaw = scatterYaw(turn, opts.yawMode, opts.yawDeg, axis)
   const variants = Math.floor(Number(opts.variantCount))
   if (!Number.isFinite(variants) || variants <= 1) return [{ x, z, yaw }]
-  const pinned = (typeof opts.variant === 'number' && Number.isFinite(opts.variant)
-    && opts.variant >= 0) ? Math.min(Math.floor(opts.variant), variants - 1) : -1
+  const pinned = scatterPinnedVariant(opts.variant, variants)
   return [{
     x, z, yaw,
     variant: pinned >= 0 ? pinned : scatterVariantIndex(opts.seed, 0, variants),

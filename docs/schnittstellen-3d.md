@@ -976,7 +976,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
             yaw_deg?: float,            # Basiswinkel 0..360, nur MIT yaw_mode gespeichert
             place?: "edge" | "center",  # fehlt = spread (die gestreute Fläche wie bisher)
             offset_m?: float,           # 0..100 m nach INNEN, nur MIT place=edge; fehlt = 0
-            variant?: int,              # Listenposition der Variante, nur MIT place=center
+            variant?: int,              # Listenposition der Modell-Variante, JEDE Zeile; fehlt = Formel
             reshuffle_min?: int}, … ]   # Neuwurf alle n SPIEL-Minuten, 1..100000; fehlt = nie
 ```
 
@@ -1097,9 +1097,9 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   (Befund 2026-09-10). Stationen, die der Versatz aus der Form hinausschiebt
   (eine spitze Ecke, ein Versatz breiter als ein schmaler Arm), fallen weg —
   eine **Subtraktion**: das Ordinal zählt sie mit, die Variante der übrigen
-  Stationen bleibt (`(FNV-1a(seed) + Ordinal) mod n`). Die Reihe wird EINMAL
-  für den ganzen Ring gerechnet, das Kamerafenster filtert der Aufrufer,
-  genau wie bei `along`.
+  Stationen bleibt (`variant` der Zeile, sonst `(FNV-1a(seed) + Ordinal)
+  mod n`). Die Reihe wird EINMAL für den ganzen Ring gerechnet, das
+  Kamerafenster filtert der Aufrufer, genau wie bei `along`.
 
   **`place: "center"` — die eine Mitte** (`polylabel` +
   `scatterCenterInstance`). Der Punkt ist der **Pol der Unzugänglichkeit**,
@@ -1119,8 +1119,8 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Rand setzen nichts. Sonst: EIN Zug aus demselben Strom, Achse am Pol
   (`axisAt` des Aufrufers — bei Strich-Flächen `lineAxis` —, sonst
   `ringEdgeAxis`), Verdikte Occluder → Grundrisse → Belegung, dann
-  eintragen. Variante: `variant` gesetzt → diese Listenposition, auf
-  `[0, n−1]` geklemmt; sonst dieselbe Formel mit Ordinal 0.
+  eintragen. Variante wie bei jeder Zeile (`variant` gesetzt → geklemmte
+  Listenposition, sonst die Formel — hier mit Ordinal 0).
 
   **`reshuffle_min` — der Neuwurf mit der SPIELUHR.** Eine Zeile mit dem Feld
   wird alle n Spielminuten neu gewürfelt:
@@ -1279,7 +1279,16 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Index würde jeden Baum hinter einem neu gemalten Gebäude zu einer anderen
   Baumart machen, und zwar auch dann noch, wenn nur die gemessene Prop-Breite
   nachträglich genauer wird. `n <= 1` antwortet immer 0, also ist das Ergebnis
-  Zeichen für Zeichen das alte. Der 3D-Client baut daraus **eine
+  Zeichen für Zeichen das alte. **Seit 2026-09-10 (Task 8) darf JEDE
+  Scatter-Zeile — spread, edge, center — mit `variant` eine Listenposition
+  festlegen:** dann tragen alle ihre Instanzen `min(max(⌊variant⌋, 0), n−1)`
+  statt der Formel (`@anima/scene-render` → `scatterPinnedVariant`, Option
+  `variant` an allen drei Samplern); Strom, Verdikte, Position und Yaw
+  bleiben unverändert, nur das Feld `variant` der Rückgabe wechselt, und bei
+  `n <= 1` fehlt es weiterhin. Im Editor ist das Select „Variant" jeder
+  Zeile mit Prop: „Random" = kein Schlüssel, „Variant 1 … N" = Position
+  0 … N−1 (1-basiert angezeigt wie bei Welt-Props); Zahlen von Hand in
+  Abschnitt (N6)/(X9) desselben Smokes. Der 3D-Client baut daraus **eine
   `InstancedMesh` je (Zeile, Variante)** statt je Zeile
   (`ground.ts buildScatter`); Zahlen von Hand in
   `client3d/scripts/smoke_scatter_math.mjs` Abschnitt (N). Die

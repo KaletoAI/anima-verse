@@ -265,10 +265,12 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
       with two decimals, clamped rather than refused (a knob). Stored only
       beside ``place == "edge"``: anywhere else it would be a number that acts
       on nothing, exactly like a ``yaw_deg`` without its mode.
-    * ``variant`` — the LIST POSITION of the model variant the ONE centred
-      instance shows, a whole number >= 0. Stored only beside
-      ``place == "center"``, for the same reason: a spread or edge row varies
-      its instances by the shared formula over the cell seed.
+    * ``variant`` — the LIST POSITION of the model variant EVERY instance of
+      this row shows, a whole number >= 0 (:func:`_variant_index`), for every
+      placement since 2026-09-10 (Task 8): a car row along the kerb is one
+      car model, a wood one species. Absent = the shared formula over the
+      cell seed varies the instances, as every scatter did before. The
+      renderers clamp the position to the variants the prop really has.
     * ``reshuffle_min`` — after how many GAME MINUTES the placement re-rolls
       (:func:`_reshuffle_min`); no key = never, the behaviour of every scatter
       before the field existed.
@@ -305,10 +307,9 @@ def _sanitize_scatter_entry(raw: Any) -> Dict[str, Any]:
         if offset is not None:
             out["offset_m"] = round(min(max(offset, 0.0),
                                         SCATTER_OFFSET_MAX_M), 2)
-    elif place == "center":
-        variant = _variant_index(raw.get("variant"))
-        if variant is not None:
-            out["variant"] = variant
+    variant = _variant_index(raw.get("variant"))
+    if variant is not None:
+        out["variant"] = variant
     reshuffle = _reshuffle_min(raw.get("reshuffle_min"))
     if reshuffle is not None:
         out["reshuffle_min"] = reshuffle

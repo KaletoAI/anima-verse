@@ -656,8 +656,9 @@ export interface TerrainScatterEntry {
   /** How far an `edge` row stands INSIDE the rim, metres; stored only with
    *  `place: "edge"`; absent = 0. */
   offset_m?: number;
-  /** A pinned model-variant list position for a `center` row (clamped to
-   *  the count); stored only with `place: "center"`. */
+  /** A pinned model-variant list position for the whole row, whatever its
+   *  placement (clamped to the count by the sampler); absent = the shared
+   *  variant formula mixes the instances. */
   variant?: number;
   /** Reshuffle every this many GAME minutes: the seed grows an epoch tail
    *  (`reshuffleEpoch`), so the row is a different draw every interval.

@@ -30,6 +30,7 @@ import type { PropRef } from '../../lib/refs'
 import { NpcSlotsEditor } from '../world/NpcSlotsEditor'
 import type { NpcSlot } from '../world/worldTypes'
 import { fmtHeight, heightColor } from './HeightLayer'
+import { scatterVariantCount } from './propSpriteMath'
 import { minFalloffFor, reliefStepNotice, tooSteep } from './heightMath'
 import {
   STROKE_STYLES, flowCompass, formatAreaM2, polygonAreaM2, scatterThinnedPercentText,
@@ -478,6 +479,51 @@ function dropPropFacts(entry: TerrainScatterEntry | TerrainAlongEntry): void {
 }
 
 /**
+ * WHICH MESH A ROW PLANTS — the `variant` select of a scatter or along row
+ * (§ A9, Task 8, 2026-09-10). "Random" (no key) leaves the mix to the shared
+ * formula; "Variant n" pins every instance of the row to list position n − 1
+ * of the prop's active variants — stored 0-based, shown 1-based exactly like
+ * the world props' `variantLabel`, so the two screens never disagree about
+ * which mesh is meant. A stored position past the list (a variant switched
+ * off since the row was authored) is offered as "(missing)" and stays
+ * selectable, so a save never silently loses it. Shown in EVERY placement.
+ */
+function ScatterVariantSelect({ value, count, onChange }: {
+  value: number | undefined
+  count: number
+  onChange: (v: number | undefined) => void
+}) {
+  const { t } = useI18n()
+  const n = Number.isFinite(count) && count >= 1 ? Math.floor(count) : 1
+  const missing = typeof value === 'number' && value >= n ? value : null
+  return (
+    <label title={t('Which of the prop’s model variants this row plants. Random = the shared formula mixes the variants per instance.')}>
+      {t('Variant')}
+      <select
+        className="ga-input"
+        value={typeof value === 'number' ? String(value) : ''}
+        onChange={(ev) => {
+          const v = ev.target.value
+          onChange(v === '' ? undefined : Math.max(0, Math.floor(Number(v))))
+        }}
+      >
+        <option value="">{t('Random')}</option>
+        {Array.from({ length: n }, (_, k) => (
+          <option key={k} value={String(k)}>
+            {t('Variant {n}').replace('{n}', String(k + 1))}
+          </option>
+        ))}
+        {missing !== null ? (
+          <option value={String(missing)}>
+            {t('Variant {n} (missing)').replace('{n}', String(missing + 1))}
+          </option>
+        ) : null}
+      </select>
+    </label>
+  )
+}
+
+/**
  * What an area GROWS — the list editor of finding B17.
  *
  * It sits in the AREA chip and not in the type dialog because that is where
@@ -508,7 +554,9 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
     // the sway factor, the ground offset) describe the OLD one. Dropped here,
     // so the sprite and the inherited height do not show the previous prop
     // until the refetch brings the new prop's facts.
-    if ('model' in next) dropPropFacts(e)
+    // A new prop has its own variant list, so the pin names nothing any
+    // more: back to Random.
+    if ('model' in next) { dropPropFacts(e); delete e.variant }
     if (!(typeof e.height_m === 'number' && e.height_m > 0)) delete e.height_m
     if (!(typeof e.min_spacing_m === 'number' && e.min_spacing_m > 0)) {
       delete e.min_spacing_m
@@ -520,13 +568,14 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
     else if (!(typeof e.yaw_deg === 'number' && Number.isFinite(e.yaw_deg))) {
       e.yaw_deg = 0
     }
-    // The placement decides which of its two companions the row may carry:
-    // the inset belongs to an edge row, the pinned variant to a centre one.
-    // A field the mode does not use is REMOVED and not merely hidden, so a
-    // switch back and forth never leaves the server a stray number.
+    // The placement decides whether the row may carry an inset: it belongs
+    // to an edge row alone, and a field the mode does not use is REMOVED and
+    // not merely hidden, so a switch back and forth never leaves the server
+    // a stray number. The pinned variant belongs to every placement (Task 8)
+    // — "Random" is its absence.
     if (e.place !== 'edge' && e.place !== 'center') delete e.place
     if (e.place !== 'edge') delete e.offset_m
-    if (e.place !== 'center') delete e.variant
+    if (!(typeof e.variant === 'number' && e.variant >= 0)) delete e.variant
     if (!(typeof e.reshuffle_min === 'number' && e.reshuffle_min >= 1)) {
       delete e.reshuffle_min
     }
@@ -697,16 +746,13 @@ function ScatterEditor({ entries, props, colorOf, onChange }: {
                 })}
               />
             ) : null}
-            {e.place === 'center' ? (
-              <ScatterNum
-                label={t('Variant')}
-                title={t('Which model variant of the prop the one instance shows, as its position in the prop’s variant list (0 = the first). Empty = the shared variant formula decides.')}
-                value={typeof e.variant === 'number' ? e.variant : null}
-                placeholder={t('by formula')}
-                step={1}
-                onCommit={(v) => patch(i, {
-                  variant: v !== null && v >= 0 ? Math.floor(v) : undefined,
-                })}
+            {/* WHICH MESH — only a row with a prop has variants to pick
+                from; the tuft is one tuft. */}
+            {model ? (
+              <ScatterVariantSelect
+                value={e.variant}
+                count={scatterVariantCount(e)}
+                onChange={(v) => patch(i, { variant: v })}
               />
             ) : null}
             {/* HOW OFTEN THE ROW IS DRAWN ANEW — in GAME minutes, so a frozen
@@ -771,8 +817,9 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
   const patch = (i: number, next: Partial<TerrainAlongEntry>) => {
     const out = entries.map((e, k) => (k === i ? { ...e, ...next } : e))
     const e = out[i]
-    // a new model is a new prop — see `ScatterEditor.patch`
-    if ('model' in next) dropPropFacts(e)
+    // a new model is a new prop, and the pin named the old one's list — see
+    // `ScatterEditor.patch`
+    if ('model' in next) { dropPropFacts(e); delete e.variant }
     if (!(typeof e.height_m === 'number' && e.height_m > 0)) delete e.height_m
     if (!e.model) delete e.model
     if (!e.side || e.side === 'right') delete e.side
@@ -882,16 +929,15 @@ function AlongEditor({ entries, widthM, props, colorOf, onChange }: {
               step={0.5}
               onCommit={(v) => patch(i, { height_m: v && v > 0 ? v : undefined })}
             />
-            <ScatterNum
-              label={t('variant')}
-              title={t('Which model variant of the prop every station shows, as its position in the prop’s variant list (0 = the first). Empty = mixed, the same rule the scatter uses — a lamp row usually wants ONE.')}
-              value={typeof e.variant === 'number' ? e.variant : null}
-              placeholder={t('mixed')}
-              step={1}
-              onCommit={(v) => patch(i, {
-                variant: v !== null && v >= 0 ? Math.floor(v) : undefined,
-              })}
-            />
+            {/* WHICH MESH — the same select a scatter row has; a lamp row
+                usually wants ONE. */}
+            {model ? (
+              <ScatterVariantSelect
+                value={e.variant}
+                count={scatterVariantCount(e)}
+                onChange={(v) => patch(i, { variant: v })}
+              />
+            ) : null}
             {/* The same reshuffle knob the scatter rows carry, in GAME
                 minutes: a row of parked cars that is a different row every
                 hour. Empty = never, the row every line has had so far. */}

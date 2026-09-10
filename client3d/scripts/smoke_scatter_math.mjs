@@ -579,6 +579,35 @@
  *      why the split happens after the sampling and not before it. The sums
  *      are the whole instance count either way — a split may not lose a prop.
  *
+ * (N6) THE PINNED VARIANT (Task 8, 2026-09-10). A row may name the variant
+ *      EVERY one of its instances shows — `variant`, the list position the
+ *      server stores for every scatter row since this day, not only for a
+ *      centred one:
+ *
+ *          variant = min( max( floor(variant), 0 ), n − 1 )      (pinned)
+ *                  = ( FNV-1a(seed) + ordinal ) mod n            (absent / NaN)
+ *
+ *      It replaces the formula's ANSWER and nothing else: the stream, every
+ *      verdict and x/z/yaw are the (N3) run byte for byte — only the
+ *      `variant` field of the returned instances changes. On the (N3)
+ *      fixture with `variant: 1`: the same five points (2,4) (5,5) (10,10)
+ *      (15,6) (8,16) with the same yaws 0, τ/4, π, 0, 0, every one variant
+ *      1. `variant: 9` at n = 3 -> 2 (clamped to the last), `-1` -> 0 (the
+ *      first), NaN -> the formula's 0 1 2 0 1 of (N3). n = 1 stays without
+ *      a `variant` key even when pinned: a prop with one mesh has nothing
+ *      to choose, whatever the row says.
+ *      THROUGH THE CELL SAMPLER, the path the authored scatter really takes:
+ *      cell (0, 0) at density 0.125 wants round(4096/100 · 0.125) = 5, and
+ *      the (N3) stream scaled to the 64 m cell lands c0 at (6.4, 12.8), c1
+ *      at (16, 16), c2 at (32, 32), c3 at (48, 19.2), c4 at (25.6, 51.2);
+ *      the 20 × 20 square keeps c0 and c1 alone. Free: variants 0, 1 (the
+ *      ordinals 0, 1 on the seed 'A', whose hash is divisible by 3, N1);
+ *      pinned 1: 1, 1 — at the same two points, yaws 0 and τ/4.
+ *      THE EDGE SAMPLER (X9, below): the (X2) fixture — RECT, spacing 7,
+ *      offset 1, three variants, the footprint dropping station 0 — with
+ *      `variant: 2` keeps the three survivors (9, 0.5) (6.5, 3) (1, 3.5) and
+ *      their yaws π, π/2, 0, all variant 2; `variant: 5` -> 2, `-3` -> 0.
+ *
  * ============================================================================
  * (S) THE MINIMUM SPACING — a row's own props keep their distance (2026-08-23)
  * ============================================================================
@@ -1548,7 +1577,8 @@ function yawOnAcceptance(source) {
       + 'axisAt ? axisAt(x, z) : 0)\n', '')
     .replace(
       'out.push(mixing\n'
-      + '      ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, index, variants) }\n'
+      + '      ? { x, z, yaw, variant: pinned >= 0 ? pinned'
+      + ' : scatterVariantIndex(opts.seed, index, variants) }\n'
       + '      : { x, z, yaw })',
       'out.push({ x, z, yaw: rnd() * Math.PI * 2 })');
 }
@@ -1559,8 +1589,8 @@ function yawOnAcceptance(source) {
  *  See the header for the derivation. */
 function variantFromSurvivorIndex(source) {
   return source.replace(
-    'variant: scatterVariantIndex(opts.seed, index, variants)',
-    'variant: scatterVariantIndex(opts.seed, out.length, variants)');
+    'scatterVariantIndex(opts.seed, index, variants)',
+    'scatterVariantIndex(opts.seed, out.length, variants)');
 }
 
 /** Section (G5)'s mutant: the precedence is turned around — the prop's library
@@ -2400,6 +2430,35 @@ async function main() {
     /scatterVariantIndex\(/.test(mixSrc), false);
   check('N5 the payload list it reads is `model_variants` (§ A9)',
     mixSrc.includes('const list = entry.model_variants;'), true);
+
+  // (N6) the pinned variant — the formula's answer replaced, nothing else
+  const pinnedRun = (variant) => scatterInstances({ ...MIX, variant, rng: stream(MIX_STREAM) });
+  const pinned1 = pinnedRun(1);
+  check('N6 a pinned variant leaves x, z and yaw of the (N3) run untouched',
+    pinned1.map((p) => [p.x, p.z, p.yaw]), mixed.map((p) => [p.x, p.z, p.yaw]), 1e-12);
+  check('N6 …and every instance shows variant 1',
+    pinned1.map((p) => p.variant), [1, 1, 1, 1, 1]);
+  check('N6 variant 9 at n = 3 clamps to the last, 2',
+    pinnedRun(9).map((p) => p.variant), [2, 2, 2, 2, 2]);
+  check('N6 variant -1 clamps to the first, 0',
+    pinnedRun(-1).map((p) => p.variant), [0, 0, 0, 0, 0]);
+  check('N6 NaN is no pin: the formula of (N3), 0 1 2 0 1',
+    pinnedRun(NaN).map((p) => p.variant), [0, 1, 2, 0, 1]);
+  check('N6 one variant carries no variant key even when pinned',
+    scatterInstances({ ...MIX, variantCount: 1, variant: 1, rng: stream(MIX_STREAM) })
+      .map((p) => Object.keys(p)), Array(5).fill(['x', 'z', 'yaw']));
+  const cellPinned = (variant) => scatterCellInstances({
+    ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 0.125, seed: 'A', variantCount: 3,
+    variant, rng: stream(MIX_STREAM),
+  });
+  check('N6 through the cell sampler: the square keeps c0 and c1, variants 0 1 free',
+    cellPinned(undefined),
+    [{ x: 6.4, z: 12.8, yaw: 0, variant: 0 }, { x: 16, z: 16, yaw: TAU * 0.25, variant: 1 }],
+    1e-9);
+  check('N6 …and 1 1 pinned, at the same two points',
+    cellPinned(1),
+    [{ x: 6.4, z: 12.8, yaw: 0, variant: 1 }, { x: 16, z: 16, yaw: TAU * 0.25, variant: 1 }],
+    1e-9);
 
   console.log('\n(S) the MINIMUM SPACING — a row\'s own props keep their distance');
   // The 10 x 10 fixture of the header: 5 wanted, one try each, 15 numbers.
@@ -3485,6 +3544,15 @@ async function main() {
   });
   check('X2 four draws for three survivors — the rejected station drew too',
     [x2Counted.length, edgeDraws], [3, 4]);
+  // (X9) the pinned variant on the rim — see (N6)
+  const x9 = (variant) => scatterEdgeInstances(RECT, {
+    ...EDGE, variantCount: 3, footprints: [X_BLOCK], clearM: 0.2, variant,
+  });
+  check('X9 a pinned variant keeps the (X2) survivors and their yaws',
+    x9(2).map((p) => [p.x, p.z, p.yaw]), x2.map((p) => [p.x, p.z, p.yaw]), 1e-12);
+  check('X9 …all showing variant 2', x9(2).map((p) => p.variant), [2, 2, 2]);
+  check('X9 variant 5 at n = 3 -> 2, variant -3 -> 0',
+    [x9(5).map((p) => p.variant), x9(-3).map((p) => p.variant)], [[2, 2, 2], [0, 0, 0]]);
   const x3Ref = seededRandom('x');
   check('X3 no mode: one seeded draw per station, positions unmoved',
     scatterEdgeInstances(RECT, { spacingM: 7, offsetM: 1, seed: 'x' })

@@ -126,13 +126,15 @@ Throwaway storage. Hand-derived expectations:
         place "center", variant -1 / 1.5 / True / "2" / None -> dropped (a
                                        list position is a whole number >= 0,
                                        and True is not an index)
-        place "edge", variant 1      -> variant dropped: the variant belongs
-                                       to the ONE centred instance, a row
-                                       varies by the shared cell formula
+        place "edge", variant 1      -> 1: since 2026-09-10 (Task 8) the pin
+                                       belongs to EVERY row — a car row along
+                                       the kerb is one car model, a wood one
+                                       species; absent = the shared formula
+        no place, variant 0          -> 0 (the first variant, pinned)
         place "center", offset_m 2   -> offset dropped: there is nothing to
                                        stand off from, the point IS the
                                        area's inmost one
-        no place, offset_m 2 + variant 1 -> both dropped
+        no place, offset_m 2 + variant 1 -> offset dropped, variant 1 stays
       and reshuffle_min, after how many GAME MINUTES a placement re-rolls —
       the same rule on a scatter entry and on an along row ([11z]):
         30      -> 30      1 -> 1 (the floor: below a minute there is no
@@ -883,12 +885,15 @@ for bad in (-1, 1.5, True, "2", None):
     check(f"variant {bad!r} on a centred entry loses the key",
           _place({"place": "center", "variant": bad}),
           {**PLAIN, "place": "center"})
-check("a variant beside place 'edge' is dropped",
-      _place({"place": "edge", "variant": 1}), {**PLAIN, "place": "edge"})
+check("a variant beside place 'edge' stays — the pin belongs to every row",
+      _place({"place": "edge", "variant": 1}),
+      {**PLAIN, "place": "edge", "variant": 1})
+check("a spread row pins variant 0 — the first variant, not 'no pin'",
+      _place({"variant": 0}), {**PLAIN, "variant": 0})
 check("an offset beside place 'center' is dropped",
       _place({"place": "center", "offset_m": 2}), {**PLAIN, "place": "center"})
-check("without a place neither of the two is stored",
-      _place({"offset_m": 2, "variant": 1}), PLAIN)
+check("without a place the offset goes and the variant stays",
+      _place({"offset_m": 2, "variant": 1}), {**PLAIN, "variant": 1})
 
 check("a reshuffle period survives", _place({"reshuffle_min": 30}),
       {**PLAIN, "reshuffle_min": 30})

@@ -279,6 +279,25 @@ export function scatterVariantIndex(seed: string, instance: number,
 }
 
 /**
+ * The variant a row PINS (§ A9, Task 8, 2026-09-10): the authored `variant`
+ * clamped to `[0, count − 1]`, or −1 when the row pins none — absent, NaN or
+ * junk — and the formula above decides. ONE helper for the three samplers
+ * (box, edge, centre), so "pinned" means the same thing on every placement:
+ *
+ *     pinned = min( max( floor(variant), 0 ), count − 1 )
+ *
+ * A negative position is the first variant, not "no pin": a number the
+ * editor never writes, answered the way the server whitelist would round it.
+ */
+export function scatterPinnedVariant(variant: number | undefined,
+                                     count: number): number {
+  if (typeof variant !== 'number' || !Number.isFinite(variant)) return -1
+  const n = Math.floor(Number(count))
+  if (!Number.isFinite(n) || n < 1) return -1
+  return Math.min(Math.max(Math.floor(variant), 0), n - 1)
+}
+
+/**
  * Deterministic PRNG over a string seed: FNV-1a for the state, xorshift for
  * the stream.
  *
@@ -677,6 +696,15 @@ export interface ScatterSampleOptions {
    * that number exists only in here — see `scatterVariantIndex`.
    */
   variantCount?: number
+  /**
+   * The variant the row PINS (§ A9, Task 8, 2026-09-10): every accepted
+   * instance shows this list position, clamped to `[0, variantCount − 1]`
+   * (`scatterPinnedVariant`), instead of the formula's answer. Absent or NaN
+   * = the formula, as ever. It replaces the ANSWER and nothing else — the
+   * stream, every verdict, x/z/yaw are untouched, and a prop with one
+   * variant still carries no `variant` key, pin or no pin.
+   */
+  variant?: number
   /** Misses allowed per wanted instance; defaults to
    *  `SCATTER_TRIES_PER_POINT`. */
   triesPerPoint?: number
@@ -844,6 +872,8 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
   // whether the instances say anything about it at all (see `variantCount`).
   const variants = Math.floor(Number(opts.variantCount))
   const mixing = Number.isFinite(variants) && variants > 1
+  // …and the one the row pins, if it pins one (−1 = the formula decides).
+  const pinned = mixing ? scatterPinnedVariant(opts.variant, variants) : -1
   // The turn: the axis is asked only under `aligned`, only for a survivor.
   const axisAt = opts.yawMode === 'aligned' ? opts.axisAt : undefined
   // What earlier rows planted, and the radius this row's survivors take up.
@@ -922,7 +952,7 @@ export function scatterInstances(opts: ScatterSampleOptions): ScatterInstance[] 
     if (occupied) occupied.add(x, z, occupyR, occupyTag)
     const yaw = scatterYaw(turn, opts.yawMode, opts.yawDeg, axisAt ? axisAt(x, z) : 0)
     out.push(mixing
-      ? { x, z, yaw, variant: scatterVariantIndex(opts.seed, index, variants) }
+      ? { x, z, yaw, variant: pinned >= 0 ? pinned : scatterVariantIndex(opts.seed, index, variants) }
       : { x, z, yaw })
   }
   return out
@@ -1178,6 +1208,9 @@ export interface ScatterCellOptions {
    *  `ScatterSampleOptions.variantCount`. The seed the mix is drawn from is
    *  this CELL's (`seed` above), so every cell of a wood mixes its own way. */
   variantCount?: number
+  /** the variant the row pins, exactly as in `ScatterSampleOptions` —
+   *  every cell of the wood is the one species then */
+  variant?: number
   /** the random stream, for the smoke check only — see `ScatterSampleOptions` */
   rng?: () => number
   /** The entry's turn mode and base angle — `scatterYaw`. Absent = random. */
@@ -1239,6 +1272,7 @@ export function scatterCellInstances(opts: ScatterCellOptions): ScatterInstance[
     // house.
     triesPerPoint: 1,
     variantCount: opts.variantCount,
+    variant: opts.variant,
     rng: opts.rng,
     yawMode: opts.yawMode,
     yawDeg: opts.yawDeg,
