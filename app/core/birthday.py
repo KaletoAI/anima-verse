@@ -13,7 +13,9 @@ Two things happen on the day, and nothing else:
   chat situation block) — that is a pure read of the profile and needs no
   bookkeeping here.
 * **The world knows it.** :func:`run_birthday_sweep` writes ONE global event
-  plus one notification to the character itself, once per GAME day.
+  plus one notification to the character itself, once per GAME day. The event
+  runs out at the END of that game day (:func:`event_ttl_hours`) — its own
+  sentence says "today", so it must not outlive the day it talks about.
 
 Deliberately absent: the age is never written. ``age`` stays the hand-kept
 number it has always been — a birthday is an occasion, not a bookkeeper.
@@ -40,14 +42,14 @@ The sweep runs as a sub-task of the world-admin tick
 from typing import Any, Dict, Optional
 
 from app.core.db import get_connection, transaction
-from app.core.game_time import GameTime, is_season_day, parse_season_day
+from app.core.game_time import (DAY_SECONDS, GameTime, is_season_day,
+                                parse_season_day)
 from app.core.log import get_logger
 
 logger = get_logger("birthday")
 
-#: The happening is a social one, and it lasts the whole world day.
+#: The happening is a social one.
 EVENT_CATEGORY = "social"
-EVENT_TTL_GAME_HOURS = 24
 #: Notification kind — the birthday child's own line in the notification list.
 NOTIFICATION_KIND = "birthday"
 #: world_kv guard, ``birthday_done:<name>`` -> the GAME day key it last fired
@@ -97,6 +99,27 @@ def is_birthday_today(profile: Optional[Dict[str, Any]],
     return is_season_day(now, parsed[0], parsed[1])
 
 
+def event_ttl_hours(now: GameTime) -> float:
+    """GAME hours left of ``now``'s day — the life span of the announcement.
+
+    The event says "Today is X's birthday.", so it has to die WITH the day, not
+    24 hours after whenever the sweep happened to notice. The sweep does not
+    run at a fixed hour: it only fires on the first tick after the world is
+    unfrozen, and the game clock is settable, so the announcement can be born
+    at any second of the day. A flat 24-hour TTL therefore left the sentence
+    standing deep into the next day, where every NPC read it as fact.
+
+    The remainder is taken in SECONDS, not in whole hours: at 23:50 the hour
+    ceiling ``24 - hour`` would still grant a full hour and run 50 minutes past
+    midnight — the very overrun this computes away. Fractional hours cost
+    nothing, ``add_event`` turns them into whole game seconds via
+    ``GameDuration.of``. No floor is needed either: ``seconds_of_day`` is at
+    most one second short of the day, so the result is always > 0 and the
+    event never becomes the "no expiry" case.
+    """
+    return (DAY_SECONDS - now.seconds_of_day) / 3600.0
+
+
 def run_birthday_sweep() -> int:
     """Announce every birthday that falls on the current GAME day.
 
@@ -134,7 +157,7 @@ def run_birthday_sweep() -> int:
             # that fails leaves the day unmarked and the next run retries,
             # which is the better half of the trade — a birthday that is
             # silently skipped cannot be noticed until the next world year.
-            add_event(text, location_id=None, ttl_hours=EVENT_TTL_GAME_HOURS,
+            add_event(text, location_id=None, ttl_hours=event_ttl_hours(now),
                       category=EVENT_CATEGORY, metadata={"birthday_of": name})
             create_notification(name, text, NOTIFICATION_KIND,
                                 metadata={"birthday_of": name})

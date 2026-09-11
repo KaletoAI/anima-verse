@@ -46,9 +46,9 @@ WHAT IS CHECKED, and where every expected value comes from
       between one greeting and 288 of them.
 
       On D045T12:00 the sweep is silent as well (wrong day), and the event of
-      D044 is gone: it was created at D044T10:00 with a TTL of 24 GAME hours,
-      so it ran out at D045T10:00. The notification stays — notifications do
-      not expire.
+      D044 is gone: it was created at D044T10:00 and runs to the END of D044
+      (see (i)), i.e. it ran out at D045T00:00. The notification stays —
+      notifications do not expire.
 
   (f) THE NEXT WORLD YEAR. At Y0003-D044 the very same character fires again:
       the guard holds a day KEY, not a "done" flag.
@@ -69,6 +69,26 @@ WHAT IS CHECKED, and where every expected value comes from
       field asking for the old hooks is inert — ``prompt_compute: "age"``
       renders the raw value, ``replacement.compute: "age"`` passes the raw
       value through. No shim, no fallback.
+
+  (i) THE LIFE SPAN OF THE ANNOUNCEMENT, ``birthday.event_ttl_hours``. The
+      event says "Today is X's birthday.", so it has to end WITH the day — not
+      24 hours after the sweep happened to notice. The sweep has no fixed
+      hour: it fires on the first tick after the world is unfrozen, and the
+      game clock is settable, so it can land on any second of the day. The TTL
+      is therefore the REST of the day, taken in seconds and handed over as
+      fractional GAME hours. By hand, against a 24 h = 86400 s day:
+
+          sweep at 22:00  -> 79200 s gone, 86400 - 79200 = 7200 s = 2.0 h
+                             -> alive at D044T23:59, gone at D045T01:00
+                                (a flat 24 h would have held it to D045T22:00)
+          sweep at 23:50  -> 85800 s gone, 86400 - 85800 =  600 s = 600/3600 h
+                             -> alive at D044T23:55, gone at D045T00:05
+                                (a whole-hour "24 - hour" would grant 1 h and
+                                 overrun midnight by 50 minutes)
+
+      The day checked in (d) is the same rule at 10:00: 86400 - 36000 =
+      50400 s = 14.0 h. Years 4 and 5 are used so the per-day guard of (e) is
+      out of the way; the birthday key comes round every world year anyway.
 
 Usage:  ./.venv/bin/python scripts/smoke_birthday.py
 """
@@ -130,10 +150,10 @@ OTHER = "Bram"
 DAY_OF_YEAR = 44
 
 
-def at(year, day_of_year, hour=10):
+def at(year, day_of_year, hour=10, minute=0):
     """Freeze the clock on a named game day."""
     set_game_factor(0.0)
-    set_game_time(GameTime.from_parts(year, day_of_year, hour, 0, 0))
+    set_game_time(GameTime.from_parts(year, day_of_year, hour, minute, 0))
 
 
 def birthday_events():
@@ -207,7 +227,8 @@ check("one global birthday event", len(_events), 1)
 if _events:
     check("the event is global", _events[0].get("location_id"), None)
     check("the event is social", _events[0].get("category"), "social")
-    check("the event lasts a world day", _events[0].get("ttl_hours"), 24)
+    check("the event lasts to the end of the day",
+          _events[0].get("ttl_hours"), 14.0)
     check("the event names the character", _events[0].get("text"),
           f"Today is {BDAY}'s birthday.")
 _notes = birthday_notifications()
@@ -229,7 +250,7 @@ check("still one notification", len(birthday_notifications()), 1)
 print("\n(e) the day after — wrong day, and the event has run out")
 at(2, DAY_OF_YEAR + 1, hour=12)
 check("the sweep is silent", run_birthday_sweep(), 0)
-check("the 24-game-hour event expired", len(birthday_events()), 0)
+check("the event ended with its day", len(birthday_events()), 0)
 check("the notification stays", len(birthday_notifications()), 1)
 
 # --- (f) the next world year ------------------------------------------------
@@ -296,6 +317,40 @@ check("replacement compute 'age' passes the raw value through",
       ct.build_replacement_map(_age_tpl, {"born": "1999-04-02"},
                                "character_appearance"),
       {"age": "1999-04-02"})
+
+# --- (i) a LATE sweep — the event ends at midnight, not 24h later -----------
+print("\n(i) a late sweep — the announcement ends with its own day")
+at(4, DAY_OF_YEAR, hour=22)
+check("the birthday fires in year 4", run_birthday_sweep(), 1)
+_late = birthday_events()
+check("one live event", len(_late), 1)
+if _late:
+    # 22:00 -> 79200 s of the day gone, 86400 - 79200 = 7200 s = 2.0 hours.
+    check("two game hours left of the day", _late[0].get("ttl_hours"), 2.0)
+at(4, DAY_OF_YEAR, hour=23, minute=59)
+check("still standing at 23:59 of its own day", len(birthday_events()), 1)
+at(4, DAY_OF_YEAR + 1, hour=1)
+check("gone at 01:00 the next day", len(birthday_events()), 0)
+
+print("\n(i) the last ten minutes — the minute counts, not just the hour")
+at(5, DAY_OF_YEAR, hour=23, minute=50)
+check("the birthday fires in year 5", run_birthday_sweep(), 1)
+_tail = birthday_events()
+check("one live event", len(_tail), 1)
+if _tail:
+    # 23:50 -> 85800 s gone, 86400 - 85800 = 600 s = 600/3600 h (10 minutes).
+    check("ten game minutes left of the day",
+          _tail[0].get("ttl_hours"), 600 / 3600)
+at(5, DAY_OF_YEAR, hour=23, minute=55)
+check("still standing five minutes before midnight",
+      len(birthday_events()), 1)
+at(5, DAY_OF_YEAR + 1, hour=0, minute=5)
+check("gone five minutes after midnight", len(birthday_events()), 0)
+
+# The demo world is tracked in git — a smoke that touched it would show up as
+# a diff. Everything above lives in the temp storage created at import time.
+check("the smoke writes into its own temp storage",
+      str(paths.get_storage_dir()), str(STORAGE))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 for f in FAILURES:
