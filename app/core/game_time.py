@@ -1039,6 +1039,88 @@ class GameTime:
         }
 
 
+# ---------------------------------------------------------------------------
+# Calendar DAY without a year — "<season_key>:<day>"
+# ---------------------------------------------------------------------------
+#
+# A recurring day of the world calendar (a birthday, a festival) is a SEASON
+# plus the day within that season — the same two values the scheduler cron and
+# the header popover already speak in, and deliberately not a day-of-year
+# (which would wander when a season length changes) and not a real date.
+#
+# The season is referenced by its stable KEY, never by its display name or its
+# index: renaming a season or reordering the list must leave the stored value
+# intact. Keys are free text per the config schema, so the day is split off
+# from the RIGHT (``rsplit(":", 1)``) — a key may itself contain colons.
+#
+# Everything here is tolerant: a value that no longer fits the calendar (day
+# beyond the season length, a season that was deleted) is simply "no day", the
+# same as an empty field. Nothing raises, nothing repairs the stored value.
+
+#: The day part is plain ASCII digits — no signs, no unicode digits, no "14.0".
+_SEASON_DAY_RE = re.compile(r"^[0-9]+$")
+
+
+def parse_season_day(text: Any,
+                     calendar: Optional[Calendar] = None
+                     ) -> Optional[Tuple[str, int]]:
+    """``"<season_key>:<day>"`` -> ``(key, day)``, or ``None``.
+
+    ``None`` means "no calendar day": an empty/missing value, a non-string, a
+    value without a colon, a non-numeric day, a season key this world does not
+    have, or a day outside ``1..season.days``. The returned key is the season's
+    own key, the day a 1-based day of that season.
+    """
+    if not isinstance(text, str):
+        return None
+    raw = text.strip()
+    if ":" not in raw:
+        return None
+    key_part, day_part = raw.rsplit(":", 1)
+    key = key_part.strip()
+    day_text = day_part.strip()
+    if not key or not _SEASON_DAY_RE.match(day_text):
+        return None
+    season = _cal(calendar).season_by_key(key)
+    if season is None:
+        return None
+    day = int(day_text)
+    if not 1 <= day <= season.days:
+        return None
+    return season.key, day
+
+
+def season_day_label(key: str, day: int, lang: str = "en",
+                     calendar: Optional[Calendar] = None) -> str:
+    """``"Summer, day 14"`` — the head of :meth:`GameTime._label`, no weekday,
+    no clock, no year.
+
+    A season key this world does not have answers with an empty string (the
+    caller drops the line); a season without a display name answers
+    ``"day 14"``, exactly as the full label does.
+    """
+    season = _cal(calendar).season_by_key(key)
+    if season is None:
+        return ""
+    name = season.name_for(lang)
+    return f"{name}, day {day}" if name else f"day {day}"
+
+
+def is_season_day(now: GameTime, key: str, day: int,
+                  calendar: Optional[Calendar] = None) -> bool:
+    """True iff ``now`` falls on that calendar day (season key + day of season).
+
+    Year-agnostic by design — the day comes round once per world year. A world
+    without seasons, or a key it does not have, is never "today".
+    """
+    cal = _cal(calendar)
+    if not cal.seasons:
+        return False
+    parts = now.parts(cal)
+    return (cal.seasons[parts.season_index].key == key
+            and parts.day_of_season == day)
+
+
 EPOCH = GameTime(0)
 
 
@@ -1056,6 +1138,9 @@ __all__ = [
     "get_calendar",
     "invalidate_calendar_cache",
     "calendar_to_dict",
+    "parse_season_day",
+    "season_day_label",
+    "is_season_day",
     "default_seasons_config",
     "default_calendar_config",
 ]
