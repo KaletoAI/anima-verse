@@ -2949,22 +2949,22 @@ def list_conditions() -> Dict[str, Any]:
 @router.get("/locations/{location_name}/background")
 def get_location_background(
     location_name: str,
-    room: str = Query("", description="Raum-ID fuer Bild-Filterung"),
-    file: str = Query("", description="Konkreter Hintergrund-Dateiname (bg_id) — Pin statt Zufallswahl")):
-    """Liefert das Hintergrundbild eines Ortes (per ID oder Name).
+    room: str = Query("", description="Room ID for image filtering"),
+    file: str = Query("", description="Concrete background file name (bg_id) — pin instead of random pick")):
+    """Serves the background image of a location (by ID or name).
 
-    Bei aktivem disruption/danger-Event mit gerendertem image_path wird
-    das Event-Bild ausgeliefert. Innerhalb des Resolve-Linger-Fensters
-    das resolved_image_path. Sonst das normale Location-Background.
-    Multi-Room: der Swap gilt fuer alle Raeume der Location (konsistent
-    zur location-weiten Block-Rule).
+    While a disruption/danger event with a rendered image_path is active,
+    the event image is served. Within the resolve linger window, the
+    resolved_image_path. Otherwise the regular location background.
+    Multi-room: the swap applies to every room of the location (consistent
+    with the location-wide block rule).
 
-    ``file`` pinnt ein konkretes Hintergrundbild (vom /play-Frontend genutzt,
-    damit Figuren-Positionen am exakt angezeigten Bild haften). Ein aktives
-    Event-Bild hat Vorrang und ignoriert ``file``.
+    ``file`` pins a concrete background image (used by the /play frontend so
+    that figure positions stick to exactly the image on screen). An active
+    event image takes precedence and ignores ``file``.
 
-    Tag/Nacht ist bewusst KEIN Query-Parameter: die Auswahl fragt den
-    Spielkalender, nicht die Uhr des Browsers.
+    Day/night is deliberately NOT a query parameter: the selection asks the
+    game calendar, not the browser's clock.
     """
     bg_path = world_ops.resolve_background_path(location_name, room=room,
                                                 file=file)
