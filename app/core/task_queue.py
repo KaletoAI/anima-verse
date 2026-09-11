@@ -391,7 +391,7 @@ class TaskQueue:
         now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
             cur = conn.execute(
-                """UPDATE tasks SET status='cancelled', completed_at=?, error='Abgebrochen'
+                """UPDATE tasks SET status='cancelled', completed_at=?, error='Cancelled'
                    WHERE task_id=? AND status IN ('pending', 'running')""",
                 (now, task_id))
             conn.commit()

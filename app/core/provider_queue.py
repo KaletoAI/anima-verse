@@ -555,7 +555,7 @@ class ProviderQueue:
                 if task.task_id == task_id and task.status == "pending":
                     task._cancelled = True
                     task.status = "cancelled"
-                    task.error = "Abgebrochen"
+                    task.error = "Cancelled"
                     self._pending_tasks.remove(task)
                     self._history.append(task)
                     if len(self._history) > self._history_limit:
@@ -788,7 +788,7 @@ class ProviderQueue:
                                 self._queue_name, task.task_id, task.duration_s)
                 except _CancelledByUser:
                     task.status = "cancelled"
-                    task.error = "Abgebrochen"
+                    task.error = "Cancelled"
                     task.duration_s = round(time.monotonic() - t0, 2)
                     logger.info("[%s] GPU-Task abgebrochen: %s (%ss)",
                                 self._queue_name, task.task_id, task.duration_s)
@@ -801,7 +801,7 @@ class ProviderQueue:
                 except Exception as e:
                     if task._cancelled:
                         task.status = "cancelled"
-                        task.error = "Abgebrochen"
+                        task.error = "Cancelled"
                         task.duration_s = round(time.monotonic() - t0, 2)
                         logger.info("[%s] GPU-Task abgebrochen: %s", self._queue_name, task.task_id)
                     else:
@@ -908,7 +908,7 @@ class ProviderQueue:
                     _log_task_result(task, model_name, max_tokens, response)
                 except _CancelledByUser:
                     task.status = "cancelled"
-                    task.error = "Abgebrochen"
+                    task.error = "Cancelled"
                     task.duration_s = round(time.monotonic() - t0, 2)
                     logger.info("[%s] Task abgebrochen: %s (%s) (%ss)",
                                 self._queue_name, task.task_id, task.task_type, task.duration_s)
@@ -922,7 +922,7 @@ class ProviderQueue:
                 except Exception as e:
                     if task._cancelled:
                         task.status = "cancelled"
-                        task.error = "Abgebrochen"
+                        task.error = "Cancelled"
                         task.duration_s = round(time.monotonic() - t0, 2)
                         logger.info("[%s] Task cancelled: %s (%s)",
                                     self._queue_name, task.task_id, task.task_type)
