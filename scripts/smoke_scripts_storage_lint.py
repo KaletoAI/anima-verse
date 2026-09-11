@@ -50,8 +50,10 @@ silently.
 
 SELF-TEST, hand-derived (part 1 of the output)
 
-The classifier is checked against six hand-written snippets before it judges
-anything, so a broken lint fails loudly instead of passing everything:
+The classifier is checked against twelve hand-written snippets before it
+judges anything, so a broken lint fails loudly instead of passing everything.
+Every expected verdict below is derived by hand from THE RULE above, never
+recorded from a run:
 
   1. redirect via ``paths.init`` on line 3, DB import on line 5  -> clean
   2. DB import on line 3, ``paths.init`` on line 5 (too late)    -> offender
@@ -63,6 +65,15 @@ anything, so a broken lint fails loudly instead of passing everything:
   7. DB import INSIDE a function, ``paths.init`` one line later  -> clean
      (a deferred import runs on the call, so line order proves nothing)
   8. DB import inside a function, no redirect anywhere           -> offender
+  9. only a DOCSTRING mentions ``paths.init()``                  -> offender
+     (prose is not code — and the sentence that says no redirect is needed
+     used to BE the redirect, for a text search)
+ 10. ``paths.init()`` with NO argument, then the DB import       -> offender
+     (no argument and no ``STORAGE_DIR`` resolves to worlds/demo, see above)
+ 11. only ``os.environ.get("STORAGE_DIR")`` is READ              -> offender
+     (a read leaves the resolution order untouched)
+ 12. ``os.environ.setdefault("STORAGE_DIR", tmp)`` before it     -> clean
+     (a write, just a conditional one — scripts here use this form)
 
 Exit code 0 = every candidate redirects its storage.  Exit 1 lists the ones
 that do not — including the line numbers that decide the verdict.
@@ -165,16 +176,73 @@ def app_imports(source: str):
     return sorted(out)
 
 
-REDIRECT = re.compile(r"paths\.init\s*\(|[\"']STORAGE_DIR[\"']")
+def dotted(node) -> str:
+    """Dotted name of a Name/Attribute expression, "" for anything else."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return ""
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def is_storage_env(node) -> bool:
+    """True for the subscript ``os.environ["STORAGE_DIR"]`` (or bare ``environ``)."""
+    if not isinstance(node, ast.Subscript):
+        return False
+    if dotted(node.value).split(".")[-1] != "environ":
+        return False
+    key = node.slice
+    return isinstance(key, ast.Constant) and key.value == "STORAGE_DIR"
 
 
 def redirect_line(source: str):
-    """First line that sets a storage root, or None."""
-    for lineno, line in enumerate(source.splitlines(), 1):
-        code = line.split("#", 1)[0]
-        if REDIRECT.search(code):
-            return lineno
-    return None
+    """First line that STRUCTURALLY sets a storage root, or None.
+
+    Structural, not textual.  The predecessor searched the text of every
+    non-comment line for ``paths.init(`` or ``"STORAGE_DIR"``, which got all
+    three of these wrong:
+
+      * a DOCSTRING naming ``paths.init()`` counted as a redirect — even the
+        sentence "it builds without a world, so no paths.init() is needed",
+        i.e. the very statement that there is none;
+      * ``paths.init()`` WITHOUT an argument counted — yet that is exactly the
+        call that falls back to ``./worlds/demo``, the opposite of a redirect;
+      * merely READING ``os.environ.get("STORAGE_DIR")`` counted.
+
+    Only two shapes count, both taken from the resolution order in
+    app/core/paths.py: a call to ``paths.init`` WITH at least one argument
+    (positional or ``storage_dir=``), and a WRITE to
+    ``os.environ["STORAGE_DIR"]`` — assignment, augmented/annotated
+    assignment, or ``os.environ.setdefault("STORAGE_DIR", ...)``.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    lines = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            if any(is_storage_env(t) for t in node.targets):
+                lines.append(node.lineno)
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            if is_storage_env(node.target):
+                lines.append(node.lineno)
+        elif isinstance(node, ast.Call):
+            name = dotted(node.func)
+            if name == "paths.init" or name.endswith(".paths.init"):
+                if node.args or node.keywords:
+                    lines.append(node.lineno)
+            elif (isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "setdefault"
+                    and dotted(node.func.value).split(".")[-1] == "environ"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "STORAGE_DIR"):
+                lines.append(node.lineno)
+    return min(lines) if lines else None
 
 
 def verdict(source: str, db_modules: set):
@@ -239,6 +307,26 @@ def main():
 def main():
     from app.core import db
     print(db)
+'''),
+    ("9 paths.init only named in a docstring", "offender", '''
+"""A check that needs no world, so no paths.init() is needed."""
+from app.core import db
+print(db)
+'''),
+    ("10 paths.init() without an argument", "offender", '''
+from app.core import paths
+paths.init()
+from app.core import db
+'''),
+    ("11 STORAGE_DIR only read, never written", "offender", '''
+import os
+print(os.environ.get("STORAGE_DIR"))
+from app.core import db
+'''),
+    ("12 os.environ.setdefault writes STORAGE_DIR", "clean", '''
+import os
+os.environ.setdefault("STORAGE_DIR", "/tmp/x")
+from app.core import db
 '''),
 ]
 
