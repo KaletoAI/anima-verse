@@ -73,6 +73,12 @@ class LLMTask:
     _done_event: threading.Event = field(default_factory=threading.Event, repr=False)
     _cancelled: bool = field(default=False, repr=False)
     _retry_count: int = field(default=0, repr=False)
+    # Who reports a failure of this task — stamped at SUBMIT time from the
+    # caller's context (provider_queue.caller_handles_failure), because the
+    # worker THREAD does not inherit it (same reason as trace_id). True = a
+    # caller retries this call over its own fallback chain and writes the
+    # ERROR itself once the chain is exhausted.
+    _caller_handles_failure: bool = field(default=False, repr=False)
     # Monotonically increasing timestamp — used for stale detection so that
     # server clock changes/drift cannot distort it.
     _monotonic_created: float = field(default=0.0, repr=False)

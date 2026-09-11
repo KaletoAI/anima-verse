@@ -86,7 +86,7 @@ def log_task_failure(queue_name: str, task: LLMTask, err: BaseException) -> None
     exhausted. Everything else — a user/payload error, or any failure nobody
     else reports — keeps the ERROR and the full traceback.
     """
-    if getattr(task, "_caller_handles_failure", False) and _is_upstream_failure_safe(err):
+    if task._caller_handles_failure and _is_upstream_failure_safe(err):
         logger.warning("[%s] Upstream failure: %s: %s — the caller falls back",
                        queue_name, task.task_id, err)
     else:
