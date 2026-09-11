@@ -338,22 +338,166 @@ _QUOTE_PAIR_RE = re.compile(
 )
 
 
-def _quoted_speech(text: str) -> List[str]:
-    """Quoted dialogue segments in RP prose — the deterministic scan of the
-    B-lite speech net (plan-thought-speech-dropped.md).
+# A quoted segment that sits in a JSON value position: the key in front of it
+# ("detail": "…") is what a tool input looks like, not what a character says.
+_JSON_VALUE_BEFORE_RE = re.compile(r'["“„][^"“”„\n]{1,40}["“”]\s*:\s*$')
 
-    Emphasis/name quotes do not count: a spoken line has at least one space
-    or ends in sentence punctuation („Eclipse" stays out, „Ja." counts).
+# Written, not spoken: a writing verb close in front of the quote turns it into
+# a caption, a note or a post. Word stems, German and English.
+_WRITTEN_CONTEXT_RE = re.compile(
+    r"(schreib|schrieb|geschrieben|tipp|getippt|notier|notiz|kritzel|kritzl|"
+    r"skizzi|bildunterschrift|caption|untertitel|"
+    r"\bpost(e|et|ete|s|ed|ing)?\b|\bwrit(e|es|ing)\b|\bwrote\b|"
+    r"\btyp(e|es|ed|ing)\b|scribbl|\bjot\b|\bnotes?\b|\bnoted\b)",
+    re.IGNORECASE)
+
+# Someone ELSE said it: a speech attribution in the third person behind the
+# quote. Thought prose is written in the first person („sage ich"), so
+# „…", sagt sie / sagt Tom is another character's line (decision E1).
+_FOREIGN_AFTER_RE = re.compile(
+    r"^\s*[,;:–—-]?\s*(?:sagt|sagte|fragt|fragte|flüstert|flüsterte|ruft|rief|"
+    r"murmelt|murmelte|meint|meinte|erwidert|erwiderte|antwortet|antwortete|"
+    r"says|said|asks|asked|whispers|whispered|calls|called|mutters|muttered|"
+    r"replies|replied|answers|answered)\b\s+"
+    r"(?:(?P<name>[A-ZÄÖÜ][\wäöüß-]*)|(?P<pron>er|sie|es|he|she|they)\b)")
+
+# … or in front of it: `Tom hat gesagt: „…"`.
+_FOREIGN_BEFORE_RE = re.compile(
+    r"(?P<name>[A-ZÄÖÜ][\wäöüß-]*)\s+"
+    r"(?:hat gesagt|hatte gesagt|sagte|sagt|meinte|meint|flüsterte|flüstert|"
+    r"fragte|fragt|said|says|asked|asks|whispered|whispers|replied|replies)"
+    r"\s*:?\s*$")
+
+# A hashtag inside the segment marks it as a social-post caption.
+_HASHTAG_RE = re.compile(r"#\w")
+
+# How far back the context rules look from the opening quote character.
+_WRITTEN_LOOKBEHIND = 90
+_FOREIGN_LOOKBEHIND = 60
+
+
+def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[str, int]]:
+    """The filtered quote scan of the B-lite speech net — segments plus the
+    per-rule drop counters (plan-log-befunde-2026-09-11 § 3.8).
+
+    Base rule (unchanged): emphasis/name quotes do not count — a spoken line
+    has at least one space or ends in sentence punctuation („Eclipse" stays
+    out, „Ja." counts). On top of it three deterministic exclusions, each
+    measured against the 2026-09-11 log analysis where 40 of 40 warnings were
+    false positives:
+
+    json      the segment is a JSON value: it sits inside a ``{…}`` pair of
+              the same line, directly behind a ``"<key>":`` or directly in
+              front of a ``:``. A tool input, never speech.
+    written   a writing verb stands within the preceding characters, or the
+              segment carries a hashtag — a caption, a note, a post.
+    foreign   a third-person speech attribution follows the segment (or a
+              ``<Name> hat gesagt:`` precedes it) and names somebody other
+              than ``speaker``. A pronoun counts as somebody else, because
+              thought prose is written in the first person (decision E1);
+              the speaker's OWN name keeps the line (a model narrating its
+              character in the third person).
+
+    Deliberately NOT filtered: remembered quotes and the inner voice. No
+    deterministic rule separates them from real speech — that judgement is
+    left to the retry prompt.
     """
     out: List[str] = []
-    for m in _QUOTE_PAIR_RE.finditer(text or ""):
+    counts: Dict[str, int] = {"json": 0, "written": 0, "foreign": 0}
+    src = text or ""
+    who = (speaker or "").strip().lower()
+    for m in _QUOTE_PAIR_RE.finditer(src):
         seg = next((g for g in m.groups() if g), "").strip()
         if len(seg) < 2:
             continue
         if " " not in seg and seg[-1] not in ".!?…":
             continue
+        line_start = src.rfind("\n", 0, m.start()) + 1
+        line_end = src.find("\n", m.end())
+        if line_end < 0:
+            line_end = len(src)
+        before = src[line_start:m.start()]
+        after = src[m.end():line_end]
+
+        # 1) JSON / key context
+        in_braces = ("{" in before) and ("}" in after)
+        if in_braces or _JSON_VALUE_BEFORE_RE.search(before) \
+                or after.lstrip().startswith(":"):
+            counts["json"] += 1
+            continue
+
+        # 2) written / caption context
+        if _WRITTEN_CONTEXT_RE.search(before[-_WRITTEN_LOOKBEHIND:]) \
+                or _HASHTAG_RE.search(seg):
+            counts["written"] += 1
+            continue
+
+        # 3) foreign speaker
+        if _foreign_speaker(before, after, who):
+            counts["foreign"] += 1
+            continue
+
         out.append(seg)
-    return out
+    return out, counts
+
+
+def _foreign_speaker(before: str, after: str, speaker_lower: str) -> bool:
+    """True when the quote is attributed to somebody other than the speaker."""
+    m = _FOREIGN_AFTER_RE.match(after)
+    if m:
+        name = m.group("name")
+        if name is None:
+            return True  # third-person pronoun (E1)
+        if name.lower() != speaker_lower:
+            return True
+    m = _FOREIGN_BEFORE_RE.search(before[-_FOREIGN_LOOKBEHIND:])
+    if m and m.group("name").lower() != speaker_lower:
+        return True
+    return False
+
+
+def _speech_candidates(text: str, speaker: str) -> List[str]:
+    """Quoted segments that can only be SPOKEN dialogue of ``speaker``.
+    Applies the deterministic exclusions of the B-lite net
+    (plan-log-befunde-2026-09-11 § 3.8)."""
+    return _scan_speech_candidates(text, speaker)[0]
+
+
+def _normalize_quote(text: str) -> str:
+    """Whitespace-normalised, case-folded form for substring comparison."""
+    return " ".join((text or "").split()).casefold()
+
+
+def _delivered_by_content_tool(
+    quote: str,
+    tool_matches: List[Tuple[str, str]],
+    content_names: Any,
+) -> bool:
+    """True when a CONTENT_TOOL call of this turn already carries the quote in
+    its caption/message/text/content field — the line has a delivery path, so
+    the speech net must not retry for it."""
+    import json as _json
+    needle = _normalize_quote(quote)
+    if not needle:
+        return False
+    for name, raw in tool_matches or []:
+        if name not in (content_names or ()):
+            continue
+        fields: List[str] = []
+        try:
+            data = _json.loads(raw or "")
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            for key in ("caption", "message", "text", "content"):
+                val = data.get(key)
+                if isinstance(val, str):
+                    fields.append(val)
+        else:
+            fields.append(str(raw or ""))
+        if any(needle in _normalize_quote(f) for f in fields):
+            return True
+    return False
 
 
 def _dedupe_singleton_tools(matches: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
@@ -943,12 +1087,12 @@ class StreamingAgent:
 
         rp_response = state_rp.response.strip()
         if not rp_response:
-            logger.info("rp_first: leere RP-Antwort, beendet")
+            logger.info("rp_first: empty RP response, done")
             return
 
         # SKIP (thought mode)
         if rp_response.upper() == "SKIP":
-            logger.info("rp_first: SKIP → keine Aktion, %.2fs", time.monotonic() - _start)
+            logger.info("rp_first: SKIP → no action, %.2fs", time.monotonic() - _start)
             return
 
         # Phase 2: the tool LLM decides + extracts (intent, assignment,
@@ -967,26 +1111,26 @@ class StreamingAgent:
             # B-lite speech net: in a thought turn dropped dialogue is lost
             # for good — catch it deterministically before moving on.
             async for event in self._ensure_speech_mapped(
-                    state_tool, rp_response, tool_system, tool_decision_input):
+                    state_tool, rp_response):
                 yield event
         # Expose the raw decision text (never streamed to the client).
         self.last_tool_response = state_tool.response.strip()
 
-        # Extrahierte Marker (Intent, Assignment, Fallback-Mood/Activity/Location)
+        # Extracted markers (intent, assignment, fallback mood/activity/location)
         _extracted = _extract_markers(state_tool.response, rp_response)
         if _extracted:
             yield ExtractionEvent(markers=_extracted)
-            logger.info("rp_first: extrahierte Marker: %s", _extracted[:100])
+            logger.info("rp_first: extracted markers: %s", _extracted[:100])
 
         if state_tool.decision_failed:
             logger.warning(
-                "rp_first: Tool-Entscheidung blieb LEER — RP-Text ohne "
-                "Tool-Auswertung, Turn gilt als gestoert (2 Calls, %.2fs)",
+                "rp_first: tool decision stayed EMPTY — RP text without a "
+                "tool evaluation, the turn counts as broken (2 calls, %.2fs)",
                 time.monotonic() - _start)
             return
 
         if not state_tool.tool_matches:
-            logger.info("rp_first: keine Tools → fertig (2 Calls, %.2fs)",
+            logger.info("rp_first: no tools → done (2 calls, %.2fs)",
                         time.monotonic() - _start)
             return
 
@@ -1007,10 +1151,10 @@ class StreamingAgent:
             else:
                 side_fx_matches.append(tm)
 
-        logger.info("rp_first: %d post-rp, %d content, %d side-fx Tools",
+        logger.info("rp_first: %d post-rp, %d content, %d side-fx tools",
                      len(post_rp_matches), len(content_matches), len(side_fx_matches))
 
-        # Seiteneffekt-Tools: ausfuehren, nichts weiter
+        # Side-effect tools: run them, nothing further
         if side_fx_matches:
             _dummy_results = []
             _dummy_deferred = []
@@ -1459,22 +1603,45 @@ class StreamingAgent:
                 "(verfuegbar: %s)", self.agent_name or "?", name,
                 ", ".join(sorted(self.tools_dict.keys())))
 
+    def _present_names(self) -> List[str]:
+        """Other characters in the same room right now — the audience the
+        speech net can deliver to (same query the decency check uses)."""
+        try:
+            from app.models.character import get_character_profile
+            from app.core.outfit_compliance import _present_other_characters
+            profile = get_character_profile(self.agent_name)
+            return _present_other_characters(
+                self.agent_name, profile.get("current_room", ""),
+                profile.get("current_location", ""))
+        except Exception as err:
+            logger.debug("B-lite: presence lookup failed: %s", err)
+            return []
+
     async def _ensure_speech_mapped(
         self,
         state_tool: _StreamState,
-        rp_response: str,
-        tool_system: str,
-        tool_decision_input: str) -> AsyncGenerator[StreamEvent, None]:
-        """B-lite speech net for THOUGHT turns (plan-thought-speech-dropped.md).
+        rp_response: str) -> AsyncGenerator[StreamEvent, None]:
+        """B-lite speech net for THOUGHT turns (plan-thought-speech-dropped.md,
+        rebuilt after the 2026-09-11 log analysis).
 
         A thought turn's prose is discarded, so spoken dialogue reaches the
         room ONLY through a speech verb — a decision that dropped a quoted
-        line loses it silently. Deterministic quote scan over the RP prose;
-        when dialogue is present but no DELIVERS_SPEECH verb was called, ONE
-        pointed retry asks for exactly the missing speech calls and merges
-        them in. Still nothing → WARNING (observable, not silent).
+        line loses it silently. The filtered quote scan
+        (``_scan_speech_candidates``) keeps only segments that can be spoken
+        dialogue of this character; a line a content tool already carries
+        counts as delivered, and with nobody in the room there is nothing to
+        deliver. What is left gets ONE retry with its OWN short prompt
+        (``tasks/speech_retry.md``) — not appended to the 7.4k-token decision
+        prompt, whose closing "respond with NONE" produced byte-identical
+        answers. The tool list of that call is narrowed to the
+        DELIVERS_SPEECH verbs. Still nothing → WARNING (observable).
         """
-        quotes = _quoted_speech(rp_response)
+        quotes, dropped = _scan_speech_candidates(rp_response, self.agent_name)
+        if any(dropped.values()):
+            logger.info(
+                "B-lite: dropped %d quote(s) by filter (json=%d, written=%d, "
+                "foreign=%d)", sum(dropped.values()), dropped["json"],
+                dropped["written"], dropped["foreign"])
         if not quotes:
             return
         speech_names = _speech_tool_names()
@@ -1482,35 +1649,82 @@ class StreamingAgent:
             return
         if any(n in speech_names for n, _ in state_tool.tool_matches):
             return
-        logger.info("B-lite: %d gesprochene Zeile(n) ohne Speech-Verb in der "
-                    "Tool-Entscheidung — gezielter Retry", len(quotes))
-        hint = (
-            "RETRY — your previous decision dropped spoken dialogue. The "
-            "character's RP text contains these SPOKEN lines:\n"
-            + "\n".join(f"  - «{q}»" for q in quotes[:5])
-            + "\nOutput ONLY the speech tool calls that deliver them: TalkTo "
-            'with JSON {"name": "<addressed person>", "message": "<the spoken '
-            'words, verbatim>"} for someone in the same room (add "volume": '
-            '"whisper"/"shout" when the RP says so), or SendMessage for a '
-            "recipient who is not in the room. No other tools, no markers. If a quoted "
-            "segment is not actually speech to someone (a memory, reading "
-            "aloud, an inner voice), skip it; if none qualify, respond NONE.")
+        quotes = [q for q in quotes if not _delivered_by_content_tool(
+            q, state_tool.tool_matches, self.content_tools)]
+        if not quotes:
+            logger.info("B-lite: every spoken line is carried by a content "
+                        "tool of this turn — no retry")
+            return
+        present = self._present_names()
+        if not present:
+            logger.info("B-lite: %d spoken line(s) without a speech verb, "
+                        "nobody within earshot — no retry", len(quotes))
+            return
+        speech_tools = [n for n in self.tools_dict if n in speech_names]
+        if not speech_tools:
+            return
+        logger.info("B-lite: %d spoken line(s) without a speech verb, %d "
+                    "listener(s) present — targeted retry", len(quotes),
+                    len(present))
+        try:
+            system, user = self._render_speech_retry(
+                quotes, present, speech_tools)
+        except Exception as err:
+            logger.error("B-lite: speech_retry template failed: %s", err)
+            return
         state_retry = _StreamState()
         async for event in self._invoke_tool_decision(
-                state_retry, tool_system,
-                tool_decision_input + "\n\n" + hint):
+                state_retry, system, user):
             yield event
         added = [(n, i) for n, i in state_retry.tool_matches
                  if n in speech_names]
         if added:
             state_tool.tool_matches = list(state_tool.tool_matches) + added
-            logger.info("B-lite: %d Speech-Call(s) nachgetragen", len(added))
+            logger.info("B-lite: %d speech call(s) added", len(added))
         elif not state_retry.decision_failed:
             # decision_failed has its own loud warning in _invoke_tool_decision.
             logger.warning(
-                "B-lite: RP enthaelt woertliche Rede («%s»%s), aber auch der "
-                "Retry lieferte kein Speech-Verb — Dialog geht verloren",
-                quotes[0][:60], "…" if len(quotes) > 1 else "")
+                "B-lite: the RP contains spoken lines (%s) and %s is in the "
+                "room, but the retry delivered no speech verb either — the "
+                "dialogue is lost",
+                " · ".join(f"«{q[:60]}»" for q in quotes),
+                ", ".join(present))
+
+    def _render_speech_retry(
+        self,
+        quotes: List[str],
+        present: List[str],
+        speech_tools: List[str]) -> Tuple[str, str]:
+        """Build the speech-retry prompt from ``tasks/speech_retry.md``.
+
+        The tool descriptions come from the skills themselves — the core names
+        no verb and no input field (R1). The format example is the plain
+        syntax shell of the handler's tool format; the JSON shape stays in the
+        skill's description (decision E2)."""
+        from app.core import prompt_templates
+        from app.core.tool_formats import format_example
+        descriptions = []
+        try:
+            from app.core.dependencies import get_skill_manager
+            sm = get_skill_manager()
+        except Exception:
+            sm = None
+        for name in speech_tools:
+            skill = sm.get_skill_by_name(name) if sm else None
+            descriptions.append({
+                "name": name,
+                "description": (getattr(skill, "description", "") or "").strip(),
+            })
+        example = format_example(
+            self.tool_format, speech_tools[0],
+            "<JSON input exactly as the tool description specifies>")
+        return prompt_templates.render_task(
+            "speech_retry",
+            character=self.agent_name or "the character",
+            quotes=list(quotes),
+            present=list(present),
+            tools=descriptions,
+            example=example)
 
     # ------------------------------------------------------------------
     # Tool execution
