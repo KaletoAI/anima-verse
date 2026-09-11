@@ -48,10 +48,22 @@ current output):
 Exit code 0 = all checks passed, 1 = at least one failed.
 """
 import logging
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.models.memory would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="memory-meta-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="memory-meta-storage-"))
 
 from app.models import memory as mem  # noqa: E402
 

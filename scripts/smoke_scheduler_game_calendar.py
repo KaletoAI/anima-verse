@@ -69,10 +69,22 @@ Hand-derived expectations:
 Usage:  ./.venv/bin/python scripts/smoke_scheduler_game_calendar.py
 """
 import logging
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.core.game_calendar_migration would open its
+# world.db and leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="scheduler-game-calendar-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="scheduler-game-calendar-storage-"))
 
 from app.core import game_time as game_time_mod  # noqa: E402
 from app.core.game_time import Calendar, GameTime  # noqa: E402

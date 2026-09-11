@@ -29,10 +29,21 @@ Expectations are derived by hand from that rule, not from recorded output:
 """
 import os
 import sys
+import tempfile
 import threading
 
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.core.provider_queue would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="channel-reload-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="channel-reload-storage-"))
 
 from app.core.provider_manager import ProviderManager  # noqa: E402
 from app.core.provider_queue import ProviderQueue  # noqa: E402

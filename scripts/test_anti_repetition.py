@@ -24,10 +24,22 @@ whole distribution tail was open.
 All expected numbers are derived by hand in the case comments, from the values
 pinned in `_pin_config()`.
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.utils.history_manager would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="anti-repetition-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="anti-repetition-storage-"))
 
 from app.core import config  # noqa: E402
 from app.core.chat_engine import (  # noqa: E402

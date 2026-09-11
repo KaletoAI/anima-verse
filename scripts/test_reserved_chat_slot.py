@@ -29,13 +29,25 @@ Expected outcomes, derived by hand from the design:
 4. N=2, reservation ON, two chat tasks: both run in parallel — chat is
    never capped by the background counter, only by the semaphore.
 """
+import os
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.core.provider_queue would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="reserved-chat-slot-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="reserved-chat-slot-storage-"))
 
 from app.core.llm_queue import Priority  # noqa: E402
 from app.core.provider_queue import ProviderQueue  # noqa: E402

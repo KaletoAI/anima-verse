@@ -35,10 +35,22 @@ on both axes) with a storey of 3 m:
 Usage:  ./.venv/bin/python scripts/smoke_scene_recipe.py
 """
 import math
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.models.world would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="scene-recipe-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="scene-recipe-storage-"))
 
 from app.core import scene_recipe  # noqa: E402
 

@@ -87,10 +87,22 @@ The cases, each with its hand-derived arithmetic:
       which leaves 0.5 untouched. The two neighbouring edges are 0.7211 m
       away against the chamfer's 0.1414 m, so the chamfer wins.
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.models.world would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="exit-migration-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="exit-migration-storage-"))
 
 from app.models.world import project_exit_to_opening  # noqa: E402
 

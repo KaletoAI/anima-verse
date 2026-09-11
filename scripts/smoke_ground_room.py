@@ -89,10 +89,22 @@ Part 5 — the ground room carries no GEOMETRY (`_sanitize_rooms_layout`,
     ground without a layout      -> untouched
     ground with geometry + props -> only the props survive
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.models.world would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="ground-room-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="ground-room-storage-"))
 
 from app.models.world import (  # noqa: E402
     GROUND_ROOM_ID, ground_room_action, ground_room_target)

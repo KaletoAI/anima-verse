@@ -301,10 +301,22 @@ Part 8 — the hull door (§ 6), through compose_scene. A corridor has no walls,
       a nine-entry list keeps the first eight.
 """
 import logging
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.models.world would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="floor-rooms-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="floor-rooms-storage-"))
 
 from app.models import world  # noqa: E402
 # Pure import too — world_ops opens no world at import time (checked: the

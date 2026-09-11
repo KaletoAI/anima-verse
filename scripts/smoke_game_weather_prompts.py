@@ -45,11 +45,23 @@ Usage:
     ./.venv/bin/python scripts/smoke_game_weather_prompts.py
 Exit code 0 = all checks passed.
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.core.prompt_compose_llm would open its
+# world.db and leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="game-weather-prompts-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="game-weather-prompts-storage-"))
 
 import app.core.game_time as gt          # noqa: E402
 import app.core.timeutils as timeutils   # noqa: E402

@@ -61,10 +61,22 @@ Part 5 — the width of a pass-through (world_ops._sanitize_map3d, user test
       width "wide" (not a number) → entry dropped (a structural reject, as
                                     before: there is nothing to clamp)
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.models.world would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="boundary-entry-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="boundary-entry-storage-"))
 
 from app.core import scene_recipe  # noqa: E402
 from app.core.boundary_entry import (  # noqa: E402

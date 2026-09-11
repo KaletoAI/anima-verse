@@ -65,13 +65,25 @@ Expected counts, derived from that rule:
 Exit code 0 = all checks passed, 1 = at least one failed.
 """
 import logging
+import os
 import sys
+import tempfile
 import threading
 import time
 import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.core.provider_queue would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="model-cooldown-log-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="model-cooldown-log-storage-"))
 
 import inspect  # noqa: E402
 

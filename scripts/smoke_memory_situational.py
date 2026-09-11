@@ -65,10 +65,22 @@ plan-memory-facts-and-commitments.md, section "Situativer Memory-Block"):
 
 Exit code 0 = all checks passed, 1 = at least one failed.
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.core.memory_situational would open its
+# world.db and leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="memory-situational-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="memory-situational-storage-"))
 
 from app.core import memory_situational as ms  # noqa: E402
 from app.core.streaming import compose_messages  # noqa: E402

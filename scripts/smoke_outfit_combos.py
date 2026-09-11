@@ -9,10 +9,22 @@ in the queue.
 
 Usage:  ./.venv/bin/python scripts/smoke_outfit_combos.py
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.models.inventory would open its world.db and
+# leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="outfit-combos-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="outfit-combos-storage-"))
 
 from app.core import outfit_batch as ob  # noqa: E402
 

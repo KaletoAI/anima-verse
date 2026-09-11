@@ -52,11 +52,22 @@ day-of-year 1 / 31 / 61 / 91, week length = 7 (the world has no weekdays).
    window around a real "now" T is [T − 840 s, T + 600 s) — 24 real minutes,
    one game day at factor 60.
 """
+import os
 import sys
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.core.day_consolidation would open its
+# world.db and leave the working tree dirty.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="day-key-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="day-key-storage-"))
 
 from app.core import day_consolidation as dc  # noqa: E402
 from app.core import memory_service as ms  # noqa: E402
