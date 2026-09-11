@@ -12,9 +12,8 @@ Ablauf:
 """
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
 
-from app.core.timeutils import utc_now
+from app.core.timeutils import game_time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -844,7 +843,9 @@ class PromptBuilder:
 
         loc_data = get_location(raw_location)
         current_room_id = get_character_current_room(self.character_name)
-        hour = utc_now().hour
+        # Day/night is a GAME-clock question and the calendar answers it: the
+        # season's sunrise/sunset, not a fixed hour of the system clock.
+        is_day = game_time().is_day()
 
         location_name = ""
         location_desc = ""
@@ -873,7 +874,7 @@ class PromptBuilder:
             room_data = get_room_by_id(loc_data, current_room_id)
             if room_data:
                 location_name = room_data.get("name", "")
-                if 6 <= hour < 18:
+                if is_day:
                     location_desc = (room_data.get("image_prompt_day", "")
                                      or _safe_desc_fallback(room_data.get("description", "")))
                 else:
@@ -884,7 +885,7 @@ class PromptBuilder:
             # Fallback: Location-Level
             location_name = loc_data.get("name", raw_location) if loc_data else raw_location
             if loc_data:
-                if 6 <= hour < 18:
+                if is_day:
                     location_desc = (loc_data.get("image_prompt_day", "")
                                      or _safe_desc_fallback(loc_data.get("description", "")))
                 else:
