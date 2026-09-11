@@ -12,6 +12,8 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
@@ -41,6 +43,84 @@ def _trace_fields() -> Tuple[str, str]:
     if not t:
         return "", ""
     return t.get("id", ""), t.get("kind", "")
+
+
+# A caller that retries the same logical call over its own fallback chain
+# (llm_router.llm_call) reports the outcome itself. While this is set, a
+# failed LLM task of the upstream class is logged here as a WARNING without a
+# traceback — the ERROR with the full traceback belongs to the caller, and
+# only once its chain is exhausted. Read at SUBMIT time and stamped onto the
+# task, because the worker THREAD does not inherit the caller's context (same
+# reason as LLMTask.trace_id).
+_caller_handles_failure: ContextVar[bool] = ContextVar(
+    "llm_caller_handles_failure", default=False)
+
+
+@contextmanager
+def caller_handles_failure():
+    """Marks LLM submits inside this block as reported by the caller."""
+    token = _caller_handles_failure.set(True)
+    try:
+        yield
+    finally:
+        _caller_handles_failure.reset(token)
+
+
+def _is_upstream_failure_safe(err: BaseException) -> bool:
+    """``llm_router._is_upstream_failure`` without an import-time dependency —
+    the router imports this module, so the import stays local and a failure to
+    resolve it means "not recoverable" (full traceback)."""
+    try:
+        from app.core.llm_router import _is_upstream_failure
+        return _is_upstream_failure(err)
+    except Exception:
+        return False
+
+
+def log_task_failure(queue_name: str, task: LLMTask, err: BaseException) -> None:
+    """Logs a failed LLM task at the level its outcome deserves.
+
+    An upstream failure (5xx, connection drop, "no servable backend") whose
+    caller retries it over a fallback chain is NOT final: it becomes a WARNING
+    without a traceback, and the caller writes the ERROR once the chain is
+    exhausted. Everything else — a user/payload error, or any failure nobody
+    else reports — keeps the ERROR and the full traceback.
+    """
+    if getattr(task, "_caller_handles_failure", False) and _is_upstream_failure_safe(err):
+        logger.warning("[%s] Upstream failure: %s: %s — the caller falls back",
+                       queue_name, task.task_id, err)
+    else:
+        logger.error("[%s] Error: %s: %s", queue_name, task.task_id, err, exc_info=True)
+
+
+def cooldown_after_failure(provider: Provider, model_name: str,
+                           task_type: str, err: BaseException) -> None:
+    """Puts the provider (or just one of its models) into cooldown after a
+    backend-side crash (5xx, process exit, connection drop), so resolve_llm
+    skips it and the routing chain falls through. Streaming consumers that do
+    not go through llm_call benefit too.
+
+    EXCEPTION: a 503 "No healthy backend for model X" is model-specific — cool
+    down only that (provider, model) pair, NOT the whole provider, which keeps
+    serving its other models.
+
+    Both cooldown setters are idempotent and log only the FIRST time per
+    outage, so this call and llm_router.llm_call's own one leave a single line.
+    """
+    try:
+        from app.core.llm_router import (
+            _is_upstream_failure, _UPSTREAM_COOLDOWN_SECONDS,
+            mark_model_unhealthy,
+        )
+        from app.core.llm_client import _is_no_backend_error
+        if _is_no_backend_error(err):
+            mark_model_unhealthy(provider.name, model_name)
+        elif _is_upstream_failure(err):
+            provider.mark_unhealthy(
+                f"upstream-fail [{task_type}]: {str(err)[:120]}",
+                _UPSTREAM_COOLDOWN_SECONDS)
+    except Exception:
+        pass
 
 
 def _wait_for_future(future, task, timeout: float, poll_interval: float = 2.0):
@@ -245,6 +325,8 @@ class ProviderQueue:
             _llm=llm,
             _messages=messages_or_prompt)
         task.trace_id, task.trace_kind = _trace_fields()
+        # Who reports a failure of this task — see caller_handles_failure().
+        task._caller_handles_failure = _caller_handles_failure.get()
 
         with self._lock:
             self._seq_counter += 1
@@ -835,37 +917,15 @@ class ProviderQueue:
                         task.status = "cancelled"
                         task.error = "Abgebrochen"
                         task.duration_s = round(time.monotonic() - t0, 2)
-                        logger.info("[%s] Task abgebrochen: %s (%s)",
+                        logger.info("[%s] Task cancelled: %s (%s)",
                                     self._queue_name, task.task_id, task.task_type)
                     else:
                         task.status = "failed"
                         task.error = str(e)
                         task.duration_s = round(time.monotonic() - t0, 2)
-                        logger.error("[%s] Fehler: %s: %s", self._queue_name, task.task_id, e, exc_info=True)
+                        log_task_failure(self._queue_name, task, e)
                         _log_task_result(task, model_name, max_tokens, None, error=task.error)
-                        # Backend-side crash (5xx, process exit, conn drop):
-                        # cooldown the provider so resolve_llm skips it and
-                        # the routing chain falls through. Streaming consumers
-                        # that don't go through llm_call benefit too.
-                        # EXCEPTION: a 503 "No healthy backend for model X" is
-                        # model-specific — cool down only that (provider, model)
-                        # pair, NOT the whole provider (it keeps serving its
-                        # other models). Mirrors llm_router.llm_call /
-                        # streaming — only the queue worker lacked the guard.
-                        try:
-                            from app.core.llm_router import (
-                                _is_upstream_failure, _UPSTREAM_COOLDOWN_SECONDS,
-                                mark_model_unhealthy,
-                            )
-                            from app.core.llm_client import _is_no_backend_error
-                            if _is_no_backend_error(e):
-                                mark_model_unhealthy(self.provider.name, model_name)
-                            elif _is_upstream_failure(e):
-                                self.provider.mark_unhealthy(
-                                    f"upstream-fail [{task.task_type}]: {str(e)[:120]}",
-                                    _UPSTREAM_COOLDOWN_SECONDS)
-                        except Exception:
-                            pass
+                        cooldown_after_failure(self.provider, model_name, task.task_type, e)
                 finally:
                     with self._lock:
                         self._futures.pop(task.task_id, None)

@@ -26,6 +26,7 @@ from app.core.llm_queue import get_llm_queue
 from app.core.log import get_logger
 from app.core.provider import Provider
 from app.core.provider_manager import get_provider_manager
+from app.core.provider_queue import caller_handles_failure
 
 logger = get_logger("llm_router")
 
@@ -477,12 +478,22 @@ def mark_model_unhealthy(provider_name: str, model: str,
                          cooldown_seconds: float = _UPSTREAM_COOLDOWN_SECONDS) -> None:
     """Marks a single (provider, model) pair unhealthy without touching the
     provider's overall availability. Used for "no servable backend for model X"
-    so other models on the same provider keep routing normally."""
+    so other models on the same provider keep routing normally.
+
+    ONE warning per outage: the same 503 reaches this function twice (the
+    queue worker on the failed task, llm_call on the re-raised exception).
+    A repeat inside a running cooldown only pushes the deadline out and logs
+    DEBUG."""
     if not provider_name or not model:
         return
+    already_cooling = _model_cooled_down(provider_name, model)
     _MODEL_COOLDOWN[(provider_name, model)] = time.monotonic() + max(0.0, cooldown_seconds)
-    logger.warning("Model %s/%s in cooldown for %ds (no servable backend)",
-                   provider_name, model, int(cooldown_seconds))
+    if already_cooling:
+        logger.debug("Model %s/%s stays in cooldown for another %ds (no servable backend)",
+                     provider_name, model, int(cooldown_seconds))
+    else:
+        logger.warning("Model %s/%s in cooldown for %ds (no servable backend)",
+                       provider_name, model, int(cooldown_seconds))
 
 
 def llm_call(
@@ -492,25 +503,29 @@ def llm_call(
     *,
     agent_name: str = "", priority: Optional[int] = None,
     label: str = "", max_tokens: Optional[int] = None) -> Any:
-    """Zentraler LLM-Einstiegspunkt fuer Non-Stream-Calls.
+    """Central LLM entry point for non-streaming calls.
 
-    Resolved Provider+Model per Task, submitted ueber Queue, Logging
-    laeuft automatisch in der Queue-Worker. Bei Upstream-Failures
-    (5xx / Connection-Reset / Backend-Crash) wird der Provider in
-    Cooldown gesetzt und der Call durch die Routing-Kette weitergeleitet
-    (max ``_LLM_CALL_MAX_ATTEMPTS`` Versuche).
+    Resolves provider+model per task and submits through the queue; the queue
+    worker does the logging. On an upstream failure (5xx / connection reset /
+    backend crash) the provider goes into cooldown and the call moves on
+    through the routing chain (at most ``_LLM_CALL_MAX_ATTEMPTS`` attempts).
 
-    ``max_tokens`` capt das Completion-Budget fuer DIESEN Call (statt des
-    Routing-Eintrags) — Anti-Halluzinations-Schranke fuer eng begrenzte
-    Ausgaben wie den Prompt-Composer.
+    This function OWNS the failure report for its attempts: it submits inside
+    ``caller_handles_failure()``, so the worker keeps a recoverable failure at
+    WARNING, and the ERROR with the full traceback is written here — once,
+    when the chain is exhausted.
+
+    ``max_tokens`` caps the completion budget for THIS call (instead of the
+    routing entry) — the anti-hallucination bound for tightly limited output
+    such as the prompt composer.
 
     Returns:
-        Das Response-Objekt der Queue (kompatibel mit bestehenden
-        Aufrufstellen: `.content` liefert den Text).
+        The queue's response object (compatible with the existing call sites:
+        `.content` yields the text).
 
     Raises:
-        RuntimeError: wenn kein LLM fuer den Task verfuegbar ist oder
-        alle Fallback-Provider scheitern.
+        RuntimeError: when no LLM is available for the task, or every
+        fallback provider failed.
     """
     if priority is None:
         from app.core.llm_tasks import get_default_priority
@@ -526,10 +541,14 @@ def llm_call(
         instance = resolve_llm(task, agent_name=agent_name)
         if instance is None:
             if last_err is not None:
+                # Nothing caught this one — the traceback the worker held back
+                # belongs in the log now.
+                logger.error("llm_call: no provider left for '%s' after %d attempt(s)",
+                             task, attempt - 1, exc_info=last_err)
                 raise RuntimeError(
-                    f"llm_call: Alle Provider fuer '{task}' fehlgeschlagen — "
-                    f"letzter Fehler: {last_err}")
-            raise RuntimeError(f"llm_call: Kein verfuegbares LLM fuer Task '{task}'")
+                    f"llm_call: every provider for '{task}' failed — "
+                    f"last error: {last_err}")
+            raise RuntimeError(f"llm_call: no LLM available for task '{task}'")
 
         llm = (instance.create_llm(max_tokens=max_tokens) if max_tokens
                else instance.create_llm())
@@ -538,13 +557,14 @@ def llm_call(
                     agent_name or "-", attempt, _LLM_CALL_MAX_ATTEMPTS)
 
         try:
-            return get_llm_queue().submit(
-                task_type=task,
-                priority=priority,
-                llm=llm,
-                messages_or_prompt=messages,
-                agent_name=agent_name,
-                label=label)
+            with caller_handles_failure():
+                return get_llm_queue().submit(
+                    task_type=task,
+                    priority=priority,
+                    llm=llm,
+                    messages_or_prompt=messages,
+                    agent_name=agent_name,
+                    label=label)
         except Exception as e:
             last_err = e
             if not _is_upstream_failure(e):
@@ -567,6 +587,10 @@ def llm_call(
                 _cooldown_provider(instance.provider_name, f"upstream-fail: {str(e)[:120]}")
             # Loop continues; resolve_llm now skips the cooled-down model/provider.
 
+    # The fallback chain is used up — this failure is final, so it is logged
+    # here with the traceback the queue worker left to the caller.
+    logger.error("llm_call: every provider for '%s' failed after %d attempts",
+                 task, _LLM_CALL_MAX_ATTEMPTS, exc_info=last_err)
     raise RuntimeError(
-        f"llm_call: Alle Provider fuer '{task}' fehlgeschlagen nach "
-        f"{_LLM_CALL_MAX_ATTEMPTS} Versuchen — letzter Fehler: {last_err}")
+        f"llm_call: every provider for '{task}' failed after "
+        f"{_LLM_CALL_MAX_ATTEMPTS} attempts — last error: {last_err}")

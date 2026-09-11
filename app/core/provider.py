@@ -48,13 +48,24 @@ class Provider:
         process exit, connection reset) but the /models probe might still
         report 200. The cooldown blocks scheduling here so the routing
         chain falls through to the next provider until the window expires.
+
+        ONE warning per outage: the same failure reaches this method twice
+        (the queue worker sees the task fail, llm_router.llm_call sees the
+        re-raised exception). A repeat while the cooldown still runs only
+        extends the deadline and logs DEBUG — the second warning said
+        nothing the first one had not.
         """
         import time as _time
+        already_cooling = self._cooldown_active()
         self.available = False
         self._cooldown_until = _time.monotonic() + max(0.0, cooldown_seconds)
         self._cooldown_reason = reason or "unhealthy"
-        logger.warning("Provider %s in cooldown for %ds: %s",
-                       self.name, int(cooldown_seconds), reason)
+        if already_cooling:
+            logger.debug("Provider %s stays in cooldown for another %ds: %s",
+                         self.name, int(cooldown_seconds), reason)
+        else:
+            logger.warning("Provider %s in cooldown for %ds: %s",
+                           self.name, int(cooldown_seconds), reason)
 
     def _cooldown_active(self) -> bool:
         if not self._cooldown_until:
