@@ -744,6 +744,13 @@ def run_action_for(name: str, *,
     (:func:`_apply_home_answer`): one field, no room, and the walk is drawn
     rather than asked.
 
+    There is deliberately NO retry for transport failures here: ``llm_call``
+    already makes up to three attempts along the routing fallback chain and
+    puts a provider that refuses the connection into a 300 s cooldown. A retry
+    on this level would run into exactly that cooldown and gain nothing — the
+    turn it costs is the "one interval of quiet" the stamp below buys
+    (2026-09-11 log analysis, finding B9).
+
     ``llm`` is injectable for the smoke; it has ``llm_call``'s call shape.
     """
     if llm is None:
