@@ -12,7 +12,7 @@ order, so the plain SQL ordering keeps working.
 """
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from app.core.game_time import GameDuration, GameTime, get_calendar
 from app.core.timeutils import game_time, parse_iso, utc_now, utc_now_iso
@@ -322,31 +322,35 @@ _ADDRESSEE_RE = re.compile(
 def apply_extracted_memories(character_name: str,
     extracted: List[Dict[str, Any]],
     extraction_context: Optional[Dict[str, Any]] = None) -> int:
-    """Speichert extrahierte Memories. Commitments mit Delay werden als Intent eingeplant.
+    """Stores extracted memories. A commitment with a delay becomes an intent.
+
+    Stamps are SYSTEM time: memories carry an aware ISO stamp written by
+    ``utc_now_iso()``, so the dedup window is built with ``utc_now()`` and read
+    back with ``parse_iso()``. A naive system-clock stamp here raised a
+    TypeError on the very first row and silently killed the whole extraction.
 
     extraction_context (optional):
-      - source: "user_chat" | "thought" | "random_event" | "group_chat" — wo
-        die Extraktion ausgeloest wurde
-      - is_background: bool — True bei Background-Pfaden (Thought etc.). Bei
-        True wird ein commitment ohne delay UND ohne externen Adressaten zu
-        semantic umklassifiziert, damit der commitment-Schutz nicht greift.
-      - event_id: str — wenn aus einem Random-Event-Kontext, fuer spaeteren
-        Cleanup beim Event-Abbruch.
+      - source: "user_chat" | "thought" | "random_event" | "group_chat" — where
+        the extraction was triggered.
+      - is_background: bool — True on background paths (thoughts etc.). When
+        True a commitment without a delay AND without an external addressee is
+        reclassified as semantic, so the commitment protection does not apply.
+      - event_id: str — set when the extraction came from a random-event
+        context, for the later cleanup when the event is cancelled.
     """
     from app.models.memory import add_memory, load_memories, _keyword_overlap
-    from datetime import datetime as _dt, timedelta as _td
 
     ctx = extraction_context or {}
     is_background = bool(ctx.get("is_background"))
     event_id = ctx.get("event_id") or ""
     source = ctx.get("source") or ""
 
-    # Recent-Memory-Pool fuer Dedup: alle <14d, Inhalt vorbereiten
-    recent_cutoff = _dt.now() - _td(days=14)
+    # Recent-memory pool for the dedup check: everything younger than 14 days.
+    recent_cutoff = utc_now() - timedelta(days=14)
     recent_contents: List[str] = []
     for e in load_memories(character_name):
         try:
-            ts = _dt.fromisoformat(e.get("timestamp", ""))
+            ts = parse_iso(e.get("timestamp", ""))
         except (ValueError, TypeError):
             continue
         if ts >= recent_cutoff:
@@ -369,20 +373,20 @@ def apply_extracted_memories(character_name: str,
             delay_minutes = 0
         new_content = item.get("content", "")
 
-        # Dedup: gegen alle <14d alten Memories. Bei >50% Keyword-Overlap skip,
-        # damit nicht jede Variation desselben Plans ("Wanzen installieren" /
-        # "Wanzen in der Lagerhalle installieren") einen eigenen Eintrag bekommt.
+        # Dedup against every memory younger than 14 days: skip on more than
+        # 50% keyword overlap, so that every variation of the same plan does
+        # not get its own entry.
         if new_content and any(_keyword_overlap(c, new_content) > 0.5 for c in recent_contents):
             continue
 
-        # Background-Pfad: commitment ohne delay UND ohne externen Adressaten
-        # → semantic. Bleibt als Fakt erhalten, faellt aber unter den 50er-Cap
-        # statt unter den commitment-Schutz.
+        # Background path: a commitment without a delay AND without an external
+        # addressee becomes semantic. It is kept as a fact, but falls under the
+        # 50-entry cap instead of the commitment protection.
         if is_background and mem_type == "commitment" and not delay_minutes:
             if not _ADDRESSEE_RE.search(new_content or ""):
                 mem_type = "semantic"
 
-        # Commitment mit Zeitangabe → Intent erzeugen
+        # A commitment with a due time creates an intent.
         intent_created = False
         if mem_type == "commitment" and delay_minutes:
             _create_intent_from_commitment(character_name, item["content"],
@@ -391,15 +395,15 @@ def apply_extracted_memories(character_name: str,
             intent_created = True
 
         importance = item.get("importance", 3)
-        # Auto-extrahierte Plaene aus Background-Generation (Activities/Thoughts/
-        # Random Events) werden vom Extraction-LLM oft mit imp 4-5 bewertet, weil
-        # die Story-Inhalte dramatisch klingen. Das fuehrt zu Backlog-Inflation
-        # und schuetzt sie vor dem Auto-Cleanup. Echte Wichtigkeit wird durch den
-        # User-Kontext bestimmt, nicht durch das LLM.
+        # Plans auto-extracted from background generation (activities, thoughts,
+        # random events) are often rated importance 4-5 by the extraction LLM,
+        # because the story content sounds dramatic. That inflates the backlog
+        # and shields those entries from the auto-cleanup. Real importance comes
+        # from the user context, not from the LLM.
         if intent_created and importance > 3:
             importance = 3
 
-        # Provenance ins Meta — fuer spaeteren Event-Cleanup und Debugging
+        # Provenance into the meta — for the later event cleanup and debugging.
         extra_meta: Dict[str, Any] = {}
         if source:
             extra_meta["source"] = source
