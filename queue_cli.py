@@ -171,7 +171,7 @@ def cmd_cancel(args: argparse.Namespace) -> None:
     conn = _connect()
     now = datetime.now().isoformat(timespec="seconds")
     cur = conn.execute(
-        "UPDATE tasks SET status='cancelled', completed_at=?, error='Abgebrochen (CLI)'"
+        "UPDATE tasks SET status='cancelled', completed_at=?, error='Cancelled (CLI)'"
         " WHERE task_id=? AND status='pending'",
         (now, args.task_id),
     )
