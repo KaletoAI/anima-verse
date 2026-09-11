@@ -1,4 +1,4 @@
-"""World routes - Orte und Aktivitaeten verwalten (User-Level)"""
+"""World routes - manage locations and activities (user level)."""
 import asyncio
 import io
 import os
@@ -2704,10 +2704,17 @@ def prop_delete(prop_id: str) -> Dict[str, Any]:
 # one that is not unique across locations.
 
 
-def _furnish_call(fn, *args) -> Dict[str, Any]:
+async def _furnish_call(fn, *args) -> Dict[str, Any]:
+    """Run one furnishing job call in the default threadpool.
+
+    The ``room_furnish`` / ``room_description_sync`` entry points are blocking:
+    they issue synchronous LLM calls and wait on the provider queue, which took
+    the event loop down for up to 11 s. ``asyncio.to_thread`` keeps the loop
+    free; exceptions (``FurnishError``, ``HTTPException``) come back unchanged.
+    """
     from app.core.room_furnish import FurnishError
     try:
-        return fn(*args)
+        return await asyncio.to_thread(fn, *args)
     except FurnishError as e:
         raise HTTPException(status_code=e.status, detail=e.message)
 
@@ -2745,7 +2752,7 @@ async def furnish_start(room_id: str, request: Request,
     open."""
     body = await _furnish_body(request)
     from app.core.room_furnish import start
-    return _furnish_call(start, room_id, body.get("exclude"))
+    return await _furnish_call(start, room_id, body.get("exclude"))
 
 
 @router.post("/rooms/{room_id}/furnish/direct")
@@ -2757,7 +2764,7 @@ async def furnish_direct(room_id: str, request: Request,
     review/accept as usual."""
     body = await _furnish_body(request)
     from app.core.room_furnish import start_direct
-    return _furnish_call(start_direct, room_id, body.get("proposal") or body)
+    return await _furnish_call(start_direct, room_id, body.get("proposal") or body)
 
 
 @router.post("/rooms/{room_id}/furnish/confirm")
@@ -2768,7 +2775,7 @@ async def furnish_confirm(room_id: str, request: Request,
     meshes are generated after accept (E6)."""
     body = await _furnish_body(request)
     from app.core.room_furnish import confirm
-    return _furnish_call(confirm, room_id, body.get("proposal"))
+    return await _furnish_call(confirm, room_id, body.get("proposal"))
 
 
 @router.post("/rooms/{room_id}/furnish/accept")
@@ -2784,44 +2791,44 @@ async def furnish_accept(room_id: str, request: Request,
     ``generating`` > 0."""
     body = await _furnish_body(request)
     from app.core.room_furnish import accept
-    return _furnish_call(accept, room_id, body.get("placements"))
+    return await _furnish_call(accept, room_id, body.get("placements"))
 
 
 @router.post("/rooms/{room_id}/furnish/discard")
-def furnish_discard(room_id: str,
-                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+async def furnish_discard(room_id: str,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Drop the job. Generated props stay in the library. 409 while meshes of
     an accepted room are still outstanding — the placements are in the room
     already, so there is nothing to discard until they have landed."""
     from app.core.room_furnish import discard
-    return _furnish_call(discard, room_id)
+    return await _furnish_call(discard, room_id)
 
 
 @router.post("/rooms/{room_id}/furnish/reset")
-def furnish_reset(room_id: str,
-                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+async def furnish_reset(room_id: str,
+                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Throw away a stage-1 proposal so a new one can be requested."""
     from app.core.room_furnish import reset
-    return _furnish_call(reset, room_id)
+    return await _furnish_call(reset, room_id)
 
 
 @router.post("/rooms/{room_id}/furnish/retry")
-def furnish_retry(room_id: str,
-                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+async def furnish_retry(room_id: str,
+                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Re-enter a failed job at its persisted state."""
     from app.core.room_furnish import retry
-    return _furnish_call(retry, room_id)
+    return await _furnish_call(retry, room_id)
 
 
 @router.post("/rooms/{room_id}/furnish/continue")
-def furnish_continue(room_id: str,
-                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+async def furnish_continue(room_id: str,
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Continue a job whose orchestrator thread died with the server
     (status ``stalled``). A job whose meshes all arrived while no thread was
     watching is closed instead of continued and answers
     ``{"status": "finished"}``."""
     from app.core.room_furnish import resume
-    return _furnish_call(resume, room_id)
+    return await _furnish_call(resume, room_id)
 
 
 # ── Room description ↔ inventory (E8, plan-furnish-v2.md § 2b B14b) ──
@@ -2840,7 +2847,7 @@ async def room_description_sync(room_id: str, request: Request,
     {proposal, inventory}; NOTHING is written. 404 = no such room."""
     body = await _furnish_body(request)
     from app.core.room_description_sync import propose
-    return _furnish_call(propose, room_id, str(body.get("lang") or ""))
+    return await _furnish_call(propose, room_id, str(body.get("lang") or ""))
 
 
 @router.put("/rooms/{room_id}/description")
@@ -2852,8 +2859,8 @@ async def room_description_write(room_id: str, request: Request,
     composite job id too; the furnish dialog's "Apply" uses it."""
     body = await _furnish_body(request)
     from app.core.room_description_sync import apply as apply_description
-    return _furnish_call(apply_description, room_id,
-                         str(body.get("description") or ""))
+    return await _furnish_call(apply_description, room_id,
+                               str(body.get("description") or ""))
 
 
 # ── Map Layout Import / Export ──
