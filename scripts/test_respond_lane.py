@@ -4,7 +4,9 @@
 Usage:
     ./.venv/bin/python scripts/test_respond_lane.py
 
-Runs WITHOUT the server and without a world DB: the LLM turn
+Runs WITHOUT the server and without a real world DB: the storage directory is
+redirected to a throwaway temp world, so the tracked worlds/demo/world.db stays
+untouched. The LLM turn
 (_run_respond_turn) and the room resolution (_char_room_key) are stubbed on
 the AgentLoop instance; the module-level gates (_is_paused,
 _is_respond_eligible, _chat_llm_available, _get_max_parallel_responds) are
@@ -34,11 +36,24 @@ Expected numbers, derived by hand from the design (not from output):
    running is deferred, not dropped: the stub must run exactly twice.
 """
 import asyncio
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Storage and clip library MUST be redirected BEFORE the first app import:
+# without it the default world is worlds/demo, which is tracked in git, and
+# AgentLoop's pause gate (_is_paused -> is_world_frozen -> get_connection)
+# would open its world.db and leave the working tree dirty.
+STORAGE = Path(tempfile.mkdtemp(prefix="respond-lane-storage-"))
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="respond-lane-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(STORAGE)
 
 from app.core import agent_loop as al  # noqa: E402
 

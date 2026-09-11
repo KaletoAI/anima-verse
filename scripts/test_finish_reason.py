@@ -2,8 +2,9 @@
 """Check: the provider's finish_reason survives from the SDK response to the log.
 
 No server, no world DB, no network — the OpenAI SDK call is replaced by a
-hand-built fake response, and the JSONL logger writes into a temp directory so
-the real logs/llm_calls.jsonl is never touched.
+hand-built fake response, the JSONL logger writes into a temp directory so the
+real logs/llm_calls.jsonl is never touched, and the storage directory points at
+a throwaway world so the tracked worlds/demo/world.db stays untouched.
 
 Covered:
   1. finish_reason="stop"      -> LLMResponse.finish_reason == "stop", no warning
@@ -19,6 +20,7 @@ Usage:  ./.venv/bin/python scripts/test_finish_reason.py
 import asyncio
 import json
 import logging
+import os
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -26,6 +28,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Storage and clip library MUST be redirected BEFORE the first app import:
+# without it the default world is worlds/demo, which is tracked in git, and
+# llm_stats.record_call (reached through _log_task_result) would INSERT into
+# its world.db and leave the working tree dirty.
+STORAGE = Path(tempfile.mkdtemp(prefix="finish-reason-storage-"))
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
+    prefix="finish-reason-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(STORAGE)
 
 from app.core import llm_client as lc          # noqa: E402
 from app.core import provider_queue as pq      # noqa: E402
