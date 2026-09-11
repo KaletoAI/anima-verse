@@ -367,11 +367,17 @@ class BackendPool:
         return None
 
     def _wait_for_explicit_backend(self, backend_name, media: str = "image",
-                                   has_input_image: bool = False):
+                                   has_input_image: bool = False,
+                                   log_missing: bool = True):
         """Resolves a backend glob (e.g. "ComfyUI*", "Together*") via the match
         concept to a concrete, available backend. An exact name matches itself.
         ``media`` keeps the media kinds apart. Fail-fast: no polling — recovery
         is detected by the background poller (channel_health) every 30s.
+
+        ``log_missing`` says whether a miss is worth a WARNING. The POLICY for a
+        miss belongs to the caller, and so does the message: a soft match falls
+        back to the default selection and logs that itself, so this function
+        announcing "fail-fast" on the same event only contradicted it.
         """
         import fnmatch
         pl = (backend_name or "").strip().lower()
@@ -382,6 +388,7 @@ class BackendPool:
                 b.check_availability()
         target = self.match_backend(backend_name, media=media,
                                     has_input_image=has_input_image)
-        if not target:
-            logger.warning("Backend '%s' nicht verfuegbar/kein Treffer — fail-fast", backend_name)
+        if not target and log_missing:
+            logger.warning("Backend '%s' unavailable / no match — fail-fast",
+                           backend_name)
         return target

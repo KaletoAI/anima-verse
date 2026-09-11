@@ -53,13 +53,20 @@ Hand-derived expectations
       ``openai_diffusion`` raises on its request timeout. Before the fix:
       ``[]``, which the runner read as a failure and answered with a 300s
       cooldown on a backend that was merely slow.
+  [7] ``_wait_for_explicit_backend("nope")`` on a pool that cannot match it
+      logs exactly ONE warning; with ``log_missing=False`` it logs NONE.
+      The soft-match path in ``service.generate`` passes False: it falls back
+      to the default selection and says so itself, so the pool announcing
+      "fail-fast" for the same event produced a contradictory log pair.
 """
+import logging
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.imagegen.base import BackendBusyError, ImageBackend  # noqa: E402
+from app.imagegen import selection as selection_mod  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
 from app.imagegen.backends.openai_diffusion import OpenAIDiffusionBackend  # noqa: E402
 from app.imagegen.backends import civitai as civitai_mod  # noqa: E402
@@ -181,6 +188,31 @@ try:
 except BaseException as e:   # noqa: BLE001
     raised = e
 check("civitai timeout: exception type", type(raised).__name__, "BackendBusyError")
+
+print("[7] the miss is announced by whoever owns the policy")
+
+
+class _CountingHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.warnings = []
+
+    def emit(self, record):
+        if record.levelno >= logging.WARNING:
+            self.warnings.append(record.getMessage())
+
+
+_counter = _CountingHandler()
+selection_mod.logger.addHandler(_counter)
+try:
+    empty_pool = BackendPool([], lambda n: {})
+    empty_pool._wait_for_explicit_backend("nope")
+    check("explicit miss: warnings", len(_counter.warnings), 1)
+    _counter.warnings.clear()
+    empty_pool._wait_for_explicit_backend("nope", log_missing=False)
+    check("soft miss: warnings", len(_counter.warnings), 0)
+finally:
+    selection_mod.logger.removeHandler(_counter)
 
 print()
 if FAILED:

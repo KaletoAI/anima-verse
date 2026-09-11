@@ -475,9 +475,11 @@ class ImageService:
         return self._pool._wait_for_backend(character_name, has_input_image)
 
     def _wait_for_explicit_backend(self, backend_name, media: str = "image",
-                                   has_input_image: bool = False):
+                                   has_input_image: bool = False,
+                                   log_missing: bool = True):
         return self._pool._wait_for_explicit_backend(
-            backend_name, media=media, has_input_image=has_input_image)
+            backend_name, media=media, has_input_image=has_input_image,
+            log_missing=log_missing)
 
     @staticmethod
     def _run_on_backend_channel(backend: ImageBackend, gen_fn, *,
@@ -1472,8 +1474,12 @@ class ImageService:
                         f"(disabled, offline, or cooling down).")
             logger.info("Explicit backend: %s", explicit_backend)
         elif _soft_backend:
+            # A soft match MAY miss — the default selection takes over below
+            # and the fallback is logged right here. Nothing to warn about in
+            # the pool.
             backend = self._wait_for_explicit_backend(
-                _soft_backend, has_input_image=_has_input_image)
+                _soft_backend, has_input_image=_has_input_image,
+                log_missing=False)
             _match_source = ("character match" if _soft_from_character
                              else "render match")
             if backend:
