@@ -163,13 +163,8 @@ SYSTEM_TODAY = re.compile(r"\b(?:date|datetime)\.today\(\)")
 #   app/core/model_suitability.py:477 — a model-test record dates the
 #       MEASUREMENT; capabilities are shared across worlds and describe the
 #       model plus its hardware, not a game day.
-# TODO app/models/character_template.py:600 — _compute_age() derives an age
-#       from date.today() against a real birth date. The user decided this is
-#       rebuilt onto the game calendar in a SEPARATE round (2026-09-11);
-#       remove this entry when that lands.
 WHITELIST_E_CLOCK = {
     "app/core/model_suitability.py",
-    "app/models/character_template.py",
 }
 
 
@@ -280,6 +275,9 @@ PROBES: Tuple[Tuple[str, str, str], ...] = (
      "    today = utc_now().date().isoformat()", "E"),
     ("app/core/npc_windows.py", "    t = to_world_tz(stamp).time()", "E"),
     ("app/models/character.py", "    born = date.today()", "E"),
+    # character_template.py used to be exempt here for _compute_age(); the
+    # computation is gone, so the file is an ordinary one again.
+    ("app/models/character_template.py", "    today = date.today()", "E"),
     # …and the exemptions, which must stay silent:
     ("app/core/chat_ops.py", "    # game_now() was removed in T1", ""),
     ("app/core/chat_ops.py", "    x = 1   # replaces game_now()", ""),
@@ -295,7 +293,6 @@ PROBES: Tuple[Tuple[str, str, str], ...] = (
      "    name = f\"{loc}_{utc_now().strftime('%Y%m%d%H%M%S')}.png\"", ""),
     ("app/core/sessions.py", "    ts = utc_now().timestamp()", ""),
     ("app/core/thoughts.py", "    h = game_time().hour", ""),
-    ("app/models/character_template.py", "    today = date.today()", ""),
     ("app/core/model_suitability.py",
      '    rec = {"date": utc_now().date().isoformat()}', ""),
     ("app/server.py", "    last = _dt.fromisoformat(_stamp.read_text())", ""),
