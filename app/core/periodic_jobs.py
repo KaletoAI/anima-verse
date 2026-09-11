@@ -378,6 +378,21 @@ def _sub_npc_windows():
         logger.debug("npc_windows sub error: %s", e)
 
 
+def _sub_birthdays():
+    """Announce the birthdays that fall on the current GAME day.
+
+    The sweep itself is idempotent per game day (world_kv guard), so the
+    5-minute rhythm here is only how fast the world notices — a birthday that
+    started while the world was frozen is announced on the first tick after
+    the thaw, not lost.
+    """
+    try:
+        from app.core.birthday import run_birthday_sweep
+        run_birthday_sweep()
+    except Exception as e:
+        logger.debug("birthdays sub error: %s", e)
+
+
 def _sub_npc_wanderers():
     """Keep up to ``npc.wanderer_quota`` travelling NPCs on the roads.
 
@@ -436,6 +451,7 @@ _SUB_TASKS: List[tuple] = [
     # cannot ride along with the hourly TTL sweep (see _sub_npc_windows).
     (_sub_npc_windows,               120,                   "npc_windows"),
     (_sub_npc_wanderers,             300,                   "npc_wanderers"),
+    (_sub_birthdays,                 300,                   "birthdays"),
     (_sub_npc_actions,               60,                    "npc_actions"),
     (_sub_npc_scenes,                60,                    "npc_scenes"),
     (_sub_improvements,              30,                    "improvements"),
