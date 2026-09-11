@@ -259,20 +259,25 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         if self.extra_params:
             payload.update(self.extra_params)
 
-        logger.info(f"{self.name}: Starte Generierung (Alias {model}, {width}x{height}, "
-                    f"{len(ref_images)} Ref-Bild(er), rf={self.response_format})")
+        logger.info(f"{self.name}: starting generation (alias {model}, {width}x{height}, "
+                    f"{len(ref_images)} reference image(s), rf={self.response_format})")
         try:
             resp = self._post_gateway("generations", json=payload)
             return self._parse_image_response(resp)
         except BackendBusyError:
             raise  # load, not a defect — the fallback engine skips the cooldown
         except requests.Timeout:
-            logger.error(f"{self.name}: Timeout nach {self.timeout}s")
+            logger.error(f"{self.name}: timeout after {self.timeout}s")
             raise BackendBusyError("request timeout")
         except RuntimeError:
-            return []
+            # The precise HTTP mapping of _post_gateway (400/401/402/403/5xx,
+            # code in the text) must reach run_on_backend: it keeps the backend
+            # available on a 4xx payload error instead of cooling a healthy
+            # backend down for 300s. Re-raise, do NOT fall into the generic
+            # handler below.
+            raise
         except Exception as e:
-            logger.error(f"{self.name}: Fehler: {e}")
+            logger.error(f"{self.name}: error: {e}")
             return []
 
     def _to_openai_mask(self, raw: bytes) -> bytes:
@@ -350,8 +355,8 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         data = {k: str(v) for k, v in data.items()}
 
         _img_n = sum(1 for f, _ in files if f == "image")
-        _mask_info = f"1 mask [{self.mask_format}]" if mask_part else "KEINE mask"
-        logger.info(f"{self.name}: Starte Inpaint/edits (Alias {model}, {width}x{height}, "
+        _mask_info = f"1 mask [{self.mask_format}]" if mask_part else "NO mask"
+        logger.info(f"{self.name}: starting inpaint/edits (alias {model}, {width}x{height}, "
                     f"{_img_n} image + {_mask_info})")
         try:
             resp = self._post_gateway("edits", files=files, data=data)
@@ -359,10 +364,15 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         except BackendBusyError:
             raise  # load, not a defect — the fallback engine skips the cooldown
         except requests.Timeout:
-            logger.error(f"{self.name}: Timeout nach {self.timeout}s")
+            logger.error(f"{self.name}: timeout after {self.timeout}s")
             raise BackendBusyError("request timeout")
         except RuntimeError:
-            return []
+            # The precise HTTP mapping of _post_gateway (400/401/402/403/5xx,
+            # code in the text) must reach run_on_backend: it keeps the backend
+            # available on a 4xx payload error instead of cooling a healthy
+            # backend down for 300s. Re-raise, do NOT fall into the generic
+            # handler below.
+            raise
         except Exception as e:
-            logger.error(f"{self.name}: Fehler: {e}")
+            logger.error(f"{self.name}: error: {e}")
             return []
