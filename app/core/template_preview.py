@@ -27,9 +27,8 @@ Public API
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
 
-from app.core.timeutils import parse_iso, utc_now
+from app.core.timeutils import parse_iso
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -345,26 +344,36 @@ def _drive_consolidation_monthly(agent: str, avatar: str) -> PreviewResult:
 
 def _drive_consolidation_today(agent: str, avatar: str) -> PreviewResult:
     """history_manager._create_daily_summary needs a list of messages.
-    Build it the same way history_manager would build today's slice."""
+    Build it the way _update_daily_summary builds today's slice.
+
+    "Today" is the GAME day (decision E4), so the day key comes from the game
+    calendar and the same production helpers cut and group the slice:
+    ``_get_day_messages`` turns that key into the SYSTEM window the chat rows
+    are stamped in (``chat_messages.ts`` carries no game stamp), and
+    ``_group_by_partner`` reduces it to the pair being previewed. Slicing by
+    the system date instead would show a different day than the rollup the
+    preview is supposed to demonstrate.
+    """
+    from app.core.timeutils import game_time
+    from app.utils.history_manager import (_create_daily_summary,
+                                           _get_day_messages,
+                                           _group_by_partner)
+    today_key = game_time().day_key()
     try:
-        from app.models.chat import get_chat_history
-        history = get_chat_history(agent, partner_name=avatar) or []
-    except Exception:
-        history = []
-    today = utc_now().date().isoformat()
-    todays = []
-    for m in history:
-        ts = m.get("timestamp", "") if isinstance(m, dict) else getattr(m, "timestamp", "")
-        if ts.startswith(today):
-            todays.append(m)
+        todays = _group_by_partner(_get_day_messages(agent, today_key)).get(avatar, [])
+    except Exception as e:
+        logger.debug("preview: day messages for %s/%s failed: %s", agent, today_key, e)
+        todays = []
     if not todays:
         return {"ok": False, "output": "",
-                "note": f"No chat messages from today ({today}) between {avatar!r} and {agent!r}."}
-    from app.utils.history_manager import _create_daily_summary
-    task, sys, user = _capture_render(lambda: _create_daily_summary(todays, agent))
+                "note": f"No chat messages from today ({today_key}) between "
+                        f"{avatar!r} and {agent!r}."}
+    task, sys, user = _capture_render(
+        lambda: _create_daily_summary(todays, character_name=agent,
+                                      partner_name=avatar))
     return {"ok": True, "output": _format(task, sys, user),
             "note": "Production: history_manager._create_daily_summary "
-                    "with today's avatar↔agent transcript."}
+                    "with today's (game day) avatar↔agent transcript."}
 
 
 def _drive_consolidation_history_summary(agent: str, avatar: str) -> PreviewResult:
