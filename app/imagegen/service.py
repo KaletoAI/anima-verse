@@ -1896,13 +1896,23 @@ class ImageService:
                 return (f"Fehler: {backend.name} ist gerade ausgelastet — "
                         "bitte später erneut versuchen.")
             except RuntimeError as _err:
-                logger.error("Bildgenerierung fehlgeschlagen (%s): %s",
+                # Carry the backend's OWN words out of here. The generic
+                # "the API answered without images" line hid every reason —
+                # a 403 on the alias, a rejected payload, a dead gateway all
+                # read the same, and the warning a caller like model_refs
+                # showed was "render failed" and nothing more. The "Error: "
+                # prefix is what the consumers recognise (npc_assets
+                # `startswith(("error", "fehler"))`, instagram `"Error" in
+                # result[:20]`); every other caller extracts an image path by
+                # regex and treats "no match" as the failure it is.
+                logger.error("Image generation failed (%s): %s",
                              backend.name, _err)
-                images = []
+                _tq.track_finish(_track_id, error=str(_err)[:200])
+                return f"Error: {backend.name}: {str(_err)[:300]}"
 
             if not images:
-                _tq.track_finish(_track_id, error="Keine Bilder generiert")
-                return "API antwortete, aber keine Bilder enthalten."
+                _tq.track_finish(_track_id, error="no images generated")
+                return f"Error: {backend.name} returned no image."
 
             _gen_duration = time.time() - _gen_start
             logger.info("ERFOLG - %d Bild(er) generiert via %s (%.1fs)", len(images), backend.name, _gen_duration)
