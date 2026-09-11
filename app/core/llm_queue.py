@@ -79,6 +79,11 @@ class LLMTask:
     # caller retries this call over its own fallback chain and writes the
     # ERROR itself once the chain is exhausted.
     _caller_handles_failure: bool = field(default=False, repr=False)
+    # The original exception of a failed task, kept by the worker so the
+    # caller thread can chain it as __cause__ (LLM path) or re-raise it
+    # typed (GPU path, e.g. BackendBusyError). repr=False keeps the whole
+    # traceback out of the task representation in logs.
+    _exception: Optional[BaseException] = field(default=None, repr=False)
     # Monotonically increasing timestamp — used for stale detection so that
     # server clock changes/drift cannot distort it.
     _monotonic_created: float = field(default=0.0, repr=False)

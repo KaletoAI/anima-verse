@@ -359,8 +359,7 @@ class ProviderQueue:
             # stack from llm_client/HTTP as well — without it the traceback
             # would end at this raise. No original (e.g. watchdog timeout)
             # means no cause.
-            raise Exception(f"LLM Queue task failed: {task.error}") from getattr(
-                task, "_exception", None)
+            raise Exception(f"LLM Queue task failed: {task.error}") from task._exception
 
         return task.result
 
@@ -416,7 +415,7 @@ class ProviderQueue:
             # BackendBusyError = load from real defects). Queue-level failures
             # (watchdog timeout) have no original exception and stay generic:
             # a task that blows past the watchdog is treated as broken.
-            _orig = getattr(task, "_exception", None)
+            _orig = task._exception
             if _orig is not None:
                 raise _orig
             raise Exception(f"GPU task failed: {task.error}")
