@@ -289,12 +289,12 @@ def _delivered_image(result: str) -> bool:
 
     NEITHER PRODUCER RAISES. The service reports every failure as PROSE —
     "Error: backend … not available", "Fehler: Keine Instanz … (Timeout)" —
-    and a cache hit as the ``NO_NEW_IMAGE`` sentinel; a delivered render
-    always names a file path. So a path-shaped answer is the only "yes", and
-    everything else is worth a WARNING with the text in it.
+    while a delivered render always names a file path. So a path-shaped answer
+    is the only "yes", and everything else is worth a WARNING with the text
+    in it.
     """
     text = (result or "").strip()
-    if not text or "NO_NEW_IMAGE" in text:
+    if not text:
         return False
     if text.lower().startswith(("error", "fehler")):
         return False

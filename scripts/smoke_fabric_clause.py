@@ -128,9 +128,10 @@ class FakeImageService:
 
     def generate_from_input(self, raw):
         self.payloads.append(json.loads(raw))
-        # The cache-hit sentinel: a path-shaped answer would send the caller
-        # looking for a file that was never written (feedback_no_new_image_sentinel).
-        return "NO_NEW_IMAGE"
+        # An error string, not a path: a path-shaped answer would send the
+        # caller looking for a file that was never written. "Error: " is the
+        # prefix the service itself uses for a failed render.
+        return "Error: fake backend renders nothing"
 
 
 SERVICE = FakeImageService()
