@@ -2969,7 +2969,7 @@ def get_location_background(
     bg_path = world_ops.resolve_background_path(location_name, room=room,
                                                 file=file)
     if not bg_path or not bg_path.exists():
-        raise HTTPException(status_code=404, detail="Kein Hintergrundbild vorhanden")
+        raise HTTPException(status_code=404, detail="No background image available")
     suffix = bg_path.suffix.lower()
     media_types = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
     return FileResponse(
