@@ -545,12 +545,14 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
     too, because a pack ships its reference pose as one take among the
     movements. ``GET /clips-inbox/takes/{name}`` lists what a file offers.
     The Blender run takes a second or two, so the answer carries the finished
-    clip.
+    clip. It is a ``subprocess.run`` and goes into the threadpool — the
+    conversion stalled the event loop for 1.25 s per import.
 
     ``target`` defaults to ``licensed``: a foreign file is licensed material
     until its owner says otherwise. ``free`` (the tracked, redistributable
     library) needs ``redistributable: true`` — 400 without it.
     """
+    import asyncio
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
@@ -578,7 +580,8 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
             detail="the free library is redistributable — confirm the licence "
                    "allows it, or import into the licensed library")
     try:
-        return fbx_import.import_fbx(
+        return await asyncio.to_thread(
+            fbx_import.import_fbx,
             body.get("kind"), files,
             rest_file=body.get("rest_file") or None,
             clip_set=str(body.get("set") or ""),
