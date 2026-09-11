@@ -1,20 +1,20 @@
 /**
- * AvatarSettingsPanel — der eigene Avatar im /play: Aussehen, Soul und
- * Präferenzen bearbeiten. Nutzt denselben template-getriebenen Spalten-Renderer
- * wie der Game-Admin (`TemplateTab`) — gleiche Aufteilung, gefiltert auf
- * user-taugliche Spalten/Felder.
+ * AvatarSettingsPanel — the user's own avatar in /play: edit appearance, soul
+ * and preferences. Uses the same template-driven column renderer as the
+ * Game-Admin (`TemplateTab`) — same layout, filtered down to the columns and
+ * fields a user may touch.
  *
- * Sub-Tabs:
- *  - Aussehen   = Template-Spalten 1,6 (Identität + Gesicht inkl. Profilbild)
- *  - Körper     = Template-Spalten 4,5 (physische Werte + Aussehen-Prompt inkl. Bild)
- *  - Soul       = SoulEditor (Lock-Sektionen respektiert)
- *  - Präferenzen= Spalten 2,10 ohne Social-Zahlen → Dressing-Preference + TTS
+ * Sub-tabs:
+ *  - Appearance  = template columns 1,6 (identity + face incl. profile picture)
+ *  - Physique    = template columns 4,5 (physical values + appearance prompt incl. image)
+ *  - Soul        = SoulEditor (respects locked sections)
+ *  - Preferences = columns 2,10 without the social numbers → dressing preference + TTS
  *
- * Social-Zahlen, Feature-Flags, Telegram, Stats, Placement bleiben Admin-only
- * (nicht in diesen Spalten / via excludeKeys). Der eigene Avatar liegt in
- * `allowed_characters`, daher sind /characters/{avatar}/* erlaubt.
+ * Social numbers, feature flags, Telegram, stats and placement stay admin-only
+ * (not in these columns / via excludeKeys). The user's own avatar is in
+ * `allowed_characters`, so /characters/{avatar}/* is allowed.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 import { TemplateTab } from '../tabs/characters/TemplateTab'
@@ -29,19 +29,20 @@ interface TmplSectionRaw extends TmplSection {
   row?: number
 }
 
-// Social-Zahlen bleiben Admin-only (auch wenn sie in einer erlaubten Spalte liegen).
+// The social numbers stay admin-only (even where they sit in an allowed column).
 const HIDE_KEYS = ['popularity', 'trustworthiness', 'social_dialog_probability', 'roles', 'romantic_interests']
-const AUSSEHEN_COLS = [1, 6] // Identität + Gesicht(+Profilbild)
-const KOERPER_COLS = [4, 5] // Body editor (species slots) + Aussehen-Prompt
-const PREF_COLS = [2, 10] // Eigenschaften (→ nur Dressing-Preference) + TTS
+const AUSSEHEN_COLS = [1, 6] // identity + face (+ profile picture)
+const KOERPER_COLS = [4, 5] // body editor (species slots) + appearance prompt
+const PREF_COLS = [2, 10] // traits (→ dressing preference only) + TTS
 
 type Sub = 'look' | 'body' | 'soul' | 'prefs'
 
 export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const [sections, setSections] = useState<TmplSectionRaw[]>([])
   const [loaded, setLoaded] = useState(false)
   const [sub, setSub] = useState<Sub>('look')
+  const [seasons, setSeasons] = useState<Array<{ value: string; label: string; days: number }>>([])
 
   useEffect(() => {
     let alive = true
@@ -70,9 +71,40 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
     }
   }, [avatar])
 
-  // Appearance-Selects nutzen keine dynamischen Quellen; TTS-Voices/Speaker sind
-  // im /play nicht ladbar → aktueller Wert bleibt, Auswahl eingeschränkt.
-  const dynamicData: DynamicData = { tts_voices: [], tts_speakers: [], characters: [] }
+  // Seasons of the world calendar, names localized for the UI language — the
+  // option source of every `season_day` field.
+  useEffect(() => {
+    let alive = true
+    apiGet<{ calendar?: { seasons?: Array<{ key: string; name: string; days: number }> } }>(
+      `/world/game-time?lang=${encodeURIComponent(lang)}`,
+    )
+      .then((d) => {
+        if (!alive) return
+        setSeasons(
+          (d.calendar?.seasons || []).map((s) => ({
+            value: s.key,
+            label: s.name || s.key,
+            days: s.days,
+          })),
+        )
+      })
+      .catch(() => {
+        if (alive) setSeasons([])
+      })
+    return () => {
+      alive = false
+    }
+  }, [lang])
+
+  // The appearance selects use no dynamic sources; TTS voices/speakers cannot be
+  // loaded in /play → the current value stays, the choice is limited.
+  // The world calendar is the exception: `season_day` fields (the identity
+  // column carries one) are an empty dropdown without it, so the same list the
+  // game clock ships is loaded here too.
+  const dynamicData: DynamicData = useMemo(
+    () => ({ tts_voices: [], tts_speakers: [], characters: [], seasons }),
+    [seasons],
+  )
 
   if (!avatar) return <div className="ga-placeholder">{t('No active avatar')}</div>
   if (!loaded) return <div className="ga-loading">{t('Loading…')}</div>

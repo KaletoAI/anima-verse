@@ -8,6 +8,7 @@
  * to a free-text field (like the old UI).
  */
 import { useEffect, useState } from 'react'
+import { useI18n } from '../../i18n/I18nProvider'
 
 export interface TmplFieldDef {
   [k: string]: unknown
@@ -38,7 +39,16 @@ export interface TmplFieldDef {
   reload_after_save?: boolean
 }
 
-export type DynamicData = Record<string, Array<{ value: string; label: string }>>
+/** An option source. `days` is only filled where the source carries a length
+ *  per entry — the world calendar's seasons do, and a `season_day` field takes
+ *  the day maximum from it. */
+export interface DynamicOption {
+  value: string
+  label: string
+  days?: number
+}
+
+export type DynamicData = Record<string, DynamicOption[]>
 
 function normOpts(
   raw: Array<string | { value?: string; id?: string; label?: string }> | undefined,
@@ -59,6 +69,110 @@ export function tmplText(
   if (lang === 'de' && typeof de === 'string' && de) return de
   const base = field[key]
   return typeof base === 'string' ? base : ''
+}
+
+
+/** Split a stored `"<season_key>:<day>"`. The DAY is the last segment, so a
+ *  season key containing a colon survives — the same split the backend's
+ *  `parse_season_day` does. A value without a colon is kept as the season half
+ *  so an imported oddity stays visible instead of vanishing from the form. */
+function splitSeasonDay(raw: string): { season: string; day: string } {
+  const text = raw.trim()
+  const cut = text.lastIndexOf(':')
+  if (cut < 0) return { season: text, day: '' }
+  return { season: text.slice(0, cut).trim(), day: text.slice(cut + 1).trim() }
+}
+
+/**
+ * A day of the WORLD calendar without a year — a season plus the day within it,
+ * stored as one string `"<season_key>:<day>"`. The season list comes from the
+ * field's option source (`dynamicData`), so the control never knows a season
+ * name or a season length itself.
+ *
+ * Only a complete pair is a calendar day: half an entry commits `""`, never a
+ * broken value. A season key the calendar does not (or no longer) know is kept
+ * as its own option — the backend ignores such a value when reading, it never
+ * discards it, so the form must not silently drop it either.
+ */
+function SeasonDayField({
+  value,
+  seasons,
+  disabled,
+  onCommit,
+}: {
+  value: string
+  seasons: DynamicOption[]
+  disabled?: boolean
+  onCommit: (value: string) => void
+}) {
+  const { t } = useI18n()
+  const [season, setSeason] = useState(() => splitSeasonDay(value).season)
+  const [day, setDay] = useState(() => splitSeasonDay(value).day)
+  useEffect(() => {
+    const parts = splitSeasonDay(value)
+    setSeason(parts.season)
+    setDay(parts.day)
+  }, [value])
+
+  const picked = seasons.find((s) => s.value === season)
+  // Without a season (or with one the calendar does not know) the longest
+  // season is the only honest ceiling; an empty list leaves the day open.
+  const maxDay = picked?.days ?? seasons.reduce((m, s) => Math.max(m, s.days ?? 0), 0)
+  const seasonKnown = !season || seasons.some((s) => s.value === season)
+
+  const commit = (nextSeason: string, nextDay: string) => {
+    const n = parseInt(nextDay, 10)
+    const limit = seasons.find((s) => s.value === nextSeason)?.days ?? 0
+    const bounded = Number.isFinite(n) && n >= 1 ? (limit > 0 ? Math.min(n, limit) : n) : 0
+    const next = nextSeason && bounded ? `${nextSeason}:${bounded}` : ''
+    if (next !== value) onCommit(next)
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <select
+        className="ga-input"
+        aria-label={t('Season')}
+        title={t('Season')}
+        value={season}
+        disabled={disabled}
+        style={{ flex: 1, minWidth: 0 }}
+        onChange={(e) => {
+          const next = e.target.value
+          // A day beyond the new season's length does not exist there.
+          const limit = seasons.find((s) => s.value === next)?.days ?? 0
+          const n = parseInt(day, 10)
+          const nextDay = limit > 0 && Number.isFinite(n) && n > limit ? String(limit) : day
+          setSeason(next)
+          setDay(nextDay)
+          commit(next, nextDay)
+        }}
+      >
+        <option value="">— {t('Season')} —</option>
+        {/* Keep an imported value the calendar does not know */}
+        {seasonKnown ? null : <option value={season}>{season}</option>}
+        {seasons.map((s) => (
+          <option key={s.value} value={s.value}>
+            {s.label}
+          </option>
+        ))}
+      </select>
+      <input
+        className="ga-input"
+        type="number"
+        min={1}
+        max={maxDay || undefined}
+        aria-label={t('Day')}
+        title={t('Day')}
+        placeholder={t('Day')}
+        value={day}
+        disabled={disabled}
+        style={{ width: 90, flex: '0 0 auto' }}
+        onChange={(e) => setDay(e.target.value)}
+        onBlur={() => commit(season, day)}
+      />
+    </div>
+  )
 }
 
 export function TemplateField({
@@ -134,6 +248,18 @@ export function TemplateField({
         onBlur={() => {
           if (local !== String(value ?? '')) onCommit(local)
         }}
+      />
+    )
+  }
+
+  // ---- Season + day of the world calendar ----
+  if (type === 'season_day') {
+    return (
+      <SeasonDayField
+        value={local}
+        seasons={dynamicData[field.source || 'seasons'] || []}
+        disabled={disabled}
+        onCommit={onCommit}
       />
     )
   }

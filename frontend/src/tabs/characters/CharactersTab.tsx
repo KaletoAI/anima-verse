@@ -178,6 +178,8 @@ export function CharactersTab() {
   // Dynamic TTS option lists (Others tab) — loaded once on mount.
   const [ttsVoices, setTtsVoices] = useState<Array<{ value: string; label: string }>>([])
   const [ttsSpeakers, setTtsSpeakers] = useState<Array<{ value: string; label: string }>>([])
+  // Seasons of the world calendar — the option source of `season_day` fields.
+  const [seasons, setSeasons] = useState<Array<{ value: string; label: string; days: number }>>([])
   // Activity & Home: home/sleep location + daily rhythm (grid is self-managed).
   const [homeLoc, setHomeLoc] = useState<{ home_location: string; home_room: string }>({
     home_location: '',
@@ -208,6 +210,32 @@ export function CharactersTab() {
       .then((d) => setTtsSpeakers(d.speakers || []))
       .catch(() => setTtsSpeakers([]))
   }, [])
+
+  // The world calendar — no own endpoint, the game clock already ships it, and
+  // it carries the season NAMES localized for `lang`. A world without a
+  // calendar simply offers no seasons.
+  useEffect(() => {
+    let cancelled = false
+    apiGet<{ calendar?: { seasons?: Array<{ key: string; name: string; days: number }> } }>(
+      `/world/game-time?lang=${encodeURIComponent(lang)}`,
+    )
+      .then((d) => {
+        if (cancelled) return
+        setSeasons(
+          (d.calendar?.seasons || []).map((s) => ({
+            value: s.key,
+            label: s.name || s.key,
+            days: s.days,
+          })),
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setSeasons([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [lang])
 
   // A template can switch the whole activity/home subject off — the same
   // truth the sub-tab gate below uses. Kept here as well because `subTab`
@@ -720,8 +748,9 @@ export function CharactersTab() {
       tts_speakers: ttsSpeakers,
       characters: sortedCharacters.map((c) => ({ value: c.name, label: c.display_name || c.name })),
       animation_sets: animationSetOptions,
+      seasons,
     }),
-    [ttsVoices, ttsSpeakers, sortedCharacters, animationSetOptions],
+    [ttsVoices, ttsSpeakers, sortedCharacters, animationSetOptions, seasons],
   )
 
   // Editable "current state" placement — rendered as a special slot
