@@ -10,7 +10,7 @@ the extension adds profile-specific fields.
 Field types:
   - text: Single-line or multi-line text (multiline: true)
   - number: Numeric value
-  - game_date: World-calendar day without a year, "<season_key>:<day>"
+  - season_day: World-calendar day without a year, "<season_key>:<day>"
   - select: Dropdown with predefined options [{value, label}]
 """
 import copy
@@ -23,7 +23,7 @@ from app.core.log import get_logger
 logger = get_logger("char_template")
 
 # Valid field types
-FIELD_TYPES = {"text", "number", "game_date", "select"}
+FIELD_TYPES = {"text", "number", "season_day", "select"}
 
 # Templates directory
 from app.core.paths import get_templates_dir
@@ -497,10 +497,11 @@ def build_prompt_section(
                 value = ", ".join(str(v) for v in value if v)
                 if not value:
                     continue
-        elif prompt_format == "game_date":
+        elif prompt_format == "season_day":
             # A world-calendar day without a year, stored as
-            # "<season_key>:<day>". A value the calendar no longer knows
-            # (season deleted, season shortened) drops the line.
+            # "<season_key>:<day>" — a recurring day such as a birthday, not
+            # the current date the prompts get elsewhere. A value the calendar
+            # no longer knows (season deleted, shortened) drops the line.
             from app.core.game_time import parse_season_day, season_day_label
             parsed = parse_season_day(value)
             if not parsed:

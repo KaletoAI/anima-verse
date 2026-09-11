@@ -85,6 +85,18 @@
           "llm_generable": true
         },
         {
+          "key": "birthday",
+          "label": "Birthday",
+          "label_de": "Geburtstag",
+          "type": "season_day",
+          "hint": "Season and day of the world calendar, no year. Leave empty for no birthday.",
+          "hint_de": "Saison und Tag im Weltkalender, ohne Jahr. Leer = kein Geburtstag.",
+          "in_prompt": true,
+          "prompt_label": "Birthday",
+          "prompt_format": "season_day",
+          "llm_generable": false
+        },
+        {
           "key": "height",
           "label": "Height (cm)",
           "label_de": "Größe (cm)",
