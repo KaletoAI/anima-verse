@@ -412,9 +412,38 @@ _FIRST_PERSON_WORDS = {"ich", "i", "wir", "we"}
 # A hashtag inside the segment marks it as a social-post caption.
 _HASHTAG_RE = re.compile(r"#\w")
 
+# End of a sentence: . ! ? … followed by whitespace, or closing the lookbehind.
+# Deliberately simple — the punctuation alone decides, no abbreviation list and
+# no capital-letter test. The dot of "z.B." or of a decimal is followed by a
+# letter or a digit and therefore never ends a sentence, while "usw." or "Dr."
+# do end one here although they should not. That error only ever SHORTENS the
+# lookbehind, so it can cost a suppression, never a line of dialogue — the
+# cheap direction (§ 5). A colon and a comma are NOT sentence ends: they bind
+# the writing verb to the quote behind them („Ich notierte: …").
+_SENTENCE_END_RE = re.compile(r"[.!?…](?:\s|$)")
+
 # How far back the context rules look from the opening quote character.
 _WRITTEN_LOOKBEHIND = 60
 _FOREIGN_LOOKBEHIND = 60
+
+
+def _lookbehind(before: str, window: int) -> str:
+    """The ``window`` characters in front of the quote, cut at the last
+    sentence boundary inside them.
+
+    A plain character window runs across sentence borders, so a writing verb
+    of the PREVIOUS sentence turned the next sentence's dialogue into written
+    text („Ich schreibe den Brief zu Ende. „Komm her", sage ich."). The verb
+    only governs the quote while both stand in the same sentence, so the
+    lookbehind ends where the sentence does. The window stays on top of it:
+    it is the weaker of the two limits, and keeping it makes the cut a pure
+    relaxation — every line the filter drops afterwards it dropped before.
+    """
+    tail = before[-window:]
+    cut = 0
+    for m in _SENTENCE_END_RE.finditer(tail):
+        cut = m.end()
+    return tail[cut:]
 
 
 def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[str, int]]:
@@ -430,12 +459,14 @@ def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[st
     json      the segment is a JSON value: an unclosed ``{`` precedes it on the
               same line, it stands directly behind a ``"<key>":`` or directly
               in front of a ``:``. A tool input, never speech.
-    written   a conjugated writing VERB stands within the 60 characters in
-              front of the quote, or the segment carries a hashtag — a
-              caption, a note, a post. Nouns that share a writing stem
-              (Schreibtisch, Notizbuch, Notiz, Tipp, Post, note, notes) are
-              scenery and do not count; dropping real dialogue is the worse
-              error.
+    written   a conjugated writing VERB stands in front of the quote WITHIN
+              THE SAME SENTENCE (at most 60 characters back, cut at the last
+              `.`/`!`/`?`/`…`), or the segment carries a hashtag — a caption,
+              a note, a post. Nouns that share a writing stem (Schreibtisch,
+              Notizbuch, Notiz, Tipp, Post, note, notes) are scenery and do
+              not count, and neither does a writing verb that belongs to the
+              sentence before; dropping real dialogue is the worse error. A
+              colon or a comma binds the verb to the quote and keeps it in.
     foreign   a third-person speech attribution follows the segment (or a
               ``<Name> hat gesagt:`` precedes it) and names somebody other
               than ``speaker``. A pronoun of the third person counts as
@@ -474,8 +505,8 @@ def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[st
             counts["json"] += 1
             continue
 
-        # 2) written / caption context
-        if _WRITTEN_CONTEXT_RE.search(before[-_WRITTEN_LOOKBEHIND:]) \
+        # 2) written / caption context — only the sentence the quote sits in
+        if _WRITTEN_CONTEXT_RE.search(_lookbehind(before, _WRITTEN_LOOKBEHIND)) \
                 or _HASHTAG_RE.search(seg):
             counts["written"] += 1
             continue
@@ -496,6 +527,12 @@ def _foreign_speaker(before: str, after: str, speaker_lower: str) -> bool:
     sagte:", "I said:") and therefore looks exactly like a name — it is the
     speaker themselves and never a foreign one (§ 3.8 rule 3). The prose can be
     German or English, so both pronoun sets are excluded on both patterns.
+
+    The BEFORE pattern needs no sentence cut of its own: it is anchored to the
+    end of the lookbehind and tolerates nothing but whitespace and a colon
+    between the attribution and the quote, so an attribution of the previous
+    sentence cannot reach across („Tom sagte etwas. „Komm her", sage ich."
+    keeps its line, „Tom sagte: „Komm her."" still drops).
     """
     m = _FOREIGN_AFTER_RE.match(after)
     if m:

@@ -92,6 +92,33 @@ Three deterministic exclusions on top, checked one class per case:
      directions get a case. `noted` needs no colon (it is only a verb), but
      the attributive `a noted author` / `the noted author` is an adjective
      and keeps its dialogue.
+
+[17] The lookbehind of the writing rule ends at the SENTENCE boundary. A
+     character window alone runs across sentence borders, so a writing verb
+     of the previous sentence swallowed the next sentence's dialogue
+     („Ich schreibe den Brief zu Ende. „Komm her", sage ich." and
+     „Ich tippe die Nachricht. „Komm her", sage ich." both lost their line).
+     A verb governs a quote only inside the same sentence.
+
+     Sentence end = `.` `!` `?` `…` followed by whitespace or closing the
+     lookbehind — punctuation alone, no abbreviation list, no capital-letter
+     test. Consequences, all of them checked here:
+
+     (a) The dot of `z.B.` or of a decimal (`3.5`) is followed by a letter or
+         a digit, never by whitespace, so it does not cut. The final dot of
+         `z.B.`, `usw.` or `Dr.` DOES cut although it ends no sentence — that
+         error only shortens the lookbehind, so it can cost a suppression but
+         never a line of dialogue, which is the cheap direction of § 5.
+     (b) A colon and a comma are NOT sentence ends, on purpose: they bind the
+         writing verb to the quote behind them (`Ich notierte: „Milch
+         kaufen"`, `Ich schreibe, „Komm her"`) — exactly the case the rule
+         must catch. Both keep dropping.
+     (c) `!` and `?` end a sentence like `.` does.
+     (d) The foreign-speaker rule needs no cut of its own: its BEFORE pattern
+         is anchored to the end of the lookbehind and tolerates only
+         whitespace and a colon in between, so an attribution of the previous
+         sentence cannot reach across. `Tom sagte etwas. „Komm her", sage
+         ich.` survives, `Tom sagte: „Komm her."` still drops.
 """
 import os
 import sys
@@ -360,6 +387,39 @@ def main() -> int:
     survives("types without a colon stays a noun",
              'She knows both types well. "Pick one," I say.',
              "Pick one,")
+
+    print("[17] the writing lookbehind stops at the sentence boundary")
+    survives("writing verb one sentence earlier (reported regression)",
+             'Ich schreibe den Brief zu Ende. „Komm her", sage ich.',
+             "Komm her")
+    survives("tippen one sentence earlier (reported regression)",
+             'Ich tippe die Nachricht. „Komm her", sage ich.',
+             "Komm her")
+    survives("the next sentence may start with anything",
+             'Ich schreibe den Brief. Dann „Komm her", sage ich.',
+             "Komm her")
+    survives("! ends a sentence too",
+             'Ich schreibe das auf! „Komm her", sage ich.',
+             "Komm her")
+    survives("? ends a sentence too",
+             'Schreibe ich das auf? „Komm her", sage ich.',
+             "Komm her")
+    survives("… ends a sentence too",
+             'Ich habe ihm geschrieben… „Komm her", sage ich.',
+             "Komm her")
+    drops("a colon binds the verb to the quote",
+          'Ich notierte: „Milch kaufen."')
+    drops("a comma binds the verb to the quote",
+          'Ich schreibe, „Milch kaufen."')
+    drops("a decimal point does not end a sentence",
+          'Ich habe 3.5 Seiten geschrieben: „Milch kaufen."')
+    drops("no boundary, no cut",
+          'Ich schreibe mit ruhiger Hand „Milch kaufen" auf den Zettel.')
+    survives("foreign attribution one sentence earlier",
+             'Tom sagte etwas. „Komm her", sage ich.',
+             "Komm her")
+    drops("foreign attribution with a colon still binds",
+          'Tom sagte: „Komm her."')
 
     ok = all(CHECKS)
     print(f"\n{'ALL OK' if ok else 'FAILURES'} ({sum(CHECKS)}/{len(CHECKS)} checks)")
