@@ -542,7 +542,9 @@ def llm_call(
         if instance is None:
             if last_err is not None:
                 # Nothing caught this one — the traceback the worker held back
-                # belongs in the log now.
+                # belongs in the log now: the queue chains its original
+                # exception as __cause__, so this record carries the upstream
+                # stack, not just the queue wrapper.
                 logger.error("llm_call: no provider left for '%s' after %d attempt(s)",
                              task, attempt - 1, exc_info=last_err)
                 raise RuntimeError(
@@ -588,7 +590,8 @@ def llm_call(
             # Loop continues; resolve_llm now skips the cooled-down model/provider.
 
     # The fallback chain is used up — this failure is final, so it is logged
-    # here with the traceback the queue worker left to the caller.
+    # here with the traceback the queue worker left to the caller (the upstream
+    # stack rides along as the wrapper's __cause__).
     logger.error("llm_call: every provider for '%s' failed after %d attempts",
                  task, _LLM_CALL_MAX_ATTEMPTS, exc_info=last_err)
     raise RuntimeError(

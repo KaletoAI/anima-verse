@@ -5,8 +5,9 @@ Usage:
     ./.venv/bin/python scripts/smoke_model_cooldown_log.py
 
 Runs without the server, without a world DB and without any real provider: the
-queue is faked, the failure is a hand-built exception carrying the gateway's
-own 503 text.
+failure is a hand-built exception carrying the gateway's own 503 text. The
+router section drives a fake queue, the last section drives a REAL
+ProviderQueue whose LLM client raises instead of answering.
 
 WHY these expectations (derived by hand from the defect, not recorded from
 current output):
@@ -48,13 +49,26 @@ Expected counts, derived from that rule:
  [7] The same incident without a working fallback (three providers, all dead):
      3 cooldown lines (three distinct (provider, model) outages, one line each)
      and exactly 1 ERROR — llm_call's own, WITH the traceback, because this
-     failure really is final.
+     failure really is final. "With the traceback" means the UPSTREAM one:
+     `exc_info is not None` is already true for the bare queue wrapper and
+     would prove nothing, so the check asks for the wrapper's `__cause__` —
+     type and message of the exception the LLM client raised.
+ [8] The real ProviderQueue, running a client that raises inside an HTTP-layer
+     frame: `submit()` raises the queue wrapper, and its `__cause__` is that
+     very exception object — same message, and its traceback still names the
+     frame that raised it. Without the chain the caller only ever sees
+     `submit`'s own `raise`, which is [7]'s whole point.
+ [9] Feeding that wrapper to `logger.error(..., exc_info=<exc>)` renders the
+     upstream frame and the "direct cause" line. That is the end of the chain
+     the promise is about — measured at the log record, not at the raise.
 
 Exit code 0 = all checks passed, 1 = at least one failed.
 """
 import logging
 import sys
+import threading
 import time
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -69,8 +83,11 @@ from app.core.provider import Provider  # noqa: E402
 failures = []
 
 # The gateway's own wording for "this model has no servable backend" — the
-# exact class of error that produced the 22 duplicated lines.
-NO_BACKEND = "LLM Queue task failed: Error code: 503 - No healthy backend for model 'helper'"
+# exact class of error that produced the 22 duplicated lines. UPSTREAM_503 is
+# what the LLM client raises; NO_BACKEND is what the queue wrapper says once
+# the worker put `str(original)` into task.error.
+UPSTREAM_503 = "Error code: 503 - No healthy backend for model 'helper'"
+NO_BACKEND = f"LLM Queue task failed: {UPSTREAM_503}"
 PAYLOAD_ERROR = "Error code: 400 - Bad Request: messages[1] has no content"
 
 
@@ -194,6 +211,15 @@ class _FakeAnswer:
     content = "ok"
 
 
+def upstream_error(message: str) -> Exception:
+    """The exception as the HTTP layer raises it — raised and caught here so it
+    owns a real traceback, which is what the chain has to carry to the log."""
+    try:
+        raise Exception(message)
+    except Exception as e:
+        return e
+
+
 class _FakeQueue:
     """Stands in for the provider queue: runs the worker's failure handling
     (the real functions) and re-raises the way ProviderQueue.submit does."""
@@ -213,10 +239,15 @@ class _FakeQueue:
         self.owner_seen.append(task._caller_handles_failure)
         if self.calls > self.fail_times:
             return _FakeAnswer()
-        err = Exception(NO_BACKEND)
+        err = upstream_error(UPSTREAM_503)
+        task.error = str(err)
+        task._exception = err
         pq.log_task_failure("P", task, err)
         pq.cooldown_after_failure(providers[self.calls - 1], "helper", task_type, err)
-        raise Exception(f"LLM Queue task failed: {err}")
+        # Same re-raise as ProviderQueue.submit: the wrapper carries the
+        # original as __cause__ (section 5 proves the real one does this).
+        raise Exception(f"LLM Queue task failed: {task.error}") from getattr(
+            task, "_exception", None)
 
 
 providers = [Provider(name=f"P{i}", type="openai",
@@ -252,11 +283,78 @@ try:
     check("llm_call gives up", raised.startswith("llm_call: every provider"), True)
     check("one cooldown line per dead model", len(cooldown_lines(logging.WARNING)), 3)
     check("the final failure is one ERROR", len(handler.by_level(logging.ERROR)), 1)
-    check("the final ERROR carries the traceback",
-          handler.by_level(logging.ERROR)[0].exc_info is not None, True)
+    # The wrapper alone would satisfy "exc_info is not None" — ask for the
+    # upstream exception it was chained to instead.
+    final_exc = handler.by_level(logging.ERROR)[0].exc_info[1]
+    check("the final ERROR carries the upstream cause",
+          type(getattr(final_exc, "__cause__", None)).__name__, "Exception")
+    check("the cause is the gateway's 503", str(final_exc.__cause__), UPSTREAM_503)
 finally:
     lr.resolve_llm, lr.get_llm_queue = orig_resolve, orig_queue
     lr._MODEL_COOLDOWN.clear()
+
+print("5) the real queue hands the original exception on as __cause__")
+
+# The worker's only two side effects that touch files/DB — a smoke writes
+# neither, so both are stubbed out before the queue runs.
+pq._log_task_result = lambda *a, **kw: None
+pq._attach_duration_estimate = lambda *a, **kw: None
+
+
+def _broken_http_call():
+    """Stands in for the llm_client/HTTP frame — the stack that must survive."""
+    raise Exception(UPSTREAM_503)
+
+
+class _BoomLLM:
+    """An LLM client that fails the way a dead gateway does."""
+    model = "helper"
+    max_tokens = 0
+
+    def invoke(self, messages):
+        _broken_http_call()
+
+
+lr._MODEL_COOLDOWN.clear()
+handler.clear()
+real_q = pq.ProviderQueue(Provider(name="Q", type="openai",
+                                   api_base="http://127.0.0.1:1/v1", api_key="",
+                                   timeout=30))
+box = {}
+
+
+def _drive_queue():
+    try:
+        real_q.submit("tools", 20, _BoomLLM(),
+                      [{"role": "user", "content": "x"}], agent_name="Demo")
+    except Exception as e:  # noqa: BLE001 — that is the object under test
+        box["err"] = e
+
+
+_th = threading.Thread(target=_drive_queue, daemon=True)
+_th.start()
+_th.join(timeout=60)
+check("submit returned", _th.is_alive(), False)
+
+raised = box.get("err")
+check("submit raises the queue wrapper",
+      str(raised).startswith("LLM Queue task failed:"), True)
+cause = getattr(raised, "__cause__", None)
+check("the worker's exception rides along as __cause__",
+      type(cause).__name__, "Exception")
+check("the cause is the upstream error", str(cause), UPSTREAM_503)
+cause_frames = [f.name for f in traceback.extract_tb(cause.__traceback__)] if cause else []
+check("the cause still carries the HTTP-layer frame",
+      "_broken_http_call" in cause_frames, True)
+
+# [9] measured where the promise is made: the formatted log record.
+handler.clear()
+logging.getLogger("llm_router").error("final failure", exc_info=raised)
+rendered = logging.Formatter().format(handler.by_level(logging.ERROR)[0])
+check("the log record shows the upstream frame", "_broken_http_call" in rendered, True)
+check("… marked as the cause of the wrapper", "direct cause" in rendered, True)
+
+lr._MODEL_COOLDOWN.clear()
 
 print()
 if failures:

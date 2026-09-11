@@ -353,7 +353,14 @@ class ProviderQueue:
             raise Exception(f"LLM Queue task cancelled: {task.task_id}")
 
         if task.status == "failed":
-            raise Exception(f"LLM Queue task failed: {task.error}")
+            # Chain the worker's original exception as __cause__. The caller
+            # type stays a plain Exception (llm_router matches on the message),
+            # but logging with exc_info on this error now prints the upstream
+            # stack from llm_client/HTTP as well — without it the traceback
+            # would end at this raise. No original (e.g. watchdog timeout)
+            # means no cause.
+            raise Exception(f"LLM Queue task failed: {task.error}") from getattr(
+                task, "_exception", None)
 
         return task.result
 
@@ -922,6 +929,10 @@ class ProviderQueue:
                     else:
                         task.status = "failed"
                         task.error = str(e)
+                        # Keep the original exception: submit() chains it as
+                        # __cause__ so the final ERROR in llm_router carries the
+                        # stack from the HTTP layer, not just the wrapper.
+                        task._exception = e
                         task.duration_s = round(time.monotonic() - t0, 2)
                         log_task_failure(self._queue_name, task, e)
                         _log_task_result(task, model_name, max_tokens, None, error=task.error)
