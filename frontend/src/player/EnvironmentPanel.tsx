@@ -3,7 +3,7 @@
  * **freely movable and scalable expression figures** (current pose/expression).
  * plan-room-conversation phase 2.
  *
- * Background:  GET /world/locations/{id}/background?room=&hour=&file=<bg_id>
+ * Background:  GET /world/locations/{id}/background?room=&file=<bg_id>
  *              (file pins the concrete image → positions stick to exactly it).
  * Expression:  GET /characters/{name}/outfit-expression?fallback=default
  * Positions:   GET/PUT /play/figures  (per character {x,y,scale}; x/y as
@@ -57,7 +57,7 @@ export function EnvironmentPanel({
   const { t } = useI18n()
   const bgUrl = locationId
     ? `/world/locations/${encodeURIComponent(locationId)}/background`
-      + `?room=${encodeURIComponent(roomId)}&hour=${new Date().getHours()}`
+      + `?room=${encodeURIComponent(roomId)}`
       + (bgId ? `&file=${encodeURIComponent(bgId)}` : '')
       + (bgVersion ? `&v=${encodeURIComponent(bgVersion)}` : '')
     : ''
