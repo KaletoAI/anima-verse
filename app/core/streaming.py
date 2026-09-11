@@ -345,33 +345,46 @@ _JSON_VALUE_BEFORE_RE = re.compile(r'["“„][^"“”„\n]{1,40}["“”]\s*:
 # Written, not spoken: a writing VERB close in front of the quote turns it into
 # a caption, a note or a post. Conjugated forms only, never bare stems — the
 # nouns that share those stems are everyday scenery and must not swallow the
-# dialogue next to them (Schreibtisch, Schreibblock, Schreibmaschine,
-# Notizbuch, Notizblock, Tipp, Tippfehler, Post, Postkarte, Posten, Kritzelei,
-# English notes / notebook / writing desk). Every alternative therefore ends on
-# a word boundary, so a stem followed by more word characters does not match.
+# dialogue next to them (Schreibtisch, Schreibblock, Schreibmaschine, Notiz,
+# Notizbuch, Notizblock, Notierung, Tipp, Tippfehler, Post, Postkarte, Posten,
+# Kritzelei, Skizze, Skizzierung, English note / notes / notebook / type /
+# types / writing desk). Every alternative therefore ends on a word boundary,
+# so a stem followed by more word characters does not match, and the forms a
+# noun happens to share with a verb (notes, types) need the colon of a speech
+# introduction to count.
 _WRITTEN_CONTEXT_RE = re.compile(
     r"\b(?:"
-    # German — schreiben / schrieb / geschrieben (also the separable forms)
+    # German — schreiben / schrieb / geschrieben (also the separable forms;
+    # vorgeschrieben/zugeschrieben/eingeschrieben/festgeschrieben are not
+    # about writing at all, so the prefixes are listed instead of \w*)
     r"schreib(?:e|st|t|en|end)?\b"
     r"|schrieb(?:st|t|en)?\b"
-    r"|\w*geschrieben\b"
+    r"|(?:auf|nieder|hin|hinein|daneben|darunter|dazu|voll|mit|an|ab|drauf|"
+    r"dran)?geschrieben\b"
     # tippen — "Tipp"/"Tipps"/"Tippfehler" need a conjugation ending to count
     r"|tipp(?:e|st|t|en)\b|getippt\b"
-    # notieren / Notiz (singular only; "Notizbuch"/"Notizen" are objects)
-    r"|notier\w*|notiz\b"
-    # kritzeln / skizzieren — "Kritzelei"/"Skizze" stay out
+    # notieren — the noun "Notiz"/"Notizen"/"Notierung" is an object on the
+    # table, only the conjugated verb is a writing act
+    r"|notier(?:e|st|t|en|end|te|test|tet|ten)\b"
+    # kritzeln / skizzieren — "Kritzelei"/"Skizze"/"Skizzierung" stay out
     r"|kritzel(?:e|st|t|n|te|ten)\b|kritzl(?:e|st|t|en)\b|gekritzelt\b"
-    r"|skizzier\w*"
+    r"|skizzier(?:e|st|t|en|end|te|test|tet|ten)\b"
     # posten — only the conjugated German forms; the noun "Post"/"Posten" is mail
     r"|poste(?:t|te)?\b|gepostet\b"
     # caption wording is a written frame by itself
     r"|caption\w*|bildunterschrift\w*|untertitel\b"
     # English
     r"|writ(?:e|es)\b|wrote\b|written\b"
-    r"|writing\b(?!\s+(?:desk|table|paper|pad|room))"
+    # "noted" is a verb — except attributively ("a noted author")
+    r"|(?<!\ba )(?<!\bthe )noted\b"
+    r"|writing\b(?!\s+(?:desk|table|paper|pad|room|style|class|classes|"
+    r"skill|skills|hand|course|group))"
     r"|typ(?:ed|ing)\b|scribbl(?:e|es|ed|ing)\b|jot(?:s|ted|ting)?\b"
     r"|posted\b|posting\b"
     r"|(?:take|takes|took|taking)\s+notes\b"
+    # "notes"/"types" alone are nouns (my notes, two types) — a colon behind
+    # them makes them the verb of a written introduction ("She notes: …")
+    r"|(?:notes|types)\s*:"
     r")",
     re.IGNORECASE)
 
@@ -420,8 +433,9 @@ def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[st
     written   a conjugated writing VERB stands within the 60 characters in
               front of the quote, or the segment carries a hashtag — a
               caption, a note, a post. Nouns that share a writing stem
-              (Schreibtisch, Notizbuch, Tipp, Post, notes) are scenery and do
-              not count; dropping real dialogue is the worse error.
+              (Schreibtisch, Notizbuch, Notiz, Tipp, Post, note, notes) are
+              scenery and do not count; dropping real dialogue is the worse
+              error.
     foreign   a third-person speech attribution follows the segment (or a
               ``<Name> hat gesagt:`` precedes it) and names somebody other
               than ``speaker``. A pronoun of the third person counts as

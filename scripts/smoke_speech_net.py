@@ -57,14 +57,22 @@ Three deterministic exclusions on top, checked one class per case:
      real speech"). Two failure modes cost real dialogue once and must stay
      covered by a case each:
 
-     (a) A writing STEM inside an everyday NOUN is not a writing verb.
-         `Schreibtisch`, `Schreibmaschine`, `Schreibblock`, `Notizbuch`,
-         `Notizblock`, `Notizheft`, `Tipp`, `Tippfehler`, `Post`,
-         `Postkarte`, `Postbote`, `Posten`, `Kritzelei`, `Skizze` and the
-         English `notes`, `notebook`, `writing desk`, `writer`, `type` are
-         furniture, objects and people — none of them says anything about
-         the quote next to them. The spec asks for conjugated verb forms, so
-         every one of these sentences keeps its dialogue.
+     (a) A writing STEM inside an everyday NOUN is not a writing verb, and
+         neither is a verb form that an everyday NOUN or ADJECTIVE happens to
+         share. `Schreibtisch`, `Schreibmaschine`, `Schreibblock`, `Notiz`,
+         `Notizen`, `Notizbuch`, `Notizblock`, `Notizheft`, `Notierung`,
+         `Tipp`, `Tippfehler`, `Post`, `Postkarte`, `Postbote`, `Posten`,
+         `Kritzelei`, `Skizze`, `Skizzierung` and the English `note`,
+         `notes`, `notebook`, `type`, `types`, `writing desk`, `writing
+         style`, `writer`, `a noted author` are furniture, objects, people
+         and properties — none of them says anything about the quote next to
+         them. The spec asks for conjugated verb forms, so every one of these
+         sentences keeps its dialogue. `Notiz` is the case that slipped
+         through the first pass: the singular is as much an object as the
+         plural, and the verb is already covered by `notier…`.
+         The same holds for the `ge…schrieben` family: `vorgeschrieben`,
+         `zugeschrieben`, `eingeschrieben` and `festgeschrieben` are not
+         about writing at all, so only the writing prefixes count.
      (b) A first-person pronoun at the start of a sentence is capitalised and
          therefore matches the NAME pattern of rule 3 („Ich sagte:", "I
          said:"). § 3.8 rule 3 exempts `ich`/`I` explicitly — the quote is
@@ -74,7 +82,16 @@ Three deterministic exclusions on top, checked one class per case:
 [15] The exclusions must NOT be given up to reach [14]: the same sentences
      with a real conjugated writing verb, and a real foreign name, still
      drop. `Ich notiere mir:`, `Ich kritzele:`, `Ich poste:`, `I wrote:`,
-     `She typed:`, `taking notes:` -> []; `Tom sagte:` -> [].
+     `She typed:`, `taking notes:` -> []; `Tom sagte:` -> []. The writing
+     prefixes of `geschrieben` (`aufgeschrieben`, `vollgeschrieben` — the
+     latter straight out of the 2026-09 logs) keep dropping too.
+
+[16] `notes` and `types` are nouns as bare words (`my notes`, `two types`)
+     and verbs of a written introduction with a colon behind them
+     (`She notes:`, `He types:`). The colon is what decides — both
+     directions get a case. `noted` needs no colon (it is only a verb), but
+     the attributive `a noted author` / `the noted author` is an adjective
+     and keeps its dialogue.
 """
 import os
 import sys
@@ -260,6 +277,48 @@ def main() -> int:
     survives("post (EN noun)",
              'The post arrived today. "Look, a letter for you," I say.',
              "Look, a letter for you,")
+    survives("Notiz (reported regression)",
+             'Eine Notiz liegt auf dem Tisch. „Lies sie", sage ich.',
+             "Lies sie")
+    survives("Notiz (reported regression, verb reading of lesen)",
+             'Ich lese die Notiz. „Komm her", sage ich.',
+             "Komm her")
+    survives("Notizen",
+             'Ich blättere durch die Notizen. „Setz dich", sage ich.',
+             "Setz dich")
+    survives("Notizzettel",
+             'Der Notizzettel klebt am Spiegel. „Sieh mal", sage ich.',
+             "Sieh mal")
+    survives("Notierung",
+             'Die Notierung steht fest. „Sieh her", sage ich.',
+             "Sieh her")
+    survives("Skizzierung",
+             'Die Skizzierung ist fertig. „Schau es dir an", sage ich.',
+             "Schau es dir an")
+    survives("vorgeschrieben",
+             'Die Uniform ist vorgeschrieben. „Zieh sie an", sage ich.',
+             "Zieh sie an")
+    survives("zugeschrieben",
+             'Man hat mir das zugeschrieben. „Egal jetzt", sage ich.',
+             "Egal jetzt")
+    survives("eingeschrieben",
+             'Ich bin an der Uni eingeschrieben. „Komm mit", sage ich.',
+             "Komm mit")
+    survives("festgeschrieben",
+             'Die Regel ist festgeschrieben. „Halt dich dran", sage ich.',
+             "Halt dich dran")
+    survives("note (EN noun)",
+             'I read the note. "Come here," I say.',
+             "Come here,")
+    survives("types (EN noun)",
+             'There are two types of tea. "Try this one," I say.',
+             "Try this one,")
+    survives("a noted author (EN adjective)",
+             'He is a noted author. "Sit down," I say.',
+             "Sit down,")
+    survives("writing style (EN noun phrase)",
+             'Her writing style is odd. "Sit down," I say.',
+             "Sit down,")
 
     print("[14b] MANDATORY SURVIVORS — a first-person pronoun is not a name")
     survives("Ich sagte:",
@@ -284,7 +343,23 @@ def main() -> int:
     drops("wrote (EN)", 'I wrote: "See you tomorrow."')
     drops("typed (EN)", 'She typed: "I am on my way."')
     drops("taking notes (EN)", 'I was taking notes: "remember the key."')
+    drops("aufgeschrieben", 'Ich habe es aufgeschrieben: „Milch kaufen."')
+    drops("vollgeschrieben", 'Die Seite ist vollgeschrieben: „Kais Kaffeekunst."')
+    drops("notierte", 'Ich notierte: „Morgen einkaufen."')
+    drops("skizzierte", 'Ich skizzierte daneben: „So sieht es aus."')
     drops("foreign name in front", 'Tom sagte: „Ich bin morgen weg."')
+
+    print("[16] notes / types / noted — the colon decides")
+    drops("noted (EN verb)", 'I noted: "Come sit with me."')
+    drops("notes: (EN verb)", 'She notes: "Come here."')
+    drops("types: (EN verb)", 'He types: "Hello."')
+    drops("Notes: as a written heading", 'Notes: "Bring milk tomorrow."')
+    survives("notes without a colon stays a noun",
+             'I look through my notes. "Come sit with me," I say.',
+             "Come sit with me,")
+    survives("types without a colon stays a noun",
+             'She knows both types well. "Pick one," I say.',
+             "Pick one,")
 
     ok = all(CHECKS)
     print(f"\n{'ALL OK' if ok else 'FAILURES'} ({sum(CHECKS)}/{len(CHECKS)} checks)")
