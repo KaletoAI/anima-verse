@@ -64,10 +64,21 @@ it builds without a world, so no paths.init() is needed.
 
 Usage:  ./.venv/bin/python scripts/smoke_reply_shape.py
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# The storage root and the clip library MUST be redirected BEFORE the first
+# app import: paths.init otherwise falls back to worlds/demo — the world that
+# is tracked in git — and app.models.relationship would open its world.db.
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="reply-shape-clips-")
+
+from app.core import paths  # noqa: E402
+
+paths.init(tempfile.mkdtemp(prefix="reply-shape-storage-"))
 
 from app.core.reply_shape import (  # noqa: E402
     BRIEF_MAX_WORDS,
