@@ -71,6 +71,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     Loads only what's needed: each block is computed lazily and only set
     when it has content. The template renders nothing for empty blocks.
     """
+    from app.core.birthday import is_birthday_today
     from app.core.perception import prompt_place
     from app.models.character import (
         get_character_profile, get_character_current_location,
@@ -114,6 +115,9 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         # info with no code effect: it colors what the character notices and
         # what it decides to wear, nothing enforces it.
         "game_weather": now_game.atmosphere(lang)["label"],
+        # The character's OWN birthday, today. Always set — the template gates
+        # on it and StrictUndefined would raise on a missing key.
+        "birthday_today": is_birthday_today(profile, now_game),
         # Defaults for optional blocks — keep them present so StrictUndefined
         # doesn't raise on missing keys.
         "inbox_block": _build_inbox_block(character_name),

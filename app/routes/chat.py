@@ -2391,6 +2391,11 @@ def _build_full_system_prompt(character_name: str,
     time_line = (f"Current time: {_now_game.time_hhmm()} — "
                  f"{_now_game.date_label(_date_lang)}\n"
                  f"Weather: {_now_game.atmosphere(_date_lang)['label']}")
+    # The day itself, not the standing date: the character block already
+    # carries "Birthday: Summer, day 14" generically from the template.
+    from app.core.birthday import is_birthday_today as _is_birthday_today
+    if _is_birthday_today(char_profile, _now_game):
+        time_line += "\nToday is your birthday."
     situation_parts = [time_line]
 
     if _has("locations_enabled") and current_location:

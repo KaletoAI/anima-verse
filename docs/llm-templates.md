@@ -113,6 +113,16 @@ dict with only the blocks that have content (inbox, events,
 assignments, general task, commitments, outfit-decision, story arc,
 retrospective). The template renders nothing for empty blocks.
 
+`birthday_today` is part of the always-present situation data: True
+only on the character's own birthday (a day of the WORLD calendar,
+stored on the profile as `birthday` = `"<season_key>:<day>"`), and it
+renders the single line `- Today is your birthday.` The standing
+`Birthday: Summer, day 14` line is NOT built here — it comes
+generically from the character template (`prompt_format: "season_day"`)
+and therefore only appears in the chat system prompt. Both thought
+templates read the key, so `thought_context` always sets it —
+`StrictUndefined` would raise on a missing one.
+
 Section ordering reflects priority — what comes first gets more LLM
 attention:
 

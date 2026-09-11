@@ -12,6 +12,9 @@
    Required:
      character_name, personality, location_name, activity, feeling,
      time_of_day, game_date, game_weather
+     birthday_today            — True only on the character's own birthday
+                                 (world calendar); the static "Birthday:"
+                                 line comes from the character template
 
    Optional pre-formatted blocks (omit / empty string to skip):
      effects_block          — active status modifiers (drunk, exhausted, …)
@@ -45,6 +48,9 @@ Current situation:
 - Time: {{ time_of_day }}
 - Date: {{ game_date }}
 - Weather: {{ game_weather }}
+{% if birthday_today %}
+- Today is your birthday.
+{% endif %}
 {% if effects_block %}
 - Active effects:
 {{ effects_block }}

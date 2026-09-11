@@ -105,6 +105,13 @@ def load_prompt_data(character_name: str, sections: Set[str]) -> Dict[str, Any]:
     # morning"). Prompt info only: it colors perception and dressing choices,
     # no rule reads it.
     data["game_weather"] = _now_game.atmosphere(_lang)["label"]
+    # The character's OWN birthday, today. Always set (never conditionally
+    # added): the thought templates gate on it and StrictUndefined would
+    # raise on a missing key. The static "Birthday: Summer, day 14" line is
+    # not built here — it comes generically from the character template
+    # (``prompt_format: "season_day"``).
+    from app.core.birthday import is_birthday_today
+    data["birthday_today"] = is_birthday_today(profile, _now_game)
 
     if PRESENCE in sections:
         presence_lines, elsewhere_lines, anyone_nearby = _load_presence(

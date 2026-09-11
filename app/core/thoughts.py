@@ -479,14 +479,19 @@ class ThoughtRunner:
 
             # Build the context sections within budget (priority order)
             _ctx_parts = []
-            # Prio 1: essentials (always)
-            _ctx_parts.append(
+            # Prio 1: essentials (always). The birthday line only shows up on
+            # the day itself — the standing "Birthday: Summer, day 14" comes
+            # from the character template, not from here.
+            _essentials = (
                 f"Character: {character_name}.\n"
                 f"Aufgabe: {_td.get('task', '')}\n"
                 f"Uhrzeit: {_td.get('time_of_day', '')} "
                 f"({_td.get('game_date', '')}).\n"
                 f"Wetter: {_td.get('game_weather', '')}"
             )
+            if _td.get("birthday_today"):
+                _essentials += "\nToday is your birthday."
+            _ctx_parts.append(_essentials)
             # Prio 2: tool instructions (always)
             _ctx_parts.append(tool_instr_block)
             # Prio 3: current situation
