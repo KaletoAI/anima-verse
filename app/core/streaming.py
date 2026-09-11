@@ -158,6 +158,17 @@ def _defers_for_attachment(tool_name: str, tool_input: str) -> bool:
         return False
 
 
+def _attachment_sends_last(
+    pending: List[Tuple[str, str]]
+) -> List[Tuple[str, str]]:
+    """Stable sort: calls that wait for this turn's attachment run after the
+    image tools that produce it (the skill's own ``defer_for_attachment``)."""
+    return sorted(
+        pending,
+        key=lambda m: 1 if _defers_for_attachment(m[0], m[1]) else 0,
+    )
+
+
 # Sentinel fuer Stream-Ende (safe_anext)
 _STREAM_END = object()
 
@@ -1575,30 +1586,28 @@ class StreamingAgent:
     async def _run_deferred_tools(
         self, rp_response: str, pending_deferred: List[Tuple[str, str]] = None,
         user_input: str = "") -> AsyncGenerator[StreamEvent, None]:
-        """Fuehrt Deferred Tools nach Chat-Antwort mit RP-Kontext-Injektion aus.
+        """Run the deferred tools after the chat response, with RP context
+        injected.
 
-        user_input wird mit injiziert, damit Tools (z.B. Bildgenerierung)
-        Avatar-Aenderungen aus der User-Eingabe extrahieren koennen.
+        ``user_input`` is injected as well so that tools (image generation,
+        for example) can extract avatar changes from the user's input.
         """
         if not pending_deferred:
             return
         # Attachment sends run last: their image is produced by the other
-        # deferred tools (ImageGenerator) of this same batch. Stable sort
+        # deferred tools (the image verbs) of this same batch. Stable sort
         # keeps the remaining order untouched.
-        pending_deferred = sorted(
-            pending_deferred,
-            key=lambda m: 1 if (m[0] == "SendMessage"
-                                and _sendmessage_wants_attachment(m[1])) else 0)
+        pending_deferred = _attachment_sends_last(pending_deferred)
         rp_text = rp_response.strip() if rp_response else ""
         user_text = user_input.strip() if user_input else ""
-        logger.info("DEFERRED TOOLS: %d Tool(s) nach Chat-Antwort (rp_context=%d, user_input=%d chars)",
+        logger.info("DEFERRED TOOLS: %d tool(s) after the chat response (rp_context=%d, user_input=%d chars)",
                      len(pending_deferred), len(rp_text), len(user_text))
         for tool_name, tool_input_text in pending_deferred:
             if tool_name not in self.tools_dict:
                 continue
-            # RP-Kontext und User-Eingabe in den Tool-Input injizieren
+            # Inject RP context and the user's input into the tool input
             enriched_input = _inject_rp_context(tool_input_text, rp_text, user_text)
-            logger.info("Deferred Tool ausfuehrt: %s", tool_name)
+            logger.info("Running deferred tool: %s", tool_name)
             yield DeferredToolEvent(tool_name=tool_name)
             yield ToolStartEvent(tool_name=tool_name)
             try:
@@ -1609,9 +1618,9 @@ class StreamingAgent:
                     tool_result = await asyncio.to_thread(tool_func, enriched_input)
                 yield ToolEndEvent(tool_name=tool_name)
                 yield ToolResultEvent(tool_name=tool_name, result=tool_result)
-                logger.info("Deferred Tool Ergebnis: %s -> %s", tool_name, tool_result[:100])
+                logger.info("Deferred tool result: %s -> %s", tool_name, tool_result[:100])
             except Exception as def_err:
-                logger.error("Deferred Tool Fehler: %s: %s", tool_name, def_err)
+                logger.error("Deferred tool error: %s: %s", tool_name, def_err)
                 yield ToolEndEvent(tool_name=tool_name)
                 yield ToolErrorEvent(tool_name=tool_name, error=str(def_err))
 
