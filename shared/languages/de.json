@@ -1357,6 +1357,8 @@
     "Secrets": "Geheimnisse",
     "Season": "Jahreszeit",
     "Seasons": "Jahreszeiten",
+    "“{season}” is not a season of the world calendar — the date is kept, but it never comes round.": "„{season}“ ist keine Jahreszeit des Weltkalenders — das Datum bleibt erhalten, kommt aber nie.",
+    "{season} has only {days} days — the date is kept, but day {day} never comes round.": "{season} hat nur {days} Tage — das Datum bleibt erhalten, Tag {day} kommt aber nie.",
     "Seed saved": "Seed gespeichert",
     "Seeding error": "Fehler beim Seeding",
     "Seeding failed": "Seeding fehlgeschlagen",

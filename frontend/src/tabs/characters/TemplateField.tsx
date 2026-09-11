@@ -93,6 +93,15 @@ function splitSeasonDay(raw: string): { season: string; day: string } {
  * broken value. A season key the calendar does not (or no longer) know is kept
  * as its own option — the backend ignores such a value when reading, it never
  * discards it, so the form must not silently drop it either.
+ *
+ * The calendar can be edited UNDER a stored date: delete a season or shorten
+ * one, and a day that was a day yesterday is a day that never comes round.
+ * The control then MARKS the value the way the LoRA library marks a LoRA its
+ * backend stopped listing — "(missing)" on the option plus a warning line
+ * underneath — and changes NOTHING: the stored string survives untouched
+ * until someone picks another one. A silent repair would hide the only clue
+ * why a character lost its day. An EMPTY season list is no evidence at all
+ * (the option source has not answered yet), so it marks nothing.
  */
 function SeasonDayField({
   value,
@@ -118,7 +127,26 @@ function SeasonDayField({
   // Without a season (or with one the calendar does not know) the longest
   // season is the only honest ceiling; an empty list leaves the day open.
   const maxDay = picked?.days ?? seasons.reduce((m, s) => Math.max(m, s.days ?? 0), 0)
-  const seasonKnown = !season || seasons.some((s) => s.value === season)
+  const seasonKnown = !season || !!picked
+  // Both ways a stored date can stop being one, and each only counts once the
+  // option source has answered: the season is gone from the calendar, or it is
+  // still there but no longer that long.
+  const seasonMissing = seasons.length > 0 && !!season && !picked
+  const pickedDays = picked?.days ?? 0
+  const dayNumber = parseInt(day, 10)
+  const dayOutOfSeason =
+    !!picked && day !== ''
+    && (!Number.isFinite(dayNumber) || dayNumber < 1
+        || (pickedDays > 0 && dayNumber > pickedDays))
+  const warning = seasonMissing
+    ? t('“{season}” is not a season of the world calendar — the date is kept, but it never comes round.')
+        .replace('{season}', season)
+    : dayOutOfSeason
+      ? t('{season} has only {days} days — the date is kept, but day {day} never comes round.')
+          .replace('{season}', picked?.label || season)
+          .replace('{days}', String(pickedDays))
+          .replace('{day}', day)
+      : ''
 
   const commit = (nextSeason: string, nextDay: string) => {
     const n = parseInt(nextDay, 10)
@@ -129,48 +157,67 @@ function SeasonDayField({
   }
 
   return (
-    <div style={{ display: 'flex', gap: 6 }}>
-      <select
-        className="ga-input"
-        aria-label={t('Season')}
-        title={t('Season')}
-        value={season}
-        disabled={disabled}
-        style={{ flex: 1, minWidth: 0 }}
-        onChange={(e) => {
-          const next = e.target.value
-          // A day beyond the new season's length does not exist there.
-          const limit = seasons.find((s) => s.value === next)?.days ?? 0
-          const n = parseInt(day, 10)
-          const nextDay = limit > 0 && Number.isFinite(n) && n > limit ? String(limit) : day
-          setSeason(next)
-          setDay(nextDay)
-          commit(next, nextDay)
-        }}
-      >
-        <option value="">— {t('Season')} —</option>
-        {/* Keep an imported value the calendar does not know */}
-        {seasonKnown ? null : <option value={season}>{season}</option>}
-        {seasons.map((s) => (
-          <option key={s.value} value={s.value}>
-            {s.label}
-          </option>
-        ))}
-      </select>
-      <input
-        className="ga-input"
-        type="number"
-        min={1}
-        max={maxDay || undefined}
-        aria-label={t('Day')}
-        title={t('Day')}
-        placeholder={t('Day')}
-        value={day}
-        disabled={disabled}
-        style={{ width: 90, flex: '0 0 auto' }}
-        onChange={(e) => setDay(e.target.value)}
-        onBlur={() => commit(season, day)}
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <select
+          className="ga-input"
+          aria-label={t('Season')}
+          title={seasonMissing ? warning : t('Season')}
+          value={season}
+          disabled={disabled}
+          style={{ flex: 1, minWidth: 0 }}
+          onChange={(e) => {
+            const next = e.target.value
+            // A day beyond the new season's length does not exist there.
+            const limit = seasons.find((s) => s.value === next)?.days ?? 0
+            const n = parseInt(day, 10)
+            const nextDay = limit > 0 && Number.isFinite(n) && n > limit ? String(limit) : day
+            setSeason(next)
+            setDay(nextDay)
+            commit(next, nextDay)
+          }}
+        >
+          <option value="">— {t('Season')} —</option>
+          {/* Keep an imported value the calendar does not know — marked once
+              the list has answered, bare while it is still empty. */}
+          {seasonKnown ? null : (
+            <option value={season}>
+              {seasonMissing ? `${season} ${t('(missing)')}` : season}
+            </option>
+          )}
+          {seasons.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <input
+          className="ga-input"
+          type="number"
+          min={1}
+          max={maxDay || undefined}
+          aria-label={t('Day')}
+          title={dayOutOfSeason ? warning : t('Day')}
+          placeholder={t('Day')}
+          value={day}
+          aria-invalid={dayOutOfSeason || undefined}
+          disabled={disabled}
+          style={{
+            width: 90,
+            flex: '0 0 auto',
+            ...(dayOutOfSeason ? { borderColor: '#d29922' } : null),
+          }}
+          onChange={(e) => setDay(e.target.value)}
+          onBlur={() => {
+            // ONLY a real edit may commit. `onBlur` fires on a mere focus pass
+            // as well, and `commit` bounds the day to the season's length — on
+            // a stored day the calendar has outgrown that would rewrite a value
+            // nobody typed, right where the warning says it is being kept.
+            if (day !== splitSeasonDay(value).day) commit(season, day)
+          }}
+        />
+      </div>
+      {warning ? <div className="ga-field-hint ga-field-warn">{warning}</div> : null}
     </div>
   )
 }
