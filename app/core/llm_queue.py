@@ -17,7 +17,7 @@ import threading  # noqa: F401  (still used for LLMTask._done_event)
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from app.core.log import get_logger
 
@@ -84,6 +84,12 @@ class LLMTask:
     # typed (GPU path, e.g. BackendBusyError). repr=False keeps the whole
     # traceback out of the task representation in logs.
     _exception: Optional[BaseException] = field(default=None, repr=False)
+    # The work of a GPU-slot task (e.g. image generation), stamped at submit
+    # time by ProviderQueue.submit_gpu_task. Its presence is what makes the
+    # worker take the GPU branch instead of the LLM branch — None means a
+    # plain LLM task. repr=False keeps the callable out of the task
+    # representation in logs.
+    _gpu_callable: Optional[Callable[[], Any]] = field(default=None, repr=False)
     # Monotonically increasing timestamp — used for stale detection so that
     # server clock changes/drift cannot distort it.
     _monotonic_created: float = field(default=0.0, repr=False)

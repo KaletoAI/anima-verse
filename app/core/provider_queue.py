@@ -384,7 +384,6 @@ class ProviderQueue:
             provider_name=self.provider.name,
             model=label)
         task.trace_id, task.trace_kind = _trace_fields()
-        # Store the callable on the task object
         task._gpu_callable = callable_fn
 
         with self._lock:
@@ -770,7 +769,7 @@ class ProviderQueue:
 
             t0 = time.monotonic()
             task_timeout = self.provider.timeout or 300  # default 5 min
-            gpu_callable = getattr(task, '_gpu_callable', None)
+            gpu_callable = task._gpu_callable
 
             if gpu_callable:
                 # GPU-slot task: run the callable (e.g. image generation)
@@ -1088,7 +1087,7 @@ def _attach_duration_estimate(task: LLMTask) -> None:
     really run on a provider get an estimate. GPU-slot tasks (image
     generation) get no LLM estimate.
     """
-    if getattr(task, "_gpu_callable", None) is not None:
+    if task._gpu_callable is not None:
         return
     if not task.model or not task.task_type:
         return
