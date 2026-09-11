@@ -49,6 +49,21 @@ The five rules, each reported as ``file:line  RULE  <line>``:
      of scope: a plugin parses calendar dates out of documents, and a script is
      not game logic.
 
+     E also catches the second shape of the same defect: the RIGHT clock read
+     for the WRONG question. ``utc_now()`` is aware and is exactly right for a
+     technical stamp, so the rule never fires on the call itself — only on the
+     COMPONENT that answers "what time is it in the world": ``.hour``,
+     ``.minute``, ``.second``, ``.time()``, ``.date()`` off ``utc_now()`` /
+     ``local_now()`` / ``to_world_tz()`` / ``to_local()``, plus
+     ``date.today()`` / ``datetime.today()``. Time of day and the calendar day
+     belong to the GAME clock: ``game_time().is_day()`` (the season's
+     sunrise/sunset), ``.day_bucket()``, ``.day_key()``. On 2026-09-11
+     ``prompt_builder._collect_location`` chose between ``image_prompt_day``
+     and ``image_prompt_night`` from ``6 <= utc_now().hour < 18`` — the UTC
+     hour, so the image prompt said "day" while the world was at midnight.
+     A naive ``datetime.now().hour`` needs no extra pattern; the first half
+     already has it.
+
 Deliberately simple about comments: a line whose first non-blank character is
 ``#`` is skipped, and on any other line only the text BEFORE the first ``#`` is
 scanned. That is what lets the modules which DOCUMENT the removal keep talking
@@ -68,6 +83,7 @@ Exit code 0 = clean, 1 = at least one finding (or a broken rule).
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -134,6 +150,28 @@ WHITELIST_E = {
     "app/skills/video_generation_skill.py",
 }
 
+# Second half of E: a time-of-day / calendar-day COMPONENT taken off the system
+# clock. The aware helpers are matched, never a bare ``utc_now()`` — that call
+# is the documented way to stamp something, and it is everywhere.
+SYSTEM_CLOCK_PART = re.compile(
+    r"\b(?:utc_now|local_now|to_world_tz|to_local)\([^()]*\)"
+    r"\.(?:hour|minute|second|time\(\)|date\(\))(?![A-Za-z_])")
+# ``date.today()`` / ``datetime.today()`` reach the same answer without the
+# detour through timeutils.
+SYSTEM_TODAY = re.compile(r"\b(?:date|datetime)\.today\(\)")
+# Files whose system-clock day/hour is NOT a statement about the world:
+#   app/core/model_suitability.py:477 — a model-test record dates the
+#       MEASUREMENT; capabilities are shared across worlds and describe the
+#       model plus its hardware, not a game day.
+# TODO app/models/character_template.py:600 — _compute_age() derives an age
+#       from date.today() against a real birth date. The user decided this is
+#       rebuilt onto the game calendar in a SEPARATE round (2026-09-11);
+#       remove this entry when that lands.
+WHITELIST_E_CLOCK = {
+    "app/core/model_suitability.py",
+    "app/models/character_template.py",
+}
+
 
 def iter_python_files() -> Iterable[Path]:
     for root in ROOTS:
@@ -190,6 +228,11 @@ def rules_for(rel: str, raw: str) -> List[str]:
         if naive:
             out.append("E naive system clock — use utc_now()/parse_iso "
                        f"({', '.join(naive)})")
+        if rel not in WHITELIST_E_CLOCK:
+            hit = SYSTEM_CLOCK_PART.search(line) or SYSTEM_TODAY.search(line)
+            if hit:
+                out.append("E the world's time of day off the system clock — "
+                           f"use game_time() ({hit.group(0)})")
 
     return out
 
@@ -230,6 +273,13 @@ PROBES: Tuple[Tuple[str, str, str], ...] = (
     ("app/core/character_ops.py",
      '    ts = _dt.fromisoformat(entry.get("timestamp", ""))', "E"),
     ("app/core/chat_ops.py", "    now = datetime.now()", "E"),
+    ("app/core/prompt_builder.py", "    hour = utc_now().hour", "E"),
+    ("app/core/scene_render.py",
+     "    bg = resolve_background_path(loc, hour=utc_now().hour)", "E"),
+    ("app/core/template_preview.py",
+     "    today = utc_now().date().isoformat()", "E"),
+    ("app/core/npc_windows.py", "    t = to_world_tz(stamp).time()", "E"),
+    ("app/models/character.py", "    born = date.today()", "E"),
     # …and the exemptions, which must stay silent:
     ("app/core/chat_ops.py", "    # game_now() was removed in T1", ""),
     ("app/core/chat_ops.py", "    x = 1   # replaces game_now()", ""),
@@ -240,6 +290,14 @@ PROBES: Tuple[Tuple[str, str, str], ...] = (
     ("app/core/thoughts.py", "    now = game_time()", ""),
     ("app/core/chat_ops.py", "    stamp = utc_now().isoformat()", ""),
     ("app/core/memory_service.py", "    x = utc_now() - parse_iso(ts)", ""),
+    # …and the second half of E must not fire on a technical stamp:
+    ("app/core/world_ops.py",
+     "    name = f\"{loc}_{utc_now().strftime('%Y%m%d%H%M%S')}.png\"", ""),
+    ("app/core/sessions.py", "    ts = utc_now().timestamp()", ""),
+    ("app/core/thoughts.py", "    h = game_time().hour", ""),
+    ("app/models/character_template.py", "    today = date.today()", ""),
+    ("app/core/model_suitability.py",
+     '    rec = {"date": utc_now().date().isoformat()}', ""),
     ("app/server.py", "    last = _dt.fromisoformat(_stamp.read_text())", ""),
     ("plugins/knowledge/extract_utils.py",
      "    d = datetime.fromisoformat(raw)", ""),
