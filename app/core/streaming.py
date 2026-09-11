@@ -342,13 +342,37 @@ _QUOTE_PAIR_RE = re.compile(
 # ("detail": "…") is what a tool input looks like, not what a character says.
 _JSON_VALUE_BEFORE_RE = re.compile(r'["“„][^"“”„\n]{1,40}["“”]\s*:\s*$')
 
-# Written, not spoken: a writing verb close in front of the quote turns it into
-# a caption, a note or a post. Word stems, German and English.
+# Written, not spoken: a writing VERB close in front of the quote turns it into
+# a caption, a note or a post. Conjugated forms only, never bare stems — the
+# nouns that share those stems are everyday scenery and must not swallow the
+# dialogue next to them (Schreibtisch, Schreibblock, Schreibmaschine,
+# Notizbuch, Notizblock, Tipp, Tippfehler, Post, Postkarte, Posten, Kritzelei,
+# English notes / notebook / writing desk). Every alternative therefore ends on
+# a word boundary, so a stem followed by more word characters does not match.
 _WRITTEN_CONTEXT_RE = re.compile(
-    r"(schreib|schrieb|geschrieben|tipp|getippt|notier|notiz|kritzel|kritzl|"
-    r"skizzi|bildunterschrift|caption|untertitel|"
-    r"\bpost(e|et|ete|s|ed|ing)?\b|\bwrit(e|es|ing)\b|\bwrote\b|"
-    r"\btyp(e|es|ed|ing)\b|scribbl|\bjot\b|\bnotes?\b|\bnoted\b)",
+    r"\b(?:"
+    # German — schreiben / schrieb / geschrieben (also the separable forms)
+    r"schreib(?:e|st|t|en|end)?\b"
+    r"|schrieb(?:st|t|en)?\b"
+    r"|\w*geschrieben\b"
+    # tippen — "Tipp"/"Tipps"/"Tippfehler" need a conjugation ending to count
+    r"|tipp(?:e|st|t|en)\b|getippt\b"
+    # notieren / Notiz (singular only; "Notizbuch"/"Notizen" are objects)
+    r"|notier\w*|notiz\b"
+    # kritzeln / skizzieren — "Kritzelei"/"Skizze" stay out
+    r"|kritzel(?:e|st|t|n|te|ten)\b|kritzl(?:e|st|t|en)\b|gekritzelt\b"
+    r"|skizzier\w*"
+    # posten — only the conjugated German forms; the noun "Post"/"Posten" is mail
+    r"|poste(?:t|te)?\b|gepostet\b"
+    # caption wording is a written frame by itself
+    r"|caption\w*|bildunterschrift\w*|untertitel\b"
+    # English
+    r"|writ(?:e|es)\b|wrote\b|written\b"
+    r"|writing\b(?!\s+(?:desk|table|paper|pad|room))"
+    r"|typ(?:ed|ing)\b|scribbl(?:e|es|ed|ing)\b|jot(?:s|ted|ting)?\b"
+    r"|posted\b|posting\b"
+    r"|(?:take|takes|took|taking)\s+notes\b"
+    r")",
     re.IGNORECASE)
 
 # Someone ELSE said it: a speech attribution in the third person behind the
@@ -368,11 +392,15 @@ _FOREIGN_BEFORE_RE = re.compile(
     r"fragte|fragt|said|says|asked|asks|whispered|whispers|replied|replies)"
     r"\s*:?\s*$")
 
+# First-person pronouns look like names once a sentence starts with them, and
+# they always denote the speaker — never a foreign one.
+_FIRST_PERSON_WORDS = {"ich", "i", "wir", "we"}
+
 # A hashtag inside the segment marks it as a social-post caption.
 _HASHTAG_RE = re.compile(r"#\w")
 
 # How far back the context rules look from the opening quote character.
-_WRITTEN_LOOKBEHIND = 90
+_WRITTEN_LOOKBEHIND = 60
 _FOREIGN_LOOKBEHIND = 60
 
 
@@ -386,17 +414,21 @@ def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[st
     measured against the 2026-09-11 log analysis where 40 of 40 warnings were
     false positives:
 
-    json      the segment is a JSON value: it sits inside a ``{…}`` pair of
-              the same line, directly behind a ``"<key>":`` or directly in
-              front of a ``:``. A tool input, never speech.
-    written   a writing verb stands within the preceding characters, or the
-              segment carries a hashtag — a caption, a note, a post.
+    json      the segment is a JSON value: an unclosed ``{`` precedes it on the
+              same line, it stands directly behind a ``"<key>":`` or directly
+              in front of a ``:``. A tool input, never speech.
+    written   a conjugated writing VERB stands within the 60 characters in
+              front of the quote, or the segment carries a hashtag — a
+              caption, a note, a post. Nouns that share a writing stem
+              (Schreibtisch, Notizbuch, Tipp, Post, notes) are scenery and do
+              not count; dropping real dialogue is the worse error.
     foreign   a third-person speech attribution follows the segment (or a
               ``<Name> hat gesagt:`` precedes it) and names somebody other
-              than ``speaker``. A pronoun counts as somebody else, because
-              thought prose is written in the first person (decision E1);
-              the speaker's OWN name keeps the line (a model narrating its
-              character in the third person).
+              than ``speaker``. A pronoun of the third person counts as
+              somebody else, because thought prose is written in the first
+              person (decision E1); ``ich``/``I`` and the speaker's OWN name
+              keep the line (first person, and a model narrating its character
+              in the third person).
 
     Deliberately NOT filtered: remembered quotes and the inner voice. No
     deterministic rule separates them from real speech — that judgement is
@@ -420,7 +452,9 @@ def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[st
         after = src[m.end():line_end]
 
         # 1) JSON / key context
-        in_braces = ("{" in before) and ("}" in after)
+        # An unclosed brace in front of the quote — a stray "{" anywhere on the
+        # line would otherwise pull quotes that sit outside the object in.
+        in_braces = before.count("{") > before.count("}")
         if in_braces or _JSON_VALUE_BEFORE_RE.search(before) \
                 or after.lstrip().startswith(":"):
             counts["json"] += 1
@@ -442,17 +476,26 @@ def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[st
 
 
 def _foreign_speaker(before: str, after: str, speaker_lower: str) -> bool:
-    """True when the quote is attributed to somebody other than the speaker."""
+    """True when the quote is attributed to somebody other than the speaker.
+
+    A first-person pronoun is capitalised at the start of a sentence („Ich
+    sagte:", "I said:") and therefore looks exactly like a name — it is the
+    speaker themselves and never a foreign one (§ 3.8 rule 3). The prose can be
+    German or English, so both pronoun sets are excluded on both patterns.
+    """
     m = _FOREIGN_AFTER_RE.match(after)
     if m:
         name = m.group("name")
         if name is None:
             return True  # third-person pronoun (E1)
-        if name.lower() != speaker_lower:
+        low = name.lower()
+        if low not in _FIRST_PERSON_WORDS and low != speaker_lower:
             return True
     m = _FOREIGN_BEFORE_RE.search(before[-_FOREIGN_LOOKBEHIND:])
-    if m and m.group("name").lower() != speaker_lower:
-        return True
+    if m:
+        low = m.group("name").lower()
+        if low not in _FIRST_PERSON_WORDS and low != speaker_lower:
+            return True
     return False
 
 
