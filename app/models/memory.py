@@ -112,9 +112,21 @@ def _row_to_entry(row) -> Dict[str, Any]:
 # apply_extracted_memories, dropped here → 0 rows carrying one in any world) and
 # `summary`/`summary_stale` (the pairwise relationship summary, which could
 # therefore never be stored and stayed permanently "stale").
+#
+# The PROVENANCE fields below belong here too. ``add_memory`` takes them
+# through its ``extra_meta`` door and merges them into the column, so the
+# insert is complete — but every later write-back runs through the builder,
+# and ``retrieve_relevant_memories`` writes every entry back to bump
+# access_count/last_accessed/decay_factor. Without the keys on this list a
+# field therefore survived exactly until the character's first retrieval.
+# Their producers: scene_manager.py (scene_id, location_id, room_id,
+# participants), day_consolidation.py (date_key), memory_service.py and
+# intent_engine.py (source, event_id).
 META_KEYS = ("context", "importance", "access_count", "last_accessed",
              "decay_factor", "related_character", "delay_minutes",
-             "summary", "summary_stale")
+             "summary", "summary_stale",
+             "source", "event_id", "scene_id", "location_id", "room_id",
+             "participants", "date_key")
 
 # Entry fields that are stored in their own columns, not in `meta` — knowing
 # them is what lets the builder below tell "belongs elsewhere" from "typo".
@@ -159,7 +171,7 @@ def _entry_to_row(entry: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def load_memories(character_name: str) -> List[Dict[str, Any]]:
-    """Laedt alle Memory-Eintraege eines Characters aus der DB."""
+    """Loads all memory entries of a character from the DB."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -168,18 +180,20 @@ def load_memories(character_name: str) -> List[Dict[str, Any]]:
         ).fetchall()
         return [_row_to_entry(r) for r in rows]
     except Exception as e:
-        logger.error("load_memories Fehler fuer %s: %s", character_name, e)
+        logger.error("load_memories error for %s: %s", character_name, e)
         return []
 
 
 def save_memories(character_name: str, entries: List[Dict[str, Any]]):
-    """Ersetzt alle Memories eines Characters in der DB.
+    """Replaces all memories of a character in the DB.
 
-    Wird aufgerufen wenn eine oder mehrere Memories geaendert wurden
-    (access_count, decay_factor, entfernte Eintraege etc.).
+    Called whenever one or more memories changed (access_count,
+    decay_factor, removed entries, ...). Every entry goes through
+    ``_entry_to_row`` → ``_build_meta``, so anything not on META_KEYS is
+    dropped here — which is why provenance fields have to be on that list.
     """
     try:
-        # Bestimme welche Entries neu/geaendert sind via ID-Vergleich
+        # Determine which entries are new/changed by comparing ids
         conn = get_connection()
         existing_ids = {
             str(r[0])
@@ -192,7 +206,7 @@ def save_memories(character_name: str, entries: List[Dict[str, Any]]):
             for entry in entries:
                 row = _entry_to_row(entry)
                 raw_id = entry.get("id", "")
-                # Numeric row-id aus "mem_N" oder direkte int-ID
+                # Numeric row id out of "mem_N" or a plain int id
                 row_id = None
                 if raw_id and str(raw_id).isdigit():
                     row_id = int(raw_id)
@@ -239,7 +253,7 @@ def save_memories(character_name: str, entries: List[Dict[str, Any]]):
                     (del_id, character_name)
                 )
     except Exception as e:
-        logger.error("save_memories Fehler fuer %s: %s", character_name, e)
+        logger.error("save_memories error for %s: %s", character_name, e)
 
 
 def add_memory(character_name: str,
@@ -573,9 +587,14 @@ def _keyword_overlap(text: str, query: str) -> float:
 def retrieve_relevant_memories(character_name: str,
     current_message: str = "",
     max_results: int = 0) -> List[Dict[str, Any]]:
-    """Ruft die relevantesten Memories ab, gescort nach Kontext.
+    """Retrieves the most relevant memories, scored by context.
 
-    Score = importance * decay * (1 + keyword_relevance + type_bonus)
+    Score = importance * decay * recency * (1 + keyword_relevance + type_bonus)
+
+    The retrieved entries are written BACK (access_count, last_accessed,
+    decay_factor), so every retrieval sends the whole entry through
+    ``save_memories`` → ``_build_meta``. A meta field missing from META_KEYS
+    therefore dies here, on the first retrieval, not on the write.
     """
     if max_results <= 0:
         # Per-NPC prompt budget (empty = global memory.max_prompt_entries).
@@ -591,34 +610,34 @@ def retrieve_relevant_memories(character_name: str,
         decay = _compute_decay(entry)
         importance = entry.get("importance", 3)
 
-        # Keyword-Relevanz
+        # Keyword relevance
         search_text = entry.get("content", "") + " " + " ".join(entry.get("tags", []))
         relevance = _keyword_overlap(search_text, current_message) if current_message else 0.0
 
-        # Typ-Bonus: nur OFFENE Commitments bekommen Bonus
+        # Type bonus: only OPEN commitments get one
         type_bonus = 0.0
         if entry.get("memory_type") == "commitment":
             if "completed" not in entry.get("tags", []):
                 type_bonus = 0.3
-            # Completed commitments: kein Bonus, normales Decay
+            # Completed commitments: no bonus, plain decay
         elif entry.get("memory_type") == "episodic":
             type_bonus = 0.1
 
-        # Recency-Boost: aktuelle Daten (< 2 Tage) deutlich bevorzugen
+        # Recency boost: clearly prefer recent entries (< 2 days)
         try:
             ts = parse_iso(entry.get("timestamp", ""))
             age_days = max(0, (utc_now() - ts).total_seconds() / 86400)
         except (ValueError, TypeError):
-            age_days = 30.0  # Unbekanntes Alter = kein Boost
+            age_days = 30.0  # Unknown age = no boost
         recency = _recency_boost(age_days)
 
         score = importance * decay * recency * (1.0 + relevance * 2.0 + type_bonus)
         scored.append((score, entry, decay))
 
-    # Sortieren nach Score
+    # Sort by score
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    # Top-N zurueckgeben und Access-Count aktualisieren
+    # Return the top N and update the access count
     result = []
     changed = False
     for score, entry, decay in scored[:max_results]:

@@ -28,7 +28,19 @@ current output):
    meta and must NOT trigger the warning — otherwise every single save would
    log noise and the warning would be worthless.
 
-5. The dedup context takes the NEWEST entries. `load_memories` sorts ts DESC,
+5. The seven PROVENANCE fields must survive: `source`, `event_id`,
+   `scene_id`, `location_id`, `room_id`, `participants`, `date_key`. They reach
+   a row through `add_memory(extra_meta=...)`, which merges them into the meta
+   column AFTER the builder ran — so the insert was always complete. Every
+   later write-back goes through the builder, and `retrieve_relevant_memories`
+   writes every entry back to bump access_count/last_accessed/decay_factor.
+   Before 2026-09-11 the keys were not on META_KEYS, so the fields died at the
+   character's FIRST retrieval and the log showed
+   "unknown field(s) location_id, participants, room_id, scene_id". A pure
+   `_build_meta` check on them is the unit half; the round trip through the DB
+   is `scripts/smoke_memory_meta_roundtrip.py`.
+
+6. The dedup context takes the NEWEST entries. `load_memories` sorts ts DESC,
    so `[-15:]` handed the model the fifteen OLDEST memories as its "do not
    repeat" list. With 20 synthetic entries newest-first, the first slice entry
    must be the newest one, not the oldest.
@@ -71,6 +83,10 @@ entry = {
     "memory_type": "commitment", "content": "x", "timestamp": "2026-08-03",
     "tags": ["a"], "importance": 4, "related_character": "Alpha",
     "delay_minutes": 120, "summary": "kurz", "summary_stale": False,
+    # The seven provenance fields (see docstring point 5).
+    "source": "scene", "event_id": "evt_7", "scene_id": "sc_1",
+    "location_id": "loc_1", "room_id": "room_1",
+    "participants": ["Demo", "Other"], "date_key": "Y0002-D109",
 }
 handler.records.clear()
 meta = mem._build_meta(entry)
@@ -78,6 +94,13 @@ check("delay_minutes kept", meta.get("delay_minutes"), 120)
 check("summary kept", meta.get("summary"), "kurz")
 check("summary_stale kept", meta.get("summary_stale"), False)
 check("importance kept", meta.get("importance"), 4)
+check("source kept", meta.get("source"), "scene")
+check("event_id kept", meta.get("event_id"), "evt_7")
+check("scene_id kept", meta.get("scene_id"), "sc_1")
+check("location_id kept", meta.get("location_id"), "loc_1")
+check("room_id kept", meta.get("room_id"), "room_1")
+check("participants kept as a list", meta.get("participants"), ["Demo", "Other"])
+check("date_key kept", meta.get("date_key"), "Y0002-D109")
 check("no warning for known fields", handler.records, [])
 
 print("2) column fields are not meta and stay quiet")
