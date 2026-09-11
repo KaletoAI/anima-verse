@@ -10,7 +10,7 @@ the extension adds profile-specific fields.
 Field types:
   - text: Single-line or multi-line text (multiline: true)
   - number: Numeric value
-  - date: Date value (YYYY-MM-DD)
+  - game_date: World-calendar day without a year, "<season_key>:<day>"
   - select: Dropdown with predefined options [{value, label}]
 """
 import copy
@@ -23,7 +23,7 @@ from app.core.log import get_logger
 logger = get_logger("char_template")
 
 # Valid field types
-FIELD_TYPES = {"text", "number", "date", "select"}
+FIELD_TYPES = {"text", "number", "game_date", "select"}
 
 # Templates directory
 from app.core.paths import get_templates_dir
@@ -402,7 +402,6 @@ def get_all_template_fields(template: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 import re
-from datetime import date
 
 
 def get_prompt_fields(template: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -438,7 +437,7 @@ def build_prompt_section(
     is_partner: bool = False, character_name: str = "") -> List[str]:
     """Build prompt lines from template + profile data.
 
-    Handles: empty values (skip), lists (join), age computation.
+    Handles: empty values (skip), lists (join), calendar days (label).
     If active_features is given, fields with "prompt_requires_feature"
     are only included when that feature is true in active_features.
     When is_partner=True, fields with "prompt_self_only": true are skipped
@@ -492,15 +491,23 @@ def build_prompt_section(
         label = field.get("prompt_label") or field.get("label", key)
 
         # Special handling
-        if field.get("prompt_compute") == "age":
-            value = _compute_age(str(value))
-            if not value:
-                continue
-        elif field.get("prompt_format") == "list":
+        prompt_format = field.get("prompt_format")
+        if prompt_format == "list":
             if isinstance(value, list):
                 value = ", ".join(str(v) for v in value if v)
                 if not value:
                     continue
+        elif prompt_format == "game_date":
+            # A world-calendar day without a year, stored as
+            # "<season_key>:<day>". A value the calendar no longer knows
+            # (season deleted, season shortened) drops the line.
+            from app.core.game_time import parse_season_day, season_day_label
+            parsed = parse_season_day(value)
+            if not parsed:
+                continue
+            value = season_day_label(parsed[0], parsed[1])
+            if not value:
+                continue
 
         # Multiline value (e.g. structured MD): label on its own line.
         # Multiline blocks are separated visually (blank line before + after) so
@@ -592,27 +599,14 @@ def strip_empty_sections(text: str) -> str:
         return ""
 
 
-def _compute_age(date_str: str) -> Optional[str]:
-    """Compute age from a date string (YYYY-MM-DD)."""
-    try:
-        parts = date_str.strip().split("-")
-        birth = date(int(parts[0]), int(parts[1]), int(parts[2]))
-        today = date.today()
-        age = today.year - birth.year
-        if (today.month, today.day) < (birth.month, birth.day):
-            age -= 1
-        return str(age) if age >= 0 else None
-    except Exception:
-        return None
-
-
 def build_replacement_map(
     template: Dict[str, Any], profile: Dict[str, Any], target_key: str
 ) -> Dict[str, str]:
     """Build a map of {token} -> resolved value for a given target field.
 
     Only fields with a "replacement" config whose "target" matches target_key
-    are included. Supports computed values (e.g. "age" from a birthdate field).
+    are included. Supports computed values (e.g. the height phrase from the
+    height in centimetres).
     """
     token_map = {}
     for field in get_all_template_fields(template):
@@ -638,11 +632,7 @@ def build_replacement_map(
 
         # Apply compute transform
         compute = repl.get("compute")
-        if compute == "age":
-            computed = _compute_age(str(raw_value))
-            if computed:
-                token_map[token] = computed
-        elif compute == "height_phrase":
+        if compute == "height_phrase":
             # Stored in centimetres (for the 3D client), rendered as the
             # descriptive phrase the prompts have always used.
             from app.core.height import height_phrase

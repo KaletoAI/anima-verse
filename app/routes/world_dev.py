@@ -91,8 +91,6 @@ def _format_generable_fields_for_templates(selected_template: str = "") -> str:
                 if ftype == "select" and "options" in field:
                     opts = [o["value"] for o in field["options"]]
                     type_info = f"Auswahl: {' | '.join(opts)}"
-                elif ftype == "date":
-                    type_info = "Datum (YYYY-MM-DD)"
                 elif ftype == "number":
                     type_info = "Zahl (0-100)"
                 else:
