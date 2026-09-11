@@ -278,6 +278,10 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // placement logic is not part of this editor yet. The armed prop is just
   // the highlighted palette card; nothing on the plan reads it so far.
   const [propsOpen, setPropsOpen] = useState(false)
+  // Pick list of the PLACED props in the side panel (📋 tool) — a way to
+  // select a placement by name instead of by hitting its footprint. It
+  // closes itself with the pick.
+  const [propListOpen, setPropListOpen] = useState(false)
   const [armedProp, setArmedProp] = useState('')
   // WHICH MODEL VARIANT the armed prop is dropped as (undefined = the primary
   // one). It belongs to the ARMING, not to a placement: the same prop may be
@@ -317,7 +321,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   // may have gained props meanwhile — the job generates its own).
   const [propDims, setPropDims] = useState<Record<string, PropDims>>({})
   useEffect(() => {
-    if (!propsOpen && !reviewing && Object.keys(propDims).length) return
+    if (!propsOpen && !propListOpen && !reviewing
+        && Object.keys(propDims).length) return
     apiGet<{ props?: Array<{ id: string } & PropDims> }>('/world/props')
       .then((d) => {
         const map: Record<string, PropDims> = {}
@@ -329,7 +334,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       })
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [propsOpen, reviewing])
+  }, [propsOpen, propListOpen, reviewing])
   // …PLUS the pieces that do not exist yet. A ghost of an unbuilt need carries
   // the temporary `need:<key>` prop id, which no library record answers — so
   // without this the review drew every piece still to be made as an unnamed
@@ -2471,6 +2476,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         noSelectionHint={t('Nothing is selected — these tools work on ONE shape. Pick a room with the chips under the plan; a room that has no shape yet is drawn with its own ⬠ button in the hint above the plan.')}
         onFitToModel={fitToModel}
         propsOpen={propsOpen}
+        propListOpen={propListOpen}
         onMode={armMode}
         onRotate={rotateSelected}
         onUnplace={() => { updateLayout(selectedRoom?.id || '', null); setSelected('') }}
@@ -2481,6 +2487,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         onCancelDraw={cancelDraw}
         onSuggest={suggestOpenings}
         onProps={() => setPropsOpen((v) => !v)}
+        onPropList={() => setPropListOpen((v) => !v)}
       />
       {/* Zoom viewport: the canvas grows with the zoom, this box scrolls it
           in BOTH axes (wheel zooms on the canvas). Its height follows the
@@ -2729,6 +2736,15 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
             : t('Let the LLM furnish this room: it picks library props, proposes the missing pieces and a solver places them.')}
         onFurnish={() => setFurnishOpen(true)}
         propsOpen={propsOpen}
+        propListOpen={propListOpen}
+        propDims={ghostDims}
+        propSel={propSel}
+        onPickPlacement={(i) => {
+          // The pick IS the selection — and the list has done its job.
+          setPropSel(i)
+          setPropListOpen(false)
+        }}
+        onClosePropList={() => setPropListOpen(false)}
         armedPropId={armedProp}
         armedVariant={armedVariant}
         onArmedVariant={setArmedVariant}

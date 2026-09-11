@@ -22,9 +22,11 @@
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { SliderInput } from '../../components/SliderInput'
+import { PlanPropList } from './PlanPropList'
 import { PropsPalette } from './PropsPalette'
 import { SurfaceKindSelect } from './SurfaceKindSelect'
 import type { PropFull } from '../props/propTypes'
+import type { PropDims } from './PlanCanvas'
 import type { MapWaterRef, Room, RoomLayout, SurfaceKind } from './worldTypes'
 import { groupKeys, groupLabel } from './placeTypes'
 import type { PoseGroupSpec } from './placeTypes'
@@ -108,6 +110,14 @@ interface PlanSidePanelProps {
    *  writes it into the placement it mints. */
   armedVariant?: number
   onArmedVariant: (value: number | undefined) => void
+  /** Pick list of the PLACED props (📋 tool): open flag, library names for
+   *  the rows, the selected placement index, and the two ways out — a pick
+   *  (the editor selects it and closes the list) or the ✕. */
+  propListOpen: boolean
+  propDims: Record<string, PropDims>
+  propSel: number | null
+  onPickPlacement: (index: number) => void
+  onClosePropList: () => void
 }
 
 /** Job state → the badge next to the Furnish button. */
@@ -128,6 +138,7 @@ export function PlanSidePanel({
   surfaceKinds, waterKinds, onSurface, mapWater,
   furnishState, furnishDisabled, furnishHint, onFurnish,
   propsOpen, onPickProp, armedPropId, armedVariant, onArmedVariant,
+  propListOpen, propDims, propSel, onPickPlacement, onClosePropList,
 }: PlanSidePanelProps) {
   const { t } = useI18n()
   const layout = room?.layout
@@ -344,6 +355,18 @@ export function PlanSidePanel({
 
   return (
     <div className="ga-plan-panel">
+      {/* The pick list stands FIRST: it is a transient picker the 📋 tool
+          opened on purpose, and it closes itself with the pick. */}
+      {propListOpen && room ? (
+        <PlanPropList
+          roomName={ground ? groundName : (room.name || room.id || '')}
+          placements={layout?.props || []}
+          dims={propDims}
+          selected={propSel}
+          onPick={onPickPlacement}
+          onClose={onClosePropList}
+        />
+      ) : null}
       {roomBlock}
       {propsOpen ? (
         <PropsPalette

@@ -97,6 +97,8 @@ interface PlanToolbarProps {
    *  in (user finding 2026-08-20). */
   noSelectionHint: string
   propsOpen: boolean
+  /** The placed-prop pick list is open in the side panel (📋 tool). */
+  propListOpen: boolean
   onMode: (m: PlanMode) => void
   onRotate: () => void
   onFitToModel: () => void
@@ -108,6 +110,7 @@ interface PlanToolbarProps {
   onCancelDraw: () => void
   onSuggest: () => void
   onProps: () => void
+  onPropList: () => void
 }
 
 export function PlanToolbar({
@@ -115,9 +118,9 @@ export function PlanToolbar({
   outlineDraftLen, hasElevator, stairCount, editLevel, building, canHullDoor,
   canSuggest,
   canFitToModel, canCurve, ground, groundHint, noSelectionHint, onFitToModel,
-  propsOpen, onMode, onRotate, onUnplace,
+  propsOpen, propListOpen, onMode, onRotate, onUnplace,
   onRemoveOutline, onRemoveElevator, onCommitOutline, onCommitRoom,
-  onCancelDraw, onSuggest, onProps,
+  onCancelDraw, onSuggest, onProps, onPropList,
 }: PlanToolbarProps) {
   const { t } = useI18n()
   // NO SCALE-ANCHOR LOCK since contract v6 Nr. 2: a room layout carries its
@@ -294,6 +297,18 @@ export function PlanToolbar({
         active={propsOpen}
         onClick={onProps}
         title={t('Show the prop library in the panel next to the plan.')}
+      />
+      {/* The pieces ALREADY in the selected shape — a list beats hunting a
+          small footprint under a big one on the plan. The yard counts: it
+          has placements even though it has no geometry (§ A13a). */}
+      <Tool
+        icon="📋"
+        active={propListOpen}
+        disabled={!hasSelection}
+        onClick={onPropList}
+        title={hasSelection
+          ? t('List the props placed in the selected room — pick one there to select it on the plan.')
+          : noSelectionHint}
       />
       {/* The yard cannot be taken off the plan — it IS the plan's ground
           (§ A13a). Clearing its placements is what the prop strip's ✕ and
