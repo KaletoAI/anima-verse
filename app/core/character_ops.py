@@ -10,7 +10,7 @@ from app.core.log import get_logger
 
 logger = get_logger("characters")
 
-from app.core.timeutils import utc_now
+from app.core.timeutils import parse_iso, utc_now
 
 # File-default whitelist (single source of truth for the soul editor UI)
 from app.core.soul_sections import (
@@ -127,8 +127,12 @@ def _score_memory_no_mutate(entry: Dict[str, Any], current_message: str = "") ->
 
     Mirrors the score formula from app/models/memory.py:retrieve_relevant_memories
     for the read-only display in the "Today" tab.
+
+    Stamps are SYSTEM time and aware (``utc_now_iso()``); they must be read with
+    ``parse_iso`` and compared against ``utc_now()``. A naive comparison raised a
+    TypeError inside the try below, so ``age_days`` silently fell back to 30.0
+    and the recency boost was permanently off.
     """
-    from datetime import datetime as _dt
     from app.models.memory import _compute_decay, _keyword_overlap, _recency_boost
 
     decay = _compute_decay(entry)
@@ -143,8 +147,8 @@ def _score_memory_no_mutate(entry: Dict[str, Any], current_message: str = "") ->
     elif mtype == "episodic":
         type_bonus = 0.1
     try:
-        ts = _dt.fromisoformat(entry.get("timestamp", ""))
-        age_days = max(0, (_dt.now() - ts).total_seconds() / 86400)
+        ts = parse_iso(entry.get("timestamp", ""))
+        age_days = max(0, (utc_now() - ts).total_seconds() / 86400)
     except (ValueError, TypeError):
         age_days = 30.0
     recency = _recency_boost(age_days)
