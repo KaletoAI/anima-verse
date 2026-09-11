@@ -25,7 +25,7 @@ from app.core.db import get_connection, transaction
 logger = get_logger("world")
 
 from app.core.paths import get_storage_dir
-from app.core.timeutils import utc_now_iso
+from app.core.timeutils import game_time, utc_now_iso
 from app.core.view_prompts import building_view
 
 
@@ -2459,7 +2459,7 @@ def migrate_transit_places_once() -> Dict[str, int]:
 # === Hintergrundbilder ===
 
 def get_background_path(location_identifier: str, room: str = "",
-                        hour: int = -1, strict_room: bool = False,
+                        strict_room: bool = False,
                         stable: bool = False) -> Optional[Path]:
     """Returns the path of a background image chosen for location + room.
 
@@ -2472,8 +2472,13 @@ def get_background_path(location_identifier: str, room: str = "",
       (gallery types "building-<view>"), never the untagged interior default
     - location unset OR location has no images → None
 
+    Day/night comes from the GAME calendar, never from a caller and never
+    from the system clock: :meth:`GameTime.is_day` reads the current season's
+    sunrise/sunset. This is the only place that decides it for a background
+    image, so the picture cannot disagree with the prompt text that asks the
+    same calendar.
+
     Args:
-        hour: Current hour (0-23). -1 = no time-of-day filtering.
         strict_room: If True and ``room`` is set: NO fallback to the location
             default. Returns None when the room has no dedicated images. Used
             by the regenerate path so that an explicit room change in the
@@ -2548,16 +2553,13 @@ def get_background_path(location_identifier: str, room: str = "",
     def _pick(lst: List[str]) -> str:
         return sorted(lst)[0] if stable else _random.choice(lst)
 
-    # Determine the time of day
-    time_type = ""
-    if 0 <= hour <= 23:
-        time_type = "day" if 6 <= hour < 18 else "night"
+    # Time of day — the world calendar answers it (season sunrise/sunset).
+    time_type = "day" if game_time().is_day() else "night"
 
-    # Prefer day/night
-    if time_type:
-        timed = [img for img in candidates if image_types.get(img, "") == time_type]
-        if timed:
-            return gallery_base / _pick(timed)
+    # Prefer the matching day/night image
+    timed = [img for img in candidates if image_types.get(img, "") == time_type]
+    if timed:
+        return gallery_base / _pick(timed)
 
     # Images without a time-of-day assignment (neutral) are preferred over the
     # one that does not fit the current time.

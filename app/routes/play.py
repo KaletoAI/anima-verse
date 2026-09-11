@@ -94,7 +94,6 @@ def _bg_version(location_id: str, room: str) -> str:
     changes)."""
     import hashlib
     import os
-    from app.core.timeutils import game_time
     p = None
     try:
         from app.core.event_images import get_effective_background_event
@@ -104,8 +103,7 @@ def _bg_version(location_id: str, room: str) -> str:
     if not p or not p.exists():
         try:
             from app.models.world import get_background_path
-            p = get_background_path(location_id, room=room,
-                                    hour=game_time().hour, stable=True)
+            p = get_background_path(location_id, room=room, stable=True)
         except Exception:
             p = None
     if p and p.exists():
@@ -117,9 +115,9 @@ def _bg_id(location_id: str, room: str) -> str:
     """File name (``bg_id``) of the currently chosen background image — an
     event image wins, otherwise the regular selection. The frontend pins the
     ``<img>`` with it (``/background?file=<bg_id>``) and ties the figure
-    positions to exactly that image. Time of day comes from the GAME clock,
-    consistent with :func:`_bg_version`."""
-    from app.core.timeutils import game_time
+    positions to exactly that image. Time of day comes from the GAME
+    calendar inside :func:`get_background_path`, consistent with
+    :func:`_bg_version`."""
     try:
         from app.core.event_images import get_effective_background_event
         p = get_effective_background_event(location_id)
@@ -129,8 +127,7 @@ def _bg_id(location_id: str, room: str) -> str:
         pass
     try:
         from app.models.world import get_background_path
-        p = get_background_path(location_id, room=room,
-                                hour=game_time().hour, stable=True)
+        p = get_background_path(location_id, room=room, stable=True)
         if p and p.exists():
             return p.name
     except Exception:

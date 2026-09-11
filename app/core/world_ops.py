@@ -2658,7 +2658,7 @@ def room_shape_hint(location: Optional[Dict[str, Any]],
         ratio=ratio)
 
 
-def resolve_background_path(location_name: str, room: str = "", hour: int = -1,
+def resolve_background_path(location_name: str, room: str = "",
                             file: str = "") -> Optional[Path]:
     """Resolve the background image of a location (by id or name).
 
@@ -2671,6 +2671,10 @@ def resolve_background_path(location_name: str, room: str = "", hour: int = -1,
     ``file`` pins a concrete background image (used by the /play frontend so
     that figure positions stick to the exact displayed image). An active
     event image takes precedence and ignores ``file``.
+
+    Day/night is NOT a parameter: ``get_background_path`` asks the game
+    calendar itself, so no caller (least of all a browser) can decide what
+    time of day the world is in.
     """
     # location_name can be an id or a name — the event swap needs the id.
     bg_path: Optional[Path] = None
@@ -2687,7 +2691,7 @@ def resolve_background_path(location_name: str, room: str = "", hour: int = -1,
     if (not bg_path or not bg_path.exists()) and file:
         bg_path = get_background_file_path(location_name, file)
     if not bg_path or not bg_path.exists():
-        bg_path = get_background_path(location_name, room=room, hour=hour)
+        bg_path = get_background_path(location_name, room=room)
     return bg_path
 
 

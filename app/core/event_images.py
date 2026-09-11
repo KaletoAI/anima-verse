@@ -11,10 +11,11 @@ Ablauf:
    ``image_path`` im Event-Payload gesetzt.
 2. ``trigger_event_resolved_image(event_id, ...)`` wird im
    ``resolve_event``-Pfad aufgerufen. Output: ``resolved_image_path``.
-3. ``get_effective_background(location_id, room, hour)`` liefert den
-   Pfad, der vom ``/locations/{id}/background``-Endpoint ausgeliefert
-   wird — Event-Bild bei aktivem ungeloesten Event, Resolved-Bild im
-   Linger-Fenster, sonst normaler Location-Background.
+3. ``get_effective_background_event(location_id)`` liefert den Pfad, den
+   der ``/locations/{id}/background``-Endpoint bevorzugt ausliefert —
+   Event-Bild bei aktivem ungeloesten Event, Resolved-Bild im
+   Linger-Fenster, sonst faellt der Endpoint auf den normalen
+   Location-Background zurueck.
 
 Per-world default: ``EVENT_IMAGEGEN_DEFAULT`` from config.json is resolved
 like location/outfit images (format ``backend:<glob>``).
@@ -28,7 +29,7 @@ import threading
 import time
 from datetime import datetime
 
-from app.core.timeutils import parse_iso, utc_now, game_time
+from app.core.timeutils import parse_iso, utc_now
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -262,12 +263,11 @@ def _do_generate(event_id: str,
     from app.models.world import get_background_path
     from app.models.events import update_event_fields
 
-    # Reference image: the location's current background. The time of day
-    # (GAME hour) is passed along so get_background_path picks the matching
-    # day/night image — same logic as the /background endpoint. Without the
-    # hour the pick would be purely random across all background images,
-    # giving the event image a stale or day/night-wrong template.
-    bg_path = get_background_path(location_id, hour=game_time().hour)
+    # Reference image: the location's current background. The day/night
+    # image matching the GAME calendar is picked inside get_background_path
+    # — same logic as the /background endpoint, so the event image never
+    # gets a day/night-wrong template.
+    bg_path = get_background_path(location_id)
     if not bg_path or not bg_path.exists():
         logger.info("Event-Bild [%s]: kein Background — skip", event_id)
         return None

@@ -2950,7 +2950,6 @@ def list_conditions() -> Dict[str, Any]:
 def get_location_background(
     location_name: str,
     room: str = Query("", description="Raum-ID fuer Bild-Filterung"),
-    hour: int = Query(-1, description="Aktuelle Stunde (0-23) fuer Tag/Nacht-Auswahl"),
     file: str = Query("", description="Konkreter Hintergrund-Dateiname (bg_id) — Pin statt Zufallswahl")):
     """Liefert das Hintergrundbild eines Ortes (per ID oder Name).
 
@@ -2963,9 +2962,12 @@ def get_location_background(
     ``file`` pinnt ein konkretes Hintergrundbild (vom /play-Frontend genutzt,
     damit Figuren-Positionen am exakt angezeigten Bild haften). Ein aktives
     Event-Bild hat Vorrang und ignoriert ``file``.
+
+    Tag/Nacht ist bewusst KEIN Query-Parameter: die Auswahl fragt den
+    Spielkalender, nicht die Uhr des Browsers.
     """
     bg_path = world_ops.resolve_background_path(location_name, room=room,
-                                                hour=hour, file=file)
+                                                file=file)
     if not bg_path or not bg_path.exists():
         raise HTTPException(status_code=404, detail="Kein Hintergrundbild vorhanden")
     suffix = bg_path.suffix.lower()
