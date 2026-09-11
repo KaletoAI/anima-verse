@@ -2757,18 +2757,20 @@ async def rebuild_image_prompt_core(character_name: str, request) -> Dict[str, A
                                             _outfit.get("name", "?"), ref1)
                     except Exception as _e:
                         logger.debug("Outfit-Enrichment fehlgeschlagen: %s", _e)
-            # Location-Enrichment: wenn canonical.location zu kurz (nur Name, keine Description),
-            # aus world.json den Raum-Description nachladen
+            # Location enrichment: when canonical.location is too short (just a
+            # name, no description), pull the room description from the world.
             if pv.prompt_location and len(pv.prompt_location) < 30 and (location_id or room_id):
                 try:
                     from app.models.world import get_location, get_room_by_id
-                    from datetime import datetime as _dt
+                    from app.core.timeutils import game_time
                     _loc_data = get_location(location_id) if location_id else None
                     if _loc_data:
-                        _hour = _dt.now().hour
-                        _is_day = 6 <= _hour < 18
+                        # Day/night is a GAME-clock question and the calendar
+                        # answers it: the season's sunrise/sunset, not a fixed
+                        # hour of the system clock.
+                        _is_day = game_time().is_day()
                         _desc = ""
-                        # Raum bevorzugt
+                        # The room wins over the location.
                         if room_id:
                             _room = get_room_by_id(_loc_data, room_id)
                             if _room:
@@ -2779,10 +2781,10 @@ async def rebuild_image_prompt_core(character_name: str, request) -> Dict[str, A
                                     or _loc_data.get("description", "")
                         if _desc:
                             pv.prompt_location = f"{pv.prompt_location}, {_desc}"
-                            logger.info("rebuild: Location enriched fuer kurze canonical.location (room=%s loc=%s)",
+                            logger.info("rebuild: location enriched for a short canonical.location (room=%s loc=%s)",
                                         room_id, location_id)
                 except Exception as _e:
-                    logger.debug("Location-Enrichment fehlgeschlagen: %s", _e)
+                    logger.debug("Location enrichment failed: %s", _e)
             source = "saved"
         else:
             # 2) FALLBACK: aktueller State (nur fuer alte Bilder ohne canonical)
