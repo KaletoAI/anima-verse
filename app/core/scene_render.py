@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional
 from app.core import config
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
-from app.core.timeutils import utc_now
+from app.core.timeutils import game_time
 
 logger = get_logger("scene_render")
 
@@ -343,9 +343,14 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     if not loc:
         return None
     room = (get_character_current_room(avatar) or "").strip()
-    # Same hour source as the event images — keeps the day/night template
-    # consistent with what the /background endpoint would deliver.
-    bg_path = resolve_background_path(loc, room=room, hour=utc_now().hour)
+    # Day/night is a GAME-clock question and the calendar answers it: the
+    # season's sunrise/sunset, not a fixed hour of the system clock. The
+    # background lookup only splits the hour binary ("day" for 6..17, else
+    # "night"), so it is handed a representative hour of the half the
+    # calendar picked — the same verdict prompt_builder renders into the
+    # scene text, so image and prompt cannot disagree.
+    bg_path = resolve_background_path(loc, room=room,
+                                      hour=12 if game_time().is_day() else 0)
     if not bg_path or not bg_path.exists():
         return None
 
