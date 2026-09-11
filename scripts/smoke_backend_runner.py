@@ -46,6 +46,13 @@ Hand-derived expectations
       raises the 400 RuntimeError must RAISE it. Before the fix: ``[]``.
       Checked for the generations path AND the edits/inpaint path, because
       both carried the same swallowing handler.
+  [6] ``CivitAIBackend._generate`` with ``max_wait = 0``: the job is created,
+      the polling loop never runs (``time.time() - start < 0`` is false at
+      once), so no blobUrl arrives. That is a job still queued or rendering —
+      LOAD — and must raise ``BackendBusyError``, the same class
+      ``openai_diffusion`` raises on its request timeout. Before the fix:
+      ``[]``, which the runner read as a failure and answered with a 300s
+      cooldown on a backend that was merely slow.
 """
 import sys
 from pathlib import Path
@@ -55,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.imagegen.base import BackendBusyError, ImageBackend  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
 from app.imagegen.backends.openai_diffusion import OpenAIDiffusionBackend  # noqa: E402
+from app.imagegen.backends import civitai as civitai_mod  # noqa: E402
 
 FAILED = []
 
@@ -147,6 +155,32 @@ for label, method, kwargs in (
     check(f"{label}: raises", type(raised).__name__, "RuntimeError")
     check(f"{label}: keeps the HTTP code in the text",
           "HTTP 400" in str(raised or ""), True)
+
+print("[6] a civitai polling timeout is load, not a defect")
+
+
+class _Resp:
+    """Just enough of a requests.Response for the job-creation call."""
+
+    status_code = 200
+
+    @staticmethod
+    def json():
+        return {"token": "tok", "jobs": [{"jobId": "j"}]}
+
+    text = ""
+
+
+civ = civitai_mod.CivitAIBackend("c", "http://x", 1.0, "C_",
+                                 api_key="k", model="urn:air:sdxl:checkpoint:civitai:1@2")
+civ.max_wait = 0            # the poll loop cannot run a single round
+civitai_mod.requests.post = lambda *a, **k: _Resp()
+raised = None
+try:
+    civ._generate("a prompt", "", {})
+except BaseException as e:   # noqa: BLE001
+    raised = e
+check("civitai timeout: exception type", type(raised).__name__, "BackendBusyError")
 
 print()
 if FAILED:

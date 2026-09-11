@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import ImageBackend
+from app.imagegen.base import BackendBusyError, ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -267,19 +267,23 @@ class CivitAIBackend(ImageBackend):
                 logger.warning(f"{self.name}: Polling-Fehler: {e} ({elapsed}s)")
 
         if not blob_url:
-            logger.error(f"{self.name}: Timeout nach {self.max_wait}s (kein blobUrl). Letzte Response: {_last_raw}")
-            return []
+            # No result within max_wait = the job is still queued or rendering.
+            # That is LOAD, not a defect: BackendBusyError survives the queue
+            # boundary as a typed exception and is retried WITHOUT a cooldown,
+            # exactly as openai_diffusion handles its request timeout.
+            logger.warning(f"{self.name}: no blobUrl after {self.max_wait}s. Last response: {_last_raw}")
+            raise BackendBusyError(f"{self.name}: polling timeout after {self.max_wait}s")
 
         # 3. Download the image
         try:
             img_resp = requests.get(blob_url, timeout=60)
             if img_resp.status_code != 200:
-                logger.error(f"{self.name}: Bild-Download fehlgeschlagen (Status {img_resp.status_code})")
+                logger.error(f"{self.name}: image download failed (status {img_resp.status_code})")
                 return []
 
             image_bytes = img_resp.content
-            logger.info(f"Bild heruntergeladen: {len(image_bytes)} bytes")
+            logger.info(f"image downloaded: {len(image_bytes)} bytes")
             return [image_bytes]
         except Exception as e:
-            logger.error(f"{self.name}: Fehler beim Herunterladen: {e}")
+            logger.error(f"{self.name}: download error: {e}")
             return []
