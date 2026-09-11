@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Lint the GAME-clock border: no legacy clock names, no datetime maths on
-``GameTime``, no ``parse_iso`` on a persisted game stamp.
+``GameTime``, no ``parse_iso`` on a persisted game stamp, no naive system clock.
 
 Usage:
     ./.venv/bin/python scripts/smoke_game_time_lint.py
@@ -13,7 +13,7 @@ runtime, but a text scan catches the two shapes that slip past a type check: a
 name that no longer exists sitting in a doc line, and a SYSTEM-time helper
 pointed at a GAME stamp.
 
-The four rules, each reported as ``file:line  RULE  <line>``:
+The five rules, each reported as ``file:line  RULE  <line>``:
 
   A  removed clock names — ``game_now(``, ``game_local_now(``,
      ``game_now_iso(``, ``to_world_tz(game``, ``_game_now(``. T1 deleted all
@@ -35,6 +35,19 @@ The four rules, each reported as ``file:line  RULE  <line>``:
      ``strftime("%Y-%m-%d")``. The game day is ``GameTime.day_key()``
      (``Y0002-D109``); a real calendar date as the key silently splits one game
      day across two rows the moment the tick factor is not 1.
+  E  naive SYSTEM time inside ``app/``: ``datetime.now(``, ``_dt.now(`` or
+     ``.fromisoformat(``. Every persisted stamp is written aware
+     (``utc_now_iso()``), so a naive value never compares against one — it
+     raises ``TypeError``. Where that ``TypeError`` sits inside a ``try`` the
+     defect is SILENT: on 2026-09-11 ``memory_service.apply_extracted_memories``
+     had killed every thought extraction for weeks and
+     ``character_ops._score_memory_no_mutate`` had pinned ``age_days`` to its
+     30.0 fallback, turning the recency boost permanently off. The pair
+     ``utc_now()`` / ``parse_iso()`` from ``app.core.timeutils`` is the only
+     way in; ``parse_iso`` reads a naive legacy stamp as UTC, which is the
+     documented convention, not a shim. ``plugins/`` and ``scripts/`` are out
+     of scope: a plugin parses calendar dates out of documents, and a script is
+     not game logic.
 
 Deliberately simple about comments: a line whose first non-blank character is
 ``#`` is skipped, and on any other line only the text BEFORE the first ``#`` is
@@ -45,7 +58,7 @@ whitelisted per rule instead (WHITELIST below) — everywhere else a docstring
 mentioning a deleted name is a finding, not an exception: it documents an API
 that is gone.
 
-Before it scans anything, the run puts the four rules against a table of
+Before it scans anything, the run puts the five rules against a table of
 hand-written probe lines (PROBES) — one that must trip each rule plus the
 exemptions that must stay silent. A scan that matches nothing would otherwise
 print "clean" whether it works or not.
@@ -103,6 +116,24 @@ WHITELIST_C_SYSTEM_TTL = {
 DAY_KEY_FILE = "app/core/day_consolidation.py"
 DAY_KEY_PATTERNS = ('strftime("%Y-%m-%d")', "strftime('%Y-%m-%d')")
 
+# ── rule E ──────────────────────────────────────────────────────────────
+NAIVE_CLOCK = ("datetime.now(", "_dt.now(", ".fromisoformat(")
+RULE_E_ROOT = "app/"
+# Known technical stamps that are NOT game logic and stay as they are:
+#   app/core/timeutils.py                 — the definition of the border itself
+#   app/server.py:688–696                 — the startup timestamp file
+#   app/core/game_calendar_migration.py:503 — date.fromisoformat on a legacy
+#                                           day key; reading old rows IS its job
+#   app/models/world.py:2178              — a file-name stamp
+#   app/skills/video_generation_skill.py:234 — legacy skill, animate_created_at
+WHITELIST_E = {
+    "app/core/timeutils.py",
+    "app/server.py",
+    "app/core/game_calendar_migration.py",
+    "app/models/world.py",
+    "app/skills/video_generation_skill.py",
+}
+
 
 def iter_python_files() -> Iterable[Path]:
     for root in ROOTS:
@@ -154,6 +185,12 @@ def rules_for(rel: str, raw: str) -> List[str]:
     if rel == DAY_KEY_FILE and any(p in line for p in DAY_KEY_PATTERNS):
         out.append("D day key built from a real date")
 
+    if rel.startswith(RULE_E_ROOT) and rel not in WHITELIST_E:
+        naive = [n for n in NAIVE_CLOCK if n in line]
+        if naive:
+            out.append("E naive system clock — use utc_now()/parse_iso "
+                       f"({', '.join(naive)})")
+
     return out
 
 
@@ -188,6 +225,11 @@ PROBES: Tuple[Tuple[str, str, str], ...] = (
     ("app/models/character.py", '    since = parse_iso(p["state_flag_since"])', "C"),
     ("app/core/day_consolidation.py",
      '    key = utc_now().strftime("%Y-%m-%d")', "D"),
+    ("app/core/memory_service.py",
+     "    recent_cutoff = _dt.now() - _td(days=14)", "E"),
+    ("app/core/character_ops.py",
+     '    ts = _dt.fromisoformat(entry.get("timestamp", ""))', "E"),
+    ("app/core/chat_ops.py", "    now = datetime.now()", "E"),
     # …and the exemptions, which must stay silent:
     ("app/core/chat_ops.py", "    # game_now() was removed in T1", ""),
     ("app/core/chat_ops.py", "    x = 1   # replaces game_now()", ""),
@@ -197,6 +239,12 @@ PROBES: Tuple[Tuple[str, str, str], ...] = (
     ("app/core/sessions.py", '    expires = parse_iso(row["expires_at"])', ""),
     ("app/core/thoughts.py", "    now = game_time()", ""),
     ("app/core/chat_ops.py", "    stamp = utc_now().isoformat()", ""),
+    ("app/core/memory_service.py", "    x = utc_now() - parse_iso(ts)", ""),
+    ("app/server.py", "    last = _dt.fromisoformat(_stamp.read_text())", ""),
+    ("plugins/knowledge/extract_utils.py",
+     "    d = datetime.fromisoformat(raw)", ""),
+    ("scripts/smoke_memory_aware_stamps.py",
+     "    old = datetime.now().isoformat()", ""),
 )
 
 
@@ -233,7 +281,7 @@ def main() -> int:
     print(f"scanned {files} python files under {', '.join(ROOTS)}/")
     if not findings:
         print("clean — no legacy clock names, no datetime maths on GameTime, "
-              "no parse_iso on a game stamp")
+              "no parse_iso on a game stamp, no naive system clock")
         return 0
 
     for rel, no, rule, line in findings:
