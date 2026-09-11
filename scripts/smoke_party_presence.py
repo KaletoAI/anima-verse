@@ -207,6 +207,8 @@ def test_thought_template() -> None:
         "activity": "standing in front of demo_far", "feeling": "calm",
         "time_of_day": "17:21", "game_date": "Summer, day 17 · Year 3",
         "game_weather": "freezing, snow — often fog in the morning",
+        # Always present, like the weather (StrictUndefined).
+        "birthday_today": False,
         "has_assignments": False,
         "action_instruction": "Decide what to do.",
     }

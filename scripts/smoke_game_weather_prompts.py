@@ -131,6 +131,9 @@ THOUGHT_CTX = {
     "personality": "curious", "location_name": "Village Square",
     "activity": "sweeping", "feeling": "Neutral",
     "time_of_day": "07:14", "game_date": DATE, "game_weather": LABEL,
+    # Always present, like the weather — the template gates on it and
+    # StrictUndefined raises on a missing key.
+    "birthday_today": False,
     "has_assignments": False, "alone_here": False,
     "action_instruction": "Decide what you want to do next.",
     "present_people_block": "Ren (idle)",
