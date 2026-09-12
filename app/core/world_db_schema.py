@@ -999,6 +999,12 @@ ALTER_MIGRATIONS = [
     # it from the profile blob would put a per-character read on the worldmap
     # payload, the earshot lists and the agent loop.
     ("characters", "status", "TEXT DEFAULT ''"),
+    # utterances: game time the line was spoken (canonical GameTime); ts stays
+    # the SYSTEM stamp for ordering. The conversation-pair window
+    # (app/core/conversation_pairs.py) is measured in WORLD time, so a world
+    # freeze freezes the pairs with it. No backfill — old rows simply never
+    # form pairs.
+    ("utterances", "game_ts", "TEXT DEFAULT ''"),
 ]
 
 

@@ -144,6 +144,9 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
         decency: draft.decency,
         style_hint: draft.style_hint,
         swim_allowed: draft.swim_allowed,
+        // Always sent, null included: that is how the override is taken away
+        // again (the server then drops the key and the world value counts).
+        chattiness: draft.chattiness ?? null,
         activity_hint: draft.activity_hint,
         knowledge_item_id: draft.knowledge_item_id,
         terrain: draft.terrain,
@@ -229,6 +232,18 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
               <option key={d.value} value={d.value}>{d.value} — {t(d.label)}</option>
             ))}
           </select>
+        </Field>
+        <Field label={t('Chattiness')}
+          hint={t('How likely a bystander chimes in on a line not addressed to them (0–1). Empty = world default from Chat settings.')}>
+          <input
+            className="ga-input"
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={draft.chattiness ?? ''}
+            onChange={(e) => upd('chattiness', e.target.value === '' ? null : Number(e.target.value))}
+          />
         </Field>
       </div>
 

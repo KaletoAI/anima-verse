@@ -448,6 +448,10 @@ export interface Location {
   style_hint?: string
   swim_allowed?: boolean
   activity_hint?: string
+  /** Per-location override of `chat.chattiness` (0..1): how likely a bystander
+   *  chimes in on a line that was not addressed to them. `null`/absent = the
+   *  world value from the chat settings applies. */
+  chattiness?: number | null
   knowledge_item_id?: string
   image_prompt_day?: string
   image_prompt_night?: string

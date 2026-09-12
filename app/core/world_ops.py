@@ -2135,6 +2135,12 @@ def update_location_with_extras(location_id: str,
     terrain = data.get("terrain")
     map3d = data.get("map3d")
     npc_slots = data.get("npc_slots")
+    # THE CHATTINESS OVERRIDE IS CLEARABLE, so an empty value is NOT "leave it
+    # alone": a request that carries the key with ``None``/``""`` takes the
+    # override away again and the world value (``chat.chattiness``) applies.
+    # Only a request without the key at all leaves the stored value untouched.
+    chattiness_given = isinstance(data, dict) and "chattiness" in data
+    chattiness = data.get("chattiness")
 
     loc = get_location_by_id(location_id)
     if not loc:
@@ -2166,7 +2172,8 @@ def update_location_with_extras(location_id: str,
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
                   or terrain is not None
-                  or map3d is not None or npc_slots is not None)
+                  or map3d is not None or npc_slots is not None
+                  or chattiness_given)
     if _has_extra:
         from app.models.world import (
             _load_world_data, _save_world_data, ensure_floor_rooms,
@@ -2192,6 +2199,18 @@ def update_location_with_extras(location_id: str,
                     _l["style_hint"] = (style_hint or "").strip()
                 if swim_allowed is not None:
                     _l["swim_allowed"] = bool(swim_allowed)
+                if chattiness_given:
+                    # How likely a bystander chimes in on a line that was not
+                    # addressed to them (plan-gespraechs-auswahl.md § 3.2).
+                    # Empty — or anything that is no number at all — takes the
+                    # override away, so the world value from the chat settings
+                    # counts again; a number is clamped into [0, 1].
+                    try:
+                        if chattiness is None or chattiness == "":
+                            raise ValueError
+                        _l["chattiness"] = max(0.0, min(1.0, float(chattiness)))
+                    except (TypeError, ValueError):
+                        _l.pop("chattiness", None)
                 if activity_hint is not None:
                     _l["activity_hint"] = (activity_hint or "").strip()
                 if knowledge_item_id is not None:

@@ -2195,7 +2195,8 @@ def _build_full_system_prompt(character_name: str,
     respond_opportunity: bool = False,
     winding_down: bool = False,
     present_characters: Optional[list] = None,
-    incoming_text: str = "") -> str:
+    incoming_text: str = "",
+    addressed_to: Optional[List[str]] = None) -> str:
     """Build the chat-stream / talk-to system prompt.
 
     Loads all data sections (character/soul template, partner template,
@@ -2209,6 +2210,10 @@ def _build_full_system_prompt(character_name: str,
         incoming_text: The message the LLM is about to answer, exactly as
             it will see it. Only its size and shape reach the prompt;
             callers that have no incoming message leave it empty.
+        addressed_to: Names the incoming line was addressed to (room mode).
+            ``None`` = not known — a plain 1:1 chat, where the line is by
+            definition meant for this character, so ``addressed_to_me`` is
+            True. An empty list means the line went to the room.
     """
     from app.core.prompt_templates import render
 
@@ -2697,6 +2702,16 @@ def _build_full_system_prompt(character_name: str,
     reply_shape_section = build_reply_shape_section(
         character_name, _partner_name, incoming_text)
 
+    # ---- Who was addressed ---------------------------------------------
+    # Only meaningful in room mode; a 1:1 chat has no addressee list and the
+    # line is always meant for this character.
+    if addressed_to is None:
+        addressed_to_me = True
+        addressed_names = ""
+    else:
+        addressed_to_me = bool(character_name in addressed_to)
+        addressed_names = ", ".join(n for n in addressed_to if n != character_name)
+
     return render(
         "chat/chat_stream.md",
         character_name=character_name,
@@ -2737,4 +2752,6 @@ def _build_full_system_prompt(character_name: str,
         condition_reminder=condition_reminder,
         reply_shape_section=reply_shape_section,
         respond_opportunity=respond_opportunity,
-        winding_down=winding_down)
+        winding_down=winding_down,
+        addressed_to_me=addressed_to_me,
+        addressed_names=addressed_names)

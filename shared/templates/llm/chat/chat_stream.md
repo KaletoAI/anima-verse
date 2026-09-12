@@ -52,6 +52,10 @@
      tools_enabled, mood_tracking_enabled, intent_tracking_enabled,
      winding_down (the exchange is ending), respond_opportunity (overheard,
      may chime in)
+     addressed_to_me: bool — the incoming line was addressed to THIS character
+       (room mode). True for every 1:1 chat, where there is no addressee list.
+     addressed_names: str — comma-separated names the incoming line was
+       addressed to, this character excluded; "" = it went to the room.
 
    OTHER:
      world_setup — per-world briefing text (worlds/<world>/world_setup.json)
@@ -98,9 +102,12 @@ What you can see of them:
 {% endif %}
 Each of them is their OWN person and speaks and acts on their OWN turn. You do NOT control them and you cannot speak or act for them.
 Write ONLY {{ character_name }}'s own words and actions, in the first person. NEVER write, quote, narrate, or describe what {{ present_characters }} say, do, think, or feel — that is impersonation and breaks the scene. Only react to what they already said.
-{% if partner_name %}{{ partner_name }} spoke to you — that is what brought you into this turn, so answer {{ partner_name }}. Others may have spoken since: the transcript is what the room actually heard and its last lines are the freshest thing said, whoever said them. React to those as well if they concern you.
+{% if partner_name and addressed_to_me %}{{ partner_name }} spoke to YOU directly — that is what brought you into this turn. Answer {{ partner_name }}. Others may have spoken since: the transcript is what the room actually heard and its last lines are the freshest thing said, whoever said them. React to those as well if they concern you.
+{% elif partner_name and addressed_names %}{{ partner_name }} was speaking to {{ addressed_names }}, not to you. You overheard it. If you speak, speak as a bystander who joins in — do not answer as if the words were meant for you.
+{% elif partner_name %}{{ partner_name }} said that to the room, to nobody in particular — anyone present may pick it up, and this time it is you. Answer {{ partner_name }} as one of the people there.
 {% endif %}
 The transcript also contains YOUR OWN earlier turns — they are the messages written in your voice, without a speaker name in front. Everything in them is already said and done. Never repeat one of them: not the same wording, not the same gesture, not the same line lightly rephrased. Each turn of yours moves the scene one step further; if you have nothing new, keep it to a short reaction rather than saying the old thing again.
+Lines with a speaker name in front were said by OTHER people. Never repeat one of them — not their wording, not their gesture, not a lightly rephrased copy. If someone already asked the question you were about to ask, ask something else or react to the answer instead.
 Do NOT narrate the whole scene or jump ahead — one beat per turn.
 {% endif %}
 

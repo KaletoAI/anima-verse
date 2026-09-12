@@ -33,6 +33,7 @@ The forced_thought handler stays on ThoughtRunner (registered separately at
 startup); this loop does not handle external triggers.
 """
 import asyncio
+import logging
 import random
 from datetime import datetime, timedelta
 
@@ -527,9 +528,15 @@ class AgentLoop:
         """Phase 3b: distributes reactions to a room utterance across the loop.
 
         - Addressed characters present → mandatory answer (obligatory).
-        - Remaining characters present → Chime opportunity (skippable) — only
-          while the room energy is not exhausted (Backstop). Avatar input
-          recharges it; every AI utterance consumes a hop (decay).
+        - Remaining characters present → at most ONE chime, chosen
+          server-side BEFORE any LLM runs (``chime_select``, plan
+          ``plan-gespraechs-auswahl.md`` § 3.2, decision E2): a bystander
+          stuck in a foreign pair stays out, a bystander NAMED in the line
+          wins outright, everyone else is drawn against
+          ``chattiness x relationship x aim``. Often that draw picks nobody —
+          "Hello Liesa" is answered by Liesa, not by the whole room. The
+          Backstop still caps the ROUNDS on top of that: avatar input
+          recharges the room energy, every AI utterance consumes a hop.
         - Whispering distributes NO chimes (private).
 
         An EMPTY location_id is the WILDERNESS (E6): the earshot roster is
@@ -663,14 +670,72 @@ class AgentLoop:
                 out["obligatory"].append(c)
                 _halt_addressed_wanderer(c)
 
-        # 2) Chime opportunities for the remaining characters present (not on whisper)
+        # 2) At most ONE chime among the remaining characters present, picked
+        #    here and not by the models: the chime template asks for SKIP and
+        #    the LLMs practically never take it, so a round-robin bump IS the
+        #    round-robin answer. A whisper is private and distributes none.
         if volume != "whisper":
-            for c in present:
-                if c in addr:
-                    continue
-                if self.bump_respond(c, speaker=speaker, content=content,
-                                     volume=volume, obligatory=False):
-                    out["chime"].append(c)
+            from app.core.chime_select import (
+                DEFAULT_CHATTINESS, NO_RELATIONSHIP_STRENGTH, Candidate,
+                chime_scores, effective_chattiness, select_chimer)
+            from app.core.conversation_pairs import partners_in_room
+            from app.models.relationship import get_relationship
+            from app.models.world import get_location_by_id
+
+            # The pairs standing in this room — read ONCE for the whole
+            # selection. Out in the open both keys are empty, and that empty
+            # pair IS the wilderness bucket the lines out there are stored
+            # under (``recent_room_utterances``), so this arm needs no case
+            # of its own.
+            partners = partners_in_room(location_id or "", room_id or "")
+
+            def _strength(name: str) -> float:
+                """Relationship strength candidate ↔ speaker (symmetric)."""
+                try:
+                    rel = get_relationship(name, speaker)
+                    if rel and rel.get("strength") is not None:
+                        return float(rel["strength"])
+                except Exception:  # noqa: BLE001
+                    logger.debug("chime: relationship %s/%s unreadable",
+                                 name, speaker, exc_info=True)
+                return NO_RELATIONSHIP_STRENGTH
+
+            candidates = [
+                Candidate(name=c, strength=_strength(c),
+                          partner=partners.get(c))
+                for c in present
+                if c not in addr and _is_respond_eligible(c)
+            ]
+            try:
+                chattiness = effective_chattiness(
+                    get_location_by_id(location_id) if location_id else None)
+            except Exception:  # noqa: BLE001
+                logger.debug("chime: chattiness lookup failed for %s",
+                             location_id, exc_info=True)
+                chattiness = DEFAULT_CHATTINESS
+            # E6: the player speaking to the room must never talk into the
+            # void — then someone always answers (if anyone can at all).
+            always_someone = bool(is_avatar and not addr)
+            if candidates and logger.isEnabledFor(logging.DEBUG):
+                logger.debug("room %s: chime scores %s",
+                             key, chime_scores(
+                                 candidates, speaker=speaker,
+                                 addressees=list(addr), content=content,
+                                 chattiness=chattiness))
+            chosen = select_chimer(candidates, speaker=speaker,
+                                   addressees=list(addr), content=content,
+                                   chattiness=chattiness,
+                                   always_someone=always_someone)
+            if chosen and self.bump_respond(chosen, speaker=speaker,
+                                            content=content, volume=volume,
+                                            obligatory=False):
+                out["chime"].append(chosen)
+                logger.info("room %s: chime → %s (chattiness %.2f, "
+                            "%d candidates)", key, chosen, chattiness,
+                            len(candidates))
+            else:
+                logger.info("room %s: no chime (chattiness %.2f, "
+                            "%d candidates)", key, chattiness, len(candidates))
         return out
 
     def pop_hint(self, character_name: str) -> str:
@@ -1159,6 +1224,24 @@ class AgentLoop:
                     return None
                 if age < 0 or age > _ROOM_CONVO_ACTIVE_SEC:
                     return None
+                # Pair gate (plan § 3.3): a line aimed at two other people is
+                # THEIR conversation. Chiming in on it is exactly the
+                # round-robin this strand removes on the dispatch side — so
+                # the thought turn may only pick up a line that went to the
+                # room, that went to this character, or that involves its own
+                # conversation partner.
+                raw_addr = meta.get("addressees")
+                line_addr = [str(a).strip() for a in raw_addr
+                             if str(a or "").strip()] \
+                    if isinstance(raw_addr, (list, tuple)) else []
+                if line_addr and character_name not in line_addr:
+                    from app.core.conversation_pairs import conversation_partner
+                    partner = conversation_partner(character_name, loc, room)
+                    if not partner or (partner != sp
+                                       and partner not in line_addr):
+                        logger.debug("active-conversation chime %s: %s is in "
+                                     "a foreign pair", character_name, sp)
+                        return None
                 return {"speaker": sp, "content": content, "volume": "normal",
                         "obligatory": False, "hint": "", "winding_down": False}
             return None

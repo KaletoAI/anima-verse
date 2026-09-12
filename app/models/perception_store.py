@@ -29,24 +29,30 @@ def insert_utterance(*, ts: str, speaker: str, location_id: str, room_id: str,
                      volume: str, addressees: Sequence[str], content: str,
                      meta: Optional[Dict[str, Any]] = None,
                      pos_x: Optional[float] = None,
-                     pos_z: Optional[float] = None) -> int:
+                     pos_z: Optional[float] = None,
+                     game_ts: str = "") -> int:
     """Writes one speech act and returns its id.
 
     ``pos_x``/``pos_z`` belong to the wilderness only: a speaker outside every
     location has no room to name, so the metre point it spoke from is what
     later tells where the line was heard. Inside a location both stay NULL —
     the ``location_id``/``room_id`` pair already answers that question.
+
+    ``game_ts`` is the canonical GameTime of the moment the line was spoken;
+    ``ts`` stays the SYSTEM stamp everything orders by. The world-time stamp
+    is what the conversation-pair window measures against, so an empty value
+    simply means "this line never forms a pair".
     """
     with transaction() as conn:
         cur = conn.execute(
             """INSERT INTO utterances
                (ts, speaker, location_id, room_id, volume, addressees, content,
-                meta, pos_x, pos_z)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                meta, pos_x, pos_z, game_ts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (ts, speaker, location_id or "", room_id or "", volume,
              json.dumps(list(addressees or []), ensure_ascii=False),
              content, json.dumps(meta or {}, ensure_ascii=False),
-             pos_x, pos_z),
+             pos_x, pos_z, game_ts or ""),
         )
         return int(cur.lastrowid)
 
@@ -133,6 +139,33 @@ def get_room_utterances_since(location_id: str, room_id: str,
     return [_row_to_dict(r) for r in rows]
 
 
+def recent_room_utterances(location_id: str, room_id: str,
+                           limit: int = 40) -> List[Dict[str, Any]]:
+    """The newest ``limit`` speech acts of ONE room, NEWEST FIRST.
+
+    The source of the derived conversation pairs
+    (``app/core/conversation_pairs.py``): it needs the last handful of lines
+    of a room with their addressees and their WORLD time, nothing else. The
+    slice is taken on the system stamp (``ts``/``id``) because that is the
+    write order; the window itself is then measured on ``game_ts``.
+
+    Both keys are matched exactly, empty included — an empty
+    ``location_id``/``room_id`` pair is the wilderness bucket, not a wildcard.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT speaker, addressees, content, ts, game_ts, volume "
+            "FROM utterances WHERE location_id=? AND room_id=? "
+            "ORDER BY ts DESC, id DESC LIMIT ?",
+            (location_id or "", room_id or "", int(limit))).fetchall()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("recent_room_utterances(%s/%s) failed: %s",
+                     location_id, room_id, e)
+        return []
+    return [_row_to_dict(r) for r in rows]
+
+
 def last_shared_utterance_ts(character: str,
                              partners: Sequence[str]) -> Optional[str]:
     """Timestamp of the most recent speech act this character SHARED with one
@@ -215,9 +248,12 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     conn = get_connection()
     # Include u.volume (whisper/normal/shout) — NOT secret content, just the
     # volume; the content itself stays filtered in p.content (whisper_meta = empty).
+    # u.game_ts travels with it so a stream row carries the WORLD time it was
+    # spoken at, not just the system stamp in p.ts.
     if location_id:
         rows = conn.execute(
-            "SELECT p.*, u.volume AS volume FROM perceptions p "
+            "SELECT p.*, u.volume AS volume, u.game_ts AS game_ts "
+            "FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
             "WHERE p.perceiver=? AND (p.kind='addressed' "
             "                         OR (u.location_id=? AND u.room_id=?)) "
@@ -225,7 +261,8 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
             (perceiver, location_id, room_id, limit)).fetchall()
     else:
         rows = conn.execute(
-            "SELECT p.*, u.volume AS volume FROM perceptions p "
+            "SELECT p.*, u.volume AS volume, u.game_ts AS game_ts "
+            "FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
             "WHERE p.perceiver=? AND (p.kind='addressed' OR u.location_id='') "
             "ORDER BY p.ts DESC, p.id DESC LIMIT ?",

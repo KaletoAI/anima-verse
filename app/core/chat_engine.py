@@ -70,7 +70,20 @@ def _messages_from_room_stream(responder: str,
     Core of the room conversation: what the character HEARD in the room is its
     conversational context — not an old pairwise history. Foreign lines are
     prefixed with the speaker name (`Thalion: …`) so the LLM knows who said what
-    in a multi-person scene. Whisper meta (no content) is dropped.
+    in a multi-person scene.
+
+    The prefix also carries WHOM a line was aimed at, taken from the row's
+    ``meta.addressees`` (absent/empty = said to the room):
+
+    - no addressees      → ``Thalion: …``
+    - one addressee      → ``Thalion (to Liesa): …``
+    - several            → ``Thalion (to Liesa, Karl): …``
+    - the responder among them → its own name becomes ``you``, the original
+      order stays: ``Thalion (to you): …``, ``Thalion (to you, Karl): …``
+
+    Without it a character cannot tell a line meant for it from one it merely
+    overheard. The responder's own lines stay role "assistant" with no prefix.
+    Whisper meta (no content) is dropped.
     """
     out: List[Dict[str, str]] = []
     for row in stream or []:
@@ -83,7 +96,15 @@ def _messages_from_room_stream(responder: str,
         if sp and sp == responder:
             out.append({"role": "assistant", "content": content})
         else:
-            out.append({"role": "user", "content": f"{sp or '?'}: {content}"})
+            addressees = [str(a).strip() for a in (meta.get("addressees") or [])
+                          if str(a).strip()]
+            if addressees:
+                shown = ", ".join("you" if a == responder else a
+                                  for a in addressees)
+                prefix = f"{sp or '?'} (to {shown})"
+            else:
+                prefix = sp or "?"
+            out.append({"role": "user", "content": f"{prefix}: {content}"})
     return out
 
 
@@ -223,24 +244,29 @@ def build_chat_context(
     partner_name: str = "",
     room_stream: Optional[List[Dict[str, Any]]] = None,
     respond_opportunity: bool = False,
-    winding_down: bool = False) -> Dict[str, Any]:
+    winding_down: bool = False,
+    addressed_to: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Build everything needed to run a chat: system prompt, message history,
     LLM instances, and tool setup.
 
     Args:
         owner_id: User who owns the character (storage path)
-        character_name: Character name (der Antwortende)
+        character_name: Character name (the responder)
         user_input: Current incoming message
         channel: "web" or "telegram"
         selected_skills: Optional skill filter
-        speaker: "user" (default) oder Name des sprechenden Characters.
-            Bei Character-zu-Character ist speaker der Name des Senders.
-        medium: Kommunikationsmedium aus Sicht der Figuren:
+        speaker: "user" (default) or the name of the speaking character.
+            For character-to-character, speaker is the sender's name.
+        medium: Communication medium as the characters see it:
             "in_person", "messaging", "telegram", "instagram".
-            None = auto-derive aus channel + Speaker-Kontext.
-        partner_name: Bei Character-zu-Character: der sprechende Character (= speaker
-            wenn speaker != "user"). Fuer History-Dateinamen.
+            None = auto-derived from channel + speaker context.
+        partner_name: For character-to-character: the speaking character
+            (= speaker when speaker != "user"). Used for history file names.
+        addressed_to: Names the incoming line was addressed to. None = not
+            known / plain 1:1 chat — the prompt then treats the line as
+            addressed to the responder. An empty list means "said to the
+            room", i.e. addressed to nobody in particular.
 
     Returns:
         Dict with keys: system_content, messages, llm, agent_config,
@@ -267,9 +293,9 @@ def build_chat_context(
     # For web chat: player's active character is the conversation partner identity.
     # For telegram: use account name (telegram has no character-switching).
     if channel == "telegram":
-        # Telegram hat kein Avatar-Wahlfeld — der gesteuerte Avatar steht
-        # in der Bot-Config (telegram_partner_character). Ohne den waeren
-        # alle Telegram-Nachrichten partner='' und unauffindbar.
+        # Telegram has no avatar picker — the controlled avatar is named in
+        # the bot config (telegram_partner_character). Without it every
+        # Telegram message would be partner='' and unfindable.
         user_display_name = (
             (agent_config or {}).get("telegram_partner_character", "").strip()
             or "user"
@@ -278,12 +304,12 @@ def build_chat_context(
         # Avatar identity, never the login name — "admin" used to leak in here.
         user_display_name = get_active_character() or get_chat_partner() or "user"
 
-    # Auto-derive medium wenn nicht gesetzt
+    # Auto-derive the medium when it is not set
     if medium is None:
         if channel == "telegram":
             medium = "telegram"
         elif speaker != "user":
-            # Character-zu-Character: in_person wenn am gleichen Ort, sonst messaging
+            # Character-to-character: in_person when at the same place, else messaging
             try:
                 from app.models.character import get_character_current_location
                 speaker_loc = get_character_current_location(speaker)
@@ -294,12 +320,12 @@ def build_chat_context(
         else:
             medium = "in_person"
 
-    # Partner-Name fuer History-Dateinamen: bei C2C explizit; sonst active character
+    # Partner name for the history file names: explicit for C2C, else the active character
     _history_partner = partner_name if partner_name else (speaker if speaker != "user" else "")
-    # Im Raum-Modus wird die 1:1-History unten (s. ~Z.320) komplett durch den
-    # Wahrnehmungs-Stream ersetzt UND die history_summary im Prompt unterdrueckt —
-    # der Load + die Aufbereitung waeren reine Verschwendung. Daher hier ueber-
-    # springen (Anti-Rep nutzt im Raum-Modus ohnehin den room_stream).
+    # In room mode the 1:1 history below is replaced entirely by the
+    # perception stream AND the history_summary is suppressed in the prompt —
+    # loading and preparing it would be pure waste. So skip it here
+    # (anti-repetition uses the room_stream in room mode anyway).
     full_chat_history = [] if room_stream else get_chat_history(
         character_name, partner_name=_history_partner)
 
@@ -323,17 +349,17 @@ def build_chat_context(
         agent_name=character_name)
     llm = _chat_instance.create_llm(**_llm_overrides) if _chat_instance else None
 
-    # History window (zeitgesteuert)
+    # History window (time-based)
     recent_history, old_history = get_time_based_history(full_chat_history)
     history_summary = (
         refresh_summary_if_uncovered(character_name, old_history)
         if old_history else "")
 
     messages = []
-    # Halluzinierter Template-Prefix von Send-Message-Hint:
-    # "[Name, ]deine Antwort: '...'" wurde frueher als Antwort-Format gespeichert
-    # weil das LLM den Format-Hinweis literal kopierte. Bereinigen, damit das
-    # Muster nicht in neue Antworten echoed wird.
+    # Hallucinated template prefix from the send-message hint:
+    # "[Name, ]deine Antwort: '...'" used to be stored as the reply format
+    # because the LLM copied the format hint literally. Strip it so the
+    # pattern is not echoed into new replies.
     _meta_prefix_re = re.compile(
         r'^(?:[A-Z][\wÄÖÜäöüß \-]{0,30},\s*)?(?:deine|meine|seine|ihre)\s+Antwort:\s*[\'\"]?',
         re.IGNORECASE)
@@ -384,13 +410,13 @@ def build_chat_context(
         messages, drop_preceding_user=not room_mode,
         log_label="Room transcript" if room_mode else "C2C history")
 
-    # Tools aus aktivierten Skills ableiten
+    # Derive the tools from the enabled skills
     sm = get_skill_manager()
     agent_tools = sm.get_agent_tools(character_name, check_limits=False)
     if selected_skills is not None:
         agent_tools = [t for t in agent_tools if t.name in selected_skills]
 
-    # Modus-Erkennung: tool_llm frueh laden fuer determine_mode + System-Prompt
+    # Mode detection: load the tool_llm early for determine_mode + system prompt
     from app.core.dependencies import determine_mode
     _tool_instance = resolve_llm("intent", agent_name=character_name) if agent_tools else None
     tool_llm = _tool_instance.create_llm() if _tool_instance else None
@@ -408,12 +434,13 @@ def build_chat_context(
         respond_opportunity=respond_opportunity,
         winding_down=winding_down,
         present_characters=present_characters,
-        incoming_text=user_input)
+        incoming_text=user_input,
+        addressed_to=addressed_to)
 
-    # Zustands-Filter (drunk/exhausted/…): deren prompt_modifier wird nur im
-    # Thought-Pfad angewandt. Hier (Chat-Antwort) ergänzen, damit der Character
-    # auch beim Antworten seinen Zustand zeigt. status_section + condition_reminder
-    # liefert _build_full_system_prompt bereits.
+    # State filters (drunk/exhausted/…): their prompt_modifier is only applied
+    # on the thought path. Add it here (chat reply) as well so the character
+    # shows its state when answering too. status_section + condition_reminder
+    # already come from _build_full_system_prompt.
     try:
         from app.core.prompt_filters import active_modifiers
         from app.models.character import get_character_current_location
@@ -431,9 +458,9 @@ def build_chat_context(
     max_iterations = 1
 
     if agent_tools:
-        # Initiator: wer hat diesen Chat-Turn ausgeloest. Bei user-chat = "user",
-        # bei C2C = der sprechende Character. Wird an Skills durchgereicht, damit
-        # talk_to/send_message pending_reports anlegen koennen.
+        # Initiator: who triggered this chat turn. "user" for a user chat,
+        # the speaking character for C2C. Passed through to the skills so
+        # talk_to/send_message can create pending_reports.
         _tool_initiator = speaker if speaker else "user"
         for t in agent_tools:
             _orig_func = t.func
@@ -599,31 +626,35 @@ def run_chat_turn(
     room_stream: Optional[List[Dict[str, Any]]] = None,
     respond_opportunity: bool = False,
     hint: str = "",
-    winding_down: bool = False) -> str:
-    """Laesst responder EINE Antwort auf incoming_message von speaker generieren.
+    winding_down: bool = False,
+    addressed_to: Optional[List[str]] = None) -> str:
+    """Lets responder generate ONE reply to incoming_message from speaker.
 
-    Synchron. Wird von talk_to / send_message Skills genutzt. Nutzt die
-    existierende Chat-Engine (System-Prompt, History, Medium-Kontext) aber
-    OHNE Streaming — ein einzelner llm_queue.submit() Call.
+    Synchronous. Used by the talk_to / send_message skills. Uses the existing
+    chat engine (system prompt, history, medium context) but WITHOUT
+    streaming — a single llm_queue.submit() call.
 
-    Schreibt beide Seiten der Konversation in die Chat-History:
+    Writes both sides of the conversation into the chat history:
       - responder's file: "user" (speaker) → "assistant" (responder)
       - speaker's file: "assistant" (speaker) → "user" (responder)
 
+    ``addressed_to`` names who the incoming line was aimed at. If the caller
+    does not know it, it is derived from the room transcript (below), so the
+    prompt can tell a line meant for the responder from one it overheard.
+
     Returns:
-        Aufbereiteter Response-Text des responders.
+        The responder's cleaned-up response text.
     """
     from app.core.llm_queue import get_llm_queue, Priority
     from app.models.chat import save_message
     from datetime import datetime
 
-    # Wenn der angesprochene Responder vom Spieler gesteuert wird (Avatar),
-    # darf KEIN LLM-Call laufen — der User soll selbst antworten. Eingehende
-    # Nachricht wird trotzdem in beiden Chat-Histories gespeichert, damit
-    # sie beim naechsten Refresh erscheint.
-    # WICHTIG: is_player_controlled lebt in app.models.account, NICHT in
-    # app.models.character. Frueher hier falscher Import → ImportError →
-    # try/except schluckte → Avatar antwortete trotzdem (Vallerie/Kai-Bug).
+    # When the addressed responder is player-controlled (an avatar), NO LLM
+    # call may run — the user answers themselves. The incoming message is
+    # still stored in both chat histories so it shows up on the next refresh.
+    # IMPORTANT: is_player_controlled lives in app.models.account, NOT in
+    # app.models.character. A wrong import here used to raise ImportError,
+    # the try/except swallowed it and the avatar answered anyway.
     try:
         from app.models.account import is_player_controlled
         if is_player_controlled(responder):
@@ -644,10 +675,33 @@ def run_chat_turn(
         logger.warning("run_chat_turn: player_controlled-Check fehlgeschlagen "
                        "(Avatar-Schutz unwirksam): %s", _pe)
 
+    if addressed_to is None and room_stream:
+        # The caller did not say whom the line was for — read it off the
+        # transcript: the speaker's most recent row carries the addressees.
+        _derived: List[str] = []
+        for _row in reversed(room_stream):
+            _meta = _row.get("meta") or {}
+            _sp = (_row.get("speaker") or _meta.get("speaker") or "").strip()
+            if _sp and _sp == speaker:
+                _derived = [str(a).strip()
+                            for a in (_meta.get("addressees") or [])
+                            if str(a).strip()]
+                break
+        if _derived:
+            addressed_to = _derived
+        elif respond_opportunity:
+            # An overheard turn with nothing addressed: said to the room.
+            addressed_to = []
+        else:
+            # Obligatory turn — being called on IS being addressed, even when
+            # the row itself carries no addressee list.
+            addressed_to = [responder]
+
     ctx = build_chat_context(owner_id, responder, incoming_message,
         speaker=speaker, medium=medium,
         partner_name=speaker, room_stream=room_stream,
-        respond_opportunity=respond_opportunity, winding_down=winding_down)
+        respond_opportunity=respond_opportunity, winding_down=winding_down,
+        addressed_to=addressed_to)
 
     if ctx["llm"] is None:
         logger.error("run_chat_turn: Kein LLM fuer %s verfuegbar", responder)
@@ -655,18 +709,18 @@ def run_chat_turn(
 
     _sys = ctx["system_content"]
     if hint:
-        # Einmaliger Sofort-Kontext (z.B. Spell-Effekt) — der Character reagiert
-        # narrativ darauf, ohne dass es dauerhaft im Prompt landet.
+        # One-off immediate context (e.g. a spell effect) — the character
+        # reacts to it narratively without it staying in the prompt.
         _sys = _sys + "\n\n[" + hint + "]"
     messages = [{"role": "system", "content": _sys}]
     messages.extend(ctx["messages"])
-    # Im Raum-Modus enthält das Transkript die auslösende Äußerung bereits als
-    # letzte Zeile → nicht nochmal anhängen. Nur als Fallback (leeres Transkript)
-    # den Trigger explizit setzen, sonst hätte das LLM keinen letzten User-Turn.
+    # In room mode the transcript already carries the triggering utterance as
+    # its last line → do not append it again. Only as a fallback (empty
+    # transcript) set the trigger explicitly, else the LLM has no last user turn.
     if not ctx.get("room_mode") or not ctx["messages"]:
         messages.append({"role": "user", "content": incoming_message})
 
-    # Label fuer Task-Panel — zeigt klar wer-zu-wem ueber welchen Trigger
+    # Label for the task panel — shows who-to-whom via which trigger
     if task_type == "talk_to":
         _label = f"TalkTo: {speaker} → {responder}"
     elif task_type == "send_message":
@@ -719,9 +773,9 @@ def run_chat_turn(
         logger.warning("run_chat_turn: leere Antwort von %s", responder)
         return ""
 
-    # Chime-in-SKIP-Gate: bei einer Gelegenheits-Äußerung (nicht adressiert) darf
-    # der Character schweigen. "SKIP" → keine Antwort, kein Speichern, kein
-    # Post-Processing, keine Utterance. Toleriert Satzzeichen/Anführungszeichen.
+    # Chime-in SKIP gate: on an opportunity utterance (not addressed) the
+    # character may stay silent. "SKIP" → no reply, no saving, no
+    # post-processing, no utterance. Tolerates punctuation/quotes.
     if respond_opportunity or winding_down:
         _probe = clean.strip().strip('"\'`*().!').strip().upper()
         if _probe == "SKIP" or (_probe.startswith("SKIP") and len(_probe) <= 12):
@@ -770,11 +824,12 @@ def run_chat_turn(
 
     ts = utc_now_iso()
 
-    # chat_messages NUR für gerichtetes Messaging (talk_to/send_message, Telegram/
-    # Web) — dort speist es die Agent-Inbox (load_unread_messages). Im RAUM-Modus
-    # ist der Perception-Stream die kanonische Quelle (Anzeige in /play + Szenen);
-    # chat_messages würde nur die alte paarweise History duplizieren und ist Teil
-    # des Cutovers (plan-history-consolidation-cleanup.md, Phase 3).
+    # chat_messages ONLY for directed messaging (talk_to/send_message,
+    # Telegram/web) — there it feeds the agent inbox (load_unread_messages).
+    # In ROOM mode the perception stream is the canonical source (shown in
+    # /play + scenes); chat_messages would only duplicate the old pairwise
+    # history and is part of the cutover
+    # (plan-history-consolidation-cleanup.md, phase 3).
     if not ctx.get("room_mode"):
         save_message({
             "role": "user", "content": incoming_message, "timestamp": ts,

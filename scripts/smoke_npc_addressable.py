@@ -65,8 +65,13 @@ Hand-derived expectations:
       rows for the room (Mira, and the avatar's own self-line) AND for Tove at
       the gate — three, not two — and ``dispatch_room_reactions`` with
       ``location_id`` INN must bump Tove obligatorily (addressed) and Mira as a
-      chime. Osric in the cellar hears nothing either way (another room, and he
-      is not location-less).
+      chime. Mira is NAMED in the line for that: since
+      plan-gespraechs-auswahl § 3.2 at most ONE bystander chimes in and an
+      unnamed one only with probability chattiness x rel x aim =
+      0.5 x 0.6 x 0.3 = 0.09, so without the name this arm would be a 9 %
+      coin toss instead of a statement about the earshot union. Osric in the
+      cellar hears nothing either way (another room, and he is not
+      location-less).
       A WHISPER is the one thing that does not cross the wall: the same line
       whispered at Tove reaches Mira (``whisper_meta``, the bare fact) and the
       avatar itself, never Tove, and bumps nobody. Otherwise the private volume
@@ -132,7 +137,12 @@ Hand-derived expectations:
       prove the hook reads the flag and not the situation: an ordinary
       temporary NPC (Fenna, same road, no ``npc_wanderer``) addressed exactly
       the same way KEEPS its journey, and a wanderer merely OVERHEARING the
-      line (not addressed → chime) keeps its journey too.
+      line (not addressed → chime) keeps its journey too. That overhearing
+      wanderer (Gwyn) is NAMED in the line: since plan-gespraechs-auswahl
+      § 3.2 a targeted line hands out at most ONE chime and an unnamed
+      bystander only with probability chattiness x rel x aim =
+      0.5 x 0.6 x 0.3 = 0.09 — being named makes the chime certain without
+      making it an address, which is exactly the state this arm needs.
       Afterwards the retry path picks the road back up: with a fresh utterance
       from the avatar ``_settle_wanderer`` refuses (still no journey), and once
       that line is 20 minutes old the same call starts a NEW journey to the OLD
@@ -415,18 +425,19 @@ check("the scene still knows where the avatar itself stands",
 
 # ── (b2) the same union all the way through: gate → fan-out → dispatch ──────
 print("(b2) the line the avatar speaks in the taproom REACHES the gate")
-_uid = perception.record_utterance(speaker=AVATAR, content="Come in, Tove!",
+_LINE = "Come in, Tove — Mira, make room!"
+_uid = perception.record_utterance(speaker=AVATAR, content=_LINE,
                                    addressees=["Tove"])
 check("the room and the one outside the gate perceived it, nobody else",
       sorted(perceivers_of(_uid)), ["Mira", "Tove", "Wren"])
 _loop = AgentLoop()
-_res = _loop.dispatch_room_reactions(speaker=AVATAR, content="Come in, Tove!",
+_res = _loop.dispatch_room_reactions(speaker=AVATAR, content=_LINE,
                                      volume="normal", location_id=INN,
                                      room_id="taproom", addressees=["Tove"],
                                      is_avatar=True)
 check("the addressee at the gate is bumped for a mandatory answer",
       _res["obligatory"], ["Tove"])
-check("and the room mate may chime in", _res["chime"], ["Mira"])
+check("and the room mate named in the line chimes in", _res["chime"], ["Mira"])
 
 _uid = perception.record_utterance(speaker=AVATAR, content="psst",
                                    addressees=["Tove"], volume="whisper")
@@ -538,7 +549,8 @@ check_true("Fenna is on the road too",
            isinstance(get_character_profile("Fenna").get("journey"), dict))
 
 loop = AgentLoop()
-res = loop.dispatch_room_reactions(speaker=AVATAR, content="Wait a moment!",
+res = loop.dispatch_room_reactions(speaker=AVATAR,
+                                   content="Wait a moment! Gwyn, you too?",
                                    volume="normal", location_id="", room_id="",
                                    addressees=["Kestrel", "Fenna"],
                                    is_avatar=True)
@@ -555,6 +567,9 @@ check_true("the ordinary NPC keeps walking",
 check_true("the wanderer that only overheard keeps walking",
            isinstance(get_character_profile("Gwyn").get("journey"), dict))
 check("Gwyn was a chime, not an addressee", res["chime"], ["Gwyn"])
+# Gwyn is NAMED in the line: § 3.2 hands out at most ONE chime and an unnamed
+# bystander of a TARGETED line only with probability 0.09 — the name keeps
+# this arm about the halt hook, not about a draw.
 
 player_says("Kestrel", 0.0)
 check("mid-conversation the tick does not send it off again",

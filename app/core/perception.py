@@ -695,10 +695,21 @@ def record_utterance(*, speaker: str, content: str,
         # was spoken. The circle above needs the point regardless — the two
         # are different questions and only look like one.
         _stored_pos = (speaker_pos or {}) if not loc else {}
+        # WORLD time of the line. ``stamp`` above stays the SYSTEM stamp
+        # (ordering, dedup); the conversation-pair window is measured in game
+        # time, so the pairs freeze with a frozen world. Never blocking: a
+        # clock that cannot be read simply leaves the stamp empty.
+        try:
+            from app.core.timeutils import game_time
+            game_stamp = game_time().canonical()
+        except Exception as _ge:
+            logger.debug("game stamp for utterance failed: %s", _ge)
+            game_stamp = ""
         uid = perception_store.insert_utterance(
             ts=stamp, speaker=speaker, location_id=loc, room_id=room,
             volume=vol, addressees=addr, content=content, meta=_umeta,
-            pos_x=_stored_pos.get("x"), pos_z=_stored_pos.get("z"))
+            pos_x=_stored_pos.get("x"), pos_z=_stored_pos.get("z"),
+            game_ts=game_stamp)
 
         rows = []
         for t in targets:

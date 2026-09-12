@@ -435,6 +435,9 @@ The task queue can also be inspected **without the server** via `python queue_cl
   walk-through for setting up a fresh world from zero.
 - **[`docs/npc-slots.md`](docs/npc-slots.md)** — authoring automatic NPCs: slots on locations and
   painted areas, home areas, time windows, and the `npc.*` settings that bound them.
+- **[`docs/room-conversation.md`](docs/room-conversation.md)** — who answers a line in a room:
+  addressees, the single bystander the server picks, derived conversation pairs and the
+  `chat.chattiness` / per-location chattiness settings.
 - **[`docker/DEPLOYMENT.md`](docker/DEPLOYMENT.md)** — reproducible Docker deployment against a
   self-hosted LocalAI backend (single-GPU watchdog, GPU-label serialization, Proxmox-LXC note).
 - **`docs/`** — technical reference (config defaults, LLM task mapping/templates, movement model,

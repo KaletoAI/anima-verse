@@ -93,7 +93,12 @@ Cases [8]-[14] continue on the same seed (the brief numbers them [7]-[10];
 [10] dispatch_room_reactions in the open. After [9] the neighbours of A
     (0,0) are: E (0,17) → 17 <= 20 in; C (30,0) → 30 out; B (100,0) → out;
     D behind walls. So addressing E yields obligatory=[E], nobody else is
-    queued; without an addressee E gets the chime. C as speaker (nearest
+    queued; without an addressee E is the one bystander that CAN chime in —
+    and it does so for certain here because the line NAMES it ("hm, npc_e?"),
+    which beats the chattiness draw outright (plan-gespraechs-auswahl § 3.2:
+    an unnamed bystander would only chime in with probability
+    chattiness x rel x aim = 0.5 x 0.6 x 1.0 = 0.30, so the roster would be
+    proven by a coin toss instead of by the roster). C as speaker (nearest
     other: A at 30, E at hypot(30,17) = 34.48, B at 70) bumps NOBODY.
     No LLM runs: dispatch only queues into the respond lane and returns.
 [11] TalkTo in the open: A → E (17 m) goes through, A → C (30 m) is
@@ -132,6 +137,10 @@ Cases [8]-[14] continue on the same seed (the brief numbers them [7]-[10];
     (the old behaviour, and proof the fan-out did not simply stop caring
     about positions out here), and an anchor never moves a speaker that has
     a point of its own (C anchored on A stays at (30, 0), out of A's ear).
+    The narration names nobody, so E's reaction is a chattiness DRAW
+    (plan-gespraechs-auswahl § 3.2): 0.5 x 0.6 x 1.0 = 0.30, and the actor
+    is no avatar, so nothing forces the draw. The case pins the draw at 0.0
+    (< 0.30 → E is picked); the roster, not luck, is what it proves.
 
 [17] The wilderness prune (E7/D2). A located line ends with its scene; a
     location-less one has no scene, so AGE is its only exit —
@@ -466,10 +475,11 @@ res = loop.dispatch_room_reactions(speaker="npc_a", content="anyone there?",
 check("E must answer", res, {"obligatory": ["npc_e"], "chime": []})
 check("nobody else was queued", list(loop._respond_queue), ["npc_e"])
 loop = AgentLoop()
-res = loop.dispatch_room_reactions(speaker="npc_a", content="hm",
+res = loop.dispatch_room_reactions(speaker="npc_a", content="hm, npc_e?",
                                    volume="normal", location_id="", room_id="",
                                    addressees=[], is_avatar=False)
-check("E may chime in", res, {"obligatory": [], "chime": ["npc_e"]})
+check("the one in earshot is named and chimes in", res,
+      {"obligatory": [], "chime": ["npc_e"]})
 loop = AgentLoop()
 res = loop.dispatch_room_reactions(speaker="npc_c", content="hello?",
                                    volume="normal", location_id="", room_id="",
@@ -536,7 +546,30 @@ check("C's nearby hint says it is alone",
 print("[14] a direct action outside is narrated INTO the actor's radius")
 loop = AgentLoop()
 _set_agent_loop(loop)
+
+
+class _FixedRandom:
+    """The two decisions ``select_chimer`` makes, pinned (draw, then pick)."""
+
+    def random(self) -> float:
+        return 0.0  # < 0.30 → somebody chimes in
+
+    def choices(self, population, weights=None, k=1):
+        return [population[0]]
+
+
+from app.core import chime_select as _chime_select  # noqa: E402
+_real_select = _chime_select.select_chimer
+
+
+def _pinned_select(candidates, **kwargs):
+    kwargs.pop("rng", None)
+    return _real_select(candidates, rng=_FixedRandom(), **kwargs)
+
+
+_chime_select.select_chimer = _pinned_select
 announce_action("npc_a", "npc_a changes clothes.")
+_chime_select.select_chimer = _real_select
 narr = get_connection().execute(
     "SELECT id, location_id, pos_x, pos_z FROM utterances WHERE speaker=? "
     "ORDER BY id DESC LIMIT 1", (STORYTELLER_SPEAKER,)).fetchone()
