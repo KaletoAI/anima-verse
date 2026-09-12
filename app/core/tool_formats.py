@@ -1,13 +1,12 @@
 """
-Tool Format System - Konfigurierbares Tool-Calling Format fuer verschiedene LLMs.
+Tool format system - configurable tool-calling format for different LLMs.
 
-Jedes Format definiert:
-- instruction: Wie das LLM Tool-Calls formatieren soll (fuer System-Prompt)
-- example: Template fuer Beispiele (mit {tool_name} und {input} Platzhaltern)
-- pattern: Regex zum Erkennen von Tool-Calls in der LLM-Antwort
-- stream_pattern: Regex fuer fruehe Erkennung waehrend des Streamings
-- direct_pattern: Regex fuer direkte Tool-Calls in User-Nachrichten
-- format_call: Funktion zum Erzeugen eines Tool-Calls (z.B. fuer Scheduler)
+Every format defines:
+- instruction: how the LLM should format tool calls (for the system prompt)
+- example: template for examples (with {tool_name} and {input} placeholders)
+- pattern: regex that detects tool calls in the LLM answer
+- stream_pattern: regex for early detection while streaming
+- direct_pattern: regex for direct tool calls in user messages
 """
 import json
 import re
@@ -19,13 +18,13 @@ logger = get_logger("tool_formats")
 
 
 # ============================================================================
-# Format-Definitionen
+# Format definitions
 # ============================================================================
 
 TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
     "tag": {
         "name": "XML Tag",
-        "description": "XML-artiges Tag-Format. Sehr zuverlaessig, da LLMs Tags gut kennen.",
+        "description": "XML-like tag format. Very reliable, LLMs know tags well.",
         "instruction": (
             "To use a tool, write EXACTLY this format:\n"
             "<tool name=\"ToolName\">your detailed input here</tool>\n"
@@ -34,7 +33,8 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
             "- Write your input between the opening and closing tags\n"
             "- Do NOT add any text after the closing </tool> tag\n"
             "- WRONG: I will use ToolName to create...\n"
-            "- RIGHT: <tool name=\"ToolName\">[your detailed input]</tool>"
+            "- RIGHT: <tool name=\"ToolName\">your detailed input here</tool>\n"
+            "- If a tool needs no input, write {} between the tags: <tool name=\"ToolName\">{}</tool>"
         ),
         "example": '<tool name="{tool_name}">{input}</tool>',
         "pattern": r'<tool\s+name="(\w+)">([\s\S]*?)</tool>',
@@ -44,7 +44,7 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
     },
     "natural_en": {
         "name": "English Natural",
-        "description": "Englisches natuerliches Format. Gut fuer englisch-trainierte Modelle.",
+        "description": "English natural-language format. Good for English-trained models.",
         "instruction": (
             "To use a tool, write EXACTLY this format:\n"
             "Use ToolName for: your detailed input here\n"
@@ -61,7 +61,7 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
     },
     "natural_de": {
         "name": "German Natural",
-        "description": "Deutsches natuerliches Format. Das bisherige Standard-Format.",
+        "description": "German natural-language format. The former default format.",
         "instruction": (
             "Um ein Tool zu nutzen, schreibe EXAKT dieses Format:\n"
             "Ich nutze ToolName für: deine detaillierte Eingabe hier\n"
@@ -70,7 +70,7 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
             "- Dann 'für:' MIT DOPPELPUNKT\n"
             "- Dann die Details/Beschreibung\n"
             "- FALSCH: Ich nutze die Skills des ToolName für Dich\n"
-            "- RICHTIG: Ich nutze ToolName für: [deine Eingabe]"
+            "- RICHTIG: Ich nutze ToolName für: deine detaillierte Eingabe hier"
         ),
         "example": "Ich nutze {tool_name} für: {input}",
         "pattern": r"(?:Ich\s+)?[Nn]utze\s+(\w+)\s+f(?:ü|ue)r:\s*(.*?)(?:\n|$)",
@@ -82,13 +82,13 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
 
 
 # ============================================================================
-# Modell-zu-Format Bibliothek
-# Mapping: Modell-Name (oder Teilstring) -> empfohlenes Format
-# Wird von unten nach oben durchsucht - spezifischere Eintraege zuerst
+# Model-to-format library
+# Mapping: model name (or substring) -> recommended format
+# The longest matching substring wins - more specific entries first
 # ============================================================================
 
 MODEL_FORMAT_LIBRARY: Dict[str, str] = {
-    # --- Grosse Modelle (>30B) - Tag-Format empfohlen ---
+    # --- Large models (>30B) - tag format recommended ---
     "gpt-4": "tag",
     "gpt-3.5": "tag",
     "claude": "tag",
@@ -99,7 +99,7 @@ MODEL_FORMAT_LIBRARY: Dict[str, str] = {
     "command-r": "tag",
     "gemma2": "tag",
 
-    # --- Mittlere Modelle (7B-13B) ---
+    # --- Mid-size models (7B-13B) ---
     "mistral": "natural_en",
     "llama3": "natural_en",
     "llama2": "natural_en",
@@ -111,7 +111,7 @@ MODEL_FORMAT_LIBRARY: Dict[str, str] = {
     "internlm": "natural_en",
     "glm": "tag",
 
-    # --- Kleine/Uncensored Modelle ---
+    # --- Small / uncensored models ---
     "wizardlm": "natural_en",
     "wizard-vicuna": "natural_en",
     "dolphin": "natural_en",
@@ -128,29 +128,29 @@ MODEL_FORMAT_LIBRARY: Dict[str, str] = {
 
 
 # ============================================================================
-# Hilfsfunktionen
+# Helpers
 # ============================================================================
 
 def get_format(format_name: str) -> Dict[str, Any]:
-    """Gibt ein Tool-Format zurueck. Fallback auf 'tag' wenn nicht gefunden."""
+    """Returns a tool format; falls back to 'tag' when unknown."""
     return TOOL_FORMATS.get(format_name, TOOL_FORMATS["tag"])
 
 
 def get_format_for_model(model_name: str) -> str:
-    """Ermittelt das empfohlene Format fuer ein Modell anhand der Bibliothek.
+    """Determines the recommended format for a model from the library.
 
-    Durchsucht MODEL_FORMAT_LIBRARY nach Teil-Matches im Modellnamen.
+    Searches MODEL_FORMAT_LIBRARY for substring matches in the model name.
     """
     if not model_name:
         return MODEL_FORMAT_LIBRARY.get("_default", "tag")
 
     model_lower = model_name.lower()
 
-    # Exakter Match zuerst
+    # Exact match first
     if model_lower in MODEL_FORMAT_LIBRARY:
         return MODEL_FORMAT_LIBRARY[model_lower]
 
-    # Teil-Match (laengster Match gewinnt)
+    # Substring match (longest match wins)
     best_match = ""
     best_format = MODEL_FORMAT_LIBRARY.get("_default", "tag")
 
@@ -165,7 +165,7 @@ def get_format_for_model(model_name: str) -> str:
 
 
 def format_example(format_name: str, tool_name: str, example_input: str) -> str:
-    """Erzeugt ein Beispiel fuer den System-Prompt."""
+    """Builds an example for the system prompt."""
     fmt = get_format(format_name)
     return fmt["example"].format(tool_name=tool_name, input=example_input)
 
@@ -189,7 +189,7 @@ _DEFAULT_TOOL_INSTRUCTION = (
     "NEVER put JSON objects or tool tags inside field values."
 )
 
-# Zusatzklausel nur fuer Roleplay-Characters (Chatbots koennen/sollen Tools frei nutzen)
+# Extra clause for roleplay characters only (chatbots may/should use tools freely)
 _ROLEPLAY_TOOL_NOUSE_CLAUSE = (
     "WHEN NOT TO USE TOOLS:\n"
     "- The user is just chatting, asking about your feelings, or discussing fiction/roleplay."
@@ -212,9 +212,9 @@ def _image_tool_names() -> frozenset:
 
 
 def _get_tool_instruction_for_model(model_name: str) -> str:
-    """Laedt die tool_instruction aus model_capabilities.json fuer ein Modell.
+    """Loads the tool_instruction for a model from model_capabilities.json.
 
-    Fallback auf _DEFAULT_TOOL_INSTRUCTION wenn nicht konfiguriert.
+    Falls back to _DEFAULT_TOOL_INSTRUCTION when not configured.
     """
     if not model_name:
         return _DEFAULT_TOOL_INSTRUCTION
@@ -235,18 +235,18 @@ def build_tool_instruction(format_name: str, tools: List[Any],
                            photographer_mode: bool = False,
                            user_appearance: str = "",
                            is_roleplay: bool = True) -> str:
-    """Baut den kompletten Tool-Instruktions-Block fuer den System-Prompt.
+    """Builds the complete tool-instruction block for the system prompt.
 
     Args:
-        format_name: Name des Tool-Formats (tag, natural_en, natural_de)
-        tools: Liste der verfuegbaren Tools (mit .name und .description)
-        appearance: Agent-Appearance fuer Appearance-Hinweis
-        usage_instructions: Skill-spezifische Nutzungsanweisungen
-        model_name: Modellname fuer modellspezifische Tool-Instruktionen
-        photographer_mode: True wenn Agent=Fotograf (nicht im Bild)
-        user_appearance: User-Appearance (fuer Photographer-Modus)
-        is_roleplay: True fuer RP-Characters (fuegt "WHEN NOT TO USE TOOLS"
-            Klausel hinzu die Chatting/Feelings/Fiction aus Tool-Calls ausschliesst).
+        format_name: name of the tool format (tag, natural_en, natural_de)
+        tools: list of available tools (with .name and .description)
+        appearance: agent appearance for the appearance hint
+        usage_instructions: skill-specific usage instructions
+        model_name: model name for model-specific tool instructions
+        photographer_mode: True when the agent is the photographer (not in the picture)
+        user_appearance: user appearance (for photographer mode)
+        is_roleplay: True for RP characters (adds the "WHEN NOT TO USE TOOLS"
+            clause that keeps chatting/feelings/fiction out of tool calls).
             Chatbots = False.
     """
     fmt = get_format(format_name)
@@ -258,15 +258,15 @@ def build_tool_instruction(format_name: str, tools: List[Any],
     parts.append("\n=== HOW TO USE TOOLS ===")
     parts.append(fmt["instruction"])
 
-    # Output-Disziplin — abgeleitet aus echten Fehl-Outputs (Suitability-Daten):
-    # Modelle driften in Meta-/Reasoning-Prosa ("Based on...", "We need to
-    # analyse...") oder erfinden eigene Formate ([Brackets], "INTENT:"/"TOOLS:"-
-    # Header, **markdown** Tool-Namen) — der Parser fuehrt dann nichts aus.
-    # STRICT OUTPUT zielt NUR auf das Tool-Call-Format. Wichtig: NICHT pauschal
-    # eckige Klammern / Markdown verbieten — der rp_first-Tool-LLM bekommt diesen
-    # Block als System-Prompt UND soll danach Marker (**I feel ...**) und
-    # [INTENT:/NEW_ASSIGNMENT:]-Zeilen ausgeben. Verboten ist ein TOOL-Call in
-    # fremder Form, nicht Klammern an sich.
+    # Output discipline — derived from real bad outputs (suitability data):
+    # models drift into meta/reasoning prose ("Based on...", "We need to
+    # analyse...") or invent their own formats ([brackets], "INTENT:"/"TOOLS:"
+    # headers, **markdown** tool names) — the parser then executes nothing.
+    # STRICT OUTPUT targets ONLY the tool-call format. Important: do NOT ban
+    # square brackets / markdown wholesale — the rp_first tool LLM gets this
+    # block as its system prompt AND is expected to emit markers (**I feel ...**)
+    # and [INTENT:/NEW_ASSIGNMENT:] lines afterwards. What is forbidden is a
+    # TOOL call in a foreign shape, not brackets as such.
     parts.append(
         "\nSTRICT OUTPUT:\n"
         "- Do NOT explain, analyse or think out loud. No preamble, no commentary, "
@@ -277,12 +277,14 @@ def build_tool_instruction(format_name: str, tools: List[Any],
         "not buried inside a sentence."
     )
 
-    # Positiv-Beispiel im exakten Zielformat — zieht schwache Modelle ins Format
-    # und zeigt Mehrfach-Calls. Tool-Name = erstes tatsaechlich verfuegbares Tool
-    # (kein erfundener Name), Input als eckiger Platzhalter (von _is_placeholder_input
-    # gefiltert, falls ein Modell das Beispiel doch kopiert).
+    # Positive example in the exact target format — pulls weak models into the
+    # format and shows multiple calls. Tool name = the first tool that really
+    # is available (no invented name); the input is the textual placeholder
+    # that _is_placeholder_input filters, should a model copy the example.
+    # Deliberately NO square brackets: a bracketed example teaches the model
+    # to bracket its inputs, and a parameterless verb then comes back as "[]".
     if tools:
-        _ex = format_example(format_name, tools[0].name, "[your input]")
+        _ex = format_example(format_name, tools[0].name, "your detailed input here")
         parts.append(
             "\nEXAMPLE of a correct tool call (use this exact shape):\n"
             f"{_ex}\n"
@@ -296,7 +298,7 @@ def build_tool_instruction(format_name: str, tools: List[Any],
     tool_names = [t.name for t in tools]
     if any(n in _image_tool_names() for n in tool_names):
         if photographer_mode:
-            # Photographer-Modus: Agent ist Fotograf, nicht im Bild
+            # Photographer mode: the agent takes the picture and is not in it
             photographer_hint = (
                 "\nYou are a PHOTOGRAPHER. When generating images, describe ONLY the subjects "
                 "you are photographing. Do NOT include yourself or your own appearance in the "
@@ -307,22 +309,22 @@ def build_tool_instruction(format_name: str, tools: List[Any],
                 photographer_hint += f"\nThe user's appearance: {user_appearance}"
             parts.append(photographer_hint)
         elif appearance:
-            # Normal-Modus: Agent-Appearance fuer Selbstbilder
+            # Normal mode: agent appearance for self-portraits
             parts.append(
                 f"\nWhen generating images of yourself, always include your appearance: {appearance}"
             )
 
-    # Skill-spezifische Beispiele (jeweils eine Zeile pro Skill)
+    # Skill-specific examples (one line per skill)
     if usage_instructions:
         for line in usage_instructions.split('\n'):
             if line.strip():
                 parts.append(f"- {line.strip()}")
 
-    # Modellspezifische Tool-Instruktion (aus model_capabilities.json)
+    # Model-specific tool instruction (from model_capabilities.json)
     instruction = _get_tool_instruction_for_model(model_name)
     parts.append(f"\n{instruction}")
 
-    # RP-only: Hinweis dass Chatting/Feelings/Fiction keine Tools triggern
+    # RP only: chatting/feelings/fiction trigger no tools
     if is_roleplay:
         parts.append(_ROLEPLAY_TOOL_NOUSE_CLAUSE)
 
@@ -330,10 +332,10 @@ def build_tool_instruction(format_name: str, tools: List[Any],
 
 
 def build_minimal_tool_reminder(format_name: str, tool_names: List[str]) -> str:
-    """Baut einen minimalen Tool-Reminder fuer den reduzierten System-Prompt."""
+    """Builds a minimal tool reminder for the reduced system prompt."""
     fmt = get_format(format_name)
-    # Zeige Format-Schema mit ToolName-Platzhalter statt konkretem Tool
-    # damit das LLM nicht auf ein bestimmtes Tool biased wird
+    # Show the format schema with a ToolName placeholder instead of a real
+    # tool so the LLM is not biased towards one particular tool
     schema = fmt["example"].format(
         tool_name="ToolName",
         input="your input"
@@ -347,13 +349,21 @@ def build_minimal_tool_reminder(format_name: str, tool_names: List[str]) -> str:
 
 
 def _is_placeholder_input(tool_input: str) -> bool:
-    """Erkennt ob ein Tool-Input ein halluzinierter Platzhalter ist.
+    """Detects whether a tool input is a hallucinated placeholder.
 
-    Kleine LLMs kopieren oft die Beispiele aus dem System-Prompt als echte Tool-Calls.
-    Diese Funktion filtert offensichtliche Platzhalter-Inputs heraus.
+    Small LLMs often copy the examples from the system prompt as real tool
+    calls; this filters the obvious placeholder inputs out.
+
+    An EMPTY container is not a placeholder: a parameterless verb (Undress,
+    IgnoreDressCode, ...) is legitimately called as ``{}`` or ``[]`` — the
+    model has nothing to put between the tags. Dropping ``[]`` here used to
+    swallow every such call silently (the verb showed up in the LLM log and
+    was never executed).
     """
     stripped = tool_input.strip()
     if not stripped:
+        return False
+    if stripped in ("[]", "{}"):
         return False
     # "[search query or question]", "[detailed image description]", "[mood/feeling]"
     if stripped.startswith("[") and stripped.endswith("]"):
@@ -366,50 +376,50 @@ def _is_placeholder_input(tool_input: str) -> bool:
 
 def find_tool_calls(format_name: str, text: str,
                     known_tools: Optional[Dict] = None) -> List[Tuple[str, str]]:
-    """Findet alle Tool-Calls in einem Text.
+    """Finds all tool calls in a text.
 
-    Prueft ALLE bekannten Formate (nicht nur das konfigurierte),
-    da LLMs oft ein anderes Format verwenden als angewiesen.
+    Checks ALL known formats (not only the configured one) because LLMs
+    often use a different format than instructed.
 
     Args:
-        format_name: Name des konfigurierten Tool-Formats (wird zuerst geprueft)
-        text: Der zu durchsuchende Text
-        known_tools: Optional - Dict der bekannten Tools fuer Fallback-Matching
+        format_name: name of the configured tool format (checked first)
+        text: the text to search
+        known_tools: optional dict of known tools for fallback matching
 
     Returns:
-        Liste von (tool_name, tool_input) Tuples
+        list of (tool_name, tool_input) tuples
     """
     raw_matches = []
 
-    # 1. Konfiguriertes Format zuerst pruefen
+    # 1. Configured format first
     fmt = get_format(format_name)
     matches = re.findall(fmt["pattern"], text, re.IGNORECASE)
     if matches:
         raw_matches = [(name, inp.strip()) for name, inp in matches]
     else:
-        # 2. Alle anderen Formate durchprobieren
+        # 2. Try every other format
         for other_name, other_fmt in TOOL_FORMATS.items():
             if other_name == format_name:
                 continue
             matches = re.findall(other_fmt["pattern"], text, re.IGNORECASE)
             if matches:
-                logger.debug("Tool erkannt via '%s' Format (konfiguriert: '%s')", other_name, format_name)
+                logger.debug("Tool detected via '%s' format (configured: '%s')", other_name, format_name)
                 raw_matches = [(name, inp.strip()) for name, inp in matches]
                 break
 
-        # 3. Fallback: Flexibles Matching mit bekannten Tool-Namen
+        # 3. Fallback: flexible matching on known tool names
         if not raw_matches and known_tools:
             tool_names_pattern = "|".join(re.escape(name) for name in known_tools.keys())
-            # Universaler Fallback: Tool-Name gefolgt von fuer:/for: und Text
-            # Doppelpunkt ist OBLIGATORISCH (verhindert Matches auf Fliesstext)
+            # Universal fallback: tool name followed by für:/for: and text.
+            # The colon is MANDATORY (prevents matches on running prose)
             fallback = rf"(?:[Nn]utze|[Uu]se)\s+({tool_names_pattern})\s+(?:f(?:ü|ue)r|for):\s*(.*?)(?:\n|$)"
             matches = re.findall(fallback, text, re.IGNORECASE)
             if matches:
-                # Mehrere Fallback-Matches = Massen-Halluzination → alle verwerfen
+                # Several fallback matches = mass hallucination → drop all
                 if len(matches) > 1:
-                    logger.debug("Fallback: %d Matches gefunden - Halluzination, alle verworfen", len(matches))
+                    logger.debug("Fallback: %d matches found - hallucination, all dropped", len(matches))
                     return []
-                logger.debug("Fallback-Pattern hat Tool erkannt: %s", matches)
+                logger.debug("Fallback pattern detected a tool: %s", matches)
                 raw_matches = [(name, inp.strip()) for name, inp in matches]
 
     # Open end tag: LLMs often drop the closing </tool> on the LAST
@@ -442,9 +452,9 @@ def find_tool_calls(format_name: str, text: str,
     if not raw_matches:
         return []
 
-    # Verschachtelte Tag-Tool-Calls aufloesen:
-    # Wenn ein LLM das schliessende </tool> vergisst, landet der naechste
-    # <tool name="..."> im Input des vorherigen Calls. Hier aufsplitten.
+    # Resolve nested tag tool calls: when an LLM forgets the closing </tool>,
+    # the next <tool name="..."> lands inside the previous call's input.
+    # Split them apart here.
     _nested_tag = re.compile(r'<tool\s+name="(\w+)">([\s\S]*)', re.IGNORECASE)
     split_matches = []
     for name, inp in raw_matches:
@@ -455,14 +465,14 @@ def find_tool_calls(format_name: str, text: str,
             nested_name = nested.group(1)
             nested_inp = re.sub(r'</tool>\s*$', '', nested.group(2)).strip()
             split_matches.append((nested_name, nested_inp))
-            logger.debug("Verschachtelter Tool-Call aufgeloest: %s + %s", name, nested_name)
+            logger.debug("Nested tool call split: %s + %s", name, nested_name)
         else:
             split_matches.append((name, inp))
     raw_matches = split_matches
 
-    # Massen-Halluzination erkennen: Wenn ein Tool-Name mehrfach vorkommt
-    # UND die Inputs identisch sind, sind die Calls halluziniert.
-    # Unterschiedliche Inputs = legitime Mehrfach-Nutzung (z.B. mehrere Raeume beschreiben).
+    # Detect mass hallucination: when a tool name occurs several times AND
+    # the inputs are identical, the calls are hallucinated. Different inputs
+    # = legitimate multi-use (e.g. describing several rooms).
     from collections import defaultdict
     tool_inputs_by_name = defaultdict(list)
     for name, inp in raw_matches:
@@ -472,24 +482,26 @@ def find_tool_calls(format_name: str, text: str,
         if len(inputs) > 1:
             unique_inputs = set(inputs)
             if len(unique_inputs) == 1:
-                # Alle Inputs identisch → Halluzination
+                # All inputs identical → hallucination
                 hallucinated_tools.add(name)
-                logger.debug("Halluzination erkannt (identische Inputs): %s (%dx)", name, len(inputs))
+                logger.debug("Hallucination detected (identical inputs): %s (%dx)", name, len(inputs))
             else:
-                logger.debug("Mehrfach-Call mit unterschiedlichen Inputs akzeptiert: %s (%dx)", name, len(inputs))
+                logger.debug("Multi-call with different inputs accepted: %s (%dx)", name, len(inputs))
 
-    # Platzhalter, Duplikate und halluzinierte Tools filtern
+    # Filter placeholders, duplicates and hallucinated tools
     filtered = []
     for name, inp in raw_matches:
-        # "ToolName" ist der Platzhalter aus der Instruktion
+        # "ToolName" is the placeholder from the instruction
         if name.lower() == "toolname":
-            logger.debug("Platzhalter-Tool 'ToolName' uebersprungen")
+            logger.debug("Placeholder tool 'ToolName' skipped")
             continue
-        # Platzhalter-Inputs wie "[search query or question]"
+        # Placeholder inputs such as "[search query or question]". Logged as
+        # a warning: a dropped call is otherwise invisible ("tool call in the
+        # log, never executed").
         if _is_placeholder_input(inp):
-            logger.debug("Platzhalter-Input uebersprungen: %s -> %.60s", name, inp)
+            logger.warning("Tool call %s dropped — placeholder input: %.60s", name, inp)
             continue
-        # Tools mit identischen Mehrfach-Calls sind halluziniert → alle verwerfen
+        # Tools with identical multi-calls are hallucinated → drop all
         if name in hallucinated_tools:
             continue
         filtered.append((name, inp))
@@ -499,20 +511,20 @@ def find_tool_calls(format_name: str, text: str,
 
 def find_stream_tool_call(format_name: str, text: str,
                           known_tools: Optional[Dict] = None) -> Optional[re.Match]:
-    """Prueft ob ein Tool-Call im Streaming-Text erkannt wird.
+    """Checks whether a tool call is detected in the streaming text.
 
-    Prueft ALLE bekannten Formate, nicht nur das konfigurierte.
+    Checks ALL known formats, not only the configured one.
 
     Returns:
-        re.Match Objekt wenn gefunden, sonst None
+        re.Match object when found, else None
     """
-    # 1. Konfiguriertes Format zuerst
+    # 1. Configured format first
     fmt = get_format(format_name)
     match = re.search(fmt["stream_pattern"], text, re.IGNORECASE)
     if match:
         return match
 
-    # 2. Alle anderen Formate durchprobieren
+    # 2. Try every other format
     for other_name, other_fmt in TOOL_FORMATS.items():
         if other_name == format_name:
             continue
@@ -520,9 +532,9 @@ def find_stream_tool_call(format_name: str, text: str,
         if match:
             return match
 
-    # 3. Universaler Fallback mit bekannten Tool-Namen
-    # WICHTIG: Pattern muss mit find_tool_calls()-Fallback uebereinstimmen!
-    # Doppelpunkt obligatorisch, keine Extra-Woerter zwischen Use/Nutze und Tool-Name
+    # 3. Universal fallback on known tool names
+    # IMPORTANT: the pattern must match the find_tool_calls() fallback!
+    # Colon mandatory, no extra words between Use/Nutze and the tool name
     if known_tools:
         tool_names_pattern = "|".join(re.escape(name) for name in known_tools.keys())
         fallback = rf"(?:[Nn]utze|[Uu]se)\s+({tool_names_pattern})\s+(?:f(?:ü|ue)r|for):\s*(.*?)(?:\n|$)"
@@ -534,22 +546,22 @@ def find_stream_tool_call(format_name: str, text: str,
 
 
 def find_direct_tool_call(format_name: str, text: str) -> Optional[Tuple[str, str]]:
-    """Prueft ob der gesamte Text ein direkter Tool-Call ist (z.B. vom Scheduler).
+    """Checks whether the whole text is a direct tool call (e.g. from the scheduler).
 
-    Prueft ALLE bekannten Formate, nicht nur das konfigurierte.
+    Checks ALL known formats, not only the configured one.
 
     Returns:
-        (tool_name, tool_input) Tuple wenn gefunden, sonst None
+        (tool_name, tool_input) tuple when found, else None
     """
     stripped = text.strip()
 
-    # 1. Konfiguriertes Format zuerst
+    # 1. Configured format first
     fmt = get_format(format_name)
     match = re.match(fmt["direct_pattern"], stripped, re.IGNORECASE | re.DOTALL)
     if match:
         return (match.group(1), match.group(2).strip())
 
-    # 2. Alle anderen Formate durchprobieren
+    # 2. Try every other format
     for other_name, other_fmt in TOOL_FORMATS.items():
         if other_name == format_name:
             continue
