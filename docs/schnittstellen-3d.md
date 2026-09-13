@@ -9159,7 +9159,7 @@ für `animation` — nirgends.
 
 **Raum-Rezept** (§ B1): `placements[]` zusätzlich `id`, `label`, `prop_name`;
 `prop_markers[]` = `{placement, id, group, capacity, spacing_m, offset_m,
-height_m, facing}`. Das LLM-Einrichten (`furnish_needs`) schlägt je Möbel einen
+height_m, facing}`. Das LLM-Einrichten (Template `tasks/furnish_needs.md`) schlägt je Möbel einen
 Marker mit `group` aus dieser Liste vor, keinen Clip-Kind mehr.
 
 ## Nachtrag 2026-08-29 (§ A6/B1): TREPPEN v2 — der Lauf ist DATEN, der Boden bekommt ein Loch

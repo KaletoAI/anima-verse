@@ -39,8 +39,7 @@ shared/templates/llm/
 | `consolidation_today.md` | `consolidation` | `history_manager._create_daily_summary` | Roleplay summary of today's chat (5-8 sentences, past tense) |
 | `consolidation_history_summary.md` | `consolidation` | `history_manager.create_summary` | Sliding-window summary of older chat history (2-3 sentences) |
 | `consolidation_daily_diary.md` | `consolidation` | `routes/diary._generate_summary_sync` | First-person diary entry from a day's events |
-| `classify_activity.md` | `classify_activity` | `activity_engine._do_classify` | Classify free-text activity into a known activity name |
-| `perceive_announcement.md` | `perceive_announcement` | `avatar_activity_detect._detect` | Notification of a perception of activity in a room |
+| `perceive_action.md` | `thought` | `act_engine._bump_with_perception` | Perception prompt of an AgentLoop bump: a character notices someone else's action and may react |
 | `spell_detect.md` | `spell_detect` | `chat_engine._process_spells` | Detect whether the avatar's chat message contains a magical/ritual cast that matches one of the spells in their inventory |
 
 
@@ -160,7 +159,9 @@ instead of silently rendering empty.
 ## Cross-references
 
 - **Task → model routing:** [docs/llm-task-mapping.md](llm-task-mapping.md)
-  for the `llm_routing` admin tab and how each task's model is picked
+  for the task catalog, the `fallback_parent` rule for unrouted tasks and the
+  three admin pages under `/admin/settings → LLM Routing` (Tasks / LLMs /
+  Overview) that pick each task's model
 - **AgentLoop architecture:** [app/core/agent_loop.py](../app/core/agent_loop.py)
   — continuous worker, importance-weighted round-robin
 - **Inbox model:** [app/core/agent_inbox.py](../app/core/agent_inbox.py)

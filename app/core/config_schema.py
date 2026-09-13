@@ -225,7 +225,7 @@ SECTIONS = {
             "tasks": {
                 "type": "task_order_list",
                 "label": "Tasks",
-                "description": "Tasks this LLM serves. Order is the fallback rank between LLMs that share the same task (1 = primary, 2 = fallback if primary unavailable). Use the + All <category> buttons below to bulk-add a whole task group.",
+                "description": "Tasks this LLM serves — read-only here; assign and order them on the Tasks page. Order is the fallback rank between LLMs that share a task (1 = primary).",
             },
         },
     },

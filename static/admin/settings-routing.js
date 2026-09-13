@@ -892,7 +892,11 @@ function rtOverviewBody(data) {
         html += '<div style="font-size:12px; color:#58a6ff; font-weight:600;">' + esc(t.label)
              + ' <span class="rt-muted" style="font-weight:400;">— ' + esc(t.task) + '</span></div>';
         html += '<div class="rt-chain-row">' + rtOverviewStatus(t) + '</div>';
-        if (t.via !== 'none' && t.reason) {
+        // A `direct` task WITHOUT a resolved LLM (pose_embedding on the
+        // built-in model) already carries its reason as the status line —
+        // printing it again below would duplicate it.
+        const reasonIsStatus = t.via === 'direct' && !t.resolved;
+        if (t.via !== 'none' && t.reason && !reasonIsStatus) {
             html += '<div class="desc rt-muted">' + esc(t.reason) + '</div>';
         }
         for (const row of (t.chain || [])) {
