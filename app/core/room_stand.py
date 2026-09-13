@@ -187,6 +187,9 @@ def _blockers(recipe: Dict[str, Any], cx: float, cz: float,
     """
     from app.core import props as prop_store
     from app.core.world_geometry import local_to_world
+    # ONE library record per prop for the whole room — a scattered wood is
+    # twenty placements of one pine.
+    records: Dict[str, Dict[str, Any]] = {}
     out: List[Blocker] = []
     for p in recipe.get("placements") or []:
         dims = p.get("dims") or {}
@@ -198,7 +201,10 @@ def _blockers(recipe: Dict[str, Any], cx: float, cz: float,
             continue
         if w <= 0 or d <= 0 or h <= _BLOCKER_MIN_H_M:
             continue
-        prop = prop_store.get_prop(str(p.get("prop_id") or "")) or {}
+        pid = str(p.get("prop_id") or "")
+        if pid not in records:
+            records[pid] = prop_store.get_prop(pid) or {}
+        prop = records[pid]
         if (str(prop.get("mount") or "floor").strip().lower() or "floor") != "floor":
             continue
         if "walkable" in [str(t).lower() for t in (prop.get("tags") or [])]:
