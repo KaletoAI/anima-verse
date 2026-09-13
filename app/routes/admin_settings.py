@@ -2022,6 +2022,7 @@ def _build_settings_html() -> str:
 <div class="toast" id="toast"></div>
 
 <script src="/static/admin/settings.js"></script>
+<script src="/static/admin/settings-routing.js"></script>
 </body>
 </html>'''
 

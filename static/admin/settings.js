@@ -512,6 +512,14 @@ function renderSection(key, pageId) {
     if (key.indexOf('::') !== -1) { renderSubArrayPage(key); return; }
     // Einfache, kategorie-basierte LLM-Seite (befuellt CONFIG.llm_routing).
     if (key === 'llm_simple') { renderLlmSimpleEditor(); return; }
+    // Task-centric LLM routing editor — its own file (settings-routing.js),
+    // loaded after this one, renders all three pages of the section.
+    if (key === 'llm_routing') {
+        renderLlmRoutingPage(pageId === undefined || pageId === null
+            ? (key === ACTIVE_SECTION ? ACTIVE_PAGE : null)
+            : pageId);
+        return;
+    }
     const sec = SCHEMA[key];
     // Paged section: the many renderSection(ACTIVE_SECTION) rerenders (field
     // edits, array add/remove) pass no page — stay on the current one.
@@ -556,29 +564,10 @@ function renderSection(key, pageId) {
 
     // Array sections (providers)
     if (sec.is_array) {
-        if (key === 'llm_routing') {
-            // Two columns: editor on the left, read-only task view on the right
-            html += '<div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">';
-            html += '<div>';
-            html += '<div style="margin-bottom: 12px;">';
-            html += '<button class="btn btn-sm" onclick="addArrayItem(\'' + key + '\', \'array\')">+ Add LLM</button>';
-            html += '</div>';
-            html += renderArrayItems(sec, data || [], key);
-            html += '</div>';
-            html += '<div>';
-            html += '<div class="subsection-title" style="margin-bottom:8px;">' + ROUTING_TEXT.perTaskView + '</div>';
-            html += '<div id="llm-task-view"><div class="desc">Loading…</div></div>';
-            html += '</div>';
-            html += '</div>';
-            // The tool/helper suitability test now lives under "Model Capabilities".
-            html += '<div class="desc" style="margin-top:16px;">🧪 The Tool/Helper suitability test moved to <a href="/admin/models" target="_blank" style="color:#58a6ff;">Model Capabilities</a>.</div>';
-            setTimeout(() => renderLlmTaskView(data || []), 0);
-        } else {
-            html += '<div style="margin-bottom: 12px;">';
-            html += '<button class="btn btn-sm" onclick="addArrayItem(\'' + key + '\', \'array\')">+ Add ' + sec.label + '</button>';
-            html += '</div>';
-            html += renderArrayItems(sec, data || [], key);
-        }
+        html += '<div style="margin-bottom: 12px;">';
+        html += '<button class="btn btn-sm" onclick="addArrayItem(\'' + key + '\', \'array\')">+ Add ' + sec.label + '</button>';
+        html += '</div>';
+        html += renderArrayItems(sec, data || [], key);
     }
 
     html += '</div>';
@@ -1083,16 +1072,14 @@ function onTaskRowTaskChanged(path, index, value) {
     setVal(path + '[' + index + '].task', value);
     updateTaskRowMatchBadges(path);
     applyEmbedVisibility();
-    if (ACTIVE_SECTION === 'llm_routing') renderLlmTaskView(CONFIG.llm_routing || []);
 }
 
-// Model/provider of an llm_routing entry changed -> re-check its task rows and
-// the per-task overview. Every other model field on the page is ignored.
+// Model/provider of an llm_routing entry changed -> re-check its task rows.
+// Every other model field on the page is ignored.
 function onRoutingModelChanged(path) {
     const m = /^(llm_routing\[\d+\])\.(model|provider)$/.exec(path || '');
     if (!m) return;
     updateTaskRowMatchBadges(m[1] + '.tasks');
-    if (ACTIVE_SECTION === 'llm_routing') renderLlmTaskView(CONFIG.llm_routing || []);
 }
 
 async function renderLlmTaskView(entries) {
@@ -1266,7 +1253,7 @@ function toggleTaskPersistent(taskId, disable) {
     if (!disable && idx >= 0) arr.splice(idx, 1);
     CONFIG.llm_task_state.disabled_tasks = arr;
     toast('Change only takes effect after save', 'success');
-    renderLlmTaskView(CONFIG.llm_routing || []);
+    renderLlmRoutingPage('tasks');
 }
 
 async function applyTaskPreset(preset) {
@@ -1282,7 +1269,7 @@ async function applyTaskPreset(preset) {
         } else {
             toast('Runtime preset "' + preset + '" active (' + (data.disabled || []).length + ' tasks off)', 'success');
         }
-        renderLlmTaskView(CONFIG.llm_routing || []);
+        renderLlmRoutingPage('tasks');
     } catch (e) {
         toast('Preset error: ' + e.message, 'error');
     }
@@ -2094,10 +2081,6 @@ function rerenderTaskOrderList(path) {
     }
     wrap.innerHTML = html;
     populateTaskSelects(path);
-    // Also refresh the per-task view on the right while we are in the llm_routing tab
-    if (ACTIVE_SECTION === 'llm_routing') {
-        renderLlmTaskView(CONFIG.llm_routing || []);
-    }
 }
 
 // ── Data Access ──

@@ -228,3 +228,43 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 }
 .task-match-slot { display: inline-flex; align-items: center; gap: 4px; }
 .task-match-slot:empty { display: none; }
+
+/* ── LLM Routing (Advanced): the task-centric editor ──
+   Rendered by static/admin/settings-routing.js. Same palette as the .req-*
+   rules above; the per-category left border colour comes in as an inline
+   style, except on a problem card, where the warning colour wins. */
+.rt-toolbar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-bottom: 10px;
+}
+.rt-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: #161b22; border: 1px solid #30363d; color: #8b949e;
+    padding: 3px 10px; border-radius: 12px; font-size: 11px;
+    cursor: pointer; user-select: none; white-space: nowrap;
+}
+.rt-chip:hover { border-color: #58a6ff; }
+.rt-chip.on { background: #1f3a5f; border-color: #58a6ff; color: #c9d1d9; }
+/* One task = one card. The 3px left border carries the category colour. */
+.rt-card {
+    margin-bottom: 6px; padding: 8px 10px;
+    background: #0d1117; border: 1px solid #30363d;
+    border-left: 3px solid #30363d; border-radius: 6px;
+}
+.rt-card.problem { border-left-color: #d29922; }
+/* One LLM of a task's chain. */
+.rt-chain-row {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    font-size: 12px; color: #c9d1d9; padding: 1px 0;
+}
+.rt-chain-row.off { color: #6e7681; text-decoration: line-through; }
+.rt-err { color: #f85149; }
+.rt-warn { color: #d29922; }
+.rt-muted { color: #6e7681; }
+.rt-ok { color: #3fb950; }
+/* Inline "new LLM" form inside a task card. */
+.rt-newform {
+    display: grid; grid-template-columns: auto 1fr; gap: 6px;
+    align-items: center; padding: 8px; margin-top: 6px;
+    border: 1px dashed #30363d; border-radius: 6px;
+}

@@ -162,6 +162,30 @@ SECTIONS = {
         "nav_sub": True,
         "is_array": True,
         "item_label_field": ["name", "model"],
+        # Paged section (see image_generation for the generic mechanism). The
+        # three pages are rendered entirely by static/admin/settings-routing.js —
+        # `fields` below stays the field definition of ONE array item (the LLMs
+        # page), the pages themselves list no fields.
+        "pages": [
+            {
+                "id": "tasks",
+                "label": "Tasks",
+                "icon": "🎯",
+                "description": "One row per LLM task with its ordered LLM chain — assign, reorder, spot the gaps.",
+            },
+            {
+                "id": "llms",
+                "label": "LLMs",
+                "icon": "🧠",
+                "description": "The configured LLM entries: provider, model, sampling and which tasks they serve.",
+            },
+            {
+                "id": "overview",
+                "label": "Overview",
+                "icon": "📋",
+                "description": "What the server would route each task to right now (saved config, read-only).",
+            },
+        ],
         "fields": {
             "name": {
                 "type": "str",
