@@ -2423,6 +2423,7 @@
     "Move to the licensed library? It stays local and is never committed.": "In die lizenzierte Bibliothek verschieben? Sie bleibt lokal und wird nie committet.",
     "Delete this file?": "Diese Datei löschen?",
     "Delete this file? It is one half of a pair — both halves go together.": "Diese Datei löschen? Sie ist eine Hälfte eines Paares — beide Hälften gehen zusammen.",
+    "That name is taken. Replace overwrites the file lying there — it is gone for good.": "Der Name ist vergeben. „Ersetzen\" überschreibt die Datei, die dort liegt — sie ist dann endgültig weg.",
     "they are not updated automatically and will find no clip under the old name.": "sie werden nicht automatisch angepasst und finden unter dem alten Namen keinen Clip mehr.",
     "Poses that play this kind": "Posen, die diese Art spielen",
     "Clip sets": "Clip-Sets",

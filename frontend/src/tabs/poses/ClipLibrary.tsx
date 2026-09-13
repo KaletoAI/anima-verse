@@ -29,15 +29,20 @@
  * measurement. It is stored in the `<kind>.json` sidecar and therefore holds
  * for the whole kind in that set — both halves of a pair, every variant.
  *
+ * A rename or move onto a name that is already taken is not an error the
+ * admin has to work around: the server answers 409, the action box stays open
+ * and offers "Replace", which repeats the same call with `overwrite` and lets
+ * the incoming file take the place of the one lying there.
+ *
  *   GET    /assets/animation-clips                     … + {locomotion}
  *   PUT    /assets/animation-clips/locomotion          {walk?, run?, idle?}
- *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?}
+ *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, overwrite?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ClipPreview } from './ClipPreview'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPatch, apiPut } from '../../lib/api'
+import { ApiError, apiDelete, apiGet, apiPatch, apiPut } from '../../lib/api'
 import { orderSets } from './clipSets'
 import type { ApiClipRow, ClipListing } from './clipSets'
 
@@ -130,6 +135,10 @@ export function ClipLibrary({
   // over to a free text field instead of snapping back on every keystroke.
   const [customSet, setCustomSet] = useState(false)
   const [error, setError] = useState('')
+  // The body of a rename/move the server refused with 409 (the name is taken).
+  // It is kept so the "Replace" button can send exactly that call again, this
+  // time with `overwrite` — the collision is a question, not a dead end.
+  const [conflict, setConflict] = useState<Record<string, string | boolean> | null>(null)
   const [busy, setBusy] = useState(false)
   // Bumped after every write so the preview reloads the (possibly renamed) clip
   const [seq, setSeq] = useState(0)
@@ -288,12 +297,14 @@ export function ClipLibrary({
       setPreviewSet(set !== undefined ? set : orderSets(Array.from(new Set(own)))[0] || '')
       setAction(null)
       setError('')
+      setConflict(null)
     },
     [clips],
   )
 
   const openAction = useCallback((clip: ApiClipRow, type: ActionKind) => {
     setError('')
+    setConflict(null)
     setAction({ rel: `${libraryOf(clip)}/${relOf(clip)}`, type })
     setValue(type === 'kind' ? clip.kind : type === 'set' ? clip.set || '' : '')
     setCustomSet(false)
@@ -304,6 +315,7 @@ export function ClipLibrary({
       if (busy) return
       setBusy(true)
       setError('')
+      setConflict(null)
       try {
         if (body) await apiPatch(clipPath(clip), body)
         else await apiDelete(clipPath(clip))
@@ -316,12 +328,34 @@ export function ClipLibrary({
         if (typeof body?.set === 'string') setPreviewSet(body.set)
       } catch (e) {
         setError((e as Error).message)
+        // 409 is the ONE refusal with an answer: the name at the target is
+        // taken. The action box stays open and offers "Replace", which is
+        // this very body once more with `overwrite`.
+        if (body && e instanceof ApiError && e.status === 409) setConflict(body)
       } finally {
         setBusy(false)
       }
     },
     [busy, onReload],
   )
+
+  /** The offer after a 409 — shown inside the action box that ran into it. */
+  const replaceNode = (clip: ApiClipRow) =>
+    conflict ? (
+      <>
+        <span className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>
+          {t('That name is taken. Replace overwrites the file lying there — it is gone for good.')}
+        </span>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm ga-btn-danger"
+          disabled={busy}
+          onClick={() => run(clip, { ...conflict, overwrite: true })}
+        >
+          {t('Replace')}
+        </button>
+      </>
+    ) : null
 
   const cellNode = (r: Row, col: string) => {
     const cell = r.cells[col]
@@ -420,6 +454,7 @@ export function ClipLibrary({
             <button type="button" className="ga-btn ga-btn-sm" onClick={() => setAction(null)}>
               {t('Cancel')}
             </button>
+            {replaceNode(clip)}
             <span className="ga-hint">
               {t('Lowercase letters, digits, space, "_" and "-"; never "__" (that separates the pair halves) and never a trailing "_<number>" (that is the variant numbering).')}
             </span>
@@ -470,6 +505,7 @@ export function ClipLibrary({
             <button type="button" className="ga-btn ga-btn-sm" onClick={() => setAction(null)}>
               {t('Cancel')}
             </button>
+            {replaceNode(clip)}
           </div>
         ) : null}
 
@@ -491,6 +527,7 @@ export function ClipLibrary({
             <button type="button" className="ga-btn ga-btn-sm" onClick={() => setAction(null)}>
               {t('Cancel')}
             </button>
+            {replaceNode(clip)}
           </div>
         ) : null}
 

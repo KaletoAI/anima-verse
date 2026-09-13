@@ -733,7 +733,8 @@ def delete_clip(library: str, rel: str) -> Dict[str, Any]:
 
 def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
                 cset: Optional[str] = None,
-                to_library: Optional[str] = None) -> List[Dict[str, Any]]:
+                to_library: Optional[str] = None,
+                overwrite: bool = False) -> List[Dict[str, Any]]:
     """Renames a clip and/or moves it to another set or library.
 
     A pair moves as a pair (both halves), a numbered variant keeps its
@@ -743,6 +744,11 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     is COPIED when other variants still need it. The ``kind`` field is
     rewritten with the new name in both cases. An existing sidecar at the
     target is left untouched — it belongs to the variants already there.
+
+    A name already taken at the target is a ``ClipExists`` — unless
+    ``overwrite`` says the admin answered the question with "Replace": then
+    the file lying there is deleted before the move, together with the sidecar
+    belonging to it ALONE, for every half of a pair alike (``_clear_replaced``).
 
     Returns the moved clips as listing views.
     """
@@ -768,6 +774,7 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
         sources.append(partner)
 
     moves: List[Tuple[Path, Path]] = []
+    replaced: List[Path] = []
     for p in sources:
         _k, role, num = _split_stem(p.stem)
         name = new_kind + (f"{ROLE_SEPARATOR}{role}" if role else "") + num + p.suffix
@@ -775,14 +782,21 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
         if dest.resolve() == p.resolve():
             continue                                  # nothing to do for this half
         if dest.exists():
-            raise ClipExists(
-                f"{new_set + '/' if new_set else ''}{name} already exists "
-                f"in the {new_library} library")
+            if not overwrite:
+                raise ClipExists(
+                    f"{new_set + '/' if new_set else ''}{name} already exists "
+                    f"in the {new_library} library")
+            replaced.append(dest)
         moves.append((p, dest))
     if not moves:
         return [_view_of(src, new_set, new_library)]        # nothing changed
 
     dest_dir.mkdir(parents=True, exist_ok=True)
+    if replaced:
+        gone = _clear_replaced(replaced, dest_dir, new_kind)
+        logger.info("clip replaced at the target: %s (%s%s, %s library)",
+                    ", ".join(gone), f"{new_set}/" if new_set else "",
+                    new_kind, new_library)
     # Only a file WITHOUT a sidecar of its own still depends on the shared
     # <kind>.json — one that brings its own must not drag a copy along.
     needs_shared = False
@@ -890,6 +904,33 @@ def _move_sidecar(src_dir: Path, old_kind: str, dest_dir: Path,
         shutil.copy2(str(sidecar), str(target))
     if new_kind != old_kind:
         _rewrite_sidecar_kind(target, new_kind)
+
+
+def _clear_replaced(targets: List[Path], dest_dir: Path, kind: str) -> List[str]:
+    """Clears the way for an OVERWRITING move — the admin's "Replace".
+
+    Every file being replaced goes with the sidecar that belongs to it alone
+    (``walk_02.json``), one half of a pair like the other. The shared
+    ``<kind>.json`` beside them goes only when NO file of that kind is left in
+    the target directory after the deletions: while other variants remain it
+    is theirs, not the replaced file's, and the incoming sidecar must not
+    overwrite their numbers.
+
+    Returns the names removed, for the log line of the caller.
+    """
+    removed: List[str] = []
+    for dest in targets:
+        own = _own_sidecar(dest)
+        dest.unlink(missing_ok=True)
+        removed.append(dest.name)
+        if own is not None:
+            own.unlink(missing_ok=True)
+            removed.append(own.name)
+    shared = dest_dir / f"{kind}.json"
+    if shared.is_file() and not _kind_files(dest_dir, kind):
+        shared.unlink(missing_ok=True)
+        removed.append(shared.name)
+    return removed
 
 
 def _take_own_sidecar(sidecar: Path, target: Path, new_kind: str) -> None:

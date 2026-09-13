@@ -52,6 +52,20 @@ Expected values, derived by hand from that fixture and the layout rules:
   sit is left in female/) and removes the then-empty female/ directory;
   DELETING the last clip of a set empties the same directory and removes it
   the same way (never the library root itself).
+* REPLACE (the "overwrite" answer to a collision, plan U1): without it a
+  taken target name is a ``ClipExists`` and NOTHING moves; with it the file
+  lying at the target is deleted first, together with the sidecar that belongs
+  to it alone. The shared ``<kind>.json`` at the target follows the same rule
+  the delete does — it goes only when no file of that kind is left there:
+  - ``run.fbx -> walk`` with walk_02.fbx staying behind: walk.json is the
+    sidecar of that variant and stays untouched (walk_02's 90 frames / 3.0 s),
+  - the same move with walk_02.fbx gone first: nothing of kind walk is left,
+    so walk.json goes and the incoming run.json takes its place (4.0 s),
+  - ``walk_02.fbx -> run`` onto run_02.fbx: its OWN run_02.json goes with it,
+    so the replaced slot reads the shared run.json (4.0 s instead of 2.0 s),
+    while run.fbx keeps that shared sidecar,
+  - a PAIR replaces a pair: both halves of hug are overwritten by kiss and
+    hug.json is replaced by kiss.json (45 frames), since no hug file is left.
 * ``url`` is percent-encoded per segment: the kind "climbing a ladder" has two
   spaces, so its url is ``…/climbing%20a%20ladder.fbx`` while ``rel`` keeps the
   raw file path, and a set segment is encoded on its own (the ``/`` survives).
@@ -407,6 +421,91 @@ def test_validation() -> None:
           and (FREE / "walk_02.fbx").is_file())
 
 
+def test_overwrite() -> None:
+    """The "Replace" answer to a name collision (plan U1)."""
+    print("\nReplace — overwrite on a name collision")
+    build_tree()
+    raises("a taken target name is still ClipExists without overwrite",
+           ac.ClipExists,
+           lambda: ac.rename_clip("free", "run.fbx", kind="walk"))
+    check("the refused call moved nothing",
+          (FREE / "run.fbx").read_bytes() == b"free-run"
+          and (FREE / "walk.fbx").read_bytes() == b"free-walk"
+          and (FREE / "run.json").is_file() and (FREE / "walk.json").is_file())
+
+    clips = ac.rename_clip("free", "run.fbx", kind="walk", overwrite=True)
+    check("overwrite puts the moved file at the taken name",
+          (FREE / "walk.fbx").read_bytes() == b"free-run"
+          and not (FREE / "run.fbx").exists()
+          and [c["rel"] for c in clips] == ["walk.fbx"],
+          str([c["rel"] for c in clips]))
+    check("walk.json STAYS — walk_02.fbx is still a file of that kind",
+          (FREE / "walk.json").is_file()
+          and json.loads((FREE / "walk.json").read_text(
+              encoding="utf-8"))["frames"] == 90
+          and clips[0]["duration_s"] == 3.0, str(clips[0]["duration_s"]))
+    check("run.json stays behind with run_02.fbx, which still needs it",
+          (FREE / "run.json").is_file() and (FREE / "run_02.fbx").is_file())
+
+    build_tree()
+    ac.delete_clip("free", "walk_02.fbx")                # nothing else of that kind
+    clips = ac.rename_clip("free", "run.fbx", kind="walk", overwrite=True)
+    check("with no file of the kind left, the target sidecar is REPLACED",
+          json.loads((FREE / "walk.json").read_text(
+              encoding="utf-8"))["frames"] == 120
+          and clips[0]["duration_s"] == 4.0 and clips[0]["fps"] == 30,
+          str((clips[0]["duration_s"], clips[0]["fps"])))
+    check("the replaced sidecar carries the new kind",
+          json.loads((FREE / "walk.json").read_text(
+              encoding="utf-8"))["kind"] == "walk")
+
+    build_tree()
+    clips = ac.rename_clip("free", "walk_02.fbx", kind="run", overwrite=True)
+    check("a variant replaces a variant, its OWN sidecar goes with it",
+          (FREE / "run_02.fbx").read_bytes() == b"free-walk-2"
+          and not (FREE / "run_02.json").exists()
+          and not (FREE / "walk_02.fbx").exists(),
+          str([c["rel"] for c in clips]))
+    check("the shared run.json stays — run.fbx is still there",
+          (FREE / "run.json").is_file() and (FREE / "run.fbx").is_file()
+          and clips[0]["duration_s"] == 4.0 and clips[0]["fps"] == 30,
+          str((clips[0]["duration_s"], clips[0]["fps"])))
+    check("walk.json stays with walk.fbx, no run.json was overwritten",
+          (FREE / "walk.json").is_file()
+          and json.loads((FREE / "walk.json").read_text(
+              encoding="utf-8"))["kind"] == "walk")
+
+    build_tree()
+    (FREE / "kiss__a.fbx").write_bytes(b"free-kiss-a")
+    (FREE / "kiss__b.fbx").write_bytes(b"free-kiss-b")
+    write_sidecar(FREE / "kiss.json", {
+        "kind": "kiss", "pair": True, "roles": ["a", "b"], "fps": 30,
+        "frames": 45, "duration_s": 1.5,
+        "geometry": {"anchor_frame": 20},
+        "source": {"format": "fbx", "bone_map": "unity-humanoid"}})
+    clips = ac.rename_clip("free", "kiss__a.fbx", kind="hug", overwrite=True)
+    check("a pair replaces a pair — both halves at once",
+          sorted(c["rel"] for c in clips) == ["hug__a.fbx", "hug__b.fbx"]
+          and (FREE / "hug__a.fbx").read_bytes() == b"free-kiss-a"
+          and (FREE / "hug__b.fbx").read_bytes() == b"free-kiss-b"
+          and not (FREE / "kiss__a.fbx").exists()
+          and not (FREE / "kiss__b.fbx").exists(),
+          str(sorted(c["rel"] for c in clips)))
+    hug_json = json.loads((FREE / "hug.json").read_text(encoding="utf-8"))
+    check("no hug file was left, so hug.json is the moved kiss.json",
+          not (FREE / "kiss.json").exists()
+          and (hug_json["kind"], hug_json["frames"]) == ("hug", 45)
+          and clips[0]["duration_s"] == 1.5,
+          f"{hug_json['kind']} / {hug_json['frames']} / {clips[0]['duration_s']}")
+
+    build_tree()
+    clips = ac.rename_clip("free", "wave.fbx", kind="swim", overwrite=True)
+    check("overwrite without a collision is a plain move",
+          (FREE / "swim.fbx").is_file() and not (FREE / "wave.fbx").exists()
+          and (LICENSED / "wave.fbx").read_bytes() == b"licensed-wave",
+          str([c["rel"] for c in clips]))
+
+
 def main() -> int:
     check("ANIMATION_CLIPS_DIR is honoured",
           paths.get_animation_clips_dir() == FREE,
@@ -419,6 +518,7 @@ def main() -> int:
     test_rename_kind()
     test_move_set()
     test_validation()
+    test_overwrite()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

@@ -157,13 +157,16 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     """Renames a clip, moves it to another set or library, and/or sets its
     LOOP flag.
 
-    Body ``{kind?, set?, library?, loop?}``, at least one of them. ``set: ""``
+    Body ``{kind?, set?, library?, loop?, overwrite?}``, at least one of the
+    first four. ``set: ""``
     moves the clip to the neutral root — the ONE empty value with a meaning;
     ``library: ""`` is a bad request, not a silent no-op. ``loop`` is the
     admin's "repeat this clip / hold its last frame" and is written into the
     ``<kind>.json`` beside the clip, so it holds for both halves of a pair and
-    every variant of the kind in that set. The answer carries the touched
-    clips in the shape of the listing.
+    every variant of the kind in that set. ``overwrite`` is the answer to the
+    409 a taken name earns: the file at the target is replaced instead of the
+    move being refused. The answer carries the touched clips in the shape of
+    the listing.
     """
     try:
         body = await request.json()
@@ -179,6 +182,9 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
                             detail="library must be 'free' or 'licensed'")
     if "loop" in body and not isinstance(body["loop"], bool):
         raise HTTPException(status_code=400, detail="loop must be true or false")
+    if "overwrite" in body and not isinstance(body["overwrite"], bool):
+        raise HTTPException(status_code=400,
+                            detail="overwrite must be true or false")
     try:
         clips: List[Dict[str, Any]] = []
         if any(k in body for k in ("kind", "set", "library")):
@@ -186,7 +192,8 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
                                 kind=body["kind"] if "kind" in body else None,
                                 cset=body["set"] if "set" in body else None,
                                 to_library=body["library"] if "library" in body
-                                else None)
+                                else None,
+                                overwrite=bool(body.get("overwrite")))
         if "loop" in body:
             # After the move, not before: the flag is written beside the file
             # where it ends up. The moved view names that place.
