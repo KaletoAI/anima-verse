@@ -341,7 +341,16 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
 
 def end_interaction(character_name: str, reason: str = "ended") -> bool:
     """Clears the interaction on the character AND the partner. True when
-    there was one."""
+    there was one.
+
+    Both partners STAND UP from the pair seat, and where they stand then is the
+    server's word (T4): with the pair pose still on, ``clear_pose_intent``
+    carries the standing point; where the pose has already moved on, the place
+    is dropped here and ``room_stand.stand_up`` is asked here — the two must
+    not end up on top of each other, which is why the first one placed counts
+    as the second one's neighbour.
+    """
+    from app.core.room_stand import stand_up
     from app.core.state_events import publish
     from app.models.character import (clear_pose_intent, get_character_profile,
                                       save_character_profile)
@@ -363,6 +372,8 @@ def end_interaction(character_name: str, reason: str = "ended") -> bool:
             save_character_profile(name, p)
             if same_pose:
                 clear_pose_intent(name)
+            else:
+                stand_up(name)
     publish("interaction_ended", character_name, partner=partner,
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)
     logger.info("interaction %s ended (%s)", inter["id"], reason)

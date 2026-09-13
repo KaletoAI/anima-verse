@@ -833,8 +833,32 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
-| `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
+| `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). Gilt auch IN einem Raum (s. u.). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
 | `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
+
+- **`pos` gilt auch IN einem Raum** (2026-09-13, T4). Der Server hat den Punkt
+  gestellt: frei von Wänden, Möbeln, Türzonen und Mitbewohnern. Ein Client
+  ZEICHNET die Figur dort und wählt keinen Raumpunkt mehr selbst — kein
+  Steh-Raster, kein alphabetischer Index, kein Gedränge um den Raummittelpunkt.
+  Die Höhe bleibt Sache des Clients (Raumboden des Stockwerks am Punkt), und
+  ein Charakter MIT `place` (§ A8a) steht weiterhin auf seinem Slot: der Marker
+  gewinnt vor `pos`.
+  Die Regel, mit der der Server wählt (`app/core/room_stand.py`, vier
+  Konstanten): Kandidaten liegen auf einem Raster von **0,25 m** über der
+  Bounding-Box des Raumpolygons; frei ist ein Kandidat im Polygon mit
+  **≥ 0,35 m** Abstand zu jeder Polygonkante, außerhalb jeder gedrehten
+  Boden-Prop-Grundfläche, die um den Körperradius **0,30 m** gewachsen ist
+  (Auswahl wie `blockers[]`: mount `floor`, kein Tag `walkable`, Höhe > 0,3 m),
+  außerhalb der Türzonen der Raumöffnungen und **≥ 0,70 m** von jedem anderen
+  Charakter im selben Raum (wer auf einem Marker sitzt, zählt mit seiner
+  Slot-Position). Gewählt wird der freie Kandidat mit dem kleinsten Abstand zum
+  AUSGANGSPUNKT — bei Gleichstand größerer Wandabstand, dann kleinstes x, dann
+  kleinstes z. Ist der Ausgangspunkt selbst frei, bleibt er stehen: niemand
+  läuft grundlos. Ausgangspunkt ist immer die aktuelle Position (der
+  Ankunftspunkt beim Betreten, der Sitz nach einer Pose). Geschrieben wird nur
+  auf den Schreibwegen — Raumwechsel und Aufstehen —, nie beim Bau eines
+  Payloads. Findet die Regel keinen freien Punkt (winziger oder voll
+  möblierter Raum), bleibt die Position unverändert.
 
 - **„Außerhalb jeder Location" ist ein legaler Zustand.** Ein Charakter
   mit `location_id: ""` UND einem `pos` steht in der **Wildnis**. Beim
@@ -4987,6 +5011,7 @@ sie produziert.
 | `scripts/smoke_terrain_types.py` [9] | die Sanitizer der Katalog-Felder (`edge_blend_m` mit 0 als WERT, Relief-Amplitude/Welle) |
 | `scripts/smoke_scene_recipe.py` | die Rezept-Zahlen der neuen Leiter, die roten Gegenproben (0,08 / 0,09 / 0,10 dürfen auf Etage 0 in keinem `top_y`/`base_y`/`bottom_y` auftauchen), `floor_plan`, `draws_built_floor`; **[4a]** der Wandsaum — beide Grenzen des 0,14-Maßes von Hand, die feste Oberkante, der ungesäumte Sturz, die ungesäumte Türschwelle und die unbewegte deklarierte Etage |
 | `scripts/smoke_scene_recipe.py` **[7g]/[7h]** | das Oberflächen-Raster am Spec (v6): `code_version` **11** (siehe [7i]), der Block unverändert am Raum-Spec, `walkable` + Block nur am getaggten Prop, die bewegte Signatur — und je Kopie eines mehrvariantigen Props das Raster IHRER Store-Variante |
+| `scripts/smoke_room_stand.py` | der freie Stehplatz (§ A1.4): die vier Konstanten, der L-Raum mit `near` im Ausschnitt, der um 30° gedrehte Tisch bei 0,20 m und 0,40 m, zwei Mitbewohner in 0,50 m durch die ganze Gleichstands-Leiter, die Türzone einer 1,0-m-Tür, und der Raum, in dem niemand stehen kann |
 | `scripts/smoke_terrain_query.py` / `scripts/smoke_terrain_areas.py` | `kind_at` und die Flächen-Speicherung, aus der die Priorität kommt |
 
 **Client — Höhe, Schnitt, Wasser, Szene**
@@ -5001,7 +5026,7 @@ sie produziert.
 | `client3d/scripts/smoke_water_plane.mjs` | [3] die E1-Invariante unabhängig nachgerechnet samt Gegenprobe, die Ufer-Alpha-Stützstellen, [5] die Zonen-Wasser unter einem Punkt (Vorrang vor gemalten Flächen, Letzter-gewinnt, `null` wird nie 0, der Schwimmer am Zonen-Spiegel) |
 | `client3d/scripts/smoke_walk_math.mjs` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren; **§ S** `storeyGroundLift` — die Mondscheinsee-Zahlen von Hand, die ebene Bühne der Admin-Vorschau, und die drei Nicht-Heber (deklarierte Etage, Gebäudemodell, fehlender Sampler) |
 | `client3d/scripts/smoke_surface_math.mjs` | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
-| `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter, Flachheits-Tor, Möbel-Fenster, Zonen-Wasser-Auswahl |
+| `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `elapsed_s / rate` bei Faktor 0,5/1/2 ergibt dieselbe Phase, Freeze hält sie, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
 | `client3d/scripts/smoke_undergrowth.mjs` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |
 | `client3d/scripts/smoke_natural_ground.mjs` | die drei Naturstufen auf dem KOMPONIERTEN Ergebnis |

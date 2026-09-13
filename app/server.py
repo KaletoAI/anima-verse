@@ -369,6 +369,22 @@ async def lifespan(app: FastAPI):
     except Exception as _lre:
         logger.warning("location-reference cleanup failed: %s", _lre)
 
+    # WHERE IN A ROOM a character stands is the server's word since T4
+    # (plan-animationen-echtzeit-stehplatz.md): it is written when somebody
+    # enters a room and when it stands up from a place. Everyone who has been
+    # standing in a room since before that keeps the point it has — a client
+    # invented one until now — so each of them is put on its free standing
+    # point once. AFTER the marker migrations above, which the room inventory
+    # is read through, and after the dangling-reference cleanup, so no
+    # character is placed in a room that no longer exists.
+    try:
+        from app.core.room_stand_migration import migrate_room_stands_once
+        _rs = migrate_room_stands_once()
+        if _rs:
+            logger.info("room stand migration: %s", _rs)
+    except Exception as _rse:
+        logger.warning("room stand migration failed: %s", _rse)
+
     # Background hygiene: prune dead file references in background_images +
     # gallery_meta.json + prompts.json. Deletes no files.
     from app.models.world import cleanup_orphan_backgrounds

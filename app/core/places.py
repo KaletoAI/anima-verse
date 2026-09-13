@@ -346,8 +346,10 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
             if prefer:
                 raise PlaceUnavailable(f"{prefer} has no free slot")
             if current:
-                profile["place"] = None
-                save_character_profile(name, profile)
+                # Through :func:`release`, not by clearing the field here: a
+                # character that loses its seat has stood up, and standing up
+                # is where the free standing point is chosen (T4).
+                release(name)
             return None
         place, slot = chosen
         field = {"id": place["id"], "slot": slot, "room_id": room}
@@ -368,13 +370,19 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
 
 
 def release(name: str) -> None:
-    """Clear ``profile["place"]`` if set — the character stands up, the
-    position stays where it is."""
+    """Clear ``profile["place"]`` if set — the character STANDS UP, next to the
+    seat it just left (``room_stand``, T4): the freed point is whatever the
+    room offers nearest to where it was sitting, so nobody stays standing in
+    the armchair and nobody walks across the room for it. A room that offers
+    no free point leaves the position where it is.
+    """
     from app.models.character import get_character_profile, save_character_profile
     profile = get_character_profile(name) or {}
     if profile.get("place"):
         profile["place"] = None
         save_character_profile(name, profile)
+        from app.core.room_stand import stand_up
+        stand_up(name)
 
 
 def can_take(name: str, pose_key: str, place_id: str, ignore: Tuple[str, ...] = ()) -> bool:

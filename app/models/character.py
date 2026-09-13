@@ -2002,7 +2002,13 @@ def _seat_for_pose(character_name: str, key: str, prefer: str = "") -> Optional[
 
 
 def clear_pose_intent(character_name: str) -> None:
-    """Clears the pose (e.g. after a location/room change — it goes stale)."""
+    """Clears the pose (e.g. after a location/room change — it goes stale).
+
+    Giving up a PLACE means standing up, and where the character stands then is
+    the server's word since T4: ``room_stand.stand_up`` puts it on the free
+    point nearest the seat it held. Without a place nothing moves — the pose it
+    struck there needed no marker and no space of its own.
+    """
     if not character_name:
         return
     profile = get_character_profile(character_name) or {}
@@ -2013,6 +2019,9 @@ def clear_pose_intent(character_name: str) -> None:
         profile["pose_flavor"] = ""
         profile["place"] = None          # the character stands up (§ 3.5)
         save_character_profile(character_name, profile)
+        if old_place:
+            from app.core.room_stand import stand_up
+            stand_up(character_name)
         _publish_activity_changed(character_name, "", old_display, "", None, old_place)
 
 
@@ -2110,6 +2119,20 @@ def save_character_current_room(character_name: str, room_id: str,
         # no reader ever sees the lounge's armchair held from the kitchen.
         profile["place"] = None
     save_character_profile(character_name, profile)
+
+    # WHERE IN THE ROOM the character now stands is the server's word (T4):
+    # the free point nearest the one it arrived on — the doorstep of a walk,
+    # the spot it was standing on when it stepped through. A room that offers
+    # none leaves the position alone. Party followers come through here too
+    # (`_drag_party_followers_to_room` below calls this very function), and the
+    # leader is placed first, so a follower keeps its distance from it.
+    if room_id and room_id != old_room:
+        try:
+            from app.core.room_stand import stand_up
+            stand_up(character_name)
+        except Exception as _rse:
+            logger.debug("room stand point failed for %s: %s",
+                         character_name, _rse)
 
     # AV3D-3: room-change push (within-location moves; cross-location moves
     # publish via save_character_current_location). Clearing counts too —
