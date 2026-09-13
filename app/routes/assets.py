@@ -2,7 +2,8 @@
 
 Reading is public, editing is not: everything a client plays is served
 unauthenticated, while the import sources, the two library edit routes
-(``DELETE`` / ``PATCH /assets/animation-clips/{library}/{rel}``) and the
+(``DELETE`` / ``PATCH /assets/animation-clips/{library}/{rel}``, and
+``POST …/orient``, which turns and lifts a clip in the file) and the
 locomotion mapping (``PUT /assets/animation-clips/locomotion``) are
 admin-only.
 
@@ -21,8 +22,8 @@ name, ``set`` from the subdirectory the clip lies in; both vocabularies are
 OPEN — no list exists in the code, a new kind is just a new file and a new set
 just a new directory. Clips are served with an ETag and ``no-cache``, i.e.
 stored but revalidated — they are rewritten in place by
-``scripts/repair_clip_roll.py``, so a long ``max-age`` would hide the change
-for a day.
+``scripts/repair_clip_roll.py`` and by the orient route, so a long ``max-age``
+would hide the change for a day.
 
 On top of the two libraries sits the CMU TRIAL archive (``clip_catalog``):
 ``/assets/clip-catalog`` hands out the measured catalog of the whole database
@@ -41,18 +42,20 @@ and it is admin-only.
 """
 import mimetypes
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
+from app.blender import runner as blender_runner
 from app.core import clip_catalog, fbx_import
 from app.core.animation_clips import (CLIP_EXTS, ClipExists, ClipLibraryError,
                                       ClipNotFound, clip_entries, clip_meta,
                                       clip_view, delete_clip,
                                       load_locomotion_clips, load_transitions,
-                                      pair_kinds, rename_clip,
+                                      orient_clip, pair_kinds, rename_clip,
                                       save_locomotion_clips, save_transitions,
                                       set_clip_loop)
 from app.core.auth_dependency import require_admin
@@ -204,6 +207,47 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips}
+
+
+@router.post("/animation-clips/{library}/{rel:path}/orient")
+async def post_animation_clip_orient(library: str, rel: str, request: Request,
+                                     _: Dict[str, Any] = Depends(require_admin)
+                                     ) -> Dict[str, Any]:
+    """Turns and lifts an already imported clip — the import's orientation
+    dial, applied to the FILE.
+
+    Body ``{yaw_deg?, tilt_deg?, roll_deg?, height_cm?}``, at least one of them
+    non-zero: the rigid rotation ``Ry(yaw) · Rx(tilt) · Rz(roll)`` about the
+    origin of the clip frame on the floor, then the lift. Both halves of a
+    pair are turned in ONE Blender run, the sidecar's angles add up and a
+    pair's root geometry is re-measured on the written file. Needs Blender
+    (503 when the host has none), answers the touched clips plus the run time.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="object expected")
+    dials: Dict[str, float] = {}
+    for field in ("yaw_deg", "tilt_deg", "roll_deg", "height_cm"):
+        raw = body.get(field, 0)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise HTTPException(status_code=400, detail=f"{field} must be a number")
+        dials[field] = float(raw)
+    if not any(abs(v) > 1e-9 for v in dials.values()):
+        raise HTTPException(
+            status_code=400,
+            detail="one of yaw_deg, tilt_deg, roll_deg, height_cm must be non-zero")
+    if not blender_runner.is_available():
+        raise HTTPException(status_code=503,
+                            detail="Blender is not available on this server")
+    started = time.monotonic()
+    try:
+        clips = orient_clip(library, rel, **dials)
+    except ClipLibraryError as e:
+        raise _clip_edit_error(e)
+    return {"clips": clips, "seconds": round(time.monotonic() - started, 2)}
 
 
 @router.put("/animation-clips/locomotion")

@@ -50,15 +50,19 @@ CLAUDE.md), tracked in git; a ground's own ``move_anim`` / ``idle_anim``
 (``shared/terrain/types.json``) keeps its precedence over these roles.
 """
 import json
+import math
+import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from app.core.log import get_logger
 from app.core.paths import (get_animation_clips_dir, get_animation_clips_dirs,
-                            get_config_dir, get_licensed_clips_dir)
+                            get_config_dir, get_licensed_clips_dir,
+                            get_rig_file)
 
 logger = get_logger(__name__)
 
@@ -66,6 +70,9 @@ CLIP_EXTS = (".fbx", ".glb", ".gltf")
 PAIR_ROLES = ("a", "b")
 ROLE_SEPARATOR = "__"
 LIBRARIES = ("free", "licensed")
+#: The cumulative orientation dials a clip sidecar records, in degrees —
+#: what the import baked plus every later ``orient_clip``.
+ORIENT_ANGLES = ("yaw_deg", "tilt_deg", "roll_deg")
 #: The locomotion roles a figure plays without the server naming a clip. The
 #: DEFAULT kind of a role is the role's own name — an empty or missing entry
 #: in the mapping file means exactly that.
@@ -535,6 +542,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
     """
     path: Path = entry["path"]
     meta = clip_meta(entry["kind"], entry["set"], stem=path.stem)
+    geometry = (meta or {}).get("geometry")
+    geometry = geometry if isinstance(geometry, dict) else {}
     return {
         "kind": entry["kind"],
         "role": entry["role"],
@@ -558,6 +567,11 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "fps": (meta or {}).get("fps"),
         "frames": (meta or {}).get("frames"),
         "loop": clip_loops(meta),
+        # What has already been BAKED into the file — the import's dial plus
+        # every later ``orient_clip``. The library UI shows it beside the
+        # dials so an angle is added to a known state, not to a guess.
+        "orientation": {k: geometry.get(k) for k in
+                        ORIENT_ANGLES + ("floor_shift_cm",)},
     }
 
 
@@ -862,6 +876,159 @@ def set_clip_loop(library: str, rel: str, loop: bool) -> List[Dict[str, Any]]:
     logger.info("clip loop flag: %s%s (%s) -> %s", f"{cset}/" if cset else "",
                 kind, library, bool(loop))
     return [_view_of(p, cset, library) for p in files]
+
+
+# ── Turning a clip AFTER the import (plan-clip-library-…-ausrichtung U2) ──
+
+def _orient_sidecar(path: Path, kind: str, pair: bool) -> Path:
+    """The sidecar an orientation writes into.
+
+    A PAIR always uses the shared ``<kind>.json``: the role geometry
+    (``geometry.roles.a/b``) lives there and nowhere else. A solo file uses
+    its OWN sidecar when it has one (``walk_02.json``) — its numbers are its
+    own and must not be attributed to the whole kind — and the shared
+    ``<kind>.json`` otherwise.
+    """
+    own = None if pair else _own_sidecar(path)
+    return own if own is not None else path.parent / f"{kind}.json"
+
+
+def _bump_angle(geometry: Dict[str, Any], field: str, delta: float) -> None:
+    """Adds ``delta`` degrees to a cumulative dial, 0.1 deg resolution; a dial
+    that comes out at 0 is dropped, the way the import omits an unturned one."""
+    total = round(float(geometry.get(field) or 0.0) + delta, 1)
+    if abs(total) < 0.05:
+        geometry.pop(field, None)
+    else:
+        geometry[field] = total
+
+
+def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
+                tilt_deg: float = 0.0, roll_deg: float = 0.0,
+                height_cm: float = 0.0) -> List[Dict[str, Any]]:
+    """Turns and lifts a clip IN THE FILE — the import dial, after the fact.
+
+    ``yaw_deg`` / ``tilt_deg`` / ``roll_deg`` are the rigid rotation
+    ``Ry(yaw) · Rx(tilt) · Rz(roll)`` about the origin of the clip frame on
+    the floor, ``height_cm`` the lift after it (``app/blender/scripts/
+    clip_orient.py`` writes out the convention). A PAIR is turned as a pair:
+    both halves go into ONE Blender run with the same numbers, so their shared
+    anchor survives.
+
+    There is no second truth: the FBX is rewritten (temp file, then
+    ``os.replace``) and the sidecar follows it — the three angles add up
+    cumulatively, ``floor_shift_cm`` moves by the lift, and a pair's
+    ``roles.*.start_xz_m`` / ``anchor_xz_m`` and ``root_distance_m`` are
+    RE-MEASURED on the written file instead of being predicted, because that
+    root path is what the clients read.
+
+    All four dials at 0 is a no-op (no Blender start). Returns the touched
+    clips as listing views.
+    """
+    from app.blender import runner
+
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    yaw, tilt, roll = float(yaw_deg or 0.0), float(tilt_deg or 0.0), float(roll_deg or 0.0)
+    height = float(height_cm or 0.0)
+    kind, _role = parse_clip_role(path.name)
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    if not any(abs(v) > 1e-9 for v in (yaw, tilt, roll, height)):
+        return [_view_of(path, cset, library)]               # nothing dialled
+
+    partner = _pair_partner(path)
+    sidecar = _orient_sidecar(path, kind, partner is not None)
+    if not sidecar.is_file():
+        raise ClipLibraryError(
+            f"'{kind}' has no sidecar {sidecar.name} — the baked angles are "
+            "stored there, so the clip has to be (re-)imported first")
+    try:
+        meta = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(meta, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    geometry = meta.get("geometry")
+    if not isinstance(geometry, dict):
+        geometry = {}
+        meta["geometry"] = geometry
+
+    targets = [path] + ([partner] if partner is not None else [])
+    slots = {f"src_{i}": p for i, p in enumerate(targets)}
+    inputs: Dict[str, Path] = {"rig": get_rig_file()}
+    inputs.update(slots)
+    with tempfile.TemporaryDirectory(prefix="clip-orient-") as tmp:
+        res = runner.run("clip_orient", inputs=inputs, params={
+            "yaw_deg": yaw, "tilt_deg": tilt, "roll_deg": roll,
+            "height_cm": height, "fps": int(meta.get("fps") or 30),
+            "anchor_frame": int(geometry.get("anchor_frame") or 0),
+        }, out_dir=Path(tmp), timeout_s=900)
+        if not res["ok"]:
+            raise ClipLibraryError(str(res.get("error") or "the Blender run failed"))
+        written = res.get("outputs") or {}
+        missing = [s for s in slots if not Path(written.get(s) or "").is_file()]
+        if missing:
+            raise ClipLibraryError("the Blender run declared no file for "
+                                   + ", ".join(slots[s].name for s in missing))
+        # Both halves are staged beside their targets first: a pair must never
+        # end up with one turned and one untouched file.
+        staged = []
+        try:
+            for slot, target in slots.items():
+                stage = target.with_name(target.name + ".orient-tmp")
+                shutil.copy2(written[slot], stage)
+                staged.append((stage, target))
+            for stage, target in staged:
+                os.replace(stage, target)
+        finally:
+            for stage, _target in staged:
+                if stage.exists():
+                    stage.unlink(missing_ok=True)
+    data = (res["data"] or {}).get("clips") or {}
+
+    for field, delta in zip(ORIENT_ANGLES, (yaw, tilt, roll)):
+        if abs(delta) > 1e-9:
+            _bump_angle(geometry, field, delta)
+    if abs(height) > 1e-9:
+        geometry["floor_shift_cm"] = round(
+            float(geometry.get("floor_shift_cm") or 0.0) + height, 2)
+    if partner is not None:
+        roles = geometry.get("roles")
+        if not isinstance(roles, dict):
+            roles = {}
+            geometry["roles"] = roles
+        for slot, target in slots.items():
+            _k, role, _num = _split_stem(target.stem)
+            entry = roles.get(role)
+            if not isinstance(entry, dict):
+                entry = {}
+                roles[role] = entry
+            d = data.get(slot) or {}
+            entry["start_xz_m"] = _xz_m(d.get("root_after"))
+            entry["anchor_xz_m"] = _xz_m(d.get("root_after_anchor"))
+        a, b = (roles.get(r) or {} for r in PAIR_ROLES)
+        if a.get("anchor_xz_m") and b.get("anchor_xz_m"):
+            geometry["root_distance_m"] = round(
+                math.dist(a["anchor_xz_m"], b["anchor_xz_m"]), 3)
+    sidecar.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
+                       encoding="utf-8")
+
+    reload_clip_caches()
+    logger.info("clip oriented: %s%s (%s) yaw %+.1f tilt %+.1f roll %+.1f "
+                "height %+.1f cm -> %s; lowest point now %s cm",
+                f"{cset}/" if cset else "", kind, library, yaw, tilt, roll,
+                height, ", ".join(p.name for p in targets),
+                (data.get("src_0") or {}).get("floor_min_cm_after"))
+    return [_view_of(p, cset, library) for p in targets]
+
+
+def _xz_m(xyz: Any) -> List[float]:
+    """The XZ of a clip-space position in metres, as the sidecar stores it."""
+    if not isinstance(xyz, (list, tuple)) or len(xyz) < 3:
+        return [0.0, 0.0]
+    return [round(float(xyz[0]) / 100, 3), round(float(xyz[2]) / 100, 3)]
 
 
 def _view_of(path: Path, cset: str, library: str) -> Dict[str, Any]:
