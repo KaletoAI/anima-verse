@@ -111,8 +111,8 @@ const MIN_CLIP_TRACKS = 8;
  * `/assets/animation-rig` is missing and the old copy is all we have.
  */
 export const MAX_REST_FRAME_DEV_DEG = 30;
-/** Drift (clip seconds) between the local mixer and the server's game-clock
- *  position of a pair clip beyond which the action is re-seeked. */
+/** Drift (clip seconds) between the local mixer and the phase the caller asks
+ *  a pair clip for beyond which the action is re-seeked. */
 export const PAIR_RESYNC_S = 0.2;
 
 /** The convention the shared clip library was authored in: a bone's child sits
@@ -1607,24 +1607,34 @@ export class Figure {
     this.targetYaw = yaw;
   }
 
-  /** Play the half of a PAIR clip in lockstep with the game clock (§ A8a):
-   *  `t` is the clip time in GAME seconds, `rate` the game seconds per real
-   *  second the mixer advances at between polls (0 = frozen). Re-seeks only
-   *  when the local time drifted more than PAIR_RESYNC_S from `t`, so a poll
-   *  never makes the figure stutter. Returns false when the half is not
-   *  bound on this rig — the caller then falls back to a solo clip. */
-  playPair(clipName: string, t: number, rate: number): boolean {
+  /** Play the half of a PAIR clip (§ A8a). `t` is the clip time in REAL
+   *  seconds — the phase `game/pairClip.ts` derived from the server's
+   *  game-clock numbers: the clip always runs at its authored speed (E1), and
+   *  the game-speed factor only says whether it advances at all. `frozen`
+   *  (rate 0) stops the mixer where it stands; `loop` repeats the clip, a
+   *  one-shot holds its last frame instead. Re-seeks only when the action's
+   *  own time drifted more than PAIR_RESYNC_S from `t`, so a poll never makes
+   *  the figure stutter. Returns false when the half is not bound on this rig
+   *  — the caller then falls back to a solo clip. */
+  playPair(clipName: string, t: number, frozen: boolean, loop: boolean): boolean {
     const action = this.actions.get(clipName);
     if (!action) return false;
     this.setClipDrop(0);
     this.terrainClip = false;
     this.sink = 0;
     const duration = action.getClip().duration || 1;
-    // an interaction may run longer than its clip (a looping cycle, § A8a):
-    // the clip repeats, the game clock keeps counting
-    const want = Math.max(t, 0) % duration;
+    // The caller already wrapped/clamped against the clip length the SERVER
+    // stated; this repeats it against the length the loaded clip actually has
+    // (the two may differ by a frame). A cycle replays — an interaction
+    // outlives its clip — a one-shot stops a millisecond short of the end, so
+    // a seek does not finish the action while it is being placed.
+    const clipT = Math.max(t, 0);
+    const want = loop ? clipT % duration : Math.min(clipT, duration - 1e-3);
     if (this.current !== action) {
-      action.reset().fadeIn(0.25).play();
+      action.reset();
+      action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      action.clampWhenFinished = !loop;
+      action.fadeIn(0.25).play();
       action.time = want;
       this.current?.fadeOut(0.25);
       this.current = action;
@@ -1632,11 +1642,12 @@ export class Figure {
       this.root.userData.clipKind = clipName;
       this.root.userData.clipBound = true;
     } else {
-      // drift on the circle: the action's own time wraps at the clip end
+      // drift: a cycle's time wraps at the clip end, so its distance is
+      // measured on the circle; a one-shot's is the plain difference.
       const raw = Math.abs(action.time - want);
-      if (Math.min(raw, duration - raw) > PAIR_RESYNC_S) action.time = want;
+      if ((loop ? Math.min(raw, duration - raw) : raw) > PAIR_RESYNC_S) action.time = want;
     }
-    action.timeScale = rate;
+    action.timeScale = frozen ? 0 : 1;
     return true;
   }
 

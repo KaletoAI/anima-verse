@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
+import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   ghostCutY, groundWaterLevel, idleClip, locomotionClip, moveClip, sinkForState, standingClipFor,
   terrainPace, wadeGate,
@@ -200,8 +201,9 @@ export interface TravelRoute {
 }
 
 /** A pair interaction as the renderer runs it (§ A8a): the anchor the two
- *  halves are placed at, and ONE number — the clip time in GAME seconds —
- *  advanced locally at `rate` and reconciled against each new poll. */
+ *  halves are placed at, and ONE number — the clip clock in REAL seconds —
+ *  advanced locally with the frame time and reconciled against each new poll
+ *  (`game/pairClip.ts`). */
 export interface PairPlay {
   id: string;
   /** `<kind>__<role>` — the clip half this figure plays */
@@ -210,9 +212,13 @@ export interface PairPlay {
    *  figures stand at its slot height, not on the ground; null = halfway
    *  on the ground. */
   anchor: { x: number; z: number; yaw: number; placeId: string | null };
-  /** interaction time in game seconds */
+  /** interaction time in game seconds — only the duration clamp still reads
+   *  it; the clip runs off `clipT`. */
   elapsed: number;
   duration: number;
+  /** REAL seconds since the interaction started: the clip's own clock (E1),
+   *  independent of the game-speed factor. */
+  clipT: number;
   /** the clip's own length — a looping clip replays every clipDuration */
   clipDuration: number;
   loop: boolean;
@@ -220,9 +226,6 @@ export interface PairPlay {
   rate: number;
   stamp: number;
 }
-
-/** Beyond this drift (clip seconds) a fresh poll snaps the local clip time. */
-export const PAIR_SNAP_S = 0.3;
 
 /** Identity of a polyline — same points, same journey. */
 function routeKey(points: MetrePoint[]): string {
@@ -1053,9 +1056,10 @@ export class NpcManager {
 
   /** Take the interaction block of a worldmap row (§ A8a). A new id is a new
    *  interaction and is adopted whole; the same id keeps the locally advanced
-   *  clip time and only snaps it when a genuinely NEW poll disagrees by more
-   *  than PAIR_SNAP_S. The rate is authoritative on every update — a freeze
-   *  must stop the mixer at once. */
+   *  clip clock and only snaps it when a genuinely NEW poll disagrees by more
+   *  than PAIR_SNAP_S (`game/pairClip.ts` — the server counts game seconds,
+   *  the clip runs in real ones). The rate is authoritative on every update —
+   *  a freeze must stop the mixer at once. */
   private adoptInteraction(npc: Npc, st: NpcState) {
     const it = st.interaction;
     if (!it || !it.anchor) {
@@ -1065,11 +1069,15 @@ export class NpcManager {
     const clip = `${it.kind}__${it.role}`;
     const stamp = st.stamp ?? 0;
     if (!npc.interaction || npc.interaction.id !== it.id || npc.interaction.clip !== clip) {
+      const rate = it.rate ?? 0;
+      const clipDuration = it.clip_duration_s || it.duration_s;
+      const loop = !!it.loop;
       npc.interaction = {
         id: it.id, clip,
         anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
-        elapsed: it.elapsed_s, duration: it.duration_s, rate: it.rate ?? 0, stamp,
-        clipDuration: it.clip_duration_s || it.duration_s, loop: !!it.loop,
+        elapsed: it.elapsed_s, duration: it.duration_s, rate, stamp,
+        clipT: pairClipPhase({ elapsedGameS: it.elapsed_s, rate, loop, clipDurationS: clipDuration }).clipT,
+        clipDuration, loop,
       };
       npc.route = null;
       npc.waypoints = [];
@@ -1082,27 +1090,38 @@ export class NpcManager {
     cur.anchor = { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null };
     if (cur.stamp !== stamp) {
       if (Math.abs(cur.elapsed - it.elapsed_s) > PAIR_SNAP_S) cur.elapsed = it.elapsed_s;
+      cur.clipT = pairClipPhase({
+        elapsedGameS: it.elapsed_s, rate: cur.rate, loop: cur.loop,
+        clipDurationS: cur.clipDuration, localClipT: cur.clipT,
+      }).clipT;
       cur.stamp = stamp;
     }
   }
 
   /** One frame of a pair interaction: the figure stands at
    *  `anchor + R_y(yaw) · clipRoot(t)`, its root turned by `yaw`, and plays
-   *  its clip half at game-clock time `t`. A pair the server seated on a
+   *  its clip half at the phase `t`. A pair the server seated on a
    *  PLACE (`anchor.placeId`) stands at that place's slot height — the
    *  couple on the sofa, not on the floor under it; the slots of one place
-   *  share their height, so slot 0 stands for the place. Returns false when
-   *  the half is not bound on this rig (or the figure has no rig) — then the
-   *  ordinary placement runs, the clip falls back to the activity kind. */
+   *  share their height, so slot 0 stands for the place. The clip time is
+   *  REAL seconds (E1): the game-speed factor only freezes it. Returns false
+   *  when the half is not bound on this rig (or the figure has no rig) — then
+   *  the ordinary placement runs, the clip falls back to the activity kind. */
   private tickInteraction(npc: Npc, dt: number, camDist: number, labelVisible: boolean): boolean {
     const it = npc.interaction!;
     if (!npc.figure || !this.figures) return false;
+    // the GAME clock, for the duration clamp alone
     it.elapsed = Math.min(it.duration || Infinity, it.elapsed + dt * it.rate);
-    // clip time: a cycle replays, a one-shot holds its last frame
-    const clipT = it.loop && it.clipDuration > 0 ? it.elapsed % it.clipDuration : it.elapsed;
-    const root = this.figures.pairRootAt(it.clip, clipT);
+    // the CLIP clock: the frame's real seconds, unscaled — a frozen world
+    // (rate 0) adds nothing and the clip stands where it is.
+    if (it.rate > 0) it.clipT += dt;
+    const { phase } = pairClipPhase({
+      elapsedGameS: null, rate: it.rate, loop: it.loop,
+      clipDurationS: it.clipDuration, localClipT: it.clipT,
+    });
+    const root = this.figures.pairRootAt(it.clip, phase);
     if (!root) return false;
-    if (!npc.figure.playPair(it.clip, clipT, it.rate)) return false;
+    if (!npc.figure.playPair(it.clip, phase, it.rate <= 0, it.loop)) return false;
     const c = Math.cos(it.anchor.yaw);
     const s = Math.sin(it.anchor.yaw);
     const x = it.anchor.x + root.x * c + root.z * s;

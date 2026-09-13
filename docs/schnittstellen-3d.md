@@ -2115,8 +2115,19 @@ Positionsänderung, neue Pose — immer für BEIDE.
 }
 ```
 `null`, wenn keine läuft (auch unter Nebel ausgedünnt). `elapsed_s` ist die
-Clip-Zeit in SPIELsekunden zum Payload-Zeitpunkt, `rate` Spielsekunden pro
+verstrichene SPIELzeit zum Payload-Zeitpunkt, `rate` Spielsekunden pro
 Realsekunde (0 = Freeze).
+
+**Der Clip läuft in ECHTZEIT** — unabhängig vom Spieluhr-Faktor, genau wie ein
+Solo-Clip. Der Client leitet die Clip-Phase als `elapsed_s / rate` her (das
+sind REALsekunden seit dem Start) und zählt zwischen zwei Polls mit der realen
+Frame-Zeit weiter; sein Mixer läuft immer mit `timeScale 1`. `rate = 0` friert
+die Phase ein (kein Serverwert zum Teilen, die lokale Phase bleibt stehen).
+Ein Loop-Clip wiederholt sich (`Phase mod clip_duration_s`), ein Einmal-Clip
+hält sein letztes Bild (`min(Phase, clip_duration_s)`). Die Spieluhr entscheidet
+also nur, WO der Clip bei einem Poll steht und ob er überhaupt weiterläuft.
+Regel und handgerechnete Zahlen: `client3d/src/game/pairClip.ts` +
+`client3d/scripts/smoke_pair_realtime.mjs`.
 
 Daneben `place: {id, slot, x, z, facing?, room_id} | null` — der Platz
 (Raum- oder Prop-Marker, plan-posen-plaetze.md § 4), auf den der Server die
@@ -2168,7 +2179,10 @@ ein „Move", der die Interaktion serverseitig beendet).
 **Numerische Prüfung (§ B5a):** `scripts/smoke_interaction.py` (Anker, Yaw,
 Rollen-Positionen, Spielzeit-Ende, Abbrüche, Payload),
 `client3d/scripts/smoke_clip_pair.mjs` (echte FBX-Hälften per FBXLoader:
-Root-Bahn am Ankerframe = Sidecar, Anker-Transformation = Server-Formel).
+Root-Bahn am Ankerframe = Sidecar, Anker-Transformation = Server-Formel),
+`client3d/scripts/smoke_pair_realtime.mjs` (die Echtzeit-Phase: dieselbe Phase
+bei Faktor 0,5/1/2, Freeze hält sie, Einmal-Clip klemmt, Poll-Schnapp erst über
+0,3 s Abweichung).
 Bekannte Grenze des Piloten: Handkontakt ist nicht garantiert — die Proportionen
 des Mixamo-Skeletts sind nicht die der Schauspieler (Handschlag: Hände ~25 cm
 statt 11 cm auseinander); Körpergrößen-Unterschiede (`height_cm`) skalieren die
@@ -4971,6 +4985,7 @@ sie produziert.
 | `client3d/scripts/smoke_walk_math.mjs` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren; **§ S** `storeyGroundLift` — die Mondscheinsee-Zahlen von Hand, die ebene Bühne der Admin-Vorschau, und die drei Nicht-Heber (deklarierte Etage, Gebäudemodell, fehlender Sampler) |
 | `client3d/scripts/smoke_surface_math.mjs` | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter, Flachheits-Tor, Möbel-Fenster, Zonen-Wasser-Auswahl |
+| `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `elapsed_s / rate` bei Faktor 0,5/1/2 ergibt dieselbe Phase, Freeze hält sie, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
 | `client3d/scripts/smoke_undergrowth.mjs` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |
 | `client3d/scripts/smoke_natural_ground.mjs` | die drei Naturstufen auf dem KOMPONIERTEN Ergebnis |
 | `client3d/scripts/smoke_hillshade.mjs` | die Schattierungs-Tabelle samt Überhöhung und den roten Gegenproben |
