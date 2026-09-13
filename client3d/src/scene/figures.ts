@@ -32,6 +32,32 @@ import { bridgePace, clipTransition, locomotionClip, setClipTransitions,
  *  the prop/diorama scales are all worked out against 1.70. */
 export const BASE_FIGURE_HEIGHT_M = 1.70;
 
+/** Which KINDS repeat and which hold their last frame — the admin's flag per
+ *  clip, taken from the server listing (§ A8, E5). Filled once when the
+ *  library is loaded; a kind that is not in it counts as a LOOP, because the
+ *  one thing that must never happen is a walk cycle stopping mid-stride. */
+const clipLoopFlags = new Map<string, boolean>();
+
+/** Takes the listing's loop flags. A kind can have several files (both halves
+ *  of a pair, numbered variants, one per set): it loops when ANY of them
+ *  does — a single "hold the last frame" file must not freeze the others.
+ *  Returns how many kinds do NOT loop, for the boot log. */
+export function setClipLoopFlags(clips: Array<{ kind: string; role?: string; loop?: boolean }>): number {
+  clipLoopFlags.clear();
+  for (const c of clips) {
+    const kind = (c.role ? `${c.kind}__${c.role}` : c.kind).toLowerCase();
+    if (!kind) continue;
+    clipLoopFlags.set(kind, (clipLoopFlags.get(kind) ?? false) || !!c.loop);
+  }
+  return [...clipLoopFlags.values()].filter((v) => !v).length;
+}
+
+/** Does this clip kind repeat? Unknown kinds loop (see `clipLoopFlags`). */
+export function clipLoops(kind: string): boolean {
+  const known = clipLoopFlags.get((kind || '').toLowerCase());
+  return known === undefined ? true : known;
+}
+
 interface ManifestModel {
   name: string;
   url: string;   // .glb oder .fbx
@@ -741,6 +767,10 @@ export class FigureLibrary {
       const rules = setClipTransitions(library.transitions);
       console.info(`[figures] clip transitions: ${rules.length}`);
     }
+    // And the loop flags ride it too — before any figure plays its first
+    // clip, or a one-shot would cycle until the next `play()`.
+    const oneShots = setClipLoopFlags(library.clips);
+    console.info(`[figures] ${library.clips.length} clips, ${oneShots} of them one-shot`);
     const serverClips = library.clips;
     // A PAIR clip's half is indexed under `<kind>__<role>` (§ A8a) — the name
     // an interaction asks for; a solo clip keeps its plain kind.
@@ -1482,6 +1512,13 @@ export class Figure {
       return;
     }
     resolved.timeScale = paceOf();
+    // Loop or last frame (E5): the admin's flag of the kind that ACTUALLY
+    // plays — a stand-in serves its own motion, so it decides its own end.
+    // `clampWhenFinished` is what makes "no loop" a held pose instead of a
+    // snap back to frame 0.
+    const loop = clipLoops(chosenKind || kind);
+    resolved.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    resolved.clampWhenFinished = !loop;
     resolved.reset().fadeIn(0.25).play();
     this.current?.fadeOut(0.25);
     this.current = resolved;

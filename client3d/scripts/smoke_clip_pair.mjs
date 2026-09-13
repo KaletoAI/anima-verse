@@ -46,8 +46,9 @@
  *       at t = 0.5).
  *
  *   [5] the time base: the clip's duration equals the sidecar's
- *       `duration_s` (±1 frame = 0.034 s) — the server ends the interaction
- *       on that number, the client seeks the action with it.
+ *       `duration_s` (±1 frame = 0.034 s) — the server sends that number as
+ *       `clip_duration_s`, the client wraps or clamps the phase with it
+ *       (the interaction itself has no clock end, § A8a).
  *
  *   [6] TRACK SHAPE — the Mixamo library's: rotation tracks plus ONE
  *       position track (the hips), no scale tracks. Checked on all three

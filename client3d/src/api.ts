@@ -546,6 +546,9 @@ export interface ApiClip {
   name: string;
   filename: string;
   url: string;
+  /** repeat the clip, or hold its last frame? The admin's flag per kind and
+   *  set (§ A8); missing = the listing predates it, which counts as a loop. */
+  loop?: boolean;
 }
 
 /** The server's global clip library plus the two mappings that say WHICH clip

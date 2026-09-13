@@ -274,10 +274,11 @@ export interface MapInteraction {
     place_id?: string | null;
   };
   started_at_game: string;
-  /** GAME seconds into the interaction at the time of this payload */
+  /** GAME seconds into the interaction at the time of this payload. Grows
+   *  without bound: an interaction has no clock end, only signals (E4). */
   elapsed_s: number;
-  duration_s: number;
-  /** the clip's own length; with `loop` it repeats (elapsed mod this) */
+  /** the clip's own length; with `loop` it repeats (phase mod this), without
+   *  it the clip holds its last frame */
   clip_duration_s?: number;
   loop?: boolean;
   /** GAME seconds per REAL second right now (0 = frozen world) */

@@ -212,10 +212,9 @@ export interface PairPlay {
    *  figures stand at its slot height, not on the ground; null = halfway
    *  on the ground. */
   anchor: { x: number; z: number; yaw: number; placeId: string | null };
-  /** interaction time in game seconds — only the duration clamp still reads
-   *  it; the clip runs off `clipT`. */
+  /** interaction time in GAME seconds as of the last poll — what the local
+   *  clip clock is reconciled against; it has no end (E4). */
   elapsed: number;
-  duration: number;
   /** REAL seconds since the interaction started: the clip's own clock (E1),
    *  independent of the game-speed factor. */
   clipT: number;
@@ -1070,12 +1069,12 @@ export class NpcManager {
     const stamp = st.stamp ?? 0;
     if (!npc.interaction || npc.interaction.id !== it.id || npc.interaction.clip !== clip) {
       const rate = it.rate ?? 0;
-      const clipDuration = it.clip_duration_s || it.duration_s;
+      const clipDuration = it.clip_duration_s ?? 0;
       const loop = !!it.loop;
       npc.interaction = {
         id: it.id, clip,
         anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
-        elapsed: it.elapsed_s, duration: it.duration_s, rate, stamp,
+        elapsed: it.elapsed_s, rate, stamp,
         clipT: pairClipPhase({ elapsedGameS: it.elapsed_s, rate, loop, clipDurationS: clipDuration }).clipT,
         clipDuration, loop,
       };
@@ -1110,8 +1109,8 @@ export class NpcManager {
   private tickInteraction(npc: Npc, dt: number, camDist: number, labelVisible: boolean): boolean {
     const it = npc.interaction!;
     if (!npc.figure || !this.figures) return false;
-    // the GAME clock, for the duration clamp alone
-    it.elapsed = Math.min(it.duration || Infinity, it.elapsed + dt * it.rate);
+    // the GAME clock — unbounded, there is nothing to clamp it against
+    it.elapsed += dt * it.rate;
     // the CLIP clock: the frame's real seconds, unscaled — a frozen world
     // (rate 0) adds nothing and the clip stands where it is.
     if (it.rate > 0) it.clipT += dt;
