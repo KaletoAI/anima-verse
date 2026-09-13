@@ -13,15 +13,22 @@ make sense played at ONE anchor, in lockstep. This module owns that state:
         "anchor": {"x": 12.3, "z": -4.5, "yaw": 1.57,    # world metres / rad
                    "place_id": "sofa/s"},                # the PLACE it sits on, or None
         "started_at_game": "Y0002-D109T14:23:45",        # canonical GAME stamp
-        "duration_s": 2.533,          # GAME seconds, from the clip sidecar
+        "clip_duration_s": 2.533,     # the clip's own length, from the sidecar
+        "loop": True,                 # repeat the clip, or hold its last frame
     }
 
-Like a journey it is a pure function of the GAME clock: ``interaction_state``
-derives the elapsed time from ``started_at_game`` and the clock, so a world
-freeze freezes the handshake mid-air and every client shows the same frame
-(``docs/schnittstellen-3d.md`` § A8a). Nothing here ticks on its own; the
-travel ticker calls ``settle_finished`` and anything that moves a character
-away (journey, teleport, a new pose) calls ``end_interaction``.
+Like a journey its POSITION in time is a pure function of the GAME clock:
+``interaction_state`` derives the elapsed time from ``started_at_game`` and
+the clock, so a world freeze freezes the handshake mid-air and every client
+shows the same frame (``docs/schnittstellen-3d.md`` § A8a).
+
+An interaction has NO clock end (plan-animationen-echtzeit-stehplatz.md E4):
+it runs until a SIGNAL ends it, and there is no safety cap. Nothing here ticks
+on its own; everything that moves a character out of the scene calls
+``end_interaction`` — a new pose or activity (``set_pose_intent`` /
+``clear_pose_intent``), a position change, a journey, a room or location
+change, falling asleep, NPC pooling, the avatar's ``POST /play/interact/end``,
+and the partner doing any of those.
 
 Anchor convention (shared with the clips and both renderers): the clip's
 frame has its origin at the anchor and its +X pointing from A to B. A client
@@ -65,9 +72,6 @@ MAX_START_DISTANCE_M = 4.5
 # Wide enough that an invitation survives the walk over, far short of "two
 # dots on the same map" — the start still insists on MAX_START_DISTANCE_M.
 OPEN_FIELD_REACH_M = 40.0
-# How long a LOOPING pair clip runs (game seconds) — the clip itself is a
-# cycle of a second or two; the interaction is the scene, not the cycle.
-LOOP_INTERACTION_S = 30.0
 
 
 # ------------------------------------------------------------------ reading
@@ -87,14 +91,12 @@ def get_interaction(character_name: str,
 
 
 def interaction_state(inter: Dict[str, Any], now_game: GameTime) -> Dict[str, Any]:
-    """Where the clip stands at ``now_game``: elapsed GAME seconds, whether it
-    is over. Pure — no I/O."""
+    """Where the clip stands at ``now_game``: elapsed GAME seconds. Pure — no
+    I/O. There is nothing to be "over": the scene ends on a signal, never on
+    the clock (E4), so this only ever grows."""
     started = GameTime.parse(inter["started_at_game"])
     elapsed = max(0.0, (now_game - started).seconds)
-    duration = float(inter.get("duration_s") or 0.0)
-    done = duration > 0 and elapsed >= duration
-    return {"elapsed_s": round(min(elapsed, duration) if duration > 0 else elapsed, 3),
-            "duration_s": duration, "done": done}
+    return {"elapsed_s": round(elapsed, 3)}
 
 
 def payload_for(character_name: str, profile: Dict[str, Any],
@@ -106,8 +108,6 @@ def payload_for(character_name: str, profile: Dict[str, Any],
     if not inter:
         return None
     st = interaction_state(inter, now_game)
-    if st["done"]:
-        return None
     return {
         "id": inter["id"],
         "kind": inter["kind"],
@@ -116,10 +116,9 @@ def payload_for(character_name: str, profile: Dict[str, Any],
         "anchor": dict(inter.get("anchor") or {}),
         "started_at_game": inter["started_at_game"],
         "elapsed_s": st["elapsed_s"],
-        "duration_s": st["duration_s"],
         # the clip's own length and whether it cycles — a looping clip is
-        # replayed (elapsed mod clip length) for the whole duration
-        "clip_duration_s": float(inter.get("clip_duration_s") or st["duration_s"]),
+        # replayed (phase mod clip length), a one-shot holds its last frame
+        "clip_duration_s": float(inter.get("clip_duration_s") or 0.0),
         "loop": bool(inter.get("loop")),
         "rate": round(float(rate or 0.0), 4),
     }
@@ -216,7 +215,7 @@ def _rotate(x: float, z: float, yaw: float) -> Tuple[float, float]:
 def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]:
     """Binds ``actor`` (role A) and ``partner`` (role B) to the pair clip the
     pose names. Raises ``ValueError`` with a reason a tool result can relay."""
-    from app.core.animation_clips import clip_meta
+    from app.core.animation_clips import clip_loops, clip_meta
     from app.core.state_events import publish
     from app.models.character import (get_character_current_location,
                                       get_character_current_room,
@@ -230,15 +229,13 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
     if not kind:
         raise ValueError(f"'{pose_key}' has no pair animation")
     meta = clip_meta(kind) or {}
-    duration = float(meta.get("duration_s") or 0.0)
-    if duration <= 0:
+    clip_duration = float(meta.get("duration_s") or 0.0)
+    if clip_duration <= 0:
         raise ValueError(f"pair clip '{kind}' has no sidecar duration")
-    # A cycle (sidecar ``loop``) is repeated for LOOP_INTERACTION_S game
-    # seconds — a 0.5 s cycle played once was a blink at any game speed.
-    clip_duration = duration
-    loop = bool(meta.get("loop"))
-    if loop:
-        duration = max(duration, LOOP_INTERACTION_S)
+    # The clip's own length is all there is: a cycle repeats for as long as
+    # the scene lasts, a one-shot holds its last frame. How long the SCENE
+    # lasts is not a number here — a signal ends it (E4).
+    loop = clip_loops(meta)
 
     # The pose-independent side of "can these two pair up" — one definition,
     # asked here and by the invitation. Checked AFTER the clip: a pose with no
@@ -300,7 +297,7 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
         prof["interaction"] = {
             "id": inter_id, "kind": kind, "role": role, "partner": other,
             "pose_key": pose_key, "anchor": anchor,
-            "started_at_game": started, "duration_s": round(duration, 3),
+            "started_at_game": started,
             "clip_duration_s": round(clip_duration, 3), "loop": loop,
         }
         save_character_profile(name, prof)
@@ -317,7 +314,7 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
                 set_character_pos(name, px, pz, preserve_movement_target=True)
         set_pose_intent(name, pose_key)
     publish("interaction_started", actor, partner=partner, kind=kind,
-            interaction_id=inter_id, duration_s=duration)
+            interaction_id=inter_id, clip_duration_s=clip_duration)
     # The room has to SEE it. Without a line in the perception stream the
     # pair is a 3D animation nobody in the fiction ever noticed — including
     # the two doing it, who read the stream as their own memory of the scene.
@@ -336,8 +333,9 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
             source="interaction", anchor=actor)
     except Exception as e:
         logger.debug("interaction narration failed: %s", e)
-    logger.info("interaction %s: %s (a) + %s (b) play '%s' for %.1fs",
-                inter_id, actor, partner, kind, duration)
+    logger.info("interaction %s: %s (a) + %s (b) play '%s' (%.1fs %s)",
+                inter_id, actor, partner, kind, clip_duration,
+                "cycle" if loop else "one-shot")
     return profiles[actor]["interaction"]
 
 
@@ -369,23 +367,6 @@ def end_interaction(character_name: str, reason: str = "ended") -> bool:
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)
     logger.info("interaction %s ended (%s)", inter["id"], reason)
     return True
-
-
-def settle_finished() -> int:
-    """Ends every interaction whose clip has run out (called by the travel
-    ticker on its 5 s beat). Returns how many it closed."""
-    from app.models.character import get_character_profile, list_available_characters
-    now = game_time()
-    closed = 0
-    for name in list_available_characters():
-        try:
-            inter = get_interaction(name, get_character_profile(name) or {})
-            if inter and interaction_state(inter, now)["done"]:
-                if end_interaction(name, reason="finished"):
-                    closed += 1
-        except Exception as e:          # one bad profile must not stop the beat
-            logger.debug("settle interaction failed for %s: %s", name, e)
-    return closed
 
 
 # ------------------------------------------------------------------ invites

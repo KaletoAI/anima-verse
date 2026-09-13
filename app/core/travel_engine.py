@@ -1413,13 +1413,11 @@ class TravelTicker:
             except Exception:
                 logger.exception("travel tick failed")
             try:
-                # Pair interactions end on the game clock too; the same beat
-                # closes the ones whose clip has run out — and binds the ones
-                # whose accepted invitation was only waiting for the walk
-                # over, which is why it runs AFTER the journeys.
-                from app.core.interaction_engine import (settle_approaches,
-                                                         settle_finished)
-                await asyncio.to_thread(settle_finished)
+                # The same beat binds the pairs whose accepted invitation was
+                # only waiting for the walk over, which is why it runs AFTER
+                # the journeys. Nothing ENDS a pair here: an interaction has
+                # no clock end, only signals (E4).
+                from app.core.interaction_engine import settle_approaches
                 await asyncio.to_thread(settle_approaches)
             except Exception:
                 logger.exception("interaction settle failed")

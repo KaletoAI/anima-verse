@@ -2029,7 +2029,7 @@ GET /characters/{name}/model3d      → { model: {url, format, rig,
 GET /play/test-figure/meta|/model   → Referenz-Figur der Admin-Vorschau
 GET /assets/props                   → Bare Array (§ A2 Props)
 GET /assets/props/{id}/model        → GLB (ETag; 404 = kein Mesh)
-GET /assets/animation-clips         → [{ kind, set?, url }]
+GET /assets/animation-clips         → [{ kind, set?, url, loop, … }]
 GET /assets/surface-textures        → Flächen + Blends (§ A9)
 ```
 
@@ -2070,6 +2070,14 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   den Clip; nennt der Server keinen, steht die Figur (`idle`). Die
   Keyword-Heuristik `activityToClipKind` im Client ist gelöscht (2026-08-28,
   Task 13 plan-posen-plaetze.md).
+- **Loop oder letztes Bild** (2026-09-13, E5): Jeder Clip der Auflistung trägt
+  `loop` — `true` = wiederholen, `false` = letztes Bild halten (Three.js
+  `LoopOnce` + `clampWhenFinished`). Das Kennzeichen setzt der Admin NACH dem
+  Import je Kind und Set im Poses-Tab (`PATCH /assets/animation-clips/
+  {library}/{rel}` mit `{loop}`, geschrieben ins Sidecar `<kind>.json`); ein
+  dort gesetztes `loop` schlägt die `geometry.loop`-Messung des Imports. Es
+  gilt für Solo- UND Paar-Clips. Ein Kind OHNE Eintrag in der Auflistung gilt
+  im Client als Loop — Locomotion darf nie stehen bleiben.
 
 ## A8a. Paar-Interaktionen — zwei Figuren, ein Clip-Paar, ein Anker (2026-08-20)
 
@@ -2101,8 +2109,13 @@ dass Clip-+X auf die Weltrichtung Actor→Partner fällt, `place_id` `null`; ein
 Sitz-Pose ohne freien Sitz wird abgelehnt. Der Server setzt beide
 Spielzustands-Positionen auf `anchor + R(yaw)·anchor_xz_m` der Rolle (so sehen
 Wahrnehmung, Regeln und Karte die beiden dort, wo der Clip sie am Anker hält).
-Ende: Ticker (`settle_finished`, Spielzeit ≥ `duration_s`), Reise, manuelle
-Positionsänderung, neue Pose — immer für BEIDE.
+**Ende: KEIN Uhr-Ende.** Eine Interaktion läuft, bis ein SIGNAL sie beendet —
+neue Pose/Aktivität (`set_pose_intent`/`clear_pose_intent`), manuelle
+Positionsänderung, Reise, Raum- oder Ortswechsel, Einschlafen, NPC-Pooling,
+Avatar-`POST /play/interact/end`, oder der Partner tut eines davon. Immer für
+BEIDE. Es gibt keine Sicherheits-Obergrenze und keinen Ticker, der beendet:
+`elapsed_s` wächst unbegrenzt, der Clip wiederholt sich oder hält sein letztes
+Bild (s. u.).
 
 **Payload (Worldmap, pro Charakter):**
 
@@ -2111,12 +2124,14 @@ Positionsänderung, neue Pose — immer für BEIDE.
   "id": "049b7a009533", "kind": "handshake", "role": "a", "partner": "Bob",
   "anchor": {"x": 10.0, "z": 22.0, "yaw": -1.5708, "place_id": null},
   "started_at_game": "Y0001-D001T12:00:00",
-  "elapsed_s": 0.8, "duration_s": 2.533, "rate": 1.0
+  "elapsed_s": 0.8, "clip_duration_s": 2.533, "loop": false, "rate": 1.0
 }
 ```
 `null`, wenn keine läuft (auch unter Nebel ausgedünnt). `elapsed_s` ist die
 verstrichene SPIELzeit zum Payload-Zeitpunkt, `rate` Spielsekunden pro
-Realsekunde (0 = Freeze).
+Realsekunde (0 = Freeze), `clip_duration_s` die eigene Länge des Clips aus
+seinem Sidecar und `loop` sein Kennzeichen (Poses-Tab → Library, E5). Ein
+Ende-Feld gibt es NICHT.
 
 **Der Clip läuft in ECHTZEIT** — unabhängig vom Spieluhr-Faktor, genau wie ein
 Solo-Clip. Der Client leitet die Clip-Phase als `elapsed_s / rate` her (das

@@ -53,7 +53,8 @@ from app.core.animation_clips import (CLIP_EXTS, ClipExists, ClipLibraryError,
                                       clip_view, delete_clip,
                                       load_locomotion_clips, load_transitions,
                                       pair_kinds, rename_clip,
-                                      save_locomotion_clips, save_transitions)
+                                      save_locomotion_clips, save_transitions,
+                                      set_clip_loop)
 from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError
 from app.core.http_files import etag_file_response
@@ -153,12 +154,16 @@ def delete_animation_clip(library: str, rel: str,
 async def patch_animation_clip(library: str, rel: str, request: Request,
                                _: Dict[str, Any] = Depends(require_admin)
                                ) -> Dict[str, Any]:
-    """Renames a clip and/or moves it to another set or library.
+    """Renames a clip, moves it to another set or library, and/or sets its
+    LOOP flag.
 
-    Body ``{kind?, set?, library?}``, at least one of them. ``set: ""`` moves
-    the clip to the neutral root — the ONE empty value with a meaning;
-    ``library: ""`` is a bad request, not a silent no-op. The answer carries
-    the moved clips in the shape of the listing.
+    Body ``{kind?, set?, library?, loop?}``, at least one of them. ``set: ""``
+    moves the clip to the neutral root — the ONE empty value with a meaning;
+    ``library: ""`` is a bad request, not a silent no-op. ``loop`` is the
+    admin's "repeat this clip / hold its last frame" and is written into the
+    ``<kind>.json`` beside the clip, so it holds for both halves of a pair and
+    every variant of the kind in that set. The answer carries the touched
+    clips in the shape of the listing.
     """
     try:
         body = await request.json()
@@ -166,18 +171,29 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
         raise HTTPException(status_code=400, detail="invalid JSON body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
-    if not any(k in body for k in ("kind", "set", "library")):
+    if not any(k in body for k in ("kind", "set", "library", "loop")):
         raise HTTPException(status_code=400,
-                            detail="one of kind, set, library is required")
+                            detail="one of kind, set, library, loop is required")
     if "library" in body and not str(body["library"] or "").strip():
         raise HTTPException(status_code=400,
                             detail="library must be 'free' or 'licensed'")
+    if "loop" in body and not isinstance(body["loop"], bool):
+        raise HTTPException(status_code=400, detail="loop must be true or false")
     try:
-        clips = rename_clip(library, rel,
-                            kind=body["kind"] if "kind" in body else None,
-                            cset=body["set"] if "set" in body else None,
-                            to_library=body["library"] if "library" in body
-                            else None)
+        clips: List[Dict[str, Any]] = []
+        if any(k in body for k in ("kind", "set", "library")):
+            clips = rename_clip(library, rel,
+                                kind=body["kind"] if "kind" in body else None,
+                                cset=body["set"] if "set" in body else None,
+                                to_library=body["library"] if "library" in body
+                                else None)
+        if "loop" in body:
+            # After the move, not before: the flag is written beside the file
+            # where it ends up. The moved view names that place.
+            if clips:
+                library = str(clips[0].get("library") or library)
+                rel = str(clips[0].get("rel") or rel)
+            clips = set_clip_loop(library, rel, bool(body["loop"]))
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips}

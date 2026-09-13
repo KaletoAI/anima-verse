@@ -36,12 +36,14 @@ Hand-derived expectations:
       Bob (10, 22.3) — the pair faces each other 0.6 m apart along +Z.
 
   [3] Both profiles carry the same interaction id, roles a/b, the partner,
-      ``duration_s`` = 2.0 from the sidecar and the pinned start stamp;
+      ``clip_duration_s`` = 2.0 from the sidecar and the pinned start stamp;
       both poses are "embracing".
 
-  [4] Clock: at +1.0 game second the state is elapsed 1.0 / not done; at
-      +2.0 it is done. ``settle_finished`` then clears BOTH profiles and the
-      poses go back to empty.
+  [4] Clock: the interaction has NO clock end (E4). At +1.0 game second the
+      state is elapsed 1.0, at +2.0 (the clip's whole length) elapsed 2.0 and
+      at +600 elapsed 600.0 — the payload still carries the block every time.
+      Only ``end_interaction`` clears BOTH profiles; the poses then go back
+      to empty.
 
   [5] Guards: 5 m apart is too far (MAX_START_DISTANCE_M = 4.5), a partner
       490 m away elsewhere is refused, a solo pose ("standing") is refused,
@@ -64,10 +66,9 @@ Hand-derived expectations:
   [7] The worldmap payload carries the ``interaction`` block on both
       characters while it runs (anchor, role, elapsed), and null after.
 
-  [8] A pair clip whose sidecar says ``loop`` (a pack's 0.5 s cycle) runs
-      for LOOP_INTERACTION_S game seconds — the payload says so
-      (``loop``, ``clip_duration_s`` 0.5) and a client replays the cycle;
-      after 5 s it is still running.
+  [8] A pair clip whose sidecar says ``loop`` (a pack's 0.5 s cycle) carries
+      that flag into the payload (``loop``, ``clip_duration_s`` 0.5) so a
+      client replays the cycle; after 5 s — ten cycles — it is still running.
 
   [10] Invitations. A pair is ASKED, never imposed: ``create_invite`` writes
       the question and nothing else happens — no interaction on either side.
@@ -220,8 +221,8 @@ def near(a, b, eps=1e-3) -> bool:
                  "roles": {"a": {"anchor_xz_m": [-0.3, 0.0]},
                            "b": {"anchor_xz_m": [0.3, 0.0]}}}}), encoding="utf-8")
 
-# A LOOPING pair (a pack's 0.5 s cycle): the interaction must run for
-# LOOP_INTERACTION_S game seconds, not for one cycle.
+# A LOOPING pair (a pack's 0.5 s cycle): the flag rides the payload, the
+# cycle is replayed by the client — the interaction itself has no end.
 (CLIPS / "sway__a.fbx").write_bytes(b"a")
 (CLIPS / "sway__b.fbx").write_bytes(b"b")
 (CLIPS / "sway.json").write_text(json.dumps({
@@ -327,7 +328,9 @@ ib = ie.get_interaction("Bob")
 check("same id on both", ia and ib and ia["id"] == ib["id"])
 check("roles a/b", ia["role"] == "a" and ib["role"] == "b")
 check("partners cross-linked", ia["partner"] == "Bob" and ib["partner"] == "Ann")
-check("duration from the sidecar", ia["duration_s"] == 2.0 and ib["duration_s"] == 2.0)
+check("clip length from the sidecar",
+      ia["clip_duration_s"] == 2.0 and ib["clip_duration_s"] == 2.0)
+check("no clock end is written", "duration_s" not in ia and "duration_s" not in ib)
 check("start stamp is the pinned clock", ia["started_at_game"] == START.canonical(),
       ia["started_at_game"])
 check("both poses are embracing",
@@ -403,19 +406,28 @@ check("… and the running interaction survived the refusal",
       and get_character_pose_key("Ann") == "embracing")
 
 # ── [4] clock ───────────────────────────────────────────────────────────
-print("\n[4] the game clock ends it")
+print("\n[4] the game clock does NOT end it")
 set_game_time(START + GameDuration.of(seconds=1))
 st = ie.interaction_state(ie.get_interaction("Ann"), game_time())
-check("at +1 s: elapsed 1.0, not done", st["elapsed_s"] == 1.0 and not st["done"], str(st))
-check("settle_finished closes nothing yet", ie.settle_finished() == 0)
+check("at +1 s: elapsed 1.0", st["elapsed_s"] == 1.0, str(st))
+check("the state says nothing about being done", "done" not in st, str(st))
 set_game_time(START + GameDuration.of(seconds=2))
 st = ie.interaction_state(ie.get_interaction("Ann"), game_time())
-check("at +2 s: done", st["done"], str(st))
+check("at +2 s (the whole clip): elapsed 2.0, still running",
+      st["elapsed_s"] == 2.0 and ie.get_interaction("Ann") is not None, str(st))
+set_game_time(START + GameDuration.of(seconds=600))
+st = ie.interaction_state(ie.get_interaction("Ann"), game_time())
+check("at +600 s: elapsed 600.0, STILL running (no safety cap)",
+      st["elapsed_s"] == 600.0 and ie.get_interaction("Ann") is not None, str(st))
 wm = build_worldmap_payload(show_all=True)
 rows = {c["name"]: c for c in wm["characters"]}
-check("payload already shows null when the clip is over",
-      rows["Ann"].get("interaction") is None)
-check("settle_finished closes ONE interaction (both profiles)", ie.settle_finished() == 1)
+check("the payload still carries the block 600 s in",
+      (rows["Ann"].get("interaction") or {}).get("elapsed_s") == 600.0,
+      str(rows["Ann"].get("interaction")))
+check("no duration_s in the payload",
+      "duration_s" not in (rows["Ann"].get("interaction") or {}))
+check("only a signal ends it (end_interaction closes both profiles)",
+      ie.end_interaction("Ann", reason="smoke") is True)
 check("both profiles are clear",
       ie.get_interaction("Ann") is None and ie.get_interaction("Bob") is None)
 check("poses are cleared", get_character_pose_key("Ann") == "" and get_character_pose_key("Bob") == "")
@@ -450,21 +462,22 @@ save_character_current_room("Bob", "square")
 clear_pose_intent("Ann")
 clear_pose_intent("Bob")
 
-# ── [8] a looping pair runs for LOOP_INTERACTION_S, the clip repeats ───────
+# ── [8] a looping pair carries its cycle into the payload ─────────────────
 print("\n[8] looping pair")
 set_game_time(START)
 set_character_pos("Ann", 10.0, 20.0)
 set_character_pos("Bob", 10.0, 24.0)
 inter = ie.start_interaction("Ann", "Bob", "swaying")
-check("a 0.5 s cycle runs for LOOP_INTERACTION_S game seconds",
-      inter["duration_s"] == ie.LOOP_INTERACTION_S and inter["clip_duration_s"] == 0.5 and inter["loop"],
-      str({k: inter[k] for k in ("duration_s", "clip_duration_s", "loop")}))
+check("the 0.5 s cycle is stored as the clip length, nothing else",
+      inter["clip_duration_s"] == 0.5 and inter["loop"] and "duration_s" not in inter,
+      str({k: v for k, v in inter.items() if k in ("clip_duration_s", "loop")}))
 wm = build_worldmap_payload(show_all=True)
 row = {c["name"]: c for c in wm["characters"]}["Ann"]["interaction"]
 check("payload carries loop + clip_duration_s", row["loop"] is True and row["clip_duration_s"] == 0.5, str(row))
 set_game_time(START + GameDuration.of(seconds=5))
-check("still running after 5 s (one cycle would be long over)",
-      not ie.interaction_state(ie.get_interaction("Ann"), game_time())["done"])
+check("still running after 5 s (ten cycles)",
+      ie.get_interaction("Ann") is not None
+      and ie.interaction_state(ie.get_interaction("Ann"), game_time())["elapsed_s"] == 5.0)
 ie.end_interaction("Ann")
 
 # ── [9] a pair anchors on a free place of its group ─────────────────────

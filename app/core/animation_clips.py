@@ -505,6 +505,23 @@ def _origin(meta: Optional[Dict[str, Any]]) -> str:
     return str(src.get("bone_map") or "") or "unknown"
 
 
+def clip_loops(meta: Optional[Dict[str, Any]]) -> bool:
+    """Does this clip REPEAT, or does it hold its last frame?
+
+    The sidecar's own ``loop`` is the answer whenever it is there — including
+    an explicit ``false`` against the ``geometry.loop`` the import measured:
+    that flag is the ADMIN's decision, taken after the import in the Poses
+    tab (plan-animationen-echtzeit-stehplatz.md E5), and a measurement must
+    never overrule it. Only without it does the import's own finding count.
+    """
+    if not isinstance(meta, dict):
+        return False
+    if "loop" in meta:
+        return bool(meta["loop"])
+    geometry = meta.get("geometry")
+    return bool(isinstance(geometry, dict) and geometry.get("loop"))
+
+
 def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
     """One ``clip_entries()`` entry as the API delivers it — the file facts
     plus what its sidecar knows.
@@ -518,9 +535,6 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
     """
     path: Path = entry["path"]
     meta = clip_meta(entry["kind"], entry["set"], stem=path.stem)
-    geometry = meta.get("geometry") if isinstance(meta, dict) else None
-    loop = bool(meta and (meta.get("loop")
-                          or (isinstance(geometry, dict) and geometry.get("loop"))))
     return {
         "kind": entry["kind"],
         "role": entry["role"],
@@ -543,7 +557,7 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "duration_s": (meta or {}).get("duration_s"),
         "fps": (meta or {}).get("fps"),
         "frames": (meta or {}).get("frames"),
-        "loop": loop,
+        "loop": clip_loops(meta),
     }
 
 
@@ -790,6 +804,50 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
                 f"{old_set}/" if old_set else "", old_kind, library,
                 f"{new_set}/" if new_set else "", new_kind, new_library)
     return [_view_of(dest, new_set, new_library) for _s, dest in moves]
+
+
+def set_clip_loop(library: str, rel: str, loop: bool) -> List[Dict[str, Any]]:
+    """Writes the LOOP flag of a clip — the admin's decision after the import
+    (E5): loop = repeat the clip, no loop = hold its last frame.
+
+    The flag belongs to the KIND in its set, not to a single file: it is
+    written into the shared ``<kind>.json`` beside the clip, so both halves of
+    a pair (``hug__a`` / ``hug__b``) and every numbered variant of the kind
+    play the same way. A variant carrying a sidecar of its OWN is written too
+    — otherwise it would be the one file in the set that ignores the switch.
+
+    Without a shared sidecar there is nowhere to put it: a clip whose numbers
+    were never written cannot be given a flag (``ClipLibraryError``). Returns
+    the touched clips as listing views.
+    """
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, _role = parse_clip_role(path.name)
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(
+            f"'{kind}' has no sidecar {sidecar.name} — the loop flag is stored "
+            "there, so the clip has to be (re-)imported first")
+    files = _kind_files(path.parent, kind)
+    targets = [sidecar] + [s for s in (_own_sidecar(p) for p in files)
+                           if s is not None]
+    for target in targets:
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ClipLibraryError(f"{target.name} is not readable: {e}")
+        if not isinstance(data, dict):
+            raise ClipLibraryError(f"{target.name} is not an object")
+        data["loop"] = bool(loop)
+        target.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                          encoding="utf-8")
+    reload_clip_caches()
+    logger.info("clip loop flag: %s%s (%s) -> %s", f"{cset}/" if cset else "",
+                kind, library, bool(loop))
+    return [_view_of(p, cset, library) for p in files]
 
 
 def _view_of(path: Path, cset: str, library: str) -> Dict[str, Any]:
