@@ -34,15 +34,24 @@
  * and offers "Replace", which repeats the same call with `overwrite` and lets
  * the incoming file take the place of the one lying there.
  *
+ * Under the preview sit the ORIENTATION dials: turn, tilt, roll and height.
+ * The preview shows them live against the calibration box of a place type,
+ * and "Apply orientation" BAKES them into the file — there is no second
+ * truth, because the clients read a pair's root path out of the clip itself.
+ * The import's own dial is gone by then and most mocap sources with it, so
+ * this is the only way a clip that lies across the bed gets straightened.
+ *
  *   GET    /assets/animation-clips                     … + {locomotion}
  *   PUT    /assets/animation-clips/locomotion          {walk?, run?, idle?}
  *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, overwrite?}
+ *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, height_cm?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ClipPreview } from './ClipPreview'
+import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
-import { ApiError, apiDelete, apiGet, apiPatch, apiPut } from '../../lib/api'
+import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import { orderSets } from './clipSets'
 import type { ApiClipRow, ClipListing } from './clipSets'
 
@@ -148,6 +157,19 @@ export function ClipLibrary({
   const [locoBusy, setLocoBusy] = useState(false)
   const [locoError, setLocoError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
+  // The orientation dials of the selected clip: degrees, degrees, degrees and
+  // centimetres. They are a DRAFT — the preview turns live, nothing is written
+  // until "Apply orientation".
+  const [yawDeg, setYawDeg] = useState(0)
+  const [tiltDeg, setTiltDeg] = useState(0)
+  const [rollDeg, setRollDeg] = useState(0)
+  const [heightCm, setHeightCm] = useState(0)
+  // Which place type the preview draws as the calibration box — a view
+  // setting, never sent to the server.
+  const [footprint, setFootprint] = useState('')
+  const [orientBusy, setOrientBusy] = useState(false)
+  const [orientError, setOrientError] = useState('')
+  const [orientSeconds, setOrientSeconds] = useState<number | null>(null)
 
   // Fetched with every new listing: a rename or delete may have taken a
   // configured kind away, and the block must show what is in force now.
@@ -288,9 +310,20 @@ export function ClipLibrary({
     [row],
   )
 
+  /** Back to an untouched clip: the dials are a draft for ONE file. */
+  const resetDials = useCallback(() => {
+    setYawDeg(0)
+    setTiltDeg(0)
+    setRollDeg(0)
+    setHeightCm(0)
+    setOrientError('')
+    setOrientSeconds(null)
+  }, [])
+
   const pick = useCallback(
     (kind: string, set?: string) => {
       setSelected(kind)
+      resetDials()
       // Clicking the row (no column) previews the set the kind actually has —
       // neutral when there is one, otherwise the first that exists.
       const own = clips.filter((c) => c.kind === kind).map((c) => c.set || '')
@@ -299,8 +332,56 @@ export function ClipLibrary({
       setError('')
       setConflict(null)
     },
-    [clips],
+    [clips, resetDials],
   )
+
+  /** The file the dials act on: the previewed set's clip, and for a pair its
+   *  A half — the server turns the B half with it, in one Blender run. */
+  const orientTarget = useMemo(
+    () => (row
+      ? row.clips.find((c) => (c.set || '') === previewSet && (c.role || '') !== 'b') || null
+      : null),
+    [previewSet, row],
+  )
+  const orientDirty = !!(yawDeg || tiltDeg || rollDeg || heightCm)
+
+  const applyOrientation = useCallback(async () => {
+    if (!orientTarget || orientBusy || !orientDirty) return
+    setOrientBusy(true)
+    setOrientError('')
+    try {
+      const res = await apiPost<{ seconds?: number }>(`${clipPath(orientTarget)}/orient`, {
+        yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg, height_cm: heightCm,
+      })
+      setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
+      setYawDeg(0)
+      setTiltDeg(0)
+      setRollDeg(0)
+      setHeightCm(0)
+      // The file keeps its URL, so the preview has to be rebuilt AND the
+      // clip re-fetched — `seq` does both (component key + cache buster).
+      setSeq((n) => n + 1)
+      await onReload()
+    } catch (e) {
+      setOrientError((e as Error).message)
+    } finally {
+      setOrientBusy(false)
+    }
+  }, [heightCm, onReload, orientBusy, orientDirty, orientTarget, rollDeg, tiltDeg, yawDeg])
+
+  /** What the FILE already carries — the import's dial plus every earlier
+   *  apply. A new angle is added to this, not to zero, so it is named. */
+  const bakedNote = useMemo(() => {
+    const o = orientTarget?.orientation
+    if (!o) return ''
+    const parts = [
+      o.yaw_deg ? `${t('turn')} ${o.yaw_deg}°` : '',
+      o.tilt_deg ? `${t('tilt')} ${o.tilt_deg}°` : '',
+      o.roll_deg ? `${t('roll')} ${o.roll_deg}°` : '',
+      typeof o.floor_shift_cm === 'number' ? `${t('floor shift')} ${o.floor_shift_cm} cm` : '',
+    ].filter(Boolean)
+    return parts.length ? parts.join(' · ') : t('nothing turned yet')
+  }, [orientTarget, t])
 
   const openAction = useCallback((clip: ApiClipRow, type: ActionKind) => {
     setError('')
@@ -813,7 +894,139 @@ export function ClipLibrary({
                   kind={row.kind}
                   set={previewSet}
                   height={280}
+                  importYaw={yawDeg}
+                  importTilt={tiltDeg}
+                  importRoll={rollDeg}
+                  importHeightM={heightCm / 100}
+                  footprint={footprint}
+                  bust={seq}
                 />
+
+                {/* ── the orientation dials ── */}
+                {orientTarget ? (
+                  <div
+                    style={{
+                      border: '1px solid var(--border, #30363d)',
+                      borderRadius: 6,
+                      padding: '8px 10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                      <strong>{t('Orientation')}</strong>
+                      <span className="ga-hint">
+                        {t('Turns and lifts the clip in the FILE — both halves of a pair together. The preview shows it live, Apply writes it; the sources of most clips are gone, so this replaces a re-import.')}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <SliderInput
+                        label={t('Turn the clip')}
+                        unit="°"
+                        title={t('Degrees the clip turns about the vertical — the import dial, applied after the fact. A lying clip is aimed at the bed with it.')}
+                        min={-180}
+                        max={180}
+                        step={5}
+                        fineStep={1}
+                        value={yawDeg}
+                        onChange={setYawDeg}
+                        disabled={orientBusy}
+                        sliderWidth="auto"
+                        sliderStyle={{ flex: 1, minWidth: 90 }}
+                        style={{ display: 'flex', flex: '1 1 260px' }}
+                      />
+                      <button type="button" className="ga-btn ga-btn-sm" disabled={orientBusy}
+                        onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
+                      <button type="button" className="ga-btn ga-btn-sm" disabled={orientBusy}
+                        onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <SliderInput
+                        label={t('Tilt')}
+                        unit="°"
+                        title={t('Degrees the clip tips forward — a standing figure bows, a lying one rolls onto its face. Positive tips the head towards the clip’s forward axis.')}
+                        min={-180}
+                        max={180}
+                        step={5}
+                        fineStep={1}
+                        value={tiltDeg}
+                        onChange={setTiltDeg}
+                        disabled={orientBusy}
+                        sliderWidth="auto"
+                        sliderStyle={{ flex: 1, minWidth: 70 }}
+                        style={{ display: 'flex', flex: '1 1 200px' }}
+                      />
+                      <SliderInput
+                        label={t('Roll')}
+                        unit="°"
+                        title={t('Degrees the clip tips sideways. Positive tips the figure to its own right.')}
+                        min={-180}
+                        max={180}
+                        step={5}
+                        fineStep={1}
+                        value={rollDeg}
+                        onChange={setRollDeg}
+                        disabled={orientBusy}
+                        sliderWidth="auto"
+                        sliderStyle={{ flex: 1, minWidth: 70 }}
+                        style={{ display: 'flex', flex: '1 1 200px' }}
+                      />
+                      <SliderInput
+                        label={t('Height')}
+                        unit="cm"
+                        title={t('Centimetres the clip is lifted after the turn — a tilted figure that sinks into the floor is raised back out with it.')}
+                        min={-50}
+                        max={50}
+                        step={1}
+                        value={heightCm}
+                        onChange={setHeightCm}
+                        disabled={orientBusy}
+                        sliderWidth="auto"
+                        sliderStyle={{ flex: 1, minWidth: 70 }}
+                        style={{ display: 'flex', flex: '1 1 200px' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <span className="ga-hint">{t('Turn against')}</span>
+                        <select className="ga-input" value={footprint}
+                          onChange={(e) => setFootprint(e.target.value)}>
+                          <option value="">{t('grid only')}</option>
+                          <option value="lie">{t('bed / lying surface')}</option>
+                          <option value="seat">{t('seat')}</option>
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="ga-btn ga-btn-sm ga-btn-primary"
+                        disabled={!orientDirty || orientBusy}
+                        onClick={() => void applyOrientation()}
+                      >
+                        {orientBusy ? t('Applying…') : t('Apply orientation')}
+                      </button>
+                      <button
+                        type="button"
+                        className="ga-btn ga-btn-sm"
+                        disabled={!orientDirty || orientBusy}
+                        onClick={resetDials}
+                      >
+                        {t('Reset dials')}
+                      </button>
+                      {orientSeconds !== null && !orientBusy ? (
+                        <span className="ga-hint">{`${t('written in')} ${orientSeconds.toFixed(1)} s`}</span>
+                      ) : null}
+                    </div>
+                    <div className="ga-form-hint">
+                      {`${t('Already baked into the file')}: ${bakedNote}`}
+                    </div>
+                    {orientError ? (
+                      <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
+                        {orientError}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 {rowSets.map((s) => (
                   <div key={s || 'neutral'}>

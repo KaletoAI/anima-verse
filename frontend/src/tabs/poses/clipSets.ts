@@ -31,6 +31,16 @@ export interface ApiClipRow {
   loop?: boolean
   origin?: string
   has_sidecar?: boolean
+  /** What the FILE already carries: the import's orientation dial plus every
+   *  later "Apply orientation" (`geometry.yaw_deg` / `tilt_deg` / `roll_deg`
+   *  in degrees, `floor_shift_cm` in centimetres). A field the sidecar never
+   *  wrote is absent — an unturned clip carries no angle at all. */
+  orientation?: {
+    yaw_deg?: number | null
+    tilt_deg?: number | null
+    roll_deg?: number | null
+    floor_shift_cm?: number | null
+  }
 }
 
 export interface ClipListing {
