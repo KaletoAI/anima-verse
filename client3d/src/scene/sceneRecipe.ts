@@ -1141,7 +1141,6 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   for (const c of scene.corridors) {
     if (!c.room_id) continue;
     tile.roomLevels.set(c.room_id, c.level);
-    tile.roomSpots.set(c.room_id, []);
     tile.corridors.push({ roomId: c.room_id, level: c.level, anchor: c.anchor,
                           outline: c.outline,
                           plateTop: storeyPlate.get(c.level)?.top_y });
@@ -2153,7 +2152,6 @@ export function unmountScene(tile: Tile): void {
   tile.roomCenters.clear();
   tile.roomDoors.clear();
   tile.roomFloors.clear();
-  tile.roomSpots.clear();
   tile.roomSitSpots.clear();
   tile.roomLieSpots.clear();
   tile.roomMarkers.clear();

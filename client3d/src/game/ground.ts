@@ -265,16 +265,22 @@ export function polygonCentroid(poly: Polygon | null | undefined
   return { x: cx / (3 * twiceArea), z: cz / (3 * twiceArea) };
 }
 
-/** How much of a room's bounding box the stand raster spans, as a fraction —
- *  the 0.78 the ray raster used, kept so the stands sit where they always sat
- *  (inside the walls, not against them). */
+/** How much of a room's bounding box the raster spans, as a fraction — the
+ *  0.78 the ray raster used, kept so the point it yields sits inside the walls
+ *  rather than against them. */
 export const SPOT_SPREAD = 0.78;
 
-/** Rows and columns of the stand raster — the 6 x 6 of the ray raster. */
+/** Rows and columns of the raster — the 6 x 6 of the ray raster. */
 export const SPOT_GRID = 6;
 
 /**
- * THE STANDS OF A ROOM, in the frame its hull is given in.
+ * THE RASTER OF A ROOM, in the frame its hull is given in.
+ *
+ * Since T4 it hands out no stands: where a figure without a place marker
+ * stands in a room is the SERVER's word (§ A1.4) and the client draws `pos`.
+ * Its one reader left is `deriveRoomSpots`, which needs an interior point for
+ * a room whose area centroid falls outside the hull — the raster's first
+ * element is inside by construction.
  *
  * The very raster the rays were shot on — `SPOT_GRID` x `SPOT_GRID` points over
  * `SPOT_SPREAD` of the room's bounding box, around its centre — with the RAY
@@ -304,17 +310,6 @@ export function roomSpotGrid(hull: Polygon | null | undefined,
     - ((b.x - cx) ** 2 + (b.z - cz) ** 2));
   return out;
 }
-
-/** How far a stand's own ground may deviate from the room's floor and still be
- *  part of that floor, in metres — the 12 cm the ray raster judged its hits by,
- *  now measured against the HEIGHT DATA instead of against triangles.
- *
- *  Under a built room it is inert by construction: the plateau stamp makes the
- *  plot flat (§ G5), so every stand reads the room's own floor to the
- *  millimetre. Under an OPEN ZONE on natural ground it is the rule that keeps
- *  a huddle off a hillside the zone happens to run up — exactly what the
- *  dominant-bin heuristic did, minus the guessing. */
-export const SPOT_FLAT_M = 0.12;
 
 /** Is a surface at `surfaceY` a SEAT for a figure standing on `floorY`?
  *  Between a footstool and a bar stool, in metres over the floor: a 1.70 m

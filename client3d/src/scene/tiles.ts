@@ -5,7 +5,7 @@ import type { CutoutHandle, PlacedSurface, SceneModelSpec,
   SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
-  recipeFloorAt, roomSpotGrid, SPOT_FLAT_M, standY, WALK_CLEARANCE_M,
+  recipeFloorAt, roomSpotGrid, standY, WALK_CLEARANCE_M,
   type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';
 import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
 import type { SubmergedGhost } from './submergedGhost';
@@ -626,7 +626,6 @@ export interface Tile {
    *  6 x 6 raycast raster was shot from. */
   roomFloors: Map<string, RoomFloor>;
   /** free stands in the room (world coordinates at floor height) */
-  roomSpots: Map<string, THREE.Vector3[]>;
   /** detected sit surfaces (furniture height, small faces) */
   roomSitSpots: Map<string, THREE.Vector3[]>;
   /** detected lie surfaces (furniture height, large contiguous faces) */
@@ -943,7 +942,7 @@ export function buildTile(loc: WorldLocation): Tile {
     width, yaw, isBuilding, isArea, height: 0,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomDoors: new Map(),
-    roomFloors: new Map(), roomSpots: new Map(),
+    roomFloors: new Map(),
     roomSitSpots: new Map(), roomLieSpots: new Map(), roomMarkers: new Map(),
     roomGroups: new Map(), roomRects: new Map(), roomLevels: new Map(), alwaysVisibleRooms: new Set(),
     outlineWalls: [], levelSlabs: new Map(), levelOutlines: new Map(),
@@ -1060,9 +1059,10 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
   const d = Math.max(maxZ - minZ, 0.5);
   tile.roomRects.set(roomId, { x: bx, z: bz, w, d });
 
-  // THE RASTER FIRST, because the centre may need it. `roomSpotGrid` is the
-  // very raster the rays were shot on, with the polygon test where the ray hit
-  // used to be (`game/ground.ts`).
+  // THE RASTER, only as the centre's fallback: since the SERVER picks the
+  // point a figure stands on (§ A1.4, T4) nothing hands out stands here any
+  // more, but an L-shaped room still needs an interior point when its centroid
+  // falls outside — and the raster is inside by construction.
   const grid = roomSpotGrid(hull, bx, bz, w, d);
   // THE CENTRE is the area centroid of the drawn hull. On an L-shaped room
   // that point can lie OUTSIDE the room, and then the nearest raster point is
@@ -1076,24 +1076,12 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
   const cx = inside ? inside.x : bx;
   const cz = inside ? inside.z : bz;
 
-  const floorAt = (lx: number, lz: number) => roomFloorWorldY(tile, roomId, floor, lx, lz);
-  const floorY = floorAt(cx, cz);
+  const floorY = roomFloorWorldY(tile, roomId, floor, cx, cz);
   // The centre, ONE instance under id AND name — the readers key by both.
   const centre = tileToWorld(tile, cx, cz, 0).setY(floorY + WALK_CLEARANCE_M);
   tile.roomCenters.set(roomId, centre);
   const roomName = tile.loc.rooms.find((r) => r.id === roomId)?.name;
   if (roomName) tile.roomCenters.set(roomName, centre);
-
-  // THE STANDS, each at ITS OWN ground and gated by the room's floor: a point
-  // whose ground runs more than `SPOT_FLAT_M` away from the room's own floor is
-  // the hillside an open zone happens to climb, not part of that floor. Under a
-  // built room the gate is inert — the plateau is flat to the millimetre.
-  const spots: THREE.Vector3[] = [];
-  for (const g of grid) {
-    const y = floorAt(g.x, g.z);
-    if (Math.abs(y - floorY) > SPOT_FLAT_M) continue;
-    spots.push(tileToWorld(tile, g.x, g.z, 0).setY(y + WALK_CLEARANCE_M));
-  }
 
   // SIT / LIE: the top face of a placed prop, measured on the prop. Its own
   // bounding box says how high and how large the surface is; `furnitureUse`
@@ -1119,7 +1107,6 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
     map.set(roomId, list);
     if (roomName) map.set(roomName, list);
   };
-  put(tile.roomSpots, spots);
   put(tile.roomSitSpots, sit);
   put(tile.roomLieSpots, lie);
 
@@ -1169,10 +1156,7 @@ export function bakedFloorAt(tile: Tile, lx: number, lz: number,
  *  spec-surface-height) — but scoped to THIS ROOM's own lattices, on any
  *  storey: a room's stands and the figure walking over them must come out on
  *  ONE floor (law 2026-08-20), so a spot on a diorama's hillock stands on the
- *  hillock, while the diorama of the room next door has no say here. The
- *  `SPOT_FLAT_M` gate in `deriveRoomSpots` still keeps the room's stands
- *  together — a lattice cell that runs far away from the room's own floor
- *  drops out of the raster exactly as a climbing piece of terrain does. */
+ *  hillock, while the diorama of the room next door has no say here. */
 function roomFloorWorldY(tile: Tile, roomId: string, floor: RoomFloor,
                          lx: number, lz: number): number {
   const baked = bakedFloorAt(tile, lx, lz, (e) => e.roomId === roomId);
@@ -1181,6 +1165,15 @@ function roomFloorWorldY(tile: Tile, roomId: string, floor: RoomFloor,
   const w = tileToWorld(tile, lx, lz, 0);
   const y = worldGroundAt ? worldGroundAt(w.x, w.z) : NaN;
   return Number.isFinite(y) ? y : tile.center.y;
+}
+
+/** The same floor for a room the caller names, or `null` when the tile has no
+ *  floor for it — how a figure the SERVER put on a point (§ A1.4) finds the
+ *  height to stand at. */
+export function roomFloorAt(tile: Tile, roomId: string,
+                            lx: number, lz: number): number | null {
+  const floor = tile.roomFloors.get(roomId);
+  return floor ? roomFloorWorldY(tile, roomId, floor, lx, lz) : null;
 }
 
 /**

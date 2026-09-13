@@ -858,7 +858,11 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
   Ankunftspunkt beim Betreten, der Sitz nach einer Pose). Geschrieben wird nur
   auf den Schreibwegen — Raumwechsel und Aufstehen —, nie beim Bau eines
   Payloads. Findet die Regel keinen freien Punkt (winziger oder voll
-  möblierter Raum), bleibt die Position unverändert.
+  möblierter Raum), bleibt die Position unverändert. **Der Etagen-Flur
+  (§ A13c) hat keine eigene Hülle** und bekommt deshalb keinen Stehpunkt: dort
+  zeichnet ein Client die Figur auf den Flur-Anker der Etage (`corridors[].anchor`,
+  ebenfalls vom Server gerechnet), nicht auf `pos`. Der Hof (`__ground__`) ist
+  kein Raum mit Hülle und bleibt beim bisherigen Verhalten.
 
 - **„Außerhalb jeder Location" ist ein legaler Zustand.** Ein Charakter
   mit `location_id: ""` UND einem `pos` steht in der **Wildnis**. Beim

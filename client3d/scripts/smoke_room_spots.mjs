@@ -43,13 +43,18 @@
  *     enclose nothing and have no centre — `null`, never 0/0.
  *
  * ============================================================================
- * [2] `roomSpotGrid` — the stands, on the raster the rays were shot on
+ * [2] `roomSpotGrid` — the fallback for a centre that lies outside its room
  * ============================================================================
  * `SPOT_GRID` = 6 rows and columns over `SPOT_SPREAD` = 0.78 of the room's
  * BOUNDING BOX, around its centre — the very raster of the ray version — with
  * the polygon test where the ray hit used to be. Ordered by distance from the
- * centre, nearest first, which is why a lone character stands in the middle of
- * its room.
+ * centre, nearest first.
+ *
+ * SINCE T4 IT HANDS OUT NO STANDS ANY MORE: where a figure without a place
+ * marker stands in a room is the SERVER's word (§ A1.4, `scripts/smoke_room_stand.py`),
+ * and the client draws `pos`. What is left of the raster is the ONE reader
+ * `deriveRoomSpots` still has for it — the interior point a room needs when
+ * its own area centroid falls outside the hull, which is case (b) below.
  *
  * (a) THE RECTANGULAR ROOM (−4,−4) (0,−4) (0,−1) (−4,−1) — 4 m × 3 m, the
  *     "Haus von Kai" room hull the walk smoke uses:
@@ -81,20 +86,6 @@
  * (d) A degenerate hull (fewer than three points) is not a filter either — it
  *     contains nothing, and a room that dropped every stand would be a room
  *     nobody could be placed in.
- *
- * ============================================================================
- * [3] `SPOT_FLAT_M` — the 12 cm, now measured against the HEIGHT DATA
- * ============================================================================
- * The ray version kept a hit whose y was within 0.12 m of the dominant height
- * bin. The same tolerance survives, applied to the SAMPLER: a stand whose
- * ground runs further than that from the room's own floor is the hillside an
- * open zone happens to climb, not part of that floor.
- *
- * Under a BUILT room it is inert by construction — § G5 stamps the plot flat,
- * so every stand reads the room's floor to the millimetre. Derived on a plane
- * that rises 0.05 m/m (a 2.9° slope) through a 4 m room: over the raster's
- * half-width 1.56 m the ground moves ±0.078 m, so nothing is dropped; at
- * 0.10 m/m (5.7°) it moves ±0.156 m and the outer columns go.
  *
  * ============================================================================
  * [4] `furnitureUse` — a seat is measured on the OBJECT, over the DATA floor
@@ -191,7 +182,7 @@ const { ground } = await loadModules([
   ['client3d/src/game/ground.ts', 'ground'],
 ]);
 const { polygonCentroid, roomSpotGrid, furnitureUse,
-  SPOT_GRID, SPOT_SPREAD, SPOT_FLAT_M,
+  SPOT_GRID, SPOT_SPREAD,
   SEAT_MIN_M, SEAT_MAX_M, LIE_LENGTH_M, LIE_WIDTH_M } = ground;
 const { pointInPolygon } = (await loadModules(
   [['client3d/src/game/polygon.ts', 'polygon']])).polygon;
@@ -212,8 +203,8 @@ check('…and neither does a collinear one',
   polygonCentroid([[0, 0], [1, 1], [2, 2]]), null);
 check('…nor an absent one', polygonCentroid(undefined), null);
 
-// --- [2] the stands ----------------------------------------------------------
-console.log('\n[2] roomSpotGrid — the raster the rays were shot on');
+// --- [2] the centroid fallback -----------------------------------------------
+console.log('\n[2] roomSpotGrid — the interior point a centroid outside the hull needs');
 check('the raster is 6 x 6', SPOT_GRID, 6);
 check('…over 0.78 of the bounding box', SPOT_SPREAD, 0.78);
 const RECT = [[-4, -4], [0, -4], [0, -1], [-4, -1]];
@@ -239,21 +230,6 @@ check('…and every stand is inside',
 check('without a hull nothing is filtered', roomSpotGrid(null, 0, 0, 6, 6).length, 36);
 check('…and a degenerate hull is not a filter either',
   roomSpotGrid([[0, 0], [1, 1]], 0, 0, 6, 6).length, 36);
-
-// --- [3] the flatness gate ---------------------------------------------------
-console.log('\n[3] SPOT_FLAT_M — the 12 cm, measured against the height data');
-check('the tolerance is the ray version\'s 0.12 m', SPOT_FLAT_M, 0.12);
-const HALF_W = 0.5 * 4 * SPOT_SPREAD;          // 1.56 m, the raster half-width
-check('the raster half-width of a 4 m room is 1.56 m', HALF_W, 1.56);
-/** A plane rising `slope` metres per metre in x, read at a stand. */
-const rise = (slope, p) => slope * p.x;
-const keptAt = (slope) => rect.filter(
-  (p) => Math.abs(rise(slope, p) - rise(slope, { x: -2 })) <= SPOT_FLAT_M).length;
-check('a flat plot keeps every stand (the built case, § G5)', keptAt(0), 36);
-check('a 0.05 m/m slope (2.9°) still keeps them all: 1.56 · 0.05 = 0.078',
-  keptAt(0.05), 36);
-check('a 0.10 m/m slope (5.7°) drops the two outer columns: 1.56 · 0.10 = 0.156',
-  keptAt(0.10), 24);
 
 // --- [4] the furniture -------------------------------------------------------
 console.log('\n[4] furnitureUse — the OBJECT is measured, the floor is data');

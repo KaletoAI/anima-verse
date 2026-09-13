@@ -67,7 +67,8 @@
  * by `game/ground.groundLift`. "Ein Boden" E5b deletes the second term with the
  * field it read: a location has no 17 x 17 relief of its own any more (§ A19
  * no. 6, decision 1), local relief is authored through the map's HEIGHT AREAS,
- * and `reliefLiftAt` is one line. The walk verdict is unchanged
+ * and `reliefLiftAt` became one line — then lost its last caller with the
+ * room huddle (T4) and is gone with it. The walk verdict is unchanged
  * (`client3d/src/game/walk.slopeBlocks`), and both are checked against the
  * field above.
  *
@@ -431,7 +432,8 @@ const SLOPE = 40;
 // and that field is deleted (§ A19 no. 6, decision 1 — local relief is
 // authored through the map's height areas). What used to be
 // `groundLift(sampleWorldHeight(...), patches)` is `sampleWorldHeight(...)`,
-// full stop, and `main.reliefLiftAt` is one line because of it.
+// full stop, which left `main.reliefLiftAt` a one-line wrapper — deleted with
+// the room huddle that was its last caller (T4).
 checkBool('`groundLift` no longer exists', groundMod.groundLift === undefined, true);
 const hereH = sampleWorldHeight(FIELD, -2, 0);
 const thereH = sampleWorldHeight(FIELD, -1, 0);

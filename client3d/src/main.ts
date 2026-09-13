@@ -50,7 +50,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintCentre, redatumTile, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintCentre, redatumTile, roomFloorAt, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
@@ -63,7 +63,6 @@ import { declaredFloorAt, WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { figureTransition, pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
-import { seededRandom } from './scene/textures';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
@@ -2261,14 +2260,6 @@ async function startApp(username: string, role: string) {
     return { x: Math.cos(angle) * 2.6, z: Math.sin(angle) * 2.6 };
   }
 
-  // Raum-Mitbewohner im kleinen Kreis anordnen statt aufeinander zu stehen
-  function roomSlot(index: number, count: number, name: string): THREE.Vector3 {
-    if (count <= 1) return new THREE.Vector3(0, 0, 0.2);
-    const rnd = seededRandom('jitter:' + name);
-    const angle = (index / count) * Math.PI * 2 + rnd() * 0.5;
-    return new THREE.Vector3(Math.cos(angle) * 1.0, 0, Math.sin(angle) * 0.8);
-  }
-
   /**
    * Render state of a character on a JOURNEY (contract § A11), or null when it
    * is not travelling — then the location placement below takes over.
@@ -2403,14 +2394,18 @@ async function startApp(username: string, role: string) {
         if (inRoom && roomCenter) {
           const mates = roomMates.get(inRoom)!;
           const idx = mates.indexOf(c.name);
-          const spots = tile.roomSpots.get(inRoom);
-          // WHERE the figure stands is the server's word first: a character
-          // the server SEATED (plan-posen-plaetze.md § 4) carries `place`,
-          // and the seat is looked up by marker ID — no clip kind is matched
-          // against a marker any more (the kind-keyed markers of AV3D-11 are
-          // gone). Only a character WITHOUT a place still falls down the
-          // heuristic ladder below: sampled sit/lie surfaces by the family of
-          // its animation, then the room's free stands, then the huddle.
+          // WHERE the figure stands is the server's word, twice over. A
+          // character the server SEATED (plan-posen-plaetze.md § 4) carries
+          // `place`, and the seat is looked up by marker ID — no clip kind is
+          // matched against a marker any more (the kind-keyed markers of
+          // AV3D-11 are gone). A character WITHOUT a place stands on its own
+          // `pos`, which the server now picks INSIDE the room as well (§ A1.4,
+          // T4): free of walls, furniture, door zones and room mates. The
+          // client chooses no room point of its own any more — the 6 x 6
+          // raster by alphabetical index and the huddle around the room centre
+          // are gone. What is left in between is the one HEIGHT question a
+          // payload point cannot answer: a sitting or lying figure without a
+          // marker is put on a surface sampled off the furniture itself.
           const kind = c.activity_animation || '';
           const held = c.place ? tile.roomMarkers.get(inRoom)?.get(c.place.id) : undefined;
           // The seat point itself — `undefined` for a marker that named no
@@ -2443,25 +2438,30 @@ async function startApp(username: string, role: string) {
             if (held.tilt || held.roll) lean = { tilt: held.tilt || 0, roll: held.roll || 0 };
           } else if (pool?.length) {
             pos = pool[idx % pool.length].clone();
-          } else if (spots?.length) {
-            // abgetastete freie Stellfläche im Raum-Modell (nicht in Möbeln)
-            pos = spots[idx % spots.length].clone();
+          } else if (tile.corridors.some((cor) => cor.roomId === inRoom)) {
+            // A STOREY CORRIDOR (§ A13c) is no room with a hull: the server
+            // picks no standing point in it, and `pos` is whatever point the
+            // figure last stood on. Its own anchor is the server's answer for
+            // that storey (`floor_anchor`: inside the outline, outside every
+            // room, largest clearance) — so the figure is drawn there, and
+            // that is still the server's geometry, not the client's.
+            pos = roomCenter.clone();
+          } else if (c.pos) {
+            // THE SERVER'S STANDING POINT. The payload point is a WORLD metre
+            // like every other `pos`; only the height is the client's, and it
+            // is the room's own floor AT THAT POINT — the same ladder the
+            // avatar walks on indoors (baked lattice, declared floor,
+            // terrain), asked per figure instead of once per room, so a figure
+            // on a diorama's hillock stands on the hillock.
+            const local = worldToTile(tile, c.pos.x, c.pos.z);
+            const y = roomFloorAt(tile, inRoom, local.x, local.z);
+            pos = new THREE.Vector3(c.pos.x,
+                                    y === null ? roomCenter.y : y + WALK_CLEARANCE_M,
+                                    c.pos.z);
           } else {
-            // No room scale on the offset any anymore: a metre in the room IS a
-            // metre on the map (k = 1), so the huddle radius is the metre
-            // count `roomSlot` states.
-            pos = roomCenter.clone().add(roomSlot(idx, mates.length, c.name));
-            // The room's centre is ONE height; the ground under a figure set
-            // aside from it is not. Applied as the DIFFERENCE of the terrain
-            // between the two points, so it stays right whether the centre is a
-            // declared floor or the landscape itself — an absolute sample here
-            // would flatten a declaring room onto the hill under it. Under a
-            // built plot the difference is 0 by construction (the plateau is
-            // flat, § G5); marker and spot positions are out of this branch,
-            // they carry their own data height.
-            const rise = reliefLiftAt(pos.x, pos.z)
-              - reliefLiftAt(roomCenter.x, roomCenter.z);
-            if (rise) pos.setY(pos.y + rise);
+            // No point at all (a character that was never positioned): the
+            // room's centre is the only thing left.
+            pos = roomCenter.clone();
           }
         } else {
           const slot = slotOffset(tile, i, chars.length);
@@ -2827,26 +2827,6 @@ async function startApp(username: string, role: string) {
       if (r.until > now && Math.hypot(r.x - x, r.z - z) < REFUSED_RADIUS_M) return true;
     }
     return false;
-  }
-
-  /**
-   * Height of the ground at a WORLD point — the client's mirror of the
-   * server's `relief.ground_at`, and since "Ein Boden" E5b it is ONE reading
-   * and nothing added to it: `terrainGround.heightAt`, the bilinear lattice the
-   * terrain's own vertices are placed from and the server judges steps by.
-   *
-   * The second term is gone with the scene's own relief (§ A19 no. 6,
-   * decision 1): a location had a 17 x 17 field of its own, the innermost
-   * enclosing one counted (`groundLift`), and local relief is authored through
-   * the map's height areas now.
-   *
-   * THE LANDSCAPE ONLY, and its one caller wants exactly that: the huddle
-   * above applies the DIFFERENCE of the terrain between a room's centre and a
-   * figure set aside from it. The HEIGHT GATE does not read this — it reads
-   * `gateStandAt` below, the whole standing ladder.
-   */
-  function reliefLiftAt(x: number, z: number): number {
-    return terrainGround.heightAt(x, z);
   }
 
   /**
