@@ -2192,7 +2192,9 @@ Der Avatar meldet währenddessen keine Position (die Clip-Bewegung wäre sonst
 ein „Move", der die Interaktion serverseitig beendet).
 
 **Numerische Prüfung (§ B5a):** `scripts/smoke_interaction.py` (Anker, Yaw,
-Rollen-Positionen, Spielzeit-Ende, Abbrüche, Payload),
+Rollen-Positionen, kein Uhr-Ende, Abbruch-Signale, Payload),
+`scripts/smoke_clip_loop_flag.py` (das Loop-Kennzeichen: Sidecar schlägt
+Messung, Schreiben je Kind und Set),
 `client3d/scripts/smoke_clip_pair.mjs` (echte FBX-Hälften per FBXLoader:
 Root-Bahn am Ankerframe = Sidecar, Anker-Transformation = Server-Formel),
 `client3d/scripts/smoke_pair_realtime.mjs` (die Echtzeit-Phase: dieselbe Phase
