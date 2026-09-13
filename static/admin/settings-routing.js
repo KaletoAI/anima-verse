@@ -252,10 +252,14 @@ async function renderLlmRoutingTasksPage(content) {
             const e = routing[r.entry] || {};
             const capsKey = e.model ? capsKeyFor(e.provider, e.model) : '';
             const match = capsKey ? evaluateRoutingMatch(t.requirements, MODEL_CAPS_CACHE[capsKey]) : { missing: [], unknown: false };
+            // Only judge the model when the provider's model list is actually
+            // loaded — an unloaded provider says nothing about its models.
+            const known = PROVIDERS_CACHE[e.provider];
             return {
                 entry: r.entry, order: r.order, cfg: e, capsKey: capsKey,
                 off: e.enabled === false,
                 providerMissing: !!(e.provider && !providerNames.has(e.provider)) || !e.provider,
+                notOnServer: !!(known && known.length && e.model && !known.includes(e.model)),
                 mismatch: (match.missing || []).length > 0,
             };
         });
@@ -419,6 +423,7 @@ async function renderLlmRoutingTasksPage(content) {
                     html += '<span class="rt-err" style="text-decoration:none;">'
                          + esc(rtFmt(RT_TEXT.providerMissing, { name: r.cfg.provider || '?' })) + '</span>';
                 }
+                if (r.notOnServer) html += '<span class="rt-muted">' + esc(RT_TEXT.notOnServer) + '</span>';
                 if (r.capsKey) html += renderMatchBadges(t.requirements, r.capsKey);
                 html += '<span style="margin-left:auto; display:inline-flex; gap:4px;">';
                 html += '<button class="btn btn-sm" title="' + esc(RT_TEXT.moveUp) + '"' + (i === 0 ? ' disabled' : '')
@@ -438,7 +443,8 @@ async function renderLlmRoutingTasksPage(content) {
 
         // Assign row: pick an existing LLM or open the inline "new LLM" form.
         html += '<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">';
-        html += rtEntrySelect('rtAssign(\'' + rtJs(t.id) + '\', this.value)', RT_TEXT.assignLlm, true);
+        html += rtEntrySelect('rtAssign(\'' + rtJs(t.id) + '\', this.value)', RT_TEXT.assignLlm, true,
+            new Set(nfo.rows.map(r => r.entry)));
         html += '</div>';
         if (RT_NEW_FORM === t.id) html += rtNewLlmForm(t);
         html += '</div>';
@@ -454,11 +460,14 @@ async function renderLlmRoutingTasksPage(content) {
 
 // One <select> over CONFIG.llm_routing. `withNew` adds the "+ New LLM…" option
 // (the per-task assign dropdown); the group dropdown only assigns existing ones.
-function rtEntrySelect(onchangeJs, placeholder, withNew) {
+// `excludeIdx` (a Set of entry indices) hides entries that are already in the
+// chain of this task — picking one could only be a no-op.
+function rtEntrySelect(onchangeJs, placeholder, withNew, excludeIdx) {
     const routing = rtRouting();
     let html = '<select onchange="' + onchangeJs + '" style="background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:4px 6px; border-radius:4px; font-size:12px;">';
     html += '<option value="">' + esc(placeholder) + '</option>';
     routing.forEach((e, i) => {
+        if (excludeIdx && excludeIdx.has(i)) return;
         html += '<option value="' + i + '">' + esc(rtEntryLabel(e, i)) + (e && e.enabled === false ? ' ' + esc(RT_TEXT.entryDisabled) : '') + '</option>';
     });
     if (withNew) html += '<option value="__new__">' + esc(RT_TEXT.newLlm) + '</option>';
@@ -509,14 +518,14 @@ function rtAssign(taskId, entryIdxOrNew) {
     if (entryIdxOrNew === '__new__') { rtNewLlmOpen(taskId); return; }
     const idx = parseInt(entryIdxOrNew, 10);
     if (isNaN(idx)) return;
-    assignTask(rtRouting(), taskId, idx);
+    const changed = assignTask(rtRouting(), taskId, idx);
     RT_NEW_FORM = null;
-    rtRerender(RT_TEXT.saveHint);
+    rtRerender(changed ? RT_TEXT.saveHint : '');
 }
 
 function rtUnassign(taskId, entryIdx) {
-    unassignTask(rtRouting(), taskId, entryIdx);
-    rtRerender(RT_TEXT.saveHint);
+    const changed = unassignTask(rtRouting(), taskId, entryIdx);
+    rtRerender(changed ? RT_TEXT.saveHint : '');
 }
 
 function rtMove(taskId, entryIdx, delta) {
@@ -561,16 +570,22 @@ function rtNewLlmCreate(taskId) {
     const tempRaw = (document.getElementById('rt-new-temp') || {}).value;
     const maxRaw = (document.getElementById('rt-new-maxtok') || {}).value;
     if (!provider || !model) { toast(RT_TEXT.needProviderModel, 'error'); return; }
+    // Unparsable numbers fall back instead of writing NaN into the config:
+    // the temperature to the category default, max_tokens to "not set".
+    const task = ((RT_CATALOG || {}).tasks || []).find(x => x && x.id === taskId);
+    const defTemp = LLM_SIMPLE_TEMP[task ? task.category : ''];
+    const temp = parseFloat(tempRaw);
+    const maxTok = parseInt(maxRaw, 10);
     const entry = {
         name: name.trim(),
         enabled: true,
         preload_on_startup: false,
         provider: provider,
         model: model,
-        temperature: (tempRaw === '' || tempRaw === undefined) ? 0.5 : parseFloat(tempRaw),
+        temperature: isNaN(temp) ? (defTemp === undefined ? 0.5 : defTemp) : temp,
         tasks: [],
     };
-    if (maxRaw !== '' && maxRaw !== undefined && maxRaw !== null) entry.max_tokens = parseInt(maxRaw, 10);
+    if (!isNaN(maxTok)) entry.max_tokens = maxTok;
     const routing = rtRouting();
     routing.push(entry);
     assignTask(routing, taskId, routing.length - 1);
@@ -579,8 +594,8 @@ function rtNewLlmCreate(taskId) {
 }
 
 function rtRemoveUnknown(entryIdx, taskId) {
-    unassignTask(rtRouting(), taskId, entryIdx);
-    rtRerender(RT_TEXT.saveHint);
+    const changed = unassignTask(rtRouting(), taskId, entryIdx);
+    rtRerender(changed ? RT_TEXT.saveHint : '');
 }
 
 // Fills a model <select> for one provider — same endpoint and the same
