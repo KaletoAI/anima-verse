@@ -856,8 +856,12 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
   kleinstes z. Ist der Ausgangspunkt selbst frei, bleibt er stehen: niemand
   läuft grundlos. Ausgangspunkt ist immer die aktuelle Position (der
   Ankunftspunkt beim Betreten, der Sitz nach einer Pose). Geschrieben wird nur
-  auf den Schreibwegen — Raumwechsel und Aufstehen —, nie beim Bau eines
-  Payloads. Findet die Regel keinen freien Punkt (winziger oder voll
+  auf den SCHREIBWEGEN — Raumwechsel, Ortswechsel (auch Teleport: der
+  Ankunftsraum wird dort mitgeschrieben) und Aufstehen —, nie beim Bau eines
+  Payloads. Eine angekommene REISE behält dabei den Punkt, den sie gelaufen
+  ist (die Tür), statt auf den Ortsmittelpunkt gezogen zu werden — sonst
+  stellte sich jeder Ankömmling in die Raummitte. Mehrfaches Fragen kostet
+  nichts: ein bereits freier Punkt kommt unverändert zurück. Findet die Regel keinen freien Punkt (winziger oder voll
   möblierter Raum), bleibt die Position unverändert. **Der Etagen-Flur
   (§ A13c) hat keine eigene Hülle** und bekommt deshalb keinen Stehpunkt: dort
   zeichnet ein Client die Figur auf den Flur-Anker der Etage (`corridors[].anchor`,

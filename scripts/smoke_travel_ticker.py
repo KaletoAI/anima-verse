@@ -62,8 +62,16 @@ Hand-derived expectations:
         t = 120 → (60, 0)  still wilderness
       Arrival at t = 155: current_location MARKET, current_room = the room
       the W opening links to (NOT the ground room the arrival rule would
-      pick), movement_target '' and journey gone; the position is dragged
-      to MARKET's centre (100, 0) by the location write's own sync.
+      pick), movement_target '' and journey gone; the position is the point
+      the journey WALKED TO, the W opening (95, 0). Since T4 the arrival
+      keeps its own point (``sync_pos=False``) instead of being dragged to
+      the centre: what comes after it measures from where the figure came
+      IN — the standing point of the arrival room is chosen nearest to the
+      character's position, and from the centre that would read as "walks
+      to the middle of the room". The centre survives only where the
+      arrival point does NOT derive the target, which is not this case
+      (x = 95 is MARKET's west edge and the footprint test is inclusive).
+      A TELEPORT still gets the centre: it has no point of its own.
 
   [3] Party: leader + 2 followers, offsets 1.2 m perpendicular to the
       CURRENT segment, index-based (first follower left, second right):
@@ -75,9 +83,13 @@ Hand-derived expectations:
       hook pulls both followers to MARKET, and the settle then spreads them
       with the SAME formation instead of stacking them on the centre (E4):
       the last segment W4→W5 points (1, 0), perpendicular (0, 1), so the
-      leader stands on MARKET's centre (100, 0) and the followers at
-      (100, 1.2) and (100, −1.2) — both still inside MARKET
-      (x ∈ [95, 105], z ∈ [−5, 5]), so neither yields.
+      leader stands on its arrival point (95, 0) and the followers at
+      (95, 1.2) and (95, −1.2) — both still inside MARKET
+      (x ∈ [95, 105] with the west edge inclusive, z ∈ [−5, 5]), so neither
+      yields. The formation is the follower's PREFERENCE since T4, not the
+      last word: ``room_stand.stand_up`` runs on each of them afterwards and
+      keeps a free slot exactly where it is (these rooms have no drawn hull,
+      so it finds no geometry at all here and nobody moves).
       The formation never puts a follower where the leader is not: SHED sits
       at (0, 32) with edge 2 m, i.e. x ∈ [−1, 1] and z ∈ [31, 33], so it
       swallows f1's offset point (0, 31.2) while the leader at (0, 30) and
@@ -172,8 +184,9 @@ Hand-derived expectations:
           building it was just refused. So (294.5, 0.0) is the assertion that
           pins "never teleport forward".
       (b) without the rule: the same tick settles as a proper arrival —
-          location EASTGATE, journey and movement_target gone, the point
-          dragged to the centre (300, 0). The room is the ARRIVAL room (the
+          location EASTGATE, journey and movement_target gone, and the point
+          is the crossing point (298, 0) it was caught at, not the centre
+          (T4: the arrival keeps what it walked to). The room is the ARRIVAL room (the
           ground), NOT the Yard the E opening links to: the route is 75 m
           long and 8 m of it are walked, so 67 m of REMAINING ROUTE stand
           against one tick's 5 m (5 s × 1 m/game-s) — this crossing is not
@@ -451,8 +464,8 @@ check_true("… and not the room the arrival rule would pick",
            HALL != GROUND_ROOM_ID, f"{HALL} vs {GROUND_ROOM_ID}")
 check("movement_target cleared", get_movement_target("demo_npc"), "")
 check("journey gone", travel_engine.get_journey("demo_npc"), None)
-check("the location write dragged the point to MARKET's centre",
-      pos_of("demo_npc"), (100.0, 0.0))
+check("the arrival keeps the point it walked to — MARKET's W opening",
+      pos_of("demo_npc"), (95.0, 0.0))
 
 print("[2b] an arrival WITHOUT an opening edge falls back to the arrival room")
 new_npc("fallback_npc", "", 60.0, 0.0)
@@ -504,11 +517,11 @@ check("follower 1 was dragged along (existing party hook)",
       get_character_current_location("f1_npc"), MARKET)
 check("follower 2 was dragged along",
       get_character_current_location("f2_npc"), MARKET)
-check("the leader stands on the target's centre", pos_of("lead_npc"),
-      (100.0, 0.0))
+check("the leader stands on its own arrival point", pos_of("lead_npc"),
+      (95.0, 0.0))
 check("follower 1 arrives IN FORMATION, not on the leader's point",
-      pos_of("f1_npc"), (100.0, 1.2))
-check("follower 2 on the other side", pos_of("f2_npc"), (100.0, -1.2))
+      pos_of("f1_npc"), (95.0, 1.2))
+check("follower 2 on the other side", pos_of("f2_npc"), (95.0, -1.2))
 
 # ── [4] the blocked arrival ─────────────────────────────────────────────
 print("[4] a block rule ends the journey in front of the door")
@@ -756,12 +769,12 @@ check_true("… and the far door really links to another room",
            YARD != GROUND_ROOM_ID, f"{YARD} vs {GROUND_ROOM_ID}")
 check("movement_target cleared", get_movement_target("through_npc2"), "")
 check("journey gone", travel_engine.get_journey("through_npc2"), None)
-check("the location write dragged the point to the centre",
-      pos_of("through_npc2"), (300.0, 0.0))
+check("the early crossing keeps the point it was caught at",
+      pos_of("through_npc2"), (298.0, 0.0))
 EVENTS.clear()
 tick_at(20)
 check("the next tick is a complete no-op (settled exactly once)", EVENTS, [])
-check("… and nothing moved", pos_of("through_npc2"), (300.0, 0.0))
+check("… and nothing moved", pos_of("through_npc2"), (298.0, 0.0))
 check("… and the location stands",
       get_character_current_location("through_npc2"), EASTGATE)
 

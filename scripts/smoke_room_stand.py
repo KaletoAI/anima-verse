@@ -73,6 +73,13 @@ THE FIXTURES AND THEIR HAND-DERIVED ANSWERS
 [6] RED COUNTER-CHECK: a 0.6 x 0.6 room has no point 0.35 m from every edge
     -> None, and the caller leaves the position alone.
 
+[7] IDEMPOTENCE — asking twice costs nothing. Every answer of [2]…[5] is FREE
+    by construction (that is what made it an answer), and a free `near` is
+    returned unchanged by rule, so feeding a result back in yields itself.
+    That is why the write paths may ask more than once for one arrival: the
+    location write, the room write and the travel engine all call the same
+    thing, and only the first of them can move anybody.
+
 Usage:  ./.venv/bin/python scripts/smoke_room_stand.py
 """
 import math
@@ -198,6 +205,22 @@ def test_no_room() -> None:
           pick_stand([[0, 0], [1, 1]], [], [], [], (0.0, 0.0)) is None)
 
 
+def test_idempotent() -> None:
+    print("\n[7] asking twice moves nobody — every answer is itself free")
+    cases = [
+        ("the L-room", L_ROOM, [], [], [], (5.5, 1.0)),
+        ("the turned table", SQUARE, [TABLE], [], [],
+         (3.0 + 0.6 * SIN30, 3.0 + 0.6 * COS30)),
+        ("two mates", SQUARE, [], [], [(2.5, 3.0), (3.5, 3.0)], (3.0, 3.0)),
+    ]
+    for label, poly, blockers, zones, mates, near in cases:
+        first = pick_stand(poly, blockers, zones, mates, near)
+        again = pick_stand(poly, blockers, zones, mates, first)
+        check(f"{label}: the second ask returns the first answer",
+              first is not None and again is not None
+              and at(again, first[0], first[1]), f"{first} -> {again}")
+
+
 def main() -> int:
     print("Smoke: the free standing point in a room (T4)")
     test_constants()
@@ -207,6 +230,7 @@ def main() -> int:
     test_mates()
     test_door_zone()
     test_no_room()
+    test_idempotent()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

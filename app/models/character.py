@@ -1439,6 +1439,25 @@ def save_character_current_location(character_name: str = "", location: str = ""
         if _px is not None and _pz is not None:
             _cx, _cz = float(_px), float(_pz)
         _write_character_pos(character_name, _cx, _cz)
+    # ENTERING A LOCATION IS ENTERING A ROOM: the arrival room was written into
+    # the profile a few lines up, so this IS one of the two write paths the
+    # standing-point rule covers (T4) — a teleport (drag & drop, admin, a
+    # scheduler force, the teleport spell) would otherwise leave the figure
+    # standing on the location's centre, which is a point nobody checked
+    # against walls, furniture or the others in that room.
+    #
+    # ONLY WITH sync_pos: False means the POINT is the caller's truth and the
+    # caller writes it AFTER this function returns (`set_character_pos`, the
+    # travel arrival) — placing from the position still stored here would
+    # measure from where the character came FROM and be overwritten a moment
+    # later. Those callers place from their own point.
+    if location_changed and sync_pos and (profile.get("current_room") or ""):
+        try:
+            from app.core.room_stand import stand_up
+            stand_up(character_name)
+        except Exception as _rse:
+            logger.debug("arrival stand point failed for %s: %s",
+                         character_name, _rse)
     # AV3D-3: push the movement to connected map clients (SSE state stream) —
     # polling /play/worldmap stays the baseline, the event just arrives
     # instantly. The location-change pose reset above is pushed too, so a

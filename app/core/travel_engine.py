@@ -854,7 +854,7 @@ def _segment_perpendicular(waypoints: Sequence[Sequence[float]],
 
 def _move_party_followers(leader: str, leader_location: str, pos: Point,
                           waypoints: Sequence[Sequence[float]],
-                          seg: int) -> None:
+                          seg: int, settle: bool = False) -> None:
     """Walk the leader's followers alongside them for this tick.
 
     Followers are a pure function of the leader's position, so nothing has to
@@ -871,8 +871,16 @@ def _move_party_followers(leader: str, leader_location: str, pos: Point,
     the formation yields and the follower stands on the leader's point: one
     deterministic answer, no shrink-until-it-fits search whose result would
     depend on the step size.
+
+    ``settle`` is the ARRIVAL: the party has stopped, so the formation point
+    becomes a PREFERENCE rather than the result — ``room_stand.stand_up``
+    keeps a follower whose slot is free exactly where the formation put it and
+    steps the one whose slot lies in a table beside it. Off while the party is
+    walking: in flight a follower stands in no room at all, and the formation
+    is the whole point of a marching column.
     """
     from app.core.party_engine import party_followers
+    from app.core.room_stand import stand_up
     from app.core.world_geometry import location_at_point
     from app.models.character import set_character_pos
     from app.models.world import list_locations
@@ -892,6 +900,11 @@ def _move_party_followers(leader: str, leader_location: str, pos: Point,
             # preserve: this IS a travel step, and the plain write would fire
             # the manual-teleport journey cancel on every single tick.
             set_character_pos(follower, fx, fz, preserve_movement_target=True)
+            # Followers are settled in list order, so each one already counts
+            # as the next one's neighbour — and the leader, settled before
+            # this call, counts for all of them.
+            if settle:
+                stand_up(follower)
         except Exception as e:
             logger.debug("party follow failed for %s: %s", follower, e)
 
@@ -1102,6 +1115,8 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         return
 
     from app.core.boundary_entry import opening_entry_room
+    from app.core.places import inside as places_inside
+    from app.core.room_stand import stand_up
     from app.models.character import (clear_pose_intent, get_movement_target,
                                       record_access_denied,
                                       save_character_current_location,
@@ -1170,15 +1185,44 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
                     name, target_id, reason)
         return
 
+    # WHERE THE ARRIVAL LANDS: on the point the journey walked to — the
+    # doorstep — and not on the location's centre. `sync_pos=True` drags the
+    # position to the centre because a TELEPORT has no point of its own; a
+    # journey has one, and it is the point this very tick's gate was checked
+    # against. It has to be there BEFORE the crossing, because everything
+    # after it measures from the character's position: the standing point of
+    # the arrival room is chosen nearest to where the figure came in
+    # (`room_stand`, T4), and from the centre that reads as "walks to the
+    # middle of the room".
+    #
+    # The raw write is right here and nowhere else: the location is written in
+    # the very next line, so a deriving write would run the crossing cascade
+    # twice. And it only happens when the point really DOES derive the target
+    # (the same reader the gate used) — otherwise position and location would
+    # disagree, and the centre stays the honest answer.
+    ax, az = float(st["pos"][0]), float(st["pos"][1])
+    keep_point = places_inside(target_id, ax, az)
+    if keep_point:
+        from app.models.character import _write_character_pos
+        _write_character_pos(name, ax, az)
     # The crossing. _preserve_movement_target=True marks it as a PROGRAMMED
     # step: the setter clears target + journey precisely because the new
     # location IS the target, and drags the party followers along on the way.
     save_character_current_location(name, target_id,
-                                    _preserve_movement_target=True)
+                                    _preserve_movement_target=True,
+                                    sync_pos=not keep_point)
     # Write the room explicitly: the opening may route somewhere other than
     # the arrival room the location write picks by itself, and only an
     # explicit write clears the room the character came from.
     save_character_current_room(name, entry_room)
+    # …and STAND somewhere free in it. The two writes above each place the
+    # character themselves, but only when what they write actually changes:
+    # `sync_pos=False` skips the location write's own placement (the point is
+    # ours), and an arrival room that equals the one the location write picked
+    # is no room CHANGE. This is the arrival, so it asks outright — and a
+    # second ask costs nothing, because a point that is already free is
+    # returned unchanged (`room_stand.pick_stand`).
+    stand_up(name)
     # The one case the setter cannot clear: the character ALREADY stood in the
     # target (an editor moved the location onto it mid-journey), so nothing
     # changed and the clearing branch never ran — without this the arrival
@@ -1197,7 +1241,7 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         if pos is not None and len(waypoints) >= 2:
             _move_party_followers(name, target_id,
                                   (float(pos["x"]), float(pos["z"])),
-                                  waypoints, len(waypoints) - 2)
+                                  waypoints, len(waypoints) - 2, settle=True)
     except Exception:
         logger.debug("party arrival formation failed for %s", name,
                      exc_info=True)
