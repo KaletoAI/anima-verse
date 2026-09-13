@@ -131,7 +131,7 @@ export function ClipTransitions() {
     >
       {/* ── the rules ── */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, minHeight: 0 }}>
-        <p className="ga-hint" style={{ margin: 0 }}>
+        <p className="ga-form-hint" style={{ margin: 0 }}>
           {t('The clip that has to play BETWEEN two clips, so a figure does not jump'
              + ' from one state into the next. Write "*" for "anything" — on the To'
              + ' side that makes an exit clip, on the From side an enter clip, and the'
@@ -274,7 +274,7 @@ export function ClipTransitions() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div>
               <h3 style={{ margin: '0 0 2px' }}>{row.kind}</h3>
-              <div className="ga-hint">
+              <div className="ga-form-hint">
                 <code>{row.from || TRANSITION_ANY}</code> → <code>{row.to || TRANSITION_ANY}</code>
               </div>
             </div>
