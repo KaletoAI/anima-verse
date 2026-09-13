@@ -493,6 +493,15 @@ export function PosesTab() {
     }
   }, [groupsDraft, load, t, toast])
 
+  /** The `root_drop` of one place type, as a FRACTION of the figure height —
+   *  0 for an unknown or empty one. The clip surfaces calibrate their preview
+   *  against a place type's body, and the figure has to sit as far under the
+   *  marked surface as the server will put it. */
+  const rootDropOf = useCallback(
+    (group: string) => (data.groups || {})[group]?.root_drop ?? 0,
+    [data.groups],
+  )
+
   const viewSwitch = (
     <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
       {(['entries', 'library', 'catalog', 'inbox', 'transitions'] as View[]).map((v) => (
@@ -519,7 +528,8 @@ export function PosesTab() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
-        <ClipLibrary listing={clipList} poses={data.entries} onReload={reloadLibrary} />
+        <ClipLibrary listing={clipList} poses={data.entries} onReload={reloadLibrary}
+          rootDropOf={rootDropOf} />
       </div>
     )
   }
@@ -541,8 +551,8 @@ export function PosesTab() {
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
         {view === 'catalog'
-          ? <ClipCatalog onCreatePose={startFromClip} />
-          : <ClipInbox onCreatePose={startFromClip} />}
+          ? <ClipCatalog onCreatePose={startFromClip} rootDropOf={rootDropOf} />
+          : <ClipInbox onCreatePose={startFromClip} rootDropOf={rootDropOf} />}
       </div>
     )
   }

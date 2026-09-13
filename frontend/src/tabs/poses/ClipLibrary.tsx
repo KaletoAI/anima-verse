@@ -121,12 +121,17 @@ export function ClipLibrary({
   listing,
   poses,
   onReload,
+  rootDropOf,
 }: {
   listing: ClipListing
   /** the pose catalog entries — the "Used by" column reads their `animation` */
   poses: PoseRef[]
   /** re-fetch the listing (and the catalog) after a rename/move/delete */
   onReload: () => Promise<void> | void
+  /** `root_drop` of a place type (fraction of the figure height) — the preview
+   *  sinks the figure that far under the calibration box's top, the way the
+   *  server places it. Without it the figure would rest ON the bed. */
+  rootDropOf?: (group: string) => number
 }) {
   const { t } = useI18n()
   const [search, setSearch] = useState('')
@@ -344,6 +349,9 @@ export function ClipLibrary({
     [previewSet, row],
   )
   const orientDirty = !!(yawDeg || tiltDeg || rollDeg || heightCm)
+  // The baked angles live in the sidecar, so a clip without one has nowhere to
+  // put them — the block says so instead of earning a 400 after Apply.
+  const orientLocked = orientBusy || orientTarget?.has_sidecar === false
 
   const applyOrientation = useCallback(async () => {
     if (!orientTarget || orientBusy || !orientDirty) return
@@ -899,6 +907,7 @@ export function ClipLibrary({
                   importRoll={rollDeg}
                   importHeightM={heightCm / 100}
                   footprint={footprint}
+                  rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0}
                   bust={seq}
                 />
 
@@ -913,6 +922,9 @@ export function ClipLibrary({
                       flexDirection: 'column',
                       gap: 6,
                     }}
+                    title={orientTarget.has_sidecar === false
+                      ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
+                      : undefined}
                   >
                     <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
                       <strong>{t('Orientation')}</strong>
@@ -931,14 +943,14 @@ export function ClipLibrary({
                         fineStep={1}
                         value={yawDeg}
                         onChange={setYawDeg}
-                        disabled={orientBusy}
+                        disabled={orientLocked}
                         sliderWidth="auto"
                         sliderStyle={{ flex: 1, minWidth: 90 }}
                         style={{ display: 'flex', flex: '1 1 260px' }}
                       />
-                      <button type="button" className="ga-btn ga-btn-sm" disabled={orientBusy}
+                      <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
                         onClick={() => setYawDeg((v) => ((v - 90 + 540) % 360) - 180)}>−90°</button>
-                      <button type="button" className="ga-btn ga-btn-sm" disabled={orientBusy}
+                      <button type="button" className="ga-btn ga-btn-sm" disabled={orientLocked}
                         onClick={() => setYawDeg((v) => ((v + 90 + 540) % 360) - 180)}>+90°</button>
                     </div>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -952,7 +964,7 @@ export function ClipLibrary({
                         fineStep={1}
                         value={tiltDeg}
                         onChange={setTiltDeg}
-                        disabled={orientBusy}
+                        disabled={orientLocked}
                         sliderWidth="auto"
                         sliderStyle={{ flex: 1, minWidth: 70 }}
                         style={{ display: 'flex', flex: '1 1 200px' }}
@@ -967,7 +979,7 @@ export function ClipLibrary({
                         fineStep={1}
                         value={rollDeg}
                         onChange={setRollDeg}
-                        disabled={orientBusy}
+                        disabled={orientLocked}
                         sliderWidth="auto"
                         sliderStyle={{ flex: 1, minWidth: 70 }}
                         style={{ display: 'flex', flex: '1 1 200px' }}
@@ -981,7 +993,7 @@ export function ClipLibrary({
                         step={1}
                         value={heightCm}
                         onChange={setHeightCm}
-                        disabled={orientBusy}
+                        disabled={orientLocked}
                         sliderWidth="auto"
                         sliderStyle={{ flex: 1, minWidth: 70 }}
                         style={{ display: 'flex', flex: '1 1 200px' }}
@@ -1000,7 +1012,7 @@ export function ClipLibrary({
                       <button
                         type="button"
                         className="ga-btn ga-btn-sm ga-btn-primary"
-                        disabled={!orientDirty || orientBusy}
+                        disabled={!orientDirty || orientLocked}
                         onClick={() => void applyOrientation()}
                       >
                         {orientBusy ? t('Applying…') : t('Apply orientation')}
@@ -1008,7 +1020,7 @@ export function ClipLibrary({
                       <button
                         type="button"
                         className="ga-btn ga-btn-sm"
-                        disabled={!orientDirty || orientBusy}
+                        disabled={!orientDirty || orientLocked}
                         onClick={resetDials}
                       >
                         {t('Reset dials')}
@@ -1018,7 +1030,9 @@ export function ClipLibrary({
                       ) : null}
                     </div>
                     <div className="ga-form-hint">
-                      {`${t('Already baked into the file')}: ${bakedNote}`}
+                      {orientTarget.has_sidecar === false
+                        ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
+                        : `${t('Already baked into the file')}: ${bakedNote}`}
                     </div>
                     {orientError ? (
                       <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>

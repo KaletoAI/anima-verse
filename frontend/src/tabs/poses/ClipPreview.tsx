@@ -53,9 +53,8 @@ const FIGURE_H = 1.7
  *  much room the pose takes, and a slab makes no claim about furniture that
  *  the marker has not made.
  *
- *  The SAME box is the calibration body a solo clip is turned against
- *  (`footprint`): the dials are set on the place type's real measurements, and
- *  the box the admin aims at is the one the server will seat figures on. */
+ *  This is the PAIR body. A SOLO figure is calibrated against `SOLO_BOX`,
+ *  which is the same slab turned 90° — see there. */
 interface MarkerBox {
   size: [number, number, number]
 }
@@ -67,6 +66,31 @@ const MARKER_BOX: Record<string, MarkerBox> = {
 
 function markerBox(group?: string): MarkerBox | undefined {
   return MARKER_BOX[(group || '').trim().toLowerCase()]
+}
+
+/** The body a SOLO clip is calibrated against — the same place types, turned
+ *  90° against `MARKER_BOX`, and both are right for their case.
+ *
+ *  Read off the beds a world actually has, not guessed: a `lie` marker of
+ *  capacity 2 puts its two slots 0.60–0.80 m apart ACROSS its facing (measured
+ *  on two of them, facing 180 with the row along world X and facing 270 with
+ *  the row along world Z). Two sleepers that far apart lie SIDE BY SIDE, so
+ *  their bodies run ALONG the facing — and a solo figure is yawed to the
+ *  facing, which points its clip's +Z along it. A lying clip therefore has to
+ *  lie along its OWN forward axis, and the body it is dialled against is
+ *  1.0 m across (X) by 2.0 m along (Z).
+ *
+ *  A PAIR is seated by `pair_yaw`, which puts A → B along the facing, so a
+ *  lying couple lands ACROSS the bed and its body is `MARKER_BOX.lie`, the
+ *  other way round. Whether a lying pair should be seated that way is a
+ *  question about the pair seating, not about this box. */
+const SOLO_BOX: Record<string, MarkerBox> = {
+  seat: { size: [0.5, 0.45, 0.5] },
+  lie: { size: [1.0, 0.1, 2.0] },
+}
+
+function soloBox(group?: string): MarkerBox | undefined {
+  return SOLO_BOX[(group || '').trim().toLowerCase()]
 }
 
 interface ApiClip { kind: string; role?: string; set?: string; url: string }
@@ -275,17 +299,19 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         // faces south and stays put, and seeing the figures turn against it is
         // the whole point of the dials.
         //
-        //  * a PAIR on a place type with a marker — the couple's seating;
-        //  * a SOLO clip with a `footprint` — the calibration box the
-        //    orientation dials are set against. A line outline on the floor
-        //    was not enough to judge a tilt or a height against (E3): the
-        //    figure has to be seen resting ON something.
+        //  * a PAIR on a place type with a marker — the couple's seating,
+        //    `MARKER_BOX`;
+        //  * a SOLO clip with a `footprint` — the calibration body the
+        //    orientation dials are set against, `SOLO_BOX`, which is the same
+        //    slab turned 90° because a solo figure lies ALONG the facing. A
+        //    line outline on the floor was not enough to judge a tilt or a
+        //    height against (E3): the figure has to be seen resting ON
+        //    something.
         //
-        // Both are the same box, so a pair being seated wins and nothing is
-        // ever drawn twice.
+        // A pair being seated wins, so nothing is ever drawn twice.
         setPairClip(parts.length === 2)
         const seat = parts.length === 2 ? markerBox(group) : undefined
-        const calib = seat || (footprint ? markerBox(footprint) : undefined)
+        const calib = seat || (footprint ? soloBox(footprint) : undefined)
         if (calib) {
           const [bw, bh, bd] = calib.size
           const geom = new THREE.BoxGeometry(bw, bh, bd)
@@ -462,7 +488,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
     : ''
   // The calibration body, named in metres — a reference one cannot measure is
   // no reference (the 1.70 m figure and the 1 m grid are already said above).
-  const fp = footprint ? markerBox(footprint) : undefined
+  const fp = footprint ? soloBox(footprint) : undefined
   const footNote = fp
     ? ` · ${t('calibration box')} ${footprint} ${fp.size[0].toFixed(2)}`
       + ` × ${fp.size[1].toFixed(2)} × ${fp.size[2].toFixed(2)} m, ${t('facing south')}`

@@ -158,8 +158,12 @@ function mb(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function ClipInbox({ onCreatePose }: {
+export function ClipInbox({ onCreatePose, rootDropOf }: {
   onCreatePose?: (kind: string, store?: 'shared' | 'world') => void
+  /** `root_drop` of a place type (fraction of the figure height) — the preview
+   *  sinks the figure that far under the calibration box's top, the way the
+   *  server places it on the real marker. */
+  rootDropOf?: (group: string) => number
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -964,7 +968,8 @@ export function ClipInbox({ onCreatePose }: {
             {probe && !imported ? (
               <>
                 <ClipPreview key={`probe:${probe.seq}`} urls={probe.urls} height={300}
-                  importYaw={yawDeg} footprint={footprint} />
+                  importYaw={yawDeg} footprint={footprint}
+                  rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0} />
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                   <SliderInput
                     label={t('Turn the clip')}

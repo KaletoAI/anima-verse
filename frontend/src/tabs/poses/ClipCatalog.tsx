@@ -143,8 +143,12 @@ function slugKind(description: string): string {
   return slug.split('-').filter(Boolean).slice(0, 3).join('-')
 }
 
-export function ClipCatalog({ onCreatePose }: {
+export function ClipCatalog({ onCreatePose, rootDropOf }: {
   onCreatePose?: (kind: string, store?: 'shared' | 'world') => void
+  /** `root_drop` of a place type (fraction of the figure height) — the preview
+   *  sinks the figure that far under the calibration box's top, the way the
+   *  server places it on the real marker. */
+  rootDropOf?: (group: string) => number
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -780,7 +784,8 @@ export function ClipCatalog({ onCreatePose }: {
             {selected.clip && selected.clip_urls && (selected.clip_urls.solo || selected.clip_urls.a) ? (
               <>
                 <ClipPreview urls={selected.clip_urls} height={280} window={playWindow}
-                  speed={Number(speed) || 1} importYaw={yawDeg + frameYaw} footprint={footprint} />
+                  speed={Number(speed) || 1} importYaw={yawDeg + frameYaw} footprint={footprint}
+                  rootDrop={footprint ? (rootDropOf?.(footprint) ?? 0) : 0} />
                 {/* THE ORIENTATION DIAL. It turns the preview live and is
                     baked by the import — the same rotation on both sides
                     (scripts/smoke_clip_yaw.py). The footprint beside it is
