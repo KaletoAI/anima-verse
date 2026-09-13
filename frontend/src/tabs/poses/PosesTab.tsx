@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ClipCatalog } from './ClipCatalog'
 import { ClipInbox } from './ClipInbox'
 import { ClipLibrary } from './ClipLibrary'
+import { ClipTransitions } from './ClipTransitions'
 import { clipCoverage, setLabel } from './clipSets'
 import type { ClipListing } from './clipSets'
 import { ClipPreview } from './ClipPreview'
@@ -35,10 +36,21 @@ import { ListPane } from '../../components/ListPane'
 import { CommaListInput } from '../../components/CommaListInput'
 
 type Axis = 'pose' | 'expression'
-/** The tab has four surfaces: the catalog entries, the installed clip library
- *  behind their animation kinds, the CMU clip pool those kinds come from, and
- *  the inbox of foreign files waiting to be imported. */
-type View = 'entries' | 'library' | 'catalog' | 'inbox'
+/** The tab has five surfaces: the catalog entries, the installed clip library
+ *  behind their animation kinds, the CMU clip pool those kinds come from, the
+ *  inbox of foreign files waiting to be imported, and the bridge clips that
+ *  have to play between two clips. */
+type View = 'entries' | 'library' | 'catalog' | 'inbox' | 'transitions'
+
+/** The label of each surface — the button row reads it, and a nested ternary
+ *  over five cases reads like nothing at all. */
+const VIEW_LABELS: Record<View, string> = {
+  entries: 'Entries',
+  library: 'Library',
+  catalog: 'CMU clip catalog',
+  inbox: 'Import files',
+  transitions: 'Transitions',
+}
 
 /** One place type: the vocabulary a marker speaks. `root_drop` is a FRACTION
  *  of the figure height, so it reads back as metres against a 1.70 m figure.
@@ -483,7 +495,7 @@ export function PosesTab() {
 
   const viewSwitch = (
     <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-      {(['entries', 'library', 'catalog', 'inbox'] as View[]).map((v) => (
+      {(['entries', 'library', 'catalog', 'inbox', 'transitions'] as View[]).map((v) => (
         <button
           key={v}
           type="button"
@@ -497,13 +509,7 @@ export function PosesTab() {
             setView(v)
           }}
         >
-          {v === 'entries'
-            ? t('Entries')
-            : v === 'library'
-              ? t('Library')
-              : v === 'catalog'
-                ? t('CMU clip catalog')
-                : t('Import files')}
+          {t(VIEW_LABELS[v])}
         </button>
       ))}
     </div>
@@ -514,6 +520,15 @@ export function PosesTab() {
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
         <ClipLibrary listing={clipList} poses={data.entries} onReload={reloadLibrary} />
+      </div>
+    )
+  }
+
+  if (view === 'transitions') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        {viewSwitch}
+        <ClipTransitions />
       </div>
     )
   }

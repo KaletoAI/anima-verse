@@ -97,21 +97,6 @@ interface PoseRef {
   animation: string
 }
 
-/** One rule of the transition table: the clip that has to play when a figure
- *  goes from one clip to another. `"*"` is the wildcard — on `to` it makes an
- *  EXIT clip ("stand up, whatever comes next"), on `from` an ENTER clip. */
-interface Transition {
-  from: string
-  to: string
-  kind: string
-  /** Fraction of normal speed the figure gains per second WHILE the clip
-   *  plays. 0 holds it on the spot for the whole clip (standing up out of a
-   *  seat); above 0 it gets going during the clip (starting to walk). */
-  accel: number
-}
-
-const TRANSITION_ANY = '*'
-
 export function ClipLibrary({
   listing,
   poses,
@@ -147,29 +132,19 @@ export function ClipLibrary({
   const [locoDraft, setLocoDraft] = useState<Record<string, string>>({})
   const [locoBusy, setLocoBusy] = useState(false)
   const [locoError, setLocoError] = useState('')
-  // The transition rules as the server stores them, and the edited copy
-  const [transitions, setTransitions] = useState<Transition[] | null>(null)
-  const [transDraft, setTransDraft] = useState<Transition[]>([])
-  const [transBusy, setTransBusy] = useState(false)
-  const [transError, setTransError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
 
   // Fetched with every new listing: a rename or delete may have taken a
   // configured kind away, and the block must show what is in force now.
   useEffect(() => {
     let alive = true
-    apiGet<{ locomotion?: Record<string, string>; transitions?: Transition[] }>(
-      '/assets/animation-clips')
+    apiGet<{ locomotion?: Record<string, string> }>('/assets/animation-clips')
       .then((data) => {
         if (!alive) return
         const map = data.locomotion || {}
         setLocomotion(map)
         setLocoDraft(map)
         setLocoError('')
-        const rules = data.transitions || []
-        setTransitions(rules)
-        setTransDraft(rules)
-        setTransError('')
       })
       .catch((e) => {
         if (alive) setLocoError((e as Error).message)
@@ -281,31 +256,6 @@ export function ClipLibrary({
       setLocoBusy(false)
     }
   }, [locoBusy, locoDraft, locomotion])
-
-  const transDirty = useMemo(
-    () => !!transitions && JSON.stringify(transDraft) !== JSON.stringify(transitions),
-    [transDraft, transitions],
-  )
-
-  const saveTransitions = useCallback(async () => {
-    if (transBusy || !transitions) return
-    setTransBusy(true)
-    setTransError('')
-    try {
-      // The WHOLE list travels — the editor shows all of it, so a partial
-      // write would only invite two editors to disagree about what it is.
-      const res = await apiPut<{ transitions: Transition[] }>(
-        '/assets/animation-clips/transitions',
-        { transitions: transDraft.filter((r) => r.from && r.to && r.kind) },
-      )
-      setTransitions(res.transitions)
-      setTransDraft(res.transitions)
-    } catch (e) {
-      setTransError((e as Error).message)
-    } finally {
-      setTransBusy(false)
-    }
-  }, [transBusy, transDraft, transitions])
 
   const refresh = useCallback(async () => {
     if (refreshing) return
@@ -632,122 +582,6 @@ export function ClipLibrary({
           {locoError ? (
             <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
               {locoError}
-            </div>
-          ) : null}
-        </div>
-
-        {/* ── the transitions ── */}
-        <div
-          style={{
-            border: '1px solid var(--border, #30363d)',
-            borderRadius: 6,
-            padding: '8px 10px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
-          }}
-        >
-          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-            <strong>{t('Transitions')}</strong>
-            <span className="ga-hint">
-              {t('The clip that has to play BETWEEN two clips, so a figure does not'
-                 + ' jump from one state into the next. Write "*" for "anything": on'
-                 + ' the right it makes an exit clip (stand up, whatever comes next),'
-                 + ' on the left an enter clip. The more precise rule wins.'
-                 + ' "Speed-up" is how much of its normal speed the figure gains per'
-                 + ' second while the clip plays: 0 keeps it on the spot for the whole'
-                 + ' clip (getting out of a seat), 1 has it at full speed after a'
-                 + ' second (starting to walk). Above 0 the body also turns into the'
-                 + ' new direction at once instead of easing into it.')}
-            </span>
-          </div>
-          <datalist id="clip-kind-list">
-            {locoKinds.map((k) => <option key={k} value={k} />)}
-          </datalist>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {transDraft.map((rule, i) => (
-              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center',
-                flexWrap: 'wrap', fontSize: '0.85em' }}>
-                <span className="ga-hint" style={{ width: 34 }}>{t('from')}</span>
-                <input
-                  className="ga-input" list="clip-kind-list" style={{ maxWidth: 190 }}
-                  value={rule.from} placeholder={TRANSITION_ANY}
-                  disabled={transBusy}
-                  onChange={(e) => setTransDraft((d) => d.map(
-                    (r, j) => (j === i ? { ...r, from: e.target.value } : r)))}
-                />
-                <span className="ga-hint" style={{ width: 22 }}>{t('to')}</span>
-                <input
-                  className="ga-input" list="clip-kind-list" style={{ maxWidth: 190 }}
-                  value={rule.to} placeholder={TRANSITION_ANY}
-                  disabled={transBusy}
-                  onChange={(e) => setTransDraft((d) => d.map(
-                    (r, j) => (j === i ? { ...r, to: e.target.value } : r)))}
-                />
-                <span className="ga-hint" style={{ width: 30 }}>{t('play')}</span>
-                <select
-                  className="ga-input" style={{ maxWidth: 200 }}
-                  value={rule.kind} disabled={transBusy}
-                  onChange={(e) => setTransDraft((d) => d.map(
-                    (r, j) => (j === i ? { ...r, kind: e.target.value } : r)))}
-                >
-                  {locoKinds.includes(rule.kind) ? null : (
-                    <option value={rule.kind}>{`${rule.kind} (${t('missing')})`}</option>
-                  )}
-                  {locoKinds.map((k) => <option key={k} value={k}>{k}</option>)}
-                </select>
-                <span className="ga-hint" style={{ width: 58 }}>{t('speed-up')}</span>
-                <input
-                  className="ga-input" type="number" min={0} max={8} step={0.1}
-                  style={{ maxWidth: 80 }}
-                  value={rule.accel} disabled={transBusy}
-                  onChange={(e) => setTransDraft((d) => d.map(
-                    (r, j) => (j === i
-                      ? { ...r, accel: Math.max(0, Math.min(8, Number(e.target.value) || 0)) }
-                      : r)))}
-                />
-                <button
-                  type="button" className="ga-btn ga-btn-sm" disabled={transBusy}
-                  title={t('Remove this rule')}
-                  onClick={() => setTransDraft((d) => d.filter((_, j) => j !== i))}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-            {transDraft.length === 0 ? (
-              <span className="ga-hint">
-                {t('No rules — every clip change is instant.')}
-              </span>
-            ) : null}
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button
-              type="button" className="ga-btn ga-btn-sm" disabled={transBusy}
-              onClick={() => setTransDraft((d) => [...d,
-                { from: '', to: TRANSITION_ANY, kind: locoKinds[0] || '', accel: 0 }])}
-            >
-              {t('Add rule')}
-            </button>
-            <button
-              type="button" className="ga-btn ga-btn-sm ga-btn-primary"
-              disabled={!transDirty || transBusy}
-              onClick={() => void saveTransitions()}
-            >
-              {transBusy ? t('Saving…') : t('Save')}
-            </button>
-            {transDirty && !transBusy ? (
-              <button
-                type="button" className="ga-btn ga-btn-sm"
-                onClick={() => setTransDraft(transitions || [])}
-              >
-                {t('Cancel')}
-              </button>
-            ) : null}
-          </div>
-          {transError ? (
-            <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
-              {transError}
             </div>
           ) : null}
         </div>
