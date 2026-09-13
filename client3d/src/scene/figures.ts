@@ -32,30 +32,44 @@ import { bridgePace, clipTransition, locomotionClip, setClipTransitions,
  *  the prop/diorama scales are all worked out against 1.70. */
 export const BASE_FIGURE_HEIGHT_M = 1.70;
 
-/** Which KINDS repeat and which hold their last frame — the admin's flag per
- *  clip, taken from the server listing (§ A8, E5). Filled once when the
- *  library is loaded; a kind that is not in it counts as a LOOP, because the
- *  one thing that must never happen is a walk cycle stopping mid-stride. */
-const clipLoopFlags = new Map<string, boolean>();
+/** Does THIS clip repeat, or does it hold its last frame? The admin's flag
+ *  (§ A8, E5) belongs to one FILE — the sidecar lives in the set directory,
+ *  so `dance` in the neutral set and `female/dance` are two decisions, not
+ *  one. The flag therefore travels with the clip OBJECT, from the file that
+ *  was loaded through cloning, adaptation and retargeting down to the action
+ *  a figure plays; a per-kind table would have to fold the sets together and
+ *  would answer the wrong one for half the figures.
+ *
+ *  A clip nobody flagged (a model's own embedded clip, the dev manifest, a
+ *  listing without the field) LOOPS — a walk cycle must never stop
+ *  mid-stride. */
+const clipLoopFlags = new WeakMap<THREE.AnimationClip, boolean>();
 
-/** Takes the listing's loop flags. A kind can have several files (both halves
- *  of a pair, numbered variants, one per set): it loops when ANY of them
- *  does — a single "hold the last frame" file must not freeze the others.
- *  Returns how many kinds do NOT loop, for the boot log. */
-export function setClipLoopFlags(clips: Array<{ kind: string; role?: string; loop?: boolean }>): number {
-  clipLoopFlags.clear();
-  for (const c of clips) {
-    const kind = (c.role ? `${c.kind}__${c.role}` : c.kind).toLowerCase();
-    if (!kind) continue;
-    clipLoopFlags.set(kind, (clipLoopFlags.get(kind) ?? false) || !!c.loop);
-  }
-  return [...clipLoopFlags.values()].filter((v) => !v).length;
+/** Remembers the listing's flag for one loaded clip file. */
+function setClipLoop(clip: THREE.AnimationClip, loop: boolean | undefined): void {
+  if (loop !== undefined) clipLoopFlags.set(clip, loop);
 }
 
-/** Does this clip kind repeat? Unknown kinds loop (see `clipLoopFlags`). */
-export function clipLoops(kind: string): boolean {
-  const known = clipLoopFlags.get((kind || '').toLowerCase());
-  return known === undefined ? true : known;
+/** Carries the flags of `from` onto the clips DERIVED from them — the clone
+ *  per character, `adaptExternalClips`, `retargetClips`. Matched by name,
+ *  which every one of those steps keeps; a derived clip whose origin carried
+ *  no flag keeps none (and thus loops). */
+function carryClipLoops(from: readonly THREE.AnimationClip[],
+                        to: readonly THREE.AnimationClip[]): void {
+  const byName = new Map<string, boolean>();
+  for (const c of from) {
+    const flag = clipLoopFlags.get(c);
+    if (flag !== undefined) byName.set(c.name.toLowerCase(), flag);
+  }
+  for (const c of to) {
+    const flag = byName.get(c.name.toLowerCase());
+    if (flag !== undefined) clipLoopFlags.set(c, flag);
+  }
+}
+
+/** Does the clip that actually plays repeat? Unknown = loop (see above). */
+export function clipLoops(clip: THREE.AnimationClip | null | undefined): boolean {
+  return clip ? clipLoopFlags.get(clip) ?? true : true;
 }
 
 interface ManifestModel {
@@ -767,29 +781,38 @@ export class FigureLibrary {
       const rules = setClipTransitions(library.transitions);
       console.info(`[figures] clip transitions: ${rules.length}`);
     }
-    // And the loop flags ride it too — before any figure plays its first
-    // clip, or a one-shot would cycle until the next `play()`.
-    const oneShots = setClipLoopFlags(library.clips);
-    console.info(`[figures] ${library.clips.length} clips, ${oneShots} of them one-shot`);
     const serverClips = library.clips;
     // A PAIR clip's half is indexed under `<kind>__<role>` (§ A8a) — the name
-    // an interaction asks for; a solo clip keeps its plain kind.
-    const sources: Array<{ kind: string; set: string; url: string }> = serverClips.map((c) => ({
-      kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '', url: c.url,
-    }));
+    // an interaction asks for; a solo clip keeps its plain kind. The listing's
+    // loop flag rides along PER FILE: it belongs to the kind in ITS set.
+    const sources: Array<{ kind: string; set: string; url: string; loop?: boolean }> =
+      serverClips.map((c) => ({
+        kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '',
+        url: c.url, loop: c.loop,
+      }));
     if (!sources.length) {
       // Dev/offline fallback: the local manifest clips (no sets)
       for (const [kind, url] of Object.entries(manifest.clipFiles ?? {})) sources.push({ kind, set: '', url });
     } else {
       const desc = sources.map((s) => s.set ? `${s.kind}/${s.set}` : s.kind).join(', ');
       console.info(`[figures] ${sources.length} clips from the server: ${desc}`);
+      // Loud on purpose: a one-shot that should cycle (or the other way
+      // round) is a report about ONE file in ONE set, and this line is what
+      // says which files the flag was actually delivered for.
+      const oneShots = sources.filter((s) => s.loop === false)
+        .map((s) => s.set ? `${s.set}/${s.kind}` : s.kind).sort();
+      console.info(`[figures] one-shot clips (hold the last frame): `
+        + `${oneShots.length ? oneShots.join(', ') : 'none'}`);
     }
-    for (const { kind, set, url } of sources) {
+    for (const { kind, set, url, loop } of sources) {
       try {
         const { animations } = await loadFile(url);
         if (!animations[0]) continue;
         const clip = animations[0].clone();
         clip.name = kind;
+        // The flag of THIS file — kept on the clip object, because the same
+        // kind in another set may have the opposite one (E5).
+        setClipLoop(clip, loop);
         // The half of a pair clip carries ROOT MOTION inside the anchor frame
         // (the handshake's approach, the dance's travel). `adaptExternalClips`
         // strips the horizontal hips motion like for every clip, so the root
@@ -838,6 +861,7 @@ export class FigureLibrary {
       // from the first model that HAS clips and retarget bone by bone.
       if (!donor) continue;
       m.clips = retargetClips(m.template, donor.template, donor.clips);
+      carryClipLoops(donor.clips, m.clips);
       if (!m.clips.length) console.warn(`[figures] ${m.name}: clip retargeting failed`);
       else console.info(`[figures] ${m.name}: ${m.clips.length} clips retargeted from ${donor.name}`);
     }
@@ -1003,6 +1027,7 @@ export class FigureLibrary {
       }
     }
     const adapted = adaptExternalClips(candidates, template, corrections);
+    carryClipLoops(candidates, adapted);
     const have = new Set(own.map((c) => c.name.toLowerCase()));
     const missing = missingClipKinds(
       candidates.map((c) => c.name),
@@ -1042,6 +1067,9 @@ export class FigureLibrary {
         if (clip) {
           const c = clip.clone();
           c.name = kind;
+          // The set chain has just decided WHICH file this character plays
+          // for this kind — its flag is the one that counts from here on.
+          setClipLoop(c, clipLoopFlags.get(clip));
           out.push(c);
           break;
         }
@@ -1512,11 +1540,11 @@ export class Figure {
       return;
     }
     resolved.timeScale = paceOf();
-    // Loop or last frame (E5): the admin's flag of the kind that ACTUALLY
-    // plays — a stand-in serves its own motion, so it decides its own end.
-    // `clampWhenFinished` is what makes "no loop" a held pose instead of a
-    // snap back to frame 0.
-    const loop = clipLoops(chosenKind || kind);
+    // Loop or last frame (E5): the flag of the CLIP that actually plays —
+    // this figure's set decided which file that is, and a stand-in serves its
+    // own motion, so it decides its own end. `clampWhenFinished` is what
+    // makes "no loop" a held pose instead of a snap back to frame 0.
+    const loop = clipLoops(resolved.getClip());
     resolved.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
     resolved.clampWhenFinished = !loop;
     resolved.reset().fadeIn(0.25).play();
