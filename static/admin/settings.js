@@ -875,10 +875,8 @@ const ROUTING_TEXT = {
     requiredSuffix:   ' required',
     capsUnknown:      'capabilities unknown',
     capsUnknownTitle: 'No capability entry for this model — maintain it under /admin/models. No check possible, no warning.',
-    perTaskView:      'Per-task view',
-    orderApplied:     'Order set for all tasks',
-    catalogFailed:    'Could not load the LLM task list — task dropdowns and the '
-                    + 'per-task view stay empty. After a code update the server '
+    catalogFailed:    'Could not load the LLM task list — the task pages and the '
+                    + 'task chips stay empty. After a code update the server '
                     + 'needs a restart; if that is not it, your session may have expired.',
 };
 
@@ -1029,220 +1027,13 @@ function renderMatchBadges(req, capsKey) {
     return html;
 }
 
-// Compact variant for the narrow editable task rows: ONLY a real warning, and
-// only as an icon whose tooltip carries the full text. No chip text and no
-// "capabilities unknown" hint — that row is a flex-row of select + number +
-// delete button and has no space for either.
-function renderMatchIcon(req, capsKey) {
-    const caps = MODEL_CAPS_CACHE[capsKey];
-    if (caps === undefined) return '';
-    const res = evaluateRoutingMatch(req, caps);
-    let html = '';
-    for (const key of res.missing) {
-        const txt = MISMATCH_TEXT[key];
-        if (!txt) continue;
-        html += '<span class="req-warn-icon" title="' + esc(txt.label + ' — ' + txt.title)
-             + '">⚠</span>';
-    }
-    return html;
-}
-
-// Fills the mismatch slots of the editable task rows of one llm_routing entry
-// with the compact warning icon. Runs as a post-pass because
-// renderTaskOrderRow() is synchronous.
-async function updateTaskRowMatchBadges(path) {
-    const slots = document.querySelectorAll('[data-taskmatch^="' + path + '|"]');
-    if (!slots.length) return;
-    const catalog = await loadLlmCatalog();
-    const reqById = {};
-    for (const t of (catalog.tasks || [])) reqById[t.id] = t.requirements || null;
-    const entry = getVal(path.replace(/\.tasks$/, '')) || {};
-    const items = getVal(path) || [];
-    const key = capsKeyFor(entry.provider, entry.model);
-    if (entry.model) await ensureModelCaps([key]);
-    slots.forEach(el => {
-        const idx = parseInt((el.getAttribute('data-taskmatch') || '').split('|')[1], 10);
-        const item = items[idx] || {};
-        el.innerHTML = entry.model ? renderMatchIcon(reqById[item.task], key) : '';
-    });
-}
-
-// Task select of an editable routing row changed.
-function onTaskRowTaskChanged(path, index, value) {
-    setVal(path + '[' + index + '].task', value);
-    updateTaskRowMatchBadges(path);
-    applyEmbedVisibility();
-}
-
-// Model/provider of an llm_routing entry changed -> re-check its task rows.
-// Every other model field on the page is ignored.
+// Provider/model of an llm_routing entry changed. Only the Tasks page shows
+// mismatch badges for a model, so only that page needs a re-render; on the
+// LLMs page the tasks are read-only chips carrying no model information, and
+// re-rendering there would collapse the accordion on every edit.
 function onRoutingModelChanged(path) {
-    const m = /^(llm_routing\[\d+\])\.(model|provider)$/.exec(path || '');
-    if (!m) return;
-    updateTaskRowMatchBadges(m[1] + '.tasks');
-}
-
-async function renderLlmTaskView(entries) {
-    const catalog = await loadLlmCatalog();
-    const tasks = catalog.tasks || [];
-    const view = document.getElementById('llm-task-view');
-    if (!view) return;
-
-    // Load state from the server (runtime + persistent + presets)
-    let state = { disabled: [], runtime_disabled: [], presets: {} };
-    try {
-        const r = await fetch('/admin/settings/llm-task-state', { credentials: 'same-origin' });
-        if (r.ok) state = await r.json();
-    } catch (e) {}
-
-    // Persistently disabled from CONFIG (the UI source for the toggles)
-    const persistentDisabled = new Set(
-        ((CONFIG.llm_task_state || {}).disabled_tasks || [])
-    );
-    const runtimeDisabled = new Set(state.runtime_disabled || []);
-
-    // task_id -> [{order, provider, model, llmDisabled}]
-    const byTask = {};
-    for (const entry of (entries || [])) {
-        if (!entry || typeof entry !== 'object') continue;
-        const prov = entry.provider || '';
-        const mod = entry.model || '';
-        const llmDisabled = entry.enabled === false;
-        for (const t of (entry.tasks || [])) {
-            if (!t || !t.task) continue;
-            (byTask[t.task] = byTask[t.task] || []).push({
-                order: t.order || 999,
-                provider: prov,
-                model: mod,
-                llmDisabled: llmDisabled,
-            });
-        }
-    }
-    for (const k in byTask) byTask[k].sort((a, b) => a.order - b.order);
-
-    // Capabilities of every assigned model — one batched lookup before the
-    // markup is built, so the mismatch chips are there on the first paint.
-    const capsKeys = [];
-    for (const k in byTask) {
-        for (const r of byTask[k]) if (r.model) capsKeys.push(capsKeyFor(r.provider, r.model));
-    }
-    await ensureModelCaps(capsKeys);
-
-    let html = '';
-    // Preset selector (runtime, not persistent — only for this server session)
-    html += '<div style="margin-bottom:10px; padding:8px 10px; background:#161b22; border:1px solid #30363d; border-radius:6px;">';
-    html += '<div style="font-size:12px; color:#8b949e; margin-bottom:6px;">Runtime preset (not persistent):</div>';
-    html += '<select id="llm-task-preset" onchange="applyTaskPreset(this.value)" style="background:#0d1117; color:#c9d1d9; border:1px solid #30363d; padding:6px; border-radius:4px; width:100%;">';
-    html += '<option value="none">— none (all tasks active) —</option>';
-    for (const p of Object.keys(state.presets || {})) {
-        html += '<option value="' + esc(p) + '">' + esc(p) + ' — ' + (state.presets[p] || []).length + ' tasks off</option>';
-    }
-    html += '</select>';
-    if (runtimeDisabled.size) {
-        html += '<div style="font-size:11px; color:#d29922; margin-top:4px;">Active: ' + runtimeDisabled.size + ' tasks runtime-disabled</div>';
-    }
-    html += '</div>';
-
-    // Sorted by category (chat → tool → helper → image), then by label. Bigger
-    // models (chat) end up on top, small helpers at the bottom — which matches
-    // the reading expectation "who needs what".
-    const _CAT_ORDER = { chat: 0, tool: 1, helper: 2, image: 3, embedding: 4 };
-    // Per-category colors for border + badge:
-    //   chat:   blue   — large models
-    //   tool:   violet — structured output
-    //   helper: green  — small/cheap models
-    //   image:  orange — vision / image IO
-    const _CAT_COLORS = {
-        chat:   { bg: '#1f3a5f', fg: '#79c0ff', border: '#30547a' },
-        tool:   { bg: '#3a2f5f', fg: '#d2a8ff', border: '#54497a' },
-        helper: { bg: '#1c3a2c', fg: '#7ee787', border: '#2d553f' },
-        image:  { bg: '#5a3a1f', fg: '#ffaa66', border: '#7a543d' },
-        embedding: { bg: '#3a1f4f', fg: '#c879ff', border: '#54387a' },
-        '':     { bg: '#21262d', fg: '#8b949e', border: '#30363d' },
-    };
-    const sortedTasks = [...tasks].sort((a, b) => {
-        const ao = _CAT_ORDER[a.category] ?? 99;
-        const bo = _CAT_ORDER[b.category] ?? 99;
-        if (ao !== bo) return ao - bo;
-        return (a.label || '').localeCompare(b.label || '');
-    });
-
-    let _lastCat = null;
-    for (const t of sortedTasks) {
-        // Category header whenever the category changes
-        if (t.category !== _lastCat) {
-            _lastCat = t.category;
-            const cc = _CAT_COLORS[t.category] || _CAT_COLORS[''];
-            html += '<div style="margin:14px 0 6px 0; padding:4px 10px; '
-                 + 'background:' + cc.bg + '; color:' + cc.fg + '; '
-                 + 'border-left:3px solid ' + cc.fg + '; border-radius:3px; '
-                 + 'font-size:11px; font-weight:600; letter-spacing:0.3px; '
-                 + 'text-transform:uppercase;">'
-                 + esc(t.category_label || 'Other') + '</div>';
-        }
-
-        const rows = byTask[t.id] || [];
-        const isEmpty = rows.length === 0;
-        const isPersistDisabled = persistentDisabled.has(t.id);
-        const isRuntimeDisabled = runtimeDisabled.has(t.id);
-        const disabledStyle = (isPersistDisabled || isRuntimeDisabled) ? 'opacity:0.5;' : '';
-        const cc = _CAT_COLORS[t.category] || _CAT_COLORS[''];
-        html += '<div style="margin-bottom:6px; padding:8px 10px; background:#0d1117; '
-             + 'border:1px solid #30363d; border-left:3px solid ' + cc.fg + '; '
-             + 'border-radius:6px; ' + disabledStyle + '">';
-        html += '<div style="display:flex; justify-content:space-between; align-items:center;">';
-        let catBadge = '';
-        if (t.category_label) {
-            catBadge = ' <span style="font-size:10px; color:' + cc.fg
-                 + '; font-weight:400; background:' + cc.bg
-                 + '; padding:1px 6px; border-radius:8px; margin-left:4px;">'
-                 + esc(t.category_label) + '</span>';
-        }
-        html += '<div style="font-size:12px; color:#58a6ff; font-weight:600;">' + esc(t.label) + catBadge + ' <span style="color:#6e7681; font-weight:400;">— ' + esc(t.id) + '</span></div>';
-        html += '<label style="display:inline-flex; align-items:center; gap:4px; font-size:11px; color:#8b949e; cursor:pointer;">';
-        html += '<input type="checkbox" ' + (isPersistDisabled ? '' : 'checked') + ' onchange="toggleTaskPersistent(\'' + t.id + '\', !this.checked)"> active';
-        html += '</label>';
-        html += '</div>';
-        // Requirement profile of the task (nothing for a task without one).
-        html += renderRequirementBadges(t.requirements, catalog);
-        if (isRuntimeDisabled) {
-            html += '<div style="font-size:11px; color:#d29922;">runtime-disabled (preset)</div>';
-        }
-        if (isEmpty) {
-            // pose_embedding runs over CONFIG.embedding (built-in fastembed/ONNX or an
-            // external /v1/embeddings provider), NOT over llm_routing. With the
-            // internal/auto backend "no LLM assigned" would be misleading -> show the
-            // real status instead.
-            const _emb = CONFIG.embedding || {};
-            const _embBackend = (_emb.backend || 'auto');
-            if (t.id === 'pose_embedding' && _embBackend !== 'external') {
-                const _m = _emb.internal_model || 'bge-small-en';
-                const _lbl = _embBackend === 'auto' ? 'built-in (auto)' : 'built-in';
-                html += '<div class="desc" style="color:#3fb950;">' + _lbl + ' embedding — ' + esc(_m) + ' (CPU, no LLM needed)</div>';
-            } else {
-                html += '<div class="desc" style="color:#d29922;">no LLM assigned</div>';
-            }
-        } else {
-            html += '<div style="margin-top:4px;">';
-            for (const r of rows) {
-                const rowStyle = r.llmDisabled
-                    ? 'font-size:12px; color:#6e7681; display:flex; gap:8px; text-decoration:line-through;'
-                    : 'font-size:12px; color:#c9d1d9; display:flex; gap:8px;';
-                html += '<div style="' + rowStyle + '">';
-                html += '<span style="color:#6e7681; min-width:22px;">' + r.order + '.</span>';
-                html += '<span>' + esc(r.provider) + ' / ' + esc(r.model) + '</span>';
-                if (r.llmDisabled) {
-                    html += '<span style="color:#d29922; text-decoration:none;">(LLM disabled)</span>';
-                }
-                // Mismatch per provider/model entry of this task row.
-                if (r.model) html += renderMatchBadges(t.requirements, capsKeyFor(r.provider, r.model));
-                html += '</div>';
-            }
-            html += '</div>';
-        }
-        html += '</div>';
-    }
-    view.innerHTML = html;
+    if (!/^llm_routing\[\d+\]\.(model|provider)$/.test(path || '')) return;
+    if (ACTIVE_SECTION === 'llm_routing' && ACTIVE_PAGE === 'tasks') renderLlmRoutingPage('tasks');
 }
 
 function toggleTaskPersistent(taskId, disable) {
@@ -1373,7 +1164,9 @@ function renderFields(fields, data, path) {
             continue;
         }
         if (f.type === 'task_order_list') {
-            html += renderTaskOrderList(data[fKey] || [], path + '.' + fKey, f);
+            // Read-only chips (settings-routing.js) — assignment lives on the
+            // Tasks page of the LLM Routing section.
+            html += renderTaskChips(data[fKey] || [], path + '.' + fKey, f);
             continue;
         }
         const val = data[fKey] !== undefined ? data[fKey] : (f.default !== undefined ? f.default : '');
@@ -1896,82 +1689,6 @@ async function loadLlmCatalog(forceRefresh) {
     return LLM_CATALOG_CACHE;
 }
 
-function renderTaskOrderList(items, path, f) {
-    // items: [{task: 'chat_stream', order: 1}, ...]
-    let html = '<div class="field"><label>' + f.label + '</label><div class="input-wrap">';
-    if (f.description) html += '<div class="desc" style="margin-bottom:6px;">' + f.description + '</div>';
-    html += '<div id="tasks-' + path + '">';
-    for (let i = 0; i < items.length; i++) {
-        html += renderTaskOrderRow(items[i] || {}, path, i);
-    }
-    html += '</div>';
-    html += '<div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:4px;">';
-    html += '<button class="btn btn-sm" onclick="addTaskOrderRow(\'' + path + '\')">+ Task</button>';
-    html += '<button class="btn btn-sm" title="Add all Image-Input tasks not yet assigned" onclick="addTaskGroup(\'' + path + '\', \'image\')">+ All Image</button>';
-    html += '<button class="btn btn-sm" title="Add all Tool tasks not yet assigned" onclick="addTaskGroup(\'' + path + '\', \'tool\')">+ All Tools</button>';
-    html += '<button class="btn btn-sm" title="Add all Large Chat Model tasks not yet assigned" onclick="addTaskGroup(\'' + path + '\', \'chat\')">+ All Chat</button>';
-    html += '<button class="btn btn-sm" title="Add all Small Helper tasks not yet assigned" onclick="addTaskGroup(\'' + path + '\', \'helper\')">+ All Helper</button>';
-    html += '<button class="btn btn-sm" title="Add all Embedding tasks not yet assigned" onclick="addTaskGroup(\'' + path + '\', \'embedding\')">+ All Embedding</button>';
-    html += '<button class="btn btn-sm" title="Add all Tool/Helper tasks that run WITHOUT thinking" onclick="addTaskGroupByThinking(\'' + path + '\', false)">+ All No-Thinking</button>';
-    html += '<button class="btn btn-sm" title="Add all Tool/Helper tasks that should run WITH thinking (🧠)" onclick="addTaskGroupByThinking(\'' + path + '\', true)">+ All Thinking 🧠</button>';
-    html += '</div>';
-    // Bulk-Action: alle Task-Orders dieses LLMs auf einen Wert setzen
-    html += '<div style="margin-top:6px; display:flex; align-items:center; gap:6px;">';
-    html += '<span style="font-size:12px; color:#8b949e;">Set order for all tasks:</span>';
-    html += '<input type="number" id="bulk-order-input-' + path + '" min="1" step="1" placeholder="1" style="max-width:70px;">';
-    html += '<button class="btn btn-sm" onclick="setAllTaskOrders(\'' + path + '\')">Apply</button>';
-    html += '</div>';
-    html += '</div></div>';
-    // Async: Dropdowns fuellen nachdem DOM da ist
-    setTimeout(() => populateTaskSelects(path), 0);
-    return html;
-}
-
-function renderTaskOrderRow(item, path, i) {
-    const task = item.task || '';
-    const order = (item.order !== undefined ? item.order : 1);
-    let html = '<div class="flex-row" id="taskrow-' + path + '-' + i + '">';
-    html += '<select data-taskrow="' + path + '-' + i + '" style="flex:3;" onchange="onTaskRowTaskChanged(\'' + path + '\', ' + i + ', this.value)">';
-    html += '<option value="' + esc(task) + '" selected>' + esc(task || '— select —') + '</option>';
-    html += '</select>';
-    html += '<input type="number" value="' + order + '" min="1" step="1" style="max-width:70px;" title="Order" onchange="setVal(\'' + path + '[' + i + '].order\', parseInt(this.value) || 1)">';
-    // Slot for the mismatch chip — filled by updateTaskRowMatchBadges().
-    html += '<span class="task-match-slot" data-taskmatch="' + path + '|' + i + '"></span>';
-    html += '<button class="btn btn-sm btn-danger" onclick="removeTaskOrderRow(\'' + path + '\', ' + i + ')">✕</button>';
-    html += '</div>';
-    return html;
-}
-
-async function populateTaskSelects(path) {
-    const tasks = (await loadLlmCatalog()).tasks || [];
-    // Group tasks by category for guidance — show grouped <optgroup>s in the dropdown.
-    const order = ['image', 'tool', 'chat', 'helper', 'embedding', ''];
-    const grouped = {};
-    for (const t of tasks) {
-        const cat = t.category || '';
-        (grouped[cat] = grouped[cat] || []).push(t);
-    }
-    const selects = document.querySelectorAll('select[data-taskrow^="' + path + '-"]');
-    selects.forEach(sel => {
-        const current = sel.value;
-        let opts = '<option value="">— select —</option>';
-        for (const cat of order) {
-            const list = grouped[cat];
-            if (!list || !list.length) continue;
-            const groupLabel = list[0].category_label || 'Other';
-            opts += '<optgroup label="' + esc(groupLabel) + '">';
-            for (const t of list) {
-                opts += '<option value="' + esc(t.id) + '"' + (t.id === current ? ' selected' : '') + '>'
-                     + esc(t.label) + (t.thinking ? ' 🧠' : '') + ' — ' + esc(t.id) + '</option>';
-            }
-            opts += '</optgroup>';
-        }
-        sel.innerHTML = opts;
-    });
-    applyEmbedVisibility();
-    updateTaskRowMatchBadges(path);
-}
-
 // True when the routing entry serves at least one task of the "embedding" group
 // (embedding models use no temperature/max_tokens).
 function _entryIsEmbedding(data) {
@@ -1990,97 +1707,6 @@ function applyEmbedVisibility() {
         const entry = getVal(entryPath);
         el.style.display = _entryIsEmbedding(entry) ? 'none' : '';
     });
-}
-
-function addTaskOrderRow(path) {
-    const obj = _ensureContainer(path, 'array');
-    // order=1 is the default primary slot. Increase only when this LLM is meant
-    // as a fallback for a task another LLM already serves at order=1.
-    obj.push({ task: '', order: 1 });
-    rerenderTaskOrderList(path);
-}
-
-async function addTaskGroup(path, category) {
-    const tasks = (await loadLlmCatalog()).tasks || [];
-    const obj = _ensureContainer(path, 'array');
-    const existing = new Set((obj || []).map(it => it && it.task).filter(Boolean));
-    let added = 0;
-    for (const t of tasks) {
-        if (t.category !== category) continue;
-        if (existing.has(t.id)) continue;
-        obj.push({ task: t.id, order: 1 });
-        added++;
-    }
-    rerenderTaskOrderList(path);
-    if (added) toast('Added ' + added + ' task' + (added === 1 ? '' : 's'), 'success');
-    else toast('All tasks of this group are already assigned', 'success');
-}
-
-// Bulk-add tool/helper tasks by their thinking-group (gateway thinking vs
-// no-thinking alias). wantThinking=true → only tasks flagged thinking; false →
-// the rest of tool/helper. Chat/image/embedding tasks are never included here.
-async function addTaskGroupByThinking(path, wantThinking) {
-    const tasks = (await loadLlmCatalog()).tasks || [];
-    const obj = _ensureContainer(path, 'array');
-    const existing = new Set((obj || []).map(it => it && it.task).filter(Boolean));
-    let added = 0;
-    for (const t of tasks) {
-        if (t.category !== 'tool' && t.category !== 'helper') continue;
-        if (!!t.thinking !== !!wantThinking) continue;
-        if (existing.has(t.id)) continue;
-        obj.push({ task: t.id, order: 1 });
-        added++;
-    }
-    rerenderTaskOrderList(path);
-    if (added) toast('Added ' + added + ' task' + (added === 1 ? '' : 's'), 'success');
-    else toast('All tasks of this group are already assigned', 'success');
-}
-
-function removeTaskOrderRow(path, index) {
-    const parts = parsePath(path);
-    let obj = CONFIG;
-    for (const p of parts) obj = obj[p];
-    obj.splice(index, 1);
-    rerenderTaskOrderList(path);
-}
-
-function setAllTaskOrders(path) {
-    const inputEl = document.getElementById('bulk-order-input-' + path);
-    if (!inputEl) return;
-    const order = parseInt(inputEl.value, 10);
-    if (!order || order < 1) {
-        toast('Please enter an order value >= 1', 'error');
-        return;
-    }
-    const parts = parsePath(path);
-    let obj = CONFIG;
-    for (const p of parts) obj = obj && obj[p];
-    if (!Array.isArray(obj) || !obj.length) {
-        toast('No tasks assigned', 'error');
-        return;
-    }
-    for (const it of obj) {
-        if (it && typeof it === 'object') it.order = order;
-    }
-    rerenderTaskOrderList(path);
-    toast(ROUTING_TEXT.orderApplied + ': order=' + order + ' (' + obj.length + ')', 'success');
-}
-
-function rerenderTaskOrderList(path) {
-    // Re-render only the tasks container instead of the whole section, so the
-    // surrounding array item stays open.
-    const parts = parsePath(path);
-    let obj = CONFIG;
-    for (const p of parts) obj = obj && obj[p];
-    const items = Array.isArray(obj) ? obj : [];
-    const wrap = document.getElementById('tasks-' + path);
-    if (!wrap) { renderSection(ACTIVE_SECTION); return; }
-    let html = '';
-    for (let i = 0; i < items.length; i++) {
-        html += renderTaskOrderRow(items[i] || {}, path, i);
-    }
-    wrap.innerHTML = html;
-    populateTaskSelects(path);
 }
 
 // ── Data Access ──

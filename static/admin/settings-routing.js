@@ -1,17 +1,17 @@
 // ── LLM Routing (Advanced): the task-centric editor ─────────────────────
-// plan-llm-routing-ui.md, Task 3. Loaded AFTER static/admin/settings.js, so
+// plan-llm-routing-ui.md. Loaded AFTER static/admin/settings.js, so
 // every global of that file (CONFIG, SCHEMA, esc, toast, loadLlmCatalog,
 // renderRequirementBadges, ensureModelCaps, …) is available at run time.
 //
 // The section is a PAGED schema section (config_schema.py → llm_routing.pages):
-//   tasks    — one row per catalog task with its ordered LLM chain  (this file)
-//   llms     — the per-LLM editor                                   (Task 4)
-//   overview — what the server would route right now                (Task 4)
+//   tasks    — one row per catalog task with its ordered LLM chain
+//   llms     — the per-LLM editor (provider/model/sampling), tasks read-only
+//   overview — what the server would route right now (read-only)
 //
 // The config model is unchanged: CONFIG.llm_routing is a list of LLM entries
 // {name, enabled, preload_on_startup, provider, model, temperature, max_tokens,
-//  chat_template, tasks: [{task, order}]}. This page only edits the `tasks`
-// lists — a task's chain is its assignments across ALL entries, ordered.
+//  chat_template, tasks: [{task, order}]}. Only the Tasks page edits the
+// `tasks` lists — a task's chain is its assignments across ALL entries, ordered.
 
 // >>> harness-extract:routingModel
 // Pure functions over CONFIG.llm_routing (a list of LLM entries, each with
@@ -114,15 +114,32 @@ const RT_TEXT = {
     activeRuntime: 'Active: {n} tasks runtime-disabled',
     groupAssigned: '{n} task(s) assigned to {llm}', groupNone: 'Nothing to assign — no unassigned task in this group.',
     newLlmTitle: 'New LLM for this task', name: 'Name (optional)', temperature: 'Temperature',
-    maxTokens: 'Max tokens (optional)', comingTask4: 'Coming in Task 4.',
+    maxTokens: 'Max tokens (optional)',
     otherCategory: 'Other',
+    // LLMs page: the per-entry accordion.
+    llmsIntro: 'Model parameters per entry. Assign tasks on the Tasks page.',
+    addLlm: '+ Add LLM', duplicateEntry: 'Duplicate as a new entry', deleteEntry: 'Delete this LLM',
+    disabledBadge: 'disabled', tasksLabel: 'Tasks', noTaskAssigned: 'no task assigned',
+    assignOnTasksPage: 'Assign tasks on the Tasks page.', unknownTask: 'unknown task',
+    deleteAsk: 'Delete "{name}"?', deleteLosing: 'These tasks would lose their only LLM: {tasks}',
+    deleteNoLoss: 'No task loses its only LLM.', deleteConfirm: 'Delete',
+    // Overview page: what the server resolves right now.
+    ovBanner: 'Shows the SAVED configuration as the server resolves it right now — '
+            + 'unsaved changes on the other pages are not included.',
+    refresh: 'Refresh', loading: 'Loading…',
+    ovError: 'Could not load the effective routing ({what}). After a code update the server needs a restart.',
+    ovProviders: 'Providers', ovEntries: 'LLM entries', ovTasks: 'Tasks per category',
+    colProvider: 'Provider', colType: 'Type', colEnabled: 'Enabled', colAvailable: 'Available',
+    ovProviderMissing: 'provider missing', ovUnavailable: 'unavailable', ovCooldown: 'cooldown {n}s',
+    ovNoTasks: 'no tasks', ovSkipped: 'skipped: {why}', ovViaFallback: 'via fallback ({task})',
+    ovNone: 'none', ovGatedOff: 'gated off', ovDisabled: 'disabled',
+    ovNoProviders: 'No providers configured.', ovNoEntries: 'No LLM entries configured.',
     suitabilityMoved: 'The Tool/Helper suitability test lives under Model Capabilities.',
     capabilitiesLink: 'Model Capabilities',
 };
 
-// Category order and colours — the Tasks page is grouped by category, big chat
-// models on top, small helpers at the bottom. (Copied out of the old
-// renderLlmTaskView, which Task 4 removes.)
+// Category order and colours — the Tasks and Overview pages group by category,
+// big chat models on top, small helpers at the bottom.
 const _CAT_ORDER = { chat: 0, tool: 1, helper: 2, image: 3, embedding: 4 };
 const _CAT_COLORS = {
     chat:   { bg: '#1f3a5f', fg: '#79c0ff', border: '#30547a' },
@@ -142,6 +159,9 @@ let RT_CATALOG = null;    // last catalog seen by the renderer (for the click ha
 // preset/active-toggle path in settings.js) refetches, rtRerender() reuses.
 let RT_TASK_STATE = null;
 let RT_KEEP_STATE = false;
+// Index of the LLM entry whose inline delete confirmation is open, or null.
+// Only one at a time — the box sits under that entry's accordion header.
+let RT_DELETE_ASK = null;
 
 // A value that ends up INSIDE an inline onclick="fn('…')": escaped for the
 // single-quoted JS literal first, then for the HTML attribute. Task ids and
@@ -172,19 +192,9 @@ async function renderLlmRoutingPage(pageId) {
     const content = document.getElementById('content');
     if (RT_KEEP_STATE) RT_KEEP_STATE = false; else RT_TASK_STATE = null;
     const page = pageId || 'tasks';
-    if (page === 'llms') return renderLlmRoutingLlmsPage(content);       // Task 4
-    if (page === 'overview') return renderLlmRoutingOverviewPage(content); // Task 4
+    if (page === 'llms') return renderLlmRoutingLlmsPage(content);
+    if (page === 'overview') return renderLlmRoutingOverviewPage(content);
     return renderLlmRoutingTasksPage(content);
-}
-
-function renderLlmRoutingLlmsPage(content) {
-    content.innerHTML = '<div class="section active"><h1 class="section-title">🔧 ' + esc(RT_TEXT.title)
-        + ' — ' + esc(RT_TEXT.pageLlms) + '</h1><div class="desc">' + esc(RT_TEXT.comingTask4) + '</div></div>';
-}
-
-function renderLlmRoutingOverviewPage(content) {
-    content.innerHTML = '<div class="section active"><h1 class="section-title">🔧 ' + esc(RT_TEXT.title)
-        + ' — ' + esc(RT_TEXT.pageOverview) + '</h1><div class="desc">' + esc(RT_TEXT.comingTask4) + '</div></div>';
 }
 
 // Re-render the Tasks page in place. Scroll position and (for the search box)
@@ -629,4 +639,292 @@ async function rtLoadModelsFor(selectId, provider) {
         opts = '<option value="' + esc(cur) + '" selected>' + esc(cur) + ' ' + esc(RT_TEXT.notOnServer) + '</option>' + opts;
     }
     el.innerHTML = opts;
+}
+
+// ── LLMs page ──────────────────────────────────────────────────────────
+// The per-entry accordion of CONFIG.llm_routing. Same markup as the generic
+// renderArrayItem() in settings.js, with two differences: the ✕ opens an
+// inline confirmation that names the tasks losing their only LLM (no
+// confirm() dialog), and the `tasks` field renders as read-only chips —
+// assignment happens on the Tasks page.
+async function renderLlmRoutingLlmsPage(content) {
+    // Awaited so the chips can show task LABELS instead of raw ids; the
+    // catalog is cached after the first page view.
+    await loadLlmCatalog();
+    const def = SCHEMA.llm_routing || { fields: {} };
+    const routing = rtRouting();
+
+    let html = '<div class="section active">';
+    html += '<h1 class="section-title">🧠 ' + esc(RT_TEXT.title) + ' › ' + esc(RT_TEXT.pageLlms) + '</h1>';
+    html += '<div class="desc" style="margin-bottom:12px;">' + esc(RT_TEXT.llmsIntro) + '</div>';
+    html += '<div style="margin-bottom:12px;">';
+    html += '<button class="btn btn-sm" onclick="addArrayItem(\'llm_routing\', \'array\')">' + esc(RT_TEXT.addLlm) + '</button>';
+    html += '</div>';
+    html += '<div id="arr-llm_routing">';
+    routing.forEach((item, idx) => {
+        html += rtRenderEntryItem(def, item || {}, 'llm_routing[' + idx + ']', idx);
+    });
+    html += '</div>';
+    if (!routing.length) html += '<div class="desc rt-muted">' + esc(RT_TEXT.ovNoEntries) + '</div>';
+    html += '</div>';
+    content.innerHTML = html;
+    // Temperature/max_tokens are meaningless on an embedding entry — the
+    // post-pass hides them (the fields carry data-embedhide-entry).
+    applyEmbedVisibility();
+}
+
+// One accordion item. Mirrors renderArrayItem() (settings.js) — kept separate
+// because the delete button must not reach removeItem()/confirm().
+function rtRenderEntryItem(def, item, path, idx) {
+    const label = _itemLabel(item, def.item_label_field, 'Item ' + idx);
+    const openClass = OPEN_ITEMS.has(path) ? ' open' : '';
+    let html = '<div class="array-item' + openClass + '" id="item-' + path + '">';
+    html += '<div class="array-item-header" onclick="toggleArrayItem(this, \'' + path + '\')">';
+    html += '<span class="chevron">▶</span> ';
+    html += '<span class="title" style="margin-left:6px;">' + esc(label) + '</span>';
+    if (item.enabled === false) html += '<span class="badge">' + esc(RT_TEXT.disabledBadge) + '</span>';
+    html += '<button class="btn btn-sm" style="margin-left:8px;" title="' + esc(RT_TEXT.duplicateEntry)
+         + '" onclick="event.stopPropagation(); duplicateItem(\'' + path + '\')">⧉</button>';
+    html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" title="' + esc(RT_TEXT.deleteEntry)
+         + '" onclick="event.stopPropagation(); rtDeleteEntryAsk(' + idx + ')">✕</button>';
+    html += '</div>';
+    // Outside the body, so the question stays visible on a collapsed item.
+    if (RT_DELETE_ASK === idx) html += rtDeleteConfirmBox(item, idx);
+    html += '<div class="array-item-body">';
+    html += renderFields(def.fields, item, path);
+    html += '</div></div>';
+    return html;
+}
+
+// The inline confirmation: which tasks would be left without any LLM.
+function rtDeleteConfirmBox(item, idx) {
+    const losing = entriesLosingLastAssignment(rtRouting(), idx);
+    let html = '<div class="rt-confirm">';
+    html += '<div style="font-size:12px; color:#c9d1d9;">'
+         + esc(rtFmt(RT_TEXT.deleteAsk, { name: rtEntryLabel(item, idx) })) + '</div>';
+    html += losing.length
+        ? '<div class="rt-warn" style="font-size:12px; margin-top:2px;">'
+            + esc(rtFmt(RT_TEXT.deleteLosing, { tasks: losing.map(rtTaskLabel).join(', ') })) + '</div>'
+        : '<div class="rt-muted" style="font-size:12px; margin-top:2px;">' + esc(RT_TEXT.deleteNoLoss) + '</div>';
+    html += '<div style="display:flex; gap:6px; margin-top:6px;">';
+    html += '<button class="btn btn-sm btn-danger" onclick="rtDeleteEntryConfirm(' + idx + ')">'
+         + esc(RT_TEXT.deleteConfirm) + '</button>';
+    html += '<button class="btn btn-sm" onclick="rtDeleteEntryCancel()">' + esc(RT_TEXT.cancel) + '</button>';
+    html += '</div></div>';
+    return html;
+}
+
+// Catalog label of a task id (the raw id while the catalog is not loaded).
+function rtTaskLabel(taskId) {
+    const cat = LLM_CATALOG_CACHE || EMPTY_LLM_CATALOG;
+    const t = (cat.tasks || []).find(x => x && x.id === taskId);
+    return (t && t.label) || taskId;
+}
+
+// The three handlers return the render promise so a caller can await the
+// finished page (the inline onclick ignores it).
+function rtDeleteEntryAsk(idx) {
+    RT_DELETE_ASK = idx;
+    return renderLlmRoutingPage('llms');
+}
+
+function rtDeleteEntryCancel() {
+    RT_DELETE_ASK = null;
+    return renderLlmRoutingPage('llms');
+}
+
+async function rtDeleteEntryConfirm(idx) {
+    const routing = rtRouting();
+    const entry = routing[idx];
+    RT_DELETE_ASK = null;
+    if (!entry) { await renderLlmRoutingPage('llms'); return; }
+    const tasks = (entry.tasks || []).map(t => t && t.task).filter(Boolean);
+    routing.splice(idx, 1);
+    // The removed entry left holes in its tasks' chains — close them.
+    for (const tid of tasks) renumberTask(routing, tid);
+    // Every remembered accordion path above the removed index now points at
+    // the wrong entry, so the open state of this array is dropped entirely.
+    for (const key of Array.from(OPEN_ITEMS)) {
+        if (key.indexOf('llm_routing[') === 0) OPEN_ITEMS.delete(key);
+    }
+    await renderLlmRoutingPage('llms');
+    toast(RT_TEXT.saveHint, 'success');
+}
+
+// Read-only render of an entry's `tasks` field (schema type task_order_list),
+// called from renderFields() in settings.js. Editing happens on the Tasks page.
+function renderTaskChips(items, path, f) {
+    const cat = LLM_CATALOG_CACHE || EMPTY_LLM_CATALOG;
+    const labels = {};
+    for (const t of (cat.tasks || [])) if (t && t.id) labels[t.id] = t.label || t.id;
+    // Without a loaded catalog nothing is "unknown" — the ids are simply
+    // unlabelled, and painting them all red would be a lie.
+    const loaded = Object.keys(labels).length > 0;
+    const rows = (items || []).filter(it => it && it.task).slice()
+        .sort((a, b) => (Number(a.order) || 999) - (Number(b.order) || 999));
+
+    let html = '<div class="field"><label>' + esc((f && f.label) || RT_TEXT.tasksLabel) + '</label>';
+    html += '<div class="input-wrap">';
+    if (!rows.length) {
+        html += '<span class="rt-muted" style="font-size:11px;">' + esc(RT_TEXT.noTaskAssigned) + '</span>';
+    }
+    for (const it of rows) {
+        const id = String(it.task);
+        const unknown = loaded && labels[id] === undefined;
+        html += '<span class="rt-taskchip' + (unknown ? ' rt-err' : '') + '"'
+             + (unknown ? ' title="' + esc(RT_TEXT.unknownTask) + '"' : '') + '>'
+             + esc(labels[id] || id) + ' · ' + esc(it.order === undefined || it.order === null ? '?' : it.order)
+             + '</span>';
+    }
+    html += '<div class="desc">' + esc(RT_TEXT.assignOnTasksPage) + '</div>';
+    html += '</div></div>';
+    return html;
+}
+
+// ── Overview page ──────────────────────────────────────────────────────
+// Read-only mirror of GET /admin/settings/llm-routing/effective: what the
+// SAVED config resolves to right now, including provider availability and
+// model cooldowns. Always fetched fresh — the whole point is live state.
+async function renderLlmRoutingOverviewPage(content) {
+    let html = '<div class="section active">';
+    html += '<h1 class="section-title">📋 ' + esc(RT_TEXT.title) + ' › ' + esc(RT_TEXT.pageOverview) + '</h1>';
+    html += '<div class="desc" style="margin-bottom:8px;">' + esc(RT_TEXT.ovBanner) + '</div>';
+    html += '<div style="margin-bottom:12px;">';
+    html += '<button class="btn btn-sm" onclick="rtOverviewRefresh()">' + esc(RT_TEXT.refresh) + '</button>';
+    html += '</div>';
+    html += '<div id="rt-ov-body" class="desc">' + esc(RT_TEXT.loading) + '</div>';
+    html += '</div>';
+    content.innerHTML = html;
+
+    let data = null, what = '';
+    try {
+        const r = await fetch('/admin/settings/llm-routing/effective',
+            { credentials: 'same-origin', cache: 'no-store' });
+        if (!r.ok) what = 'HTTP ' + r.status;
+        else data = await r.json();
+    } catch (e) {
+        what = e.message || String(e);
+    }
+    const body = document.getElementById('rt-ov-body');
+    if (!body) return;   // the user navigated away while the fetch was running
+    if (what) {
+        body.className = 'rt-err';
+        body.textContent = rtFmt(RT_TEXT.ovError, { what: what });
+        return;
+    }
+    body.className = '';
+    body.innerHTML = rtOverviewBody(data || {});
+}
+
+function rtOverviewRefresh() {
+    renderLlmRoutingPage('overview');
+}
+
+// Sections A (providers), B (entries + their tasks), C (tasks per category).
+function rtOverviewBody(data) {
+    let html = '';
+
+    // A — providers as the server sees them.
+    html += '<div class="subsection-title" style="margin-top:4px;">' + esc(RT_TEXT.ovProviders) + '</div>';
+    const provs = data.providers || [];
+    if (!provs.length) {
+        html += '<div class="desc rt-muted">' + esc(RT_TEXT.ovNoProviders) + '</div>';
+    } else {
+        html += '<table class="rt-ov-table"><tr><th>' + esc(RT_TEXT.colProvider) + '</th><th>'
+             + esc(RT_TEXT.colType) + '</th><th>' + esc(RT_TEXT.colEnabled) + '</th><th>'
+             + esc(RT_TEXT.colAvailable) + '</th></tr>';
+        for (const p of provs) {
+            html += '<tr><td>' + esc(p.name) + '</td><td class="rt-muted">' + esc(p.type || '') + '</td>';
+            html += '<td class="' + (p.enabled ? 'rt-ok' : 'rt-muted') + '">' + (p.enabled ? '✓' : '✕') + '</td>';
+            html += '<td class="' + (p.available ? 'rt-ok' : 'rt-warn') + '">' + (p.available ? '✓' : '✕') + '</td></tr>';
+        }
+        html += '</table>';
+    }
+
+    // B — one row per configured LLM entry with its task assignments.
+    html += '<div class="subsection-title" style="margin-top:16px;">' + esc(RT_TEXT.ovEntries) + '</div>';
+    const entries = data.entries || [];
+    if (!entries.length) {
+        html += '<div class="desc rt-muted">' + esc(RT_TEXT.ovNoEntries) + '</div>';
+    }
+    for (const e of entries) {
+        const name = e.name || rtEntryLabel({ name: e.name, model: e.model, provider: e.provider }, e.index);
+        html += '<div class="rt-chain-row' + (e.enabled === false ? ' off' : '') + '">';
+        html += '<span class="rt-muted" style="min-width:20px;">' + ((e.index || 0) + 1) + '.</span>';
+        html += '<span>' + esc(name) + '</span>';
+        html += '<span class="rt-muted">' + esc(e.provider || '?') + ' / ' + esc(e.model || '?') + '</span>';
+        if (!e.provider_exists) {
+            html += '<span class="rt-err" style="text-decoration:none;">' + esc(RT_TEXT.ovProviderMissing) + '</span>';
+        } else if (!e.provider_available) {
+            html += '<span class="rt-warn" style="text-decoration:none;">' + esc(RT_TEXT.ovUnavailable) + '</span>';
+        }
+        if (e.model_cooldown_s !== null && e.model_cooldown_s !== undefined) {
+            html += '<span class="rt-warn" style="text-decoration:none;">'
+                 + esc(rtFmt(RT_TEXT.ovCooldown, { n: e.model_cooldown_s })) + '</span>';
+        }
+        const tasks = e.tasks || [];
+        if (!tasks.length) html += '<span class="rt-muted">' + esc(RT_TEXT.ovNoTasks) + '</span>';
+        for (const t of tasks) {
+            html += '<span class="rt-taskchip">' + esc(t.task) + '@' + esc(t.order) + '</span>';
+        }
+        html += '</div>';
+    }
+
+    // C — per task: what would be picked right now, why, and the chain.
+    html += '<div class="subsection-title" style="margin-top:16px;">' + esc(RT_TEXT.ovTasks) + '</div>';
+    const tasks = (data.tasks || []).slice();
+    tasks.sort((a, b) => {
+        const ao = _CAT_ORDER[a.category] ?? 99, bo = _CAT_ORDER[b.category] ?? 99;
+        if (ao !== bo) return ao - bo;
+        return (a.label || '').localeCompare(b.label || '');
+    });
+    let lastCat = null;
+    for (const t of tasks) {
+        if (t.category !== lastCat) {
+            lastCat = t.category;
+            const cc = _CAT_COLORS[t.category] || _CAT_COLORS[''];
+            html += '<div style="margin:12px 0 4px 0; padding:4px 10px; display:inline-block; background:' + cc.bg
+                 + '; color:' + cc.fg + '; border-left:3px solid ' + cc.fg + '; border-radius:3px; font-size:11px; '
+                 + 'font-weight:600; letter-spacing:0.3px; text-transform:uppercase;">'
+                 + esc(t.category_label || RT_TEXT.otherCategory) + '</div>';
+        }
+        html += '<div class="rt-card" style="margin-bottom:4px;">';
+        html += '<div style="font-size:12px; color:#58a6ff; font-weight:600;">' + esc(t.label)
+             + ' <span class="rt-muted" style="font-weight:400;">— ' + esc(t.task) + '</span></div>';
+        html += '<div class="rt-chain-row">' + rtOverviewStatus(t) + '</div>';
+        if (t.via !== 'none' && t.reason) {
+            html += '<div class="desc rt-muted">' + esc(t.reason) + '</div>';
+        }
+        for (const row of (t.chain || [])) {
+            html += '<div class="rt-chain-row">';
+            html += '<span class="rt-muted" style="min-width:20px;">' + esc(row.order) + '.</span>';
+            html += '<span>' + esc(row.provider || '?') + ' / ' + esc(row.model || '?') + '</span>';
+            if (row.skipped) {
+                html += '<span class="rt-muted">' + esc(rtFmt(RT_TEXT.ovSkipped, { why: row.skipped })) + '</span>';
+            }
+            html += '</div>';
+        }
+        html += '</div>';
+    }
+    return html;
+}
+
+// The one line that says what this task runs on. Colours per `via`:
+// direct green, fallback blue, gated_off/disabled grey, none amber.
+function rtOverviewStatus(t) {
+    const res = t.resolved || null;
+    const model = res ? (esc(res.provider || '?') + ' / ' + esc(res.model || '?')) : '';
+    if (t.via === 'direct') {
+        // pose_embedding on the built-in model resolves to no LLM at all —
+        // the reason line IS the answer there.
+        return '<span class="rt-ok">' + (res ? model : esc(t.reason)) + '</span>';
+    }
+    if (t.via === 'fallback') {
+        return '<span style="color:#58a6ff;">' + model + ' — '
+             + esc(rtFmt(RT_TEXT.ovViaFallback, { task: (res && res.via_task) || t.fallback || '?' })) + '</span>';
+    }
+    if (t.via === 'gated_off') return '<span class="rt-muted">' + esc(RT_TEXT.ovGatedOff) + '</span>';
+    if (t.via === 'disabled') return '<span class="rt-muted">' + esc(RT_TEXT.ovDisabled) + '</span>';
+    return '<span class="rt-warn">' + esc(RT_TEXT.ovNone)
+         + (t.reason ? ' — ' + esc(t.reason) : '') + '</span>';
 }

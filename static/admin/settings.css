@@ -209,25 +209,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .req-soft { color: #8b949e; cursor: help; white-space: nowrap; }
 .req-sep { color: #484f58; }
 /* Mismatch between task requirement and model capability (hard warning) and the
-   grey "no capability data" hint — both also used in the editable task rows. */
+   grey "no capability data" hint — both used in the chain rows of the Tasks page. */
 .req-warn {
     background: #da363322; border: 1px solid #f8514955; color: #f85149;
     padding: 0 6px; border-radius: 10px; font-size: 10px; font-weight: 600;
     cursor: help; white-space: nowrap; text-decoration: none;
-}
-/* Compact icon-only warning for the narrow editable task rows (renderMatchIcon):
-   no chip text, the full warning lives in the tooltip. */
-.req-warn-icon {
-    color: #f85149; font-size: 13px; line-height: 1;
-    cursor: help; text-decoration: none;
 }
 .req-unknown {
     background: #21262d; border: 1px solid #30363d; color: #8b949e;
     padding: 0 6px; border-radius: 10px; font-size: 10px;
     cursor: help; white-space: nowrap; text-decoration: none;
 }
-.task-match-slot { display: inline-flex; align-items: center; gap: 4px; }
-.task-match-slot:empty { display: none; }
 
 /* ── LLM Routing (Advanced): the task-centric editor ──
    Rendered by static/admin/settings-routing.js. Same palette as the .req-*
@@ -262,6 +254,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .rt-warn { color: #d29922; }
 .rt-muted { color: #6e7681; }
 .rt-ok { color: #3fb950; }
+/* One task assignment of an LLM entry, read-only (LLMs + Overview page). */
+.rt-taskchip {
+    display: inline-block; font-size: 11px; background: #21262d; color: #8b949e;
+    border-radius: 8px; padding: 1px 6px; margin: 2px; white-space: nowrap;
+}
+/* Inline delete confirmation under an LLM entry's accordion header. */
+.rt-confirm {
+    padding: 8px 12px; border: 1px solid #d29922; border-radius: 6px; margin: 6px 0;
+}
+/* Overview: providers table. */
+.rt-ov-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.rt-ov-table td, .rt-ov-table th {
+    padding: 4px 8px; border-bottom: 1px solid #21262d; text-align: left;
+}
 /* Inline "new LLM" form inside a task card. */
 .rt-newform {
     display: grid; grid-template-columns: auto 1fr; gap: 6px;
