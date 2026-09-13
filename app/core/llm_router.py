@@ -390,6 +390,125 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
     return None
 
 
+def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
+                    disabled: set, runtime_disabled: set) -> dict:
+    """Read-only walk of the routing table for the admin Overview page.
+
+    Mirrors resolve_llm's global chain (character overrides are NOT applied)
+    and says per task what would be picked right now and why. ``provider_lookup``
+    and ``cooled_down`` are injected so the rule can be tested without a
+    provider manager; the route passes the real ones. Nothing here mutates
+    cooldown state.
+    """
+    from app.core.llm_tasks import TASK_TYPES, CATEGORY_LABELS, is_task_gated_off
+
+    routing = [e for e in (cfg.get("llm_routing") or []) if isinstance(e, dict)]
+    provider_rows = []
+    for p in (cfg.get("providers") or []):
+        if not isinstance(p, dict):
+            continue
+        name = str(p.get("name") or "")
+        live = provider_lookup(name)
+        provider_rows.append({"name": name, "type": p.get("type") or "",
+                              "enabled": p.get("enabled") is not False,
+                              "available": bool(live and getattr(live, "available", False))})
+    known = {r["name"] for r in provider_rows}
+
+    def _entry_status(entry):
+        prov = (entry.get("provider") or "").strip()
+        model = (entry.get("model") or "").strip()
+        live = provider_lookup(prov) if prov else None
+        return {
+            "provider_exists": prov in known,
+            "provider_available": bool(live and getattr(live, "available", False)),
+            "model_cooldown_s": cooled_down(prov, model) if prov and model else None,
+        }
+
+    entries = []
+    for idx, e in enumerate(routing):
+        st = _entry_status(e)
+        entries.append({"index": idx, "name": e.get("name") or "",
+                        "provider": e.get("provider") or "", "model": e.get("model") or "",
+                        "enabled": e.get("enabled") is not False, **st,
+                        "tasks": [{"task": t.get("task"), "order": t.get("order")}
+                                  for t in (e.get("tasks") or []) if isinstance(t, dict) and t.get("task")]})
+
+    def _index_of(entry) -> int:
+        """Position of ``entry`` in ``routing`` — by identity, not by value.
+
+        Two routing rows may be equal dicts; list.index() would then report the
+        first one for both.
+        """
+        for i, cand in enumerate(routing):
+            if cand is entry:
+                return i
+        return -1
+
+    def _walk(task):
+        """(chain rows, resolved-or-None, reason) over the ENABLED candidates of ``task``."""
+        cands = sorted(_candidates(task, routing), key=lambda x: x[0])
+        chain, resolved, skipped_notes = [], None, []
+        for order, entry in cands:
+            idx = _index_of(entry)
+            st = _entry_status(entry)
+            if not st["provider_exists"]:
+                skip = "provider missing"
+            elif not st["provider_available"]:
+                skip = "provider unavailable"
+            elif st["model_cooldown_s"] is not None:
+                skip = "model cooldown"
+            else:
+                skip = None
+            chain.append({"index": idx, "order": order, "provider": entry.get("provider") or "",
+                          "model": entry.get("model") or "", "skipped": skip})
+            if skip is None and resolved is None:
+                resolved = {"index": idx, "provider": entry.get("provider") or "",
+                            "model": entry.get("model") or "", "order": order, "via_task": task}
+            elif skip is not None and resolved is None:
+                skipped_notes.append(f"order {order} skipped: {skip}")
+        if resolved is None:
+            return chain, None, ("no LLM in chain" if cands else "")
+        reason = f"order {resolved['order']}"
+        if skipped_notes:
+            reason += " — " + "; ".join(skipped_notes)
+        return chain, resolved, reason
+
+    emb = cfg.get("embedding") or {}
+    tasks_out = []
+    for tid, meta in TASK_TYPES.items():
+        row = {"task": tid, "label": meta.get("label", tid), "category": meta.get("category", ""),
+               "category_label": CATEGORY_LABELS.get(str(meta.get("category", "")), ""),
+               "gated_off": is_task_gated_off(tid, cfg), "disabled": tid in disabled,
+               "runtime_disabled": tid in runtime_disabled, "fallback": fallback_parent(tid),
+               "chain": [], "resolved": None, "via": "none", "reason": ""}
+        if row["disabled"] or row["runtime_disabled"]:
+            row["via"] = "disabled"
+            row["reason"] = "task disabled (" + ("runtime preset" if row["runtime_disabled"] else "persistent") + ")"
+        elif row["gated_off"]:
+            row["via"] = "gated_off"
+            row["reason"] = f"feature gate {meta.get('gate')} is off"
+        elif tid == "pose_embedding" and (emb.get("backend") or "auto") != "external":
+            row["via"] = "direct"
+            row["reason"] = f"built-in embedding ({emb.get('internal_model') or 'default model'})"
+        else:
+            chain, resolved, reason = _walk(tid)
+            if chain:
+                row.update(chain=chain, resolved=resolved, via="direct" if resolved else "none", reason=reason)
+            else:
+                parent = fallback_parent(tid)
+                if parent:
+                    pchain, presolved, preason = _walk(parent)
+                    row.update(chain=pchain, resolved=presolved,
+                               via="fallback" if presolved else "none",
+                               reason=f"no routing, parent '{parent}'" + (f" — {preason}" if preason else ""))
+                    if not presolved:
+                        row["reason"] = f"no routing, parent '{parent}' has no LLM in chain"
+                else:
+                    row["reason"] = "no LLM assigned"
+        tasks_out.append(row)
+    return {"providers": provider_rows, "entries": entries, "tasks": tasks_out}
+
+
 # Substrings in error messages that indicate an upstream backend problem
 # (5xx, process crash, connection drop) — NOT a user-input error like
 # bad-request, content-policy or auth. When seen, we cooldown the provider

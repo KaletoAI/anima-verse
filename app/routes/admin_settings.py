@@ -960,10 +960,15 @@ def settings_llm_tasks(user=Depends(require_admin)):
     value, `model_class_labels` the long form for the tooltip.
     A task without a `requirements` profile (pose_embedding) reports
     `requirements: null` — the UI shows no badge block for it.
+    `gate` is the config path that switches the whole feature off, `gated_off`
+    whether that gate is currently off, `fallback` the task an unrouted task
+    borrows its LLM from (the rule lives in llm_router, not here).
     """
     from app.core.llm_tasks import (
         TASK_TYPES, CATEGORY_LABELS, REQUIREMENT_LABELS,
-        REQUIREMENT_BADGE_LABELS, MODEL_CLASS_LABELS)
+        REQUIREMENT_BADGE_LABELS, MODEL_CLASS_LABELS, is_task_gated_off)
+    from app.core.llm_router import fallback_parent
+    cfg = config.get_all()
     return {
         "tasks": [
             {
@@ -973,6 +978,10 @@ def settings_llm_tasks(user=Depends(require_admin)):
                 "category_label": CATEGORY_LABELS.get(str(t.get("category", "")), ""),
                 "thinking": bool(t.get("thinking")),
                 "requirements": t.get("requirements") or None,
+                "priority": int(t.get("priority", 0)),
+                "gate": t.get("gate") or None,
+                "gated_off": is_task_gated_off(tid, cfg),
+                "fallback": fallback_parent(tid),
             }
             for tid, t in TASK_TYPES.items()
         ],
@@ -980,6 +989,31 @@ def settings_llm_tasks(user=Depends(require_admin)):
         "requirement_badge_labels": REQUIREMENT_BADGE_LABELS,
         "model_class_labels": MODEL_CLASS_LABELS,
     }
+
+
+@router.get("/settings/llm-routing/effective")
+def settings_llm_routing_effective(user=Depends(require_admin)):
+    """What the server would route each task to RIGHT NOW (saved config,
+    provider availability, model cooldowns, task-state) — the admin
+    Overview page. Read-only; character overrides are not applied."""
+    import time
+    from app.core.llm_router import explain_routing, _MODEL_COOLDOWN
+    from app.core.llm_task_state import disabled_tasks, runtime_disabled_tasks
+    from app.core.provider_manager import get_provider_manager
+    pm = get_provider_manager()
+
+    def _cooled(prov: str, model: str):
+        until = _MODEL_COOLDOWN.get((prov, model))
+        if until is None:
+            return None
+        left = until - time.monotonic()
+        return round(left, 1) if left > 0 else None
+
+    # disabled_tasks() reports persistent AND runtime disables together —
+    # the UI wants them apart, so the runtime set is subtracted here.
+    runtime = set(runtime_disabled_tasks())
+    return explain_routing(config.get_all(), provider_lookup=pm.get_provider, cooled_down=_cooled,
+                           disabled=set(disabled_tasks()) - runtime, runtime_disabled=runtime)
 
 
 @router.post("/settings/model-capabilities/lookup")
