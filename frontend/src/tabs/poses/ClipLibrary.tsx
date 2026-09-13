@@ -23,9 +23,15 @@
  * listing (`locomotion`) and is fetched here — the listing prop's type does
  * not carry it.
  *
+ * Per file the detail column carries the LOOP switch: whether a clip repeats
+ * or holds its last frame is the admin's decision AFTER the import
+ * (plan-animationen-echtzeit-stehplatz.md E5), not the importer's
+ * measurement. It is stored in the `<kind>.json` sidecar and therefore holds
+ * for the whole kind in that set — both halves of a pair, every variant.
+ *
  *   GET    /assets/animation-clips                     … + {locomotion}
  *   PUT    /assets/animation-clips/locomotion          {walk?, run?, idle?}
- *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?}
+ *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -294,7 +300,7 @@ export function ClipLibrary({
   }, [])
 
   const run = useCallback(
-    async (clip: ApiClipRow, body: Record<string, string> | null) => {
+    async (clip: ApiClipRow, body: Record<string, string | boolean> | null) => {
       if (busy) return
       setBusy(true)
       setError('')
@@ -306,8 +312,8 @@ export function ClipLibrary({
         await onReload()
         // A renamed kind carries the selection with it, so the detail pane
         // does not fall back to the placeholder after every rename.
-        if (body?.kind) setSelected(body.kind)
-        if (body && 'set' in body) setPreviewSet(body.set)
+        if (typeof body?.kind === 'string') setSelected(body.kind)
+        if (typeof body?.set === 'string') setPreviewSet(body.set)
       } catch (e) {
         setError((e as Error).message)
       } finally {
@@ -350,7 +356,6 @@ export function ClipLibrary({
       clip.duration_s ? `${clip.duration_s.toFixed(1)} s` : '',
       clip.fps ? `${clip.fps} fps` : '',
       clip.frames ? `${clip.frames} ${t('frames')}` : '',
-      clip.loop ? t('loop') : '',
       clip.origin && clip.origin !== 'unknown' ? clip.origin : '',
       mb(clip.size),
       clip.has_sidecar === false ? t('no sidecar') : '',
@@ -361,7 +366,22 @@ export function ClipLibrary({
           <code style={{ wordBreak: 'break-all' }}>{clip.filename || relOf(clip)}</code>
           <span className={`ga-tag${lib === 'licensed' ? ' ga-tag-tier' : ''}`}>{t(lib)}</span>
         </div>
-        <div className="ga-hint" style={{ marginTop: 2 }}>{facts.join(' · ')}</div>
+        <div className="ga-form-hint" style={{ marginTop: 2 }}>{facts.join(' · ')}</div>
+        <label
+          style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}
+          title={clip.has_sidecar === false
+            ? t('Without a sidecar there is nowhere to store the flag — import the clip again.')
+            : t('Applies to the whole kind in this set: both halves of a pair and every variant.')}
+        >
+          <input
+            type="checkbox"
+            checked={!!clip.loop}
+            disabled={busy || clip.has_sidecar === false}
+            onChange={(e) => run(clip, { loop: e.target.checked })}
+          />
+          <span>{t('Loop')}</span>
+          <span className="ga-form-hint">{t('Repeat the clip; off = hold the last frame')}</span>
+        </label>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
           <button type="button" className="ga-btn ga-btn-sm" onClick={() => openAction(clip, 'kind')}>
             {t('Rename kind')}
