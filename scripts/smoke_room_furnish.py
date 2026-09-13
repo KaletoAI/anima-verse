@@ -137,15 +137,19 @@ def need(key="n1", kind="dining chair", **kw):
 
 
 def fake_llm(answers):
-    """Replace room_furnish's LLM hop with canned answers per task. An answer
-    that IS an exception is raised instead (error-path coverage); a callable
-    is asked for its answer with the rendered user prompt in hand (the ids of
-    freshly generated props are only known then)."""
+    """Replace room_furnish's LLM hop with canned answers per STEP. The three
+    steps share one routing task (``furnish``) and are told apart by their call
+    label ("needs" / "match" / "place"), so that label is the key here; a
+    re-plan round's " (re-plan n)" suffix resolves to the same answer. An
+    answer that IS an exception is raised instead (error-path coverage); a
+    callable is asked for its answer with the rendered user prompt in hand (the
+    ids of freshly generated props are only known then)."""
     calls = []
 
     def _stub(task, system_prompt, user_prompt, label):
-        calls.append((task, user_prompt))
-        answer = answers[task]
+        step = label.split(" (")[0]
+        calls.append((step, user_prompt))
+        answer = answers[step]
         if isinstance(answer, Exception):
             raise answer
         if callable(answer):
@@ -176,9 +180,9 @@ def instant_meshes():
     props.trigger_generation = _trigger
 
 
-def last_prompt(calls, task):
+def last_prompt(calls, step):
     for t, prompt in reversed(calls):
-        if t == task:
+        if t == step:
             return prompt
     return ""
 
@@ -446,7 +450,7 @@ def main() -> int:
     print("\n  room 4.0 × 4.0 m (metres in the layout), one south door")
 
     answers = {
-        "furnish_needs": {
+        "needs": {
             "needs": [
                 need("a", "table", category="table", count=1, mount="floor",
                      width_m=1.2, depth_m=0.8, height_m=0.75,
@@ -462,12 +466,12 @@ def main() -> int:
             ],
             "surfaces": {"floor": "oak_planks", "wall": "does_not_exist"},
         },
-        "furnish_match": lambda prompt: {"matches": [
+        "match": lambda prompt: {"matches": [
             {"need": "n1", "ref": ref_for(prompt, "Table")},
             {"need": "n2", "ref": None}]},
         # The plan names the two unbuilt pieces by their TEMPORARY ids — no
         # prop exists for them yet (E6), and none has to.
-        "furnish_place": {"plan": [
+        "place": {"plan": [
             {"prop": table, "count": 1, "anchor": "wall_n", "ref": None,
              "facing": "room"},
             {"prop": "need:n2", "count": 1, "anchor": "wall_n", "ref": None,
@@ -485,10 +489,10 @@ def main() -> int:
     proposal = status["proposal"]
     needs_out = proposal["needs"]
     check("needs prompt carries the metre size",
-          "4.0 × 4.0 m" in last_prompt(calls, "furnish_needs"))
+          "4.0 × 4.0 m" in last_prompt(calls, "needs"))
     check("needs prompt never shows the library",
-          "Table" not in last_prompt(calls, "furnish_needs"))
-    match_prompt = last_prompt(calls, "furnish_match")
+          "Table" not in last_prompt(calls, "needs"))
+    match_prompt = last_prompt(calls, "match")
     check("match prompt uses refs, not slugs",
           "#1 |" in match_prompt and table not in match_prompt,
           match_prompt[-300:])
@@ -569,7 +573,7 @@ def main() -> int:
     check("the surface piece is stored in its support's frame, trim 0",
           candle.get("on") == table_place["id"] and candle["at"] == [0.0, 0.0]
           and "offset_y" not in candle, json.dumps(candle))
-    place_prompt = last_prompt(calls, "furnish_place")
+    place_prompt = last_prompt(calls, "place")
     check("place prompt lists the door on wall S",
           "on wall S" in place_prompt, place_prompt[:300])
     check("place prompt groups the pieces by mount",
@@ -686,7 +690,7 @@ def main() -> int:
 
     # ── error → retry → reset, and the surfaces gate ────────────────────
     print("\n  error, retry and the surfaces gate")
-    answers["furnish_needs"] = room_furnish.FurnishError("stage 1 exploded")
+    answers["needs"] = room_furnish.FurnishError("stage 1 exploded")
     room_furnish.start("smokeroom")
     status = wait_for(("error", "proposal_ready"))
     check("failed stage 1 lands in error", status["state"] == "error")
@@ -699,11 +703,11 @@ def main() -> int:
         if entry["id"] == loc["id"]:
             entry["rooms"][0]["layout"]["surfaces"] = {"floor": "oak_planks"}
     _save_world_data(data)
-    answers["furnish_needs"] = {
+    answers["needs"] = {
         "needs": [need("a", "stool", count=2, mount="floor", width_m=0.4,
                        depth_m=0.4, height_m=0.5, description="a low stool")],
         "surfaces": {"floor": "plaster_wall", "wall": "plaster_wall"}}
-    answers["furnish_match"] = {"matches": []}
+    answers["match"] = {"matches": []}
     room_furnish.retry("smokeroom")
     status = wait_for(("proposal_ready", "error"))
     check("retry re-enters at stage 1", status["state"] == "proposal_ready",
@@ -712,10 +716,10 @@ def main() -> int:
           status["proposal"]["surfaces"] is None,
           json.dumps(status["proposal"]["surfaces"]))
     check("the prompt asks for null instead of a kind list",
-          'answer "surfaces": null' in last_prompt(calls, "furnish_needs"))
+          'answer "surfaces": null' in last_prompt(calls, "needs"))
     check("the room's own furnishing is known to the LLM",
-          "1× Table" in last_prompt(calls, "furnish_needs"),
-          last_prompt(calls, "furnish_needs")[:200])
+          "1× Table" in last_prompt(calls, "needs"),
+          last_prompt(calls, "needs")[:200])
     check("confirming an empty list is refused",
           _refused(room_furnish.confirm, "smokeroom", {"needs": []}))
     room_furnish.reset("smokeroom")
@@ -726,13 +730,13 @@ def main() -> int:
     # with an empty placement list: a prop nobody put in a room is a library
     # entry the admin never asked for.
     print("\n  accepting an empty result")
-    answers["furnish_needs"] = {
+    answers["needs"] = {
         "needs": [need("a", "iron kettle", count=1, mount="floor",
                        width_m=0.3, depth_m=0.3, height_m=0.3,
                        description="a black iron kettle")],
         "surfaces": None}
-    answers["furnish_match"] = {"matches": []}
-    answers["furnish_place"] = {"plan": []}
+    answers["match"] = {"matches": []}
+    answers["place"] = {"plan": []}
     props_before_empty = len(props.list_props())
     room_furnish.start("smokeroom")
     status = wait_for(("proposal_ready", "error"))
@@ -756,7 +760,7 @@ def main() -> int:
 
     # ── start_direct: admin picks become needs ──────────────────────────
     print("\n  start_direct (admin picks, no LLM)")
-    answers["furnish_place"] = {"plan": [
+    answers["place"] = {"plan": [
         {"prop": chair, "count": 2, "anchor": "wall_w", "ref": None,
          "facing": "room"}]}
     room_furnish.start_direct("smokeroom", {"existing": [
@@ -791,7 +795,7 @@ def main() -> int:
     # names it instead, so a kind never vanishes silently between the proposal
     # and the room.
     print("\n  only a placed need is built")
-    answers["furnish_needs"] = {
+    answers["needs"] = {
         "needs": [need("a", "wooden stool", category="chair", count=1,
                        mount="floor", width_m=0.4, depth_m=0.4, height_m=0.5,
                        description="a small wooden stool"),
@@ -799,9 +803,9 @@ def main() -> int:
                        mount="floor", width_m=0.3, depth_m=0.3, height_m=0.3,
                        description="a black iron kettle")],
         "surfaces": None}
-    answers["furnish_match"] = {"matches": []}
+    answers["match"] = {"matches": []}
     # The plan names only the stool; the kettle stays unplaced.
-    answers["furnish_place"] = {"plan": [
+    answers["place"] = {"plan": [
         {"prop": "need:n1", "count": 1, "anchor": "wall_e", "ref": None,
          "facing": "room"}]}
     props_before_ruling = len(props.list_props())
@@ -841,13 +845,13 @@ def main() -> int:
 
     def one_build_job(kind: str) -> dict:
         """Drive one job with a single built floor need up to review_ready."""
-        answers["furnish_needs"] = {
+        answers["needs"] = {
             "needs": [need("a", kind, category="chair", count=1,
                            mount="floor", width_m=0.3, depth_m=0.3,
                            height_m=0.4, description=f"a {kind}")],
             "surfaces": None}
-        answers["furnish_match"] = {"matches": []}
-        answers["furnish_place"] = {"plan": [
+        answers["match"] = {"matches": []}
+        answers["place"] = {"plan": [
             {"prop": "need:n1", "count": 1, "anchor": "wall_e", "ref": None,
              "facing": "room"}]}
         room_furnish.start("smokeroom")
@@ -984,7 +988,7 @@ def main() -> int:
     yard_job = room_furnish.ground_job_id(yard_loc["id"])
     check("the yard job id is the composite one",
           yard_job == f"__ground__@{yard_loc['id']}", yard_job)
-    answers["furnish_needs"] = {
+    answers["needs"] = {
         "needs": [need("a", "table", category="table", count=1, mount="floor",
                        width_m=1.2, depth_m=0.8, height_m=0.75,
                        description="a plain oak table"),
@@ -994,10 +998,10 @@ def main() -> int:
                        mount="surface", width_m=0.08, depth_m=0.08,
                        height_m=0.2, description="a beeswax candle")],
         "surfaces": {"floor": "oak_planks", "wall": "plaster_wall"}}
-    answers["furnish_match"] = lambda prompt: {"matches": [
+    answers["match"] = lambda prompt: {"matches": [
         {"need": "n1", "ref": ref_for(prompt, "Table")}]}
     # The wall torch is dropped, so the candle is need n2 after re-minting.
-    answers["furnish_place"] = {"plan": [
+    answers["place"] = {"plan": [
         {"prop": table, "count": 1, "anchor": "wall_n", "ref": None,
          "facing": "room"},
         {"prop": "need:n2", "count": 1, "anchor": "on", "ref": table,
@@ -1008,11 +1012,11 @@ def main() -> int:
           status and status["state"] == "proposal_ready",
           (status or {}).get("error") or "")
     check("its prompt states the boundary's 10 × 10 m",
-          "10.0 × 10.0 m" in last_prompt(calls, "furnish_needs"),
-          last_prompt(calls, "furnish_needs")[:120])
+          "10.0 × 10.0 m" in last_prompt(calls, "needs"),
+          last_prompt(calls, "needs")[:120])
     check("an unnamed yard is called Yard, not Room",
-          "Yard" in last_prompt(calls, "furnish_needs"),
-          last_prompt(calls, "furnish_needs")[:120])
+          "Yard" in last_prompt(calls, "needs"),
+          last_prompt(calls, "needs")[:120])
     check("the wall torch was dropped with its reason",
           status["proposal"]["dropped"]
           == [{"kind": "wall torch", "reason": "the yard has no walls/ceiling"}],
@@ -1020,7 +1024,7 @@ def main() -> int:
     check("the yard gets no surface proposal",
           status["proposal"]["surfaces"] is None)
     check("the open-air catalog keeps the outdoor prop",
-          "Evergreen Pine" in last_prompt(calls, "furnish_match"))
+          "Evergreen Pine" in last_prompt(calls, "match"))
     room_furnish.confirm(yard_job, status["proposal"])
     status = wait_for(("review_ready", "error"), job=yard_job)
     check("the yard reaches review_ready",

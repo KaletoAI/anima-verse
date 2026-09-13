@@ -77,7 +77,7 @@ shared/templates/llm/
 | `image_prompt_scene.md` | `image_prompt` | `routes/chat._generate_image_prompt` | Extract a visual scene from chat narrative |
 | `image_prompt_improver.md` | `image_prompt` | `image_regenerate.enhance_prompt` | Modify an existing image prompt based on user feedback |
 | `image_prompt_enhance.md` | `image_prompt` | `prompt_adapters._llm_enhance` | Workflow-specific stylistic rewrite of an image prompt |
-| `image_analysis.md` | `image_analysis` | `instagram_skill._analyze_image` | Vision-LLM objective image description |
+| `image_analysis.md` | `image_recognition` | `instagram_skill._analyze_image` | Vision-LLM objective image description (every vision call resolves `image_recognition`; `image_analysis` is the queue label) |
 | `instagram_caption.md` | `instagram_caption` | `instagram_skill._generate_caption` | Vision-LLM Instagram post caption |
 | `animation_prompt.md` | `instagram_caption` | `routes/instagram` + `routes/characters` (suggest-animate) | Image-to-video motion prompt |
 
@@ -97,9 +97,9 @@ into "what does the room need" and "what does the library already have";
 
 | Template | Task | Caller | Purpose |
 |---|---|---|---|
-| `furnish_needs.md` | `furnish_needs` | `room_furnish._phase_needs` | Stage 1a: the room's complete need list (kind, category, count, mount, size, style, marker) invented from its purpose alone — the library is not in the prompt |
-| `furnish_match.md` | `furnish_match` | `room_furnish._phase_needs` | Stage 1b: map the setting-filtered prop catalog (short ids `#n`) onto that need list; every unmatched need is built as a new prop |
-| `furnish_place.md` | `furnish_place` | `furnish_place.run` (via `room_furnish._phase_place`) | Stage 2: relational placement plan per mount pass (anchors `around` / `under` / `wall_above` / `at_opening` / `above` / `on`), with one repair round per failing pass; `furnish_solver` turns it into metres |
+| `furnish_needs.md` | `furnish` (label `needs`) | `room_furnish._phase_needs` | Stage 1a: the room's complete need list (kind, category, count, mount, size, style, marker) invented from its purpose alone — the library is not in the prompt |
+| `furnish_match.md` | `furnish` (label `match`) | `room_furnish._phase_needs` | Stage 1b: map the setting-filtered prop catalog (short ids `#n`) onto that need list; every unmatched need is built as a new prop |
+| `furnish_place.md` | `furnish` (label `place`) | `furnish_place.run` (via `room_furnish._phase_place`) | Stage 2: relational placement plan per mount pass (anchors `around` / `under` / `wall_above` / `at_opening` / `above` / `on`), with one repair round per failing pass; `furnish_solver` turns it into metres |
 | `room_description_sync.md` | `room_description_sync` | `room_description_sync.propose` | Rewrite a room's description so it names the props that now stand in it — preview in the Furnish dialog, the admin decides |
 | `prop_mount_classify.md` | `prop_mount_classify` | `props_mount.classify_mounts` | Classify library props into `floor` / `wall` / `ceiling` / `surface` (batched); the guess lands as `mount_suggested` and the admin confirms it in the Props tab |
 

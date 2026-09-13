@@ -34,14 +34,6 @@
           "order": 1
         },
         {
-          "task": "send_message",
-          "order": 1
-        },
-        {
-          "task": "talk_to",
-          "order": 1
-        },
-        {
           "task": "thought",
           "order": 1
         }
@@ -96,10 +88,6 @@
           "order": 1
         },
         {
-          "task": "image_comment",
-          "order": 1
-        },
-        {
           "task": "intro_memory",
           "order": 1
         },
@@ -113,10 +101,6 @@
         },
         {
           "task": "image_recognition",
-          "order": 1
-        },
-        {
-          "task": "image_analysis",
           "order": 1
         }
       ],

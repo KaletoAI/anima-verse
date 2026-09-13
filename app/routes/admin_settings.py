@@ -452,7 +452,8 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
         "title": "LLM task",
         "intro": "Routing key — maps to a provider+model under LLM Routing.",
         "items": [
-            {"code": "chat, tools, summarize, vision", "text": "Common task keys"},
+            {"code": "chat_stream, intent, consolidation, image_recognition",
+             "text": "Common task keys (the full list is the Tasks page under LLM Routing)"},
         ],
     },
 }

@@ -28,14 +28,14 @@ PRESETS = {
     "background": [
         "random_event", "thought", "secret_generation",
         "consolidation", "relationship_summary",
-        "outfit_generation", "image_comment",
+        "outfit_generation",
     ],
     "world_dev": [
         # All background LLM activity that gets in the way in world-dev mode
         "random_event", "thought", "secret_generation",
         "consolidation", "relationship_summary",
-        "instagram_caption", "image_comment", "image_prompt", "image_recognition",
-        "image_analysis", "outfit_generation",
+        "instagram_caption", "image_prompt", "image_recognition",
+        "outfit_generation",
     ],
     "chat_only": [
         # everything except chat_stream, group_chat_stream, extraction

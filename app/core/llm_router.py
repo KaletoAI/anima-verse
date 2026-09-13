@@ -277,6 +277,39 @@ def _resolve_character_override(task: str, agent_name: str) -> Optional[LLMInsta
     return instance
 
 
+def fallback_parent(task: str) -> Optional[str]:
+    """The task an UNROUTED task borrows its LLM from, or None.
+
+    Pure rule, no config access — the admin routing UI and the effective-
+    routing endpoint show the same rule resolve_llm applies:
+      * "<parent>_<sub>" → parent for intent / thought / extraction
+      * furnish, prop_mount_classify, room_description_sync → "intent"
+        (strict-JSON tool work; the tool-class anchor)
+      * npc_* → "chat_stream" (character writing; the chat anchor)
+    """
+    for parent in ("intent", "thought", "extraction"):
+        if task.startswith(parent + "_") and task != parent:
+            return parent
+    if task in ("furnish", "prop_mount_classify", "room_description_sync"):
+        return "intent"
+    if task.startswith("npc_"):
+        return "chat_stream"
+    return None
+
+
+def _candidates(task: str, routing: list) -> List[Tuple[int, dict]]:
+    """(order, entry) for every ENABLED routing entry that lists ``task``."""
+    out: List[Tuple[int, dict]] = []
+    for entry in routing:
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        for t in (entry.get("tasks") or []):
+            if isinstance(t, dict) and t.get("task") == task:
+                out.append((int(t.get("order", 999)), entry))
+                break
+    return out
+
+
 def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
     """Ermittelt das LLM fuer einen Task anhand der llm_routing-Config.
 
@@ -309,55 +342,13 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
     if not routing:
         return None
 
-    # Kandidaten sammeln: (order, entry)
-    candidates: List = []
-    for entry in routing:
-        if not isinstance(entry, dict):
-            continue
-        # Disabled-Eintraege ueberspringen (Admin kann LLM ausblenden ohne
-        # Task-Zuweisungen zu loeschen). Default: enabled.
-        if entry.get("enabled") is False:
-            continue
-        tasks = entry.get("tasks") or []
-        for t in tasks:
-            if not isinstance(t, dict):
-                continue
-            if t.get("task") == task:
-                order = int(t.get("order", 999))
-                candidates.append((order, entry))
-                break
+    candidates = _candidates(task, routing)
 
     if not candidates:
-        # Sub-task fallback: an unrouted specific task tries its generic
-        # parent. Pattern: "<parent>_<sub>" falls back to "<parent>", so the
-        # admin can assign sub-tasks individually later without the feature
-        # failing until then.
-        for _parent in ("intent", "thought", "extraction"):
-            if task.startswith(_parent + "_") and task != _parent:
-                logger.debug("resolve_llm(%s): no routing, falling back to '%s'",
-                             task, _parent)
-                return resolve_llm(_parent, agent_name=agent_name)
-        # Task FAMILIES without a parent task of their own fall back to a
-        # generic anchor of their class: furnish_* is strict-JSON tool work →
-        # "intent" (the tool-class fallback), and so is the prop-mount
-        # classifier the furnishing reads. ``room_description_sync`` rides
-        # along: it is furnish work under another name (the fourth step of the
-        # same job), and an unrouted button that does nothing looks like a
-        # broken feature rather than a setting. An explicit routing entry in
-        # /admin/settings always wins over this.
-        if (task.startswith("furnish_") or task == "prop_mount_classify"
-                or task == "room_description_sync"):
-            logger.debug("resolve_llm(%s): no routing, falling back to 'intent'",
-                         task)
-            return resolve_llm("intent", agent_name=agent_name)
-        # npc_* is character WRITING — the same class of work as the chat
-        # stream, and its anchor. Without this an admin who never opened the
-        # routing tab would find the automatic NPC spawn silently doing
-        # nothing, which looks like a broken feature rather than a setting.
-        if task.startswith("npc_"):
-            logger.debug("resolve_llm(%s): no routing, falling back to "
-                         "'chat_stream'", task)
-            return resolve_llm("chat_stream", agent_name=agent_name)
+        parent = fallback_parent(task)
+        if parent:
+            logger.debug("resolve_llm(%s): no routing, falling back to '%s'", task, parent)
+            return resolve_llm(parent, agent_name=agent_name)
         return None
 
     candidates.sort(key=lambda x: x[0])

@@ -48,13 +48,11 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "random_event":       {"label": "Random Event",             "priority": Priority.LOW,    "category": "tool",   "gate": "random_events.enabled", "thinking": True},
     "secret_generation":  {"label": "Secret Generation",        "priority": Priority.LOW,    "category": "tool",   "thinking": True},
     "outfit_generation":  {"label": "Outfit Generation",        "priority": Priority.NORMAL, "category": "tool",   "gate": "image_generation.enabled", "thinking": True},
-    "send_message":       {"label": "Send Message",             "priority": Priority.NORMAL, "category": "chat",   "gate": "skills.send_message.enabled"},
-    "talk_to":            {"label": "Talk-To (Char-to-Char)",   "priority": Priority.LOW,    "category": "chat",   "gate": "skills.talk_to.enabled"},
-    "thought":            {"label": "Thought (Fallback)",       "priority": Priority.LOW,    "category": "chat"},
+    "thought":            {"label": "Thought (agent loop)",     "priority": Priority.LOW,    "category": "chat"},
     # "intent" stays as the fallback when a specific intent_* task has no
     # routing (see llm_router.resolve_llm). New code should not use it directly
     # any more — use one of the intent_* sub-tasks instead.
-    "intent":             {"label": "Intent (Fallback)",        "priority": Priority.NORMAL, "category": "tool"},
+    "intent":             {"label": "Intent / tool calls",      "priority": Priority.NORMAL, "category": "tool"},
     "spell_detect":       {"label": "Spell Cast Detection",      "priority": Priority.NORMAL, "category": "tool"},
     # Pose consolidation: vector for the similarity match against existing
     # variants (the free-text normalizer is gone — poses come from the catalog,
@@ -65,13 +63,10 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # separate task entry to maintain in /admin/settings → LLM Routing.
 
     # Room furnishing ("✨ Furnish", plan-furnish-v2.md): three strict-JSON
-    # steps of one job — write the room's need WITHOUT the library, map the
-    # library onto that need list, arrange the result relationally (the solver
-    # turns that into geometry). No thinking: the answers must be a bare JSON
-    # object — a reasoning pass only adds prose around it.
-    "furnish_needs":      {"label": "Furnish: Room Needs",         "priority": Priority.NORMAL, "category": "tool"},
-    "furnish_match":      {"label": "Furnish: Match Library",      "priority": Priority.NORMAL, "category": "tool"},
-    "furnish_place":      {"label": "Furnish: Placement Plan",     "priority": Priority.NORMAL, "category": "tool"},
+    # steps of ONE job (needs → match → placement) on one routing task; the
+    # steps stay distinguishable in the LLM log through their call labels.
+    # No thinking: the answers must be a bare JSON object.
+    "furnish":            {"label": "Furnish (needs · match · placement)", "priority": Priority.NORMAL, "category": "tool"},
     # The fourth step of the same feature, but the only one that answers PROSE:
     # after the furnishing has landed, the room's description is rewritten so it
     # names what really stands there (E8, B14b). Button with a preview — the
@@ -80,7 +75,7 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # Which surface a prop may be set down on (floor / wall / ceiling / on
     # another prop) — a one-off classification of the LIBRARY, run from the
     # Props tab, that the furnish solver then reads. Same class of work as the
-    # three above and no thinking, for the same reason.
+    # furnish steps above and no thinking, for the same reason.
     "prop_mount_classify": {"label": "Props: Classify Mount",       "priority": Priority.NORMAL, "category": "tool"},
 
     # LLM-Blender models (docs/llm-blender-models.md): the roof form of ONE
@@ -121,12 +116,10 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
 
     # Image / Prompt
     "image_prompt":       {"label": "Image Prompt Enhancer",    "priority": Priority.NORMAL, "category": "helper", "gate": "image_generation.enabled"},
-    "image_comment":      {"label": "Image Comment",            "priority": Priority.NORMAL, "category": "helper", "gate": "image_generation.enabled"},
     "instagram_caption":  {"label": "Instagram Caption",        "priority": Priority.NORMAL, "category": "image",  "gate": "skills.instagram.enabled"},
 
     # Vision
-    "image_recognition":  {"label": "Image Recognition",        "priority": Priority.NORMAL, "category": "image",  "gate": "image_generation.enabled"},
-    "image_analysis":     {"label": "Image Analysis",           "priority": Priority.NORMAL, "category": "image",  "gate": "image_generation.enabled"},
+    "image_recognition":  {"label": "Vision (analysis · comments · recognition)", "priority": Priority.NORMAL, "category": "image", "gate": "image_generation.enabled"},
 
     # Misc
     "intro_memory":       {"label": "Intro Memory (Fresh Import)", "priority": Priority.NORMAL, "category": "helper"},
@@ -228,9 +221,9 @@ REQUIREMENT_BADGE_LABELS: Dict[str, Dict[str, str]] = {
 #   latency_sensitive — someone is actively waiting (user turn, streaming, the
 #                       tool phase of a reply); False = background job.
 #
-# STATUS: mixed. The five creative-chat tasks (`chat_stream`,
-# `group_chat_stream`, `talk_to`, `thought`, `send_message`) carry REASONED
-# values from section A1 of plan-llm-routing-review.md — measurement in
+# STATUS: mixed. The three creative-chat tasks (`chat_stream`,
+# `group_chat_stream`, `thought`) carry REASONED values from section A1 of
+# plan-llm-routing-review.md — measurement in
 # .superpowers/sdd/plan-llm-routing-review/task-A1.1-report.md, decisions in
 # task-A1.3-report.md. Every OTHER profile is still the first pass derived from
 # category + the A0 inventory (development_instructions/llm-routing-review/
@@ -238,7 +231,7 @@ REQUIREMENT_BADGE_LABELS: Dict[str, Dict[str, str]] = {
 # `pose_embedding` has NO profile on purpose: it does not run over the chat
 # providers but over app/core/embedding.py and the /v1/embeddings endpoint.
 #
-# A1 result that shapes all five chat profiles: the dominant repetition is a
+# A1 result that shapes all three chat profiles: the dominant repetition is a
 # COPY out of the task's own prompt (the "recent thoughts" block), measured
 # across three models on two providers and on a MoE as well as on dense models
 # — so it is not an architecture property and `arch` stays "any" (A1.1 § 2.6,
@@ -305,23 +298,6 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": True, "language_de": True, "latency_sensitive": True,
     },
-    # `send_message` and `talk_to` are never resolved under their own name
-    # (findings [D2]/Q4): both skills only drop the line into the recipient's
-    # inbox and return; the answer is written later by the recipient's AgentLoop
-    # turn through chat_engine.run_chat_turn, whose LLM comes from
-    # resolve_llm("chat_stream"). Their profiles therefore describe the chat
-    # turn that actually fulfils them — same requirements as `chat_stream`,
-    # except that nobody waits for it (the sending skill does not block).
-    "send_message": {
-        "tools": True, "vision": False, "json": False, "min_context": 16384,
-        "model_class": "large", "arch": "any", "hallucination_risk": "medium",
-        "creative": True, "language_de": True, "latency_sensitive": False,
-    },
-    "talk_to": {
-        "tools": True, "vision": False, "json": False, "min_context": 16384,
-        "model_class": "large", "arch": "any", "hallucination_risk": "medium",
-        "creative": True, "language_de": True, "latency_sensitive": False,
-    },
     "thought": {
         "tools": True, "vision": False, "json": False, "min_context": 8192,
         "model_class": "large", "arch": "any", "hallucination_risk": "medium",
@@ -366,8 +342,8 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         # prefilter (every incantation token verbatim, spell_engine.py:128)
         # reduces the job to picking among the avatar's own spell items, and
         # small + German prose is an established pair here (translation,
-        # intro_memory, image_comment). hallucination_risk medium, not low: an
-        # invented spell_id cannot fire (catalog check :199, confidence < 60
+        # intro_memory). hallucination_risk medium, not low: an invented
+        # spell_id cannot fire (catalog check :199, confidence < 60
         # discarded), but chat_substitute is unvalidated German prose that
         # REPLACES the player's line and is what the room then reacts to.
         "tools": False, "vision": False, "json": True, "min_context": 2048,
@@ -376,59 +352,33 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     },
 
     # --- Room furnishing ----------------------------------------------------
-    # A3: two decisions are shared by all three. (1) latency_sensitive stays
-    # False: the job is a daemon thread tracked in the TaskQueue, it survives a
-    # restart (_resume_phase), it ends in a notification, and the admin UI polls
-    # at 3 s while the dialog is open and 15 s while it is CLOSED, precisely so
-    # the dialog may be closed while it runs (FurnishDialog.tsx:70-125). After
-    # the review the job waits up to 30 min per mesh (E6 moved that wait behind
+    # A3 for the whole job. (1) latency_sensitive stays False: the job is a
+    # daemon thread tracked in the TaskQueue, it survives a restart
+    # (_resume_phase), it ends in a notification, and the admin UI polls at 3 s
+    # while the dialog is open and 15 s while it is CLOSED, precisely so the
+    # dialog may be closed while it runs (FurnishDialog.tsx:70-125). After the
+    # review the job waits up to 30 min per mesh (E6 moved that wait behind
     # accept), so seconds of LLM latency are not what anyone waits on.
-    # (2) hallucination_risk is low
-    # wherever the output is checked against a catalog AND against the admin —
-    # nothing reaches the room without passing a validator and the review gate
-    # (``room_furnish.confirm`` / ``room_furnish.accept``).
-    "furnish_needs": {
-        # The room's whole furnishing, invented from its purpose alone — the
-        # one furnish task whose main output is checked against NOTHING: kind,
-        # style and description are free text, and after the confirm gate the
-        # description becomes the prop's image prompt and a mesh in the shared
-        # library, so hallucination_risk stays medium. creative True (writing
-        # what a lived-in room holds is the job); language_de False for the
-        # same reason every image prompt is English. min_context 4096 with no
-        # measurement (n=0): the prompt is the room plus the marker groups,
-        # never the library — that is the point of this stage.
-        "tools": False, "vision": False, "json": True, "min_context": 4096,
+    # (2) hallucination_risk is low wherever the output is checked against a
+    # catalog AND against the admin — nothing reaches the room without passing
+    # a validator and the review gate (``room_furnish.confirm`` /
+    # ``room_furnish.accept``).
+    "furnish": {
+        # The UNION of the three steps that share this task, because one model
+        # has to serve all of them: min_context 8192 is the MATCH step (its
+        # prompt carries the whole filtered catalog, one line per prop, and the
+        # library only grows); hallucination_risk medium is the NEEDS step (the
+        # one output checked against nothing — kind, style and description are
+        # free text and become the prop's image prompt and a mesh in the shared
+        # library after the confirm gate), while match and placement stay low
+        # (an invented ref resolves to nothing, an invented prop or anchor comes
+        # back as `unplaced` and feeds a re-plan round); creative True because
+        # the needs step INVENTS what a lived-in room holds, even though match
+        # and placement only compare and arrange. language_de False: what these
+        # steps write ends up in image prompts, and those are English.
+        "tools": False, "vision": False, "json": True, "min_context": 8192,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": False, "latency_sensitive": False,
-    },
-    "furnish_match": {
-        # Needs in, catalog refs out. hallucination_risk low: an invented ref
-        # resolves to nothing and a match that survives it is still re-checked
-        # in code (same mount, largest dimension within ±40 %,
-        # furnish_needs.match_fits) — a wrong answer costs a freshly built
-        # piece, never a wrong one in the room. creative False: this is a
-        # comparison, not an invention. min_context 8192 (n=0): the prompt
-        # carries the WHOLE filtered catalog, one line per prop with its style
-        # snippet, plus the need list — more than the v1 catalog prompt sent,
-        # and the library only grows.
-        "tools": False, "vision": False, "json": True, "min_context": 8192,
-        "model_class": "medium", "arch": "any", "hallucination_risk": "low",
-        "creative": False, "language_de": False, "latency_sensitive": False,
-    },
-    "furnish_place": {
-        # A3: hallucination_risk medium -> low. No invented value can place a
-        # piece: unknown prop, unknown anchor and an unresolved ref all come
-        # back as `unplaced` with a reason, feed the per-pass re-plan rounds
-        # (one call per failing pass, at most three) and end in the review UI;
-        # count is clamped to 1..64 and an unknown `facing` is not rejected but
-        # simply falls through to the room-facing branch
-        # (furnish_solver.solve). min_context 4096 since v2: the system prompt
-        # alone doubled to ~3.9 k characters when the anchor vocabulary grew
-        # from one group to four, and the user half carries four item lists
-        # plus the openings and everything already standing.
-        "tools": False, "vision": False, "json": True, "min_context": 4096,
-        "model_class": "medium", "arch": "any", "hallucination_risk": "low",
-        "creative": False, "language_de": False, "latency_sensitive": False,
     },
     "room_description_sync": {
         # The one furnish task that answers PROSE, so json False — the room's
@@ -453,9 +403,9 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         # the admin confirms or corrects each guess in the Props tab
         # (`mount_suggested`). min_context 4096 with no measurement (n=0):
         # one line per prop, up to 40 props per call.
-        # latency_sensitive True, unlike the three furnish tasks above: this
-        # one runs behind a button the admin is waiting in front of, not
-        # inside a job that already waits half an hour on a mesh.
+        # latency_sensitive True, unlike the furnish job above: this one runs
+        # behind a button the admin is waiting in front of, not inside a job
+        # that already waits half an hour on a mesh.
         "tools": False, "vision": False, "json": True, "min_context": 4096,
         "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": False, "language_de": False, "latency_sensitive": True,
@@ -471,6 +421,21 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": True, "min_context": 2048,
         "model_class": "small", "arch": "any", "hallucination_risk": "low",
         "creative": True, "language_de": False, "latency_sensitive": True,
+    },
+    "npc_generate": {
+        # A whole character sheet for an automatically spawned NPC: creative
+        # prose (name, looks, character, standing task) inside a JSON fence, so
+        # json True AND creative True. Chat class like the sheet the manual
+        # dialog writes — a thin model produces interchangeable figures.
+        # language_de True: the sheet is read by the player and is written in
+        # the world's language. hallucination_risk low — there is nothing to
+        # get wrong, every field is invented by design and validated on the way
+        # in. latency_sensitive False: the spawn runs in the background, nobody
+        # is looking at a dialog. min_context 4096: the world briefing plus the
+        # spawn's own hints.
+        "tools": False, "vision": False, "json": True, "min_context": 4096,
+        "model_class": "large", "arch": "any", "hallucination_risk": "low",
+        "creative": True, "language_de": True, "latency_sensitive": False,
     },
     "npc_action": {
         # Two fields out, a room list and a standing task in. Nothing the
@@ -533,11 +498,6 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "model_class": "small", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": False, "latency_sensitive": True,
     },
-    "image_comment": {
-        "tools": False, "vision": False, "json": False, "min_context": 2048,
-        "model_class": "small", "arch": "any", "hallucination_risk": "low",
-        "creative": False, "language_de": True, "latency_sensitive": False,
-    },
     "instagram_caption": {
         "tools": False, "vision": True, "json": False, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
@@ -549,11 +509,6 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": True, "json": False, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": True, "latency_sensitive": True,
-    },
-    "image_analysis": {
-        "tools": False, "vision": True, "json": False, "min_context": 2048,
-        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
-        "creative": False, "language_de": True, "latency_sensitive": False,
     },
 
     # --- Misc ---------------------------------------------------------------
