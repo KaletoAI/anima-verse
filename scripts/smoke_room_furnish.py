@@ -139,15 +139,16 @@ def need(key="n1", kind="dining chair", **kw):
 def fake_llm(answers):
     """Replace room_furnish's LLM hop with canned answers per STEP. The three
     steps share one routing task (``furnish``) and are told apart by their call
-    label ("needs" / "match" / "place"), so that label is the key here; a
-    re-plan round's " (re-plan n)" suffix resolves to the same answer. An
-    answer that IS an exception is raised instead (error-path coverage); a
-    callable is asked for its answer with the rendered user prompt in hand (the
-    ids of freshly generated props are only known then)."""
+    label ``<step>: <room>``, so the part before the colon is the key here; a
+    re-plan round's " (re-plan n)" suffix rides along in the room half and
+    resolves to the same answer. An answer that IS an exception is raised
+    instead (error-path coverage); a callable is asked for its answer with the
+    rendered user prompt in hand (the ids of freshly generated props are only
+    known then)."""
     calls = []
 
     def _stub(task, system_prompt, user_prompt, label):
-        step = label.split(" (")[0]
+        step = label.split(":", 1)[0]
         calls.append((step, user_prompt))
         answer = answers[step]
         if isinstance(answer, Exception):

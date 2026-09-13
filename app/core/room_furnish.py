@@ -1,13 +1,13 @@
 """Room furnishing job (plan-room-furnish.md) — the "✨ Furnish" workflow.
 
 The LLM delivers SEMANTICS, never coordinates: it writes what the room NEEDS
-without ever seeing the library (label ``needs``), maps the library onto that
+without ever seeing the library (step ``needs``), maps the library onto that
 need list (``match``) and arranges the result RELATIONALLY (``place``); the
 deterministic ``furnish_solver`` turns that plan into ``layout.props``
 geometry. The three steps are ONE routing task (``furnish``) and stay apart in
-the LLM log through those call labels. The need list is the ONE list the whole
-job carries — a need either names the library piece that serves it or is built
-(plan-furnish-v2.md § 4).
+the LLM log through their call labels, ``<step>: <room>``. The need list is
+the ONE list the whole job carries — a need either names the library piece
+that serves it or is built (plan-furnish-v2.md § 4).
 
 Because generation takes minutes, the whole thing is a PERSISTED job — one
 row per room, one in-process orchestrator thread (pattern:
@@ -705,7 +705,7 @@ def _phase_needs(room_id: str) -> None:
                        for k, g in groups.items()],
         key_area_kinds=furnish_needs.key_area_kinds(),
         surfaces_missing=surfaces_missing, surface_kinds=surface_kinds)
-    answer = _llm_json("furnish", sys_p, user_p, "needs")
+    answer = _llm_json("furnish", sys_p, user_p, f"needs: {room_name}")
     needs, dropped = furnish_needs.valid_needs(
         _list_field(answer, "needs"), list(groups), is_yard=is_yard)
     surfaces = (furnish_needs.valid_surfaces(
@@ -726,8 +726,8 @@ def _phase_needs(room_id: str) -> None:
                                       "height_m", "style")} for n in needs],
             catalog=catalog)
         matches = furnish_needs.valid_matches(
-            _list_field(_llm_json("furnish", sys_p, user_p, "match"),
-                        "matches"),
+            _list_field(_llm_json("furnish", sys_p, user_p,
+                                  f"match: {room_name}"), "matches"),
             needs, by_ref, catalog_lib)
     # An empty catalog needs no call: with nothing to choose from every
     # answer is null, and asking a model to say so costs a minute of GPU.
@@ -870,7 +870,7 @@ def _phase_place(room_id: str) -> None:
         # indistinguishable from the first attempt in the LLM log and read
         # as duplicate submits.
         return _llm_json("furnish", system_prompt, user_prompt,
-                         f"place{suffix}")
+                         f"place: {room_name}{suffix}")
 
     result = furnish_place.run(
         room_name=room_name, room_description=str(room.get("description") or ""),

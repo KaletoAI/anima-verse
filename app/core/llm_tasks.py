@@ -49,9 +49,11 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "secret_generation":  {"label": "Secret Generation",        "priority": Priority.LOW,    "category": "tool",   "thinking": True},
     "outfit_generation":  {"label": "Outfit Generation",        "priority": Priority.NORMAL, "category": "tool",   "gate": "image_generation.enabled", "thinking": True},
     "thought":            {"label": "Thought (agent loop)",     "priority": Priority.LOW,    "category": "chat"},
-    # "intent" stays as the fallback when a specific intent_* task has no
-    # routing (see llm_router.resolve_llm). New code should not use it directly
-    # any more — use one of the intent_* sub-tasks instead.
+    # The tool-class task: the tool phase of a reply resolves it directly —
+    # chat_engine loads the Tool-LLM from it for chat AND thought turns
+    # (chat_engine.py:421). It is also the anchor llm_router.fallback_parent()
+    # sends unrouted tool work to: furnish, prop_mount_classify,
+    # room_description_sync and any "intent_<sub>" id.
     "intent":             {"label": "Intent / tool calls",      "priority": Priority.NORMAL, "category": "tool"},
     "spell_detect":       {"label": "Spell Cast Detection",      "priority": Priority.NORMAL, "category": "tool"},
     # Pose consolidation: vector for the similarity match against existing

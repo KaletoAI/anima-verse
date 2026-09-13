@@ -1,19 +1,19 @@
-"""Zentrale LLM-Aufruf-Funktion mit Task-basiertem Routing.
+"""Central LLM call function with task-based routing.
 
-Die `llm_call()` Funktion ist der einheitliche Einstiegspunkt fuer alle
-Nicht-Stream-LLM-Aufrufe. Der Resolver ermittelt anhand des Task-Typs
-aus der `llm_routing`-Config das passende LLM (Provider+Model+Settings)
-mit Fallback-Kette bei nicht verfuegbarem Provider.
+The `llm_call()` function is the single entry point for all non-streaming
+LLM calls. From the task type the resolver reads the matching LLM
+(provider+model+settings) out of the `llm_routing` config, with a fallback
+chain when a provider is unavailable.
 
-Zusaetzlich liegen hier:
-- `LLMInstance`: Datenklasse, die Provider+Model+Settings buendelt und bei Bedarf
-  einen LLMClient erzeugt.
-- `create_llm_instance()`: Fabrik fuer Dev-Routen (world_dev, story_dev), die
-  ein konkretes Model explizit waehlen.
-- `get_llm_instance_by_name()`: Parsing-Helfer fuer Character-Overrides
-  ("Provider::Model" oder "Model").
+Also living here:
+- `LLMInstance`: dataclass that bundles provider+model+settings and creates an
+  LLMClient on demand.
+- `create_llm_instance()`: factory for the dev routes (world_dev, story_dev)
+  that pick a concrete model explicitly.
+- `get_llm_instance_by_name()`: parsing helper for character overrides
+  ("Provider::Model" or "Model").
 
-Streaming laeuft separat, nutzt aber denselben Resolver.
+Streaming runs separately but uses the same resolver.
 """
 import os
 import time
@@ -105,9 +105,9 @@ class LLMInstance:
 
 
 def get_llm_instance_by_name(model_name: str) -> Optional[LLMInstance]:
-    """Erzeugt eine LLMInstance per Model-Name (Provider wird aufgeloest).
+    """Creates an LLMInstance from a model name (the provider is resolved).
 
-    Akzeptiert "Provider::Model" oder "Model".
+    Accepts "Provider::Model" or "Model".
     """
     pm = get_provider_manager()
 
@@ -135,7 +135,7 @@ def create_llm_instance(
     provider_name: str = "",
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None) -> Optional[LLMInstance]:
-    """Erzeugt eine LLMInstance fuer ein konkretes Model (fuer Dev-Routen)."""
+    """Creates an LLMInstance for a concrete model (for the dev routes)."""
     pm = get_provider_manager()
 
     if model and "::" in model and not provider_name:
@@ -165,16 +165,15 @@ def create_llm_instance(
 # ---------------------------------------------------------------------------
 
 def _load_routing() -> List[dict]:
-    """Liest llm_routing aus der Config."""
+    """Reads llm_routing from the config."""
     routing = config.get("llm_routing", [])
     return routing if isinstance(routing, list) else []
 
 
 async def _warmup_one(entry: dict) -> None:
-    """Sendet einen 1-Token-Ping an einen Routing-Eintrag, damit das
-    Backend (z.B. llama-swap, vLLM) das Model in den Speicher laedt.
-    Fehler werden geloggt, aber nie geworfen — Preload darf den Start
-    nicht stoeren.
+    """Sends a 1-token ping to a routing entry so the backend (e.g.
+    llama-swap, vLLM) loads the model into memory. Errors are logged but
+    never raised — a preload must not disturb the startup.
     """
     provider_name = (entry.get("provider") or "").strip()
     model = (entry.get("model") or "").strip()
@@ -210,8 +209,8 @@ async def _warmup_one(entry: dict) -> None:
         return
     try:
         logger.info("Preload start: %s/%s", provider_name, model)
-        # Anthropic + OpenAI-Clients haben beide astream(); ein 1-Token-Ping
-        # ueber Streaming reicht voellig zum Laden.
+        # The Anthropic and OpenAI clients both have astream(); a 1-token ping
+        # over streaming is entirely enough to load the model.
         async for _ in client.astream([{"role": "user", "content": "ping"}]):
             break
         logger.info("Preload OK:    %s/%s", provider_name, model)
@@ -220,9 +219,9 @@ async def _warmup_one(entry: dict) -> None:
 
 
 async def preload_models() -> None:
-    """Laedt alle Routing-Eintraege mit ``preload_on_startup=True`` parallel.
-    Wird in der FastAPI-Lifespan via ``asyncio.create_task`` gefeuert,
-    damit der Server-Start nicht blockiert.
+    """Loads every routing entry with ``preload_on_startup=True`` in parallel.
+    Fired in the FastAPI lifespan via ``asyncio.create_task`` so the server
+    start does not block.
     """
     routing = _load_routing()
     targets = [
@@ -240,14 +239,14 @@ async def preload_models() -> None:
 
 
 def _resolve_character_override(task: str, agent_name: str) -> Optional[LLMInstance]:
-    """Liest `llm_routing_overrides[task]` aus character_config.
+    """Reads `llm_routing_overrides[task]` from character_config.
 
-    Unterstuetzte Wert-Formate:
-    - "Provider::Model"   — konkreter Provider + Model
-    - "Model"             — Model allein; Provider wird automatisch ermittelt
+    Supported value formats:
+    - "Provider::Model"   — a concrete provider + model
+    - "Model"             — the model alone; the provider is found automatically
 
-    Liefert eine LLMInstance wenn Override existiert UND der Provider
-    verfuegbar ist, sonst None (fallt auf globales Routing zurueck).
+    Returns an LLMInstance when an override exists AND the provider is
+    available, otherwise None (falls back to the global routing).
     """
     try:
         from app.models.character import get_character_config
@@ -311,28 +310,28 @@ def _candidates(task: str, routing: list) -> List[Tuple[int, dict]]:
 
 
 def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
-    """Ermittelt das LLM fuer einen Task anhand der llm_routing-Config.
+    """Determines the LLM for a task from the llm_routing config.
 
-    Reihenfolge:
-    1. Character-Override aus `character_config.llm_routing_overrides[task]`
-       (Format: "Provider::Model") — wenn Provider verfuegbar
-    2. Globale llm_routing-Kette (sortiert nach order, erster verfuegbarer Provider)
-    3. None wenn keiner greift
+    Order:
+    1. Character override from `character_config.llm_routing_overrides[task]`
+       (format: "Provider::Model") — when the provider is available
+    2. The global llm_routing chain (sorted by order, first available provider)
+    3. None when nothing applies
 
     Args:
-        task: Task-ID aus TASK_TYPES
-        user_id, agent_name: Optional — wenn beide gesetzt, wird der
-            Character-Override aus character_config.json beruecksichtigt.
+        task: task id from TASK_TYPES
+        user_id, agent_name: optional — when both are set, the character
+            override from character_config.json is taken into account.
 
-    Task-Disable (llm_task_state) greift immer als erstes Check.
+    The task disable (llm_task_state) is always the first check.
     """
-    # Task deaktiviert? → kein LLM (Aufrufer fallen in bestehende Fallback-Pfade)
+    # Task disabled? → no LLM (callers drop into their existing fallback paths)
     from app.core.llm_task_state import is_enabled
     if not is_enabled(task):
         logger.debug("resolve_llm(%s): Task deaktiviert", task)
         return None
 
-    # 1. Character-Override
+    # 1. Character override
     if agent_name:
         override_inst = _resolve_character_override(task, agent_name)
         if override_inst is not None:

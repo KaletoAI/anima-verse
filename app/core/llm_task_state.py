@@ -1,16 +1,15 @@
-"""Task-Disable-Zustand fuer den LLM-Router.
+"""Task-disable state for the LLM router.
 
-Ersetzt den alten globalen llm_queue.pause() — statt alle LLM-Calls zu
-blockieren, koennen einzelne Tasks (oder Preset-Gruppen) deaktiviert werden.
-Ein deaktivierter Task wird vom Router als "kein LLM verfuegbar" behandelt
-(resolve_llm liefert None, llm_call wirft RuntimeError). Aufrufer haben
-bereits Fallbacks fuer diesen Fall.
+Replaces the old global llm_queue.pause() — instead of blocking every LLM
+call, single tasks (or preset groups) can be disabled. The router treats a
+disabled task as "no LLM available" (resolve_llm returns None, llm_call raises
+RuntimeError). Callers already have fallbacks for that case.
 
-Zwei Ebenen:
+Two levels:
 - Persistent:    `llm_task_state.disabled_tasks` in config.json
-- Runtime-only:  in-memory Set, ueberschreibt persistent fuer die Session
-                 (z.B. World-Dev-Builder aktiviert "world_dev"-Preset fuer
-                 die Dauer der Session, ohne Config zu veraendern)
+- Runtime-only:  in-memory set, overrides the persistent one for the session
+                 (e.g. the world-dev builder activates the "world_dev" preset
+                 for the duration of the session without changing the config)
 """
 from threading import RLock
 from typing import List, Set
@@ -54,7 +53,7 @@ PRESETS["chat_only"] = _chat_only_disabled()
 
 
 _lock = RLock()
-_runtime_disabled: Set[str] = set()  # nicht persistent — World-Dev etc.
+_runtime_disabled: Set[str] = set()  # not persistent — world-dev etc.
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +61,7 @@ _runtime_disabled: Set[str] = set()  # nicht persistent — World-Dev etc.
 # ---------------------------------------------------------------------------
 
 def is_enabled(task: str) -> bool:
-    """True wenn der Task aktuell weder persistent noch runtime deaktiviert ist."""
+    """True when the task is currently neither persistently nor runtime disabled."""
     with _lock:
         if task in _runtime_disabled:
             return False
@@ -71,7 +70,7 @@ def is_enabled(task: str) -> bool:
 
 
 def disabled_tasks() -> List[str]:
-    """Liste aller aktuell deaktivierten Tasks (persistent + runtime, dedupliziert)."""
+    """List of every currently disabled task (persistent + runtime, deduplicated)."""
     persisted = _persisted_disabled()
     with _lock:
         combined = set(persisted) | set(_runtime_disabled)
@@ -79,9 +78,9 @@ def disabled_tasks() -> List[str]:
 
 
 def set_runtime_disabled(tasks: List[str]) -> None:
-    """Setzt die Runtime-Disable-Liste (ueberschreibt bestehendes Set).
+    """Sets the runtime-disable list (overwrites the existing set).
 
-    Leere Liste = alle Runtime-Disables aufgehoben (persistente bleiben).
+    An empty list = every runtime disable lifted (the persistent ones stay).
     """
     with _lock:
         _runtime_disabled.clear()
@@ -90,14 +89,14 @@ def set_runtime_disabled(tasks: List[str]) -> None:
 
 
 def activate_preset_runtime(preset: str) -> List[str]:
-    """Aktiviert ein Preset als Runtime-Disable. Gibt die Task-Liste zurueck."""
+    """Activates a preset as a runtime disable. Returns the task list."""
     tasks = PRESETS.get(preset, [])
     set_runtime_disabled(tasks)
     return tasks
 
 
 def clear_runtime() -> None:
-    """Hebt alle Runtime-Disables auf."""
+    """Lifts every runtime disable."""
     with _lock:
         _runtime_disabled.clear()
     logger.info("Runtime-Disables aufgehoben")
@@ -117,7 +116,7 @@ def get_presets() -> dict:
 # ---------------------------------------------------------------------------
 
 def _persisted_disabled() -> Set[str]:
-    """Liest die persistent deaktivierten Tasks aus der Config."""
+    """Reads the persistently disabled tasks from the config."""
     val = config.get("llm_task_state.disabled_tasks", [])
     if isinstance(val, list):
         return {str(t) for t in val if t}
