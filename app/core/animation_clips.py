@@ -529,6 +529,29 @@ def clip_loops(meta: Optional[Dict[str, Any]]) -> bool:
     return bool(isinstance(geometry, dict) and geometry.get("loop"))
 
 
+#: The genders a pair half can be assigned to — the two the profile field
+#: ``gender`` names unambiguously (the same pair ``animation_sets`` derives).
+ROLE_GENDERS = ("male", "female")
+
+
+def clip_role_gender(meta: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Which gender plays which half of a pair clip: ``{"a": …, "b": …}``.
+
+    Written by the admin in the Poses tab (``set_clip_role_gender``). Only a
+    complete assignment counts — one man, one woman — anything else (no key,
+    one half missing, both the same, an unknown word) is ``{}``: the pair is
+    not assigned, and the initiator plays half A.
+    """
+    raw = (meta or {}).get("role_gender") if isinstance(meta, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    a = str(raw.get("a") or "").strip().lower()
+    b = str(raw.get("b") or "").strip().lower()
+    if a in ROLE_GENDERS and b in ROLE_GENDERS and a != b:
+        return {"a": a, "b": b}
+    return {}
+
+
 def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
     """One ``clip_entries()`` entry as the API delivers it — the file facts
     plus what its sidecar knows.
@@ -567,6 +590,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "fps": (meta or {}).get("fps"),
         "frames": (meta or {}).get("frames"),
         "loop": clip_loops(meta),
+        # Which gender plays which half — pair halves only, {} = not assigned.
+        "role_gender": clip_role_gender(meta) if entry["role"] else {},
         # What has already been BAKED into the file — the import's dial plus
         # every later ``orient_clip``. The library UI shows it beside the
         # dials so an angle is added to a known state, not to a guess.
@@ -876,6 +901,59 @@ def set_clip_loop(library: str, rel: str, loop: bool) -> List[Dict[str, Any]]:
     logger.info("clip loop flag: %s%s (%s) -> %s", f"{cset}/" if cset else "",
                 kind, library, bool(loop))
     return [_view_of(p, cset, library) for p in files]
+
+
+def set_clip_role_gender(library: str, rel: str,
+                         role_gender: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Writes which gender plays which half of a PAIR clip.
+
+    ``role_gender`` is ``{"a": "male", "b": "female"}`` (or the other way
+    round); ``None`` / ``{}`` removes the assignment, so the initiator plays
+    half A again. Like the loop flag it belongs to the KIND in its set and
+    lives in the shared ``<kind>.json`` — both halves read the same answer.
+
+    Refused (``ClipLibraryError``): a solo clip (it has no halves), a kind
+    without a shared sidecar, and anything but one man plus one woman.
+    Returns the touched clips as listing views.
+    """
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    kind, role = parse_clip_role(path.name)
+    if not role:
+        raise ClipLibraryError(
+            f"'{kind}' is a solo clip — only the halves of a pair have roles")
+    value: Dict[str, str] = {}
+    if role_gender:
+        if not isinstance(role_gender, dict):
+            raise ClipLibraryError("role_gender must be an object {a, b}")
+        value = clip_role_gender({"role_gender": role_gender})
+        if not value:
+            raise ClipLibraryError(
+                "role_gender needs one half male and the other female")
+    root = library_root(library).resolve()
+    cset = path.parent.name if path.parent.resolve() != root else ""
+    sidecar = path.parent / f"{kind}.json"
+    if not sidecar.is_file():
+        raise ClipLibraryError(
+            f"'{kind}' has no sidecar {sidecar.name} — the roles are stored "
+            "there, so the clip has to be (re-)imported first")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ClipLibraryError(f"{sidecar.name} is not readable: {e}")
+    if not isinstance(data, dict):
+        raise ClipLibraryError(f"{sidecar.name} is not an object")
+    if value:
+        data["role_gender"] = value
+    else:
+        data.pop("role_gender", None)
+    sidecar.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                       encoding="utf-8")
+    reload_clip_caches()
+    logger.info("clip role genders: %s%s (%s) -> %s", f"{cset}/" if cset else "",
+                kind, library, value or "not assigned")
+    return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
 
 
 # ── Turning a clip AFTER the import (plan-clip-library-…-ausrichtung U2) ──

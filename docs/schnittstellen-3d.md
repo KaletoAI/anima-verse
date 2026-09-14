@@ -2123,6 +2123,23 @@ Sidecar `<kind>.json` neben den Dateien trägt `duration_s`, `fps`, `frames` und
 `geometry` (`anchor_s`, `root_distance_m`, `roles.{a,b}.anchor_xz_m` = Hüft-XZ
 der Rolle am Ankerframe, in m). `GET /assets/animation-clips` liefert pro Clip
 `role` (`a`/`b`/leer) sowie `pair_kinds` + `pairs.<kind>` (= Sidecar).
+
+**Rollen nach Geschlecht (2026-09-14).** Das Sidecar kann die beiden Hälften
+Geschlechtern zuordnen: `role_gender: {"a": "male", "b": "female"}` (oder
+umgekehrt). Gültig ist nur die vollständige Zuordnung Mann + Frau, sonst gilt
+das Paar als nicht zugeordnet. Gesetzt wird sie im Poses-Tab → Library
+(`PATCH /assets/animation-clips/{library}/{rel}` mit `{"role_gender": {…} | null}`),
+geliefert pro Hälfte in der Listing-Zeile (`role_gender`, `{}` = nicht
+zugeordnet) und in `pairs.<kind>.role_gender`. Beim Start entscheidet das
+Profilfeld `gender`, nicht wer eingeladen hat: Eine Figur PASST zu einer
+Hälfte, wenn ihr Geschlecht das der Hälfte ist. Getauscht (Partner spielt A)
+wird, wenn der Initiator zu B oder der Partner zu A passt — außer der Initiator
+passt zu A oder der Partner zu B (zwei Figuren gleichen Geschlechts). Mann und
+Frau spielen also immer ihre eigene Hälfte, eine Frau neben einer
+nicht-binären Figur ihre; entscheidet nichts (gleiches Geschlecht, kein
+Geschlecht, keine Zuordnung), spielt der Initiator A — abgelehnt wird deswegen
+nie. Regel + handgerechnete Tabelle: `interaction_engine.assign_roles`,
+`scripts/smoke_pair_role_gender.py`.
 Erzeugung: `scripts/clip_import_cmu.py` (CMU-Mocap → Mixamo-Skelett, Blender
 headless) — die CMU-Daten sind frei weitergebbar, anders als Mixamo.
 
@@ -2137,7 +2154,8 @@ Anker dessen Mitte (Mittelwert der Slots — bei Kapazität 2 die Marker-Positio
 Facings; ohne Facing = Süd), und `anchor.place_id` nennt den Platz — beide
 Profile halten ihn als `place.slot = "pair"`, das Paar belegt `places` Slots.
 Sonst (nur Gruppe `stand`) Anker = Mittelpunkt der beiden Positionen, `yaw` so,
-dass Clip-+X auf die Weltrichtung Actor→Partner fällt, `place_id` `null`; eine
+dass Clip-+X auf die Weltrichtung A-Figur→B-Figur fällt (nach der Rollenwahl
+oben, nicht Initiator→Partner), `place_id` `null`; eine
 Sitz-Pose ohne freien Sitz wird abgelehnt. Der Server setzt beide
 Spielzustands-Positionen auf `anchor + R(yaw)·anchor_xz_m` der Rolle (so sehen
 Wahrnehmung, Regeln und Karte die beiden dort, wo der Clip sie am Anker hält).

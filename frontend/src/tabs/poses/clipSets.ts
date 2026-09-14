@@ -29,6 +29,9 @@ export interface ApiClipRow {
   fps?: number | null
   frames?: number | null
   loop?: boolean
+  /** Pair halves only: which gender plays which half (`{a: 'male', b: 'female'}`
+   *  or reversed); empty = not assigned, the initiator plays A. */
+  role_gender?: { a?: string; b?: string }
   origin?: string
   has_sidecar?: boolean
   /** What the FILE already carries: the import's orientation dial plus every

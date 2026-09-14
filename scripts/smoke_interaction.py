@@ -166,6 +166,23 @@ Hand-derived expectations:
       outside, so set_character_pos is skipped: Ann stays (19, 21), Bob
       (19, 23), both still in the square. The marker is removed afterwards.
 
+  [11] Gender decides the halves, not who asked (§ A8a, rule and table in
+      scripts/smoke_pair_role_gender.py). hug.json gets role_gender
+      {a: male, b: female}; Ann is female, Bob male. They stand at (10, 13)
+      and (10, 14) — spot is 9 m away, so the standing pair meets halfway
+      at (10, 13.5) exactly as in [9].
+      Ann asks: Ann fits B → swap → Bob plays "a", Ann "b". The yaw runs from
+      the A figure to the B figure: Bob (10, 14) → Ann (10, 13), u = (0, −1),
+      atan2(−uz, ux) = atan2(1, 0) = +π/2. A's offset (−0.3, 0) turned by
+      +π/2: x' = −0.3·0 + 0·1 = 0, z' = −(−0.3)·1 + 0·0 = +0.3 → Bob
+      (10, 13.8); B's (0.3, 0) → z' = −0.3 → Ann (10, 13.2). Nobody crosses:
+      without the assignment ([9], yaw −π/2) Ann stood at (10, 13.2) too.
+      Bob asks (positions reset): Bob fits A → no swap → the same result,
+      Bob "a", yaw +π/2 — the initiator no longer matters.
+      Two women (Bob set to female), Ann asks: Ann fits B but so does Bob →
+      no swap → Ann "a", yaw −π/2, Ann (10, 13.2), Bob (10, 13.8).
+      The assignment and the genders are removed afterwards.
+
 Usage:  ./.venv/bin/python scripts/smoke_interaction.py
 """
 import json
@@ -860,6 +877,63 @@ check("describe names the partner", ie.describe("Ann") == "embracing with Bob",
 check("… from both sides", ie.describe("Bob") == "embracing with Ann")
 ie.end_interaction("Ann")
 check("and is empty without a pair", ie.describe("Ann") == "")
+
+# ── [11] gender decides the halves ──────────────────────────────────────
+print("\n[11] roles by gender")
+from app.core.animation_clips import reload_clip_caches  # noqa: E402
+
+_hug = json.loads((CLIPS / "hug.json").read_text(encoding="utf-8"))
+_hug["role_gender"] = {"a": "male", "b": "female"}
+(CLIPS / "hug.json").write_text(json.dumps(_hug), encoding="utf-8")
+reload_clip_caches()
+
+
+def set_gender(name: str, gender: str) -> None:
+    prof = get_character_profile(name)
+    prof["gender"] = gender
+    save_character_profile(name, prof)
+
+
+def restart_pair(initiator: str, other: str) -> dict:
+    for _n in ("Ann", "Bob"):
+        ie.end_interaction(_n)
+        clear_pose_intent(_n)
+        ie.clear_invites_for(_n)
+    set_character_pos("Ann", 10.0, 13.0)
+    set_character_pos("Bob", 10.0, 14.0)
+    return ie.start_interaction(initiator, other, "embracing")
+
+
+set_gender("Ann", "female")
+set_gender("Bob", "male")
+for _who, _other in (("Ann", "Bob"), ("Bob", "Ann")):
+    anchor = restart_pair(_who, _other)["anchor"]
+    pa, pb = get_character_pos("Ann"), get_character_pos("Bob")
+    check(f"{_who} asks: Bob plays a, Ann plays b",
+          ie.get_interaction("Bob")["role"] == "a" and ie.get_interaction("Ann")["role"] == "b")
+    check(f"{_who} asks: midpoint (10, 13.5), yaw +π/2 (A=Bob → B=Ann)",
+          near(anchor["x"], 10) and near(anchor["z"], 13.5)
+          and near(anchor["yaw"], math.pi / 2, 1e-3) and anchor.get("place_id", "x") is None,
+          str(anchor))
+    check(f"{_who} asks: Ann (10, 13.2), Bob (10, 13.8) — nobody crosses",
+          near(pa["x"], 10, 0.011) and near(pa["z"], 13.2, 0.011)
+          and near(pb["x"], 10, 0.011) and near(pb["z"], 13.8, 0.011), f"{pa} {pb}")
+
+set_gender("Bob", "female")
+anchor = restart_pair("Ann", "Bob")["anchor"]
+pa, pb = get_character_pos("Ann"), get_character_pos("Bob")
+check("two women: the initiator Ann plays a",
+      ie.get_interaction("Ann")["role"] == "a" and ie.get_interaction("Bob")["role"] == "b")
+check("two women: yaw −π/2, Ann (10, 13.2), Bob (10, 13.8)",
+      near(anchor["yaw"], -math.pi / 2, 1e-3)
+      and near(pa["z"], 13.2, 0.011) and near(pb["z"], 13.8, 0.011), f"{anchor} {pa} {pb}")
+
+ie.end_interaction("Ann")
+_hug.pop("role_gender")
+(CLIPS / "hug.json").write_text(json.dumps(_hug), encoding="utf-8")
+reload_clip_caches()
+set_gender("Ann", "")
+set_gender("Bob", "")
 
 
 print()

@@ -152,7 +152,7 @@ export function ClipLibrary({
   // The body of a rename/move the server refused with 409 (the name is taken).
   // It is kept so the "Replace" button can send exactly that call again, this
   // time with `overwrite` — the collision is a question, not a dead end.
-  const [conflict, setConflict] = useState<Record<string, string | boolean> | null>(null)
+  const [conflict, setConflict] = useState<Record<string, unknown> | null>(null)
   const [busy, setBusy] = useState(false)
   // Bumped after every write so the preview reloads the (possibly renamed) clip
   const [seq, setSeq] = useState(0)
@@ -400,7 +400,7 @@ export function ClipLibrary({
   }, [])
 
   const run = useCallback(
-    async (clip: ApiClipRow, body: Record<string, string | boolean> | null) => {
+    async (clip: ApiClipRow, body: Record<string, unknown> | null) => {
       if (busy) return
       setBusy(true)
       setError('')
@@ -474,8 +474,13 @@ export function ClipLibrary({
     const rel = `${lib}/${relOf(clip)}`
     const open = action?.rel === rel ? action.type : null
     const other = lib === 'licensed' ? 'free' : 'licensed'
+    // Which gender plays which half — one answer for both halves of the pair.
+    const genderA = clip.role_gender?.a || ''
+    const halfGender = clip.role === 'a' ? genderA : clip.role === 'b' ? clip.role_gender?.b || '' : ''
     const facts = [
-      clip.role ? `${t('half')} ${clip.role.toUpperCase()}` : '',
+      clip.role
+        ? `${t('half')} ${clip.role.toUpperCase()}${halfGender ? ` (${halfGender === 'male' ? t('man') : t('woman')})` : ''}`
+        : '',
       clip.duration_s ? `${clip.duration_s.toFixed(1)} s` : '',
       clip.fps ? `${clip.fps} fps` : '',
       clip.frames ? `${clip.frames} ${t('frames')}` : '',
@@ -505,6 +510,33 @@ export function ClipLibrary({
           <span>{t('Loop')}</span>
           <span className="ga-form-hint">{t('Repeat the clip; off = hold the last frame')}</span>
         </label>
+        {clip.role ? (
+          <label
+            style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}
+            title={clip.has_sidecar === false
+              ? t('Without a sidecar there is nowhere to store the roles — import the clip again.')
+              : t('Applies to both halves of the pair in this set.')}
+          >
+            <span>{t('Roles')}</span>
+            <select
+              className="ga-input"
+              style={{ maxWidth: 220 }}
+              value={genderA}
+              disabled={busy || clip.has_sidecar === false}
+              onChange={(e) => {
+                const a = e.target.value
+                run(clip, { role_gender: a ? { a, b: a === 'male' ? 'female' : 'male' } : null })
+              }}
+            >
+              <option value="">{t('not set')}</option>
+              <option value="male">{t('A = man, B = woman')}</option>
+              <option value="female">{t('A = woman, B = man')}</option>
+            </select>
+            <span className="ga-form-hint">
+              {t('A man and a woman always play their own halves; otherwise the one who starts plays A.')}
+            </span>
+          </label>
+        ) : null}
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
           <button type="button" className="ga-btn ga-btn-sm" onClick={() => openAction(clip, 'kind')}>
             {t('Rename kind')}

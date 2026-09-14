@@ -53,11 +53,11 @@ from app.blender import runner as blender_runner
 from app.core import clip_catalog, fbx_import
 from app.core.animation_clips import (CLIP_EXTS, ClipExists, ClipLibraryError,
                                       ClipNotFound, clip_entries, clip_meta,
-                                      clip_view, delete_clip,
+                                      clip_role_gender, clip_view, delete_clip,
                                       load_locomotion_clips, load_transitions,
                                       orient_clip, pair_kinds, rename_clip,
                                       save_locomotion_clips, save_transitions,
-                                      set_clip_loop)
+                                      set_clip_loop, set_clip_role_gender)
 from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError
 from app.core.http_files import etag_file_response
@@ -107,6 +107,8 @@ def list_animation_clips() -> Dict[str, Any]:
             "fps": meta.get("fps"),
             "frames": meta.get("frames"),
             "geometry": meta.get("geometry") or {},
+            # Which gender plays which half ({} = the initiator plays A).
+            "role_gender": clip_role_gender(meta),
         }
     return {"clips": clips,
             "kinds": sorted({c["kind"] for c in clips}),
@@ -158,10 +160,12 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
                                _: Dict[str, Any] = Depends(require_admin)
                                ) -> Dict[str, Any]:
     """Renames a clip, moves it to another set or library, and/or sets its
-    LOOP flag.
+    LOOP flag or the genders of its pair halves.
 
-    Body ``{kind?, set?, library?, loop?, overwrite?}``, at least one of the
-    first four. ``set: ""``
+    Body ``{kind?, set?, library?, loop?, role_gender?, overwrite?}``, at
+    least one of the first five. ``role_gender`` is ``{"a": "male", "b":
+    "female"}`` (or reversed) or ``null`` to clear it — pair clips only,
+    stored in the ``<kind>.json`` like ``loop`` (§ A8a). ``set: ""``
     moves the clip to the neutral root — the ONE empty value with a meaning;
     ``library: ""`` is a bad request, not a silent no-op. ``loop`` is the
     admin's "repeat this clip / hold its last frame" and is written into the
@@ -177,9 +181,14 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
         raise HTTPException(status_code=400, detail="invalid JSON body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
-    if not any(k in body for k in ("kind", "set", "library", "loop")):
+    if not any(k in body for k in ("kind", "set", "library", "loop", "role_gender")):
+        raise HTTPException(
+            status_code=400,
+            detail="one of kind, set, library, loop, role_gender is required")
+    if "role_gender" in body and not (body["role_gender"] is None
+                                      or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
-                            detail="one of kind, set, library, loop is required")
+                            detail="role_gender must be an object {a, b} or null")
     if "library" in body and not str(body["library"] or "").strip():
         raise HTTPException(status_code=400,
                             detail="library must be 'free' or 'licensed'")
@@ -204,6 +213,11 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
                 library = str(clips[0].get("library") or library)
                 rel = str(clips[0].get("rel") or rel)
             clips = set_clip_loop(library, rel, bool(body["loop"]))
+        if "role_gender" in body:
+            if clips:
+                library = str(clips[0].get("library") or library)
+                rel = str(clips[0].get("rel") or rel)
+            clips = set_clip_role_gender(library, rel, body["role_gender"])
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips}

@@ -212,10 +212,40 @@ def _rotate(x: float, z: float, yaw: float) -> Tuple[float, float]:
     return (x * c + z * s, -x * s + z * c)
 
 
+def assign_roles(actor: str, partner: str, actor_gender: str,
+                 partner_gender: str,
+                 role_gender: Dict[str, str]) -> Tuple[str, str]:
+    """``(plays A, plays B)`` — who takes which half of the pair clip.
+
+    A clip whose sidecar assigns the halves to genders (``role_gender``,
+    ``animation_clips.clip_role_gender``) is matched by gender, not by who
+    asked: a character FITS a half when its gender is that half's gender.
+    The two swap when the actor fits B or the partner fits A — unless the
+    actor fits A or the partner fits B as well, which is the case with two
+    characters of the same gender. So a man and a woman always play their
+    own halves, a woman beside a non-binary partner still takes hers, and
+    whenever nothing decides (same gender, no gender, no assignment) the
+    initiator plays A — the pair is never refused over it.
+    """
+    if not role_gender:
+        return actor, partner
+    ga = str(actor_gender or "").strip().lower()
+    gp = str(partner_gender or "").strip().lower()
+
+    def fits(gender: str, role: str) -> bool:
+        return bool(gender) and gender == role_gender.get(role)
+
+    swap = ((fits(ga, "b") or fits(gp, "a"))
+            and not (fits(ga, "a") or fits(gp, "b")))
+    return (partner, actor) if swap else (actor, partner)
+
+
 def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]:
-    """Binds ``actor`` (role A) and ``partner`` (role B) to the pair clip the
-    pose names. Raises ``ValueError`` with a reason a tool result can relay."""
-    from app.core.animation_clips import clip_loops, clip_meta
+    """Binds ``actor`` (the initiator) and ``partner`` to the pair clip the
+    pose names. Who plays which half follows the clip's gender assignment
+    (``assign_roles``); without one the actor plays A. Raises ``ValueError``
+    with a reason a tool result can relay."""
+    from app.core.animation_clips import clip_loops, clip_meta, clip_role_gender
     from app.core.state_events import publish
     from app.models.character import (get_character_current_location,
                                       get_character_current_room,
@@ -245,6 +275,13 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
         raise ValueError(blocked)
 
     profiles = {n: get_character_profile(n) or {} for n in (actor, partner)}
+    # Who plays which half: by gender when the clip assigns its halves, else
+    # the initiator plays A. The geometry below orients on the HALVES (clip
+    # +X runs from A to B), never on who asked.
+    who_a, who_b = assign_roles(actor, partner,
+                                str(profiles[actor].get("gender") or ""),
+                                str(profiles[partner].get("gender") or ""),
+                                clip_role_gender(meta))
     loc_a = get_character_current_location(actor) or ""
     pa = get_character_pos(actor)
     pb = get_character_pos(partner)
@@ -284,14 +321,15 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
         anchor = {"x": round(ax, 3), "z": round(az, 3), "yaw": round(yaw, 4),
                   "place_id": place["id"]}
     else:
-        yaw = _yaw_from_to(pa["x"], pa["z"], pb["x"], pb["z"]) if dist > 1e-6 else 0.0
+        p_a, p_b = (pa, pb) if who_a == actor else (pb, pa)
+        yaw = _yaw_from_to(p_a["x"], p_a["z"], p_b["x"], p_b["z"]) if dist > 1e-6 else 0.0
         anchor = {"x": round((pa["x"] + pb["x"]) / 2, 3),
                   "z": round((pa["z"] + pb["z"]) / 2, 3), "yaw": round(yaw, 4),
                   "place_id": None}
     inter_id = uuid.uuid4().hex[:12]
     started = game_time().canonical()
     roles = (meta.get("geometry") or {}).get("roles") or {}
-    for name, role, other in ((actor, "a", partner), (partner, "b", actor)):
+    for name, role, other in ((who_a, "a", who_b), (who_b, "b", who_a)):
         # Re-read: assign_pair just wrote the place into both profiles.
         prof = profiles[name] = get_character_profile(name) or {}
         prof["interaction"] = {
@@ -334,7 +372,7 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
     except Exception as e:
         logger.debug("interaction narration failed: %s", e)
     logger.info("interaction %s: %s (a) + %s (b) play '%s' (%.1fs %s)",
-                inter_id, actor, partner, kind, clip_duration,
+                inter_id, who_a, who_b, kind, clip_duration,
                 "cycle" if loop else "one-shot")
     return profiles[actor]["interaction"]
 
