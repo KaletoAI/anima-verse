@@ -1069,6 +1069,7 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
             tokens_input=tokens_in,
             tokens_output=tokens_out,
             max_tokens=max_tokens,
+            tokens_cached=token_info.get("cached_tokens"),
             label=getattr(task, "label", "") or "",
             trace_id=getattr(task, "trace_id", "") or "",
             trace_kind=getattr(task, "trace_kind", "") or "",
@@ -1076,7 +1077,7 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
             llm=task._llm,
             error=error)
     except Exception as e:
-        logger.error("Logging-Fehler: %s", e, exc_info=True)
+        logger.error("Logging error: %s", e, exc_info=True)
 
 
 def _attach_duration_estimate(task: LLMTask) -> None:

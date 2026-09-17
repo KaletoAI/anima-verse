@@ -45,6 +45,37 @@ function speakerOf(line: SceneLine): string {
   return line.speaker || (line.meta?.speaker as string) || '?'
 }
 
+/** Token usage of the LLM call that produced the line, as `meta.llm_usage`.
+ *  The server sends it to admins only (`/play/scene`), so its mere presence is
+ *  the switch. `cached_tokens` missing means the backend reported no cache
+ *  figure at all — shown as such, because that is not a cold cache (0). */
+interface LineUsage {
+  text: string
+  /** share of the prompt served from the backend's cache, null = not reported */
+  pct: number | null
+}
+
+function usageOf(line: SceneLine, t: (en: string) => string): LineUsage | null {
+  const u = line.meta?.llm_usage
+  if (!u || typeof u !== 'object') return null
+  const usage = u as Record<string, unknown>
+  // 0/missing = the backend reported no usage at all; the prompt part is then
+  // left out rather than shown as "0 tok".
+  const prompt = Number(usage.prompt_tokens) || 0
+  const model = typeof usage.model === 'string' ? usage.model : ''
+  const cached = typeof usage.cached_tokens === 'number' ? usage.cached_tokens : null
+  const pct = cached === null ? null : (prompt > 0 ? Math.round((cached / prompt) * 100) : 0)
+  const parts: string[] = []
+  if (prompt > 0) parts.push(t('prompt {prompt} tok').replace('{prompt}', prompt.toLocaleString()))
+  parts.push(cached === null
+    ? t('cache not reported')
+    : t('cached {cached} ({pct}%)')
+      .replace('{cached}', cached.toLocaleString())
+      .replace('{pct}', String(pct)))
+  if (model) parts.push(model)
+  return { text: parts.join(' · '), pct }
+}
+
 export interface ThinkingInfo {
   name: string
   /** true = antwortet (sichtbarer Chat-Turn), false = denkt (Hintergrund). */
@@ -137,6 +168,7 @@ function SceneRow({ line, onOpenImage, highlighted, onRowHover }: {
   // Attached image (avatar showed something): rendered as a small thumbnail
   // under the line. Click opens it via onOpenImage (Lightbox) or in a new tab.
   const imageUrl = (line.meta?.image_url as string) || ''
+  const usage = usageOf(line, t)
 
   // Event verdict (resolved/unresolved) — its own coloured block below the narrator.
   const verdict = line.meta?.event_verdict as string | undefined
@@ -232,6 +264,17 @@ function SceneRow({ line, onOpenImage, highlighted, onRowHover }: {
                 border: '1px solid var(--border, #30363d)', display: 'block',
               }}
             />
+          </span>
+        )}
+        {usage && (
+          <span style={{
+            display: 'block', fontSize: '0.7em', opacity: 0.6,
+            fontVariantNumeric: 'tabular-nums',
+            // green = most of the prompt came from the cache, amber = little
+            // did, grey = the backend does not say
+            color: usage.pct === null ? undefined : usage.pct >= 50 ? '#3fa45a' : '#e0843c',
+          }}>
+            ⚡ {usage.text}
           </span>
         )}
       </span>

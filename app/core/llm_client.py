@@ -4,7 +4,10 @@ Provides:
 - LLMClient: holds the config (model, api_key, …) and offers invoke() + astream()
 - AnthropicLLMClient: client for Anthropic Claude models (native SDK)
 - LLMResponse: answer wrapper with .content, .usage and .finish_reason
-- LLMChunk: streaming chunk with .content
+- LLMChunk: streaming chunk with .content (the terminal one carries
+  .finish_reason and .usage)
+- usage_from_openai(): normalises a provider's usage report, prompt-cache
+  hits included, into one dict shape
 - to_openai_messages(): converts dicts/legacy objects into the OpenAI format
 """
 import asyncio
@@ -102,7 +105,9 @@ def _warn_if_cut_off(mode: str, model: str, finish: Optional[str]) -> None:
 class LLMResponse:
     """Wrapper for LLM answers (replacement for the LangChain AIMessage)."""
     content: str
-    usage: Optional[Dict[str, int]] = None  # {"prompt_tokens": N, "completion_tokens": N}
+    # {"prompt_tokens": N, "completion_tokens": N[, "cached_tokens": N]} —
+    # see usage_from_openai for what an absent "cached_tokens" means.
+    usage: Optional[Dict[str, int]] = None
     # Why the provider stopped generating, in the OpenAI vocabulary
     # ("stop" = finished on its own, "length" = completion budget hit and the
     # text is cut off mid-sentence, "content_filter", …). ``None`` means the
@@ -115,15 +120,87 @@ class LLMResponse:
 class LLMChunk:
     """A single streaming chunk.
 
-    A chunk carries EITHER text or the terminal ``finish_reason`` — never both.
+    A chunk carries EITHER text or the terminal markers — never both.
     ``astream`` appends exactly ONE contentless terminal chunk when the provider
-    named a reason, because the reason is only known after the last token. Every
-    consumer already skips chunks without content, so the marker adds no
-    character to any assembled answer and never reaches the browser; consumers
-    that want the reason read ``finish_reason`` before that skip.
+    named a reason or reported usage, because both are only known after the
+    last token. Every consumer already skips chunks without content, so the
+    marker adds no character to any assembled answer and never reaches the
+    browser; consumers that want the reason or the usage read them before that
+    skip. ``usage`` has the shape of ``LLMResponse.usage``.
     """
     content: str
     finish_reason: Optional[str] = None
+    usage: Optional[Dict[str, int]] = None
+
+
+def _field(obj: Any, name: str) -> Any:
+    """Reads ``name`` from an SDK model or a plain dict alike.
+
+    The OpenAI SDK keeps fields the schema does not know (llama.cpp's
+    ``timings``, a gateway's ``cache_read_input_tokens``) as extra attributes,
+    while nested extras arrive as plain dicts — one accessor for both.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _as_count(value: Any) -> Optional[int]:
+    """A token count as int, or None when the value is missing or not a number."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def usage_from_openai(usage: Any, timings: Any = None) -> Optional[Dict[str, int]]:
+    """Normalises an OpenAI-compatible usage report into the LLMResponse shape.
+
+    ``cached_tokens`` (prompt tokens the backend served from its prefix/KV
+    cache) is read from whichever field the backend fills, first match wins:
+
+    1. ``usage.prompt_tokens_details.cached_tokens`` — OpenAI, vLLM (with
+       prompt-token details on), LiteLLM, current llama.cpp
+    2. ``usage.cache_read_input_tokens`` — Anthropic vocabulary passed through
+       by a gateway
+    3. ``timings.cache_n`` — llama.cpp's own timing block
+
+    The key is left OUT when none of them is present. That is not "0 cached":
+    the backend behind the gateway is not ours to choose, and one that reports
+    nothing must stay distinguishable from one that reports a cold cache.
+    Returns None when there is no usage and no timings at all.
+    """
+    if usage is None and timings is None:
+        return None
+    out: Dict[str, int] = {
+        "prompt_tokens": _as_count(_field(usage, "prompt_tokens")) or 0,
+        "completion_tokens": _as_count(_field(usage, "completion_tokens")) or 0,
+    }
+    cached = _as_count(_field(_field(usage, "prompt_tokens_details"), "cached_tokens"))
+    if cached is None:
+        cached = _as_count(_field(usage, "cache_read_input_tokens"))
+    if cached is None:
+        cached = _as_count(_field(timings, "cache_n"))
+    if cached is not None:
+        out["cached_tokens"] = cached
+    return out
+
+
+# (base_url, model) pairs whose server refused ``stream_options``. The OpenAI
+# SDK only sends the final usage chunk on request, and a strict or older
+# OpenAI-compatible server may answer that field with a 400 — such a server
+# then streams without usage instead of not streaming at all.
+_NO_STREAM_USAGE: set = set()
+
+
+def _rejects_stream_options(err: BaseException) -> bool:
+    """True when a 400/422 names ``stream_options`` as the unaccepted field."""
+    status = getattr(err, "status_code", None)
+    return status in (400, 422) and "stream_options" in str(err).lower()
 
 
 def _is_qwen3_model(model_name: str) -> bool:
@@ -139,10 +216,10 @@ def _is_gemma_model(model_name: str) -> bool:
 
 
 class LLMClient:
-    """Ersetzt ChatOpenAI — haelt Config und bietet invoke() + astream().
+    """Replaces ChatOpenAI — holds the config and offers invoke() + astream().
 
-    Attribute bleiben kompatibel mit bestehenden getattr()-Zugriffen:
-    - model_name, model (Model-Name)
+    Attributes stay compatible with existing getattr() accesses:
+    - model_name, model (model name)
     - openai_api_base, base_url (API URL)
     - max_tokens, temperature, request_timeout
     """
@@ -222,7 +299,7 @@ class LLMClient:
         return kwargs
 
     def invoke(self, messages: List) -> LLMResponse:
-        """Synchroner LLM-Call (fuer provider_queue.py Worker-Threads)."""
+        """Synchronous LLM call (for the provider_queue.py worker threads)."""
         openai_msgs = to_openai_messages(messages)
         kwargs = self._build_kwargs()
         max_attempts, base = _busy_retry_policy()
@@ -241,12 +318,7 @@ class LLMClient:
                     "LLM busy (503) on %s — retry %d/%d after %.0fs",
                     self.model, attempt, max_attempts, delay)
                 time.sleep(delay)
-        usage = None
-        if resp.usage:
-            usage = {
-                "prompt_tokens": resp.usage.prompt_tokens,
-                "completion_tokens": resp.usage.completion_tokens,
-            }
+        usage = usage_from_openai(resp.usage, _field(resp, "timings"))
         choice = resp.choices[0]
         finish = getattr(choice, "finish_reason", None) or None
         _warn_if_cut_off("Call", self.model, finish)
@@ -256,13 +328,16 @@ class LLMClient:
             finish_reason=finish)
 
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
-        """Async Streaming Generator (fuer streaming.py Agent-Loop).
+        """Async streaming generator (for the streaming.py agent loop).
 
-        Thinking/Reasoning wird per Default disabled (Tool-LLM im Dual-Modus).
-        Das Chat-LLM ist ein separates grosses Modell das kein Gemma/Qwen3 ist.
+        Thinking/reasoning is disabled by default (tool LLM in dual mode).
+        The chat LLM is a separate large model that is not Gemma/Qwen3.
         """
         openai_msgs = to_openai_messages(messages)
         kwargs = self._build_kwargs()
+        _usage_key = (self.base_url, self.model)
+        if _usage_key not in _NO_STREAM_USAGE:
+            kwargs["stream_options"] = {"include_usage": True}
         max_attempts, base = _busy_retry_policy()
         attempt = 0
         # Busy-retry only around connection setup — once chunks start flowing a
@@ -273,6 +348,12 @@ class LLMClient:
                     messages=openai_msgs, stream=True, **kwargs)
                 break
             except Exception as e:
+                if "stream_options" in kwargs and _rejects_stream_options(e):
+                    logger.info("%s @ %s refuses stream_options — streaming "
+                                "without usage from now on", self.model, self.base_url)
+                    _NO_STREAM_USAGE.add(_usage_key)
+                    kwargs.pop("stream_options")
+                    continue
                 if not _is_busy_error(e) or attempt >= max_attempts:
                     raise
                 attempt += 1
@@ -282,6 +363,7 @@ class LLMClient:
                     self.model, attempt, max_attempts, delay)
                 await asyncio.sleep(delay)
         finish = ""
+        usage = None
         async for chunk in stream:
             if chunk.choices:
                 _c = chunk.choices[0]
@@ -289,27 +371,39 @@ class LLMClient:
                     yield LLMChunk(content=_c.delta.content)
                 if getattr(_c, "finish_reason", None):
                     finish = _c.finish_reason
+            # The usage arrives on the last chunk (choices empty with
+            # include_usage; llama.cpp puts its timings on the finishing one).
+            _chunk_usage = usage_from_openai(_field(chunk, "usage"),
+                                             _field(chunk, "timings"))
+            if _chunk_usage:
+                # Merge, never replace: the timings and the usage block may
+                # come on different chunks, and a zero from the one that does
+                # not carry a field must not wipe the other's value.
+                usage = usage or {}
+                for _k, _v in _chunk_usage.items():
+                    if _v or _k not in usage:
+                        usage[_k] = _v
         _warn_if_cut_off("Stream", self.model, finish)
-        if finish:
+        if finish or usage:
             # Terminal marker — contentless, see LLMChunk. The streaming path
-            # bypasses the queue, so this is the ONLY way the reason reaches
-            # the caller's log line.
-            yield LLMChunk(content="", finish_reason=finish)
+            # bypasses the queue, so this is the ONLY way the reason and the
+            # usage reach the caller's log line.
+            yield LLMChunk(content="", finish_reason=finish or None, usage=usage)
 
     def __repr__(self) -> str:
         return f"LLMClient(model={self.model!r}, base_url={self.base_url!r})"
 
 
 def to_openai_messages(messages) -> List[Dict[str, Any]]:
-    """Konvertiert Message-Dicts oder Legacy-Objekte in OpenAI-Format.
+    """Converts message dicts or legacy objects into the OpenAI format.
 
-    Akzeptiert:
-    - Einzelner String: wird als einzelne user-Message behandelt
-    - Liste von Dicts: {"role": "user", "content": "..."}
-    - Liste von Legacy-Objekten mit .type/.content Attributen
-    - Liste von Strings: jeder String wird als user-Message behandelt
+    Accepts:
+    - a single string: treated as one user message
+    - a list of dicts: {"role": "user", "content": "..."}
+    - a list of legacy objects with .type/.content attributes
+    - a list of strings: every string is treated as a user message
     """
-    # String als Ganzes behandeln (nicht zeichenweise iterieren!)
+    # Treat a string as a whole (do not iterate it character by character!)
     if isinstance(messages, str):
         return [{"role": "user", "content": messages}]
 
@@ -320,7 +414,7 @@ def to_openai_messages(messages) -> List[Dict[str, Any]]:
         elif isinstance(m, str):
             result.append({"role": "user", "content": m})
         elif hasattr(m, "content"):
-            # Legacy-Objekt (z.B. noch existierende LangChain-Messages)
+            # Legacy object (e.g. LangChain messages that still exist)
             role_map = {"human": "user", "ai": "assistant", "system": "system"}
             msg_type = getattr(m, "type", "human")
             role = role_map.get(msg_type, "user")
@@ -335,10 +429,10 @@ def to_openai_messages(messages) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _convert_openai_content_to_anthropic(content: Any) -> Any:
-    """Konvertiert OpenAI content-Blocks in Anthropic-Format.
+    """Converts OpenAI content blocks into the Anthropic format.
 
-    OpenAI image_url -> Anthropic image (base64 oder URL).
-    Strings bleiben Strings.
+    OpenAI image_url -> Anthropic image (base64 or URL).
+    Strings stay strings.
     """
     if isinstance(content, str):
         return content
@@ -375,11 +469,11 @@ def _convert_openai_content_to_anthropic(content: Any) -> Any:
 
 def _split_anthropic_messages(
     messages) -> Tuple[str, List[Dict[str, Any]]]:
-    """Trennt Messages in (system_prompt, conversation) fuer die Anthropic API.
+    """Splits messages into (system_prompt, conversation) for the Anthropic API.
 
-    - System-Messages werden extrahiert und zusammengefuegt
-    - Aufeinanderfolgende Messages gleicher Rolle werden gemerged
-    - Erste Message muss role=user sein (Anthropic-Anforderung)
+    - system messages are extracted and joined
+    - consecutive messages of the same role are merged
+    - the first message must be role=user (Anthropic requirement)
     """
     openai_msgs = to_openai_messages(messages)
 
@@ -391,7 +485,7 @@ def _split_anthropic_messages(
         content = msg.get("content", "")
 
         if role == "system":
-            # System-Content immer als Text extrahieren
+            # Always extract system content as text
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "text":
@@ -406,7 +500,7 @@ def _split_anthropic_messages(
             anthropic_content = _convert_openai_content_to_anthropic(content)
             conversation.append({"role": role, "content": anthropic_content})
 
-    # Aufeinanderfolgende gleiche Rollen mergen (Anthropic erfordert Alternierung)
+    # Merge consecutive equal roles (Anthropic requires alternation)
     merged: List[Dict[str, Any]] = []
     for msg in conversation:
         if merged and merged[-1]["role"] == msg["role"]:
@@ -423,7 +517,7 @@ def _split_anthropic_messages(
         else:
             merged.append(msg.copy())
 
-    # Erste Message muss user sein
+    # The first message must be user
     if merged and merged[0]["role"] != "user":
         merged.insert(0, {"role": "user", "content": "[Start]"})
 
@@ -432,6 +526,25 @@ def _split_anthropic_messages(
 
     system = "\n\n".join(system_parts) if system_parts else ""
     return system, merged
+
+
+def _anthropic_usage(usage: Any) -> Optional[Dict[str, int]]:
+    """Anthropic usage in the LLMResponse shape.
+
+    Anthropic's ``input_tokens`` counts only the tokens AFTER the last cache
+    breakpoint; the whole prompt is that plus the cache read and the cache
+    write. ``cached_tokens`` is always present here — this API reports the
+    cache read on every answer, 0 included.
+    """
+    if usage is None:
+        return None
+    cached = _as_count(_field(usage, "cache_read_input_tokens")) or 0
+    written = _as_count(_field(usage, "cache_creation_input_tokens")) or 0
+    return {
+        "prompt_tokens": (_as_count(_field(usage, "input_tokens")) or 0) + cached + written,
+        "completion_tokens": _as_count(_field(usage, "output_tokens")) or 0,
+        "cached_tokens": cached,
+    }
 
 
 def _anthropic_finish_reason(stop_reason: Optional[str]) -> Optional[str]:
@@ -454,10 +567,10 @@ def _anthropic_finish_reason(stop_reason: Optional[str]) -> Optional[str]:
 
 
 class AnthropicLLMClient:
-    """LLM Client fuer Anthropic Claude-Modelle (native SDK).
+    """LLM client for Anthropic Claude models (native SDK).
 
-    Gleiche Schnittstelle wie LLMClient: invoke() + astream().
-    Attribute bleiben kompatibel fuer getattr()-Zugriffe.
+    Same interface as LLMClient: invoke() + astream().
+    Attributes stay compatible for getattr() accesses.
     """
 
     def __init__(
@@ -476,10 +589,10 @@ class AnthropicLLMClient:
         self.openai_api_base = api_base
         self.base_url = api_base
         self.temperature = temperature
-        self.max_tokens = max_tokens or 4096  # Anthropic erfordert max_tokens
+        self.max_tokens = max_tokens or 4096  # Anthropic requires max_tokens
         self.request_timeout = request_timeout
 
-        # SDK erwartet Base-URL ohne /v1
+        # The SDK expects the base URL without /v1
         base = api_base.rstrip("/")
         if base.endswith("/v1"):
             base = base[:-3]
@@ -501,7 +614,7 @@ class AnthropicLLMClient:
         return kwargs
 
     def invoke(self, messages: List) -> LLMResponse:
-        """Synchroner LLM-Call."""
+        """Synchronous LLM call."""
         system_msg, msgs = _split_anthropic_messages(messages)
         resp = self._sync.messages.create(**self._build_kwargs(system_msg, msgs))
 
@@ -510,37 +623,34 @@ class AnthropicLLMClient:
             if hasattr(block, "text"):
                 content += block.text
 
-        usage = None
-        if resp.usage:
-            usage = {
-                "prompt_tokens": resp.usage.input_tokens,
-                "completion_tokens": resp.usage.output_tokens,
-            }
+        usage = _anthropic_usage(resp.usage)
         finish = _anthropic_finish_reason(getattr(resp, "stop_reason", None))
         _warn_if_cut_off("Call", self.model, finish)
         return LLMResponse(content=content, usage=usage, finish_reason=finish)
 
     async def astream(self, messages: List) -> AsyncGenerator[LLMChunk, None]:
-        """Async Streaming Generator."""
+        """Async streaming generator."""
         system_msg, msgs = _split_anthropic_messages(messages)
         async with self._async.messages.stream(
             **self._build_kwargs(system_msg, msgs)
         ) as stream:
             async for text in stream.text_stream:
                 yield LLMChunk(content=text)
-            # Same terminal marker as the OpenAI stream. The reason only exists
-            # on the assembled final message, and asking for it must never break
-            # a stream that already delivered its text.
+            # Same terminal marker as the OpenAI stream. Reason and usage only
+            # exist on the assembled final message, and asking for them must
+            # never break a stream that already delivered its text.
             finish = None
+            usage = None
             try:
                 final = await stream.get_final_message()
                 finish = _anthropic_finish_reason(
                     getattr(final, "stop_reason", None))
+                usage = _anthropic_usage(getattr(final, "usage", None))
             except Exception as e:
                 logger.debug("Anthropic stream finish_reason unavailable: %s", e)
             _warn_if_cut_off("Stream", self.model, finish)
-            if finish:
-                yield LLMChunk(content="", finish_reason=finish)
+            if finish or usage:
+                yield LLMChunk(content="", finish_reason=finish, usage=usage)
 
     def __repr__(self) -> str:
         return f"AnthropicLLMClient(model={self.model!r}, base_url={self.base_url!r})"

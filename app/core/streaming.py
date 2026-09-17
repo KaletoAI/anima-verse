@@ -1359,6 +1359,9 @@ class StreamingAgent:
         # Why the provider stopped ("length" = budget hit, text cut off). Set
         # from the terminal chunk of astream; "" = the provider named no reason.
         finish_reason = ""
+        # Provider usage (prompt-cache hits included) from the same terminal
+        # chunk; None = the backend reported none, the log then estimates.
+        stream_usage = None
         _iter_start = time.monotonic()
 
         for _attempt in range(_EMPTY_RETRIES + 1):
@@ -1377,6 +1380,7 @@ class StreamingAgent:
             iteration_response = ""
             chunk_count = 0
             finish_reason = ""
+            stream_usage = None
             tool_call_detected = False
             tool_call_end_pos = -1
             count_sent = 0
@@ -1445,12 +1449,14 @@ class StreamingAgent:
                     continue
 
                 # Terminal marker: astream appends ONE contentless chunk that
-                # carries the provider's finish_reason (llm_client.LLMChunk).
-                # It is not output — it must not be counted as a chunk and
-                # never reaches the client.
+                # carries the provider's finish_reason and usage
+                # (llm_client.LLMChunk). It is not output — it must not be
+                # counted as a chunk and never reaches the client.
                 _fr = getattr(chunk, "finish_reason", None)
-                if _fr:
-                    finish_reason = _fr
+                _usage = getattr(chunk, "usage", None)
+                if _fr or _usage:
+                    finish_reason = _fr or finish_reason
+                    stream_usage = _usage or stream_usage
                     continue
 
                 chunk_count += 1
@@ -1562,7 +1568,7 @@ class StreamingAgent:
         self._log_llm_call(
             active_llm, system_content, _logged_user_input, iteration_response,
             llm_label, _iter_start, history=history,
-            finish_reason=finish_reason)
+            finish_reason=finish_reason, usage=stream_usage)
 
         # --- Tool-Matches extrahieren ---
         if detect_tools and iteration_response:
@@ -1619,6 +1625,7 @@ class StreamingAgent:
         _start = time.monotonic()
         response_text = ""
         finish_reason = ""
+        tool_usage = None
         saw_empty = False
         last_error = None
         for _attempt in (1, 2):
@@ -1642,6 +1649,7 @@ class StreamingAgent:
             # This one call is NOT streamed, so the reason rides on the
             # response object itself (LLMResponse.finish_reason).
             finish_reason = getattr(response, "finish_reason", None) or ""
+            tool_usage = getattr(response, "usage", None)
             if response_text:
                 break
             saw_empty = True
@@ -1659,7 +1667,7 @@ class StreamingAgent:
 
         self._log_llm_call(self.tool_llm, system_content, user_input,
                            response_text, "Tool-LLM", _start,
-                           finish_reason=finish_reason)
+                           finish_reason=finish_reason, usage=tool_usage)
         yield LoopInfoEvent(
             iteration=iteration,
             max_iterations=self.max_iterations,
@@ -1978,8 +1986,12 @@ class StreamingAgent:
 
     def _log_llm_call(self, active_llm, system_content, user_input,
                       response, llm_label, start_time, history=None,
-                      finish_reason=""):
+                      finish_reason="", usage=None):
         """Logs a completed LLM call.
+
+        ``usage`` is the provider's report (``LLMResponse.usage`` shape). When
+        it is there its token counts replace the character estimate, and its
+        ``cached_tokens`` goes to the log line; None keeps the estimate.
 
         ``finish_reason`` is the provider's stop reason when it is known ("" =
         not reported). Streaming bypasses the queue, so these lines are written
@@ -2001,9 +2013,12 @@ class StreamingAgent:
                 user_input=user_input,
                 response=response,
                 duration_s=time.monotonic() - start_time,
-                tokens_input=estimate_tokens(system_content + user_input),
-                tokens_output=estimate_tokens(response),
+                tokens_input=((usage or {}).get("prompt_tokens")
+                              or estimate_tokens(system_content + user_input)),
+                tokens_output=((usage or {}).get("completion_tokens")
+                               or estimate_tokens(response)),
                 max_tokens=get_max_tokens(active_llm),
+                tokens_cached=(usage or {}).get("cached_tokens"),
                 messages=history or None,
                 finish_reason=finish_reason or "",
                 llm=active_llm,

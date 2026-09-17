@@ -69,6 +69,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .badge-character { background: #bc8cff33; color: #bc8cff; }
 .badge-provider { background: #f0883e33; color: #f0883e; }
 .badge-tokens { background: #d2992233; color: #d29922; }
+.badge-cache { background: #3fa45a33; color: #3fa45a; }
 .badge-time { background: #8b949e33; color: #8b949e; }
 .badge-duration { background: #f8514933; color: #f85149; }
 .badge-role { background: #da363333; color: #ff7b72; }

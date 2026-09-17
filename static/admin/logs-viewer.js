@@ -195,6 +195,11 @@ function buildEntry(e, globalIdx, searchTerm) {
     const tokens = e.tokens || {};
     const duration = e.duration_s ? e.duration_s.toFixed(1) + 's' : '';
     const tokenStr = (tokens.input || 0) + '/' + (tokens.output || 0);
+    // Prompt tokens the backend served from its prefix cache. The field only
+    // exists when the backend reported it — absent is "not reported", not 0.
+    const cacheBadge = (typeof tokens.cached === 'number')
+        ? `<span class="badge badge-cache" title="Prompt tokens served from the backend's prompt cache">cache ${tokens.cached}${tokens.input ? ' (' + Math.round(tokens.cached / tokens.input * 100) + '%)' : ''}</span>`
+        : '';
 
     const div = document.createElement('div');
     div.className = 'entry';
@@ -220,6 +225,7 @@ function buildEntry(e, globalIdx, searchTerm) {
             ${provBadge}
             <span class="badge badge-model">${e.model || '?'}</span>
             <span class="badge badge-tokens">${tokenStr} tok</span>
+            ${cacheBadge}
             <span class="badge badge-duration">${duration}</span>
             ${errBadge}
         </div>

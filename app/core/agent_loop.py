@@ -1130,6 +1130,9 @@ class AgentLoop:
             logger.debug("respond-turn %s: room_stream fetch failed: %s", character_name, e)
 
         reply = ""
+        # Token usage of the reply call, prompt-cache hits included — rides on
+        # the utterance as meta.llm_usage (admins see it under the line).
+        llm_usage: Dict[str, Any] = {}
         try:
             from app.core import perception_shadow
             from app.core.chat_engine import run_chat_turn
@@ -1139,7 +1142,8 @@ class AgentLoop:
                     "in_person", "character_talk", True,  # post_process=True
                     room_stream=room_stream,
                     respond_opportunity=respond_opportunity,
-                    hint=hint, winding_down=winding_down)
+                    hint=hint, winding_down=winding_down,
+                    usage_out=llm_usage)
         except Exception as e:
             logger.error("respond-turn %s: run_chat_turn failed: %s", character_name, e)
         if reply and reply.strip():
@@ -1154,7 +1158,9 @@ class AgentLoop:
                 record_utterance(speaker=character_name, content=reply,
                                  volume=_reply_vol,
                                  addressees=[speaker] if speaker else [],
-                                 source="loop")
+                                 source="loop",
+                                 perception_meta=({"llm_usage": llm_usage}
+                                                  if llm_usage else None))
             except Exception as e:
                 logger.error("respond-turn %s: record_utterance failed: %s",
                              character_name, e)

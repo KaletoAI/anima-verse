@@ -627,7 +627,8 @@ def run_chat_turn(
     respond_opportunity: bool = False,
     hint: str = "",
     winding_down: bool = False,
-    addressed_to: Optional[List[str]] = None) -> str:
+    addressed_to: Optional[List[str]] = None,
+    usage_out: Optional[Dict[str, Any]] = None) -> str:
     """Lets responder generate ONE reply to incoming_message from speaker.
 
     Synchronous. Used by the talk_to / send_message skills. Uses the existing
@@ -641,6 +642,15 @@ def run_chat_turn(
     ``addressed_to`` names who the incoming line was aimed at. If the caller
     does not know it, it is derived from the room transcript (below), so the
     prompt can tell a line meant for the responder from one it overheard.
+
+    ``usage_out``, when given, receives the chat call's token usage as
+    ``{"model"[, "prompt_tokens", "completion_tokens"[, "cached_tokens"]]}``.
+    ``model`` is set whenever the call returned; the counts only when the
+    backend reported usage, ``cached_tokens`` only when it reported a cache
+    figure (see ``llm_client.usage_from_openai``). It stays empty when no call
+    returned. The caller hangs it on the utterance so the chat can show how
+    much of the prompt the backend served from its cache — or that it says
+    nothing about it.
 
     Returns:
         The responder's cleaned-up response text.
@@ -737,6 +747,12 @@ def run_chat_turn(
             agent_name=responder,
             label=_label)
         raw = getattr(response, "content", "") or ""
+        if usage_out is not None:
+            from app.utils.llm_logger import get_model_name
+            _usage = getattr(response, "usage", None)
+            if isinstance(_usage, dict):
+                usage_out.update(_usage)
+            usage_out["model"] = get_model_name(ctx["llm"])
     except Exception as e:
         logger.error("run_chat_turn LLM error for %s: %s", responder, e)
         return ""

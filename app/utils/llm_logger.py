@@ -77,6 +77,7 @@ def log_llm_call(
     tokens_input: int = 0,
     tokens_output: int = 0,
     max_tokens: int = 0,
+    tokens_cached: Optional[int] = None,
     messages: Optional[List[Dict[str, str]]] = None,
     error: str = "",
     llm_role: str = "",
@@ -104,6 +105,11 @@ def log_llm_call(
             default budget applied — it never means "unknown", because every
             client carries the attribute (see
             ``provider_queue._get_max_tokens_safe``).
+        tokens_cached: prompt tokens the backend served from its prompt/prefix
+            cache, as the provider reported them (``llm_client.usage_from_openai``).
+            ``None`` = the backend reported nothing — the field is then left
+            out of the JSONL instead of written as 0, because "no report" and
+            "cold cache" are different findings.
         messages: optional full message list for multi-message calls
         llm_role: role of the LLM call (Tool-LLM, Chat-LLM, LLM)
         template: full path or file name of the rendered Jinja template
@@ -170,6 +176,9 @@ def log_llm_call(
         "response": response,
     }
 
+    if tokens_cached is not None:
+        entry["tokens"]["cached"] = tokens_cached
+
     sampler = _sampler_info(llm)
     if sampler:
         entry["sampler"] = sampler
@@ -202,6 +211,8 @@ def log_llm_call(
     tok_str = ""
     if tokens_input or tokens_output:
         tok_str = " | %d\u2192%d tok" % (tokens_input, tokens_output)
+        if tokens_cached is not None:
+            tok_str += " (%d cached)" % tokens_cached
     prov_str = "%s/" % provider if provider else ""
     role_str = "[%s] " % llm_role if llm_role else ""
     if error:
@@ -219,13 +230,15 @@ def log_llm_call(
             record_call(model, task, provider, tokens_input, tokens_output, duration_s,
                         agent_name=agent_name, max_tokens=max_tokens)
         except Exception as e:
-            logger.warning("llm_stats.record_call fehlgeschlagen: %s", e)
+            logger.warning("llm_stats.record_call failed: %s", e)
 
 
 def extract_token_info(response) -> Dict[str, int]:
     """Extracts token info from an LLM response.
 
-    Supports LLMResponse.usage (dict with prompt_tokens/completion_tokens).
+    Supports LLMResponse.usage (dict with prompt_tokens/completion_tokens and
+    an optional cached_tokens). ``cached_tokens`` is only present in the result
+    when the provider reported it — see ``llm_client.usage_from_openai``.
     """
     info = {"input_tokens": 0, "output_tokens": 0}
 
@@ -233,6 +246,8 @@ def extract_token_info(response) -> Dict[str, int]:
     if usage and isinstance(usage, dict):
         info["input_tokens"] = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0)
         info["output_tokens"] = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0)
+        if usage.get("cached_tokens") is not None:
+            info["cached_tokens"] = usage["cached_tokens"]
 
     return info
 
