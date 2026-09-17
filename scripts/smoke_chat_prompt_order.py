@@ -35,7 +35,7 @@ on the last user turn, BEHIND the history. Derived expectations:
 [3] Order inside the system prompt, rarest change first. With every block
     filled by a sentinel, the sentinels appear in exactly this order:
         WORLD_SETUP < CONTEXT: < === SCENE STATE === < === GROUP SCENE ===
-        < === REPLY LENGTH === < Location change < Activity change
+        < === REPLY LENGTH === < Going somewhere < Activity change
         < Plans & tasks < LANG < === YOUR IDENTITY === < TOOLS < SECRETS
         < LONGTERM < DAILY < HISTSUM < SCENES
 
@@ -73,6 +73,12 @@ on the last user turn, BEHIND the history. Derived expectations:
     package's "Places you can go" (plugins/movement/blocks.py) stays gated by
     the character's knowledge items. Two lists, one prompt, is how a character
     ends up naming a destination the travel gate then refuses.
+
+[10] The place marker promises only what the server does. Since 2026-09-18 a
+    marker names a room here or a place the character KNOWS, and a place
+    starts a journey (routes/chat._extract_location). So the system prompt
+    must not carry the old sentence "You may also use other locations not in
+    this list" — it invited exactly the markers the server then threw away.
 
 [7] build_prompt_section(volatile=...) with four fields in template order
         a: plain                                   -> stable
@@ -159,7 +165,7 @@ def _stream(**over):
 
 a = _stream()
 order = ["WORLD_SETUP", "CONTEXT:", "=== SCENE STATE ===", "=== GROUP SCENE ===",
-         "=== REPLY LENGTH ===", "Location change", "Activity change",
+         "=== REPLY LENGTH ===", "Going somewhere", "Activity change",
          "Plans & tasks", "LANG_A", "=== YOUR IDENTITY ===", "TOOLS_A",
          "SECRETS_A", "LONGTERM_A", "DAILY_A", "HISTSUM_A", "SCENES_A"]
 pos = [a.find(s) for s in order]
@@ -266,6 +272,13 @@ for path in ("app/routes/chat.py", "app/core/chat_engine.py"):
           len(re.findall(r"\blist_locations\(", src)), 0)
     check(f"[9] {path} uses the gated list",
           "list_locations_for_character(" in src, True)
+
+# [10]
+stream_src = _env.loader.get_source(_env, "chat/chat_stream.md")[0]
+check("[10] no open-ended place promise",
+      "other locations not in this list" in stream_src, False)
+check("[10] the marker block says a place is a walk",
+      "a place is a walk" in stream_src, True)
 
 print(f"\n{'FAILED: ' + str(len(FAILURES)) if FAILURES else 'all checks passed'}")
 sys.exit(1 if FAILURES else 0)

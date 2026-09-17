@@ -41,7 +41,11 @@
      history_summary_block — "Summary of previous conversations: ..."
      scenes_block — "Earlier days" / "Earlier scenes today" from consolidated scenes
      tool_instructions  — pre-built tool spec block (built externally; complex)
-     known_locations    — comma-separated location names (when locations_enabled)
+     known_locations    — comma-separated names of the places this character
+                          KNOWS. Only set when the marker may still travel for
+                          it (no movement verb, no party follower, no avatar —
+                          routes/chat._marker_travel_refusal); whoever has the
+                          verb travels with the verb and is taught no marker.
 
    FLAGS:
      tools_enabled, mood_tracking_enabled, intent_tracking_enabled,
@@ -100,9 +104,10 @@ IMPORTANT: Always end your response with your current emotional state with only 
 {% endif %}
 {% if known_locations %}
 
-Location change: If the roleplay clearly moves you to a DIFFERENT location, add this line at the very end: **I am at <new location>**
-Known locations: {{ known_locations }}
-You may also use other locations not in this list if the roleplay requires it.
+Going somewhere: If the roleplay clearly takes you to another room here or to one of the places below, add this line at the very end: **I am at <room or place>**
+A room here you reach at once; a place is a walk, and you are on your way once you say it — do not narrate arriving there in the same reply.
+Places you know: {{ known_locations }}
+Only these. A place that is not listed is one you have never been told about, so you cannot set out for it.
 {% endif %}
 {% if activity_marker_enabled %}
 

@@ -2610,8 +2610,15 @@ def _build_chat_prompt(character_name: str,
         _has("mood_tracking_enabled") and char_config.get("mood_tracking", False))
 
     # ---- Location / activity change instructions ----------------------
+    # The place marker is taught ONLY where it still does something: a
+    # character with the movement verb travels with the verb, and a follower
+    # or an avatar may not travel this way at all (_marker_travel_refusal).
+    # Teaching it to everyone is what produced markers the server then threw
+    # away — the prompt promised a way that was closed.
+    marker_travel_enabled = bool(_has("locations_enabled")
+                                 and _may_travel_by_marker(character_name))
     known_locations = ""
-    if current_location_id and _has("locations_enabled"):
+    if current_location_id and marker_travel_enabled:
         # The places this character may know (knowledge items), not every place
         # in the world: the movement package's "Places you can go" is gated the
         # same way (plugins/movement/blocks.py), and a chat prompt that names
