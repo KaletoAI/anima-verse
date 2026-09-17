@@ -159,15 +159,12 @@ for name, text in ALL_PROMPTS.items():
     check(f"{name}: singleton list names SetLocation",
           "ChangeOutfit, SetLocation" in text)
 # Since 2026-09-18 the place marker is named only where it may still travel
-# (routes/chat._marker_travel_refusal). The fixture owns SetLocation, so the
-# streaming paths must NOT name it any more. The chat_engine builder gets no
-# character and therefore cannot ask — it still carries the line; that gap is
-# noted in plan-bewegung-party-prompts.md.
+# (routes/chat._marker_travel_refusal). The fixture owns SetLocation, and the
+# chat_engine call below passes no character — without a name the builder
+# promises nothing either. So NO prompt here carries the line.
 for name, text in ALL_PROMPTS.items():
-    has = "At most ONE **I am at ...** marker" in text
-    want = name.startswith("chat_engine")
-    check(f"{name}: single-**I am at**-marker rule {'present' if want else 'absent'}",
-          has == want)
+    check(f"{name}: single-**I am at**-marker rule absent",
+          "At most ONE **I am at ...** marker" not in text)
 
 print("\n5) Speech note uses the room verb only")
 th = ALL_PROMPTS["streaming/thought"]
@@ -291,6 +288,35 @@ check("...and is told a place is a walk", "starts a walk" in _free)
 check("...and is not sent to a tool it does not have", "CALL THAT TOOL" not in _free)
 check("a follower is taught neither way",
       "CALL THAT TOOL" not in _foll and "**I am at" not in _foll)
+
+# The room path (chat_engine) asks the same rule once it is given the name.
+try:
+    _chat_mod._marker_travel_refusal = lambda name: ""
+    _ce_free = _rp_tool_decision_input("Hi", "She walks to the kitchen.", MUTE,
+                                       agent_name="demo_one")
+    _chat_mod._marker_travel_refusal = lambda name: "has_movement_verb"
+    _ce_verb = _rp_tool_decision_input("Hi", "She walks to the kitchen.", LEADER,
+                                       agent_name="demo_one")
+    _chat_mod._marker_travel_refusal = lambda name: "party_follower"
+    _ce_foll = _rp_tool_decision_input("Hi", "She walks to the kitchen.", MUTE,
+                                       agent_name="demo_one")
+finally:
+    _chat_mod._marker_travel_refusal = _real_refusal
+check("room path: no other way -> the marker", "**I am at <room or place>**" in _ce_free)
+check("room path: owner of the verb -> the verb", "call SetLocation" in _ce_verb)
+check("room path: owner of the verb is not asked for the marker",
+      "**I am at <room or place>**" not in _ce_verb)
+check("room path: a follower is taught neither way",
+      "**I am at" not in _ce_foll and "call SetLocation" not in _ce_foll)
+# No name: the builder cannot ask the rule, so it never ASKS for the marker.
+# With the verb in hand it still points at the verb — that is the safe half.
+_ce_anon = _rp_tool_decision_input("Hi", "x", LEADER)
+check("room path without a name does not ask for the marker",
+      "**I am at <room or place>**" not in _ce_anon)
+check("room path without a name still points at the verb",
+      "call SetLocation" in _ce_anon)
+check("room path without a name and without the verb promises nothing",
+      "**I am at" not in _rp_tool_decision_input("Hi", "x", MUTE))
 
 print(f"\n{len(RESULTS)} checks run.")
 print("\n" + ("ALL CHECKS PASSED" if not FAILS

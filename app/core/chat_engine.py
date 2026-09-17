@@ -176,17 +176,43 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
 
 def _rp_tool_decision_input(user_input: str, rp_response: str,
                             tools_dict: Dict[str, Any],
-                            in_person: bool = False) -> str:
+                            in_person: bool = False,
+                            agent_name: str = "") -> str:
     """Tool decision prompt for the character-to-character chat turn.
 
     The action→tool mapping, the speech note and the anti-hallucination rules
     come from the SAME source as the streaming path (app.core.streaming), so
     both prompts always offer exactly the tools this character actually has —
     minus the movement verbs an in-person turn would discard anyway.
+
+    ``agent_name`` decides how this character may move at all — the same rule
+    the server applies when it reads the answer
+    (``routes.chat._marker_travel_refusal``): whoever owns the movement verb
+    is sent to the verb, a character with no other way keeps the place marker,
+    and a party follower or an avatar is told nothing about moving, because
+    neither way is open to it. Without a name the marker is left out: naming a
+    way that turns out to be closed is how a model writes one anyway.
     """
     from app.core.streaming import (action_mapping_lines, decision_tools,
                                     speech_turn_note, tool_decision_guardrails)
     tools_dict = decision_tools(tools_dict, suppress_in_person=in_person)
+    try:
+        from app.routes.chat import _marker_travel_refusal
+        _move_refusal = _marker_travel_refusal(agent_name) if agent_name else "no_name"
+    except Exception:
+        _move_refusal = "no_name"
+    if not _move_refusal:
+        _place_rule = (
+            ", and **I am at <room or place>** ONLY when the RP explicitly describes "
+            "physically setting off — a room of this place is reached at once, a place "
+            "from the list starts a walk")
+    elif "SetLocation" in tools_dict:
+        _place_rule = (
+            ". When the RP describes setting off for another place, call SetLocation "
+            "from the list above — never write **I am at ...**, it is refused for this "
+            "character")
+    else:
+        _place_rule = ""
     return (
         f"The user said: {user_input}\n\n"
         f"The character responded:\n{rp_response}\n\n"
@@ -200,12 +226,11 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
         f"{speech_turn_note(tools_dict, False)}"
         f"Call every tool that applies; multiple are fine. Do NOT skip a tool because "
         f"the action was \"only described\" narratively — that IS the signal.\n"
-        f"{tool_decision_guardrails(tools_dict)}"
+        f"{tool_decision_guardrails(tools_dict, with_markers=not _move_refusal)}"
         f"Also emit fallback markers the character forgot (only if NOT already wrapped "
         f"in **...** in the RP): **I feel <emotion>**, "
-        f"**I do <pose key>: <what you do, 2-6 words>**, and "
-        f"**I am at <location>** ONLY when the RP explicitly describes physically moving "
-        f"to a NEW place. The pose key is one of the keys listed after a place (or under "
+        f"**I do <pose key>: <what you do, 2-6 words>**"
+        f"{_place_rule}. The pose key is one of the keys listed after a place (or under "
         f"'Anywhere here'), copied exactly; the part after the colon is the detail (what a "
         f"bystander would see), and may be left out. Use the character's language; match "
         f"exact names from the lists in your system prompt.\n"
@@ -860,7 +885,8 @@ def run_chat_turn(
                 {"role": "system", "content": ctx["tool_system_content"]},
                 {"role": "user", "content": _rp_tool_decision_input(
                     incoming_message, clean, ctx["tools_dict"],
-                    in_person=(ctx.get("medium") == "in_person"))},
+                    in_person=(ctx.get("medium") == "in_person"),
+                    agent_name=responder)},
             ]
             _tresp = get_llm_queue().submit(
                 task_type="intent", priority=Priority.CHAT, llm=ctx["tool_llm"],
