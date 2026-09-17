@@ -63,18 +63,20 @@ def _character_color(name: str) -> str:
 def _build_group_system_prompt(character_name: str,
     participants: List[str],
     location_name: str,
-    chat_context: List[Dict[str, Any]]) -> str:
-    """Build system prompt for a character in a group conversation.
+    chat_context: List[Dict[str, Any]]):
+    """Build the prompt for a character in a group conversation.
 
-    Uses the standard _build_full_system_prompt and appends group context.
+    Uses the standard _build_chat_prompt and appends the group context to its
+    system prompt. Returns a ``ChatPrompt``; the caller hangs ``moment`` (the
+    scene state) on the user turn.
     """
-    from app.routes.chat import _build_full_system_prompt
+    from app.routes.chat import ChatPrompt, _build_chat_prompt
     from app.core.dependencies import get_skill_manager
 
     lang_instruction = get_character_language_instruction(character_name)
     agent_config = get_character_config(character_name)
 
-    # Tools aus aktivierten Skills ableiten + Modus bestimmen
+    # Derive the tools from the enabled skills + determine the mode
     from app.core.dependencies import determine_mode
     from app.core.llm_router import resolve_llm as _resolve_llm_tmp
     _agent_tools = get_skill_manager().get_agent_tools(character_name)
@@ -82,22 +84,22 @@ def _build_group_system_prompt(character_name: str,
     _tool_llm_tmp = _tool_inst_tmp.create_llm() if _tool_inst_tmp else None
     _mode = determine_mode(_agent_tools, _tool_llm_tmp, agent_config)
     _char_tools = _mode != "no_tools"
-    base_prompt = _build_full_system_prompt(character_name, lang_instruction, "",
+    base_prompt = _build_chat_prompt(character_name, lang_instruction, "",
         tools_enabled=_char_tools, agent_config=agent_config,
         has_tool_llm=(_mode == "rp_first"),
-        skip_partner=True,  # Teilnehmer kommen in die GROUP CONVERSATION Sektion
+        skip_partner=True,  # participants go into the GROUP CONVERSATION section
     )
 
     # Build participant info with relationship context + activity visibility
     from app.models.relationship import get_relationship
     from app.models.character import get_effective_activity
     from app.models.account import get_active_character
-    # Avatar nur einbinden wenn echt aktiv — kein "Player"-Phantom in der
-    # Participant-Liste, sonst behauptet der System-Prompt eine Person, die
-    # nicht in der Welt existiert.
+    # Only include the avatar when it is really active — no "Player" phantom
+    # in the participant list, otherwise the system prompt claims a person
+    # that does not exist in the world.
     user_name = (get_active_character() or "").strip()
 
-    # Alle anwesenden Personen auflisten (NPCs + ggf. aktiver Avatar)
+    # List everyone present (NPCs + the active avatar, if any)
     all_present = list(participants)
     if user_name and user_name not in all_present:
         all_present.append(user_name)
@@ -107,7 +109,7 @@ def _build_group_system_prompt(character_name: str,
         if p == character_name:
             continue
         rel = get_relationship(character_name, p)
-        # Pose ist immer sichtbar (kein Hidden-Activity-Konzept mehr)
+        # The pose is always visible (no hidden-activity concept anymore)
         p_activity = get_effective_activity(p) or ""
         activity_info = f", doing: {p_activity}" if p_activity else ""
         is_player = (p == user_name)
@@ -164,7 +166,8 @@ def _build_group_system_prompt(character_name: str,
         + ("" if _char_tools else "\n9. Do NOT use [INTENT:] tags.")
     )
 
-    return base_prompt + group_section
+    return ChatPrompt(system=base_prompt.system + group_section,
+                      moment=base_prompt.moment)
 
 
 async def get_group_session(location_id: str = "") -> Dict[str, Any]:
@@ -469,7 +472,8 @@ async def group_chat(request: Request):
 
             try:
                 # Build system prompt for this character
-                system_content = _build_group_system_prompt(char_name, participant_names, loc_name, running_context)
+                _group_prompt = _build_group_system_prompt(char_name, participant_names, loc_name, running_context)
+                system_content = _group_prompt.system
 
                 # Build messages from group history
                 # Only include messages from current participants
@@ -644,7 +648,8 @@ async def group_chat(request: Request):
                         content_tools=_content_tools if _char_tools_enabled else set(),
                         log_task="group_chat",
                         mode=_char_mode,
-                        chat_task_id=_chat_task_id)
+                        chat_task_id=_chat_task_id,
+                        user_turn_suffix=_group_prompt.moment)
 
                     # Tool-Executor: Queue freigeben waehrend Tool-Ausfuehrung,
                     # damit Tools die selbst LLM-Calls machen nicht blockiert werden

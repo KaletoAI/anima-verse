@@ -9,7 +9,7 @@ from datetime import datetime
 
 from app.core.timeutils import utc_now, utc_now_iso
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, NamedTuple, Optional
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from app.core.log import get_logger
@@ -1059,34 +1059,33 @@ async def chat(request: Request) -> StreamingResponse:
     tools_enabled = mode != "no_tools"
     _has_tool_llm = mode == "rp_first"
 
-    system_content = _build_full_system_prompt(current_agent, lang_instruction, history_summary,
+    # --- One-off context of this turn → scene state, not system prompt ---
+    # _spell_hint was filled above (before the `if not current_agent: return`)
+    # when the avatar cast one of its inventory spells. The effect item was
+    # already handed to the target — the hint tells the NPC narratively what
+    # is happening to it right now (pain, dizziness, a magic feeling, …).
+    _moment_notes: List[str] = []
+    if _spell_hint:
+        _moment_notes.append(
+            f"IMPORTANT — A magical event is happening to you RIGHT NOW: "
+            f"{_spell_hint} React to this within your character; do not "
+            f"explain the magic mechanically, just feel/show its effect.")
+    _is_sleeping = is_character_sleeping(current_agent)
+    if _is_sleeping:
+        _moment_notes.append(
+            "IMPORTANT: You were sleeping and the user just woke you up. "
+            "React naturally as someone who was just woken from sleep — groggy, surprised, or sleepy. "
+            "You are no longer sleeping after this message.")
+
+    _prompt = _build_chat_prompt(current_agent, lang_instruction, history_summary,
         tools_enabled=tools_enabled, agent_config=agent_config,
         selected_skills=selected_skills,
         has_tool_llm=_has_tool_llm,
         medium=medium,
         room_item_ids=room_item_ids,
-        incoming_text=_effective_user_input)
-
-    # --- Spell-Cast Sofort-Hinweis im System-Prompt ---
-    # _spell_hint wurde oben (vor dem if not current_agent: return) befuellt
-    # wenn der Avatar einen seiner Inventar-Spells gewirkt hat. Effect-Item
-    # wurde bereits ans Ziel gegeben — der Hint sagt dem NPC narrativ was
-    # gerade mit ihm passiert (Schmerz, Schwindel, Magie-Gefuehl, …).
-    if _spell_hint:
-        system_content += (
-            f"\n\nIMPORTANT — A magical event is happening to you RIGHT NOW: "
-            f"{_spell_hint} React to this within your character; do not "
-            f"explain the magic mechanically, just feel/show its effect."
-        )
-
-    # --- Wake-Up Hinweis im System-Prompt ---
-    _is_sleeping = is_character_sleeping(current_agent)
-    if _is_sleeping:
-        system_content += (
-            "\n\nIMPORTANT: You were sleeping and the user just woke you up. "
-            "React naturally as someone who was just woken from sleep — groggy, surprised, or sleepy. "
-            "You are no longer sleeping after this message."
-        )
+        incoming_text=_effective_user_input,
+        moment_notes=_moment_notes)
+    system_content = _prompt.system
 
     # --- StreamingAgent Setup ---
     tools_dict = {}
@@ -1241,14 +1240,15 @@ async def chat(request: Request) -> StreamingResponse:
         # SetLocation im selben Antwort-Turn — man geht nicht weg, während
         # man spricht. Remote (messaging/phone) bleibt unberührt.
         suppress_move_in_conversation=(medium == "in_person"),
-        # Situational memories: the facts/promises that fit THIS message, hung
-        # on the user turn. Not on the system prompt — its cached prefix has
-        # to stay byte-identical, and it is only rebuilt every few minutes, so
-        # a message-driven selection there would answer the wrong message
+        # The scene state of this turn, then the situational memories (the
+        # facts/promises that fit THIS message), both hung on the user turn.
+        # Not on the system prompt — its cached prefix, and the history
+        # behind it, have to stay byte-identical between turns
         # (plan-memory-facts-and-commitments.md, Task 5). Both chat modes go
         # through the same StreamingAgent, so single and rp_first both get it;
         # thought turns build their own agent and never pass a suffix.
-        user_turn_suffix=_situational_block)
+        user_turn_suffix="\n\n".join(
+            p for p in (_prompt.moment, _situational_block) if p))
 
     async def generate():
         # Queue-Tracking: Chat als aktiv registrieren (pausiert nur Provider-Queue)
@@ -1295,7 +1295,7 @@ async def chat(request: Request) -> StreamingResponse:
             history_text = "\n".join([msg["content"] for msg in messages])
             tokens_input = estimate_tokens(
                 system_content + history_text + _effective_user_input
-                + _situational_block)
+                + _prompt.moment + _situational_block)
             full_response = ""
             _tool_image_urls = []  # Bild-URLs aus Tool-Results
             _tool_exec_counts = {}  # Tool-Name -> Ausfuehrungszaehler
@@ -2180,7 +2180,19 @@ def _extract_context_from_last_chat(agent_name: str,
         _do_extraction()
 
 
-def _build_full_system_prompt(character_name: str,
+class ChatPrompt(NamedTuple):
+    """The chat prompt in its two cache parts.
+
+    ``system`` is the system prompt — only what stays put between turns.
+    ``moment`` is the scene state of THIS turn; the caller hangs it on the last
+    user turn, after the history, so a changing clock, mood or room never
+    invalidates the backend's cached system prompt and history.
+    """
+    system: str
+    moment: str
+
+
+def _build_chat_prompt(character_name: str,
     lang_instruction: str,
     history_summary: str,
     tools_enabled: bool = False,
@@ -2196,13 +2208,17 @@ def _build_full_system_prompt(character_name: str,
     winding_down: bool = False,
     present_characters: Optional[list] = None,
     incoming_text: str = "",
-    addressed_to: Optional[List[str]] = None) -> str:
-    """Build the chat-stream / talk-to system prompt.
+    addressed_to: Optional[List[str]] = None,
+    moment_notes: Optional[List[str]] = None) -> ChatPrompt:
+    """Build the chat-stream / talk-to prompt as system prompt + scene state.
 
     Loads all data sections (character/soul template, partner template,
-    memory, relationships, ...), then renders ``chat/chat_stream.md``.
-    Pre-formatted blocks live in Python (``build_*_prompt_section``);
-    static instruction text lives in the template.
+    memory, relationships, ...), then renders ``chat/chat_stream.md`` (the
+    stable system prompt) and ``chat/chat_moment.md`` (the per-turn scene
+    state). Which block goes where is decided by how often it changes — see
+    the header of both templates. Pre-formatted blocks live in Python
+    (``build_*_prompt_section``); static instruction text lives in the
+    templates.
 
     Args:
         skip_partner: True for group chat — partner section is skipped
@@ -2214,6 +2230,9 @@ def _build_full_system_prompt(character_name: str,
             ``None`` = not known — a plain 1:1 chat, where the line is by
             definition meant for this character, so ``addressed_to_me`` is
             True. An empty list means the line went to the room.
+        moment_notes: One-off context of this turn (a state modifier, a spell
+            taking effect, being woken up, a caller's hint). Rendered in the
+            scene state, never in the system prompt.
     """
     from app.core.prompt_templates import render
 
@@ -2225,6 +2244,9 @@ def _build_full_system_prompt(character_name: str,
     from app.models.account import get_active_character
     _partner_name = "" if skip_partner else (partner_override or get_active_character())
     _partner_lines: list = []
+    # The partner's per-turn facts (mood, doing, volatile fields) — they go
+    # to the scene state; _partner_lines keeps only the stable sheet.
+    _partner_state_lines: list = []
     partner_mode = "none"
 
     if _partner_name and _partner_name != character_name:
@@ -2240,9 +2262,9 @@ def _build_full_system_prompt(character_name: str,
                     p_app = resolve_profile_tokens(
                         p_app, partner_profile, template=partner_template,
                         target_key="character_appearance")
-                # Slot-Fragmente unbedeckter, ungetragener Slots anhaengen
-                # (gleiche Logik wie beim Variant-Bild). So weiss der LLM
-                # was unter dem Outfit zu sehen waere.
+                # Append the slot fragments of uncovered, unworn slots (same
+                # logic as the variant image), so the LLM knows what would be
+                # visible under the outfit.
                 try:
                     _slot_extras = render_unworn_slots(profile=partner_profile)
                     if _slot_extras:
@@ -2257,18 +2279,24 @@ def _build_full_system_prompt(character_name: str,
                 _partner_lines = build_prompt_section(
                     partner_template, partner_profile,
                     active_features=char_features,
-                    is_partner=True, character_name=_partner_name)
+                    is_partner=True, character_name=_partner_name,
+                    volatile=False)
+                _partner_state_lines = build_prompt_section(
+                    partner_template, partner_profile,
+                    active_features=char_features,
+                    is_partner=True, character_name=_partner_name,
+                    volatile=True)
             if not _partner_lines:
                 _partner_lines = [f"Name: {_partner_name}"]
 
             try:
                 _p_feeling = (partner_profile.get("current_feeling") or "").strip()
                 if _p_feeling:
-                    _partner_lines.append(f"Current mood: {_p_feeling}")
+                    _partner_state_lines.append(f"Current mood: {_p_feeling}")
                 _p_activity = (partner_profile.get("pose_flavor")
                                or partner_profile.get("pose_key") or "").strip()
                 if _p_activity:
-                    _partner_lines.append(f"Currently doing: {_p_activity}")
+                    _partner_state_lines.append(f"Currently doing: {_p_activity}")
             except Exception:
                 pass
 
@@ -2276,8 +2304,8 @@ def _build_full_system_prompt(character_name: str,
             if partner_address:
                 _partner_lines.append(f"Form of address: {partner_address}")
     elif not skip_partner:
-        # Fallback: no active character — kein Login-Name, sonst rutscht
-        # "admin" als Pseudo-Partner in Prompts und Memory.
+        # Fallback: no active character — no login name, otherwise "admin"
+        # slips into prompts and memory as a pseudo partner.
         pass
 
     # ---- Self / partner wearing blocks --------------------------------
@@ -2345,8 +2373,8 @@ def _build_full_system_prompt(character_name: str,
             appearance = resolve_profile_tokens(
                 appearance, char_profile, template=char_template,
                 target_key="character_appearance")
-        # Slot-Fragmente unbedeckter, ungetragener Slots anhaengen — selbe
-        # Logik wie im Partner-Block + Variant-Bild.
+        # Append the slot fragments of uncovered, unworn slots — same logic
+        # as in the partner block + variant image.
         try:
             _slot_extras = render_unworn_slots(profile=char_profile)
             if _slot_extras:
@@ -2363,9 +2391,15 @@ def _build_full_system_prompt(character_name: str,
             char_profile["current_location"] = loc_name if loc_name else loc_id
         char_lines = build_prompt_section(
             char_template, char_profile,
-            active_features=char_features, character_name=character_name)
+            active_features=char_features, character_name=character_name,
+            volatile=False)
+        self_state_lines = build_prompt_section(
+            char_template, char_profile,
+            active_features=char_features, character_name=character_name,
+            volatile=True)
     else:
         char_lines = [f"Name: {character_name}"]
+        self_state_lines = []
         if char_profile.get("character_personality"):
             char_lines.append(f"Personality: {char_profile['character_personality']}")
 
@@ -2374,7 +2408,7 @@ def _build_full_system_prompt(character_name: str,
     def _has(feat: str) -> bool:
         return _feat(character_name, feat)
 
-    # ---- Active intents (Vorhaben & Aufgaben) -------------------------
+    # ---- Active intents (plans & tasks) -------------------------------
     assignment_section = ""
     if _has("assignments_enabled"):
         from app.models.intents import build_intents_prompt_section
@@ -2433,12 +2467,6 @@ def _build_full_system_prompt(character_name: str,
         situation_block = time_line
     else:
         situation_block = "Your current situation:\n" + "\n".join(situation_parts)
-
-    # ---- Status effects / danger --------------------------------------
-    status_section = ""
-    if _has("status_effects_enabled"):
-        from app.core.danger_system import build_status_prompt_section
-        status_section = build_status_prompt_section(character_name) or ""
 
     # ---- Location events ----------------------------------------------
     events_section = ""
@@ -2534,14 +2562,17 @@ def _build_full_system_prompt(character_name: str,
         if location_names:
             known_locations = ", ".join(location_names)
 
+    # The marker RULE is stable (system prompt); the place offer it points at
+    # follows the room's occupancy and goes to the scene state.
+    activity_marker_enabled = bool(current_location_id and _has("activities_enabled"))
     known_activities = ""
-    if current_location_id and _has("activities_enabled"):
+    if activity_marker_enabled:
         known_activities = _current_activity_hint(character_name, current_location_id)
 
-    # ---- Intent tracking flag (vereinheitlichte Vorhaben & Aufgaben) ---
-    # Ein Block lehrt die [INTENT:]-Marker-Syntax (plan-intents-unified.md).
-    # Nur wenn der Chat-LLM selbst Marker setzen darf (kein separates Tool-LLM)
-    # UND der Character ueberhaupt Vorhaben fuehrt (intents_enabled).
+    # ---- Intent tracking flag (unified plans & tasks) -----------------
+    # One block teaches the [INTENT:] marker syntax (plan-intents-unified.md).
+    # Only when the chat LLM may set markers itself (no separate tool LLM)
+    # AND the character keeps plans at all (intents_enabled).
     intent_tracking_enabled = bool(
         tools_enabled and not has_tool_llm and _has("intents_enabled"))
 
@@ -2587,9 +2618,9 @@ def _build_full_system_prompt(character_name: str,
             history_summary_block = f"Summary of previous conversations:\n{history_summary}"
 
     # ---- Multi-party room scene framing -------------------------------
-    # Mehrere Anwesende → Gruppen-Szene statt 1:1-Partner-Framing (behebt die
-    # Identitaetsvermischung: Modell narrierte/uebernahm fremde Figuren, weil der
-    # Prompt eine 4-Personen-Szene als "du sprichst mit X" rahmte).
+    # Several people present → group scene instead of 1:1 partner framing
+    # (fixes identity mixing: the model narrated/took over other figures
+    # because the prompt framed a 4-person scene as "you talk to X").
     _present_str = ""
     _present_details = ""
     if present_characters:
@@ -2612,11 +2643,11 @@ def _build_full_system_prompt(character_name: str,
             except Exception:
                 _present_details = ""
 
-    # ---- Szenen als kanonische "fruehere Gespraeche" ------------------
-    # scene_store-Consolidation (Konversation->Szene). Schliesst den Loop und
-    # ersetzt im Raum-Modus die alte paarweise History-Summary (Redundanz raus).
-    # Vergangene Tage = je EIN Tages-Eintrag (Stufe 2b); heutige, noch nicht
-    # eingeklappte Szenen einzeln (Stufe 2, gefiltert über den Tages-Cursor).
+    # ---- Scenes as the canonical "earlier conversations" --------------
+    # scene_store consolidation (conversation -> scene). Closes the loop and
+    # replaces the old pairwise history summary in room mode (no redundancy).
+    # Past days = ONE day entry each (stage 2b); today's not yet folded scenes
+    # one by one (stage 2, filtered by the day cursor).
     scenes_block = ""
     if _has("memory_enabled"):
         try:
@@ -2667,11 +2698,11 @@ def _build_full_system_prompt(character_name: str,
             scenes_block = "\n\n".join(_parts)
         except Exception as _se:
             logger.debug("scenes_block build failed: %s", _se)
-    # Raum-Modus = neue Pipeline (Stufe 1 Live-Transkript + Stufe 2 Szenen +
-    # Stufe 3 Memories). Die chat_messages-basierten Alt-Blöcke (paarweise
-    # History-Summary, Daily-Summaries, Longterm-Summary) gehören NICHT mehr in
-    # den Raum-Prompt — sie sind redundant zu den Szenen und waren die
-    # Müll-Flutungsquelle (plan-history-consolidation-cleanup.md, Phase 1).
+    # Room mode = new pipeline (stage 1 live transcript + stage 2 scenes +
+    # stage 3 memories). The chat_messages-based old blocks (pairwise history
+    # summary, daily summaries, longterm summary) do NOT belong in the room
+    # prompt anymore — they duplicate the scenes and were the source of the
+    # garbage flooding (plan-history-consolidation-cleanup.md, phase 1).
     if partner_mode == "room":
         history_summary_block = ""
         daily_summary_section = ""
@@ -2712,7 +2743,7 @@ def _build_full_system_prompt(character_name: str,
         addressed_to_me = bool(character_name in addressed_to)
         addressed_names = ", ".join(n for n in addressed_to if n != character_name)
 
-    return render(
+    system = render(
         "chat/chat_stream.md",
         character_name=character_name,
         world_setup=world_setup,
@@ -2721,37 +2752,44 @@ def _build_full_system_prompt(character_name: str,
         partner_mode=partner_mode,
         partner_name=_partner_name,
         partner_lines=_partner_lines,
-        present_characters=_present_str,
-        present_details=_present_details,
-        skip_partner=skip_partner,
         medium=medium,
-        self_wearing=self_wearing,
-        partner_wearing=partner_wearing,
-        focused_items=focused_items,
-        assignment_section=assignment_section,
-        situation_block=situation_block,
-        status_section=status_section,
-        events_section=events_section,
-        memory_section=memory_section,
-        relationships_section=relationships_section,
         secrets_section=secrets_section,
-        inventory_carrying_section=inventory_carrying_section,
-        inventory_room_section=inventory_room_section,
         tools_enabled=tools_enabled,
-        has_tool_llm=has_tool_llm,
         mood_tracking_enabled=mood_tracking_enabled,
         known_locations=known_locations,
-        known_activities=known_activities,
+        activity_marker_enabled=activity_marker_enabled,
         intent_tracking_enabled=intent_tracking_enabled,
         tool_instructions=tool_instructions,
         longterm_section=longterm_section,
         daily_summary_section=daily_summary_section,
         scenes_block=scenes_block,
-        history_summary_block=history_summary_block,
-        recent_activity_section=recent_activity_section,
+        history_summary_block=history_summary_block)
+    moment = render(
+        "chat/chat_moment.md",
+        character_name=character_name,
+        partner_mode=partner_mode,
+        partner_name=_partner_name,
+        partner_state_lines=_partner_state_lines,
+        present_characters=_present_str,
+        present_details=_present_details,
+        situation_block=situation_block,
+        self_state_lines=self_state_lines,
         condition_reminder=condition_reminder,
+        moment_notes=[n for n in (moment_notes or []) if n],
+        self_wearing=self_wearing,
+        partner_wearing=partner_wearing,
+        inventory_carrying_section=inventory_carrying_section,
+        inventory_room_section=inventory_room_section,
+        focused_items=focused_items,
+        known_activities=known_activities,
+        events_section=events_section,
+        assignment_section=assignment_section,
+        recent_activity_section=recent_activity_section,
+        memory_section=memory_section,
+        relationships_section=relationships_section,
         reply_shape_section=reply_shape_section,
-        respond_opportunity=respond_opportunity,
-        winding_down=winding_down,
         addressed_to_me=addressed_to_me,
-        addressed_names=addressed_names)
+        addressed_names=addressed_names,
+        respond_opportunity=respond_opportunity,
+        winding_down=winding_down)
+    return ChatPrompt(system=system, moment=moment)

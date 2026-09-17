@@ -222,16 +222,17 @@ def _drive_agent_thought_template(agent: str, template_rel: str) -> PreviewResul
                      f"Avatar selection is unused by this template.")}
 
 
-# --- chat/chat_stream.md (production: _build_full_system_prompt) ----------
+# --- chat/chat_stream.md + chat/chat_moment.md (production: _build_chat_prompt)
 
 def _drive_chat_stream(agent: str, avatar: str) -> PreviewResult:
     """Same path as routes/chat.py uses to build the chat-stream prompt.
 
-    Liefert System-Prompt + messages-Array (recent_history nach Gap-Cut).
-    Die Summary wird aus dem Cache gelesen — kein synchroner LLM-Refresh,
-    auch wenn die Summary stale ist (Hinweis im note-Feld).
+    Returns the system prompt + the messages array (recent_history after the
+    gap cut) + the scene state that production hangs on the last user turn.
+    The summary is read from the cache — no synchronous LLM refresh, even
+    when it is stale (hint in the note field).
     """
-    from app.routes.chat import _build_full_system_prompt
+    from app.routes.chat import _build_chat_prompt
     from app.models.character import get_character_config
     from app.models.chat import get_chat_history
     from app.utils.history_manager import (
@@ -241,12 +242,12 @@ def _drive_chat_stream(agent: str, avatar: str) -> PreviewResult:
 
     cfg = get_character_config(agent)
 
-    # Recent_history wie im Production-Pfad rechnen (inkl. Session-Gap-Cut)
+    # Compute recent_history like the production path (session gap cut included)
     full_history = get_chat_history(agent, partner_name=avatar) or []
     recent, old = get_time_based_history(full_history)
     summary = get_cached_summary(agent) if old else ""
 
-    # Stale-Hinweis: wuerde Production einen synchronen Refresh ausloesen?
+    # Stale hint: would production trigger a synchronous refresh?
     stale_hint = ""
     if old:
         updated_at = _summary_updated_at(agent)
@@ -260,14 +261,14 @@ def _drive_chat_stream(agent: str, avatar: str) -> PreviewResult:
             except (ValueError, TypeError):
                 continue
         if not summary:
-            stale_hint = "⚠ Cached Summary leer — beim Chat wird sie sync generiert."
+            stale_hint = "⚠ Cached summary empty — the chat generates it synchronously."
         elif updated_at and newest_old and newest_old > updated_at:
-            stale_hint = (f"⚠ Cached Summary deckt nicht alle old_messages ab "
+            stale_hint = (f"⚠ Cached summary does not cover all old_messages "
                           f"(newest_old {newest_old.isoformat(timespec='minutes')} > "
                           f"updated_at {updated_at.isoformat(timespec='minutes')}). "
-                          f"Beim Chat wird sie sync regeneriert.")
+                          f"The chat regenerates it synchronously.")
 
-    sys_prompt = _build_full_system_prompt(
+    prompt = _build_chat_prompt(
         character_name=agent,
         lang_instruction="Respond in English.",
         history_summary=summary,
@@ -278,23 +279,25 @@ def _drive_chat_stream(agent: str, avatar: str) -> PreviewResult:
         medium="in_person",
     )
 
-    # Messages-Block formatieren
+    # Format the messages block
     gap_h = get_memory_thresholds().get("session_gap_hours", 4)
-    parts = [f"## task: chat_stream\n\n## system\n{sys_prompt}"]
+    parts = [f"## task: chat_stream\n\n## system\n{prompt.system}"]
     if recent:
         parts.append(
             f"\n\n## messages ({len(recent)} turn{'s' if len(recent) != 1 else ''} "
-            f"nach Session-Gap-Cut > {gap_h}h)")
+            f"after the session gap cut > {gap_h}h)")
         for i, m in enumerate(recent, 1):
             role = m.get("role", "?")
             ts = m.get("timestamp", "")
             ts_short = ts[:16] if ts else "no-ts"
             parts.append(f"\n--- [{i}] {role} @ {ts_short} ---\n{m.get('content', '')}")
     else:
-        parts.append("\n\n## messages\n(empty — keine Turns nach Gap-Cut)")
+        parts.append("\n\n## messages\n(empty — no turns after the gap cut)")
+    parts.append("\n\n## scene state (chat/chat_moment.md — appended to the last "
+                 f"user turn)\n{prompt.moment}")
 
     note_lines = [
-        f"Production path: routes/chat._build_full_system_prompt(agent={agent!r}, "
+        f"Production path: routes/chat._build_chat_prompt(agent={agent!r}, "
         f"partner_override={avatar!r}, medium='in_person', tools_enabled=False).",
         f"Recent: {len(recent)} turn(s), Old (in Summary): {len(old)} turn(s).",
     ]
@@ -770,6 +773,7 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "chat/agent_thought.md": _drive_agent_thought,
     "chat/agent_thought_in_chat.md": _drive_agent_thought_in_chat,
     "chat/chat_stream.md": _drive_chat_stream,
+    "chat/chat_moment.md": _drive_chat_stream,
     "tasks/extraction_memory.md": _drive_extraction_memory,
     "tasks/extraction_chat_state.md": _drive_extraction_chat_state,
     "tasks/consolidation_daily.md": _drive_consolidation_daily,

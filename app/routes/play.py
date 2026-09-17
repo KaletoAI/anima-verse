@@ -374,7 +374,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     # ``meta.llm_usage`` (token usage + prompt-cache hits of the call that
     # produced an NPC line) is a diagnostic for whoever tunes the prompts, not
     # part of the world: only an admin gets it, everyone else never sees it.
-    if user.get("role") != users.ROLE_ADMIN:
+    if not (isinstance(user, dict) and user.get("role") == users.ROLE_ADMIN):
         for _ln in scene:
             _m = _ln.get("meta")
             if isinstance(_m, dict):

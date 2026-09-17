@@ -1,12 +1,11 @@
 """The few memories that fit THIS message — attached to the user turn.
 
 Why it is not in the system prompt (plan-memory-facts-and-commitments.md,
-Task 5): the memory section of the full system prompt is only rebuilt every
-``SYSTEM_PROMPT_CACHE_TIMEOUT`` seconds, so a message-driven selection there
-would answer the message that happened to trigger the rebuild — up to five
-minutes stale — and it would break the byte-identical cached prefix. This
-block therefore hangs on the CURRENT user turn instead: it is composed fresh
-per message, and the prefix above it never changes.
+Task 5): a message-driven selection changes with every message, and anything
+that changes in front of the history breaks the byte-identical prefix the
+backend caches (CHAT_PROMPTS.md § 1). This block therefore hangs on the
+CURRENT user turn instead, behind the scene state: it is composed fresh per
+message, and the prefix above it never changes.
 
 Selection is similarity, nothing else: the current message is embedded, every
 candidate memory (facts + open commitments) is compared by cosine similarity

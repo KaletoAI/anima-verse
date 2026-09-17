@@ -3,8 +3,9 @@
 plan-gespraechs-auswahl.md § 3.4).
 
 Pure: no world, no DB, no LLM. Exercised are the pure renderer
-``chat_engine._messages_from_room_stream`` and the room branch of the prompt
-template ``chat/chat_stream.md``.
+``chat_engine._messages_from_room_stream`` and the room branch of the chat
+prompt — its rules in ``chat/chat_stream.md``, the per-turn addressee
+sentence in ``chat/chat_moment.md``.
 
 Every expectation is derived BY HAND from the rule in § 3.4, not recorded
 from an implementation run. The responder is "Rosi" throughout.
@@ -27,7 +28,7 @@ is replaced by "you" while the original order is kept.
   [6] kind "whisper_meta"               -> no message at all
   [7] speaker only in meta              -> "Kai (to you): Hallo" (same as [3])
 
-Template render [8]-[10] (chat/chat_stream.md, StrictUndefined): the room
+Template render [8]-[10] (chat/chat_moment.md, StrictUndefined): the room
 branch reads, by hand,
 
     {% if partner_name and addressed_to_me %}... spoke to YOU directly ...
@@ -189,19 +190,30 @@ def test_template_render():
 
     from app.core.prompt_templates import _env, render
 
-    source = _env.loader.get_source(_env, "chat/chat_stream.md")[0]
-    names = meta.find_undeclared_variables(_env.parse(source))
+    def _names(tpl: str):
+        return meta.find_undeclared_variables(
+            _env.parse(_env.loader.get_source(_env, tpl)[0]))
+
+    stream_names = _names("chat/chat_stream.md")
+    moment_names = _names("chat/chat_moment.md")
     for var in ("addressed_to_me", "addressed_names"):
-        assert var in names, f"chat_stream.md does not reference {var}"
+        assert var in moment_names, f"chat_moment.md does not reference {var}"
+        check(f"[8] system prompt never takes {var}", var in stream_names, False)
 
     def _render(addressed_to_me, addressed_names):
-        ctx = {name: "" for name in names}
-        ctx.update(partner_mode="room", partner_name="Kai",
-                   present_characters="Liesa, Rosi", character_name="Rosi",
-                   medium="in_person",
-                   addressed_to_me=addressed_to_me,
-                   addressed_names=addressed_names)
-        return render("chat/chat_stream.md", **ctx)
+        parts = []
+        for tpl, names in (("chat/chat_stream.md", stream_names),
+                           ("chat/chat_moment.md", moment_names)):
+            ctx = {name: "" for name in names}
+            ctx.update(partner_mode="room", partner_name="Kai",
+                       present_characters="Liesa, Rosi", character_name="Rosi",
+                       medium="in_person",
+                       addressed_to_me=addressed_to_me,
+                       addressed_names=addressed_names,
+                       char_lines=[], partner_lines=[], partner_state_lines=[],
+                       self_state_lines=[], moment_notes=[])
+            parts.append(render(tpl, **{k: v for k, v in ctx.items() if k in names}))
+        return "\n".join(parts)
 
     mine = _render(True, "")
     check("[8] direct sentence", "Kai spoke to YOU directly" in mine, True)
@@ -222,7 +234,7 @@ def test_template_render():
     check("[10] no direct sentence", "spoke to YOU directly" in room, False)
     print("[10] overheard, said to the room")
 
-    # the anti-echo paragraph is unconditional in the room branch
+    # the anti-echo paragraph is unconditional in the room branch (system prompt)
     for label, text in (("mine", mine), ("other", other), ("room", room)):
         check(f"[11] anti-echo ({label})",
               "Lines with a speaker name in front were said by OTHER people."

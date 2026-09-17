@@ -879,7 +879,9 @@ class CharacterBotPoller:
             max_iterations=ctx["max_iterations"],
             tool_llm=ctx["tool_llm"],
             log_task="telegram_chat",
-            mode=ctx.get("mode", "no_tools"))
+            mode=ctx.get("mode", "no_tools"),
+            # The scene state rides on the user turn, behind the history.
+            user_turn_suffix=ctx["moment_content"])
 
         # Tool executor: release queue during tool execution (prevents deadlock)
         _chat_state = {"task_id": _chat_task_id}

@@ -414,6 +414,23 @@ def get_prompt_fields(template: Dict[str, Any]) -> List[Dict[str, Any]]:
     return fields
 
 
+def is_prompt_volatile(field: Dict[str, Any]) -> bool:
+    """True when a prompt field's value changes from turn to turn.
+
+    The chat prompt keeps such fields out of the cached identity block and
+    renders them in the per-turn scene state instead (``chat/chat_moment.md``):
+    one changed byte in the identity block would make everything behind it,
+    the conversation history included, uncacheable for the backend.
+
+    The template says so with ``"prompt_volatile": true``. Without the key a
+    field counts as volatile when its value lives in ``status_effects`` — those
+    are the stats that drift every hour, whatever pack declares them.
+    """
+    if "prompt_volatile" in field:
+        return bool(field["prompt_volatile"])
+    return field.get("store") == "status_effects"
+
+
 def source_file_keys(template: Dict[str, Any]) -> Dict[str, str]:
     """Map profile key -> relative MD path for every ``source_file`` field.
 
@@ -434,7 +451,8 @@ def source_file_keys(template: Dict[str, Any]) -> Dict[str, str]:
 def build_prompt_section(
     template: Dict[str, Any], data: Dict[str, Any],
     active_features: Optional[Dict[str, Any]] = None,
-    is_partner: bool = False, character_name: str = "") -> List[str]:
+    is_partner: bool = False, character_name: str = "",
+    volatile: Optional[bool] = None) -> List[str]:
     """Build prompt lines from template + profile data.
 
     Handles: empty values (skip), lists (join), calendar days (label).
@@ -449,10 +467,15 @@ def build_prompt_section(
     that). A missing or empty file means the field is skipped — there is no
     fallback to the profile blob.
 
+    ``volatile`` filters by :func:`is_prompt_volatile`: None = every field,
+    False = only the stable ones, True = only the per-turn ones.
+
     Returns a list of "Label: value" strings.
     """
     lines = []
     for field in get_prompt_fields(template):
+        if volatile is not None and is_prompt_volatile(field) != volatile:
+            continue
         # Feature gate: include the field only when the feature is on. Order:
         #   1. per-character config override via is_feature_enabled (e.g.
         #      retrospect_enabled from the character config)

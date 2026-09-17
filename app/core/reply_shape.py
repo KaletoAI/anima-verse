@@ -3,7 +3,8 @@
 This module only collects and formats FACTS — how big the incoming line was,
 what role the character carries, its mood, how it stands to the partner.
 The interpretation ("a brief line deserves a brief answer") lives exactly once
-in the chat template (``shared/templates/llm/chat/chat_stream.md``); no
+in the chat templates (rules in ``shared/templates/llm/chat/chat_stream.md``,
+the "This moment" facts in ``shared/templates/llm/chat/chat_moment.md``); no
 threshold and no length instruction is written here.
 
 Two asymmetries are deliberate:

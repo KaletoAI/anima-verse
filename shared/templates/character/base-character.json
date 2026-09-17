@@ -322,7 +322,8 @@
           "in_prompt": true,
           "prompt_label": "Current feeling",
           "prompt_requires_feature": "mood_tracking_enabled",
-          "prompt_self_only": true
+          "prompt_self_only": true,
+          "prompt_volatile": true
         }
       ]
     },

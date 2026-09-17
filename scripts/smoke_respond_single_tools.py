@@ -142,7 +142,7 @@ class FakeQueue:
 
 def fake_ctx(mode="single"):
     return {
-        "llm": object(), "system_content": "sys", "messages": [{"role": "user", "content": "Kai: Noch ein Bier"}],
+        "llm": object(), "system_content": "sys", "moment_content": "", "messages": [{"role": "user", "content": "Kai: Noch ein Bier"}],
         "room_mode": True, "mode": mode, "tool_system_content": "", "tool_llm": None,
         "tools_dict": {"SetActivity": lambda inp: CALLS.append(("SetActivity", inp))},
         "tool_format": "tag", "deferred_tools": set(), "content_tools": set(),

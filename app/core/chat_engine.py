@@ -233,6 +233,30 @@ def chat_llm_task(character_name: str) -> str:
     return "chat_stream"
 
 
+def attach_moment(messages: List[Dict[str, Any]], moment: str) -> List[Dict[str, Any]]:
+    """Hangs the scene state on the last user turn — after the history.
+
+    Returns a NEW list; the history dicts are never mutated (they are reused
+    for the next turn, where they must reach the backend byte-identical, or
+    its prompt cache breaks right there). The last message is replaced by a
+    copy with the scene state appended, separated by a blank line — the same
+    join ``streaming.compose_messages`` uses. When the list does not end with
+    a user turn (or is empty) the scene state becomes a user turn of its own,
+    so a model always gets it last. An empty scene state changes nothing.
+    """
+    if not moment:
+        return list(messages)
+    out = list(messages)
+    if out and out[-1].get("role") == "user" and isinstance(out[-1].get("content"), str):
+        last = dict(out[-1])
+        last["content"] = (f"{last['content']}\n\n{moment}"
+                           if last["content"] else moment)
+        out[-1] = last
+    else:
+        out.append({"role": "user", "content": moment})
+    return out
+
+
 def build_chat_context(
     owner_id: str,
     character_name: str,
@@ -245,10 +269,11 @@ def build_chat_context(
     room_stream: Optional[List[Dict[str, Any]]] = None,
     respond_opportunity: bool = False,
     winding_down: bool = False,
-    addressed_to: Optional[List[str]] = None) -> Dict[str, Any]:
+    addressed_to: Optional[List[str]] = None,
+    moment_notes: Optional[List[str]] = None) -> Dict[str, Any]:
     """
-    Build everything needed to run a chat: system prompt, message history,
-    LLM instances, and tool setup.
+    Build everything needed to run a chat: system prompt, scene state,
+    message history, LLM instances, and tool setup.
 
     Args:
         owner_id: User who owns the character (storage path)
@@ -267,9 +292,14 @@ def build_chat_context(
             known / plain 1:1 chat — the prompt then treats the line as
             addressed to the responder. An empty list means "said to the
             room", i.e. addressed to nobody in particular.
+        moment_notes: One-off context of this turn (e.g. a caller's hint);
+            it lands in the scene state next to the character's active state
+            modifiers.
 
     Returns:
-        Dict with keys: system_content, messages, llm, agent_config,
+        Dict with keys: system_content, moment_content (the scene state —
+        hang it on the last user turn, see attach_moment), messages, llm,
+        agent_config,
         tools_dict, tool_format, tool_llm, max_iterations,
         full_chat_history, user_display_name, lang_instruction,
         speaker, medium
@@ -284,7 +314,7 @@ def build_chat_context(
     from app.utils.history_manager import (
         get_time_based_history, get_cached_summary, refresh_summary_if_uncovered,
         strip_history_artifacts, anti_repetition_overrides)
-    from app.routes.chat import _build_full_system_prompt, _strip_tool_hallucinations
+    from app.routes.chat import _build_chat_prompt, _strip_tool_hallucinations
 
     agent_config = get_character_config(character_name)
     _chat_instance = resolve_llm(chat_llm_task(character_name),
@@ -423,8 +453,26 @@ def build_chat_context(
     mode = determine_mode(agent_tools, tool_llm, agent_config)
     tools_enabled = mode != "no_tools"
 
-    # System prompt
-    system_content = _build_full_system_prompt(character_name, lang_instruction, history_summary,
+    # State filters (drunk/exhausted/…): their prompt_modifier is only applied
+    # on the thought path. Add it here (chat reply) as well so the character
+    # shows its state when answering too — in the scene state, because a
+    # state comes and goes; condition_reminder already comes from
+    # _build_chat_prompt.
+    _notes: List[str] = []
+    try:
+        from app.core.prompt_filters import active_modifiers
+        from app.models.character import get_character_current_location
+        _mods = active_modifiers(character_name,
+                                 get_character_current_location(character_name) or "")
+        if _mods:
+            _notes.append("[Current state — let this shape how you respond:]\n"
+                          + "\n".join(_mods))
+    except Exception as _e:
+        logger.debug("chat-context active_modifiers failed: %s", _e)
+    _notes.extend(n for n in (moment_notes or []) if n)
+
+    # System prompt + scene state
+    _prompt = _build_chat_prompt(character_name, lang_instruction, history_summary,
         tools_enabled=tools_enabled, agent_config=agent_config,
         selected_skills=selected_skills,
         channel=channel,
@@ -435,22 +483,9 @@ def build_chat_context(
         winding_down=winding_down,
         present_characters=present_characters,
         incoming_text=user_input,
-        addressed_to=addressed_to)
-
-    # State filters (drunk/exhausted/…): their prompt_modifier is only applied
-    # on the thought path. Add it here (chat reply) as well so the character
-    # shows its state when answering too. status_section + condition_reminder
-    # already come from _build_full_system_prompt.
-    try:
-        from app.core.prompt_filters import active_modifiers
-        from app.models.character import get_character_current_location
-        _mods = active_modifiers(character_name,
-                                 get_character_current_location(character_name) or "")
-        if _mods:
-            system_content += ("\n\n[Current state — let this shape how you "
-                               "respond:]\n" + "\n".join(_mods))
-    except Exception as _e:
-        logger.debug("chat-context active_modifiers failed: %s", _e)
+        addressed_to=addressed_to,
+        moment_notes=_notes)
+    system_content = _prompt.system
 
     # Tool setup
     tools_dict = {}
@@ -509,6 +544,7 @@ def build_chat_context(
 
     return {
         "system_content": system_content,
+        "moment_content": _prompt.moment,
         "messages": messages,
         "llm": llm,
         "agent_config": agent_config,
@@ -711,24 +747,23 @@ def run_chat_turn(
         speaker=speaker, medium=medium,
         partner_name=speaker, room_stream=room_stream,
         respond_opportunity=respond_opportunity, winding_down=winding_down,
-        addressed_to=addressed_to)
+        addressed_to=addressed_to,
+        # One-off immediate context (e.g. a spell effect) — the character
+        # reacts to it narratively without it staying in the prompt.
+        moment_notes=([f"[{hint}]"] if hint else None))
 
     if ctx["llm"] is None:
         logger.error("run_chat_turn: Kein LLM fuer %s verfuegbar", responder)
         return ""
 
-    _sys = ctx["system_content"]
-    if hint:
-        # One-off immediate context (e.g. a spell effect) — the character
-        # reacts to it narratively without it staying in the prompt.
-        _sys = _sys + "\n\n[" + hint + "]"
-    messages = [{"role": "system", "content": _sys}]
+    messages = [{"role": "system", "content": ctx["system_content"]}]
     messages.extend(ctx["messages"])
     # In room mode the transcript already carries the triggering utterance as
     # its last line → do not append it again. Only as a fallback (empty
     # transcript) set the trigger explicitly, else the LLM has no last user turn.
     if not ctx.get("room_mode") or not ctx["messages"]:
         messages.append({"role": "user", "content": incoming_message})
+    messages = attach_moment(messages, ctx["moment_content"])
 
     # Label for the task panel — shows who-to-whom via which trigger
     if task_type == "talk_to":

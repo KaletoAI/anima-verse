@@ -37,17 +37,22 @@ Bullet composition: one line per fact, in the fixed order incoming /
 on_duty / mood / relationship / attention / discretion, joined with "\\n",
 no trailing newline; no fact at all -> "".
 
-Render check [R] (chat/chat_stream.md, StrictUndefined): the template's
-REPLY LENGTH block reads, by hand,
+Render check [R] (StrictUndefined): the rules and the facts live in the two
+cache parts of the chat prompt. chat/chat_stream.md (system prompt) reads,
+by hand,
 
     === REPLY LENGTH ===
     <five rule lines>
+
+and chat/chat_moment.md (the per-turn scene state) reads
+
     {% if reply_shape_section %}
     This moment:
     {{ reply_shape_section }}
     {% endif %}
 
-so the header is unconditional and the facts are conditional. Rendering
+so the header is unconditional in the system prompt, and the facts are
+conditional and never in the system prompt (they change every turn). Rendering
 the template twice with an otherwise identical context therefore yields:
 with reply_shape_section "" -> header yes, "This moment:" no; with
 "- Your mood: annoyed." -> header yes, "This moment:" yes and the bullet
@@ -250,16 +255,29 @@ def test_template_render():
 
     from app.core.prompt_templates import _env, render
 
-    source = _env.loader.get_source(_env, "chat/chat_stream.md")[0]
-    names = meta.find_undeclared_variables(_env.parse(source))
-    assert "reply_shape_section" in names, \
-        "[R] chat_stream.md does not reference reply_shape_section"
+    def _names(tpl: str):
+        return meta.find_undeclared_variables(
+            _env.parse(_env.loader.get_source(_env, tpl)[0]))
+
+    stream_names = _names("chat/chat_stream.md")
+    moment_names = _names("chat/chat_moment.md")
+    check("[R] system prompt never takes the facts",
+          "reply_shape_section" in stream_names, False)
+    assert "reply_shape_section" in moment_names, \
+        "[R] chat_moment.md does not reference reply_shape_section"
 
     def _render(section: str) -> str:
-        ctx = {name: "" for name in names}
-        ctx.update(partner_mode="room", present_characters="Bob",
-                   medium="in_person", reply_shape_section=section)
-        return render("chat/chat_stream.md", **ctx)
+        parts = []
+        for tpl, names in (("chat/chat_stream.md", stream_names),
+                           ("chat/chat_moment.md", moment_names)):
+            ctx = {name: "" for name in names}
+            ctx.update(partner_mode="room", present_characters="Bob",
+                       medium="in_person", reply_shape_section=section,
+                       char_lines=[], partner_lines=[], partner_state_lines=[],
+                       self_state_lines=[], moment_notes=[])
+            ctx = {k: v for k, v in ctx.items() if k in names}
+            parts.append(render(tpl, **ctx))
+        return "\n".join(parts)
 
     without = _render("")
     with_facts = _render("- Your mood: annoyed.")
@@ -276,7 +294,7 @@ def test_template_render():
     for label, text in (("without", without), ("with", with_facts)):
         check(f"[R] old sentence gone ({label})",
               "one turn is a few sentences at most" in text, False)
-    print("[R] chat_stream.md renders with and without the section")
+    print("[R] chat_stream.md + chat_moment.md render with and without the section")
 
 
 def main():
