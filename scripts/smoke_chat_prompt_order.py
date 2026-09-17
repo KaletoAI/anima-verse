@@ -59,6 +59,13 @@ on the last user turn, BEHIND the history. Derived expectations:
     c) empty list -> [{"role": "user", "content": "M"}]
     d) empty moment -> an equal copy, not the same list object
 
+[8] The thought turn's tool prompt (app/core/thoughts.py) follows the same
+    contract: its ~17 KB tool-instruction block is stable, the clock is not.
+    Reading the ``_ctx_parts.append(...)`` calls in source order, the part
+    naming the standing task comes first, then ``tool_instr_block``, and the
+    clock ("Uhrzeit") only after it — a clock in front of the tool block cost
+    123 of 297 measured pairs their whole cacheable prefix (~96 tokens left).
+
 [7] build_prompt_section(volatile=...) with four fields in template order
         a: plain                                   -> stable
         b: prompt_volatile true                    -> volatile
@@ -215,6 +222,32 @@ data = {"a": "1", "b": "2", "c": "3", "d": "4"}
 check("[7] stable", build_prompt_section(tpl, data, volatile=False), ["A: 1", "D: 4"])
 check("[7] volatile", build_prompt_section(tpl, data, volatile=True), ["B: 2", "C: 3"])
 check("[7] all", build_prompt_section(tpl, data), ["A: 1", "B: 2", "C: 3", "D: 4"])
+
+# [8]
+thought_src = (ROOT / "app/core/thoughts.py").read_text()
+thought_tree = ast.parse(thought_src)
+# A part is often assembled in a variable first, so a bare name is resolved to
+# the source of its assignment — otherwise "Uhrzeit" hides behind `_situation`.
+assigned = {}
+for n in ast.walk(thought_tree):
+    if (isinstance(n, ast.Assign) and len(n.targets) == 1
+            and isinstance(n.targets[0], ast.Name)
+            and n.targets[0].id not in assigned):
+        assigned[n.targets[0].id] = ast.get_source_segment(thought_src, n.value) or ""
+appends = [ast.get_source_segment(thought_src, n.value.args[0]) or ""
+           for n in ast.walk(thought_tree)
+           if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+           and getattr(n.value.func, "attr", "") == "append"
+           and getattr(getattr(n.value.func, "value", None), "id", "") == "_ctx_parts"
+           and n.value.args]
+resolved = [assigned.get(s.strip(), s) for s in appends]
+task_at = next((i for i, s in enumerate(resolved) if "Aufgabe" in s), -1)
+tools_at = next((i for i, s in enumerate(appends) if s.strip() == "tool_instr_block"), -1)
+clock_at = next((i for i, s in enumerate(resolved) if "Uhrzeit" in s), -1)
+check("[8] thought tool prompt: all three parts found",
+      [x >= 0 for x in (task_at, tools_at, clock_at)], [True, True, True])
+check("[8] standing task before the tool block", task_at < tools_at, True)
+check("[8] clock behind the tool block", clock_at > tools_at, True)
 
 print(f"\n{'FAILED: ' + str(len(FAILURES)) if FAILURES else 'all checks passed'}")
 sys.exit(1 if FAILURES else 0)

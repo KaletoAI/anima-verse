@@ -460,10 +460,18 @@ class ThoughtRunner:
         except Exception:
             arc_context = ""
 
-        # Tool-System-Prompt fuer Tool-LLM (erweiterter Kontext fuer autonome Entscheidungen)
-        # Im Gedanken-Modus muss das Tool-LLM den vollen Situationskontext kennen,
-        # da es eigenstaendig entscheidet welche Tools aufgerufen werden.
-        # Budget-System: Sektionen werden gekuerzt falls Token-Limit knapp.
+        # Tool system prompt for the tool LLM (extended context for autonomous
+        # decisions). In thought mode the tool LLM needs the full situation
+        # context, because it decides on its own which tools to call.
+        # Budget system: sections are shortened when the token limit gets tight.
+        #
+        # ORDER IS A CACHE CONTRACT (CHAT_PROMPTS.md § 1): the backend caches by
+        # prefix, so the stable part comes first — who the character is, its
+        # standing task, then the big tool block — and everything that moves
+        # (clock, weather, place, mood, the room's offer, memories) follows it.
+        # The clock used to sit in the essentials, ~400 chars in: it changed
+        # every turn and pushed the ~17 KB tool block out of the cache, which
+        # left ~96 cacheable tokens of an otherwise 93-96 % identical prompt.
         tool_system_content = ""
         if mode == "rp_first" and tools_dict and agent_tools:
             from app.core.system_prompt_builder import load_prompt_data, THOUGHT_FULL
@@ -482,25 +490,26 @@ class ThoughtRunner:
             # Prio 1: essentials (always). The birthday line only shows up on
             # the day itself — the standing "Birthday: Summer, day 14" comes
             # from the character template, not from here.
-            _essentials = (
+            _ctx_parts.append(
                 f"Character: {character_name}.\n"
-                f"Aufgabe: {_td.get('task', '')}\n"
-                f"Uhrzeit: {_td.get('time_of_day', '')} "
-                f"({_td.get('game_date', '')}).\n"
-                f"Wetter: {_td.get('game_weather', '')}"
+                f"Aufgabe: {_td.get('task', '')}"
             )
-            if _td.get("birthday_today"):
-                _essentials += "\nToday is your birthday."
-            _ctx_parts.append(_essentials)
             # Prio 2: tool instructions (always)
             _ctx_parts.append(tool_instr_block)
-            # Prio 3: current situation
-            _ctx_parts.append(
+            # Prio 3: current situation — the per-turn half of the prompt
+            # starts HERE, behind the tool block (see the cache note above).
+            _situation = (
                 f"Aktuelle Situation:\n"
+                f"- Uhrzeit: {_td.get('time_of_day', '')} "
+                f"({_td.get('game_date', '')})\n"
+                f"- Wetter: {_td.get('game_weather', '')}\n"
                 f"- Ort: {_td.get('location_name', 'Unbekannt')}\n"
                 f"- Aktivitaet: {_td.get('activity', 'Keine')}\n"
                 f"- Stimmung: {_td.get('feeling', 'Neutral')}"
             )
+            if _td.get("birthday_today"):
+                _situation += "\n- Today is your birthday."
+            _ctx_parts.append(_situation)
             # Prio 3b: the room's place offer — the pose keys SetActivity
             # takes. The chat route's tool phase shows the same block
             # (chat.py _current_activity_hint); without it the tool LLM
