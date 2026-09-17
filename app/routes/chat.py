@@ -1670,6 +1670,41 @@ def _extract_mood(agent_name: str, response: str) -> Optional[str]:
     return mood
 
 
+def _marker_travel_refusal(agent_name: str) -> str:
+    """Why the ``**I am at …**`` marker may NOT start a journey — "" = it may.
+
+    The marker travels only for a character that cannot travel any other way:
+
+    * ``has_movement_verb`` — whoever has SetLocation uses it; a second path
+      for the same thing is what kept a party standing;
+    * ``party_follower`` — a follower is dragged along by its leader and must
+      not set out on its own. The verb is hidden from it for exactly that
+      reason, so "has no verb" alone would say the opposite here;
+    * ``player_avatar`` — the avatar travels over the /play route, not
+      through a chat reply.
+    """
+    try:
+        from app.models.account import is_player_controlled
+        if is_player_controlled(agent_name):
+            return "player_avatar"
+        from app.core.party_engine import is_party_follower
+        if is_party_follower(agent_name):
+            return "party_follower"
+        from app.core.dependencies import get_skill_manager
+        skills = get_skill_manager()._get_agent_skills(agent_name, check_limits=False)
+        if any(getattr(s, "SKILL_ID", "") == "setlocation" for s in skills):
+            return "has_movement_verb"
+        return ""
+    except Exception as e:
+        logger.debug("marker-travel check failed for %s: %s", agent_name, e)
+        return "check_failed"
+
+
+def _may_travel_by_marker(agent_name: str) -> bool:
+    """True when the marker may start a journey (see the reason function)."""
+    return not _marker_travel_refusal(agent_name)
+
+
 def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]]:
     """Extrahiert Location aus LLM-Antwort. Returns {'name': ..., 'id': ...} or None.
 
@@ -1755,24 +1790,40 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
                     return {"name": new_name, "room": room_id, "location_id": old_loc}
                 return None  # Schon im Raum
 
-    # 2. Location-Match — DEAKTIVIERT (Lösung C, 2026-06): Orts-Bewegung läuft
-    # AUSSCHLIESSLICH über den SetLocation-Skill (als getaktete Reise über die
-    # Meter-Karte). Der narrative RP-Pfad darf NICHT cross-location
-    # setzen — das umging den Wegfinder und teleportierte den Char zu Orten/Wegen,
-    # die er gar nicht kennt (Bug seit Initial Release, durch den aktiven Loop-RP
-    # sichtbar geworden). Raumwechsel am AKTUELLEN Ort (Section 1 oben) bleibt
-    # erlaubt. Für einen echten Direkt-Sprung gibt es den Teleport-Spell (Anker).
+    # 2. Location match. The marker NEVER sets a place directly ("Lösung C",
+    # 2026-06): that bypassed the pathfinder and teleported the character to
+    # places and along ways it does not know. A room change at the CURRENT
+    # place (section 1 above) stays instant; a real jump is the teleport spell.
+    #
+    # What the marker may do is START A JOURNEY — the same call SetLocation
+    # makes, with the same knowledge gate on the target. It does that for a
+    # character that has NO movement verb, because otherwise such a character
+    # could never travel at all. Whoever has the verb keeps the tool as its one
+    # way: two paths for one thing is what left a party standing.
     loc_obj = resolve_location(new_name)
     if loc_obj and loc_obj.get("id") and loc_obj["id"] != old_loc:
-        logger.info(
-            "Narrativer Orts-Wechsel fuer %s ignoriert: '%s' (%s) — Bewegung nur "
-            "ueber SetLocation als getaktete Reise, kein Teleport via RP-Text.",
-            agent_name, new_name, loc_obj.get("name", new_name))
+        refusal = _marker_travel_refusal(agent_name)
+        if not refusal:
+            from app.core.travel_engine import start_journey
+            journey, reason = start_journey(agent_name, loc_obj["id"])
+            if journey:
+                logger.info(
+                    "Marker journey for %s -> '%s' (%s): started, no tool of "
+                    "its own", agent_name, new_name, loc_obj.get("id"))
+            else:
+                # unknown_target also means "the character does not know the
+                # place" — the gate sits in start_journey, not here.
+                logger.info("Marker journey for %s -> '%s' refused: %s",
+                            agent_name, new_name, reason)
+        else:
+            logger.info(
+                "Narrative place change for %s ignored: '%s' (%s) — %s",
+                agent_name, new_name, loc_obj.get("name", new_name), refusal)
     else:
-        # Weder Raum am aktuellen Ort noch eine (andere) Welt-Location.
+        # Neither a room at the current place nor a (different) world location.
         logger.info(
-            "Location-Extract fuer %s ignoriert: '%s' ist weder Raum am aktuellen "
-            "Ort noch eine Welt-Location.", agent_name, new_name)
+            "Location extract for %s ignored: '%s' is neither a room here nor "
+            "a world location.", agent_name, new_name)
     return None
 
 
