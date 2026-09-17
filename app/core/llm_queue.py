@@ -93,6 +93,18 @@ class LLMTask:
     # Monotonically increasing timestamp — used for stale detection so that
     # server clock changes/drift cannot distort it.
     _monotonic_created: float = field(default=0.0, repr=False)
+    # Cache lane this task occupies while it runs (app/core/llm_lanes.py) and
+    # the prompt-prefix key it was assigned for. The handle rides on the task
+    # because the streaming path takes the lane in register_chat_active and
+    # gives it back in register_chat_done; both fields also reach the JSONL
+    # logger, which runs in the worker thread.
+    _lane_handle: Any = field(default=None, repr=False)
+    _cache_key: str = field(default="", repr=False)
+    # When this call FIRST asked for a lane, on the lane manager's clock. A
+    # queued task asks again on every pass of the worker; the stamp stays at
+    # the first attempt so the call really ages while it waits (what the lane
+    # rules R2/R3 read).
+    _lane_arrived: float = field(default=0.0, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes for the REST endpoint (without internal fields)."""
@@ -217,18 +229,55 @@ class LLMQueue:
     async def register_chat_active_async(self, agent_name: str, llm_instance: Any = None,
                                           task_type: str = "chat_stream",
                                           label: str = "") -> str:
-        """Async wrapper: runs the blocking _tasks_idle.wait() in the threadpool
-        so the event loop does not stall while we wait for the provider to idle.
+        """Async wrapper: runs the blocking registration in the threadpool so
+        the event loop does not stall while we wait for a cache lane of this
+        model's pool (app/core/llm_lanes.py).
 
         Async code MUST use this variant. Sync code (worker threads) keeps
         using register_chat_active().
+
+        CANCELLATION-SAFE. Cancelling the caller (thoughts.py wraps the whole
+        turn in a wait_for) does not stop the thread — it registers, takes a
+        lane and hands back a task_id that nobody would ever be able to close
+        again: the lane would be lost for the lifetime of the process. The
+        registration is therefore shielded and, if the caller is gone by the
+        time it finishes, closed right here. The caller still sees the
+        CancelledError it asked for.
         """
         import asyncio
-        return await asyncio.to_thread(
+
+        pending = asyncio.ensure_future(asyncio.to_thread(
             self.register_chat_active,
             agent_name, llm_instance=llm_instance,
             task_type=task_type, label=label,
-        )
+        ))
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            pending.add_done_callback(self._close_orphaned_registration)
+            raise
+
+    def _close_orphaned_registration(self, done) -> None:
+        """Closes a registration whose caller was cancelled while it waited.
+
+        Runs as the done-callback of the shielded task above, so it also
+        consumes an exception the abandoned registration may carry. It must
+        never raise: it runs on the event loop, with nobody left to handle
+        anything.
+        """
+        try:
+            if done.cancelled():
+                return
+            if done.exception() is not None:
+                return
+            task_id = done.result()
+            if not task_id:
+                return
+            self.register_chat_done(task_id)
+            logger.info("chat registration %s closed — its caller was cancelled "
+                        "before it was handed over", task_id)
+        except Exception as e:
+            logger.error("could not close the orphaned chat registration: %s", e)
 
     def register_chat_done(self, task_id: str) -> None:
         """Chat/story finished. The queue resumes."""

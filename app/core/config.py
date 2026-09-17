@@ -1191,6 +1191,72 @@ def _rewrite_legacy_workflow_specs(config: dict) -> bool:
     return changed
 
 
+# Marker for the one-time lane migration below. It is a top-level config key,
+# so it survives the admin save round-trip (/admin/settings/raw hands the whole
+# config back out and config.save writes it) and nothing re-derives it.
+_LANE_MIGRATION_MARKER = "llm_lanes_migrated"
+
+
+def _migrate_entry_lanes(config: dict) -> bool:
+    """ONCE per world: the provider's ``max_concurrent`` becomes the lane count
+    of that provider's enabled LLM entries (plan-cache-lanes.md § 5).
+
+    How many LLM calls run at once is decided per ENTRY now, not per provider
+    — and an entry without a value has ONE lane. A world that had a provider
+    at 4 parallel requests would therefore silently drop to strictly serial
+    work the first time the new code runs. This carries the number over, once,
+    to every enabled entry of that provider that has no own value yet. No
+    fallback reader anywhere: after this the entry is the only place the
+    number lives.
+
+    "Once" is the load-bearing word, and it is why the marker exists. The
+    provider field itself stays (it sizes the channel's worker pool and is the
+    GPU limit), so a plain "copy it onto every entry without a value" would
+    run again on EVERY boot: an entry created later in the admin UI writes no
+    ``max_concurrent`` and would silently inherit the provider's number at the
+    next start — a ``tool`` entry would come up with 4 lanes although § 10 of
+    the plan keeps tool/vision at 1. With the marker set, this whole step is
+    skipped and an entry without a value simply means one lane, forever.
+
+    Disabled entries are left alone: they describe no running pool, and
+    turning one on in the admin should give it the documented default.
+
+    In-memory only — see `migrate_file()` for the disk side.
+    """
+    if config.get(_LANE_MIGRATION_MARKER):
+        return False
+    config[_LANE_MIGRATION_MARKER] = True
+    providers = config.get("providers")
+    routing = config.get("llm_routing")
+    if not isinstance(providers, list) or not isinstance(routing, list):
+        return True
+    per_provider = {}
+    for prov in providers:
+        if not isinstance(prov, dict):
+            continue
+        name = (prov.get("name") or "").strip()
+        value = int(prov.get("max_concurrent") or 1)
+        if name and value > 1:
+            per_provider[name] = value
+    if not per_provider:
+        return True
+    changed = []
+    for entry in routing:
+        if not isinstance(entry, dict) or entry.get("max_concurrent"):
+            continue
+        if entry.get("enabled") is False:
+            continue
+        lanes = per_provider.get((entry.get("provider") or "").strip())
+        if not lanes:
+            continue
+        entry["max_concurrent"] = lanes
+        changed.append(f"{entry.get('provider')}/{entry.get('model')}={lanes}")
+    if changed:
+        logger.info("LLM entries got their lane count from the provider: %s",
+                    ", ".join(changed))
+    return True
+
+
 def _apply_file_migrations(config: dict, fresh_world: bool) -> bool:
     """Runs every load-time normalisation over ``config``, IN MEMORY.
 
@@ -1220,6 +1286,8 @@ def _apply_file_migrations(config: dict, fresh_world: bool) -> bool:
     if _migrate_backend_categories(config):
         changed = True
     if _migrate_lora_triggers(config):
+        changed = True
+    if _migrate_entry_lanes(config):
         changed = True
     return changed
 
@@ -1628,7 +1696,6 @@ def _flatten_to_env(config: dict) -> None:
         _set(env, f"{p}TIMEOUT", prov.get("timeout", 120))
         _set(env, f"{p}MAX_CONCURRENT", prov.get("max_concurrent", 1))
         _set(env, f"{p}SERIALIZE_GROUP", prov.get("serialize_group", ""))
-        _set(env, f"{p}RESERVE_CHAT_SLOT", bool(prov.get("reserve_chat_slot", False)))
 
     # Memory Thresholds (3-Stufen-System)
     memory = config.get("memory", {})

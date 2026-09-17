@@ -168,11 +168,9 @@ q = ProviderQueue(_provider("P", 1), queue_name="P", max_concurrent=1,
                   chat_pause_enabled=False, serialize_group="")
 gate = threading.Semaphore(1)
 q.reconfigure(_provider("P", 2), max_concurrent=2, chat_pause_enabled=True,
-              serialize_group="gpu0", reserve_chat_slot=True,
-              serialize_gate=gate)
+              serialize_group="gpu0", serialize_gate=gate)
 check("serialize_group applied", q.serialize_group, "gpu0")
 check("chat pause applied", q._chat_pause_enabled, True)
-check("reserve_chat_slot applied", q.reserve_chat_slot, True)
 check("serialize gate applied", q._serialize_gate is gate, True)
 check("limit applied", q._max_concurrent, 2)
 

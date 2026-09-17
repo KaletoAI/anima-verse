@@ -1998,12 +1998,15 @@ class StreamingAgent:
         here instead of in ``provider_queue._log_task_result`` — without the
         argument the four SSE tasks would be the only ones in llm_calls.jsonl
         that cannot say whether the answer was cut off at the token budget.
+        The same holds for the cache lane: the registration took one, so it is
+        looked up here (``_lane_fields``) instead of by the queue worker.
         """
         if not self.log_task:
             return
         try:
             from app.utils.llm_logger import log_llm_call, estimate_tokens, get_max_tokens
             prov = self._resolve_provider(active_llm)
+            _lane, _cache_key = self._lane_fields()
             log_llm_call(
                 task=self.log_task,
                 model=get_model_name(active_llm),
@@ -2021,10 +2024,34 @@ class StreamingAgent:
                 tokens_cached=(usage or {}).get("cached_tokens"),
                 messages=history or None,
                 finish_reason=finish_reason or "",
+                lane=_lane,
+                cache_key=_cache_key,
                 llm=active_llm,
                 llm_role=llm_label)
         except Exception as e:
             logger.error("LLM-Log Fehler: %s", e)
+
+    def _lane_fields(self) -> Tuple[Optional[int], str]:
+        """``(lane, cache key)`` of this turn for the log line.
+
+        The lane is the one the streaming registration took — only the
+        registration knows it, so it is read back from the provider manager.
+        The key is derived even without a registration: it says which prompt
+        beginning this call produced, which is worth logging on its own.
+        """
+        lane: Optional[int] = None
+        cache_key = ""
+        try:
+            if self.chat_task_id:
+                from app.core.provider_manager import get_provider_manager
+                lane, cache_key = get_provider_manager().chat_lane_info(
+                    self.chat_task_id)
+            if not cache_key:
+                from app.core.llm_lanes import cache_key_for
+                cache_key = cache_key_for(self.log_task, self.agent_name)
+        except Exception:
+            pass
+        return lane, cache_key
 
     def _log_llm_error(self, active_llm, system_content, user_input,
                        llm_label, error, start_time, partial_response="",

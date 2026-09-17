@@ -12,7 +12,7 @@ Usage:
 """
 import os
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .provider import Provider
 from .provider_queue import ProviderQueue
@@ -95,9 +95,6 @@ class ProviderManager:
 
             serialize_group = os.environ.get(f"{prefix}SERIALIZE_GROUP", "").strip()
 
-            reserve_chat_slot = (os.environ.get(
-                f"{prefix}RESERVE_CHAT_SLOT", "").strip().lower() == "true")
-
             provider = Provider(
                 name=name,
                 type=ptype,
@@ -116,15 +113,12 @@ class ProviderManager:
             self._channel(name, provider,
                           max_concurrent=max_concurrent,
                           chat_pause_enabled=bool(serialize_group),
-                          serialize_group=serialize_group,
-                          reserve_chat_slot=reserve_chat_slot)
+                          serialize_group=serialize_group)
 
             timeout_info = f", timeout={timeout}s" if timeout else ""
             group_info = f", serialize_group={serialize_group}" if serialize_group else ""
-            reserve_info = ", reserve_chat_slot" if reserve_chat_slot else ""
-            logger.info("Loaded PROVIDER_%d '%s': type=%s, concurrent=%d%s%s%s",
-                       n, name, ptype, max_concurrent, timeout_info, group_info,
-                       reserve_info)
+            logger.info("Loaded PROVIDER_%d '%s': type=%s, concurrent=%d%s%s",
+                       n, name, ptype, max_concurrent, timeout_info, group_info)
             n += 1
 
         if not self.providers:
@@ -137,8 +131,7 @@ class ProviderManager:
 
     def _channel(self, key: str, provider: Provider, *,
                  max_concurrent: int, chat_pause_enabled: bool,
-                 serialize_group: str,
-                 reserve_chat_slot: bool = False) -> ProviderQueue:
+                 serialize_group: str) -> ProviderQueue:
         """One channel for ``key`` — reusing a surviving queue object so
         in-flight tasks keep holding their concurrency slots across a config
         reload; only a genuinely new key gets a fresh queue."""
@@ -148,14 +141,12 @@ class ProviderManager:
             pq.reconfigure(provider, max_concurrent=max_concurrent,
                            chat_pause_enabled=chat_pause_enabled,
                            serialize_group=serialize_group,
-                           reserve_chat_slot=reserve_chat_slot,
                            serialize_gate=gate)
         else:
             pq = ProviderQueue(provider, queue_name=key,
                                max_concurrent=max_concurrent,
                                chat_pause_enabled=chat_pause_enabled,
-                               serialize_group=serialize_group,
-                               reserve_chat_slot=reserve_chat_slot)
+                               serialize_group=serialize_group)
             pq._serialize_gate = gate
         self._queues[key] = pq
         self.channels[key] = pq
@@ -400,6 +391,22 @@ class ProviderManager:
                 pq.register_chat_done(task_id)
                 return
         logger.warning("chat task %s not found in any channel", task_id)
+
+    def chat_lane_info(self, task_id: str) -> Tuple[Optional[int], str]:
+        """``(lane number, cache key)`` of a streaming registration.
+
+        The streaming path bypasses the queue and writes its own log lines, so
+        it has to ask for the lane its registration took. Unknown task id or a
+        registration that runs unlaned gives ``(None, "")``.
+        """
+        for pq in self.channels.values():
+            task = pq._chat_tasks.get(task_id)
+            if task is None:
+                continue
+            handle = task._lane_handle
+            return ((handle.lane_id if handle is not None else None),
+                    getattr(task, "_cache_key", "") or "")
+        return (None, "")
 
     def register_chat_iteration(self, task_id: str,
                                  iteration: int, max_iterations: int) -> None:

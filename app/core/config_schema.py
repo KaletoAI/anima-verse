@@ -135,9 +135,8 @@ SECTIONS = {
             "api_base": {"type": "str", "label": "API Base URL", "required": True, "placeholder": "http://host:port/v1"},
             "api_key": {"type": "password", "label": "API Key", "sensitive": True, "default": "not-needed", "description": "API Key (bei lokalen Providern: 'not-needed')"},
             "timeout": {"type": "int", "label": "Timeout (s)", "default": 600, "min": 10, "max": 3600, "description": "Request timeout in seconds — SYSTEM time (HTTP). Be generous: a queued gateway call waits for the model AND for its own slot, and a thinking model spends minutes on hidden reasoning tokens before the first visible one."},
-            "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Maximale gleichzeitige Anfragen"},
+            "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallel jobs on this channel. For LLM calls it is no longer the limit — how many run at once is decided per model by the lanes of the LLM entry (LLM Routing › LLMs › Lanes); here it only sizes the channel's worker pool. It IS still the hard limit for the GPU jobs of this channel (image/video/mesh generation), which take a slot of this channel instead of a lane."},
             "serialize_group": {"type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
-            "reserve_chat_slot": {"type": "bool", "label": "Reserve Chat Slot", "default": False, "description": "Keep one of the Max Concurrent slots free for chat-priority calls (NPC answers, storyteller): background tasks then use at most N-1 slots, so a chat call never waits behind a fully busy queue. Effective only with Max Concurrent >= 2. Enable on the provider that serves chat; leave off for background-only providers (it would idle one slot)."},
         },
     },
     "llm_retry": {
@@ -215,6 +214,14 @@ SECTIONS = {
                 "step": 0.1,
                 "description": "Recommended by task category — Tools: 0.0-0.2 · Image: 0.2-0.4 · Helper: 0.3-0.6 · Chat: 0.7-0.9",
                 "hide_for_embedding": True,
+            },
+            "max_concurrent": {
+                "type": "int",
+                "label": "Lanes (max concurrent)",
+                "default": 1,
+                "min": 1,
+                "max": 16,
+                "description": "How many calls this LLM entry may run at the same time. Each lane is one serialized slot that remembers the prompt beginning it last served, and a new call prefers the lane that already holds its own beginning — so two alternating conversations keep their prompt caches instead of evicting each other. 1 = strictly one call after another. Raise it only as far as the backend really serves in parallel: more lanes mean more different prompt beginnings at once, and the backend drops the oldest cache.",
             },
             "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 200000, "placeholder": "provider default", "hide_for_embedding": True, "description": "Completion budget per request. For thinking models (GLM, DeepSeek-R1, …) the HIDDEN reasoning tokens count against it — too small a value cuts the visible answer mid-output. Empty = no cap sent (provider default)."},
             "chat_template": {

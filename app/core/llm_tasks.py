@@ -14,7 +14,8 @@ from typing import Dict
 from app.core.llm_queue import Priority
 
 
-# Task catalog: task_id -> {label, priority, category, gate?, thinking?, requirements}
+# Task catalog: task_id -> {label, priority, category, cache_class?, gate?,
+#                           thinking?, requirements}
 # `gate` = dot path to a bool field in the config. When that field is False,
 # NO routing entry is required for this task (feature inactive).
 # Task categories — guidance for which LLM kind a task expects.
@@ -24,6 +25,21 @@ from app.core.llm_queue import Priority
 #   "chat"   → big chat / RP model (creative writing, streaming)
 #   "helper" → small/cheap helper model is enough
 #
+# `cache_class` = which PROMPT FAMILY this task produces, and therefore which
+# cache lane it may run on (app/core/llm_lanes.py, plan-cache-lanes.md § 3):
+#   "chat"    → a character's reply in a live conversation; these are the
+#               prompt beginnings worth protecting.
+#   "thought" → the agent loop's thought prompt.
+#   "tool"    → the tool/intent prompt (strict JSON, tool definitions).
+#   absent    → "bg", background work: it shares one lane per character with
+#               every other background call and displaces no conversation.
+# Declared HERE and nowhere else. It deliberately does NOT follow the routing
+# fallback (`llm_router.fallback_parent`): routing says which model answers,
+# the class says what the prompt looks like. An NPC action tick borrows the
+# chat model but writes a completely different prompt — putting it in class
+# "chat" would send it onto the lane holding that character's conversation
+# and evict exactly the cache the lanes exist to keep.
+#
 # `thinking` (tool/helper tasks only): True = the task benefits from a
 # reasoning/thinking pass, route it to the gateway's thinking alias; absent/False
 # = run WITHOUT thinking (the default — extraction/classification/tool-calling
@@ -32,9 +48,9 @@ from app.core.llm_queue import Priority
 # embedding tasks ignore this flag (they route to their own models).
 TASK_TYPES: Dict[str, Dict[str, object]] = {
     # Streaming / RP
-    "chat_stream":        {"label": "Chat (Stream)",            "priority": Priority.CHAT,   "category": "chat"},
+    "chat_stream":        {"label": "Chat (Stream)",            "priority": Priority.CHAT,   "category": "chat", "cache_class": "chat"},
     "story_stream":       {"label": "Story (Stream)",           "priority": Priority.HIGH,   "category": "chat",   "gate": "story_engine.enabled"},
-    "group_chat_stream":  {"label": "Group-Chat (Stream)",      "priority": Priority.CHAT,   "category": "chat"},
+    "group_chat_stream":  {"label": "Group-Chat (Stream)",      "priority": Priority.CHAT,   "category": "chat", "cache_class": "chat"},
     "storyteller":        {"label": "Storyteller (Action)",     "priority": Priority.CHAT,   "category": "chat"},
 
     # Tool / Decision LLM
@@ -48,14 +64,14 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     "random_event":       {"label": "Random Event",             "priority": Priority.LOW,    "category": "tool",   "gate": "random_events.enabled", "thinking": True},
     "secret_generation":  {"label": "Secret Generation",        "priority": Priority.LOW,    "category": "tool",   "thinking": True},
     "outfit_generation":  {"label": "Outfit Generation",        "priority": Priority.NORMAL, "category": "tool",   "gate": "image_generation.enabled", "thinking": True},
-    "thought":            {"label": "Thought (agent loop)",     "priority": Priority.LOW,    "category": "chat"},
+    "thought":            {"label": "Thought (agent loop)",     "priority": Priority.LOW,    "category": "chat",   "cache_class": "thought"},
     # The tool-class task: the tool phase of a reply resolves it directly —
     # chat_engine loads the Tool-LLM from it for chat AND thought turns
     # (chat_engine.py:421). It is also the anchor llm_router.fallback_parent()
     # sends unrouted tool work to: furnish, prop_mount_classify,
     # room_description_sync and any "intent_<sub>" id.
-    "intent":             {"label": "Intent / tool calls",      "priority": Priority.NORMAL, "category": "tool"},
-    "spell_detect":       {"label": "Spell Cast Detection",      "priority": Priority.NORMAL, "category": "tool"},
+    "intent":             {"label": "Intent / tool calls",      "priority": Priority.NORMAL, "category": "tool",   "cache_class": "tool"},
+    "spell_detect":       {"label": "Spell Cast Detection",      "priority": Priority.NORMAL, "category": "tool",   "cache_class": "tool"},
     # Pose consolidation: vector for the similarity match against existing
     # variants (the free-text normalizer is gone — poses come from the catalog,
     # plan-pose-katalog.md).
@@ -68,17 +84,20 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # steps of ONE job (needs → match → placement) on one routing task; the
     # steps stay distinguishable in the LLM log through their call labels.
     # No thinking: the answers must be a bare JSON object.
-    "furnish":            {"label": "Furnish (needs · match · placement)", "priority": Priority.NORMAL, "category": "tool"},
+    "furnish":            {"label": "Furnish (needs · match · placement)", "priority": Priority.NORMAL, "category": "tool", "cache_class": "tool"},
     # The fourth step of the same feature, but the only one that answers PROSE:
     # after the furnishing has landed, the room's description is rewritten so it
     # names what really stands there (E8, B14b). Button with a preview — the
-    # admin reads the text before anything is stored.
-    "room_description_sync": {"label": "Furnish: Sync Room Description", "priority": Priority.NORMAL, "category": "tool"},
+    # admin reads the text before anything is stored. Class "bg", not "tool"
+    # like its three siblings: it answers PROSE from its own template and
+    # shares no prompt beginning with the tool/intent prompt, so putting it on
+    # the tool lane would evict that cache for nothing.
+    "room_description_sync": {"label": "Furnish: Sync Room Description", "priority": Priority.NORMAL, "category": "tool", "cache_class": "bg"},
     # Which surface a prop may be set down on (floor / wall / ceiling / on
     # another prop) — a one-off classification of the LIBRARY, run from the
     # Props tab, that the furnish solver then reads. Same class of work as the
     # furnish steps above and no thinking, for the same reason.
-    "prop_mount_classify": {"label": "Props: Classify Mount",       "priority": Priority.NORMAL, "category": "tool"},
+    "prop_mount_classify": {"label": "Props: Classify Mount",       "priority": Priority.NORMAL, "category": "tool", "cache_class": "tool"},
 
     # LLM-Blender models (docs/llm-blender-models.md): the roof form of ONE
     # building as a small declarative JSON object. Everything the answer says
@@ -104,7 +123,7 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # be routed for background figures. No gate — an addressed NPC answers
     # whatever the conversation mode says. Unrouted it falls back to
     # `chat_stream` (resolve_llm's npc_* rule), i.e. the RP model.
-    "npc_talk":           {"label": "NPC conversation reply", "priority": Priority.LOW, "category": "chat"},
+    "npc_talk":           {"label": "NPC conversation reply", "priority": Priority.LOW, "category": "chat", "cache_class": "chat"},
 
     # Director scene (spec-npc-conversation § 4): 2–4 lines for one room in
     # one small JSON call — the cheap alternative to turn-by-turn replies.

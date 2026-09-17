@@ -86,6 +86,8 @@ def log_llm_call(
     trace_id: str = "",
     trace_kind: str = "",
     finish_reason: str = "",
+    lane: Optional[int] = None,
+    cache_key: str = "",
     llm: Any = None):
     """Logs an LLM call as a JSONL line and prints a short line to stdout.
 
@@ -129,6 +131,16 @@ def log_llm_call(
         trace_kind: kind of the action (``respond``, ``thought``, ``chat``,
             ...), same fallback as ``trace_id``. The fallback fills each field
             on its own, so an explicit value always wins per field.
+        lane: number of the cache lane this call ran on
+            (``app/core/llm_lanes.py``). ``None`` = the call ran without a
+            lane (an unlaned fallback, or a path that does not take one) and
+            the field is left out, the same way ``tokens_cached`` distinguishes
+            "not reported" from a real value.
+        cache_key: the prompt-prefix key the lane was assigned for
+            (``<task class>:<character>``, e.g. ``chat:Kira``). Together with
+            ``lane`` it makes the cache hit rate readable per conversation:
+            a ``tokens.cached`` of 0 on a lane whose previous call carried a
+            different key is the eviction this whole mechanism is about.
         finish_reason: why the provider stopped generating ("stop", "length",
             ...). Only written to the JSONL when it is actually known — an
             empty value leaves the field out entirely instead of implying a
@@ -186,6 +198,10 @@ def log_llm_call(
         entry["label"] = label
     if finish_reason:
         entry["finish_reason"] = finish_reason
+    if lane is not None:
+        entry["lane"] = lane
+    if cache_key:
+        entry["cache_key"] = cache_key
     if trace_id:
         entry["trace_id"] = trace_id
     if trace_kind:

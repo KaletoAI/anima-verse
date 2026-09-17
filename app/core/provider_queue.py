@@ -1,10 +1,19 @@
-"""Per-Provider LLM Queue with configurable concurrency.
+"""Per-Provider LLM Queue.
 
-Each Provider gets its own ProviderQueue. Tasks are processed in priority order
-with up to max_concurrent workers running simultaneously.
+Each Provider gets its own ProviderQueue. Tasks are processed in priority
+order.
 
-Chat/Story streaming bypasses the queue (direct invoke) but registers for tracking.
-While chat is active on a provider, that provider's background tasks pause.
+How many LLM calls run at once is NOT decided here: every LLM task takes a
+CACHE LANE of the pool of its own provider/model (app/core/llm_lanes.py,
+plan-cache-lanes.md), so the limit belongs to the LLM entry and a call prefers
+the lane that already holds its prompt beginning. The queue's own slot
+bookkeeping (``_Permits``) is left for GPU tasks — image/video/mesh jobs on a
+backend channel, where the limit really is the backend.
+
+Chat/Story streaming bypasses the queue (direct invoke) but registers for
+tracking AND takes a lane of the same pool, so a streaming turn and a queued
+call never race for the same prompt cache. While chat is active on a provider,
+that provider's background tasks pause.
 """
 import queue
 import re
@@ -152,6 +161,21 @@ _RETRIABLE_GPU_ERRORS = (
 
 _GPU_MAX_RETRIES = 2  # Max retry attempts for retriable GPU errors
 
+# A worker that went once through the whole queue without finding a task
+# whose pool has a free lane sleeps this long before trying again — otherwise
+# it would spin on the re-queue path at full speed. Short enough that a lane
+# freed meanwhile is picked up without a noticeable delay.
+_LANE_RETRY_SLEEP = 0.15
+
+# How long a streaming registration waits for its lane in ONE go. It has no
+# second option — it cannot be re-queued — so it waits; but a pool that hands
+# out no lane for minutes is a bug, and an ERROR line every minute is what
+# makes it visible. It is also the slice length of that wait: between two
+# slices the registration runs the stale-chat cleanup, which is the only thing
+# that can give back a lane held by a registration whose done never came
+# (see _acquire_chat_lane).
+_LANE_WAIT_WARN = 60
+
 
 class _Permits:
     """The concurrency slots of ONE channel, with a limit that may change
@@ -208,7 +232,7 @@ class ProviderQueue:
 
     def __init__(self, provider: Provider, queue_name: str = "",
                  max_concurrent: int = 0, chat_pause_enabled: bool = True,
-                 serialize_group: str = "", reserve_chat_slot: bool = False):
+                 serialize_group: str = ""):
         self.provider = provider
         self._queue_name = queue_name or provider.name
         self._chat_pause_enabled = chat_pause_enabled
@@ -217,25 +241,15 @@ class ProviderQueue:
         self.serialize_group = serialize_group
         effective_concurrent = max_concurrent if max_concurrent > 0 else provider.max_concurrent
         self._max_concurrent = effective_concurrent
-        # Reserved chat slot (plan-parallel-bump-lane.md Task 4): when
-        # enabled, background tasks (priority > Priority.CHAT) occupy at
-        # most max_concurrent-1 slots, so a chat-priority call (NPC answer,
-        # storyteller) never waits behind a fully busy queue — priorities
-        # alone cannot do that (they order WAITING tasks, no preemption).
-        # Effective only with max_concurrent > 1; opt-in per provider,
-        # because on a background-only provider it would idle one slot.
-        self.reserve_chat_slot = bool(reserve_chat_slot)
-        self._bg_cond = threading.Condition()
-        self._bg_running = 0  # background tasks currently executing
         self._queue: queue.PriorityQueue = queue.PriorityQueue()
         self._seq_counter: int = 0
         self._lock = threading.Lock()
         self._chat_active = threading.Event()
         self._chat_active.set()  # Initially free (no chat active)
-        self._tasks_idle = threading.Event()
-        self._tasks_idle.set()  # Initially no tasks running
         self._running = False
         self._workers: List[threading.Thread] = []
+        # Slot bookkeeping for GPU tasks only — LLM tasks take a lane
+        # instead (see the module docstring).
         self._semaphore = _Permits(effective_concurrent)
         # Optional serialize-group gate: one shared Semaphore across ALL
         # channels with the same serialize_group (e.g. an LLM provider and an
@@ -249,6 +263,9 @@ class ProviderQueue:
         self._current_tasks: List[LLMTask] = []
         # Multiple concurrent chats supported (keyed by task_id)
         self._chat_tasks: Dict[str, LLMTask] = {}
+        # The cache lane each registration holds, by the SAME key. Separate
+        # from the task object on purpose — see _release_chat_lane.
+        self._chat_lanes: Dict[str, Any] = {}
         self._chat_registered_at: float = 0.0  # monotonic timestamp (latest)
         self._history: List[LLMTask] = []
         self._history_limit: int = 30
@@ -257,7 +274,6 @@ class ProviderQueue:
 
     def reconfigure(self, provider: Provider, *, max_concurrent: int = 0,
                     chat_pause_enabled: bool = True, serialize_group: str = "",
-                    reserve_chat_slot: bool = False,
                     serialize_gate: Optional[threading.Semaphore] = None) -> None:
         """Applies new settings IN PLACE so this queue object — and with it
         every in-flight task's concurrency slot — survives a config reload.
@@ -268,18 +284,26 @@ class ProviderQueue:
         2026-08-03: an admin save mid-mesh-job double-ran a gateway backend
         into 600-s ComfyUI timeouts). The slot bookkeeping (``_Permits``)
         therefore stays the SAME object and only its limit changes; a shrink
-        lands as the running tasks finish. The worker-thread count re-syncs
-        the next time the queue idles — the permits alone enforce the limit.
+        lands as the running tasks finish.
+
+        A running queue tops its workers up right here. The worker count
+        follows the lane totals of the config, so a raised lane count would
+        otherwise stay without effect until the queue idles — and a queue busy
+        enough to need the lanes is the one that never idles. Only growth is
+        applied: a surplus worker ends by itself when it finds nothing to do,
+        and taking one away mid-task is the one thing that must not happen.
         """
         effective = max_concurrent if max_concurrent > 0 else provider.max_concurrent
         with self._lock:
             self.provider = provider
             self._chat_pause_enabled = chat_pause_enabled
             self.serialize_group = serialize_group
-            self.reserve_chat_slot = bool(reserve_chat_slot)
             self._serialize_gate = serialize_gate
             self._max_concurrent = effective
+            running = self._running
         self._semaphore.set_limit(effective)
+        if running:
+            self._ensure_workers()
 
     def is_busy(self) -> bool:
         """A task is running or waiting on this queue — the ProviderManager
@@ -337,7 +361,6 @@ class ProviderQueue:
         label_suffix = f" label={label}" if label else ""
         logger.info("[%s] Eingereicht: %s (%s) prio=%d agent=%s%s",
                     self._queue_name, task.task_id, task_type, priority, agent_name, label_suffix)
-        self._notify_chat_submit(priority)
 
         self._ensure_workers()
 
@@ -394,7 +417,6 @@ class ProviderQueue:
         self._queue.put((priority, seq, task))
         logger.info("[%s] GPU-Task eingereicht: %s (%s) prio=%d agent=%s label=%s",
                     self._queue_name, task.task_id, task_type, priority, agent_name, label)
-        self._notify_chat_submit(priority)
 
         self._ensure_workers()
 
@@ -456,21 +478,24 @@ class ProviderQueue:
         # yet at registration time, so show the median for (model, task).
         _attach_duration_estimate(task)
 
+        # Take a cache lane of this model's pool BEFORE the registration
+        # exists. Streaming bypasses the queue, so without a lane a streaming
+        # turn and a queued call would compete for the same prompt cache. The
+        # order matters: while this waits, the entry is in no dict yet, so
+        # neither _check_stale_chat nor a cancelled caller can throw away a
+        # registration whose lane is still being handed out. The lane is held
+        # until register_chat_done — the tool executor releases and
+        # re-registers around its own LLM calls (R6), which is why a lane is
+        # never held across a nested call.
+        handle = self._acquire_chat_lane(task)
+
         with self._lock:
             self._chat_tasks[task.task_id] = task
+            self._chat_lanes[task.task_id] = handle
             self._chat_registered_at = time.monotonic()
 
         # Pause queue: workers won't start NEW tasks
         self._chat_active.clear()
-
-        # With max_concurrent=1: wait for the running task (e.g. llama-swap)
-        # With max_concurrent>1: the server can handle parallel requests
-        if self.provider.max_concurrent <= 1 and not self._tasks_idle.is_set():
-            logger.info("[%s] Chat wartet auf laufenden Task (max_concurrent=%d)...",
-                        self._queue_name, self.provider.max_concurrent)
-            if not self._tasks_idle.wait(timeout=300):
-                logger.warning("[%s] Task laeuft noch nach 300s, Chat startet trotzdem",
-                               self._queue_name)
 
         # Serialize-group gate: wait until the group is free (e.g. a running
         # image generation in the same group) and hold it for the chat's
@@ -507,6 +532,81 @@ class ProviderQueue:
             task.current_iteration = iteration
             task.max_iterations = max_iterations
 
+    def _acquire_chat_lane(self, task: LLMTask) -> Any:
+        """Takes a cache lane for a streaming registration and returns the
+        handle.
+
+        This is the ONE path that really waits for a lane: a stream cannot be
+        put back into the queue and started again later. It therefore has no
+        "run without a lane" escape either — that would be unbounded
+        parallelism on exactly the pool whose cache we are protecting.
+
+        The wait runs in SLICES of _LANE_WAIT_WARN seconds, and between two
+        slices this calls _check_stale_chat(). That is not a nicety: the
+        stale check used to run only in the chat-pause wait of the worker
+        loop, which is gated by _chat_pause_enabled (= a serialize group is
+        configured). On every other provider nothing ever cleaned up a
+        registration whose register_chat_done never came — the documented
+        case is a browser reload during streaming, where the SSE generator's
+        finally does not run. Without lanes that left a stale entry behind;
+        with lanes it would hold the model's lane for the lifetime of the
+        process, so every later chat would wait here forever and every queued
+        task of that pool would be deferred for good. The ERROR line per
+        slice (same 60-s cadence as before) keeps such a wait visible.
+
+        A slice boundary drops the call out of the pool's waiting list for an
+        instant. The arrival stamp is taken ONCE and handed back in on every
+        slice, so the ordering rules of phase 2 still age it from when it
+        really arrived.
+        """
+        from app.core.llm_lanes import (
+            LaneTimeout, cache_key_for, get_lane_manager, pool_key_for,
+        )
+        pool_key = pool_key_for(self.provider.name, task.model)
+        task._cache_key = cache_key_for(task.task_type, task.agent_name)
+        manager = get_lane_manager()
+        manager.sync_from_config(pool_key)
+        task._lane_arrived = manager.now()
+        waited = 0.0
+        while True:
+            # The lower bound only keeps a misconfigured 0 from
+            # spinning; a check may shorten the slice to run in seconds.
+            slice_seconds = max(0.05, float(_LANE_WAIT_WARN))
+            try:
+                handle = manager.acquire_lane(
+                    pool_key, task._cache_key, task.priority,
+                    arrived=task._lane_arrived, timeout=slice_seconds,
+                    label=task.task_type)
+                break
+            except LaneTimeout:
+                waited += slice_seconds
+                logger.error(
+                    "[%s] %s (%s) waits %.0fs for a lane on %s — looking for "
+                    "stale chat registrations",
+                    self._queue_name, task.agent_name or "?", task._cache_key,
+                    waited, pool_key)
+                # The one cleanup that can free this lane again. It runs here
+                # because this path is reached on EVERY provider, whereas the
+                # worker's chat-pause wait only runs where a serialize group
+                # is configured.
+                self._check_stale_chat()
+        task._lane_handle = handle
+        return handle
+
+    def _release_chat_lane(self, task_id: str) -> None:
+        """Gives the lane of a streaming registration back.
+
+        Keyed by task_id, not by the task object: whatever happened to the
+        _chat_tasks entry in between (popped by the stale check, never
+        inserted because the caller was cancelled), the handle stays reachable
+        and is released exactly once — release() itself is idempotent.
+        Callers hold ``self._lock``; the lane manager never takes it back, so
+        the order stays one-way.
+        """
+        handle = self._chat_lanes.pop(task_id, None)
+        if handle is not None:
+            handle.release()
+
     def _release_serialize_gate_if_held(self) -> None:
         """Releases the serialize-group gate if this channel holds it because of
         active chats. Idempotent (double-release safe via flag under lock)."""
@@ -524,6 +624,7 @@ class ProviderQueue:
         """Chat/story finished. Resumes queue only when ALL chats are done."""
         with self._lock:
             task = self._chat_tasks.pop(task_id, None)
+            self._release_chat_lane(task_id)
             if task:
                 task.status = "completed"
                 task.duration_s = 0
@@ -598,24 +699,48 @@ class ProviderQueue:
             "available": self.provider.available,
             "max_concurrent": self._max_concurrent,
             "serialize_group": self.serialize_group,
-            "reserve_chat_slot": self.reserve_chat_slot,
             "chat_active": chat,
             "current_tasks": current,
             "pending": pending,
             "recent": recent,
         }
 
+    def _worker_count(self) -> int:
+        """How many worker threads this channel runs.
+
+        A worker holds at most one lane, so fewer threads than the channel's
+        LLM entries have lanes would cap the parallelism below what the
+        entries allow. An image-backend channel has no LLM entries and keeps
+        its permit count.
+        """
+        try:
+            from app.core.llm_lanes import configured_lane_total
+            lanes = configured_lane_total(self.provider.name)
+        except Exception:
+            lanes = 0
+        return max(1, self._max_concurrent, lanes)
+
     def _ensure_workers(self) -> None:
-        """Starts worker threads if not already running."""
+        """Brings the worker threads up to ``_worker_count()``.
+
+        Tops up while the queue is already running, instead of only starting
+        a fresh set when it was idle: the count follows the lane totals of the
+        config, so raising the lanes of an LLM entry in the admin used to have
+        no effect until the queue happened to fall idle — on a busy provider
+        that is exactly when it never happens.
+
+        Threads that ended are dropped first: a worker leaves the list itself
+        when it goes idle, but one that died on an unexpected exception would
+        otherwise count forever and block the top-up.
+        """
         with self._lock:
-            if self._running:
-                return
+            self._workers = [w for w in self._workers if w.is_alive()]
             self._running = True
-            for i in range(self._max_concurrent):
+            for _ in range(self._worker_count() - len(self._workers)):
                 t = threading.Thread(
                     target=self._worker_loop,
                     daemon=True,
-                    name=f"ProviderQueue-{self._queue_name}-{i}")
+                    name=f"ProviderQueue-{self._queue_name}-{len(self._workers)}")
                 self._workers.append(t)
                 t.start()
 
@@ -653,6 +778,7 @@ class ProviderQueue:
 
             for tid in stale_ids:
                 task = self._chat_tasks.pop(tid)
+                self._release_chat_lane(tid)
                 task.status = "completed"
                 self._history.append(task)
                 cleaned.append((task.agent_name, tid))
@@ -671,38 +797,109 @@ class ProviderQueue:
             self._release_serialize_gate_if_held()  # stale chat gone -> release gate
             logger.info("[%s] Queue fortgesetzt (alle stale Chats bereinigt)", self._queue_name)
 
-    def _chat_reservation_active(self) -> bool:
-        """Reserved chat slot applies only with real concurrency — with one
-        slot the reservation would starve background work entirely."""
-        return self.reserve_chat_slot and self._max_concurrent > 1
+    def _acquire_lane(self, task: LLMTask) -> bool:
+        """Tries ONCE to take a cache lane for a queued LLM task. Never blocks.
 
-    def _notify_chat_submit(self, priority: int) -> None:
-        """Wake workers parked in the background-cap wait when a chat call
-        arrives, so it is picked up immediately instead of after the 1s
-        poll timeout."""
-        if self._chat_reservation_active() and priority <= Priority.CHAT:
-            with self._bg_cond:
-                self._bg_cond.notify_all()
+        The pool is provider/model of the task, the key its prompt beginning
+        (task class + character). Two things must not happen here, which is
+        why this does not wait:
 
-    def _release_bg_slot(self, held: bool) -> None:
-        """Counterpart to the _bg_running increment in _worker_loop — must
-        mirror every semaphore-release path exactly."""
-        if held:
-            with self._bg_cond:
-                self._bg_running -= 1
-                self._bg_cond.notify_all()
+        * A queued task must never run WITHOUT a lane — that is unbounded
+          parallelism on a model whose whole point is that only N prompt
+          beginnings exist at a time.
+        * A worker must never park on a full pool. Workers belong to the
+          PROVIDER, lanes to the MODEL: a worker waiting for one model's pool
+          would starve every other model of the same provider.
+
+        No lane free -> False, and the caller puts the task back unchanged.
+        The arrival stamp is taken on the FIRST attempt and kept on the task,
+        so a task that is re-queued a few times still ages from when it really
+        arrived (what R2/R3 will read in phase 2).
+        """
+        from app.core.llm_lanes import (
+            LaneTimeout, cache_key_for, get_lane_manager, pool_key_for,
+        )
+        pool_key = pool_key_for(task.provider_name or self.provider.name,
+                                task.model)
+        task._cache_key = cache_key_for(task.task_type, task.agent_name)
+        manager = get_lane_manager()
+        # Live config: an admin save changes the lane count without a restart.
+        manager.sync_from_config(pool_key)
+        if not task._lane_arrived:
+            task._lane_arrived = manager.now()
+        try:
+            task._lane_handle = manager.acquire_lane(
+                pool_key, task._cache_key, task.priority,
+                timeout=0, arrived=task._lane_arrived, label=task.task_type)
+            return True
+        except LaneTimeout:
+            task._lane_handle = None
+            return False
+
+    def _release_slot(self, task: LLMTask) -> None:
+        """Gives back what _worker_loop took for this task — a permit for a
+        GPU task, a lane for an LLM task. Mirrors every release path."""
+        if task._gpu_callable is not None:
+            self._semaphore.release()
+            return
+        handle = task._lane_handle
+        if handle is not None:
+            handle.release()
+            task._lane_handle = None
+
+    def _requeue(self, prio: int, seq: int, task: LLMTask) -> None:
+        """Puts a popped task back UNCHANGED — same priority, same sequence
+        number, so the queue order is exactly what it was — and balances the
+        get() with a task_done()."""
+        self._queue.put((prio, seq, task))
+        self._queue.task_done()
+
+    def _flush_deferred(self, deferred: List[Tuple[int, int, LLMTask]]) -> None:
+        """Puts back every task of this pass that found no free lane.
+
+        Unchanged, and each with the ``task_done()`` its ``get()`` owes the
+        queue. A deferred task is invisible to the other workers while the
+        list holds it, so this runs BEFORE anything long starts — a task must
+        never wait out a call it has nothing to do with.
+        """
+        while deferred:
+            prio, seq, task = deferred.pop()
+            self._requeue(prio, seq, task)
 
     def _worker_loop(self) -> None:
         """Processes LLM tasks. Pauses when chat is active on this provider."""
+        # Tasks of this pass whose pool had no free lane. They are held HERE
+        # rather than put straight back: the queue orders by (priority,
+        # sequence), so a task put back would be the very next one popped and
+        # the worker would never get past it to a task of another pool.
+        deferred: List[Tuple[int, int, LLMTask]] = []
         while True:
             # Wait until chat is not active on this provider (with stale check)
             if self._chat_pause_enabled:
+                if deferred and not self._chat_active.is_set():
+                    # About to park for a chat: held-back tasks belong in the
+                    # queue, not in a parked worker.
+                    self._flush_deferred(deferred)
                 while not self._chat_active.wait(timeout=30):
                     self._check_stale_chat()
 
             try:
-                prio, seq, task = self._queue.get(timeout=5.0)
+                if deferred:
+                    # Holding tasks back, so never park on the queue: those
+                    # tasks are invisible to the other workers while this list
+                    # owns them, and a 5-s block would hide them for 5 s. An
+                    # empty queue lands in the Empty branch below, which puts
+                    # them back at once.
+                    prio, seq, task = self._queue.get_nowait()
+                else:
+                    prio, seq, task = self._queue.get(timeout=5.0)
             except queue.Empty:
+                if deferred:
+                    # Another worker emptied the queue while we were holding
+                    # tasks back. They belong to the queue, not to a worker
+                    # that is about to go idle.
+                    self._flush_deferred(deferred)
+                    continue
                 with self._lock:
                     if self._queue.empty():
                         self._running = False
@@ -720,34 +917,46 @@ class ProviderQueue:
                 self._queue.task_done()
                 continue
 
-            # Reserved chat slot: background tasks use at most N-1 of the N
-            # slots. At the cap, put the task back UNCHANGED (same
-            # priority/seq — ordering stays stable) and wait briefly for a
-            # slot or a chat submit; the next get() pops a chat task first
-            # if one arrived. Chat tasks (priority <= CHAT) pass untouched.
-            bg_slot_held = False
-            if self._chat_reservation_active() and task.priority > Priority.CHAT:
-                with self._bg_cond:
-                    if self._bg_running >= self._max_concurrent - 1:
-                        self._queue.put((prio, seq, task))
-                        self._queue.task_done()
-                        self._bg_cond.wait(timeout=1.0)
-                        continue
-                    self._bg_running += 1
-                    bg_slot_held = True
+            # Occupy the execution slot: a GPU task takes one of the
+            # channel's permits (the backend is the limit there), an LLM task
+            # takes a CACHE LANE of its provider/model pool — that is where
+            # LLM concurrency is decided now.
+            if task._gpu_callable is not None:
+                # The permit wait can be long; do not hold other tasks for it.
+                self._flush_deferred(deferred)
+                self._semaphore.acquire()
+            elif not self._acquire_lane(task):
+                # The pool of THIS task is full. Hold it back and carry on
+                # with the next task: lanes belong to the MODEL, workers to
+                # the PROVIDER, so another model of the same provider may well
+                # have a free lane — waiting here would starve it for a pool
+                # that is not even its own.
+                deferred.append((prio, seq, task))
+                if self._queue.empty():
+                    # A whole pass over the queue without a single runnable
+                    # task: put everything back and wait a moment, instead of
+                    # spinning on the same head over and over.
+                    self._flush_deferred(deferred)
+                    time.sleep(_LANE_RETRY_SLEEP)
+                continue
+            # A slot in hand: hand the held tasks back BEFORE anything long
+            # starts (see _flush_deferred).
+            self._flush_deferred(deferred)
 
-            # Acquire semaphore (limits concurrency)
-            self._semaphore.acquire()
+            # A chat that registered while we were taking the slot: give the
+            # slot back and re-queue UNCHANGED (same priority/seq, so the
+            # order stays stable) instead of waiting with it in hand. A
+            # streaming registration wants a lane of the same pool, so waiting
+            # here would block exactly the chat we are waiting for. The next
+            # pass parks at the top of the loop, without a slot.
+            if self._chat_pause_enabled and not self._chat_active.is_set():
+                self._release_slot(task)
+                self._requeue(prio, seq, task)
+                continue
 
-            # Re-check chat pause after acquiring semaphore
-            if self._chat_pause_enabled:
-                while not self._chat_active.wait(timeout=30):
-                    self._check_stale_chat()
-
-            # Re-check cancelled after wait
+            # Re-check cancelled after taking the slot
             if task._cancelled:
-                self._semaphore.release()
-                self._release_bg_slot(bg_slot_held)
+                self._release_slot(task)
                 self._queue.task_done()
                 continue
 
@@ -757,10 +966,18 @@ class ProviderQueue:
             # busy. None = no gate (default).
             if self._serialize_gate is not None:
                 self._serialize_gate.acquire()
+                # The gate can hold us for minutes (an image generation on the
+                # same GPU) — and we are holding a lane the whole time. A chat
+                # that registered meanwhile wants a lane of this very pool, so
+                # give both back and re-queue, exactly as above the gate.
+                if self._chat_pause_enabled and not self._chat_active.is_set():
+                    self._serialize_gate.release()
+                    self._release_slot(task)
+                    self._requeue(prio, seq, task)
+                    continue
 
             with self._lock:
                 self._current_tasks.append(task)
-                self._tasks_idle.clear()
             task.status = "running"
             task.started_at = utc_now_iso()
             _attach_duration_estimate(task)
@@ -820,8 +1037,6 @@ class ProviderQueue:
                             with self._lock:
                                 if task in self._current_tasks:
                                     self._current_tasks.remove(task)
-                                if not self._current_tasks:
-                                    self._tasks_idle.set()
                                 self._seq_counter += 1
                                 seq = self._seq_counter
                                 self._pending_tasks.append(task)
@@ -829,8 +1044,7 @@ class ProviderQueue:
                             self._queue.put((task.priority, seq, task))
                             if self._serialize_gate is not None:
                                 self._serialize_gate.release()
-                            self._semaphore.release()
-                            self._release_bg_slot(bg_slot_held)
+                            self._release_slot(task)
                             self._queue.task_done()
                             continue  # Skip normal cleanup — task is re-queued
                         else:
@@ -943,8 +1157,6 @@ class ProviderQueue:
             with self._lock:
                 if task in self._current_tasks:
                     self._current_tasks.remove(task)
-                if not self._current_tasks:
-                    self._tasks_idle.set()
                 self._history.append(task)
                 if len(self._history) > self._history_limit:
                     self._history = self._history[-self._history_limit:]
@@ -956,13 +1168,11 @@ class ProviderQueue:
             # Unblock caller
             task._done_event.set()
 
-            # Release the serialize gate (before the semaphore, reverse acquire order)
+            # Release the serialize gate (before the slot, reverse acquire order)
             if self._serialize_gate is not None:
                 self._serialize_gate.release()
 
-            # Release semaphore
-            self._semaphore.release()
-            self._release_bg_slot(bg_slot_held)
+            self._release_slot(task)
 
             self._queue.task_done()
 
@@ -1074,6 +1284,9 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
             trace_id=getattr(task, "trace_id", "") or "",
             trace_kind=getattr(task, "trace_kind", "") or "",
             finish_reason=getattr(response, "finish_reason", None) or "",
+            lane=(task._lane_handle.lane_id
+                  if task._lane_handle is not None else None),
+            cache_key=getattr(task, "_cache_key", "") or "",
             llm=task._llm,
             error=error)
     except Exception as e:
