@@ -32,6 +32,12 @@
      inbox_block            — unread messages from any sender
      events_block           — acute events at location
      commitments_block      — open promises
+     skill_context_blocks   — self-contained sections contributed by the
+                              character's active skills (e.g. "Places you can
+                              go"). The SAME block agent_thought.md renders:
+                              without it a character in a chat does not know
+                              where it could go, and the only two thought
+                              prompts of this world disagree about that.
      tools_hint             — tool-format hint
      lang_instruction       — which language this character speaks
 #}
@@ -113,6 +119,10 @@ happened. Do not reuse a sentence, a phrase or an image from these lines.
 
 === Open promises ===
 {{ commitments_block }}
+{% endif %}
+{% if skill_context_blocks %}
+
+{{ skill_context_blocks }}
 {% endif %}
 {% if tools_hint %}
 
