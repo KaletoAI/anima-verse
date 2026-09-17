@@ -65,6 +65,19 @@ class PartySkill(PluginSkill):
             return party is not None
         return True
 
+    def thought_context_block(self, character_name: str) -> str:
+        """The party section — emitted by the LEAVE verb only.
+
+        All three verbs live in this one class, so a naive block would reach
+        the prompt up to three times. ``leave`` is the verb whose visibility
+        is exactly "this character is in a party" (see visible_for above),
+        which makes it the one place the section belongs.
+        """
+        if self._verb != "leave":
+            return ""
+        from plugins.party.blocks import party_section
+        return party_section(character_name)
+
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
             return f"{self.name} is disabled."
