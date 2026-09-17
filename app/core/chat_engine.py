@@ -122,7 +122,7 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
                                        get_character_current_location,
                                        get_character_language_instruction)
     from app.models.character_template import is_roleplay_character
-    from app.models.world import list_locations
+    from app.models.world import list_locations_for_character
     from app.models.account import get_active_character
 
     sm = get_skill_manager()
@@ -134,7 +134,9 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
     names = [t.name for t in agent_tools]
 
     loc_id = get_character_current_location(character_name) or ""
-    loc_list = ", ".join(l.get("name", "") for l in list_locations() if l.get("name"))
+    loc_list = ", ".join(l.get("name", "")
+                         for l in list_locations_for_character(character_name)
+                         if l.get("name"))
     act_list = ""
     if loc_id:
         try:

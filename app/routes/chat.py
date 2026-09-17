@@ -38,7 +38,8 @@ from app.models.character import (
     is_character_sleeping,
     list_available_characters,
     get_character_images_dir)
-from app.models.world import get_location, get_room_by_id, list_locations, get_location_name, resolve_location
+from app.models.world import (get_location, get_room_by_id, get_location_name,
+                              list_locations_for_character, resolve_location)
 from app.models.character_template import (
     resolve_profile_tokens, get_template, build_prompt_section)
 from app.models.chat import get_chat_history, save_message
@@ -1155,7 +1156,9 @@ async def chat(request: Request) -> StreamingResponse:
         # tool LLM must be able to guess which location/activity is meant
         # when the RP LLM forgot to say)
         _tool_loc_id = get_character_current_location(current_agent)
-        _tool_loc_list = ", ".join(l.get("name", "") for l in list_locations() if l.get("name"))
+        _tool_loc_list = ", ".join(
+            l.get("name", "") for l in list_locations_for_character(current_agent)
+            if l.get("name"))
         _tool_act_list = _current_activity_hint(current_agent, _tool_loc_id)
         # Current outfit of both conversation partners for ChangeOutfit context
         from app.models.account import get_active_character
@@ -2558,9 +2561,14 @@ def _build_chat_prompt(character_name: str,
     # ---- Location / activity change instructions ----------------------
     known_locations = ""
     if current_location_id and _has("locations_enabled"):
-        location_names = [loc.get("name", "") for loc in list_locations()]
+        # The places this character may know (knowledge items), not every place
+        # in the world: the movement package's "Places you can go" is gated the
+        # same way (plugins/movement/blocks.py), and a chat prompt that names
+        # more would teach a destination the travel gate then refuses.
+        location_names = [loc.get("name", "")
+                          for loc in list_locations_for_character(character_name)]
         if location_names:
-            known_locations = ", ".join(location_names)
+            known_locations = ", ".join(n for n in location_names if n)
 
     # The marker RULE is stable (system prompt); the place offer it points at
     # follows the room's occupancy and goes to the scene state.

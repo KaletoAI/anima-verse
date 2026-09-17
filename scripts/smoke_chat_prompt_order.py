@@ -66,6 +66,14 @@ on the last user turn, BEHIND the history. Derived expectations:
     clock ("Uhrzeit") only after it — a clock in front of the tool block cost
     123 of 297 measured pairs their whole cacheable prefix (~96 tokens left).
 
+[9] The chat path never names a place the character may not know. Both files
+    that build a chat prompt (app/routes/chat.py, app/core/chat_engine.py) use
+    ``list_locations_for_character`` only — a bare ``list_locations(`` there
+    would put the whole world into "Known locations", while the movement
+    package's "Places you can go" (plugins/movement/blocks.py) stays gated by
+    the character's knowledge items. Two lists, one prompt, is how a character
+    ends up naming a destination the travel gate then refuses.
+
 [7] build_prompt_section(volatile=...) with four fields in template order
         a: plain                                   -> stable
         b: prompt_volatile true                    -> volatile
@@ -248,6 +256,16 @@ check("[8] thought tool prompt: all three parts found",
       [x >= 0 for x in (task_at, tools_at, clock_at)], [True, True, True])
 check("[8] standing task before the tool block", task_at < tools_at, True)
 check("[8] clock behind the tool block", clock_at > tools_at, True)
+
+# [9]
+import re  # noqa: E402
+
+for path in ("app/routes/chat.py", "app/core/chat_engine.py"):
+    src = (ROOT / path).read_text()
+    check(f"[9] {path} asks only for the character's places",
+          len(re.findall(r"\blist_locations\(", src)), 0)
+    check(f"[9] {path} uses the gated list",
+          "list_locations_for_character(" in src, True)
 
 print(f"\n{'FAILED: ' + str(len(FAILURES)) if FAILURES else 'all checks passed'}")
 sys.exit(1 if FAILURES else 0)
