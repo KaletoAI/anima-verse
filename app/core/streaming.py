@@ -317,6 +317,9 @@ def tool_decision_guardrails(tools: Dict[str, Any],
             f"SETS a state the character ends the turn in, so contradicting calls cancel each "
             f"other out — decide on the final state and call it exactly once.")
     if with_markers:
+        # Only where the marker may still travel — the caller decides that
+        # (streaming: routes/chat._marker_travel_refusal). Naming a marker a
+        # character may not use is how it ends up writing one anyway.
         lines.append(
             "  - At most ONE **I am at ...** marker per answer, for the destination the "
             "character actually reaches.")
@@ -1050,8 +1053,19 @@ class StreamingAgent:
             self.tools_dict,
             suppress_in_person=self.suppress_move_in_conversation)
         _action_lines = action_mapping_lines(_tools)
+        # Who may move how — asked ONCE, from the same rule the server applies
+        # when it reads the answer (routes/chat._marker_travel_refusal). The
+        # tool LLM used to be told to emit **I am at ...** for everyone, and
+        # the server threw those markers away again for whoever owns the verb.
+        # "" = the marker still travels for this character.
+        try:
+            from app.routes.chat import _marker_travel_refusal
+            _move_refusal = _marker_travel_refusal(self.agent_name)
+        except Exception:
+            _move_refusal = "has_movement_verb" if "SetLocation" in (_tools or {}) else ""
         _guardrails = tool_decision_guardrails(
-            _tools, with_markers=not self.constrained_tools)
+            _tools,
+            with_markers=(not self.constrained_tools) and not _move_refusal)
         if self.constrained_tools:
             return (
                 f"The user said: {user_input}\n\n"
@@ -1074,6 +1088,37 @@ class StreamingAgent:
         # character's own speech verbs (speech_turn_note), so it disappears
         # when the character has none.
         _speech_note = speech_turn_note(_tools, _is_thought)
+        # The place marker is a DEAD END for a character that has SetLocation:
+        # the server refuses a narrative place change from whoever owns the
+        # verb (routes/chat._marker_travel_refusal), because the verb is the
+        # one way — as a timed journey over the map, not a jump. Asking the
+        # tool LLM for the marker there produced markers that were thrown
+        # away, while the move never happened.
+        if not _move_refusal:
+            _location_marker_rule = (
+                "     - Place marker: ONLY emit **I am at <room or place>** when the RP text "
+                "EXPLICITLY describes the character physically setting off (verbs like 'I walk "
+                "to', 'ich gehe in', 'arriving at'). A room of the current place is reached at "
+                "once; a place from the Known locations list starts a walk. Do NOT emit it when "
+                "the character simply STAYS where it is — even if props, furniture or scene "
+                "details suggest another place. If in doubt: do NOT emit it.\n")
+            _location_example = (
+                "     RP says 'I walk to the kitchen' without '**I am at ...**' → "
+                "EMIT **I am at Küche**\n")
+        elif "SetLocation" in (_tools or {}):
+            _location_marker_rule = (
+                "     - Place: the character has SetLocation. When the RP text describes "
+                "physically setting off for another place, CALL THAT TOOL (step 1) — never "
+                "emit **I am at ...**; the marker is refused for this character. Staying "
+                "put is not a move: props or scenery naming another place mean nothing.\n")
+            _location_example = (
+                "     RP says 'I walk to the kitchen' → call SetLocation, no marker\n")
+        else:
+            # Neither way is open (a party follower is carried by its leader,
+            # an avatar travels over its own route). Saying nothing beats
+            # teaching a way that is closed.
+            _location_marker_rule = ""
+            _location_example = ""
         if _is_thought:
             _pure_talk_rule = (
                 "   BUT a feeling or a trivial gesture alone (shaking their head, smiling, "
@@ -1131,18 +1176,13 @@ class StreamingAgent:
             f"     - Emotion clearly shown in RP AND no '**I feel <X>**' in RP → EMIT **I feel <emotion>**\n"
             f"     - New activity clearly started AND no '**I do ...**' marker in RP → "
             f"EMIT **I do <pose key>: <what you do, 2-6 words>**\n"
-            f"     - Location marker: ONLY emit **I am at <location>** when the RP text EXPLICITLY "
-            f"describes the character PHYSICALLY MOVING to a NEW location (verbs like 'I walk to', "
-            f"'ich gehe in', 'arriving at', 'ankommen in'). Do NOT emit it when the character simply "
-            f"STAYS at their current location — even if props, furniture, or scene details suggest "
-            f"another place. If in doubt: do NOT emit the location marker. Props on a stage do not "
-            f"mean the location changed.\n"
+            f"{_location_marker_rule}"
             f"   Examples (study carefully):\n"
             f"     RP ends with 'Ich fuehle mich... gluecklich.' (no asterisks) → EMIT **I feel gluecklich**\n"
             f"     RP ends with 'I feel manipulative.' (no asterisks) → EMIT **I feel manipulative**\n"
             f"     RP ends with '**I feel happy**' (has asterisks) → do NOT emit (already present)\n"
-            f"     RP mentions 'sits on a chair' without walking/moving → do NOT emit any location marker\n"
-            f"     RP says 'I walk to the kitchen' without '**I am at ...**' → EMIT **I am at Küche**\n"
+            f"     RP mentions 'sits on a chair' without walking/moving → do NOT emit any place marker\n"
+            f"{_location_example}"
             f"   Use the SAME language as the character's RP response (German → German word, English → English).\n"
             f"   For a location: match the EXACT name from the Known locations list in your system prompt. "
             f"The pose key is one of the keys listed after a place (or under 'Anywhere here') in the "

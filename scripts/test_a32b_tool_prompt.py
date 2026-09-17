@@ -158,9 +158,14 @@ for name, text in ALL_PROMPTS.items():
     check(f"{name}: at-most-one singleton rule", "At most ONE call per answer" in text)
     check(f"{name}: singleton list names SetLocation",
           "ChangeOutfit, SetLocation" in text)
+# Since 2026-09-18 the place marker is named only where it may still travel
+# (routes/chat._marker_travel_refusal). The fixture owns SetLocation, so the
+# streaming paths must NOT name it any more. The chat_engine builder gets no
+# character and therefore cannot ask — it still carries the line; that gap is
+# noted in plan-bewegung-party-prompts.md.
 for name, text in ALL_PROMPTS.items():
     has = "At most ONE **I am at ...** marker" in text
-    want = name != "streaming/constrained"
+    want = name.startswith("chat_engine")
     check(f"{name}: single-**I am at**-marker rule {'present' if want else 'absent'}",
           has == want)
 
@@ -250,6 +255,42 @@ check("streaming/in-person keeps the other 5 tools",
       all(f"→ {n}" in _ip_stream for n in
           ["ChangeOutfit", "TakePhoto", "JoinParty", "TalkTo", "SendMessage"]))
 check("not-in-person is unchanged", "→ SetLocation" in streaming_prompt(LEADER))
+
+# ---------------------------------------------------------------------------
+# 9) The place rule follows the SERVER's rule, not the tool list alone
+# ---------------------------------------------------------------------------
+# Derived by hand from routes/chat._marker_travel_refusal (2026-09-18): the
+# **I am at ...** marker travels only for a character that has no movement
+# verb, is no party follower and is no avatar. So the tool LLM must be told
+#   - "call SetLocation, never the marker"  when the character owns the verb,
+#   - the marker rule                        when it owns nothing else,
+#   - nothing about moving at all            when neither way is open.
+# The three cases are driven by the refusal, because that is what the server
+# will answer — the tool list alone cannot tell a follower from a character
+# that simply owns nothing (both have no SetLocation).
+print("\n9) Place rule: tool call vs. marker")
+import app.routes.chat as _chat_mod  # noqa: E402
+
+_real_refusal = _chat_mod._marker_travel_refusal
+try:
+    _chat_mod._marker_travel_refusal = lambda name: "has_movement_verb"
+    _lead = streaming_prompt(LEADER)
+    _chat_mod._marker_travel_refusal = lambda name: ""
+    _free = streaming_prompt(MUTE)
+    _chat_mod._marker_travel_refusal = lambda name: "party_follower"
+    _foll = streaming_prompt(MUTE)
+finally:
+    _chat_mod._marker_travel_refusal = _real_refusal
+
+check("owner of the verb is sent to the tool", "CALL THAT TOOL" in _lead)
+check("owner of the verb is not ASKED for the marker",
+      "emit **I am at <room or place>**" not in _lead)
+check("a character with no other way keeps the marker",
+      "emit **I am at <room or place>**" in _free)
+check("...and is told a place is a walk", "starts a walk" in _free)
+check("...and is not sent to a tool it does not have", "CALL THAT TOOL" not in _free)
+check("a follower is taught neither way",
+      "CALL THAT TOOL" not in _foll and "**I am at" not in _foll)
 
 print(f"\n{len(RESULTS)} checks run.")
 print("\n" + ("ALL CHECKS PASSED" if not FAILS
