@@ -12,6 +12,7 @@ Usage:
 """
 import os
 import threading
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 from .provider import Provider
@@ -318,9 +319,45 @@ class ProviderManager:
         """Returns the best LLM channel for a named provider."""
         return self._find_channel_for_provider(provider_name)
 
+    def provider_name_for(self, llm: Any) -> str:
+        """The provider a resolved LLM belongs to — the ONE place that answers
+        it, for an ``LLMInstance`` and for a bare ``LLMClient`` alike.
+
+        An ``LLMInstance`` carries ``provider_name``, and so does every client
+        ``LLMInstance.create_llm()`` hands out — the router stamps it there,
+        because a client knows only its endpoint and its provider is the one
+        thing it cannot work out for itself.
+
+        The endpoint match below is therefore the FALLBACK, for an object that
+        did not come from the router. Its limit is in its nature: it returns
+        the FIRST provider that uses that base URL, and several providers on
+        one AI-Hub URL (one per alias or key) are indistinguishable by
+        endpoint — nothing in the object says which of them it was built from.
+        That is the reason the stamp exists rather than a smarter match. The
+        lane pool a call lands on is derived from this name, so the answer has
+        to come from ONE place, which is this one. Returns "" when nothing
+        matches.
+        """
+        name = (getattr(llm, "provider_name", "") or "").strip()
+        if name:
+            return name
+        api_base = (getattr(llm, "openai_api_base", "")
+                    or getattr(llm, "base_url", "")
+                    or "").strip().rstrip("/")
+        if not api_base:
+            return ""
+        for provider_name, provider in self.providers.items():
+            if (provider.api_base or "").rstrip("/") == api_base:
+                return provider_name
+        return ""
+
     def get_queue_for_instance(self, instance: Any) -> Optional[ProviderQueue]:
-        """Returns the channel for the provider that an LLM instance belongs to."""
-        provider_name = getattr(instance, "provider_name", "")
+        """Returns the channel for the provider that an LLM instance belongs to.
+
+        Resolves through ``provider_name_for``, so a bare ``LLMClient`` finds
+        its channel by endpoint instead of falling through to the first one.
+        """
+        provider_name = self.provider_name_for(instance)
         if provider_name:
             return self._find_channel_for_provider(provider_name)
         return None
@@ -407,6 +444,114 @@ class ProviderManager:
             return ((handle.lane_id if handle is not None else None),
                     getattr(task, "_cache_key", "") or "")
         return (None, "")
+
+    @contextmanager
+    def nested_call_lane(self, chat_task_id: str, llm_instance: Any,
+                         cache_key: str, label: str = ""):
+        """A lane for an LLM call made from INSIDE a running chat turn
+        (plan-cache-lanes.md § 6, item 7a — R6 is its precondition).
+
+        The rp_first tool decision calls its LLM directly, past the queue. On
+        a one-model host that is a second prompt beginning on exactly the pool
+        whose cache the turn is building, so it needs a lane of its own.
+
+        WHICH POOL IT LANDS ON DECIDES EVERYTHING, so it is resolved FIRST —
+        and it is resolved from the LLM this call really uses. That is an
+        ``LLMClient`` (``StreamingAgent.tool_llm``), which carries the
+        provider name the router stamped on it; ``provider_name_for`` reads
+        that name, and falls back to the endpoint for anything the router did
+        not build. Taking the first channel instead — what a missing name used
+        to fall through to — would put every nested call on a channel that, in
+        a world with more than one provider, serves neither the tool alias nor
+        the chat model: the same-pool test below would be answered against a
+        phantom and the suspend would never happen.
+
+        No channel at all for that endpoint = **unknown pool**. The lane is
+        still taken (on the fallback channel, because something has to run the
+        wait), but under a pool key that names no provider: naming the
+        fallback channel would invent a ``provider/model`` pair no channel
+        serves and show it to the admin in ``snapshot()``. An unknown pool is
+        never "the same pool", so nothing is suspended either.
+
+        The two real cases:
+
+        * **Another pool** (the normal topology — the chat model is
+          `for-her-darkside-12b`, the tool alias is `tool`, different hosts):
+          the turn KEEPS its lane and the nested call takes one over there.
+          Suspending here would be pure loss — the conversation's lane goes to
+          whoever is waiting on that pool, its cache is evicted, and the turn
+          then waits for that stranger to finish. Nothing is won: the two
+          calls do not share a pool and never contend.
+        * **The same pool**: R6, in this order —
+            1. the chat registration hands its lane back — without this a
+               one-lane pool would wait for itself,
+            2. the nested call takes a lane for ITS key, carrying the turn's
+               lane id (R1's first step then hands that very lane back to it —
+               anything else stalls a 2-lane pool whose other lane is busy, or
+               evicts the second conversation) and the turn's arrival stamp
+               (or the call would be the youngest waiter at every suspend and
+               lose every pass),
+            3. it gives that lane back,
+            4. the registration takes a lane again, with the same two values —
+               and only then does the turn go on.
+          Step 4 waits: whoever took the lane in between now holds it. That is
+          the same trade the tool executor in routes/chat.py has always made
+          with the queue, and it is the point — on one pool the nested prompt
+          does not run next to the conversation, it runs instead of it, for
+          its duration.
+
+        **The nested call inherits the OWNER's lane priority**, exactly as the
+        resume does. A fixed ``Priority.CHAT`` would let a THOUGHT turn's tool
+        call ignore R3 and rank level with — in R2 even ahead of — a user's
+        parked conversation, which is the one thing the lane priority exists
+        to keep apart (``llm_lanes.lane_priority_for``). Nothing stalls by
+        inheriting: R1's first step gives the call its own lane back at once,
+        whatever its class. Without an owner (no registration found) it is an
+        ordinary background call, ``Priority.NORMAL``.
+        """
+        from .llm_lanes import pool_key_for
+        from .llm_queue import Priority
+
+        model = getattr(llm_instance, "model", "") or ""
+        target = self.get_queue_for_instance(llm_instance)
+        if target is not None:
+            pool_key = pool_key_for(target.provider.name, model)
+        else:
+            logger.debug(
+                "nested call for %r: no channel serves %r — running it as an "
+                "unknown pool (no suspend)", cache_key,
+                getattr(llm_instance, "openai_api_base", "")
+                or getattr(llm_instance, "base_url", "") or "?")
+            # No provider name goes into the key: "?/model" is visibly not a
+            # pool any channel serves, and it can never equal the owner's.
+            pool_key = pool_key_for("", model)
+            target = self.get_first_queue()
+
+        owner = None
+        if chat_task_id:
+            for pq in self.channels.values():
+                if chat_task_id in pq._chat_tasks:
+                    owner = pq
+                    break
+        owner_pool, owner_priority = ("", int(Priority.NORMAL))
+        if owner is not None:
+            owner_pool, owner_priority = owner.chat_lane_context(chat_task_id)
+        same_pool = bool(owner_pool) and owner_pool == pool_key
+        suspended = owner.suspend_chat_lane(chat_task_id) if same_pool else None
+        own_lane, arrived = suspended if suspended else (None, None)
+        handle = None
+        try:
+            if target is not None:
+                handle = target.acquire_nested_lane(
+                    pool_key, cache_key, owner_priority, label=label,
+                    arrived=arrived, own_lane=own_lane)
+            yield handle
+        finally:
+            if handle is not None:
+                handle.release()
+            if suspended is not None and owner is not None:
+                owner.resume_chat_lane(chat_task_id, own_lane=own_lane,
+                                       arrived=arrived)
 
     def register_chat_iteration(self, task_id: str,
                                  iteration: int, max_iterations: int) -> None:

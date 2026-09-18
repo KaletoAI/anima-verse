@@ -100,6 +100,13 @@ class LLMTask:
     # logger, which runs in the worker thread.
     _lane_handle: Any = field(default=None, repr=False)
     _cache_key: str = field(default="", repr=False)
+    # The priority this call carries IN THE LANES. Not the same thing as
+    # `priority`: that one pauses the provider queue and is what the admin
+    # panel shows, and every streaming registration sets it to CHAT — thought
+    # turns included. For the lanes a thought is background work, so the lane
+    # priority follows the prompt class instead (llm_lanes.lane_priority_for).
+    # Set in ProviderQueue._acquire_chat_lane; queued tasks use `priority`.
+    _lane_priority: int = field(default=int(Priority.NORMAL), repr=False)
     # When this call FIRST asked for a lane, on the lane manager's clock. A
     # queued task asks again on every pass of the worker; the stamp stays at
     # the first attempt so the call really ages while it waits (what the lane
@@ -285,6 +292,21 @@ class LLMQueue:
         pm = get_provider_manager()
         pm.register_chat_done(task_id)
 
+    def nested_call_lane(self, chat_task_id: str, llm_instance: Any,
+                         cache_key: str, label: str = ""):
+        """Context manager for an LLM call made from inside a running chat
+        turn — the rp_first tool decision (plan-cache-lanes.md item 7a).
+
+        Blocks: call it from a worker thread (``asyncio.to_thread``), never on
+        the event loop. It yields the lane handle, or None when there is no
+        channel at all to take one from — then the call runs as it did before
+        lanes existed, which is still better than dropping the turn.
+        """
+        from .provider_manager import get_provider_manager
+
+        return get_provider_manager().nested_call_lane(
+            chat_task_id, llm_instance, cache_key, label=label)
+
     def register_chat_iteration(self, task_id: str,
                                  iteration: int, max_iterations: int) -> None:
         """Update iteration count on a chat_active task.
@@ -309,30 +331,18 @@ class LLMQueue:
         return pm.get_combined_status()
 
     def _resolve_provider_name(self, llm: Any) -> Optional[str]:
-        """Resolves provider name from a LLMClient's api_base.
+        """The provider of a bare ``LLMClient``, by its endpoint.
 
-        Matches the LLMClient's api_base against all known providers.
-        Returns provider name if found, None otherwise.
+        The matching itself lives in ``ProviderManager.provider_name_for`` —
+        one place, because the lane pool a call lands on is derived from this
+        name and two answers would mean two pools for one backend.
         """
         try:
             from .provider_manager import get_provider_manager
 
-            api_base = (getattr(llm, "openai_api_base", "")
-                        or getattr(llm, "base_url", "")
-                        or "")
-            api_base = api_base.rstrip("/")
-            if not api_base:
-                return None
-
-            pm = get_provider_manager()
-            for name, provider in pm.providers.items():
-                if provider.api_base.rstrip("/") == api_base:
-                    return name
-
+            return get_provider_manager().provider_name_for(llm) or None
         except Exception:
-            pass
-
-        return None
+            return None
 
 
 # ---------------------------------------------------------------------------

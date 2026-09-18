@@ -176,6 +176,12 @@ _LANE_RETRY_SLEEP = 0.15
 # (see _acquire_chat_lane).
 _LANE_WAIT_WARN = 60
 
+# After how many slices a NESTED wait (the tool call of a running turn, and
+# the turn taking its lane back afterwards) stops being normal. Losing one
+# pass to another conversation is what the rules are for and logs WARNING;
+# waiting minutes for a lane one just gave back is not, and logs ERROR.
+_LANE_WAIT_ESCALATE_SLICES = 3
+
 
 class _Permits:
     """The concurrency slots of ONE channel, with a limit that may change
@@ -560,38 +566,204 @@ class ProviderQueue:
         really arrived.
         """
         from app.core.llm_lanes import (
-            LaneTimeout, cache_key_for, get_lane_manager, pool_key_for,
+            cache_key_for, lane_priority_for, pool_key_for,
         )
+
         pool_key = pool_key_for(self.provider.name, task.model)
         task._cache_key = cache_key_for(task.task_type, task.agent_name)
+        # The priority for the LANES follows the prompt class, not the panel:
+        # every registration here is Priority.CHAT, thought turns included, so
+        # taking that value would let the AgentLoop's thoughts ignore R3 and
+        # rank level with a user's conversation in R2. task.priority itself is
+        # untouched — it is what pauses the queue and what the panel shows.
+        task._lane_priority = lane_priority_for(task.task_type)
+        handle, arrived = self._wait_for_lane(
+            pool_key, task._cache_key, task._lane_priority, task.task_type,
+            who=task.agent_name or "?")
+        task._lane_arrived = arrived
+        task._lane_handle = handle
+        return handle
+
+    def _wait_for_lane(self, pool_key: str, cache_key: str, priority: int,
+                       label: str, who: str = "",
+                       arrived: Optional[float] = None,
+                       own_lane: Optional[int] = None,
+                       nested: bool = False) -> Tuple[Any, float]:
+        """Waits for a lane of ``pool_key`` in slices. Returns (handle, when
+        it first asked).
+
+        The slice loop is the same for the two paths that cannot be put back
+        into the queue — a streaming registration and the nested tool call of
+        an rp_first turn (R6). Between two slices the stale-chat cleanup runs,
+        the one thing that can free a lane held by a registration whose
+        ``register_chat_done`` never came; a log line per slice keeps a long
+        wait visible.
+
+        ``arrived`` hands in a stamp the CALLER already owns instead of taking
+        a fresh one: the nested call of a turn and the turn's own resume are
+        the same call still, and a fresh stamp would make each of them the
+        youngest waiter on the pool — two turns on one pool would then
+        leapfrog each other at every suspend. ``own_lane`` is the lane that
+        call handed back a moment ago; R4 does not hold it off that one.
+
+        The level of the wait line: a nested/resume wait that is merely losing
+        a pass to another conversation is normal and logs WARNING; only a wait
+        that survives several slices is the pathology the ERROR is for. A
+        registration's own wait logs ERROR from the first slice — it has no
+        second option at all.
+
+        A slice boundary drops the call out of the pool's waiting list for an
+        instant. The arrival stamp is taken ONCE and handed back in on every
+        slice, so the ordering rules (R2 ageing, R3 affinity) age it from when
+        it really arrived.
+        """
+        from app.core.llm_lanes import LaneTimeout, get_lane_manager
+
         manager = get_lane_manager()
+        # Live config: an admin save changes the lane count without a restart.
         manager.sync_from_config(pool_key)
-        task._lane_arrived = manager.now()
+        if arrived is None:
+            arrived = manager.now()
         waited = 0.0
+        slices = 0
         while True:
             # The lower bound only keeps a misconfigured 0 from
             # spinning; a check may shorten the slice to run in seconds.
             slice_seconds = max(0.05, float(_LANE_WAIT_WARN))
             try:
                 handle = manager.acquire_lane(
-                    pool_key, task._cache_key, task.priority,
-                    arrived=task._lane_arrived, timeout=slice_seconds,
-                    label=task.task_type)
-                break
+                    pool_key, cache_key, priority, arrived=arrived,
+                    own_lane=own_lane, timeout=slice_seconds, label=label)
+                return handle, arrived
             except LaneTimeout:
                 waited += slice_seconds
-                logger.error(
+                slices += 1
+                _log = (logger.warning
+                        if nested and slices < _LANE_WAIT_ESCALATE_SLICES
+                        else logger.error)
+                _log(
                     "[%s] %s (%s) waits %.0fs for a lane on %s — looking for "
                     "stale chat registrations",
-                    self._queue_name, task.agent_name or "?", task._cache_key,
-                    waited, pool_key)
+                    self._queue_name, who or "?", cache_key, waited, pool_key)
                 # The one cleanup that can free this lane again. It runs here
                 # because this path is reached on EVERY provider, whereas the
                 # worker's chat-pause wait only runs where a serialize group
                 # is configured.
                 self._check_stale_chat()
-        task._lane_handle = handle
+
+    def acquire_nested_lane(self, pool_key: str, cache_key: str,
+                            priority: int = Priority.NORMAL,
+                            label: str = "",
+                            arrived: Optional[float] = None,
+                            own_lane: Optional[int] = None) -> Any:
+        """A lane for a call this channel makes OUTSIDE the queue and outside
+        a registration — today the rp_first tool decision (plan § 6, 7a).
+
+        It is a second prompt beginning on a real pool, so it needs a lane
+        like everything else. The POOL is handed in, not derived from this
+        channel: the caller (``ProviderManager.nested_call_lane``) is the one
+        that knows which pool the nested LLM belongs to, and when no channel
+        serves it at all the call runs here under an explicitly unknown pool
+        key rather than under this channel's name. So is the PRIORITY, which
+        is the owning turn's lane priority — a thought's tool call must not
+        outrank a parked conversation just because a chat turn is waiting for
+        some nested call somewhere.
+
+        When it runs on the SAME pool as the turn that triggered it, the
+        caller must have given back the lane it holds (R6,
+        ``suspend_chat_lane``) — on a one-lane pool this would otherwise wait
+        for itself — and hands the two things that belong to the turn along:
+        ``arrived``, so the call ages from when the TURN first asked instead
+        of being the youngest waiter at every suspend, and ``own_lane``, the
+        lane just handed back, which R1 gives it before it considers anything
+        else. On a different pool there is nothing to suspend and both stay
+        None.
+        """
+        handle, _arrived = self._wait_for_lane(
+            pool_key, cache_key, priority,
+            label or "nested", who=cache_key, arrived=arrived,
+            own_lane=own_lane, nested=True)
         return handle
+
+    def chat_lane_context(self, task_id: str) -> Tuple[str, int]:
+        """``(lane pool, lane priority)`` of a live registration, or
+        ``("", Priority.NORMAL)`` when there is no such registration.
+
+        The nested-call path asks BEFORE it suspends anything, and it needs
+        both answers from the same lookup: the POOL, because a tool LLM on
+        another pool must not cost the conversation its lane (the tool alias
+        and the chat model are different hosts in the normal topology), so
+        only a nested call on the SAME pool is preceded by R6 — and the
+        PRIORITY, because the nested call runs on the turn's behalf and must
+        rank exactly as the turn does, thought turns included.
+        """
+        from app.core.llm_lanes import pool_key_for
+
+        with self._lock:
+            task = self._chat_tasks.get(task_id)
+            if task is None:
+                return ("", int(Priority.NORMAL))
+            model = task.model
+            priority = int(task._lane_priority)
+        return (pool_key_for(self.provider.name, model), priority)
+
+    def suspend_chat_lane(self, task_id: str) -> Optional[Tuple[int, float]]:
+        """R6: gives back the lane of a LIVE registration for the duration of
+        a nested call on the SAME pool.
+
+        The registration itself stays in the books — the panel keeps showing
+        the turn and ``register_chat_done`` still closes it. The return value
+        is ``(lane id, arrival stamp)`` of what was handed back, and it is the
+        turn's identity for the two acquires that follow: the nested call and
+        the resume take that lane id along so R4 does not hold either of them
+        off their own lane, and that arrival stamp so the turn goes on ageing
+        from when it FIRST asked instead of arriving anew at every suspend.
+        ``None`` means there was nothing to give back (unknown id, or already
+        suspended), and then nothing must be re-taken either.
+        """
+        with self._lock:
+            task = self._chat_tasks.get(task_id)
+            if task is None:
+                return None
+            handle = self._chat_lanes.pop(task_id, None)
+            arrived = task._lane_arrived
+            # Nothing may report this registration as holding a lane while it
+            # does not — the log line of the nested call reads it from here.
+            task._lane_handle = None
+        if handle is None:
+            return None
+        lane_id = handle.lane_id
+        handle.release()
+        return (lane_id, arrived)
+
+    def resume_chat_lane(self, task_id: str, own_lane: Optional[int] = None,
+                         arrived: Optional[float] = None) -> None:
+        """Takes a lane again for a registration that was suspended (R6).
+
+        Waits like the registration itself did, and with the turn's OWN
+        arrival stamp and lane id (see ``suspend_chat_lane``): a resume that
+        stamped itself fresh would be the youngest waiter on the pool every
+        time and lose to anything parked there. A registration that was
+        closed or swept away meanwhile gets nothing — and a lane handed out
+        in that race is released again right here instead of being lost.
+        """
+        with self._lock:
+            task = self._chat_tasks.get(task_id)
+            if task is None or task_id in self._chat_lanes:
+                return
+        from app.core.llm_lanes import pool_key_for
+
+        handle, arrived = self._wait_for_lane(
+            pool_key_for(self.provider.name, task.model), task._cache_key,
+            task._lane_priority, task.task_type, who=task.agent_name or "?",
+            arrived=arrived, own_lane=own_lane, nested=True)
+        with self._lock:
+            if task_id in self._chat_tasks and task_id not in self._chat_lanes:
+                task._lane_arrived = arrived
+                task._lane_handle = handle
+                self._chat_lanes[task_id] = handle
+                return
+        handle.release()
 
     def _release_chat_lane(self, task_id: str) -> None:
         """Gives the lane of a streaming registration back.

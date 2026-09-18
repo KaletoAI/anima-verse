@@ -655,12 +655,21 @@ async def group_chat(request: Request):
                     # damit Tools die selbst LLM-Calls machen nicht blockiert werden
                     _chat_state = {"task_id": _chat_task_id}
 
+                    # _agent is bound here for the same reason _state is: the
+                    # executor closes the registration and opens a NEW one
+                    # around every tool, and the agent looks ITS registration
+                    # up by id — iteration progress in the queue panel, and
+                    # the lane of a nested tool-LLM call (llm_lanes R6). An id
+                    # set once goes stale after the first tool, and the nested
+                    # call then finds no owner to suspend.
                     async def _tool_executor(tool_name, tool_input,
                                              _state=_chat_state, _queue=_llm_queue,
-                                             _cname=char_name, _uid="", _inst=_llm_inst):
+                                             _cname=char_name, _uid="", _inst=_llm_inst,
+                                             _agent=agent):
                         if _state["task_id"]:
                             _queue.register_chat_done(_state["task_id"])
                             _state["task_id"] = None
+                            _agent.chat_task_id = ""
                         try:
                             tool_func = _tools_dict[tool_name]
                             return await asyncio.to_thread(tool_func, tool_input)
@@ -668,6 +677,7 @@ async def group_chat(request: Request):
                             _state["task_id"] = await _queue.register_chat_active_async(
                                 _cname, llm_instance=_inst,
                                 task_type="group_chat", label=f"Group Chat: {_cname}")
+                            _agent.chat_task_id = _state["task_id"] or ""
 
                     agent.tool_executor = _tool_executor
 

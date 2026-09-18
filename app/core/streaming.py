@@ -863,6 +863,10 @@ class StreamingAgent:
         # compose_messages). Empty for every path that has no such context —
         # thought turns deliberately included.
         self.user_turn_suffix = user_turn_suffix
+        # (lane id, cache key) of the last nested tool-decision call. It
+        # runs on its own lane while the chat registration's lane is
+        # suspended, so its log line cannot read the registration's.
+        self._tool_lane: Tuple[Optional[int], str] = (None, "")
         # Raw text of the Tool-LLM decision from the last rp_first run. The
         # Tool-LLM phase suppresses ContentEvents, so callers (e.g. the agent
         # loop's "Recent turns" panel) can only see it through this attribute.
@@ -1670,7 +1674,7 @@ class StreamingAgent:
         last_error = None
         for _attempt in (1, 2):
             _call = asyncio.create_task(
-                asyncio.to_thread(self.tool_llm.invoke, messages))
+                asyncio.to_thread(self._invoke_tool_llm_laned, messages))
             while True:
                 done, _ = await asyncio.wait({_call},
                                              timeout=_HEARTBEAT_INTERVAL)
@@ -1707,7 +1711,8 @@ class StreamingAgent:
 
         self._log_llm_call(self.tool_llm, system_content, user_input,
                            response_text, "Tool-LLM", _start,
-                           finish_reason=finish_reason, usage=tool_usage)
+                           finish_reason=finish_reason, usage=tool_usage,
+                           lane_info=self._tool_lane)
         yield LoopInfoEvent(
             iteration=iteration,
             max_iterations=self.max_iterations,
@@ -1724,6 +1729,77 @@ class StreamingAgent:
             state.tool_matches = _dedupe_singleton_tools(state.tool_matches)
             logger.info("%d Tool-Match(es) erkannt", len(state.tool_matches))
             self._warn_dead_tool_calls(state.tool_matches)
+
+    def _invoke_tool_llm_laned(self, messages: List[Dict[str, str]]):
+        """The tool decision's LLM call, ON A LANE of its own pool.
+
+        Runs in a worker thread (``asyncio.to_thread``), so it may block —
+        which it does twice: once for its own lane and once to take the chat
+        lane back afterwards. Both waits are covered by the heartbeats of
+        ``_invoke_tool_decision``.
+
+        Why at all: this call goes past the queue AND past the lanes. On a
+        one-model host it is a second prompt beginning on exactly the pool
+        whose cache the running turn just filled, so without a lane it
+        displaces it every single rp_first turn. Its key is the TOOL key of
+        this character (``tool:<name>``, the key the same decision gets when
+        it runs as a queued ``intent`` call), so two turns of the same
+        character reuse the tool lane instead of fighting over it.
+
+        The chat registration's lane is handed back for the duration (R6) and
+        taken again afterwards — on a one-lane pool the call would otherwise
+        wait for itself. That is the ONE reason this is not a plain acquire,
+        and ``nested_call_lane`` is where the order lives.
+
+        Each of the two attempts of the tool decision takes its own lane. A
+        second attempt is a rare retry after an empty answer; holding a lane
+        across the gap would be worse than re-taking it.
+
+        WITHOUT A REGISTRATION ID there is no owner to suspend. The turn may
+        still be holding a lane — the registration exists, this agent just was
+        not told its id — and asking for a second lane on that same pool would
+        be the turn waiting for itself, on a one-lane pool until the stale
+        sweep. So that case takes NO lane and says so, loudly: every caller
+        that builds an rp_first agent today hands the id along (routes/chat.py,
+        core/thoughts.py, routes/group_chat.py, core/telegram_polling.py), and
+        the ones that do not (story.py, story_dev.py, world_dev.py) build their
+        agent without tools and never reach this method. A new caller that gets
+        it wrong therefore loses the lane of its tool decision — one displaced
+        cache per turn — and leaves a WARNING naming the character, instead of
+        stalling the turn.
+        """
+        from contextlib import ExitStack
+
+        from app.core.llm_lanes import cache_key_for
+        from app.core.llm_queue import get_llm_queue
+
+        cache_key = cache_key_for("intent", self.agent_name)
+        if self.mode == "rp_first" and not self.chat_task_id:
+            logger.warning(
+                "tool decision for %s runs WITHOUT a lane: the rp_first turn "
+                "has no chat registration id (agent.chat_task_id is empty), "
+                "so its own lane cannot be handed back for this call — see "
+                "StreamingAgent._invoke_tool_llm_laned", self.agent_name)
+            self._tool_lane = (None, cache_key)
+            return self.tool_llm.invoke(messages)
+        with ExitStack() as stack:
+            handle = None
+            try:
+                handle = stack.enter_context(get_llm_queue().nested_call_lane(
+                    self.chat_task_id, self.tool_llm, cache_key,
+                    label="tool_decision"))
+            except Exception as e:
+                # No provider manager at all (checks, early boot) or a lane
+                # that could not be had: the decision still has to happen —
+                # an rp_first turn without it loses every tool of the turn.
+                # Whatever the context manager already did it has undone
+                # itself, so the chat lane is where it was.
+                logger.warning("tool decision runs without a lane: %s", e)
+            # For the log line of this call — the registration's lane is
+            # suspended while we are in here, so asking it would report the
+            # wrong one (see _lane_fields).
+            self._tool_lane = (getattr(handle, "lane_id", None), cache_key)
+            return self.tool_llm.invoke(messages)
 
     def _warn_dead_tool_calls(self, matches: List[Tuple[str, str]]) -> None:
         """Warn about parsed calls this character has no executor for.
@@ -2026,7 +2102,7 @@ class StreamingAgent:
 
     def _log_llm_call(self, active_llm, system_content, user_input,
                       response, llm_label, start_time, history=None,
-                      finish_reason="", usage=None):
+                      finish_reason="", usage=None, lane_info=None):
         """Logs a completed LLM call.
 
         ``usage`` is the provider's report (``LLMResponse.usage`` shape). When
@@ -2040,13 +2116,16 @@ class StreamingAgent:
         that cannot say whether the answer was cut off at the token budget.
         The same holds for the cache lane: the registration took one, so it is
         looked up here (``_lane_fields``) instead of by the queue worker.
+        ``lane_info`` overrides that lookup for a call that ran on a lane of
+        its own — the nested tool decision, whose registration is suspended
+        exactly while it runs.
         """
         if not self.log_task:
             return
         try:
             from app.utils.llm_logger import log_llm_call, estimate_tokens, get_max_tokens
             prov = self._resolve_provider(active_llm)
-            _lane, _cache_key = self._lane_fields()
+            _lane, _cache_key = lane_info or self._lane_fields()
             log_llm_call(
                 task=self.log_task,
                 model=get_model_name(active_llm),
@@ -2121,21 +2200,19 @@ class StreamingAgent:
             pass
 
     def _resolve_provider(self, llm) -> str:
-        """Resolves provider name from LLM client."""
+        """The provider name of an LLM client, for the log line.
+
+        Asks ``ProviderManager.provider_name_for``, which is the one place
+        that answers this: it reads the name the router stamped on the client
+        and only falls back to matching the endpoint. Doing the endpoint match
+        here as well would give the log a different answer than the lanes for
+        two providers sharing one AI-Hub URL.
+        """
         try:
-            api_base = (
-                getattr(llm, "openai_api_base", "")
-                or getattr(llm, "base_url", "")
-                or ""
-            ).rstrip("/")
-            if api_base:
-                from app.core.provider_manager import get_provider_manager
-                for name, prov in get_provider_manager().providers.items():
-                    if prov.api_base.rstrip("/") == api_base:
-                        return name
+            from app.core.provider_manager import get_provider_manager
+            return get_provider_manager().provider_name_for(llm)
         except Exception:
-            pass
-        return ""
+            return ""
 
     def _fallback_after_upstream_error(
             self, failed_llm, err: BaseException, tried: set):

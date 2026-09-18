@@ -1268,6 +1268,21 @@ async def chat(request: Request) -> StreamingResponse:
         # Tool-Executor: gibt Queue waehrend Tool-Ausfuehrung frei,
         # damit Tools die selbst LLM-Calls machen (z.B. KnowledgeExtract) nicht blockiert werden
         _chat_state = {"task_id": _chat_task_id}
+
+        def _set_chat_task(tid):
+            """Keeps the agent's registration id in step with this turn's.
+
+            The agent looks its own registration up by this id — for the
+            iteration progress in the queue panel, and for the lane of a
+            nested tool-LLM call (llm_lanes R6, ProviderManager
+            .nested_call_lane). The executor below closes the registration
+            and opens a NEW one around every tool, so an id set once at the
+            start goes stale after the first tool: the nested call would then
+            find no owner, suspend nothing, and on a same-pool host wait for
+            the very lane this turn is holding.
+            """
+            _chat_state["task_id"] = tid
+            agent.chat_task_id = tid or ""
         # (tool_name, raw_input) per executed tool — passed to the intent
         # engine so [INTENT:...] markers that duplicate a tool already run
         # in this turn get skipped (avoids double SendMessage / Instagram).
@@ -1281,15 +1296,15 @@ async def chat(request: Request) -> StreamingResponse:
                 pass
             if _chat_state["task_id"]:
                 _llm_queue.register_chat_done(_chat_state["task_id"])
-                _chat_state["task_id"] = None
+                _set_chat_task(None)
             try:
                 tool_func = tools_dict[tool_name]
                 return await asyncio.to_thread(tool_func, tool_input)
             finally:
                 # Chat wieder als aktiv registrieren
-                _chat_state["task_id"] = await _llm_queue.register_chat_active_async(
+                _set_chat_task(await _llm_queue.register_chat_active_async(
                     current_agent, llm_instance=_llm_inst,
-                    task_type="user_chat", label=f"Chat: {current_agent}")
+                    task_type="user_chat", label=f"Chat: {current_agent}"))
 
         agent.tool_executor = _tool_executor
 
@@ -1500,7 +1515,7 @@ async def chat(request: Request) -> StreamingResponse:
             # pausiert ist solange Chat aktiv ist.
             if _chat_state["task_id"]:
                 _llm_queue.register_chat_done(_chat_state["task_id"])
-                _chat_state["task_id"] = None
+                _set_chat_task(None)
 
             # Shared post-processing: mood, location, activity, memory,
             # relationships, intents, instagram, context, history summary

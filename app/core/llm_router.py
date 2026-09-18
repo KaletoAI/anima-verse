@@ -71,7 +71,19 @@ class LLMInstance:
         return f"{self.provider_name}/{self.model} ({tasks_str})"
 
     def create_llm(self, **overrides):
-        """Creates an LLMClient (or AnthropicLLMClient) with optional per-agent overrides."""
+        """Creates an LLMClient (or AnthropicLLMClient) with optional per-agent
+        overrides.
+
+        The client is STAMPED with this instance's ``provider_name``. The
+        client itself knows only its endpoint, and matching an endpoint back
+        to a provider can only ever return the first provider that uses it
+        (``ProviderManager.provider_name_for``) — two entries on the same
+        AI-Hub URL are indistinguishable that way. Everything the router hands
+        out therefore answers the question itself, and the endpoint match
+        stays what it was meant to be: a fallback for objects that come from
+        somewhere else. The name decides which lane pool the call lands on, so
+        a wrong answer is a wrong pool.
+        """
         model = overrides.get("model") or self.model
         api_key = overrides.get("api_key") or self.api_key
         api_base = overrides.get("api_base") or self.api_base
@@ -84,24 +96,27 @@ class LLMInstance:
         top_p = overrides.get("top_p")
 
         if self._provider and self._provider.type == "anthropic":
-            return AnthropicLLMClient(
+            client = AnthropicLLMClient(
                 model=model,
                 api_key=api_key,
                 api_base=api_base,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 request_timeout=timeout)
-
-        return LLMClient(
-            model=model,
-            api_key=api_key,
-            api_base=api_base,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            request_timeout=timeout,
-            chat_template=overrides.get("chat_template") or self.chat_template,
-            frequency_penalty=frequency_penalty,
-            top_p=top_p)
+        else:
+            client = LLMClient(
+                model=model,
+                api_key=api_key,
+                api_base=api_base,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                request_timeout=timeout,
+                chat_template=(overrides.get("chat_template")
+                               or self.chat_template),
+                frequency_penalty=frequency_penalty,
+                top_p=top_p)
+        client.provider_name = self.provider_name
+        return client
 
 
 def get_llm_instance_by_name(model_name: str) -> Optional[LLMInstance]:

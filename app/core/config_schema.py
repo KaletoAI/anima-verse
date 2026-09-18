@@ -236,6 +236,40 @@ SECTIONS = {
             },
         },
     },
+    # Cache lanes — the global timings of the assignment rules
+    # (development_instructions/plan-cache-lanes.md § 5). HOW MANY lanes an
+    # LLM entry has is set per entry (LLM Routing › LLMs › Lanes); these three
+    # decide who gets one when they are scarce. All of them are SYSTEM time.
+    "lanes": {
+        "label": "Cache Lanes",
+        "icon": "🛣️",
+        "fields": {
+            "affinity_wait_seconds": {
+                "type": "int",
+                "label": "Affinity Wait (s)",
+                "default": 3,
+                "min": 0,
+                "max": 120,
+                "description": "How long a background call (anything below chat priority) waits for a lane that already holds ITS prompt beginning before it takes a foreign one and evicts that lane's cache. A lane with its own key — or one that was never used — it takes at once. 0 = no wait, a background call displaces immediately.",
+            },
+            "conversation_hold_seconds": {
+                "type": "int",
+                "label": "Conversation Hold (s)",
+                "default": 120,
+                "min": 0,
+                "max": 3600,
+                "description": "How long a lane that last served a CHAT stays reserved for that conversation: a call with a different prompt beginning treats it as occupied and uses another lane. It is never a blockade — when no other lane can come free, the lane is taken anyway. 0 = no protection.",
+            },
+            "wait_upgrade_seconds": {
+                "type": "int",
+                "label": "Wait Upgrade (s)",
+                "default": 60,
+                "min": 0,
+                "max": 3600,
+                "description": "After this long in the waiting list a call counts one priority class higher when the next lane is handed out (LOW → NORMAL → HIGH → CHAT). That is what keeps background work from starving behind a busy chat. 0 = no ageing.",
+            },
+        },
+    },
     "embedding": {
         "label": "Embedding",
         "icon": "🔢",

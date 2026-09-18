@@ -672,6 +672,19 @@ class ThoughtRunner:
         # character_name/user_id werden bereits von _make_ctx_wrapper (Zeile ~778) injiziert.
         _thought_state = {"task_id": _thought_task_id}
 
+        def _set_thought_task(tid):
+            """Keeps the agent's registration id in step with this turn's.
+
+            The agent looks its own registration up by this id — iteration
+            progress in the queue panel, and the lane of a nested tool-LLM
+            call (llm_lanes R6). The executor below closes the registration
+            and opens a NEW one around every tool, so an id set once would go
+            stale after the first tool and the nested call would find no
+            owner to suspend.
+            """
+            _thought_state["task_id"] = tid
+            agent.chat_task_id = tid or ""
+
         async def _tool_executor_queued(tool_name, tool_input):
             # Cascade brake (see sibling _tool_executor)
             if reply_only_to and tool_name in _cascade_brake_tool_names():
@@ -691,14 +704,14 @@ class ThoughtRunner:
                 pass
             if _thought_state["task_id"]:
                 _llm_queue.register_chat_done(_thought_state["task_id"])
-                _thought_state["task_id"] = None
+                _set_thought_task(None)
             try:
                 tool_func = tools_dict[tool_name]
                 return await asyncio.to_thread(tool_func, tool_input)
             finally:
-                _thought_state["task_id"] = await _llm_queue.register_chat_active_async(
+                _set_thought_task(await _llm_queue.register_chat_active_async(
                     character_name, llm_instance=_llm_inst,
-                    task_type="thought", label=_thought_label)
+                    task_type="thought", label=_thought_label))
         agent.tool_executor = _tool_executor_queued
 
         try:
@@ -714,7 +727,7 @@ class ThoughtRunner:
         finally:
             if _thought_state["task_id"]:
                 _llm_queue.register_chat_done(_thought_state["task_id"])
-                _thought_state["task_id"] = None
+                _set_thought_task(None)
 
         # Process the result
         full_response = full_response.strip()

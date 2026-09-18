@@ -863,13 +863,9 @@ class CharacterBotPoller:
         if ctx["llm"] is None:
             return "LLM nicht verfügbar. Bitte Konfiguration prüfen.", []
 
-        # Register in LLM queue (same as web chat — shows in task queue/dashboard)
         from app.core.llm_router import resolve_llm as _resolve_tg
         _llm_queue = get_llm_queue()
         _llm_inst = _resolve_tg("chat_stream", agent_name=self.character_name)
-        _chat_task_id = await _llm_queue.register_chat_active_async(
-            self.character_name, llm_instance=_llm_inst,
-            task_type="telegram_chat", label=f"Telegram: {self.character_name}")
 
         agent = StreamingAgent(
             llm=ctx["llm"],
@@ -883,20 +879,45 @@ class CharacterBotPoller:
             # The scene state rides on the user turn, behind the history.
             user_turn_suffix=ctx["moment_content"])
 
+        # Register in LLM queue (same as web chat — shows in task
+        # queue/dashboard). AFTER the agent is built, and nothing between this
+        # line and the try/finally below may raise: a registration holds a
+        # cache lane, and one that is never closed keeps that lane until the
+        # 660 s stale sweep. Building the agent is the one step here that can
+        # throw, so the registration comes after it.
+        _chat_task_id = await _llm_queue.register_chat_active_async(
+            self.character_name, llm_instance=_llm_inst,
+            task_type="telegram_chat", label=f"Telegram: {self.character_name}")
+
         # Tool executor: release queue during tool execution (prevents deadlock)
         _chat_state = {"task_id": _chat_task_id}
+
+        def _set_chat_task(tid):
+            """Keeps the agent's registration id in step with this turn's.
+
+            Same shape as routes/chat.py. The agent looks its own registration
+            up by this id — for the iteration progress in the queue panel, and
+            for the lane of a nested tool-LLM call (llm_lanes R6,
+            ProviderManager.nested_call_lane). Without it a Telegram turn's
+            tool decision finds no owner, suspends nothing, and on a same-pool
+            host waits for the very lane this turn is holding.
+            """
+            _chat_state["task_id"] = tid
+            agent.chat_task_id = tid or ""
+
+        _set_chat_task(_chat_task_id)
 
         async def _tool_executor(tool_name, tool_input):
             if _chat_state["task_id"]:
                 _llm_queue.register_chat_done(_chat_state["task_id"])
-                _chat_state["task_id"] = None
+                _set_chat_task(None)
             try:
                 tool_func = ctx["tools_dict"][tool_name]
                 return await asyncio.to_thread(tool_func, tool_input)
             finally:
-                _chat_state["task_id"] = await _llm_queue.register_chat_active_async(
+                _set_chat_task(await _llm_queue.register_chat_active_async(
                     self.character_name, llm_instance=_llm_inst,
-                    task_type="telegram_chat", label=f"Telegram: {self.character_name}")
+                    task_type="telegram_chat", label=f"Telegram: {self.character_name}"))
 
         agent.tool_executor = _tool_executor
 
