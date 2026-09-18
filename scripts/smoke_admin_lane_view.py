@@ -98,6 +98,30 @@ demands the changed number back.
     ``?/model`` pool) is still listed, marked ``configured: false`` and sorted
     behind the configured ones — hiding it would hide exactly the lanes nobody
     expects to exist.
+
+[7] A RESERVATION IS SHOWN, AND SHOWN APART (plan § 6 P5 item 13). A reply
+    that is queued in the AgentLoop holds no lane and is parked nowhere — it
+    only keeps a freed lane from going to lower-class work until it asks
+    again. So it is neither a lane row nor a waiting call, and the payload
+    carries it as its own list: who holds it, for which key, in which class
+    and how long it still counts. A LOW call parked behind it says
+    ``reserved`` as its reason, which is the manager's answer, not a guess by
+    the view. The page itself cannot run here, so one text check pins that
+    static/admin/agent-loop.js reads both — a payload field nobody renders
+    would otherwise pass.
+
+      t=0  bg:holder (NORMAL) takes the one lane
+      t=1  the dispatcher reserves chat:Kira for 3 s  (counts until t=4)
+      t=1  thought:Ida (LOW) parks
+      t=2  read: one claim with 2 s left, the thought held by it
+      t=5  read: the claim has run out and is gone from the payload
+
+    A READ REPORTS, IT DOES NOT DECIDE. At t=5 the claim is gone from the
+    payload because it has run out, not because looking at it removed it: it
+    is still in the manager's books afterwards, and the SELECTION pass — the
+    one place a lane is handed out — is what forgets it. A read that quietly
+    changed the state it reports on would make that state depend on who looked
+    last, and this page polls.
 """
 import atexit
 import os
@@ -490,6 +514,71 @@ check("marked as not configured",
 check("its live numbers are still real",
       (stray["lane_count"], stray["busy"]), (1, 1))
 h_f.release()
+
+# ── [7] a reservation in the payload ───────────────────────────────────────
+print("\n[7] a reply's reservation is shown, apart from lanes and waiters")
+
+m9, clock9 = manager(1)
+clock9.set(0)
+h_g = m9.acquire_lane(POOL, "bg:holder", Priority.NORMAL, timeout=0,
+                      label="consolidation")
+clock9.set(1)
+m9.reserve(POOL, "chat:Kira", Priority.CHAT, ttl=3.0,
+           holder="respond dispatcher")
+w9 = parked(m9, "thought:Ida", Priority.LOW, arrived=1, pool=POOL)
+check("the thought is parked", wait_for_waiters(m9, 1), True)
+clock9.set(2)
+row = pool_of(admin_lane_view(m9, stats={}), POOL)
+check("one claim, with holder, key, class and what is left of it",
+      [(r["holder"], r["cache_key"], r["priority_label"], r["expires_in_s"])
+       for r in row["reservations"]],
+      [("respond dispatcher", "chat:Kira", "CHAT", 2.0)])
+check("it is not a lane — the lane still runs what it ran",
+      (row["busy"], row["free"], row["lanes"][0]["label"]),
+      (1, 0, "consolidation"))
+check("and not a waiting call either",
+      [c["cache_key"] for c in row["waiting_calls"]], ["thought:Ida"])
+
+h_g.release()
+row = pool_of(admin_lane_view(m9, stats={}), POOL)
+check("with the lane free the thought names the claim as its reason",
+      [(c["cache_key"], c["reason"]) for c in row["waiting_calls"]],
+      [("thought:Ida", "reserved")])
+
+# The one thing this check cannot run: the page itself. A text check, and it
+# says so — it pins only that the payload's field and the new waiting reason
+# are READ by the page, so a claim that nobody renders does not pass here.
+_js = (Path(__file__).resolve().parents[1] / "static/admin/agent-loop.js").read_text()
+check("the page reads the claims and the new reason",
+      ("p.reservations" in _js, "'reserved'" in _js), (True, True))
+
+clock9.set(5)                        # the 3 s claim made at t=1 has run out
+row = pool_of(admin_lane_view(m9, stats={}), POOL)
+check("an expired claim is gone from the payload", row["reservations"], [])
+w9["thread"].join(timeout=5)
+check("and the thought is served",
+      w9["handle"].lane_id if "handle" in w9 else w9.get("error"), 0)
+w9["handle"].release()
+
+# A READ REPORTS, IT DOES NOT DECIDE. Own manager, nobody parked on it: the
+# only thing that touches this pool is the reading. An expired claim is left
+# OUT of the payload and stays in the books — dropping it is the job of the
+# selection pass, which is the one place a lane is handed out. A read that
+# quietly changed its subject would make the state depend on who looked last,
+# and this page polls.
+m10, clock10 = manager(1)
+clock10.set(0)
+m10.acquire_lane(POOL, "bg:holder", Priority.NORMAL, timeout=0).release()
+m10.reserve(POOL, "chat:Kira", Priority.CHAT, ttl=1.0)
+clock10.set(9)
+check("a read leaves an expired claim out of the payload",
+      pool_of(admin_lane_view(m10, stats={}), POOL)["reservations"], [])
+check("and does not delete it — expiry belongs to the selection pass",
+      list(m10._pools[POOL].reservations), ["chat:Kira"])
+check("the first call that asks for a lane forgets it",
+      (m10.acquire_lane(POOL, "thought:Ida", Priority.LOW,
+                        arrived=0, timeout=0).lane_id,
+       list(m10._pools[POOL].reservations)), (0, []))
 
 if _saved_routing is None:
     config._CONFIG.pop("llm_routing", None)

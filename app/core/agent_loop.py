@@ -237,9 +237,24 @@ class AgentLoop:
         # overwritten by the next bump for the same name.
         self._respond_resolved: Dict[str, str] = {}
         # Per QUEUE ENTRY: why the dispatcher did not start it on its last
-        # look ("active" / "no_lane"). Pure bookkeeping for status() — the
-        # dispatcher decides nothing by it.
+        # look ("active" / "no_lane"). Read back by the reservation sync
+        # below, and bookkeeping for status().
         self._respond_wait_reason: Dict[str, str] = {}
+        # Name -> pool this dispatcher currently RESERVES for a reply that is
+        # waiting for a lane (plan-cache-lanes.md § 6 P5 item 13). A reply is
+        # a poller, not a waiter, so without the reservation a thought parked
+        # in acquire_lane takes every lane that frees. The reservation holds
+        # no lane; it only stops lower-class work from taking one. It is
+        # TTL-bounded and refreshed on every tick — see
+        # _sync_respond_reservations.
+        self._respond_reserved: Dict[str, str] = {}
+        # Name -> pool whose claim was HANDED OVER to a turn that started
+        # (_hand_over_respond_reservation). From that moment the claim belongs
+        # to the turn, not to the dispatcher: it has to survive the whole
+        # prompt build, and the reply's own LLM call consumes it when it takes
+        # its lane. What is left of it is dropped in _respond_worker's finally
+        # — for the turns that never reach that call at all.
+        self._respond_turn_claims: Dict[str, str] = {}
         self._room_locks: Dict[str, asyncio.Lock] = {}
         self._respond_task: Optional[asyncio.Task] = None
         # Room conversation energy (plan-room-conversation phase 3b): per room
@@ -313,6 +328,15 @@ class AgentLoop:
         # this its entry would survive a stop/start of this instance and
         # shrink that pool's budget by one for good.
         self._respond_pools.clear()
+        # Same reasoning for the claims of the respond dispatcher: nobody
+        # refreshes them once its task is gone, and until they ran out by TTL
+        # they would keep background work off those pools for nothing. The
+        # claims of the turns go with them for the same reason as
+        # _respond_pools above: a worker cancelled before its coroutine ever
+        # ran never reaches its own finally.
+        self._release_respond_reservations()
+        for name in list(self._respond_turn_claims):
+            self._release_turn_claim(name)
         logger.info("AgentLoop stopped")
 
     # ------------------------------------------------------------------
@@ -1009,11 +1033,16 @@ class AgentLoop:
         thought, a nested tool call — is therefore counted as free once, and
         one reply too many can be started per pool. It is deliberately not
         accounted for: the reply then simply waits for its lane inside the
-        queue, where every other call waits too, and the alternative (a
-        reservation held across the whole prompt build) would keep a lane
-        empty for exactly as long as it saves one. What this guarantees is
+        queue, where every other call waits too, and the alternative — holding
+        an actual LANE from the question until the reply's own acquire — would
+        keep it empty for exactly as long as it saves. What this guarantees is
         that the dispatcher never starts a SECOND reply on a pool it already
         filled itself — the case that used to repeat on every tick.
+
+        A reply that does NOT start here keeps its pool reserved against
+        lower-class work (``_sync_respond_reservations``). That reservation is
+        not a lane and changes no number in this method: it only decides who
+        gets the lane when one frees.
         """
         from app.core.llm_lanes import cache_key_for, get_lane_manager
         from app.core.llm_queue import Priority
@@ -1024,6 +1053,143 @@ class AgentLoop:
         starting = sum(1 for pool in self._respond_pools.values()
                        if pool == pool_key)
         return min(free, manager.lane_capacity(pool_key) - starting) >= 1
+
+    def _sync_respond_reservations(self) -> None:
+        """Hold the pool of every reply that is waiting for a lane — and let
+        go of every other one (plan-cache-lanes.md § 6 P5, item 13).
+
+        THE PROBLEM THIS SOLVES. A queued reply is a POLLER: the dispatcher
+        asks ``free_lanes`` twice a second and starts a turn when one is free.
+        It never parks in ``acquire_lane``, so it is not in ``pool.waiting``
+        and R2 — which orders the calls that ARE waiting — cannot put it in
+        front of anybody. A thought turn does park. So the lane a conversation
+        was waiting for went to the parked thought the instant it freed, and
+        the reply found the pool full again on its next tick: a conversation
+        waited out a whole background turn although its class comes first.
+
+        WHY A RESERVATION AND NOT AN ACQUIRE. Parking the dispatcher itself
+        would mean holding the lane over the entire prompt build of the reply,
+        plus a thread and the room lock behind every queued name. The
+        reservation takes no lane: it only forbids the manager to hand a freed
+        lane to a call of a LOWER class (``llm_lanes.reserve``). The freed
+        lane may therefore idle for up to one tick (≤ 0.5 s) before the reply
+        takes it — that is the trade, and it buys the reply a turn's wait
+        instead of a background turn's.
+
+        WHAT IS RESERVED. Exactly the names that are in the queue for want of
+        a lane — the ``no_lane`` case ``_pop_next_respond`` already records. A
+        name that is merely ``active`` (in a turn of its own) reserves
+        nothing: its turn holds or will hold its own lane.
+
+        WHEN IT GOES. Here, the moment the reason is no longer ``no_lane``
+        and the name is not starting either — the entry left the queue, the
+        character became ineligible — and by TTL if this dispatcher never asks
+        again at all (cancelled, crashed, paused). The reason map is what is
+        read, not the result of this tick's walk: ``_pop_next_respond``
+        returns at the first name it can start and does not look at the ones
+        behind it, so a name it did not reach keeps the reason, and the
+        reservation, it had.
+
+        THE NAME THAT STARTS IS NOT RELEASED HERE — it is not in
+        ``_respond_reserved`` any more when this runs. Its claim was HANDED
+        OVER to the turn a line earlier (``_hand_over_respond_reservation``),
+        and a release would be exactly wrong: releasing notifies the pool, and
+        the lower class parked there takes the freed lane in microseconds
+        while the reply is still acquiring the room lock and building its
+        prompt. That is the bug this whole rule exists against, re-introduced
+        at the last possible moment.
+        """
+        from app.core.llm_lanes import (RESERVATION_TTL_SECONDS, cache_key_for,
+                                        get_lane_manager, lane_priority_for)
+
+        manager = get_lane_manager()
+        want: Dict[str, str] = {}
+        for name in self._respond_queue:
+            if self._respond_wait_reason.get(name) != "no_lane":
+                continue
+            pool_key = self._respond_resolved.get(name)
+            if pool_key:
+                want[name] = pool_key
+        for name, pool_key in list(self._respond_reserved.items()):
+            if want.get(name) != pool_key:
+                manager.release_reservation(
+                    pool_key, cache_key_for(_RESPOND_TASK_TYPE, name))
+                self._respond_reserved.pop(name, None)
+        for name, pool_key in want.items():
+            manager.reserve(pool_key, cache_key_for(_RESPOND_TASK_TYPE, name),
+                            lane_priority_for(_RESPOND_TASK_TYPE),
+                            ttl=RESERVATION_TTL_SECONDS,
+                            holder="respond dispatcher")
+            self._respond_reserved[name] = pool_key
+
+    def _release_respond_reservations(self) -> None:
+        """Drops every reservation this dispatcher holds.
+
+        For the states in which no reply can start at all — an empty queue,
+        the pause switch, an unreachable chat LLM — and for ``stop()``. In
+        those the dispatcher does not tick through ``_pop_next_respond``, so
+        nothing would refresh the claims; letting them run out by TTL instead
+        would keep background work off the pool for three seconds for no
+        reason at all.
+        """
+        from app.core.llm_lanes import cache_key_for, get_lane_manager
+
+        if not self._respond_reserved:
+            return
+        manager = get_lane_manager()
+        for name, pool_key in list(self._respond_reserved.items()):
+            manager.release_reservation(
+                pool_key, cache_key_for(_RESPOND_TASK_TYPE, name))
+        self._respond_reserved.clear()
+
+    def _hand_over_respond_reservation(self, name: str, pool_key: str) -> None:
+        """The claim of a reply that STARTS passes from the dispatcher to the
+        turn — it is not released (plan § 4 R7).
+
+        The turn does not take its lane when it starts. Between here and the
+        reply's own LLM call lie the room lock, the perception stream, the
+        prompt build and the queue worker; that stretch is seconds, and it is
+        precisely the stretch in which a parked thought used to take the lane
+        the reply was waiting for. So the claim has to outlive the start.
+
+        ORDER MATTERS. Re-reserving under the SAME key overwrites the entry in
+        place (``reserve`` is a refresh, under the manager's own lock), so
+        there is no instant without a claim. A release first would notify the
+        pool and let the lower class in through exactly that gap.
+
+        What changes is the holder and the lifetime: the dispatcher refreshed
+        its claim every tick and will never look at this name again, so the
+        TTL is stretched to the turn's own timeout — beyond which the turn
+        does not exist any more either. The claim then ends where it should,
+        by being CONSUMED by the reply's call (``llm_lanes._take_lane``), and
+        whatever is left of it is dropped in ``_respond_worker``'s finally.
+        """
+        from app.core.llm_lanes import (cache_key_for, get_lane_manager,
+                                        lane_priority_for)
+
+        get_lane_manager().reserve(
+            pool_key, cache_key_for(_RESPOND_TASK_TYPE, name),
+            lane_priority_for(_RESPOND_TASK_TYPE),
+            ttl=float(_TURN_TIMEOUT_SECONDS), holder="respond turn")
+        self._respond_reserved.pop(name, None)
+        self._respond_turn_claims[name] = pool_key
+
+    def _release_turn_claim(self, name: str) -> None:
+        """Drops what is left of a started turn's claim.
+
+        Normally nothing is: the reply's own call consumed it when it took its
+        lane. This is for the turns that never get that far — an avatar that
+        returns early, an exception in the prompt build, a cancellation, the
+        turn timeout. Without it those would hold their pool against
+        background work until the turn timeout ran out, and the TTL would be
+        doing the work that a finally should do.
+        """
+        from app.core.llm_lanes import cache_key_for, get_lane_manager
+
+        pool_key = self._respond_turn_claims.pop(name, None)
+        if pool_key:
+            get_lane_manager().release_reservation(
+                pool_key, cache_key_for(_RESPOND_TASK_TYPE, name))
 
     def _pop_next_respond(self) -> Optional[tuple]:
         """Pop the first queued respond that may start right now. Returns
@@ -1054,6 +1220,13 @@ class AgentLoop:
         Every name that does not start keeps its reason in
         ``_respond_wait_reason`` (see ``status()``); it is dropped as soon as
         the name starts or leaves the queue.
+
+        Both ways out end in ``_sync_respond_reservations``: the reasons this
+        walk just wrote are what decides which pools stay reserved for a reply
+        and which are let go (§ 4 R7). It runs on the way out, after the
+        winner has left the queue — and the winner's own claim is handed to
+        its turn one line before that, so the sync finds nothing of it to
+        release (``_hand_over_respond_reservation``).
         """
         for name in list(self._respond_queue):
             if name in self._respond_active:
@@ -1079,7 +1252,10 @@ class AgentLoop:
             self._respond_wait_reason.pop(name, None)
             if not payload:
                 continue
+            self._hand_over_respond_reservation(name, pool_key)
+            self._sync_respond_reservations()
             return name, payload, pool_key
+        self._sync_respond_reservations()
         return None
 
     async def _respond_dispatcher(self) -> None:
@@ -1096,13 +1272,19 @@ class AgentLoop:
             return
         while not self._stop.is_set():
             try:
+                # Nothing can start in these three states, so nothing may keep
+                # a pool reserved either — and none of them ticks through
+                # _pop_next_respond, which is what refreshes the claims.
                 if not self._respond_queue:
+                    self._release_respond_reservations()
                     await asyncio.sleep(1)
                     continue
                 if _is_paused():
+                    self._release_respond_reservations()
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
                 if not _chat_llm_available():
+                    self._release_respond_reservations()
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
                 nxt = self._pop_next_respond()
@@ -1160,6 +1342,13 @@ class AgentLoop:
         finally:
             self._respond_active.pop(character_name, None)
             self._respond_pools.pop(character_name, None)
+            # Whatever is left of this turn's claim on its pool (§ 4 R7). In
+            # the normal case the reply's own LLM call consumed it long ago;
+            # this is the backstop for a turn that never reached that call —
+            # an avatar's early return, a failed prompt build, a cancellation,
+            # the timeout above. The TTL then really only has to survive a
+            # dying process.
+            self._release_turn_claim(character_name)
             self._record_turn(character_name, started_at, outcome, turn_info)
 
     # ------------------------------------------------------------------

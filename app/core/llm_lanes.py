@@ -48,6 +48,23 @@ The rules (plan § 4), all of them live here:
   tool call.
 - **R6**: a call may release its lane early and take one again from the same
   call path without blocking itself.
+- **R7, a reply takes precedence** (plan § 4 R7 / § 6 P5 item 13): a queued
+  chat reply is not a waiter — the respond dispatcher polls ``free_lanes`` and
+  starts a turn when one is free, so it never sits in ``pool.waiting`` and R2
+  cannot order it. A **reservation** (``reserve`` / ``release_reservation``)
+  stands in for it: it takes no lane, it only forbids ``_next_in_line`` to
+  hand a freed lane to a waiter of a LOWER class. Same class or higher is
+  unaffected, so is a call coming back to its own lane (R1 step 1), and so is
+  a call of a turn that is already RUNNING (``running_turn``) — a nested tool
+  call held off here would only keep its own pool's lane busy for longer.
+  The claim lives from the moment the reply is queued until the reply's own
+  call HAS its lane: ``_take_lane`` consumes the claim of the key that just
+  took one. Releasing it when the turn merely starts lost the lane again, to
+  the parked thought the release itself woke up, while the reply was still
+  building its prompt. The TTL (``RESERVATION_TTL_SECONDS``, refreshed by the
+  holder) only backstops a holder that dies.
+  The consequence, said plainly: while replies are queued for a model, ALL
+  queued background work below the chat class on that model waits.
 
 The priority a call carries IN THE LANES is not the priority the queue panel
 shows: it follows the prompt class (``lane_priority_for``), so an AgentLoop
@@ -74,6 +91,18 @@ logger = get_logger("llm_lanes")
 # go: the deadline is computed from the INJECTED clock, so a stepped clock has
 # to be re-read regularly for the timeout to land at all.
 _WAIT_SLICE_SECONDS = 0.25
+
+# How long ONE reservation counts before it expires by itself (seconds on the
+# manager's clock). The holder — the respond dispatcher — refreshes it on
+# every one of its ticks, and its tick is at most 0.5 s, so three seconds are
+# six missed ticks: enough that a slow tick (the eligibility lookup goes to
+# the DB) never drops a reservation the reply still needs, and short enough
+# that a dispatcher which dies, is cancelled or loses its queue entry cannot
+# hold a pool against background work for longer than a lost turn would cost
+# anyway. It is a CONSTANT on purpose: the number follows the dispatcher's
+# tick, not an operator's taste, and a config field would only offer a way to
+# set it below the tick and break the refresh.
+RESERVATION_TTL_SECONDS = 3.0
 
 
 class LaneTimeout(TimeoutError):
@@ -333,12 +362,45 @@ class _Waiter:
     everything else, for every priority class: it is the lane this call's own
     prompt is cached on, so neither R4 nor the LRU order may send the call
     somewhere else (``_assignable_lane``) — and no other waiter's class may
-    take that lane away from it either (``_next_in_line``)."""
+    take that lane away from it either (``_next_in_line``).
+
+    ``running_turn`` marks a call that belongs to a turn ALREADY UNDER WAY —
+    the nested tool call of an rp_first turn and the resume behind it
+    (``ProviderQueue._wait_for_lane(nested=True)``). It is not new work
+    arriving: the lane it waits for is one a running turn will free, and that
+    turn holds a lane of its own meanwhile. A reservation therefore does not
+    hold it off (``_reservation_block``), for the same reason the ``own_lane``
+    step exists — otherwise a thought's tool call on ANOTHER pool, held there
+    by that pool's claim, keeps its own pool's lane busy until the turn times
+    out, and the replies of that pool wait behind it. It is MARKED by the
+    caller, never guessed from the key: from the key alone a nested call and a
+    fresh one look the same."""
     cache_key: str
     priority: int
     arrived: float
     ticket: int
     own_lane: Optional[int] = None
+    running_turn: bool = False
+
+
+@dataclass
+class _Reservation:
+    """A claim on a pool for a call that is NOT in ``pool.waiting``.
+
+    The respond dispatcher polls for a free lane instead of parking on the
+    pool, so R2 never sees the reply it is about to start. While the reply is
+    queued, the dispatcher holds one of these: it occupies no lane and delays
+    nobody of its own class or above — it only stops ``_next_in_line`` from
+    giving a lane that frees up to a waiter of a LOWER class (a parked
+    thought), which would make the reply wait out a whole background turn.
+
+    ``expires`` is on the manager's clock; ``holder`` is a plain name for the
+    admin view ("respond dispatcher"), never anything the rules read.
+    """
+    cache_key: str
+    priority: int
+    expires: float
+    holder: str = ""
 
 
 @dataclass
@@ -346,6 +408,9 @@ class _Pool:
     key: str
     lanes: List[Lane] = field(default_factory=list)
     waiting: List[_Waiter] = field(default_factory=list)
+    # Keyed by cache key: one reserving caller per key, so reserving again is
+    # a refresh of its own claim and never a second one.
+    reservations: Dict[str, _Reservation] = field(default_factory=dict)
     target: int = 1
     _next_lane_id: int = 0
 
@@ -415,13 +480,15 @@ class LaneManager:
                      timeout: Optional[float] = None,
                      arrived: Optional[float] = None,
                      own_lane: Optional[int] = None,
+                     running_turn: bool = False,
                      label: str = "") -> LaneHandle:
         """Occupies a lane of ``pool_key`` for ``cache_key``.
 
         ``timeout=None`` waits forever, ``timeout=0`` tries exactly once and
         never blocks; on expiry a ``LaneTimeout`` is raised. ``arrived`` is
         when the CALL first asked (see ``_Waiter``), ``own_lane`` the lane
-        this caller just gave back for a nested call (R6).
+        this caller just gave back for a nested call (R6), ``running_turn``
+        that this call belongs to a turn already under way (see ``_Waiter``).
 
         Making a long wait VISIBLE is the caller's job, not this one's: the
         one path that really waits (ProviderQueue._acquire_chat_lane) asks in
@@ -438,7 +505,8 @@ class LaneManager:
                 cache_key=cache_key, priority=int(priority),
                 arrived=float(arrived if arrived is not None else started),
                 ticket=self._ticket,
-                own_lane=(None if own_lane is None else int(own_lane)))
+                own_lane=(None if own_lane is None else int(own_lane)),
+                running_turn=bool(running_turn))
             pool.waiting.append(waiter)
             try:
                 while True:
@@ -469,12 +537,14 @@ class LaneManager:
                 priority: int = Priority.NORMAL, *,
                 timeout: Optional[float] = None,
                 arrived: Optional[float] = None,
-                own_lane: Optional[int] = None, label: str = ""):
+                own_lane: Optional[int] = None,
+                running_turn: bool = False, label: str = ""):
         """``acquire_lane`` as a context manager — the lane is released on the
         way out, also when the body raises."""
         handle = self.acquire_lane(pool_key, cache_key, priority,
                                    timeout=timeout, arrived=arrived,
-                                   own_lane=own_lane, label=label)
+                                   own_lane=own_lane,
+                                   running_turn=running_turn, label=label)
         try:
             yield handle
         finally:
@@ -559,6 +629,88 @@ class LaneManager:
             return any(not lane.busy and lane.hot_key == cache_key
                        for lane in pool.lanes)
 
+    def reserve(self, pool_key: str, cache_key: str,
+                priority: int = Priority.CHAT, *,
+                ttl: float = RESERVATION_TTL_SECONDS,
+                holder: str = "") -> None:
+        """Claims this pool for a call that cannot park on it — A REPLY TAKES
+        PRECEDENCE (plan § 6 P5 item 13).
+
+        A reservation is NOT a lane and takes none. It has exactly one effect:
+        while it counts, ``_next_in_line`` refuses to hand a lane that frees
+        up to a waiter of a LOWER class than ``priority``. A waiter of the
+        same class or a higher one is not touched by it, and neither is a call
+        coming back to its OWN lane (R1 step 1, which stands before every
+        class comparison — a suspended turn is a running turn, and holding it
+        off would mean the lane it needs never frees at all).
+
+        Why a reservation instead of simply parking: a queued reply is not
+        ready to run, it still has to build its prompt. Parking it would put a
+        thread and, in the loop, a room lock behind every waiting reply and
+        hold the lane empty for the whole prompt build. A reservation holds
+        the ORDER, not the lane.
+
+        THE COST, SAID PLAINLY: the freed lane may sit idle for up to one
+        dispatcher tick (≤ 0.5 s) until the reply asks again and takes it.
+        That is the intended trade — it buys the reply its turn instead of a
+        whole background turn's wait.
+
+        Reserving again with the same ``cache_key`` REFRESHES this caller's
+        own claim (that is what the key is for); it never stacks. ``ttl`` is
+        seconds on the manager's clock and is meant to be short: the holder
+        refreshes on every tick, and a holder that dies must not block the
+        pool (see ``RESERVATION_TTL_SECONDS``).
+
+        HOW A CLAIM ENDS — three ways, and the first is the normal one:
+        1. THE CALL IT WAS MADE FOR CONSUMES IT. ``_take_lane`` drops the
+           claim whose key is the key of the waiter that just took a lane.
+           That is what the own-key exemption in ``_reservation_block`` is
+           really for: the claim holds the order from the moment the reply is
+           queued until the reply's OWN LLM call has its lane — across the
+           room lock, the perception stream and the prompt build, which is
+           exactly the stretch where releasing early lost the lane again.
+        2. ``release_reservation`` — the holder gives up (the reply left the
+           queue, the character became ineligible, the turn ended without ever
+           reaching its call).
+        3. The TTL, which only backstops a holder that died mid-refresh.
+
+        A claim is NOT made on a pool the manager does not know yet: like
+        ``free_lanes`` and ``lane_capacity`` this asks about a pool, it does
+        not bring one into being. Such a pool has no lanes and no waiters
+        either, so there is nothing to hold off; the first call to touch it
+        creates it and the next tick of the holder reserves it for real.
+        """
+        with self._cond:
+            pool = self._pools.get(pool_key)
+            if pool is None:
+                return
+            pool.reservations[cache_key] = _Reservation(
+                cache_key=cache_key, priority=int(priority),
+                expires=self._now() + max(0.0, float(ttl)),
+                holder=holder)
+
+    def release_reservation(self, pool_key: str, cache_key: str) -> None:
+        """Drops this caller's claim because it GIVES UP on it — the reply
+        left the queue, the character became ineligible, the turn ended
+        without ever reaching its LLM call.
+
+        Not the path a reply that RUNS takes: there the claim is consumed by
+        the call it was made for, in ``_take_lane``, without anybody
+        notifying. Releasing it at the START of the turn instead would wake
+        the parked lower class right there, and it would win the lane in
+        microseconds while the reply is still building its prompt.
+
+        Idempotent, and it wakes the pool: a waiter the reservation held off
+        may take the free lane in the same instant instead of waiting out its
+        poll slice.
+        """
+        with self._cond:
+            pool = self._pools.get(pool_key)
+            if pool is None:
+                return
+            if pool.reservations.pop(cache_key, None) is not None:
+                self._cond.notify_all()
+
     def snapshot(self) -> Dict[str, Any]:
         """State of every pool for the admin view (phase 4) and for checks.
 
@@ -608,6 +760,18 @@ class LaneManager:
                         self._waiter_view(pool, waiter, now, winner)
                         for waiter in pool.waiting
                     ],
+                    # Claims, not waiters — they hold no lane and run nothing.
+                    # Shown apart for exactly that reason (see ``reserve``).
+                    "reservations": [
+                        {
+                            "cache_key": res.cache_key,
+                            "priority": int(res.priority),
+                            "holder": res.holder,
+                            "expires_in_s": round(res.expires - now, 2),
+                        }
+                        for res in sorted(self._reservations(pool, now),
+                                          key=lambda r: r.cache_key)
+                    ],
                 }
             return {"pools": pools}
 
@@ -619,15 +783,22 @@ class LaneManager:
         actually answered — no fifth, invented one:
 
         ``all_busy`` / ``affinity_wait`` (R3) / ``conversation_hold`` (R4)
-        come from ``_assignable_lane_reason``; ``outranked`` means a lane IS
-        assignable to this call and R2 gave this pass to somebody else. The
-        winner of the pass is ``starting`` — it has a lane and is on its way
-        out of the list. ``aged`` says whether R2's ageing has already lifted
-        this call a class (the answer to "is background work starving").
+        come from ``_assignable_lane_reason``; ``reserved`` means a reply has
+        reserved the pool and this call is of a lower class
+        (``_reservation_block``); ``outranked`` means a lane IS assignable to
+        this call and R2 gave this pass to somebody else. The winner of the
+        pass is ``starting`` — it has a lane and is on its way out of the
+        list. ``aged`` says whether R2's ageing has already lifted this call a
+        class (the answer to "is background work starving").
         """
         lane, reason = self._assignable_lane_reason(pool, waiter, now)
         if lane is not None:
-            reason = "starting" if waiter is winner else "outranked"
+            if waiter is winner:
+                reason = "starting"
+            elif self._reservation_block(pool, waiter, now) is not None:
+                reason = "reserved"
+            else:
+                reason = "outranked"
         effective = self._effective_priority(waiter, now)
         return {
             "cache_key": waiter.cache_key,
@@ -712,6 +883,62 @@ class LaneManager:
             return one_class_higher(waiter.priority)
         return int(waiter.priority)
 
+    def _reservations(self, pool: _Pool, now: float) -> List[_Reservation]:
+        """The claims that still count. A PURE read — it changes nothing.
+
+        An expired claim is simply not in the answer. Dropping it from the
+        dict is the job of ``_expire_reservations``, which runs where a lane
+        is actually handed out: a read (``snapshot``, the admin view, a
+        waiter's reason) must not quietly change the state it reports on, or
+        the state depends on who looked at it last.
+        """
+        return [res for res in pool.reservations.values() if res.expires > now]
+
+    def _expire_reservations(self, pool: _Pool, now: float) -> None:
+        """Forgets the claims that ran out. Called from the SELECTION pass.
+
+        There is no timer that ends a reservation, because it only ever
+        matters in the instant a lane is handed out — the same way R2's ageing
+        is recomputed at selection time. A parked waiter re-runs its selection
+        every poll slice (``_WAIT_SLICE_SECONDS``), so a claim that ran out is
+        noticed a quarter of a second later at the latest, without anybody
+        waking it.
+        """
+        for key in [key for key, res in pool.reservations.items()
+                    if res.expires <= now]:
+            pool.reservations.pop(key, None)
+
+    def _reservation_block(self, pool: _Pool, waiter: _Waiter,
+                           now: float) -> Optional[_Reservation]:
+        """The reservation that keeps this waiter from a freed lane, if any.
+
+        A waiter is held only by a claim of a HIGHER class than its own
+        (effective, so R2's ageing counts here too — a background call that
+        has already waited past ``wait_upgrade_seconds`` is compared with the
+        class it has risen to). Its own claim never holds it: the reply that
+        reserved the pool is exactly the call this is all for, and when it
+        finally asks for its lane it must walk straight through — and consume
+        the claim on its way (see ``_take_lane``).
+
+        NEITHER IS A CALL OF A RUNNING TURN (``running_turn``): a nested tool
+        call and the resume behind it are not new work, they are a turn that
+        is already under way and whose END is what frees a lane. Holding one
+        off on THIS pool because a reply is queued here brings that reply
+        nothing — the turn keeps the lane it holds on ITS pool for as long as
+        we stall it, and the replies waiting on that other pool pay for it
+        until the turn times out. Same reasoning as the ``own_lane`` step of
+        R1.
+        """
+        if waiter.running_turn:
+            return None
+        effective = self._effective_priority(waiter, now)
+        for res in self._reservations(pool, now):
+            if res.cache_key == waiter.cache_key:
+                continue
+            if effective > int(res.priority):
+                return res
+        return None
+
     def _on_hold(self, lane: Lane, cache_key: str, now: float) -> bool:
         """R4: is this free lane a protected conversation for ``cache_key``?
 
@@ -784,6 +1011,19 @@ class LaneManager:
         if own:
             return min(own, key=lambda item: (item[0].arrived,
                                               item[0].ticket))[0]
+        # A REPLY TAKES PRECEDENCE: while a reservation counts, a waiter of a
+        # lower class gets nothing, however long it has been parked. The
+        # reserving call is not in this list at all — it is a reply the
+        # respond dispatcher will start on its next tick — so without this the
+        # parked thought takes the lane the moment it frees and the reply,
+        # which only ever polls, finds the pool full again (plan § 6 P5 item
+        # 13). Coming back to one's OWN lane is decided above and stays
+        # untouched: that is a running turn, not a new arrival.
+        self._expire_reservations(pool, now)
+        contenders = [(w, lane) for w, lane in contenders
+                      if self._reservation_block(pool, w, now) is None]
+        if not contenders:
+            return None
         best = min(self._effective_priority(w, now) for w, _ in contenders)
         peers = [(w, lane) for w, lane in contenders
                  if self._effective_priority(w, now) == best]
@@ -885,6 +1125,14 @@ class LaneManager:
         lane.last_used = self._now()
         lane.label = label
         pool.waiting.remove(waiter)
+        # THE CALL THE CLAIM WAS MADE FOR CONSUMES IT (plan § 4 R7). The
+        # reply was queued long before it got here — room lock, perception
+        # stream, prompt build and queue worker all lie between the
+        # dispatcher's claim and this line — and only now is its lane really
+        # taken. Giving the claim up any earlier hands the lane to whoever is
+        # parked, which is the very thing it exists to prevent. No notify: the
+        # lane is busy from this instant, so there is nothing to take anyway.
+        pool.reservations.pop(waiter.cache_key, None)
         # The head of the queue is gone, so the call behind it may be next in
         # line now — and a second lane that became free while this one held
         # the head would otherwise only be noticed after the poll slice.
@@ -1003,6 +1251,11 @@ def admin_lane_view(manager: Optional[LaneManager] = None,
     calls of this pool as the logger saw them, with "not reported" kept apart
     from a cold 0 %.
 
+    ``reservations`` is the third list next to lanes and waiters, and it is
+    deliberately not folded into either: a reply that is queued in the
+    AgentLoop holds no lane and is parked nowhere, it only keeps a freed lane
+    from going to lower-class work until it asks again (see ``reserve``).
+
     A pool the manager knows but the config does not (a renamed entry, an
     unresolved provider ``?/model``) is listed too, marked ``configured:
     false``: hiding it would hide exactly the lanes nobody expects to exist.
@@ -1037,8 +1290,16 @@ def admin_lane_view(manager: Optional[LaneManager] = None,
             "waiting": (pool or {}).get("waiting", 0),
             "lanes": (pool or {}).get("lanes", []),
             "waiting_calls": (pool or {}).get("waiting_calls", []),
+            # A reply that is queued in the AgentLoop and holds this pool
+            # against lower-class work. It is NOT a waiting call and the view
+            # keeps the two lists apart, because they mean different things:
+            # a waiter is parked in the manager, a reservation is a claim for
+            # somebody who will only ask on the next dispatcher tick.
+            "reservations": (pool or {}).get("reservations", []),
             "cache": stats.get(key) or lane_cache_stats.pool_stats(key),
         }
+        for res in row["reservations"]:
+            res["priority_label"] = priority_name(res.get("priority", 0))
         for call in row["waiting_calls"]:
             call["priority_label"] = priority_name(call.get("priority", 0))
             call["effective_label"] = priority_name(

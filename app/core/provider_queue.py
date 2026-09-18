@@ -606,6 +606,14 @@ class ProviderQueue:
         leapfrog each other at every suspend. ``own_lane`` is the lane that
         call handed back a moment ago; R4 does not hold it off that one.
 
+        ``nested`` also says that this waiter belongs to a turn ALREADY UNDER
+        WAY, and it is handed to the manager as ``running_turn``: a reply that
+        reserved THIS pool (R7) must not hold such a call back. It is not new
+        work — the turn holds a lane on its own pool while it waits here, so
+        stalling it here only keeps that other pool's lane busy and makes the
+        replies waiting there wait longer. Everything a claim really has to
+        hold off is a fresh arrival.
+
         The level of the wait line: a nested/resume wait that is merely losing
         a pass to another conversation is normal and logs WARNING; only a wait
         that survives several slices is the pathology the ERROR is for. A
@@ -633,7 +641,8 @@ class ProviderQueue:
             try:
                 handle = manager.acquire_lane(
                     pool_key, cache_key, priority, arrived=arrived,
-                    own_lane=own_lane, timeout=slice_seconds, label=label)
+                    own_lane=own_lane, running_turn=nested,
+                    timeout=slice_seconds, label=label)
                 return handle, arrived
             except LaneTimeout:
                 waited += slice_seconds

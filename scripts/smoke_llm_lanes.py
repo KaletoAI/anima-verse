@@ -371,6 +371,64 @@ them can be read on its own; [7]-[9] switch on exactly the one they measure.
     check report whichever thread happened to win. Under the lock both calls
     are in the same selection pass, which is what the rule decides.
 
+[14] A RESERVATION — "A REPLY ALWAYS TAKES PRECEDENCE" (plan § 6 P5 item 13).
+    A queued chat reply is a POLLER, not a waiter: the respond dispatcher asks
+    ``free_lanes`` every half second and starts a turn when one is free, so it
+    is never in ``pool.waiting`` and R2, which orders the calls that ARE
+    waiting, cannot put it in front of anybody. A thought turn does park. So
+    the lane a conversation was waiting for went to the parked thought the
+    moment it freed. ``reserve`` stands in for the reply: it takes no lane and
+    only forbids a freed lane to go to a LOWER class.
+
+    One lane, all three timings 0, so neither R3 nor R4 nor the ageing can be
+    the reason for anything:
+
+      t=0  chat:Vallerie (CHAT)  holds lane 0            the running call
+      t=1  thought:Ida   (LOW)   parks                   one lane, and it is busy
+      t=2  the dispatcher reserves chat:Kira (CHAT)      the queued reply
+      t=3  lane 0 is released
+
+    a) NEGATIVE CONTROL, run first on the identical setup WITHOUT the
+       reservation: the parked LOW takes lane 0 at t=3. That is the measured
+       bug, and it is what makes the lines below a contest rather than a
+       coincidence.
+    b) With the reservation the parked LOW gets NOTHING at t=3 — and the reply
+       takes lane 0 when it asks on its next tick. TAKING THE LANE IS WHAT
+       ENDS THE CLAIM: nobody releases anything, the claim of the key that
+       just took a lane is consumed in ``_take_lane``. That is the difference
+       that decides the whole rule — the dispatcher lets go of the claim when
+       the TURN starts, and between that and the reply's own call lie the room
+       lock, the perception stream and the prompt build. Once the reply's lane
+       is free again the LOW is served: it lost its turn's place, not its
+       lane.
+    c) SAME CLASS IS UNAFFECTED: a parked CHAT next to a CHAT reservation is
+       served at once.
+    d) A HIGHER CLASS IS UNAFFECTED: a parked CHAT next to a NORMAL
+       reservation is served at once.
+    e) ITS OWN KEY WALKS THROUGH: a claim never holds off the call it was made
+       for — that call is the reply itself arriving, and its class is the
+       reservation's.
+    f) TTL. The claim is made at t=2 for 3 s, so it counts until t=5. At t=3
+       the LOW is held off, at t=5 it is served — nobody released anything.
+       That is what bounds a dispatcher that dies: seconds, not for good.
+    g) REFRESH. Reserving again under the same key at t=4 moves the expiry to
+       t=7 and does NOT stack (the snapshot shows one claim). At t=5 — where
+       (f) was already over — the LOW is still held off, at t=7 it is served.
+       That is the dispatcher's tick keeping its own claim alive.
+    h) A CALL OF A RUNNING TURN WALKS THROUGH (``running_turn``). The nested
+       tool call of a turn and the resume behind it are not new work: the turn
+       holds a lane on its OWN pool while this call waits here, so holding it
+       off does not bring the reply on this pool forward by one millisecond —
+       it only keeps the other pool busy until the turn times out, and the
+       replies waiting THERE pay for it. Negative control first, on the same
+       setup: the identical LOW call as a fresh arrival IS held off. The claim
+       itself is untouched by this — it was not made for that call.
+    i) A CLAIM ASKS ABOUT A POOL, IT DOES NOT CREATE ONE — the same rule
+       ``free_lanes`` and ``lane_capacity`` follow. A pool nobody has ever
+       touched has no lanes and no waiters, so there is nothing to hold off;
+       the first call to touch it creates it and the holder's next tick
+       reserves it for real.
+
 Exit code 0 = all checks passed, 1 = at least one failed.
 """
 import atexit
@@ -464,12 +522,17 @@ def manager(lanes, rules=None):
             clock)
 
 
-def parked(m, cache_key, priority, arrived, *, pool=None):
+def parked(m, cache_key, priority, arrived, *, pool=None,
+           running_turn=False):
     """Starts a call that really WAITS for a lane (the streaming shape).
 
     Returns a box that fills with ``handle`` once the call is served. The
     arrival stamp is handed in, so the order under test is the one written
     down here and not the one the thread scheduler produces.
+
+    ``running_turn`` is the flag the nested tool call of a turn already under
+    way carries (``ProviderQueue._wait_for_lane(nested=True)``); [14h] is what
+    it is for.
     """
     box = {}
 
@@ -480,7 +543,9 @@ def parked(m, cache_key, priority, arrived, *, pool=None):
             # place just because a section jumps the clock by a minute. It is
             # only there so a broken rule ends the check instead of hanging.
             box["handle"] = m.acquire_lane(pool or POOL, cache_key, priority,
-                                           arrived=arrived, timeout=10 ** 9)
+                                           arrived=arrived,
+                                           running_turn=running_turn,
+                                           timeout=10 ** 9)
         except LaneTimeout as e:  # pragma: no cover - a failed check
             box["error"] = str(e)
 
@@ -1191,6 +1256,168 @@ drop_lane(back13)                        # the turn ends
 check("the moment the turn ends, the parked CHAT is served — one turn's wait, "
       "which is the normal one", served(box13), 0)
 drop(box13)
+
+
+# ── [14] a reservation: a reply takes precedence over lower classes ────────
+print("\n[14] a reservation holds a freed lane against a LOWER class")
+
+
+def reserved_pool(*, reserve=True, res_key="chat:Kira",
+                  res_priority=Priority.CHAT, ttl=1000.0,
+                  waiter_key="thought:Ida", waiter_priority=Priority.LOW,
+                  waiter_running_turn=False):
+    """One busy lane, one parked waiter, and a reply reserving the pool.
+
+      t=0  chat:Vallerie (CHAT) holds lane 0     the running call
+      t=1  the waiter parks                      one lane, and it is busy
+      t=2  the dispatcher reserves for the reply
+
+    Returns (manager, clock, the held lane, the parked box). The clock stands
+    at 2 — the caller steps it to 3 to free the lane.
+    """
+    mm, cc = manager(1)
+    cc.set(0)
+    held = try_lane(mm, "chat:Vallerie", Priority.CHAT, arrived=0)
+    cc.set(1)
+    box = parked(mm, waiter_key, waiter_priority, arrived=1,
+                 running_turn=waiter_running_turn)
+    wait_for_waiters(mm, 1)
+    cc.set(2)
+    if reserve:
+        mm.reserve(POOL, res_key, res_priority, ttl=ttl,
+                   holder="respond dispatcher")
+    return mm, cc, held, box
+
+
+def still_waiting(box):
+    """True when the parked call has NOT been served. Waits 0.6 s of real
+    time first — the parked thread re-runs its selection every 0.25 s
+    (_WAIT_SLICE_SECONDS), so this gives it two full rounds to take the lane
+    it must not get. It bounds nothing else: the rule is decided by the
+    stepped clock, this only lets the thread act on it."""
+    return served(box, timeout=0.6) is None
+
+
+# a) the negative control, on the identical setup and first
+m14, clock14, held14, box14 = reserved_pool(reserve=False)
+clock14.set(3)
+drop_lane(held14)
+check("WITHOUT a reservation the parked LOW takes the freed lane",
+      served(box14), 0)
+drop(box14)
+
+# b) the rule itself
+m14, clock14, held14, box14 = reserved_pool()
+clock14.set(3)
+drop_lane(held14)
+check("with it the parked LOW gets nothing", still_waiting(box14), True)
+check("and the admin sees the claim",
+      [(r["cache_key"], r["priority"], r["holder"], r["expires_in_s"])
+       for r in m14.snapshot()["pools"][POOL]["reservations"]],
+      [("chat:Kira", int(Priority.CHAT), "respond dispatcher", 999.0)])
+check("the waiting LOW says WHY it waits",
+      [w["reason"] for w in m14.snapshot()["pools"][POOL]["waiting_calls"]],
+      ["reserved"])
+reply14 = try_lane(m14, "chat:Kira", Priority.CHAT, arrived=2)
+check("the reply takes the lane when it asks on its next tick",
+      lane_of(reply14), 0)
+check("the parked LOW is still waiting", box14.get("handle"), None)
+# THE CALL CONSUMES THE CLAIM. Nobody released anything here — taking the
+# lane is what ends the claim, and that is the whole point: between the
+# dispatcher's claim and this line lie the room lock and the prompt build.
+check("taking the lane consumed the claim — nobody released it",
+      m14.snapshot()["pools"][POOL]["reservations"], [])
+clock14.set(4)
+drop_lane(reply14)
+check("once the reply has had its turn, the LOW is served",
+      served(box14), 0)
+check("and no claim is left on the pool",
+      m14.snapshot()["pools"][POOL]["reservations"], [])
+drop(box14)
+
+# c) same class
+m14, clock14, held14, box14 = reserved_pool(waiter_key="chat:Other",
+                                            waiter_priority=Priority.CHAT)
+clock14.set(3)
+drop_lane(held14)
+check("a parked call of the SAME class is not held back", served(box14), 0)
+drop(box14)
+
+# d) a higher class
+m14, clock14, held14, box14 = reserved_pool(res_priority=Priority.NORMAL,
+                                            waiter_key="chat:Other",
+                                            waiter_priority=Priority.CHAT)
+clock14.set(3)
+drop_lane(held14)
+check("a parked call of a HIGHER class is not held back", served(box14), 0)
+drop(box14)
+
+# e) the reserved call itself
+m14, clock14, held14, box14 = reserved_pool(res_key="thought:Ida")
+clock14.set(3)
+drop_lane(held14)
+check("a claim never holds off the call it was made for", served(box14), 0)
+drop(box14)
+
+# f) the TTL
+m14, clock14, held14, box14 = reserved_pool(ttl=3.0)      # counts until t=5
+clock14.set(3)
+drop_lane(held14)
+check("inside the TTL the LOW is still held off", still_waiting(box14), True)
+clock14.set(5)
+check("when it runs out, the LOW is served — nobody released anything",
+      served(box14), 0)
+drop(box14)
+
+# g) the refresh
+m14, clock14, held14, box14 = reserved_pool(ttl=3.0)      # counts until t=5
+clock14.set(3)
+drop_lane(held14)
+check("inside the first TTL the LOW is held off", still_waiting(box14), True)
+clock14.set(4)
+m14.reserve(POOL, "chat:Kira", Priority.CHAT, ttl=3.0,
+            holder="respond dispatcher")                   # now until t=7
+check("reserving again under the same key does not stack",
+      len(m14.snapshot()["pools"][POOL]["reservations"]), 1)
+clock14.set(5)
+check("the refreshed claim still holds the lane at the OLD expiry",
+      still_waiting(box14), True)
+clock14.set(7)
+check("and lets go at the new one", served(box14), 0)
+drop(box14)
+
+# h) a call of a RUNNING turn is not held back by a foreign claim
+#    The negative control is the identical setup with the flag off — without
+#    it these lines would pass on a manager that simply forgot the rule.
+m14, clock14, held14, box14 = reserved_pool()
+clock14.set(3)
+drop_lane(held14)
+check("NEGATIVE CONTROL: the same LOW call as a fresh arrival is held off",
+      still_waiting(box14), True)
+drop(box14)
+
+m14, clock14, held14, box14 = reserved_pool(waiter_running_turn=True)
+clock14.set(3)
+drop_lane(held14)
+check("a nested call of a RUNNING turn takes the lane although a reply "
+      "reserved this pool", served(box14), 0)
+check("and the claim is untouched — it was not made for that call",
+      [r["cache_key"]
+       for r in m14.snapshot()["pools"][POOL]["reservations"]],
+      ["chat:Kira"])
+drop(box14)
+
+# i) a claim on a pool nobody has touched
+m14, clock14 = manager(1)
+m14.reserve(POOL, "chat:Kira", Priority.CHAT, ttl=1000.0)
+check("reserving an unknown pool does not bring one into being",
+      list(m14.snapshot()["pools"]), [])
+drop_lane(try_lane(m14, "chat:Kira", Priority.CHAT, arrived=0))
+m14.reserve(POOL, "chat:Kira", Priority.CHAT, ttl=1000.0)
+check("once a call has touched it, the claim lands",
+      [r["cache_key"]
+       for r in m14.snapshot()["pools"][POOL]["reservations"]],
+      ["chat:Kira"])
 
 
 print(f"\n{'FAILED: ' + str(len(FAILED)) if FAILED else 'all checks passed'}")

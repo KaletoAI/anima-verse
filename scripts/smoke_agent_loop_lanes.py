@@ -148,6 +148,58 @@ THE EXPECTATIONS, DERIVED BY HAND
     two-lane entry the second reply of a scene would wait for the whole first
     one and a lane would stand empty.
 
+[9] A QUEUED REPLY RESERVES ITS POOL (plan § 6 P5, item 13: "a reply always
+    takes precedence"). A reply that waits for a lane is a POLLER — the
+    dispatcher asks ``free_lanes`` twice a second and starts a turn when one
+    is free, so it is never in ``pool.waiting`` and R2 cannot rank it against
+    a thought that IS parked there. While it waits, the dispatcher therefore
+    holds a RESERVATION on its pool: no lane, only the rule that a freed lane
+    does not go to a lower class.
+
+    What the MANAGER does with a reservation — the parked LOW that gets
+    nothing, the same and the higher class that are untouched, the TTL, the
+    refresh — is measured on a stepped clock in scripts/smoke_llm_lanes.py
+    [14]. This section measures the DISPATCHER's half: that the claim exists
+    while, and only while, a reply is waiting for a lane.
+
+    One lane, held by a foreign chat (the shape of a user's turn), one
+    obligatory bump:
+
+      a) the dispatcher records ``no_lane`` and reserves the pool for
+         ``chat:A`` with the class the reply carries (CHAT) and a holder the
+         admin can read.
+      b) IT IS REFRESHED. After 3.5 s of ticking — longer than
+         RESERVATION_TTL_SECONDS — the claim is still there and still has
+         nearly its full TTL left. A claim that was only made once would have
+         run out in the meantime; that is what bounds a dispatcher that dies.
+      c) THE REPLY REALLY TAKES THE LANE — that is the statement, and it is
+         not the same as "a worker was started". The held lane is released
+         while a LOW thought is parked on the pool, the dispatcher starts the
+         turn, and the turn then spends 200 ms on its PROMPT BUILD before it
+         asks for its lane (Stub.build_seconds). In the server that gap is the
+         room lock, the perception stream, the prompt build and the queue
+         worker — seconds of it. A check that ends at "the dispatcher launched
+         a worker" reads green even when the reply loses its lane inside that
+         gap, which is what a review measured: the claim was released when the
+         turn STARTED, the release woke the parked thought, and the thought
+         won in microseconds. So this section reads the outcome instead: the
+         reply HOLDS the lane and the thought is still parked.
+      d) THE CLAIM IS NOT RELEASED AT THE START — it is HANDED OVER to the
+         turn (holder "respond turn"), read here inside the prompt build, and
+         it ends by being CONSUMED by the reply's own call when that call
+         takes the lane. The turn's finally drops whatever is left, for a turn
+         that never reaches its call at all.
+      e) THE OTHER TWO WAYS OUT: a queue entry that vanishes (the character
+         became ineligible — an avatar takeover) and a dispatcher that stops
+         ticking (pause switch, ``stop()``). Neither may leave a pool claimed.
+      f) ONE REPLY'S CLAIM GOES WITHOUT TOUCHING THE OTHER'S. Everything in
+         (d) and (e) empties the queue, and an empty queue drops every claim
+         at once — so none of those lines can tell the per-name release
+         apart from the blanket one. Here two replies wait on a one-lane
+         entry, the first one starts and REALLY holds the lane, and the
+         second one is still waiting: exactly one claim may be left, and it
+         must be the second reply's.
+
 Exit code 0 = all checks passed, 1 = at least one failed.
 """
 import asyncio
@@ -156,6 +208,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -179,7 +232,7 @@ paths.init(scratch("agent-loop-lanes-storage-"))
 
 from app.core import agent_loop as al  # noqa: E402
 from app.core.llm_lanes import (  # noqa: E402
-    cache_key_for, get_lane_manager,
+    LaneTimeout, cache_key_for, get_lane_manager,
 )
 from app.core.llm_queue import Priority  # noqa: E402
 from app.core.timeutils import utc_now  # noqa: E402
@@ -242,14 +295,25 @@ class Stub:
     ``holding``  one asyncio.Event per character, set once its stub turn
                  really holds its lane (only with ``take_lane``).
 
+    ``lost``     the names whose stub turn asked for its lane and did NOT get
+                 it — the outcome [9c] measures, and the one a check that only
+                 counts started workers cannot see.
+
     ``take_lane`` makes the stub turn do the one thing a real reply does to
     the pool: acquire the lane of its own chat key and hold it for as long as
     the turn runs. Without it the pool is never occupied by a turn of this
     check, and a dispatcher that counted free lanes wrongly would still pass
     every scenario — see [8].
+
+    ``build_seconds`` is the gap between the START of the turn and its LLM
+    call: in the server that is the room lock, the perception stream and the
+    prompt build, seconds of it. Nothing in this file needed it until [9],
+    where the whole rule is decided inside exactly that gap — with a turn that
+    takes its lane in the same instant it starts, a claim released at the
+    start still looks fine.
     """
 
-    def __init__(self, room_map, take_lane=False):
+    def __init__(self, room_map, take_lane=False, build_seconds=0.0):
         self.loop = al.AgentLoop()
         self.runs = []
         self.started = []
@@ -257,7 +321,9 @@ class Stub:
         self.gate = {}
         self.holding = {}
         self.held = {}
+        self.lost = []
         self.take_lane = take_lane
+        self.build_seconds = build_seconds
         self.loop._run_respond_turn = self._fake_turn
         self.loop._char_room_key = lambda name: room_map.get(name, "")
         self.loop._respond_worker = self._counting_worker
@@ -276,10 +342,19 @@ class Stub:
 
     async def _fake_turn(self, name, respond):
         if self.take_lane:
-            self.held[name] = LANES.acquire_lane(
-                POOL, cache_key_for(al._RESPOND_TASK_TYPE, name),
-                Priority.CHAT, timeout=0)
-            self.holding.setdefault(name, asyncio.Event()).set()
+            if self.build_seconds:
+                await asyncio.sleep(self.build_seconds)
+            try:
+                # timeout=0: ONE attempt, exactly like the queue worker's. A
+                # reply that does not get the lane its turn was started for is
+                # recorded instead of raising, so the check reads the outcome
+                # rather than a traceback.
+                self.held[name] = LANES.acquire_lane(
+                    POOL, cache_key_for(al._RESPOND_TASK_TYPE, name),
+                    Priority.CHAT, timeout=0)
+                self.holding.setdefault(name, asyncio.Event()).set()
+            except LaneTimeout:
+                self.lost.append(name)
         self.runs.append(name)
         self.together.append(len(self.loop._respond_active))
         self.gate.setdefault(name, asyncio.Event())
@@ -556,7 +631,13 @@ async def section_real_lane():
 
     stub.bump("B")                        # arrives AFTER the lane is held
     await wait_for(lambda: len(stub.runs) >= 2)
-    await settle()
+    # Every line below asks whether something HAPPENED, and the wait ends the
+    # moment it has: both turns hold their lane. Nothing here says "and
+    # nothing else started", so there is no negative that would need a wait
+    # longer than the dispatcher's naps.
+    await wait_for(lambda: LANES.free_lanes(
+        POOL, cache_key_for(al._RESPOND_TASK_TYPE, "A"),
+        priority=Priority.CHAT) == 0)
     check("the second reply runs on the other lane", sorted(stub.runs),
           ["A", "B"])
     check("both of them at the same time", max(stub.together), 2)
@@ -564,6 +645,180 @@ async def section_real_lane():
           LANES.free_lanes(POOL, cache_key_for(al._RESPOND_TASK_TYPE, "A"),
                            priority=Priority.CHAT), 0)
     await stop(stub, task)
+
+
+# ── [9] a queued reply reserves its pool ───────────────────────────────────
+
+def park_thought(name="Ida"):
+    """A LOW thought really parked in ``acquire_lane`` on the same pool — the
+    caller the reservation exists for. Returns a box like the lane check's:
+    ``handle`` fills the moment it is served.
+
+    Its arrival is stamped a minute BACK on purpose. This check runs against
+    the real config, where R3 holds a background call off a foreign lane for
+    the first three seconds after it arrived — a fresh stamp would keep the
+    thought off the freed lane all by itself, and the section below would read
+    green without a reservation existing at all. An old arrival puts the
+    thought where the rule is really decided: it may take that lane, and only
+    the reply's claim stops it.
+    """
+    box = {}
+
+    def run():
+        try:
+            box["handle"] = LANES.acquire_lane(
+                POOL, cache_key_for(al._THOUGHT_TASK_TYPE, name),
+                Priority.LOW, arrived=LANES.now() - 60, timeout=30)
+        except Exception as e:  # pragma: no cover - a failed check
+            box["error"] = str(e)
+
+    box["thread"] = threading.Thread(target=run, daemon=True, name="park")
+    box["thread"].start()
+    return box
+
+
+def claims():
+    """The pool's reservations, as the admin payload carries them."""
+    pool = LANES.snapshot()["pools"].get(POOL) or {}
+    return pool.get("reservations", [])
+
+
+async def gone(predicate, what):
+    """A bounded wait for something to DISAPPEAR, and the answer.
+
+    The states below are reached by a release, which is immediate: the claim
+    is gone within a dispatcher tick or it is not going at all. The
+    alternative — it merely EXPIRED — is seconds away (RESERVATION_TTL_SECONDS
+    is 3 s, a turn's claim ten minutes), so a wait of well under a second
+    cannot confuse the two. A fixed settle can: on a loaded machine its 2.4 s
+    are longer than the TTL, and the check reads green for a claim nobody ever
+    released.
+    """
+    ok = await wait_for(predicate, timeout=1.0)
+    if not ok:
+        print(f"    (waited 1.0 s in vain for: {what})")
+    return ok
+
+
+async def section_reservation():
+    print("\n[9] a reply waiting for a lane reserves its pool")
+    # The paused dispatcher naps _IDLE_SLEEP_SECONDS (30 s in the server).
+    # Shortened here so the pause sub-check below measures the CLAIM and not
+    # that nap; nothing else in this file pauses.
+    al._IDLE_SLEEP_SECONDS = 0.2
+    set_lanes(1)
+    held = hold_lane("chat:Somebody")          # a user's turn holds the lane
+    # THE TURN REALLY TAKES ITS LANE, and not before it has built its prompt:
+    # that gap is where this whole rule is decided (see Stub.build_seconds).
+    stub = Stub({"A": "loc/r1", "B": "loc/r2"}, take_lane=True,
+                build_seconds=0.2)
+    stub.bump("A")
+    task = stub.run()
+    await wait_for(lambda: bool(claims()))
+    check("a) the reply is queued for want of a lane",
+          stub.loop.status()["respond_waiting"], {"A": "no_lane"})
+    check("a) and its pool is reserved for it",
+          [(c["cache_key"], c["priority"], c["holder"]) for c in claims()],
+          [(cache_key_for(al._RESPOND_TASK_TYPE, "A"), int(Priority.CHAT),
+            "respond dispatcher")])
+
+    # b) refreshed: after longer than the TTL the claim is still young. This
+    # one really has to spend the time — the statement IS that the claim
+    # outlives its own TTL.
+    await asyncio.sleep(al_reservation_ttl() + 0.5)
+    left = [c["expires_in_s"] for c in claims()]
+    check("b) the claim survives longer than its own TTL", len(left), 1)
+    check("b) because it is refreshed every tick — nearly the full TTL left",
+          bool(left and left[0] > al_reservation_ttl() - 1.0), True)
+
+    # c) the reply REALLY TAKES the freed lane, with a thought parked on it
+    thought = park_thought()
+    await wait_for(lambda: LANES.snapshot()["pools"][POOL]["waiting"] == 1)
+    check("c) a LOW thought is really parked on the pool",
+          LANES.snapshot()["pools"][POOL]["waiting"], 1)
+    held.release()
+    await wait_for(lambda: bool(stub.started))
+    # The claim did NOT go when the turn started — it passed to the turn. The
+    # window this is read in is the 200 ms of the prompt build.
+    check("c) the claim passes to the turn, it is not released at the start",
+          [(c["cache_key"], c["holder"]) for c in claims()],
+          [(cache_key_for(al._RESPOND_TASK_TYPE, "A"), "respond turn")])
+    got = await wait_for(lambda: stub.holds("A") or bool(stub.lost))
+    check("c) the reply GETS the lane after its prompt build",
+          (got, stub.holds("A"), stub.lost), (True, True, []))
+    check("c) and the parked thought did not — it was there the whole time",
+          (thought.get("handle"), LANES.snapshot()["pools"][POOL]["waiting"]),
+          (None, 1))
+    check("c) the reply's own call consumed the claim — nobody released it",
+          claims(), [])
+    check("d) nothing is left waiting in the AgentLoop either",
+          (stub.loop._respond_queue, stub.loop.status()["respond_waiting"]),
+          ([], {}))
+
+    # e) a queue entry that vanishes
+    stub.bump("B")
+    await wait_for(lambda: bool(claims()))
+    check("e) the second reply, with no lane, reserves the pool too",
+          [c["cache_key"] for c in claims()],
+          [cache_key_for(al._RESPOND_TASK_TYPE, "B")])
+    al._is_respond_eligible = lambda name: name != "B"   # avatar takeover
+    await gone(lambda: not claims(), "the dropped entry's claim")
+    check("e) the entry is dropped", stub.loop._respond_queue, [])
+    check("e) and its claim with it", claims(), [])
+    al._is_respond_eligible = lambda name: True
+
+    # e) a dispatcher that stops ticking: the pause switch ...
+    stub.bump("B")
+    await wait_for(lambda: bool(claims()))
+    check("e) reserved again", len(claims()), 1)
+    al._is_paused = lambda: True
+    await gone(lambda: not claims(), "the paused dispatcher's claim")
+    check("e) the pause switch lets the claim go", claims(), [])
+    al._is_paused = lambda: False
+    await wait_for(lambda: bool(claims()))
+    check("e) and resuming takes it back", len(claims()), 1)
+
+    # ... and stop()
+    stub.loop._respond_task = task
+    await stub.loop.stop()
+    check("e) stop() leaves no claim behind", claims(), [])
+
+    for handle in (thought.get("handle"),):
+        if handle is not None:
+            handle.release()
+    await stop(stub, task)
+
+
+async def section_reservation_release():
+    print("\n[9f] the claim of the reply that starts goes, the other stays")
+    set_lanes(1)
+    held = hold_lane("chat:Somebody")
+    # take_lane: the first reply really occupies the lane, so the second one
+    # stays blocked and its claim has to survive the first one's start.
+    stub = Stub({"A": "loc/r1", "B": "loc/r2"}, take_lane=True)
+    stub.bump("B")
+    stub.bump("A")                  # obligatory bumps go to the front: [A, B]
+    task = stub.run()
+    await wait_for(lambda: len(claims()) == 2)     # a POSITIVE: both claims
+    check("f) both replies wait and each holds a claim",
+          sorted(c["cache_key"] for c in claims()),
+          ["chat:A", "chat:B"])
+
+    held.release()
+    await wait_for(lambda: stub.holds("A"))
+    await settle()
+    check("f) the first reply runs and holds the lane",
+          (stub.runs, stub.holds("A")), (["A"], True))
+    check("f) the second one still waits for a lane",
+          stub.loop.status()["respond_waiting"], {"B": "no_lane"})
+    check("f) and exactly its claim is left — the starter's is gone",
+          [c["cache_key"] for c in claims()], ["chat:B"])
+    await stop(stub, task)
+
+
+def al_reservation_ttl():
+    from app.core.llm_lanes import RESERVATION_TTL_SECONDS
+    return RESERVATION_TTL_SECONDS
 
 
 async def main():
@@ -575,6 +830,8 @@ async def main():
     section_r5_no_starvation()
     section_ticket_spend()
     await section_real_lane()
+    await section_reservation()
+    await section_reservation_release()
     print(f"\n{'FAILED: ' + str(len(FAILED)) if FAILED else 'all checks passed'}")
     return 1 if FAILED else 0
 

@@ -44,6 +44,12 @@ h1 { font-size:18px; margin-top:0; }
 .lane-idle { color:#6e7681; }
 .wait-head { margin-top:8px; font-size:11px; color:#8b949e; }
 .wait-table th { color:#d29922; }
+/* A reply that holds a pool while it waits for a lane — no lane of its own,
+   so it is never a row in the waiting table. */
+.reserved-row { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; font-size:12px; margin-top:3px; }
+.reserved-tag { background:#1f3a5f; color:#79c0ff; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:600; }
+.reserved-key { color:#c9d1d9; }
+.reserved-note { color:#8b949e; font-size:11px; }
 /* The AgentLoop's own respond queue — a different list from the lane waiters. */
 .wait-row { display:flex; gap:8px; font-size:12px; margin-top:2px; }
 .wait-name { color:#c9d1d9; min-width:140px; }

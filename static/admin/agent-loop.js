@@ -176,6 +176,7 @@ function laneReasonText(code) {
   if (code === 'all_busy') return 'every lane is busy';
   if (code === 'affinity_wait') return 'waiting briefly for its own lane (R3)';
   if (code === 'conversation_hold') return 'a conversation lane is protected (R4)';
+  if (code === 'reserved') return 'a reply has reserved the pool — lower class waits';
   if (code === 'outranked') return 'another call goes first (R2)';
   if (code === 'starting') return 'has a lane — starting';
   return code || '';
@@ -250,6 +251,23 @@ function renderPool(p) {
         + '<td>' + state + '</td></tr>';
     }
     html += '</tbody></table>';
+  }
+  // Reservations first: a reply that is queued in the AgentLoop and holds
+  // this pool against lower-class work while it waits for a lane. It is NOT a
+  // waiting call — it occupies no lane and is parked nowhere — so it gets its
+  // own block above the waiting table instead of a row inside it.
+  const reserved = p.reservations || [];
+  if (reserved.length) {
+    html += '<div class="wait-head">Reserved for a reply (' + reserved.length + ')</div>';
+    for (const r of reserved) {
+      html += '<div class="reserved-row"><span class="reserved-tag">reserved</span>'
+        + '<span class="reserved-key">' + escapeHtml(r.cache_key) + '</span>'
+        + '<span class="reserved-note">' + escapeHtml(r.priority_label || '')
+        + ' · held by ' + escapeHtml(r.holder || 'unknown')
+        + ' · refreshed while the reply needs it (' + escapeHtml(secs(r.expires_in_s))
+        + ' left if its holder stops)'
+        + ' · a freed lane does not go to a lower class</span></div>';
+    }
   }
   const waiting = p.waiting_calls || [];
   if (waiting.length) {
