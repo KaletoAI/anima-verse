@@ -50,6 +50,26 @@ NPCs wie für den Spieler-Avatar — der Avatar reist allerdings über die
 `/play/travel`-Route, nicht über den Skill (`is_player_controlled` überspringt
 den Skill-Zweig).
 
+## Der Marker `**I am at …**` — nur noch für Figuren ohne Verb
+
+Seit 2026-09 entscheidet EINE Regel, wie eine Figur sich bewegen darf:
+`routes/chat._marker_travel_refusal`. Sie beantwortet dieselbe Frage für den
+Chat-Prompt, den Tool-Prompt des Streaming-Pfads und den des Raum-Pfads.
+
+| Figur | Weg | Was die Prompts sagen |
+|---|---|---|
+| hat `SetLocation` | das Verb | „ruf das Tool" — der Marker wird nicht gelehrt und vom Server verworfen |
+| hat kein Bewegungs-Verb | der Marker | Raum am aktuellen Ort sofort, ein bekannter Ort startet eine **Reise** (`start_journey`, derselbe Pfad wie das Verb) |
+| Party-Follower | keiner | nichts zum Ortswechsel — nur der Leader bewegt die Gruppe |
+| vom Spieler gesteuerter Avatar | `/play` | nichts zum Ortswechsel |
+
+Wichtig: Der Marker teleportiert NIE. Er startet dieselbe getaktete Reise wie
+`SetLocation`, inklusive Wegfindung und Wissens-Gate (ein unbekannter Ort wird
+abgelehnt). Ein Raumwechsel am aktuellen Ort bleibt sofort.
+
+Check: `scripts/smoke_marker_travel.py` (alle vier Fälle plus Raumwechsel und
+unbekannter Ort), Prompt-Seite in `scripts/test_a32b_tool_prompt.py` § 9.
+
 ## Terrain: gemalte Flächen
 
 Gelände ist seit E2 **gemalte Fläche** (`GET /play/terrain`): ein

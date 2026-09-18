@@ -104,6 +104,40 @@ into "what does the room need" and "what does the library already have";
 
 ## Top-level chat composites
 
+### The chat prompt is TWO templates, and the order is a cache contract
+
+`routes/chat._build_chat_prompt` returns `ChatPrompt(system, moment)`:
+
+| Part | Template | Where it goes |
+|---|---|---|
+| `system` | `chat/chat_stream.md` | the system message |
+| `moment` | `chat/chat_moment.md` | appended to the LAST user turn, BEHIND the history |
+
+A backend caches a prompt by its prefix, so one changed byte at the top costs
+everything after it — the conversation history included. `chat_stream.md`
+therefore holds only what stays put between turns, ordered by how rarely it
+changes: first what every character of the world shares (world setup, medium,
+the rules and the marker instructions), then this character (language,
+identity, partner sheet, tools), then the slow blocks (secrets, summaries,
+earlier days and scenes). `chat_moment.md` is the `[SCENE STATE]` of THIS turn
+— clock and place, moods, who is present, items, memories, relationships, "This
+moment", the SKIP rules — framed so the model reads it as context, not as
+something a person said.
+
+Rules for editing them:
+
+- anything that can differ between two turns belongs in `chat_moment.md`,
+  never in the system prompt, and never interpolated into a rule text
+  (a name inside a rule makes the rule change with the name);
+- character-template fields marked `"prompt_volatile": true`, and everything
+  stored in `status_effects`, leave the identity block for the scene state;
+- the same rule holds for the thought prompt: its tool block is stable, the
+  clock is not — keep the clock behind the tools.
+
+`scripts/smoke_chat_prompt_order.py` pins the split: no per-turn variable may
+appear in the system template or in its render call, and the block order is
+checked against the contract.
+
 ### `chat/agent_thought.md`
 
 The AgentLoop's slim system prompt. Pre-decision logic in
