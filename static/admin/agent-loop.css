@@ -27,3 +27,26 @@ h1 { font-size:18px; margin-top:0; }
 .pv-label.tool { background:#3a2f5f; color:#d2a8ff; }
 .pv-text { white-space:pre-wrap; word-break:break-word; color:#8b949e; max-width:560px; }
 .muted { color:#484f58; }
+/* Cache lanes (plan-cache-lanes.md § 6, item 10): one block per LLM entry. */
+.section .hint { color:#8b949e; font-size:11px; margin:0 0 8px; line-height:1.45; }
+.pool { margin:0 0 12px; padding:8px; background:#0d1117; border:1px solid #21262d; border-radius:5px; }
+.pool:last-child { margin-bottom:0; }
+.pool-head { display:flex; flex-wrap:wrap; gap:10px; align-items:baseline; font-size:12px; }
+.pool-key { color:#79c0ff; font-weight:600; }
+.pool-counts { color:#8b949e; }
+.pool-cache { color:#d29922; }
+.pool-entries { color:#6e7681; font-size:11px; margin-top:2px; }
+.badge-warn { background:#4a2a1a; color:#f0883e; padding:1px 6px; border-radius:3px; font-size:10px; }
+.lane-table { width:100%; font-size:12px; border-collapse:collapse; margin-top:6px; }
+.lane-table th, .lane-table td { text-align:left; padding:3px 6px; border-bottom:1px solid #21262d; }
+.lane-table th { color:#8b949e; font-weight:500; }
+.lane-busy { color:#3fb950; }
+.lane-idle { color:#6e7681; }
+.wait-head { margin-top:8px; font-size:11px; color:#8b949e; }
+.wait-table th { color:#d29922; }
+/* The AgentLoop's own respond queue — a different list from the lane waiters. */
+.wait-row { display:flex; gap:8px; font-size:12px; margin-top:2px; }
+.wait-name { color:#c9d1d9; min-width:140px; }
+.wait-reason { color:#8b949e; }
+/* Both blocks render real markup; the pre-wrap of .data is for plain text. */
+#lanes, #respond-waiting { white-space:normal; }

@@ -248,6 +248,17 @@ def log_llm_call(
         except Exception as e:
             logger.warning("llm_stats.record_call failed: %s", e)
 
+    # The cache share of the last calls per pool, for the lane view of
+    # /admin/agent-loop. Fed from here because this is where the lane, the key
+    # and the reported cached tokens are all known at once; the alternative
+    # would be parsing this very JSONL file again inside every admin poll.
+    try:
+        from app.core.lane_cache_stats import record_call as _record_lane_call
+        _record_lane_call(provider, model, tokens_input, tokens_cached,
+                          lane=lane, cache_key=cache_key, error=error)
+    except Exception as e:  # pragma: no cover - a stats ring never breaks a call
+        logger.debug("lane_cache_stats.record_call failed: %s", e)
+
 
 def extract_token_info(response) -> Dict[str, int]:
     """Extracts token info from an LLM response.

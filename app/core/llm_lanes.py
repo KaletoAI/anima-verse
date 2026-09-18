@@ -63,7 +63,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.llm_queue import Priority
 from app.core.log import get_logger
@@ -560,11 +560,26 @@ class LaneManager:
                        for lane in pool.lanes)
 
     def snapshot(self) -> Dict[str, Any]:
-        """State of every pool for the admin view (phase 4) and for checks."""
+        """State of every pool for the admin view (phase 4) and for checks.
+
+        ``age_s`` is the age of the lane's last STAMP, and the stamp is set
+        both when a call takes the lane and when it gives it back — so on a
+        busy lane it is how long the running call has been on it, and on a
+        free one how long the lane has been idle. The two are not the same
+        reading, which is why ``running_s`` and ``idle_s`` carry them apart:
+        exactly one of them is a number, the other is None, and a lane that
+        has never run anything has neither.
+
+        ``waiting`` stays the COUNT (checks and the queue read it as one);
+        the calls themselves are ``waiting_calls``, each with the rule that
+        holds it — from ``_assignable_lane_reason`` and ``_next_in_line``,
+        never derived a second time by the reader.
+        """
         with self._cond:
             now = self._now()
             pools = {}
             for key, pool in self._pools.items():
+                winner = self._next_in_line(pool, now)
                 pools[key] = {
                     "lane_count": len(pool.lanes),
                     "target": pool.target,
@@ -579,11 +594,51 @@ class LaneManager:
                             "label": lane.label,
                             "age_s": (round(now - lane.last_used, 2)
                                       if lane.last_used else None),
+                            "running_s": (round(now - lane.last_used, 2)
+                                          if lane.busy and lane.last_used
+                                          else None),
+                            "idle_s": (round(now - lane.last_used, 2)
+                                       if not lane.busy and lane.last_used
+                                       else None),
+                            "used": bool(lane.hot_key),
                         }
                         for lane in pool.lanes
                     ],
+                    "waiting_calls": [
+                        self._waiter_view(pool, waiter, now, winner)
+                        for waiter in pool.waiting
+                    ],
                 }
             return {"pools": pools}
+
+    def _waiter_view(self, pool: _Pool, waiter: _Waiter, now: float,
+                     winner: Optional[_Waiter]) -> Dict[str, Any]:
+        """One waiting call for the admin view, with the reason it waits.
+
+        Four reasons, and every one of them is what the code that decides
+        actually answered — no fifth, invented one:
+
+        ``all_busy`` / ``affinity_wait`` (R3) / ``conversation_hold`` (R4)
+        come from ``_assignable_lane_reason``; ``outranked`` means a lane IS
+        assignable to this call and R2 gave this pass to somebody else. The
+        winner of the pass is ``starting`` — it has a lane and is on its way
+        out of the list. ``aged`` says whether R2's ageing has already lifted
+        this call a class (the answer to "is background work starving").
+        """
+        lane, reason = self._assignable_lane_reason(pool, waiter, now)
+        if lane is not None:
+            reason = "starting" if waiter is winner else "outranked"
+        effective = self._effective_priority(waiter, now)
+        return {
+            "cache_key": waiter.cache_key,
+            "priority": int(waiter.priority),
+            "effective_priority": effective,
+            "aged": effective != int(waiter.priority),
+            "waiting_s": round(now - waiter.arrived, 2),
+            "reason": reason,
+            "own_lane": waiter.own_lane,
+            "lane_id": None if lane is None else lane.lane_id,
+        }
 
     def reconfigure(self, pool_key: str, lanes: int) -> None:
         """New lane count for a pool.
@@ -738,8 +793,23 @@ class LaneManager:
 
     def _assignable_lane(self, pool: _Pool, waiter: _Waiter,
                          now: float) -> Optional[Lane]:
+        """Which lane this waiter would take right now (see
+        ``_assignable_lane_reason``); the reason is dropped."""
+        return self._assignable_lane_reason(pool, waiter, now)[0]
+
+    def _assignable_lane_reason(self, pool: _Pool, waiter: _Waiter,
+                                now: float) -> Tuple[Optional[Lane], str]:
         """Which lane this waiter would take right now — R1, narrowed by R3
-        and R4.
+        and R4 — and, when the answer is "none", WHICH rule said so.
+
+        The reason exists for the admin view (phase 4): a waiting name there
+        has to carry the rule that holds it, and deriving that a second time
+        somewhere else would be a copy of this method that drifts. It is
+        therefore produced by the ONE place that decides, and it is one of
+        ``all_busy`` / ``affinity_wait`` / ``conversation_hold`` — never a
+        guess. A waiter that WOULD get a lane and still does not run is not
+        held by any rule in here; that is R2's doing and ``_next_in_line``
+        answers it (``outranked``).
 
         R1 order: the caller's OWN lane, if it passed one and it is free → a
         free lane whose key is already hot → a lane that was never used → the
@@ -759,25 +829,25 @@ class LaneManager:
         """
         free = [lane for lane in pool.lanes if not lane.busy]
         if not free:
-            return None
+            return None, "all_busy"
         if waiter.own_lane is not None:
             mine = [lane for lane in free if lane.lane_id == waiter.own_lane]
             if mine:
-                return mine[0]
+                return mine[0], ""
         same = [lane for lane in free if lane.hot_key == waiter.cache_key]
         if same:
             # The hottest of them: whatever ran last is most likely still
             # cached in the backend.
-            return max(same, key=lambda x: x.last_used)
+            return max(same, key=lambda x: x.last_used), ""
         fresh = [lane for lane in free if not lane.hot_key]
         if fresh:
-            return min(fresh, key=lambda x: x.lane_id)
+            return min(fresh, key=lambda x: x.lane_id), ""
         # Only foreign, used lanes left. R3: a call below the chat class waits
         # a moment for its own lane before displacing someone else's key.
         if int(waiter.priority) > int(Priority.CHAT):
             wait = self._rules().affinity_wait
             if wait > 0 and (now - waiter.arrived) < wait:
-                return None
+                return None, "affinity_wait"
         # R4: a fresh conversation lane is not displaced ...
         if int(waiter.priority) <= int(Priority.CHAT):
             # ... by BACKGROUND work. The chat class itself is exempt, just as
@@ -798,9 +868,9 @@ class LaneManager:
             # case the plan rules out ("no other lane exists at all", and its
             # general form: no other lane can come free).
             if any(lane.busy for lane in pool.lanes):
-                return None
+                return None, "conversation_hold"
             allowed = free
-        return min(allowed, key=lambda x: x.last_used)
+        return min(allowed, key=lambda x: x.last_used), ""
 
     def _take_lane(self, pool: _Pool, waiter: _Waiter,
                    label: str) -> Optional[Lane]:
@@ -849,3 +919,131 @@ def get_lane_manager() -> LaneManager:
             if _manager is None:
                 _manager = LaneManager()
     return _manager
+
+
+# ── admin view (plan § 6, item 10) ─────────────────────────────────────────
+
+# The priority classes by value, for the admin table. IMAGE_GEN is left out
+# on purpose — a GPU job takes a slot of its channel, never a lane, so a
+# waiter can never carry it.
+_PRIORITY_NAMES: Dict[int, str] = {
+    int(Priority.CHAT): "CHAT",
+    int(Priority.HIGH): "HIGH",
+    int(Priority.NORMAL): "NORMAL",
+    int(Priority.LOW): "LOW",
+}
+
+
+def priority_name(value: int) -> str:
+    """``CHAT``/``HIGH``/``NORMAL``/``LOW`` — or the bare number for a value
+    that is not a rung of the ladder, rather than a wrong label."""
+    return _PRIORITY_NAMES.get(int(value), str(int(value)))
+
+
+def _routing_pools() -> Dict[str, Dict[str, Any]]:
+    """The pools the CONFIG defines, with the entries that feed each of them.
+
+    One pool per ``provider/model``, because that is where the prompt cache
+    lives: several enabled entries may name the same pair (one per sampling
+    profile) and they all run against the same backend slot. Their lane
+    counts are folded the same way ``configured_lane_count`` folds them — the
+    highest wins — so the admin sees the number that is really in force, not
+    the first entry's.
+
+    Disabled entries are left out: they route nothing, so they have no lanes.
+    """
+    pools: Dict[str, Dict[str, Any]] = {}
+    try:
+        from app.core import config
+
+        entries = config.get("llm_routing", []) or []
+    except Exception as e:  # pragma: no cover - config must never break the view
+        logger.debug("lane view: llm_routing not readable: %s", e)
+        entries = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        provider = (entry.get("provider") or "").strip()
+        model = (entry.get("model") or "").strip()
+        if not provider or not model:
+            continue
+        key = pool_key_for(provider, model)
+        row = pools.setdefault(key, {"provider": provider, "model": model,
+                                     "entries": [], "configured_lanes": 1})
+        row["entries"].append((entry.get("name") or "").strip() or model)
+        try:
+            lanes = int(entry.get("max_concurrent") or 1)
+        except (TypeError, ValueError):
+            # A hand-edited config.json can hold anything; one bad entry must
+            # not take the whole lane view down with a 500.
+            logger.debug("lane view: %s has no usable max_concurrent", key)
+            lanes = 1
+        row["configured_lanes"] = max(int(row["configured_lanes"]), lanes)
+    return pools
+
+
+def admin_lane_view(manager: Optional[LaneManager] = None,
+                    stats: Optional[Dict[str, Dict[str, Any]]] = None,
+                    ) -> Dict[str, Any]:
+    """Everything ``/admin/agent-loop`` shows about the lanes, in one payload.
+
+    Two sources, joined on the pool key and never mixed up:
+
+    * the CONFIG says which pools exist and how many lanes each may have —
+      that is the only thing known about a pool nobody has called yet, and
+      the view says so (``started: false``) instead of printing zeros that
+      look like a measurement;
+    * the running ``LaneManager`` says what the lanes are doing right now.
+      Its numbers are passed through untouched: ``lane_count`` is the number
+      of lanes that EXIST (a shrink takes effect as the running calls end, so
+      it may lag the configured value for a moment, and seeing that lag is
+      the point of showing both).
+
+    The cache share comes from the ring in ``lane_cache_stats`` — the last
+    calls of this pool as the logger saw them, with "not reported" kept apart
+    from a cold 0 %.
+
+    A pool the manager knows but the config does not (a renamed entry, an
+    unresolved provider ``?/model``) is listed too, marked ``configured:
+    false``: hiding it would hide exactly the lanes nobody expects to exist.
+    """
+    from app.core import lane_cache_stats
+
+    manager = manager or get_lane_manager()
+    live = manager.snapshot().get("pools", {})
+    stats = lane_cache_stats.snapshot() if stats is None else stats
+    configured = _routing_pools()
+
+    keys = list(configured)
+    keys += [key for key in live if key not in configured]
+    keys += [key for key in stats if key not in configured and key not in live]
+
+    pools = []
+    for key in keys:
+        cfg = configured.get(key)
+        pool = live.get(key)
+        provider, _, model = key.partition("/")
+        row: Dict[str, Any] = {
+            "pool_key": key,
+            "provider": (cfg or {}).get("provider", provider),
+            "model": (cfg or {}).get("model", model),
+            "entries": (cfg or {}).get("entries", []),
+            "configured": cfg is not None,
+            "configured_lanes": (cfg or {}).get("configured_lanes"),
+            "started": pool is not None,
+            "lane_count": (pool or {}).get("lane_count"),
+            "busy": (pool or {}).get("busy"),
+            "free": (pool or {}).get("free"),
+            "waiting": (pool or {}).get("waiting", 0),
+            "lanes": (pool or {}).get("lanes", []),
+            "waiting_calls": (pool or {}).get("waiting_calls", []),
+            "cache": stats.get(key) or lane_cache_stats.pool_stats(key),
+        }
+        for call in row["waiting_calls"]:
+            call["priority_label"] = priority_name(call.get("priority", 0))
+            call["effective_label"] = priority_name(
+                call.get("effective_priority", call.get("priority", 0)))
+        pools.append(row)
+
+    pools.sort(key=lambda r: (not r["configured"], r["pool_key"]))
+    return {"pools": pools, "ring_size": lane_cache_stats.RING_SIZE}

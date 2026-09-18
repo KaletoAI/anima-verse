@@ -1705,6 +1705,19 @@ def _agent_loop_bump_sync(user, body: Any):
     return {"status": "queued" if ok else "skipped", "character": name}
 
 
+@router.get("/agent-loop/lanes")
+def agent_loop_lanes(user=Depends(require_admin)):
+    """The cache lanes per LLM entry, for the table on the Agent-Loop page.
+
+    Thin adapter: everything is assembled in ``llm_lanes.admin_lane_view()``
+    from the live LaneManager, the routing config and the in-memory cache ring
+    (``lane_cache_stats``). Nothing here reads a log file — the page polls
+    every few seconds.
+    """
+    from app.core.llm_lanes import admin_lane_view
+    return admin_lane_view()
+
+
 @router.get("/agent-loop", response_class=HTMLResponse)
 def agent_loop_page(user=Depends(require_admin)):
     """Minimal HTML panel for the AgentLoop: status + pause toggle + recent turns."""
@@ -1738,6 +1751,13 @@ _AGENT_LOOP_HTML = """<!DOCTYPE html>
 <div class="section">
   <h2>Respond lane (parallel)</h2>
   <div id="respond" class="data">—</div>
+  <div id="respond-waiting" class="data"></div>
+</div>
+
+<div class="section">
+  <h2>Cache lanes (per LLM entry)</h2>
+  <div class="hint">One lane is one serialized slot of an LLM entry. It keeps the prompt beginning of its last call — a new call prefers the lane that already holds its own, so two alternating conversations keep their backend caches. Lane count: LLM Routing › LLMs › Lanes.</div>
+  <div id="lanes" class="data">—</div>
 </div>
 
 <div class="section">

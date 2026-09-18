@@ -124,18 +124,18 @@ SECTIONS = {
         "is_array": True,
         "item_label_field": "name",
         "fields": {
-            "name": {"type": "str", "label": "Name", "required": True, "description": "Eindeutiger Name (wird in Task Defaults und GPU-Zuordnung referenziert)"},
+            "name": {"type": "str", "label": "Name", "required": True, "description": "Unique name — referenced by the task defaults and the GPU assignment"},
             "type": {
                 "type": "select",
-                "label": "Typ",
+                "label": "Type",
                 "choices": ["openai", "ollama", "anthropic"],
                 "default": "openai",
-                "description": "API-Protokoll des Providers",
+                "description": "API protocol of the provider",
             },
             "api_base": {"type": "str", "label": "API Base URL", "required": True, "placeholder": "http://host:port/v1"},
-            "api_key": {"type": "password", "label": "API Key", "sensitive": True, "default": "not-needed", "description": "API Key (bei lokalen Providern: 'not-needed')"},
+            "api_key": {"type": "password", "label": "API Key", "sensitive": True, "default": "not-needed", "description": "API key (local providers: 'not-needed')"},
             "timeout": {"type": "int", "label": "Timeout (s)", "default": 600, "min": 10, "max": 3600, "description": "Request timeout in seconds — SYSTEM time (HTTP). Be generous: a queued gateway call waits for the model AND for its own slot, and a thinking model spends minutes on hidden reasoning tokens before the first visible one."},
-            "max_concurrent": {"type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallel jobs on this channel. For LLM calls it is no longer the limit — how many run at once is decided per model by the lanes of the LLM entry (LLM Routing › LLMs › Lanes); here it only sizes the channel's worker pool. It IS still the hard limit for the GPU jobs of this channel (image/video/mesh generation), which take a slot of this channel instead of a lane."},
+            "max_concurrent": {"type": "int", "label": "Max Concurrent (workers / GPU slots)", "default": 1, "min": 1, "max": 50, "description": "NOT the LLM limit any more. Parallel jobs on this channel — how many LLM calls run at once is decided per model by the lanes of the LLM entry (LLM Routing › LLMs › Lanes); here it only sizes the channel's worker pool. It IS still the hard limit for the GPU jobs of this channel (image/video/mesh generation), which take a slot of this channel instead of a lane."},
             "serialize_group": {"type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
         },
     },
@@ -163,25 +163,37 @@ SECTIONS = {
         "item_label_field": ["name", "model"],
         # Paged section (see image_generation for the generic mechanism). The
         # three pages are rendered entirely by static/admin/settings-routing.js —
-        # `fields` below stays the field definition of ONE array item (the LLMs
-        # page), the pages themselves list no fields.
+        # `fields` below stays the field definition of ONE array item, and the
+        # LLMs page lists which of them it shows, in the order it shows them.
+        # `custom: true` marks a page that renders no config fields at all (its
+        # whole content is built by that file); scripts/smoke_admin_pages.py
+        # reads both, so a field that is in no page is still caught.
         "pages": [
             {
                 "id": "tasks",
                 "label": "Tasks",
                 "icon": "🎯",
+                "custom": True,
                 "description": "One row per LLM task with its ordered LLM chain — assign, reorder, spot the gaps.",
             },
             {
                 "id": "llms",
                 "label": "LLMs",
                 "icon": "🧠",
-                "description": "The configured LLM entries: provider, model, sampling and which tasks they serve.",
+                # The order the fields appear in on the accordion of one entry.
+                # Lanes sits with provider/model: it is a property of the model
+                # slot (how many prompt beginnings it holds at once), not a
+                # sampling setting.
+                "fields": ["name", "enabled", "preload_on_startup", "provider",
+                           "model", "max_concurrent", "temperature",
+                           "max_tokens", "chat_template", "tasks"],
+                "description": "The configured LLM entries: provider, model, lanes, sampling and which tasks they serve.",
             },
             {
                 "id": "overview",
                 "label": "Overview",
                 "icon": "📋",
+                "custom": True,
                 "description": "What the server would route each task to right now (saved config, read-only).",
             },
         ],
@@ -221,7 +233,7 @@ SECTIONS = {
                 "default": 1,
                 "min": 1,
                 "max": 16,
-                "description": "How many calls this LLM entry may run at the same time. Each lane is one serialized slot that remembers the prompt beginning it last served, and a new call prefers the lane that already holds its own beginning — so two alternating conversations keep their prompt caches instead of evicting each other. 1 = strictly one call after another. Raise it only as far as the backend really serves in parallel: more lanes mean more different prompt beginnings at once, and the backend drops the oldest cache.",
+                "description": "How many calls this LLM entry may run at the same time. Each lane is one serialized slot that remembers the prompt beginning it last served, and a new call prefers the lane that already holds its own beginning — so two alternating conversations keep their prompt caches instead of evicting each other. 1 = strictly one call after another. Raise it only as far as the backend really serves in parallel: more lanes mean more different prompt beginnings at once, and the backend drops the oldest cache. Lanes belong to the MODEL, not to this entry: entries that name the same provider+model share one set of lanes, and the HIGHEST value among them is the one in force. What the lanes are doing right now is on /admin/agent-loop.",
             },
             "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 200000, "placeholder": "provider default", "hide_for_embedding": True, "description": "Completion budget per request. For thinking models (GLM, DeepSeek-R1, …) the HIDDEN reasoning tokens count against it — too small a value cuts the visible answer mid-output. Empty = no cap sent (provider default)."},
             "chat_template": {

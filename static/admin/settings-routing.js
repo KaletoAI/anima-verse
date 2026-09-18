@@ -654,6 +654,8 @@ async function renderLlmRoutingLlmsPage(content) {
     const def = SCHEMA.llm_routing || { fields: {} };
     const routing = rtRouting();
 
+    const fields = rtEntryFields(def);
+
     let html = '<div class="section active">';
     html += '<h1 class="section-title">🧠 ' + esc(RT_TEXT.title) + ' › ' + esc(RT_TEXT.pageLlms) + '</h1>';
     html += '<div class="desc" style="margin-bottom:12px;">' + esc(RT_TEXT.llmsIntro) + '</div>';
@@ -662,7 +664,7 @@ async function renderLlmRoutingLlmsPage(content) {
     html += '</div>';
     html += '<div id="arr-llm_routing">';
     routing.forEach((item, idx) => {
-        html += rtRenderEntryItem(def, item || {}, 'llm_routing[' + idx + ']', idx);
+        html += rtRenderEntryItem(def, fields, item || {}, 'llm_routing[' + idx + ']', idx);
     });
     html += '</div>';
     if (!routing.length) html += '<div class="desc rt-muted">' + esc(RT_TEXT.ovNoEntries) + '</div>';
@@ -673,9 +675,24 @@ async function renderLlmRoutingLlmsPage(content) {
     applyEmbedVisibility();
 }
 
+// The fields of ONE entry, in the order the LLMs page declares them
+// (schema: llm_routing.pages[id=llms].fields). A field the page forgot is
+// appended instead of disappearing — the same safety net resolvePages() gives
+// the generic paged sections; scripts/smoke_admin_pages.py makes sure it never
+// has to catch anything.
+function rtEntryFields(def) {
+    const all = def.fields || {};
+    const page = ((def.pages || []).find(p => p && p.id === 'llms') || {});
+    const listed = Array.isArray(page.fields) ? page.fields : [];
+    const out = {};
+    for (const key of listed) if (all[key]) out[key] = all[key];
+    for (const key of Object.keys(all)) if (!out[key]) out[key] = all[key];
+    return out;
+}
+
 // One accordion item. Mirrors renderArrayItem() (settings.js) — kept separate
 // because the delete button must not reach removeItem()/confirm().
-function rtRenderEntryItem(def, item, path, idx) {
+function rtRenderEntryItem(def, fields, item, path, idx) {
     const label = _itemLabel(item, def.item_label_field, 'Item ' + idx);
     const openClass = OPEN_ITEMS.has(path) ? ' open' : '';
     let html = '<div class="array-item' + openClass + '" id="item-' + path + '">';
@@ -691,7 +708,7 @@ function rtRenderEntryItem(def, item, path, idx) {
     // Outside the body, so the question stays visible on a collapsed item.
     if (RT_DELETE_ASK === idx) html += rtDeleteConfirmBox(item, idx);
     html += '<div class="array-item-body">';
-    html += renderFields(def.fields, item, path);
+    html += renderFields(fields, item, path);
     html += '</div></div>';
     return html;
 }

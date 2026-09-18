@@ -1,5 +1,6 @@
 
 let _state = null;
+let _lanes = null;
 
 let _loadCounter = 0;
 
@@ -26,6 +27,9 @@ async function load() {
     }
     _state = await r.json();
     render();
+    // The lane table is its own endpoint: the AgentLoop status must keep
+    // rendering even when the lane view fails, and vice versa.
+    await loadLanes();
   } catch(e) {
     clearTimeout(timer);
     if (lbl) lbl.textContent = (e.name === 'AbortError')
@@ -73,6 +77,21 @@ function render() {
   document.getElementById('respond').textContent =
     (act.length ? '▶ ' + act.join(', ') : '(idle)')
     + (rq.length ? '  |  waiting: ' + rq.join(' → ') : '');
+  // Why each queued answer did not start on the dispatcher's last look. The
+  // reason is recorded by the dispatcher itself (AgentLoop.status ->
+  // respond_waiting); nothing is guessed here. This is the AgentLoop's own
+  // queue — the lane manager's waiting calls are a different list and live in
+  // the lane table below.
+  const rw = s.respond_waiting || {};
+  const rwEl = document.getElementById('respond-waiting');
+  if (rwEl) {
+    const names = rq.filter(n => rw[n]);
+    rwEl.innerHTML = names.length
+      ? names.map(n => '<div class="wait-row"><span class="wait-name">'
+          + escapeHtml(n) + '</span><span class="wait-reason">'
+          + escapeHtml(respondReasonText(rw[n])) + '</span></div>').join('')
+      : '';
+  }
   const bumped = s.bumped || [];
   document.getElementById('bumped').textContent = bumped.length ? bumped.join(' → ') : '(none)';
   const round = s.remaining_in_round || [];
@@ -138,6 +157,129 @@ function render() {
     tr.innerHTML = `<td>${escapeHtml(r.agent)}</td><td>${escapeHtml(startedShort)}</td><td>${r.duration_s}s</td><td class="${cls}">${escapeHtml(r.outcome)}</td><td>${tagsCell}</td><td>${preview}</td>`;
     tbody.appendChild(tr);
   }
+}
+
+// ── Cache lanes (plan-cache-lanes.md § 6, item 10) ─────────────────────────
+
+// Why a queued ANSWER does not run — the dispatcher's own vocabulary
+// (agent_loop._respond_wait_reason). An unknown code is printed as it came,
+// never replaced by a plausible sentence.
+function respondReasonText(code) {
+  if (code === 'active') return 'already in a turn';
+  if (code === 'no_lane') return 'its LLM entry has no free lane';
+  return code || '';
+}
+
+// Why a call PARKED ON A POOL does not run — the lane manager's vocabulary
+// (llm_lanes._waiter_view). Same rule: unknown codes are shown raw.
+function laneReasonText(code) {
+  if (code === 'all_busy') return 'every lane is busy';
+  if (code === 'affinity_wait') return 'waiting briefly for its own lane (R3)';
+  if (code === 'conversation_hold') return 'a conversation lane is protected (R4)';
+  if (code === 'outranked') return 'another call goes first (R2)';
+  if (code === 'starting') return 'has a lane — starting';
+  return code || '';
+}
+
+function secs(v) { return (v === null || v === undefined) ? '' : (Math.round(v * 10) / 10) + 's'; }
+
+async function loadLanes() {
+  try {
+    const r = await fetch('/admin/agent-loop/lanes', {
+      cache: 'no-store', credentials: 'same-origin',
+    });
+    if (!r.ok) {
+      document.getElementById('lanes').textContent = 'HTTP ' + r.status;
+      return;
+    }
+    _lanes = await r.json();
+    renderLanes();
+  } catch(e) {
+    document.getElementById('lanes').textContent = 'error: ' + e.message;
+    console.error('[agent-loop lanes failed]', e);
+  }
+}
+
+function renderLanes() {
+  const el = document.getElementById('lanes');
+  if (!el) return;
+  const pools = (_lanes && _lanes.pools) || [];
+  if (!pools.length) {
+    el.innerHTML = '<span class="muted">(no LLM entry configured)</span>';
+    return;
+  }
+  el.innerHTML = pools.map(renderPool).join('');
+}
+
+function renderPool(p) {
+  // Lane counts: what the config allows and what exists right now. They differ
+  // while a shrink waits for running calls — showing only one would hide that.
+  const cfg = (p.configured_lanes === null || p.configured_lanes === undefined)
+    ? '?' : p.configured_lanes;
+  let counts;
+  if (!p.started) {
+    counts = cfg + (cfg === 1 ? ' lane' : ' lanes') + ' configured · not used yet';
+  } else {
+    counts = p.lane_count + (p.lane_count === 1 ? ' lane' : ' lanes')
+      + ' · ' + p.free + ' free · ' + p.busy + ' busy';
+    if (p.lane_count !== cfg) counts += ' · config ' + cfg;
+  }
+  let html = '<div class="pool">';
+  html += '<div class="pool-head"><span class="pool-key">' + escapeHtml(p.pool_key) + '</span>'
+    + '<span class="pool-counts">' + escapeHtml(counts) + '</span>'
+    + '<span class="pool-cache">⚡ ' + escapeHtml((p.cache && p.cache.text) || '') + '</span>';
+  if (!p.configured) html += '<span class="badge-warn">not in the routing config</span>';
+  html += '</div>';
+  if (p.entries && p.entries.length) {
+    html += '<div class="pool-entries">' + escapeHtml(p.entries.join(', ')) + '</div>';
+  }
+  if (p.started && (p.lanes || []).length) {
+    html += '<table class="lane-table"><thead><tr>'
+      + '<th>Lane</th><th>Hot key</th><th>Running</th><th>For</th><th>State</th>'
+      + '</tr></thead><tbody>';
+    for (const lane of p.lanes) {
+      const state = lane.busy ? '<span class="lane-busy">busy</span>'
+                              : '<span class="lane-idle">idle</span>';
+      const forCell = lane.busy
+        ? secs(lane.running_s)
+        : (lane.used ? 'idle ' + secs(lane.idle_s) : '');
+      html += '<tr><td>' + lane.lane_id + '</td>'
+        + '<td>' + (lane.hot_key ? escapeHtml(lane.hot_key) : '<span class="muted">never used</span>') + '</td>'
+        + '<td>' + (lane.busy ? escapeHtml(lane.label || '?') : '<span class="muted">—</span>') + '</td>'
+        + '<td>' + escapeHtml(forCell) + '</td>'
+        + '<td>' + state + '</td></tr>';
+    }
+    html += '</tbody></table>';
+  }
+  const waiting = p.waiting_calls || [];
+  if (waiting.length) {
+    html += '<div class="wait-head">Waiting on this pool (' + waiting.length + ')</div>';
+    html += '<table class="lane-table wait-table"><thead><tr>'
+      + '<th>Key</th><th>Class</th><th>Waiting</th><th>Reason</th>'
+      + '</tr></thead><tbody>';
+    for (const w of waiting) {
+      const cls = w.aged
+        ? escapeHtml(w.priority_label) + ' → ' + escapeHtml(w.effective_label)
+        : escapeHtml(w.priority_label);
+      // A resume or a nested tool call carries the TURN's arrival, not the
+      // moment it started waiting — "40s" there means "40s into its turn",
+      // not "parked for 40s". Saying which lane it is coming back to is what
+      // tells the two apart.
+      const key = (w.own_lane === null || w.own_lane === undefined)
+        ? escapeHtml(w.cache_key)
+        : escapeHtml(w.cache_key) + ' <span class="muted">(back to lane '
+          + escapeHtml(String(w.own_lane)) + ')</span>';
+      html += '<tr><td>' + key + '</td>'
+        + '<td>' + cls + '</td>'
+        + '<td>' + escapeHtml(secs(w.waiting_s)) + '</td>'
+        + '<td>' + escapeHtml(laneReasonText(w.reason)) + '</td></tr>';
+    }
+    html += '</tbody></table>';
+  } else if (p.started) {
+    html += '<div class="wait-head muted">nobody waiting</div>';
+  }
+  html += '</div>';
+  return html;
 }
 
 function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
