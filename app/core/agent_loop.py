@@ -6,13 +6,15 @@ turn at a time (LLM/GPU is the bottleneck). Sleeping characters and the
 user-controlled avatar are excluded.
 
 Chat-response bumps (``bump_respond``) do NOT go through the serial loop:
-they live in their own respond lane — a dispatcher task spawns up to
-``thoughts.max_parallel_responds`` concurrent respond turns (no global turn
+they live in their own respond lane — a dispatcher task spawns a respond
+turn whenever the responder's LLM ENTRY has a free cache lane (no global turn
 lock, no min_turn_gap), so a conversation never waits behind unrelated
-thought turns. Answers in the SAME room stay serialized via a per-room lock
-(each answer must see the previous one in the perception stream); actual
-LLM parallelism is still capped by the provider's max_concurrent
-(plan-parallel-bump-lane.md).
+thought turns. There is no second parallelism knob any more
+(plan-cache-lanes.md § 6 P3): how many replies run at once is what
+``max_concurrent`` of that entry says, because that is the number the backend
+can serve without evicting each other's prompt cache. Answers in the SAME
+room stay serialized via a per-room lock (each answer must see the previous
+one in the perception stream).
 
 Eligibility (per turn):
     - thoughts_enabled feature is true for the character
@@ -39,7 +41,7 @@ from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now
 from app.core.turn_trace import begin_trace, set_trace
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from app.core.log import get_logger
 from app.core.perception import STORYTELLER_SPEAKER
@@ -83,9 +85,13 @@ _ROOM_CONVO_ACTIVE_SEC = 240
 # in-chat-skip / no_llm backoffs.
 _MIN_TURN_GAP_DEFAULT = 30
 _MIN_PER_CHAR_COOLDOWN_MIN_DEFAULT = 5
-# Respond lane: how many bumped chat responses may run concurrently
-# (thoughts.max_parallel_responds, read live).
-_MAX_PARALLEL_RESPONDS_DEFAULT = 2
+
+# The task ids whose PROMPT a loop turn produces — they decide the cache key
+# and the LLM entry the turn will run on (plan-cache-lanes.md § 3).
+# A respond turn calls chat_engine.run_chat_turn with task_type
+# "character_talk"; an autonomous turn registers as "thought".
+_RESPOND_TASK_TYPE = "character_talk"
+_THOUGHT_TASK_TYPE = "thought"
 
 
 def _get_min_turn_gap() -> int:
@@ -107,14 +113,65 @@ def _get_per_char_cooldown_min() -> int:
         return _MIN_PER_CHAR_COOLDOWN_MIN_DEFAULT
 
 
-def _get_max_parallel_responds() -> int:
-    """Read thoughts.max_parallel_responds from config (live), floor 1."""
+def _pool_for(task_type: str, character_name: str) -> str:
+    """The lane pool a turn of this character will really run on.
+
+    Resolved the way the turn itself resolves it — ``resolve_llm`` with the
+    character's name, so a per-character routing override counts — and turned
+    into the pool key of that LLM entry (``provider/model``). One place for
+    both loops.
+
+    Unresolvable (task disabled, no provider available, config unreadable) is
+    answered with the pool key of the unknown entry, ``?/?``. That is a real
+    pool of one lane, so a character whose route cannot be read gets one turn
+    at a time instead of an unbounded number — the safe answer, and the
+    dispatcher's LLM gate has usually already stopped the lane before it.
+    """
+    from app.core.llm_lanes import pool_key_for
     try:
-        from app.core import config as _cfg
-        return max(1, int(_cfg.get("thoughts.max_parallel_responds")
-                          or _MAX_PARALLEL_RESPONDS_DEFAULT))
-    except Exception:
-        return _MAX_PARALLEL_RESPONDS_DEFAULT
+        from app.core.llm_router import resolve_llm
+        instance = resolve_llm(task_type, agent_name=character_name)
+    except Exception as e:  # noqa: BLE001 — routing must never stop a turn
+        logger.debug("pool lookup for %s/%s failed: %s",
+                     task_type, character_name, e)
+        instance = None
+    if instance is None:
+        return pool_key_for("", "")
+    return pool_key_for(instance.provider_name, instance.model)
+
+
+def _has_hot_lane(character_name: str) -> bool:
+    """R5: is this character's thought prompt still on a FREE lane of the
+    entry its turn would run on (plan-cache-lanes.md § 4 R5)?
+
+    True means the backend would most likely serve the beginning of that
+    prompt from its cache. It is the only thing R5 asks, and it is asked only
+    about characters that are due anyway — never to make anybody due.
+
+    Never raises: an unreadable route or lane state answers False, and the
+    loop keeps the order it had.
+    """
+    try:
+        from app.core.llm_lanes import cache_key_for, get_lane_manager
+        pool_key = _pool_for(_THOUGHT_TASK_TYPE, character_name)
+        key = cache_key_for(_THOUGHT_TASK_TYPE, character_name)
+        return get_lane_manager().hot_free_lane(pool_key, key)
+    except Exception as e:  # noqa: BLE001 — an order hint never stops a turn
+        logger.debug("hot-lane check for %s failed: %s", character_name, e)
+        return False
+
+
+def _respond_pool_of(character_name: str) -> str:
+    """The pool a reply of this character runs on — the chat entry the reply
+    path itself picks (``chat_engine.chat_llm_task``: a temporary NPC answers
+    through ``npc_talk``, everyone else through ``chat_stream``)."""
+    try:
+        from app.core.chat_engine import chat_llm_task
+        task = chat_llm_task(character_name)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("chat task for %s not readable: %s", character_name, e)
+        task = "chat_stream"
+    return _pool_for(task, character_name)
 
 
 # Transient network error types the LLM stream can raise when the provider
@@ -156,14 +213,33 @@ class AgentLoop:
         self._bump_perception: Dict[str, Dict[str, Any]] = {}
         # Respond lane (plan-parallel-bump-lane.md): bump_respond entries do
         # NOT share the serial loop. The dispatcher task pops from
-        # _respond_queue (FIFO, obligatory-first) and runs up to
-        # thoughts.max_parallel_responds concurrent respond turns. A
-        # character never runs two turns at once (_respond_active is checked
-        # by the round-robin too); answers in the same room serialize on a
-        # per-room asyncio.Lock so each answer sees the previous one.
+        # _respond_queue (FIFO, obligatory-first) and starts a respond turn
+        # for every FREE CACHE LANE of the responder's LLM entry
+        # (plan-cache-lanes.md § 6 P3). A character never runs two turns at
+        # once (_respond_active is checked by the round-robin too); answers in
+        # the same room serialize on a per-room asyncio.Lock so each answer
+        # sees the previous one.
         self._respond_queue: List[str] = []
         self._respond_to: Dict[str, Dict[str, Any]] = {}
         self._respond_active: Dict[str, asyncio.Task] = {}
+        # Which pool each running respond turn is going to occupy. A turn
+        # that has just been started does not hold its lane yet (it is still
+        # building its prompt), so the free-lane count alone would let the
+        # dispatcher start one more turn on every tick until the first of
+        # them finally acquires. Entry added at the start, dropped in the
+        # worker's finally.
+        self._respond_pools: Dict[str, str] = {}
+        # Per QUEUE ENTRY, resolved once in bump_respond: the pool key the
+        # reply of this name would run on. The dispatcher asks every queued
+        # name on every tick, and resolving the entry means a character-config
+        # read plus a routing lookup — too much to redo twice a second for a
+        # name that is only waiting. Dropped when the name leaves the queue,
+        # overwritten by the next bump for the same name.
+        self._respond_resolved: Dict[str, str] = {}
+        # Per QUEUE ENTRY: why the dispatcher did not start it on its last
+        # look ("active" / "no_lane"). Pure bookkeeping for status() — the
+        # dispatcher decides nothing by it.
+        self._respond_wait_reason: Dict[str, str] = {}
         self._room_locks: Dict[str, asyncio.Lock] = {}
         self._respond_task: Optional[asyncio.Task] = None
         # Room conversation energy (plan-room-conversation phase 3b): per room
@@ -232,6 +308,11 @@ class AgentLoop:
         self._task = None
         self._respond_task = None
         self._respond_active.clear()
+        # Belongs to the very same turns: a worker that was cancelled before
+        # its coroutine ever ran never reaches its own finally, so without
+        # this its entry would survive a stop/start of this instance and
+        # shrink that pool's budget by one for good.
+        self._respond_pools.clear()
         logger.info("AgentLoop stopped")
 
     # ------------------------------------------------------------------
@@ -249,6 +330,12 @@ class AgentLoop:
             "bumped": list(self._bump_queue),
             "respond_queue": list(self._respond_queue),
             "respond_active": list(self._respond_active.keys()),
+            # Why each queued name did not start on the dispatcher's last
+            # look — "active" (already in a turn) or "no_lane" (its LLM entry
+            # is full). The admin table of phase 4 reads it instead of
+            # deriving it again.
+            "respond_waiting": {n: self._respond_wait_reason.get(n, "")
+                                for n in self._respond_queue},
             "recent": list(self._recent),
         }
 
@@ -344,6 +431,16 @@ class AgentLoop:
             self._respond_queue.insert(0, character_name)
         else:
             self._respond_queue.append(character_name)
+        # The LLM entry of this reply, resolved HERE and kept for as long as
+        # this queue entry lives: the dispatcher looks at every waiting name
+        # twice a second, and the lookup behind it reads the character config
+        # and the routing. A new bump for the same name resolves again — that
+        # is the only invalidation, and it is enough, because the two things
+        # that move the answer to another entry (the character becoming a
+        # temporary NPC, an edit to the routing) both come with a new
+        # utterance long before they matter.
+        self._respond_resolved[character_name] = _respond_pool_of(character_name)
+        self._respond_wait_reason.pop(character_name, None)
         logger.info("AgentLoop.bump_respond: %s %s to %s", character_name,
                     "answers" if obligatory else "(opportunity)", speaker)
         return True
@@ -885,28 +982,112 @@ class AgentLoop:
         except Exception:
             return ""
 
+    def _respond_lane_free(self, character_name: str, pool_key: str) -> bool:
+        """May a reply of this character START right now — does its LLM entry
+        have a lane for it (plan-cache-lanes.md § 6 P3, item 8)?
+
+        Two numbers, and the smaller one decides:
+
+        * ``free_lanes`` for THIS key, asked with the class the reply really
+          carries (``Priority.CHAT``, see ``llm_lanes.lane_priority_for``):
+          what the assignment rules would hand out at this instant, R4
+          included.
+        * capacity minus the respond turns already under way on the same pool:
+          a turn that was started a moment ago has not acquired its lane yet,
+          and without this term the dispatcher would start one more of them on
+          every tick until the first one finally does.
+
+        The pool is NOT synchronised with the config here — that is the job of
+        the path that actually takes a lane (``ProviderQueue._wait_for_lane``
+        calls ``sync_from_config`` before every acquire). Asking must not
+        resize a pool a running call is on.
+
+        EXACTLY WHAT THIS PROMISES, because it is not quite "starts only when
+        a lane is free": the second term counts the replies THIS dispatcher
+        has started, not every call on the pool. A lane taken by somebody else
+        between the question and the reply's own acquire — a user chat turn, a
+        thought, a nested tool call — is therefore counted as free once, and
+        one reply too many can be started per pool. It is deliberately not
+        accounted for: the reply then simply waits for its lane inside the
+        queue, where every other call waits too, and the alternative (a
+        reservation held across the whole prompt build) would keep a lane
+        empty for exactly as long as it saves one. What this guarantees is
+        that the dispatcher never starts a SECOND reply on a pool it already
+        filled itself — the case that used to repeat on every tick.
+        """
+        from app.core.llm_lanes import cache_key_for, get_lane_manager
+        from app.core.llm_queue import Priority
+
+        manager = get_lane_manager()
+        key = cache_key_for(_RESPOND_TASK_TYPE, character_name)
+        free = manager.free_lanes(pool_key, key, priority=Priority.CHAT)
+        starting = sum(1 for pool in self._respond_pools.values()
+                       if pool == pool_key)
+        return min(free, manager.lane_capacity(pool_key) - starting) >= 1
+
     def _pop_next_respond(self) -> Optional[tuple]:
-        """Pop the first queued respond whose character is not already
-        running a turn. Re-checks eligibility at pop time (the character
-        may have been taken over as avatar since the bump). Returns
-        (name, payload) or None."""
+        """Pop the first queued respond that may start right now. Returns
+        (name, payload, pool_key) or None.
+
+        Three reasons not to take a name, and they are not the same:
+        a character that is already running a turn is skipped (never two turns
+        at once), one that became ineligible since the bump — taken over as an
+        avatar, say — is DROPPED, and one whose LLM entry has no free lane
+        keeps its place in the queue and is asked again on the next tick.
+
+        The lane check is per candidate, not once per tick: two characters can
+        answer through different entries (a temporary NPC on a fast model next
+        to an ordinary character), and a full entry must not hold up a reply
+        that would run on an empty one.
+
+        WHAT IS CACHED AND WHAT IS NOT. This runs twice a second for every
+        waiting name, so only what can actually change between two looks is
+        looked up again: whether the character is in a turn (in memory),
+        whether it is still eligible (one lookup — an avatar takeover must
+        stop the answer) and the lane state. The LLM ENTRY is not re-derived:
+        it was resolved when the name entered the queue (``bump_respond`` →
+        ``_respond_resolved``) and stays that value until the next bump for
+        that name. A name that is in the queue without a resolved entry — only
+        possible for a queue that outlived a code path that filled it — is
+        resolved here once and cached the same way.
+
+        Every name that does not start keeps its reason in
+        ``_respond_wait_reason`` (see ``status()``); it is dropped as soon as
+        the name starts or leaves the queue.
+        """
         for name in list(self._respond_queue):
             if name in self._respond_active:
+                self._respond_wait_reason[name] = "active"
                 continue  # never two turns for the same character at once
-            self._respond_queue.remove(name)
-            payload = self._respond_to.pop(name, None)
-            if not payload:
-                continue
             if not _is_respond_eligible(name):
+                self._respond_queue.remove(name)
+                self._respond_to.pop(name, None)
+                self._respond_resolved.pop(name, None)
+                self._respond_wait_reason.pop(name, None)
                 logger.debug("respond lane: %s became ineligible — dropped", name)
                 continue
-            return name, payload
+            pool_key = self._respond_resolved.get(name)
+            if pool_key is None:
+                pool_key = _respond_pool_of(name)
+                self._respond_resolved[name] = pool_key
+            if not self._respond_lane_free(name, pool_key):
+                self._respond_wait_reason[name] = "no_lane"
+                continue  # its entry is busy — the name keeps its place
+            self._respond_queue.remove(name)
+            payload = self._respond_to.pop(name, None)
+            self._respond_resolved.pop(name, None)
+            self._respond_wait_reason.pop(name, None)
+            if not payload:
+                continue
+            return name, payload, pool_key
         return None
 
     async def _respond_dispatcher(self) -> None:
-        """Own asyncio task feeding the respond lane. Spawns respond turns
-        as concurrent tasks up to thoughts.max_parallel_responds — no global
-        turn lock, no min_turn_gap. Honors the shared pause switch (admin
+        """Own asyncio task feeding the respond lane. Spawns a respond turn
+        for every FREE CACHE LANE of the responder's LLM entry — no global
+        turn lock, no min_turn_gap, and no separate parallelism knob: how many
+        replies may run at once is what ``max_concurrent`` of that entry says
+        (plan-cache-lanes.md § 6 P3). Honors the shared pause switch (admin
         pause, world freeze, world sleep) and keeps the queue when the chat
         LLM is unreachable."""
         try:
@@ -921,17 +1102,18 @@ class AgentLoop:
                 if _is_paused():
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
-                if len(self._respond_active) >= _get_max_parallel_responds():
-                    await asyncio.sleep(0.5)
-                    continue
                 if not _chat_llm_available():
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
                 nxt = self._pop_next_respond()
                 if not nxt:
-                    await asyncio.sleep(1)
+                    # Either nobody is startable or every entry is busy — the
+                    # short nap is what makes the second case a wait for a
+                    # lane instead of a spin.
+                    await asyncio.sleep(0.5)
                     continue
-                name, payload = nxt
+                name, payload, pool_key = nxt
+                self._respond_pools[name] = pool_key
                 self._respond_active[name] = asyncio.create_task(
                     self._respond_worker(name, payload))
             except asyncio.CancelledError:
@@ -977,6 +1159,7 @@ class AgentLoop:
                 outcome = f"error: {type(e).__name__}"
         finally:
             self._respond_active.pop(character_name, None)
+            self._respond_pools.pop(character_name, None)
             self._record_turn(character_name, started_at, outcome, turn_info)
 
     # ------------------------------------------------------------------
@@ -999,6 +1182,11 @@ class AgentLoop:
         cooldown deliberately (external triggers like avatar room entry
         must act immediately). Chat responses never appear here — they
         live in the respond lane.
+
+        Among the candidates that are due ANYWAY, the cache lanes decide the
+        order (R5, plan-cache-lanes.md § 4): see ``_take_from_tickets``. They
+        decide nothing else — tickets, cooldowns and eligibility keep saying
+        WHO is due, and a bump stays a bump.
         """
         # 1) Bumped agents come first — cooldown ignored (bump = priority).
         #    A bumped char who is mid-respond stays queued for later.
@@ -1035,35 +1223,93 @@ class AgentLoop:
                 return False
             return True
 
+        def _due(name: str) -> bool:
+            """Everything that decides whether this character may take a turn
+            at all — unchanged, and asked before R5 ever sees a name."""
+            if name in self._respond_active:
+                return False   # mid-respond — never two turns at once
+            if not _is_agent_eligible(name):
+                return False
+            if _on_cooldown(name):
+                return False
+            if _in_chat_skip(name):
+                return False
+            return True
+
         # 2) Current round.
-        while self._tickets:
-            candidate = self._tickets.pop(0)
-            if candidate in self._respond_active:
-                continue  # mid-respond — never two turns at once
-            if not _is_agent_eligible(candidate):
-                continue
-            if _on_cooldown(candidate):
-                continue  # next ticket — skip this char
-            if _in_chat_skip(candidate):
-                continue  # char is actively chatting — no thought
+        candidate = self._take_from_tickets(_due)
+        if candidate:
             return candidate
 
         # 3) Refill round.
         self._tickets = _build_round_tickets()
         if not self._tickets:
             return None
-        while self._tickets:
-            candidate = self._tickets.pop(0)
-            if candidate in self._respond_active:
+        return self._take_from_tickets(_due)
+
+    def _take_from_tickets(self,
+                           is_due: Callable[[str], bool]) -> Optional[str]:
+        """One turn out of the current round — R5 decides the order.
+
+        The tickets are walked in their (shuffled) order, and the walk spends
+        exactly the tickets the serial walk before R5 spent:
+
+        * a ticket in FRONT of the first due character is spent right there.
+          That is what makes a character on cooldown come up less often and
+          not block the round, and it is the behaviour this loop always had;
+        * from the first due character onwards a not-due ticket is only
+          SKIPPED, never popped. The old loop returned at that point and never
+          looked at those tickets at all, so they were judged only when they
+          were actually reached — a character that is on cooldown at this
+          instant but free again two picks later still gets all its turns.
+          Spending them here instead would take an importance-3 character's
+          whole round away for one moment of cooldown.
+
+        Among the due characters the walk finds, the one whose prompt is still
+        sitting on a free lane of its LLM entry wins
+        (``llm_lanes.hot_free_lane``) — one turn where the backend can reuse
+        the prompt beginning instead of one where it cannot. ONLY the chosen
+        character's ticket is consumed.
+
+        R5 therefore only ever changes the ORDER of characters that were all
+        going to run in this round anyway:
+
+        * a character that is not due is never looked at — ``is_due`` has
+          already answered for it;
+        * the tickets of the ones that are passed over stay in the list, so
+          they are picked on the next turns of the same round. A character
+          that is never hot therefore comes up in its normal turn; it cannot
+          be starved, because the round runs out of hot candidates as they
+          take their turns;
+        * with nobody hot (the usual case on a fresh pool) the first due
+          character wins, which is the order the round already had.
+
+        The pool is read for the THOUGHT entry of each candidate. A turn that
+        then turns out to be a chime runs on the chat entry instead — R5
+        picked the wrong lane to look at, and the cost of that is nothing: the
+        character was due either way and the order is all that changed.
+        """
+        due: List[str] = []
+        verdict: Dict[str, bool] = {}
+        index = 0
+        while index < len(self._tickets):
+            name = self._tickets[index]
+            if name not in verdict:
+                verdict[name] = bool(is_due(name))
+            if not verdict[name]:
+                if due:
+                    index += 1     # behind the first due name — only skipped
+                    continue
+                self._tickets.pop(index)   # the ticket is spent, as before
                 continue
-            if not _is_agent_eligible(candidate):
-                continue
-            if _on_cooldown(candidate):
-                continue
-            if _in_chat_skip(candidate):
-                continue
-            return candidate
-        return None
+            if name not in due:
+                due.append(name)
+            index += 1
+        if not due:
+            return None
+        picked = next((name for name in due if _has_hot_lane(name)), due[0])
+        self._tickets.remove(picked)
+        return picked
 
     # ------------------------------------------------------------------
     # Turn execution

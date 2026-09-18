@@ -9,16 +9,28 @@ redirected to a throwaway temp world, so the tracked worlds/demo/world.db stays
 untouched. The LLM turn
 (_run_respond_turn) and the room resolution (_char_room_key) are stubbed on
 the AgentLoop instance; the module-level gates (_is_paused,
-_is_respond_eligible, _chat_llm_available, _get_max_parallel_responds) are
-monkeypatched. What remains under test is the REAL dispatcher, queue and
-lock logic of app/core/agent_loop.py.
+_is_respond_eligible, _chat_llm_available) and the pool lookup
+(_respond_pool_of, which would need routing config) are monkeypatched. What
+remains under test is the REAL dispatcher, queue and lock logic of
+app/core/agent_loop.py — the lane budget included: the lane manager is the
+real one, with a pool of a known lane count (plan-cache-lanes.md § 6 P3).
+
+HOW MANY TURNS MAY RUN AT ONCE is no longer a knob of its own
+(``thoughts.max_parallel_responds`` is gone, 2026-09-18): it is the number of
+free lanes of the LLM entry the reply runs on. The scenarios below therefore
+set the LANE COUNT of the pool where they used to set the cap; the expected
+numbers are unchanged, because two lanes allow exactly what a cap of 2 did.
+The stub turn never reaches an LLM and so never takes a lane — what limits it
+is the dispatcher's own bookkeeping of the turns it has started
+(``_respond_pools``), which is the part that has to be right for a real turn
+too: a turn that was started a moment ago does not hold its lane yet.
 
 Expected numbers, derived by hand from the design (not from output):
 
-1. Capacity — 3 obligatory bumps in 3 distinct rooms, cap 2, each stub
-   turn takes 0.4 s: all 3 must run, and the maximum number of turns
+1. Capacity — 3 obligatory bumps in 3 distinct rooms, an entry with 2 lanes,
+   each stub turn takes 0.4 s: all 3 must run, and the maximum number of turns
    observed running at the same instant must be exactly 2 (the third can
-   only start after a slot frees up; with only a serial loop it would
+   only start after a lane frees up; with only a serial loop it would
    never exceed 1 — that is the regression this guards).
 
 2. Same-room serialization — 2 bumps in the SAME room: their stub
@@ -36,7 +48,9 @@ Expected numbers, derived by hand from the design (not from output):
    running is deferred, not dropped: the stub must run exactly twice.
 """
 import asyncio
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -44,22 +58,35 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+
+def scratch(prefix):
+    """A temp directory that lives exactly as long as this run — a check that
+    is started a few dozen times otherwise fills /tmp with empty worlds."""
+    path = tempfile.mkdtemp(prefix=prefix)
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
+
+
 # Storage and clip library MUST be redirected BEFORE the first app import:
 # without it the default world is worlds/demo, which is tracked in git, and
 # AgentLoop's pause gate (_is_paused -> is_world_frozen -> get_connection)
 # would open its world.db and leave the working tree dirty.
-STORAGE = Path(tempfile.mkdtemp(prefix="respond-lane-storage-"))
-os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
-    prefix="respond-lane-clips-")
+STORAGE = Path(scratch("respond-lane-storage-"))
+os.environ["ANIMATION_CLIPS_DIR"] = scratch("respond-lane-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
 
 from app.core import agent_loop as al  # noqa: E402
+from app.core.llm_lanes import get_lane_manager  # noqa: E402
 
 # Captured BEFORE make_loop() monkeypatches the module gates — scenario 6
 # inspects the real implementation.
 _REAL_CHAT_GATE = al._chat_llm_available
+
+# The one LLM entry every stubbed reply runs on (provider/model, as
+# llm_lanes.pool_key_for builds it).
+POOL = "check-provider/check-model"
 
 FAILED = []
 
@@ -71,13 +98,21 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         FAILED.append(name)
 
 
-def make_loop(room_map, cap=2, turn_seconds=0.4):
+def make_loop(room_map, lanes=2, turn_seconds=0.4):
     """AgentLoop with stubbed turn + room resolution; returns (loop, runs).
 
     runs collects (name, start, end) per stub turn, monotonic seconds.
+
+    Every character answers through the SAME pool here, which is the shape
+    that makes the numbers countable: one entry, ``lanes`` lanes, and that is
+    the whole budget. The manager is reset first, so a scenario never inherits
+    the lanes of the one before it.
     """
     loop = al.AgentLoop()
     runs = []
+    get_lane_manager().reset()
+    get_lane_manager().reconfigure(POOL, lanes)
+    al._respond_pool_of = lambda name: POOL
 
     async def fake_turn(name, respond):
         start = time.monotonic()
@@ -91,7 +126,6 @@ def make_loop(room_map, cap=2, turn_seconds=0.4):
     al._is_paused = lambda: False
     al._is_respond_eligible = lambda name: True
     al._chat_llm_available = lambda: True
-    al._get_max_parallel_responds = lambda: cap
     al._BOOT_GRACE_SECONDS = 0
     return loop, runs
 
@@ -117,7 +151,7 @@ def overlap(a, b):
 
 
 async def scenario_capacity():
-    print("Scenario 1: capacity cap 2, three rooms")
+    print("Scenario 1: two lanes, three rooms")
     loop, runs = make_loop({"A": "loc/r1", "B": "loc/r2", "C": "loc/r3"})
     for n in ("A", "B", "C"):
         loop.bump_respond(n, speaker="S", content="hi", obligatory=True)
@@ -145,7 +179,7 @@ async def scenario_room_serial():
 
 async def scenario_obligatory_first():
     print("Scenario 3: obligatory starts before earlier opportunity")
-    loop, runs = make_loop({"A": "loc/r1", "B": "loc/r2"}, cap=1)
+    loop, runs = make_loop({"A": "loc/r1", "B": "loc/r2"}, lanes=1)
     loop.bump_respond("A", speaker="S", content="hi", obligatory=False)
     loop.bump_respond("B", speaker="S", content="hi", obligatory=True)
     check("queue order B,A", loop._respond_queue == ["B", "A"],

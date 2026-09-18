@@ -263,6 +263,17 @@ them can be read on its own; [7]-[9] switch on exactly the one they measure.
        OLDER one — R1 picks the least recently used lane among those allowed,
        so a lane a conversation just left is the last one anybody reaches for.
        The exemption only decides what happens when there is nothing else.
+       AND ``free_lanes`` HAS TO SAY THE SAME THING. It answers "what could
+       this caller take right now", so it needs the caller's class, exactly
+       as the assignment does: on that pool the thought is told 0 and the
+       chat call 1 — and the chat call then really gets a lane, which is what
+       makes the 1 the truth and not an opinion. Asked without a class it
+       answers for background work, which is the safe default for everyone
+       who is. The respond dispatcher of phase 3 asks with the chat class
+       (`agent_loop._respond_lane_free`); told 0 here it would leave a free
+       lane unused whenever the NEIGHBOURING conversation had been on it
+       within the hold — with one lane per entry, that is every second turn
+       of a two-person scene.
     f) AND NOT AGAINST THE CALLER'S OWN LANE. The nested tool call of a turn
        hands its lane back first (R6) and asks again a moment later; the lane
        is then a free, fresh chat lane belonging to that very turn. R4 would
@@ -933,6 +944,10 @@ clock9d.set(3)
 check("e) a thought still waits for the running call",
       lane_of(try_lane(m9d, "thought:Ida", Priority.LOW, arrived=3)),
       "LaneTimeout")
+check("e) free_lanes tells background work the same: no lane",
+      m9d.free_lanes(POOL, "thought:Ida"), 0)
+check("e) but it tells a CHAT caller the truth — one lane",
+      m9d.free_lanes(POOL, "chat:Vallerie", priority=Priority.CHAT), 1)
 h = try_lane(m9d, "chat:Vallerie", Priority.CHAT, arrived=3)
 check("e) a CHAT call takes the held lane at once — the hold is against "
       "background work", lane_of(h), 0)

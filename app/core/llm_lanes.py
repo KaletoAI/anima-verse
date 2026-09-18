@@ -480,7 +480,8 @@ class LaneManager:
         finally:
             handle.release()
 
-    def free_lanes(self, pool_key: str, cache_key: str = "") -> int:
+    def free_lanes(self, pool_key: str, cache_key: str = "",
+                   priority: int = Priority.NORMAL) -> int:
         """How many lanes of the pool ``cache_key`` could take right now.
 
         R4 is applied (a protected conversation lane is not free for a
@@ -489,6 +490,16 @@ class LaneManager:
         a call off is still a lane that call will take. Without a cache key
         the plain number of free lanes comes back. R5 (phase 3) and the
         respond dispatcher read this.
+
+        ``priority`` is the CALLER's lane class and it has to be handed in,
+        because R4 does not apply to everybody: the chat class is exempt from
+        the conversation hold (§ 4 R4), exactly as ``_assignable_lane``
+        exempts it. Without the argument this answered every question as if
+        the caller were background work and UNDER-reported for a chat key —
+        the respond dispatcher of phase 3 asks for ``chat:<character>`` and
+        would have left a free lane unused whenever a NEIGHBOURING
+        conversation had been on it within the hold. The default keeps the
+        old answer for callers that really are background.
 
         The answer is what could REALLY be taken, which in the blockade branch
         is exactly ONE, however many held lanes there are: the first caller to
@@ -503,12 +514,50 @@ class LaneManager:
             free = [lane for lane in pool.lanes if not lane.busy]
             if not cache_key:
                 return len(free)
+            if int(priority) <= int(Priority.CHAT):
+                return len(free)
             now = self._now()
             open_now = [lane for lane in free
                         if not self._on_hold(lane, cache_key, now)]
             if not open_now and free and not any(lane.busy for lane in pool.lanes):
                 return 1   # no blockade, see _assignable_lane — but only one
             return len(open_now)
+
+    def lane_capacity(self, pool_key: str) -> int:
+        """How many lanes this pool has ALTOGETHER, busy ones included.
+
+        The respond dispatcher (phase 3) needs it next to ``free_lanes``: a
+        turn it has just started does not hold its lane yet — it is still
+        building its prompt — so the free count alone would let it start one
+        turn per tick until the first of them finally acquires. Capacity minus
+        the turns already under way on this pool is the honest budget.
+
+        A pool that has never been used answers from the config, without
+        creating it: asking must never invent a pool the admin view then shows
+        (the same rule ``free_lanes`` follows).
+        """
+        with self._cond:
+            pool = self._pools.get(pool_key)
+            if pool is None:
+                return max(1, int(self._lane_count(pool_key)))
+            return len(pool.lanes)
+
+    def hot_free_lane(self, pool_key: str, cache_key: str) -> bool:
+        """R5: is this key's prompt sitting on a lane that is free right now?
+
+        The AgentLoop asks it about candidates that are due anyway, to decide
+        the ORDER among them (plan § 4 R5) — never who is due. A pool that
+        does not exist yet holds no prompt of anybody, so the answer is False:
+        R5 then changes nothing and the loop keeps its own order.
+        """
+        if not cache_key:
+            return False
+        with self._cond:
+            pool = self._pools.get(pool_key)
+            if pool is None:
+                return False
+            return any(not lane.busy and lane.hot_key == cache_key
+                       for lane in pool.lanes)
 
     def snapshot(self) -> Dict[str, Any]:
         """State of every pool for the admin view (phase 4) and for checks."""
