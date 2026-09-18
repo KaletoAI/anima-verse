@@ -29,6 +29,9 @@ initiatives, no Instagram, no outfit changes"):
 
 [1] Both templates render ``skill_context_blocks`` — what the character's
     skills offer (e.g. "Places you can go") is knowledge, not an initiative.
+    The same holds for ``activity_hint_block``, the room's place offer: a
+    character that sits down or leans on the counter mid-conversation needs
+    the pose keys (user decision, 2026-09-18).
 [2] Every variable the in-chat template omits is one of DELIBERATE below.
 [3] Both templates render from the same context without an undefined variable
     (the environment runs StrictUndefined, so a forgotten one would raise).
@@ -59,9 +62,6 @@ DELIBERATE = {
     "assignments_block": "assignments would pull the character out of the chat",
     "retrospective_block": "reflecting on the day is not a conversation step",
     "tracker_block": "tracker-driven initiative, same reason",
-    # Not a decision yet — the place offer is knowledge, like skill_context_blocks
-    # was. Tracked as T2b in development_instructions/plan-bewegung-party-prompts.md.
-    "activity_hint_block": "OPEN: the room's place offer — see plan T2b",
 }
 
 # Blocks that exist only in the in-chat turn (case [4]).
@@ -88,6 +88,8 @@ regular, in_chat = names(REGULAR), names(IN_CHAT)
 # [1]
 check("[1] regular renders skill_context_blocks", "skill_context_blocks" in regular, True)
 check("[1] in-chat renders skill_context_blocks", "skill_context_blocks" in in_chat, True)
+check("[1] regular renders activity_hint_block", "activity_hint_block" in regular, True)
+check("[1] in-chat renders activity_hint_block", "activity_hint_block" in in_chat, True)
 
 # [2]
 missing = regular - in_chat

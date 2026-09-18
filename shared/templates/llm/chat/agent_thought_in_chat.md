@@ -32,6 +32,12 @@
      inbox_block            — unread messages from any sender
      events_block           — acute events at location
      commitments_block      — open promises
+     activity_hint_block    — the room's place offer: free places with their
+                              poses, busy ones by name, the free-text hint as
+                              the tail. In a chat too: a character that shifts
+                              to a seat or leans on the counter mid-conversation
+                              needs the pose keys, and changing WHAT IT DOES is
+                              not one of the initiatives this turn holds back.
      skill_context_blocks   — self-contained sections contributed by the
                               character's active skills (e.g. "Places you can
                               go"). The SAME block agent_thought.md renders:
@@ -119,6 +125,12 @@ happened. Do not reuse a sentence, a phrase or an image from these lines.
 
 === Open promises ===
 {{ commitments_block }}
+{% endif %}
+{% if activity_hint_block %}
+
+=== Places and activities here ===
+{{ activity_hint_block }}
+Use SetActivity to set what you are doing right now — pose: one of the pose keys above, detail: what you do in 2-6 words (for example pose sitting, detail sketching in a notebook). The tool description states the JSON input.
 {% endif %}
 {% if skill_context_blocks %}
 
