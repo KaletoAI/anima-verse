@@ -26,22 +26,15 @@ Export „FBX, **Without Skin**", 30 fps. Direkt verwendbar.
 
 ### 2. Beliebige Mocap-Quelle + Retargeting (Adobe-frei)
 
-`tools/retarget-to-mixamo.py` konvertiert BVH/FBX von fremden Skeletten
-auf unser Mixamo-Skelett:
+Der Import läuft heute über `scripts/clip_import_cmu.py` im Repo-Wurzel-
+verzeichnis (Blender-Seite: `app/blender/scripts/cmu_clip.py`, `fbx_clip.py`,
+`clip_orient.py`, `clip_roll.py`). Jede Konvertierung treibt ihren Take auf
+das Referenz-Rig `shared/models/rig/reference.fbx` (gebaut von
+`scripts/make_reference_rig.py`) — nicht auf einen Clip. Das frühere
+Client-Skript `tools/retarget-to-mixamo.py` (Mixamo-Referenzskelett) ist
+damit abgelöst und entfernt.
 
-```bash
-blender --background --python tools/retarget-to-mixamo.py -- \
-    --ref public/models/Idle.fbx \      # Mixamo-Referenzskelett
-    --in  <datei.bvh|.fbx|ordner> \     # Quelle(n)
-    --out <ausgabeordner> [--kind walk] # Ausgabename
-```
-
-Verfahren: Knochen-Zuordnung per Namens-Heuristik (Tabelle `MAP` im
-Skript erweiterbar), Rotationsübertragung über den Weltraum (kompensiert
-abweichende Ruhe-Orientierungen), Hüftbewegung auf die Zielgröße skaliert,
-Export als Mixamo-kompatible FBX. Ganze Ordner in einem Lauf.
-
-**Verifiziert** mit der CMU-Motion-Capture-Datenbank (Public Domain,
+**Historisch verifiziert** mit der CMU-Motion-Capture-Datenbank (Public Domain,
 2.548 Bewegungen, BVH-Mirror: github.com/una-dinosauria/cmu-mocap):
 Gehzyklus retargetet, läuft aufrecht und sauber auf den generierten
 Charakteren (`figure-test.html?model=…&clip=cmuwalk`).

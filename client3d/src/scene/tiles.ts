@@ -131,7 +131,7 @@ export function worldWaterSampler(
  * anchor, a 10 m square" fallback without replacement, so such a place is a
  * pin: it claims no point on the plane and says so once.
  */
-export function footprintBoundary(loc: WorldLocation): [number, number][] | null {
+function footprintBoundary(loc: WorldLocation): [number, number][] | null {
   const pts = sanitizePolygon(loc.boundary ?? loc.map3d?.boundary);
   if (pts) return pts;
   if (!widthWarned.has(loc.id)) {
@@ -146,7 +146,7 @@ export function footprintBoundary(loc: WorldLocation): [number, number][] | null
  *  boundary (v6 Nr. 2), with the server's own `plan_width_m` as the fallback
  *  for a location that has a width but no outline. Everything that needs ONE
  *  length reads it: the texture repeat, the selection ring, the load radius. */
-export function footprintWidth(loc: WorldLocation): number {
+function footprintWidth(loc: WorldLocation): number {
   const b = polygonBounds(loc.boundary ?? loc.map3d?.boundary);
   if (b) return Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
   const w = loc.plan_width_m ?? loc.map3d?.plan_width_m;
@@ -224,7 +224,7 @@ export function redatumTile(tile: Tile): number {
 
 /** Footprint rotation in RADIANS, the world-map convention of § A1.1 — the
  *  same sign the tile group is turned by (`rotation.y = +rad(yaw_deg)`). */
-export function footprintYaw(loc: WorldLocation): number {
+function footprintYaw(loc: WorldLocation): number {
   const y = loc.yaw_deg;
   return typeof y === 'number' && Number.isFinite(y) ? (y * Math.PI) / 180 : 0;
 }

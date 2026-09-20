@@ -68,7 +68,7 @@ function carryClipLoops(from: readonly THREE.AnimationClip[],
 }
 
 /** Does the clip that actually plays repeat? Unknown = loop (see above). */
-export function clipLoops(clip: THREE.AnimationClip | null | undefined): boolean {
+function clipLoops(clip: THREE.AnimationClip | null | undefined): boolean {
   return clip ? clipLoopFlags.get(clip) ?? true : true;
 }
 

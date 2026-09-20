@@ -37,18 +37,17 @@ export { normBoneName, restPoseOf, restCorrections, bindRelativeValues,
   bindRelativeClip } from './clipRetarget'
 export type { RestPose, RestCorrection } from './clipRetarget'
 
-export { applyDepthCut, cutPlaneFor, disposeCutMaterials } from './depthCut'
+export { applyDepthCut, disposeCutMaterials } from './depthCut'
 
 export { applySlotMaterials, disposeSlotMaterials, GLASS_PRESET,
   MATERIAL_PRESETS } from './slotMaterials'
-export type { MaterialPreset, SlotTextureLoader } from './slotMaterials'
+export type { SlotTextureLoader } from './slotMaterials'
 
 export { planeOfFaces, MirrorBudget, sharedMirrorBudget, attachMirror,
-  disposeMirror, mirrorPlaneOf, MIRROR_PRESET } from './mirrorSurface'
+  disposeMirror, mirrorPlaneOf } from './mirrorSurface'
 export type { MirrorPlane, MirrorOptions, MirrorInfo } from './mirrorSurface'
 
-export { applyCutouts, CUTOUT_MAX_POLYS,
-  CUTOUT_MAX_POINTS } from './cutouts'
+export { applyCutouts } from './cutouts'
 export type { CutoutHandle } from './cutouts'
 
 export { bilinear, latticeSample, sampleWorldHeight, worldHeightRange,
@@ -60,7 +59,7 @@ export { hillshadeImage, MAP_RELIEF_Z_FACTOR } from './hillshade'
 export type { HillshadeOpts, HillshadeImage } from './hillshade'
 
 export {
-  decodeSd, layerPairAt, layerSdAt, layerSdBlockAt, layerWeight, lcNoise,
+  decodeSd, layerPairAt, layerSdAt, layerSdBlockAt, layerWeight,
   lcPushedSd, packLayerWindow, terrainLayerGlsl, terrainLayerVertexGlsl,
   topLayerAt,
 } from './layerCut'
@@ -71,18 +70,17 @@ export type {
 
 export {
   buildAreaGeometry, signedArea, polygonArea, cleanRing, shapePoints,
-  AREA_EPS_M2,
 } from './groundAreas'
 export type { AreaGeometry, Point2 } from './groundAreas'
 
 export {
   propGroundFit, scatterInstances, scatterSeed, scatterWantedCount,
-  scatterSeedHash, scatterPinnedVariant, scatterVariantIndex, scatterYaw,
-  reshuffleEpoch, seedEpochSuffix, scatterOccupyR,
+  scatterSeedHash, scatterVariantIndex, scatterYaw,
+  reshuffleEpoch,
   seededRandom, pointInRing, pointInFootprint, worldToLocalXZ,
   footprintBlocks, footprintDistance, scatterClearM,
   propBoxFootprint, propBoxFootprints,
-  SCATTER_CLEAR_HEIGHT_RATIO, SCATTER_MAX_PER_ENTRY, SCATTER_TRIES_PER_POINT,
+  SCATTER_CLEAR_HEIGHT_RATIO, SCATTER_MAX_PER_ENTRY,
   scatterCellAt, scatterCellInstances, scatterCellRing, scatterCellSeed,
   scatterCellSpan, scatterCellsInBox, scatterCellCountInBox, wantedScatterCells,
   SCATTER_CELL_M, SCATTER_CELLS_MAX, SCATTER_MAX_PER_CELL,
@@ -109,11 +107,11 @@ export type { CellGrids, CellOccupancy } from './occupancy'
 export {
   STROKE_STYLES, isStrokeStyle, strokeSeed, decorateStroke,
   MAX_DECORATED_POINTS, STROKE_SPACING_DEFAULT_M, STROKE_AMPLITUDE_DEFAULT_M,
-  strokeCentreLine, strokeStations, alongSeed, ALONG_SIDES,
+  strokeCentreLine, strokeStations, alongSeed,
 } from './stroke'
 export type {
-  StrokeStyle, StrokeDeco, DecoratedStroke, StrokeRecipe, AlongSide,
-  AlongEntry, StrokeStationOptions,
+  StrokeStyle, StrokeDeco, DecoratedStroke, StrokeRecipe,
+  StrokeStationOptions,
 } from './stroke'
 
 export { SpecVerifier, VERIFY_EPS } from './verify'
@@ -124,7 +122,7 @@ export {
   plateTargets, wallTargets,
 } from './primitives'
 
-export { pickVariant, pickModelVariant, MODEL_TIERS } from './types'
+export { pickVariant, pickModelVariant } from './types'
 
 export { FIGURE_HEIGHT_M, anchorFigureBind, clipHipsDrop, figureRootY,
   hipsTrackMedian } from './figure'

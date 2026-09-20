@@ -58,7 +58,7 @@ const RING_LIFT_M = 0.03;
  *  test off the ring shows through the chair it marks. */
 const RING_RENDER_ORDER = 20;
 
-export function glyphColour(group: string): number {
+function glyphColour(group: string): number {
   return GLYPH_COLOURS[group] ?? GLYPH_COLOUR_UNKNOWN;
 }
 

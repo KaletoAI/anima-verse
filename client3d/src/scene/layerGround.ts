@@ -281,12 +281,6 @@ export function topLayerIndexAt(x: number, z: number): number {
   return topLayerAt(window_, x, z);
 }
 
-/** The loaded window itself, for the smoke and for anything that needs the raw
- *  reading rather than the gate. */
-export function layerWindow(): LayerMaskWindow | null {
-  return window_;
-}
-
 /**
  * Take over the layer TABLE and build the surface array from it.
  *

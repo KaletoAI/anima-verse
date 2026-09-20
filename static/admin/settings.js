@@ -1748,17 +1748,6 @@ function parsePath(path) {
     return result;
 }
 
-function setLoraVal(path, index, field, value) {
-    const parts = parsePath(path);
-    let obj = CONFIG;
-    for (const p of parts) {
-        if (obj[p] === undefined) obj[p] = [];
-        obj = obj[p];
-    }
-    while (obj.length <= index) obj.push({ file: '', strength: 1 });
-    obj[index][field] = value;
-}
-
 // Walks `path` inside CONFIG, creating any missing levels. Intermediate levels
 // are always created as {}; only the leaf takes the requested `leafType`
 // ('array' or 'dict'). Returns the leaf container.
@@ -1861,14 +1850,6 @@ function duplicateItem(path) {
         const arrPath = path.replace(/\.[^.\[\]]+$/, '');
         SELECTED_ITEM[arrPath] = arrPath + '.' + newKey;
     }
-    renderSection(ACTIVE_SECTION);
-}
-
-function removeSubItem(path, index) {
-    const parts = parsePath(path);
-    let obj = CONFIG;
-    for (const p of parts) obj = obj[p];
-    obj.splice(index, 1);
     renderSection(ACTIVE_SECTION);
 }
 

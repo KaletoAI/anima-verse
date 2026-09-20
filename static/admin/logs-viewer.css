@@ -110,7 +110,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .msg-turn.role-user .msg-role { color: #58a6ff; }
 .msg-turn.role-assistant .msg-role { color: #56d364; }
 .msg-turn.role-system .msg-role { color: #e3b341; }
-.msg-meta { color: #6e7681; font-size: 11px; margin-bottom: 8px; }
 
 .pager {
     display: flex; justify-content: center; gap: 8px; padding: 16px;

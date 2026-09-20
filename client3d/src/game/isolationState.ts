@@ -189,13 +189,8 @@ export const ISOLATION_TOGGLES: readonly IsolationToggle[] = [
     cost: 'none' },
 ];
 
-/** Lookup by id, `undefined` for an id the panel does not know. */
-export function isolationToggle(id: number): IsolationToggle | undefined {
-  return ISOLATION_TOGGLES.find((t) => t.id === id);
-}
-
 /** True for an id this client has a switch for. */
-export function isIsolationId(id: number): boolean {
+function isIsolationId(id: number): boolean {
   return Number.isInteger(id) && id >= ISO_MIN_ID && id <= ISO_MAX_ID;
 }
 

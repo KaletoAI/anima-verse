@@ -205,7 +205,7 @@ function cellAt(f: number, n: number): [number, number] {
 }
 
 /** One tile's water level at (x, z) — bilinear, NaN where dry. */
-export function sampleWaterTile(field: WaterTileField | null | undefined,
+function sampleWaterTile(field: WaterTileField | null | undefined,
                                 x: number, z: number): number {
   const rows = field?.level;
   if (!field || !rows || rows.length < 2) return NaN;

@@ -10,7 +10,7 @@ import type { PlaceOffer } from '../api';
 
 let current: { el: HTMLElement; teardown: () => void } | null = null;
 
-export function closePlaceMenu(): void {
+function closePlaceMenu(): void {
   if (!current) return;
   current.teardown();
   current.el.remove();

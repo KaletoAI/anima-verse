@@ -192,7 +192,7 @@ function distanceM(raw: unknown, fallback: number): number {
 /** near < far < cull, strictly. Equal values are refused too: a band of zero
  *  width is no hysteresis, and `far === cull` would leave the thinning line no
  *  metres to fall over. */
-export function scatterPrefsOrdered(p: ScatterPrefs): boolean {
+function scatterPrefsOrdered(p: ScatterPrefs): boolean {
   return p.scatterNearM < p.scatterFarM && p.scatterFarM < p.scatterCullM;
 }
 

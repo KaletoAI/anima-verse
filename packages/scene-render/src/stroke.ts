@@ -450,28 +450,6 @@ export function strokeCentreLine(recipe: StrokeRecipe): Array<[number, number]> 
     num(recipe.amplitude_m, STROKE_AMPLITUDE_DEFAULT_M)).points
 }
 
-/** Which side(s) of the line a row stands on, walking in drawing order. */
-export type AlongSide = 'right' | 'left' | 'both' | 'alternate'
-export const ALONG_SIDES: readonly AlongSide[] = ['right', 'left', 'both', 'alternate']
-
-/** One row of `meta.stroke.along` — server whitelist
- *  `app/models/terrain._sanitize_along_entry`. */
-export interface AlongEntry {
-  model?: string
-  spacing_m: number
-  offset_m: number
-  side?: AlongSide
-  yaw_deg?: number
-  yaw_mode?: 'random'
-  start_m?: number
-  /** the half-width of the random shift every station takes along the
-   *  line, 0..spacing_m; absent = the even row (Task 9, 2026-09-10) */
-  spacing_jitter_m?: number
-  variant?: number
-  /** reshuffle every this many GAME minutes — see `ScatterEntry.reshuffle_min` */
-  reshuffle_min?: number
-}
-
 /** The seed of one row — area- AND row-stable, like `scatterSeed`, and with
  *  the same `:e<epoch>` tail for a row that reshuffles (`reshuffleEpoch`);
  *  none without one. */

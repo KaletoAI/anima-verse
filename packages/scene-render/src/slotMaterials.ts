@@ -42,7 +42,6 @@ import type { SceneSlotValues } from './types'
  *  `SLOT_PRESETS` so the storage layer can refuse an unknown one; change both
  *  or neither. */
 export const MATERIAL_PRESETS = ['glass', 'mirror'] as const
-export type MaterialPreset = (typeof MATERIAL_PRESETS)[number]
 
 /** What "glass" MEANS, numerically. One declaration for both renderers, for
  *  the same reason the surface kinds live in `materials.ts`: the pane of a

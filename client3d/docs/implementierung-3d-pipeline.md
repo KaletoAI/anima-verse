@@ -3,7 +3,7 @@
 Stand 2026-07-13, verifiziert mit Kira („Fast") und Bianca („High") in der
 Kai-Welt. Zielbild: **LLM-Gateway** orchestriert ComfyUI und erzeugt pro
 Charakter ein fertiges GLB; **anima-verse** speichert und liefert es aus
-(AV3D-5 Stufe 1, siehe `backend-wishlist.md`).
+(AV3D-5 Stufe 1).
 
 ## Die Kette (final)
 
@@ -26,9 +26,9 @@ LoadImage → TRELLIS.2-Mesh-Generierung (vb)
   selbst ~10 s. Beide liefern 52-Bone-Mixamo-Rigs mit eingebetteter Textur.
 - **Zielgröße:** ~10 MB pro Charakter (bei Textur 2048; 4K-Texturen
   verdreifachen die Datei ohne sichtbaren Gewinn auf Kartendistanz).
-- Der frühere Reparatur-Schritt (`tools/fix-rig-uv.py`) ist **obsolet** —
+- Der frühere Reparatur-Schritt (`tools/fix-rig-uv.py`) war **obsolet** —
   er gehörte zur alten Kette (RasterizePBR→UniRig-Node, drei Node-Bugs)
-  und bleibt nur als Werkzeug für Altbestände im Repo.
+  und ist inzwischen aus dem Repo entfernt.
 
 ## Animations-Clips (global, einmalig)
 
@@ -116,8 +116,9 @@ als Dev-/Offline-Modus erhalten. Aufwand: klein, Schnittstellen sind isoliert.
 - **Dritter Node-Bug (bestätigt): Gewichtsspalten falsch zugeordnet.** Die
   Spine-Kette ist rotiert (Head-Spalte hält Torso-Vertices usw.) und
   Fuß/Zehe sind vertauscht — Ursache des „Klebens" an Gliedmaßen. 
-  `fix-rig-uv.py` erkennt und korrigiert das automatisch (Spalten-Schwerpunkt
-  vs. Knochensegment, optimale Zuordnung) und loggt die Korrekturen.
+  Das damalige `fix-rig-uv.py` erkannte und korrigierte das automatisch
+  (Spalten-Schwerpunkt vs. Knochensegment, optimale Zuordnung).
 - Upstream-Fix wünschenswert: ComfyUI-UniRig müsste PBR-Texturen übernehmen,
-  UVs erhalten und die Gewichtsspalten korrekt zuordnen — bis dahin bleibt
-  `fix-rig-uv.py` (UV-Transfer + Welding + Spalten-Korrektur) Teil der Pipeline.
+  UVs erhalten und die Gewichtsspalten korrekt zuordnen — die damalige
+  Zwischenlösung (UV-Transfer + Welding + Spalten-Korrektur) ist mit der
+  neuen Kette weggefallen.

@@ -666,7 +666,7 @@ float twSdAt( vec2 p ) {
  * sampler follows, and for the same reason: declaring a uniform twice in one
  * shader stage is a compile error.
  */
-export function waterKindGlsl(): string {
+function waterKindGlsl(): string {
   return `
 uniform sampler2D uTlodWaterKind;
 
