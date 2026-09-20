@@ -293,8 +293,6 @@ export function RulesTab() {
           copyDisabled={!draft || draft.isNew}
           extra={
             <ImportButton
-              endpoint="/rules/import"
-              overwriteSupported
               onImported={() => reload()}
             />
           }

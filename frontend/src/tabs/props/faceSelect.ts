@@ -124,16 +124,6 @@ export function meshLayoutOf(meshes: LoadedPrimitive[]): MeshGroup[] {
 }
 
 /**
- * Where the flat index of mesh `i`'s triangles starts — the sum of every
- * earlier mesh's triangle count.
- */
-export function meshIndexBase(layout: MeshLayoutEntry[], meshIndex: number): number {
-  let base = 0
-  for (let i = 0; i < meshIndex && i < layout.length; i++) base += layout[i].tri_count
-  return base
-}
-
-/**
  * Is (x, y) inside the polygon? Crossing-number test, boundary undefined (a
  * point exactly on an edge may fall either way — a triangle centre landing on
  * a hand-drawn line is a coin toss the admin cannot see anyway).

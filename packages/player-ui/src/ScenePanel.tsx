@@ -515,9 +515,9 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   // Prune the addressee selection as soon as the present set changes (e.g.
   // after a room/location change) — otherwise someone from the old room stays
   // addressed who is not even here. The backend filters too; this is the UI side.
-  // Beware: the join separator is a literal (invisible) U+0001 control byte,
-  // carried over verbatim from PlayerApp so adjacent names cannot collide.
-  const presentKey = present.join('')
+  // Beware: the join separator is a U+0001 control character, carried over
+  // verbatim from PlayerApp so adjacent names cannot collide.
+  const presentKey = present.join('\u0001')
   useEffect(() => {
     setAddressees((prev) => {
       const next = prev.filter((n) => present.includes(n))

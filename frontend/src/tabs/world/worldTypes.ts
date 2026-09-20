@@ -383,14 +383,6 @@ export type {
   SceneProblem, SceneStairs,
 } from '@anima/scene-render'
 
-/** What the preview POSTs to /play/scene-preview: the editor draft as it
- *  stands, including unsaved layouts. */
-export interface SceneDraft {
-  id: string
-  map3d?: Map3D
-  rooms: Array<{ id: string; name?: string; layout?: RoomLayout }>
-}
-
 export interface EventSettings {
   event_probability?: number
   max_concurrent_events?: number
@@ -654,17 +646,3 @@ export function readMapWater(floor: SceneFloor | undefined | null
   return { area_id: areaId, kind }
 }
 
-/** The kind a closed room's floor wears when nobody named one — mirrors
- *  `app.core.terrain_layers.FLOOR_KIND_DEFAULT`. */
-export const FLOOR_KIND_DEFAULT = 'floor'
-
-/** WHAT THE GROUND WEARS in one room — the client's half of
- *  `terrain_layers.floor_kind_of`. Where the author named nothing: a CLOSED
- *  room gets the default floor (it has walls, so it has a floor, and it is
- *  not the meadow outside), an open ZONE gets the empty string, i.e. no layer
- *  at all and the terrain showing through. */
-export function floorKindOf(layout: RoomLayout | undefined | null): string {
-  const named = (layout?.surfaces?.floor || '').trim()
-  if (named) return named
-  return layout?.always_visible ? '' : FLOOR_KIND_DEFAULT
-}

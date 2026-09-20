@@ -379,9 +379,6 @@ interface PreviewResult { type: string; multi: boolean; elements: PreviewElement
  * importable element is listed with a checkbox, and elements that would
  * overwrite an existing one are flagged. Works for ALL export types via the
  * generic /api/content/preview + /api/content/import endpoints.
- *
- * `endpoint`/`overwriteSupported` are kept for API compatibility but no longer
- * used — the generic endpoints dispatch by the ZIP's manifest type.
  */
 export function ImportButton({
   accept = '.zip',
@@ -389,10 +386,8 @@ export function ImportButton({
   label,
   title,
 }: {
-  endpoint?: string
   accept?: string
   onImported?: (result: unknown) => void
-  overwriteSupported?: boolean
   label?: string
   title?: string
 }) {

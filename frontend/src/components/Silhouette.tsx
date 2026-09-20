@@ -96,8 +96,6 @@ function colorFor(slot: string, slotSet: Set<string>, coverSet: Set<string>, par
   return null
 }
 
-export type SlotStatus = 'slot' | 'cover' | 'partial' | 'empty'
-
 export function Silhouette({
   slots,
   covers,

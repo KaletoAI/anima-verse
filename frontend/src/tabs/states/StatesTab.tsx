@@ -219,7 +219,6 @@ export function StatesTab() {
                 title={t('Download all world-level states as a ZIP')}
               />
               <ImportButton
-                endpoint="/admin/prompt-filters/import"
                 onImported={() => reload()}
                 title={t('Upload a states ZIP (merges by id)')}
               />

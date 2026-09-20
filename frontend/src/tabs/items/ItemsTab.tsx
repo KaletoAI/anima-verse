@@ -400,8 +400,6 @@ export function ItemsTab() {
           copyDisabled={!draft || draft.isNew}
           extra={
             <ImportButton
-              endpoint="/inventory/items/import"
-              overwriteSupported
               onImported={() => reload()}
             />
           }

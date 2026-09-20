@@ -2,10 +2,6 @@ import type { ComponentType } from 'react'
 import { SetupTab } from './setup/SetupTab'
 import { CharactersTab } from './characters/CharactersTab'
 import { StorytellerTab } from './storyteller/StorytellerTab'
-// ActivitiesTab + OutfitRulesTab versteckt seit Schritt 5/7 (May 2026,
-// plan-outfit-system-rethink.md): Activity-Library und outfit_types werden
-// durch Pose-Variants + Decency ersetzt. Source bleibt im Tree fuer finalen
-// Cleanup in Schritt 8.
 import { RulesTab } from './rules/RulesTab'
 import { StatesTab } from './states/StatesTab'
 import { ItemsTab } from './items/ItemsTab'
@@ -46,7 +42,7 @@ export type TabId =
   | 'mind'
   | 'poses'
 
-export interface TabSpec {
+interface TabSpec {
   id: TabId
   label: string // English source — translated via t() at render time.
   Component: ComponentType

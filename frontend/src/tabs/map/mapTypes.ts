@@ -1069,14 +1069,6 @@ export interface HeightAreasResp {
   max_step_height_m?: number
 }
 
-/** What `POST`/`PUT /world/height-areas` answer. The step is the one the world
- *  has AFTERWARDS (the write re-rasters synchronously), which is what makes
- *  the coarsening warning a fact rather than a forecast. */
-export interface HeightAreaWriteResp {
-  area?: HeightArea
-  step_m?: number
-}
-
 /** ONE authored prop on the world plane (§ A9a) as the EDITOR reads it —
  *  `GET /world/world-props`, not the worldmap block.
  *

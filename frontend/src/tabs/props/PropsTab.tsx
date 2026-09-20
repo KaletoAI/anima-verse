@@ -233,8 +233,6 @@ export function PropsTab() {
                 {classifying ? t('Classifying…') : t('Classify mount (LLM)')}
               </button>
               <ImportButton
-                endpoint="/world/props/import"
-                overwriteSupported
                 onImported={() => { void load(); setCacheBump((b) => b + 1) }}
               />
             </>

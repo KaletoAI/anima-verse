@@ -35,10 +35,6 @@ import { MOUNT_GROUPS, NEED_ID_PREFIX, propMount, type FurnishActResult,
 
 export type { FurnishJob, FurnishState, FurnishStatus } from './furnishTypes'
 
-/** One library pick of the direct mode — `start_direct` takes these, not a
- *  proposal (the server turns each into a need that is already served). */
-export interface FurnishPick { prop_id: string; count: number }
-
 const POLL_OPEN_MS = 3000
 const POLL_IDLE_MS = 15000
 

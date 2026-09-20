@@ -156,7 +156,6 @@ export function WorldTab() {
           copyDisabled={selection?.kind !== 'location'}
           extra={
             <ImportButton
-              endpoint="/world/locations/import"
               onImported={() => reload()}
             />
           }

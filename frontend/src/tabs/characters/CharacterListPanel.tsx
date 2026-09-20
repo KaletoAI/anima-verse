@@ -199,8 +199,6 @@ export function CharacterListPanel({
             {t('New character')}
           </button>
           <ImportButton
-            endpoint="/characters/import"
-            overwriteSupported
             onImported={onImported}
           />
         </div>
