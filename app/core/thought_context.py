@@ -132,7 +132,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "skill_context_blocks": "",  # set below from _skill_block_parts (fine-grained drops)
         # Additional context — currently rendered in agent_thought_in_chat.md.
         # Agent_thought.md ignores them silently (no template reference).
-        "effects_block": _build_effects_block(character_name),
+        "effects_block": "",  # filled by prompt_filters after building
         "recent_chat_block": _build_recent_chat_block(character_name),
         # The character's OWN last thoughts — continuity of inner life. Private
         # to this character: it never reaches anyone else's prompt.
@@ -725,21 +725,6 @@ def _build_retrospective_block(character_name: str) -> str:
 # ---------------------------------------------------------------------------
 # In-Chat extras (also useful for the regular template)
 # ---------------------------------------------------------------------------
-
-def _build_effects_block(character_name: str) -> str:
-    """Active status modifiers + danger conditions (drunk, exhausted, etc.).
-
-    Reuses ``danger_system.build_status_prompt_section`` which already
-    knows how to combine stat-based modifiers, danger levels and active
-    conditions into a single prompt section.
-    """
-    try:
-        from app.core.danger_system import build_status_prompt_section
-        return (build_status_prompt_section(character_name) or "").strip()
-    except Exception as e:
-        logger.debug("effects block failed for %s: %s", character_name, e)
-        return ""
-
 
 # A sentence end: closing punctuation, optionally followed by closing quotes or
 # brackets, at a word boundary. The quote tail matters here — narrated turns are

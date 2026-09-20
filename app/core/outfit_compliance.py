@@ -33,9 +33,6 @@ logger = get_logger("outfit_compliance")
 # (top + bottom — Unterwaesche zaehlt sozial nicht als "bedeckt".)
 PUBLIC_REQUIRED_SLOTS: Set[str] = {"top", "bottom"}
 
-# Swimwear-Slots: erfuellen public-Pflicht wenn swim_allowed + is_wet.
-SWIM_SLOTS: Set[str] = {"swimwear_top", "swimwear_bottom"}
-
 
 def _get_room_and_location(character_name: str) -> tuple[Optional[Dict], Optional[Dict]]:
     """Liefert (room, location) fuer den aktuellen Standort des Chars."""

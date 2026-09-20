@@ -29,9 +29,6 @@ from typing import Any, Optional, Tuple
 
 from app.core.game_time import GameTime
 
-#: Minutes in a day — the modulus every window value lives in.
-DAY_MINUTES = 24 * 60
-
 #: The two symbolic windows. Everything else is a literal span or "".
 NIGHT = "night"
 DAY = "day"

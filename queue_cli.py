@@ -72,14 +72,6 @@ def _fmt_dt(iso: str | None) -> str:
         return str(iso)
 
 
-def _fmt_duration(s: float | None) -> str:
-    if not s:
-        return "-"
-    if s < 60:
-        return f"{s:.1f}s"
-    return f"{s/60:.1f}m"
-
-
 _STATUS_COLORS = {
     "pending":   "\033[33m",   # yellow
     "running":   "\033[36m",   # cyan

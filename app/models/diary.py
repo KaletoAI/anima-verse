@@ -383,7 +383,6 @@ def get_state_history(character_name: str,
 # gerendert — damit kein neues state_history-Feld stillschweigend im Tagebuch
 # verschluckt wird.
 
-DiaryRenderer = "Callable[[str, Dict[str, Any], str], Optional[Dict[str, Any]]]"
 _DIARY_RENDERERS: Dict[str, Any] = {}
 
 

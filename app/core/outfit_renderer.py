@@ -51,22 +51,6 @@ def is_outfit_worn(profile: Optional[Dict[str, Any]]) -> bool:
     return bool(worn)
 
 
-def _resolve_tokens(raw: str, profile: Dict[str, Any]) -> str:
-    """Resolve {placeholder}-Tokens gegen das Profil. Robust gegen Fehler."""
-    s = (raw or "").strip()
-    if not s or "{" not in s:
-        return s
-    try:
-        from app.models.character_template import (
-            get_template, resolve_profile_tokens,
-        )
-        tmpl = get_template(profile.get("template", "")) if profile else None
-        return resolve_profile_tokens(s, profile, template=tmpl,
-                                       target_key="character_appearance")
-    except Exception:
-        return s
-
-
 def collect_covered_slots(equipped_pieces: Dict[str, str]) -> Set[str]:
     """Alle Slots, die durch ein anderes Piece via `covers` verdeckt werden."""
     covered: Set[str] = set()

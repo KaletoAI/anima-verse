@@ -106,7 +106,6 @@ SINK_KEYS = ("move_sink_m", "idle_sink_m")
 #: passability and pace stay the kind's business, and ``speed_factor`` keeps
 #: counting over the whole area — wading is slow too.
 SWIM_FROM_KEY = "swim_from_m"
-SWIM_FROM_DEFAULT_M = 1.0
 SWIM_FROM_MIN_M, SWIM_FROM_MAX_M = 0.0, 10.0
 
 #: HOW FAR THE SCATTER OF THIS GROUND BENDS IN THE WIND, in metres — the
@@ -164,10 +163,6 @@ WATER_META_KEY = "water"
 #: number a kind can never answer.
 WATER_DEPTH_KEY = "water_depth_m"
 SHORE_RAMP_KEY = "shore_ramp_m"
-
-#: …and it is valid for ANY kind, including one created five minutes ago: the
-#: sanitizer whitelists the keys unconditionally and never looks at the name.
-WATER_KIND_KEYS = (WATER_DEPTH_KEY, SHORE_RAMP_KEY)
 
 
 def _shared_path() -> Path:

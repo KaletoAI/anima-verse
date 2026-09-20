@@ -46,18 +46,6 @@ def _all_parties() -> List[Dict]:
     return [_row_to_party(r) for r in rows]
 
 
-def get_party(party_id: str) -> Optional[Dict]:
-    if not party_id:
-        return None
-    try:
-        row = get_connection().execute(
-            "SELECT party_id, leader, members, created_at FROM parties WHERE party_id=?",
-            (party_id,)).fetchone()
-    except Exception:
-        return None
-    return _row_to_party(row) if row else None
-
-
 def get_party_of(character: str) -> Optional[Dict]:
     """Party, in der ``character`` Leader ODER Follower ist — inkl. ``role``-Feld
     ("leader"/"follower"). None, wenn er in keiner Party ist."""

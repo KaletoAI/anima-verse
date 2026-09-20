@@ -19,7 +19,7 @@ Public API:
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 from app.core.log import get_logger
 
@@ -173,33 +173,6 @@ def _id_from_condition(condition: str, label: str = "") -> str:
     if label:
         return _re.sub(r"[^a-z0-9_]", "_", label.lower()).strip("_") or "filter"
     return _re.sub(r"[^a-z0-9_]", "_", cond)[:32].strip("_") or "filter"
-
-
-def get_filter_for_condition(condition_name: str) -> Optional[Dict[str, Any]]:
-    """Return the merged filter entry whose id (or legacy condition expression)
-    matches ``condition_name``.
-
-    Used by UI badge + image generation to look up icon/label/image_modifier
-    for an active condition. Match is case-insensitive.
-
-    Reihenfolge:
-        1. Filter-id (neues Modell — id IS der Condition-Name)
-        2. Legacy ``condition: condition:<name>``-Expression (Bestandsdaten)
-    Returns None when nothing matches.
-    """
-    if not condition_name:
-        return None
-    target_id = condition_name.strip().lower()
-    target_expr = f"condition:{target_id}"
-    legacy_match: Optional[Dict[str, Any]] = None
-    for f in load_filters():
-        fid = (f.get("id") or "").strip().lower()
-        if fid == target_id:
-            return f
-        cond = (f.get("condition") or "").strip().lower()
-        if cond == target_expr and legacy_match is None:
-            legacy_match = f
-    return legacy_match
 
 
 def _evaluate(condition: str, character_name: str, location_id: str = "") -> bool:

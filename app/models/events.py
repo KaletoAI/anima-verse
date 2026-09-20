@@ -22,15 +22,6 @@ from app.core.timeutils import game_time, game_time_at, utc_now, utc_now_iso
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-# TTL options in GAME hours (label -> hours, 0 = never expires)
-TTL_OPTIONS = {
-    "1h": 1,
-    "6h": 6,
-    "24h": 24,
-    "48h": 48,
-    "7d": 168,
-    "0": 0,
-}
 DEFAULT_TTL_HOURS = 24
 
 from app.core.log import get_logger

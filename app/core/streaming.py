@@ -638,10 +638,7 @@ async def _safe_anext(aiter):
     except StopAsyncIteration:
         return _STREAM_END
 
-from app.core.tool_formats import (
-    TOOL_FORMATS, find_tool_calls, find_stream_tool_call,
-    find_direct_tool_call
-)
+from app.core.tool_formats import find_tool_calls, find_stream_tool_call
 
 
 # ---------------------------------------------------------------------------
@@ -903,24 +900,6 @@ class StreamingAgent:
                 logger.info("Search-Intent erkannt: Keyword '%s' in User-Input", kw)
                 return True
         return False
-
-    # ------------------------------------------------------------------
-    # Direct tool call detection
-    # ------------------------------------------------------------------
-
-    def check_direct_tool_call(self, user_input: str) -> Optional[Tuple[str, str]]:
-        """Prueft ob user_input selbst ein Tool-Call ist (z.B. vom Scheduler)."""
-        result = find_direct_tool_call(self.tool_format, user_input)
-        if result:
-            return result
-
-        # Fallback: andere Formate pruefen
-        for fmt_name in TOOL_FORMATS:
-            if fmt_name != self.tool_format:
-                result = find_direct_tool_call(fmt_name, user_input)
-                if result:
-                    return result
-        return None
 
     # ------------------------------------------------------------------
     # Main streaming method — dispatches to mode-specific method

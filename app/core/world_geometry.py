@@ -442,13 +442,6 @@ def polygon_interior_point(points: Any) -> Optional[Tuple[float, float]]:
 _INWARD_PROBE_M = 1e-3
 
 
-def polygon_edge_count(points: Any) -> int:
-    """How many edges the outline has — edge i runs point i → point i+1, the
-    last one back to point 0. 0 for a degenerate outline."""
-    pts = _poly_points(points)
-    return 0 if pts is None else len(pts)
-
-
 def polygon_edge_frame(points: Any, edge: Any, at: Any = 0.5
                        ) -> Optional[Tuple[Tuple[float, float],
                                            Tuple[float, float]]]:

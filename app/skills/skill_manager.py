@@ -12,20 +12,6 @@ from .outfit_creation_skill import OutfitCreationSkill
 from .video_generation_skill import VideoGenerationSkill
 
 
-class _Verb:
-    """Registry-Binding: laesst EINE parameterisierte Skill-Klasse mehrere Verben
-    (eigene SKILL_IDs/Tools) bedienen. Traegt ALWAYS_LOAD durch, damit
-    _load_skill den Wert schon vor der Instanziierung lesen kann."""
-
-    def __init__(self, cls, **kwargs):
-        self._cls = cls
-        self._kwargs = kwargs
-        self.ALWAYS_LOAD = getattr(cls, "ALWAYS_LOAD", False)
-
-    def __call__(self, config):
-        return self._cls(config, **self._kwargs)
-
-
 class SkillManager:
     """
     Verwaltet alle verfügbaren Skills und stellt sie als Tools bereit.
@@ -139,9 +125,6 @@ class SkillManager:
             "errors": errors
         }
 
-    def get_tools(self) -> List[ToolSpec]:
-        return self.tools
-
     def _get_agent_skills(self, character_name: str,
                           check_limits: bool = True) -> List:
         """Filtert Skills auf die fuer diesen Agent aktivierten.
@@ -239,21 +222,6 @@ class SkillManager:
             for skill in self.skills
         ]
 
-    def describe_for_agent(self, character_name: str,
-                           check_limits: bool = True) -> str:
-        """Skill-Beschreibungen nur fuer die beim Agent aktiven Skills."""
-        agent_skills = self._get_agent_skills(character_name, check_limits=check_limits)
-        if not agent_skills:
-            return ""
-        descriptions = [f"- {skill.name}: {skill.description}" for skill in agent_skills]
-        return "Available skills:\n" + "\n".join(descriptions)
-
-    def describe_all(self) -> str:
-        if not self.skills:
-            return ""
-        descriptions = [f"- {skill.name}: {skill.description}" for skill in self.skills]
-        return "Available skills:\n" + "\n".join(descriptions)
-
     def get_agent_usage_instructions(self, character_name: str,
                                      format_name: str = "",
                                      check_limits: bool = True) -> str:
@@ -262,8 +230,3 @@ class SkillManager:
         if not agent_skills:
             return ""
         return "\n".join(skill.get_usage_instructions(format_name, character_name=character_name) for skill in agent_skills)
-
-    def get_all_usage_instructions(self, format_name: str = "") -> str:
-        if not self.skills:
-            return ""
-        return "\n".join(skill.get_usage_instructions(format_name) for skill in self.skills)

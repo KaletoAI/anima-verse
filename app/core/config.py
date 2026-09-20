@@ -1802,13 +1802,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_SEARX_CATEGORIES", searx.get("categories", ""))
     _set(env, "SKILL_SEARX_NUM_RESULTS", searx.get("num_results", 5))
 
-    for skill_key, env_prefix_map in [
-    ]:
-        s = skills.get(skill_key, {})
-        _set(env, f"{env_prefix_map}_ENABLED", s.get("enabled", True))
-        _set(env, f"{env_prefix_map}_NAME", s.get("name", ""))
-        _set(env, f"{env_prefix_map}_DESCRIPTION", s.get("description", ""))
-
     oc = skills.get("outfit_change", {})
     _set(env, "SKILL_OUTFIT_CHANGE_NAME", oc.get("name", "ChangeOutfit"))
     _set(env, "SKILL_OUTFIT_CHANGE_DESCRIPTION", oc.get("description", ""))
@@ -1818,8 +1811,6 @@ def _flatten_to_env(config: dict) -> None:
 
     # Knowledge
     kn = config.get("knowledge", {})
-    _set(env, "KNOWLEDGE_MAX_PROMPT_ENTRIES", kn.get("max_prompt_entries", 20))
-    _set(env, "KNOWLEDGE_MAX_ENTRIES", kn.get("max_entries", 200))
     _set(env, "DAILY_SUMMARY_DAYS", kn.get("daily_summary_days", 7))
     _set(env, "SKILL_KNOWLEDGE_BATCH_SIZE", kn.get("batch_size", 5))
     _set(env, "SKILL_KNOWLEDGE_MAX_INPUT_TOKENS", kn.get("max_input_tokens", 12000))

@@ -7,7 +7,8 @@ Zwei Regeltypen:
 Regeln nutzen die gleiche Condition-Syntax wie Aktivitaeten
 (stamina>20, courage<30, NOT alone AND night, etc.)
 
-Storage: worlds/{world}/rules.json
+Storage: the ``rules`` table in ``world.db`` (+ shared baseline
+``shared/rules/rules.json``)
 """
 import json
 import uuid
@@ -15,7 +16,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
-from app.core.paths import get_storage_dir
 from app.core.db import get_connection, transaction
 from app.core.i18n import localized
 
@@ -33,10 +33,6 @@ def _user_lang() -> str:
         return (get_user_profile().get("system_language") or "en").strip() or "en"
     except Exception:
         return "en"
-
-
-def _get_rules_path() -> Path:
-    return get_storage_dir() / "rules.json"
 
 
 def _get_shared_rules_path() -> Path:

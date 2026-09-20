@@ -111,12 +111,6 @@ class OutfitCreationSkill(BaseSkill):
     SKILL_ID = "outfit_creation"
     ALWAYS_LOAD = True
 
-    # Slots die der LLM normalerweise fuellen soll — Kopf/Unterwaesche nur wenn
-    # der Kontext (z.B. Beachwear, Sleepwear) sie verlangt.
-    CORE_SLOTS = ["top", "bottom", "feet"]
-    OPTIONAL_SLOTS = ["outer", "head", "neck", "legs",
-                       "underwear_top", "underwear_bottom"]
-
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         from app.core.prompt_templates import load_skill_meta

@@ -39,7 +39,6 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
         "example": '<tool name="{tool_name}">{input}</tool>',
         "pattern": r'<tool\s+name="(\w+)">([\s\S]*?)</tool>',
         "stream_pattern": r'<tool\s+name="(\w+)">([\s\S]*?)</tool>',
-        "stream_start": r'<tool\s+name=',
         "direct_pattern": r'^<tool\s+name="(\w+)">([\s\S]*?)</tool>$',
     },
     "natural_en": {
@@ -56,7 +55,6 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
         "example": "Use {tool_name} for: {input}",
         "pattern": r"(?:I\s+)?[Uu]se\s+(\w+)\s+for:\s*(.*?)(?:\n|$)",
         "stream_pattern": r"(?:I\s+)?[Uu]se\s+(\w+)\s+for:\s*(.*?)(?:\n|$)",
-        "stream_start": r"[Uu]se\s+\w+\s+for:",
         "direct_pattern": r"^(?:I\s+)?[Uu]se\s+(\w+)\s+for:\s*(.*?)$",
     },
     "natural_de": {
@@ -75,7 +73,6 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
         "example": "Ich nutze {tool_name} für: {input}",
         "pattern": r"(?:Ich\s+)?[Nn]utze\s+(\w+)\s+f(?:ü|ue)r:\s*(.*?)(?:\n|$)",
         "stream_pattern": r"(?:Ich\s+)?[Nn]utze\s+(\w+)\s+f(?:ü|ue)r:\s*(.*?)(?:\n|$)",
-        "stream_start": r"[Nn]utze\s+\w+\s+f(?:ü|ue)r:",
         "direct_pattern": r"^(?:Ich\s+)?[Nn]utze\s+(\w+)\s+f(?:ü|ue)r:\s*(.*?)$",
     },
 }
@@ -331,21 +328,6 @@ def build_tool_instruction(format_name: str, tools: List[Any],
     return "\n".join(parts)
 
 
-def build_minimal_tool_reminder(format_name: str, tool_names: List[str]) -> str:
-    """Builds a minimal tool reminder for the reduced system prompt."""
-    fmt = get_format(format_name)
-    # Show the format schema with a ToolName placeholder instead of a real
-    # tool so the LLM is not biased towards one particular tool
-    schema = fmt["example"].format(
-        tool_name="ToolName",
-        input="your input"
-    )
-    return (
-        f"\n\nAvailable tools: {', '.join(tool_names)}"
-        f"\nOnly use a tool when the user ASKS for it. Always respond with conversation FIRST."
-        f"\nEXACT format: {schema}"
-        f"\nReplace ToolName with the EXACT tool name from the list above."
-    )
 
 
 def _is_placeholder_input(tool_input: str) -> bool:
@@ -543,32 +525,3 @@ def find_stream_tool_call(format_name: str, text: str,
             return match
 
     return None
-
-
-def find_direct_tool_call(format_name: str, text: str) -> Optional[Tuple[str, str]]:
-    """Checks whether the whole text is a direct tool call (e.g. from the scheduler).
-
-    Checks ALL known formats, not only the configured one.
-
-    Returns:
-        (tool_name, tool_input) tuple when found, else None
-    """
-    stripped = text.strip()
-
-    # 1. Configured format first
-    fmt = get_format(format_name)
-    match = re.match(fmt["direct_pattern"], stripped, re.IGNORECASE | re.DOTALL)
-    if match:
-        return (match.group(1), match.group(2).strip())
-
-    # 2. Try every other format
-    for other_name, other_fmt in TOOL_FORMATS.items():
-        if other_name == format_name:
-            continue
-        match = re.match(other_fmt["direct_pattern"], stripped, re.IGNORECASE | re.DOTALL)
-        if match:
-            return (match.group(1), match.group(2).strip())
-
-    return None
-
-

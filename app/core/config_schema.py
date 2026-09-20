@@ -863,8 +863,6 @@ SECTIONS = {
         "label": "Knowledge System",
         "icon": "📚",
         "fields": {
-            "max_prompt_entries": {"type": "int", "label": "Max Prompt Entries", "default": 20, "min": 1, "description": "Max Eintraege im System-Prompt (Token-Budget)"},
-            "max_entries": {"type": "int", "label": "Max Entries", "default": 200, "min": 1, "description": "Max gespeicherte Eintraege pro Character (Sliding Window)"},
             "daily_summary_days": {"type": "int", "label": "Daily summary days", "default": 7, "min": 1, "description": "Number of past days shown in the system prompt. SYSTEM time (real days)."},
             "batch_size": {"type": "int", "label": "Batch Size", "default": 5, "min": 1},
             "max_input_tokens": {"type": "int", "label": "Max Input Tokens", "default": 12000, "min": 100},

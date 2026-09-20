@@ -761,30 +761,6 @@ class TaskQueue:
             return True
         return False
 
-    def get_tracked_active(self) -> List[Dict[str, Any]]:
-        """Returns currently running and pending tracked tasks (for UI)."""
-        conn = self._connect()
-        try:
-            rows = conn.execute(
-                """SELECT task_id, task_type, label, agent_name, status,
-                          created_at, provider, started_at
-                   FROM tasks
-                   WHERE status IN ('running', 'pending') AND task_origin='tracked'
-                   ORDER BY created_at ASC"""
-            ).fetchall()
-            result = []
-            for r in rows:
-                d = dict(r)
-                # Berechne live elapsed time (nur fuer running tasks mit Timer)
-                t0 = self._track_start_times.get(d["task_id"])
-                d["duration_s"] = round(time.monotonic() - t0, 2) if t0 else 0.0
-                if d.get("provider"):
-                    d["provider_name"] = d["provider"]
-                result.append(d)
-            return result
-        finally:
-            conn.close()
-
     def get_tracked_recent(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Returns recently completed tracked tasks (for UI compatibility)."""
         conn = self._connect()

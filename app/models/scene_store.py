@@ -11,7 +11,7 @@ This layer only reads/writes — idle detection + consolidation live in
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from app.core.db import get_connection, transaction
 from app.core.log import get_logger
@@ -82,17 +82,6 @@ def touch_scene(location_id: str, room_id: str, speaker: str, ts: str) -> int:
             (location_id, room_id, ts, ts,
              json.dumps([speaker] if speaker else [], ensure_ascii=False)))
         return int(cur.lastrowid)
-
-
-def get_open_scene(location_id: str, room_id: str) -> Optional[Dict[str, Any]]:
-    """The currently open scene of a room (or None)."""
-    if not location_id:
-        return None
-    conn = get_connection()
-    r = conn.execute(
-        "SELECT * FROM scenes WHERE status='open' AND location_id=? AND room_id=? "
-        "ORDER BY id DESC LIMIT 1", (location_id, room_id or "")).fetchone()
-    return _row(r) if r else None
 
 
 def get_idle_open_scenes(cutoff_ts: str) -> List[Dict[str, Any]]:

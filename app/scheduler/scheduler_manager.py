@@ -1237,59 +1237,6 @@ class SchedulerManager:
                 pass
         return before - len(self.jobs_data["jobs"])
 
-    def _was_recently_chatting(self, character: str, minutes: int = 10) -> bool:
-        """Whether the character chatted with the user in the last N minutes.
-
-        Covers 1:1 chats (chat_messages table) as well as group chats.
-        """
-        threshold = minutes * 60  # in seconds
-        now = utc_now()
-
-        # 1:1 chat: the most recent ts in chat_messages for this character.
-        # (Used to be the filesystem mtime — useless after the DB-only
-        # migration.)
-        try:
-            from app.core.db import get_connection
-            row = get_connection().execute(
-                "SELECT ts FROM chat_messages WHERE character_name=? "
-                "ORDER BY ts DESC LIMIT 1",
-                (character,)).fetchone()
-            if row and row[0]:
-                try:
-                    last_ts = parse_iso(row[0])
-                except (ValueError, TypeError):
-                    last_ts = None
-                if last_ts:
-                    age_s = (now - last_ts).total_seconds()
-                    if 0 <= age_s < threshold:
-                        logger.info("Location change blocked: %s was in a 1:1 chat "
-                                    "%.0f min ago", character, age_s / 60)
-                        return True
-        except Exception as e:
-            logger.debug("Checking the 1:1 chat activity failed: %s", e)
-
-        # Group chat: last_activity of active sessions with this character
-        try:
-            from app.models.group_chat import load_sessions
-            sessions = load_sessions()
-            for s in sessions:
-                if not s.get("active", True):
-                    continue
-                if character not in s.get("participants", []):
-                    continue
-                last_activity = s.get("last_activity", "")
-                if last_activity:
-                    activity_ts = parse_iso(last_activity).timestamp()
-                    if (now_ts - activity_ts) < threshold:
-                        logger.info("Location change blocked: %s was in group chat "
-                                    "%s %.0f min ago", character, s.get("id", "?"),
-                                    (now_ts - activity_ts) / 60)
-                        return True
-        except Exception as e:
-            logger.debug("Checking the group chat activity failed: %s", e)
-
-        return False
-
     def toggle_job(self, job_id: str) -> Dict[str, Any]:
         """Enables/disables a job"""
         job = None
@@ -1403,29 +1350,3 @@ class SchedulerManager:
         """Shuts the scheduler down."""
         logger.info("Shutting the scheduler down...")
         self.scheduler.shutdown()
-
-
-def _was_chatted_recently(character_name: str,
-                          within_minutes: int = 10) -> bool:
-    """True when the last chat with this character is younger than
-    ``within_minutes`` minutes.
-
-    Reads the newest ``ts`` from ``chat_messages`` (world.db). This used to be
-    the ``chats/*.json`` mtime, which finds nothing since the unified_chat
-    refactor.
-    """
-    try:
-        from app.core.db import get_connection
-        from datetime import datetime
-        conn = get_connection()
-        row = conn.execute(
-            "SELECT ts FROM chat_messages WHERE character_name=? "
-            "ORDER BY ts DESC LIMIT 1",
-            (character_name,)).fetchone()
-        if not row or not row[0]:
-            return False
-        last_ts = parse_iso(row[0])
-        age_s = (utc_now() - last_ts).total_seconds()
-        return age_s < within_minutes * 60
-    except Exception:
-        return False

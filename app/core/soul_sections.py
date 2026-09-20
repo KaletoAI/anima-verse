@@ -25,6 +25,4 @@ SECTION_FILE_MAP = {
     "soul":           "soul/soul.md",
 }
 
-ALL_SECTIONS = EDITABLE_SECTIONS | LOCKED_SECTIONS
-
 EDITABLE_MARKER = "<!-- EDITABLE -->"

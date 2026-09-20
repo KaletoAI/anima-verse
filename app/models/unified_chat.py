@@ -36,11 +36,6 @@ class ChannelManager:
         """Registriere einen neuen Kanal"""
         self._channels[channel.channel_type] = channel
     
-    def unregister_channel(self, channel_type: ChannelType) -> None:
-        """Deregistriere einen Kanal"""
-        if channel_type in self._channels:
-            del self._channels[channel_type]
-    
     def get_channel(self, channel_type: ChannelType) -> Optional[ChannelInterface]:
         """Hole einen registrierten Kanal"""
         return self._channels.get(channel_type)
@@ -306,39 +301,6 @@ class UnifiedChatManager:
         )
         
         return channel_message_id
-    
-    async def broadcast_message(
-        self, character_name: str,
-        content: str,
-        channels: Optional[List[ChannelType]] = None,
-        **kwargs
-    ) -> Dict[ChannelType, Optional[str]]:
-        """
-        Sende eine Nachricht an mehrere Kanäle gleichzeitig
-        
-        Args:
-            user_id: Benutzer-ID
-            character_name: Agent-Name
-            content: Nachrichteninhalt
-            channels: Liste von Zielkanälen. Falls None, sende an alle verfügbaren.
-            **kwargs: Kanal-spezifische Optionen
-        
-        Returns:
-            Dict mapping Kanäle zu ihren Message-IDs
-        """
-        target_channels = channels or self.channel_manager.list_channels()
-        results = {}
-        
-        for channel_type in target_channels:
-            try:
-                msg_id = await self.send_message_to_channel(character_name, content, channel_type, **kwargs
-                )
-                results[channel_type] = msg_id
-            except Exception as e:
-                logger.error("Error sending to %s: %s", channel_type.value, e)
-                results[channel_type] = None
-        
-        return results
 
 
 # Globale Channel Manager Instanz
@@ -356,22 +318,3 @@ def get_channel_manager() -> ChannelManager:
 def get_unified_chat_manager() -> UnifiedChatManager:
     """Hole die globale Unified Chat Manager Instanz"""
     return UnifiedChatManager(get_channel_manager())
-
-
-# Legacy-Kompatibilität mit bestehender API
-def get_chat_history(character_name: str = "") -> List[Dict]:
-    """Legacy-Funktion für Backward-Kompatibilität"""
-    messages = UnifiedChatManager.get_chat_history(character_name)
-    # Konvertiere zu altem Format
-    return [msg.to_dict() for msg in messages]
-
-
-def save_message(message: Dict, character_name: str = ""):
-    """Legacy-Funktion für Backward-Kompatibilität"""
-    # Falls es noch ein altes Dict ist, konvertiere zu Message
-    if isinstance(message, dict):
-        msg_obj = Message.from_dict(message)
-    else:
-        msg_obj = message
-    
-    UnifiedChatManager.save_message(msg_obj, character_name)

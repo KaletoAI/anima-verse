@@ -99,10 +99,3 @@ def resolve_sets(character_name: str,
         if s and s not in chain:
             chain.append(s)
     return chain
-
-
-def resolve_set(character_name: str,
-                profile: Optional[Dict[str, Any]] = None) -> str:
-    """The character's primary set (first of the chain) — "" if it has none."""
-    chain = resolve_sets(character_name, profile)
-    return chain[0] if chain else ""

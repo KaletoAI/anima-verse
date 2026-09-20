@@ -77,20 +77,6 @@ def _types_of(item_id: str) -> List[str]:
     return list(((item.get("outfit_piece") or {}).get("outfit_types")) or [])
 
 
-def visible_types(pieces: Dict[str, str]) -> List[List[str]]:
-    """Tag lists of the VISIBLE pieces of a combination, one entry per piece.
-
-    Covered slots drop out via the render normalisation — a piece nobody sees
-    cannot clash with anything.
-    """
-    try:
-        from app.core.outfit_renderer import visible_equipped_pieces
-        visible = visible_equipped_pieces(pieces or {})
-    except Exception:
-        visible = {k: v for k, v in (pieces or {}).items() if v}
-    return [_types_of(iid) for iid in visible.values() if iid]
-
-
 #: Slots whose pieces are UNDERWEAR: they never constrain a combination that
 #: has visible outerwear (user finding 2026-07-27 — an intimate lace bra under
 #: or peeking out of a business blouse is simply normal underwear). Only when
@@ -198,11 +184,3 @@ def matching_pieces(worn: Dict[str, str],
         else:
             rest.append(iid)
     return matching, rest
-
-
-def coherent_pieces(combos: Iterable[Dict[str, str]]) -> Iterable[Dict[str, str]]:
-    """Filter an enumeration lazily — the batch feeds a generator of a
-    million combinations through here."""
-    for pieces in combos:
-        if is_coherent(pieces):
-            yield pieces

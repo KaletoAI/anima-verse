@@ -44,8 +44,3 @@ def match_queue_name(name: str) -> Optional[str]:
     except Exception:
         pass
     return None
-
-
-def invalidate_cache() -> None:
-    """No-op — kept for backward compatibility."""
-    pass

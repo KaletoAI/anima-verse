@@ -188,14 +188,6 @@ def repetition_keys(
     return keys
 
 
-def detect_assistant_repetition(messages: List[Dict[str, str]],
-                                 lookback: int = 6) -> bool:
-    """Boolean wrapper for ``count_assistant_repetitions``. True as soon as at
-    least one repetition was found.
-    """
-    return count_assistant_repetitions(messages, lookback) > 0
-
-
 def count_assistant_repetitions(messages: List[Dict[str, str]],
                                  lookback: int = 6) -> int:
     """Counts how many of the last ``lookback`` assistant replies repeat
@@ -915,12 +907,6 @@ def build_longterm_summary_prompt_section(character_name: str,
             parts.append(f"- {week_key}: {weekly[week_key]}")
 
     return "\n".join(parts)
-
-
-def _get_today_messages(character_name: str) -> List[Dict[str, str]]:
-    """Only the messages of the game day currently running."""
-    from app.core.timeutils import game_time
-    return _get_day_messages(character_name, game_time().day_key())
 
 
 def _get_day_messages(character_name: str, day_key: str) -> List[Dict[str, str]]:

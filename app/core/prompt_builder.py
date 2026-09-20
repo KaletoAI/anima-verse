@@ -173,7 +173,6 @@ _USER_PRONOUNS = [
 SELFIE_KEYWORDS = (
     "selfie", "selbstportrait", "self-portrait", "self portrait",
     "foto von mir", "photo of me", "bild von mir", "picture of me")
-_SELFIE_KEYWORDS = SELFIE_KEYWORDS  # Abwaertskompatibel
 
 
 def is_photographer_mode(character_name: str) -> bool:
@@ -560,7 +559,7 @@ class PromptBuilder:
         variables.persons = persons
         variables.photographer_mode = photographer_mode
         variables.set_profile = set_profile
-        variables.is_selfie = any(kw in prompt_text.lower() for kw in _SELFIE_KEYWORDS)
+        variables.is_selfie = any(kw in prompt_text.lower() for kw in SELFIE_KEYWORDS)
         # Items fruehzeitig sammeln — spaetere Schritte sehen sie via variables.items
         if item_ids:
             variables.items = self._collect_items(item_ids)

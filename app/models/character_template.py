@@ -22,9 +22,6 @@ from app.core.log import get_logger
 
 logger = get_logger("char_template")
 
-# Valid field types
-FIELD_TYPES = {"text", "number", "season_day", "select"}
-
 # Templates directory
 from app.core.paths import get_templates_dir
 

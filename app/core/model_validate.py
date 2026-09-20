@@ -228,11 +228,6 @@ def gltf_capabilities(gltf: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def glb_capabilities(data: bytes) -> Dict[str, Any]:
-    """``gltf_capabilities`` of a GLB held in memory (upload path)."""
-    return gltf_capabilities(parse_glb(data)["gltf"])
-
-
 def glb_capabilities_at(path: Union[str, Path]) -> Dict[str, Any]:
     """``gltf_capabilities`` of a STORED GLB — header + JSON chunk only, so a
     100-MB mesh costs a few hundred kB of reading."""
@@ -378,31 +373,6 @@ def _accessor_positions(acc: Dict[str, Any], views: List[Dict[str, Any]],
     count = int(acc.get("count") or 0)
     step = 1 if count <= MAX_POSITION_SAMPLES else math.ceil(count / MAX_POSITION_SAMPLES)
     return _accessor_vec3(acc, views, bin_chunk, step)
-
-
-def _accessor_indices(acc: Dict[str, Any], views: List[Dict[str, Any]],
-                      bin_chunk: bytes) -> Optional[List[int]]:
-    """The index list of a primitive (SCALAR ubyte/ushort/uint), or None when
-    it cannot be decoded — an un-indexed primitive is the caller's business."""
-    fmt = {5121: "B", 5123: "H", 5125: "I"}.get(acc.get("componentType"))
-    if fmt is None or acc.get("type") != "SCALAR" or acc.get("sparse") is not None:
-        return None
-    bv_idx = acc.get("bufferView")
-    if not isinstance(bv_idx, int) or not (0 <= bv_idx < len(views)):
-        return None
-    bv = views[bv_idx]
-    if int(bv.get("buffer", 0)) != 0:
-        return None
-    size = struct.calcsize("<" + fmt)
-    stride = int(bv.get("byteStride") or size)
-    base = int(bv.get("byteOffset", 0)) + int(acc.get("byteOffset", 0))
-    count = int(acc.get("count") or 0)
-    if count <= 0 or base < 0 or stride < size:
-        return None
-    if base + (count - 1) * stride + size > len(bin_chunk):
-        return None
-    return [struct.unpack_from("<" + fmt, bin_chunk, base + i * stride)[0]
-            for i in range(count)]
 
 
 def _iter_primitives(gltf: Dict[str, Any]):

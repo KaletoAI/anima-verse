@@ -888,30 +888,12 @@ def apply_hourly_status_tick(character_name: str):
             save_character_profile(character_name, profile)
             logger.info("Hourly status tick fuer %s angewendet", character_name)
 
-        # (Force-Rules laufen jetzt zentral im world_admin_tick
-        # → periodic_jobs._sub_force_rules; Activity-Effekte gibt es nicht
-        # mehr — Activity-Library entfernt. Hier bleibt nur der bar_hourly-
-        # Drift oben + der Danger-Drain unten.)
+        # (Force rules now run centrally in world_admin_tick
+        # -> periodic_jobs._sub_force_rules; activity effects are gone —
+        # the activity library was removed. Only the bar_hourly drift
+        # above is left here.)
     except Exception as e:
         logger.warning("Hourly status tick fehlgeschlagen fuer %s: %s", character_name, e)
-
-    # Location-basierter Danger-Drain (gefaehrliche Orte kosten Stamina)
-    try:
-        from app.models.character import get_character_current_location
-        from app.models.world import get_location_by_id
-        from app.core.danger_system import apply_danger_drain
-        loc_id = get_character_current_location(character_name)
-        if loc_id:
-            loc_data = get_location_by_id(loc_id)
-            if loc_data:
-                drain_changes = apply_danger_drain(character_name, loc_data)
-                if drain_changes:
-                    from app.models.character import _record_state_change
-                    _record_state_change(character_name, "effects",
-                                         f"danger:{loc_data.get('name', '?')}",
-                                         metadata={"changes": drain_changes, "hourly": True})
-    except Exception as e:
-        logger.debug("Hourly danger drain fehlgeschlagen: %s", e)
 
     # Abgelaufene Conditions aufraeumen (drunk, exhausted, charmed, etc.)
     cleanup_expired_conditions(character_name)

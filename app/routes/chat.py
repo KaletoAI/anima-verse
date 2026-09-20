@@ -1736,11 +1736,6 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
     new_name = match.group(1).strip().rstrip('.!,')
     old_loc = get_character_current_location(agent_name)
 
-    def _move_avatar_loc(new_loc_id: str):
-        """Avatar folgt NICHT mehr automatisch bei Location-Wechsel.
-        Der User entscheidet manuell ueber die Avatar-UI wo sein Charakter ist."""
-        return
-
     def _move_avatar_room(room_id: str):
         """Avatar geht mit dem Chat-Character mit (Raum-Wechsel innerhalb
         derselben Location). Location-Follow ist bewusst abgeschaltet."""

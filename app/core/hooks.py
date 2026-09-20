@@ -25,10 +25,6 @@ def register(event: str, fn: Callable, tag: str = "") -> None:
     _hooks[key] = fn
 
 
-def unregister(event: str, tag: str) -> None:
-    _hooks.pop((event, tag), None)
-
-
 def emit(event: str, **kwargs: Any) -> int:
     """Fire an event. Returns the number of callbacks invoked."""
     count = 0
@@ -58,10 +54,6 @@ _providers: Dict[str, Callable] = {}
 
 def register_provider(capability: str, fn: Callable) -> None:
     _providers[capability] = fn
-
-
-def unregister_provider(capability: str) -> None:
-    _providers.pop(capability, None)
 
 
 def get_provider(capability: str) -> Optional[Callable]:

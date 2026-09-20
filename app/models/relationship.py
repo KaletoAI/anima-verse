@@ -25,9 +25,6 @@ logger = get_logger("relationship")
 # How many interaction events to keep per relationship
 MAX_HISTORY_ENTRIES = 20
 
-# Weekly decay amount when no interaction occurs (applied externally)
-DECAY_PER_WEEK = 1
-
 # Human-readable label per relationship type (used in every prompt section)
 TYPE_LABELS = {
     "friend": "Friend",

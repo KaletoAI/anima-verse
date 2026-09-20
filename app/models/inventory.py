@@ -331,20 +331,6 @@ def _piece_slots(item: Optional[Dict[str, Any]]) -> List[str]:
     return list(op.get("slots") or [])
 
 
-def _piece_render_slot(item_slots: List[str]) -> str:
-    """Bestimmt deterministisch den Render-Slot eines Multi-Slot-Pieces.
-
-    Render-Reihenfolge folgt VALID_PIECE_SLOTS — der erste Slot des Pieces
-    in dieser Reihenfolge ist der Render-Slot. Dadurch wird das Fragment
-    nur einmal in den Image-Prompt aufgenommen.
-    """
-    sset = set(item_slots or [])
-    for s in VALID_PIECE_SLOTS:
-        if s in sset:
-            return s
-    return ""
-
-
 def _normalize_outfit_types(raw) -> List[str]:
     """Outfit-type tags against the closed vocabulary. Lazy import: the
     coherence module reads items, and importing it at module load would close

@@ -1074,13 +1074,6 @@ def get_character_appearance(character_name: str) -> str:
     return appearance
 
 
-def save_character_appearance(character_name: str, appearance: str):
-    """Speichert das Aussehen eines Characters"""
-    profile = get_character_profile(character_name)
-    profile["character_appearance"] = appearance
-    save_character_profile(character_name, profile)
-
-
 def get_character_current_location(character_name: str = "") -> str:
     """Gibt den aktuellen Aufenthaltsort des Characters zurueck (Character-Level)."""
     if not character_name:
@@ -1829,14 +1822,6 @@ def set_character_pos(character_name: str, x: float, z: float,
     return {"pos": {"x": fx, "z": fz}, "location_id": location_id}
 
 
-def get_location_changed_at(character_name: str = "") -> str:
-    """The timestamp of the last location change (character level)."""
-    if not character_name:
-        return ""
-    profile = get_character_profile(character_name)
-    return profile.get("location_changed_at", "")
-
-
 def get_character_pose_key(character_name: str) -> str:
     """Current pose CATALOG KEY — the one render/animation key.
 
@@ -2502,15 +2487,6 @@ def add_forbidden_slot(character_name: str, slot: str) -> None:
         set_outfit_intent(character_name, intent)
 
 
-def remove_forbidden_slot(character_name: str, slot: str) -> None:
-    if not (character_name and slot):
-        return
-    intent = get_outfit_intent(character_name)
-    if slot in intent["forbidden_slots"]:
-        intent["forbidden_slots"].remove(slot)
-        set_outfit_intent(character_name, intent)
-
-
 def clear_forbidden_slots(character_name: str) -> None:
     """Leert die Liste vollstaendig — z.B. bei Location-Wechsel."""
     if not character_name:
@@ -2518,23 +2494,6 @@ def clear_forbidden_slots(character_name: str) -> None:
     intent = get_outfit_intent(character_name)
     if intent["forbidden_slots"]:
         intent["forbidden_slots"] = []
-        set_outfit_intent(character_name, intent)
-
-
-def add_forced_piece(character_name: str, slot: str, item_id: str) -> None:
-    if not (character_name and slot and item_id):
-        return
-    intent = get_outfit_intent(character_name)
-    intent["forced_pieces"][slot] = item_id
-    set_outfit_intent(character_name, intent)
-
-
-def clear_forced_piece(character_name: str, slot: str) -> None:
-    if not (character_name and slot):
-        return
-    intent = get_outfit_intent(character_name)
-    if slot in intent["forced_pieces"]:
-        del intent["forced_pieces"][slot]
         set_outfit_intent(character_name, intent)
 
 
@@ -4405,5 +4364,3 @@ def cleanup_orphaned_images(character_name: str) -> Dict[str, Any]:
         logger.info("%s: %d orphaned image(s) deleted", character_name, len(deleted))
 
     return {"character": character_name, "deleted": deleted, "count": len(deleted)}
-
-

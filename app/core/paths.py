@@ -233,11 +233,6 @@ def get_languages_dir() -> Path:
     return get_shared_dir() / "languages"
 
 
-def get_expression_presets_dir() -> Path:
-    """Expression presets for image generation."""
-    return get_shared_dir() / "templates" / "expression"
-
-
 def get_schemas_dir() -> Path:
     """World-dev schemas are shared across all worlds."""
     return get_shared_dir() / "world_dev_schemas"
@@ -245,8 +240,3 @@ def get_schemas_dir() -> Path:
 
 def get_config_path() -> Path:
     return get_storage_dir() / "config.json"
-
-
-def get_secrets_path() -> Path:
-    """Sensitive overlay (api keys, passwords) — gitignored, merged on top of config.json at load time."""
-    return get_storage_dir() / "secrets.json"

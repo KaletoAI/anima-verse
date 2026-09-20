@@ -94,11 +94,6 @@ def get_all_suitability() -> Dict[str, Any]:
     return dict(_load_suit())
 
 
-def get_suitability(model_full: str) -> Dict[str, Any]:
-    """Suitability result for one concrete 'Provider::Model' (or {})."""
-    return _load_suit().get((model_full or "").lower(), {})
-
-
 def save_suitability(model_full: str, result: Dict[str, Any]) -> None:
     """Saves/updates the suitability result for 'Provider::Model'.
 
@@ -126,11 +121,6 @@ def _load_outputs_file() -> Dict[str, Any]:
             return json.load(f)
     except Exception:
         return {"_comment": "Raw suitability test answers — local only.", "outputs": {}}
-
-
-def get_raw_outputs(model_full: str) -> Dict[str, str]:
-    """Raw answers of one 'Provider::Model' run, keyed by check id."""
-    return (_load_outputs_file().get("outputs") or {}).get((model_full or "").lower(), {})
 
 
 def save_raw_outputs(model_full: str, outputs: Dict[str, str]) -> None:

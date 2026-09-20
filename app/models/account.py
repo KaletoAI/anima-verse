@@ -476,10 +476,8 @@ def get_default_character() -> str:
     )
 
 
-get_current_character = get_active_character
 set_current_character = set_active_character
 get_current_agent = get_active_character
-set_current_agent = set_active_character
 
 
 def get_chat_partner() -> str:

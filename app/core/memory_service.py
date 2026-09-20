@@ -1138,24 +1138,7 @@ def _consolidate_weekly_to_monthly(character_name: str) -> int:
 
 
 def run_migration_for_all_users():
-    """Migriert knowledge.json -> memories.json fuer alle User/Characters.
-
-    Fuehrt auch die 3-Stufen-Migration durch (Episodics → Tages/Wochen/Monats-Summaries).
-    """
-    from app.models.memory import migrate_knowledge_to_memories
-    from app.models.character import list_available_characters
-
-    total = 0
-    for char_name in list_available_characters():
-        try:
-            migrated = migrate_knowledge_to_memories(char_name)
-            total += migrated
-        except Exception as e:
-            logger.error("Migration error %s: %s", char_name, e)
-
-    if total > 0:
-        logger.info("Knowledge-Migration abgeschlossen: %d Eintraege migriert", total)
-
+    """Runs the three-tier migration (episodics -> daily/weekly/monthly summaries)."""
     submit_three_tier_migration()
 
 
