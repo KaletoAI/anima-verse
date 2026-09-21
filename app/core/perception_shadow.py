@@ -5,11 +5,8 @@ Additiv + vollstaendig gekapselt — bricht NIE den Chat-Pfad. Reines
 Beobachtungs-Feature, solange der Loop den Stream noch nicht primaer befuellt
 (ab Phase 3 wird der Schreibpfad direkt, der Shadow faellt dann weg).
 
-Zwei Quellen, weil 1:1 und Gruppe getrennte Persistenz haben:
-- ``from_chat_message``  — Hook in ``UnifiedChatManager.save_message`` (1:1,
-                            TalkTo).
-- ``from_group_message`` — Hook in ``group_chat.save_group_message`` (Gruppe,
-                            inkl. Fluestern).
+One source: ``from_chat_message``, the hook in
+``UnifiedChatManager.save_message`` (1:1, TalkTo).
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -88,37 +85,3 @@ def from_chat_message(message, character_name: str, partner: str) -> None:
                          dedupe=True)
     except Exception as e:
         logger.debug("shadow from_chat_message skipped: %s", e)
-
-
-def from_group_message(role: str, content: str, character: str = "",
-                       whisper_to: str = "") -> None:
-    """Ein ``save_group_message`` -> ein Sprechakt (Fluestern unterstuetzt).
-
-    role=user      -> Avatar spricht (whisper_to -> Fluestern).
-    role=assistant -> der ``character`` spricht.
-    """
-    try:
-        if _suppressed.get():
-            return
-        content = content or ""
-        if role not in ("user", "assistant") or not content.strip():
-            return
-
-        from app.core.perception import (VOLUME_NORMAL, VOLUME_WHISPER,
-                                          record_utterance)
-
-        speaker = (character or "") if role == "assistant" else _avatar()
-        if not speaker:
-            return
-
-        if whisper_to:
-            volume = VOLUME_WHISPER
-            addressees = [whisper_to]
-        else:
-            volume = VOLUME_NORMAL
-            addressees = []
-
-        record_utterance(speaker=speaker, content=content, volume=volume,
-                         addressees=addressees, source="shadow")
-    except Exception as e:
-        logger.debug("shadow from_group_message skipped: %s", e)
