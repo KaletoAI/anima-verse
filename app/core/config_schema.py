@@ -1304,25 +1304,6 @@ SECTIONS = {
             },
         },
     },
-    "telegram": {
-        "label": "Telegram",
-        "icon": "✈",
-        "fields": {
-            "webhook_secret": {
-                "type": "password",
-                "label": "Webhook secret token",
-                "description": "Shared secret for POST /telegram/webhook. Telegram sends it "
-                               "back in the X-Telegram-Bot-Api-Secret-Token header; the "
-                               "server compares it and refuses every other caller. Pass the "
-                               "same value as secret_token when registering the webhook via "
-                               "setWebhook. Until this is set the webhook stays CLOSED — "
-                               "without it anyone who reaches the port can inject player "
-                               "messages. Stored in secrets.json.",
-                "sensitive": True,
-                "requires_restart": False,
-            },
-        },
-    },
     "messaging_frame": {
         "label": "Messaging-Frame (Phone-Chat-Layout)",
         "icon": "📱",

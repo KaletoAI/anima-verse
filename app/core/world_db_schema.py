@@ -510,13 +510,7 @@ SCHEMA_STATEMENTS = [
         meta           TEXT DEFAULT '{}'
     )""",
 
-    # ── Telegram / Session / Account ───────────────────────────────────
-    """CREATE TABLE IF NOT EXISTS telegram_mapping (
-        chat_id        TEXT PRIMARY KEY,
-        character_name TEXT NOT NULL,        -- NPC (Bot-Character) dieses Chats
-        avatar         TEXT NOT NULL DEFAULT '',  -- gebundener Avatar (Telegram-User = Character, Option B)
-        created_at     TEXT NOT NULL
-    )""",
+    # ── Session / Account ──────────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS account (
         id            INTEGER PRIMARY KEY CHECK (id = 1),    -- single-row
         user_name     TEXT NOT NULL DEFAULT 'admin',
@@ -911,9 +905,6 @@ ALTER_MIGRATIONS = [
     # (JSON list of "Name (room)" snapshots, room names frozen at write time).
     # Makes "same building, different room" visible in the admin journal.
     ("thoughts", "nearby", "TEXT DEFAULT ''"),
-    # telegram_mapping: avatar column — the Telegram user is represented by an
-    # avatar character (option B). character_name stays the chat's NPC (bot).
-    ("telegram_mapping", "avatar", "TEXT NOT NULL DEFAULT ''"),
     # llm_call_stats: agent_name + max_tokens added for the admin stats tab
     ("llm_call_stats", "agent_name", "TEXT DEFAULT ''"),
     ("llm_call_stats", "max_tokens", "INTEGER DEFAULT 0"),

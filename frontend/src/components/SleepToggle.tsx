@@ -3,7 +3,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
 
 // Global toggle for the world SLEEP mode: every NPC really falls asleep in
-// place — no more NPC LLM chat calls (agent loop, telegram, direct chat).
+// place — no more NPC LLM chat calls (agent loop, direct chat).
 // Ticks, memory consolidation, scheduler, task queue and the GAME CLOCK keep
 // running (unlike Freeze, which also stops the game clock). Waking restores
 // only the NPCs the sleep mode put to sleep; natural sleepers sleep on.

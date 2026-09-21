@@ -47,10 +47,10 @@ WHAT IS CHECKED, and where every expected value comes from
       (same ts, same content, the OPPOSITE role — which the reader flips back,
       so they collide with the originals on the dedup key (ts, role, content)),
       then three own messages b11…b13 at T11…T13.
-      Finally two TELEGRAM messages of Ann in the same pair bucket, tg1 at
-      T14 and tg2 at T15 — only the channel tells them apart.
+      Finally two more messages of Ann in the same pair bucket, c14 at
+      T14 and c15 at T15.
       => the merged, deduped, chronological history of Ann↔Bob is exactly
-         a01 … a10, b11, b12, b13, tg1, tg2  =  15 messages.
+         a01 … a10, b11, b12, b13, c14, c15  =  15 messages.
 
   [4] THE BOUND IS EXACT. For every limit in 1, 2, 5, 12, 13, 14, 50 the
       bounded read returns exactly the last ``limit`` entries of the unbounded
@@ -65,14 +65,7 @@ WHAT IS CHECKED, and where every expected value comes from
       without one it issues none. Fails on the old code, where the limit was
       a Python slice and no statement ever carried a LIMIT.
 
-  [6] NO BEHAVIOUR CHANGE where a SQL LIMIT would be wrong: with a channel
-      filter the limit stays a Python tail (a SQL LIMIT would cut before the
-      filter and hand back fewer messages than asked for). Ann has 13 web
-      messages and 2 telegram ones; ``channel=TELEGRAM, limit=5`` must return
-      exactly the 2 telegram messages, not 0 and not 5 web ones — and no
-      statement carries a LIMIT.
-
-  [7] DEFAULT UNCHANGED: without ``limit`` the full history comes back, and
+  [6] DEFAULT UNCHANGED: without ``limit`` the full history comes back, and
       the statement carries no LIMIT.
 """
 import sys
@@ -89,7 +82,6 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import world_db_schema  # noqa: E402
-from app.models.channel import ChannelType  # noqa: E402
 from app.models.unified_chat import UnifiedChatManager as UCM  # noqa: E402
 
 FAILURES = []
@@ -154,10 +146,9 @@ for i in range(6, 11):
     ROWS.append(("Bob", "Ann", f"T{i:02d}", flipped, f"a{i:02d}", "web"))
 for i in range(11, 14):
     ROWS.append(("Bob", "Ann", f"T{i:02d}", "user" if i % 2 else "assistant", f"b{i:02d}", "web"))
-# Two telegram messages of Ann WITHOUT a partner bucket of their own — they
-# live in the same pair bucket and only the channel tells them apart.
-ROWS.append(("Ann", "Bob", "T14", "user", "tg1", "telegram"))
-ROWS.append(("Ann", "Bob", "T15", "assistant", "tg2", "telegram"))
+# Two more messages of Ann in the same pair bucket.
+ROWS.append(("Ann", "Bob", "T14", "user", "c14", "web"))
+ROWS.append(("Ann", "Bob", "T15", "assistant", "c15", "web"))
 with db.transaction() as c:
     c.executemany(
         "INSERT INTO chat_messages (character_name, partner, ts, role, content, "
@@ -165,7 +156,7 @@ with db.transaction() as c:
 
 full = UCM.get_chat_history("Ann", partner_name="Bob")
 contents = [m.content for m in full]
-expected = [f"a{i:02d}" for i in range(1, 11)] + ["b11", "b12", "b13", "tg1", "tg2"]
+expected = [f"a{i:02d}" for i in range(1, 11)] + ["b11", "b12", "b13", "c14", "c15"]
 check("merged, deduped, chronological pair history",
       contents == expected, str(contents))
 
@@ -209,17 +200,8 @@ check("partner-less read with limit issues a LIMIT",
       any("LIMIT" in q.upper() for q in solo_bounded), str(len(solo_bounded)))
 check("partner-less read without limit issues none",
       not any("LIMIT" in q.upper() for q in solo_plain))
-check("channel filter keeps the limit out of SQL",
-      not any("LIMIT" in q.upper() for q in chat_sql(
-          partner_name="Bob", channel=ChannelType.TELEGRAM, limit=5)))
 
-print("[6] a channel filter keeps the Python tail")
-tg = UCM.get_chat_history("Ann", partner_name="Bob",
-                          channel=ChannelType.TELEGRAM, limit=5)
-check("telegram + limit 5 -> the 2 telegram messages",
-      [m.content for m in tg] == ["tg1", "tg2"], str([m.content for m in tg]))
-
-print("[7] default unchanged")
+print("[6] default unchanged")
 check("no limit -> the full history",
       [m.content for m in UCM.get_chat_history("Ann", partner_name="Bob")] == expected)
 

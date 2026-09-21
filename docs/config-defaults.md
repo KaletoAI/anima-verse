@@ -39,7 +39,6 @@ ihren Standardwerten.
 | Variable | Default | Datei |
 |---|---|---|
 | `SKILL_SEARX_URL` | `http://localhost:8888` | plugins/searx (config.json) |
-| `TELEGRAM_API_URL` | `https://api.telegram.org/bot` | app/models/telegram_channel.py |
 
 ---
 
@@ -214,4 +213,3 @@ Beschreibungen stehen in `app/core/config_schema.py`.
 |---|---|---|
 | `server.max_upload_mb` | `25` | Obergrenze für EINE hochgeladene Datei auf den Spieler-Routen (Chat-Bild, User-Galerie, Profilbild, Regel-Import). Darüber 413, bevor der Body gelesen wird. Content-Packs haben ihre eigene, größere Grenze (Content Marketplace → Max pack size). |
 | `server.cors_origins` | `http://localhost:5173`, `http://127.0.0.1:5173`, `http://localhost:5183`, `http://127.0.0.1:5183` (eine Origin pro Zeile) | Welche fremden Origins die API aufrufen dürfen — für die beiden Vite-Dev-Server und einen 3D-Client auf einem anderen Rechner. `/play` und `/game-admin` liefert der Server selbst aus und brauchen keinen Eintrag. Leer = kein Cross-Origin-Zugriff. Kein Wildcard. Braucht Neustart. |
-| `telegram.webhook_secret` | leer | Gemeinsames Geheimnis für `POST /telegram/webhook`; Telegram schickt es im Header `X-Telegram-Bot-Api-Secret-Token` zurück. Solange es leer ist, bleibt der Webhook GESCHLOSSEN. Liegt in `secrets.json`. |

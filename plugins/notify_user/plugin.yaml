@@ -6,7 +6,7 @@ skills:
   - skill_id: notify_user
     always_load: true
     default_enabled: true
-    user_notification: true       # result becomes a user notification (Telegram forward)
+    user_notification: true       # result becomes a user notification
     progress_type: notification
 
 templates:

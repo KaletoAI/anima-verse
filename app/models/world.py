@@ -584,7 +584,7 @@ def set_world_setting(key: str, value: str) -> None:
 
 # --- World Freeze ---------------------------------------------------------
 # Persistenter Schalter, der die AUTONOME Welt-Simulation einfriert (AgentLoop,
-# hourly Ticks, Scheduler-Jobs, Telegram-Polling), damit man die Welt in Ruhe
+# hourly Ticks, Scheduler-Jobs), damit man die Welt in Ruhe
 # aufbauen kann. TaskQueue (Bildgenerierung) und LLM-Tools bleiben bewusst
 # aktiv — daher NICHT die queue_paused-Pause wiederverwenden.
 # Siehe development_instructions/plan-world-freeze.md.
@@ -625,7 +625,7 @@ def set_world_frozen(frozen: bool) -> None:
 # --- World Sleep -----------------------------------------------------------
 # Persistenter Schalter: alle NPCs schlafen (echtes is_sleeping, siehe
 # world_ops.sleep_world/wake_world). Waehrend des Schlafmodus loesen NPCs
-# keine LLM-Chat-Calls aus (AgentLoop-Turns/Reaktionen/Bumps, Telegram,
+# keine LLM-Chat-Calls aus (AgentLoop-Turns/Reaktionen/Bumps,
 # direkter Chat) — Memory-Konsolidierung, periodische Ticks, Scheduler,
 # TaskQueue und LLM-Tools laufen bewusst weiter. Die GAME-Uhr laeuft weiter
 # (anders als Freeze). Siehe development_instructions/plan-game-time.md.

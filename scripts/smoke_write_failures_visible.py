@@ -64,7 +64,7 @@ db.init_schema()
 
 from app.models import notifications as notif  # noqa: E402
 from app.models import unified_chat as uc  # noqa: E402
-from app.models.channel import ChannelType, Message  # noqa: E402
+from app.models.channel import Message  # noqa: E402
 
 FAILURES = []
 CHECKED = 0
@@ -118,7 +118,7 @@ with db.transaction() as c:
 
 def msg():
     return Message(content="hello", role="assistant", timestamp="T01",
-                   channel=ChannelType.WEB)
+                   channel="web")
 
 
 print("[1] happy path unchanged")

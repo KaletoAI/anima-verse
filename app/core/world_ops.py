@@ -3799,8 +3799,7 @@ def sleep_world() -> Dict[str, Any]:
     ``is_sleeping``; no off-map move, no location change). NPCs that were
     already sleeping naturally are remembered (``world_sleep_prior``) so
     ``wake_world`` leaves them asleep. The avatar is untouched. While the
-    mode is on, NPC LLM-chat triggers are gated (agent loop, telegram,
-    direct chat); ticks/memory/scheduler/task queue keep running and the
+    mode is on, NPC LLM-chat triggers are gated (agent loop, direct chat); ticks/memory/scheduler/task queue keep running and the
     game clock keeps moving (unlike freeze)."""
     import json as _json
     from app.models.character import (list_available_characters,

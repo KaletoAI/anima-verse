@@ -123,10 +123,6 @@ class EntryPointConfig:
                    include_activity=False, include_outfit=False)
 
     @classmethod
-    def telegram(cls) -> "EntryPointConfig":
-        return cls(name="telegram")
-
-    @classmethod
     def outfit_variant(cls) -> "EntryPointConfig":
         return cls(name="outfit_variant", include_location=False)
 

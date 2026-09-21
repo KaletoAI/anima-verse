@@ -26,7 +26,7 @@ Rules:
 - Keep the content suitable for a public audience — no intimate, private or suggestive content
 - Focus on the image, the mood, activities, places or inspiration
 - Mention people involved by name when they appear in the image
-- Length: at least 3-5 sentences, more is fine — NOT a one-liner, no telegram-style brevity
+- Length: at least 3-5 sentences, more is fine — NOT a one-liner, no telegraphic brevity
 - Append exactly {{ hashtag_count }} matching hashtags at the end (also in {{ language_name }})
 - Reply ONLY with the post text and the hashtags, nothing else
 - No quotation marks, no markdown

@@ -121,7 +121,7 @@ Hand-derived expectations:
       later the very same call returns 1 and pools it. Cass carries NO stamp
       at all, so it is invisible to both sweeps and cannot make the count lie.
       The OTHER source is proven too: with the stream emptied, a single
-      ``chat_messages`` row (what DM/phone/TalkTo/Telegram still write) is
+      ``chat_messages`` row (what DM/phone/TalkTo still write) is
       enough to hold Bede back — the perception stream is the new primary
       source, not a replacement.
 
@@ -344,7 +344,7 @@ def player_says(npc: str, minutes_ago: float = 0.0) -> None:
 
 
 def dm_row(character: str, partner: str, minutes_ago: float) -> None:
-    """One ``chat_messages`` row — the DM/phone/TalkTo/Telegram half of the
+    """One ``chat_messages`` row — the DM/phone/TalkTo half of the
     in-chat rule, which still writes that table."""
     with db.transaction() as conn:
         conn.execute(
@@ -503,7 +503,7 @@ check("Cass is still standing there", get_character_status("Cass"), "")
 check("the TTL sweep pools nobody", sweep_expired_npcs(), 0)
 check("Bede is still alive", get_character_status("Bede"), "")
 
-# The OTHER source still counts: DM/phone/TalkTo/Telegram write chat_messages,
+# The OTHER source still counts: DM/phone/TalkTo write chat_messages,
 # and nothing else does since room mode stopped calling save_message.
 clear_chat()
 dm_row("Bede", AVATAR, 0.0)

@@ -115,9 +115,9 @@ _BLOCKING_CALLEES = {"set_pose_intent", "_extract_activity", "_extract_mood",
 # Deliberate inline exceptions: {(file, async def name, callee): reason}.
 # Empty today — every site under app/routes/ is offloaded. The mechanism
 # exists so a future exception is written down WITH a reason instead of the
-# check being weakened. (The known inline callers outside app/routes/ —
-# thoughts.py, telegram_polling.py — are pre-existing and out of scope: they
-# already block on their own LLM call, the pose call only adds to it.)
+# check being weakened. (The known inline caller outside app/routes/ —
+# thoughts.py — is pre-existing and out of scope: it already blocks on its
+# own LLM call, the pose call only adds to it.)
 _ALLOWED_INLINE: dict = {}
 
 # Sites that must keep their offload. The scan above only proves the ABSENCE

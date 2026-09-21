@@ -7,14 +7,10 @@ from app.core.log import get_logger
 logger = get_logger("dependencies")
 
 from app.skills.skill_manager import SkillManager
-from app.models.unified_chat import get_channel_manager
-from app.models.channel import WebChannel, ChannelType
-from app.models.telegram_channel import TelegramChannel
 
 
-# Global SkillManager Instance (kann ohne Server-Neustart neu geladen werden)
+# Global SkillManager Instance (can be reloaded without a server restart)
 _skill_manager = None
-_channels_initialized = False
 
 
 def determine_mode(agent_tools, tool_llm, agent_config=None) -> str:
@@ -51,29 +47,8 @@ def get_skill_manager() -> SkillManager:
     return _skill_manager
 
 
-def initialize_channels() -> None:
-    """Initialisiere Multi-Channel Support beim Server-Start"""
-    global _channels_initialized
-    
-    if _channels_initialized:
-        return
-    
-    manager = get_channel_manager()
-    
-    # Registriere Standard Web-Kanal
-    manager.register_channel(WebChannel())
-    logger.info("Web-Channel registered")
-
-    # Registriere Telegram-Kanal (Bot-Token wird per Agent konfiguriert)
-    telegram = TelegramChannel()
-    manager.register_channel(telegram)
-    logger.info("Telegram-Channel registered (per-agent bot tokens)")
-
-    _channels_initialized = True
-
-
 def reload_skill_manager() -> Dict[str, Any]:
-    """Reloads .env, then LLM Service, Skills and Channels.
+    """Reloads the config, then LLM Service and Skills.
 
     Prints a consolidated availability summary to the console.
     """
@@ -113,37 +88,6 @@ def reload_skill_manager() -> Dict[str, Any]:
     except Exception as e:
         logger.error("TTS Service reload failed: %s", e)
         tts_result = {"error": str(e)}
-
-    # ── Telegram Channel ──
-    manager = get_channel_manager()
-    has_telegram = manager.get_channel(ChannelType.TELEGRAM) is not None
-    if not has_telegram:
-        telegram = TelegramChannel()
-        manager.register_channel(telegram)
-        result["telegram"] = "registered"
-
-    # ── Telegram Polling (restart all bots with current config) ──
-    telegram_result = {}
-    try:
-        import asyncio
-        from .telegram_polling import get_polling_manager
-        pm = get_polling_manager()
-
-        async def _restart_polling():
-            await pm.stop()
-            await pm.start()
-            return pm.get_status()
-
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Schedule as task so it runs in the existing event loop
-            _future = asyncio.ensure_future(_restart_polling())
-            telegram_result = {"status": "restarting"}
-        else:
-            telegram_result = loop.run_until_complete(_restart_polling())
-    except Exception as e:
-        logger.error("Telegram Polling reload failed: %s", e)
-        telegram_result = {"error": str(e)}
 
     # ── Availability Summary ──
     logger.info("-" * 80)
@@ -197,25 +141,11 @@ def reload_skill_manager() -> Dict[str, Any]:
     except Exception:
         logger.info("  TTS   FAIL  Could not read TTS service status")
 
-    # Telegram Polling
-    try:
-        from .telegram_polling import get_polling_manager
-        _pm = get_polling_manager()
-        _ps = _pm.get_status()
-        if _ps["active_bots"] > 0:
-            for _key, _bot in _ps["bots"].items():
-                logger.info("  Tele  OK    @%s -> %s", _bot.get("bot_username", "?"), _key)
-        else:
-            logger.info("  Tele  --    No Telegram bots configured")
-    except Exception:
-        logger.info("  Tele  FAIL  Could not read Telegram polling status")
-
     logger.info("-" * 80)
 
     result["providers"] = provider_result
     result["llm"] = llm_result
     result["tts"] = tts_result
-    result["telegram"] = telegram_result
     return result
 
 

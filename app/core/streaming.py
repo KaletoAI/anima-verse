@@ -1740,7 +1740,7 @@ class StreamingAgent:
         be the turn waiting for itself, on a one-lane pool until the stale
         sweep. So that case takes NO lane and says so, loudly: every caller
         that builds an rp_first agent today hands the id along (routes/chat.py,
-        core/thoughts.py, routes/group_chat.py, core/telegram_polling.py), and
+        core/thoughts.py, routes/group_chat.py), and
         the ones that do not (story.py, story_dev.py, world_dev.py) build their
         agent without tools and never reach this method. A new caller that gets
         it wrong therefore loses the lane of its tool decision — one displaced

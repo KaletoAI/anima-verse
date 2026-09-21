@@ -90,7 +90,7 @@ except Exception as _fje:
     logger.warning("furnish legacy job cleanup failed: %s", _fje)
 
 # Import routers
-from app.routes import auth, store, characters, chat, group_chat, scheduler, instagram, world, telegram, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, intents, diary
+from app.routes import auth, store, characters, chat, group_chat, scheduler, instagram, world, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, intents, diary
 from app.routes import admin_settings
 from app.routes import user_gallery
 from app.routes import assets
@@ -113,7 +113,7 @@ from app.routes import prop_variants as prop_variants_route
 from app.routes import improvements as improvements_route
 from app.routes import npc as npc_route
 from app.scheduler.scheduler_manager import SchedulerManager
-from app.core.dependencies import initialize_channels, get_skill_manager
+from app.core.dependencies import get_skill_manager
 from app.core.provider_manager import initialize_provider_manager
 from app.core.tts_service import initialize_tts_service, clear_tts_tmp
 
@@ -533,10 +533,6 @@ async def lifespan(app: FastAPI):
     except Exception as _ere:
         logger.debug("entry-room migration failed: %s", _ere)
 
-    # Initialisiere Multi-Channel Support
-    logger.info("Initialisiere Multi-Channel Support...")
-    initialize_channels()
-
     logger.info("Initializing Providers...")
     provider_manager = initialize_provider_manager()
 
@@ -624,7 +620,6 @@ async def lifespan(app: FastAPI):
             f"({tts_info['url']}, voice={tts_info['voice']})")
     else:
         _summary_lines.append(f"  TTS   --    Disabled")
-    _summary_lines.append(f"  Tele  OK    Telegram Channel (per-agent bot tokens)")
     _summary_lines.append("-" * 80)
     logger.info("\n%s", "\n".join(_summary_lines))
 
@@ -638,11 +633,6 @@ async def lifespan(app: FastAPI):
     from app.routes.scheduler import set_scheduler_manager
     set_scheduler_manager(_scheduler_manager)
     logger.info("Scheduler bereit!")
-
-    # Telegram Long Polling starten
-    from app.core.telegram_polling import get_polling_manager
-    _telegram_polling = get_polling_manager()
-    await _telegram_polling.start()
 
     # Instantiate the thought container — no background task any more,
     # just the access object for ``run_thought_turn``. The AgentLoop calls
@@ -749,7 +739,6 @@ async def lifespan(app: FastAPI):
         logger.debug("periodic_jobs stop failed: %s", _pe)
 
     # Shutdown
-    await _telegram_polling.stop()
     try:
         from app.core.travel_engine import get_travel_ticker
         await get_travel_ticker().stop()
@@ -855,10 +844,6 @@ app.include_router(world.router, tags=["world"])
 # (…/props/{id}/variants/…), so this is order-independent, but the variant
 # routes are an extension of the prop library and belong beside it.
 app.include_router(prop_variants_route.router)
-app.include_router(telegram.router, tags=["telegram"])
-# The Telegram webhook is the one route Telegram itself calls: its own router
-# without the admin dependency, authenticated by the shared webhook secret.
-app.include_router(telegram.webhook_router, tags=["telegram"])
 app.include_router(templates.router)
 app.include_router(story.router)
 app.include_router(story_dev.router)

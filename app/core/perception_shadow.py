@@ -7,7 +7,7 @@ Beobachtungs-Feature, solange der Loop den Stream noch nicht primaer befuellt
 
 Zwei Quellen, weil 1:1 und Gruppe getrennte Persistenz haben:
 - ``from_chat_message``  — Hook in ``UnifiedChatManager.save_message`` (1:1,
-                            TalkTo, Telegram).
+                            TalkTo).
 - ``from_group_message`` — Hook in ``group_chat.save_group_message`` (Gruppe,
                             inkl. Fluestern).
 """
@@ -56,12 +56,12 @@ def from_chat_message(message, character_name: str, partner: str) -> None:
         if role not in ("user", "assistant") or not content.strip():
             return
 
-        # Remote-DM (Phone/Telegram/Instagram) NICHT in den Raum-Wahrnehmungs-
+        # Remote-DM (Phone/Instagram) NICHT in den Raum-Wahrnehmungs-
         # Stream schatten — das ist die Messaging-Saeule (Fernkommunikation),
         # der Partner ist gar nicht im Raum. Sonst taucht eine Telefon-Nachricht
         # an einen abwesenden NPC im Raum-Chat auf. Nur co-located (in_person /
         # leeres Medium) wird gespiegelt.
-        if (getattr(message, "medium", "") or "") in ("messaging", "telegram", "instagram"):
+        if (getattr(message, "medium", "") or "") in ("messaging", "instagram"):
             return
 
         from app.core.perception import (VOLUME_NORMAL, VOLUME_SHOUT,

@@ -34,7 +34,7 @@ Three things are wrong with that, and the auth gate only made the first fatal:
 
 The in-process delivery already exists: ``execute()`` is the verb, and it
 writes BOTH history rows (inbox model: sender = ``assistant`` in its own
-history, ``user`` in the recipient's), bridges to Telegram, notifies and bumps.
+history, ``user`` in the recipient's), notifies and bumps.
 ``handle_intent`` now only has to name the recipient: the one the intent gave,
 otherwise the player's avatar — "reaches the player" is what the follow-up is
 for.

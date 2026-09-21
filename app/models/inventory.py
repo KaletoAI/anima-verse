@@ -1756,7 +1756,7 @@ def _record_outfit_history(character_name: str, action: str,
     did this character take that off" was not reconstructable (finding E of
     plan-npc-clothing-behavior.md). One entry per mutation call — not per
     slot — keeps the diary readable; the metadata carries who did it
-    (``source``: skill / compliance / wardrobe / avatar / telegram / …), the
+    (``source``: skill / compliance / wardrobe / avatar / …), the
     affected slots and the item ids.
 
     ``displaced`` names what an equip pushed out of the slot. Without it the
@@ -2017,7 +2017,7 @@ def apply_equipped_pieces(character_name: str, *,
             Merged into equipped_pieces_meta and overriding the auto-cleanup
             logic (whoever supplies meta has the final say).
     source: caller context, for the log line and the state-history entry
-            (ui_wardrobe, telegram, skill, ...).
+            (ui_wardrobe, skill, ...).
 
     Returns: {
         "status": "ok",

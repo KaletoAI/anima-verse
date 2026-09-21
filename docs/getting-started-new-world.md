@@ -53,11 +53,6 @@ Infermatic) in the [README](../README.md#getting-started).
      (provider, model, sampling, `Lanes`); **Overview** — what the server resolves right now.
      A task nobody routed falls back to its parent, so you never have to fill all of them.
    - *(optional)* **Image Backends**, **TTS** — only for the corresponding features.
-   - *(optional)* **Telegram** — `Webhook secret token` (`telegram.webhook_secret`). Until it is
-     set, `POST /telegram/webhook` is **refused** for every caller. Pass the same value as
-     `secret_token` when you register the webhook with Telegram's `setWebhook`; Telegram returns
-     it in the `X-Telegram-Bot-Api-Secret-Token` header and the server compares the two. Stored in
-     `secrets.json`.
 
    API keys, the JWT secret and passwords are written to a separate **`secrets.json`** next to
    `config.json` (gitignored), so the demo world can ship with an empty `config.json` and each user

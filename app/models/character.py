@@ -1014,12 +1014,6 @@ def get_character_personality(character_name: str) -> str:
 def _get_character_defaults() -> Dict[str, Any]:
     """Character-Default-Config. LLM-Wahl erfolgt zentral ueber den Router."""
     return {
-        "telegram_bot_token": "",
-        # Telegram has no avatar selector — every incoming message must
-        # belong to SOME in-world character. Set this to the avatar that
-        # the human on the other end controls; otherwise messages get
-        # tagged with an empty partner and disappear into limbo.
-        "telegram_partner_character": "",
         "tts_enabled": True,
         "tts_auto": False,
         "tts_voice": "",
@@ -1032,7 +1026,7 @@ def _get_character_defaults() -> Dict[str, Any]:
 
 
 def get_character_config(character_name: str) -> Dict[str, Any]:
-    """Gibt die per-Character Konfiguration zurueck (LLM, Vision, Telegram, etc.).
+    """Gibt die per-Character Konfiguration zurueck (LLM, Vision, TTS, etc.).
 
     Das Profil-Feld 'language' wird automatisch als 'tts_language' injiziert,
     damit die TTS-Kette die richtige Sprache verwendet.

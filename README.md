@@ -115,7 +115,7 @@ stops acting autonomously).
   `known_locations`, an `entry_room`, item-gated rooms, and rule-based access control.
 - **Events:** disruption / danger events can swap the room background and spawn temporary access
   rules (e.g. "can't leave during the fire"); announcements bump nearby characters.
-- **World Freeze:** pause the autonomous simulation (agent loop, ticks, scheduler, Telegram) while
+- **World Freeze:** pause the autonomous simulation (agent loop, ticks, scheduler) while
   keeping the task queue and LLM tools live.
 
 ### Image generation & animation
@@ -150,8 +150,7 @@ stops acting autonomously).
 - **Group chat** with turn-taking; **TalkTo** for face-to-face character-to-character exchange;
   **SendMessage** for remote messages; social reactions between characters.
 - **Relationships** with automatic decay over time.
-- **Messaging pillar:** phone-style chat layout in `/play`, plus a Telegram integration where the
-  user acts as their avatar.
+- **Messaging pillar:** phone-style chat layout in `/play` for remote conversations.
 
 ### Knowledge, search & automation
 - **Knowledge extraction:** pull facts from local files (Markdown/JSON/…) via LLM, mtime-cached,

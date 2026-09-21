@@ -2053,7 +2053,7 @@ def _thought_llm_available() -> bool:
 def _last_chat_message_ts(character_name: str,
                           avatars: Sequence[str]) -> Optional[str]:
     """Timestamp of the newest ``chat_messages`` row between this character and
-    one of ``avatars`` — the DM/phone/TalkTo/Telegram half of the in-chat rule.
+    one of ``avatars`` — the DM/phone/TalkTo half of the in-chat rule.
 
     Both storage directions (A,B)/(B,A) are covered.
     """
@@ -2088,7 +2088,7 @@ def _minutes_since_last_chat_with_avatar(character_name: str) -> Optional[float]
       set, and every respond turn is room mode), so a whole conversation in
       the player UI used to leave this function answering None: the guards
       built on it were inert on the one path the player actually uses.
-    * ``chat_messages`` — still the truth for DM/phone, TalkTo and Telegram.
+    * ``chat_messages`` — still the truth for DM/phone and TalkTo.
 
     The newer of the two wins. Both are SYSTEM-time stamps (``utc_now_iso``),
     which is the right clock here: this is a technical "how long ago", not an

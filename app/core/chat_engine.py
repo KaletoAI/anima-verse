@@ -1,5 +1,5 @@
 """
-Chat Engine — shared logic for Web and Telegram chat paths.
+Chat Engine — shared logic for the chat paths.
 
 Provides:
 - build_chat_context(): prepares system prompt, history, tools
@@ -288,7 +288,6 @@ def build_chat_context(
     owner_id: str,
     character_name: str,
     user_input: str,
-    channel: str = "web",
     selected_skills: Optional[list] = None,
     speaker: str = "user",
     medium: Optional[str] = None,
@@ -306,13 +305,12 @@ def build_chat_context(
         owner_id: User who owns the character (storage path)
         character_name: Character name (the responder)
         user_input: Current incoming message
-        channel: "web" or "telegram"
         selected_skills: Optional skill filter
         speaker: "user" (default) or the name of the speaking character.
             For character-to-character, speaker is the sender's name.
         medium: Communication medium as the characters see it:
-            "in_person", "messaging", "telegram", "instagram".
-            None = auto-derived from channel + speaker context.
+            "in_person", "messaging", "instagram".
+            None = auto-derived from the speaker context.
         partner_name: For character-to-character: the speaking character
             (= speaker when speaker != "user"). Used for history file names.
         addressed_to: Names the incoming line was addressed to. None = not
@@ -347,25 +345,13 @@ def build_chat_context(
     _chat_instance = resolve_llm(chat_llm_task(character_name),
                                  agent_name=character_name)
     lang_instruction = get_character_language_instruction(character_name)
-    # For web chat: player's active character is the conversation partner identity.
-    # For telegram: use account name (telegram has no character-switching).
-    if channel == "telegram":
-        # Telegram has no avatar picker — the controlled avatar is named in
-        # the bot config (telegram_partner_character). Without it every
-        # Telegram message would be partner='' and unfindable.
-        user_display_name = (
-            (agent_config or {}).get("telegram_partner_character", "").strip()
-            or "user"
-        )
-    else:
-        # Avatar identity, never the login name — "admin" used to leak in here.
-        user_display_name = get_active_character() or get_chat_partner() or "user"
+    # The player's active character is the conversation partner identity.
+    # Avatar identity, never the login name — "admin" used to leak in here.
+    user_display_name = get_active_character() or get_chat_partner() or "user"
 
     # Auto-derive the medium when it is not set
     if medium is None:
-        if channel == "telegram":
-            medium = "telegram"
-        elif speaker != "user":
+        if speaker != "user":
             # Character-to-character: in_person when at the same place, else messaging
             try:
                 from app.models.character import get_character_current_location
@@ -502,7 +488,6 @@ def build_chat_context(
     _prompt = _build_chat_prompt(character_name, lang_instruction, history_summary,
         tools_enabled=tools_enabled, agent_config=agent_config,
         selected_skills=selected_skills,
-        channel=channel,
         has_tool_llm=(mode == "rp_first"),
         partner_override=(speaker if speaker != "user" else ""),
         medium=medium,
@@ -912,8 +897,8 @@ def run_chat_turn(
 
     ts = utc_now_iso()
 
-    # chat_messages ONLY for directed messaging (talk_to/send_message,
-    # Telegram/web) — there it feeds the agent inbox (load_unread_messages).
+    # chat_messages ONLY for directed messaging (talk_to/send_message) —
+    # there it feeds the agent inbox (load_unread_messages).
     # In ROOM mode the perception stream is the canonical source (shown in
     # /play + scenes); chat_messages would only duplicate the old pairwise
     # history and is part of the cutover
@@ -1086,7 +1071,7 @@ def post_process_response(
     Run all post-processing after a chat response: mood, location, activity,
     memory extraction, relationship updates, intent extraction.
 
-    Can be called from both Web (in background) and Telegram.
+    Called from the web chat path (in the background).
 
     Args:
         owner_id: User who owns the character

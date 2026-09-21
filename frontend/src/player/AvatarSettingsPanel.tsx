@@ -10,7 +10,7 @@
  *  - Soul        = SoulEditor (respects locked sections)
  *  - Preferences = columns 2,10 without the social numbers → dressing preference + TTS
  *
- * Social numbers, feature flags, Telegram, stats and placement stay admin-only
+ * Social numbers, feature flags, stats and placement stay admin-only
  * (not in these columns / via excludeKeys). The user's own avatar is in
  * `allowed_characters`, so /characters/{avatar}/* is allowed.
  */

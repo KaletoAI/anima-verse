@@ -29,8 +29,8 @@ B) Every `app/…`, `plugins/…` or `docker/…` path named in the Datei column
    exists on disk. Expected: all of them. This is the `test -f` half of the
    finding — four paths had been deleted with their modules.
 
-C) The three settings the document gained (`server.max_upload_mb`,
-   `server.cors_origins`, `telegram.webhook_secret`) are still fields of
+C) The two settings the document gained (`server.max_upload_mb`,
+   `server.cors_origins`) are still fields of
    `app/core/config_schema.py`. They are config.json settings, not names of
    the A-kind, so A would not see them.
 
@@ -102,9 +102,9 @@ def main():
     gone = [p for p in paths if not (REPO / p).exists()]
     check("no Datei column points at a deleted module", not gone, str(gone))
 
-    print("C) the three config.json settings are still in the schema")
+    print("C) the two config.json settings are still in the schema")
     schema = (REPO / "app" / "core" / "config_schema.py").read_text(encoding="utf-8")
-    for field in ("max_upload_mb", "cors_origins", "webhook_secret"):
+    for field in ("max_upload_mb", "cors_origins"):
         check(f"config_schema.py defines {field}", f'"{field}": {{' in schema)
         check(f"docs/config-defaults.md mentions {field}", field in doc)
 
@@ -121,8 +121,11 @@ def main():
         check("the pre-fix revision documented at least 19 unknown names",
               len(old_dead) >= 19, f"{len(old_dead)}: {old_dead}")
         old_gone = [p for p in documented_paths(old) if not (REPO / p).exists()]
-        check("the previous revision named 4 deleted modules",
-              len(old_gone) == 4, f"{len(old_gone)}: {old_gone}")
+        # At least the 4 modules DS-11 found deleted. Later feature removals
+        # delete more modules the old document still names, so this is a
+        # floor, not a pin.
+        check("the previous revision named at least 4 deleted modules",
+              len(old_gone) >= 4, f"{len(old_gone)}: {old_gone}")
 
     print()
     print(f"{_checks - len(_failures)}/{_checks} checks passed")

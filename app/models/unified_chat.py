@@ -1,14 +1,12 @@
-"""
-Unified Chat Manager - Multi-Channel Chat Verwaltung
+"""Unified Chat Manager — chat history storage.
 
-Verwaltet Chat-Verlauf über mehrere Kanäle (Web, Telegram, WhatsApp, etc.)
-Alle Nachrichten werden in einem einheitlichen Format gespeichert.
+Reads and writes the 1:1 chat history of a character. Every message is
+stored in the same format.
 
-Storage: world.db — Tabelle chat_messages
+Storage: world.db — table chat_messages
 """
 from pathlib import Path
-from typing import Dict, List, Optional
-from datetime import datetime
+from typing import List, Optional
 
 from app.core.timeutils import utc_now_iso
 import json
@@ -21,44 +19,15 @@ logger = get_logger("unified_chat")
 # get_user_name absichtlich nicht importiert — Login-Name wuerde sonst als
 # Partner-Key in chat_messages leaken. Stattdessen wird get_player_identity
 # in _resolve_partner_key benutzt (lazy import dort).
-from app.models.channel import Message, ChannelType, ChannelInterface
-
-
-class ChannelManager:
-    """
-    Verwaltet registrierte Kanäle und Kommunikation zwischen Kanälen
-    """
-    
-    def __init__(self):
-        self._channels: Dict[ChannelType, ChannelInterface] = {}
-    
-    def register_channel(self, channel: ChannelInterface) -> None:
-        """Registriere einen neuen Kanal"""
-        self._channels[channel.channel_type] = channel
-    
-    def get_channel(self, channel_type: ChannelType) -> Optional[ChannelInterface]:
-        """Hole einen registrierten Kanal"""
-        return self._channels.get(channel_type)
-    
-    def list_channels(self) -> List[ChannelType]:
-        """Liste alle verfügbaren Kanäle auf"""
-        return list(self._channels.keys())
+from app.models.channel import Message
 
 
 class UnifiedChatManager:
+    """Chat history of a character — read and write.
+
+    A namespace of static methods; there is nothing to instantiate.
     """
-    Verwaltet Chat-Verlauf über mehrere Kanäle
-    
-    Alle Nachrichten werden im gleichen Format gespeichert, unabhängig vom Kanal.
-    Dies ermöglicht:
-    - Konsistente Chat-Historie über alle Kanäle
-    - Kanalübergreifenden Nachrichtenverlauf
-    - Explizites Routing an bestimmte Kanäle
-    """
-    
-    def __init__(self, channel_manager: ChannelManager):
-        self.channel_manager = channel_manager
-    
+
     @staticmethod
     def get_chat_dir(character_name: str) -> Path:
         """Legacy-Kompatibilitaet: Gibt das Chat-Verzeichnis zurueck (existiert noch fuer Backups)."""
@@ -129,35 +98,29 @@ class UnifiedChatManager:
 
     @staticmethod
     def get_chat_history(character_name: str = "",
-        channel: Optional[ChannelType] = None,
         limit: Optional[int] = None,
         partner_name: str = "") -> List[Message]:
-        """Laedt Chat-History aus der DB.
+        """Loads the chat history from the DB.
 
         Args:
-            character_name: Character-Name (der Character dessen History geladen wird)
-            channel: Wenn gesetzt, nur Nachrichten von diesem Kanal filtern
-            limit: Maximale Anzahl von Nachrichten (letzte N)
-            partner_name: Expliziter Partner-Character-Name (fuer Character-zu-Character)
+            character_name: character whose history is loaded
+            limit: maximum number of messages (the last N)
+            partner_name: explicit partner character name (character-to-character)
 
         Returns:
-            Liste von Message-Objekten
+            List of Message objects
 
-        ``limit`` is applied IN SQL whenever it can be (DATA-12): the history
-        of a pair is never pruned, so after months of play a chat turn read,
-        parsed and object-ified tens of thousands of rows for a prompt that
-        keeps the last ~100. It stays a Python tail only when ``channel``
-        filters as well — a SQL ``LIMIT`` would then cut before the filter and
-        return fewer messages than asked for. Without ``limit`` nothing
-        changes: the full history is read as before.
+        ``limit`` is applied IN SQL (DATA-12): the history of a pair is never
+        pruned, so after months of play a chat turn read, parsed and
+        object-ified tens of thousands of rows for a prompt that keeps the
+        last ~100. Without ``limit`` nothing changes: the full history is read
+        as before.
         """
         if not character_name:
             return []
 
         partner = UnifiedChatManager._resolve_partner_key(partner_name, character_name)
-        # A channel filter runs AFTER the rows are built, so a SQL LIMIT would
-        # cut the wrong end of the list — only an unfiltered read is bounded.
-        sql_limit = limit if (limit and limit > 0 and channel is None) else None
+        sql_limit = limit if (limit and limit > 0) else None
 
         try:
             conn = get_connection()
@@ -239,32 +202,25 @@ class UnifiedChatManager:
                     meta = json.loads(meta_json or "{}")
                 except Exception:
                     meta = {}
-                ch_type = ChannelType.WEB
-                if ch:
-                    try:
-                        ch_type = ChannelType(ch)
-                    except (ValueError, KeyError):
-                        pass
                 msg = Message(
                     content=content,
                     role=role,
                     timestamp=ts,
-                    channel=ch_type,
+                    channel=ch or "web",
                     channel_message_id=ch_msg_id,
                     id=row_id,
                     **{k: v for k, v in meta.items()
                        if k not in ("content", "role", "timestamp", "channel",
                                     "channel_message_id", "id")},
                 )
-                if channel is None or msg.channel == channel:
-                    history.append(msg)
+                history.append(msg)
 
             if limit and len(history) > limit:
                 history = history[-limit:]
             return history
 
         except Exception as e:
-            logger.error("get_chat_history DB-Fehler fuer %s/%s: %s",
+            logger.error("get_chat_history DB error for %s/%s: %s",
                          character_name, partner_name, e)
             return []
 
@@ -272,12 +228,12 @@ class UnifiedChatManager:
     def save_message(message: Message,
         character_name: str = "",
         partner_name: str = "") -> bool:
-        """Speichert eine Nachricht in der DB.
+        """Stores a message in the DB.
 
         Args:
-            message: Message-Objekt
-            character_name: Character-Name (in dessen History die Nachricht gespeichert wird)
-            partner_name: Expliziter Partner-Character-Name (fuer Character-zu-Character)
+            message: Message object
+            character_name: character in whose history the message is stored
+            partner_name: explicit partner character name (character-to-character)
 
         Returns:
             True when the row is committed, False when it is NOT (DATA-13).
@@ -296,14 +252,13 @@ class UnifiedChatManager:
 
         partner = UnifiedChatManager._resolve_partner_key(partner_name, character_name)
 
-        # Meta: alle Felder ausser Standard-Felder
+        # Meta: every field except the standard columns
         msg_dict = message.to_dict()
         meta = {k: v for k, v in msg_dict.items()
                 if k not in ("content", "role", "timestamp", "channel",
                              "channel_message_id")}
 
-        ch_value = (message.channel.value if hasattr(message.channel, "value")
-                    else str(message.channel or "web"))
+        ch_value = str(message.channel or "web")
 
         try:
             with transaction() as conn:
@@ -323,82 +278,15 @@ class UnifiedChatManager:
                     json.dumps(meta, ensure_ascii=False),
                 ))
         except Exception as e:
-            logger.error("save_message DB-Fehler fuer %s/%s: %s",
+            logger.error("save_message DB error for %s/%s: %s",
                          character_name, partner_name, e, exc_info=True)
             return False
 
-        # Shadow-Write in den Wahrnehmungs-Stream (additiv, nie blockierend).
-        # plan-room-conversation Phase 1 — faellt ab Phase 3 weg.
+        # Shadow write into the perception stream (additive, never blocking).
+        # plan-room-conversation phase 1 — goes away from phase 3 on.
         try:
             from app.core import perception_shadow
             perception_shadow.from_chat_message(message, character_name, partner)
         except Exception:
             pass
         return True
-    
-    async def send_message_to_channel(
-        self, character_name: str,
-        content: str,
-        target_channel: ChannelType,
-        **kwargs
-    ) -> Optional[str]:
-        """
-        Sende eine Nachricht an einen bestimmten Kanal
-        
-        Dies ermöglicht Anweisungen wie:
-        "Suche Fußballergebnisse und sende sie an Telegram"
-        
-        Args:
-            user_id: Benutzer-ID
-            character_name: Agent-Name
-            content: Nachrichteninhalt
-            target_channel: Zielkanal (z.B. ChannelType.TELEGRAM)
-            **kwargs: Kanal-spezifische Optionen
-        
-        Returns:
-            Kanal-spezifische Message-ID falls verfügbar
-        """
-        channel = self.channel_manager.get_channel(target_channel)
-        if not channel:
-            raise ValueError(f"Kanal {target_channel.value} nicht registriert")
-        
-        # Sende Nachricht über den Kanal
-        channel_message_id = await channel.send_message(character_name, content, **kwargs
-        )
-        
-        # Speichere im einheitlichen Chat-Format
-        message = Message(
-            content=content,
-            role="assistant",
-            channel=target_channel,
-            channel_message_id=channel_message_id
-        )
-        if not self.save_message(message, character_name):
-            # The channel already has the message — it is out there. Only the
-            # local history is missing, and that is worth a loud line rather
-            # than a silent hole in the transcript (DATA-13).
-            logger.error("send_message_to_channel: %s -> %s sent but NOT stored",
-                         character_name, target_channel)
-
-        # Rufe Channel Hook auf
-        await channel.on_message_sent(character_name, content, channel_message_id
-        )
-        
-        return channel_message_id
-
-
-# Globale Channel Manager Instanz
-_channel_manager = None
-
-
-def get_channel_manager() -> ChannelManager:
-    """Hole die globale Channel Manager Instanz"""
-    global _channel_manager
-    if _channel_manager is None:
-        _channel_manager = ChannelManager()
-    return _channel_manager
-
-
-def get_unified_chat_manager() -> UnifiedChatManager:
-    """Hole die globale Unified Chat Manager Instanz"""
-    return UnifiedChatManager(get_channel_manager())

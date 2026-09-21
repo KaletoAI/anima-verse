@@ -41,8 +41,7 @@ _BOOT_RESTART_SNAPSHOT: Optional[dict] = None
 
 # Fields that contain sensitive data (API keys, passwords, secrets)
 SENSITIVE_FIELDS = {
-    "api_key", "password", "jwt_secret", "bot_token", "secret",
-    "auth_token", "webhook_secret",
+    "api_key", "password", "jwt_secret", "secret", "auth_token",
 }
 
 
@@ -1848,11 +1847,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "STORY_ENGINE_MAX_BEATS", se.get("max_beats", 5))
     _set(env, "STORY_ENGINE_BEAT_IMAGES", se.get("beat_images", True))
     _set(env, "STORY_ENGINE_IMAGEGEN_DEFAULT", se.get("imagegen_default", ""))
-
-    # Telegram
-    tg = config.get("telegram", {})
-    _set(env, "TELEGRAM_BOT_TOKEN", tg.get("bot_token", ""))
-    _set(env, "TELEGRAM_API_URL", tg.get("api_url", "https://api.telegram.org/bot"))
 
     # UI
     ui = config.get("ui", {})

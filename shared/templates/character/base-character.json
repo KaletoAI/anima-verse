@@ -578,34 +578,6 @@
       ]
     },
     {
-      "id": "telegram_config",
-      "visible_when": { "feature": "telegram_enabled" },
-      "label": "Telegram",
-      "label_de": "Telegram",
-      "column": 9,
-      "row": 0,
-      "fields": [
-        {
-          "key": "telegram_bot_token",
-          "label": "Bot Token",
-          "label_de": "Bot Token",
-          "type": "text",
-          "store": "config",
-          "hint": "Telegram Bot Token from @BotFather. Each character needs its own bot. After saving, use the Reload button to start polling.",
-          "hint_de": "Telegram Bot-Token von @BotFather. Jeder Character braucht einen eigenen Bot. Nach dem Speichern den Reload-Button drücken."
-        },
-        {
-          "key": "telegram_partner_character",
-          "label": "Controlled Avatar",
-          "label_de": "Gesteuerter Avatar",
-          "type": "character_select",
-          "store": "config",
-          "hint": "The in-world character that the human on the other side of this Telegram bot is controlling. Used as partner identity for chat/relationship history. Leave empty to skip identity tagging.",
-          "hint_de": "Welcher Charakter in der Welt vom Menschen auf der Telegram-Seite gesteuert wird. Wird als Partner-Identitaet fuer Chat/Beziehungs-Historie genutzt. Leer lassen um keinen Avatar zu setzen."
-        }
-      ]
-    },
-    {
       "id": "thoughts_config",
       "visible_when": { "feature": "thoughts_enabled" },
       "label": "Thoughts",

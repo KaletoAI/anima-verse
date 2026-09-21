@@ -114,7 +114,6 @@ start-*.sh
 logs/
 
 # Individual User/Agent Storage
-telegram_chats.json
 Aufgaben.md
 
 # Model Files (Large Binary Files) — ignore the model binaries themselves,

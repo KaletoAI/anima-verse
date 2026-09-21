@@ -108,7 +108,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `skills[].delivers_speech` | nein | Über dieses Verb erreicht wörtliche Rede jemanden (TalkTo/SendMessage) — das B-lite-Sprachnetz prüft Thought-Turns dagegen |
 | `skills[].intents` | nein | `[INTENT: <typ>]`-Marker, die dieses Verb ausführt (F6) — die Klasse implementiert `handle_intent()`; Default = Payload-Durchreichung an `execute()` |
 | `skills[].intent_payload_keys` | nein | INTENT-Params mit dem vergleichbaren Inhalt (Redundanz-Skip: Marker vs. bereits ausgeführtes Tool im selben Turn) |
-| `skills[].user_notification` | nein | Tool-Ergebnis wird User-Notification (Telegram-Forward) — generisch gelesen via `tool_names_with_flag` |
+| `skills[].user_notification` | nein | Tool-Ergebnis wird User-Notification — generisch gelesen via `tool_names_with_flag` |
 | `skills[].remote_comm` | nein | Verb erreicht NICHT anwesende Charaktere (World-Setup-Checkliste „Kommunikation") |
 | `skills[].progress_type` | nein | Generischer Fortschritts-Typ (`image`, `search`, `talkto`, …) für zählbasierte Intents/Assignments — ersetzt die frühere TOOL_NAME_MAP |
 | `templates.llm` | nein | Ordner relativ zum Paket; gleiche Struktur wie `shared/templates/llm/` |

@@ -206,8 +206,6 @@ def seed_stores(name):
                   "VALUES (?,?,?,?)", ("pi1", name, OTHER, "t"))
         c.execute("INSERT OR REPLACE INTO explored_cells (character_id, cx, cz) VALUES (?,?,?)",
                   (name, 3, 4))
-        c.execute("INSERT OR REPLACE INTO telegram_mapping (chat_id, character_name, avatar, created_at) "
-                  "VALUES (?,?,?,?)", ("c1", name, "", "t"))
         c.execute("INSERT OR REPLACE INTO intents (id, owner, participants, created_at, updated_at) "
                   "VALUES (?,?,?,?,?)", ("i1", name, json.dumps({"target": OTHER}), "t", "t"))
         c.execute("INSERT OR REPLACE INTO story_arcs (id, title, participants, created_at, updated_at) "

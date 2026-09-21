@@ -274,7 +274,6 @@ def _drive_chat_stream(agent: str, avatar: str) -> PreviewResult:
         history_summary=summary,
         tools_enabled=False,
         agent_config=cfg,
-        channel="web",
         partner_override=avatar,
         medium="in_person",
     )

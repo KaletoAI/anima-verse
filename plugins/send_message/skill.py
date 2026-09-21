@@ -49,7 +49,7 @@ class SendMessageSkill(PluginSkill):
         USER utterance addressed to whoever the current chat partner was.
 
         The verb itself IS the in-process delivery: ``execute`` writes both
-        history rows, bridges to Telegram, notifies and bumps the recipient.
+        history rows, notifies and bumps the recipient.
         The recipient is the one the intent named; with none, the follow-up is
         meant for the player, i.e. their avatar.
         """
@@ -225,19 +225,6 @@ class SendMessageSkill(PluginSkill):
                 sender_name, target_name, _stored.count(False))
             return (f"Error: the message to {target_name} could not be "
                     f"stored and was NOT delivered.")
-
-        # Push bridge (Telegram option B): if the target is a Telegram-bound
-        # avatar of this sender (NPC), deliver the message to the Telegram
-        # chat. Sync enqueue; the NPC's poller delivers it asynchronously.
-        # (Image attachments are not bridged yet — text only, phase 2.)
-        try:
-            from app.models.telegram_channel import (
-                get_telegram_channel, enqueue_telegram_outbound)
-            tg = get_telegram_channel()
-            for cid in tg.chat_ids_for(npc=sender_name, avatar=target_name):
-                enqueue_telegram_outbound(cid, sender_name, message)
-        except Exception as _be:
-            self.ctx.logger.debug("telegram outbound enqueue failed: %s", _be)
 
         # Notification only for character→character (keeps the system event
         # feed clean of "X wrote Y" spam). For an avatar target the chat

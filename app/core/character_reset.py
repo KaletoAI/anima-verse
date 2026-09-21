@@ -121,9 +121,6 @@ STORES: Tuple[Store, ...] = (
           (SCOPE_REINIT,), "pending party invitations", params=2),
     Store("explored_cells", "explored_cells", "character_id=?", (SCOPE_REINIT,),
           "fog-of-war cells of the previous world"),
-    Store("telegram_mapping", "telegram_mapping", "character_name=? OR avatar=?",
-          (SCOPE_REINIT,), "Telegram chat bindings of the previous world",
-          params=2),
     # ── JSON-participant stores: pruned, not deleted ──────────────────────
     Store("intents", "intents", "", (SCOPE_REINIT,),
           "intents owned by or naming this character", json_column="participants"),

@@ -622,7 +622,7 @@ export function CharactersTab() {
   // a tab appears when it is NOT a special tab and at least one generically
   // renderable section lies in its columns. Order = tab order in the template.
   // Template features are the truth about what a character KIND has —
-  // npc-temporary switches memory/thoughts/telegram/… off. A section whose
+  // npc-temporary switches memory/thoughts/… off. A section whose
   // `visible_when.feature` names a disabled feature is dropped here, ONCE,
   // before tabs and forms ever see it; a tab left without sections vanishes.
   // A temporary NPC is a different KIND of character sheet, not a stripped

@@ -306,7 +306,6 @@ def _extract_characters_from_path(path: str):
 #                             already translated
 #   /auth/login|logout|status -> the login round trip itself
 #   /health, /favicon.ico  -> liveness + the browser's automatic icon request
-#   /telegram/webhook      -> authenticated by X-Telegram-Bot-Api-Secret-Token
 #   /api/images            -> authenticated by X-API-Key
 _PUBLIC_EXACT = {
     "/",
@@ -315,7 +314,6 @@ _PUBLIC_EXACT = {
     "/play", "/play/",
     "/game-admin", "/game-admin/",
     "/auth/login", "/auth/logout", "/auth/status",
-    "/telegram/webhook",
     "/api/images",
 }
 _PUBLIC_PREFIXES = ("/static", "/i18n")
@@ -336,7 +334,6 @@ _ADMIN_PREFIXES = (
     "/story",          # storyteller files (raw read/write/delete)
     "/story-dev",
     "/scheduler",
-    "/telegram",       # the webhook is on the public list above
 )
 # Readable for a player, writable only for an admin. /templates/{id} is what
 # the player's own avatar settings render from (character settings come from

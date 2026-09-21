@@ -3,7 +3,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
 
 // Global toggle for the persistent World-Freeze. Freezing pauses the autonomous
-// simulation (agent loop, hourly ticks, scheduler jobs, telegram polling) so the
+// simulation (agent loop, hourly ticks, scheduler jobs) so the
 // world can be built in peace. Image generation and LLM tools keep working.
 // Backend: GET/POST /world/freeze-status|freeze|unfreeze (see plan-world-freeze.md).
 export function FreezeToggle() {
@@ -52,7 +52,7 @@ export function FreezeToggle() {
         : undefined}
       title={frozen
         ? t('World is frozen — autonomous simulation is paused (image generation & LLM tools still work). Click to resume.')
-        : t('Freeze the world — pauses ticks, agent loop, scheduler & telegram while you build. Image generation & LLM tools keep working.')}
+        : t('Freeze the world — pauses ticks, agent loop & scheduler while you build. Image generation & LLM tools keep working.')}
     >
       {frozen ? `❄ ${t('World frozen — Resume')}` : `❄ ${t('Freeze world')}`}
     </button>

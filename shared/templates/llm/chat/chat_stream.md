@@ -64,9 +64,7 @@ The world this conversation takes place in:
 Stay consistent with this world's tone, era and rules in everything you say or do.
 
 {% endif %}
-{% if medium == "telegram" %}
-CONTEXT: This conversation takes place via Telegram (text messaging). You are NOT face-to-face with the other person. You are chatting remotely. Keep this in mind for your responses — you cannot see them, they cannot see you. Physical actions (touching, handing things over, etc.) are not possible. However, you CAN send images and media via Telegram. React as if you are texting on your phone.
-{% elif medium == "messaging" %}
+{% if medium == "messaging" %}
 CONTEXT: This conversation takes place via text messaging — you are NOT face-to-face, you are chatting remotely from different locations. Physical actions (touching, handing things over, sharing a look, etc.) are not possible. React as if you are texting.
 {% elif medium == "instagram" %}
 CONTEXT: This interaction takes place on Instagram (comments or DMs). Keep responses short, casual, and platform-appropriate. Emojis are fine.

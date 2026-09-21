@@ -33,7 +33,7 @@ The sweep runs as a sub-task of the world-admin tick
   rest of the autonomous simulation — exactly like the random events, the NPC
   ticks and the day consolidation. Nothing is gated a second time here.
 * **Sleeping** (``world_sleeping``): the sweep keeps running, like every other
-  sub-task (only the agent loop and the Telegram poll stand down while the
+  sub-task (only the agent loop stands down while the
   world sleeps). The game clock runs during sleep, so the day really does
   happen; gating the sweep would swallow a birthday whose whole day fell into
   one long night, and the guard below would not offer it again until the next

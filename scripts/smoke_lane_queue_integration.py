@@ -269,21 +269,8 @@ THE EXPECTATIONS, DERIVED BY HAND
     neighbour's: every turn evicts the other conversation and the whole
     mechanism is worse than no lanes at all.
 
-[15] Review of phase 2, round 2, blocker 2 — THE TELEGRAM PATH SETS
-    `agent.chat_task_id`. The nested call looks its owner up by that id; a
-    turn whose agent does not carry it finds no owner, suspends nothing and,
-    on a same-pool host, waits for the lane its own registration holds (in
-    production until the 660-s stale sweep). The poller's `_generate_response`
-    is driven for real — only `build_chat_context`, `resolve_llm`,
-    `post_process_response` and `StreamingAgent` are stubs, the registration
-    goes through the real queue — and the stand-in agent reports, at the
-    start of its stream and again after the tool executor has re-registered,
-    whether its `chat_task_id` names a LIVE registration. Both must say yes,
-    and the second id must be a different one: the executor closes the
-    registration around every tool and opens a new one.
-
-[16] After all of it: both pools fully free, nothing waiting. A lane that is
-    busy here is a leak, and [1]-[6] and [8]-[11], [13]-[15] are exactly the
+[15] After all of it: both pools fully free, nothing waiting. A lane that is
+    busy here is a leak, and [1]-[6] and [8]-[11], [13]-[14] are exactly the
     paths that can leak one.
 
 Exit code 0 = all checks passed, 1 = at least one failed.
@@ -1304,85 +1291,8 @@ LANES.sync_from_config(POOL_A)
 check("pool A is back to one free lane",
       (pool(POOL_A)["busy"], pool(POOL_A)["free"]), (0, 1))
 
-# ── [15] round 2, blocker 2: the Telegram path sets agent.chat_task_id ────
-print("\n[15] the Telegram turn hands its registration id to the agent")
-from app.core import chat_engine as _ce  # noqa: E402
-from app.core import llm_router as _lr  # noqa: E402
-from app.core import streaming as _st  # noqa: E402
-from app.core.telegram_polling import CharacterBotPoller  # noqa: E402
-
-_tg = {"owner_at_start": None, "owner_after_tool": None,
-       "id_at_start": None, "id_after_tool": None}
-
-
-class _RecordingAgent:
-    """Stands in for StreamingAgent and reports what the poller told it.
-
-    What matters is not the id itself but whether it names a LIVE
-    registration: that is what ProviderManager.nested_call_lane looks up to
-    find the turn whose lane it has to suspend.
-    """
-
-    def __init__(self, **kwargs):
-        self.chat_task_id = kwargs.get("chat_task_id", "")
-        self.tool_executor = None
-
-    async def stream(self, system_content, messages, user_input):
-        _tg["id_at_start"] = self.chat_task_id
-        _tg["owner_at_start"] = self.chat_task_id in QUEUE._chat_tasks
-        await self.tool_executor("Probe", "x")
-        _tg["id_after_tool"] = self.chat_task_id
-        _tg["owner_after_tool"] = self.chat_task_id in QUEUE._chat_tasks
-        if False:  # pragma: no cover - makes this an async generator
-            yield None
-
-
-class _RoutedInstance:
-    provider_name = "P"
-    model = "model-a"
-
-
-_tg_ctx = {
-    "llm": StubLLM("model-a", gate=None),
-    "tool_llm": StubLLM("model-a", gate=None),
-    "tool_format": "tag",
-    "tools_dict": {"Probe": lambda _x: "ok"},
-    "max_iterations": 2,
-    "mode": "rp_first",
-    "system_content": "s",
-    "messages": [],
-    "moment_content": "",
-    "agent_config": {},
-    "user_display_name": "",
-    "full_chat_history": [],
-    "old_history": None,
-}
-
-_saved = (_ce.build_chat_context, _ce.post_process_response,
-          _lr.resolve_llm, _st.StreamingAgent)
-_ce.build_chat_context = lambda *a, **kw: _tg_ctx
-_ce.post_process_response = lambda *a, **kw: None
-_lr.resolve_llm = lambda *a, **kw: _RoutedInstance()
-_st.StreamingAgent = _RecordingAgent
-try:
-    asyncio.run(CharacterBotPoller("Kira", "token")._generate_response("hi"))
-except Exception as e:  # pragma: no cover - would be a failed check
-    _tg["error"] = str(e)
-finally:
-    (_ce.build_chat_context, _ce.post_process_response,
-     _lr.resolve_llm, _st.StreamingAgent) = _saved
-
-check("the poller drove the agent", _tg.get("error"), None)
-check("the agent knows its registration from the start",
-      (bool(_tg["id_at_start"]), _tg["owner_at_start"]), (True, True))
-check("and still knows it after the executor re-registered around a tool",
-      (bool(_tg["id_after_tool"]), _tg["owner_after_tool"]), (True, True))
-check("the re-registration really is a NEW one",
-      _tg["id_after_tool"] != _tg["id_at_start"], True)
-check("pool A is free after the Telegram turn", pool(POOL_A)["busy"], 0)
-
-# ── [16] nothing leaked ────────────────────────────────────────────────────
-print("\n[16] no lane left behind")
+# ── [15] nothing leaked ────────────────────────────────────────────────────
+print("\n[15] no lane left behind")
 for name, key in (("A", POOL_A), ("B", POOL_B)):
     snap = pool(key)
     check(f"pool {name}: every lane free",

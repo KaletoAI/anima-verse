@@ -178,8 +178,6 @@ check("anon GET /health", status("GET", "/health"), 200)
 check("anon GET /", status("GET", "/"), 200)
 check("anon GET /static/game_admin/assets/x.js",
       status("GET", "/static/game_admin/assets/x.js"), 200)
-check("anon GET /telegram/webhook is not the gate's business (POST)",
-      status("POST", "/telegram/webhook"), 200)
 check("anon POST /api/images", status("POST", "/api/images"), 200)
 check("anon GET /api/content/catalogs", status("GET", "/api/content/catalogs"), 401)
 check("anon HTML nav /admin/settings",

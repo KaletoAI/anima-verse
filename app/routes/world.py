@@ -131,8 +131,8 @@ def get_freeze_status() -> Dict[str, Any]:
 async def freeze_world(
     _: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
-    """Friert die Welt ein: AgentLoop, hourly Ticks, Scheduler-Jobs und
-    Telegram-Polling pausieren. TaskQueue (Bildgenerierung) + LLM-Tools bleiben
+    """Friert die Welt ein: AgentLoop, hourly Ticks und Scheduler-Jobs
+    pausieren. TaskQueue (Bildgenerierung) + LLM-Tools bleiben
     aktiv. Persistent (ueberlebt Neustart)."""
     from app.models.world import set_world_frozen
     set_world_frozen(True)

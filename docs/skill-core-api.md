@@ -130,9 +130,8 @@ Zugangs-/Verlass-Regeln: `app.models.rules.check_access`/`check_leave` (⚠ — 
 |---|---|
 | `app.models.chat.save_message(msg, character_name=…, partner_name=…)` | Eine Zeile in die Chat-History eines Charakters schreiben (Inbox-Modell: Sender als `assistant`, Empfänger als `user`) |
 | `app.core.pending_reports.add_report / list_open / mark_resolved` | Chain-of-Command-Follow-ups: wer wem noch eine Rückmeldung schuldet (talk_to/send_message legen bei Fremd-Initiator einen Report an und lösen offene beim Antworten) |
-| `app.models.notifications.create_notification(character=…, content=…, notification_type=…, metadata=…)` | User-Notification anlegen (notify_user; send_message für Char→Char). Forward zum Telegram-Avatar via `user_notification`-Flag |
+| `app.models.notifications.create_notification(character=…, content=…, notification_type=…, metadata=…)` | User-Notification anlegen (notify_user; send_message für Char→Char) |
 | `app.models.account.get_player_identity(...)` | Aktiver Avatar-Name (notify_user spiegelt die Notification in dessen Inbox) |
-| `app.models.telegram_channel.get_telegram_channel / enqueue_telegram_outbound` | Push-Bridge (Telegram Option B): DM an einen Telegram-gebundenen Avatar (send_message) |
 | `app.imagegen.service.get_image_service()` | Bild-Service (Welle 6) — `attach_image` liest die Turn-Bild-Meta (`_meta_tls`/`last_image_meta`) daraus, kein Skill→Skill-Import |
 
 ## Party — `app.core.party_engine` ✅ (party-Paket)

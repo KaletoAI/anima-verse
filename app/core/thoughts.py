@@ -1,7 +1,7 @@
 """ThoughtRunner — Container fuer ``run_thought_turn``.
 
 Hostet die LLM-Streaming-Logik fuer einen einzelnen Thought-Turn. Wer einen
-Char "denken" laesst (AgentLoop scheduling, Telegram-Trigger, Admin-Bump),
+Char "denken" laesst (AgentLoop scheduling, Admin-Bump),
 ruft ``get_thought_runner().run_thought_turn(...)``.
 
 Scheduling laeuft im ``app.core.agent_loop.AgentLoop`` (importance-gewichtetes
@@ -36,7 +36,7 @@ def _char_lang(character_name: str) -> str:
 
 def _user_notification_tool_names() -> frozenset:
     """Tools declared USER_NOTIFICATION (F7-style flag) — their result
-    becomes a user notification / Telegram forward."""
+    becomes a user notification."""
     try:
         from app.core.dependencies import get_skill_manager
         return get_skill_manager().tool_names_with_flag("USER_NOTIFICATION")
@@ -187,34 +187,6 @@ class ThoughtRunner:
     def __init__(self):
         self._lock = asyncio.Lock()
 
-
-    # ------------------------------------------------------------------
-    # Telegram delivery
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    async def _send_to_telegram(character_name: str, content: str):
-        """Send thought notification via Telegram if the character has a bot."""
-        from app.core.telegram_polling import get_polling_manager
-
-        pm = get_polling_manager()
-        key = character_name
-        poller = pm.pollers.get(key)
-        if not poller or not poller._running:
-            return  # No active Telegram bot for this character
-
-        # Find all registered chat_ids for this user
-        from app.models.telegram_channel import get_telegram_channel
-        telegram = get_telegram_channel()
-
-        sent = False
-        for chat_id, mapped_user in telegram.chat_to_user_mapping.items():
-            # Send to all registered Telegram users
-            await poller.send_message(chat_id, content, parse_mode="")
-            sent = True
-
-        if sent:
-            logger.info("[%s] Gedanken-Nachricht an Telegram gesendet", character_name)
 
     # ------------------------------------------------------------------
     # LLM Call
@@ -863,8 +835,7 @@ class ThoughtRunner:
         notification_content = ""
         if had_notification_tool:
             # Nur wenn der Character explizit SendNotification (nur fuer
-            # System-zugewiesene Tasks aktiviert) gerufen hat — Inhalt fuer
-            # optionale Telegram-Weiterleitung sammeln.
+            # System-zugewiesene Tasks aktiviert) gerufen hat.
             if full_response:
                 notification_content = full_response
             elif notification_tool_content:
@@ -932,13 +903,6 @@ class ThoughtRunner:
             except Exception as _je:
                 logger.debug("Thought-Journal Fehler: %s", _je)
 
-        # Gedanken-Nachricht an Telegram senden (wenn Character einen Bot hat)
-        if notification_content:
-            try:
-                await self._send_to_telegram(character_name, notification_content)
-            except Exception as tg_err:
-                logger.debug("Telegram thought send error: %s", tg_err)
-
         # In Chat-History speichern, damit der Character sich spaeter erinnern kann
         if notification_content:
             try:
@@ -966,7 +930,7 @@ class ThoughtRunner:
                     logger.info("%s: In Chat-History gespeichert", character_name)
                 else:
                     # The thought turn itself is done and its other effects
-                    # (notification, Telegram) already happened — there is
+                    # (the notification) already happened — there is
                     # nothing to roll back. But the character will NOT
                     # remember having said this, so it must not pass quietly
                     # (DATA-13).

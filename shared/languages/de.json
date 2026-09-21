@@ -2234,6 +2234,8 @@
     "Delete this post?": "Diesen Post löschen?",
     "Remove this image from the post?": "Dieses Bild aus dem Post entfernen?",
     "Delete this animation? The image stays.": "Diese Animation löschen? Das Bild bleibt.",
-    "The world’s own version of \"{name}\" is dropped; the shared rule stays in force.": "Die welteigene Fassung von „{name}\" entfällt; die geteilte Regel gilt weiter."
+    "The world’s own version of \"{name}\" is dropped; the shared rule stays in force.": "Die welteigene Fassung von „{name}\" entfällt; die geteilte Regel gilt weiter.",
+    "Freeze the world — pauses ticks, agent loop & scheduler while you build. Image generation & LLM tools keep working.": "Welt einfrieren — pausiert Ticks, Agent-Loop und Scheduler, während du baust. Bildgenerierung und LLM-Tools laufen weiter.",
+    "World is frozen — autonomous simulation is paused (image generation & LLM tools still work). Click to resume.": "Welt ist eingefroren — die autonome Simulation ist pausiert (Bildgenerierung und LLM-Tools laufen weiter). Klicken zum Fortsetzen."
   }
 }

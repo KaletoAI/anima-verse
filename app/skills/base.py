@@ -45,7 +45,7 @@ class BaseSkill(ABC):
     SUPPRESS_IN_PERSON = False  # hidden while the conversation partners share a room
     CASCADE_BRAKE = False       # reply_only_to gate for messaging cascades
     SEARCH_INTENT = False       # search-forcing hint targets this tool
-    USER_NOTIFICATION = False   # tool result becomes a user notification (Telegram forward)
+    USER_NOTIFICATION = False   # tool result becomes a user notification
     REMOTE_COMM = False         # verb reaches characters NOT present (world-setup checklist)
     PROGRESS_TYPE = ""          # generic progress type ('image', 'search', ...) for
                                 # count-based intents/assignments — replaces TOOL_NAME_MAP

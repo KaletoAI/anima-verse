@@ -50,7 +50,6 @@ _OWNED_TABLES: Tuple[str, ...] = (
     "scheduler_jobs",
     "assignments",
     "image_metadata",
-    "telegram_mapping",
 )
 
 # Optional tables — only included when the matching flag is set.
