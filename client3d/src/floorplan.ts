@@ -17,7 +17,7 @@ import { Engine } from './scene/engine';
 import { applyTileFade, buildTile, setSurfaceTextures, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { getSurfaceTextures } from './api';
-import { mountScene, SceneLibrary } from './scene/sceneRecipe';
+import { mountScene, SceneLibrary, unmountScene } from './scene/sceneRecipe';
 void getSurfaceTextures().then(setSurfaceTextures);
 import { grassTexture } from './scene/textures';
 import type { WorldLocation } from './types';
@@ -76,7 +76,15 @@ async function fetchLocation(): Promise<WorldLocation | null> {
 }
 
 function rebuild(loc: WorldLocation) {
-  if (tile) engine.scene.remove(tile.group);
+  if (tile) {
+    engine.scene.remove(tile.group);
+    // …and give back what the old scene allocated. The editor polls every
+    // 4 s and every signature change lands here, so without this a whole
+    // tile's geometries, materials and texture clones leaked per rebuild
+    // (review finding UI-3 neighbourhood; the ownership ledger of the scene
+    // mount is what frees them).
+    unmountScene(tile);
+  }
   // CSS2D-Label-Reste des alten Baus entfernen (der Renderer räumt sie nicht ab)
   document.querySelectorAll('.room-label, .loc-label').forEach((el) => el.remove());
 

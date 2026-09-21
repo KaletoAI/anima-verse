@@ -10,7 +10,7 @@ import os
 import re
 from fastapi import HTTPException
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from app.core.log import get_logger
 from app.core import scene_recipe
 from app.core.scatter_curves import curve_map, tessellate
@@ -194,6 +194,85 @@ def _place_payload(name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
     return {"id": p["id"], "slot": p["slot"], "x": p["x"], "z": p["z"],
             "facing": p.get("facing"), "room_id": p["room_id"]}
+
+
+#: ``name -> (cheap change token, model signature)`` for
+#: :func:`_model_signature`. Process-local and unbounded by design: it holds
+#: one short tuple per character of the world.
+_MODEL_SIG_CACHE: Dict[str, Tuple[str, str]] = {}
+
+
+def _model_signature(name: str, profile: Dict[str, Any]) -> str:
+    """The signature of the mesh ``GET /characters/<name>/model3d`` would
+    serve right now — ``""`` when the character has no mesh store at all.
+
+    WHY IT IS IN THE WORLDMAP (review finding UI-3). The 3D client used to ask
+    the model route for every character every 20 seconds, sequentially, only to
+    compare this one string; the worldmap poll already carries exactly that
+    pattern for the world (``terrain_sig`` / ``height_sig``). With the field
+    here the client compares and asks only when it moved.
+
+    IT IS THE ROUTE'S OWN ANSWER, not a second derivation:
+    ``model3d.find_model3d_serving`` decides which file is served (exact
+    state variant → neutral → nearest stored combination) and
+    ``get_model3d_info`` reports its stem as ``model.signature``. This reads
+    the same function and reports the same stem.
+
+    WHAT KEEPS IT CHEAP. That function costs two profile loads, a directory
+    walk and a stored manifest per candidate mesh — far too much for every
+    character on a 3-second poll, and it would break the one-profile-per-
+    character bound the worldmap loop was just brought down to
+    (``scripts/smoke_worldmap_profile_loads.py``). So it runs only when a
+    CHANGE TOKEN moved, and the token is built from what the loop already
+    holds plus one ``stat``:
+
+    * the worn outfit and the image-modifier trigger state — the inputs of
+      ``model_refs.current_outfit_state``, read straight out of the profile
+      the loop loaded (``equipped_pieces``, ``equipped_items``, the free-text
+      outfit fields a template without an outfit system renders, and
+      ``status_effects``). Deliberately a SUPERSET: a status flag that changes
+      nothing about the appearance costs one needless re-derivation, never a
+      missed model.
+    * the mtime of ``<character>/model3d`` — a generated or deleted mesh
+      lands there, and a character without that directory has no mesh store,
+      which is the ``""`` case above (and the whole derivation is skipped).
+    * the storage directory, so a world switch cannot serve the previous
+      world's answer for a character of the same name.
+    """
+    from app.models.character import get_character_dir
+    try:
+        model_dir = get_character_dir(name) / "model3d"
+        dir_mtime = model_dir.stat().st_mtime_ns
+    except (OSError, ValueError):
+        return ""   # no mesh store -> nothing to report, and nothing to poll
+    try:
+        import json
+        from app.core.paths import get_storage_dir
+        token_parts = [str(get_storage_dir()), str(dir_mtime),
+                       json.dumps(profile.get("equipped_pieces") or {},
+                                  sort_keys=True, default=str),
+                       json.dumps(profile.get("equipped_items") or [],
+                                  sort_keys=True, default=str),
+                       str(profile.get("outfit_description") or ""),
+                       str(profile.get("outfit_worn")),
+                       json.dumps(profile.get("status_effects") or {},
+                                  sort_keys=True, default=str)]
+        token = "\u0000".join(token_parts)
+    except Exception as e:   # noqa: BLE001 — a poll may not fail on this
+        logger.debug("model signature token for %s: %s", name, e)
+        return ""
+    cached = _MODEL_SIG_CACHE.get(name)
+    if cached and cached[0] == token:
+        return cached[1]
+    try:
+        from app.core.model3d import find_model3d_serving
+        path, _match = find_model3d_serving(name)
+        sig = path.stem if path else ""
+    except Exception as e:   # noqa: BLE001
+        logger.debug("model signature for %s: %s", name, e)
+        return ""
+    _MODEL_SIG_CACHE[name] = (token, sig)
+    return sig
 
 
 def build_worldmap_payload(avatar_name: Optional[str] = None,
@@ -671,6 +750,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         target_name = name_by_id.get(mt, "") or mt
         if fogged and mt and mt not in visible_ids:
             target_name = ""
+        # NOT fogged: a mesh signature is an opaque cache key, it names no
+        # place and no route — and the figure whose row this is has already
+        # passed all three visibility gates above.
+        _model_sig = _model_signature(name, _prof)
         characters.append({
             "name": name,
             "location_id": loc_id,
@@ -705,6 +788,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # none (or the marker vanished — place_of validates).
             "place": _place_payload(name, _prof),
             "avatar_url": (f"/characters/{name}/images/{prof}" if prof else ""),
+            # The served 3D mesh's change key (§ A11a) — the same string
+            # `GET /characters/<name>/model3d` reports as `model.signature`.
+            # Only present where there IS a mesh store: a character without
+            # one has nothing to poll, and an absent field says exactly that
+            # (one fewer empty string per row per 3-second poll).
+            **({"model_sig": _model_sig} if _model_sig else {}),
         })
 
     events_by_location = {}

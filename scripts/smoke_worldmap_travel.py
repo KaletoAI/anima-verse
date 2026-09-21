@@ -4,9 +4,14 @@
 Checks the ``travel`` block of ``world_ops.build_worldmap_payload`` against
 docs/schnittstellen-3d.md § A11 (metre polyline): the block carries
 ``{target_id, waypoints, progress_m, total_m, eta_game, eta_hhmm, eta_label,
-speed_m_s_real, pace_m_s_real}`` and NOTHING else — every cell field of v1 (``path``/``seg``/
+starts_in_s, speed_m_s_real, pace_m_s_real}`` and NOTHING else — every cell field of v1 (``path``/``seg``/
 ``frac``/``progress_cells``/``cell_seconds_real``) is gone without
 replacement.
+
+``starts_in_s`` joined the block with the DEPARTURE BRIDGE (transition clips,
+``travel_engine.departure_bridge``): a journey whose ``started_at_game`` lies
+ahead of the clock has not begun, and this is the real-seconds countdown until
+it does. It is the one number fog does NOT withhold — see [6].
 
 Runs against a THROWAWAY storage directory — it never touches a real world.
 The journey is written onto the profile BY HAND, so no expectation below
@@ -131,6 +136,11 @@ Hand-derived expectations:
                     total_m, eta_game, eta_hhmm, eta_label, speed_m_s_real,
                     pace_m_s_real ALL null; target_id still B; the keys all stay (so "not
                     told" stays distinguishable from "empty")
+        ``starts_in_s`` is deliberately NOT among them (§ A11): it is a
+        countdown to a DEPARTURE, not route knowledge — it says nothing about
+        where the figure is heading, and a client needs it to hold a figure
+        still that is not walking yet. In this fixture every journey has
+        already begun, so it is null on both sides anyway.
           fogged, demo_avatar (itself)           -> the full block
           show_all, npc_near                     -> the full block
 
@@ -181,7 +191,8 @@ SLOW_WAYPOINTS = [[0.0, 0.0, 0.0], [30.0, 0.0, 30.0], [30.0, 40.0, 110.0]]
 SPEED = 1.0
 # Exactly the fields § A11 lists — no more, no less.
 FIELDS = {"target_id", "waypoints", "progress_m", "total_m", "eta_game",
-          "eta_hhmm", "eta_label", "speed_m_s_real", "pace_m_s_real"}
+          "eta_hhmm", "eta_label", "starts_in_s", "speed_m_s_real",
+          "pace_m_s_real"}
 # What the fog withholds from a foreign traveller: everything but target_id.
 THIN_NUMBERS = ("progress_m", "total_m", "eta_game", "eta_hhmm", "eta_label",
                 "speed_m_s_real", "pace_m_s_real")
@@ -296,6 +307,9 @@ def main() -> int:
     check("eta_game is canonical and timezone-free", tr.get("eta_game"), ETA)
     check("… with the HH:MM rendered server-side", tr.get("eta_hhmm"), "12:01")
     check("… and the calendar label beside it", tr.get("eta_label"), ETA_LABEL)
+    # The journey started at the clock's own instant, so the departure bridge
+    # is behind it: nothing is pending, and the countdown says so.
+    check("starts_in_s is null once under way", tr.get("starts_in_s"), None)
     check("speed_m_s_real is null while frozen", tr.get("speed_m_s_real"), None)
     check("pace_m_s_real is null while frozen", tr.get("pace_m_s_real"), None)
 

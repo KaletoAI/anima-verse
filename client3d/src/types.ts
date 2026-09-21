@@ -252,6 +252,13 @@ export interface MapCharacter {
    *  pair the point is the place's centre, its anchor). */
   place?: { id: string; slot: number | 'pair'; x: number; z: number; facing?: number; room_id: string } | null;
   avatar_url?: string;
+  /** Change key of the 3D MESH the server would serve for this character
+   *  (§ A11a) — the very string `GET /characters/<name>/model3d` reports as
+   *  `model.signature`. Same job as `terrain_sig`/`height_sig` one level up:
+   *  while it matches what the figure library already holds, there is
+   *  nothing to fetch. Absent = this character has no mesh store (or an
+   *  older server) — then nothing is polled for it at all. */
+  model_sig?: string;
 }
 
 /** A pair interaction as the server states it (§ A8a): two characters play

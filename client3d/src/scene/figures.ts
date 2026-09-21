@@ -886,19 +886,30 @@ export class FigureLibrary {
     if (sets?.length) this.charSets.set(charName, sets);
   }
 
-  /** Modellwechsel prüfen (z.B. neues Outfit): Signatur vom Server holen und
-   *  bei Abweichung das Modell verwerfen -> wird neu geladen. */
-  async refreshIfChanged(charName: string): Promise<boolean> {
+  /** Modellwechsel prüfen (z.B. neues Outfit): bei Abweichung das Modell
+   *  verwerfen -> wird neu geladen.
+   *
+   *  `serverSig` is the signature the WORLDMAP poll already carries for this
+   *  character (`MapCharacter.model_sig`, § A11a) — the same string the model
+   *  route reports. Handed in, this costs no request at all: an unchanged
+   *  signature returns straight away, and a changed one goes to the reload
+   *  without a confirming fetch. Left out (no such field), the signature is
+   *  fetched as before. */
+  async refreshIfChanged(charName: string, serverSig?: string): Promise<boolean> {
     const known = this.apiSignature.get(charName);
     if (!known || this.pending.has(charName)) return false;
-    let info: ApiModel | null;
-    try {
-      info = await getCharacterModel(charName);
-    } catch {
-      return false;   // Server gerade nicht erreichbar -> nächster Poll
+    let signature = serverSig;
+    if (signature === undefined) {
+      let info: ApiModel | null;
+      try {
+        info = await getCharacterModel(charName);
+      } catch {
+        return false;   // Server gerade nicht erreichbar -> nächster Poll
+      }
+      signature = info?.signature ?? '';
     }
-    if (!info?.signature || info.signature === known) return false;
-    console.info(`[figures] ${charName}: Modell geändert (${known} -> ${info.signature}) — lade neu`);
+    if (!signature || signature === known) return false;
+    console.info(`[figures] ${charName}: Modell geändert (${known} -> ${signature}) — lade neu`);
     // The old mesh leaves the caches here, but NOT the GPU: a Figure built
     // from it is still on screen until the replacement arrives (see
     // `retireModels`). Freeing it now would only make three.js upload it

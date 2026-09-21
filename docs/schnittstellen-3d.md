@@ -829,12 +829,14 @@ Die Feldnamen des Charakter-Eintrags sind unverändert; neu ist **`pos`**
 Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
-`travel`, `interaction` (§ A8a), `place` (§ A8a), `avatar_url`.
+`travel`, `interaction` (§ A8a), `place` (§ A8a), `avatar_url`,
+**`model_sig`** (§ A11a, nur wenn vorhanden).
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
+| `model_sig` | `str` (optional) | Änderungs-Kennung des 3D-**Meshs**, das der Server für diese Figur ausliefern würde — dieselbe Zeichenkette, die `GET /characters/<name>/model3d` als `model.signature` meldet. **Fehlt**, wenn der Charakter gar keinen Mesh-Speicher hat. Siehe **§ A11a** |
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). Gilt auch IN einem Raum (s. u.). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
-| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
+| `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `starts_in_s`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
 
 - **`pos` gilt auch IN einem Raum** (2026-09-13, T4). Der Server hat den Punkt
   gestellt: frei von Wänden, Möbeln, Türzonen und Mitbewohnern. Ein Client
@@ -2814,6 +2816,7 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 | `eta_game` | Kalenderzeit `\| null` | nominelle Ankunft auf der **Spieluhr**, als **kanonischer Weltkalender-Stempel** `"Y0002-D109T14:00:00"` (Jahr 4-stellig, Tag im Jahr 3-stellig). Kein ISO-Datum, **keine Weltzeitzone** — die gibt es nicht mehr. Der Client PARST das Feld nicht: es ist der Vergleichs-/Sortierwert, die Anzeige kommt aus den beiden Feldern darunter. **Gefoggt `null`** wie `progress_m` |
 | `eta_hhmm` | `str \| null` | Ankunftszeit als fertiges `"HH:MM"` — vom Server gerendert. **Gefoggt `null`** wie `progress_m` |
 | `eta_label` | `str \| null` | Ankunft als vollständiges, lokalisiertes Kalender-Label (z. B. `"Summer, day 17 · 14:23 · Year 3"`; Sprache = die des Avatars). Für Reisen, die über Mitternacht laufen, ist das die einzige vollständige Angabe. **Gefoggt `null`** wie `progress_m` |
+| `starts_in_s` | `float \| null` | **ECHTE** Sekunden, bis die Figur losläuft — `null`, sobald sie läuft. Eine Reise kann mit einem verzögerten `started_at_game` beginnen, weil die Figur erst aus ihrer Pose aufsteht (`travel_engine.departure_bridge`): solange spielt der Client den Übergangsclip aus `activity_animation` und bewegt **nichts** — `journey_state` klemmt die Position ohnehin auf den ersten Punkt. Dauer durch Zeitfaktor geteilt (es ist eine DAUER, kein Tempo). **Wird NICHT ausgedünnt**: ein Abfahrts-Countdown verrät keine Route, und eine gefoggte Figur, die noch steht, darf nicht extrapoliert werden |
 | `speed_m_s_real` | `float \| null` | **Nominal**-Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null`, wenn nicht extrapoliert werden darf: eingefrorene Welt bzw. Zeitfaktor 0 — und ebenso, wenn die Reise kein brauchbares `speed_m_s` trägt (fehlend, 0 oder negativ). **Gefoggt `null`** wie `progress_m` |
 | `pace_m_s_real` | `float \| null` | **Echtes** Tempo des Segments, das die Figur GERADE läuft, in Metern pro ECHTER Sekunde: `\|w[seg+1] − w[seg]\| / (t[seg+1] − t[seg]) × Zeitfaktor` aus denselben gebackenen Zeitmarken (seit **E4**, 2026-08-09). Damit steckt der Gelände-`speed_factor` drin, den `speed_m_s_real` nicht kennt. `null`, wenn es kein aktuelles Segment gibt oder nichts extrapoliert werden darf: eingefrorene Welt / Zeitfaktor 0, angekommen (Zeit über dem Ende), entartetes Segment (Länge 0 oder Zeitspanne 0). **Gefoggt `null`** wie `progress_m` |
 
@@ -3028,6 +3031,50 @@ damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
 
 ---
 
+## A11a. `model_sig` — die Modell-Signatur reist im Worldmap-Poll (neu 2026-09-21)
+
+Ein Charakter hat **ein Mesh je Outfit-Kombination** (`app/core/model3d.py`).
+Wechselt die Kleidung, ein Zustands-Modifikator oder wird ein Mesh neu
+erzeugt, liefert `GET /characters/<name>/model3d` eine andere Datei — und ein
+laufender Client muss das mitbekommen.
+
+**Vorher** fragte der 3D-Client dafür alle 20 s **pro Charakter** einen
+eigenen `/model3d`-Request an, seriell und ohne ETag: 30 NPCs = 30 Requests
+alle 20 s, in 99 % der Fälle mit der Antwort „unverändert".
+
+**Jetzt** trägt jede Charakter-Zeile des Worldmap-Payloads das Feld
+**`model_sig`** — genau dieselbe Zeichenkette, die die Modell-Route als
+`model.signature` meldet (der Dateistamm des Meshs, das die Auslieferungskette
+*exakt → neutral → nächstliegende Kombination* wählt). Das ist dasselbe
+Muster, mit dem `terrain_sig` und `height_sig` (§ A16) den Boden aktuell
+halten, eine Ebene tiefer:
+
+- Der Client vergleicht `model_sig` mit der Signatur, die seine Figuren-
+  Bibliothek für diesen Charakter hält. **Gleich → nichts tun.** Kein
+  Request, kein Timer.
+- **Verschieden →** das alte Mesh wird verworfen und das neue geladen (der
+  bestehende Nachladepfad). Ein bestätigender Zwischen-Request entfällt: die
+  Signatur im Payload IST die Antwort der Modell-Route.
+- **Feld fehlt** = dieser Charakter hat gar keinen Mesh-Speicher (oder ein
+  älterer Server) — dann wird für ihn nichts gepollt. Ohne Ersatzmechanik,
+  bewusst: eine Figur ohne Mesh hat nichts nachzuladen.
+
+**Kosten auf Serverseite.** Die Auslieferungskette selbst (zwei Profil-Lesungen,
+ein Verzeichnislauf, ein gespeichertes Manifest je Kandidat) ist für einen
+3-Sekunden-Poll zu teuer. Sie läuft deshalb nur, wenn ein **Änderungs-Token**
+sich bewegt hat, das aus dem ohnehin geladenen Profil plus **einem** `stat`
+gebaut wird: getragene Outfit-Teile und Items, der freie Outfit-Text, die
+`status_effects` (Auslöser der Bild-Modifikatoren) und die mtime von
+`<character>/model3d`. Das Token ist absichtlich eine **Obermenge** — ein
+Status-Flag ohne Wirkung aufs Aussehen kostet eine überflüssige Neuberechnung,
+nie ein verpasstes Modell.
+
+**Nicht ausgedünnt.** Eine Mesh-Signatur ist ein opaker Cache-Schlüssel: sie
+nennt keinen Ort und keine Route, und die Zeile, an der sie hängt, hat die drei
+Sichtbarkeits-Tore des Fogs (§ A12) bereits passiert.
+
+---
+
 ## A12. Fog of War im Worldmap-Payload — neu 2026-08-05
 
 `GET /play/worldmap` liefert standardmäßig NICHT mehr die ganze Welt, sondern
@@ -3046,7 +3093,7 @@ stehen (strict — leere Liste = nichts) und ein eventuelles
 | `characters[]` | ja | der Avatar selbst immer; jeder andere nur, wenn seine `location_id` sichtbar ist. Unsichtbarer Ort ⇒ Figur fehlt komplett. **Wildnis** (`location_id: ""` mit `pos`): seit **E6** die Sichtweiten-Regel unten — nur wer nah genug am Avatar steht, ist da; Reisende bleiben (§ A11), solange ein Avatar aktiv ist. **Seit 2026-08-24 zusätzlich der DUNST-Filter** (`plan-fog-schleier-v2.md`, unten): wessen Punkt in einer vom Avatar **unerkundeten** 64-m-Zelle liegt, fehlt ebenfalls — Ausnahmen sind nur der Avatar selbst, wer im **selben Ort** wie der Avatar steht, und wer gar keinen Punkt hat. Diese Regel gilt auch für **Reisende**: eine Figur, die über gezeichneten Dunst läuft, darf nicht sichtbar sein |
 | `characters[].movement_target_id` | nein | das Reiseziel bleibt — der Client zeichnet die Richtung |
 | `characters[].movement_target_name` | ja | `""`, wenn das Ziel nicht sichtbar ist. Ohne diese Regel leckten Ortsnamen über die Figurenliste |
-| `characters[].travel` | teilweise | der Block bleibt (die Figur ist ja sichtbar), aber bei **jedem außer dem Avatar** sind ALLE acht Zahlen/Listen `null`: `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`. Es bleibt `target_id` — opak, wie `movement_target_id`. Begründung und Feldliste: § A11 („Die ROUTE ist Avatar-Wissen — und ihre ZAHLEN auch") |
+| `characters[].travel` | teilweise | der Block bleibt (die Figur ist ja sichtbar), aber bei **jedem außer dem Avatar** sind ALLE acht Zahlen/Listen `null`: `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`. Es bleibt `target_id` — opak, wie `movement_target_id` — und `starts_in_s`, der Abfahrts-Countdown (§ A11: verrät keine Route, und ohne ihn liefe eine gefoggte Figur los, die noch aufsteht). Begründung und Feldliste: § A11 („Die ROUTE ist Avatar-Wissen — und ihre ZAHLEN auch") |
 | `events_by_location` | ja | nur Schlüssel sichtbarer Orte |
 | `world_bounds` | **nein** | siehe unten |
 | `terrain_sig` | **nein** | Gelände wird nie gefoggt (§ A1.5) |
@@ -5561,6 +5608,57 @@ bauen, Texturen kacheln. Dazu weiterhin alles Sicht-/Interaktions-
 Zustandliche: Kamera, LOD/Fades, Etagen-Umschalter (per `opacity_role`
 und `level` gesteuert), Kamera-Culling (`outward_normal` liegt bei),
 Labels, Pathfinding, Tag/Nacht, Terrain-Blends, Animations-Retargeting.
+
+## B1a. Der Poll: `ETag`/`304` und der Eingabe-Cache — neu 2026-09-21
+
+`signature` ist als **Poll-Feld** gebaut: ein Client holt die Szene jeder
+geladenen Location im Minutentakt und vergleicht genau dieses eine Feld
+(`sceneRecipe.sweep`). Gebaut wird es aber ZULETZT, nach der kompletten
+Komposition — der unveränderte Fall, also praktisch jeder Fall, zahlte einen
+vollen Aufbau **und** eine volle Serialisierung eines Payloads, in dem die
+gebackenen Lauf-Gitter mitreisen (einige hundert Kilobyte je Modell).
+
+Zwei Dinge, additiv, am Payload ändert sich **nichts**:
+
+1. **`ETag` = der EINGABE-Fingerabdruck, `Cache-Control: no-cache`.** Nicht
+   `signature`, und das aus zwei Gründen: der Fingerabdruck steht fest, BEVOR
+   irgendetwas komponiert ist (ein `304` kostet also keine Komposition), und
+   er ist der strengere der beiden — er bewegt sich bei jeder Eingabe, ein
+   `304` kann also keine Payload-Änderung verdecken, die `signature` zufällig
+   nicht abdeckt. Der Tag ist wie jeder ETag **opak**; die Änderungs-Erkennung
+   im Client bleibt `signature`. Für einen Browser-Client ist das gratis:
+   `fetch` revalidiert von selbst und liefert bei `304` den Rumpf aus seinem
+   Cache — im Client steht dafür keine Zeile. Gleiche Schreibweise wie bei den
+   Datei-Routen (`http_files.etag_file_response`): Tag in Anführungszeichen,
+   `no-cache` auf beiden Antworten.
+2. **Ein Eingabe-Fingerabdruck je Location.** Die Signatur lässt sich nicht
+   ohne Komposition ableiten (sie hasht die Raum-Rezepte und die Gitter der
+   fertigen Specs), also wird das **komponierte Payload** je Location unter
+   einem Hash seiner EINGABEN gehalten (`scene_recipe.scene_for_location`,
+   acht Locations). Der Fingerabdruck deckt: Code-Version, Jahreszeit,
+   den Location-Datensatz selbst (map3d, alle Raum-Layouts, `terrain`,
+   `default_door_prop_id`), `terrain_sig`, die Relief-Signatur, die
+   Oberflächen-Bibliothek, den Platztypen-Katalog sowie je einen `stat` über
+   **jede Datei** in `<storage>/props/<id>/` und in
+   `<storage>/locations/<owner>/model3d/` (Sidecars, Meshes, Tier-Dateien,
+   gebackene Gitter). Er ist absichtlich eine **Obermenge**: eine
+   überflüssige Neukomposition ist billig, eine veraltete Szene nicht.
+
+**Was der Fingerabdruck-ETag bewahrt.** `signature` hat Lücken: eine Änderung
+an den `tags` eines Props (also am `walkable`-Schalter im Payload) und ein
+gemaltes Gewässer unter der Location bewegen das Payload, aber nicht die
+Signatur — kein Raum-Rezept hasht Prop-Tags, und das gemalte Gelände erreicht
+`_signature` über keinen seiner Eingänge. Bisher fing der Poll das auf: der
+Client holte jede Minute das ganze Payload und legte es ab, remountete nur bei
+Signaturwechsel. Ein `304` auf `signature` hätte genau das kassiert. Auf den
+Fingerabdruck gestellt nicht: sobald sich das Payload ändern KANN, hat sich der
+Fingerabdruck bewegt, die volle Antwort geht raus, der Client legt sie ab und
+remountet (richtigerweise) nicht. Nachgewiesen in
+`scripts/smoke_scene_cache.py` [2b]/[2d].
+
+Die **Draft-Vorschau** (`POST /play/scene-preview`, § B3) bleibt ungecacht —
+sie komponiert einen ungespeicherten Entwurf, der keine gespeicherten
+Eingaben hat, die man fingerabdrucken könnte.
 
 ## B2. Die EINE Platzierungs-Routine
 

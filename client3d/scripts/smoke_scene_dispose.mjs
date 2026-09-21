@@ -55,10 +55,14 @@
  *     holds — a teardown that simply traversed and disposed would free every
  *     copied geometry twice.
  * [5] RED counter-probe: the SAME checks against the pre-fix `sceneRecipe.ts`
- *     out of `git show HEAD:…`, bundled through an esbuild onLoad plugin.
+ *     out of `git show d6bc7673^:…` (the pre-fix revision), bundled through an esbuild onLoad plugin.
  *     There the owned resources must come out at 0 — that is the leak.
  */
 import { execFileSync } from 'node:child_process';
+// The counter-probe bundles the PRE-FIX sceneRecipe.ts. Pinned to the parent of the
+// commit that introduced the ownership ledger (d6bc7673) — 'HEAD' would compare the
+// file with itself as soon as that commit is HEAD.
+const PRE_FIX_REV = 'd6bc7673^';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -445,7 +449,7 @@ async function main() {
         String(shell.tile.shell));
 
   // ── [5] RED counter-probe against the pre-fix source ─────────────────────
-  const old = await loadClient('HEAD');
+  const old = await loadClient(PRE_FIX_REV);
   const red = await run(old, '[5] RED: the pre-fix unmount frees nothing of it',
                         ({ tile, unmountScene }) => { unmountScene(tile); });
   report('pre-fix unmount', red, 0);

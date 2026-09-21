@@ -1639,11 +1639,23 @@ def play_room_model_meta(room_id: str):
 # perception and has nothing to do with 3D.
 
 @router.get("/play/locations/{location_id}/scene")
-def play_location_scene(location_id: str):
+def play_location_scene(location_id: str, request: Request):
     """The whole location as a ready-to-render scene: plates, floor plan,
     walls, extras, model placement specs, figures, markers, doorways and
     problems — all in world metres around the tile centre (contract § B1).
     Poll ``signature`` for changes.
+
+    THE POLL IS CHEAP NOW (§ B1a, review finding IMG-10). The ``ETag`` is the
+    INPUT fingerprint (``scene_recipe.scene_fingerprint``), not the payload's
+    ``signature``: it is known before anything is composed, so a client that
+    sends it back as ``If-None-Match`` is answered ``304 Not Modified``
+    without a composition and without a body. It is also the stricter of the
+    two — the fingerprint moves with every input, so a ``304`` can never hide
+    a payload change that ``signature`` happens not to cover. Behind it the
+    composed payload is held per location under the same fingerprint, so a
+    first-time fetch of an unchanged location does not recompose either.
+    ``Cache-Control: no-cache`` — always revalidate, never serve a scene from
+    the browser cache without asking.
 
     ``plates`` covers the DECLARED storeys only since "Ein Boden" E5a. Storey 0
     is the terrain: its height is ``h_final`` and its material is the layer
@@ -1656,22 +1668,23 @@ def play_location_scene(location_id: str):
     404 = nothing to compose (no building outline, no room with a layout and
     no building model) — that is the legacy auto-grid case, the client keeps
     rendering the location procedurally as before."""
+    from fastapi.responses import JSONResponse, Response
     from app.models.world import get_location_by_id
-    from app.core.scene_recipe import compose_scene, scene_inputs
-    from app.core.surface_textures import library_kinds
+    from app.core.scene_recipe import scene_fingerprint, scene_for_location
     loc = get_location_by_id(location_id)
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
-    plan_width_m, building_meta, room_metas = scene_inputs(loc, location_id)
-    map3d = loc.get("map3d") or {}
-    has_layout = any(isinstance(r, dict) and r.get("layout")
-                     for r in loc.get("rooms") or [])
-    if not has_layout and len(map3d.get("outline") or []) < 3 \
-            and not building_meta:
+    # The same spelling as the file routes (``http_files.etag_file_response``):
+    # a quoted tag, ``no-cache`` on both answers, and a plain comparison —
+    # nothing here issues a weak tag, so nothing has to parse one.
+    etag = f'"{scene_fingerprint(loc, location_id)}"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    payload = scene_for_location(loc, location_id, etag.strip('"'))
+    if payload is None:
         raise HTTPException(status_code=404, detail="No scene")
-    return compose_scene(loc, plan_width_m=plan_width_m,
-                         building_meta=building_meta, room_metas=room_metas,
-                         surface_kinds=library_kinds())
+    return JSONResponse(payload, headers=headers)
 
 
 @router.post("/play/scene-preview")

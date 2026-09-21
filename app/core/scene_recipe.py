@@ -54,6 +54,10 @@ is read through ``room_recipe`` exactly as the room recipe does it.
 """
 
 import math
+import os
+import threading
+from collections import OrderedDict
+from pathlib import Path
 from typing import (Any, Dict, Iterator, List, Optional, Sequence, Set,
                     Tuple)
 
@@ -3058,7 +3062,37 @@ def _plate_top(recipe: Dict[str, Any]) -> float:
     return ROOM_PLATE_TOP
 
 
+def _prop_record(prop_id: str,
+                 cache: Optional[Dict[str, Dict[str, Any]]] = None,
+                 ) -> Dict[str, Any]:
+    """``props.get_prop`` for ONE compose, asked once per prop id.
+
+    Every PLACEMENT used to ask again, and the answer is a function of the
+    prop alone: one sidecar parse, a bbox check, a gallery directory scan per
+    active variant and a second JSON parse for its file areas — 200 placements
+    of 40 props paid all of that 200 times (review finding IMG-9, measured at
+    51 ms per scene request, 10 ms with this memo).
+
+    THE CACHE IS REQUEST-LOCAL, never a module global: props are edited while
+    the server runs, and a compose that outlived its own request would serve
+    yesterday's sidecar to every client. ``{}`` for an unknown or empty id —
+    both callers read the answer as a record either way.
+    """
+    if not prop_id:
+        return {}
+    if cache is not None:
+        hit = cache.get(prop_id)
+        if hit is not None:
+            return hit
+    from app.core import props as prop_store
+    record = prop_store.get_prop(prop_id) or {}
+    if cache is not None:
+        cache[prop_id] = record
+    return record
+
+
 def _prop_models(recipe: Dict[str, Any], storey: float,
+                 prop_cache: Optional[Dict[str, Dict[str, Any]]] = None,
                  ) -> List[Dict[str, Any]]:
     """The room's prop placements as specs (REAL-SIZE rule, § A2).
 
@@ -3108,7 +3142,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
         anchor_u = _num(at[0])
         anchor_v = _num(at[1])
         has_model = bool(placement.get("has_model"))
-        prop = prop_store.get_prop(pid) if pid else None
+        prop = _prop_record(pid, prop_cache)
         model_variants = (_prop_variant_urls(pid, placement)
                           if has_model else [])
         # The published entry THIS placement resolves to — its file's
@@ -3152,7 +3186,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
             spec["leaf_bbox"] = entry["leaf_bbox"]
         # WALKABLE (v6): only a prop that carries the tag ships its surface —
         # a table's lattice would be dead weight in every payload.
-        tags = [str(t).lower() for t in ((prop or {}).get("tags") or [])]
+        tags = [str(t).lower() for t in (prop.get("tags") or [])]
         if "walkable" in tags:
             spec["walkable"] = True
             store_variant = _store_variant_index(placement, model_variants)
@@ -3210,6 +3244,7 @@ def _slot_spec(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _door_prop_models(doorways: List[Dict[str, Any]],
+                      prop_cache: Optional[Dict[str, Dict[str, Any]]] = None,
                       ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """The door props of a location as ``models[]`` specs (§ B2 v5), plus the
     ``{prop_id: model_signature}`` of the props they name.
@@ -3281,7 +3316,6 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
     """
     from urllib.parse import quote
 
-    from app.core import props as prop_store
     out: List[Dict[str, Any]] = []
     sigs: Dict[str, str] = {}
     for index, door in enumerate(doorways):
@@ -3302,7 +3336,7 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
         edge = (width / 2) * (1.0 if hinge == "right" else -1.0)
         yaw = math.degrees(math.atan2(-uz, ux)) + (180.0 if hinge == "right"
                                                    else 0.0)
-        prop = prop_store.get_prop(pid) or {}
+        prop = _prop_record(pid, prop_cache)
         has_model = bool(prop.get("has_model"))
         sigs[pid] = str(prop.get("model_signature") or "")
         # The PRIMARY variant's published entry (ruling V1).
@@ -3686,6 +3720,25 @@ def _figures() -> Dict[str, Any]:
             "stand_clearance": STAND_CLEARANCE}
 
 
+def season_token() -> str:
+    """The current season's key, ``""`` in a world without seasons.
+
+    ONE spelling for the two readers that need it: the scene signature (a
+    season swaps prop variants and surface textures without touching a single
+    stored value, see :func:`_signature`) and the scene cache's input
+    fingerprint (:func:`scene_fingerprint`), which has to move for exactly the
+    same reason.
+    """
+    from app.core.game_time import get_calendar
+    from app.core.timeutils import game_time
+    try:
+        cal = get_calendar()
+        return (cal.seasons[game_time().parts(cal).season_index].key
+                if cal.seasons else "")
+    except Exception:
+        return ""
+
+
 def _signature(location: Dict[str, Any], plan_width_m: float,
                recipes: List[Dict[str, Any]], building_meta: Dict[str, Any],
                room_metas: Dict[str, Dict[str, Any]],
@@ -3740,14 +3793,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     doors into hull holes or interior gaps."""
     import hashlib
     import json
-    from app.core.game_time import get_calendar
-    from app.core.timeutils import game_time
-    try:
-        cal = get_calendar()
-        season = (cal.seasons[game_time().parts(cal).season_index].key
-                  if cal.seasons else "")
-    except Exception:
-        season = ""
+    season = season_token()
     payload = {
         "code_version": SCENE_RECIPE_VERSION,
         "map3d": location.get("map3d") or {},
@@ -4097,6 +4143,9 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     rooms = [r for r in (location.get("rooms") or []) if isinstance(r, dict)]
     building_meta = building_meta or {}
     room_metas = room_metas or {}
+    # ONE prop record per prop id for this compose (:func:`_prop_record`) —
+    # the placements of a room and the doors of the whole location share it.
+    prop_cache: Dict[str, Dict[str, Any]] = {}
     extent, k, storey = derive_scalars(map3d, plan_width_m)
 
     recipes: List[Dict[str, Any]] = []
@@ -4266,7 +4315,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                                  storey)
         if diorama:
             models.append(diorama)
-        models.extend(_prop_models(recipe, storey))
+        models.extend(_prop_models(recipe, storey, prop_cache))
         # ONE determination, two readers: the spec just built above IS the
         # answer to "does this room have a diorama", so the marker branch is
         # handed that very result instead of re-deciding it from the meta.
@@ -4301,7 +4350,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # the doorway (``_door_prop``) and leaves the payload again right here:
     # the model spec is its only consumer, and the same fact twice in one
     # payload is exactly what § B5 forbids.
-    door_props, door_prop_sigs = _door_prop_models(doorways)
+    door_props, door_prop_sigs = _door_prop_models(doorways, prop_cache)
     models.extend(door_props)
     for door in doorways:
         door.pop("_door_prop", None)
@@ -4453,3 +4502,238 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # the PLATEAU STAMP reads it (``models.heightfield.draws_built_floor``) —
     # never as a payload field, and never as a second spelling here (E6).
     return out
+
+
+# ── The scene cache (review finding IMG-10) ─────────────────────────────
+#
+# WHY. ``GET /play/locations/{id}/scene`` is a POLL: every connected 3D client
+# refetches every cached location once a minute (``sceneRecipe.sweep``) and
+# then compares ONE field, ``signature``. That field is built LAST, after the
+# whole composition, so the unchanged case — practically every case — paid a
+# full compose plus a full serialization of a payload that carries the walking
+# lattices (hundreds of kilobytes per model).
+#
+# WHAT MAKES IT CHEAP. The signature cannot be derived without composing (it
+# hashes the room recipes and the baked lattices of the finished specs), so
+# the composed payload is cached per location under a fingerprint of its
+# INPUTS. A poll that finds the fingerprint unchanged hands out the same
+# payload — and the route answers ``304 Not Modified`` from its signature,
+# so nothing is serialized either.
+#
+# The draft preview (``POST /play/scene-preview``) is deliberately NOT cached:
+# it composes an unsaved draft, so it has no stored inputs to fingerprint.
+
+#: How many locations keep their composed scene. A payload with baked walking
+#: surfaces is a few hundred kilobytes, so this is memory, not a free lunch —
+#: and a client sweeps only the locations it has loaded.
+SCENE_CACHE_MAX = 8
+
+_scene_cache_lock = threading.Lock()
+_scene_cache: "OrderedDict[str, Tuple[str, Dict[str, Any]]]" = OrderedDict()
+
+
+def _dir_stat_sig(directory: Path, depth: int = 0) -> str:
+    """``name:mtime_ns:size`` of every file under ``directory``, sorted.
+
+    ``depth`` is how many levels of SUBDIRECTORIES are descended into (0 = the
+    directory's own files only). A missing directory contributes ``""`` —
+    "there is nothing here" is a stable answer, and it starts moving the
+    moment the first file appears.
+
+    Stats, not contents: this runs on a poll and must not read a mesh to
+    notice that it changed. ``st_mtime_ns`` is nanosecond-resolution, so a
+    rewrite that keeps the size still moves the fingerprint.
+    """
+    parts: List[str] = []
+    try:
+        entries = sorted(os.scandir(directory), key=lambda e: e.name)
+    except OSError:
+        return ""
+    for entry in entries:
+        try:
+            if entry.is_dir():
+                if depth > 0:
+                    parts.append(entry.name + "/["
+                                 + _dir_stat_sig(Path(entry.path), depth - 1)
+                                 + "]")
+                continue
+            st = entry.stat()
+            parts.append(f"{entry.name}:{st.st_mtime_ns}:{st.st_size}")
+        except OSError:
+            continue
+    return "|".join(parts)
+
+
+def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
+    """Hash over every INPUT :func:`compose_scene` reads for ONE location —
+    the cache key of :func:`scene_for_location`.
+
+    It is deliberately a SUPERSET: an input that is only sometimes read (a
+    prop the location does not place, a terrain area nowhere near it) still
+    moves this hash, which costs a needless recompose and never a stale scene.
+    The inputs, and how a change in each is noticed:
+
+    ``code_version``
+        :data:`SCENE_RECIPE_VERSION` — the payload is a function of the code
+        as much as of the data, exactly as in :func:`_signature`.
+    ``storage``
+        the active world's storage root — two worlds may hold a location of
+        the same id, and their scenes are not the same scene.
+    ``season``
+        :func:`season_token` — a season swaps prop variants and surface
+        textures without touching a stored value.
+    ``location``
+        the location record itself, as canonical JSON: ``map3d`` (boundary,
+        outline, rotation, storeys, stairs, relief dials), every room with its
+        layout (placements, openings, markers), ``terrain`` and
+        ``default_door_prop_id``. The route holds it already, so this costs a
+        dump, not a read — and it is per location, unlike the global write
+        counter in ``models.world``.
+    ``terrain``
+        ``models.terrain.terrain_sig()`` — the painted areas plus the
+        EFFECTIVE type catalog, which is what ``_painted_waters`` and
+        ``_floor_plan`` (``terrain_layers.floor_kind_of``) read.
+    ``relief``
+        ``heightfield.current_sig()`` — the world height field behind
+        ``heightfield.water_areas``. A dict lookup while the field is warm.
+    ``surfaces``
+        ``surface_textures.library_kinds()`` — the ground kind a location's
+        ``terrain`` resolves to moves when the library gains or loses it.
+    ``places``
+        ``pose_catalog.get_groups()`` — the place types ``_markers``
+        classifies against; an unknown group drops its marker.
+    ``props``
+        one stat per file in ``<storage>/props/<id>/`` — sidecars, meshes,
+        their tier files and their baked lattices all live flat in that one
+        directory per prop. This is the only input with no signature of its
+        own, and the one the finding named.
+    ``models``
+        the same, for ``<storage>/locations/<owner>/model3d/``: the building
+        and room meshes, their sidecars (orientation fix, ``width_m``,
+        ``walk_y``, offsets) and their baked lattices — i.e. everything
+        :func:`scene_inputs` would read.
+
+    A contributor that RAISES yields a unique token instead of a constant, so
+    the fingerprint misses rather than freezing on a value it could not read.
+    """
+    import hashlib
+    import json
+    import uuid
+
+    def _safe(fn) -> str:
+        try:
+            return str(fn())
+        except Exception:   # noqa: BLE001 — a cache key may not fail a request
+            return "?" + uuid.uuid4().hex
+
+    def _terrain() -> str:
+        from app.models.terrain import terrain_sig
+        return terrain_sig()
+
+    def _relief() -> str:
+        from app.core.heightfield import current_sig
+        return current_sig()
+
+    def _surface_library() -> str:
+        from app.core.surface_textures import library_kinds
+        return ",".join(sorted(library_kinds()))
+
+    def _place_types() -> str:
+        from app.core.pose_catalog import get_groups
+        return json.dumps(get_groups(), sort_keys=True, default=str)
+
+    def _props() -> str:
+        # The private accessor on purpose: the props root has ONE spelling in
+        # this codebase, and a second one here would silently stop
+        # fingerprinting the day it moves.
+        from app.core.props import _props_dir
+        return _dir_stat_sig(_props_dir(), depth=1)
+
+    def _models() -> str:
+        from app.core.location_model3d import _model_dir, _owner_id
+        owner = _owner_id(location_id) if location_id else ""
+        return _dir_stat_sig(_model_dir(owner)) if owner else ""
+
+    def _storage() -> str:
+        # The world this answer belongs to: two worlds may hold a location of
+        # the same id, and their scenes are not the same scene.
+        from app.core.paths import get_storage_dir
+        return str(get_storage_dir())
+
+    parts = [
+        str(SCENE_RECIPE_VERSION),
+        season_token(),
+        _safe(_storage),
+        _safe(lambda: json.dumps(location, sort_keys=True, default=str)),
+        _safe(_terrain),
+        _safe(_relief),
+        _safe(_surface_library),
+        _safe(_place_types),
+        _safe(_props),
+        _safe(_models),
+    ]
+    return hashlib.md5("\u0000".join(parts).encode()).hexdigest()
+
+
+def invalidate_scene_cache(location_id: str = "") -> None:
+    """Drop one location's cached scene, or all of them.
+
+    Nothing in the server needs to call this — the fingerprint notices every
+    input by itself — but a test that rewrites storage under the same
+    nanosecond wants a clean slate.
+    """
+    with _scene_cache_lock:
+        if location_id:
+            _scene_cache.pop(location_id, None)
+        else:
+            _scene_cache.clear()
+
+
+def scene_for_location(location: Dict[str, Any], location_id: str,
+                       fingerprint: str = "") -> Optional[Dict[str, Any]]:
+    """The composed scene of ONE STORED location, out of the cache whenever no
+    input moved — ``None`` when there is nothing to compose.
+
+    ``None`` is the route's 404 (the legacy auto-grid case): no room with a
+    layout, no building outline and no building model. It is decided on the
+    very inputs the fingerprint covers, so a cache hit is a hit on that
+    decision too.
+
+    ``fingerprint`` is :func:`scene_fingerprint` when the caller has already
+    computed it — the route does, because it answers ``304`` from it before it
+    ever asks for a payload.
+
+    The payload is SHARED, not copied: every caller serializes it and none of
+    them writes to it. A caller that wants to change the scene has to compose
+    its own (:func:`compose_scene` is unchanged and uncached).
+    """
+    # A location without an id is not a STORED location: nothing about it can
+    # be fingerprinted, and one cache slot under "" would answer for every
+    # such caller. It composes and is handed out, never cached.
+    if location_id:
+        fingerprint = fingerprint or scene_fingerprint(location, location_id)
+        with _scene_cache_lock:
+            hit = _scene_cache.get(location_id)
+            if hit and hit[0] == fingerprint:
+                _scene_cache.move_to_end(location_id)
+                return hit[1]
+    from app.core.surface_textures import library_kinds
+    plan_width_m, building_meta, room_metas = scene_inputs(location,
+                                                           location_id)
+    map3d = location.get("map3d") or {}
+    has_layout = any(isinstance(r, dict) and r.get("layout")
+                     for r in location.get("rooms") or [])
+    if not has_layout and len(map3d.get("outline") or []) < 3 \
+            and not building_meta:
+        return None
+    payload = compose_scene(location, plan_width_m=plan_width_m,
+                            building_meta=building_meta,
+                            room_metas=room_metas,
+                            surface_kinds=library_kinds())
+    if location_id:
+        with _scene_cache_lock:
+            _scene_cache[location_id] = (fingerprint, payload)
+            _scene_cache.move_to_end(location_id)
+            while len(_scene_cache) > SCENE_CACHE_MAX:
+                _scene_cache.popitem(last=False)
+    return payload

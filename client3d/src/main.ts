@@ -2084,6 +2084,15 @@ async function startApp(username: string, role: string) {
       roomOf.set(c.name, c.room_id ?? '');
       figures.setCharacterSets(c.name, c.animation_sets);
       figures.setCharacterHeight(c.name, c.height_cm);
+      // MODELLWECHSEL (§ A11a): the served mesh's signature rides in this
+      // very payload, exactly as `terrain_sig` does for the ground — so the
+      // check is a string compare inside the poll that runs anyway, and the
+      // model route is asked only when it really moved. A row without the
+      // field (no mesh store, or an older server) says nothing and is left
+      // alone. Not awaited: the reload runs on its own, and no rebuild
+      // happens here — the figure keeps its old mesh until `onModelReady`
+      // reports the new one, or it would flicker through the download.
+      if (c.model_sig) void figures.refreshIfChanged(c.name, c.model_sig);
     }
   }
 
@@ -2230,17 +2239,10 @@ async function startApp(username: string, role: string) {
   setInterval(pollWorldMap, WORLDMAP_POLL_MS);
 
   // Outfit-/Modellwechsel: der Server kann pro Charakter ein anderes Modell
-  // ausliefern (ein Modell je Outfit). Bis die Worldmap eine Signatur liefert,
-  // fragen wir sie periodisch für die sichtbaren Charaktere nach.
-  async function pollModelChanges() {
-    const names = (lastMap?.characters ?? []).map((c) => c.name);
-    for (const n of names) {
-      // Kein Rebuild hier: die Figur behält ihr altes Modell, bis onModelReady
-      // das neue meldet — sonst flackert sie während des Downloads.
-      await figures.refreshIfChanged(n);
-    }
-  }
-  setInterval(pollModelChanges, 20_000);
+  // ausliefern (ein Modell je Outfit). DIE WORLDMAP LIEFERT DIE SIGNATUR
+  // (§ A11a, `MapCharacter.model_sig`) — der eigene 20-s-Timer, der dafür pro
+  // Charakter einen `/model3d`-Request abgesetzt hat, ist damit ersatzlos
+  // entfallen; der Vergleich steckt in `takeRoomsFrom`.
 
   // Windows glow at night — and the soundtrack changes with the same factor.
   /** Installed further down by the soundtrack driver (E4-T5), which needs the
