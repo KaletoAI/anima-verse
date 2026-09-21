@@ -1800,11 +1800,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_KNOWLEDGE_SEARCH_MAX_CANDIDATES", kn.get("search_max_candidates", 50))
     _set(env, "SKILL_KNOWLEDGE_SEARCH_MAX_RETURN", kn.get("search_max_return", 8))
 
-    # Relationships
-    rel = config.get("relationships", {})
-    _set(env, "RELATIONSHIP_SUMMARY_ENABLED", rel.get("summary_enabled", True))
-    _set(env, "RELATIONSHIP_SUMMARY_INTERVAL_MINUTES", rel.get("summary_interval_minutes", 120))
-
     # Thoughts — AgentLoop pacing.
     # AgentLoop liest die Werte direkt via config.get() (kein env-Bridge
     # mehr noetig); Mapping bleibt nur fuer Backward-Compat falls Code

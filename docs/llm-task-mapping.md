@@ -221,7 +221,7 @@ exist as routing tasks — only as template file names.
 | Task id | Label | Category | Gate | Caller | Purpose |
 |---|---|---|---|---|---|
 | `consolidation` | Consolidation (3-Tier) | helper | — | `core/memory_service.py`, `utils/history_manager.py`, `core/day_consolidation.py`, `core/story_engine.py`, `core/scene_manager.py`, `routes/diary.py`, `plugins/retrospect/skill.py` | Everything that compresses history: episodic → daily → weekly → monthly memories, chat summaries, the diary entry, story arcs and the retrospect skill. |
-| `relationship_summary` | Relationship Summary | helper | `relationships.summary_enabled` | `core/relationship_summary.py`, `core/chat_engine.py` | Narrative summaries out of raw relationship events, plus the sentiment after a user exchange. |
+| `relationship_summary` | Relationship Summary | helper | `relationships.summary_enabled` | `core/chat_engine.py` | Sentiment and romantic delta of both sides after a chat exchange; the gate is read in the call site, so off means no call and the default deltas. |
 
 ### Image / prompt / vision
 

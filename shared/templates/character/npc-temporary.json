@@ -12,7 +12,6 @@
     "roleplay_rules_enabled": true,
     "memory_enabled": false,
     "relationships_enabled": false,
-    "relationship_summary_enabled": false,
     "thoughts_enabled": false,
     "intents_enabled": false,
     "story_enabled": false,

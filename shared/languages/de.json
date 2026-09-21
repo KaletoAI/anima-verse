@@ -2333,6 +2333,8 @@
     "Retry task": "Task wiederholen",
     "Retrying…": "Wird wiederholt …",
     "Mark all as read": "Alle als gelesen markieren",
-    "{actor} picks {item} up.": "{actor} hebt {item} auf."
+    "{actor} picks {item} up.": "{actor} hebt {item} auf.",
+    "Analyse sentiment after conversations": "Stimmung nach Gesprächen analysieren",
+    "After every exchange a small LLM call rates how both sides felt about it (and whether it was romantic). Those ratings move the relationship's feeling, its romantic value and thereby its type. Off: no extra call — a conversation then only adds the fixed default deltas (closeness +2, feeling +0.05 for both).": "Nach jedem Wortwechsel bewertet ein kleiner LLM-Aufruf, wie beide Seiten ihn empfunden haben (und ob er romantisch war). Diese Bewertungen verschieben Gefühl und Romantik-Wert der Beziehung und damit ihren Typ. Aus: kein zusätzlicher Aufruf — ein Gespräch bringt dann nur die festen Standard-Deltas (Nähe +2, Gefühl +0,05 für beide)."
   }
 }

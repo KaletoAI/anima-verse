@@ -906,8 +906,7 @@ SECTIONS = {
         "label": "Relationships",
         "icon": "❤",
         "fields": {
-            "summary_enabled": {"type": "bool", "label": "Summaries Aktiviert", "default": True, "description": "Periodische Zusammenfassung der Beziehungen"},
-            "summary_interval_minutes": {"type": "int", "label": "Summary interval (min)", "default": 120, "min": 10, "description": "Interval of the periodic relationship summary job. SYSTEM time (real minutes)."},
+            "summary_enabled": {"type": "bool", "label": "Analyse sentiment after conversations", "default": True, "description": "After every exchange a small LLM call rates how both sides felt about it (and whether it was romantic). Those ratings move the relationship's feeling, its romantic value and thereby its type. Off: no extra call — a conversation then only adds the fixed default deltas (closeness +2, feeling +0.05 for both)."},
         },
     },
     "social_reactions": {

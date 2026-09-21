@@ -58,7 +58,6 @@ can add a template, not override one. That is where
 | Template | Task | Caller | Purpose |
 |---|---|---|---|
 | `relationship_summary.md` | `relationship_summary` | `chat_engine.post_process_response` | Sentiment + romantic-delta after a user-chat exchange |
-| `relationship_summary_pair.md` | `relationship_summary` | `relationship_summary._generate_summary` | Narrative summary of one character's view of another |
 | `relationship_summary_romantic_interests.md` (in `plugins/attraction/templates/`) | `relationship_summary` | `plugins/attraction/extraction.py` (`extract_romantic_interests`) | One-time extraction of romantic preferences from personality text; without the package the field stays unset |
 
 ### Random World Events

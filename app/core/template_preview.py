@@ -419,28 +419,6 @@ def _drive_consolidation_daily_diary(agent: str, avatar: str) -> PreviewResult:
             "note": "Production: routes/diary._generate_summary_sync with today's diary input."}
 
 
-def _drive_relationship_summary_pair(agent: str, avatar: str) -> PreviewResult:
-    """Find a relationship-memory entry (agent → some other char) and
-    let production._generate_summary build the prompt for it."""
-    from app.models.memory import load_memories
-    entries = load_memories(agent) or []
-    rel = next((e for e in entries
-                if "relationship" in (e.get("tags") or [])
-                and (e.get("content") or "").strip()
-                and e.get("related_character")), None)
-    if not rel:
-        return {"ok": False, "output": "",
-                "note": "Agent has no relationship-memory entries to summarize."}
-    from app.core.relationship_summary import _generate_summary
-    task, sys, user = _capture_render(
-        lambda: _generate_summary(agent, rel["related_character"],
-                                   rel["content"], rel.get("summary", "")))
-    return {"ok": True, "output": _format(task, sys, user),
-            "note": "Production: relationship_summary._generate_summary "
-                    f"for {agent} → {rel['related_character']}."}
-
-
-
 def _drive_retrospect(agent: str, avatar: str) -> PreviewResult:
     """The Reflect skill parses input but the prompt build only needs
     agent_name. Run with a stub raw_input via the loaded package skill."""
@@ -791,7 +769,6 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "tasks/consolidation_history_summary.md": _drive_consolidation_history_summary,
     "tasks/consolidation_daily_diary.md": _drive_consolidation_daily_diary,
     "tasks/relationship_summary.md": _drive_relationship_summary,
-    "tasks/relationship_summary_pair.md": _drive_relationship_summary_pair,
     "tasks/retrospect.md": _drive_retrospect,
     "tasks/secret_generation.md": _drive_secret_generation,
     "tasks/outfit_generation.md": _drive_outfit_generation,

@@ -557,8 +557,6 @@ async def lifespan(app: FastAPI):
     register_social_dialog_handler()
     from app.core.story_engine import register_story_engine_handler
     register_story_engine_handler()
-    from app.core.relationship_summary import register_relationship_summary_handler
-    register_relationship_summary_handler()
     from app.core.relationship_decay import register_relationship_decay_handler
     register_relationship_decay_handler()
     from app.core.intent_engine import register_intent_handlers

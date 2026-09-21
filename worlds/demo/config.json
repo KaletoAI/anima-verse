@@ -689,8 +689,7 @@
     "search_max_return": 8
   },
   "relationships": {
-    "summary_enabled": true,
-    "summary_interval_minutes": 120
+    "summary_enabled": true
   },
   "social_reactions": {
     "enabled": true

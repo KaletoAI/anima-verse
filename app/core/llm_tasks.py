@@ -497,10 +497,9 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "model_class": "medium", "arch": "any", "hallucination_risk": "high",
         "creative": False, "language_de": True, "latency_sensitive": False,
     },
-    # Two templates share this task and disagree on the output format:
-    # relationship_summary.md returns JSON (sentiment/romantic deltas), while
-    # relationship_summary_pair.md returns a 1-3 sentence narrative summary that
-    # is stored as the relationship text. `json` describes the stricter branch.
+    # relationship_summary.md returns JSON (sentiment/romantic deltas after an
+    # exchange). The attraction package puts a second template on this task
+    # (relationship_summary_romantic_interests.md) — also JSON.
     "relationship_summary": {
         "tools": False, "vision": False, "json": True, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "high",

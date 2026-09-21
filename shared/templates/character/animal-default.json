@@ -9,7 +9,6 @@
     "storydev_enabled": true,
     "memory_enabled": true,
     "relationships_enabled": true,
-    "relationship_summary_enabled": true,
     "secrets_enabled": true,
     "inventory_enabled": true,
     "activities_enabled": true,

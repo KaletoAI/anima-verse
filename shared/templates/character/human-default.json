@@ -8,7 +8,6 @@
     "storydev_enabled": false,
     "memory_enabled": false,
     "relationships_enabled": false,
-    "relationship_summary_enabled": false,
     "secrets_enabled": false,
     "inventory_enabled": false,
     "activities_enabled": false,

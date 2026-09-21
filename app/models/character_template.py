@@ -267,23 +267,22 @@ def is_roleplay_character(character_name: str) -> bool:
 
 
 def is_feature_enabled(character_name: str, feature: str) -> bool:
-    """Prueft ob ein Feature fuer den Character aktiviert ist.
+    """Whether a feature is active for the character.
 
-    Reihenfolge:
-      1. Per-Character Config-Override (UI-Toggle wie "Gedanken: Aktiviert")
-         — wenn der Key in character_config.json explizit gesetzt ist,
-         hat er Vorrang und kann das Template-Default sowohl an- als auch
-         abschalten.
-      2. Template-Feature (z.B. ``human-default.features.thoughts_enabled``).
+    Order:
+      1. Per-character config override (a UI toggle like "Thoughts: on") —
+         when the key is set explicitly in character_config.json it wins and
+         can both switch the template default on and off.
+      2. Template feature (e.g. ``human-default.features.thoughts_enabled``).
       3. Default: True (fail-open).
 
-    Typische Features (siehe Templates):
-      memory_enabled, relationships_enabled,
-      relationship_summary_enabled, secrets_enabled, inventory_enabled,
-      activities_enabled, locations_enabled, mood_tracking_enabled,
-      thoughts_enabled, retrospect_enabled, status_effects_enabled,
-      social_dialog_enabled, random_events_enabled, outfit_system_enabled,
-      expression_variants_enabled, story_enabled, storydev_enabled
+    Typical features (see the templates):
+      memory_enabled, relationships_enabled, secrets_enabled,
+      inventory_enabled, activities_enabled, locations_enabled,
+      mood_tracking_enabled, thoughts_enabled, retrospect_enabled,
+      status_effects_enabled, social_dialog_enabled, random_events_enabled,
+      outfit_system_enabled, expression_variants_enabled, story_enabled,
+      storydev_enabled
     """
     try:
         from app.models.character import get_character_profile, get_character_config

@@ -99,7 +99,6 @@ EXPECTED_FEATURES = {
     "roleplay_rules_enabled": True,
     "memory_enabled": False,
     "relationships_enabled": False,
-    "relationship_summary_enabled": False,
     "thoughts_enabled": False,
     "intents_enabled": False,
     "story_enabled": False,

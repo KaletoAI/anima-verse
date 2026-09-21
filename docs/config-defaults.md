@@ -168,11 +168,11 @@ bleibt für eine spätere Wiederverwendung im Code.
 
 ## Beziehungen
 
-| Name | Quelle | Default | Leser |
-|---|---|---|---|
-| `RELATIONSHIP_SUMMARY_ENABLED` | `relationships.summary_enabled` → Relationships | `true` | app/core/relationship_summary.py |
-| `RELATIONSHIP_SUMMARY_INTERVAL_MINUTES` | `relationships.summary_interval_minutes` → Relationships | `120` | app/core/relationship_summary.py |
-| `RELATIONSHIP_SUMMARY_MAX_PER_RUN` | — | `5` | app/core/relationship_summary.py |
+Hier gibt es keine env-Brücke mehr. Die einzige Einstellung ist
+`relationships.summary_enabled` (Admin → Relationships, Default `true`), und
+`app/core/chat_engine.py` liest sie direkt per `config.get()`: steht sie auf
+`false`, entfällt der Sentiment-LLM-Call nach einem Gespräch und die Beziehung
+bekommt nur die festen Default-Deltas.
 
 Der Beziehungs-Zerfall ist nicht einstellbar: die Raten stehen als
 `DECAY_STRENGTH_PER_WEEK` (1.0) und `DECAY_ROMANTIC_PER_WEEK` (0.02) in

@@ -108,10 +108,8 @@ def _row_to_entry(row) -> Dict[str, Any]:
 # Everything an entry may carry into the `meta` JSON column. The list is a
 # whitelist on purpose — a memory row must not become a dumping ground — but it
 # used to be written out twice, and a key that was not in it vanished WITHOUT a
-# trace. Two features died that way: the due hint of a commitment (handed in by
-# apply_extracted_memories, dropped here → 0 rows carrying one in any world) and
-# `summary`/`summary_stale` (the pairwise relationship summary, which could
-# therefore never be stored and stayed permanently "stale").
+# trace. That is how the due hint of a commitment died (handed in by
+# apply_extracted_memories, dropped here → 0 rows carrying one in any world).
 #
 # The PROVENANCE fields below belong here too. ``add_memory`` takes them
 # through its ``extra_meta`` door and merges them into the column, so the
@@ -124,7 +122,6 @@ def _row_to_entry(row) -> Dict[str, Any]:
 # intent_engine.py (source, event_id).
 META_KEYS = ("context", "importance", "access_count", "last_accessed",
              "decay_factor", "related_character", "delay_minutes",
-             "summary", "summary_stale",
              "source", "event_id", "scene_id", "location_id", "room_id",
              "participants", "date_key")
 

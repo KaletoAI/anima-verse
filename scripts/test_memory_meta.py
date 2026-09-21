@@ -15,10 +15,11 @@ current output):
    0 rows with `meta.delay` in all three worlds, while the prompt block kept
    rendering "(when: …)" from a field that was never stored.
 
-2. `summary` / `summary_stale` must survive. Same whitelist, different victim:
-   the pairwise relationship summary could never be persisted, so
-   `summary_stale` stayed True forever — 32 and 132 memories tagged
-   `relationship`, none with a summary.
+2. `summary` / `summary_stale` must NOT be stored. They were the pairwise
+   relationship summary of the periodic relationship-summary job; that job was
+   removed (2026-09-21, it was never submitted to the background queue), so the
+   two keys have no writer and no reader left. They are now ordinary unknown
+   keys and must be refused with a warning like any other.
 
 3. An unknown key still must NOT be stored (the column is a whitelist on
    purpose) but must produce exactly one warning. Silent loss is the defect;
@@ -94,7 +95,7 @@ print("1) the fields that used to vanish now survive")
 entry = {
     "memory_type": "commitment", "content": "x", "timestamp": "2026-08-03",
     "tags": ["a"], "importance": 4, "related_character": "Alpha",
-    "delay_minutes": 120, "summary": "kurz", "summary_stale": False,
+    "delay_minutes": 120,
     # The seven provenance fields (see docstring point 5).
     "source": "scene", "event_id": "evt_7", "scene_id": "sc_1",
     "location_id": "loc_1", "room_id": "room_1",
@@ -103,8 +104,6 @@ entry = {
 handler.records.clear()
 meta = mem._build_meta(entry)
 check("delay_minutes kept", meta.get("delay_minutes"), 120)
-check("summary kept", meta.get("summary"), "kurz")
-check("summary_stale kept", meta.get("summary_stale"), False)
 check("importance kept", meta.get("importance"), 4)
 check("source kept", meta.get("source"), "scene")
 check("event_id kept", meta.get("event_id"), "evt_7")
@@ -128,6 +127,13 @@ meta = mem._build_meta({"content": "x", "voellig_neu": 1})
 check("not stored", "voellig_neu" in meta, False)
 check("exactly one warning", len(handler.records), 1)
 check("warning names the field", "voellig_neu" in handler.records[0], True)
+
+# The two keys of the removed relationship-summary job are unknown keys now.
+handler.records.clear()
+meta = mem._build_meta({"content": "x", "summary": "short", "summary_stale": False})
+check("summary not stored", "summary" in meta, False)
+check("summary_stale not stored", "summary_stale" in meta, False)
+check("one warning for both", len(handler.records), 1)
 
 print("4) _entry_to_row uses the same builder")
 row = mem._entry_to_row({"memory_type": "commitment", "content": "c",

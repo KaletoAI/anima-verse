@@ -1232,46 +1232,51 @@ def post_process_response(
                     summary += f" — {_speaker_b}: {cleaned[:80]}"
 
                 analysis = {"sentiment_a": 0.05, "sentiment_b": 0.05, "romantic_delta": 0.0}
-                try:
-                    ri_a = get_romantic_interests(_speaker_a)
-                    ri_b = get_romantic_interests(_speaker_b)
-                    romantic_context = ""
-                    if ri_a or ri_b:
-                        romantic_context = "\nRomantic interest context:\n"
-                        if ri_a:
-                            romantic_context += f"- {_speaker_a}'s romantic interests: {ri_a}\n"
-                        if ri_b:
-                            romantic_context += f"- {_speaker_b}'s romantic interests: {ri_b}\n"
-                        romantic_context += "Only set romantic_delta > 0 if the conversation matches these interests."
-
-                    from app.core.llm_router import llm_call as _llm_call
-                    from app.core.prompt_templates import render_task
-                    rel_system_prompt, conversation_text = render_task(
-                        "relationship_summary",
-                        speaker_a=_speaker_a,
-                        speaker_b=_speaker_b,
-                        text_a=user_input[:300],
-                        text_b=cleaned[:300] if cleaned else "",
-                        romantic_context=romantic_context)
+                # Admin switch "Analyse sentiment after conversations"
+                # (relationships.summary_enabled). Off: no extra LLM call,
+                # the interaction keeps the default deltas above.
+                from app.core import config as _rel_config
+                if _rel_config.get("relationships.summary_enabled", True):
                     try:
-                        resp = _llm_call(
-                            task="relationship_summary",
-                            system_prompt=rel_system_prompt,
-                            user_prompt=conversation_text,
-                            agent_name=character_name)
-                        raw = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', resp.content).strip()
-                    except RuntimeError:
-                        raw = ""
-                    match = re.search(r'\{[^}]+\}', raw, re.DOTALL)
-                    if match:
-                        data = json.loads(match.group(0))
-                        analysis = {
-                            "sentiment_a": max(-0.3, min(0.3, float(data.get("sentiment_a", 0.05)))),
-                            "sentiment_b": max(-0.3, min(0.3, float(data.get("sentiment_b", 0.05)))),
-                            "romantic_delta": max(-0.1, min(0.15, float(data.get("romantic_delta", 0.0)))),
-                        }
-                except Exception as rel_err:
-                    logger.debug("[%s] Relationship analysis failed (defaults): %s", character_name, rel_err)
+                        ri_a = get_romantic_interests(_speaker_a)
+                        ri_b = get_romantic_interests(_speaker_b)
+                        romantic_context = ""
+                        if ri_a or ri_b:
+                            romantic_context = "\nRomantic interest context:\n"
+                            if ri_a:
+                                romantic_context += f"- {_speaker_a}'s romantic interests: {ri_a}\n"
+                            if ri_b:
+                                romantic_context += f"- {_speaker_b}'s romantic interests: {ri_b}\n"
+                            romantic_context += "Only set romantic_delta > 0 if the conversation matches these interests."
+
+                        from app.core.llm_router import llm_call as _llm_call
+                        from app.core.prompt_templates import render_task
+                        rel_system_prompt, conversation_text = render_task(
+                            "relationship_summary",
+                            speaker_a=_speaker_a,
+                            speaker_b=_speaker_b,
+                            text_a=user_input[:300],
+                            text_b=cleaned[:300] if cleaned else "",
+                            romantic_context=romantic_context)
+                        try:
+                            resp = _llm_call(
+                                task="relationship_summary",
+                                system_prompt=rel_system_prompt,
+                                user_prompt=conversation_text,
+                                agent_name=character_name)
+                            raw = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', resp.content).strip()
+                        except RuntimeError:
+                            raw = ""
+                        match = re.search(r'\{[^}]+\}', raw, re.DOTALL)
+                        if match:
+                            data = json.loads(match.group(0))
+                            analysis = {
+                                "sentiment_a": max(-0.3, min(0.3, float(data.get("sentiment_a", 0.05)))),
+                                "sentiment_b": max(-0.3, min(0.3, float(data.get("sentiment_b", 0.05)))),
+                                "romantic_delta": max(-0.1, min(0.15, float(data.get("romantic_delta", 0.0)))),
+                            }
+                    except Exception as rel_err:
+                        logger.debug("[%s] Relationship analysis failed (defaults): %s", character_name, rel_err)
 
                 # Old type BEFORE the update — a TYPE change (neutral →
                 # acquaintance → friend/romantic) is surfaced as a
