@@ -42,7 +42,6 @@ migration_backup/
 .superpowers/
 
 # Files removed from public release
-docs/llm-task-mapping.md
 CHAT_PROMPTS.md
 MODEL_TESTS.md
 CLAUDE.md
