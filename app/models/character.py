@@ -3485,28 +3485,6 @@ def list_active_journeys() -> List[Dict[str, Any]]:
     return out
 
 
-def get_character_user_data(character_name: str) -> Dict[str, Any]:
-    """Laedt character-spezifische User-Daten (z.B. Anrede)"""
-    character_dir = get_character_dir(character_name)
-    user_data_path = character_dir / "user_data.json"
-
-    if user_data_path.exists():
-        try:
-            return json.loads(user_data_path.read_text())
-        except:
-            pass
-
-    return {
-        "user_id": "",
-        "address_form": "",
-    }
-
-
-def get_character_address_form(character_name: str) -> str:
-    """Gibt die Anrede zurueck, die dieser Character fuer den User verwendet"""
-    return get_character_user_data(character_name).get("address_form", "")
-
-
 # --- Character Images ---
 
 def get_character_images_dir(character_name: str) -> Path:

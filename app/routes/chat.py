@@ -20,7 +20,6 @@ from app.core.dependencies import get_skill_manager
 from app.models.account import get_user_appearance
 from app.core.outfit_renderer import render_outfit, render_unworn_slots
 from app.models.character import (
-    get_character_address_form,
     get_character_config,
     get_character_profile,
     get_character_appearance,
@@ -1049,9 +1048,15 @@ def _build_chat_prompt(character_name: str,
             except Exception:
                 pass
 
-            partner_address = get_character_address_form(character_name)
-            if partner_address:
-                _partner_lines.append(f"Form of address: {partner_address}")
+            # How THIS character addresses THIS partner (free text per pair
+            # and per direction, e.g. formal vs. informal plus a nickname).
+            # Stable for a given partner, so it belongs in the partner block
+            # of the system prompt — the template's "unless a different form
+            # of address is specified above" refers to exactly this line.
+            from app.models.relationship import address_line as _address_line
+            _addr = _address_line(character_name, _partner_name)
+            if _addr:
+                _partner_lines.append(_addr)
     elif not skip_partner:
         # Fallback: no active character — no login name, otherwise "admin"
         # slips into prompts and memory as a pseudo partner.
@@ -1494,6 +1499,16 @@ def _build_chat_prompt(character_name: str,
     reply_shape_section = build_reply_shape_section(
         character_name, _partner_name, incoming_text)
 
+    # ---- Form of address toward the partner -----------------------------
+    # 1:1 character mode keeps the note in the partner block of the SYSTEM
+    # prompt (see above) — it is stable for that partner. In room mode the
+    # partner is whoever just spoke and changes from turn to turn, so the
+    # scene state carries it instead of invalidating the prompt prefix.
+    partner_address = ""
+    if partner_mode == "room" and _partner_name and _partner_name != character_name:
+        from app.models.relationship import get_address as _get_address
+        partner_address = _get_address(character_name, _partner_name)
+
     # ---- Who was addressed ---------------------------------------------
     # Only meaningful in room mode; a 1:1 chat has no addressee list and the
     # line is always meant for this character.
@@ -1531,6 +1546,7 @@ def _build_chat_prompt(character_name: str,
         partner_mode=partner_mode,
         partner_name=_partner_name,
         partner_state_lines=_partner_state_lines,
+        partner_address=partner_address,
         present_characters=_present_str,
         present_details=_present_details,
         situation_block=situation_block,

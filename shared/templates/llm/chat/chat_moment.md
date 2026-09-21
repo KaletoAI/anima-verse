@@ -29,6 +29,10 @@
 
    FLAGS / NAMES:
      character_name, partner_mode, partner_name
+     partner_address: str — room mode, how THIS character addresses the partner
+       (free text per pair and per direction; empty = nothing agreed). 1:1
+       character mode carries the same note in the partner block of the system
+       prompt, where it is stable; in a room the partner changes per turn.
      addressed_to_me: bool, addressed_names: str — room mode, who the triggering
        line was meant for
      winding_down, respond_opportunity — the SKIP rules, always last
@@ -116,6 +120,8 @@ FOCUSED ITEMS IN THE ROOM (the person you're talking to has drawn attention to t
 {% if addressed_to_me %}{{ partner_name }} spoke to YOU directly — that is what brought you into this turn. Answer {{ partner_name }}. Others may have spoken since: the transcript is what the room actually heard and its last lines are the freshest thing said, whoever said them. React to those as well if they concern you.
 {% elif addressed_names %}{{ partner_name }} was speaking to {{ addressed_names }}, not to you. You overheard it. If you speak, speak as a bystander who joins in — do not answer as if the words were meant for you.
 {% else %}{{ partner_name }} said that to the room, to nobody in particular — anyone present may pick it up, and this time it is you. Answer {{ partner_name }} as one of the people there.
+{% endif %}
+{% if partner_address %}How you address {{ partner_name }}: {{ partner_address }}. Keep that form of address; do not drift into another one mid-conversation.
 {% endif %}
 {% endif %}
 {% if reply_shape_section %}

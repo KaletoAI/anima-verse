@@ -29,6 +29,7 @@ import { SecretsEditor } from './SecretsEditor'
 import { SkillsTab } from './SkillsTab'
 import { WardrobeTab } from './WardrobeTab'
 import { KnownLocationsEditor } from './KnownLocationsEditor'
+import { RelationshipAddresses } from './RelationshipAddresses'
 import { NewCharacterDialog } from './NewCharacterDialog'
 import { NewNpcDialog } from './NewNpcDialog'
 import { FieldSet } from './FieldSet'
@@ -91,6 +92,7 @@ const SPECIAL_TABS: Array<{ id: string; label: string }> = [
   { id: 'expressions', label: 'Expressions' },
   { id: 'home', label: 'Activity & Home' },
   { id: 'locations', label: 'Locations' },
+  { id: 'relationships', label: 'Relationships' },
   { id: 'skills', label: 'Skills' },
   { id: 'wardrobe', label: 'Wardrobe' },
   { id: 'secrets', label: 'Secrets' },
@@ -968,6 +970,8 @@ export function CharactersTab() {
               />
             ) : subTab === 'locations' ? (
               <KnownLocationsEditor character={selected} />
+            ) : subTab === 'relationships' ? (
+              <RelationshipAddresses character={selected} />
             ) : subTab === 'image' ? (
               <ImageOverrides
                 character={selected}

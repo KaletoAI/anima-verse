@@ -18,7 +18,7 @@ on the last user turn, BEHIND the history. Derived expectations:
 [1] The per-turn blocks, as decided with the user on 2026-09-17 (plan
     analyse-prompt-caching-gespraeche.md § 8, relationships included):
         situation_block, self_state_lines, condition_reminder, moment_notes,
-        self_wearing, partner_wearing, partner_state_lines,
+        self_wearing, partner_wearing, partner_state_lines, partner_address,
         present_characters, present_details, inventory_carrying_section,
         inventory_room_section, focused_items, known_activities,
         events_section, assignment_section, recent_activity_section,
@@ -118,6 +118,7 @@ PER_TURN = {
     "events_section", "assignment_section", "recent_activity_section",
     "memory_section", "relationships_section", "reply_shape_section",
     "addressed_to_me", "addressed_names", "winding_down", "respond_opportunity",
+    "partner_address",
 }
 
 
@@ -187,7 +188,7 @@ check("[4] world part shared up to the language line",
 def _moment(**over):
     ctx = dict(
         character_name="Rosi", partner_mode="room", partner_name="Kai",
-        partner_state_lines=[], present_characters="Kai, Liesa",
+        partner_state_lines=[], partner_address="", present_characters="Kai, Liesa",
         present_details="PRESENT", situation_block="SITUATION",
         self_state_lines=["SELFSTATE"], condition_reminder="", moment_notes=["NOTE"],
         self_wearing="", partner_wearing="", inventory_carrying_section="",

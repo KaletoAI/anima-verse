@@ -789,6 +789,86 @@ def build_memory_relationships(character_name: str,
     return {"character": character_name, "items": items}
 
 
+# ---------------------------------------------------------------------------
+# Form of address per pair (world authoring — admin only)
+# ---------------------------------------------------------------------------
+
+def _known_character_or_404(name: str) -> str:
+    """Return *name* if it is an existing character, else raise 404."""
+    from app.models.character import list_available_characters
+    if name not in list_available_characters():
+        raise HTTPException(status_code=404,
+                            detail=f"Character '{name}' not found")
+    return name
+
+
+def build_relationship_addresses(character_name: str) -> Dict[str, Any]:
+    """Every known pair of *character_name* with both address directions.
+
+    ``outgoing`` = how *character_name* addresses the other one, ``incoming``
+    = how the other one addresses *character_name*. Pairs whose other side no
+    longer exists in the world are skipped (the rows stay in the DB and come
+    back with a re-import, exactly like the Mind panel does it).
+    """
+    from app.models.character import list_available_characters
+    from app.models.relationship import get_address, get_character_relationships
+
+    _known_character_or_404(character_name)
+    existing = set(list_available_characters())
+    items: List[Dict[str, Any]] = []
+    for r in get_character_relationships(character_name):
+        a = r.get("character_a") or ""
+        b = r.get("character_b") or ""
+        other = b if a.lower() == character_name.lower() else a
+        if not other or other == character_name or other not in existing:
+            continue
+        items.append({
+            "other": other,
+            "outgoing": get_address(character_name, other),
+            "incoming": get_address(other, character_name),
+            "type": r.get("type", "neutral"),
+            "strength": r.get("strength", 10),
+        })
+    items.sort(key=lambda x: x["other"].lower())
+    return {"character": character_name, "items": items}
+
+
+def set_relationship_address(character_name: str, other: str, *,
+                             outgoing: Optional[str] = None,
+                             incoming: Optional[str] = None) -> Dict[str, Any]:
+    """Write one or both address directions of the pair (character, other).
+
+    Creates the pair when it does not exist yet — that is how the admin panel
+    adds a new one. ``None`` leaves a direction untouched, an empty string
+    clears it.
+    """
+    from app.models.relationship import (AddressTextError, get_address,
+                                         set_address)
+
+    _known_character_or_404(character_name)
+    _known_character_or_404(other)
+    if other == character_name:
+        raise HTTPException(status_code=400,
+                            detail="a character has no form of address for itself")
+    if outgoing is None and incoming is None:
+        raise HTTPException(status_code=400,
+                            detail="outgoing or incoming is required")
+    try:
+        if outgoing is not None:
+            set_address(character_name, other, outgoing)
+        if incoming is not None:
+            set_address(other, character_name, incoming)
+    except AddressTextError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "character": character_name,
+        "other": other,
+        "outgoing": get_address(character_name, other),
+        "incoming": get_address(other, character_name),
+    }
+
+
 def _evolution_diff(prev: Dict[str, Any], curr: Dict[str, Any]) -> Dict[str, Any]:
     """Line-based diff (sentence-granular) over beliefs/lessons/goals.
 

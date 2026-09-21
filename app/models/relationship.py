@@ -515,6 +515,99 @@ def update_relationship_manual(char_a: str,
 
 
 # ---------------------------------------------------------------------------
+# Form of address (per pair, per direction)
+# ---------------------------------------------------------------------------
+#
+# Free text, one note per DIRECTION of a pair: how A addresses B and how B
+# addresses A ("formal, calls her Doctor" / "informal, nickname Pip"). The
+# speaking character's prompt carries its own direction, which is what keeps a
+# German world from wobbling between "Sie" and "du" from turn to turn.
+#
+# Stored in the relationship row's meta blob like the other non-numeric fields
+# (``history``, ``last_interaction_game``): ``address_a_to_b`` /
+# ``address_b_to_a``, oriented exactly like the sentiments — ``a`` is the name
+# that sorts first (``_sort_pair``).
+
+# One prompt LINE, so a note is capped and single-line on purpose.
+ADDRESS_MAX_LEN = 120
+
+
+class AddressTextError(ValueError):
+    """A form-of-address note violates the field contract."""
+
+
+def _clean_address(text: Any) -> str:
+    """Normalise + validate a form-of-address note.
+
+    Blank clears the field. Control characters (newlines included) are
+    rejected because the note is rendered as ONE prompt line; more than
+    ADDRESS_MAX_LEN characters is rejected as well.
+    """
+    s = "" if text is None else str(text)
+    s = s.strip()
+    if not s:
+        return ""
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in s):
+        raise AddressTextError(
+            "form of address must not contain line breaks or control characters")
+    if len(s) > ADDRESS_MAX_LEN:
+        raise AddressTextError(
+            f"form of address is limited to {ADDRESS_MAX_LEN} characters")
+    return s
+
+
+def _address_keys(speaker: str, addressee: str) -> Tuple[str, str]:
+    """(outgoing_key, incoming_key) for *speaker* in this pair.
+
+    The ONE place the a/b orientation is resolved. A row is always stored in
+    ``_sort_pair`` order, so ``address_a_to_b`` is the speaker's own direction
+    exactly when the speaker is the name that sorts first — the same rule
+    ``record_interaction`` applies to the sentiments.
+    """
+    first, _second = _sort_pair(speaker, addressee)
+    if first.lower() == speaker.lower():
+        return "address_a_to_b", "address_b_to_a"
+    return "address_b_to_a", "address_a_to_b"
+
+
+def get_address(speaker: str, addressee: str) -> str:
+    """How *speaker* addresses *addressee*. Empty string when unset."""
+    if not speaker or not addressee or speaker.lower() == addressee.lower():
+        return ""
+    rel = get_relationship(speaker, addressee)
+    if not rel:
+        return ""
+    out_key, _in_key = _address_keys(speaker, addressee)
+    return str(rel.get(out_key) or "").strip()
+
+
+def set_address(speaker: str, addressee: str, text: Any) -> bool:
+    """Set how *speaker* addresses *addressee*; empty text clears it.
+
+    Creates the pair when it does not exist yet. Raises ``AddressTextError``
+    when the text violates the field contract. Returns False for an empty or
+    self-directed pair.
+    """
+    if not speaker or not addressee or speaker.lower() == addressee.lower():
+        return False
+    value = _clean_address(text)
+    out_key, _in_key = _address_keys(speaker, addressee)
+    rels, rel = _ensure_relationship(speaker, addressee)
+    if value:
+        rel[out_key] = value
+    else:
+        rel.pop(out_key, None)
+    save_relationships(rels)
+    return True
+
+
+def address_line(speaker: str, addressee: str) -> str:
+    """The one prompt line, or "" when nothing is set for this direction."""
+    text = get_address(speaker, addressee)
+    return f"Form of address: {text}" if text else ""
+
+
+# ---------------------------------------------------------------------------
 # Prompt section builder (for system prompt injection)
 # ---------------------------------------------------------------------------
 

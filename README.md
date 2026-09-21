@@ -226,6 +226,11 @@ stops acting autonomously).
   status, participants, beats) and can **Generate arc** by hand or delete one.
 - **Relationships** with automatic decay over GAME time (a "week" is seven game days;
   a frozen or slow world clock slows the decay with it) and periodic summaries.
+  Each pair also carries a **form of address per direction** — free text saying how A
+  addresses B and how B addresses A ("formal, calls her Harbour Mistress" / "informal,
+  nickname Pip"). The speaking character gets its own direction in the chat prompt, which
+  is what keeps a German world from drifting between a formal and an informal address
+  mid-conversation. Edited in Game-Admin → Characters → **Relationships**.
 - **Phone panel:** a phone-style chat layout in `/play` for remote conversations, with a
   world-configurable frame.
 

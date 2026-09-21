@@ -32,7 +32,10 @@
      partner_mode: "chatbot" | "character" | "fallback" | "room" | "none"
      partner_name: str  (chatbot/character/fallback)
      partner_lines: list[str]  (character mode only; stable fields — the
-       partner's mood and current doing are in the scene state)
+       partner's mood and current doing are in the scene state). Its last
+       entry is the pair's "Form of address: …" note when one is set — that
+       is what the two "unless a different form of address is specified
+       above" sentences below point at.
 
    PRE-FORMATTED OPTIONAL BLOCKS (omit / pass empty string to skip):
      secrets_section

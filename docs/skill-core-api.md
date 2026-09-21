@@ -120,6 +120,8 @@ liefert `slot_order`/`slot_labels`/`slot_anchors`/`silhouette_url` spezies-getri
 |---|---|
 | `get_relationship(char_a, char_b) -> Optional[Dict]` | Beziehungsdaten zweier Charaktere (u.a. `strength`) |
 | `record_interaction(char_a, char_b, …)` | Eine Interaktion verbuchen (Sentiment/Stärke) |
+| `get_address(speaker, addressee) -> str` | Anrede-Freitext DIESER Richtung des Paares (`""` wenn nichts gesetzt) |
+| `address_line(speaker, addressee) -> str` | Dieselbe Angabe als fertige Prompt-Zeile `Form of address: …` (`""` wenn nichts gesetzt) |
 | `get_romantic_interests(character_name) -> str` | Freitext-Interessen aus dem Profil |
 | `are_romantically_compatible(char_a, char_b) -> bool` | Fragt den Capability-Provider `romantic_compatibility` (siehe „Hooks"); ohne Paket immer `True` |
 | `interest_aliases`-Feld-Property | Attraction-Matching liest Alias-Blöcke aus Body-Slot-Attributen — vollständig deklarations-getrieben |

@@ -2364,6 +2364,11 @@
     "Current password is wrong": "Das aktuelle Passwort ist falsch",
     "The new password must differ from the current one": "Das neue Passwort muss sich vom aktuellen unterscheiden",
     "Password must be at least 8 characters": "Das Passwort muss mindestens 8 Zeichen lang sein",
-    "last met": "zuletzt getroffen"
+    "last met": "zuletzt getroffen",
+    "Add pair…": "Paar hinzufügen…",
+    "No pairs yet — add one above.": "Noch keine Paare — oben eines hinzufügen.",
+    "closeness": "Nähe",
+    "How {a} addresses {b}": "Wie {a} {b} anspricht",
+    "Free text per direction: how one addresses the other. The speaking character gets its own direction in the chat prompt, so the form of address stays the same from turn to turn. Example: “formal, calls her Harbour Mistress” / “informal, nickname Pip”.": "Freitext je Richtung: wie der eine den anderen anspricht. Der sprechende Character bekommt seine eigene Richtung in den Chat-Prompt, so bleibt die Anrede von Zug zu Zug gleich. Beispiel: „siezt sie, nennt sie Hafenmeisterin“ / „duzt ihn, Spitzname Pip“."
   }
 }

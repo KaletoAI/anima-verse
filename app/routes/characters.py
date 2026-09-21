@@ -2446,6 +2446,38 @@ def memory_relationships(character_name: str,
         character_name, history_limit=history_limit, lang=lang)
 
 
+class AddressUpdate(BaseModel):
+    """One or both address directions of a pair. None = leave untouched."""
+    outgoing: Optional[str] = None
+    incoming: Optional[str] = None
+
+
+@router.get("/{character_name}/relationships/addresses")
+def relationship_addresses(character_name: str,
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Every known pair of this character with both forms of address.
+
+    `outgoing` = how {character_name} addresses the other one, `incoming` =
+    how the other one addresses {character_name}. World authoring, so admin
+    only — the rest of the /characters prefix is writable by a player for
+    their own character.
+    """
+    return character_ops.build_relationship_addresses(character_name)
+
+
+@router.put("/{character_name}/relationships/{other}/address")
+def set_relationship_address(character_name: str, other: str,
+                             body: AddressUpdate,
+                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Set how the two address each other; creates the pair if needed.
+
+    Free text, max 120 characters per direction, no line breaks. An empty
+    string clears that direction, a missing field leaves it as it is.
+    """
+    return character_ops.set_relationship_address(
+        character_name, other, outgoing=body.outgoing, incoming=body.incoming)
+
+
 @router.get("/{character_name}/memory/history")
 def memory_history(character_name: str,
                    kind: str = "daily",
