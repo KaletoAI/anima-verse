@@ -23,7 +23,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from app.core.log import get_logger
 
@@ -468,6 +468,60 @@ def _cleanup_legacy(refs_dir: Path, kind: str) -> None:
         legacy = refs_dir / f"{kind}{ext}"
         if legacy.exists():
             legacy.unlink()
+
+
+def invalidate_refs_for_item(character_name: str, item_id: str) -> Set[str]:
+    """Drops every reference render whose manifest contains this item.
+
+    The outfit signature is built from the item IDs, not from what they
+    LOOK like (``outfit_signature_raw``) — deliberately, so that editing a
+    piece's name or price costs no GPU minute and every existing cache entry
+    of every world stays valid. The price of that rule is this function: when
+    a field that DOES reach the render changes (``prompt_fragment`` — the one
+    item field the outfit prompt is built from, see
+    ``outfit_renderer.render_outfit``), the entries have to be dropped
+    actively, because the signature cannot notice it and the cache GC judges
+    them valid (their pieces still exist and still re-sign to the same hash).
+
+    Returns the signatures purged — state variants (``<base>-s<fp>``) count
+    as their own entry, exactly as they are stored.
+    """
+    out: Set[str] = set()
+    if not item_id:
+        return out
+    from app.core.outfit_cache_gc import REF_PREFIXES, read_manifest
+    refs_dir = get_model_refs_dir(character_name)
+    if not refs_dir.exists():
+        return out
+    for sidecar in sorted(refs_dir.glob("*.json")):
+        manifest = read_manifest(sidecar)
+        if manifest is None:
+            continue  # nothing recorded — never delete on a guess
+        if item_id not in (set(manifest["pieces"].values())
+                           | set(manifest["items"])):
+            continue
+        stem = sidecar.stem
+        for prefix in REF_PREFIXES:
+            if stem.startswith(prefix):
+                out.add(stem[len(prefix):])
+                break
+        for ext in _IMAGE_EXTS:
+            img = sidecar.with_suffix(ext)
+            if img.exists():
+                try:
+                    img.unlink()
+                except OSError as e:
+                    logger.warning("Ref invalidation %s: %s not removed: %s",
+                                   character_name, img.name, e)
+        try:
+            sidecar.unlink()
+        except OSError as e:
+            logger.warning("Ref invalidation %s: %s not removed: %s",
+                           character_name, sidecar.name, e)
+    if out:
+        logger.info("Ref invalidation %s: item %s -> %d combination(s) dropped",
+                    character_name, item_id, len(out))
+    return out
 
 
 def _ref_info(path: Optional[Path]) -> Optional[Dict[str, Any]]:

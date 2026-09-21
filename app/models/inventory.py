@@ -528,9 +528,43 @@ def add_item(name: str,
     return item
 
 
+def _render_relevant_fields(item: Optional[Dict[str, Any]]) -> tuple:
+    """The item fields the OUTFIT PROMPT is built from — everything else an
+    edit can touch (name, price, category, image, slot order …) leaves every
+    rendered image identical.
+
+    ``prompt_fragment`` is the text of the piece itself;
+    ``outfit_piece.partially_covers`` decides whether another slot's fragment
+    is rewritten as "<piece> underneath <this piece>" and suppressed
+    (``outfit_renderer.render_outfit``). ``covers`` is NOT in here on
+    purpose: it changes the outfit SIGNATURE itself
+    (``visible_equipped_pieces``), so its old cache entries are never served
+    again anyway.
+    """
+    op = (item or {}).get("outfit_piece") or {}
+    return ((item or {}).get("prompt_fragment") or "",
+            tuple(str(s) for s in (op.get("partially_covers") or [])))
+
+
+def _invalidate_renders_for_item(item_id: str) -> None:
+    """Drops the cached renders made with this item (expression variants,
+    reference renders, meshes) — they all key on the outfit signature, which
+    is built from item IDs and therefore cannot notice a changed prompt."""
+    try:
+        from app.core.expression_regen import invalidate_variants_for_item
+        invalidate_variants_for_item(item_id)
+    except Exception as e:  # noqa: BLE001 — a failed purge must not fail the save
+        logger.debug("Render-Invalidierung fuer %s fehlgeschlagen: %s", item_id, e)
+
+
 def update_item(item_id: str,
     updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Aktualisiert ein Item — World oder Shared. Admin-only Aufrufer.
+
+    Changing a field that reaches the image prompt invalidates the cached
+    renders of every combination this item is part of (see
+    ``_render_relevant_fields``) — here rather than in the route, so that a
+    piece edit through any path leaves no stale T-pose or mesh behind.
     """
     # Spell-only metadata (see spell_engine.build_spell_catalog). Anything
     # carrying an incantation is treated as a castable spell, so these keys
@@ -592,9 +626,12 @@ def update_item(item_id: str,
             if item.get("id") == item_id:
                 # _shared-Flag ist Run-Time-Marker, nicht Teil der Persistenz.
                 item.pop("_shared", None)
+                _before = _render_relevant_fields(item)
                 shared[idx] = _apply_updates(item)
                 _save_shared_items(shared)
                 logger.info("Shared-Item aktualisiert: %s", item_id)
+                if _render_relevant_fields(shared[idx]) != _before:
+                    _invalidate_renders_for_item(item_id)
                 return {**shared[idx], "_shared": True}
         return None
 
@@ -602,9 +639,12 @@ def update_item(item_id: str,
     items = _load_items()
     for item in items:
         if item.get("id") == item_id:
+            _before = _render_relevant_fields(item)
             _apply_updates(item)
             _save_items(items)
             logger.info("Item aktualisiert: %s", item_id)
+            if _render_relevant_fields(item) != _before:
+                _invalidate_renders_for_item(item_id)
             return item
     return None
 

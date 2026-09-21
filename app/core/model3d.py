@@ -501,6 +501,45 @@ def _purge_combination(out_dir: Path, signature: str) -> None:
         old.unlink()
 
 
+def invalidate_models_for_item(character_name: str, item_id: str) -> set:
+    """Drops every cached mesh whose manifest contains this item.
+
+    Counterpart of ``model_refs.invalidate_refs_for_item`` for the mesh
+    store: the outfit signature keys on item IDs, so a changed
+    ``prompt_fragment`` renders a different picture under the SAME signature
+    and the stored mesh would stay stale forever (the cache GC calls it
+    valid). Purges the model, its texture, sidecar, reduced tiers and raw
+    backup — the same set a re-generation of that combination replaces.
+
+    Returns the signatures purged.
+    """
+    out: set = set()
+    if not item_id:
+        return out
+    from app.core.outfit_cache_gc import read_manifest
+    d = get_model3d_dir(character_name)
+    if not d.exists():
+        return out
+    for sidecar in sorted(d.glob("*.json")):
+        manifest = read_manifest(sidecar)
+        if manifest is None:
+            continue  # nothing recorded — never delete on a guess
+        if item_id not in (set(manifest["pieces"].values())
+                           | set(manifest["items"])):
+            continue
+        try:
+            _purge_combination(d, sidecar.stem)
+        except OSError as e:
+            logger.warning("Model3D invalidation %s: %s not removed: %s",
+                           character_name, sidecar.stem, e)
+            continue
+        out.add(sidecar.stem)
+    if out:
+        logger.info("Model3D invalidation %s: item %s -> %d combination(s) "
+                    "dropped", character_name, item_id, len(out))
+    return out
+
+
 def save_uploaded_model(character_name: str, original_filename: str,
                         contents: bytes, *, rig: str,
                         texture: Optional[bytes] = None) -> Dict[str, Any]:

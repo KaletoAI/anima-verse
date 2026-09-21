@@ -400,11 +400,55 @@ def has_failed(character_name: str, mood: str, pose_key: str,
         return key in _failed
 
 
-def invalidate_variants_for_item(item_id: str) -> int:
-    """Deletes exactly those variant files whose equipped_pieces/items
-    contained the changed item — read from the .json sidecar next to the PNG.
+def _invalidate_outfit_caches_for_item(character_name: str, item_id: str) -> Set[str]:
+    """Drops the reference renders and meshes of one character that were made
+    with this item, and re-arms the outfit render when the WORN combination
+    was among them.
 
-    Variants without a sidecar are skipped, not deleted wholesale.
+    Both caches key on ``model_refs.outfit_signature`` (item IDs), so they
+    cannot notice an edited ``prompt_fragment`` by themselves — see
+    ``invalidate_variants_for_item``. Returns the purged signatures.
+    """
+    from app.core.model3d import invalidate_models_for_item
+    from app.core.model_refs import (current_outfit_state,
+                                     invalidate_refs_for_item,
+                                     neutral_signature, schedule_outfit_render)
+    purged: Set[str] = set()
+    purged |= invalidate_refs_for_item(character_name, item_id)
+    purged |= invalidate_models_for_item(character_name, item_id)
+    if not purged:
+        return purged
+    try:
+        worn = current_outfit_state(character_name)[2]
+    except Exception:  # noqa: BLE001 — an unreadable state only costs the
+        return purged  # re-arm; the entries are gone either way
+    if neutral_signature(worn) in {neutral_signature(s) for s in purged}:
+        schedule_outfit_render(character_name)
+    return purged
+
+
+def invalidate_variants_for_item(item_id: str) -> int:
+    """Deletes exactly those CACHED RENDERS whose equipped_pieces/items
+    contained the changed item — read from the .json sidecar next to the
+    image. Entries without a sidecar are skipped, not deleted wholesale.
+
+    All THREE per-outfit caches, not only the expression variants: the
+    reference renders (``model_refs/``, the T-pose that feeds image->3D) and
+    the meshes built from them (``model3d/``) key on the same outfit
+    signature, and that signature is built from item IDs — a changed
+    ``prompt_fragment`` renders a different picture under the very same
+    signature, so those entries would stay stale forever (the cache GC calls
+    them valid: their pieces still exist and still re-sign to the same hash).
+    Keeping the signature rule ID-based is deliberate — it costs no GPU
+    minute for an unrelated edit and leaves every existing world's cache
+    valid — so the invalidation has to be active here.
+
+    A character whose CURRENTLY worn combination was hit gets the ordinary
+    debounced outfit render re-armed (same path an equip takes), so the
+    reference images and the auto-mesh come back without a manual trigger.
+
+    Returns the number of deleted expression-variant FILES (the reference and
+    mesh purges are counted in signatures and logged separately).
     """
     if not item_id:
         return 0
@@ -415,6 +459,7 @@ def invalidate_variants_for_item(item_id: str) -> int:
     total = 0
     for char_name in list_available_characters():
         try:
+            _invalidate_outfit_caches_for_item(char_name, item_id)
             expr_dir = _get_expressions_dir(char_name)
             if not expr_dir.exists():
                 continue
@@ -443,7 +488,7 @@ def invalidate_variants_for_item(item_id: str) -> int:
                 except OSError:
                     pass
         except Exception as e:
-            logger.debug("invalidate_variants_for_item %s/%s: %s", char_name, e)
+            logger.debug("invalidate_variants_for_item %s: %s", char_name, e)
     if total:
         logger.info("Variant invalidation for item %s: %d files deleted", item_id, total)
     return total

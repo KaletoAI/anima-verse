@@ -3135,6 +3135,7 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
 
     # Image service (core engine — wave-6 split)
     from app.imagegen.service import get_image_service
+    from app.core.lora_library import LoraNotAllowedError
     image_skill = get_image_service()
     if not image_skill.enabled:
         raise HTTPException(status_code=500, detail="Image service not available")
@@ -3157,6 +3158,10 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     }
     if loras_override is not None:
         payload["loras"] = loras_override
+        # Picked in THIS request (the profile-image dialog), so the gate
+        # rejects an unassociated LoRA with a 400 instead of quietly
+        # dropping it the way a stored one is dropped.
+        payload["loras_explicit"] = True
     if model_override:
         payload["model_override"] = model_override
     input_data = _json.dumps(payload)
@@ -3164,6 +3169,11 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     try:
         import asyncio
         result = await asyncio.to_thread(image_skill.generate_from_input, input_data)
+    except LoraNotAllowedError as e:
+        # A LoRA the library does not associate with the resolved backend is a
+        # bad request, not a failed render — the dialog offers exactly the
+        # allowed ones, so only a direct API call gets here.
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Bildgenerierung fehlgeschlagen: {str(e)}")
 

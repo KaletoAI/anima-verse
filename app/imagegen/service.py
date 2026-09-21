@@ -520,6 +520,11 @@ class ImageService:
         Picks a video backend by glob (empty = cheapest available video
         backend), runs it through the pool's fallback engine, and writes the
         returned MP4 to ``output_path``. Returns True on success.
+
+        Raises ``LoraNotAllowedError`` when a picked LoRA is not associated
+        with the chosen video backend (the gate of
+        ``app/core/lora_library.py``) — that is a bad request, not a failed
+        render, so it does not collapse into the ``False`` return.
         """
         params: Dict[str, Any] = {"source_image_path": source_image_path,
                                   "reference_images": {"frame": source_image_path}}
@@ -536,6 +541,15 @@ class ImageService:
             logger.warning("generate_video: kein Video-Backend verfuegbar (glob=%r)",
                            backend_glob)
             return False
+
+        # The HARD half of the LoRA gate: every ``loras`` list that reaches
+        # this function is an explicit pick of the animate dialog (the only
+        # caller that fills it is the animate route via
+        # ``skills/animate.animate_image``; no stored per-character video
+        # LoRAs exist). A mismatch is therefore a bad request, not a stale
+        # config value — it is reported, not silently dropped.
+        from app.core.lora_library import assert_loras_allowed
+        assert_loras_allowed(primary, loras)
 
         def _op(backend: ImageBackend):
             def _gen():
@@ -1428,6 +1442,14 @@ class ImageService:
 
         Returns:
             string with image links or an error message
+
+        Raises:
+            LoraNotAllowedError: an EXPLICITLY picked LoRA (payload flag
+                ``loras_explicit``, set by the dialogs) the library does not
+                associate with the resolved backend
+                (``app/core/lora_library.py``); a route maps it to 400.
+                LoRAs from stored configuration are filtered out instead, so
+                an automatic render never fails over a stale config value.
         """
         if not self.enabled:
             return "Image generation is not available. No instance configured or reachable."
@@ -1519,6 +1541,33 @@ class ImageService:
             backend = self._wait_for_backend(character_name, _has_input_image)
         if not backend:
             return "Fehler: Keine Image-Generation Instanz ist aktuell verfuegbar (Timeout)."
+
+        # The LoRA gate, for the backend this render actually resolved to
+        # (app/core/lora_library.py holds the rule). TWO halves, because the
+        # two sources of a LoRA list are not the same kind of thing:
+        # - an EXPLICIT pick of the current request (a dialog selection; the
+        #   caller sets "loras_explicit") is rejected hard — the dialogs are
+        #   backend-scoped, so a mismatch is a direct API call or a stale
+        #   client, and a 400 says exactly what was chosen wrongly;
+        # - STORED configuration (per-character image settings, slot LoRAs of
+        #   a body-slot package, use-case defaults) is filtered: an admin who
+        #   re-points a character at another backend would otherwise break
+        #   every automatic render of that character — expression variants,
+        #   outfit/T-pose references, the agent loop's scene images — for
+        #   good. The render proceeds without the unassociated entries and
+        #   the admin is warned once per (character, backend, LoRA).
+        if isinstance(input_data, dict) and input_data.get("loras"):
+            from app.core.lora_library import (assert_loras_allowed,
+                                               filter_allowed_loras,
+                                               warn_dropped_loras)
+            if input_data.get("loras_explicit"):
+                assert_loras_allowed(backend, input_data.get("loras"))
+            else:
+                _kept, _dropped = filter_allowed_loras(
+                    backend, input_data.get("loras"))
+                if _dropped:
+                    input_data["loras"] = _kept
+                    warn_dropped_loras(backend.name, _dropped, character_name)
 
         # Lade per-Agent per-Instanz Config
         cfg = self._get_instance_config(character_name, backend)

@@ -161,8 +161,143 @@ def sync_lora_library() -> Dict[str, Any]:
         if changed:
             ig["lora_triggers"] = triggers
             config.save(data)
+            # A changed association must be able to warn again (and an
+            # obsolete warning must stop repeating) — see warn_dropped_loras.
+            with _dropped_lock:
+                _dropped_logged.clear()
             logger.info("lora sync: +%d added, -%d removed, %d missing "
                         "(scanned: %s)", result["added"], result["removed"],
                         result["missing"], ", ".join(result["scanned"]) or "-")
         result["changed"] = changed
     return result
+
+
+class LoraNotAllowedError(ValueError):
+    """A LoRA selection the library does not associate with the chosen backend.
+
+    Carries the rejected names so a route can turn it into a 400 without
+    re-parsing the message.
+    """
+
+    def __init__(self, backend_name: str, names: List[str]):
+        self.backend_name = backend_name
+        self.names = list(names)
+        super().__init__(
+            f"The LoRA library does not associate backend "
+            f"'{backend_name}' with: {', '.join(self.names)}")
+
+
+def _split_loras(backend: Any, loras: Any) -> tuple:
+    """The ONE association predicate, applied to a whole selection.
+
+    Returns ``(kept, dropped)``: ``kept`` are the ENTRIES that may be sent to
+    ``backend`` (in the given order, unchanged — including the "None"
+    placeholder of an unused slot and anything that is not a dict, which the
+    backends drop themselves), ``dropped`` the NAMES the library does not
+    associate with this backend.
+
+    Association = the entry appears in ``get_lora_options`` for this backend,
+    which includes entries the sync flagged ``missing_on`` — they stay
+    offered, marked "(missing)", the flag can be stale, and a wrong pick
+    fails visibly in the render result.
+    """
+    entries = list(loras or [])
+    if not entries:
+        return [], []
+    from app.core.config import get_lora_options
+    named = [(e, str(e.get("name") or "").strip()) for e in entries
+             if isinstance(e, dict)]
+    named = [(e, n) for e, n in named if n and n != "None"]
+    if not named:
+        return entries, []
+    allowed = {o["name"] for o in get_lora_options(
+        getattr(backend, "name", "") or "",
+        lora_filter=getattr(backend, "lora_filter", "") or "")}
+    bad = {id(e) for e, n in named if n not in allowed}
+    kept = [e for e in entries if id(e) not in bad]
+    dropped = [n for e, n in named if n not in allowed]
+    return kept, dropped
+
+
+def unassociated_loras(backend: Any, loras: Any) -> List[str]:
+    """The picked LoRA names the library does NOT associate with ``backend``
+    (see :func:`_split_loras` for the rule)."""
+    return _split_loras(backend, loras)[1]
+
+
+def filter_allowed_loras(backend: Any, loras: Any) -> tuple:
+    """``(kept, dropped)`` — the soft half of the gate, for LoRAs that were
+    NOT picked in the current request.
+
+    A stored LoRA (per-character image settings, use-case defaults, a slot
+    LoRA of a body-slot package) is configuration, not a request: once the
+    admin re-points a character at another backend or a LoRA loses its
+    association, rejecting the render would break every automatic render of
+    that character — expression variants, outfit and T-pose references, the
+    agent loop's scene images — permanently, with nothing but a log line.
+    So the render runs WITHOUT the unassociated entries; the caller reports
+    them through :func:`warn_dropped_loras`.
+
+    An EXPLICIT pick from a dialog keeps the hard reject
+    (:func:`assert_loras_allowed`) — there a 400 tells the user what they
+    just chose wrongly.
+    """
+    return _split_loras(backend, loras)
+
+
+#: In-process memo for :func:`warn_dropped_loras` — one WARNING per
+#: (subject, backend, lora name). Cleared whenever the library sync changes
+#: something (a re-association must warn again) and capped, so a world with
+#: many characters cannot grow it without bound.
+_DROP_LOG_CAP = 512
+_dropped_logged = set()
+_dropped_lock = threading.Lock()
+
+
+def warn_dropped_loras(backend_name: str, dropped: List[str],
+                       subject: str = "") -> List[str]:
+    """Reports LoRAs dropped by :func:`filter_allowed_loras` — ONCE per
+    (subject, backend, lora), so a rendering loop cannot flood the log.
+
+    ``subject`` is the character/agent the render belongs to. Returns the
+    names that were actually logged by this call.
+    """
+    names = [n for n in (dropped or []) if n]
+    if not names:
+        return []
+    fresh = []
+    with _dropped_lock:
+        if len(_dropped_logged) >= _DROP_LOG_CAP:
+            _dropped_logged.clear()
+        for n in names:
+            key = (subject or "", backend_name or "", n)
+            if key not in _dropped_logged:
+                _dropped_logged.add(key)
+                fresh.append(n)
+    if fresh:
+        logger.warning(
+            "Stored LoRA %s is not associated with backend '%s'%s — rendering "
+            "without it. Either associate it with that backend in "
+            "/admin/settings (LoRA library) or remove it from the image "
+            "settings that still ask for it.",
+            ", ".join(fresh), backend_name or "?",
+            f" (render for {subject})" if subject else "")
+    return fresh
+
+
+def assert_loras_allowed(backend: Any, loras: Any) -> None:
+    """The server-side LoRA gate — the ONE place its rule lives.
+
+    Every LoRA dropdown is backend-scoped (the library entries of the chosen
+    backend only), so this is the safety net for direct API calls: a pick the
+    library does not associate with the resolved backend is rejected instead
+    of being handed to the gateway, where it either fails with a cryptic
+    error or is silently ignored and the user gets an image without the
+    expected effect.
+
+    Raises :class:`LoraNotAllowedError` (a ``ValueError``); callers that face
+    an HTTP client map it to 400.
+    """
+    absent = _split_loras(backend, loras)[1]
+    if absent:
+        raise LoraNotAllowedError(getattr(backend, "name", "") or "", absent)

@@ -133,7 +133,13 @@ class OpenAIDiffusionBackend(LocalAIBackend):
                 if _502 >= max_502:
                     raise RuntimeError(f"{self.name}: HTTP 502 (Generierung fehlgeschlagen): {body}")
                 _502 += 1
-                logger.warning(f"{self.name}: 502, einmaliger Retry ({_502}/{max_502})")
+                # Wait like every other retrying branch of this loop: an
+                # immediate second POST hits the gateway in exactly the state
+                # that just failed. Same first step as the 503 backoff.
+                wait = 2.0
+                logger.warning(f"{self.name}: 502, warte {wait:.1f}s, "
+                               f"einmaliger Retry ({_502}/{max_502})")
+                time.sleep(wait)
                 continue
             if code == 402:
                 logger.error(f"{self.name}: HTTP 402 — Credit-/Quota-Limit erreicht: {body}")
