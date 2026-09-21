@@ -707,6 +707,119 @@ function assertUnitScale(k: number): void {
  *  every mount but the last one stale. */
 const mountSeq = new WeakMap<Tile, number>();
 
+/**
+ * THE GPU RESOURCES ONE MOUNT BUILT ITSELF (review finding UI-2) — per tile,
+ * beside `mountSeq` and for the same reason: a scene is re-fetched every
+ * minute and remounted whenever its signature moves, and what `mountScene`
+ * builds here is built FRESH every time. There is no geometry or material
+ * cache behind `buildPlate`/`buildWall`/`buildExtra` (each call is a new
+ * `ExtrudeGeometry`/`BoxGeometry` and a new material), and `tiledTexture`
+ * hands out a clone of the library image per primitive. Without this ledger
+ * every remount left all of it behind as GPU buffers.
+ *
+ * OWNERSHIP IS RECORDED AT CREATION, never derived by traversing the graph —
+ * because the graph a mount leaves behind is full of things that belong to
+ * somebody else: a prop's geometry and its base materials are the loader
+ * cache's and are shared with every other placement of the same URL, the
+ * surface texture behind a clone belongs to the shared library, and the water
+ * shader's normal map inside `surfaceMaterial` is a module-level singleton of
+ * the shared package. Only what is registered here is ever disposed.
+ *
+ * DELIBERATELY NOT IN HERE, because each already has its own disposal: the
+ * slot material clones of a placement (`disposeSlotMaterials`), the cutout
+ * clones (`tile.cutouts.dispose`), the clip/cut clones on a placed mesh
+ * (`disposeClipMaterials`/`disposeCutMaterials`), the far-view shell's
+ * material clones (`dropFarShell`), the shell/roof clones of a building model
+ * (`tile.roofMats`, kept straight by the tier swap) and the underwater ghosts
+ * (`dropPlacementGhost`).
+ */
+interface SceneOwned {
+  geometries: Set<THREE.BufferGeometry>;
+  materials: Set<THREE.Material>;
+  textures: Set<THREE.Texture>;
+}
+
+/** What ONE mesh of this mount owns — the same resources, kept PER OBJECT so a
+ *  single primitive can be released early (the tier swap replaces a
+ *  placeholder box mid-mount) without having to guess which of the tile's
+ *  materials were that mesh's. In a WeakMap rather than in `userData`, because
+ *  `Object3D.copy` JSON round-trips userData and the far-view shell clones
+ *  exactly these meshes. */
+interface OwnedTag {
+  geometry: THREE.BufferGeometry;
+  materials: THREE.Material[];
+  textures: THREE.Texture[];
+}
+
+const sceneOwned = new WeakMap<Tile, SceneOwned>();
+const ownedTag = new WeakMap<THREE.Object3D, OwnedTag>();
+
+function ownedOf(tile: Tile): SceneOwned {
+  let owned = sceneOwned.get(tile);
+  if (!owned) {
+    owned = { geometries: new Set(), materials: new Set(), textures: new Set() };
+    sceneOwned.set(tile, owned);
+  }
+  return owned;
+}
+
+/** Register a primitive this mount built itself: its geometry, its material
+ *  and the texture CLONE `tiledTexture` made for it. The clone is read off
+ *  `map`, the ONE slot these materials ever get a texture in — a shared normal
+ *  map that `surfaceMaterial` may hang on a water surface is not ours and is
+ *  deliberately never read back out of the material. */
+function ownPrimitive(tile: Tile, mesh: THREE.Mesh): void {
+  const owned = ownedOf(tile);
+  owned.geometries.add(mesh.geometry);
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  const textures: THREE.Texture[] = [];
+  for (const mat of mats) {
+    if (!mat) continue;
+    owned.materials.add(mat);
+    const map = (mat as THREE.MeshStandardMaterial).map;
+    if (map) {
+      owned.textures.add(map);
+      textures.push(map);
+    }
+  }
+  ownedTag.set(mesh, { geometry: mesh.geometry, materials: mats.filter(Boolean), textures });
+}
+
+/** Give ONE registered primitive back before the unmount (the tier swap
+ *  replacing a placeholder box). What is freed is what was registered AT
+ *  CREATION, not what hangs on the mesh now: the cut and the clip may since
+ *  have put their own clones there, and those are freed by their own
+ *  routines. */
+function releaseOwnedMesh(tile: Tile, mesh: THREE.Object3D): void {
+  const tag = ownedTag.get(mesh);
+  if (!tag) return;
+  ownedTag.delete(mesh);
+  const owned = sceneOwned.get(tile);
+  owned?.geometries.delete(tag.geometry);
+  tag.geometry.dispose();
+  for (const mat of tag.materials) {
+    owned?.materials.delete(mat);
+    mat.dispose();
+  }
+  for (const tex of tag.textures) {
+    owned?.textures.delete(tex);
+    tex.dispose();
+  }
+}
+
+/** Hand back everything this mount registered. A texture here is a CLONE and
+ *  shares its `source` with the library original; three counts the GPU upload
+ *  per source, so disposing the clone frees this mount's handle and leaves the
+ *  shared library image itself untouched. */
+function disposeSceneOwned(tile: Tile): void {
+  const owned = sceneOwned.get(tile);
+  if (!owned) return;
+  sceneOwned.delete(tile);
+  for (const geo of owned.geometries) geo.dispose();
+  for (const mat of owned.materials) mat.dispose();
+  for (const tex of owned.textures) tex.dispose();
+}
+
 /** The node name Blender gives the door leaf it cut out (spec § 6). */
 const LEAF_NODE = 'leaf';
 
@@ -1030,6 +1143,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
                    lift: 0, level: m.level, roomId: m.room_id ?? '' }));
   for (const plate of scene.plates) {
     const mesh = buildPlate(THREE, plate, plateMaterial(plate, style));
+    ownPrimitive(tile, mesh);
     // THE FLOOR THE FIGURES STAND ON (§ B1 addendum 2026-08-20): every plate is
     // one, and `tileWalkY` takes the highest one under the point that is still
     // below the storey ceiling. Since E5a that list is a list of STOREYS.
@@ -1159,6 +1273,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     if (len < 1e-4) continue;
     const { mat: wallMat, tileM } = wallMaterial(wall, style);
     const mesh = buildWall(THREE, wall, wallMat, tileM);
+    ownPrimitive(tile, mesh);
     // A leaf whose hole a DOOR PROP fills is not drawn INSIDE (v5) — the prop
     // in `models[]` IS the door there, and both of them in one hole is one
     // door too many. It is still BUILT and still hung in, invisible, for two
@@ -1237,6 +1352,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   for (const extra of scene.extras) {
     const { mat: extraMat, tileM: extraTile } = extraMaterial(extra, style);
     const box = buildExtra(THREE, extra, extraMat, extraTile);
+    ownPrimitive(tile, box);
     const isStair = extra.kind.startsWith('stair_');
     if (extra.kind.startsWith('elevator_')) {
       liftGroup.add(box);
@@ -1498,6 +1614,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       // missing / has_model:false → Platzhalter in gelieferter Größe; die
       // Platzierung wird NIE verworfen (§ A2).
       const ph = buildPlaceholder(THREE, spec.placeholder_dims, placeholderMaterial());
+      ownPrimitive(tile, ph);
       ph.receiveShadow = true;
       ph.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1]);
       // `+rad` since E4 — the same sign `placeModelSpec` turns a real mesh by
@@ -1945,12 +2062,10 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
         old.parent?.remove(old);
         disposeClipMaterials(old);
         disposeCutMaterials(old);
-        const mesh = old as THREE.Mesh;
-        if (rec.placeholder && mesh.isMesh) {
-          // The grey box owns its geometry and material (buildPlaceholder).
-          mesh.geometry.dispose();
-          (mesh.material as THREE.Material).dispose();
-        }
+        // The grey box owns its geometry and its material (buildPlaceholder,
+        // registered at the mount) — freed through the ledger, so the unmount
+        // that follows some time later does not free it a second time.
+        if (rec.placeholder) releaseOwnedMesh(tile, old);
       }
     }
     rec.object = placed;
@@ -2122,7 +2237,25 @@ export function unmountScene(tile: Tile): void {
     dropPlacementGhost(rec);
     disposeSlotMaterials(rec.slotMats);
     rec.slotMats = undefined;
+    const obj = rec.object;
+    if (!obj) continue;
+    // …and the MATERIAL CLONES the mount hung on the placed mesh itself: the
+    // room clip and the depth cut each clone what they traverse, exactly the
+    // two the tier swap frees when it drops a mesh. Their textures belong to
+    // the loader cache and are deliberately left alone.
+    disposeClipMaterials(obj);
+    disposeCutMaterials(obj);
+    // The BUILDING model hangs straight off the tile (`applySceneBuilding`),
+    // not in the scene group taken out above — so it has to be unhooked by
+    // hand, or a remount would stand a second building inside the first. Only
+    // unhooked: geometry and base materials are the loader cache's.
+    if (rec.spec.role === 'building') obj.parent?.remove(obj);
   }
+  // The plates, walls, extras and placeholder boxes this mount built itself,
+  // with their materials and their texture clones (the ledger beside
+  // `mountSeq`). Everything else in the graph above belongs to a cache or to
+  // the shared library and is only unhooked.
+  disposeSceneOwned(tile);
   // Placement ledger of the old mount: gone with the scene — an in-flight
   // tier swap compares against this list and drops its answer.
   tile.placedModels = undefined;
@@ -2134,6 +2267,18 @@ export function unmountScene(tile: Tile): void {
   tile.modelIsGround = false;
   tile.modelIsShellArea = false;
   tile.modelWalkY = undefined;
+  // The building model of THIS mount is gone with the loop above; the fade
+  // lists that pointed at it (and at the far shell dropped further up) are
+  // this scene's too and are rebuilt by the next mount.
+  tile.serverModel = undefined;
+  // The shell/roof MATERIAL CLONES of this mount (`applySceneBuilding` clones
+  // what it fades; the loaded model's own materials are the loader cache's).
+  // `roofMats` is their ledger and the tier swap keeps it straight, and the
+  // far shell has already taken its own clones out of it above — so what is
+  // left here is exactly this mount's and is freed exactly once.
+  for (const mat of tile.roofMats) mat.dispose();
+  tile.roofParts = [];
+  tile.roofMats = [];
   // The floors of this scene leave with it: until the next mount the tile has
   // the world terrain under it, exactly as a place without a recipe.
   //

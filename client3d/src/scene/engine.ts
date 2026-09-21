@@ -36,6 +36,23 @@ export function isTypingTarget(e: Event): boolean {
 }
 
 /**
+ * The vectors `frame()` works in, allocated ONCE (review finding UI-11) —
+ * the pattern `mirrorScratch` uses in the shared package. This is the
+ * innermost loop of the application: four fresh `Vector3` per frame are ~240
+ * short-lived objects a second whose only purpose is to be filled with
+ * `.set(...)` and read in the same line. Every one of them is consumed before
+ * the frame ends (`fwd`/`right` add into `target`, `off` into the camera
+ * position, `sunOff` into the sun's), so nothing outlives the call and there
+ * is exactly one Engine per page.
+ */
+const SCRATCH = {
+  fwd: new THREE.Vector3(),
+  right: new THREE.Vector3(),
+  off: new THREE.Vector3(),
+  sunOff: new THREE.Vector3(),
+};
+
+/**
  * AoE-style camera: fixed pitch (slightly zoom-dependent), yaw in 45° steps,
  * pan by drag/WASD, zoom by mouse wheel towards the cursor.
  */
@@ -207,6 +224,19 @@ export class Engine {
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(SHADOW_MAP_PX, SHADOW_MAP_PX);
     this.sun.shadow.bias = -0.0004;
+    // THE SHADOW FRUSTUM IS A CONSTANT — a fixed half width in metres and a
+    // fixed depth, which is exactly what lets `snapShadowCentre` move the
+    // whole thing in whole texels. It is therefore set ONCE, here, instead of
+    // being written and re-projected on every frame (review finding UI-11);
+    // the frame loop only moves `sun.position`/`sun.target.position`, and a
+    // translation does not touch an orthographic projection matrix.
+    const shadowCam = this.sun.shadow.camera;
+    shadowCam.left = -SHADOW_HALF_M;
+    shadowCam.right = SHADOW_HALF_M;
+    shadowCam.top = SHADOW_HALF_M;
+    shadowCam.bottom = -SHADOW_HALF_M;
+    shadowCam.far = 300;
+    shadowCam.updateProjectionMatrix();
     this.scene.add(this.sun, this.sun.target);
 
     this.resize(container);
@@ -552,8 +582,8 @@ export class Engine {
     // figure and the keys to its movement.
     if (!this.follow) {
       const panSpeed = this.dist * 0.9 * dt;
-      const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-      const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+      const fwd = SCRATCH.fwd.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+      const right = SCRATCH.right.set(-fwd.z, 0, fwd.x);
       if (this.keys.has('w') || this.keys.has('arrowup')) this.target.addScaledVector(fwd, panSpeed);
       if (this.keys.has('s') || this.keys.has('arrowdown')) this.target.addScaledVector(fwd, -panSpeed);
       if (this.keys.has('a') || this.keys.has('arrowleft')) this.target.addScaledVector(right, -panSpeed);
@@ -588,7 +618,7 @@ export class Engine {
     const pitch = THREE.MathUtils.degToRad(
       THREE.MathUtils.clamp(basePitch + this.pitchOffset, 8, 85));
 
-    const off = new THREE.Vector3(
+    const off = SCRATCH.off.set(
       Math.sin(this.yaw) * Math.cos(pitch),
       Math.sin(pitch),
       Math.cos(this.yaw) * Math.cos(pitch)
@@ -602,18 +632,13 @@ export class Engine {
     // slid continuously with the target resampled the whole world on every
     // pan, and every shadow edge in the picture crawled along its own outline.
     const sx = Math.cos(this.sunAngle), sy = Math.max(0.08, Math.sin(this.sunAngle));
-    const sunOff = new THREE.Vector3(sx * 60, sy * 80, 25);
+    const sunOff = SCRATCH.sunOff.set(sx * 60, sy * 80, 25);
     const centre = snapShadowCentre({
       target: [this.target.x, this.target.y, this.target.z],
       offset: [sunOff.x, sunOff.y, sunOff.z],
     });
     this.sun.target.position.set(centre[0], centre[1], centre[2]);
     this.sun.position.copy(this.sun.target.position).add(sunOff);
-    const s = this.sun.shadow.camera;
-    s.left = -SHADOW_HALF_M; s.right = SHADOW_HALF_M;
-    s.top = SHADOW_HALF_M; s.bottom = -SHADOW_HALF_M;
-    s.far = 300;
-    s.updateProjectionMatrix();
 
     for (const fn of this.frameHooks) fn(dt);
     this.renderer.render(this.scene, this.camera);

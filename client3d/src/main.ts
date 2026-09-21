@@ -1627,16 +1627,56 @@ async function startApp(username: string, role: string) {
   const noteGeometry = (rows: typeof firstMap.locations) => {
     for (const row of rows) geomSig.set(row.id, footprintSignature(row));
   };
+  /**
+   * TAKE ONE TILE OUT OF THE WORLD AND GIVE ITS GPU RESOURCES BACK — the ONE
+   * teardown, used by the rebuild (a changed scene signature, a moved
+   * footprint) and by the drop (the place left the payload). Both used to do
+   * their own thing: the drop freed the tile's own primitives but reached the
+   * scene's only through a traversal that `unmountScene` had already unhooked,
+   * and the rebuild disposed nothing at all — it walked the old tile for its
+   * CSS2D labels and abandoned the rest (review finding UI-2).
+   *
+   * WHAT IS FREED AND WHAT IS NOT, in two halves that do not overlap:
+   * `unmountScene` frees what the scene MOUNT owns — its plates, walls, extras
+   * and placeholder boxes with their materials and texture clones, its
+   * material clones on placed meshes — and unhooks its groups; the traversal
+   * afterwards frees what `buildTile` itself made and still hangs off the
+   * tile. Two things are left deliberately: everything hanging off a placed
+   * server MODEL (geometries and base materials belong to the loader cache,
+   * see setSceneModelTier — freeing them would poison every later mount of the
+   * same URL) and every TEXTURE down here (the surface library is shared
+   * between tiles; a material's dispose does not touch its maps).
+   */
+  function freeTile(tile: Tile): void {
+    engine.scene.remove(tile.group);
+    // Captured BEFORE the unmount, which clears the ledger: these subtrees are
+    // the loader cache's and are only unhooked, never disposed.
+    const cached = new Set<THREE.Object3D>();
+    for (const rec of tile.placedModels ?? []) if (rec.object) cached.add(rec.object);
+    unmountScene(tile);
+    const free = (o: THREE.Object3D) => {
+      if (cached.has(o)) return;
+      // CSS2D labels live in the DOM — the renderer does not take them down.
+      const label = o as { isCSS2DObject?: boolean; element?: HTMLElement };
+      if (label.isCSS2DObject && label.element) label.element.remove();
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) {
+        mesh.geometry.dispose();
+        for (const m of (Array.isArray(mesh.material) ? mesh.material : [mesh.material])) {
+          m?.dispose();
+        }
+      }
+      for (const child of [...o.children]) free(child);
+    };
+    free(tile.group);
+  }
+
   function rebuildTile(old: Tile, loc: WorldLocation) {
-    engine.scene.remove(old.group);
     // The thresholds go with it, unconditionally: a scene that turned 404
     // (layout deleted) is never mounted again, so nothing else would clear
     // them and they would hang in the air over a procedural tile.
     dropDoorMarks(loc.id);
-    old.group.traverse((o) => {   // CSS2D-Label-Elemente aufräumen
-      const el = (o as { isCSS2DObject?: boolean; element?: HTMLElement });
-      if (el.isCSS2DObject && el.element) el.element.remove();
-    });
+    freeTile(old);
     const tile = buildTile(loc);
     tile.fade = old.fade;
     tile.fadeTarget = old.fadeTarget;
@@ -3127,16 +3167,7 @@ async function startApp(username: string, role: string) {
    * takes one down for good — a rebuild (`rebuildTile`) replaces a tile with a
    * fresh one and must NOT come through here.
    *
-   * WHAT IS FREED AND WHAT IS NOT. `unmountScene` is the scene side's own
-   * teardown (its group, the clip material clones, the room groups and their
-   * labels); what stays behind afterwards is what `buildTile` itself made —
-   * ring, ground plate, procedural shell — and those geometries and materials
-   * belong to this tile alone, so they are disposed. Two things are left
-   * deliberately: everything hanging off a placed server MODEL (geometries and
-   * base materials belong to the loader cache, see setSceneModelTier — freeing
-   * them would poison every later mount of the same URL) and every TEXTURE
-   * (the surface library is shared between tiles; a material's dispose does
-   * not touch its maps).
+   * What it frees, and what it deliberately does not, is `freeTile`'s to say.
    */
   function dropTile(id: string): void {
     const tile = tiles.get(id);
@@ -3155,27 +3186,7 @@ async function startApp(username: string, role: string) {
     locSig.delete(id);
     buildingTierByLoc.delete(id);
     interiorTierByLoc.delete(id);
-    engine.scene.remove(tile.group);
-    // Captured BEFORE the unmount, which clears the ledger: these subtrees are
-    // the loader cache's and are only unhooked, never disposed.
-    const cached = new Set<THREE.Object3D>();
-    for (const rec of tile.placedModels ?? []) if (rec.object) cached.add(rec.object);
-    unmountScene(tile);
-    const free = (o: THREE.Object3D) => {
-      if (cached.has(o)) return;
-      // CSS2D labels live in the DOM — the renderer does not take them down.
-      const label = o as { isCSS2DObject?: boolean; element?: HTMLElement };
-      if (label.isCSS2DObject && label.element) label.element.remove();
-      const mesh = o as THREE.Mesh;
-      if (mesh.isMesh) {
-        mesh.geometry.dispose();
-        for (const m of (Array.isArray(mesh.material) ? mesh.material : [mesh.material])) {
-          m?.dispose();
-        }
-      }
-      for (const child of [...o.children]) free(child);
-    };
-    free(tile.group);
+    freeTile(tile);
   }
 
   /**
