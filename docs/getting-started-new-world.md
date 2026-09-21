@@ -80,7 +80,10 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
    **New character** button above the list:
 
    1. Enter a **Name** (e.g. `Rowan Kell`) — the name is also the directory under
-      `worlds/<world>/characters/`, so it has to be unique.
+      `worlds/<world>/characters/`, so it has to be unique. A new name may use letters of any
+      script, digits, single spaces, `-`, `'`, `.` and `_` — not leading — (up to 60 characters, at least one letter
+      or digit, no leading or trailing space or period) — the same rule applies to an imported
+      or generated character. Characters that already exist are never renamed by it.
    2. Pick a **Template** — e.g. **Human (Roleplay)** for a typical chat partner. This repo ships
       three more: **Human Standard** (pure NPC), **Animal**, and **Temporary NPC** (for the
       short-lived NPCs the world spawns by itself). `Character Base` is the shared base every one

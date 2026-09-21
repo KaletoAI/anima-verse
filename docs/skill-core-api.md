@@ -174,7 +174,8 @@ Position schreiben, um jemanden woanders hin zu bringen.
 | Funktion | Semantik |
 |---|---|
 | `get_character_profile(character_name) -> Dict` | Profil inkl. Runtime-State (`character_state`) und Meta-Keys |
-| `save_character_profile(character_name, profile, create_new=False) -> bool` | Schreibt den GANZEN Blob. **Wirft nie** — `False` heißt: nichts gespeichert (reservierter/unbekannter Name oder fehlgeschlagener Write). Rückgabe prüfen. Bei Neuanlage `create_new=True` Pflicht. Nur unter `keyed_lock("character_profile", name)` (siehe „Sperren") |
+| `save_character_profile(character_name, profile, create_new=False) -> bool` | Schreibt den GANZEN Blob. **Wirft nie** — `False` heißt: nichts gespeichert (reservierter/unbekannter Name oder fehlgeschlagener Write). Rückgabe prüfen. Bei Neuanlage `create_new=True` Pflicht — der Name muss dann die Namensregel erfüllen, sonst `False`. Nur unter `keyed_lock("character_profile", name)` (siehe „Sperren") |
+| `app.core.character_name.validate_character_name(name) -> str` | Die EINE Namensregel für NEUE Charaktere: Buchstaben jeder Schrift, Ziffern, einfache Leerzeichen, `-`, `'`, `.`, `_` (nicht am Anfang), 1–60 Zeichen. Gibt den NFC-normalisierten Namen zurück oder wirft `CharacterNameError` (Feld `code`). Gilt nur beim Anlegen/Import — bestehende Namen werden nie geprüft, nie umbenannt |
 | `save_character_current_location(character_name='', location='', …)` | ZENTRALE Bewegung — löst Entry-Room, Compliance, Party-Drag, Flag-Location-Resets, Discovery aus. Nie umgehen |
 | `get_character_current_location(character_name='', profile=None) -> str` / `get_character_current_room(character_name, profile=None) -> str` | Aufenthaltsort/-raum. Bei laufender Reise ist das die NÄCHSTE Position, nicht das Reiseziel; unterwegs im freien Gelände ist `current_location` leer |
 | `is_character_sleeping(character_name, profile=None) -> bool` | Schläft der Charakter? (nicht erreichbar) |

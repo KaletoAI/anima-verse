@@ -1566,6 +1566,26 @@ def _apply_character_internal(char_data: Dict[str, Any],
     except Exception:
         pass
 
+    # THE name rule (app/core/character_name.py) — only for a NEW character.
+    # An existing one is never re-validated, so a world built before the rule
+    # keeps applying. The 400 travels through the same channel every other
+    # apply error uses, so /apply-character and /apply-json both surface it and
+    # the World Dev tab shows it in its error toast.
+    if _is_new:
+        from app.core.character_name import (CharacterNameError,
+                                             localized_message,
+                                             validate_character_name)
+        try:
+            char_name = validate_character_name(char_name)
+            char_data["character_name"] = char_name
+        except CharacterNameError as err:
+            from app.core.i18n import t
+            from app.models.account import get_language_settings
+            _lang = get_language_settings().get("system_language") or "en"
+            raise HTTPException(status_code=400, detail=t(
+                "Cannot create the character: {reason}", _lang
+            ).format(reason=localized_message(err, _lang)))
+
     profile_fields, config_fields = _get_generable_fields(template)
 
     from app.models.character_template import get_template

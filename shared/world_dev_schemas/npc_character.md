@@ -27,6 +27,9 @@ Fields marked `[config]` are stored in the config; all others go into the profil
 - `character_name` — a plain in-world name, 1-2 words. It MUST NOT collide with
   any existing character (list at the end of this document). Prefer names that
   read as a person, not as a role ("Maren Kolb", not "The Barkeeper").
+  Allowed characters: letters of any script, digits, single spaces, `-`, `'`,
+  `.` and `_` (not as the first character) — nothing else, no leading or
+  trailing space or period, at most 60 characters.
 - `character_personality` — 2-3 sentences of plain prose, in the character's
   language (`language`). No name as the sentence opener: not "Maren is gruff"
   but "Gruff, economical with words, sizes up every newcomer...". This is a

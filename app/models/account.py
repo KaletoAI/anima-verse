@@ -87,12 +87,13 @@ def save_user_profile(profile: Dict[str, Any]):
         get_logger("account").error("save_user_profile DB-Fehler: %s", e)
 
 
-# Login-Namen die NIE als Character/Speaker durchsickern duerfen — sie
-# tauchen sonst in chat_messages.partner, relationships.from_char und in
-# Prompt-Templates als "Was admin gesagt hat..." auf. Reserviert spiegelt
-# app.models.character._RESERVED_NAMES wider, aber unabhaengig deklariert
-# damit keine Import-Zyklen entstehen.
-_RESERVED_LOGIN_NAMES = frozenset({"user", "admin", "system", "default", "player", ""})
+# Login names that must NEVER leak through as a character/speaker — they would
+# otherwise show up in chat_messages.partner, relationships.from_char and in
+# prompt templates as "what admin said...". ONE source of truth: the same set
+# is the login half of app.core.character_name.RESERVED_NAMES, which is what a
+# new character may not be called (that module imports nothing from app, so
+# there is no cycle to declare a second copy for any more).
+from app.core.character_name import RESERVED_LOGIN_NAMES as _RESERVED_LOGIN_NAMES
 
 
 def get_player_identity(default: str = "user") -> str:

@@ -189,6 +189,17 @@ def validate_npc_fields(data: Dict[str, Any], template: str = "") -> List[str]:
     name = str(data.get("character_name") or "").strip()
     if not name:
         gaps.append("character_name — missing, every NPC needs an in-world name")
+    else:
+        # THE name rule (app/core/character_name.py). A gap, not a rewrite: the
+        # repair turn asks the LLM for a different name, and a draft that is
+        # still invalid afterwards fails the spawn. Nothing here ever sanitizes
+        # a proposed name — names are never altered automatically.
+        from app.core.character_name import character_name_problem
+        _name_err = character_name_problem(name)
+        if _name_err is not None:
+            logger.warning("NPC draft name %r rejected (%s)", name, _name_err.code)
+            gaps.append(f"character_name — {_name_err.message} Pick a plain "
+                        f"in-world name of letters, digits, spaces, - ' and .")
 
     tmpl = get_template(npc_template_name(template)) or {}
     for section in tmpl.get("sections", []):

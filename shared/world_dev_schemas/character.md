@@ -16,6 +16,8 @@ The following fields can be set. Fields marked `[config]` are stored in the conf
 
 {generable_fields}
 
+`character_name` may only use letters of any script, digits, single spaces, `-`, `'`, `.` and `_` (not as the first character) — nothing else, no leading or trailing space or period, at most 60 characters.
+
 ## Soul-field structure (REQUIRED)
 
 Soul fields are stored as Markdown files. They MUST contain the headings below exactly — fill content UNDER the headings, not in place of them. Empty sections are better than deleted headings:

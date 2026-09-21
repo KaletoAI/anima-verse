@@ -2000,26 +2000,32 @@ def apply_template_switch(character_name: str, data: Dict[str, Any]) -> Dict[str
 
 async def create_character_core(request) -> Dict[str, Any]:
     """Creates a new character with an empty profile and an assigned template."""
-    from app.models.account import set_current_character
+    from app.models.account import get_language_settings, set_current_character
     from app.models.character import (list_available_characters,
                                       save_character_profile, get_character_config,
                                       save_character_config, save_character_skill_config)
+    from app.core.character_name import (CharacterNameError, localized_message,
+                                         validate_character_name)
+    from app.core.i18n import t
     data = await request.json()
-    character_name = data.get("character_name", "").strip()
     template_name = data.get("template", "human-default")
-    if not character_name:
-        raise HTTPException(status_code=400, detail="character_name fehlt")
-    # Catch reserved / problematic names -- e.g. "undefined" or "null" appear
-    # when some JS code fails to initialize a value and then string-converts
-    # it. That must not create a character folder.
-    if character_name.lower() in ("undefined", "null", "none", "nan"):
+    lang = get_language_settings().get("system_language") or "en"
+    # THE name rule (app/core/character_name.py) — one rule for every creator.
+    # It also catches the JS nulls ("undefined", "null") that appear when some
+    # frontend path string-converts an uninitialized value; those must never
+    # create a character folder.
+    try:
+        character_name = validate_character_name(data.get("character_name", ""))
+    except CharacterNameError as err:
         raise HTTPException(status_code=400,
-            detail=f"'{character_name}' ist als Character-Name nicht erlaubt")
+                            detail=localized_message(err, lang))
 
     # Check if character already exists
     existing = list_available_characters()
     if character_name in existing:
-        raise HTTPException(status_code=409, detail=f"Character '{character_name}' existiert bereits")
+        raise HTTPException(status_code=409, detail=t(
+            "A character named \"{name}\" already exists.", lang
+        ).format(name=character_name))
 
     # Create character with initial profile + template reference
     initial_profile = {
@@ -2042,7 +2048,7 @@ async def create_character_core(request) -> Dict[str, Any]:
             cfg["known_locations"] = []
             save_character_config(character_name, cfg)
     except Exception as _e:
-        logger.warning("create_character: known_locations init fehlgeschlagen: %s", _e)
+        logger.warning("create_character: known_locations init failed: %s", _e)
 
     # Write skill defaults -- without these files the ALWAYS_LOAD filter logic
     # (skill_manager._get_agent_skills) kicks in and turns all skills off by
@@ -2068,8 +2074,8 @@ async def create_character_core(request) -> Dict[str, Any]:
                 update_user(creator["id"], allowed_characters=allowed)
             except Exception as e:
                 logger.warning(
-                    "create_character: konnte allowed_characters fuer "
-                    "user=%s nicht aktualisieren: %s",
+                    "create_character: could not update allowed_characters "
+                    "for user=%s: %s",
                     creator.get("username"), e,
                 )
 
@@ -2080,7 +2086,8 @@ async def create_character_core(request) -> Dict[str, Any]:
         "status": "success",
         "character": character_name,
         "template": template_name,
-        "message": f"Character '{character_name}' erstellt"
+        "message": t("Character \"{name}\" created.", lang).format(
+            name=character_name),
     }
 
 

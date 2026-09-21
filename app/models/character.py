@@ -15,6 +15,9 @@ import math
 import uuid
 
 from app.core.log import get_logger
+from app.core.character_name import (JS_NULL_NAMES, LEGACY_PLACEHOLDER_NAME,
+                                     RESERVED_NAMES as _RESERVED_NAMES,
+                                     character_name_problem)
 from app.core.db import get_connection, transaction
 
 logger = get_logger("character_model")
@@ -66,26 +69,29 @@ def get_user_characters_dir() -> Path:
 
 
 def get_character_dir(character_name: str, *, create: bool = False) -> Path:
-    """Gibt das Verzeichnis fuer einen spezifischen Character zurueck.
+    """Returns the directory of one specific character.
 
-    create: wenn True, wird das Verzeichnis bei Bedarf angelegt. Default
-    False — Lese-Pfade (FE-Polls fuer current-location, Bilder, Soul-MDs)
-    sollen kein Verzeichnis erzeugen wenn der Character nicht existiert.
-    Sonst rutscht z.B. ein verwaister localStorage-Char (alte Welt) als
-    leeres Verzeichnis in jede neue Welt rein.
+    create: when True the directory is created on demand. Default False —
+    read paths (frontend polls for current-location, images, soul MDs) must
+    not create a directory for a character that does not exist. Otherwise an
+    orphaned localStorage character (from an older world) slips into every new
+    world as an empty directory.
 
-    Aufrufer die wirklich anlegen wollen (Character-Erstellung,
-    save_character_*-Pfade) muessen create=True explizit setzen.
+    Callers that really want to create (character creation, the
+    save_character_* paths) have to pass create=True explicitly.
+
+    This is NOT the name rule — an existing character is never re-validated
+    here. The rule for NEW names lives in ``app.core.character_name``; this
+    guard only keeps two never-real names out of the filesystem.
     """
-    if not character_name or character_name == "KI":
-        raise ValueError(f"Ungueltiger Character-Name: '{character_name}'")
-    # JS-stringified Null-Werte abfangen — entstehen wenn ein FE-Pfad
-    # ``${value}`` interpoliert obwohl value undefined/null/NaN ist.
-    # Sonst legt ein get_character_skills_dir("undefined") still ein
-    # Verzeichnis an, das danach in der Roster/Sidebar als Geister-Character
-    # auftaucht.
-    if character_name.lower() in ("undefined", "null", "none", "nan"):
-        raise ValueError(f"Ungueltiger Character-Name (JS-Null): '{character_name}'")
+    if not character_name or character_name == LEGACY_PLACEHOLDER_NAME:
+        raise ValueError(f"Invalid character name: '{character_name}'")
+    # Catch JS-stringified null values — they appear when a frontend path
+    # interpolates ``${value}`` although value is undefined/null/NaN.
+    # Otherwise a get_character_skills_dir("undefined") silently creates a
+    # directory that then shows up in the roster/sidebar as a ghost character.
+    if character_name.lower() in JS_NULL_NAMES:
+        raise ValueError(f"Invalid character name (JS null): '{character_name}'")
     character_dir = get_user_characters_dir() / character_name
     if create:
         character_dir.mkdir(parents=True, exist_ok=True)
@@ -479,9 +485,6 @@ def get_character_language_instruction(character_name: str) -> str:
     return get_user_language_instruction()
 
 
-_RESERVED_NAMES = {"user", "admin", "system", "default", "player", "",
-                   "undefined", "null", "none", "nan"}
-
 #: ``characters.status`` of a recycled temporary NPC — kept as a profile,
 #: standing nowhere (plan-npc-auto-spawn.md § 3). Everything else runs with an
 #: empty status; there is deliberately no third value.
@@ -506,22 +509,24 @@ def _is_real_character(name: str) -> bool:
 
 def save_character_profile(character_name: str, profile: Dict[str, Any],
                            create_new: bool = False) -> bool:
-    """Speichert das Profil eines Characters in der DB.
+    """Stores a character's profile in the DB.
 
-    Stellt sicher dass die Soul-MD-Dateien gemaess Template existieren
-    (legt fehlende aus shared/templates/soul/ an).
+    Makes sure the soul MD files required by the template exist (missing ones
+    are created from shared/templates/soul/).
 
-    ``create_new``: nur die explizite Charakter-Erstellung (POST /characters/create)
-    darf neue Charaktere anlegen. Alle anderen Callsites sind Updates fuer
-    BESTEHENDE Charaktere — wenn der Name unbekannt ist, wird das als Bug
-    behandelt (z.B. ein LLM hat "Lirien" statt "Lirien Edwinsdottir"
-    durchgereicht) und das Schreiben verworfen.
+    ``create_new``: only the explicit character creation (POST
+    /characters/create) may create new characters. Every other call site is an
+    update of an EXISTING character — an unknown name there is treated as a bug
+    (e.g. an LLM handed through "Marren" instead of "Marren Edwinsdottir") and
+    the write is dropped. With ``create_new`` the name also has to satisfy the
+    shared name rule (``app.core.character_name``).
 
     Returns True when the row was committed, False when NOTHING was stored —
-    a reserved or unknown name, or a failed write (DATA-13). The failure used
-    to be a log line the caller could not see: ``POST /characters/{name}/
-    profile`` answered ``{"status": "success"}``, the UI showed the new value
-    (it is in the returned dict) and it was gone after the next reload.
+    a reserved, invalid or unknown name, or a failed write (DATA-13). The
+    failure used to be a log line the caller could not see: ``POST
+    /characters/{name}/profile`` answered ``{"status": "success"}``, the UI
+    showed the new value (it is in the returned dict) and it was gone after
+    the next reload.
     The function does NOT raise: of its ~230 call sites almost none sits in a
     try that expects an exception, and a good many sit in a broad
     ``except Exception: logger.debug(...)`` — raising would make the failure
@@ -529,9 +534,23 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     and the boolean lets a caller that reports success check.
     """
     if character_name.lower() in _RESERVED_NAMES:
-        logger.warning("save_character_profile: reservierter Name '%s' uebersprungen",
+        logger.warning("save_character_profile: reserved name '%s' skipped",
                        character_name)
         return False
+
+    # THE LAST LINE OF DEFENCE for the name rule (app/core/character_name.py).
+    # Only on creation: an existing character is never re-validated, so a name
+    # from an older world keeps loading and saving. Every creator checks the
+    # name itself first — that is where the user gets a real message; this one
+    # exists so a creator nobody thought of cannot slip a name past the rule.
+    # Consistent with the never-raise contract: False plus a WARNING line.
+    if create_new:
+        _name_problem = character_name_problem(character_name)
+        if _name_problem is not None:
+            logger.warning(
+                "save_character_profile: '%s' is not a valid character name "
+                "(%s) — nothing created", character_name, _name_problem.code)
+            return False
 
     # Existenz-Check — wenn nicht create_new, muss Character bereits existieren
     if not create_new:

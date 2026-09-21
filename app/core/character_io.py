@@ -248,11 +248,16 @@ def _resolve_target_name_v2(zf: zipfile.ZipFile) -> Tuple[str, Dict[str, Any]]:
             f"unsupported manifest version: {manifest.get('version')!r} "
             f"(expected {MANIFEST_VERSION})"
         )
-    name = (manifest.get("character_name") or "").strip()
-    if not name:
-        raise ValueError("character_name missing in manifest")
-    if "/" in name or ".." in name or name.startswith("."):
-        raise ValueError(f"invalid character_name in manifest: {name!r}")
+    # THE name rule (app/core/character_name.py) — an import creates the
+    # character, so it goes through the same gate as every other creator. The
+    # ZIP names the directory and the DB rows, so a name with a path separator
+    # or a "." edge is not a cosmetic problem here.
+    from app.core.character_name import (CharacterNameError,
+                                         validate_character_name)
+    try:
+        name = validate_character_name(manifest.get("character_name") or "")
+    except CharacterNameError as err:
+        raise ValueError(f"invalid character_name in manifest: {err.message}")
     return name, manifest
 
 

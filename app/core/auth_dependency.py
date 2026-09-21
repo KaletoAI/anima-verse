@@ -18,6 +18,7 @@ from typing import Optional, Dict, Any
 from fastapi import Request, HTTPException, status
 
 from app.core import sessions, users
+from app.core.character_name import RESERVED_ROUTE_SEGMENTS
 from app.core.log import get_logger
 
 logger = get_logger("auth_dep")
@@ -207,11 +208,10 @@ _PUBLIC_CHARACTER_SEGMENTS = {
 
 # First segment after /characters/ that is a COLLECTION endpoint, not a
 # character name (/characters/list, /characters/at-location, ...).
-_RESERVED_CHARACTER_NAMES = {
-    "list", "chatbots", "at-location", "animate", "available-models",
-    "outfit-rules", "outfit-lora-options", "skills", "create", "import",
-    "graph", "migrate", "backfill", "",
-}
+# ONE source of truth: the same set makes those names unavailable to a NEW
+# character (app/core/character_name.py), so no character can ever shadow one
+# of these URLs.
+_RESERVED_CHARACTER_NAMES = RESERVED_ROUTE_SEGMENTS
 
 
 def _path_parts(path: str):

@@ -29,6 +29,10 @@ export function NewCharacterDialog({ existing, onClose, onCreated }: Props) {
   const [name, setName] = useState('')
   const [template, setTemplate] = useState('')
   const [busy, setBusy] = useState(false)
+  // The server's rejection, verbatim. The name rule lives in
+  // app/core/character_name.py and nowhere else; this dialog only shows what
+  // it says instead of re-implementing it in TypeScript.
+  const [error, setError] = useState('')
 
   useEffect(() => {
     apiGet<{ templates?: TemplateRef[] }>('/templates/list?template_type=character')
@@ -47,17 +51,18 @@ export function NewCharacterDialog({ existing, onClose, onCreated }: Props) {
     () => existing.some((n) => n.toLowerCase() === trimmed.toLowerCase()),
     [existing, trimmed],
   )
-  const reserved = ['undefined', 'null', 'none', 'nan'].includes(trimmed.toLowerCase())
-  const canSubmit = !!trimmed && !!template && !duplicate && !reserved && !busy
+  const canSubmit = !!trimmed && !!template && !duplicate && !busy
 
   const submit = async () => {
     if (!canSubmit) return
     setBusy(true)
+    setError('')
     try {
       await apiPost('/characters/create', { character_name: trimmed, template })
       toast(t('Character created.'), 'success')
       onCreated(trimmed)
     } catch (e) {
+      setError((e as Error).message)
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       setBusy(false)
     }
@@ -84,17 +89,23 @@ export function NewCharacterDialog({ existing, onClose, onCreated }: Props) {
                 <span className="ga-img-nomatch">
                   {t('A character with this name already exists.')}
                 </span>
-              ) : reserved ? (
-                <span className="ga-img-nomatch">{t('This name is not allowed.')}</span>
-              ) : undefined
+              ) : error ? (
+                <span className="ga-img-nomatch">{error}</span>
+              ) : (
+                t("Letters, digits, spaces, - ' . _ — up to 60 characters")
+              )
             }
           >
             <input
               className="ga-input"
               autoFocus
               value={name}
+              maxLength={60}
               placeholder={t('Character name')}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value)
+                setError('')
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') submit()
               }}

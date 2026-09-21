@@ -134,6 +134,9 @@ stops acting autonomously).
   outfits, mood, height, language, memory budgets, per-character LLM overrides. The repo ships
   `human-roleplay`, `human-default`, `animal-default` and `npc-temporary` under
   `shared/templates/character/`.
+- **One name rule for every creator:** the create form, the character ZIP import, World Dev and the
+  temporary-NPC spawn all validate a NEW name the same way — letters of any script, digits, single
+  spaces, `-`, `'`, `.` and `_` (not leading), up to 60 characters. Existing characters are never re-checked or renamed.
 - **Avatar takeover:** step into any character whose template is `playable_avatar` — their location,
   mood and outfit follow your decisions and they stop acting on their own.
 - **Structured movement only:** a character changes location through the movement skills
