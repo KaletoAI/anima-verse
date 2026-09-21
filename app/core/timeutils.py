@@ -144,6 +144,12 @@ def to_world_tz(iso_or_dt) -> datetime:
 _KEY_ANCHOR_REAL = "game_time.anchor_real"
 _KEY_ANCHOR_GAME = "game_time.anchor_game"
 _KEY_FACTOR = "game_time.factor"
+# Which freeze state the stored anchors were written FOR ("1"/"0"). The live
+# flag (``is_world_frozen()``) alone cannot tell ``on_freeze_change`` whether a
+# freeze/unfreeze actually changed anything, because it is persisted BEFORE the
+# hook runs — so a repeated freeze would re-anchor a second time and move the
+# game clock. This marker is the anchors' own record of their state.
+_KEY_ANCHORS_FROZEN = "game_time.anchors_frozen"
 
 # In-process cache of the anchors (single-process server). Invalidated by the
 # setters below and by on_freeze_change; loaded lazily from world_kv.
@@ -159,6 +165,10 @@ def _load_game_anchors() -> Dict[str, Any]:
     once, so seeing a non-canonical value here means the migration has not
     run (or failed). We log that loudly and fall back to the epoch with
     factor 1.0 WITHOUT caching, so the next call retries.
+
+    ``frozen`` is the LIVE world flag. ``anchors_frozen`` is what the stored
+    anchors were written for (``None`` = never recorded, i.e. anchors from
+    before this marker existed).
     """
     global _game_cache
     if _game_cache.get("loaded"):
@@ -167,11 +177,15 @@ def _load_game_anchors() -> Dict[str, Any]:
     anchor_game = EPOCH
     factor = 1.0
     frozen = False
+    anchors_frozen = None
     try:
         from app.models.world import get_world_setting, is_world_frozen
         raw_real = get_world_setting(_KEY_ANCHOR_REAL, "")
         raw_game = get_world_setting(_KEY_ANCHOR_GAME, "")
         raw_factor = get_world_setting(_KEY_FACTOR, "")
+        raw_anchors_frozen = get_world_setting(_KEY_ANCHORS_FROZEN, "")
+        if raw_anchors_frozen:
+            anchors_frozen = raw_anchors_frozen == "1"
         if raw_factor:
             factor = max(0.0, float(raw_factor))
         frozen = is_world_frozen()
@@ -182,7 +196,8 @@ def _load_game_anchors() -> Dict[str, Any]:
                     "— the boot migration has not converted it; falling back "
                     "to the epoch", raw_game)
                 return {"anchor_real": utc_now(), "anchor_game": EPOCH,
-                        "factor": 1.0, "frozen": frozen, "loaded": False}
+                        "factor": 1.0, "frozen": frozen,
+                        "anchors_frozen": anchors_frozen, "loaded": False}
             anchor_game = GameTime.parse(raw_game)
             # A missing real anchor means "the world time starts counting
             # now" — never silently discard the game anchor over it.
@@ -192,18 +207,22 @@ def _load_game_anchors() -> Dict[str, Any]:
         # DB not ready (early boot) — start at the epoch, do not cache so the
         # next call retries.
         return {"anchor_real": anchor_real, "anchor_game": anchor_game,
-                "factor": factor, "frozen": frozen, "loaded": False}
+                "factor": factor, "frozen": frozen,
+                "anchors_frozen": anchors_frozen, "loaded": False}
     _game_cache = {"anchor_real": anchor_real, "anchor_game": anchor_game,
-                   "factor": factor, "frozen": frozen, "loaded": True}
+                   "factor": factor, "frozen": frozen,
+                   "anchors_frozen": anchors_frozen, "loaded": True}
     return _game_cache
 
 
 def _persist_game_anchors(anchor_real: datetime, anchor_game: GameTime,
-                          factor: float) -> None:
+                          factor: float, frozen: bool) -> None:
+    """Write the anchors plus the freeze state they belong to."""
     from app.models.world import set_world_setting
     set_world_setting(_KEY_ANCHOR_REAL, anchor_real.isoformat())
     set_world_setting(_KEY_ANCHOR_GAME, anchor_game.canonical())
     set_world_setting(_KEY_FACTOR, repr(float(factor)))
+    set_world_setting(_KEY_ANCHORS_FROZEN, "1" if frozen else "0")
     _game_cache.clear()
 
 
@@ -242,7 +261,7 @@ def set_game_time(when: GameTime) -> None:
             f"set_game_time expects a GameTime, got {type(when).__name__} "
             f"({when!r}) — game time is not a datetime/ISO string")
     a = _load_game_anchors()
-    _persist_game_anchors(utc_now(), when, a["factor"])
+    _persist_game_anchors(utc_now(), when, a["factor"], bool(a["frozen"]))
 
 
 def set_game_factor(factor: float) -> None:
@@ -250,7 +269,8 @@ def set_game_factor(factor: float) -> None:
     the clock is continuous (no jump)."""
     factor = max(0.0, float(factor))
     current = game_time()
-    _persist_game_anchors(utc_now(), current, factor)
+    a = _load_game_anchors()
+    _persist_game_anchors(utc_now(), current, factor, bool(a["frozen"]))
 
 
 def on_freeze_change(frozen: bool) -> None:
@@ -258,8 +278,19 @@ def on_freeze_change(frozen: bool) -> None:
 
     Called by ``set_world_frozen`` AFTER the flag is persisted. Freeze
     re-anchors at the current game time (so ``game_time()`` returns the frozen
-    anchor); unfreeze re-anchors the real side so no frozen span is counted."""
+    anchor); unfreeze re-anchors the real side so no frozen span is counted.
+
+    Idempotent: re-anchoring twice for the SAME state moves the game clock
+    (a second freeze would add the frozen real span, a second unfreeze would
+    subtract the span since the unfreeze). Two admin tabs, a browser back or a
+    repeated POST are enough to trigger that, so a call that does not change
+    the state is a no-op. The live flag cannot answer "did it change?" — it is
+    already the new value here — hence the persisted ``anchors_frozen``
+    marker. ``None`` means the marker predates this guard: then we re-anchor
+    as before (and the marker exists from that moment on)."""
     a = _load_game_anchors()
+    if a["anchors_frozen"] is not None and bool(a["anchors_frozen"]) == bool(frozen):
+        return
     if frozen:
         # Compute the game time BEFORE the flag flip took effect in our cache:
         # anchors are still the running ones here.
@@ -268,9 +299,9 @@ def on_freeze_change(frozen: bool) -> None:
         anchor_game: GameTime = a["anchor_game"]
         frozen_at = (anchor_game + GameDuration(seconds) if seconds >= 0
                      else anchor_game.minus_clamped(GameDuration(-seconds)))
-        _persist_game_anchors(utc_now(), frozen_at, a["factor"])
+        _persist_game_anchors(utc_now(), frozen_at, a["factor"], True)
     else:
-        _persist_game_anchors(utc_now(), a["anchor_game"], a["factor"])
+        _persist_game_anchors(utc_now(), a["anchor_game"], a["factor"], False)
 
 
 def get_game_clock_info(lang: str = "en") -> Dict[str, Any]:

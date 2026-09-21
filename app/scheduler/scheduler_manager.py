@@ -1350,3 +1350,34 @@ class SchedulerManager:
         """Shuts the scheduler down."""
         logger.info("Shutting the scheduler down...")
         self.scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Singleton accessor — the ONE home of the live instance.
+#
+# The server lifespan creates the manager and hands it in via
+# ``set_scheduler_manager``; routes and models read it back here. It used to
+# live in ``app/routes/scheduler.py``, which is why
+# ``app/models/intents.py`` imported it from this module and silently got an
+# ImportError — no "at_time" intent was ever scheduled (review 2026-09-20,
+# KOORD-1).
+# ---------------------------------------------------------------------------
+
+_scheduler_manager: Optional[SchedulerManager] = None
+
+
+def set_scheduler_manager(manager: SchedulerManager) -> None:
+    """Registers the instance the whole app shares (called by the lifespan)."""
+    global _scheduler_manager
+    _scheduler_manager = manager
+
+
+def get_scheduler_manager() -> SchedulerManager:
+    """Returns the shared SchedulerManager instance."""
+    global _scheduler_manager
+    if _scheduler_manager is None:
+        # Fallback: build our own (should not happen — the lifespan registers
+        # one before any route or model can ask for it).
+        logger.warning("No SchedulerManager registered — creating one")
+        _scheduler_manager = SchedulerManager()
+    return _scheduler_manager

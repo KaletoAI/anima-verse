@@ -39,10 +39,16 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 #   app/      — Backend
 #   static/   — gebaute Frontend-Assets (game_admin/play SPA, committed)
 #   shared/   — LLM-Prompt-Templates, Character-Templates, Sprachen, Schemas (PFLICHT)
+#   plugins/  — Skill-Pakete (PFLICHT): app/plugins/loader.py erwartet /app/plugins.
+#               Ohne sie bootet der Server, aber KEIN Character hat Skills —
+#               keine Bewegung, kein Schlafen, keine Party (Review 2026-09-20, DS-2).
+#               Die privaten Pack-Symlinks + plugins/installed/ sind in der
+#               Root-.dockerignore ausgenommen.
 #   worlds/   — Welten inkl. gebackener Demo-Welt (worlds/demo/world.db)
 COPY app/ ./app/
 COPY static/ ./static/
 COPY shared/ ./shared/
+COPY plugins/ ./plugins/
 COPY worlds/ ./worlds/
 COPY start.sh fetch_models.sh ./
 COPY docker/docker-entrypoint.sh ./docker-entrypoint.sh

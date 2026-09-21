@@ -16,6 +16,7 @@ Sub-Tasks die laufen pro Tick (mit eigener Sub-Frequenz):
     - random_events_generate    — alle 3600s
     - random_events_escalate    — alle 300s
     - random_events_resolve     — alle 300s
+    - event_expiry              — alle 60s (GAME-Stunden-TTL der Events)
     - relationship_decay        — alle 24h (Handler hat eigenen Cooldown)
 
 Tick-Intervall ist im Game Admin → Settings → Server konfigurierbar.
@@ -262,11 +263,25 @@ def _sub_random_events_resolve():
         logger.debug("random_events_resolve sub error: %s", e)
 
 
+def _sub_event_expiry():
+    """Removes events whose GAME-hour TTL has run out (and their block rules).
+
+    The expiry used to happen inside ``list_events()`` — a read path that
+    wrote, and that deleted events another thread had just created
+    (review 2026-09-20, DATA-2). It belongs in the tick.
+    """
+    try:
+        from app.models.events import expire_events
+        expire_events()
+    except Exception as e:
+        logger.debug("event_expiry sub error: %s", e)
+
+
 def _sub_relationship_decay():
     try:
         from app.core.background_queue import get_background_queue
         get_background_queue().submit(
-            "relationship_decay", {"user_id": ""}, deduplicate=True)
+            "relationship_decay", {}, deduplicate=True)
     except Exception as e:
         logger.debug("relationship_decay sub error: %s", e)
 
@@ -441,6 +456,10 @@ _SUB_TASKS: List[tuple] = [
     (_sub_random_events_generate,    60,                    "random_events_generate"),
     (_sub_random_events_escalate,    300,                   "random_events_escalate"),
     (_sub_random_events_resolve,     300,                   "random_events_resolve"),
+    # 60s — an event's TTL counts GAME hours, so with a high game factor an
+    # event can expire within a minute of real time; the block rules coupled
+    # to a danger event are released with it.
+    (_sub_event_expiry,              60,                    "event_expiry"),
     (_sub_relationship_decay,        24 * 3600,             "relationship_decay"),
     (_sub_variant_prune,             3600,                  "variant_prune"),
     (_sub_day_consolidation,         600,                   "day_consolidation"),

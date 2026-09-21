@@ -39,5 +39,14 @@ worlds/*/*.db-shm
 worlds/*/*.db-wal
 worlds/*/secrets.json
 
+# Private Skill-Pakete: Symlinks in das separate anima-verse-packs-Repo, das
+# AUSSERHALB des Build-Contexts liegt — Docker folgt solchen Links nicht und
+# legte sie als tote Links ins Image. Sie gehoeren ohnehin nicht in ein Image
+# dieses SFW-Repos. plugins/installed/ ist gitignorierter Marketplace-State.
+plugins/attraction
+plugins/intimacy
+plugins/nsfw_anatomy
+plugins/installed
+
 # Docker-eigene Hilfsdateien
 docker/storage

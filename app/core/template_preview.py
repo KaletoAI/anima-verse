@@ -388,10 +388,16 @@ def _drive_consolidation_history_summary(agent: str, avatar: str) -> PreviewResu
     if not history:
         return {"ok": False, "output": "",
                 "note": "No chat history between selected avatar and agent."}
-    from app.utils.history_manager import create_summary
-    task, sys, user = _capture_render(lambda: create_summary(history[-30:], agent))
+    # ``create_summary`` is gone; ``_create_history_summary`` is what renders
+    # the consolidation_history_summary template today (review 2026-09-20,
+    # KOORD-1).
+    from app.utils.history_manager import _create_history_summary
+    task, sys, user = _capture_render(
+        lambda: _create_history_summary(history[-30:], character_name=agent,
+                                        partner_name=avatar))
     return {"ok": True, "output": _format(task, sys, user),
-            "note": "Production: history_manager.create_summary with last 30 msgs."}
+            "note": "Production: history_manager._create_history_summary "
+                    "with the last 30 msgs."}
 
 
 def _drive_consolidation_daily_diary(agent: str, avatar: str) -> PreviewResult:
@@ -607,15 +613,18 @@ def _drive_image_prompt_improver(agent: str, avatar: str) -> PreviewResult:
 
 
 def _drive_image_prompt_enhance(agent: str, avatar: str) -> PreviewResult:
-    from app.core.prompt_adapters import _llm_enhance
+    # ``_llm_enhance`` is gone; ``maybe_enhance_via_llm`` is the enhancer that
+    # renders this template today (review 2026-09-20, KOORD-1).
+    from app.core.prompt_adapters import maybe_enhance_via_llm
     task, sys, user = _capture_render(
-        lambda: _llm_enhance(
+        lambda: maybe_enhance_via_llm(
             f"{agent}, casual outfit, in a kitchen",
-            None,  # PromptVariables — unused inside _llm_enhance for the prompt build
+            None,  # PromptVariables — unused for the prompt build
             target_model="flux",
             prompt_instruction="cinematic, high contrast, 35mm film"))
     return {"ok": True, "output": _format(task, sys, user),
-            "note": "Production: prompt_adapters._llm_enhance with sample template prompt."}
+            "note": "Production: prompt_adapters.maybe_enhance_via_llm with a "
+                    "sample template prompt."}
 
 
 def _drive_animation_prompt(agent: str, avatar: str) -> PreviewResult:

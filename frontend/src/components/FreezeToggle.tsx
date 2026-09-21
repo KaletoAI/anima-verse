@@ -21,6 +21,16 @@ export function FreezeToggle() {
     if (frozen === null || busy) return
     setBusy(true)
     try {
+      // The button may be stale (a second admin tab, a browser back): act on
+      // the server's CURRENT state. If it no longer matches what the label
+      // promised, only correct the label — the click meant the other action.
+      const live = await apiGet<{ frozen?: boolean }>('/world/freeze-status')
+      if (!!live.frozen !== frozen) {
+        setFrozen(!!live.frozen)
+        return
+      }
+      // Target state, never a blind toggle: /world/freeze and /world/unfreeze
+      // set the flag absolutely, so a repeated click cannot flip it back.
       const d = await apiPost<{ frozen?: boolean }>(frozen ? '/world/unfreeze' : '/world/freeze', {})
       setFrozen(!!d.frozen)
     } catch {

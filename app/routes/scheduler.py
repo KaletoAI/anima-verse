@@ -10,29 +10,17 @@ from app.core.log import get_logger
 
 logger = get_logger("scheduler_route")
 
-from app.scheduler.scheduler_manager import SchedulerManager
+# The accessor lives next to the class it hands out
+# (app/scheduler/scheduler_manager.py). Re-exported here because server.py
+# registers the instance through this module and world_dev.py reads it back
+# from here.
+from app.scheduler.scheduler_manager import (get_scheduler_manager,
+                                             set_scheduler_manager)
+
+__all__ = ["router", "get_scheduler_manager", "set_scheduler_manager"]
 
 
 router = APIRouter()
-
-# Globale SchedulerManager-Instanz (wird von server.py gesetzt)
-_scheduler_manager = None
-
-
-def set_scheduler_manager(manager: SchedulerManager):
-    """Wird von server.py aufgerufen um die Singleton-Instanz zu teilen."""
-    global _scheduler_manager
-    _scheduler_manager = manager
-
-
-def get_scheduler_manager() -> SchedulerManager:
-    """Gibt globale SchedulerManager-Instanz zurueck"""
-    global _scheduler_manager
-    if _scheduler_manager is None:
-        # Fallback: eigene Instanz erstellen (sollte nicht passieren)
-        logger.warning("Erstelle eigene SchedulerManager-Instanz")
-        _scheduler_manager = SchedulerManager()
-    return _scheduler_manager
 
 
 class JobCreate(BaseModel):

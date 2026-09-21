@@ -438,15 +438,24 @@ def apply_outfit_compliance(
     ]
     if hard_violations:
         try:
-            from app.models.notifications import add_notification
+            # ``add_notification`` never existed — the module has
+            # ``create_notification``, and the ImportError was swallowed by
+            # the except below, so this warning never arrived
+            # (review 2026-09-20, KOORD-1).
+            from app.models.notifications import create_notification
+            from app.core.i18n import t
+            from app.models.character import get_character_language
+            lang = (get_character_language(character_name) or "en").strip() or "en"
             slots = ", ".join(v["slot"] for v in hard_violations)
-            add_notification(
+            content = t("Outfit does not fit a {decency} room — missing: "
+                        "{slots}. No suitable clothing in the inventory.",
+                        lang).format(decency=decency, slots=slots)
+            create_notification(
                 character_name,
-                (f"⚠️ Outfit passt nicht zu {decency}-Raum — fehlt: {slots}. "
-                 "Keine passende Kleidung im Inventar."),
+                f"⚠️ {content}",
                 notification_type="outfit_mismatch",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("outfit mismatch notification failed: %s", e)
 
     return result

@@ -96,57 +96,85 @@ def _load_events() -> List[Dict[str, Any]]:
         return events
 
 
-def _save_events(events: List[Dict[str, Any]]):
-    """Saves events to the DB (upsert via the string id inside the payload).
+def _row_id_for(conn, event_id: str) -> Optional[int]:
+    """Integer row id of an event, looked up by its string id.
 
-    The events schema is (id INTEGER, ts, game_ts, kind, character_name,
-    payload). The event's string id lives in the payload, so deleting needs a
-    lookup round via payload JSON extraction.
+    The string id lives inside the ``payload`` JSON (the table's own ``id`` is
+    the autoincrement key), so the lookup goes through ``json_extract``.
+    """
+    row = conn.execute(
+        "SELECT id FROM events WHERE kind='world_event' "
+        "AND json_extract(payload, '$.id')=? LIMIT 1",
+        (event_id,),
+    ).fetchone()
+    if row:
+        return row[0]
+    # A row whose payload carries no id is handed out by ``_row_to_event``
+    # under the integer row id — it has to be addressable under that id too.
+    if event_id.isdigit():
+        row = conn.execute(
+            "SELECT id FROM events WHERE kind='world_event' AND id=? "
+            "AND json_extract(payload, '$.id') IS NULL LIMIT 1",
+            (int(event_id),),
+        ).fetchone()
+        if row:
+            return row[0]
+    return None
+
+
+def _insert_event(event: Dict[str, Any]) -> None:
+    """Writes ONE new event row.
+
+    Never a save-everything: an event added by another thread between a load
+    and a save used to be deleted by absence (review 2026-09-20, DATA-2).
     """
     try:
         with transaction() as conn:
-            # Load all existing world_event rows (integer id -> event string id)
-            existing_rows = conn.execute(
-                "SELECT id, payload FROM events WHERE kind='world_event'"
-            ).fetchall()
-            # event_str_id -> db_int_id
-            existing_map: Dict[str, int] = {}
-            for row_id, row_payload in existing_rows:
-                try:
-                    p = json.loads(row_payload or "{}")
-                    str_id = p.get("id", str(row_id))
-                    existing_map[str_id] = row_id
-                except Exception:
-                    existing_map[str(row_id)] = row_id
-
-            new_ids = {e.get("id") for e in events if e.get("id")}
-
-            # Remove deleted events
-            for str_id, db_id in existing_map.items():
-                if str_id not in new_ids:
-                    conn.execute("DELETE FROM events WHERE id=?", (db_id,))
-
-            # Upsert: update existing rows, insert new ones
-            for evt in events:
-                str_id = evt.get("id")
-                if not str_id:
-                    continue
-                ts = evt.get("created_at", utc_now_iso())
-                game_ts = evt.get("game_ts", "") or ""
-                payload_str = json.dumps(evt, ensure_ascii=False)
-                if str_id in existing_map:
-                    conn.execute(
-                        "UPDATE events SET ts=?, game_ts=?, payload=? WHERE id=?",
-                        (ts, game_ts, payload_str, existing_map[str_id]),
-                    )
-                else:
-                    conn.execute(
-                        "INSERT INTO events (ts, game_ts, kind, character_name, payload) "
-                        "VALUES (?, ?, 'world_event', NULL, ?)",
-                        (ts, game_ts, payload_str),
-                    )
+            conn.execute(
+                "INSERT INTO events (ts, game_ts, kind, character_name, payload) "
+                "VALUES (?, ?, 'world_event', NULL, ?)",
+                (event.get("created_at", utc_now_iso()),
+                 event.get("game_ts", "") or "",
+                 json.dumps(event, ensure_ascii=False)),
+            )
     except Exception as e:
-        logger.error("_save_events DB error: %s", e)
+        logger.error("_insert_event DB error: %s", e)
+
+
+def _update_event(event: Dict[str, Any]) -> bool:
+    """Writes ONE changed event back onto its own row."""
+    str_id = event.get("id")
+    if not str_id:
+        return False
+    try:
+        with transaction() as conn:
+            row_id = _row_id_for(conn, str_id)
+            if row_id is None:
+                return False
+            conn.execute(
+                "UPDATE events SET ts=?, game_ts=?, payload=? WHERE id=?",
+                (event.get("created_at", utc_now_iso()),
+                 event.get("game_ts", "") or "",
+                 json.dumps(event, ensure_ascii=False), row_id),
+            )
+        return True
+    except Exception as e:
+        logger.error("_update_event DB error: %s", e)
+        return False
+
+
+def _delete_event_row(event_id: str) -> bool:
+    """Deletes ONE event row. True when a row was actually removed."""
+    try:
+        with transaction() as conn:
+            row_id = _row_id_for(conn, event_id)
+            if row_id is None:
+                return False
+            conn.execute("DELETE FROM events WHERE id=?", (row_id,))
+        return True
+    except Exception as e:
+        logger.error("_delete_event_row DB error: %s", e)
+        return False
 
 
 def add_event(text: str,
@@ -168,7 +196,6 @@ def add_event(text: str,
         ttl_hours = DEFAULT_TTL_HOURS
     now = utc_now()
     started = game_time()
-    events = _load_events()
     event = {
         "id": f"evt_{uuid.uuid4().hex[:8]}",
         "text": text.strip(),
@@ -184,8 +211,7 @@ def add_event(text: str,
         event["escalation_of"] = escalation_of
     if metadata:
         event["metadata"] = metadata
-    events.append(event)
-    _save_events(events)
+    _insert_event(event)
     logger.info("Event created: %s [%s] (location=%s, ttl=%d game hours)",
                 event["id"], category or "?", location_id, ttl_hours)
     return event
@@ -208,34 +234,66 @@ def _is_expired(event: Dict[str, Any]) -> bool:
         return False
 
 
-def _cleanup_expired(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Removes expired events and saves when needed."""
-    active = [e for e in events if not _is_expired(e)]
-    if len(active) < len(events):
-        # Clean up the block rules coupled to those events as well.
+def _active_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Expired events filtered out IN MEMORY — the read path never writes.
+
+    Removing the rows is the job of :func:`expire_events` in the periodic
+    tick. A read path that deletes by absence dropped events another thread
+    had just created (review 2026-09-20, DATA-2).
+    """
+    return [e for e in events if not _is_expired(e)]
+
+
+def expire_events() -> int:
+    """Deletes the rows of every event whose WORLD lifetime has run out.
+
+    Runs from the periodic tick (``app/core/periodic_jobs.py``). One
+    ``DELETE … WHERE``: ``expires_at`` is a canonical GameTime string
+    (``Y0002-D109T14:23:45``), fixed-width and therefore sortable as text, so
+    the comparison happens in the GAME clock the TTL is counted in. The block
+    rules coupled to an event (danger events) are cleaned up with it — the
+    cleanup that used to hang off the read path.
+    """
+    now_canonical = game_time().canonical()
+    expired_ids: List[str] = []
+    try:
+        with transaction() as conn:
+            rows = conn.execute(
+                "SELECT id, json_extract(payload, '$.id') FROM events "
+                "WHERE kind='world_event' "
+                "AND json_extract(payload, '$.expires_at') IS NOT NULL "
+                "AND json_extract(payload, '$.expires_at') < ?",
+                (now_canonical,),
+            ).fetchall()
+            for row_id, str_id in rows:
+                conn.execute("DELETE FROM events WHERE id=?", (row_id,))
+                if str_id:
+                    expired_ids.append(str_id)
+    except Exception as e:
+        logger.error("expire_events DB error: %s", e)
+        return 0
+    if expired_ids:
         try:
             from app.models.rules import delete_rules_by_event
-            for e in events:
-                if _is_expired(e) and e.get("id"):
-                    delete_rules_by_event(e["id"])
+            for str_id in expired_ids:
+                delete_rules_by_event(str_id)
         except Exception as _e:
-            logger.debug("delete_rules_by_event(cleanup) failed: %s", _e)
-        _save_events(active)
-        logger.info("%d expired events removed", len(events) - len(active))
-    return active
+            logger.debug("delete_rules_by_event(expiry) failed: %s", _e)
+        logger.info("%d expired events removed", len(expired_ids))
+    return len(expired_ids)
 
 
 def list_events(location_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Lists active events. Optionally filtered by location."""
-    events = _cleanup_expired(_load_events())
+    events = _active_events(_load_events())
     if location_id is not None:
         events = [e for e in events if e.get("location_id") == location_id or e.get("location_id") is None]
     return events
 
 
 def get_all_events() -> List[Dict[str, Any]]:
-    """All active events (expired ones are removed automatically)."""
-    return _cleanup_expired(_load_events())
+    """All active events (expired ones are filtered out)."""
+    return _active_events(_load_events())
 
 
 RESOLVED_TTL_HOURS = 2  # a resolved event stays visible for 2 more GAME hours
@@ -250,42 +308,41 @@ def resolve_event(event_id: str,
     - resolved_by: name of the character who resolved it
     - resolved_text: short description of the resolution
     """
-    events = _load_events()
-    for evt in events:
-        if evt.get("id") != event_id:
-            continue
-        if evt.get("category", "") not in ("disruption", "danger"):
-            return None  # only resolvable events
-        if evt.get("resolved"):
-            return evt  # already resolved
+    evt = get_event(event_id)
+    if evt is None:
+        return None
+    if evt.get("category", "") not in ("disruption", "danger"):
+        return None  # only resolvable events
+    if evt.get("resolved"):
+        return evt  # already resolved
 
-        evt["resolved"] = True
-        evt["resolved_by"] = resolved_by
-        evt["resolved_text"] = resolved_text
-        evt["resolved_at"] = utc_now().isoformat()
-        evt["resolved_game_ts"] = game_time().canonical()
-        # Shorten the remaining lifetime to 2 world hours from now.
-        evt["expires_at"] = (
-            game_time() + GameDuration.of(hours=RESOLVED_TTL_HOURS)).canonical()
+    evt["resolved"] = True
+    evt["resolved_by"] = resolved_by
+    evt["resolved_text"] = resolved_text
+    evt["resolved_at"] = utc_now().isoformat()
+    evt["resolved_game_ts"] = game_time().canonical()
+    # Shorten the remaining lifetime to 2 world hours from now.
+    evt["expires_at"] = (
+        game_time() + GameDuration.of(hours=RESOLVED_TTL_HOURS)).canonical()
 
-        _save_events(events)
-        logger.info("Event resolved: %s by %s — %s", event_id, resolved_by, resolved_text[:60])
-        # Clean up the coupled block rules immediately — the way is clear as
-        # soon as it is resolved, not only after the resolved TTL.
-        try:
-            from app.models.rules import delete_rules_by_event
-            delete_rules_by_event(event_id)
-        except Exception as _e:
-            logger.debug("delete_rules_by_event(resolve) failed: %s", _e)
-        # Generate the "after" image of the location (linger display). Runs
-        # in a background thread and does not block the resolve path.
-        try:
-            from app.core.event_images import trigger_resolved_image_from_text
-            trigger_resolved_image_from_text(event_id)
-        except Exception as _e:
-            logger.debug("trigger_resolved_image_from_text failed: %s", _e)
-        return evt
-    return None
+    if not _update_event(evt):
+        return None
+    logger.info("Event resolved: %s by %s — %s", event_id, resolved_by, resolved_text[:60])
+    # Clean up the coupled block rules immediately — the way is clear as
+    # soon as it is resolved, not only after the resolved TTL.
+    try:
+        from app.models.rules import delete_rules_by_event
+        delete_rules_by_event(event_id)
+    except Exception as _e:
+        logger.debug("delete_rules_by_event(resolve) failed: %s", _e)
+    # Generate the "after" image of the location (linger display). Runs
+    # in a background thread and does not block the resolve path.
+    try:
+        from app.core.event_images import trigger_resolved_image_from_text
+        trigger_resolved_image_from_text(event_id)
+    except Exception as _e:
+        logger.debug("trigger_resolved_image_from_text failed: %s", _e)
+    return evt
 
 
 def record_attempt(event_id: str,
@@ -306,25 +363,24 @@ def record_attempt(event_id: str,
     of who tried what and when the server saw it, not something the world
     reads back.
     """
-    events = _load_events()
-    for evt in events:
-        if evt.get("id") != event_id:
-            continue
-        now = utc_now()
-        resolution = evt.setdefault("resolution", {"attempts": [], "last_attempt_at": None})
-        resolution["attempts"].append({
-            "when": now.isoformat(),
-            "who": who,
-            "text": (text or "")[:500],
-            "outcome": outcome,
-            "reason": (reason or "")[:200],
-            "joint_with": joint_with or [],
-        })
-        resolution["last_attempt_at"] = now.isoformat()
-        _save_events(events)
-        logger.info("Event attempt %s: %s by %s (%s)", event_id, outcome, who, reason[:60])
-        return evt
-    return None
+    evt = get_event(event_id)
+    if evt is None:
+        return None
+    now = utc_now()
+    resolution = evt.setdefault("resolution", {"attempts": [], "last_attempt_at": None})
+    resolution["attempts"].append({
+        "when": now.isoformat(),
+        "who": who,
+        "text": (text or "")[:500],
+        "outcome": outcome,
+        "reason": (reason or "")[:200],
+        "joint_with": joint_with or [],
+    })
+    resolution["last_attempt_at"] = now.isoformat()
+    if not _update_event(evt):
+        return None
+    logger.info("Event attempt %s: %s by %s (%s)", event_id, outcome, who, reason[:60])
+    return evt
 
 
 def update_event_fields(event_id: str, **fields) -> Optional[Dict[str, Any]]:
@@ -333,18 +389,17 @@ def update_event_fields(event_id: str, **fields) -> Optional[Dict[str, Any]]:
     Used e.g. for image_path / resolved_image_path when an event spawns or is
     resolved. A value of None deletes the field.
     """
-    events = _load_events()
-    for evt in events:
-        if evt.get("id") != event_id:
-            continue
-        for k, v in fields.items():
-            if v is None:
-                evt.pop(k, None)
-            else:
-                evt[k] = v
-        _save_events(events)
-        return evt
-    return None
+    evt = get_event(event_id)
+    if evt is None:
+        return None
+    for k, v in fields.items():
+        if v is None:
+            evt.pop(k, None)
+        else:
+            evt[k] = v
+    if not _update_event(evt):
+        return None
+    return evt
 
 
 def get_event(event_id: str) -> Optional[Dict[str, Any]]:
@@ -357,10 +412,7 @@ def get_event(event_id: str) -> Optional[Dict[str, Any]]:
 
 def delete_event(event_id: str) -> bool:
     """Deletes an event by id."""
-    events = _load_events()
-    new_events = [e for e in events if e.get("id") != event_id]
-    if len(new_events) < len(events):
-        _save_events(new_events)
+    if _delete_event_row(event_id):
         logger.info("Event deleted: %s", event_id)
         try:
             from app.models.rules import delete_rules_by_event
