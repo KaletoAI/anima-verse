@@ -1,52 +1,63 @@
-# Animations-Clips: Quellen & Konvertierung
+# Animations-Clips — was der 3D-Client erwartet
 
-## Anforderung an jeden Clip
+Die Bibliothek selbst und ihre Dateiregeln stehen in
+[`shared/models/clips/README.md`](../../shared/models/clips/README.md), der
+Vertrag in [`docs/schnittstellen-3d.md`](../../docs/schnittstellen-3d.md)
+§ A8 (Clips, Sets, Loop) und § A8a (Paar-Clips). Hier steht nur, was die
+Client-Seite davon sieht.
 
-- **Mixamo-52-Bone-Skelett** (`mixamorig:`-Namen) — darauf riggt der
-  Auto-Rigger unsere Charaktere; nur so passen Clips ohne Retargeting.
-- **FBX ohne Mesh/Skin** (reine Keyframes).
-- Der Client mappt Aktivitäten auf Kategorien (`idle`, `walk`, `run`,
-  `sit`, `dance`, `wave`, …) — die Kategorie steckt im Dateinamen bzw.
-  in der Liste, die das Backend ausliefert.
+## Die drei Zusagen
 
-## Zwei Wege, einen Clip zu bekommen
+1. **Ein Rig für alles.** Jeder Clip liegt auf `shared/models/rig/reference.fbx`
+   (69 `mixamorig:`-Knochen). Der Importer retargetet jede Quelle darauf —
+   CMU-Mocap, gekaufte Packs, fremde FBX aus dem Inbox-Import —, deshalb muss
+   der Client nichts mehr umrechnen außer der Bind-Pose der jeweiligen Figur
+   (`@anima/scene-render` → `restCorrections`, gegen die Rest-Pose aus
+   `GET /assets/animation-rig`).
+2. **FBX ohne Mesh/Skin** („Without Skin"), reine Keyframes.
+3. **Bewegungsclips laufen IN PLACE.** Die Wurzel bewegt der Client (Laufen,
+   Reise, Klick-Route); ein Clip mit eigener Wurzelbewegung zieht die Figur
+   von der Position weg, an der das Spiel sie hält.
 
-### 1. Mixamo (mixamo.com, Adobe-Login)
+## Welchen Clip eine Figur spielt, sagt der SERVER
 
-Export „FBX, **Without Skin**", 30 fps. Direkt verwendbar.
+`activity_animation` je Charakter im Worldmap-Payload (§ A8) nennt die
+Clip-Art. Nennt der Server keine, steht die Figur (`idle`). Die frühere
+Keyword-Heuristik `activityToClipKind` im Client ist **gelöscht**
+(2026-08-28) — der Client rät nicht mehr aus Freitext.
 
-- **Vorteil:** kuratiert, sauber geloopt, kein Nacharbeiten.
-- **Grenze:** Adobes Nutzungsbedingungen untersagen u.a. den Einsatz in
-  pornografischen/obszönen Kontexten und die Weitergabe als
-  Asset-Bibliothek. Für ein NSFW-fähiges Projekt heißt das: Basis-Clips
-  ja, explizite Bewegungen **nicht** von hier.
-- **Wichtig:** alle Mixamo-Clips aus derselben Quelle beziehen. Fremd-FBX
-  aus Modell-Repos (z.B. das `Standard Run.fbx` aus dem MIA-Repo) haben
-  abweichende Skelett-Konventionen und kippen die Figuren um.
-
-### 2. Beliebige Mocap-Quelle + Retargeting (Adobe-frei)
-
-Der Import läuft heute über `scripts/clip_import_cmu.py` im Repo-Wurzel-
-verzeichnis (Blender-Seite: `app/blender/scripts/cmu_clip.py`, `fbx_clip.py`,
-`clip_orient.py`, `clip_roll.py`). Jede Konvertierung treibt ihren Take auf
-das Referenz-Rig `shared/models/rig/reference.fbx` (gebaut von
-`scripts/make_reference_rig.py`) — nicht auf einen Clip. Das frühere
-Client-Skript `tools/retarget-to-mixamo.py` (Mixamo-Referenzskelett) ist
-damit abgelöst und entfernt.
-
-**Historisch verifiziert** mit der CMU-Motion-Capture-Datenbank (Public Domain,
-2.548 Bewegungen, BVH-Mirror: github.com/una-dinosauria/cmu-mocap):
-Gehzyklus retargetet, läuft aufrecht und sauber auf den generierten
-Charakteren (`figure-test.html?model=…&clip=cmuwalk`).
-
-- **Vorteil:** keine Lizenz- oder Inhaltsbeschränkung (CMU ist gemeinfrei),
-  beliebige Quellen nutzbar, für NSFW-Bewegungen der einzig saubere Weg.
-- **Grenze:** Rohes Mocap ist ungefiltert — kann zittern, Füße können
-  rutschen, Loops sind nicht garantiert. Pro Clip prüfen.
-
-**Blender** liegt auf diesem CT unter `/home/dev/tools/blender-4.2.5-linux-x64/`.
+`loop` aus der Clip-Auflistung entscheidet, ob der Clip wiederholt oder sein
+letztes Bild hält (`LoopOnce` + `clampWhenFinished`); eine Art ohne Eintrag
+gilt als Loop, damit Lokomotion nie stehen bleibt.
 
 ## Prüfen
 
-`figure-test.html?model=<Modell>&clip=<kind>` im 3D-Client — mit `&diag=1`
-loggt der Viewer numerisch, ob die Figur aufrecht steht (SpineUp-Y ≈ 1).
+```
+/figure-test.html?model=<charakter>&clip=<kind>&diag=1
+```
+
+Die Diagnose-Seite des Clients rendert eine Figur isoliert und loggt nach drei
+Sekunden numerisch, ob sie aufrecht steht: `SpineUp-Y ≈ 1` = AUFRECHT,
+< 0,3 = LIEGEND. Rechnen statt Hinsehen — dieselbe Regel wie § B5a.
+
+Die Bodenlage misst `client3d/src/scene/clipGround.ts`: ein Clip, der über
+seiner eigenen Null animiert wurde (ein Schwimmer auf der Wasserlinie), wird
+beim Laufen auf den Boden gesetzt. Das rettet das Bild, nicht die Absicht —
+solche Clips gehören auf dem Boden animiert, außer sie sollen darüber liegen
+(ein Schlafender auf einem Bett).
+
+## Woher Clips kommen
+
+Zwei Wege, beide enden im selben Retarget auf das Referenz-Rig:
+
+* **CMU-Mocap** (gemeinfrei, deshalb im Repo) — `scripts/clip_import_cmu.py`
+  oder der Katalog-Browser im Game-Admin unter **Poses**.
+* **Fremde FBX** (gekaufte Packs, Mixamo-Downloads) — in
+  `shared/models/clips-inbox/` ablegen oder hochladen, dann importieren. Die
+  Rohdateien bleiben aus dem Git; das Ziel ist per Default die
+  LIZENZIERTE Bibliothek.
+
+Die Blender-Seite sind `app/blender/scripts/cmu_clip.py`, `fbx_clip.py`,
+`clip_orient.py` und `clip_roll.py`; welches Blender benutzt wird, entscheidet
+`app/blender/runner.py` (Konfiguration `image_generation.blender_executable`,
+sonst `blender` aus dem `PATH` oder ein Fund unter `~/tools/blender*/blender`).

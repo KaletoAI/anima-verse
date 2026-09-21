@@ -6,6 +6,14 @@ no mesh, no texture, no animation. 69 bones, hips at 113.03 cm, arms out along
 ±X in a T-POSE, the armature object in the Mixamo convention (0.01 scale,
 +90° X, centimetres in armature space).
 
+**This file is TRACKED in git** — the only binary here that is. It is
+pipeline, not content: without it no import can run, and every clip in
+`../clips/` already sits on exactly these bones. It is also served, at
+`GET /assets/animation-rig`, so a renderer can read a clip as a rotation away
+from THIS rest pose before transplanting it onto a character's own bind pose
+(`@anima/scene-render` → `restCorrections`). A 404 there is a normal state;
+the consumer then copies the tracks 1:1.
+
 Everything that turns motion into a clip drives it onto this file:
 
 * `scripts/clip_import_cmu.py` and the Poses tab's CMU catalog browser

@@ -1,17 +1,31 @@
 # Shared animation clips — the FREE library
 
 Skeletal animation clips for the 3D character models, shared across ALL worlds
-(they belong to the rig, not to a character or a world). Served read-only by
-`GET /assets/animation-clips`; the files themselves at
-`GET /assets/animation-clips/[licensed/][{set}/]{filename}`.
+(they belong to the rig, not to a character or a world).
+
+    GET    /assets/animation-clips                          the listing (public)
+    GET    /assets/animation-clips/[licensed/][<set>/]<file> one clip (public)
+    GET    /assets/animation-rig                            ../rig/reference.fbx
+    PATCH  /assets/animation-clips/<library>/<rel>          rename/move/loop/roles
+    POST   /assets/animation-clips/<library>/<rel>/orient   turn + lift the FILE
+    DELETE /assets/animation-clips/<library>/<rel>          both halves of a pair
+
+Reading is public, editing is admin-only, and `<library>` is `free` (this
+directory) or `licensed`. The edit routes are what the Game-Admin's **Poses**
+tab drives; they rewrite the files in place, which is why clips are served
+with an ETag and `no-cache` rather than a long `max-age`.
 
 Two libraries, one layout:
 
 * **this one** — clips that may be REDISTRIBUTED with the repository (tracked
-  in git). It carries the BASE SET everything else falls back to: CMU Graphics
-  Lab mocap converted by `scripts/clip_import_cmu.py` (`idle`, `walk`, `run`,
-  `sit`, `laying`, …), each with a `<kind>.json` sidecar naming its source and
-  the CMU credit.
+  in git). It carries the BASE SET everything else falls back to (`idle`,
+  `walk`, `run`, `sit`, `laying`, …), each with a `<kind>.json` sidecar. Two
+  sources feed it: CMU Graphics Lab mocap converted by
+  `scripts/clip_import_cmu.py` (the sidecar then names the take and carries
+  the CMU credit) and foreign FBX animations imported through the inbox
+  (`../clips-inbox/`), whose sidecar names the file, the take and the bone map
+  it was read with. Whatever the source, the result sits on the one reference
+  rig — put a file here only if its licence allows redistribution.
 * **`../clips-licensed/`** — bought packs: usable in the game, not
   redistributable, gitignored, per installation. The same `[<set>/]<file>` in
   both libraries resolves to the licensed one, so a pack overrides the base set
@@ -24,8 +38,23 @@ all clips share one rig and one standing hip height — the height the client
 normalises against. `idle.fbx` here is an ordinary clip like every other one;
 this library may be emptied or deleted without touching the pipeline.
 
-Only put a file HERE if its licence allows redistribution. Drop the `.fbx`
-files straight in — no registration, no config.
+Drop the `.fbx` files straight in — no registration, no config.
+
+## The sidecar `<kind>.json`
+
+Written by the importer, edited by the Poses tab. What a renderer reads:
+
+| Field | Meaning |
+|---|---|
+| `kind`, `pair`, `roles` | the kind, whether it is a pair and which role letters exist |
+| `fps`, `source_fps`, `frames`, `duration_s` | timing; `speed` is `1.0` for everything converted since the capture rate reached Blender |
+| `loop` | `true` = repeat, `false` = hold the last frame (Three.js `LoopOnce` + `clampWhenFinished`). Measured on import, overridden by the admin's switch in the Poses tab; it holds for both halves of a pair and for every numbered take of that kind in that set. A kind with NO listing entry counts as looping — locomotion must never stand still |
+| `geometry` | what the conversion measured: `floor_shift_cm`, `in_place`, the pair anchor (`anchor_frame`, `anchor_s`, `root_distance_m`, per-role `start_xz_m`/`anchor_xz_m`), the hip scale and, after a `…/orient` run, the accumulated angles |
+| `source` | where it came from: the CMU take plus its credit, or the file, take and `bone_map` of an inbox import |
+
+The sidecar of `<stem>.fbx` is `<stem>.json` when that file exists (so
+`idle_02.fbx` may carry its own duration in `idle_02.json`), otherwise the
+shared `<kind>.json` of its kind.
 
 ## Layout → `kind` + `set`
 
@@ -40,10 +69,6 @@ files straight in — no registration, no config.
 | `swim-idle.fbx` | `swim-idle` | — |
 | `treading-water.fbx` | `treading-water` | — |
 | `spell_casting.fbx` | `spell_casting` | — |
-
-**The sidecar of a file `<stem>.fbx` is `<stem>.json` when that file exists
-(so `idle_02.fbx` may carry its own duration in `idle_02.json`), otherwise the
-shared `<kind>.json` of its kind.**
 
 **`kind`** is the category an activity maps onto (`idle`, `walk`, `run`, `sit`,
 `lie`, `dance`, `wave`, …) and is the FILE NAME without its extension —
@@ -108,10 +133,11 @@ pack, a hand-authored take. Violating them does not fail loudly; it produces
 characters that walk on their belly:
 
 1. **FBX with keyframes only** — no mesh, no texture ("Without Skin").
-2. **The Mixamo rig**, the same basis the character GLBs and the generated
+2. **The project's rig** — the 69 `mixamorig:` bones of
+   `../rig/reference.fbx`, the same basis the character GLBs and the generated
    meshes carry. A foreign convention (e.g. "UE4 Skeleton") tips the figures
-   over; the importers retarget onto `../rig/reference.fbx` precisely so every
-   clip ends up on that one skeleton.
+   over; the importers retarget onto that file precisely so every clip ends up
+   on that one skeleton.
 3. **Movement clips must be IN PLACE.** The client moves the figure itself (the
    walk, the journey, the click route); a clip that also carries root motion
    drives the body away from the position the game holds it at.
@@ -125,8 +151,18 @@ characters that walk on their belly:
    Clips that are MEANT to sit above the floor (a sleeper on a bed) are the
    deliberate exception.
 
+## Tests must not touch this directory
+
+`paths.get_animation_clips_dir()` resolves the library and honours the
+override **`ANIMATION_CLIPS_DIR`**; the licensed library follows as
+`<that>-licensed`, and `ANIMATION_RIG_FILE` does the same for
+`../rig/reference.fbx`. A check that imports anything from `app` has to set
+them BEFORE that first import — otherwise it reads (and a write path would
+edit) the real user files. Every smoke under `scripts/` does it in its first
+lines; copy the pattern from `scripts/smoke_scene_recipe.py`.
+
 ## Why here and not under `characters/`
 
 A clip is not character data: the same `walk.fbx` drives every figure that
-carries the Mixamo rig. Keeping it world-independent means one upload, every
+carries the project's rig. Keeping it world-independent means one upload, every
 world, every client.

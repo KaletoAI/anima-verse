@@ -1,8 +1,17 @@
 # Implementierungs-Anleitung: 3D-Charakter-Pipeline
 
-Stand 2026-07-13, verifiziert mit Kira („Fast") und Bianca („High") in der
-Kai-Welt. Zielbild: **LLM-Gateway** orchestriert ComfyUI und erzeugt pro
-Charakter ein fertiges GLB; **anima-verse** speichert und liefert es aus
+> **HISTORISCH — Stand 2026-07-13, die ComfyUI-Kette von damals.** AV3D-5
+> Stufe 1 ist längst gelandet; heute sind Meshes ein **Backend-Medientyp**
+> (`MEDIA_TYPE = "mesh"`, `service.generate_mesh(rig=…)`, Alias `openai_mesh`)
+> und die Referenz-Renders kommen aus `app/core/model_refs.py`. Die
+> Referenzbild-Regeln unten (A-Pose, freigestellt, Gliedmaßen mit Abstand,
+> Tiere in symmetrischer 3/4-Ansicht) sind der Grund, warum diese Prompts so
+> aussehen, wie sie aussehen — deshalb bleibt die Datei hier. Der geltende
+> Vertrag ist `docs/schnittstellen-3d.md` § A7.
+
+Verifiziert wurde die Kette mit zwei generierten Figuren (Variante „Fast“ und
+Variante „High“). Zielbild: **LLM-Gateway** orchestriert ComfyUI und erzeugt
+pro Charakter ein fertiges GLB; **anima-verse** speichert und liefert es aus
 (AV3D-5 Stufe 1).
 
 ## Die Kette (final)
@@ -32,12 +41,14 @@ LoadImage → TRELLIS.2-Mesh-Generierung (vb)
 
 ## Animations-Clips (global, einmalig)
 
-- Quelle: **Mixamo** (mixamo.com, kostenloser Adobe-Login), Export
-  „FBX, **Without Skin**", 30 fps. **Alle Clips aus dieser einen Quelle** —
-  Fremd-FBX (z.B. aus Modell-Repos) haben abweichende Skelett-Konventionen
-  und kippen die Figur.
-- Aktueller Bestand: Walking, Sitting, Breathing Idle. Wunschliste: Standard
-  Run, Dance, Wave, Lie/Sleep.
+> **Überholt.** Die Clip-Bibliothek hängt an keiner einzelnen Quelle mehr:
+> jeder Import retargetet auf `shared/models/rig/reference.fbx`, und die
+> geltenden Regeln stehen in `shared/models/clips/README.md` und
+> `docs/schnittstellen-3d.md` § A8.
+
+- Quelle damals: Mixamo-Export „FBX, **Without Skin**“, 30 fps, alle Clips aus
+  derselben Quelle — Fremd-FBX hatte abweichende Skelett-Konventionen und
+  kippte die Figur um. Genau das löst das Referenz-Rig heute auf.
 - Der Client wendet die Clips direkt an (kein Retargeting nötig) und
   transformiert dabei automatisch den Hüft-Track in den Skelett-Raum des
   Rigs (Rotations-Konjugation; von der Hüft-Position wird nur das vertikale

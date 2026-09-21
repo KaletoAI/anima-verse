@@ -29,11 +29,24 @@ C) The README does not claim the client has no React while React is a
    `@anima/player-ui` and `src/hud/`, and must state the number of `.tsx`
    files that are really there.
 
-FAILS BEFORE / PASSES AFTER
+E) Every HTML entry point of the build is documented and every page the
+   README documents exists. Expected value = the `rollupOptions.input` map
+   of `client3d/vite.config.ts` plus the files on disk — the two diagnostic
+   pages (`figure-test.html`, `floorplan.html`) shipped undocumented until
+   2026-09-21.
+
+F) The two environment variables the client is steered with are named
+   (`ANIMA_API` from `vite.config.ts`, `CLIENT3D_PORT` from `start.sh`), and
+   the README's count of `client3d/scripts/smoke_*.mjs` matches the
+   directory.
+
+G) FAILS BEFORE / PASSES AFTER
 ---------------------------
-Confirmed by running A, B and C against the previous revision of the README
-(`git show 74693e4f: (the pinned pre-fix revision — HEAD would compare the file with itself once this is committed) client3d/README.md`) — see the last block of the output: it
-lists 7 of the 16 prefixes and carries the unqualified React claim.
+Confirmed by running A, B and C against the previous revision of the README,
+`git show 74693e4f:client3d/README.md` — an EXPLICIT hash, never `HEAD:`
+(once this is committed HEAD would compare the file with itself). See the
+last block of the output: that revision lists 7 of the 16 prefixes and
+carries the unqualified React claim.
 """
 import json
 import re
@@ -117,13 +130,35 @@ def main():
     check("the README no longer claims 'vanilla, bewusst kein React'",
           "bewusst kein React" not in readme)
 
-    print("D) the same three checks against the PREVIOUS revision")
+    print("E) the HTML entry points")
+    vite_src = VITE.read_text(encoding="utf-8")
+    m = re.search(r"input:\s*\{(.*?)\}", vite_src, re.S)
+    entries = re.findall(r"'([^']+\.html)'", m.group(1)) if m else []
+    check("vite.config.ts still declares its entry points", bool(entries),
+          str(entries))
+    for html in entries:
+        check(f"the README documents `{html}`", html in readme)
+        check(f"`{html}` exists", (REPO / "client3d" / html).is_file())
+
+    print("F) env vars and the smoke count")
+    check("the README names ANIMA_API", "ANIMA_API" in readme)
+    check("ANIMA_API is what vite.config.ts reads",
+          "process.env.ANIMA_API" in vite_src)
+    start_sh = (REPO / "start.sh").read_text(encoding="utf-8")
+    check("the README names CLIENT3D_PORT", "CLIENT3D_PORT" in readme)
+    check("CLIENT3D_PORT is what start.sh reads",
+          "CLIENT3D_PORT" in start_sh)
+    smokes = sorted((REPO / "client3d" / "scripts").glob("smoke_*.mjs"))
+    check(f"the README states the number of client smokes ({len(smokes)})",
+          str(len(smokes)) in readme, str(len(smokes)))
+
+    print("G) the same three checks against the PREVIOUS revision")
     try:
         old = subprocess.run(["git", "show", "74693e4f:client3d/README.md"],
                              cwd=REPO, capture_output=True, text=True,
                              check=True).stdout
     except Exception as e:                                   # pragma: no cover
-        check("git show 74693e4f: (the pinned pre-fix revision — HEAD would compare the file with itself once this is committed) client3d/README.md", False, str(e))
+        check("git show of the pinned pre-fix revision 74693e4f", False, str(e))
     else:
         old_missing = [p for p in cfg if p not in readme_prefixes(old)]
         check("the previous revision was missing 9 of the prefixes",

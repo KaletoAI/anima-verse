@@ -1,5 +1,13 @@
 # Recherche: Bild-zu-3D-Pipeline für Charakter-Figuren (AV3D-5 Stufe 2)
 
+> **HISTORISCH — Rechercheprotokoll vom 2026-07-11, nicht der Ist-Stand.**
+> Aufbewahrt für das Begründungswissen zu den Mesh-Aliassen (welche Lizenz
+> was erlaubt, was VRAM kostet, was riggbar ist). Was das Projekt HEUTE tut,
+> steht in `CLAUDE.md` (Backend-Medientypen `image`/`video`/`mesh`,
+> `service.generate_mesh(rig=…)`) und in `docs/schnittstellen-3d.md` § A7.
+> Modell-Landschaft und Preise ändern sich schnell — vor einer Entscheidung
+> neu recherchieren.
+
 Stand: 2026-07-11 · Methode: Deep-Research mit adversarialer Verifikation
 (25 Top-Claims, 3 unabhängige Prüfer je Claim; 24 bestätigt, 1 widerlegt).
 Frage: Referenzbild (SD/Flux) → animierbare Figur (GLB/VRM, Humanoid-Rig),
@@ -97,8 +105,7 @@ End-to-End-Dauer wurde durch keinen verifizierten Claim quantifiziert.
 3. **Rigging-Stufe selbsthostbar vorbereiten:** Make-It-Animatable (Mixamo-
    Skelett = passt zu unserem Animations-Fundus) oder UniRig (VRM-Weg) als
    zweites Backend für ungeriggte Meshes.
-4. **Client:** GLB mit Mixamo-52-Skelett abspielen (haben wir mit Soldier/Xbot
-   de facto schon); VRM-Weg (three-vrm + VRMA) erst, wenn VRoid-Upload kommt.
+4. **Client:** GLB mit dem `mixamorig:`-Skelett abspielen; VRM-Weg (three-vrm + VRMA) erst, wenn VRoid-Upload kommt.
 5. **Nachrecherche einplanen** (offene Fragen): TRELLIS/TripoSR/Stable-Fast-3D
    EU-Lizenz + Qualität bei stilisierten Charakteren; Tripo-Ownership;
    UniRig/MIA → VRM-Bone-Namen-Konformität.

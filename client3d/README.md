@@ -9,6 +9,14 @@ Seit 2026-07-26 ein npm-Workspace dieses Repos (vorher ein eigenes Repo
 Geometrie, die auch die Admin-Vorschau braucht, liegt im geteilten Paket
 [`@anima/scene-render`](../packages/scene-render) — nicht hier.
 
+**Der Vertrag, gegen den dieser Client rendert, ist
+[`docs/schnittstellen-3d.md`](../docs/schnittstellen-3d.md)** (Teil A: Karte,
+Reise, Boden; Teil B: das Szenen-Rezept einer Location; Teil C: Ergänzungen
+nach Thema). Er liegt im Wurzel-`docs/`, nicht hier. In `docs/` dieses
+Workspaces stehen nur Client-Notizen: `animations.md` (was der Client von der
+Clip-Bibliothek erwartet) und zwei als **historisch** markierte
+Recherche-Protokolle aus dem Juli 2026.
+
 ## Features (Prototyp)
 
 - **AoE-Kamera:** Pan (Ziehen/WASD), Zoom Richtung Mauszeiger (Rad), Drehen in
@@ -50,6 +58,12 @@ npm run build -w client3d            # tsc --noEmit && vite build -> client3d/di
 ANIMA_API=http://<server>:8000 npm run dev -w client3d
 ```
 
+`ANIMA_API` ist das EINE Backend-Ziel (Default `http://localhost:8000`); es
+wird nur vom Dev-Proxy gelesen. `CLIENT3D_PORT` verschiebt den Port — das
+wertet `start.sh` aus (`vite --port`), nicht `vite.config.ts`, in dem 5183
+fest steht. `./start.sh --with-3d` loggt nach `logs/client3d.log` und legt die
+PID unter `.pids/client3d.pid` ab; `./start.sh --stop` beendet beide Prozesse.
+
 Welche Präfixe der Vite-Dev-Proxy dorthin weiterleitet, steht im Array
 `proxied` in [`vite.config.ts`](vite.config.ts) — das ist die maßgebliche
 Liste, nicht diese hier. Stand heute sind es 16:
@@ -61,18 +75,41 @@ Liste, nicht diese hier. Stand heute sind es 16:
 
 Die Liste muss **vollständig** bleiben: ein fehlendes Präfix liefert keinen 404,
 sondern Vites `index.html` — der Aufrufer bekommt 200 + HTML, `res.json()`
-scheitert und der Fehler platzt weit weg von der Ursache. `CLIENT3D_PORT`
-verschiebt den Port, wenn 5183 belegt ist.
+scheitert und der Fehler platzt weit weg von der Ursache.
 (`scripts/smoke_docs_client3d_readme.py` hält Liste und Config zusammen.)
+
+## Seiten
+
+Drei HTML-Einstiege, alle drei im Build (`rollupOptions.input`):
+
+| Seite | Einstieg | Wofür |
+|---|---|---|
+| `index.html` | `src/main.ts` | die Weltkarte — die eigentliche Anwendung |
+| `floorplan.html` | `src/floorplan.ts` | EINE Location isoliert, Innenansicht aufgedeckt, gepollt: `?location=<id-oder-name>[&verify=1]`. Gedacht als iframe neben dem Grundriss-Editor des Game-Admin; rendert ausschließlich aus dem Szenen-Rezept (§ B1), zeigt also dasselbe Bild wie die Admin-Vorschau über `/play/scene-preview` (§ B3) |
+| `figure-test.html` | `src/figureTest.ts` | eine Figur isoliert, groß und neutral beleuchtet: `?model=<charakter>&clip=<kind>`, dazu `&diag=1` für die numerische Ausgabe (steht die Figur aufrecht: SpineUp-Y ≈ 1) |
+
+Beide Diagnoseseiten brauchen eine bestehende Anmeldung im 3D-Client.
 
 ## Verify (§ B5a)
 
 Rechnen statt Screenshots: `http://localhost:5183/?verify=1` laden und ~5 Minuten
 laufen lassen — jedes platzierte Objekt wird neu vermessen und gegen seine Spec
-gediffrt. Ergebnis je Location in der Konsole und in `window.__sceneVerify`.
-Stand 2026-07-26 (Welt `anima-dome`): **1757 geprüfte Zahlen, 0 Abweichungen,
-85/85 Modelle**. Die absolute Zahl gilt nur, solange die Welt stillsteht — die
-0 Abweichungen sind die Aussage.
+gediffrt (ε = 0,01 m). Ergebnis je Location in der Konsole und in
+`window.__sceneVerify`. **0 Abweichungen ist die Aussage**; die absolute Zahl
+geprüfter Werte hängt an der Welt und sagt für sich nichts.
+
+Dazu kommen die **47 Smoke-Skripte** unter `scripts/`. Sie laufen ohne Browser
+und ohne Server auf reinem Node, weil sie die Module mit esbuild übersetzen und
+pure Rechnungen prüfen:
+
+```bash
+node client3d/scripts/smoke_walk_math.mjs      # eines davon
+for f in client3d/scripts/smoke_*.mjs; do node "$f" || break; done
+```
+
+Jede erwartete Zahl darin ist im Kopf der Datei **von Hand aus dem Vertrag
+hergeleitet** — eine Prüfung, die nur die heutige Ausgabe festschreibt,
+beweist nichts.
 
 ## Flächen-Locations
 

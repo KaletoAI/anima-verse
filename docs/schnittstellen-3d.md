@@ -1,4 +1,112 @@
-# Schnittstellen 3D — Gesamtvertrag v6 „Gebiete" (2026-08-19)
+# Schnittstellen 3D — der Vertrag zwischen Server und beiden Renderern
+
+Dieses Dokument ist der **Payload-Vertrag** zwischen dem Server und den ZWEI
+Renderern, die seine Szenen zeichnen: der Grundriss-Vorschau im Game-Admin
+(`frontend/`) und dem 3D-Client (`client3d/`). Leitsatz: **der Server rechnet,
+die Clients stellen dar.** Geteilte Geometrie liegt im Paket
+`@anima/scene-render`, nie zweimal in einer App.
+
+**Wie dieses Dokument zu lesen ist**
+
+* **Präambeln v4/v5/v6** — drei nummerierte Beschlusslisten. Sie
+  überschreiben ausdrücklich alles Folgende, wo es widerspricht, und zwar
+  in der Reihenfolge **v6 vor v5 vor v4 vor Teil A/B/C**. Deshalb stehen sie
+  vorn und nicht im Anhang.
+* **Teil A** — die Welt: Karte, Reise, Fog, Boden, Terrain, Modelle,
+  Animation. **Teil B** — das Szenen-Rezept einer einzelnen Location.
+  **Teil C** — Ergänzungen zu A und B, nach Thema sortiert.
+* **Die §-Nummern sind stabil.** Code-Kommentare und Smokes verweisen auf
+  sie (über zweitausend Stellen). Eine Nummer wird nie neu vergeben; ein
+  entfallener Abschnitt behält seine Nummer als Stub (§ A18–A20).
+* **Historie steht im Anhang**, nicht in den Abschnitten: der
+  Änderungsverlauf am Ende löst jede Verweisung der Form
+  „Nachtrag <Datum>“ auf und sammelt die gestrichenen Abschnitte.
+* **Verifikation ist Arithmetik, nie ein Screenshot** (§ B5a). Jede Zahl
+  eines Smokes wird im Docstring von Hand aus diesem Vertrag hergeleitet.
+* Der Vertrag selbst wird von `scripts/smoke_docs_schnittstellen_3d.py`
+  geprüft: keine doppelte §-Nummer, kein toter §-Verweis aus dem Code, und
+  die Feldlisten von Worldmap- und Szenen-Payload gegen den Server.
+
+
+## Inhalt
+
+- [Präambel v6 — „Gebiete“ (2026-08-19)](#präambel-v6-gebiete-2026-08-19)
+- [Präambel v5 — EIN Rahmen, EIN Maßstab, EIN Anker (2026-07-28)](#präambel-v5-ein-rahmen-ein-maßstab-ein-anker-2026-07-28)
+- [Präambel v4 — der Neuschrieb (2026-07-24)](#präambel-v4-der-neuschrieb-2026-07-24)
+- [Teil A — Ist-Vertrag (konsolidiert)](#teil-a-ist-vertrag-konsolidiert)
+  - [A1. Freie Weltkarte (Meter)](#a1-freie-weltkarte-meter)
+  - [A2. Die Platzierungsketten (heute drei — v4 vereinheitlicht sie, § B2)](#a2-die-platzierungsketten-heute-drei-v4-vereinheitlicht-sie-b2)
+  - [A3. Standhöhen & Figuren-Maßstab — Klärung der 0,12-Frage](#a3-standhöhen-figuren-maßstab-klärung-der-012-frage)
+  - [A4. Raum-Rezept `GET /play/rooms/{room_id}/recipe`](#a4-raum-rezept-get-playroomsroom_idrecipe)
+  - [A5. Outdoor-Räume (`always_visible`)](#a5-outdoor-räume-always_visible)
+  - [A6. Gebäude-Grundriss, Etagen, Fahrstuhl (AV3D-12)](#a6-gebäude-grundriss-etagen-fahrstuhl-av3d-12)
+  - [A7. Modelle & Meta-Endpunkte](#a7-modelle-meta-endpunkte)
+  - [A8. Animation & Aktivität](#a8-animation-aktivität)
+  - [A8a. Paar-Interaktionen — zwei Figuren, ein Clip-Paar, ein Anker](#a8a-paar-interaktionen-zwei-figuren-ein-clip-paar-ein-anker)
+  - [A9. Terrain & Oberflächen (AV3D-13 v2)](#a9-terrain-oberflächen-av3d-13-v2)
+  - [A9a. Welt-Props — einzeln gesetzte Props auf der Weltebene (E2.2)](#a9a-welt-props-einzeln-gesetzte-props-auf-der-weltebene-e22)
+  - [A9b. Prop-Boxen — die Streu wächst nicht durch eine Bank](#a9b-prop-boxen-die-streu-wächst-nicht-durch-eine-bank)
+  - [A10. Kamera & Steuerung (Referenz, unverändert)](#a10-kamera-steuerung-referenz-unverändert)
+  - [A11. Reise-Payload — server-autoritative Bewegung als Meter-Polyline](#a11-reise-payload-server-autoritative-bewegung-als-meter-polyline)
+  - [A11a. `model_sig` — die Modell-Signatur reist im Worldmap-Poll](#a11a-model_sig-die-modell-signatur-reist-im-worldmap-poll)
+  - [A12. Fog of War im Worldmap-Payload](#a12-fog-of-war-im-worldmap-payload)
+  - [A13. Die Grundfläche ist ein Raum](#a13-die-grundfläche-ist-ein-raum)
+  - [A14. Der Sperr-Zustand kommt vom Server](#a14-der-sperr-zustand-kommt-vom-server)
+  - [A15. Freies Laufen — `POST /play/pos` — neu 2026-08-09 (E4)](#a15-freies-laufen-post-playpos-neu-2026-08-09-e4)
+  - [A16. Ein Boden — Höhe, Material und Wasser der offenen Welt](#a16-ein-boden-höhe-material-und-wasser-der-offenen-welt)
+  - [A17. Die Fernkulisse — `backdrop` im Worldmap-Payload](#a17-die-fernkulisse-backdrop-im-worldmap-payload)
+  - [A18–A20. Entfällt seit 2026-08-21 — zusammengezogen in § A16](#a18a20-entfällt-seit-2026-08-21-zusammengezogen-in-a16)
+- [Teil B — Ziel-Vertrag v4: das Szenen-Rezept](#teil-b-ziel-vertrag-v4-das-szenen-rezept)
+  - [B1. `GET /play/locations/{location_id}/scene`](#b1-get-playlocationslocation_idscene)
+  - [B1a. Der Poll: `ETag`/`304` und der Eingabe-Cache](#b1a-der-poll-etag304-und-der-eingabe-cache)
+  - [B2. Die EINE Platzierungs-Routine](#b2-die-eine-platzierungs-routine)
+  - [B2a. Größenabgleich Diorama ↔ Props ↔ Figuren — EIN Maßstabsgesetz](#b2a-größenabgleich-diorama-props-figuren-ein-maßstabsgesetz)
+  - [B3. Draft-Vorschau für den Admin](#b3-draft-vorschau-für-den-admin)
+  - [B4. Server-vermessene Meshes (Ausbaustufe)](#b4-server-vermessene-meshes-ausbaustufe)
+  - [B5. Rollen ab v4](#b5-rollen-ab-v4)
+  - [B5a. Verifikation: Arithmetik statt Screenshots](#b5a-verifikation-arithmetik-statt-screenshots)
+  - [B6. Divergenz-Fixliste](#b6-divergenz-fixliste)
+- [Teil C — Ergänzungen zum Vertrag, nach Thema](#teil-c-ergänzungen-zum-vertrag-nach-thema)
+  - [C1. Wände, Türen und Schwellen](#c1-wände-türen-und-schwellen)
+    - [Eine Wand, ein Besitzer (Kontur vs. Raumhülle)](#eine-wand-ein-besitzer-kontur-vs-raumhülle)
+    - [Eine Tür ist ein LOCH, kein Schlitz — der Sturz (§ B1)](#eine-tür-ist-ein-loch-kein-schlitz-der-sturz-b1)
+    - [Das TÜRBLATT — eine Tür ist von außen SICHTBAR (§ B1)](#das-türblatt-eine-tür-ist-von-außen-sichtbar-b1)
+    - [Tür-Props + Slots (v5) (§ B1/B2)](#tür-props-slots-v5-b1b2)
+  - [C2. Treppen und Fahrstuhl](#c2-treppen-und-fahrstuhl)
+    - [TREPPEN — man geht in den ersten Stock (§ A6/B1)](#treppen-man-geht-in-den-ersten-stock-a6b1)
+    - [TREPPEN v2 — der Lauf ist DATEN, der Boden bekommt ein Loch (§ A6/B1)](#treppen-v2-der-lauf-ist-daten-der-boden-bekommt-ein-loch-a6b1)
+    - [TEXTUREN für Treppe und Fahrstuhl, die Treppe ist eine TREPPE (v13) (§ A6/B1)](#texturen-für-treppe-und-fahrstuhl-die-treppe-ist-eine-treppe-v13-a6b1)
+  - [C3. Props, Varianten und Modelle](#c3-props-varianten-und-modelle)
+    - [Ein Prop, mehrere Modell-Varianten (§ B2)](#ein-prop-mehrere-modell-varianten-b2)
+    - [Maß, Motiv, Einsinken und Marker gehören der VARIANTE — die Nutzlast bleibt Zeichen für Zeichen gleich (§ B2/§ A9/§ A9a)](#maß-motiv-einsinken-und-marker-gehören-der-variante-die-nutzlast-bleibt-zeichen-für-zeichen-gleich-b2-a9-a9a)
+    - [Dach-Modelle (`roof_only`) (§ B1/B2)](#dach-modelle-roof_only-b1b2)
+    - [Ein Prop steht überall gleich tief — `ground_offset_m` (§ B2/§ A9/§ A9a)](#ein-prop-steht-überall-gleich-tief-ground_offset_m-b2-a9-a9a)
+    - [Ein Prop steht auf einem Prop, und ein Prop darf halb sein (§ B2)](#ein-prop-steht-auf-einem-prop-und-ein-prop-darf-halb-sein-b2)
+    - [Bild-Props (v5) — das Bild reitet auf der VARIANTE (§ B2)](#bild-props-v5-das-bild-reitet-auf-der-variante-b2)
+    - [Bild-Props v2 — Flächen, Türblatt und Orientierung gehören zur MODELLDATEI (§ B2)](#bild-props-v2-flächen-türblatt-und-orientierung-gehören-zur-modelldatei-b2)
+    - [Oberflächen-Raster (v6) (§ B2)](#oberflächen-raster-v6-b2)
+  - [C4. Plätze und Marker](#c4-plätze-und-marker)
+    - [Marker sprechen PLATZ-TYPEN (v7) (§ B)](#marker-sprechen-platz-typen-v7-b)
+    - [Ein Platz-Typ ist eine KÖRPERFORM (v11) (§ A4/§ B)](#ein-platz-typ-ist-eine-körperform-v11-a4-b)
+  - [C5. Wasser und Uferrelief](#c5-wasser-und-uferrelief)
+    - [Ein Wasser-Gesetz — W1 (Server) (§ A16.3 / § A16.7 / § A16.8 / § B1)](#ein-wasser-gesetz-w1-server-a163-a167-a168-b1)
+    - [Ein Wasser-Gesetz — W2 (Client) (§ A16.3 / § A16.7 / § A19 Nr. 5 / § G4)](#ein-wasser-gesetz-w2-client-a163-a167-a19-nr-5-g4)
+    - [Kein Relief am Wasserrand, und der Spiegel folgt seiner Achse überall — W5d (§ A16.3 / § G4)](#kein-relief-am-wasserrand-und-der-spiegel-folgt-seiner-achse-überall-w5d-a163-g4)
+    - [Das reliefreie Band bekommt sein eigenes Maß — W5e (Server) (§ A16.3 / § G4)](#das-reliefreie-band-bekommt-sein-eigenes-maß-w5e-server-a163-g4)
+    - [Das Wasser-Raster — Wasser v2, K-A E1/E2 (§ A16.5 / § G2 / § G4)](#das-wasser-raster-wasser-v2-k-a-e1e2-a165-g2-g4)
+    - [Das Wasser-Raster nennt seine ART pro Texel — die zweite Hälfte von F-A (§ A16.5)](#das-wasser-raster-nennt-seine-art-pro-texel-die-zweite-hälfte-von-f-a-a165)
+    - [Der Rückbau der Ufer-Wächter — Wasser v2, K-A E6 (Server) (§ A16.3 / § G4)](#der-rückbau-der-ufer-wächter-wasser-v2-k-a-e6-server-a163-g4)
+    - [Zwei Sichtbefunde am K-A-Wasser — Schaum-Deckung und Vorhang-Verdeckung (Client) (§ B5a)](#zwei-sichtbefunde-am-k-a-wasser-schaum-deckung-und-vorhang-verdeckung-client-b5a)
+    - [Die vier Befunde am K-A-Wasser — der `sd`-Kanal, das gehobene Ringband und der Fließ-Rahmen (§ A16.5 / § B5a)](#die-vier-befunde-am-k-a-wasser-der-sd-kanal-das-gehobene-ringband-und-der-fließ-rahmen-a165-b5a)
+- [Anhang — Änderungsverlauf](#anhang-änderungsverlauf)
+  - [Ersatzlos gestrichene Abschnitte](#ersatzlos-gestrichene-abschnitte)
+    - [Woher das Bild stammt (`origin`) — entfällt seit 2026-08-21](#woher-das-bild-stammt-origin-entfällt-seit-2026-08-21)
+    - [EIN Boden, Teile 1–3 (2026-08-20) — ersetzt durch § A16](#ein-boden-teile-13-2026-08-20-ersetzt-durch-a16)
+    - [Ein Boden, E1 / E3 / E4 / E5a / E5b (2026-08-21) — zusammengezogen in § A16](#ein-boden-e1-e3-e4-e5a-e5b-2026-08-21-zusammengezogen-in-a16)
+
+---
+
+# Präambel v6 — „Gebiete“ (2026-08-19)
 
 > **v6 — Die Location ist ein gezeichnetes Polygon, alle Inhalte sind Meter.**
 > Beschlossen 2026-08-19 (User-Freigabe Option 2, `development_instructions/`
@@ -294,7 +402,7 @@
 > N/S/E/W nennt, gilt die Liste oben. Numerische Verifikation weiterhin
 > nach § B5a (Handwerte, nie Screenshots).
 
-# Schnittstellen 3D — Gesamtvertrag v5 (2026-07-28)
+# Präambel v5 — EIN Rahmen, EIN Maßstab, EIN Anker (2026-07-28)
 
 > **v5 — EIN Rahmen, EIN Maßstabsfaktor, EIN Anker (2026-07-28).**
 > Drei Änderungen, die alles Folgende überschreiben, wo es widerspricht:
@@ -328,7 +436,7 @@
 >    liegt auf `offset_y`, das Mesh hängt darunter; bleibt sichtbar und
 >    bekommt `cutouts`). Der Client hat „Fläche" vorher aus
 >    `cutouts.length > 0` geschlossen und lag bei Flächen ohne Grundriss
->    falsch — der Mondscheinsee verschwand beim Reinzoomen komplett.
+>    falsch — der See verschwand beim Reinzoomen komplett.
 >    **Wo im Mesh die begehbare Fläche liegt, sagt ausschließlich der
 >    `walk_y`-Regler** (Meter über der Unterkante; fehlt/0 = die
 >    Unterkante selbst). Die frühere Messung („dominante horizontale Lage",
@@ -339,7 +447,7 @@
 >    erklärte die DÄCHER für begehbar und versenkte das Modell 7,7 reale
 >    Meter). Der Benutzer setzt den Basiswert, alles andere rechnet daraus.
 >    Folge: Platten, Marker, Dioramen und Overlay-Zonen liegen automatisch
->    auf derselben Höhe wie die Modelloberfläche (Mondscheinsee vorher:
+>    auf derselben Höhe wie die Modelloberfläche (der See vorher:
 >    Overlay 1,12 / Marker −0,02 / Diorama 0,07 / Unterkante 0,06).
 >
 > Der Rest des Dokuments beschreibt weiterhin korrekt, WAS komponiert wird;
@@ -636,7 +744,7 @@
 >     nennt nur, was existiert, und `pickVariant()` bleibt die eine
 >     Auflösungsregel.
 
-# Schnittstellen 3D — Gesamtvertrag v4 (2026-07-24)
+# Präambel v4 — der Neuschrieb (2026-07-24)
 
 **Vollständiger Neuschrieb.** Dieses Dokument ERSETZT und konsolidiert:
 `schnittstellen-3d.md` (Stand 2026-07-13), `backend-note-scale-anchors.md`
@@ -659,7 +767,7 @@ Der Vertrag hat zwei Teile:
 
 # Teil A — Ist-Vertrag (konsolidiert)
 
-## A1. Freie Weltkarte (Meter) — neu geschrieben 2026-08-07
+## A1. Freie Weltkarte (Meter)
 
 `development_instructions/plan-freie-weltkarte.md`, Etappe **E1**
 (Commits `dc85876`…`6e773d2`). **Das Kachelraster ist ersatzlos
@@ -676,13 +784,15 @@ Dokuments noch von einer Kachel, von `grid_x`/`grid_y` oder von
 - **Achsen:** `x` wächst nach **Osten**, `z` nach **Süden** — die
   Bodenebene beider Renderer. `y` ist keine Koordinate der Wahrheit
   (A1.2).
-- **Eine Location ist ein Quadrat**: Kantenlänge `plan_width_m`
-  (der Maßstabsanker aus `map3d.plan_width_m`), Mittelpunkt
-  (`pos_x`, `pos_z`), gedreht um `yaw_deg` um die Hochachse.
+- **Eine Location ist ein gezeichnetes Polygon** (v6 Nr. 1):
+  `map3d.boundary` in LOKALEN Metern um den Anker-Pin (`pos_x`, `pos_z`),
+  gedreht um `yaw_deg` um die Hochachse. Das Quadrat ist nur noch der
+  Spezialfall eines Polygons; `plan_width_m` ist die ABGELEITETE Breite
+  seiner Bounding-Box, kein Regler.
   **Unplatziert** = `pos_x`/`pos_z` `null` — sie steht auf keiner Karte
-  und verrät nichts (Template-Stellvertreter). **Ohne positiven Anker**
-  (`plan_width_m` fehlt oder ≤ 0) hat sie keine Fläche und kann keinen
-  Punkt für sich beanspruchen; sie hat dann nur einen Mittelpunkt.
+  und verrät nichts (Template-Stellvertreter). **Ohne gezeichnete Boundary**
+  hat sie keine Fläche und kann keinen Punkt für sich beanspruchen; sie hat
+  dann nur einen Mittelpunkt.
 - **Die Transformation ist Server-Code** (`app/core/world_geometry.py`),
   beide Renderer rechnen sie identisch nach:
 
@@ -759,11 +869,21 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 | `map3d` | `object` | **optionaler Schlüssel** — nur wenn nicht leer (inkl. der abgeleiteten `floors`-Ersatzangabe aus den Raum-Layouts) |
 | `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (gezeichnete `boundary`, Grenz-Durchgänge, `rotation`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
 
-Wurzelfelder des Payloads: `avatar` · `current_location_id` ·
-`locations` · `characters` · `events_by_location` · `world_bounds` ·
-`terrain_sig` · `height_sig` · `fogged` · `max_step_height_m` ·
-`max_slope_deg` · `backdrop` (**optionaler Schlüssel** — nur wenn die
-Fernkulisse eingeschaltet ist, § A17).
+**Wurzelfelder des Payloads — die vollständige Liste:** `avatar` · `current_location_id` · `locations` ·
+`characters` · `events_by_location` · `game_time` · `world_bounds` ·
+`terrain_sig` · `height_sig` · `explored_sig` · `world_props` ·
+`world_props_sig` · `fogged` · `max_step_height_m` · `max_slope_deg` ·
+`backdrop` (**optionaler Schlüssel** — nur wenn die Fernkulisse eingeschaltet
+ist, § A17).
+
+Fünfzehn feste Schlüssel plus `backdrop`. Gebaut werden sie in
+`world_ops.build_worldmap_payload`; wer die Liste ändert, ändert
+`scripts/smoke_docs_schnittstellen_3d.py` mit, das sie gegen ein hier
+gebautes Payload hält.
+
+`prop_boxes` (§ A9b) steht **nicht** hier, sondern in `GET /play/terrain`
+(§ A1.5) — die Prop-Grundflächen gehören zum Gelände-Payload, das nur bei
+`terrain_sig`-Wechsel geholt wird, nicht in den 3-Sekunden-Poll.
 
 | Wurzelfeld | Typ | Bedeutung |
 |---|---|---|
@@ -803,11 +923,13 @@ zurückfällt.
 ALLE Locations mit numerischem `pos_x`/`pos_z` **und über alle gemalten
 Terrain-Flächen**, und zwar:
 
-1. Location **mit Maßstabsanker** → der volle achsparallele Kasten des
-   **UNGEDREHTEN** Quadrats, `cx ± w/2` / `cz ± w/2`. Bewusst ungedreht:
-   die Ausdehnung ist ein Viewport-Hinweis, kein Kollisionsvolumen.
-2. Location **ohne Maßstabsanker** → der **blanke Mittelpunkt** `(cx, cz)`,
-   ohne ±w/2.
+1. Location **mit gezeichneter Boundary** → der achsparallele Kasten über
+   die Boundary-Punkte **in WELT-Koordinaten**, also NACH der Pin-Abbildung
+   aus § A1.1 (Drehung eingerechnet — `world_geometry.effective_boundary` +
+   `local_to_world`). Der Maßstabsanker, der hier früher ein ungedrehtes
+   Quadrat aufspannte, existiert seit v6 Nr. 2 nicht mehr.
+2. Location **ohne Boundary** (platziert, aber ohne Fläche) → der **blanke
+   Mittelpunkt** `(cx, cz)`.
 3. **Gemalte Fläche** → der achsparallele Kasten über alle Punkte ihres
    Polygons. Unlesbare oder nicht-endliche Punkte werden übersprungen,
    nie in die Ausdehnung gerechnet.
@@ -1045,7 +1167,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
 
   ```
   fehlt:    yaw = r · 2π                                   (jeder Scatter bisher)
-  aligned:  yaw = Achse + yaw_deg · π/180                  (Achse: Nachtrag 2026-09-10)
+  aligned:  yaw = Achse + yaw_deg · π/180                  (Achse: Scatter-Erweiterung 2026-09-10)
   ```
 
   Bogenmaß um +y, Blickrichtung `(sin yaw, cos yaw)` — 0° = +z (Süden),
@@ -1090,7 +1212,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   (`lineAxis` über `strokeCentreLine`, kein Innen-Test, weniger als zwei
   Punkte → 0) — dieselbe Richtung, die die `along`-Reihen längst lesen.
 
-  **Die Seitenwahl `sides` (Nachtrag 2026-09-10, Task 10)** macht die Achse
+  **Die Seitenwahl `sides` (Scatter-Erweiterung 2026-09-10, Task 10)** macht die Achse
   zur Sache der ZEILE, nicht der Fläche: sie sagt, WELCHE Kanten des
   Polygons zählen — und das für die Achse einer `aligned`-Drehung UND für
   die Kanten, an denen eine `edge`-Reihe entlangläuft (Nutzer-Entscheid).
@@ -1183,7 +1305,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
 
   auf der Kante, deren halboffene Spanne `[cum_i, cum_i+1)` `s_k` enthält;
   `s = L` ist wieder `s = 0` und keine Station, und ein Scatter-Eintrag hat
-  kein `start_m`. **Mit `spacing_jitter_m` (Nachtrag 2026-09-10, Task 9)
+  kein `start_m`. **Mit `spacing_jitter_m` (Scatter-Erweiterung 2026-09-10, Task 9)
   atmet der Abstand:** jede Station zieht EINEN Wert `r_k` aus einem EIGENEN
   Strom `seededRandom(seed + ':jitter')` — `seed` ist der Zeilen-Seed samt
   Epoche, „New mix" würfelt also auch die Abstände neu; der Yaw-Strom der
@@ -1217,7 +1339,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   mod n`). Die Reihe wird EINMAL für den ganzen Ring gerechnet, das
   Kamerafenster filtert der Aufrufer, genau wie bei `along`.
 
-  **Mit `sides` (Nachtrag 2026-09-10, Task 10) läuft die Reihe nicht mehr
+  **Mit `sides` (Scatter-Erweiterung 2026-09-10, Task 10) läuft die Reihe nicht mehr
   um den geschlossenen Ring, sondern je gewählter Kante EINEN eigenen
   Lauf** (`ringStations(ring, {…, sides})`), in aufsteigendem Kantenindex:
   jeder Lauf beginnt neu bei `s = start` auf SEINER Kante und endet beim
@@ -1232,7 +1354,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   `fehlt`/`"all"` ist der Ringlauf von oben, byte-gleich. Zahlen von Hand:
   `client3d/scripts/smoke_scatter_math.mjs` (U5, X10).
 
-  **EIN LAUF JE KETTE, nicht je Kante** (Nachtrag 2026-09-10, Task 11). Ein
+  **EIN LAUF JE KETTE, nicht je Kante** (Scatter-Erweiterung 2026-09-10, Task 11). Ein
   Lauf gehört nicht einer Kante, sondern einer KETTE zusammenhängender
   Kanten, und läuft über deren KUMULIERTE Bogenlänge — genau wie der
   geschlossene Ring. Die Option `edges` (eine explizite Kantenliste des
@@ -1378,7 +1500,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Seite. `alternate` = Station k rechts (gerade) / links (ungerade); `both`
   = je Station zwei Instanzen (rechts, dann links). `random` zieht den Yaw aus
   `terrain:along:<area_id>:<index>`, ein Zug je Instanz, sonst nichts.
-  **`spacing_jitter_m` (Nachtrag 2026-09-10, Task 9)** streut die Stationen
+  **`spacing_jitter_m` (Scatter-Erweiterung 2026-09-10, Task 9)** streut die Stationen
   genau wie bei der Rand-Reihe: `j_k = (2·r_k − 1) · spacing_jitter_m`,
   `s_0 = start + j_0`, `s_k = s_{k−1} + spacing + j_k`, `s_k < 0 → 0`, Ende
   hinter `L`; `r_k` aus dem EIGENEN Strom `seededRandom(seed + ':jitter')`
@@ -1462,7 +1584,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   URLs und Einträge ohne `model` bekommen den Schlüssel nicht; ein Datensatz hat
   IMMER eine Höhe (ohne eigene Maße den 1-m-Platzhalterwürfel), „kein
   Schlüssel" heißt also „kein Prop", nicht „keine Höhe".
-- **Zielhöhe = Prop-Höhe (Nachtrag 2026-09-10, Task 9):** das geladene Mesh
+- **Zielhöhe = Prop-Höhe (Scatter-Erweiterung 2026-09-10, Task 9):** das geladene Mesh
   wird uniform skaliert, bis seine Bounding-Box so hoch ist wie
   `prop_height_m` des Props — **2,0 m**, wo kein Prop-Datensatz antwortet
   (fremde URL). Ein Höhenfeld am Eintrag (`height_m`) gibt es nicht mehr: die
@@ -1494,7 +1616,7 @@ scatter: [ {density_per_100m2: float,   # Instanzen je 100 m² der Fläche, 0 = 
   Wasser. Getestet mit derselben Even-odd-Regel wie der eigene Ring
   (`pointInRing`, Server-Semantik `point_in_polygon`), und weil der Yaw auch
   hier vorher gezogen wird, ist es wieder eine reine **Subtraktion**. Seit
-  2026-09-10 folgt darauf noch die Belegung (Nachtrag oben): was frühere
+  2026-09-10 folgt darauf noch die Belegung (Scatter-Erweiterung, oben): was frühere
   Zeilen DERSELBEN Zelle gepflanzt haben, blockt genauso — als letztes
   Verdikt und ebenfalls nur subtrahierend.
 - **Grundflächen platzierter Locations werden ausgespart** (Befund B18):
@@ -2073,8 +2195,10 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
 - `floors` ist float (2,5 = Dach/Attika zählt halb); `height_m` =
   geschätzte Gesamthöhe; `width_m` = geschätzte reale Raumbreite (macht
   den Inhalts-Maßstab explizit). `offset_*` ±25 Welt-Meter.
-- Rig-Typen: `mixamo` (humanoid, EIN GLB, Skelett 52 Joints
-  `mixamorig:`, Textur eingebettet) · `generic` (FBX + separates
+- Rig-Typen: `mixamo` (humanoid, EIN GLB, `mixamorig:`-Konvention, Textur
+  eingebettet — Charakter-Bakes kommen meist OHNE Finger und tragen dann 52
+  statt der 69 Knochen des Clip-Referenz-Rigs `shared/models/rig/reference.fbx`;
+  das Retargeting beim Abspielen gleicht das aus) · `generic` (FBX + separates
   basecolor-Bild, keine Bibliotheks-Clips → prozedurales Idle) ·
   `none` (Gebäude/Räume/Props, unrigged GLB). Richtwert ≤ ~30 MB,
   Texturen ≤ 2048; Raum-/Gebäude-Texturen gern als JPEG eingebettet.
@@ -2083,7 +2207,7 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   Koexistenz-Verhalten des Clients (MR vorhanden → nutzen + neutrale
   Env-Map, sonst Metalness neutralisieren) ist Vertrag. Kleine uniforme
   MR-Maps sind valide, keine Fail-Bake-Artefakte.
-  **Ausnahme FIGUREN (2026-07-26, Befund Rosi):** Charakter-Bakes liefern
+  **Ausnahme FIGUREN (Befund 2026-07-26):** Charakter-Bakes liefern
   ~0,5 Metalness über Haut/Stoff (gemessen Ø B = 127) — physikalisch
   Unsinn. Renderer setzen bei Charakter-Modellen `metalness = 0`
   (Roughness-Kanal derselben Map bleibt aktiv); die Env-Map-Regel gilt
@@ -2096,10 +2220,14 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
 
 ## A8. Animation & Aktivität
 
-- Clips: Mixamo-FBX „Without Skin", alle aus derselben Quelle. Offenes
-  `kind`-Vokabular (idle/walk/run/sit/…); **Sets** = Unterverzeichnis
+- Clips: FBX „Without Skin" (reine Keyframes) auf dem EINEN Referenz-Rig
+  `shared/models/rig/reference.fbx` (`mixamorig:`-Namen, 69 Knochen) — jeder
+  Import retargetet darauf, die Quelle ist egal (CMU-Mocap, gekaufte Packs,
+  fremde FBX aus dem Inbox-Import). Offenes `kind`-Vokabular
+  (idle/walk/run/sit/…); **Sets** = Unterverzeichnis
   (`female`/`male`/`animal`/frei); Fallback-Kette
-  `<kind>_<set1>` → … → `<kind>` über `animation_sets` des Charakters.
+  `<set>/<kind>` → … → `<kind>` über `animation_sets` des Charakters.
+  Dateiregeln und Bibliotheks-Layout: `shared/models/clips/README.md`.
 - **Server-authoritativ:** `activity_animation` (per Worldmap) bestimmt
   den Clip; nennt der Server keinen, steht die Figur (`idle`). Die
   Keyword-Heuristik `activityToClipKind` im Client ist gelöscht (2026-08-28,
@@ -2113,7 +2241,7 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   gilt für Solo- UND Paar-Clips. Ein Kind OHNE Eintrag in der Auflistung gilt
   im Client als Loop — Locomotion darf nie stehen bleiben.
 
-## A8a. Paar-Interaktionen — zwei Figuren, ein Clip-Paar, ein Anker (2026-08-20)
+## A8a. Paar-Interaktionen — zwei Figuren, ein Clip-Paar, ein Anker
 
 **Clip-Paar.** Ein Paar-Clip besteht aus zwei Dateien, die ZUSAMMEN aufgenommen
 wurden: `<kind>__a.fbx` + `<kind>__b.fbx` (Doppel-Unterstrich = Rollentrenner,
@@ -2690,7 +2818,7 @@ Routine liest.
 - **Nav-Grid, Perzeption, Prompts: gar nicht.** Ein Welt-Prop ist für die
   Simulation nicht vorhanden.
 
-## A9b. Prop-Boxen — die Streu wächst nicht durch eine Bank (2026-08-23)
+## A9b. Prop-Boxen — die Streu wächst nicht durch eine Bank
 
 **Befund des Nutzers:** die Streu (§ A9) stand mitten in einzeln gesetzten
 Welt-Props (§ A9a). Der Sampler kannte bis dahin nur gesetzte **Locations**
@@ -2794,7 +2922,7 @@ Kamera folgt dort der Figur, ein Pan hätte keine Wirkung; Klick bleibt Klick
 (Geh-Befehl) bis 4 px Zeigerweg. In der Übersicht gilt unverändert das obige.
 Raum-Vorschau-Start: dist 22, Pitch-Offset +28°, Target Kachelmitte.
 
-## A11. Reise-Payload (server-autoritative Bewegung) — Meter-Polyline seit E3 (2026-08-09)
+## A11. Reise-Payload — server-autoritative Bewegung als Meter-Polyline
 
 Ein Charakter wechselt die Location nicht schlagartig, sondern **läuft eine
 Polylinie in Welt-Metern ab**. `GET /play/worldmap` liefert dafür pro
@@ -3031,7 +3159,7 @@ damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
 
 ---
 
-## A11a. `model_sig` — die Modell-Signatur reist im Worldmap-Poll (neu 2026-09-21)
+## A11a. `model_sig` — die Modell-Signatur reist im Worldmap-Poll
 
 Ein Charakter hat **ein Mesh je Outfit-Kombination** (`app/core/model3d.py`).
 Wechselt die Kleidung, ein Zustands-Modifikator oder wird ein Mesh neu
@@ -3075,7 +3203,7 @@ Sichtbarkeits-Tore des Fogs (§ A12) bereits passiert.
 
 ---
 
-## A12. Fog of War im Worldmap-Payload — neu 2026-08-05
+## A12. Fog of War im Worldmap-Payload
 
 `GET /play/worldmap` liefert standardmäßig NICHT mehr die ganze Welt, sondern
 nur, was der aktive Avatar kennt. Gebaut wird der Payload in EINER Funktion —
@@ -3142,7 +3270,7 @@ einer leeren Fläche.
 | `fogged` | `bool` | `true` = gefilterte Sicht (`= not show_all`). Clients zeigen daran „hier ist noch Nebel" an, statt eine leere Karte zu vermuten |
 | `explored_sig` | `string` | Signatur des **Erkundungs-Gedächtnisses** des Avatars (siehe unten). Ändert sie sich, holt der Client `GET /play/explored` neu. `""` ohne übernommenen Charakter |
 
-### Der Schleier hat ein Gedächtnis — neu 2026-08-16
+### Der Schleier hat ein Gedächtnis
 
 > **Stand seit 2026-08-24 (`plan-fog-schleier-v2.md`): der Schleier ist
 > zurück — als DUNST, nicht als Decke.** Zwischen 2026-08-19 (v6 Nr. 8 /
@@ -3226,7 +3354,7 @@ soll, bekommt keinen Zugang — nicht bloß Nebel.
 
 ---
 
-## A13. Die Grundfläche ist ein Raum — neu 2026-08-05
+## A13. Die Grundfläche ist ein Raum
 
 `plan-grundflaeche.md` §§ 3/6. **Den Zustand „in keinem Raum" gibt es nicht
 mehr.** Jede Location trägt einen **reservierten Raum** mit fester Id
@@ -3267,7 +3395,7 @@ kann ihn nicht löschen, nur benennen.
   ein gültiges Ziel statt eines Lochs (client3d, `groundRoomId` aus dem
   Payload) — vorher behielt sie den Raum der VORIGEN Location.
 
-### A13a. Die Grundfläche trägt einen REDUZIERTEN Grundriss — neu 2026-08-20
+### A13a. Die Grundfläche trägt einen REDUZIERTEN Grundriss
 
 Programm „Prop-Welt statt Dioramen", Etappe 2 Nr. 1. **Die Grundfläche bleibt
 ohne Geometrie — aber nicht mehr ohne Inhalt.** Der Hof einer Location war
@@ -3326,7 +3454,7 @@ wörtlich gültig.
   `GET /play/rooms/__ground__/recipe` mit 400 ab: den Hof liefert
   `GET /play/locations/{id}/scene`.
 
-### A13b. Der Flur einer Etage ist ein Raum — neu 2026-09-09
+### A13b. Der Flur einer Etage ist ein Raum
 
 Spezifikation `docs/superpowers/specs/2026-09-09-etagen-flur-design.md`. **Was
 auf einer Etage kein Raum ist, ist ihr Flur — nicht der Hof.** Jede GENUTZTE
@@ -3428,7 +3556,7 @@ auf die Grundfläche zurück — die per Definition Etage 0 ist.
 
 ---
 
-### A13c. Hüllentüren — neu 2026-09-09
+### A13c. Hüllentüren
 
 Spezifikation `docs/superpowers/specs/2026-09-09-etagen-flur-design.md` § 6.
 **Eine Hüllentür ist eine Tür, die auf dem Gebäudeumriss selbst gezeichnet
@@ -3540,7 +3668,7 @@ deshalb nicht in einem Raum, sondern in der Hülle.
 
 ---
 
-## A14. Der Sperr-Zustand kommt vom Server — neu 2026-08-06
+## A14. Der Sperr-Zustand kommt vom Server
 
 `plan-betreten-und-tueren.md` § 5. **Der Server sagt WAS gesperrt ist, der
 Client sagt WIE es aussieht.** Beide Spieler-Payloads tragen den Zustand
@@ -4410,8 +4538,8 @@ geschärft werden.
 > der Rand eines Strandes gegen den Wald und sein Rand gegen den See), dann las
 > ein Texel sein PAAR von der einen und sein VORZEICHEN von der anderen — und
 > beides zusammen ergab einen Boden, der an keiner von beiden liegt. Gemessen an
-> den Masken der laufenden Welt (Befundrunde 2026-08-21, Wohnzimmerboden „Haus
-> von Kai", Welt −1551,95 / −761,50): id-Texel = Paar der Westwand
+> den Masken der laufenden Welt (Befundrunde 2026-08-21, Wohnzimmerboden
+> „Terrace House", Welt −1551,95 / −761,50): id-Texel = Paar der Westwand
 > (`wood | grass`) bei 2,75 m, sd-Texel = Vorzeichen der Nordlinie
 > (`rubber | wood`) bei 2,75 m, komponiert `A = wood, sd = −2,77` → **Wiese,
 > drei Meter innerhalb des Raums.** 627 solche Texel in den drei fotografierten
@@ -4441,7 +4569,7 @@ geschärft werden.
 > signiert sind. Das Vorzeichen heißt „auf A's Seite MEINES Paares", also sind
 > zwei Texel mit zwei Paaren zwei Zahlen auf zwei Skalen, und zwischen ihnen zu
 > mischen ist Arithmetik über verschiedene Einheiten. Gemessen an den Masken der
-> laufenden Welt (Wohnzimmer „Haus von Kai", Welt −1553,0 / −759,9): das Texel
+> laufenden Welt (Wohnzimmer „Terrace House", Welt −1553,0 / −759,9): das Texel
 > bei −1553,25 trägt **+1,26 m** gegen das Paar `wood | grass` der Westwand, sein
 > Nachbar bei −1552,75 trägt **−1,26 m** gegen `rubber | wood` der Küchenlinie —
 > benachbart, entgegengesetzt, beide für ihr eigenes Paar richtig. Der gefilterte
@@ -4770,7 +4898,7 @@ OVERLAY_SURFACE_LIFT`) bzw. 0,08 (Hof). **Die drei Konstanten `LEVEL_PLATE_TOP`
 Datums einer deklarierten Etage** und kommen auf Etage 0 in keinem `top_y`,
 `base_y` oder `bottom_y` mehr vor.
 
-Die Laufketten von „Haus von Kai" (gebaut) und „Mondscheinsee" (natürlich),
+Die Laufketten von „Terrace House" (gebaut) und „Salt Quay" (natürlich),
 alt → neu:
 
 | Größe | gebaut, ALT | natürlich, ALT | BEIDE, NEU |
@@ -4848,7 +4976,7 @@ Drei Eigenschaften, und alle drei sind der Grund für genau diese Zahl:
 Szenen-Rahmens — `y = 0` ist der Boden unter dem ANKER-PIN, EINE Höhe für den
 ganzen Ort. Auf einem gebauten Grundstück stimmt das exakt (§ A16.4 stempelt
 eben auf genau diese Höhe); auf einem NATÜRLICHEN Ort stimmt es an einem Punkt
-und sonst nirgends. Gemessen an „Mondscheinsee" (Pin-Boden −2,00 m, das Seebett):
+und sonst nirgends. Gemessen an „Salt Quay" (Pin-Boden −2,00 m, das Seebett):
 seine beiden Ufer-Dioramen sind auf `bottom_y` −0,28 komponiert, werden also auf
 −2,28 gezeichnet, während das Gelände unter ihren eigenen Ankern auf +0,277 bzw.
 +0,335 steht — **2,56 m und 2,62 m tief begraben**, bei 5,08 m Relief über dem
@@ -4884,7 +5012,7 @@ also antwortet dieselbe Formel dort 0. Keine zweite Regel, keine Ausnahme.
   Stuhl einmal stand. Er wird an seinem EIGENEN Punkt gehoben.
 
 **Und das DATUM selbst ist auch nur eine Höhen-Abtastung** (Befundrunde
-2026-08-24, „Haus von Kai" schwebt). `datum` ist der Boden unter dem Anker-Pin,
+2026-08-24, „Terrace House" schwebt). `datum` ist der Boden unter dem Anker-Pin,
 im 3D-Client `tile.center.y` — gelesen aus genau dem Feld, das spät eintrifft
 und bei jedem neuen Bake wieder wandert, und gelesen **einmal**, beim Bau der
 Kachel. Für alles mit einem `lift` ist das folgenlos: `lift = ground − datum`
@@ -5097,7 +5225,7 @@ sie produziert.
 | `client3d/scripts/smoke_relief_math.mjs` | das Feld-Lesen und die zwei Reiselinien-Ableitungen (auf Weltfeld + Reiselinie zurückgeschnitten) |
 | `client3d/scripts/smoke_layer_cut.mjs` | die Schnitt-Arithmetik (sd-Interpolation, `b = 0`-Kante, `fwidth`-AA), EIN Spiegel-Bauer von beiden Quellen gespeist, und die **Löschungs-Prüfung**: die gestrichenen Drape-/Platten-Namen kommen in den Quellen nicht mehr vor, `rebuildAreas` setzt **gar keine** `position.y` |
 | `client3d/scripts/smoke_water_plane.mjs` | [3] die E1-Invariante unabhängig nachgerechnet samt Gegenprobe, die Ufer-Alpha-Stützstellen, [5] die Zonen-Wasser unter einem Punkt (Vorrang vor gemalten Flächen, Letzter-gewinnt, `null` wird nie 0, der Schwimmer am Zonen-Spiegel) |
-| `client3d/scripts/smoke_walk_math.mjs` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren; **§ S** `storeyGroundLift` — die Mondscheinsee-Zahlen von Hand, die ebene Bühne der Admin-Vorschau, und die drei Nicht-Heber (deklarierte Etage, Gebäudemodell, fehlender Sampler) |
+| `client3d/scripts/smoke_walk_math.mjs` | die Figuren-Leiter, die identische Kette gebaut == natürlich, die roten Gegenproben auf 0,10 / 0,09 / 0,01, und dass `walkCeiling`/`acceptsWalkHit`/`groundLift` nicht mehr existieren; **§ S** `storeyGroundLift` — die Seeufer-Zahlen von Hand, die ebene Bühne der Admin-Vorschau, und die drei Nicht-Heber (deklarierte Etage, Gebäudemodell, fehlender Sampler) |
 | `client3d/scripts/smoke_surface_math.mjs` | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `elapsed_s / rate` bei Faktor 0,5/1/2 ergibt dieselbe Phase, Freeze hält sie, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
@@ -5106,7 +5234,7 @@ sie produziert.
 | `client3d/scripts/smoke_hillshade.mjs` | die Schattierungs-Tabelle samt Überhöhung und den roten Gegenproben |
 
 
-## A17. Die Fernkulisse — `backdrop` im Worldmap-Payload — neu 2026-08-14
+## A17. Die Fernkulisse — `backdrop` im Worldmap-Payload
 
 **Reine Optik: der Server autoriert, der Renderer zeichnet.** Die Fernkulisse
 ist ein Gebirgs-Schattenriss am Welthorizont — kein Kollisionskörper, keine
@@ -5153,6 +5281,27 @@ Klemmen und der Payload-Block; rote Gegenprobe mit der gespiegelten
 Grad-Konvention 0 = Nord), Client-Seite in
 `client3d/scripts/smoke_backdrop_math.mjs`.
 
+## A18–A20. Entfällt seit 2026-08-21 — zusammengezogen in § A16
+
+Die Etappen-Kapitel „Ein Boden" (E1/E3/E4/E5a/E5b) trugen zeitweise die
+Nummern § A18 bis § A20. Sie sind zu **§ A16** verschmolzen; die Nummern
+bleiben als Stub stehen, weil sie nicht neu vergeben werden dürfen — und weil
+**Code-Kommentare und Smokes bis heute auf § A19 Nr. 1–6 verweisen**. Die
+Auflösung:
+
+| alte Fundstelle | die Regel steht heute in |
+|---|---|
+| § A19 Nr. 1 — Etage 0 hat keine Platte mehr, `terrain`/`natural_floor` werden nicht mehr gelesen | § A16.9 |
+| § A19 Nr. 2 — die Höhenleiter in einer Zeile (`storey_floor_y` + Raum-Auflage) | § A16.9 |
+| § A19 Nr. 3 — die Etage-0-Räume als Daten (`floor_plan`) | § A16.9, Payload-Form in § B1 |
+| § A19 Nr. 4 — `surfaces.floor` ist direkt eine Bibliotheks-Art | § A16.7 (Layer-Schnitt), § A16.9 (`floor_kind`) |
+| § A19 Nr. 5 — der Wasserspiegel | § A16.8, präzisiert durch die Wasser-Ergänzungen in Teil C |
+| § A19 Nr. 6 — das szenen-eigene 17 × 17-Relief ist gelöscht, nichts drapiert mehr | § A16 / § A16.1, Beschluss in der v6-Präambel Nr. 12 |
+
+**§ G1–§ G5 gehören nicht in dieses Dokument.** Code-Kommentare, die sie
+nennen, verweisen auf `development_instructions/done/plan-ein-boden.md`; die
+davon noch geltenden Regeln stehen hier in § A16.
+
 ---
 
 # Teil B — Ziel-Vertrag v4: das Szenen-Rezept
@@ -5165,18 +5314,14 @@ keine einzige eigene Geometrie-Entscheidung mehr.
 
 ## B1. `GET /play/locations/{location_id}/scene`
 
-*Stand E4 (abgeschlossen 2026-08-10): der Composer liefert **`k = 1`** und
-`extent_m = plan_width_m` — jedes `_m`-Feld IST damit ein Welt-Meter
-(§ A1.8). Die Felder `extent_m`, `k` und `storey_m` bleiben im Payload:
-Konsumenten rechnen weiter mit dem GELIEFERTEN `k` (× 1 ist richtig), nie
-mit einer eigenen Konstante — `extent_m` schon gar nicht, es ist jetzt so
-groß wie die Location. **Beide Renderer sind nachgezogen** (E4 Task 3): der
-3D-Client hat seinen eigenen zweiten Maßstab ausgebaut (Figuren-, Raum- und
-Laufgeschwindigkeits-Faktoren gelöscht, `k` wird einmal pro Sitzung gegen 1
-geprüft), Locations stehen auf `(pos_x, pos_z)` mit der Kante
-`plan_width_m`, und der Yaw-Drehsinn ist überall der der Weltkarte.
-`map3d.extent_m` ist auch als ADMIN-REGLER weg (E4 Task 7) — der Sanitizer
-verwirft das Feld, es gibt keinen Schreiber mehr.*
+**Jede Zahl dieses Payloads ist ein WELT-METER.** Der Composer liefert
+`k = 1` und `extent_m = plan_width_m`; jedes `_m`-Feld ist damit direkt ein
+Meter (§ A1.8). Die drei Skalare `extent_m`, `k` und `storey_m` bleiben
+trotzdem im Payload, und Konsumenten rechnen mit dem GELIEFERTEN `k`
+(× 1 ist richtig) statt mit einer eigenen Konstante — `extent_m` schon gar
+nicht, es ist so groß wie die Location. Einen zweiten Maßstab gibt es in
+keinem der beiden Renderer mehr, und `map3d.extent_m` ist auch als
+Admin-Regler weg: der Sanitizer verwirft das Feld, es hat keinen Schreiber.
 
 ```
 {
@@ -5186,6 +5331,15 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                              # (E2c): Prop-Varianten und Boden-Texturen
                              # wechseln mit der Spielzeit, ohne dass ein
                              # gespeicherter Wert sich bewegt
+  boundary,                  # [[x,z],…] — der Fußabdruck der Location im
+                             # SZENEN-Rahmen (= lokale Meter um den Anker-Pin,
+                             # dieselben Punkte wie in der Worldmap-Zeile,
+                             # § A1.3). Kein Konsument transformiert sie ein
+                             # zweites Mal und keiner synthetisiert ein Quadrat
+  extent_m,                  # Breite der Bounding-Box dieses Fußabdrucks in
+                             # Metern (= plan_width_m); Laderadius, Viewport
+                             # und Backdrop hängen daran. NIE eine Konstante
+                             # annehmen (früher 8)
   k, storey_m,               # abgeleitete Skalare (Welt-Einheiten)
   levels: [ { level, floor_y } ],
   style: { wall_color, floor_color, glass_color, glass_opacity, door_color,
@@ -5326,9 +5480,11 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # Locations NIE.
                placeholder_dims? } ],      # dims-Box bei missing/has_model=false
 
-  # --- Rezept-Vokabular pro Raum (PLAN-Fraktionen, für den 2D-Editor) ---
+  # --- Rezept-Vokabular pro Raum (für den Grundriss-Editor) ---
   rooms:   [ { room_id, level, always_visible,
-               outline,                    # absolute Fraktionen des Quadrats
+               outline,                    # Raumhülle in SZENEN-Metern
+                                           # (v6 Nr. 2 — die [0,1]-Fraktionen
+                                           # von früher gibt es nicht mehr)
                openings,                   # normalisiert INKL. gespiegelter —
                                            # Ghost-Öffnungen kommen von HIER,
                                            # nie aus lokaler Spiegel-Logik
@@ -5413,7 +5569,32 @@ verwirft das Feld, es gibt keinen Schreiber mehr.*
                                            # (hull_opening_off_the_outline)
   outdoor_rooms: [ room_id, … ],
 
-  # --- Etagen-Flure (2026-09-09) ---
+  # --- Etage 0 als Daten (§ A16.9) ---
+  floor_plan: [ { room_id, polygon_world: [[x,z],…], floor_kind, closed,
+                  water_level_effective? } ],
+                                           # IMMER da: eine Zeile je Raum auf
+                                           # Etage 0, in Rezept-Reihenfolge.
+                                           # Ersetzt die Etage-0-Platten, die
+                                           # es seit „Ein Boden" E5a nicht mehr
+                                           # gibt — Raum-Spots, NPC-Plätze und
+                                           # Labels kommen von HIER, die Höhe
+                                           # vom Höhen-Sampler. Felder und
+                                           # Randfälle: § A16.9
+  boundary_openings: [ { edge, at_world: [x,z], inward: [nx,nz],
+                         type, width_m } ],
+                                           # OPTIONALER Schlüssel — nur wenn
+                                           # die Location autorierte Grenz-
+                                           # Durchgänge hat (§ B1 Nr. 13;
+                                           # dieselben Öffnungen wie
+                                           # `openings` der Worldmap-Zeile,
+                                           # § A1.3)
+  area_detail: true,                       # OPTIONALER Schlüssel — nur an
+                                           # einer Flächen-Location im
+                                           # Detail-Modus (map3d.area_model +
+                                           # map3d.area_detail). Fade-Gate und
+                                           # Zonen-Behandlung hängen daran
+
+  # --- Etagen-Flure ---
   corridors: [ { room_id, level, anchor: [x, z],
                  outline: [[x, z], …] } ],
                                            # IMMER da, leer = kein Flur-Raum
@@ -5609,7 +5790,7 @@ Zustandliche: Kamera, LOD/Fades, Etagen-Umschalter (per `opacity_role`
 und `level` gesteuert), Kamera-Culling (`outward_normal` liegt bei),
 Labels, Pathfinding, Tag/Nacht, Terrain-Blends, Animations-Retargeting.
 
-## B1a. Der Poll: `ETag`/`304` und der Eingabe-Cache — neu 2026-09-21
+## B1a. Der Poll: `ETag`/`304` und der Eingabe-Cache
 
 `signature` ist als **Poll-Feld** gebaut: ein Client holt die Szene jeder
 geladenen Location im Minutentakt und vergleicht genau dieses eine Feld
@@ -5801,7 +5982,7 @@ Der Befund selbst ist mit `@anima/scene-render` und § B3 erledigt und mit
 - `/play/rooms/{id}/recipe` bleibt während der Migration bestehen
   (Untermenge von `/scene`); danach Rückbau nach Absprache.
 
-## B5a. Verifikation: Arithmetik statt Screenshots (User-Vorgabe 2026-07-24)
+## B5a. Verifikation: Arithmetik statt Screenshots
 
 Screenshot-Vergleiche taugen nicht als Nachweis — weder für eine KI-Session
 noch als Regressionsschutz. Verbindlich ab v4:
@@ -5815,7 +5996,7 @@ noch als Regressionsschutz. Verbindlich ab v4:
   (Konsole/JSON), Abweichungen einzeln mit Ist/Soll.
 - **Befunde zwischen den Sessions werden als ZAHLEN gemeldet** (Objekt,
   Feld, Ist, Soll — wie die bisherigen Zahlenbeispiele Hörsaal/
-  Mondscheinsee), nie als Bildbeschreibung. Screenshots sind nur noch
+  Seeufer), nie als Bildbeschreibung. Screenshots sind nur noch
   für Menschen (Abnahme-Optik), nie Diskussionsgrundlage zwischen
   Sessions.
 - Server-seitig sichert der Composer-Smoke dieselben Zahlen (Fixture →
@@ -5825,7 +6006,7 @@ noch als Regressionsschutz. Verbindlich ab v4:
   ist auch der letzte doppelte Code weg und der Verify-Modus kommt aus
   einer Quelle.
 
-## B6. Divergenz-Fixliste (aus der Analyse 2026-07-24)
+## B6. Divergenz-Fixliste
 
 Stand **E7** (2026-08-13) — jede Zeile am Verbraucher nachgeprüft. Sieben von
 acht sind zu; offen bleibt allein #3. Nr. 9 ist 2026-08-27 dazugekommen und
@@ -5837,22 +6018,999 @@ gleich zu (Nachtrag „Oberflächen-Raster (v6)").
 | 2 | „0,12 × k" in §2e der Rezept-Note | **Historisch, erledigt:** zurückgezogen — 0,12 Welt-Meter konstant (§ A3) |
 | 3 | `activityToClipKind`-Keyword-Heuristik im Client | **Erledigt — gelöscht 2026-08-28, Task 13 (plan-posen-plaetze.md):** die Funktion ist aus `figures.ts` raus, `npcs.ts` steht bei leerem `activity_animation` auf `idle`; die Pose kommt aus dem Katalog, ein Marker nennt seit v7 keinen Clip mehr |
 | 4 | README des Clients nennt `map-icon-2d` als Bodenquelle; `mapIconUrl()` tot | **Erledigt — aber die Diagnose war FALSCH (E7-Korrektur):** `mapIconUrl()` lebt und liefert das Footprint-Icon der Karte (`frontend/src/tabs/map/PlacementLayer.tsx:78`, Konsumenten `MapTab`, `KnownLocationsEditor`, `LocationEditor`). Nichts daran ist Dead Code, `map_image_2d`/`map_rotation_2d` bleiben ausdrücklich (§ A1.9) (beide gelöscht 2026-09, plan-rueckbau-2d-karte.md). Weg ist nur die README-Zeile des Clients |
-| 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | **Erledigt:** `client3d/docs/implementierung-3d-pipeline.md:80` sagt heute selbst, dass es diese Routen NICHT gibt, und nennt `GET /characters/{name}/model3d` (JSON) |
+| 5 | `implementierung-3d-pipeline.md` nennt `/characters/{name}/model[/meta]` | **Erledigt:** `client3d/docs/implementierung-3d-pipeline.md` (als historisch markiert) sagt selbst, dass es diese Routen NICHT gibt, und nennt `GET /characters/{name}/model3d` (JSON) |
 | 6 | `placements[].model_url` | **Erledigt:** im Szenen-Payload existiert das Feld nicht mehr (`model_tiers`/`variants` statt dessen, v5-Kopf). `model_url` gibt es nur noch als Feld der Prop-BIBLIOTHEK (`app/core/props.py`) — anderer Namensraum, kein Rest |
 | 7 | Diorama-Böden mit Löchern — begehbare Höhe nicht messbar | **Erledigt:** `walk_y` (Meter über Modell-Unterkante) ist Sidecar-Anker mit Admin-Regler; das Rezept rechnet ihn zu `walk_y_world` aus (`app/core/scene_recipe.py`) |
 | 8 | Diorama-Maßstab (Rechteck-Fit) ≠ Prop-/Figuren-Maßstab (×k) im selben Raum | **Historisch, erledigt (E4):** § B2a — Diorama skaliert real-size über `width_m` (measure xz), Rechteck-Breite nur noch Fallback; bei `k = 1` sind „real-size" und „Welt-Maßstab" dasselbe. **Seit v6 Nr. 3 auf Location-Ebene gegenstandslos**: das Gebäude-/Flächen-Modell skaliert nach demselben Gesetz (`width_m`, measure `yawed_xz`), es gibt keinen Füllfaktor mehr |
 | 9 | Mesh-Oberfläche nicht begehbar (Klippen, Props): die Figur läuft auf dem Land unter dem Diorama statt auf dessen Oberfläche | **Erledigt (v6, 2026-08-27):** ein server-gebackenes Höhenraster je Modell (`app/blender/scripts/heightgrid.py` → `<modell>.surface.json`), inline am Spec (`surface`, am Prop nur mit Tag `walkable`), EINE Sample-Funktion für beide Renderer (`packages/scene-render/src/surface.ts`) und ein zeilengleicher Python-Zwilling, mit dem der Server dasselbe Raster liest (`model_surface.stand_height_at` in `POST /play/pos`). Siehe Nachtrag „Oberflächen-Raster (v6)" |
 
-## Nachtrag 2026-07-27: Eine Wand, ein Besitzer (Kontur vs. Raumhülle)
+# Teil C — Ergänzungen zum Vertrag, nach Thema
+
+Die folgenden Abschnitte sind zwischen Juli und September 2026 als datierte
+„Nachträge“ entstanden. Sie sind **geltender Vertrag** und hier nach
+THEMA sortiert, nicht mehr nach Datum; jede Überschrift nennt in Klammern
+die Paragraphen aus Teil A/B, die der Abschnitt präzisiert. Wann welcher
+Abschnitt dazukam, steht im **Änderungsverlauf** am Ende des Dokuments —
+eine Verweisung wie „Nachtrag 2026-08-25“ findet ihr Ziel dort.
+
+## C1. Wände, Türen und Schwellen
+
+### Eine Wand, ein Besitzer (Kontur vs. Raumhülle)
 
 Wo eine INDOOR-Raumhülle kolinear auf der Gebäudekontur liegt (Toleranz
 0,09 m ≈ Wanddicke + Spiel), liefert `/scene` dort KEIN Konturwand-Stück
 mehr — die Raumwand besitzt die Strecke (sie trägt Textur und
 Öffnungen). Outdoor-Räume lassen die Kontur unberührt. Befund-Anlass:
 deckungsgleiche Wände z-fighteten, sobald eine Wand-Textur gesetzt war
-(Haus von Kai, 27 Paare / 16,47 m doppelt — jetzt 0/0).
+(Terrace House, 27 Paare / 16,47 m doppelt — jetzt 0/0).
 
-## Nachtrag 2026-08-19 (§ B2): Ein Prop, mehrere Modell-Varianten
+### Eine Tür ist ein LOCH, kein Schlitz — der Sturz (§ B1)
+
+Zwei Befunde aus der Vorschau und aus dem Blender-Außenbild, ein und dieselbe
+Ursache: **die Öffnungen wurden nicht gleich behandelt.** Ein Fenster bekam
+Brüstung, Sturz und Glasband, eine Tür bekam eine Lücke — und zwar über die
+GANZE Wandhöhe, obwohl ihre `height_m` seit jeher autoriert ist (`world_ops.
+_sanitize_opening` verlangt 0,4…10 m). Von innen reichte jede Türöffnung bis
+an die Decke; von außen las sich das gleiche Loch in der Kontur wie ein
+fehlendes Wandstück, weshalb im Blender-Außenbild „gar keine Türen" zu sehen
+waren: ein Schlitz vom Boden bis zur Traufe ist keine Tür.
+
+**Die Regel, ab jetzt eine einzige für alle Öffnungen** (`scene_recipe.
+_room_walls` und `_contour_walls`):
+
+| Stück | Fenster | Tür / Durchgang |
+|---|---|---|
+| unter der Öffnung | Brüstung 0 … `sill_m` | entfällt (man geht hindurch) |
+| die Öffnung selbst | Glasband, eigener Eintrag mit `glass` | Lücke |
+| über der Öffnung | Sturz `sill_m + height_m` … Wandkopf | **Sturz** `height_m` … Wandkopf, Eintrag mit `lintel` |
+
+Handrechnung an der 3,00-m-Etage (Wandhöhe `max(0,6; 3,00−0,15)` = 2,85) für
+eine 1,00 × 2,10 m Tür in der Südwand eines Raums, der 4 m breit ist und
+mittig auf der Kontur eines 10 × 8-m-Hauses steht:
+
+| Wand | Stücke | `base_y` | `height` |
+|---|---|---|---|
+| Raumkante | x 6,0 … 4,5 und x 3,5 … 2,0 | −0,14 | 2,99 |
+| Raumkante | x 4,5 … 3,5 (Sturz) | 2,10 | 0,75 |
+| Konturkante | x 10,0 … 4,5 und x 3,5 … 0,0 | −0,14 | 2,99 |
+| Konturkante | x 4,5 … 3,5 (Sturz) | 2,10 | 0,75 |
+
+Also: **das Loch wird in JEDE Wand geschnitten, die die Tür durchstößt** —
+die Kontur eingeschlossen, wie bisher über die Projektion der Außenschwelle
+(§ A6/§ 4.2) — und es endet in JEDER dieser Wände auf der Türhöhe. Wo die
+Kontur ohnehin einer Raumhülle weicht („eine Wand, ein Besitzer"), weicht auch
+der Sturz mit: kein Wandstück dort, kein Sturz dort, die Raumwand trägt beides.
+Eine Tür so hoch wie die Wand bekommt keinen Sturz (0 m ist kein Primitiv).
+
+**Die Drahtform ändert sich nicht** — ein `walls`-Eintrag beschrieb schon
+immer mit `base_y` + `height` ein beliebiges Band in der Wand, genau wie der
+Fenstersturz. Additiv sind nur zwei Felder:
+
+- `walls[].lintel` (bool, fehlt = normal): dieses Stück hängt über einer
+  BEGEHBAREN Öffnung. Gezeichnet wird es wie jede Wand — beide Renderer
+  brauchten dafür keine Zeile —, aber es sperrt nichts im Grundriss. Wer aus
+  `walls` 2D-Kollider ableitet (`client3d/src/game/collide.ts`), überspringt
+  es; ohne das Feld wäre jede Tür zugemauert. Der Fenstersturz trägt das Flag
+  NICHT: unter ihm liegt die eigene Brüstung, die dort ohnehin sperrt.
+- `doorways[].height_m`: die lichte Höhe, geklemmt wie `width_m` geklemmt ist.
+  `base_y + height_m` ist die Unterkante des Sturzes — dieselbe Zahl, aus der
+  die Kontur ihren Sturz stellt, nie eine zweite Ableitung.
+
+`SCENE_RECIPE_VERSION` 1 → **2**: dieselben Daten liefern andere Wände, also
+muss jede Szenensignatur sich bewegen, sonst behalten Client und Cache die
+alte Geometrie bis jemand die Location zufällig speichert.
+
+#### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Raumwand: 2 Stücke + Sturz, Sturz auf 2,10 / 0,75, ROTE PROBE „keine Türlücke reicht mehr an die Wandkrone" | `scripts/smoke_scene_recipe.py` **[3]** |
+| Kontur: Sturz über dem projizierten Loch, gleiche x-Spanne, Tür so hoch wie die Wand → gar kein Sturz; weichende Kontur überlässt auch den Sturz der Raumwand | ebenda **[4]** |
+| `doorways[].height_m`: geklemmt gegen die Wand (9,0 → 2,85), fehlende Autorierung → Wandhöhe, also kein Sturz | ebenda **[3d]** |
+| Sturz bekommt keinen Schürzen-Anteil (§ A16.9) | ebenda **[4a]** |
+| Blender-Volumen: 10 × 8-Haus, ein Raum, eine 1 × 2,1-m-Tür → 14 Wandprismen (12 Wand + 2 Türblatt), 126 Vertices, 95 Faces (ohne Tür 8 / 78 / 59), Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]** |
+| Kollision: das geflaggte Stück wird kein Segment, ROTE PROBE „ohne Flag wäre die Tür zugemauert" | `client3d/scripts/smoke_walk_math.mjs` |
+
+### Das TÜRBLATT — eine Tür ist von außen SICHTBAR (§ B1)
+
+Der Sturz (§ C1, „Eine Tür ist ein LOCH“) hat die Tür zum Loch gemacht, aber ein Loch ist noch
+keine Tür: von außen blieb eine Außentür ein dunkles Rechteck Innenraum, im
+Blender-Außenbild ein Schatten in der Fassade. **User-Entscheidung (a) vom
+2026-08-25: die Öffnung bekommt ein TÜRBLATT** — dieselbe Mechanik, die das
+Fenster seit jeher hat, nur opak statt durchsichtig.
+
+**Eine Öffnung, drei Stücke — und das dritte ist die SCHEIBE IM LOCH:**
+
+| Stück | Fenster | Tür | Durchgang |
+|---|---|---|---|
+| unter der Öffnung | Brüstung 0 … `sill_m` | entfällt | entfällt |
+| **in der Öffnung** | **Glasband**, Eintrag mit `glass` | **Türblatt**, Eintrag mit `leaf` | Lücke |
+| über der Öffnung | Sturz | Sturz, Eintrag mit `lintel` | Sturz, Eintrag mit `lintel` |
+
+Ein `passage` ist eine autorierte Öffnung OHNE Tür — ein Blatt darin behauptete
+eine Tür, die niemand gezeichnet hat —, also bleibt sein Loch leer.
+
+**Die Drahtform ändert sich wieder nicht.** Additiv sind zwei Felder:
+
+- `walls[].leaf` (bool, fehlt = normal): dieses Stück IST die Tür. Es füllt die
+  LICHTE Öffnung — vom Wandfuß (`base_y` der Wand ohne Schürze, § A16.9: das
+  Blatt steht nicht im Gelände, die Schwelle liegt an seinem Fuß) bis zur
+  Türhöhe — und ist so dünn wie ein Glasband: `WALL_THICKNESS ×
+  PANE_THICKNESS_FACTOR` = 0,07 × 0,6 = **0,042 m**. Es trägt KEIN
+  `texture_kind`; seine Farbe ist `style.door_color`, opak.
+  Beide Renderer behandeln es wie eine Scheibe: gezeichnet, aber **aus dem
+  Fassaden-Culling ausgenommen** (`wallCullRef` / `tile.outlineWalls`) — die
+  Culling-Liste ist die Fassade, und eine Scheibe füllt ein Loch, statt einen
+  Raum zu schließen. Und es SPERRT NICHTS: wer 2D-Kollider aus `walls`
+  ableitet, überspringt `leaf` wie `lintel`, sonst wäre jede Tür der Welt
+  zugemauert.
+- `doorways[].type` (`"door"` | `"passage"`): welche begehbare Öffnung das ist.
+  Daraus — und nicht aus einer zweiten Öffnungssuche — entscheidet die Kontur,
+  ob ihr projiziertes Loch ein Blatt bekommt.
+- `style.door_color` (`#4a3a2e`): die eine Farbe, die beide Renderer für ein
+  `leaf`-Stück nehmen.
+
+**Wer trägt das Blatt bei Kontur/Raum-Überlappung?** Dieselbe Regel wie beim
+Sturz, keine zweite: das Blatt der Kontur wird gegen die Strecken geklemmt, die
+einer Raumhülle gewichen sind („eine Wand, ein Besitzer"). Steht die Raumwand
+auf der Konturlinie, trägt sie Wand, Sturz UND Blatt allein; steht der Raum
+zurückgesetzt im Haus, sind es zwei verschiedene Löcher in zwei verschiedenen
+Wänden — beide bekommen ihr eigenes Blatt, genau wie beide ihren eigenen Sturz
+bekommen.
+
+Handrechnung, dieselbe 1,00 × 2,10-m-Tür an der 3,00-m-Etage wie oben:
+
+| Wand | Stück | `base_y` | `height` | `thickness` |
+|---|---|---|---|---|
+| Raumkante | Blatt x 4,5 … 3,5 | 0,00 | 2,10 | 0,042 |
+| Konturkante | Blatt x 4,5 … 3,5 | 0,00 | 2,10 | 0,042 |
+
+Also **kein Schürzen-Anteil** (der Sturz hat auch keinen) und keine
+Wandstärke: `base_y` ist der Fuß der Wand OHNE die 0,14 m, die deren
+volle Stücke ins Gelände reichen.
+
+`SCENE_RECIPE_VERSION` 2 → **3**: gleiche Daten, andere Wände.
+
+#### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Raumwand: Blatt 0,00 / 2,10 / 0,042, ohne `texture_kind`, ROTE PROBE „das Blatt trägt keine Schürze"; ein `passage` bekommt keines | `scripts/smoke_scene_recipe.py` **[3]** |
+| Kontur: Blatt über dem projizierten Loch, gleiche x-Spanne wie der Sturz; weichende Kontur überlässt auch das Blatt der Raumwand | ebenda **[4]** |
+| `style.door_color` liegt im Stil-Vokabular | ebenda **[9]** |
+| Blender-Volumen: 14 Wandprismen (2 davon Türblatt), 126 Vertices, 95 Faces, vier Materialien, Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]/[5]** |
+| Kollision: das Blatt wird kein Segment, ROTE PROBE „ein sperrendes Blatt mauert die Tür zu" | `client3d/scripts/smoke_walk_math.mjs` |
+
+### Tür-Props + Slots (v5) (§ B1/B2)
+
+Bis hierher war eine Tür ein **Blatt**: eine dünne dunkle Platte im Loch
+(Nachtrag 2026-08-25). Sie bleibt der Normalfall. Neu ist, dass eine Öffnung
+statt der Platte ein **Prop** bekommen kann — ein modelliertes Türblatt samt
+Zarge aus der Prop-Bibliothek. Das Prop ist ein ganz normaler `models[]`-
+Eintrag; neu sind nur sein Mess-Modus (`fit`) und sein Anker (die Angel).
+
+**Es sperrt weiterhin NICHTS.** Ein Tür-Prop ist ein Modell, kein Kollider —
+die Kollision liest `models[]` nicht und tut es auch weiter nicht.
+
+#### Auflösung: welches Prop steht in der Öffnung (dreiwertig)
+
+`scene_recipe.door_prop_id(opening, default)` ist die EINE Regel, und alle drei
+Verbraucher (Wand-Splitter, Schwellenliste, Modell-Spec) fragen sie:
+
+1. `openings[].prop_id` gesetzt → **dieses** Prop,
+2. sonst `openings[].door_prop == "none"` → **kein** Prop (das ist das
+   ausdrückliche „hier keine Tür", das den Location-Default aussperrt),
+3. sonst `location.default_door_prop_id` (neues Feld, leer = keiner),
+4. sonst offener Durchgang mit Blatt wie bisher.
+
+Nur `type: "door"` bekommt eins. Ein Fenster hat Glas, ein `passage` ist ein
+Loch OHNE Tür — beide nehmen auch den Default nicht an.
+
+**Und ob überhaupt ein Blatt entsteht, ist eine zweite Frage** —
+`scene_recipe.door_has_leaf(opening)`, ebenfalls von Raumwand UND Kontur
+gefragt (Nachtrag 2026-08-29). `door_prop: "none"` heißt seit dem, was das
+Wort sagt: in diesem Loch hängt **nichts**, kein Prop und auch kein Blatt.
+Vorher fiel „keine" auf das flache Blatt zurück, und das zeichnet jeder
+Renderer als volle braune Platte — also als Tür (Nutzer-Befund). Das flache
+Blatt bleibt erreichbar, weil es das ist, was eine Tür ohne jede Wahl
+bekommt: „Location default" an einem Ort, der keine Standard-Tür nennt.
+
+#### Felder
+
+| Feld | Wo | Bedeutung |
+|---|---|---|
+| `prop_id` | `rooms[].openings[]` (gespeichert) | das Prop dieser Öffnung |
+| `door_prop: "none"` | ebenda | ausdrücklich kein Prop UND kein Blatt; sperrt den Default aus, das Loch bleibt leer (`door_has_leaf` → `false`, seit 2026-08-29) |
+| `hinge: "left"\|"right"` | ebenda (fehlt = `left`) | an welchem Ende die Angel sitzt, gelesen gegen `along` der Schwelle — für den Autor: links oder rechts, von innen aus diesem Raum auf die Tür blickend |
+| `default_door_prop_id` | Location | Standard-Tür des Ortes |
+| `door_prop: true` | `walls[]` (nur zusammen mit `leaf`) | dieses Blatt füllt ein Prop → **Renderer zeichnen das Stück NICHT** |
+| `measure: "fit"` | `models[]` | in die Öffnung eingepasst statt real-size skaliert |
+| `size_m: [w, h]` | `models[]` (nur `fit`) | lichte Breite/Höhe der Öffnung in Weltmetern |
+| `door: {opening, hinge, swing}` | `models[]` | `opening` = Index in `doorways[]`, `swing` = ±1 |
+
+`walls[]` behält den Blatt-Eintrag mit Absicht: der Blender-Außenrender
+(`exterior_render.py`) baut seine Fassade aus `walls` und verlöre sonst das
+Prisma der Tür. Nur die beiden Renderer überspringen ihn. Ein `fit`-Spec trägt
+kein `max_m` — die Öffnung ist das Maß.
+
+#### `place()` mit `measure: "fit"` (§ B2, die EINE Ausnahme)
+
+Nicht-uniform, und der einzige Spec, der nicht auf seiner Mitte hängt:
+
+- x → `size_m[0]`, y → `size_m[1]`, **z mit demselben Faktor wie x** (das Blatt
+  behält sein Tiefenverhältnis zur Breite),
+- die lokale **−x-Kante** und die Unterseite gehen in den Gruppenursprung, z
+  bleibt mittig (die Dicke sitzt auf der Wandebene),
+- die Skalierung liegt INNERHALB der Yaw-Gruppe — außerhalb würde sie das
+  Blatt bei jedem Yaw scheren, der kein Vielfaches von 90° ist.
+
+Der Ursprung der zurückgegebenen Gruppe IST damit die Angel: „Tür öffnen" ist
+eine Drehung dieser Gruppe um sich selbst und bleibt reiner Sicht-Zustand je
+App (Öffnungswinkel, Nähe, wann überhaupt).
+
+#### Handrechnung Anker + Yaw
+
+Die Schwelle liefert `at_world`, `along = (ux, uz)`, `width_m`, `height_m`,
+`base_y` — nichts davon wird nachgerechnet. Dann gilt
+
+```
+anchor = at_world ∓ along · width_m/2     (− bei hinge left, + bei right)
+yaw    = (atan2(−uz, ux)·180/π + (hinge == "right" ? 180 : 0)) mod 360
+bottom_y = base_y,   size_m = [width_m, height_m]
+```
+
+`yaw` dreht das lokale +x auf die Richtung, in die das Blatt VON der Angel weg
+läuft: three's `Ry(+θ)` bildet lokal +x auf `(cos θ, −sin θ)` ab (§ A1.1), also
+löst `θ = atan2(−uz, ux)` genau `+x → along`; bei rechter Angel läuft es gegen
+`along`, daher +180°.
+
+Für eine Öffnung bei `at_world` = (x₀, z₀), `width_m` = 1,0:
+
+| `along` | `hinge` | `anchor` | `yaw` | `swing` |
+|---|---|---|---|---|
+| (1, 0) | left | (x₀ − 0,5 / z₀) | atan2(0, 1) = **0°** | +1 |
+| (1, 0) | right | (x₀ + 0,5 / z₀) | **180°** | −1 |
+| (0, 1) | left | (x₀ / z₀ − 0,5) | atan2(−1, 0) = −90° → **270°** | +1 |
+| (0, 1) | right | (x₀ / z₀ + 0,5) | 270 + 180 = **90°** | −1 |
+| (−1, 0) | left | (x₀ + 0,5 / z₀) | atan2(0, −1) = **180°** | +1 |
+
+Die letzte Zeile ist der Fall der Smoke-Fixtur (Südtür von Raum „a": `at_world`
+(−2, −1), `along` (−1, 0), Breite 1,0 → `anchor` (−1,5 / −1), `yaw` 180).
+
+#### Woher `swing` kommt
+
+`swing` ist das Vorzeichen, mit dem eine POSITIVE Drehung um y das Blatt nach
+AUSSEN öffnet — „außen" ist bei RAUMTÜREN `_door_outward` = `(uz, −ux)`, die
+Normale weg von dem Raum, aus dessen Wand das Loch geschnitten wurde
+(`rooms[0]`). Hüllentüren tragen ihre Normale selbst — siehe den Nachtrag
+2026-09-09 unten.
+
+Dreht man die gesetzte Gruppe um φ, wandert ein Weltversatz (vx, vz) mit
+
+```
+d/dφ (vx·cos φ + vz·sin φ, −vx·sin φ + vz·cos φ) |φ=0 = (vz, −vx)
+```
+
+Das freie Ende des Blattes liegt bei `v = +along` (linke Angel) bzw.
+`v = −along` (rechte). Also ist die Ableitung genau `(uz, −ux)` = außen für
+links → **+1**, und ihr Gegenteil für rechts → **−1**.
+
+`SCENE_RECIPE_VERSION` 4 → **5**: dieselben Daten liefern andere `models`/
+`walls`, also muss jede Szenensignatur sich bewegen. In der Signatur stehen
+zusätzlich `default_door_prop_id` (ein Feld der LOCATION, das keine
+Raumsignatur abdeckt) und die Mesh-Signatur jedes aufgelösten Tür-Props (die
+URL bleibt beim Neu-Erzeugen gleich).
+
+**Nachtrag 2026-09-09 (§ A13c)** — er gehört NICHT zur v5-Runde oben; am
+`swing` selbst ändert sich für keine bestehende Tür etwas (die Rezept-Version
+steht seither trotzdem auf 14, wegen `corridors[]` und des
+`no_building_entrance`-Satzes, § B1):
+„außen" ist seither das `outward_normal` DES EINTRAGS, wo er eines mitbringt,
+sonst weiter `_door_outward`. Gerechnet wird das Vorzeichen aus dem Skalarprodukt
+`(uz·nx − ux·nz)` (bei rechter Angel gespiegelt) statt aus der Angel allein.
+Für eine Raumtür ist `n` per Konstruktion `(uz, −ux)`, das Produkt also +1 —
+die Regel oben und jede bestehende Zahl bleiben unverändert. Nur eine
+**Hüllentür** kann davon abweichen: ihr `n` ist die Außennormale der
+Konturkante, und auf einer andersherum gewickelten Kontur öffnet dasselbe
+Blatt bei umgekehrtem Vorzeichen nach außen.
+
+#### Slots: welche Fläche eines Props sich füllen lässt
+
+Ein **Slot** ist ein **Material des Modells**. Wer ein Prop modelliert (oder
+prompten lässt), benennt die füllbare Fläche — den Bilderrahmen, die
+Fensterscheibe, das Schild — und genau dieser Materialname ist der Slot. Es
+gibt keine zweite Auszeichnung, keine Zusatzdatei.
+
+Die Regel steht in **einer** Funktion, `props.detect_slots(material_names)`,
+und nirgends sonst. Für jeden Materialnamen `m`, klein geschrieben und
+getrimmt:
+
+| `m` | Slot |
+|---|---|
+| beginnt mit `slot_` | Name = `m[5:]`; Art `material`, wenn der Name in {`glass`, `mirror`, `matte`} steht, sonst `image` |
+| ∈ {`picture`, `screen`, `sign`} (ganzer Name) | `{name: m, kind: "image"}` |
+| == `glass` | `{name: "glass", kind: "material"}` |
+| sonst | kein Slot |
+
+Groß/Kleinschreibung ist egal, Namen werden **klein** gespeichert, **doppelte
+fallen weg** (das erste Auftreten gewinnt), die **Reihenfolge ist die des
+Modells**. Beispiel von Hand: `["slot_glass", "Slot_Poster", "glass", "SIGN"]`
+→ `[{glass, material}, {poster, image}, {sign, image}]` — das zweite `glass`
+ist dasselbe wie das erste und fällt weg.
+
+Nur **Raum-Props** (`app/core/props.py`) haben Slots. Map-Props
+(`world_props`) bekommen keine.
+
+Ein Prop aus einem **Content-Pack** bringt seine `slots` im mitkopierten
+`sidecar.json` mit (`content_io.export_prop_to_zip` / der Prop-Import kopieren
+das Verzeichnis unverändert). Erkannt wird nur, wenn ein **Mesh landet**
+(Upload oder Generierung), nie beim Import — wer ein Prop zum Teilen baut,
+benennt die füllbaren
+Materialien also schon im Mesh nach dieser Konvention oder pflegt die Liste vor
+dem Export im Prop-Editor.
+
+**Materialnamen müssen die Blender-Veredelung überleben**, sonst zeigt die
+Liste auf Flächen, die die gespeicherte Datei nicht mehr hat. Stand heute tut
+sie das: Neukodierung (`retexture.py`), Reduktion (`lod.py`) und
+Normalisierung (`normalize.py`) fassen `bpy.data.materials` nicht an, der
+glTF-Import/Export von Blender reicht den Namen durch. Die **eine** Ausnahme
+ist der Vertex-Farben-Bake (`bake_vc.py`): er leert die Materialliste des
+Objekts und legt `baked_vc_mat_<i>` an. Deshalb liest die Erkennung erst
+**nach** den Veredelungsschritten desselben Ingests. Betroffen sind ohnehin nur
+Vertex-Farben-Meshes, die gar keine benannten Flächen mitbringen.
+
+Gelesen wird auf **beiden** Landewegen eines Meshes — es gibt keinen
+gemeinsamen Trichter:
+
+| Weg | Auslöser | Reihenfolge |
+|---|---|---|
+| `props._store_bbox` | Upload, Galerie-Auswahl, gelöschtes Mesh, gelöschte Variante | bake → retexture → LOD → **Slots** → Messung |
+| `props._generate` | die img2mesh-Kette (der Normalfall) | `select` → Sidecar-Schreibung mit `bbox` → **Slots** |
+
+`_generate` wählt und misst inline und kommt **nicht** durch `_store_bbox` —
+ein Nachbearbeitungsschritt muss in beide Blöcke (Befund 2026-08-27: die
+Erkennung stand nur in `_store_bbox` und feuerte für ein GENERIERTES Prop nie).
+Die Verkleinerungswege (`_shrink`, `_reduce_to_low`, `_store_lod_stages`)
+brauchen keinen eigenen Aufruf: sie wählen ausschließlich in die Stufe `low`,
+gelesen werden die Slots aber am `full`-Mesh (`model_path(prop_id)`).
+
+Im Datensatz (`props._prop_record`, immer vorhanden):
+
+| Feld | Bedeutung |
+|---|---|
+| `slots: [{name, kind}]` | die füllbaren Flächen; `[]` = keine. Auch auf dem schlanken Record — die Szene gleicht dagegen ab |
+| `slots_auto: true\|false` | nur im vollen Record: `true` = aus den Materialnamen gelesen (der Editor zeigt „detected"), `false` = von Hand gepflegt |
+
+Solange `slots_auto` **nicht** `false` ist, wird die Liste bei **jedem**
+landenden Mesh **neu erkannt** — ein neu generiertes Modell bringt seine
+eigenen Flächen mit, statt die des Vorgängers hinter dem Abzeichen „detected"
+stehen zu lassen; ein **leeres** Ergebnis zählt genauso (das neue Modell nennt
+dann wirklich keine füllbare Fläche). Ein Ergebnis, das dem Gespeicherten
+gleicht, schreibt nichts, und ein unlesbares Mesh ändert nichts — nur ein
+POSITIVER Befund.
+
+Sobald jemand sie **von Hand setzt**, ist Schluss: ein `POST /world/props/{id}`
+mit `slots` (oder der Batch-Save) speichert die Liste und setzt `slots_auto`
+auf `false` — ab da fasst kein weiteres Modell sie an, auch eine **geleerte**
+Liste nicht (alle Slots löschen ist auch eine Entscheidung). Eine kaputte Liste
+ist ein 400, kein stilles Verwerfen.
+
+#### Slot-WERTE: was in der Fläche steht
+
+Was in einer füllbaren Fläche steht, gehört zum **Prop**, nicht zur
+Platzierung: die Werte kommen aus den Prop-Defaults (`area_defaults`) und aus
+den `slot_values` der Bild-Variante — die Regel steht im Nachtrag
+[„Bild-Props (v5)"](#nachtrag-2026-08-27--b2-bild-props-v5--das-bild-reitet-auf-der-variante)
+am Ende dieses Dokuments. Im Payload steht das Ergebnis unverändert am
+Spec als `slots` (`models[]`, Raum-Prop wie Tür-Prop); fehlt der Schlüssel,
+rendert das Prop, wie es modelliert wurde.
+
+#### Der Tausch im Renderer (`applySlotMaterials`)
+
+`packages/scene-render/src/slotMaterials.ts` ist die EINE Routine, die einen
+Slot auf ein Mesh schreibt; drei Aufrufer rufen sie (3D-Client
+`sceneRecipe.ts`, Admin-Grundriss-Vorschau `FloorPlanPreview.tsx`,
+Prop-Betrachter des Props-Reiters `Model3DViewer.tsx`). Sie durchläuft die
+gesetzte Gruppe und vergleicht den SLOT-NAMEN jedes Materials mit den
+Schlüsseln aus `slots`.
+
+**Der Schlüssel ist der Slot-Name, nicht der Materialname** (Ruling R11): der
+Slot-Name ist der Materialname ohne sein `slot_`-Präfix — genau so, wie
+`props.detect_slots` ihn beim Lesen des Modells abgestreift hat. Das Material
+`slot_picture_1` ist also der Slot `picture_1`; die Routine streift beim
+Vergleich **ein** führendes `slot_` ab (getrimmt und klein auf beiden Seiten,
+und hinter dem Präfix noch einmal getrimmt, wie auf dem Server). Ein Material
+ohne Präfix (`picture`, `glass`) heißt weiterhin wie sein Slot. Der rohe Name
+`slot_picture_1` als Schlüssel trifft nichts — den schickt der Server nie.
+
+**Die Regel, die sie korrekt macht: das Material wird JE PLATZIERUNG geklont,
+bevor es angefasst wird.** Der GLB-Lader hält eine `THREE.Group` je URL und
+gibt sie allen Platzierungen; `Object3D.clone()` kopiert die Knoten, TEILT aber
+die Material-Instanzen — ohne Klon hinge das Poster der Diele auch in der
+Küche. (Dieselbe Regel wie bei `applyDepthCut`.) Der Aufruf steht deshalb VOR
+Schnitt/Clip/Ghost: die klonen ihrerseits, was sie durchlaufen, und übernehmen
+das Bild damit von selbst.
+
+- `image` → `loadTexture(url)` (der Lader ist Parameter — Ladepolitik ist
+  App-Sache), dann `colorSpace = SRGBColorSpace`, `flipY = false` (glTF-UVs)
+  auf `map`, und `color = 0xffffff`, damit ein grauer Grundton das Bild nicht
+  herunter multipliziert.
+- `preset "glass"` → `GLASS_PRESET` (`opacity` 0,3 · `roughness` 0,06 ·
+  `metalness` 0 · `transmission` 0,85 nur, wenn das Material das Feld hat) plus
+  `transparent` und `DoubleSide` — eine einseitige Scheibe verschwindet, sobald
+  man um die Tür herumgeht.
+- `preset "mirror"` → ein **planarer Spiegel auf den eigenen Faces der
+  Scheibe** (`packages/scene-render/src/mirrorSurface.ts`). Die Ebene wird
+  EINMAL aus den Faces genau dieser Materialgruppe gemessen
+  (flächengewichteter Schwerpunkt, Normale aus der Summe der Face-Vektoren,
+  `planeOfFaces`); das Material wird durch ein `ShaderMaterial` mit
+  Spiegelkamera, schiefer Nah-Ebene und projizierter Textur ersetzt (die Mathe
+  von three.js `Reflector.js`, plus die Clipping-Chunks, damit der
+  Tiefenschnitt weiter greift), und der Reflexions-Durchgang hängt an
+  `mesh.onBeforeRender`. Das Material ist `DoubleSide`, und die Normale wird je
+  Frame zur Kamera gedreht: **beide Seiten einer Scheibe spiegeln.** Der
+  Payload trägt nur den Wert — die Ebene ist eine Eigenschaft des Meshes vor
+  dem Renderer, und in EINER Routine gemessen kann sie zwischen den Renderern
+  nicht auseinanderlaufen.
+
+  Während des Durchgangs versteckt sich **nur die Scheibe selbst**
+  (`material.visible = false` für die Dauer des verschachtelten Renders;
+  `projectObject` überspringt ein Material, das nicht sichtbar ist, einzeln wie
+  als Gruppe eines Material-Arrays). Der Rahmen um das Glas und die Kommode,
+  auf der der Spiegel steht, stehen damit in ihrem eigenen Spiegelbild — das
+  ganze Mesh zu verstecken hatte sie herausgeschnitten.
+
+  **Gespiegelt wird nur eine kohärente Scheibe**: |Σ Face-Vektoren| /
+  Σ |Face-Vektoren| ≥ 0,9 (`FACE_COHERENCE_MIN`). Die Schwelle ist gemessen,
+  nicht geraten — die Scheiben eines echten Wandspiegel-Props liegen bei
+  1,0000, die 134 Splitter einer Tür-Glasfläche bei 0,7384 (und 87° neben dem
+  eigenen Sidecar). Darunter — Splitter-Rauschen, oder beide Häute einer
+  Scheibe in EINER Materialgruppe — bleibt das Mesh, wie es modelliert wurde,
+  und `attachMirror` sagt es EINMAL auf der Konsole, mit Slot-Namen und Grund
+  (Schweigen wäre die schlechteste Antwort: der Autor hat „Mirror" gewählt und
+  sähe eine gewöhnliche Scheibe).
+
+  **Kosten sind App-Sache**, nicht Paket-Sache: der fünfte Parameter
+  `mirror?: MirrorOptions` (`textureSize` px · `maxPerFrame` · `maxDistanceM`
+  m) ist die Sichtpolitik des Aufrufers — der 3D-Client setzt 512 / 2 / 12 m
+  (`sceneRecipe.ts`), die Grundriss-Vorschau 512 / 1 / 12 m
+  (`FloorPlanPreview.tsx`), der Prop-Betrachter nimmt die Vorgaben
+  (512 / unbegrenzt / unbegrenzt). `maxPerFrame` ist ein **App-weites** Limit,
+  keines je Scheibe: das Paket hält je Wert EINEN `MirrorBudget`
+  (`sharedMirrorBudget`), den sich alle so angehängten Spiegel teilen. Gezählt
+  wird gegen `renderer.info.render.frame`, und jede gewährte Reflexion ist ein
+  verschachtelter Render, der genau diesen Zähler hochzählt — ein Budget je
+  Scheibe würde deshalb gar nichts begrenzen.
+
+  Und die Scheiben **wechseln sich ab**: three sortiert die Render-Liste nach
+  `material.id`, die Hooks feuern also in jedem Frame in derselben Reihenfolge,
+  und ein bloßes „die ersten N gewinnen" hätte dieselben N für immer bedient —
+  die Scheibe N+1 wäre NIE gerendert worden, und ein nie gerendertes
+  Render-Target ist schwarz, nicht „die letzte Textur". Der Budget-Zähler führt
+  deshalb die Scheiben mit, die im letzten Frame gefragt haben, und bedient je
+  Frame ein um `maxPerFrame` weitergerücktes Fenster daraus. Drei Scheiben bei
+  Limit 2 werden A,B — dann C,A — dann B,C bedient: **eine Scheibe über Budget
+  zeigt ein ein bis zwei Frames altes Spiegelbild, keine bleibt schwarz.**
+
+  Die **Distanz-Grenze gilt erst ab dem zweiten Durchgang**: eine Scheibe, die
+  noch nie gerendert hat, hat kein altes Bild zu behalten — ihr Render-Target
+  ist schwarz. Der erste Durchgang läuft deshalb unabhängig von `maxDistanceM`
+  (Budget und Rekursionsschutz gelten weiter), ab dem zweiten entscheidet die
+  Distanz. Rekursionsschutz: während ein Spiegel-Durchgang die Szene rendert,
+  startet kein zweiter — ein Spiegel im Spiegel zeigt das letzte Bild. Ein
+  Mesh, das im Frustum-Culling fällt, erreicht den Hook nie und kostet nichts.
+
+  **Erwartetes Rauschen**: ein Tiefenschnitt-Klon eines Spiegel-Materials lässt
+  three einmal „UniformsUtils: Textures of render targets cannot be cloned"
+  loggen — `UniformsUtils.clone` kopiert die Textur eines Render-Targets nicht.
+  Harmlos, weil `renderMirror` `tDiffuse` und die Textur-Matrix bei JEDEM Draw
+  auf die Material-Instanz schreibt, die tatsächlich gezeichnet wird.
+
+  Gewählt wird das Preset in der Oberfläche unter „Pane defaults" (Areas-Reiter
+  des Props) und im Bild-Varianten-Dialog; beide bieten „Glass" und „Mirror" an
+  (`PRESET_LABELS`, `frontend/src/tabs/props/propTypes.ts`).
+
+Zurück kommt die Liste der Klone. Sie gehört dem Aufrufer: jeder Klon besitzt
+die Textur, die für ihn geladen wurde, und `disposeSlotMaterials` gibt beides
+frei — bei einer Spiegel-Scheibe zusätzlich das Render-Target und den
+Mesh-Hook (Client: beim Stufenwechsel und im `unmountScene`; Vorschau: vor
+jedem Neuaufbau).
+
+`three` ist Parameter, kein Import — Paketregel.
+
+#### Grenzen (bewusst)
+
+- Ein Prop-Ausweis, der ins Leere zeigt (oder ein Prop ohne Mesh), behält
+  seinen Spec mit leerem `variants` — dieselbe Regel wie bei hängenden
+  Raum-Platzierungen. Er bekommt KEINE `placeholder_dims`: eine Ersatzkiste
+  wird auf ihren Anker zentriert, und dieser Anker ist eine Kante.
+- Modell-Varianten (E2.3) hat ein Tür-Prop nicht — es liefert die primäre
+  Stufenkarte.
+
+#### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Öffnung mit `prop_id` → ein `models[]`-Eintrag `role:"prop"`, `measure:"fit"`, `size_m [1,0 / 2,1]`, Anker (−1,5 / −1), `yaw` 180, `bottom_y` 0, `door {0, left, +1}` | `scripts/smoke_scene_recipe.py` **[3p]** |
+| `hinge: "right"` → Anker (−2,5 / −1), `yaw` 0, `swing` −1 | ebenda **[3p]** |
+| zweite Achse: `along` (0, 1) → Anker (0 / −3,3), `yaw` 270, `size_m [1,6 / 2,1]` | ebenda **[3p]** |
+| Blatt bleibt in `walls[]` (Außenrender) und trägt `door_prop` — Raumwand UND Kontur | ebenda **[3p]** |
+| Default greift, `prop_id` gewinnt, `door_prop:"none"` leert das Loch (kein Prop, kein Blatt) — und eine Tür ohne Wahl behält das flache Blatt | ebenda **[3p]** |
+| ROTE PROBE: Fenster und `passage` bekommen nie ein Tür-Prop, auch nicht per Default | ebenda **[3p]** |
+| Prop-Ausweis ins Leere: Spec bleibt, `variants` leer, keine `placeholder_dims` | ebenda **[3p]** |
+| Signatur bewegt sich für Location-Default UND neue Mesh-Signatur | ebenda **[3p]** |
+| `place()` mit `fit`: 0,5×2×0,1-Kiste auf `size_m [1,0 / 2,1]` → 1,0 × 2,1 × 0,2, Angelkante AUF dem Anker, bei `yaw` 270 läuft die Breite in +z | `client3d/scripts/smoke_place_rotation.mjs` **[7]** |
+| Materialnamen aus dem GLB (`materials[].name`, Header + JSON-Chunk) | `scripts/smoke_props_slots.py` **[1]** |
+| `detect_slots`: Präfix, feste Liste, Groß/Klein, Dedup, Reihenfolge — plus rote Probe („glasses", „slots_x", „picture_frame") | ebenda **[2]** |
+| Erkennung läuft beim Modell-Eintreffen NACH bake/retexture/LOD; Record trägt `slots` + `slots_auto true` | ebenda **[3]** |
+| …und auf der GENERATIONS-Kette, die `_store_bbox` überspringt (img2mesh-Dienst gefälscht) | ebenda **[3b]** |
+| Ein neues Mesh ERSETZT eine Auto-Liste — auch mit leerem Ergebnis | ebenda **[3c]** |
+| Patch-Pfad weist kaputte Listen ab und schreibt dabei nichts; gespeicherte Liste ist klein und dedupliziert | ebenda **[4]** |
+| Von Hand gepflegte (auch geleerte) Liste überlebt das nächste Modell | ebenda **[5]** |
+| Eine Platzierung/Öffnung mit `slot_values` verliert das Feld beim Speichern, und am Spec entsteht kein `slots` daraus | `scripts/smoke_scene_recipe.py` **[3p]** |
+| `applySlotMaterials`: das benannte Material bekommt eine `map`, das andere bleibt DASSELBE Objekt, und zwei Platzierungen derselben Cache-Gruppe haben VERSCHIEDENE Material-Instanzen | `scripts/smoke_slot_materials.mjs` **[1]/[2]** |
+| `applySlotMaterials` streift das Präfix ab: Materialien `slot_picture_1`/`slot_glass_1` werden von den Schlüsseln `picture_1`/`glass_1` gefüllt — plus rote Proben (roher Name als Schlüssel trifft nichts, `slotpicture_1` ohne Unterstrich ist kein Treffer, nur EIN Präfix fällt) | ebenda **[8]** |
+| Glas-Preset setzt `transparent` + die Konstanten, `transmission` nur wo das Feld existiert | ebenda **[3]** |
+| Preset `mirror`: die Ebene aus den Faces — Rechteck, Wicklung, gekippt, Bereiche samt Klemmung, degeneriert, NaN-Wache, Flächengewichtung gegen den einfachen Mittelwert, Kohärenzschwelle von beiden Seiten, Budget-Folge mit der Zwei-Spiegel-Lesart (optional ein lokales Prop gegen sein Sidecar, 1 cm / 2°) | `scripts/smoke_mirror_plane.mjs` |
+| Preset `mirror`: Spiegel-`ShaderMaterial` auf dem Klon, Nachbar-Material unberührt, gemessen wird die EIGENE Gruppe (`mirrorPlaneOf`), `DoubleSide`, EINE Warnung je Anhängen, erneutes Anhängen gibt das Erste frei, Hook setzen und zurückgeben, geteiltes Budget | `scripts/smoke_slot_materials.mjs` **[9]–[13]** |
+| `SLOT_PRESETS` == `MATERIAL_PRESETS`, `mirror` wird angenommen, Unbekanntes abgewiesen, kein Preset auf einer `picture`-Fläche | `scripts/smoke_props_slots.py` **[7]** |
+
+## C2. Treppen und Fahrstuhl
+
+### TREPPEN — man geht in den ersten Stock (§ A6/B1)
+
+Bis hierher gab es genau EINE senkrechte Verbindung: den Fahrstuhl. Der Satz
+„Treppen gibt es nicht" ist gestrichen. **Eine Treppe ist kein neuer
+Subsystem-Zweig, sondern dieselbe Mechanik wie der Fahrstuhl** — der Server
+rechnet sie in `extras`-Kästen aus, die Renderer stellen sie hin.
+
+#### Die Drahtform (Autorenformat)
+
+```json
+"stairs": [ { "at": [2.0, -2.0], "from_level": 0, "dir_deg": 90 } ]
+```
+
+- `at` = der FUSSPUNKT, wo die erste Stufe beginnt, in lokalen Metern wie
+  `map3d.elevator` und jede andere Plankoordinate.
+- `from_level` = die untere Etage (ein Kellerlauf ist `-1`). **Ein Lauf endet
+  IMMER auf `from_level + 1`.** Wer vom Erdgeschoss in den zweiten Stock will,
+  autoriert ZWEI Läufe — das ist die Kette, und fehlt ihr ein Glied, bleibt für
+  diesen Sprung der Fahrstuhl.
+- `dir_deg` ∈ {0, 90, 180, 270} = Aufstiegsrichtung. Die Vektoren stehen fest,
+  niemand rechnet sie zurück: `{0: (0,+1), 90: (+1,0), 180: (0,−1),
+  270: (−1,0)}` in (x, z).
+- Maximal **8** Läufe je Location; der Sanitizer kappt die Liste und wirft
+  jeden Eintrag weg, dem `at`, `from_level` oder ein gültiges `dir_deg` fehlt
+  (nicht repariert — eine Treppe, deren Richtung niemand aufgeschrieben hat,
+  zeigt sonst irgendwohin).
+
+#### Das Rezept (Server-Konstanten, echte Meter)
+
+| Konstante | Wert | Was |
+|---|---|---|
+| `STAIR_WIDTH_M` | 1,20 | Stufenbreite QUER zur Steigrichtung |
+| `STAIR_TREAD_M` | 0,26 | Auftritt je Stufe ENTLANG der Steigrichtung |
+| `STAIR_RISE_M` | 0,20 | NOMINELLE Steigung — nur der Teiler |
+| `STAIR_PAD_M` | 0,90 | Kante des Trigger-Pads (Marker, wie `ELEVATOR_PAD_M`) |
+| `STAIR_PAD_THICKNESS` | 0,05 | Dicke des Pads |
+| `STAIR_PAD_GAP_M` | 0,05 | Luft zwischen Pad-Kante und erster/letzter Stufe |
+
+```
+base   = storey_floor_y(from_level, storey)
+target = storey_floor_y(from_level + 1, storey)
+climb  = target − base
+steps  = max(2, round(climb / STAIR_RISE_M))
+rise   = climb / steps          # teilt den Etagenabstand GLEICHMÄSSIG
+run    = steps · STAIR_TREAD_M
+```
+
+Die nominelle Steigung ist nur der Teiler: gerechnet wird mit `rise`, damit die
+letzte Stufe EXAKT auf dem oberen Boden landet statt eine Handbreit darunter.
+**Stufe *i* ist ein MASSIVER Kasten** vom unteren Boden bis zu ihrem eigenen
+Auftritt — eine Treppe, auf der man überall steht, kein Satz schwebender
+Platten. *(Seit v13 ERSETZT: Auftritt + Setzstufe + zwei Wangen, siehe den
+Abschnitt „TEXTUREN für Treppe und Fahrstuhl“ (§ C2). Die Formel bleibt hier als Herkunft der Zahlen
+stehen; `steps`/`rise`/`run` und die Pads gelten unverändert.)*
+
+```
+center = at + dir·(i+0.5)·TREAD ,  y = base + (i+1)·rise/2
+size   = TREAD entlang der Richtung, (i+1)·rise hoch, WIDTH quer
+```
+
+Die **Pad-OBERKANTE ist der Etagenboden + `PROP_CLEARANCE`** (0,01) — dasselbe
+Gesetz wie beim `elevator_pad`, also `center_y = Boden + 0,01 − THICKNESS/2`.
+(Bis Treppen v2 lag die Oberkante EXAKT auf dem Boden-Datum; das flimmerte
+gegen den Boden, den das Pad markiert — siehe den Nachtrag „Treppen v2".)
+
+```
+foot = at − dir·(STAIR_PAD_M/2 + STAIR_PAD_GAP_M) , level = from_level
+head = at + dir·(run + STAIR_PAD_M/2 + STAIR_PAD_GAP_M) , level = from_level+1
+```
+
+#### Handrechnung EG → OG (storey 3,00, `at` = (2, −2), `dir_deg` 90 → +X)
+
+| Größe | Rechnung | Wert |
+|---|---|---|
+| `base` | `storey_floor_y(0, 3)` — Etage 0 IST das Terrain | 0,00 |
+| `target` | `storey_floor_y(1, 3)` = 1·3 + 0,08 | **3,08** |
+| `climb` | 3,08 − 0,00 | 3,08 |
+| `steps` | `round(3,08 / 0,20)` = `round(15,4)` | **15** |
+| `rise` | 3,08 / 15 | **0,205333…** |
+| `run` | 15 · 0,26 | **3,90** |
+
+Die beiden `stair_step`-Zeilen der folgenden Tabelle zeigen die **v1-Form**
+(ein massiver Kasten je Stufe). Dieses Kind gibt es seit v13 nicht mehr — die
+gültigen Primitive sind `stair_tread` / `stair_riser` / `stair_stringer`
+(Abschnitt „TEXTUREN für Treppe und Fahrstuhl"). `steps`, `rise`, `run` und
+die beiden Pads sind unverändert und deshalb hier nachrechenbar.
+
+| Primitiv | `center` | `size` | `level` |
+|---|---|---|---|
+| `stair_step` i = 0 (v1) | [2,13 / 0,102667 / −2] | [0,26 / 0,205333 / 1,20] | 0 |
+| `stair_step` i = 14 (v1) | [5,77 / 1,54 / −2] | [0,26 / 3,08 / 1,20] | 0 |
+| `stair_pad` `foot` | [1,50 / −0,015 / −2] | [0,90 / 0,05 / 0,90] | 0 |
+| `stair_pad` `head` | [6,40 / 3,065 / −2] | [0,90 / 0,05 / 0,90] | 1 |
+
+Bei `dir_deg` 0/180 läuft der Auftritt in z: `size` tauscht x ↔ z und das
+Zentrum wandert entlang z — sonst ändert sich keine Zahl.
+
+#### Handrechnung Keller → EG (`from_level` −1)
+
+| Größe | Rechnung | Wert |
+|---|---|---|
+| `base` | `storey_floor_y(−1, 3)` = −3 + 0,08 | **−2,92** |
+| `target` | `storey_floor_y(0, 3)` | 0,00 |
+| `climb` / `steps` / `rise` / `run` | 2,92 · `round(14,6)` = 15 | 2,92 / 15 / **0,194667** / 3,90 |
+
+Stufe 0 sitzt bei y = −2,822667, Stufe 14 ist 2,92 hoch (Mitte −1,46); das
+Fuß-Pad liegt bei −2,935 auf `level` −1, das Kopf-Pad bei −0,015 auf `level` 0.
+Der Keller ist damit KEIN Sonderfall, sondern dieselbe Formel.
+
+#### Payload — additiv, zwei neue `extras`-Kinds
+
+- ~~`{kind:"stair_step", …}`~~ — **entfällt seit v13**, ersetzt durch
+  `stair_tread` / `stair_riser` / `stair_stringer`
+- `{kind:"stair_pad", center, size, level, stair: idx, end:"foot"|"head"}`
+
+`stair` ist der Index des Laufs in `map3d.stairs` — zwei Läufe einer Kette
+bleiben unterscheidbar. Dazu `style.stair_color` = **`#8a7a66`**: eine Treppe
+ist Mauerwerk, kein Maschinenteil, und muss sich vom Grau des Fahrstuhls
+unterscheiden.
+
+**Routing-Regel:** Verbindet eine Treppenkette zwei Etagen, gewinnt sie; der
+Fahrstuhl bleibt Fallback.
+
+`SCENE_RECIPE_VERSION` 3 → **4**: dieselben Daten liefern andere `extras`,
+also muss jede Szenensignatur sich bewegen.
+
+#### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| EG → OG: 15 Stufen + 2 Pads, Stufe 0 und Stufe 14 nach center/size, beide Pads nach center/size/level/end | `scripts/smoke_scene_recipe.py` **[5s]** |
+| `dir_deg` 0: `size` x ↔ z getauscht, Zentrum und Pads wandern in z | ebenda **[5s]** |
+| Keller → EG: 15 Stufen, erste bei −2,822667, letzte 2,92 hoch, Pads −2,935 / −0,015 auf `level` −1 / 0 | ebenda **[5s]** |
+| Kette aus zwei Läufen behält ihre `stair`-Indizes | ebenda **[5s]** |
+| ROTE PROBE: ohne `map3d.stairs` entsteht kein einziges `stair_*`-Primitiv (die Fahrstuhl-Zählung misst also keine Treppe) | ebenda **[5s]** |
+
+### TREPPEN v2 — der Lauf ist DATEN, der Boden bekommt ein Loch (§ A6/B1)
+
+Der Nachtrag „TREPPEN — man geht in den ersten Stock" (v1, 2026-08-25) hat zwei
+Dinge ausdrücklich vertagt: die geführte Fahrt ENTLANG des Laufs und das Loch
+in der Decke, durch die der Lauf stößt. Beide werden hier nachgeholt, dazu ein
+Z-Fighting am Startviereck. **Freies WASD-Steigen bleibt vertagt** (eigener
+Strang, braucht eine Server-Höhenleiter für Rampen).
+
+#### Befund
+
+- **Die Figur steigt IN der Treppe.** Die Fahrt setzte EIN Ziel — die Landung
+  am Kopf bzw. am Fuß — und überließ die Höhe der generischen Blende der
+  Lauf-Maschine. Auf dem Beispiel unten (Lauf 3,90 m, Etage 3,08 m) ist y nach
+  einer halben Sekunde zu 86 % da, XZ erst zu 35 %: aufwärts schwebt die Figur
+  gut anderthalb Meter über der Stufe, abwärts hängt sie darunter.
+- **Das Startviereck flimmert.** `stair_pad` und `elevator_pad` hatten ihre
+  OBERKANTE exakt auf dem Etagenboden — koplanar mit genau der Fläche, die sie
+  markieren. Jedes andere Boden-Primitiv hält seit „Ein Boden" die
+  `PROP_CLEARANCE`-Haarlinie von 0,01 m.
+- **Kein Loch.** Eine Platte war ein Ring, und `extras` sind bewusst nicht
+  etagengefiltert: die Treppe steht also in der gezeigten Etage und die
+  gezeigte Platte deckelt sie.
+- **Der Payload sagte nichts über den Lauf.** Nur Kästen. Wer Lauf, Steigung,
+  Stufenzahl oder Grundfläche brauchte, hat sie nachgerechnet — die
+  Admin-Plan-Vorschau tat genau das, mit einer zweiten Kopie der
+  Server-Formel.
+
+#### 1. Pad-Abstand: OBERKANTE = Boden + `PROP_CLEARANCE`
+
+`stair_pad` (Fuß und Kopf) und `elevator_pad` liegen jetzt eine
+`PROP_CLEARANCE` (0,01 m) über ihrem Etagenboden:
+
+```
+center_y = storey_floor_y(level, storey) + PROP_CLEARANCE − THICKNESS/2
+```
+
+Damit wandert das Aufzugs-Pad auf Etage 0 von −0,025 auf **−0,015**, das
+Treppen-Fuß-Pad ebenso, das Kopf-Pad von 3,055 auf **3,065**. Kein Renderer
+braucht dafür einen `polygonOffset`.
+
+**Der Halte-Punkt ist damit die Pad-Oberkante, nichts mehr dazu.** Ein Client,
+der aus einem Pad einen Stopp macht, hat bisher `Oberkante + 0,01` gerechnet,
+weil die Oberkante der nackte Boden war; diese eigene Haarlinie **entfällt für
+BEIDE Pad-Arten** (`elevator_pad` wie `stair_pad`) — sonst steht die Figur
+2 cm über der Etage.
+
+#### 2. `stairs[]` — der Lauf als Daten
+
+Neuer Wurzelblock neben `extras`, EIN Eintrag je autoriertem Lauf, in der
+Reihenfolge von `map3d.stairs`. Die `stair_step`/`stair_pad`-Kästen bleiben —
+sie sind das MESH; dieser Block ist die GEOMETRIE, aus der sie gebaut sind.
+Der Server rechnet einmal und speist beides (`scene_recipe._stair_flights`).
+
+| Feld | Was |
+|---|---|
+| `id` | Index des Laufs in `map3d.stairs` — dieselbe Zahl wie `stair` an den Kästen |
+| `from_level` / `to_level` | untere und obere Etage; `to_level` ist immer `from_level + 1` |
+| `at` | `[x, z]` — der FUSSPUNKT, wie autoriert, ebenen-lokal wie die Extras |
+| `dir_deg` | Aufstiegsrichtung ∈ {0, 90, 180, 270} |
+| `run_m` | Grundriss-Länge des Laufs = `steps · tread_m` |
+| `rise_m` | Steighöhe des GANZEN Laufs (der Etagenabstand). **Pro Stufe: `rise_m / steps`** |
+| `steps` | Stufenzahl |
+| `tread_m` / `width_m` | `STAIR_TREAD_M` 0,26 / `STAIR_WIDTH_M` 1,20, mitgeführt statt gespiegelt |
+| `foot` / `head` | `[x, y, z]` — die beiden STAND-Punkte: Pad-Mitte in XZ, Pad-OBERKANTE als y |
+| `footprint` | `[[x,z] × 4]` — das Rechteck `width_m × run_m` ab `at` entlang `dir` |
+
+**Umlaufsinn: die beiden Rechtecke laufen GEGENLÄUFIG, das ist Absicht.**
+`footprint` läuft GEGEN den Uhrzeigersinn in Kartensicht (x Ost, z Süd) — es
+ist Punkt für Punkt die Outline, die die Admin-Plan-Vorschau bisher selbst
+gerechnet hat, und sie ist ein SYMBOL. Der Loch-Ring in `plates[].holes`
+läuft IM Uhrzeigersinn, dem Umlaufsinn jeder gespeicherten Outline. Wer ein
+Loch braucht, nimmt also `plates[].holes` — `footprint` ist kein Ersatz dafür
+(es fehlt ihm das Kopf-Pad, und sein Umlaufsinn ist der andere).
+
+`foot`/`head` sind damit genau die Zahlen, die ein Client bisher aus den beiden
+Pads zusammengesucht und um 0,01 angehoben hat — **dieses eigene +0,01 im
+Client entfällt**, die Anhebung steckt jetzt in der Pad-Oberkante selbst.
+
+**Die Fahrt läuft AUF dem Lauf.** Der Client führt die Figur nicht mehr auf ein
+einzelnes Ziel zu, sondern liest die Höhe an ihrer aktuellen XZ aus dem Lauf:
+Projektion auf die Achse (`at`, `dir_deg`), `t = clamp(along / run_m, 0, 1)`,
+`y = foot.y + t · (head.y − foot.y)`. Das ist bewusst eine **Rampe**, keine
+Stufenfunktion: die Figur läuft mit einem Lauf-Clip, Treppenstufen-Ruckeln ist
+nicht gewünscht. Quer außerhalb der halben `width_m` gilt der Lauf nicht.
+
+#### 3. `plates[].holes` — der Lauf stößt durch die Decke
+
+Jede Platte trägt jetzt `holes`: eine Liste von Ringen, die aus ihr
+AUSGESCHNITTEN sind. Das Feld ist immer da und meist `[]`.
+
+Ein Lauf schneidet sein Loch in die Etage, auf der er ANKOMMT
+(`from_level + 1`) — in die Etagenplatte dieser Etage UND in jede Raumplatte
+darauf, deren Outline die MITTE des Lochs enthält. Das Loch ist die
+Grundfläche VEREINIGT mit dem Kopf-Pad, als EIN achsparalleles Rechteck
+entlang `dir`:
+
+```
+Länge  = run_m + STAIR_PAD_GAP_M + STAIR_PAD_M      (ab `at`)
+Breite = max(STAIR_WIDTH_M, STAIR_PAD_M)
+```
+
+— damit fehlt der Boden auch noch dort, wo die Figur von der letzten Stufe auf
+die Landung tritt. Die Ecken laufen im UHRZEIGERSINN in Kartensicht, wie jede
+gespeicherte Outline.
+
+**Jeder Ring ist auf die Kontur SEINER Platte geclippt** (Task 5, Befund der
+Task-2-Review): ein Ring, der über die Outline hinausragt, wird von
+`THREE.Shape` nicht auf die Überlappung reduziert, sondern lässt die Platte sich
+selbst schneiden und ÜBERLAUFEN — gemessen an einer 8×6-Platte mit einem Ring
+2 m über der Ostkante: Deckfläche 82 m² statt 46. Der Server schneidet deshalb
+Ring gegen Outline (Sutherland–Hodgman, der Ring als konvexes Clip-Polygon, die
+Outline als Subjekt; `scene_recipe.clip_ring_to_outline`), und was in `holes`
+steht, liegt **immer innerhalb der `outline`**. Bleibt nichts übrig (< 3 Ecken
+oder Fläche < 1e-6 m² — eine Outline, die den Ring nur BERÜHRT), trägt die
+Platte kein Loch.
+
+**Ringe sind KANONISCH geschrieben**, im Payload wie nach dem Clip: gerundet
+wie jede Outline, im Uhrzeigersinn gewickelt und beginnend an der KLEINSTEN
+Ecke (kleinstes x, dann kleinstes z). Das (`along`, `across`)-Gerüst eines
+Laufs dreht sich mit `dir_deg`, und Sutherland–Hodgman gibt sein Ergebnis in
+der Reihenfolge des SUBJEKTS zurück — ohne diese Regel stünde dasselbe
+Rechteck je nach Richtung des Laufs und je nach Startpunkt der Plattenkontur
+anders da. Mit ihr gilt: ein Ring, der ganz innen liegt, kommt als DASSELBE
+Polygon zurück, Punkt für Punkt, in allen vier Richtungen.
+
+Welche Läufe eine Platte HÖRT, entscheidet weiterhin die Mitte (Etagenplatte:
+alle ihrer Etage; Raumplatte: nur die, deren Mitte in ihr liegt); WIE VIEL vom
+Ring sie trägt, entscheidet der Clip. Ein Lauf, der in eine Wand stößt, bleibt
+ein Autorenfehler — der Composer repariert die Treppe nicht, er hält nur die
+Platte heil.
+
+Kommt ein Lauf auf Etage 0 an (Kellerlauf), passiert nichts: dort gibt es seit
+„Ein Boden" E5a gar keine Platte.
+
+**Für beide Renderer heißt das zweierlei.** Wer die Platte trianguliert, hängt
+die Ringe als `Shape.holes` an (`buildPlate`, gleiches `sy`-Vorzeichen wie der
+Außenring). Wer BEGEHBARKEIT aus `outline` ableitet, muss sie ABZIEHEN:
+`pointInPolygon(outline) && !holes.some(pointInPolygon)` — sonst läuft die
+Figur über den offenen Schacht.
+
+#### 4. Fahrstuhl: zwei Etagen fahren direkt
+
+Kennt eine Location genau zwei Etagen, hat der Fahrstuhl genau EINE Option.
+Der Picker klappt dafür nicht mehr auf — der Tastendruck fährt. Der HUD-Chip
+sagt dann „Press F to go up" bzw. „…to go down" statt einer Auswahl. Reine
+Client-Sache; am Payload ändert das nichts.
+
+#### Handrechnung EG → OG (storey 3,00, `at` = (2, −2), `dir_deg` 90 → +X)
+
+Aus v1 unverändert: `base` 0,00 · `target` 3,08 · `steps` 15 · `run` 3,90.
+
+| Größe | Rechnung | Wert |
+|---|---|---|
+| `rise_m` | `target − base` | **3,08** (pro Stufe 3,08/15 = 0,205333…) |
+| `foot` | `at − dir·(0,45 + 0,05)`, y = 0,00 + 0,01 | **[1,50 / 0,01 / −2]** |
+| `head` | `at + dir·(3,90 + 0,50)`, y = 3,08 + 0,01 | **[6,40 / 3,09 / −2]** |
+| `footprint` | Breite 1,20 ab `at`, Querachse (0, +1) | **[[2 / −1,4], [5,9 / −1,4], [5,9 / −2,6], [2 / −2,6]]** |
+| Loch-Rechteck | Länge 3,90 + 0,05 + 0,90 = 4,85, Breite 1,20 | **[[2 / −2,6], [6,85 / −2,6], [6,85 / −1,4], [2 / −1,4]]** |
+| Loch-Mitte | `at + dir·(4,85/2)` | (4,425 / −2) → Etage **1** |
+
+Bei `dir_deg` 0 (Querachse (−1, 0)): `footprint` = [[1,4 / −2], [1,4 / 1,9],
+[2,6 / 1,9], [2,6 / −2]], `foot` = [2 / 0,01 / −2,5], `head` = [2 / 3,09 / 2,4].
+Kellerlauf (`from_level` −1): `rise_m` 2,92, `foot` y −2,91, `head` y 0,01.
+
+`SCENE_RECIPE_VERSION` 8 → **9**: dieselben Daten liefern einen neuen
+Wurzelblock, Löcher in den Platten und verschobene Pads — jede Szenensignatur
+muss sich bewegen, sonst behält jeder Client seine alte Szene.
+
+#### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| `stairs[]` auf dem Vertragsbeispiel: id/Etagen/`at`/`dir`, `steps` 15, `run_m` 3,90, `rise_m` 3,08, `tread_m`/`width_m`, `foot` [1,5 / 0,01 / −2], `head` [6,4 / 3,09 / −2], `footprint`; dazu `dir_deg` 0 und der Kellerlauf | `scripts/smoke_scene_recipe.py` **[5t]** |
+| `foot`/`head` = Pad-Mitte + halbe Pad-Dicke — Block und Kästen dürfen nicht auseinanderlaufen | ebenda **[5t]** |
+| Pad-Abstand: Aufzugs-Pad −0,015, Treppen-Pads −0,015 / 3,065 / −2,935, ROTE PROBEN auf die alten +0,055 und −0,025 | ebenda **[5]/[5s]** |
+| Plattenloch: Etagenplatte 1 und der Raum, in dem die Mitte liegt, tragen das Rechteck; ein Nachbarraum derselben Etage nicht; eine Platte ohne Lauf trägt `[]`; ROTE PROBE: ein Kellerlauf schneidet nirgends | ebenda **[2]/[2s]** |
+| Zwei Läufe auf DIESELBE Etage: die Etagenplatte trägt beide Ringe in Autorenreihenfolge, der Raum nur den, dessen Mitte in ihm liegt | ebenda **[2s]** |
+| Clipping: der Ring x 2…6,85 kommt an der ±5-Kontur UND im Raum „hall" (x 1…5) als x 2…5 an; ein Raum, in dessen Ecke er ragt, trägt nur die Überlappung; ein Ring, der ganz innen liegt, bleibt unverändert; ROTE PROBE: keine Platte trägt das rohe Rechteck | ebenda **[2s]** |
+| Kanonische Ringe: ein ganz innen liegender Lauf bleibt unverändert — nach Osten (`dir` 90, Ring x −2…2,85) UND nach Norden (`dir` 0, Ring `[[1,4,−2],[2,6,−2],[2,6,2,85],[1,4,2,85]]` ab der kleinsten Ecke) | ebenda **[2s]** |
+| `clip_ring_to_outline` von Hand: Identität (auch bei umgekehrt gewickelter Outline), Ost-Schnitt, Ecken-Schnitt, keine Überlappung → `[]`, blosse BERÜHRUNG → `[]`, Ergebnis im Uhrzeigersinn, Fläche 3,6 m² (beides am RÜCKGABEWERT gemessen) | ebenda **[2c]** |
+| `SCENE_RECIPE_VERSION` == 12 (die Konstante gehört dem ganzen Payload: nach dem Marker-`diorama` dieser Runde haben sie die Platz-Typ-Umbenennung und die Kontakt-Höhe des `root_offset` vom 2026-09-08 weitergedreht) | ebenda **[7i]** |
+| Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`client3d/scripts/smoke_walk_math.mjs`) |
+| `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | **noch nicht bewiesen — folgt mit Task 3** (ebenda) |
+| Fahrstuhl: `{levels:[0,1], current:0}` → einzige Option 1, `{[0,1], 1}` → 0, `{[0,1,2], 1}` → `null` | **noch nicht bewiesen — folgt mit Task 4** (ebenda) |
+
+### TEXTUREN für Treppe und Fahrstuhl, die Treppe ist eine TREPPE (v13) (§ A6/B1)
+
+#### Befund
+
+Treppe und Fahrstuhl waren die einzigen Bauteile, die nur eine Farbe kannten
+(`style.stair_color`, `style.elevator_*_color`), während jede Wand und jede
+Platte ein `texture_kind` aus der Surface-Bibliothek trägt. Und ein Lauf war
+ein KEIL: jede Stufe ein massiver Kasten vom unteren Boden bis zum Auftritt —
+von unten und von der Seite ein Klotz, keine Treppe.
+
+#### 1. Drahtform (Autorenformat)
+
+```json
+"stairs":        [ { "at": [2.0, -2.0], "from_level": 0, "dir_deg": 90,
+                     "texture_kind": "wooden_floor" } ],
+"elevator_kind": "dark_stone"
+```
+
+- `stairs[i].texture_kind?` — die Art JEDES Kastens dieses Laufs (Auftritte,
+  Setzstufen, Wangen, beide Pads). Pro Lauf, keine Kaskade, kein globales
+  Treppen-Kind: der Lauf ist wie ein Raum eine eigene Sache mit eigenem
+  Streifen im Editor (`PlanStairStrip`).
+- `elevator_kind?` — die Art der OPAKEN Fahrstuhlteile: Säulen, Dach, Pads,
+  Kabine. Glas bleibt Glas, die Kabinen-Deckkraft bleibt (`PlanElevatorStrip`).
+- Beide leer ⇒ exakt das bisherige Bild aus den `style`-Farben. Der Sanitizer
+  (`world_ops`) nimmt beide als String ≤ 60 Zeichen mit.
+
+#### 2. Payload — `texture_kind` und `rotation` an `extras[]`
+
+- Jeder opake `extras`-Kasten darf `texture_kind` tragen; die Renderer kacheln
+  ihn EXAKT wie eine Wand — Auflösung über die Wand-Kette (kein
+  Boden-Fallback), Klon je Kasten, Kachelmaß in die UVs
+  (`applyWorldScaleWallUVs`, geteiltes Paket, jetzt auch von `buildExtra`
+  gerufen: `buildExtra(THREE, extra, material, tileM)`). Glas trägt nie eines.
+- `rotation?: [rx, ry, rz]` in GRAD, Euler XYZ (threes Vorgabe-Reihenfolge)
+  um die Kastenmitte; `size` ist die EIGENE Ausdehnung vor der Drehung. Heute
+  nur an der Wange. Ein Renderer wendet sie wörtlich an (`mesh.rotation.set`
+  in Radiant) — nichts wird zurückgerechnet.
+- `stair_step` ist WEG. Ein Lauf ist je Stufe `stair_tread` + `stair_riser`,
+  dazu zwei `stair_stringer` (`side` "left"|"right", bergauf gesehen) und
+  wie bisher zwei `stair_pad`. Alle tragen `level` (untere Etage) und
+  `stair` (Index). Wer Treppenteile filtert, prüft `kind.startsWith("stair_")`;
+  ein Pad liegt auf EINER Etage, jedes andere Teil spannt von `level` nach
+  `level + 1` (Admin-Solo-Ansicht).
+- `SCENE_RECIPE_VERSION` 12 → **13**.
+
+#### 3. Das Rezept je Stufe (Server-Konstanten, echte Meter)
+
+| Konstante | Wert | Was |
+|---|---|---|
+| `STAIR_TREAD_THICKNESS` | 0,04 | Dicke des Auftritt-Bretts |
+| `STAIR_RISER_THICKNESS` | 0,03 | Dicke der Setzstufe |
+| `STAIR_STRINGER_DEPTH_M` | 0,16 | Höhe der Wange (quer zur Steigung) |
+| `STAIR_STRINGER_THICKNESS` | 0,05 | Dicke der Wange |
+
+`steps`, `rise`, `run`, `base`, `target` wie im Nachtrag 2026-08-25; `tt` =
+Auftrittdicke, `inner` = `STAIR_WIDTH_M − 2·STAIR_STRINGER_THICKNESS` = 1,10
+(die Breite ZWISCHEN den Wangen).
+
+```
+tread i : center = at + dir·(i+0,5)·TREAD ,  y = base + (i+1)·rise − tt/2
+          size   = TREAD entlang, tt hoch, inner quer
+riser i : center = at + dir·(i·TREAD + RISER/2) ,
+          y = base + (i+1)·rise − tt − (rise − tt)/2
+          size   = RISER entlang, (rise − tt) hoch, inner quer
+```
+
+Die Setzstufe endet unter dem eigenen Auftritt und beginnt auf dem Auftritt
+darunter — keine Fläche liegt doppelt.
+
+**Die Wange** ist ein Brett, dessen OBERKANTE die Linie durch die
+hinteren-unteren Auftrittkanten ist — von `(0, base − tt)` nach
+`(run, target − tt)` in (entlang, y). Damit berührt sie jede Stufe entlang
+einer KANTE und teilt mit keiner eine Fläche (kein Z-Fighting), und sie
+schließt an Fuß und Kopf bündig mit den Böden ab.
+
+```
+θ      = atan2(climb, run)          L = hypot(run, climb)
+along  = run/2 + sin θ · DEPTH/2    y = base − tt + climb/2 − cos θ · DEPTH/2
+across = ± (STAIR_WIDTH_M − THICKNESS)/2       ("left" = −, "right" = +)
+size   = L entlang, DEPTH hoch, THICKNESS quer
+rotation: dir ±x → [0, 0, ±θ] ; dir ±z → [∓θ, 0, 0]
+```
+
+Das Vorzeichen ist so gewählt, dass das FERNE Ende das hohe ist: eine Drehung
+um z um +θ hebt das +x-Ende, eine Drehung um x um +θ SENKT das +z-Ende — also
+`−θ` für einen Lauf nach +z. **Ein Kasten lässt sich nicht rechtwinklig
+abschneiden:** das Fußende sinkt `cos θ · DEPTH` (≈ 0,13) unter den unteren
+Boden über die ersten `sin θ · DEPTH` (≈ 0,10) Meter, das Kopfende reicht
+ebenso weit unter den oberen Boden — INS Loch, das der Lauf dort ohnehin
+schneidet. Auf Etage 0 verschluckt das Terrain das Fußende; auf einer
+deklarierten Etage steckt es im Bodenaufbau (Raumplatte +0,10).
+
+#### Handrechnung EG → OG (storey 3,00, `at` = (2, −2), `dir_deg` 90 → +X)
+
+`steps` 15, `rise` 0,205333, `run` 3,90 wie gehabt; `tt` 0,04.
+
+| Primitiv | `center` | `size` | sonst |
+|---|---|---|---|
+| `stair_tread` i = 0 | [2,13 / 0,185333 / −2] | [0,26 / 0,04 / 1,10] | level 0 |
+| `stair_tread` i = 14 | [5,77 / 3,06 / −2] | [0,26 / 0,04 / 1,10] | Oberkante = 3,08 |
+| `stair_riser` i = 0 | [2,015 / 0,082667 / −2] | [0,03 / 0,165333 / 1,10] | |
+| `stair_riser` i = 14 | [5,655 / 2,957333 / −2] | [0,03 / 0,165333 / 1,10] | |
+| `stair_stringer` | [3,999582 / 1,437218 / −2 ∓ 0,575] | [4,969547 / 0,16 / 0,05] | rotation [0, 0, 38,2997] |
+
+Wange: θ = atan2(3,08; 3,90) = 38,2997°, sin θ = 0,6197748, cos θ = 0,7847797,
+L = 4,969547; along = 1,95 + 0,0495820 = 1,9995820; y = −0,04 + 1,54 −
+0,0627824 = 1,4372176. Gegenprobe im Client (drei wendet die Euler an): die
+lokale Ecke (−L/2, +DEPTH/2, 0) landet auf **(2,00 / −0,04)**, die Ecke
+(+L/2, +DEPTH/2, 0) auf **(5,90 / 3,04)** — genau die Oberkanten-Linie.
+`dir_deg` 0: `size` x ↔ z, Wangen bei x = 2 ± 0,575, rotation
+[−38,2997, 0, 0]; 180 → [+38,2997, 0, 0]; 270 → [0, 0, −38,2997].
+Keller → EG: θ = atan2(2,92; 3,90) = 36,8229°, L = 4,872002, Wangen-Mitte
+y = −2,96 + 1,46 − 0,0640394 = −1,5640394.
+
+#### Editor
+
+`PlanStairStrip` und `PlanElevatorStrip` tragen je ein `SurfaceKindSelect`
+„Texture" aus derselben Bibliotheksliste wie der Etagen-Reiter; leer heißt
+„Stair colour" bzw. „Elevator colours".
+
+#### Die Beweise (§ B5a)
+
+| Zahl | Wo |
+|---|---|
+| 15 Auftritte, 15 Setzstufen, 2 Wangen, 2 Pads; ROTE PROBE „kein `stair_step` mehr"; jede Zahl der Handrechnung oben; Vorzeichen der Neigung für alle vier Richtungen; Keller-Wange | `scripts/smoke_scene_recipe.py` **[5s]** |
+| `texture_kind` auf allen 34 Kästen eines Laufs, auf keinem Fahrstuhlteil; ROTE PROBE ohne Kind; `elevator_kind` auf 7 opaken Teilen, auf keiner Scheibe | ebenda **[5s]**, **[5]** |
+| `code_version` 13 | ebenda **[7i]** |
+| Euler in Radiant, die zwei Oberkanten-Ecken der Wange (±x UND ±z), UV-Maximum je Fläche eines gekachelten Auftritts, `tileM` 0 lässt 0..1 | `packages/scene-render/scripts/smoke_extra_box.mjs` |
+
+## C3. Props, Varianten und Modelle
+
+### Ein Prop, mehrere Modell-Varianten (§ B2)
 
 Ein Prop trägt seit E2.3 nicht mehr ein Mesh, sondern eine **geordnete Liste
 aktiver Modell-Varianten** — mehrere Meshes DESSELBEN Gegenstands. Ein
@@ -5988,7 +7146,7 @@ darübergemalten Fläche verworfen, bleiben **0, 1, 0, 1** — nicht 0, 1, 2, 0.
 Vollständige Ableitung inklusive der Hash-Arithmetik in
 `client3d/scripts/smoke_scatter_math.mjs` Abschnitt (N).
 
-### Ergänzung 2026-08-20: Das Quellbild gehört der Variante
+#### Das Quellbild gehört der Variante
 
 Eine Variante ist nicht nur ein Mesh, sondern eine ganze **Fassung des
 Gegenstands** — und dazu gehört das Produktfoto, aus dem sie gemesht wurde.
@@ -6035,14 +7193,57 @@ Nachprüfbar in `scripts/smoke_prop_variants.py` (§ B5a, Abschnitte 10–14):
 Handrechnung der Namen aus den Stämmen, ein Lauf in Variante 1 lässt
 `source.png` byte-identisch, das Neu-Meshen bekommt `source-v2.png` gereicht.
 
-### ~~Ergänzung 2026-08-20: Woher das Bild stammt (`origin`)~~ — ENTFALLEN 2026-08-21
+### Maß, Motiv, Einsinken und Marker gehören der VARIANTE — die Nutzlast bleibt Zeichen für Zeichen gleich (§ B2/§ A9/§ A9a)
 
-Die Szenenkontext-Pipeline, die als einzige ein `origin` schrieb, ist ersatzlos
-entfernt. `GET /world/props/{id}/variants` liefert je Variante nur noch die vier
-Herkunftsfelder des Bildes (`backend`, `prompt`, `negative`, `generated_at`);
-`origin` / `origin_location` / `origin_location_id` / `origin_ts` gibt es nicht mehr.
+**Für die Renderer ändert sich nichts.** Dieser Nachtrag steht hier, weil die
+Sätze weiter oben („`ground_offset_m` je Prop", „die Maße des Props") die
+Quelle falsch benennen, nicht weil ein Feld gewandert wäre.
 
-## Nachtrag 2026-08-20 (§ B1/B2): Dach-Modelle (`roof_only`)
+Ein Prop trug bis heute EIN Maß, EIN Bildmotiv, EIN `ground_offset_m` und EINE
+Markerliste; eine Modellvariante durfte die ersten beiden überschreiben. Eine
+Variante ist aber eine ganze VERSION des Objekts — der Setzling neben der
+gewachsenen Kiefer, der zerbrochene Stuhl neben dem heilen —, und genau diese
+vier Angaben unterscheiden sich je Version. Sie liegen deshalb seit heute auf
+dem Varianteneintrag und nirgendwo sonst (`app/core/props.py`, Feldtabelle im
+Modulkopf); der Master-Datensatz hat die Schlüssel verloren, ohne Fallback-Leser.
+
+| Payload-Feld | vorher gelesen aus | jetzt gelesen aus | Form |
+|---|---|---|---|
+| `max_m` / `placeholder_dims` / `dims` | Prop, Variante überschreibt | die gezeichnete VARIANTE (`props.variant_dims`) | unverändert |
+| `ground_offset_m` (Szene, Welt-Props, Streu) | Prop | die gezeichnete VARIANTE (`props.variant_ground_offset`) | unverändert, Abwesenheit = 0.0 |
+| `prop_markers[]` | Prop | die gezeichnete VARIANTE (`props.variant_markers`) | unverändert |
+| `prop_height_m` der Streu | Prop | PRIMÄRvariante (die Instanzen werden clientseitig gesampelt) | unverändert |
+
+Wo kein Variantenkontext existiert — die schlanke Prop-Bibliothek
+`GET /assets/props`, die Zeile der Bibliotheksliste, der schematische Grundriss —
+antwortet die **PRIMÄRvariante**, also dieselbe wie bei jeder anderen
+unqualifizierten Frage (`/model` ohne Parameter, `variants` als Element 0 von
+`model_variants`).
+
+Der interne Rezept-Zwischenschritt `variant_tiers` trägt die Angaben jetzt pro
+Eintrag mit: `{variant, tiers, dims, ground_offset_m?, markers?}` — `markers`
+nur auf dem VOLLEN Datensatz, die schlanke Client-Bibliothek bekommt weiterhin
+nur `marker_count`. Das ist die eine Liste, in der eine Platzierung ihre
+POSITION auflöst, damit eine Zeile nie die Größe der einen und das Einsinken
+einer anderen Version bekommt.
+
+**Einmal-Migration** beim Start (`app/core/prop_field_migration.py`, `world_kv`-
+gesichert): jedes Prop reicht seine Werte an jede Variante durch, die keinen
+eigenen hat; ein selbst gesetzter Variantenwert bleibt stehen; danach fallen die
+Schlüssel vom Master-Datensatz. Content-Pakete aus der Zeit davor werden beim
+Import durch dieselbe Transformation geschickt.
+
+#### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Maß je Variante: Sanitizer, Auflösung, `max_m`, Stapelregel, ROTE PROBE „`height_m` auf dem Master-Datensatz wird ignoriert" | `scripts/smoke_prop_variants.py` **[18]** |
+| Motiv je Variante: Kopie-beim-Anlegen, Rückfall auf den PROP-NAMEN, Aufrufstelle des Renderns, 400 auf den Prop-Route-Feldern | ebenda **[19]** |
+| Einsinken + Marker je Variante, die Stapelregel in beide Richtungen (0,75 / 1,05 statt 0,9 / 0,9) und die Migration auf einem handgebauten Vor-Umzug-Sidecar | ebenda **[20]** |
+| Zeile eines Welt-Props liest das Einsinken der Variante, die sie zeichnet (−0.4 statt −0.2) | `scripts/smoke_world_props.py` **[3]** |
+| Streu-Eintrag: Sanitizer über die echte Schreibroute, ROTE PROBE auf dem Master-Datensatz | `scripts/smoke_terrain_areas.py` **[15]** |
+
+### Dach-Modelle (`roof_only`) (§ B1/B2)
 
 Ein Gebäudemodell ERSETZT die Fernsicht-Hülle: sobald ein Servermodell
 eintrifft, nimmt der Client seine aus den § B Primitiven gebaute Hülle weg
@@ -6074,25 +7275,7 @@ Der Server setzt das Flag aus dem Sidecar des Modells
 (`location_model3d` → `get_client_meta` → `scene_recipe._building_model`); es
 entsteht ausschließlich beim Dach-Bau, nie beim Meshen eines Bildes.
 
-## ~~Nachtrag 2026-08-20 (§ B1/B2): EIN Boden — Teile 1–3~~ — ERSETZT durch § A16
-
-Die drei Teile („der Anker des Gebäudemodells und die Steh-Höhe", „EIN Datum —
-der gezeichnete Boden der Etage", „die Natur zeichnet KEINE Platte") haben eine
-Welt beschrieben, in der es auf Etage 0 eine Etagenplatte (0,08 / 0,14 dick),
-Raumplatten (0,10), Zonenflächen (0,09 / 0,01), einen Kachel-Sockel
-(`SOCLE_Y_M` 0,045), einen Backstop (`tiles.tilePlateY`, −0,05 / −0,13 / 0,04)
-und ein Payload-Flag `natural_floor` gab. **Nichts davon existiert mehr** — die
-Etage-0-Höhe ist `h_final`, das Etage-0-Material ist der Layer-Bake.
-
-Was aus diesen Nachträgen WEITERGILT, steht in **§ A16.9**: der Anker eines
-Gebäudemodells ist seine BEGEHBARE Fläche und nicht seine Unterkante
-(`walk_y_world`, auf Etage 0 also schlicht `offset_y`); die Deklaration eines
-Raums (`walk_y_world` eines Dioramas) wird ZUERST gefragt und schlägt jede
-andere Sprosse; bei zwei Ansagen gewinnt die KLEINERE Hülle (v6 Nr. 6). Die
-übrigen Zahlen und Tabellen von damals stehen in der Git-Historie (`8672c756`,
-`47abc26b`, `8a44c891`).
-
-## Nachtrag 2026-08-20 (§ B2/§ A9/§ A9a): Ein Prop steht überall gleich tief — `ground_offset_m`
+### Ein Prop steht überall gleich tief — `ground_offset_m` (§ B2/§ A9/§ A9a)
 
 Ein Prop trägt seit heute eine eigene **Höhe über dem Boden**: `ground_offset_m`
 auf dem Prop-Sidecar, in Metern, negativ versenkt, positiv hebt an. Es ist eine
@@ -6169,409 +7352,13 @@ in seinen echten Maßen; der Reglerweg folgt der Prop-Höhe (mindestens ±0,5 m,
 höchstens das gespeicherte ±5 m), damit ein Schemel in seinen Zentimetern und
 eine Tanne in ihren Metern eingestellt wird.
 
-## ~~Nachträge 2026-08-21 (§ A16–§ A20): Ein Boden — E1 / E3 / E4 / E5a / E5b~~ — ZUSAMMENGEZOGEN in § A16
-
-Die fünf Etappen-Nachträge — E1 die reine Höhenfunktion, E3 der Layer-Schnitt,
-E4 der Wasserspiegel, E5a das Ende der Etage-0-Platten, E5b die Renderer aus
-Daten — sind in Etappe E6 zu EINEM Kapitel zusammengezogen: **§ A16 „Ein
-Boden"**. Dort steht der Stand als Gesetz statt als Etappen-Diff, samt der
-Beweiskarte (§ A16.11), die sagt, welcher Smoke welche Zahl herleitet.
-
-Die Etappen-Texte mit ihren Vorher/Nachher-Tabellen, ihren Zwischenzuständen
-(„bis E4 zeichnet Wasser noch seine Drape", „bis E5 rendern Zonenplatten
-weiter") und ihren Löschlisten stehen in der Git-Historie: `81a9bb3c` (E1),
-`2f501d0e` (E2), `9062dbf9` (E3), `9e85bb18` (E4), `c9874527` (E5a),
-`9b7a424d` (E5b), `67f776d0` (Zonen-Wasser im Schwimmen).
-
-## Nachtrag 2026-08-21 (§ A16.3 / § A16.7 / § A16.8 / § B1): Ein Wasser-Gesetz — W1 (Server)
-
-*Etappe W1 aus `development_instructions/plan-fliessgewaesser.md`. Dieser
-Nachtrag **ersetzt** die Wasser-Aussagen von § A16.3 (die drei Zahlen, die
-Zonen-Wasser-Stufe), die `waters`-Liste in § A16.7, den Satz „die Fläche ist
-eben" in § A16.8 und die `zone_water_basis`-Erwähnung in der
-`height_sig`-Zeile (§ A1.3). W2 (Client) und W3 (Admin-UI) folgen; bis W2
-zeichnet der Client weiter EINE flache Platte — dafür fährt
-`water_level_effective` unverändert mit.*
-
-**DAS GESETZ, in vier Sätzen.** Wasser ist eine **ART**, kein Name und kein
-Raum: `meta.water` am Terrain-Typ macht JEDE Art zur Wasser-Art, und die Art
-trägt die Vorgaben `water_depth_m` (0,2…20, Default 2,0) und `shore_ramp_m`
-(0…20, Default 3,0). Wasser ist eine **FLÄCHE auf der Karte**: eine gemalte
-Fläche überschreibt die beiden Zahlen, setzt ihren Spiegel und wählt ihr Bett.
-Der Spiegel ist ein **PROFIL**, keine Zahl: ohne Fließrichtung eine Konstante
-(der See von bisher), mit einer eine entlang der Fließachse geneigte Ebene.
-Und ein **RAUM hat kein Wasser mehr** — die fünfte Backstufe ist gelöscht.
-
-### 1. Die Art trägt die Vorgaben, die Fläche überschreibt sie
-
-| Feld | Wo | Typ | Bedeutung |
-|---|---|---|---|
-| `meta.water` | **Art** | `bool` | Diese Bodenart IST Wasser. **Das EINE Prädikat** (`terrain_types.is_water_kind`) — Layer-Tabelle, Bake, Sanitizer und Lageplan fragen dieses und kein zweites. Das frühere zweite Buch (die Material-KLASSE der Surface-Bibliothek für Raumböden) ist ersatzlos weg. |
-| `meta.water_depth_m` | **Art** | 0,2…20 (2,0) | Vorgabe: wie tief das Bett unter dem Spiegel liegt, sobald die Uferrampe durch ist |
-| `meta.shore_ramp_m` | **Art** | 0…20 (3,0) | Vorgabe: wie weit INNERHALB des Umrisses die volle Tiefe erreicht ist. **0 ist ein WERT** (das Becken) und überlebt einen Save, wie `edge_blend_m` |
-| `meta.water_depth_m` / `meta.shore_ramp_m` | **Fläche** | dieselben Klemmen | Überschreiben die Vorgabe der Art. Fehlt der Schlüssel, antwortet die Art — deshalb wird ein unlesbarer Wert GELÖSCHT und nicht auf den Modul-Default gesetzt |
-| `meta.water_level` | **Fläche** | Welt-y (m) | Der Spiegel STEHENDEN Wassers. Fehlt er, leitet der Bake ihn her (Rand-Median); `save_area` friert ihn dann ein |
-| `meta.water_level_up` / `_down` | **Fläche** | Welt-y (m) | Die beiden Enden eines FLIESSENDEN Spiegels. Jedes überschreibt sein eigenes Ende; ein einfaches `water_level` setzt beide |
-| `meta.flow_dir_deg` | **Fläche** | 0…360, gewrappt | Die FLIESSRICHTUNG (stromabwärts) von POLYGON-Wasser. Buchstabiert wie jeder andere Yaw des Vertrags (§ A1.1): `dir = (sin θ, cos θ)`, also 0° nach +z, 90° nach +x. Sie treibt das Profil UND (ab W2) die Ripple-Scrollrichtung. Trägt die Fläche eine Linie, die sie entlangfließt, wird sie **ignoriert** (W4a) |
-| `meta.flow_along` | **Fläche** | `"forward"` / `"reverse"` / fehlt | **W4a:** Fließt eine mit dem LINIENWERKZEUG gezeichnete Fläche entlang ihrer Mittellinie (`meta.stroke.points`) — in Zeichenreihenfolge oder gegen sie; fehlt der Schlüssel, steht das Wasser. Alles andere verliert den Schlüssel. Ein Fluss macht Biegungen, und eine einzelne Gradzahl kann nicht sagen, wo ein Mäander langläuft |
-| `meta.flow_speed_m_s` | **Fläche** | 0…2 m/s, geklemmt, 2 Nachkommastellen | **Befund 2026-08-23 Nr. 2:** Wie schnell genau DIESE Fläche läuft. Überschreibt den `flow_speed`-Regler ihrer SURFACE-ART (Default **0,5 m/s** seit der Nutzer-Entscheidung 2026-08-25, davor 0,15, `surface_textures`), fehlt der Schlüssel, antwortet die Art. Reine OPTIK: Bake, Spiegel und Fließachse lesen ihn nicht, deshalb steht er auch nicht in `heightfield.WaterMeta`. Die Renderer bekommen ihn NICHT als Meter pro Sekunde, sondern als VERHÄLTNIS `Fläche ÷ Art` in der LÄNGE des Vertex-Attributs `aWaterFlow` (`waterFlowFactor`, `@anima/scene-render`) — der Shader rechnet `wSpeed = uFlowSpeed · wLen`, ein Material bleibt pro Art. Ohne Schlüssel ist die Länge exakt 1 (der Einheits-Tangens seit W4a), eine authorierte 0 wird auf 1e-3 geklemmt: 0 wäre die Länge, die der Shader als STEHEND liest, und stehendes Wasser driftet mit `uSpeed` = 0,25 m/s, also SCHNELLER |
-| `meta.bed_kind` | **Fläche** | Art-Id | Welche Bodenart der Layer-Bake UNTER dem Wasser malt. Default: die blanke Welt (`game.default_terrain_kind`) — genau die Ersetzung, die der Client bisher selbst vornahm |
-
-Die Art kann den SPIEGEL nicht beantworten: zwei Seen einer Art stehen auf zwei
-Höhen. Alles andere darf sie.
-
-### 2. Das Spiegel-PROFIL — `water_level_at(x, z)`
-
-`app/core/heightfield.WaterProfile` ist die reine Funktion, und sie fährt
-additiv im Payload mit (`meta.water_profile`, siehe Nr. 4). **Seit W4a ist die
-Achse eine POLYLINIE**, das Feld `axis`: Knoten `[x, z, s, level]` in
-Fließreihenfolge, `s` = Bogenlänge ab dem ersten Knoten, `level` = Welt-y dort.
-
-```
-s      = Bogenkoordinate des NÄCHSTEN Punktes auf der Polylinie
-         (jedes Segment mit Klemme projiziert, kürzester Abstand gewinnt)
-level  = linear zwischen den beiden Knoten, zwischen denen s liegt,
-         an beiden Enden geklemmt
-```
-
-* **Beide alten Gesetze sind Sonderfälle, kein Zweig daneben.** Stehendes
-  Wasser ist EIN Knoten (am Flächen-Schwerpunkt): der nächste Punkt ist dieser
-  Knoten, die Klemme antwortet überall sein Niveau. Ein gerader Fluss aus
-  `flow_dir_deg` ist ZWEI Knoten — die Extreme des Polygons auf der Achse mit
-  `level_up`/`level_down` —, und die Projektion auf dieses eine Segment IST das
-  `clamp((s − s_min)/(s_max − s_min), 0, 1)` von W1, Klemme inklusive.
-* **Warum überhaupt eine Polylinie:** projiziert man eine 180°-Schleife auf eine
-  Gerade, liegen Ober- und Unterlauf am selben Achsenpunkt und der Spiegel der
-  Biegung kann gar nicht fallen. Entlang der eigenen Linie kann er es immer.
-* **Die Knoten-Niveaus einer gezeichneten Linie**: je Knoten der **Median der
-  Naturhöhe über einen QUERSCHNITT** — 9 Proben senkrecht zur lokalen Tangente,
-  verteilt über `width_m`/2 + Uferrampe zu jeder Seite (der Rand-Median von oben,
-  lokal statt je Drittel). Danach **stromabwärts monoton** (laufendes Minimum):
-  Wasser fließt nie bergauf. Erst dann gewinnt der Autor: `water_level` macht
-  alle Knoten gleich (gezeichnet, aber stehend), `water_level_up`/`_down`
-  ersetzen den ersten/letzten Knoten und die inneren werden **affin** in die
-  neue Spanne eingepasst — ihre Form bleibt, ihre Enden werden die autorierten.
-* **Die Knoten sind NICHT die Klicks** (W5b, 2026-08-24). Vor den
-  Querschnitts-Medianen wird die gezeichnete Linie **nach Bogenlänge abgetastet**
-  — `heightfield.WATER_AXIS_STEP_M` = 2 m, je Teilstrecke gleichmäßig in
-  `ceil(Länge/Schritt)` Teile, die geklickten Punkte bleiben Knoten. Danach
-  laufen die Regeln oben unverändert (Median je Knoten, laufendes Minimum,
-  autorierte Enden). Zum Schluss wird die Knotenliste wieder **vereinfacht**:
-  Douglas-Peucker auf `(s, level)`, Toleranz `WATER_AXIS_SIMPLIFY_M` = 0,05 m,
-  je Teilstrecke mit den Klicks als festen Ankern, Abweichung **senkrecht in
-  der Höhe** gemessen (genau der Fehler, den ein Leser von `water_level_at`
-  sieht). Eingefügte Knoten liegen auf der geraden Teilstrecke zwischen zwei
-  Klicks, ihr Wegfall kann die Achse also nicht um einen Millimeter versetzen;
-  Klick-Knoten sind Biegungen und fallen nie weg. Ein Fluss über gleichmäßigem
-  Gefälle liefert damit exakt die gezeichneten Punkte, ein Fluss über eine
-  3-m-Kante zwei Knoten dies- und jenseits der Kante. Obergrenze
-  `WATER_AXIS_MAX_KNOTS` = 256 eingefügte Knoten (darüber wächst der Schritt).
-  **Grund:** mit Knoten nur an den Klicks war der Spiegel zwischen zwei Klicks
-  EINE Rampe — er sank lange vor der Kante unter den Boden (Carve schnitt eine
-  Schlucht) und stand lange danach in der Luft, und `waterfallsFrom` konnte die
-  Kante nicht sehen, weil kein Knoten in ihrer Nähe lag. `HEIGHT_BAKE_VERSION`
-  ist deshalb auf 3.
-* **Die beiden Enden von POLYGON-Wasser**, wo der Autor sie offen lässt: der
-  **Rand-Median des jeweiligen DRITTELS** der Achsen-Spanne — `level_up` über die
-  Randproben mit `s ≤ s_min + Spanne/3`, `level_down` über die mit
-  `s ≥ s_max − Spanne/3`. Ein Drittel und nicht „die zwei Extrempunkte": ein mit
-  vier Ecken gezeichneter Fluss hätte je Ende genau eine Probe und nähme sein
-  Niveau von einem willkürlichen Quadratmeter Landschaft.
-* **Die neun Zahlen bleiben** — für einen Leser, der die Polylinie nicht kennt,
-  die beste EINE geneigte Ebene: `level_up`/`level_down` sind das Niveau des
-  ERSTEN und des LETZTEN Knotens, `axis_x/axis_z` der erste Knoten (bei
-  Polygon-Wasser weiter der Flächen-Schwerpunkt), `flow_dir_deg` die Peilung der
-  **Sehne erster → letzter Knoten** (bei Polygon-Wasser die autorierte) und
-  `s_min`/`s_max` die Spanne auf dieser Sehne. Bei stehendem Wasser bleibt
-  `flow_dir_deg` `null` und `s_min == s_max == 0`.
-
-### 3. Der Carve rechnet gegen das LOKALE Niveau
-
-```
-h = min(h, water_level_at(x, z) − water_depth_m · smoothstep(min(d_in/shore_ramp_m, 1)))
-```
-
-> **INVARIANTE 2, jetzt PUNKTWEISE.** Für jede Probe tiefer als `shore_ramp_m`
-> im Polygon gilt `h_final ≤ water_level_at(x, z) − ε`, `ε = min(depth, 0,25)` —
-> nicht gegen einen Mittelwert, sondern gegen den Spiegel AN DIESER STELLE.
-> Jenseits der Rampe ist `smoothstep(1) = 1` exakt, das zweite Argument des
-> `min` also `level_at(x,z) − depth`: arithmetisch, nicht gesampelt.
-
-**Die rote Gegenprobe steht im Smoke** (`scripts/smoke_height_bake.py` [8h]).
-Derselbe Fluss mit EINEM Spiegel auf dem Mittelniveau 5,0 lässt den Boden
-stromabwärts bei 2,35 stehen, während das lokale Niveau dort 1,025 ist — die
-Invariante ist um 1,575 m verletzt, und ein flacher Spiegel schneidet stromauf
-durch einen Boden, der 2,65 m über ihm liegt. Der geneigte Carve antwortet an
-derselben Stelle 0,025 und hält sie.
-
-### 4. Payload — additiv, und `water_level_effective` bleibt
-
-`GET /world/terrain-areas` und `GET /play/terrain` liefern je Wasser-Fläche
-unverändert `meta.water_level_effective` und **zusätzlich** `meta.water_profile`:
-
-```jsonc
-"meta": {
-  "flow_dir_deg": 270,
-  "water_level_up": 7.4, "water_level_down": 2.6,
-  "water_level_effective": 5.0,          // OUTPUT: das MITTELNIVEAU des Profils
-  "water_depth_effective": 1.2,          // OUTPUT: die BETT-TIEFE des Carves
-  "water_profile": {                     // OUTPUT: die neun Zahlen …
-    "level_up": 7.4, "level_down": 2.6, "flow_dir_deg": 270.0,
-    "axis_x": 50.0, "axis_z": -30.0, "dir_x": -1.0, "dir_z": 0.0,
-    "s_min": -30.0, "s_max": 30.0,
-    // … und seit W4a die WAHRHEIT daneben: die Knoten [x, z, s, level] in
-    // Fließreihenfolge, auf 3 Nachkommastellen. Ein Knoten = stehend, zwei =
-    // die gerade Achse oben, N = die gezeichnete Linie.
-    "axis": [[80.0, -30.0, -30.0, 7.4], [20.0, -30.0, 30.0, 2.6]] } }
-```
-
-**`water_level_effective` ist ab jetzt das MITTELNIVEAU** (das Mittel der beiden
-Enden = das Niveau in der Mitte der eigenen Achse). Für stehendes Wasser ist es
-exakt der Spiegel, der es immer war; für einen Fluss ist es die eine Ebene, die
-an beiden Enden am wenigsten danebenliegt — die ehrlichste Zahl für den
-FLACHEN Client, den W2 ablöst. Wer die Wahrheit will, liest `water_profile` und
-wertet die Formel aus Nr. 2 selbst aus. Beides ist **Ausgabe** und wird nie in
-die Autorenfelder zurückgeschrieben (der Sanitizer wirft beide auf dem Weg
-hinein weg).
-
-**`water_depth_effective` ist dasselbe für das BETT** (W4b): die Tiefe, mit der
-der Carve wirklich gerechnet hat — die Vorgabe der ART, mit der Überschreibung
-der FLÄCHE und den Klemmen von Nr. 1 schon angewendet (`heightfield.water_meta`).
-Sie steht neben `water_level_effective`, weil sie dieselbe Art Antwort ist: das
-Ergebnis einer Auflösung, die ein Client sonst ein zweites Mal implementieren
-müsste. Er braucht sie, weil die **Deckkraft** einer Wasserfläche ¾ ihrer
-eigenen Tiefe ist (`client3d/src/scene/waterPlaneMath.waterOpaqueDepthM`,
-Vertex-Attribut `aWaterOpaque`): ein 1,2-m-Fluss ist ab 0,9 m Tiefe deckend, ein
-2-m-See erst ab 1,5 m — mit EINER Konstante blieb der schmale Fluss bis zur
-Mitte durchsichtig. Fehlt der Schlüssel (die Fläche hat kein gecarvtes Bett),
-rechnet der Client mit dem Vorgabe-See weiter.
-
-### 5. Der Layer-Schnitt: Wasser trägt sein BETT
-
-Ein Wasser-Layer bleibt ein voller Layer — die Maske muss „hier ist Wasser"
-beantworten, für den Unterwuchs-Filter und für jede Punktabfrage. Was er
-**malt**, ist ab W1 der Boden DARUNTER:
-
-* `surface` des Layers = die Oberfläche der **Bett-Art** (`meta.bed_kind`,
-  Default: die blanke Welt). Der Wasser-Layer malt also nie die Wasser-Textur
-  auf das Gelände — der Spiegel ist eine eigene Fläche darüber, und den See
-  zweimal zu malen ließ die beiden gegeneinander arbeiten.
-* `edge_blend_m` = die Übergangsbreite der **Bett-Art**, sobald eine autoriert
-  ist; ohne autoriertes Bett bleibt es die der Wasser-Art (heutige Zahl).
-* Der Tabellen-Eintrag nennt sein Bett: **`bed_kind`** (additiv, nur auf
-  Wasser-Layern). Der Schlüssel eines Layers ist damit `(kind, edge_blend_m,
-  bed_kind)`: **zwei Teiche einer Art auf zwei Betten sind zwei Layer.**
-* Das Feld `water` jeder Tabellenzeile — Karten-Arten wie Boden-Arten —
-  kommt aus dem EINEN Prädikat.
-* **Die `waters`-Liste des Index ist WEG.** Es gibt keine Zonen-Wasser mehr zu
-  listen. (Der laufende Client liest sie als `index.waters ?? []` und zeichnet
-  dann keine Zonen-Platten mehr — kein Fehler, nur das Ende eines Features.)
-
-### 6. Wasser verlässt den Lageplan — ersatzlos, ohne Kompat-Leser
-
-**Gelöscht** (keine Alias-Felder, keine Fallback-Reader):
-
-`heightfield.ZoneWaterInput` · `ZoneWaterStamp` · `HeightModel._build_zone_water`
-· `HeightModel._carve_zone` · `HeightModel.zone_water` ·
-`HeightModel.zone_water_level_by_room` · der Parameter `zone_waters` aller
-Bake-Einstiege · `models.heightfield.placed_zone_waters` · `zone_water_basis`
-(und ihr Eintrag in `height_sig`) · `terrain_layers.waters_payload` ·
-`is_water_floor` · `floor_water_meta` · `surface_classes` · die vier
-Wasser-Felder von `terrain_layers.Floor` · die drei Raum-Layout-Felder
-`water_level` / `water_depth_m` / `shore_ramp_m` (E5b-Regler) · das Feld
-`water_level_effective` im `floor_plan` der Szene.
-
-**Eine Boden-Art eines Raums darf keine Wasser-Art mehr sein.** Der Sanitizer
-(`world_ops._sanitize_room_layout`) wirft ein solches `surfaces.floor` mit einer
-Log-Zeile weg — an dem einen Schreibpfad, an dem es entstehen kann.
-
-**Stattdessen ein VERWEIS.** Der `floor_plan`-Eintrag eines Raums, dessen
-Grundriss (mehrheitlich, nach FLÄCHE) in einer gemalten Wasser-Fläche liegt,
-trägt additiv:
-
-```jsonc
-{ "room_id": "pond", "polygon_world": [...], "floor_kind": "sand",
-  "closed": false,
-  "map_water": { "area_id": "ta_pool", "kind": "water" } }
-```
-
-**Abgeleitet beim Komponieren, nie gespeichert** — deshalb kann er nicht
-hängen: verschwindet der See, verschwindet die Zeile. Mehrheit heißt STRIKT
-mehr als die Hälfte (genau halb liegt nicht darauf), gemessen auf einem festen
-32 × 32-Raster über der Hülle; bei Gleichstand gewinnt die SPÄTER gemalte
-Fläche — das Vorrangsgesetz des ganzen Bodens (§ A16.7), nicht ein hier
-erfundener Tie-Break. Raum-Semantik (Zugehörigkeit, Wahrnehmung) ändert sich
-nicht.
-
-### 7. Signaturen
-
-* `height_sig` hasht `water_basis()` mit den **effektiven** Zahlen (Spiegel,
-  beide Enden, Fließrichtung, aufgelöste Tiefe/Rampe): eine Welt, die ihre
-  Art „river" von 2 m auf 6 m dreht, ändert jedes Flussbett, ohne dass eine
-  Fläche angefasst wird — und die Signatur trägt das mit. `zone_water_basis`
-  ist aus dem Basis-Objekt raus.
-* `layers_sig` hasht zusätzlich das **`bed_kind` je Fläche**: das Bett malt,
-  also gehört es in den Schnitt, nicht in die Höhe. `surface_classes` ist raus.
-
-### 8. Die Beweise (§ B5a)
-
-| Skript | was es herleitet |
-|---|---|
-| `scripts/smoke_height_bake.py` **[8]** | die Fließachse (Yaw-Konvention, Wrapping), die beiden Drittel-Rand-Mediane von Hand (7,4 / 2,6 aus 31 Randproben je Ende), `level_at(x) = 0,08·x + 1,0`, der Carve gegen das lokale Niveau, Art-Vorgabe gegen Flächen-Überschreibung, die ungeflaggte Art (kein Carve), Invariante 2 punktweise über 2916 Proben (schlechtester Abstand exakt die Tiefe 1,0 m), die **roten** Gegenproben gegen den konstanten Spiegel, das Einfrieren beider Enden beim Save und die neun Payload-Zahlen |
-| `scripts/smoke_height_bake.py` **[8k]** | **W4a:** die Fließachse als POLYLINIE — die drei Knoten-Niveaus 10/8/6 einer Haarnadel als Querschnitts-Mediane von Hand, das Niveau am mittleren Knoten (8,0) gegen die **rote** Gegenprobe der geraden W1-Sehne (6,0: die Biegung projiziert hinter das eigene Unterlauf-Ende), Bogenlängen 101/153 und die Mitten-Niveaus 9,0/7,0, der Carve gegen das lokale Niveau, das laufende Minimum (10/11/6 → 10/10/6, seit W5b mit dem Eckknoten dort, wo die Linie wieder auf 10 fällt: 10/10/**10**/6 bei (239,4 | 300), rückwärts gezeichnet 6/6/6), autorierte Enden 12/4 über 10/8/6 → 12/8/4, `water_level` = alle Knoten gleich, `flow_along` schlägt `flow_dir_deg`, der Sanitizer der zwei Wörter und das EINE Prädikat `is_flowing` samt Settle-Pfad |
-| `scripts/smoke_height_bake.py` **[8l]** | **W5b:** die Verdichtung der Achse — eine harte 3-m-Kante bei x = 41 (Höhenfläche mit `falloff_m` 0), ein mit ZWEI Klicks gezeichneter Fluss (0,0)→(100,0), Abtastung alle 2 m ⇒ Achse `[0,3] [40,3] [42,0] [100,0]`, der ganze Abfall in EINEM 2-m-Segment (Gefälle 1,5 ⇒ genau ein Wasserfall), Spiegel 10 m vor der Kante = 3,0 und 10 m danach = 0,0, Bett-Tiefe oberhalb exakt `water_depth_m`; **rote** Gegenproben der Zwei-Knoten-Rampe: 2,07 statt 3,0 (0,93 m unter den eigenen Ufern — „Wasser fast weg", Carve gräbt bis 1,07) und 1,47 statt 0,0 (1,47 m über dem Boden — „Wasserhügel"), Gefälle 0,03 ⇒ kein Fall. Zwillinge: `client3d/scripts/smoke_water_plane.mjs` **[4e]**, `client3d/scripts/smoke_waterfall.mjs` **[9]** |
-| `scripts/smoke_height_bake.py` **[9]** | die Löschung der fünften Stufe **namentlich**: 17 Symbole, die Bake-Signaturen, der `waters`-freie Index, die drei Raum-Wasserfelder und die gestrippte Wasser-Boden-Art |
-| `scripts/smoke_terrain_layers.py` **[13]** | Bett-Art als Layer (Oberfläche + eigene Übergangsbreite, zwei Betten = zwei Layer), die rote Probe „nichts malt die Wasser-Textur aufs Gelände", das EINE Prädikat Zeile für Zeile, und das **Kantengesetz**: dieselben zwei Rechtecke in zwei Malreihenfolgen geben die zwei Breiten |
-| `scripts/smoke_scene_recipe.py` **[4w]** | `map_water` von Hand (100 % / 75 % → Verweis; 50 % / 25 % / 0 % → keiner), Letzter-gewinnt, und dass der Eintrag sonst nichts über Wasser sagt |
-| `scripts/smoke_terrain_types.py`, `scripts/smoke_nav_grid.py` | Sanitizer der Art-Vorgaben bzw. der Bett-Carve unter der Laufregel |
-
-## Nachtrag 2026-08-21 (§ A16.3 / § A16.7 / § A19 Nr. 5 / § G4): Ein Wasser-Gesetz — W2 (Client)
-
-> **Der MESH-Teil dieses Nachtrags ist mit Wasser v2 K-A E5 tot**
-> (`liftToWaterProfile`, die Regelfläche, der Ufer-Shader `vWaterPlane`): das
-> Terrain hebt und schattiert seine eigenen Wasserpixel (Nachtrag „Das
-> Wasser-Raster", 7a/9/10). Was bleibt, ist die LESUNG — `waterProfileOf`,
-> `waterLevelAt` und das Verbot, `water_level_effective` zu lesen —, und die
-> gilt unverändert für Spielmechanik, Wasserfall-Erkennung und die
-> Raster-Quelle des Servers.
-
-*Etappe W2 aus `development_instructions/plan-fliessgewaesser.md`, die
-Lese-Seite des W1-Nachtrags oben. Er **ersetzt** dessen Satz „bis W2 zeichnet
-der Client weiter EINE flache Platte", **streicht** die Zonen-Wasser-Aussagen
-von § A19 Nr. 5 ersatzlos und **präzisiert** § G4 (der Spiegel ist keine
-Platte mehr). Was der Server liefert, ändert W2 nicht um eine Zahl: die neun
-Zahlen von W1 werden jetzt ausgewertet statt gemittelt. W3 (Admin-UI) folgt.*
-
-**DAS GESETZ, in vier Sätzen.** Der Spiegel ist eine **REGELFLÄCHE**: jeder
-Vertex des Earcuts trägt `water_level_at` seines eigenen Ortes, ein See kommt
-dabei bitgleich flach heraus wie bisher. Die **Fließrichtung treibt die
-Ripple**, und zwar als **Vertex-Attribut**, weil das Material der ART gehört
-und die Strömung der FLÄCHE. Es gibt **EINE Wasserquelle**: die gemalten
-Flächen — der Zonen-Lookup ist gelöscht, und Schwimmen rechnet gegen das
-LOKALE Niveau. Und der Client **malt kein Bett mehr selbst**: er rendert die
-Oberfläche, die die Layer-Tabelle nennt.
-
-### 1. Der Spiegel ist eine Regelfläche, keine Platte
-
-`scene/waterPlaneMath.ts` trägt den reinen TS-Zwilling der Server-Funktion:
-
-* `waterProfileOf(meta)` liest `meta.water_profile` — und **das ist der ganze
-  Wasser-Test**. Nur eine Fläche, die das eine Server-Prädikat
-  (`terrain_types.is_water_kind`) als Wasser gezählt hat, trägt ein Profil.
-  Die Material-KLASSE (`isWaterClass`) wird dafür **nicht mehr befragt**: sie
-  sagt, wie Wasser AUSSIEHT, und war das zweite Buch darüber, was Wasser IST.
-* `waterLevelAt(profile, x, z)` ist `heightfield.water_level_at`, Zeile für
-  Zeile, samt der beiden Klemmen — an den Enden liefert sie `level_up` bzw.
-  `level_down` **exakt**, nicht das Ergebnis einer Interpolation mit t = 0/1.
-* `liftToWaterProfile(positions, profile)` schreibt dieses Niveau in das `y`
-  jedes `(x, y, z)`-Tripels. Die Masche steht danach im Ursprung; ihre Höhe
-  ist absolut und darf nicht noch einmal verschoben werden.
-
-**KEINE UNTERTEILUNG, und das ist Arithmetik, kein Geschmack.** Das Profil ist
-in der Ebene linear, solange die Klemme nicht greift — und die greift nur
-AUSSERHALB von `[s_min, s_max]`, das sind die Extreme des Polygons selbst.
-Kein innerer Punkt erreicht den Knick, also gibt eine Regelfläche durch den
-Umriss die Funktion exakt wieder. Ein 60 m langer Fluss ist eine Handvoll
-Dreiecke.
-
-**DER UFER-SHADER BLIEB UNVERÄNDERT** — das ist der Befund von W2, nicht ein
-Versäumnis. `wsDepth = vWaterPlane.y − tlodHeight(vWaterPlane.xz)` liest die
-Höhe seit E4 aus der GEOMETRIE, nie aus einer Uniform; die Interpolation einer
-linearen Funktion über ein Dreieck IST diese Funktion, also misst er ohne eine
-Zeile Änderung gegen das lokale Niveau. Genau dieselbe Eigenschaft trug schon
-zwei Seen auf zwei Höhen auf EINEM Material.
-
-### 2. Die Fließrichtung als Vertex-Attribut
-
-`aWaterFlow` (vec2) trägt die stromabwärtige Einheitsrichtung
-(`dir_x`/`dir_z`, für stehendes Wasser `(0, 0)`) und liegt auf der Spiegel-
-Geometrie, nicht in einer Uniform. **Der Grund ist die Materialbindung:**
-`ground.rebuildAreas` hält genau EIN Material je Wasser-ART für die ganze
-Welt; eine Uniform hätte also ein Material je FLÄCHE erzwungen, um zwei Floats
-zu sagen. Auf einer Masche von einem Dutzend Vertices sind zwei Floats nichts.
-
-Der Ripple-Patch (`@anima/scene-render` `materials.ts`) baut daraus einen
-Rahmen — `wAx` stromabwärts, `wAy` quer — und legt die beiden Scroll-Vektoren
-hinein. **Ohne Strömung ist der Rahmen der der Welt**, und die beiden Vektoren
-sind buchstäblich die Konstanten von vorher: `A = (1, 0.6)`,
-`B = −(0.8, 1.3)`. Mit Strömung laufen **beide Lagen stromabwärts**
-(`A = wAx + wAy·0.6`, `B = wAx·0.8 − wAy·1.3`) und nur ihre Querkomponenten
-sind gegenläufig — eine zweite Lage, die stromauf liefe, läse sich als zwei
-Flüsse. Die Beträge (`√1.36`, `√2.33`) sind rotationsinvariant, `uSpeed` bleibt
-also dieselben Meter pro Sekunde.
-
-**Eine Geometrie ohne das Attribut liest `(0, 0)`** — WebGL lässt ein
-ungebundenes Attribut auf seinem generischen Wert `(0, 0, 0, 1)`, den three nie
-schreibt. Jede Wasserfläche, die keine client3d-Spiegelmasche ist (allen voran
-die Böden der Admin-Vorschau), behält damit exakt ihr Aussehen.
-
-### 3. Eine Wasserquelle — der Zonen-Lookup ist gelöscht
-
-**Gelöscht** (keine Alias-Felder, keine Fallback-Leser):
-`waterPlaneMath.zoneWaterAt` · `zoneWaterMirrors` · `ZoneMirror` ·
-`waterLevelOf` · der Zustand `ground.zoneWaters` · das Lesen von
-`index.waters` · die Zonen-Schleife in `rebuildAreas` · das **Borgen** eines
-beliebigen wasser-geflaggten Katalog-Eintrags für einen Raum-Bodenart-Namen ·
-`@anima/scene-render` `TerrainLayerWater` und das Feld `waters` von
-`TerrainLayerIndex`.
-
-`typeAt` liest den Spiegel damit aus genau einer Schleife: die letzte
-enthaltende gemalte Fläche gewinnt Art UND Niveau, und das Niveau ist
-`waterLevelAt(profile, x, z)` — **das lokale**, nicht `water_level_effective`.
-`floatRootY(groundY, levelAt, sink)` ist in seinem Gesetz unverändert; was sich
-geändert hat, ist was hineingereicht wird. Das ist der Unterschied zwischen
-einer Figur, die überall 0,6 m unter ihrer eigenen Wasserlinie hängt, und
-einer, die stromab 1,92 m ÜBER dem sichtbaren Wasser schwimmt und stromauf in
-1 m tiefem Wasser watet (die rote Gegenprobe im Smoke, von Hand gerechnet).
-
-`water_level_effective` fährt weiter mit und wird vom Client **nicht mehr
-gelesen**: es ist die eine Ebene für einen FLACHEN Konsumenten, und diesen
-Konsumenten gibt es hier nicht mehr.
-
-### 4. Der Bett-Hack ist tot
-
-`layerGround.setLayerTable` ersetzte für jede Wasser-Zeile das Bild von Layer 0
-(`layer.water ? bare : layer`). Das war ein Renderer, der Boden erfindet: eine
-autorierte Kies-Sohle wurde auf die Default-Art der Welt zurückgeflacht. Seit
-W1 IST `surface` einer Wasser-Zeile schon die des Bettes und `bed_kind` nennt
-die Art dazu, also entfällt die Ersetzung ersatzlos. Wo der Client die ART
-statt der Oberfläche braucht (Farb-Fallback, Meter je Kachel), fragt er
-`layer.bed_kind || layer.kind`. `bed_kind` ist zusätzlich Teil des `layerKey`,
-denn zwei Teiche einer Art auf zwei Betten sind zwei Zeilen mit zwei Bildern —
-ohne das im Schlüssel bliebe das Slice-Array der alten Welt stehen.
-
-### 5. Der Lageplan sagt nur noch Bescheid
-
-Ein `floor_plan`-Eintrag kann `map_water {area_id, kind}` tragen (W1 § 6). Der
-3D-Client liest es **absichtlich für nichts**: Raum-Semantik (Zugehörigkeit,
-Mitte, Stände, Pulk) kommt weiter aus `polygon_world`, Boden und Spiegel malt
-die KARTE. Eine Fläche zu unterdrücken gibt es nicht, weil Stockwerk 0 seit E5a
-ohnehin keine eigene malt. Das Feld `water_level_effective` von `SceneFloor`
-ist **ersatzlos gestrichen** — der Server sendet es seit W1 nicht mehr, W3 hat
-den letzten Leser (die Admin-Lageplan-Vorschau) entfernt, und der Typ nennt es
-seitdem nicht mehr.
-
-### 6. Die Beweise (§ B5a)
-
-| Skript | was es herleitet |
-|---|---|
-| `client3d/scripts/smoke_water_plane.mjs` **[1]** | dass das PROFIL die einzige Wasserfrage ist: Mittelniveau allein ist keines, autoriertes Niveau keines, eine Zahl kaputt = kein Profil |
-| **[4]** | der Fixture-Fluss von Hand: Achse durch den Schwerpunkt (50, −30), `dir = (−1, 0)` aus 270°, `s_min/s_max = ∓30`, `level(x) = 0,08·x + 1,0` an sechs Stellen, beide Klemmen **exakt**, der See als entartete Spanne, der Flow-Vektor |
-| **[5]** | die geneigte Masche: vier Ecken auf 2,6 / 7,4 / 7,4 / 2,6 (4,8 m Gefälle auf 60 m), die Linearität an Hälfte, Viertel und ⅞ der Kante, und der See **bitgleich** flach (`Object.is`) samt `level + 0 == 0 + level` |
-| **[6]** | Schwimmen am lokalen Niveau: Bett `0,08·x`, Tiefe überall 1,0 m, Wurzel/Körper bei x = 26/50/74 — und die **roten** Gegenproben des flachen Mittelniveaus (1,92 m über dem sichtbaren Wasser stromab, Waten stromauf, ein Watet/Schwimmt-Umschlag bei genau x = 55, den es in Wahrheit nirgends gibt) |
-| **[7]** | der Ufer-Shader auf der Schräge: Alpha 20/27 an jedem x — und **rot**, dass die flache Platte oberhalb x = 62,5 negative Tiefe hätte und ganz weggeworfen würde |
-| **[8]** | die Löschung **namentlich**: acht Symbole dürfen in `client3d/src` und `packages/scene-render/src` in keiner Nicht-Kommentar-Zeile mehr stehen, `SceneFloor.water_level_effective` eingeschlossen — und `map_water` steht an seiner Stelle |
-| **[9]** | die Ripple-Richtung: der stehende Fall ergibt exakt die alten Konstanten, 0°/90°/270° geben beide Lagen stromabwärts mit gegenläufiger Querkomponente, und die Beträge bleiben rotationsinvariant |
-| `client3d/scripts/smoke_layer_cut.mjs` **[7b]** | der Bett-Fall: die Ersetzung ist weg, das Slice kommt aus `layer.surface`, Farbe und Kachelmaß fragen `bed_kind`, und `bed_kind` steht im `layerKey` |
-| `client3d/scripts/smoke_surface_patch.mjs` | **rot**: keine Bibliotheksfrage entscheidet mehr über Wasser |
-
-## Nachtrag 2026-08-23 (§ B2): Ein Prop steht auf einem Prop, und ein Prop darf halb sein
+### Ein Prop steht auf einem Prop, und ein Prop darf halb sein (§ B2)
 
 Zwei Eingriffe am Lageplan, beide an DERSELBEN Platzierung und beide ohne ein
 zweites Prop in der Bibliothek: den Teekessel auf den Tisch stellen, und den
 Tisch zur Hälfte an die Wand stellen.
 
-### 1. Obenauf — die Stapelregel
+#### 1. Obenauf — die Stapelregel
 
 **Es gibt KEIN neues Höhenfeld.** Die Platzierung trägt seit je `offset_y`
 (Meter, additiv zum Raumboden, ±5 m, Abwesenheit = 0) — das ist das Feld, in
@@ -6637,7 +7424,7 @@ ist.
 | Kessel selbst 5 cm einsinkend | `0.75 + 0.05 = 0.80`, Unterkante wieder `0.75` |
 | Payload, Etage 0 | Tisch `bottom_y = 0.01`, Kessel `0.01 + 0.75 = 0.76` |
 
-### 2. Der Tiefenschnitt — `cut_plane`
+#### 2. Der Tiefenschnitt — `cut_plane`
 
 Ein halber Tisch an der Wand ist DIESER Tisch mit einer Ebene hindurch, kein
 zweiter Bibliothekseintrag. Die Platzierung trägt dafür zwei Felder:
@@ -6704,1825 +7491,7 @@ Tiefe 2 m bei (2, 3), `keep` 0,5:
 | keep 1,0 | **keine Ebene** |
 | Payload: Tisch (Tiefe 0,8) bei Welt (−2,0, −2,5), back, keep 0,5 | `n = (0, 0, 1)`, `c = 2.5` |
 
-## Nachtrag 2026-08-24 (§ A16.3 / § G4): Kein Relief am Wasserrand, und der Spiegel folgt seiner Achse überall — W5d
-
-> **ÜBERHOLT — beide Hälften.** Der Client-Teil (Abschnitt 2,
-> `subdivideRibbonByAxis`) ist mit Wasser v2 K-A E5 gelöscht: es gibt kein
-> Spiegel-Mesh mehr, das man in Streifen schneiden könnte; das Terrain tastet
-> den Pegel pro Vertex aus dem Raster ab. Der SERVER-Teil (Abschnitt 1, das
-> reliefreie Band am Wasserrand) ist mit **K-A E6** zurückgebaut
-> (`HEIGHT_BAKE_VERSION` 8, Nachtrag „Der Rückbau der Ufer-Wächter" am Ende
-> dieses Dokuments): das Relief läuft wieder bis an die Wasserlinie, und die
-> Rand-Hälfte von § G4 ist dort neu geschrieben. Was hier steht, ist der
-> BEFUND, der zum Kragen führte — er gilt als Beschreibung des alten Defekts
-> weiter, die Regel nicht mehr.
-
-*Befund des Users nach Bake v4 + W5c: „Es sind noch immer Löcher zwischen
-Wasser und Land." Zwei getrennte Ursachen, beide numerisch überführt, beide an
-ihrer eigenen Stelle behoben. Screenshot-frei gemessen (§ B5a).*
-
-### 1. Server: das Mikro-Relief endet am Wasser (`HEIGHT_BAKE_VERSION` 4 → 5)
-
-Der Spiegel einer Fläche ohne autorierten Pegel ist der **Median der
-Naturhöhen am eigenen Umriss**. Ein Umriss, der um ±1 m Mikro-Relief
-schwankt, hat damit die HÄLFTE seines Umfangs ÜBER dem eigenen Wasser — und
-die Bankklemme (v4) kann das nicht reparieren, weil sie nur hebt. Gemessen auf
-der Fixture von `scripts/smoke_height_bake.py` **[11]**: 1,344 m Spannweite
-über einen einzigen See, der höchste Randpunkt **0,466 m über seinem eigenen
-Spiegel**, und das gezeichnete Gelände stand schon auf dem **feinsten** Gitter
-(2 m) 0,389 m über dem Spiegel INNERHALB des Polygons.
-
-Neu (`HeightModel._relief_weight`): das Mikro-Relief wird mit einem Gewicht
-multipliziert, das **0 innerhalb des Polygons und auf dem Umriss** ist und über
-das `shore_ramp_m`-Band nach außen per `smoothstep` auf 1 zurückkommt — dieselbe
-Kurve und dieselbe Breite, die das Bett INNEN benutzt. Bei überlappenden Bändern
-gewinnt das kleinste Gewicht; `shore_ramp_m = 0` (das Becken) verblasst außerhalb
-nichts.
-
-> **DIE RAND-SCHRANKE, konstruktiv.** Eine Probe im Polygon wird aus den vier
-> Ecken IHRER Gitterzelle gezeichnet, die höchstens `step` Meter entfernt
-> liegen. Für `step ≤ shore_ramp_m` liegt jede dieser Ecken damit entweder im
-> Polygon (Carve: `h ≤` Spiegel) oder im reliefreien Band, wo der Boden die
-> Flächenhöhe plus Klemme ist — das gezeichnete Bild ist eine Konvexkombination
-> davon und steht also höchstens um `WATER_BANK_LIP_M` (0,1 m) über dem
-> Spiegel. Das ist die Rand-Hälfte von § G4; Invariante 2 oben bleibt die
-> Tiefen-Hälfte.
-
-**Die Bankklemme bleibt** — sie fängt jetzt genau das, was das Relief nicht
-mehr macht: HÖHENFLÄCHEN, die den Spiegel unterlaufen (Fixture [10]: Ufer bei
-−0,4 unter einem Spiegel bei 1,0, Hub 1,5 m). Ohne Relief am Rand ist sie kein
-zweites Buch mehr, sondern der einzige.
-
-### 2. Client: die Streifen des Spiegel-Meshes sind eine ARRANGEMENT, kein Rest
-
-W5c teilte die Maske mit einem laufenden REST: der stromaufwärtige Teil jeder
-Querlinie war ein fertiger Streifen, nur der stromabwärtige wurde weiter
-geschnitten. Eine Halbebene ist UNENDLICH — bei jeder Maske, die sich zurück
-biegt (jeder Fluss mit einer Kurve), enthält der „stromauf"-Teil einer frühen
-Querlinie deshalb auch die Scheibe des fernen Arms, die zufällig auf dieser
-Seite liegt, und die Regelfläche darüber trägt ein Niveau vom falschen Ende des
-Flusses hinein. Dieselbe Asymmetrie erzeugte **T-Vertices**: eine spätere
-Querlinie teilt nur noch die Reste, während der schon fertige Streifen dieselbe
-Sehne ganz behält — eine Seite zeichnet die Sehne, die andere den Teilungspunkt.
-
-Neu (`waterPlaneMath.subdivideRibbonByAxis`): jede Querlinie wird JEDEM Stück
-angeboten; ein Stück, das sie sauber schneidet, wird durch seine beiden Hälften
-ersetzt, ein Stück, das sie verfehlt oder nur streift, bleibt ganz. Die Stücke
-kacheln die Maske weiterhin exakt, es geht keines verloren, und es gibt keinen
-T-Vertex mehr, weil jede Linie beide Seiten jeder Sehne teilt.
-
-Gemessen (`client3d/scripts/smoke_water_plane.mjs` **[5d]**, 8-m-Fluss mit
-90°-Knick, 61 Knoten, 15 360 Proben; Metrik ist triangulierungs-UNABHÄNGIG: die
-Ebene durch drei gehobene Ecken eines Stücks gegen `waterLevelAt`):
-
-| Regel | Ecke von der eigenen Ebene | Fläche gegen `waterLevelAt` |
-|---|---|---|
-| laufender Rest (W5c) | 0,1168 m | **0,3229 m** bei (56, 20) |
-| Arrangement (W5d) | 0,0322 m | **0,0322 m** bei (54, 2) |
-
-Der Rest von 0,0322 m ist nicht das Mesh: (54, 2) ist die INNENSEITE der Kurve,
-wo `waterLevelAt` selbst springt (eine Haaresbreite links projiziert auf den
-Ost-Schenkel, rechts auf den Nord-Schenkel, und deren Bogenkoordinaten liegen
-zwei halbe Bandbreiten auseinander). Der Schnitt landet AUF dem Sprung — mehr
-kann eine Fläche nicht, und es ist derselbe Sprung, mit dem die Bake das Bett
-gegraben hat. Kosten: ein Stück je Knoten (255 Stücke für einen 256-Knoten-
-Mäander, 15 ms), Deckel `WATER_STRIP_MAX` = 1024.
-
-## Nachtrag 2026-08-24 (§ A16.3 / § G4): Das reliefreie Band bekommt sein eigenes Maß — W5e (Server)
-
-> **ÜBERHOLT durch Wasser v2 K-A E6** (`HEIGHT_BAKE_VERSION` 8, Nachtrag „Der
-> Rückbau der Ufer-Wächter" am Ende dieses Dokuments): das reliefreie Band UND
-> die Bankklemme sind gelöscht, weil der Terrain-Vertex auf `max(h, w_level)`
-> gehoben wird und beide Defekte damit im Renderer beantwortet sind. Die Zahlen
-> unten bleiben als Beleg dafür lesbar, warum ein 1-m-Band nichts ausrichtete;
-> die Regel und die Konstante gibt es nicht mehr.
-
-*Befund des Users nach Bake v5: „die Wellen des angrenzenden Geländes am Rand
-des Wassers" sind KOMPLETT unverändert. Der Nachtrag **ersetzt** die Breiten-
-Aussage von W5d Nr. 1 (die Regel selbst bleibt); der Client ändert sich nicht.
-`HEIGHT_BAKE_VERSION` **5 → 6**.*
-
-### Die Zahl, die es überführt
-
-W5d hat das Mikro-Relief am Wasser ausgeblendet und dafür das **`shore_ramp_m`**
-der Fläche als Bandbreite genommen — mit der Begründung, die zwei Hälften eines
-Ufers sollten eine Zahl teilen. Genau das war der Fehler: die beiden Zahlen
-beschreiben verschiedene DINGE. Der Rampenwert sagt, wie schnell das BETT fällt;
-das Band muss sagen, wie weit eine WELLE des Nachbargeländes niedergehalten
-wird. Die Saat-Art `river` deklariert 1,0 m Rampe (`shared/terrain/types.json`),
-`water` nimmt die 3,0 m Vorgabe — die autorierte Welle einer Wiese ist typisch
-**16 m** lang. Ein 1–4-m-Band liegt damit INNERHALB einer einzigen Flanke.
-
-Gemessen auf der Fixture von `scripts/smoke_height_bake.py` **[11h]** (See
-(0,0)–(40,40), Wiese Amplitude 1,0 / Welle 16, Probe 8 m östlich des Umrisses):
-
-| Bandbreite | Gewicht 1 m vom Umriss | Kamm 8 m draußen | Schlimmstes im 4-m-Kragen |
-|---|---|---|---|
-| 1 m (Saat `river`) | **1,0** | **0,968 m** | 0,772 m |
-| 3 m (Vorgabe `water`) | 1,0 | **0,968 m** | — |
-| 4 m (Fixture W5d) | 1,0 | **0,968 m** | — |
-| **16 m (v6)** | **0,0112** | **0,484 m** | **0,121 m** |
-
-Dreimal dieselbe Zahl: das Band hat den Kamm nie berührt, es hat nur den letzten
-Meter der Flanke umgeformt. Vom Wasser aus ist das exakt „nichts hat sich
-geändert".
-
-### Die Regel (eine, `HeightModel._relief_weight`)
-
-    Band = max(shore_ramp_m, RELIEF_SHORE_FADE_M)      RELIEF_SHORE_FADE_M = 16 m
-
-`RELIEF_SHORE_FADE_M` ist **eine Flanke der Standardwelle**
-(`models.terrain.DEFAULT_RELIEF_WAVE_M` 32 / 2, im Smoke gegen diese Konstante
-geprüft, damit die beiden nicht auseinanderlaufen). Eine Welle steigt über eine
-Flanke und fällt über die nächste; ein Band, das kürzer als eine Flanke ist,
-kann eine Flanke nur eindellen. Das `max` sorgt dafür, dass das relieffreie Band
-nie INNERHALB des Bankklemmen-Bandes endet.
-
-**Bewusst NICHT die Welle der Nachbarfläche selbst.** Erstens spränge die
-Bandbreite an jeder Grenze zwischen zwei Reliefflächen, und ein Sprung im
-Gewicht ist eine Stufe im Boden — ein Uferdefekt gegen einen Naht-Riss getauscht.
-Zweitens geht `relief_wave_m` bis 200 m: ein Fluss durch eine hügelige Welt
-planierte dann einen 100-m-Korridor an beiden Ufern. Drittens braucht eine lange
-Welle gar kein breites Band — über 16 m einer 200-m-Welle steigt der Boden nur um
-etwa `Amplitude · 16/100`, das Band entlässt sie also von selbst sanft.
-
-**Kein Ausschalter mehr.** `shore_ramp_m = 0` heißt weiterhin „Becken mit einer
-Stufe als Ufer" und betrifft nur das BETT (Carve unverändert geprüft, [11e]);
-für das Relief der Nachbarfläche sagt diese Null nichts. Die Regel des Users ist
-ohne Ausnahme formuliert.
-
-**Wer das Relief autoriert, ist egal** ([11i]): das Gewicht ist Geometrie gegen
-den WASSER-Umriss und wird in `natural()` auf das fertige Rauschen angewandt —
-die Wiese nebenan, der Wald jenseits des Flusses und eine zweite Fläche über dem
-Wasser selbst werden vom selben Band verblasst.
-
-### § G4, Rand-Hälfte: die Schranke wird nur besser
-
-Eine Probe im Polygon wird aus den vier Ecken ihrer Gitterzelle gezeichnet; eine
-Ecke AUSSERHALB liegt höchstens `step·√2` vom Umriss. Damit gilt (Fixture ohne
-Höhenfläche):
-
-    gezeichnet − Spiegel ≤ max(WATER_BANK_LIP_M, Amplitude · smoothstep(step·√2 / Band))
-
-Der zweite Term fällt monoton in `Band` — ein breiteres Band kann die Schranke
-nur senken. Auf dem 2-m-Gitter: `1,0 · smoothstep(2,83/16) = 0,083 m`, unter der
-Lippe (0,1 m) und damit **konstruktiv**, wo das 4-m-Band von v5 rechnerisch
-0,786 m zuließ und nur die Messung es rettete. Gemessen (**[11g]**):
-
-| Gitter | v6 gezeichnet über dem Spiegel | ohne Verblassen (rot) |
-|---|---|---|
-| 2 m | 0,0828 m (≤ Lippe, konstruktiv) | 0,3892 m |
-| 4 m | 0,0918 m (≤ Lippe) | 0,4260 m |
-| 8 m | 0,0979 m (≤ Lippe) | 0,4463 m |
-| 16 m | 0,2069 m (jenseits der Konstruktion) | 0,3571 m |
-
-### Erreicht die Änderung eine laufende Welt?
-
-Ja, und das ist geprüft statt angenommen (**[11j]**): `height_sig()` hasht
-`code_version` = `HEIGHT_BAKE_VERSION`, die Signatur bewegt sich also allein
-durch den Versionssprung; `get_field()` nimmt die gespeicherte Rasterzeile aus
-`world_heightfield` NUR bei `stored.sig == sig`; die Kacheln, die der Client
-zeichnet, werden per Konstruktion nie persistiert (`get_tile`), und der Client
-holt Übersicht wie Kacheln neu, sobald `height_sig` im Worldmap-Payload springt.
-Es gibt kein zwischengespeichertes Artefakt, das den Neustart überlebt.
-
----
-
-## Nachtrag 2026-08-24 (§ A16.5 / § G2 / § G4): Das Wasser-Raster — Wasser v2, K-A E1/E2
-
-**Entschieden (User 2026-08-24):** `recherche-wasser-v2.md` § 4 **K-A** —
-„Wasser wird eine Bodenart". Der Umbau läuft in sechs Etappen
-(`plan-wasser-v2-ka.md`); **hier stehen E1 (Server) und E2 (Client)**. Der
-Wasserspiegel wird damit vom **gebauten Mesh** zum **abgetasteten Feld**. Was in
-diesem Nachtrag steht, ist additiv: die Polygon-Meshes von § A16.8 zeichnen
-unverändert weiter, der Terrain-Shader ist nicht angefasst, und `h_final`
-bewegt sich um keinen Millimeter.
-
-`HEIGHT_BAKE_VERSION` **6 → 7**. Nicht weil die Höhen anders herauskämen — der
-Spiegel war immer schon Eingabe des Carve und wird jetzt zusätzlich
-ausgeliefert — sondern weil die Kachel-NUTZLAST eine Funktion des Codes ist und
-eine v6-Kachel gar kein Wasserfeld hat. Der Sprung ist das Einzige, was eine
-laufende Welt zum Nachladen bringt (§ „Erreicht die Änderung eine laufende
-Welt?").
-
-### 1. Die Auslieferung — zweites Feld derselben Kachel
-
-Kachelindex, Signatur, Cache, Stapelgröße und die Statistik-Persistenz sind
-**unverändert wiederverwendet**. Eine Kachel trägt zusätzlich:
-
-```jsonc
-"water": {
-  "level":  [[float|null, …], …],   // 129 × 129, Weltmeter; null = trocken
-  "flow_x": [[float, …], …],        // optional, siehe unten
-  "flow_z": [[float, …], …]
-}
-```
-
-- **Der Schlüssel FEHLT**, wenn die Kachel keinen Tropfen Wasser trägt — was
-  die meisten Kacheln der meisten Welten sind. Kein leeres Raster, keine Zeile
-  Nullen: dieselbe Aussage, die eine nicht indizierte Kachel über die Höhe
-  macht.
-- **`null` ist die einzige Maske.** `level[j][i]` ist der lokale Spiegel am
-  selben Stützpunkt, den `heights[j][i]` beschreibt — oder `null`, wenn dort
-  kein Wasser steht. Es ist NICHT der Umriss (siehe Dilatation).
-- **`flow_x`/`flow_z` fehlen GEMEINSAM**, wenn die ganze Kachel keinen Fluss
-  hat. Ein stehendes Gewässer hat eine Ein-Knoten-Achse und damit exakt (0, 0)
-  überall; zwei Gitter Nullen würden die Kachel verdoppeln, um nichts zu sagen.
-  Abwesenheit liest sich als „(0, 0) überall".
-- Rundung: `level` auf 3 Nachkommastellen wie `heights`, die Fließkomponenten
-  auf 6 wie `dir_x`/`dir_z` des Profils.
-
-### 2. Die drei Regeln des Rasters (`HeightModel.water_at`)
-
-```
-level(p) = water_level_at(profile, p)     des OBERSTEN Wassers über p
-flow(p)  = water_flow_at(profile, p) · Faktor            desselben Wassers
-bedeckt  = INNERHALB des Umrisses ODER innerhalb WATER_RASTER_DILATION_M
-```
-
-**„Oberstes" ist die Regel des Bodens** — die zuletzt gemalte Fläche gewinnt,
-dieselbe, mit der `_kind_at` die Bodenart auflöst. **Innen schlägt dilatiert**,
-in zwei Durchgängen: der Ring außerhalb eines Flusses ist eine Filter-Reparatur
-und keine Autorenschaft, also muss ein Punkt, der wirklich in einem See liegt,
-den See lesen, auch wenn ein später gemalter Fluss dorthin reicht.
-
-**Der Wert im Ring ist die FORTGESETZTE Funktion**, nicht der nach außen
-getragene Randwert. `water_level_at` ist überall definiert (Projektion auf eine
-Polylinie plus Klemme), also bekommt ein Ringpunkt den Spiegel, den das Profil
-dort hätte — und genau das macht die bilineare Mischung INNERHALB des Umrisses
-exakt. Bewusst NICHT die Regel der Bankklemme (die liest den Pegel am NÄCHSTEN
-UMRISSPUNKT): die Klemme ist eine Aussage über den BODEN neben dem Wasser und
-darf kein Endniveau seitwärts über die Landschaft tragen, dies ist die
-analytische Fortsetzung eines Feldes.
-
-### 3. Die Dilatationsregel — zwei Gitterschritte, und die Zahl ist eine Diagonale
-
-`WATER_RASTER_DILATION_STEPS = 2`, also **4 m** bei `TILE_STEP_M` = 2 m.
-
-Sei `P` ein Punkt INNERHALB eines Umrisses. Ein bilinearer Lookup bei `P` mischt
-die vier Ecken der Gitterzelle, in der `P` liegt. Liegt eine Ecke `C` außerhalb
-des Umrisses, dann schneidet die Strecke `P→C` den Umriss in einem `Q`, also
-
-```
-d(C, Umriss) ≤ |CQ| ≤ |CP| ≤ eine Zelldiagonale = √2 Schritte = 2,8284 m
-```
-
-**Ein Schritt deckt das nicht** (eine diagonale Ecke kann 2,83 m draußen
-liegen), **zwei decken es strikt**. Damit gilt konstruktiv: *jeder Punkt
-innerhalb jeder Wasserfläche liest vier definierte Ecken auf dem Basisgitter.*
-Ein `NaN`/`null` bedeutet **trockener Boden**, nie eine Lücke in den Daten.
-
-**Die Garantie gilt dem Basisgitter allein**, und das ist bewusst so. Die
-Mip-Pyramide des Clients dezimiert das Raster, der Ring ist also 2 Texel breit
-auf Stufe 0, eines auf Stufe 1 und darüber keines mehr — während dasselbe
-Diagonalargument auf jeder Stufe √2 **Texel** verlangt, d. h. 46 Basisschritte
-(92 m) auf der 64-m-Stufe. Einen Spiegel 92 m ins Land zu malen würde „das
-oberste Wasser über diesem Punkt" zu einer Aussage über Boden machen, den
-niemand Ufer nennt — für eine Stufe, auf der ein 6-m-Fluss ohnehin keine eigene
-Stützstelle mehr hat. Was eine grobe Stufe am Ufer falsch macht, deckt die
-Fragment-MASKE (E4), nie ein Loch im Boden.
-
-### 4. Die Fließregel — der Server ist jetzt die Quelle
-
-`water_flow_at(profile, x, z, faktor)` ist die Zeile-für-Zeile-Übernahme von
-`client3d/src/scene/waterPlaneMath.waterFlowAt`: Achsentangente, an jedem Knoten
-über ein Fenster `min(halbe Vorstrecke, halbe Folgestrecke, 4 m)` kosinus-
-geblendet, am Knoten selbst exakt die normierte Winkelhalbierende. Die Regel
-wandert mit dem Mesh, das sie pro Vertex auswertete; die Zahlen bleiben
-identisch (Zwillingsprüfung: `scripts/smoke_height_bake.py` [12c] — der Client
-hat mit K-A E5 keinen zweiten Leser mehr, die Handrechnung steht seither
-vollständig in dessen Docstring).
-
-**Die LÄNGE ist der Fließ-Faktor** — die eigene Geschwindigkeit der Fläche geteilt
-durch den `flow_speed`-Regler ihrer ART (`heightfield.water_flow_factor`, der
-Zwilling von `@anima/scene-render waterFlowFactor`). Eine Fläche ohne eigenen
-Wert antwortet exakt 1, das Raster trägt dann die reine Einheitstangente.
-Warum ein Verhältnis und nicht die absolute Geschwindigkeit: der Regler der ART
-ist eine MATERIAL-Zahl, und eine Fläche darf nur skalieren, was das Material
-schon trägt.
-
-### 5. Signatur und Statistik
-
-- **`height_sig` deckte die Wasser-Eingaben bereits** (`water_basis`: Polygon,
-  Pegel, Endniveaus, Bearing, `flow_along`, Linie, Breite, Tiefe, Uferrampe) —
-  **mit zwei Lücken, die dieser Umbau geschlossen hat**: `meta.flow_speed_m_s`
-  der Fläche und der `flow_speed`-Regler ihrer Art waren bis hierher reine
-  Optik, von niemandem gehasht. Jetzt SCHIFFT die Kachel den Fließvektor, also
-  sind beide Bake-Eingaben und stehen in `water_basis`. Sie sind die einzigen
-  Einträge dieser Signatur, die `h_final` um keinen Millimeter bewegen.
-- **`world_height_tile_stats` bleibt gültig.** `min`/`max`/`err` werden
-  ausschließlich von `heights` abgelesen (`tile_stats_from`), und der Pegel
-  ändert `h` nicht — die Zeilen bleiben also wahre Aussagen über ihr Raster.
-  Sie werden trotzdem neu berechnet, weil die Signatur (ihr Schlüssel) sich mit
-  `HEIGHT_BAKE_VERSION` bewegt; das ist der normale Weg und keine Migration.
-
-### 6. Die gemessene Zahl: muss das Wasser-Raster feiner als 2 m sein?
-
-**Nein.** Gemessen auf der Haarnadel-Fixture (`smoke_height_bake.py` [8k]/[12d];
-drei Klicks A(150,300) → B(249,280) → C(201,260), 6 m breit, Maske
-(140,250)-(300,315)), bilinear gelesen gegen `water_level_at` an 321 × 321
-Proben innerhalb der Maske:
-
-| Gitter | größte Abweichung | davon auf „glatten" Zellen |
-|---|---|---|
-| **2 m** | **3,4347 m** | **0,0177 m** |
-| 1 m | 3,3638 m | 0,0088 m |
-| 0,5 m | 3,5273 m | 0,0015 m |
-
-„Glatt" heißt: alle vier Zellecken UND die Probe projizieren auf dasselbe
-Achsensegment, es läuft also keine Mittelachse durch die Zelle.
-
-**Die Lesart, und sie ist eindeutig:**
-
-1. Auf ihrem eigenen Gitter ist das Raster nicht „nah an" der Funktion, es IST
-   sie — Abweichung exakt 0 an jedem Stützpunkt.
-2. Die 3,4 m sind ein **Sprung von `water_level_at` selbst**. An der Innenseite
-   einer Haarnadel projiziert ein Punkt eine Haaresbreite links auf Schenkel 1
-   und rechts auf Schenkel 2; die Bogenkoordinaten unterscheiden sich um fast
-   die ganze Kehre. Gemessen fällt der Pegel bei z = 277,727 zwischen
-   x = 225,80 und x = 225,90 von 8,4414 auf 7,1463 — **1,2951 m über zehn
-   Zentimeter**. Halbieren und Vierteln des Gitters ändert die Zahl nicht
-   (3,36 / 3,53): *keine Auflösung löst einen Sprung auf.*
-3. Fern der Mittelachse ist das 2-m-Raster **auf 1,8 cm genau** und verhält
-   sich wie eine bilineare Lesung muss — zweiter Ordnung im Schritt
-   (0,0177 → 0,0088 → 0,0015).
-
-Ein feineres Wasser-Raster kauft also nichts. Der Rest ist eine Unstetigkeit
-des autorierten Spiegels und Sache der Fragment-Maske (E4), nicht der
-Payload-Auflösung. (Der W5d-Wert 0,0322 m stammt von der Bogen-Fixture von
-`smoke_water_plane.mjs` [5d] und beschreibt dieselbe Klasse: die Kante landet
-AUF dem Sprung, was das Beste ist, was eine Fläche kann.)
-
-### 7. Client (E2) — Pyramide, Zwilling, Dezimierung
-
-- `client3d/src/scene/waterRaster.ts` hält das Feld je Kachel
-  (`WaterRaster`), wandelt `null` an der Wire-Grenze EINMAL in `NaN` und liefert
-  `rasterLevelAt` / `rasterFlowAt`. Die Leiter hat **keine Übersichts-Sprosse**:
-  das Übersichtsgitter trägt kein Wasser, also ist ein Punkt außerhalb der
-  geladenen Kacheln „hier ist kein Wasser bekannt".
-- **Die maskierte Mischung** (`waterBilinear`): eine Ecke mit Gewicht 0 wird
-  NICHT gelesen. Reines Fließkomma würde ihr `NaN` über `NaN · 0 = NaN`
-  weitertragen — und das ist kein Rundungsdetail: die Pyramide wird AN den
-  Gitterpunkten gefüllt (`tx = 0`), der Ring verlöre also sein äußerstes Texel,
-  die Dilatation fiele von 2 auf 1 Schritt und damit unter das √2, das die
-  Garantie oben braucht. Ergebnis: Löcher im Wasser entlang eines Gitters von
-  Linien.
-- **Die Wasser-Pyramide ist `buildPyramid`**, ohne eigene Regel:
-  - **Dezimierung = TEILMENGE, kein Mittelwert.** Der Spiegel ist stückweise
-    LINEAR, also IST jeder zweite Stützpunkt der Spiegel auf dem groben Gitter
-    — dasselbe Argument, das § G2 für die Höhen führt. Ein Boxfilter erzeugte
-    eine Fläche, die kein Profil beschreibt, und verschmierte das Ufer (er
-    mischte am Randtexel den Pegel mit seinem dilatierten Nachbarn). `min` wäre
-    ebenso eine andere Fläche und ist unnötig: unter K-A wird der Boden auf
-    `max(h, level)` gehoben, der Spiegel muss nicht pessimistisch sein.
-  - **Ein grobes Texel ist genau dann Wasser, wenn sein eigenes Basistexel es
-    ist.** Die Maske dezimiert MIT dem Pegel, weil sie der Pegel IST (`NaN`).
-    Jede andere Regel („Wasser, wenn EINES der vier", „…wenn ALLE vier") wäre
-    ein zweites Buch darüber, wo das Wasser steht.
-- `wlevelAt(pyr, x, z, k)` ist der CPU-Zwilling des GLSL, das E3 neben
-  `tlodHeight` gestellt hat (`tlodWaterAt`); die Uniformen `uTlodWater`,
-  `uTlodWaterGeom`, `uTlodWaterLevel` sind gebunden und aktuell und werden seit
-  E3 **von der Wasser-Variante des Terrain-Programms gelesen** (Punkt 7a). Es
-  gibt **keinen FERN-Zwilling** (Punkt 7 oben).
-
-### 7a. Client (E3) — der Vertex-Hub, als ZWEITE Materialvariante
-
-Der Terrain-Vertex landet auf `y = max(h, w_level)`, wo das Raster einen Pegel
-hat. Vier Entscheidungen, alle in `client3d/src/scene/terrainLod.ts`:
-
-- **Zwei Programme, nicht eines.** Die Risiko-Regel aus `recherche-wasser-v2.md`
-  § 4 K-A ist bindend: trockener Boden darf für das Wasser nichts zahlen. Der
-  Besitzer baut deshalb ZWEI Materialien durch dieselbe Kette
-  (`ground.rebuildBase`), `patchTerrainLod(mat, water)` hängt den Hub nur an
-  eines davon, und der `customProgramCacheKey` des trockenen bleibt Zeichen für
-  Zeichen `…+terrain-lod` — three gibt ihm damit dasselbe `WebGLProgram` wie
-  vorher. Gezeichnet wird als zweiter Draw-Call aus einem zweiten
-  Instanz-Puffer, dessen Mesh KIND des trockenen ist (Sichtbarkeit und Lebens-
-  dauer bleiben „das Terrain", ganz).
-- **Das Tor ist die Kachelliste des Wasser-Rasters** (`nodeHasWater`): ein Stück
-  bekommt die Hub-Variante, wenn sein GESCHLOSSENES Rechteck eine Kachel mit
-  `water`-Feld berührt — `floor((x + size) / tile_m)`, ohne das `− 1e-6` von
-  `nodeBounds`. Damit gehört ein von zwei Stücken geteilter Vertex zu BEIDEN
-  Kachelspannen, beide laufen durch dasselbe Programm, und ein Riss an der Naht
-  ist konstruktiv unmöglich. (Der Server garantiert die andere Hälfte: eine
-  Kachel ohne `water`-Schlüssel hat in ihrem ganzen Fenster inklusive Rändern
-  keinen nassen Stützpunkt — `water_raster` antwortet sonst nicht None.)
-- **Der max wird PRO STUFE genommen, der Morph über das Paar**:
-  `y = mix( max(h₁,w₁), max(h₂,w₂), f )`, jede Lesung an ihrem eigenen
-  `nodeStep · 2^k`. Die andere Reihenfolge (erst die Spiegel mischen, dann ein
-  max) springt am Ufer um `level − h`, sobald `f` die 0 verlässt, weil die
-  maskierte Mischung eines nassen mit einem trockenen Texel für jedes Gewicht
-  > 0 trocken ist — gemessen 0,25 m auf der Ufer-Fixture.
-- **λ wird NIE gehoben.** `tlodMorphAt` misst weiter gegen `tlodHeight(p, 0.0)`,
-  also lesen beide Varianten dieselbe Morph-Koordinate und setzen einen
-  geteilten Vertex auf denselben Punkt.
-- **Trockentest ist `( w > h ) ? w : h`, nie `max()`**: das Sentinel ist das
-  `NaN` aus der Textur, und GLSL legt nicht fest, welchen Operanden `max` bei
-  einem NaN liefert.
-- **Statistik unangetastet.** `min`/`max`/`err` bleiben höhenrein (Punkt 5). Der
-  gehobene Spiegel kann über die Box eines Knotens ragen (höchstens um die
-  Wassertiefe dort) — das kostet nur LOD-DISTANZ, seit der Frustum-Cull weg ist,
-  und `|max(a,b) − max(c,d)| ≤ max(|a−c|,|b−d|)` hält den Stufenfehler unter
-  `max(err_h, err_w)`; der Carve schreibt die Spiegel-Variation ohnehin in das
-  Bett, ein gehobener Spiegel ist also FLACHER als das Bett, das er deckt.
-- **Die Wasser-Schattierung kam in E4** (siehe Abschnitt 9): in E3 wurde ein
-  gehobenes Pixel noch als der Boden gemalt, den es ersetzt. Die Polygon-Spiegel
-  zeichnen bis E5 weiter. Isolationsschalter **22** (`uTlodNoWater`, Uniform
-  statt Define) nimmt den Hub live heraus — und seit E4 die Schattierung mit
-  ihm, über dasselbe Uniform.
-
-### 8. Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| Raster = `water_level_at` auf dem Gitter, Dilatation, Diagonale | `scripts/smoke_height_bake.py` [12a]/[12b] |
-| Fließvektor = die Zahlen, die der Client vor K-A trug, Faktor | [12c] (Handrechnung dort; der Client-Zwilling ist mit E5 gelöscht) |
-| Kurveninnenseite: 2 m gegen 1 m gegen 0,5 m | [12d] |
-| Payload additiv, Flussfelder optional | [12e] |
-| Statistik ist höhenrein | [12f] |
-| Client liest die Server-Tabellen zurück, maskierte Mischung | `client3d/scripts/smoke_world_height.mjs` [W1]–[W4] |
-| Pyramide: Teilmenge, Sentinel, Ringverlust je Stufe, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [15] |
-| Hub `max(h, w)`, Ring-Sonden, Reihenfolge des Morphs, Tor | `client3d/scripts/smoke_terrain_lod.mjs` [16] |
-| Zweite Variante: GLSL-Pins, Cache-Key, `uTlodNoWater` | `client3d/scripts/smoke_terrain_lod.mjs` [17] |
-
-### 9. Die Wasser-Schattierung im Terrain-Fragment (K-A E4)
-
-**Kein Payload ändert sich.** E4 ist reine Client-Darstellung: derselbe Bake,
-dieselben Kacheln, dieselbe zweite Materialvariante. Was dazukommt, ist die
-Antwort auf „wie sieht ein gehobenes Pixel aus" — bisher: wie der Boden, den es
-ersetzt.
-
-**Single-Layer-Water (Recherche § 3.3).** Ein Wasserpixel wird nicht mehr
-gemischt, sondern **im selben opaken Durchgang** schattiert: der Shader, der das
-Bett gerade texturiert hat, mischt das Wasser selbst dazu. Die Reihenfolge im
-Fragment, in Shader-Reihenfolge:
-
-1. nach `#include <metalnessmap_fragment>` — `tlodWaterSurface()`: Absorption
-   über die Tiefe auf die **Albedo** (nicht auf das fertige Licht: sonst wäre
-   tiefes Wasser ein flacher, unbeleuchteter Fleck, der nachts hell bliebe),
-   dazu Rauheit und Metallizität des Wassers, alles über **einen** Faktor `twA`;
-2. in `#include <normal_fragment_begin>` — `tlodWaterNormal()`: die
-   Ripple-Normale statt der Bodennormale, über denselben Faktor geblendet;
-3. vor `#include <opaque_fragment>` — `tlodWaterOut()`: Fresnel-Himmelsanteil
-   und Schaumband, die beiden Dinge, die keine Albedo sind.
-
-**Die Tiefe ist ein Varying, keine Textur-Lesung.** Der Vertex kennt Bett und
-Spiegel bereits (`h1/h2` gegen `l1/l2`), also fährt
-`vTlodWet = mix(l1 − h1, l2 − h2, f)` mit. Das ist exakt die Differenz der
-beiden linearen Interpolanten, die das Dreieck wirklich zeichnet — die
-Uferlinie liegt also genau dort, wo der gezeichnete Spiegel das gezeichnete
-Bett verlässt, und die 4 `texelFetch`, die der Mesh-Shader je Pixel für
-`tlodHeight` ausgab, entfallen ersatzlos.
-
-**Die Kurven sind die des Spiegels**, Konstante für Konstante:
-`waterShoreAlpha` (¾ der eigenen Bettiefe, W4b) ist jetzt die Absorption,
-`waterFoam`/`WATER_FOAM_BAND_M`/`_STRENGTH` das Schaumband,
-`waterEdgeFade` die Randrampe (ohne sie stünde der weiße Schaum als Stufe an
-der Wasserlinie, weil `waterFoam(0) = 1` ist). Ripple, Anisotropie, die zwei
-Geschwindigkeiten und die Wellen-Normalmap kommen unverändert aus
-`@anima/scene-render materials.ts` — die Textur wird **geteilt**, nicht
-nachgebaut.
-
-**Welche Wasserart ein Pixel ist**, beantwortet die **id-Maske des
-Layer-Compositors**: sie nennt je Texel das Paar (oben, darunter) und sagt
-nichts darüber, auf welcher Seite man steht — was hier reicht, weil ein Pixel,
-das gehoben wurde, definitionsgemäß im Wasser steht: die **Wasserhälfte** des
-Paars ist seine Art. Je Layer-Index liegt eine Zeile in einer kleinen
-`3 × n`-RGBA32F-Tabelle (Tint/`sky_mix`, `wave_m`/`speed`/`flow_speed`/
-Deckkraft-Tiefe, Rauheit/Metallizität/`is_water`). Zeilen, die kein Wasser sind,
-tragen den Look des **ersten** Wassers der Welt, damit ein Randpixel Wasser
-zeichnet und nicht den Ton einer Wiese.
-
-**Die Deckkraft-Tiefe ist damit pro ART und nicht mehr pro FLÄCHE** — eine echte
-Verengung gegenüber W4b, weil die Maske Arten kennt und keine Flächen. Die
-zuletzt gemalte Fläche einer Art gewinnt (die Regel, die der Server bei
-überlappenden Gewässern selbst benutzt). **E6 hat entschieden, dass das so
-bleibt** (Begründung im Nachtrag „Der Rückbau der Ufer-Wächter": der Look ist
-ein Art-Datensatz, ein billiger Rasterkanal mischte am Ufer gegen 0 und deckte
-die Wasserlinie zu, und der Gewinn wäre eine Art, die zweimal mit
-verschiedenen Tiefen gemalt wurde) — wer eine andere Deckkraft braucht, malt
-eine eigene ART.
-
-**Der Fließvektor** fährt als zweites Datenfeld neben dem Pegel mit
-(`uTlodFlow`, RG32F, **nur Stufe 0** derselben Lattice) und wird **im Fragment**
-gelesen (`waterShade.twFlowAt`, am eigenen XZ des Pixels, 4 `texelFetch`
-bilinear auf Stufe 0). Seine LÄNGE ist der Geschwindigkeitsfaktor der Fläche,
-`(0,0)` ist stilles Wasser.
-
-**Warum nicht im Vertex** (Nachtrag 2026-08-27, vorher stand hier genau das):
-Die Richtung ist glatt, ein Varying lag also nahe — nur ist das Feld es nicht.
-Der Server schreibt den Fluss ausschließlich ins Gewässer plus die 4 m
-Dilatation des Bakes, und die Vertices eines Terrain-Stücks stehen
-`baseStep · 2^level` Meter auseinander: 2 m auf Stufe 0, 16 m auf Stufe 3,
-64 m auf Stufe 5. Ein 6 m breiter Fluss ist mit Dilatation ein 14 m schmales
-Band — aus 16 m Abstand können **alle vier** Ecken einer Zelle daneben liegen,
-das Varying ist dann exakt `(0,0)`, und `twRipple` nimmt seinen STILL-Zweig:
-gezeichnetes stehendes Wasser, während die Punkt-Messung der Debug-Zeile am
-selben Ort 2 m/s meldet. Das ist kein Randfall, sondern die Mehrheit der
-Ausrichtungen ab Stufe 4. Der Fragment-Tap kennt die Stufe gar nicht und kann
-deshalb nicht kollabieren. `tlodFlowAt` und `vTlodFlow` sind ersatzlos
-gelöscht; der TS-Zwilling der GPU-Lesung heißt `terrainLod.gpuWaterFlowAt`.
-
-**Der Admin-Grundriss ist davon nicht betroffen.** Die Vorschau rendert das
-Wasser weiter als Spiegel-Mesh aus `packages/scene-render/materials.ts`, mit
-einem konstanten `aWaterFlow` je Fläche und ohne LOD — es gibt dort weder
-Lattice noch Stufen, an denen etwas ausfallen könnte.
-
-**Was das trockene Programm kostet: nichts.** Die dry-Variante bekommt weder
-Chunk noch Uniform noch Anker dazu; ihr Fragment ist Zeichen für Zeichen das
-von vorher (Beweis: `smoke_terrain_lod.mjs` [18]). **Was das nasse Programm
-kostet:** ein trockenes Pixel innerhalb der nassen Variante zahlt zwei
-Ableitungen und einen Vergleich; ein Wasserpixel zahlt seit dem Umzug **+4
-`texelFetch` im Fragment**, dafür fallen im Vertex **−4** weg (das wet-Vertex-
-Programm sinkt von 20 auf 16 Fetches, das dry bleibt unberührt).
-
-**Zurückgegebene Arbeit:** wo `twA == 1` (ab der Deckkraft-Tiefe) ist die
-Bodennormale unsichtbar und wird **nicht berechnet** — `tlodNormalAt` sind 16
-`texelFetch`, die dort entfallen. Die zweite Hälfte der Recherche-Erwartung
-(ein Slice statt vier in `lcSurface`) ist **nicht** umgesetzt: sie säße in
-`@anima/scene-render layerCut.ts`, also im geteilten Compositor, und würde das
-trockene Programm mitverändern.
-
-| Was | Wo |
-|---|---|
-| Absorption, Schaumband, Randrampe, Tint-Mix (Handtabellen) | `client3d/scripts/smoke_water_shade.mjs` [1]–[3] |
-| Look-Tabelle = die Defaults des Spiegels, Packung | ebenda [4] |
-| Flow-Frame: Identität bei Stille, 3:1 stromauf | ebenda [5] |
-| GLSL-Pins: Reihenfolge, Konstanten, `textureGrad`, Maskenpaar | ebenda [6] |
-| Fließvektor im Fragment: `twFlowAt` = Punktmessung auf jeder Stufe, das zurückgebaute Vertex-Blend geht ab Stufe 3 still | `client3d/scripts/smoke_flow_lod.mjs` |
-| Trockenes Programm unverändert, drei Einfügepunkte, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [18] |
-| Tiefen-Varying, `liftedDepth`, und dass es KEIN Flow-Varying mehr gibt | ebenda [17] |
-
-### 10. Der Rückbau des Spiegels (K-A E5)
-
-**Es gibt kein Wasser-Mesh mehr.** E3 hebt den Terrain-Vertex auf
-`max(h, w_level)`, E4 schattiert dasselbe Pixel als Wasser — die zweite,
-transparente Fläche darüber war seither ein Doppel, und E5 löscht sie samt
-allem, was nur sie gebraucht hat:
-
-| Was | Wo es stand |
-|---|---|
-| `buildWaterPlane`, `earcutStrips`, `patchWaterShore`, `WATER_SHORE_CACHE_KEY` | `client3d/src/scene/waterPlane.ts` (Datei gelöscht) |
-| `addMirror`, die Material-Karte je Wasser-Art, die Wasser-Mesh-Liste, der Textur-Preload der Flächen-Stufe, `materialFor` | `client3d/src/scene/ground.ts` |
-| `liftToWaterProfile`, `subdivideRibbonByAxis` (+ `crossNormalAt`, `clipHalfPlane`, `ringSignedArea`, `WATER_STRIP_MAX`, `WaterPoint2`), `waterFlowAt` (+ Blend-Fenster), `waterShoreGlsl`, `waterShoreBody`, `waterAlpha`, `WATER_SHORE_BAND_M`, `WATER_FOAM_ALPHA` | `client3d/src/scene/waterPlaneMath.ts` |
-| `isWaterClass` — die Ausnahme, mit der Natur-Boden und Schleier dem Wasser-Material auswichen | `client3d/src/scene/naturalGroundMath.ts` |
-| Attribute `aWaterFlow` / `aWaterOpaque`, der Ufer-`discard`, `depthWrite: false` und die Transparenz-Sortierung des Wassers | ebenda, mit den Meshes |
-
-**Was bleibt und WARUM:** `waterProfileOf` / `waterLevelAt` (Spielmechanik:
-`floatRootY`, `typeAt`, Waten/Schwimmen — dort muss der Pegel exakt sein, nicht
-gerastert; dazu die Wasserfall-Erkennung und die Look-Tabelle), die Uferkurven
-`waterOpaqueDepthM` / `waterShoreAlpha` / `waterFoam` / `waterEdgeFade` samt
-ihren Konstanten (das Terrain-Fragment schattiert mit genau diesen Zahlen), und
-der Fließ-FAKTOR `waterFlowFactor` im geteilten Paket — er ist jetzt die
-Kodierung, die der Server in das Raster bäckt und die der Terrain-Shader als
-Länge zurückliest.
-
-**Der Wasserfall bleibt, und hängt jetzt am Raster-Material statt am Spiegel.**
-`waterfallsFrom(profile, strokeWidthM(meta))` liest weiter die Achse aus der
-Nutzlast — die Erkennung ist unberührt. Neu ist nur die Herkunft der
-Wellennormalen des Vorhangs: `buildWaterfall(fall, sink)` holt sie mit
-`surfaceWaveNormal(THREE)` direkt aus `@anima/scene-render materials.ts`, also
-genau die Textur, die auch das Terrain-Fragment scrollt (Punkt 9), statt sie vom
-Material des Spiegels abzulesen. Die Vorhänge und Schaumscheiben sind damit die
-EINZIGEN Meshes, die eine gemalte Wasserfläche noch erzeugt — ein Blatt in der
-Luft ist das eine, was ein Höhenfeld nicht sein kann. Sie leben und sterben mit
-den Flächen (`ground.clearAreas`).
-
-**Isolationsschalter 11** heißt darum nicht mehr „Water planes hidden", sondern
-„Waterfalls hidden": die Wasser-OBERFLÄCHE ist Teil des Terrains und wird mit
-Schalter 22 (`noWater`) abgeschaltet.
-
-**Die Beweise (§ B5a):** `smoke_water_plane.mjs` behält die Abschnitte mit
-Lesern — Profil [1], Uferkurven [2]/[2a]/[2b]/[2d], Carve-Invariante [3], die
-Fixtures [4]/[4b]/[4d]/[4e], Waten/Schwimmen [6], Uferneigung [7] — und zählt
-in [8] die gelöschten Namen als ROTE Proben mit. Gestrichen sind die
-Mesh-Abschnitte [2c] (Ufer-GLSL), [4c]/[4d-flow]/[4e-flow]/[4f] (der
-Per-Vertex-Fließvektor; der Server prüft die Regel jetzt in
-`scripts/smoke_height_bake.py` [12c]), [5]/[5b] (der Lift) und [5c]/[5d] (die
-Streifen). `smoke_waterfall.mjs` prüft die neue Herkunft der Wellennormalen,
-`smoke_layer_cut.mjs`, `smoke_natural_ground.mjs`, `smoke_surface_patch.mjs` und
-`smoke_fog_veil.mjs` prüfen die eine verbliebene Material-Kette.
-
----
-
-## Nachtrag 2026-08-24 (§ A16.3 / § G4): Der Rückbau der Ufer-Wächter — Wasser v2, K-A E6 (Server)
-
-*Letzte Etappe des K-A-Umbaus. `HEIGHT_BAKE_VERSION` **7 → 8**: die Höhen
-kommen für unveränderte Daten anders heraus, jede laufende Welt bäckt neu.*
-
-### Was gelöscht ist
-
-Zwei Bake-Stempel haben zwischen v4 und v7 den Rand jedes Gewässers geformt.
-Beide waren gegen **ein** Symptom der Mesh-Ära geschrieben — der Spiegel war
-eine eigene, durchsichtige FLÄCHE, und der Boden daneben wusste nichts von ihr:
-
-| Weg | Was er tat | Warum er sterben kann |
-|---|---|---|
-| **Bankklemme** (v4): `_bank_clamp`, `WATER_BANK_LIP_M`, `water_bank_box`, `_ring_nearest_point` | hielt den Boden im `shore_ramp_m`-Band AUSSERHALB des Umrisses auf mindestens `water_level_at(nächster Umrisspunkt) + 0,1 m`, mit linear ausblendendem Minimum | Boden unter dem Spiegel ist kein Loch mehr, sondern **Bett**: der Terrain-Vertex wird auf `max(h, w_level)` gehoben (E3), der Spiegel steht also nirgends mehr in der Luft |
-| **Relief-Fade** (v5/v6): `_relief_weight`, `_relief_fade_width`, `RELIEF_SHORE_FADE_M` | nahm das Mikro-Relief über einen Kragen von `max(shore_ramp_m, 16 m)` auf 0 zurück, innerhalb des Polygons ganz | Boden ÜBER dem Spiegel am Rand ist kein Loch mehr, sondern ein **Fels im See** — es gibt keine Platte, in die er ein Loch schneiden könnte |
-
-`h_final` hat damit wieder **drei** Stufen (`natural → carve → plateaus`), und
-ein Gewässer schreibt nur noch INNERHALB seines eigenen Umrisses. Kein
-Rückfall-Leser, kein Alias, keine Konfiguration: die Namen sind weg und werden
-namentlich als ROTE Proben geführt (`scripts/smoke_height_bake.py` **[10a]**).
-
-**Die Box, die eine Wasserfläche noch beansprucht** (`shaped_boxes`, Kachel-
-Index, Gitterwachstum), ist der Umriss **plus `WATER_RASTER_DILATION_M` = 4 m**
-statt plus `shore_ramp_m`. Das ist keine Kosmetik: was ein Gewässer außerhalb
-seines Umrisses noch schreibt, ist der **Dilatationsring** des Rasters, und eine
-Kachel, in die der Ring hineinreicht, muss indiziert sein — sonst endet der Ring
-an einer Kachelgrenze, also genau der bilineare Defekt, gegen den die Dilatation
-existiert. Die alte, mit `shore_ramp_m` gewachsene Box deckte ihn nie (ein
-legales `shore_ramp_m = 0` wuchs gar nicht).
-
-### § G4, Rand-Hälfte — neu, und konstruktiv statt gemessen
-
-> **Die Rand-Hälfte von § G4 ist keine Schranke mehr, sondern eine Aussage über
-> den Vertexshader.** Was ein Renderer über Wasser zeichnet, ist
-> `y = max(h, w_level)` pro Morph-Abgriff (K-A E3) — **auf jeder gezeichneten
-> Stufe ist die Oberfläche eines Wasser-Texels also der Spiegel**, und der
-> existiert überall dort, wo die Basismaske Wasser sagt: die Wasser-Pyramide
-> DEZIMIERT als **Teilmenge** eines stückweise linearen Feldes und ein grobes
-> Texel ist genau dann Wasser, wenn sein eigenes Basis-Texel es ist (K-A E2,
-> `buildWaterPyramid`) — kein Mittelwert, kein `min`, keine zweite Maske. Daraus
-> folgt beides ohne Messung: Boden UNTER dem Spiegel kann nicht gezeichnet
-> werden (der `max` gibt den Spiegel zurück, es entsteht keine Lücke zwischen
-> Wasser und Land), und Boden ÜBER dem Spiegel wird als das gezeichnet, was er
-> ist — Fels im Wasser, kein Loch in einer Platte. Der Preis dieser Aussage ist
-> benannt: der Ring ist auf Stufe 0 zwei Texel breit, auf Stufe 1 eines und
-> darüber keines, die Garantie gilt also auf dem BASIS-Gitter; was eine grobe
-> Stufe am Ufer verfehlt, deckt die Fragment-MASKE (K-A E4), nie das Gelände.
->
-> **Die Tiefen-Hälfte (Invariante 2) bleibt wörtlich stehen:** jenseits der
-> Ufer-Rampe liegt der Boden punktweise mindestens `ε` unter
-> `water_level_at(x, z)`, in JEDEM Raster. Sie ist die Aussage über den CARVE
-> und der Carve ist unverändert.
->
-> **Die Dilatationsregel** (unverändert seit E1, hier als Teil von § G4
-> festgeschrieben): Pegel- und Fließraster müssen mindestens
-> `WATER_RASTER_DILATION_STEPS` = 2 Gitterschritte über jeden Umriss hinaus
-> fortgeschrieben sein, weil eine Zellecke eines nassen Punktes höchstens eine
-> Zell-DIAGONALE (√2 Schritte) außerhalb liegt; ein Schritt deckt das nicht,
-> zwei decken es strikt.
-
-Geprüft in `scripts/smoke_height_bake.py` **[10e]**: das 4-/8-/16-m-Gitter des
-Wasserrasters ist Texel für Texel jedes 2./4./8. Basis-Texel (Pegel wie
-Trocken-Sentinel), und über 7 857 nasse Proben ist `min(max(h, w) − w)` exakt
-**0,0** — nichts wird unter seinem eigenen Spiegel gezeichnet, obwohl 7 497
-dieser Proben im BAKE darunter liegen.
-
-### Was zurückkommt — und was es kostet
-
-**Das Relief läuft wieder bis an die Wasserlinie** ([11a]–[11d], Fixture See
-(0,0)–(40,40) + Wiese Amplitude 1,0 / Welle 16):
-
-| | v6 (Kragen) | v8 (Rückbau) |
-|---|---|---|
-| Boden 1 m außerhalb des Umrisses | 1,1 % der Welle | **100 %** |
-| Schlimmste Welle im 4-m-Kragen | 0,1206 m | **0,772 m** |
-| Abgeleiteter Spiegel (Rand-Median) | exakt 0,0 (relieffreier Rand) | **0,1504 m**, Spannweite des Randes **1,344 m** |
-| Höchster Randpunkt über seinem Spiegel | 0,0 m | **0,466 m** — und das ist jetzt ein Fels, kein Loch |
-
-**Der Preis, als Zahl statt als Überraschung** ([10g]): ein Ufer, das unter dem
-Spiegel liegt, wird als Wasser gezeichnet, solange das Raster dort einen Pegel
-hat — also **bis zu 4 m über den autorierten Umriss hinaus**, und dort hört die
-Wasserfläche mit einer Stufe in Höhe der getragenen Tiefe auf (Fixture: 1,4 m).
-Die Bankklemme hat das nie verhindert (ihr Band ist `shore_ramp_m`, in der
-Vorgabe 3 m < 4 m, und darf 0 sein); sie hat nur den Boden, den sie deckte, hoch
-genug gemacht, dass er nicht hob. Wer die Wasserlinie exakt am gezeichneten
-Umriss haben will, malt das Ufer nicht unter den Spiegel — das ist eine
-Autoren-Aussage und keine Bake-Regel mehr.
-
-**Der Unterwasser-Geist stellt dieselbe Frage wie das Wasser** (Befund
-2026-08-27, Nachtrag zu diesem Preis): Ein Ding steht genau dann im Wasser, wenn
-Pegel UND `waterInside(sd)` es sagen — dasselbe Paar, aus dem `liftedHeight` den
-Wasser-Lift bildet (`ground.waterGhostAt` → `walk.ghostWaterLevel` +
-`walk.ghostCutY`, geprüft in `smoke_walk_math.mjs`). Ein für sich gelesener
-Pegel ist NIE eine Maske: er ist 4 m über jeden Umriss hinaus dilatiert, und der
-Boden in diesem Kragen liegt seit dem Rückbau bis zu 0,772 m darunter — also
-weit über den 0,05 m des Geist-Gates, weshalb ein Diorama auf dem trockenen Ufer
-halbtransparent geisterte, während die Figur daneben (sie liest den
-Polygon-Test `ground.typeAt`) fest blieb.
-
-### Begehung und Navigation
-
-`world_height` liefert am Ufer jetzt Boden, der unter dem Spiegel liegen darf.
-Das ist für die Gates folgenlos und geprüft: **Waten/Schwimmen** liest das
-PROFIL (`water_level_at`, exakt, nicht das Raster) und nicht `h`, **Steigung
-und Stufe** lesen `h` — und `h` ist am Ufer jetzt glatter als vorher, weil die
-0,1-m-Lippe entlang jeder Uferlinie weg ist. Gemessen in
-`scripts/smoke_nav_grid.py`: der 30-m-Weg ins Seedorf kostet wieder
-**53,0 s** = 20 s Gras + 25 s Waten + 4 s/m · 2,0 m Abstieg ins Bett (v4–v7:
-53,664 s, weil die Lippe 0,166 m Auf und Ab dazugab). `smoke_slope_gate.py`
-ist unberührt — es misst Plateau-Rampen.
-
-### Die Deckkraft-Tiefe bleibt PRO ART — Entscheidung, nicht Vertagung
-
-E4 hatte vorgemerkt, `water_depth_effective` pro FLÄCHE im Wasserraster
-mitzuliefern, weil die id-Maske nur Arten kennt. **Entschieden: sie bleibt pro
-Art**, und das ist ab hier die stehende Regel, kein offener Punkt.
-
-Gründe, in dieser Reihenfolge:
-
-1. **Der Wasser-Look IST ein Art-Datensatz.** Tint, `sky_mix`, `wave_m`,
-   `speed`, `flow_speed`, Rauheit und Metallizität kommen alle aus der
-   Surface-Bibliothek und können gar nicht pro Fläche sein. Ein Texel-Kanal für
-   das achte Feld machte EINEN Wert flächenscharf, während der Farbton, in den
-   er hineinblendet, artscharf bleibt.
-2. **Der billige Kanal wäre falsch.** Der Fließvektor fährt plain-bilinear
-   (der Server schreibt (0, 0) auf trockenen Punkten); eine Tiefe, die an
-   trockenen Ecken gegen 0 mischt, ergäbe `opaque_depth → 0` und damit
-   Absorption **1** genau an der Wasserlinie — ein deckender Saum am Ufer, also
-   die Defektklasse, gegen die die Stufe angetreten ist. Korrekt getragen
-   bräuchte sie die MASKIERTE Mischung des Pegels: entweder einen vierten Kanal
-   auf der R32F-Pegelpyramide (4× Texturspeicher auf JEDER Stufe) oder vier
-   zusätzliche `texelFetch` je Vertex. Beides ist nicht „billig".
-3. **Nutzlast.** Ein viertes Feld je nassem Texel ist rund +33 % auf jede nasse
-   Kachel, dauerhaft, für eine Zahl, die je Fläche konstant ist.
-4. **Der Gewinn ist eine Art, die ZWEIMAL mit verschiedenen Tiefen gemalt
-   wurde.** Dann gewinnt die zuletzt gemalte Fläche (die Regel, die der Server
-   bei überlappenden Gewässern selbst benutzt), und der Unterschied ist, wie
-   schnell das Bett verschwindet — nicht, wo Wasser ist und wie tief man watet
-   (beides liest das exakte Profil).
-
-Wer eine erkennbar andere Deckkraft braucht, malt eine eigene ART — das ist im
-Autorenmodell der vorgesehene Weg und kostet nichts.
-
-### Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| Namen weg, `final` dreistufig, Version 8 | `scripts/smoke_height_bake.py` **[10a]**, **[10c]** |
-| Band außerhalb des Umrisses = autorierter Boden, Bett unverändert | ebenda **[10b]**, **[10d]** |
-| § G4-Rand-Hälfte: Teilmengen-Dezimierung + `min(max(h,w) − w) = 0` | ebenda **[10e]** |
-| Ring-Box, Dilatationsbreite, der 4-m-Preis mit seiner Stufe | ebenda **[10f]**, **[10g]** |
-| Relief bis an die Wasserlinie, wobbelnder Rand-Median, Kragen zurück | ebenda **[11a]**–**[11d]** |
-| 0-Rampen-Becken unverändert, Signatur erreicht die laufende Welt | ebenda **[11e]**, **[11f]** |
-| Wegkosten am See: 53,0 s statt 53,664 s, von Hand hergeleitet | `scripts/smoke_nav_grid.py` |
-
----
-
-## Nachtrag 2026-08-24 (§ B5a): Zwei Sichtbefunde am K-A-Wasser — Schaum-Deckung und Vorhang-Verdeckung (Client)
-
-*Reine Renderer-Korrekturen. Keine Nutzlast, kein Bake, keine Signatur ändert
-sich; `HEIGHT_BAKE_VERSION` bleibt **8**.*
-
-### 1. „Weiße Ränder und Ecken am Wasserrand" — der Schaum hat seine Deckung verloren
-
-Der Spiegel war eine DURCHSICHTIGE Fläche: er weißte sein eigenes Licht mit
-`foam · WATER_FOAM_STRENGTH` und wurde danach mit
-`alpha = clamp(shoreAlpha + foam · 0,15, 0, 1) · rim` über den Grund geblendet.
-Auf den Schirm kam also das **Produkt aller drei** Faktoren — am Rand drei
-kleine Zahlen, also eine Spitze. K-A E4 hat die ersten beiden übernommen und
-den dritten fallen gelassen, weil der Boden, den es schattiert, undurchsichtig
-ist und es kein Alpha mehr gibt, in das er fallen könnte.
-
-Gemessen auf der Seefixture (Deckungstiefe 1,5 m, Randrampe gesättigt):
-
-| Tiefe | Schaumband | Deckung | weiß VORHER | weiß NACHHER | Faktor |
-|---|---|---|---|---|---|
-| 0,15 m | 0,84375 | 0,1545625 | 0,50625 | 0,0782473 | 6,47× |
-| 0,30 m | 0,5 | 0,179 | 0,30 | 0,0537 | 5,59× |
-| 0,45 m | 0,15625 | 0,2394375 | 0,09375 | 0,0224473 | 4,18× |
-
-Am lautesten ist das genau dort, wo am wenigsten Wasser steht: auf der
-überfluteten Bank im Dilatationsring (E6 hat die Bankklemme absichtlich
-zurückgebaut, „der Lift deckt es ab") und an der Gitter-Treppe, auf der dieser
-Ring endet — die gemeldeten weißen Ränder UND Ecken. Auf einer gemäanderten
-6-m-Fixture mit 1,2-m-Mikrorelief ist das Schaumband quer gemessen **11,5 m**
-breit statt der ~3 m, die ein 3-m-Uferrampen-Fluss vorsieht, und **696 von 1968**
-Ringpunkten 3,5–7 m ausserhalb des Umrisses werden gehoben.
-
-**Regel jetzt** (`client3d/src/scene/waterShade.ts`, `waterFoamAt` und ihr
-GLSL-Zwilling): `foam · min(shoreAlpha + foam · WATER_FOAM_MIN_COVER, 1) · rim`.
-`WATER_FOAM_MIN_COVER` = 0,15 ist die Randzahl des Spiegels, wörtlich; die
-Deckung benutzt dieselbe Uferkurve, die die Absorption schon reitet — keine
-zweite Kurve. Nachweis: `smoke_water_shade.mjs` [2] (Handtabelle + die drei
-ROTEN Proben mit den kaputten Zahlen) und [6] (GLSL-Zeile, plus ROTE Probe,
-dass das nackte Band nicht mehr vorkommt).
-
-### 2. „Der Wasserfall hat nur oben die Wasserfall-Textur" — der Vorhang stand in seiner eigenen Wand
-
-Unter K-A ist der Spiegel zwischen Lippe und Gumpen der BODEN: das Terrain wird
-auf `max(h, w_level)` gehoben, der Fall steht also als steile, **undurchsichtige,
-nasse Wand** über die Sehne des Laufs. Der Vorhang hing aber am Bogen-MITTELPUNKT
-über einen Lauf von `WATERFALL_LEAN · h` — steiler als diese Wand, sobald die
-Sehne länger als `0,3 h` ist, also bei jedem Fall flacher als 73°.
-
-Auf der Plan-Fixture (Fallhöhe 5,8 m, Sehne 3 m) mit `r` = Laufkoordinate ab dem
-Fallpunkt und `u` = Höhenanteil (0 = Gumpen, 1 = Lippe):
-
-```
-r_Wand(u) = 1,5 · (1 − 2u)        r_alt(u) = 0,87 · (1 − 2u)
-r_alt − r_Wand = −0,63 · (1 − 2u)   ->  −0,63 m am Fuß, < 0 für jedes u < 0,5
-```
-
-Genau die untere **Hälfte** stand hinter dem eigenen Wasser — deshalb war der
-Vorhang mit Isolationsschalter 22 („Water lift off") vollständig sichtbar. Die
-Wrap-Mode-Verdächtigung war falsch: `materials.makeWaveNormal` setzt
-`wrapS = wrapT = RepeatWrapping`, bevor sie irgendjemand sieht (im Smoke
-angenagelt).
-
-**Regel jetzt:** `Waterfall` trägt zusätzlich `chordM` (die Sehne des Laufs,
-in `runToFall` ohnehin berechnet). Der Vorhang hängt an der **Lippe** und
-bekommt den Lauf der Wand plus den Lean am Fuß:
-
-```
-top = (x, z) − dir · chordM/2                bot = (x, z) + dir · (chordM/2 + 0,3 h)
-r_neu(u) − r_Wand(u) = 0,3 h · (1 − u)   ->  1,74 / 0,87 / 0 m bei u = 0 / 0,5 / 1
-```
-
-Der obere Rand fällt damit exakt auf die Lippe (auf der Fixture Knoten B
-(20, 0)), der Fuß 1,74 m hinter den Wandfuß (Knoten C), und die Naht an der
-Lippe deckt der Vorhang-Shader mit seiner eigenen 6-%-Ausblendung ab. Nachweis:
-`smoke_waterfall.mjs` [9] — vier Ecken, drei Abstände, 101 Höhen ohne
-Verdeckung, plus die ROTEN Proben des alten Zustands.
-
-### 3. Offen und NICHT gefixt: der Fluss zerfällt ab Mip 2
-
-Der dritte Befund („nur jeder zweite Abschnitt fließendes Wasser") ist gemessen,
-aber nicht behoben — er ist keine Panne in einer der drei verdächtigten Stellen,
-sondern die Auflösungsgrenze von K-A selbst. Auf derselben Mäander-Fixture:
-
-| Gitter | gehobene Flusspunkte | kleinstes interpoliertes \|flow\| |
-|---|---|---|
-| 2 m (Level 0) | 123 / 123 | 1,0000 |
-| 4 m (Level 1) | 123 / 123 | 0,9997 |
-| 8 m (Level 2) | **44 / 123** | 0,9996 |
-| 16 m (Level 3) | **0 / 123** | — |
-
-Der Fließvektor ist also überall in Ordnung (Server: 150 von 150 Gitterpunkten
-eines 700-m-Flusses über drei Kacheln tragen `|flow| = 1`, alle drei Kacheln
-liefern die Arrays; Client: der Varying fällt nirgends unter 0,9996, wo Wasser
-gehoben wird). Was verschwindet, ist der GEHOBENE Punkt: ein 6 m breites Bett
-mit ±3 m Carve hat auf einem 8-m-Gitter meist keinen Stützpunkt mehr im Bett,
-also ist `h_k ≥ w_k` und der Lift greift nicht. Das Mesh-Mirror hatte dieses
-Problem nicht — er war ein Polygon in voller Auflösung. Die drei ehrlichen
-Optionen (Level-Deckel für wasserführende Knoten, feineres Wasserraster, oder
-akzeptieren) sind eine Entscheidung, keine Fehlerbehebung.
-
----
-
-## Nachtrag 2026-08-25 (§ A16.5 / § B5a): Die vier Befunde am K-A-Wasser — der `sd`-Kanal, das gehobene Ringband und der Fließ-Rahmen
-
-*Ein Server-Umbau (`HEIGHT_BAKE_VERSION` **8 → 9**, additive Kachel-Nutzlast)
-und drei Client-Korrekturen, die alle vier auf dieselbe Wurzel zurückgehen:
-**der Renderer hatte kein Feld, das sagt, wo der Autor das Wasser gemalt hat.**
-Der Pegel ist DILATIERT (4 m über jeden Umriss hinaus), also ist er keine Maske;
-die Material-Maske des Boden-Kompositors nennt die OBERSTE GEMALTE ART, also ist
-sie es auch nicht. Der Bake liefert die Antwort jetzt selbst.*
-
-### 1. Die Befunde und ihre Zahlen
-
-| Befund | Ursache, gemessen |
-|---|---|
-| **F-A** „der See ist nur noch eine Sandfläche" | Das Tor von `95ea0ca0` las das ID-Paar der Material-Maske. Fixture (lake + gemalter Sand-Bett-Fläche, `app/core/terrain_layers.py`): das Paar in der Seemitte ist **(1, 1) = (sand, sand)** — keine Hälfte ist Wasser, also gab `twInside` **0** über die ganze Seefläche zurück und der gehobene Spiegel wurde als sein eigenes Bett gemalt. (Ein `bed_kind` OHNE gemalte Fläche allein tut das nicht: die Wasser-Ebene trägt weiter `water: true` und nur die SURFACE des Betts — auch gemessen.) |
-| **F-B** graue Randflecken, Treppen-Silhouette, „Avatar steht im Boden" | Das Dilatationsband wurde GEOMETRISCH gehoben. Fixture (flacher Boden 0, Spiegel 1,0, Umriss bei x = 10): jeder Vertex des 4-m-Bandes stieg **1,00 m** auf den Spiegel, gezeichnet als Boden, mit dem echten Boden 1 m darunter — dort steht die Figur (`waterPlaneMath.waterLevelAt` kennt die Dilatation nicht). Der äußere Rand des Bandes ist eine Gitter-Treppe. |
-| **F-C** „fließt nicht, alle paar Meter anders strukturiert" | Der Ripple-Rahmen ist die Achsentangente pro Vertex, und die springt an der MITTELACHSE — dieselbe Unstetigkeit, die § A16.5 Punkt 6 am Pegel mit 1,2951 m auf 10 cm gemessen hat. Hairpin-Fixture: **145,96°** zwischen zwei Gitterpunkten 2 m auseinander. |
-| **F1-Deckel** | Der Deckel maß die UNGETORTE Hebung, also die Breite von Körper **plus Ring**. Fixture (6-m-Fluss, Bank unter dem Spiegel): Deckel **2** statt **1** — für einen Fluss, dessen eigener Körper auf Stufe 2 schon zerfallen ist. |
-
-### 2. Server (Bake v9): der vierte Kanal und der geglättete Fluss
-
-```jsonc
-"water": {
-  "level":  [[float|null, …], …],   // unverändert
-  "sd":     [[float|null, …], …],   // NEU: Meter, + innen, − im Ring, gleiche Maske
-  "flow_x": [[float, …], …],        // jetzt GEGLÄTTET
-  "flow_z": [[float, …], …]
-}
-```
-
-- **`sd` ist die vorzeichenbehaftete Distanz zum Umriss DESSELBEN Wassers**, aus
-  dem `level` stammt — die Nullmenge IST der gemalte Umriss. Ein Punkt innerhalb
-  zweier überlappender Seen liest die Distanz des OBERSTEN zu SEINEM Umriss;
-  „zuletzt gemalt gewinnt" ist EINE Entscheidung für alle vier Kanäle. Maske und
-  Rundung wie `level` (Millimeter, `null` auf genau denselben Texeln).
-  Kosten: ein zusätzlicher Ring-Durchlauf auf dem Innen-Zweig (der Ring-Zweig
-  misst die Distanz ohnehin, um sich zu entscheiden).
-- **`flow` läuft durch eine separable Box vom Radius
-  `WATER_FLOW_BLUR_M`** — und das ist `WATER_RASTER_DILATION_M`, nicht aus
-  Geschmack: das Raster ist genau so weit über jeden Umriss hinaus geschrieben,
-  also liegt die Box um jeden Punkt INNERHALB eines Umrisses noch ganz im
-  geschriebenen Bereich. Die Glättung mischt damit nie einen autorierten
-  Fließvektor mit dem (0, 0) echten Trockenbodens. Bei `TILE_STEP_M` = 2 m sind
-  das 2 Texel Radius, also eine 5 × 5-Box über 8 m.
-- **NICHT re-normalisiert.** Wo zwei Richtungen wirklich uneins sind, ist der
-  Mittelwert KÜRZER, und die Länge ist der Geschwindigkeits-Faktor: eine
-  anmutige Verlangsamung genau dort, wo das Feld mehrdeutig ist. Der
-  Stillwasser-Boden (1e-4) wird nie erreicht (kürzester gemessener Vektor
-  0,2952).
-- **Das Fenster wird mit RAND abgetastet und danach beschnitten** (`(129 + 2r)²`
-  statt `129²`, +6,3 %). Eine an der eigenen Kante geklemmte Box hinge davon ab,
-  aus welcher Kachel man einen Punkt liest — § G1 sagt, dass sie das nicht darf.
-  Geprüft: derselbe Punkt aus zwei Fenstern gibt bitgleich denselben Vektor.
-- **Pegel und `sd` werden NICHT geglättet.** Beide werden gegen eine SCHWELLE
-  gelesen; eine Glättung verschöbe die Wasserlinie vom autorierten Umriss weg.
-
-### 3. Client: EIN Feld, ZWEI Stufen, dasselbe Sampler-Textstück
-
-`waterShade.waterSdGlsl()` ist ein einziger GLSL-Text, den beide Stufen der
-Wasser-Variante einbinden — Vertex und Fragment können keine Funktion teilen,
-also teilen sie diesen String. Das Gitter ist `uTlodWaterLevel[0]` über
-`uTlodWaterGeom.xy`, die Ausdehnung ist per `textureSize` das Nahfenster; außen
-antwortet er `TW_SD_DRY` (−10 000 m) statt ein Randtexel nach außen zu klemmen.
-Das Trocken-Sentinel ist eine ZAHL und nicht das `NaN` des Pegels: `sd` wird auf
-ein VORZEICHEN gelesen, also zieht eine trockene Ecke die einfache bilineare
-Mischung ins Negative — die richtige Richtung — und kann keine Mischung
-vergiften. Innerhalb eines Umrisses kann sie das nie tun (Dilatationsargument,
-§ A16.5 Punkt 3; nachgemessen an 6561 bzw. 1681 Proben).
-
-- **Der LIFT tort auf `sd ≥ 0`** (`tlodLift(h, p, nodeStep, sd)`). Die Distanz
-  wird EINMAL pro Vertex genommen, vor beiden Taps des Morph-Paares: sie ist
-  eine Funktion der Position allein, also tragen beide Terme dieselbe Zahl und
-  das Paar bleibt in `f` stetig — und zwei Stücke verschiedener Stufen, die sich
-  einen Vertex teilen, heben ihn beide oder keines.
-- **Der Ring behält seine Werte** und muss es: sie sind es, die die bilineare
-  Mischung INNERHALB des Umrisses das Profil reproduzieren lassen. Er ist
-  bilineare STÜTZE, nie eine Fläche.
-- **Das Fragment-Tor liest dasselbe `sd`**, mit einem weichen Band von
-  `max(ein Bildschirmpixel, 0,5 m)`. Die ID-Maske behält genau eine Aufgabe:
-  zu sagen, WELCHE Wasserart hier steht (`layer = twIsWater(a) ? a : b`). Die
-  `sd`-Hälfte von `bindLayerIdUniforms` ist wieder gelöscht — kein totes
-  Mechanismus-Paar.
-  **ÜBERHOLT am 2026-08-25 (Bake v10, siehe letzter Nachtrag):** auch diese
-  letzte Aufgabe war falsch besetzt — die Maske nennt die oberste GEMALTE Art,
-  nicht die Wasserart. Das Raster nennt seine Art seit v10 selbst
-  (`kinds` + `kind_idx`), und `bindLayerIdUniforms` ist ganz gelöscht.
-- **Der F1-Deckel misst die GETORTE Hebung**: `waterTileCaps` nimmt das
-  `sd`-Feld und zählt ein Texel nur, wenn es wirklich steigt. Sonst beschriebe
-  die Zahl nichts.
-
-### 4. Der Fließ-Rahmen (F-C) — was die Glättung kauft, und was NICHT
-
-Gemessen als größter Winkel zwischen den Fließvektoren zweier BENACHBARTER
-Gitterpunkte innerhalb des Umrisses (`smoke_height_bake.py` [12h]):
-
-| Fixture | roh | ausgeliefert (Box r = 2) |
-|---|---|---|
-| **Mäander** — Fluss als Band um seine eigene Linie, 8 m breit | **1,80°** (p99 1,71, Mittel 0,52) | **1,49°** |
-| **Haarnadel** — Achse kehrt INNERHALB eines 160 × 65 m-Polygons um | **145,96°** | **66,32°** |
-
-**Die Lesart, und sie entscheidet gegen ein zusätzliches gröberes Abtasten:**
-ein autorierter Fluss hat den Sprung gar nicht — die Mittelachse seiner Linie
-liegt für jede Biegung sanfter als die halbe Breite AUSSERHALB des Bandes. Die
-146° gehören der Fixture, in der ein 6-m-Strich in einer seeförmigen Fläche
-umkehrt. Ein gröberes Rahmen-Sampling brächte dort 66° → 41° und kostete jedem
-schmalen Fluss die Fließrichtung an seinen Ufern; die Box ist die richtige,
-billige Versicherung, und mehr ist an dieser Stelle nicht zu holen.
-
-**Was danach übrig bleibt und NICHT behoben ist** (Messung, keine Vermutung):
-`twFrame` staucht die WELTKOORDINATE um die Fließachse, also verstärkt sich
-jede Rahmen-Änderung mit dem Abstand vom Weltursprung. Für eine Rahmen-Drehung
-`dθ` ist die zusätzliche uv-Verzerrung ≈ `(1 − 1/aniso) · |p| · dθ / λ`
-Wellenlängen. Auf der Mäander-Fixture (|p| ≈ 150 m, λ = 1,6 m, aniso = 3):
-Mittel 0,52°/2 m → Faktor 0,45, schlimmster Punkt 1,49°/2 m → 1,30 — also eine
-lokale Stauchung von 1,5× bis 2,3×, die `textureGrad` nicht kennt. Dazu kommt
-der DRIFT-Term: er wächst mit `uTlodTime` (Wrap bei 3600 s), und bei
-`sp` = 0,15 m/s sind das am Ende der Stunde 337 Wellenlängen Versatz — zwei
-Nachbarvertizes 0,52° auseinander liegen dann **3,06 Wellenlängen** auseinander,
-d. h. das Muster dekorreliert im Lauf von Minuten. Das ist die verbleibende
-Hälfte von „alle paar Meter anders strukturiert", und es ist ein
-Entwurfs-Thema (Flow-Map-Advektion mit periodischem Reset, oder die Anisotropie
-fallen lassen), keine Panne — deshalb steht es hier und nicht im Code.
-
-### 5. Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| `sd` innen/auf dem Umriss/im Ring, bed_kind unberührt, 6561 Innen-Proben ≥ 0 | `scripts/smoke_height_bake.py` **[12g]** |
-| Nutzlast: gleiche Maske wie `level`, Rundung, Lattice | ebenda **[12g]** |
-| Blur-Radius = Dilatation, Winkel-Tabelle roh/ausgeliefert, keine Re-Normierung, Stillwasser bleibt still, Fenster-Naht | ebenda **[12h]** |
-| Client-Zwilling `rasterSdAt`: bilinear, Sentinel, 1681 Innen-Proben ≥ 0 | `client3d/scripts/smoke_world_height.mjs` **[W4a]** |
-| Lift-Tor: Ring hebt nicht mehr, „Figur neben dem Wasser", GLSL-Pins | `client3d/scripts/smoke_terrain_lod.mjs` **[16]**, **[17]** |
-| Deckel misst die getorte Hebung (2 → 1) | ebenda **[18] (e)** |
-| Fragment-Tor: eine Smoothstep, Band, ID-Maske nur noch für den Look | `client3d/scripts/smoke_water_shade.mjs` **[7]** |
-
----
-
-## Nachtrag 2026-08-25 (§ A16.5): Das Wasser-Raster nennt seine ART pro Texel — die zweite Hälfte von F-A
-
-*Ein Server-Umbau (`HEIGHT_BAKE_VERSION` **9 → 10**, additive Kachel-Nutzlast)
-und ein Client-Schnitt. v9 gab dem Renderer ein Feld, das sagt, **OB** ein Pixel
-in gemaltem Wasser steht (`sd`). **WELCHES** Wasser es ist, blieb bei der
-ID-Maske des Boden-Kompositors — und die beantwortet eine andere Frage.*
-
-### 1. Der Befund
-
-Nutzer-Beleg vom 2026-08-25: „See UND Fluss zeigen Flecken, die wie
-**Waldboden** aussehen, teils durchscheinend, teils nicht; beim Fluss stimmt die
-**Fließrichtung** nicht; die gewünschte Rand-Transparenz funktioniert an
-**manchen** Seestellen."
-
-Alles davon steht in EINER Zeile des Fragments, die es bis v9 gab:
-
-```glsl
-layer = twIsWater( a ) ? a : b;     // (a, b) = das ID-Paar der Material-Maske
-```
-
-Das Paar nennt die **oberste GEMALTE Art** und die darunter. Das ist eine
-Aussage über den BODEN. Überall dort, wo das Wasser nicht die oberste gemalte
-Art ist — ein Fluss unter einer darüber gemalten Waldfläche, ein See mit
-`bed_kind`, jede Z-Order-Änderung — nennt das Paar **gar kein Wasser**, beide
-Hälften fallen durch `twIsWater`, und die Wahl landet auf einer
-Platzhalter-Zeile: dem **primären Wasser der Welt**.
-
-Gemessen auf der Fixture „Fluss durch darüber gemalten Wald"
-(`scripts/smoke_height_bake.py` **[12j]**, `terrain_layers.LayerModel`):
-
-| Größe | gemessen |
-|---|---|
-| ID-Paar in der Flussmitte (60, 40) | **(1, 1) = (g, g)** — der Wald |
-| dessen Ebene `water` | **false** — beide Hälften fallen durch |
-| eigene Ebene des Flusses | **2**, `water: true` — die Maske nennt sie hier nie |
-| Anteil der nassen Texel des Fensters mit falschem Paar | **alle** (Menge der Ebenen über alle nassen Texel = `{1}`) |
-
-Und was die falsche Zeile kostet, in Zahlen
-(`client3d/scripts/smoke_water_shade.mjs` **[11]**; tiefer See 4 m Bett →
-`opaque` 3,0 m, `flow_speed` 0; Fluss 1,2 m Bett → `opaque` 0,9 m,
-`flow_speed` 1,0 m/s):
-
-| bei 0,60 m Wassertiefe | richtige Zeile (Fluss) | gewählte Zeile (See) |
-|---|---|---|
-| Absorption `3t²−2t³` | `t = 2/3` → **20/27 = 0,740741** | `t = 0,2` → **0,104** |
-| Rest des BETTS im Bild | **7/27 = 0,259259** | **0,896** |
-| — Faktor | | **3,456× so viel Waldboden** |
-| Drift der Kämme (`flow_speed · |flow|`) | **1,0 m/s** | **0 m/s — nichts bewegt sich** |
-| Ripple-Wellenlänge | **1,2 m** | **2,0 m** |
-
-Das ist die ganze Beobachtung: „wie Waldboden" ist `1 − Absorption` mit der
-falschen `opaque`-Tiefe, „teils durchscheinend, teils nicht" ist derselbe Pixel
-bei anderer Tiefe, „Fließrichtung stimmt nicht" ist ein Muster, das gar nicht
-wandert (der RAHMEN kam immer aus dem Raster und war nie falsch), und „an
-manchen Seestellen richtig" sind genau die Stellen, an denen das Wasser zufällig
-doch die oberste gemalte Art ist.
-
-### 2. Server (Bake v10): Palette + Index-Gitter
-
-```jsonc
-"water": {
-  "level":    [[float|null, …], …],   // unverändert
-  "sd":       [[float|null, …], …],   // unverändert (v9)
-  "kinds":    ["water", "river"],      // NEU: die Palette DIESES Fensters
-  "kind_idx": [[int, …], …],           // NEU: Index hinein, pro Texel
-  "flow_x":   [[float, …], …],         // unverändert, weiterhin optional
-  "flow_z":   [[float, …], …]
-}
-```
-
-- **`kind_idx[j][i]` nennt die Art des OBERSTEN Wassers** an diesem Texel —
-  dieselbe Entscheidung, die schon `level` und `sd` wählt. „Zuletzt gemaltes
-  Wasser gewinnt" ist EINE Entscheidung, und alle fünf Kanäle eines Texels
-  stammen aus demselben Wasser. `HeightModel.water_at` gibt die Art als fünften
-  Rückgabewert.
-- **Eine PALETTE statt eines Namens pro Texel.** Eine Kachel trägt ein oder zwei
-  Wasser; 129 × 129 Wiederholungen derselben Handvoll Wörter wären hunderte
-  Kilobyte. Und ein INDEX ist ohnehin genau das, was eine Look-Tabelle
-  indiziert. Die Reihenfolge ist „zuerst angetroffen" beim zeilenweisen Lauf
-  über das BESCHNITTENE Fenster; die Palette ist nie leer, solange die Kachel
-  existiert.
-- **`kind_idx` ist 0, wo `level` `null` ist, und bedeutet dort NICHTS.** Kein
-  zweites Sentinel: `level` IST die Maske dieses Rasters, und ein zweites würde
-  nur wiederholen, was das erste sagt — und jeden Leser zwingen, eine nullable
-  Ganzzahl durch eine Textur zu tragen, die keinen Platz dafür hat.
-- **Nichts wird geglättet oder gemischt.** Eine Art ist ein NAME; der Mittelwert
-  zweier Namen ist keiner. Das Gitter wird beschnitten wie `level` und `sd`.
-- `h_final` bewegt sich um keinen Millimeter. Der Zähler dreht sich, weil eine
-  v9-Kachel keine Palette trägt und der Renderer dann nichts hat, womit er seine
-  Look-Tabelle indizieren könnte.
-
-### 3. Client: die Look-Tabelle ist nach ART geschlüsselt, die ID-Maske ist raus
-
-- **`WaterLook`-Tabelle: eine Zeile pro WASSERART** statt einer pro Ebene. Damit
-  fallen die Platzhalter-Zeilen weg (jede Bodenebene trug das primäre Wasser als
-  Attrappe) und mit ihnen das `is_water`-Flag im dritten Slot von Texel 2 — es
-  war nur dazu da, diese Attrappen wieder auszusortieren. Der Slot ist jetzt
-  Reserve. **Zeile 0 ist das primäre Wasser** und das, was eine unbekannte Art
-  liest (und jede v9-Kachel): schlimmster Fall „das falsche Wasser", nie ein
-  bodenfarbener See.
-- **`uTlodWaterKind`** — R32F auf dem BASIS-Gitter der Wasser-Pyramide, neben
-  `uTlodFlow` und `uTlodWaterSd` und ohne eigene Geometrie (das Gitter IST
-  `uTlodWaterLevel[0]` über `uTlodWaterGeom.xy`). Der Client löst den NAMEN aus
-  dem Raster über die aktuelle `rowOfKind`-Abbildung in eine ZEILE auf
-  (`terrainLod.buildKindRows`), damit die Tabelle jederzeit neu geordnet werden
-  darf, ohne dass der Bake je eine Zeilennummer eines Renderers kennt.
-- **NEAREST, nie bilinear** (`waterRaster.nearestIndex` / `rasterKindAt`, GLSL
-  `twKindRow`): eine Look-Zeile ist ein Name. Wo zwei Wasserarten INNERHALB
-  einer zusammenhängenden Fläche aneinanderstoßen, wechselt die Zeile an der
-  Texelkante statt zu blenden — **angenommen und hier notiert**: es ist ein
-  Meter-Sprung im Farbton zwischen zwei Wassern, die der Autor als zwei Wasser
-  gezeichnet hat.
-- **Was gestorben ist:** `bindLayerIdUniforms` (ganz, samt der zweiten
-  Sampler-Bindung), `uTlodWaterMask` / `uTlodWaterMaskGeom` im Wasser-Programm,
-  `twIsWater`, `WaterLook.isWater` und die Attrappen-Zeilen. Der Boden-Kompositor
-  behält seine Maske unverändert für den BODEN; geborgt wird nichts mehr.
-- **Die H2-Oberflächenterme reiten dieselbe Zeile**: Rauheit, Metalness,
-  Himmelsanteil und Ripple lesen `look1`/`look2` derselben Zeile — sie werden
-  mit demselben Schnitt richtig, ohne eigene Änderung.
-
-### 4. Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| Palette + `kind_idx` von Hand auf einer Zwei-Arten-Fixture (Überlappung, Ring, trockene Texel, Ein-Eintrag-Fenster) | `scripts/smoke_height_bake.py` **[12i]** |
-| Verurteilung „Fluss durch Wald": ID-Paar `(g, g)`, Ebene nicht Wasser, alle nassen Texel betroffen; Raster nennt `river` | ebenda **[12j]** |
-| Client-Zwilling: Draht → Palette/Gitter, `nearestIndex`-Regel, Wechsel an der Texelkante, v9-Kachel, Index außerhalb der Palette | `client3d/scripts/smoke_world_height.mjs` **[W4b]** |
-| Die Zahlen der falschen Zeile (3,456× Bett, 0 statt 1 m/s, 2,0 statt 1,2 m) | `client3d/scripts/smoke_water_shade.mjs` **[11]** |
-| GLSL: Zeile aus `twKindRow`, kein `twIsWater`, kein `uTlodWaterMask` | ebenda **[6]**, **[7]** |
-| Uniform-Bindung: `uTlodWaterKind` am Wasser-Programm, Maske an keinem | `client3d/scripts/smoke_terrain_lod.mjs` **[18]** ("the water shading lives in the water program only") |
-
----
-
-## Nachtrag 2026-08-25 (§ B2/§ A9/§ A9a): Maß, Motiv, Einsinken und Marker gehören der VARIANTE — die Nutzlast bleibt Zeichen für Zeichen gleich
-
-**Für die Renderer ändert sich nichts.** Dieser Nachtrag steht hier, weil die
-Sätze weiter oben („`ground_offset_m` je Prop", „die Maße des Props") die
-Quelle falsch benennen, nicht weil ein Feld gewandert wäre.
-
-Ein Prop trug bis heute EIN Maß, EIN Bildmotiv, EIN `ground_offset_m` und EINE
-Markerliste; eine Modellvariante durfte die ersten beiden überschreiben. Eine
-Variante ist aber eine ganze VERSION des Objekts — der Setzling neben der
-gewachsenen Kiefer, der zerbrochene Stuhl neben dem heilen —, und genau diese
-vier Angaben unterscheiden sich je Version. Sie liegen deshalb seit heute auf
-dem Varianteneintrag und nirgendwo sonst (`app/core/props.py`, Feldtabelle im
-Modulkopf); der Master-Datensatz hat die Schlüssel verloren, ohne Fallback-Leser.
-
-| Payload-Feld | vorher gelesen aus | jetzt gelesen aus | Form |
-|---|---|---|---|
-| `max_m` / `placeholder_dims` / `dims` | Prop, Variante überschreibt | die gezeichnete VARIANTE (`props.variant_dims`) | unverändert |
-| `ground_offset_m` (Szene, Welt-Props, Streu) | Prop | die gezeichnete VARIANTE (`props.variant_ground_offset`) | unverändert, Abwesenheit = 0.0 |
-| `prop_markers[]` | Prop | die gezeichnete VARIANTE (`props.variant_markers`) | unverändert |
-| `prop_height_m` der Streu | Prop | PRIMÄRvariante (die Instanzen werden clientseitig gesampelt) | unverändert |
-
-Wo kein Variantenkontext existiert — die schlanke Prop-Bibliothek
-`GET /assets/props`, die Zeile der Bibliotheksliste, der schematische Grundriss —
-antwortet die **PRIMÄRvariante**, also dieselbe wie bei jeder anderen
-unqualifizierten Frage (`/model` ohne Parameter, `variants` als Element 0 von
-`model_variants`).
-
-Der interne Rezept-Zwischenschritt `variant_tiers` trägt die Angaben jetzt pro
-Eintrag mit: `{variant, tiers, dims, ground_offset_m?, markers?}` — `markers`
-nur auf dem VOLLEN Datensatz, die schlanke Client-Bibliothek bekommt weiterhin
-nur `marker_count`. Das ist die eine Liste, in der eine Platzierung ihre
-POSITION auflöst, damit eine Zeile nie die Größe der einen und das Einsinken
-einer anderen Version bekommt.
-
-**Einmal-Migration** beim Start (`app/core/prop_field_migration.py`, `world_kv`-
-gesichert): jedes Prop reicht seine Werte an jede Variante durch, die keinen
-eigenen hat; ein selbst gesetzter Variantenwert bleibt stehen; danach fallen die
-Schlüssel vom Master-Datensatz. Content-Pakete aus der Zeit davor werden beim
-Import durch dieselbe Transformation geschickt.
-
-### Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| Maß je Variante: Sanitizer, Auflösung, `max_m`, Stapelregel, ROTE PROBE „`height_m` auf dem Master-Datensatz wird ignoriert" | `scripts/smoke_prop_variants.py` **[18]** |
-| Motiv je Variante: Kopie-beim-Anlegen, Rückfall auf den PROP-NAMEN, Aufrufstelle des Renderns, 400 auf den Prop-Route-Feldern | ebenda **[19]** |
-| Einsinken + Marker je Variante, die Stapelregel in beide Richtungen (0,75 / 1,05 statt 0,9 / 0,9) und die Migration auf einem handgebauten Vor-Umzug-Sidecar | ebenda **[20]** |
-| Zeile eines Welt-Props liest das Einsinken der Variante, die sie zeichnet (−0.4 statt −0.2) | `scripts/smoke_world_props.py` **[3]** |
-| Streu-Eintrag: Sanitizer über die echte Schreibroute, ROTE PROBE auf dem Master-Datensatz | `scripts/smoke_terrain_areas.py` **[15]** |
-
-## Nachtrag 2026-08-25 (§ B1): Eine Tür ist ein LOCH, kein Schlitz — der Sturz
-
-Zwei Befunde aus der Vorschau und aus dem Blender-Außenbild, ein und dieselbe
-Ursache: **die Öffnungen wurden nicht gleich behandelt.** Ein Fenster bekam
-Brüstung, Sturz und Glasband, eine Tür bekam eine Lücke — und zwar über die
-GANZE Wandhöhe, obwohl ihre `height_m` seit jeher autoriert ist (`world_ops.
-_sanitize_opening` verlangt 0,4…10 m). Von innen reichte jede Türöffnung bis
-an die Decke; von außen las sich das gleiche Loch in der Kontur wie ein
-fehlendes Wandstück, weshalb im Blender-Außenbild „gar keine Türen" zu sehen
-waren: ein Schlitz vom Boden bis zur Traufe ist keine Tür.
-
-**Die Regel, ab jetzt eine einzige für alle Öffnungen** (`scene_recipe.
-_room_walls` und `_contour_walls`):
-
-| Stück | Fenster | Tür / Durchgang |
-|---|---|---|
-| unter der Öffnung | Brüstung 0 … `sill_m` | entfällt (man geht hindurch) |
-| die Öffnung selbst | Glasband, eigener Eintrag mit `glass` | Lücke |
-| über der Öffnung | Sturz `sill_m + height_m` … Wandkopf | **Sturz** `height_m` … Wandkopf, Eintrag mit `lintel` |
-
-Handrechnung an der 3,00-m-Etage (Wandhöhe `max(0,6; 3,00−0,15)` = 2,85) für
-eine 1,00 × 2,10 m Tür in der Südwand eines Raums, der 4 m breit ist und
-mittig auf der Kontur eines 10 × 8-m-Hauses steht:
-
-| Wand | Stücke | `base_y` | `height` |
-|---|---|---|---|
-| Raumkante | x 6,0 … 4,5 und x 3,5 … 2,0 | −0,14 | 2,99 |
-| Raumkante | x 4,5 … 3,5 (Sturz) | 2,10 | 0,75 |
-| Konturkante | x 10,0 … 4,5 und x 3,5 … 0,0 | −0,14 | 2,99 |
-| Konturkante | x 4,5 … 3,5 (Sturz) | 2,10 | 0,75 |
-
-Also: **das Loch wird in JEDE Wand geschnitten, die die Tür durchstößt** —
-die Kontur eingeschlossen, wie bisher über die Projektion der Außenschwelle
-(§ A6/§ 4.2) — und es endet in JEDER dieser Wände auf der Türhöhe. Wo die
-Kontur ohnehin einer Raumhülle weicht („eine Wand, ein Besitzer"), weicht auch
-der Sturz mit: kein Wandstück dort, kein Sturz dort, die Raumwand trägt beides.
-Eine Tür so hoch wie die Wand bekommt keinen Sturz (0 m ist kein Primitiv).
-
-**Die Drahtform ändert sich nicht** — ein `walls`-Eintrag beschrieb schon
-immer mit `base_y` + `height` ein beliebiges Band in der Wand, genau wie der
-Fenstersturz. Additiv sind nur zwei Felder:
-
-- `walls[].lintel` (bool, fehlt = normal): dieses Stück hängt über einer
-  BEGEHBAREN Öffnung. Gezeichnet wird es wie jede Wand — beide Renderer
-  brauchten dafür keine Zeile —, aber es sperrt nichts im Grundriss. Wer aus
-  `walls` 2D-Kollider ableitet (`client3d/src/game/collide.ts`), überspringt
-  es; ohne das Feld wäre jede Tür zugemauert. Der Fenstersturz trägt das Flag
-  NICHT: unter ihm liegt die eigene Brüstung, die dort ohnehin sperrt.
-- `doorways[].height_m`: die lichte Höhe, geklemmt wie `width_m` geklemmt ist.
-  `base_y + height_m` ist die Unterkante des Sturzes — dieselbe Zahl, aus der
-  die Kontur ihren Sturz stellt, nie eine zweite Ableitung.
-
-`SCENE_RECIPE_VERSION` 1 → **2**: dieselben Daten liefern andere Wände, also
-muss jede Szenensignatur sich bewegen, sonst behalten Client und Cache die
-alte Geometrie bis jemand die Location zufällig speichert.
-
-### Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| Raumwand: 2 Stücke + Sturz, Sturz auf 2,10 / 0,75, ROTE PROBE „keine Türlücke reicht mehr an die Wandkrone" | `scripts/smoke_scene_recipe.py` **[3]** |
-| Kontur: Sturz über dem projizierten Loch, gleiche x-Spanne, Tür so hoch wie die Wand → gar kein Sturz; weichende Kontur überlässt auch den Sturz der Raumwand | ebenda **[4]** |
-| `doorways[].height_m`: geklemmt gegen die Wand (9,0 → 2,85), fehlende Autorierung → Wandhöhe, also kein Sturz | ebenda **[3d]** |
-| Sturz bekommt keinen Schürzen-Anteil (§ A16.9) | ebenda **[4a]** |
-| Blender-Volumen: 10 × 8-Haus, ein Raum, eine 1 × 2,1-m-Tür → 14 Wandprismen (12 Wand + 2 Türblatt), 126 Vertices, 95 Faces (ohne Tür 8 / 78 / 59), Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]** |
-| Kollision: das geflaggte Stück wird kein Segment, ROTE PROBE „ohne Flag wäre die Tür zugemauert" | `client3d/scripts/smoke_walk_math.mjs` |
-
-## Nachtrag 2026-08-25 (§ B1): Das TÜRBLATT — eine Tür ist von außen SICHTBAR
-
-Der Sturz (Nachtrag oben) hat die Tür zum Loch gemacht, aber ein Loch ist noch
-keine Tür: von außen blieb eine Außentür ein dunkles Rechteck Innenraum, im
-Blender-Außenbild ein Schatten in der Fassade. **User-Entscheidung (a) vom
-2026-08-25: die Öffnung bekommt ein TÜRBLATT** — dieselbe Mechanik, die das
-Fenster seit jeher hat, nur opak statt durchsichtig.
-
-**Eine Öffnung, drei Stücke — und das dritte ist die SCHEIBE IM LOCH:**
-
-| Stück | Fenster | Tür | Durchgang |
-|---|---|---|---|
-| unter der Öffnung | Brüstung 0 … `sill_m` | entfällt | entfällt |
-| **in der Öffnung** | **Glasband**, Eintrag mit `glass` | **Türblatt**, Eintrag mit `leaf` | Lücke |
-| über der Öffnung | Sturz | Sturz, Eintrag mit `lintel` | Sturz, Eintrag mit `lintel` |
-
-Ein `passage` ist eine autorierte Öffnung OHNE Tür — ein Blatt darin behauptete
-eine Tür, die niemand gezeichnet hat —, also bleibt sein Loch leer.
-
-**Die Drahtform ändert sich wieder nicht.** Additiv sind zwei Felder:
-
-- `walls[].leaf` (bool, fehlt = normal): dieses Stück IST die Tür. Es füllt die
-  LICHTE Öffnung — vom Wandfuß (`base_y` der Wand ohne Schürze, § A16.9: das
-  Blatt steht nicht im Gelände, die Schwelle liegt an seinem Fuß) bis zur
-  Türhöhe — und ist so dünn wie ein Glasband: `WALL_THICKNESS ×
-  PANE_THICKNESS_FACTOR` = 0,07 × 0,6 = **0,042 m**. Es trägt KEIN
-  `texture_kind`; seine Farbe ist `style.door_color`, opak.
-  Beide Renderer behandeln es wie eine Scheibe: gezeichnet, aber **aus dem
-  Fassaden-Culling ausgenommen** (`wallCullRef` / `tile.outlineWalls`) — die
-  Culling-Liste ist die Fassade, und eine Scheibe füllt ein Loch, statt einen
-  Raum zu schließen. Und es SPERRT NICHTS: wer 2D-Kollider aus `walls`
-  ableitet, überspringt `leaf` wie `lintel`, sonst wäre jede Tür der Welt
-  zugemauert.
-- `doorways[].type` (`"door"` | `"passage"`): welche begehbare Öffnung das ist.
-  Daraus — und nicht aus einer zweiten Öffnungssuche — entscheidet die Kontur,
-  ob ihr projiziertes Loch ein Blatt bekommt.
-- `style.door_color` (`#4a3a2e`): die eine Farbe, die beide Renderer für ein
-  `leaf`-Stück nehmen.
-
-**Wer trägt das Blatt bei Kontur/Raum-Überlappung?** Dieselbe Regel wie beim
-Sturz, keine zweite: das Blatt der Kontur wird gegen die Strecken geklemmt, die
-einer Raumhülle gewichen sind („eine Wand, ein Besitzer"). Steht die Raumwand
-auf der Konturlinie, trägt sie Wand, Sturz UND Blatt allein; steht der Raum
-zurückgesetzt im Haus, sind es zwei verschiedene Löcher in zwei verschiedenen
-Wänden — beide bekommen ihr eigenes Blatt, genau wie beide ihren eigenen Sturz
-bekommen.
-
-Handrechnung, dieselbe 1,00 × 2,10-m-Tür an der 3,00-m-Etage wie oben:
-
-| Wand | Stück | `base_y` | `height` | `thickness` |
-|---|---|---|---|---|
-| Raumkante | Blatt x 4,5 … 3,5 | 0,00 | 2,10 | 0,042 |
-| Konturkante | Blatt x 4,5 … 3,5 | 0,00 | 2,10 | 0,042 |
-
-Also **kein Schürzen-Anteil** (der Sturz hat auch keinen) und keine
-Wandstärke: `base_y` ist der Fuß der Wand OHNE die 0,14 m, die deren
-volle Stücke ins Gelände reichen.
-
-`SCENE_RECIPE_VERSION` 2 → **3**: gleiche Daten, andere Wände.
-
-### Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| Raumwand: Blatt 0,00 / 2,10 / 0,042, ohne `texture_kind`, ROTE PROBE „das Blatt trägt keine Schürze"; ein `passage` bekommt keines | `scripts/smoke_scene_recipe.py` **[3]** |
-| Kontur: Blatt über dem projizierten Loch, gleiche x-Spanne wie der Sturz; weichende Kontur überlässt auch das Blatt der Raumwand | ebenda **[4]** |
-| `style.door_color` liegt im Stil-Vokabular | ebenda **[9]** |
-| Blender-Volumen: 14 Wandprismen (2 davon Türblatt), 126 Vertices, 95 Faces, vier Materialien, Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]/[5]** |
-| Kollision: das Blatt wird kein Segment, ROTE PROBE „ein sperrendes Blatt mauert die Tür zu" | `client3d/scripts/smoke_walk_math.mjs` |
-
-## Nachtrag 2026-08-25 (§ A6/B1): TREPPEN — man geht in den ersten Stock
-
-Bis hierher gab es genau EINE senkrechte Verbindung: den Fahrstuhl. Der Satz
-„Treppen gibt es nicht" ist gestrichen. **Eine Treppe ist kein neuer
-Subsystem-Zweig, sondern dieselbe Mechanik wie der Fahrstuhl** — der Server
-rechnet sie in `extras`-Kästen aus, die Renderer stellen sie hin.
-
-### Die Drahtform (Autorenformat)
-
-```json
-"stairs": [ { "at": [2.0, -2.0], "from_level": 0, "dir_deg": 90 } ]
-```
-
-- `at` = der FUSSPUNKT, wo die erste Stufe beginnt, in lokalen Metern wie
-  `map3d.elevator` und jede andere Plankoordinate.
-- `from_level` = die untere Etage (ein Kellerlauf ist `-1`). **Ein Lauf endet
-  IMMER auf `from_level + 1`.** Wer vom Erdgeschoss in den zweiten Stock will,
-  autoriert ZWEI Läufe — das ist die Kette, und fehlt ihr ein Glied, bleibt für
-  diesen Sprung der Fahrstuhl.
-- `dir_deg` ∈ {0, 90, 180, 270} = Aufstiegsrichtung. Die Vektoren stehen fest,
-  niemand rechnet sie zurück: `{0: (0,+1), 90: (+1,0), 180: (0,−1),
-  270: (−1,0)}` in (x, z).
-- Maximal **8** Läufe je Location; der Sanitizer kappt die Liste und wirft
-  jeden Eintrag weg, dem `at`, `from_level` oder ein gültiges `dir_deg` fehlt
-  (nicht repariert — eine Treppe, deren Richtung niemand aufgeschrieben hat,
-  zeigt sonst irgendwohin).
-
-### Das Rezept (Server-Konstanten, echte Meter)
-
-| Konstante | Wert | Was |
-|---|---|---|
-| `STAIR_WIDTH_M` | 1,20 | Stufenbreite QUER zur Steigrichtung |
-| `STAIR_TREAD_M` | 0,26 | Auftritt je Stufe ENTLANG der Steigrichtung |
-| `STAIR_RISE_M` | 0,20 | NOMINELLE Steigung — nur der Teiler |
-| `STAIR_PAD_M` | 0,90 | Kante des Trigger-Pads (Marker, wie `ELEVATOR_PAD_M`) |
-| `STAIR_PAD_THICKNESS` | 0,05 | Dicke des Pads |
-| `STAIR_PAD_GAP_M` | 0,05 | Luft zwischen Pad-Kante und erster/letzter Stufe |
-
-```
-base   = storey_floor_y(from_level, storey)
-target = storey_floor_y(from_level + 1, storey)
-climb  = target − base
-steps  = max(2, round(climb / STAIR_RISE_M))
-rise   = climb / steps          # teilt den Etagenabstand GLEICHMÄSSIG
-run    = steps · STAIR_TREAD_M
-```
-
-Die nominelle Steigung ist nur der Teiler: gerechnet wird mit `rise`, damit die
-letzte Stufe EXAKT auf dem oberen Boden landet statt eine Handbreit darunter.
-**Stufe *i* ist ein MASSIVER Kasten** vom unteren Boden bis zu ihrem eigenen
-Auftritt — eine Treppe, auf der man überall steht, kein Satz schwebender
-Platten. *(Seit v13 ERSETZT: Auftritt + Setzstufe + zwei Wangen, siehe den
-Nachtrag 2026-09-09 unten. Die Formel bleibt hier als Herkunft der Zahlen
-stehen; `steps`/`rise`/`run` und die Pads gelten unverändert.)*
-
-```
-center = at + dir·(i+0.5)·TREAD ,  y = base + (i+1)·rise/2
-size   = TREAD entlang der Richtung, (i+1)·rise hoch, WIDTH quer
-```
-
-Die **Pad-OBERKANTE ist der Etagenboden + `PROP_CLEARANCE`** (0,01) — dasselbe
-Gesetz wie beim `elevator_pad`, also `center_y = Boden + 0,01 − THICKNESS/2`.
-(Bis Treppen v2 lag die Oberkante EXAKT auf dem Boden-Datum; das flimmerte
-gegen den Boden, den das Pad markiert — siehe den Nachtrag „Treppen v2".)
-
-```
-foot = at − dir·(STAIR_PAD_M/2 + STAIR_PAD_GAP_M) , level = from_level
-head = at + dir·(run + STAIR_PAD_M/2 + STAIR_PAD_GAP_M) , level = from_level+1
-```
-
-### Handrechnung EG → OG (storey 3,00, `at` = (2, −2), `dir_deg` 90 → +X)
-
-| Größe | Rechnung | Wert |
-|---|---|---|
-| `base` | `storey_floor_y(0, 3)` — Etage 0 IST das Terrain | 0,00 |
-| `target` | `storey_floor_y(1, 3)` = 1·3 + 0,08 | **3,08** |
-| `climb` | 3,08 − 0,00 | 3,08 |
-| `steps` | `round(3,08 / 0,20)` = `round(15,4)` | **15** |
-| `rise` | 3,08 / 15 | **0,205333…** |
-| `run` | 15 · 0,26 | **3,90** |
-
-| Primitiv | `center` | `size` | `level` |
-|---|---|---|---|
-| `stair_step` i = 0 | [2,13 / 0,102667 / −2] | [0,26 / 0,205333 / 1,20] | 0 |
-| `stair_step` i = 14 | [5,77 / 1,54 / −2] | [0,26 / 3,08 / 1,20] | 0 |
-| `stair_pad` `foot` | [1,50 / −0,015 / −2] | [0,90 / 0,05 / 0,90] | 0 |
-| `stair_pad` `head` | [6,40 / 3,065 / −2] | [0,90 / 0,05 / 0,90] | 1 |
-
-Bei `dir_deg` 0/180 läuft der Auftritt in z: `size` tauscht x ↔ z und das
-Zentrum wandert entlang z — sonst ändert sich keine Zahl.
-
-### Handrechnung Keller → EG (`from_level` −1)
-
-| Größe | Rechnung | Wert |
-|---|---|---|
-| `base` | `storey_floor_y(−1, 3)` = −3 + 0,08 | **−2,92** |
-| `target` | `storey_floor_y(0, 3)` | 0,00 |
-| `climb` / `steps` / `rise` / `run` | 2,92 · `round(14,6)` = 15 | 2,92 / 15 / **0,194667** / 3,90 |
-
-Stufe 0 sitzt bei y = −2,822667, Stufe 14 ist 2,92 hoch (Mitte −1,46); das
-Fuß-Pad liegt bei −2,935 auf `level` −1, das Kopf-Pad bei −0,015 auf `level` 0.
-Der Keller ist damit KEIN Sonderfall, sondern dieselbe Formel.
-
-### Payload — additiv, zwei neue `extras`-Kinds
-
-- `{kind:"stair_step", center, size, level: from_level, stair: idx}`
-- `{kind:"stair_pad", center, size, level, stair: idx, end:"foot"|"head"}`
-
-`stair` ist der Index des Laufs in `map3d.stairs` — zwei Läufe einer Kette
-bleiben unterscheidbar. Dazu `style.stair_color` = **`#8a7a66`**: eine Treppe
-ist Mauerwerk, kein Maschinenteil, und muss sich vom Grau des Fahrstuhls
-unterscheiden.
-
-**Routing-Regel:** Verbindet eine Treppenkette zwei Etagen, gewinnt sie; der
-Fahrstuhl bleibt Fallback.
-
-`SCENE_RECIPE_VERSION` 3 → **4**: dieselben Daten liefern andere `extras`,
-also muss jede Szenensignatur sich bewegen.
-
-### Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| EG → OG: 15 Stufen + 2 Pads, Stufe 0 und Stufe 14 nach center/size, beide Pads nach center/size/level/end | `scripts/smoke_scene_recipe.py` **[5s]** |
-| `dir_deg` 0: `size` x ↔ z getauscht, Zentrum und Pads wandern in z | ebenda **[5s]** |
-| Keller → EG: 15 Stufen, erste bei −2,822667, letzte 2,92 hoch, Pads −2,935 / −0,015 auf `level` −1 / 0 | ebenda **[5s]** |
-| Kette aus zwei Läufen behält ihre `stair`-Indizes | ebenda **[5s]** |
-| ROTE PROBE: ohne `map3d.stairs` entsteht kein einziges `stair_*`-Primitiv (die Fahrstuhl-Zählung misst also keine Treppe) | ebenda **[5s]** |
-
-## Nachtrag 2026-08-27 (§ B1/B2): Tür-Props + Slots (v5)
-
-Bis hierher war eine Tür ein **Blatt**: eine dünne dunkle Platte im Loch
-(Nachtrag 2026-08-25). Sie bleibt der Normalfall. Neu ist, dass eine Öffnung
-statt der Platte ein **Prop** bekommen kann — ein modelliertes Türblatt samt
-Zarge aus der Prop-Bibliothek. Das Prop ist ein ganz normaler `models[]`-
-Eintrag; neu sind nur sein Mess-Modus (`fit`) und sein Anker (die Angel).
-
-**Es sperrt weiterhin NICHTS.** Ein Tür-Prop ist ein Modell, kein Kollider —
-die Kollision liest `models[]` nicht und tut es auch weiter nicht.
-
-### Auflösung: welches Prop steht in der Öffnung (dreiwertig)
-
-`scene_recipe.door_prop_id(opening, default)` ist die EINE Regel, und alle drei
-Verbraucher (Wand-Splitter, Schwellenliste, Modell-Spec) fragen sie:
-
-1. `openings[].prop_id` gesetzt → **dieses** Prop,
-2. sonst `openings[].door_prop == "none"` → **kein** Prop (das ist das
-   ausdrückliche „hier keine Tür", das den Location-Default aussperrt),
-3. sonst `location.default_door_prop_id` (neues Feld, leer = keiner),
-4. sonst offener Durchgang mit Blatt wie bisher.
-
-Nur `type: "door"` bekommt eins. Ein Fenster hat Glas, ein `passage` ist ein
-Loch OHNE Tür — beide nehmen auch den Default nicht an.
-
-**Und ob überhaupt ein Blatt entsteht, ist eine zweite Frage** —
-`scene_recipe.door_has_leaf(opening)`, ebenfalls von Raumwand UND Kontur
-gefragt (Nachtrag 2026-08-29). `door_prop: "none"` heißt seit dem, was das
-Wort sagt: in diesem Loch hängt **nichts**, kein Prop und auch kein Blatt.
-Vorher fiel „keine" auf das flache Blatt zurück, und das zeichnet jeder
-Renderer als volle braune Platte — also als Tür (Nutzer-Befund). Das flache
-Blatt bleibt erreichbar, weil es das ist, was eine Tür ohne jede Wahl
-bekommt: „Location default" an einem Ort, der keine Standard-Tür nennt.
-
-### Felder
-
-| Feld | Wo | Bedeutung |
-|---|---|---|
-| `prop_id` | `rooms[].openings[]` (gespeichert) | das Prop dieser Öffnung |
-| `door_prop: "none"` | ebenda | ausdrücklich kein Prop UND kein Blatt; sperrt den Default aus, das Loch bleibt leer (`door_has_leaf` → `false`, seit 2026-08-29) |
-| `hinge: "left"\|"right"` | ebenda (fehlt = `left`) | an welchem Ende die Angel sitzt, gelesen gegen `along` der Schwelle — für den Autor: links oder rechts, von innen aus diesem Raum auf die Tür blickend |
-| `default_door_prop_id` | Location | Standard-Tür des Ortes |
-| `door_prop: true` | `walls[]` (nur zusammen mit `leaf`) | dieses Blatt füllt ein Prop → **Renderer zeichnen das Stück NICHT** |
-| `measure: "fit"` | `models[]` | in die Öffnung eingepasst statt real-size skaliert |
-| `size_m: [w, h]` | `models[]` (nur `fit`) | lichte Breite/Höhe der Öffnung in Weltmetern |
-| `door: {opening, hinge, swing}` | `models[]` | `opening` = Index in `doorways[]`, `swing` = ±1 |
-
-`walls[]` behält den Blatt-Eintrag mit Absicht: der Blender-Außenrender
-(`exterior_render.py`) baut seine Fassade aus `walls` und verlöre sonst das
-Prisma der Tür. Nur die beiden Renderer überspringen ihn. Ein `fit`-Spec trägt
-kein `max_m` — die Öffnung ist das Maß.
-
-### `place()` mit `measure: "fit"` (§ B2, die EINE Ausnahme)
-
-Nicht-uniform, und der einzige Spec, der nicht auf seiner Mitte hängt:
-
-- x → `size_m[0]`, y → `size_m[1]`, **z mit demselben Faktor wie x** (das Blatt
-  behält sein Tiefenverhältnis zur Breite),
-- die lokale **−x-Kante** und die Unterseite gehen in den Gruppenursprung, z
-  bleibt mittig (die Dicke sitzt auf der Wandebene),
-- die Skalierung liegt INNERHALB der Yaw-Gruppe — außerhalb würde sie das
-  Blatt bei jedem Yaw scheren, der kein Vielfaches von 90° ist.
-
-Der Ursprung der zurückgegebenen Gruppe IST damit die Angel: „Tür öffnen" ist
-eine Drehung dieser Gruppe um sich selbst und bleibt reiner Sicht-Zustand je
-App (Öffnungswinkel, Nähe, wann überhaupt).
-
-### Handrechnung Anker + Yaw
-
-Die Schwelle liefert `at_world`, `along = (ux, uz)`, `width_m`, `height_m`,
-`base_y` — nichts davon wird nachgerechnet. Dann gilt
-
-```
-anchor = at_world ∓ along · width_m/2     (− bei hinge left, + bei right)
-yaw    = (atan2(−uz, ux)·180/π + (hinge == "right" ? 180 : 0)) mod 360
-bottom_y = base_y,   size_m = [width_m, height_m]
-```
-
-`yaw` dreht das lokale +x auf die Richtung, in die das Blatt VON der Angel weg
-läuft: three's `Ry(+θ)` bildet lokal +x auf `(cos θ, −sin θ)` ab (§ A1.1), also
-löst `θ = atan2(−uz, ux)` genau `+x → along`; bei rechter Angel läuft es gegen
-`along`, daher +180°.
-
-Für eine Öffnung bei `at_world` = (x₀, z₀), `width_m` = 1,0:
-
-| `along` | `hinge` | `anchor` | `yaw` | `swing` |
-|---|---|---|---|---|
-| (1, 0) | left | (x₀ − 0,5 / z₀) | atan2(0, 1) = **0°** | +1 |
-| (1, 0) | right | (x₀ + 0,5 / z₀) | **180°** | −1 |
-| (0, 1) | left | (x₀ / z₀ − 0,5) | atan2(−1, 0) = −90° → **270°** | +1 |
-| (0, 1) | right | (x₀ / z₀ + 0,5) | 270 + 180 = **90°** | −1 |
-| (−1, 0) | left | (x₀ + 0,5 / z₀) | atan2(0, −1) = **180°** | +1 |
-
-Die letzte Zeile ist der Fall der Smoke-Fixtur (Südtür von Raum „a": `at_world`
-(−2, −1), `along` (−1, 0), Breite 1,0 → `anchor` (−1,5 / −1), `yaw` 180).
-
-### Woher `swing` kommt
-
-`swing` ist das Vorzeichen, mit dem eine POSITIVE Drehung um y das Blatt nach
-AUSSEN öffnet — „außen" ist bei RAUMTÜREN `_door_outward` = `(uz, −ux)`, die
-Normale weg von dem Raum, aus dessen Wand das Loch geschnitten wurde
-(`rooms[0]`). Hüllentüren tragen ihre Normale selbst — siehe den Nachtrag
-2026-09-09 unten.
-
-Dreht man die gesetzte Gruppe um φ, wandert ein Weltversatz (vx, vz) mit
-
-```
-d/dφ (vx·cos φ + vz·sin φ, −vx·sin φ + vz·cos φ) |φ=0 = (vz, −vx)
-```
-
-Das freie Ende des Blattes liegt bei `v = +along` (linke Angel) bzw.
-`v = −along` (rechte). Also ist die Ableitung genau `(uz, −ux)` = außen für
-links → **+1**, und ihr Gegenteil für rechts → **−1**.
-
-`SCENE_RECIPE_VERSION` 4 → **5**: dieselben Daten liefern andere `models`/
-`walls`, also muss jede Szenensignatur sich bewegen. In der Signatur stehen
-zusätzlich `default_door_prop_id` (ein Feld der LOCATION, das keine
-Raumsignatur abdeckt) und die Mesh-Signatur jedes aufgelösten Tür-Props (die
-URL bleibt beim Neu-Erzeugen gleich).
-
-**Nachtrag 2026-09-09 (§ A13c)** — er gehört NICHT zur v5-Runde oben; am
-`swing` selbst ändert sich für keine bestehende Tür etwas (die Rezept-Version
-steht seither trotzdem auf 14, wegen `corridors[]` und des
-`no_building_entrance`-Satzes, § B1):
-„außen" ist seither das `outward_normal` DES EINTRAGS, wo er eines mitbringt,
-sonst weiter `_door_outward`. Gerechnet wird das Vorzeichen aus dem Skalarprodukt
-`(uz·nx − ux·nz)` (bei rechter Angel gespiegelt) statt aus der Angel allein.
-Für eine Raumtür ist `n` per Konstruktion `(uz, −ux)`, das Produkt also +1 —
-die Regel oben und jede bestehende Zahl bleiben unverändert. Nur eine
-**Hüllentür** kann davon abweichen: ihr `n` ist die Außennormale der
-Konturkante, und auf einer andersherum gewickelten Kontur öffnet dasselbe
-Blatt bei umgekehrtem Vorzeichen nach außen.
-
-### Slots: welche Fläche eines Props sich füllen lässt
-
-Ein **Slot** ist ein **Material des Modells**. Wer ein Prop modelliert (oder
-prompten lässt), benennt die füllbare Fläche — den Bilderrahmen, die
-Fensterscheibe, das Schild — und genau dieser Materialname ist der Slot. Es
-gibt keine zweite Auszeichnung, keine Zusatzdatei.
-
-Die Regel steht in **einer** Funktion, `props.detect_slots(material_names)`,
-und nirgends sonst. Für jeden Materialnamen `m`, klein geschrieben und
-getrimmt:
-
-| `m` | Slot |
-|---|---|
-| beginnt mit `slot_` | Name = `m[5:]`; Art `material`, wenn der Name in {`glass`, `mirror`, `matte`} steht, sonst `image` |
-| ∈ {`picture`, `screen`, `sign`} (ganzer Name) | `{name: m, kind: "image"}` |
-| == `glass` | `{name: "glass", kind: "material"}` |
-| sonst | kein Slot |
-
-Groß/Kleinschreibung ist egal, Namen werden **klein** gespeichert, **doppelte
-fallen weg** (das erste Auftreten gewinnt), die **Reihenfolge ist die des
-Modells**. Beispiel von Hand: `["slot_glass", "Slot_Poster", "glass", "SIGN"]`
-→ `[{glass, material}, {poster, image}, {sign, image}]` — das zweite `glass`
-ist dasselbe wie das erste und fällt weg.
-
-Nur **Raum-Props** (`app/core/props.py`) haben Slots. Map-Props
-(`world_props`) bekommen keine.
-
-Ein Prop aus einem **Content-Pack** bringt seine `slots` im mitkopierten
-`sidecar.json` mit (`content_io.export_prop_to_zip` / der Prop-Import kopieren
-das Verzeichnis unverändert). Erkannt wird nur, wenn ein **Mesh landet**
-(Upload oder Generierung), nie beim Import — wer ein Prop zum Teilen baut,
-benennt die füllbaren
-Materialien also schon im Mesh nach dieser Konvention oder pflegt die Liste vor
-dem Export im Prop-Editor.
-
-**Materialnamen müssen die Blender-Veredelung überleben**, sonst zeigt die
-Liste auf Flächen, die die gespeicherte Datei nicht mehr hat. Stand heute tut
-sie das: Neukodierung (`retexture.py`), Reduktion (`lod.py`) und
-Normalisierung (`normalize.py`) fassen `bpy.data.materials` nicht an, der
-glTF-Import/Export von Blender reicht den Namen durch. Die **eine** Ausnahme
-ist der Vertex-Farben-Bake (`bake_vc.py`): er leert die Materialliste des
-Objekts und legt `baked_vc_mat_<i>` an. Deshalb liest die Erkennung erst
-**nach** den Veredelungsschritten desselben Ingests. Betroffen sind ohnehin nur
-Vertex-Farben-Meshes, die gar keine benannten Flächen mitbringen.
-
-Gelesen wird auf **beiden** Landewegen eines Meshes — es gibt keinen
-gemeinsamen Trichter:
-
-| Weg | Auslöser | Reihenfolge |
-|---|---|---|
-| `props._store_bbox` | Upload, Galerie-Auswahl, gelöschtes Mesh, gelöschte Variante | bake → retexture → LOD → **Slots** → Messung |
-| `props._generate` | die img2mesh-Kette (der Normalfall) | `select` → Sidecar-Schreibung mit `bbox` → **Slots** |
-
-`_generate` wählt und misst inline und kommt **nicht** durch `_store_bbox` —
-ein Nachbearbeitungsschritt muss in beide Blöcke (Befund 2026-08-27: die
-Erkennung stand nur in `_store_bbox` und feuerte für ein GENERIERTES Prop nie).
-Die Verkleinerungswege (`_shrink`, `_reduce_to_low`, `_store_lod_stages`)
-brauchen keinen eigenen Aufruf: sie wählen ausschließlich in die Stufe `low`,
-gelesen werden die Slots aber am `full`-Mesh (`model_path(prop_id)`).
-
-Im Datensatz (`props._prop_record`, immer vorhanden):
-
-| Feld | Bedeutung |
-|---|---|
-| `slots: [{name, kind}]` | die füllbaren Flächen; `[]` = keine. Auch auf dem schlanken Record — die Szene gleicht dagegen ab |
-| `slots_auto: true\|false` | nur im vollen Record: `true` = aus den Materialnamen gelesen (der Editor zeigt „detected"), `false` = von Hand gepflegt |
-
-Solange `slots_auto` **nicht** `false` ist, wird die Liste bei **jedem**
-landenden Mesh **neu erkannt** — ein neu generiertes Modell bringt seine
-eigenen Flächen mit, statt die des Vorgängers hinter dem Abzeichen „detected"
-stehen zu lassen; ein **leeres** Ergebnis zählt genauso (das neue Modell nennt
-dann wirklich keine füllbare Fläche). Ein Ergebnis, das dem Gespeicherten
-gleicht, schreibt nichts, und ein unlesbares Mesh ändert nichts — nur ein
-POSITIVER Befund.
-
-Sobald jemand sie **von Hand setzt**, ist Schluss: ein `POST /world/props/{id}`
-mit `slots` (oder der Batch-Save) speichert die Liste und setzt `slots_auto`
-auf `false` — ab da fasst kein weiteres Modell sie an, auch eine **geleerte**
-Liste nicht (alle Slots löschen ist auch eine Entscheidung). Eine kaputte Liste
-ist ein 400, kein stilles Verwerfen.
-
-### Slot-WERTE: was in der Fläche steht
-
-Was in einer füllbaren Fläche steht, gehört zum **Prop**, nicht zur
-Platzierung: die Werte kommen aus den Prop-Defaults (`area_defaults`) und aus
-den `slot_values` der Bild-Variante — die Regel steht im Nachtrag
-[„Bild-Props (v5)"](#nachtrag-2026-08-27--b2-bild-props-v5--das-bild-reitet-auf-der-variante)
-am Ende dieses Dokuments. Im Payload steht das Ergebnis unverändert am
-Spec als `slots` (`models[]`, Raum-Prop wie Tür-Prop); fehlt der Schlüssel,
-rendert das Prop, wie es modelliert wurde.
-
-### Der Tausch im Renderer (`applySlotMaterials`)
-
-`packages/scene-render/src/slotMaterials.ts` ist die EINE Routine, die einen
-Slot auf ein Mesh schreibt; drei Aufrufer rufen sie (3D-Client
-`sceneRecipe.ts`, Admin-Grundriss-Vorschau `FloorPlanPreview.tsx`,
-Prop-Betrachter des Props-Reiters `Model3DViewer.tsx`). Sie durchläuft die
-gesetzte Gruppe und vergleicht den SLOT-NAMEN jedes Materials mit den
-Schlüsseln aus `slots`.
-
-**Der Schlüssel ist der Slot-Name, nicht der Materialname** (Ruling R11): der
-Slot-Name ist der Materialname ohne sein `slot_`-Präfix — genau so, wie
-`props.detect_slots` ihn beim Lesen des Modells abgestreift hat. Das Material
-`slot_picture_1` ist also der Slot `picture_1`; die Routine streift beim
-Vergleich **ein** führendes `slot_` ab (getrimmt und klein auf beiden Seiten,
-und hinter dem Präfix noch einmal getrimmt, wie auf dem Server). Ein Material
-ohne Präfix (`picture`, `glass`) heißt weiterhin wie sein Slot. Der rohe Name
-`slot_picture_1` als Schlüssel trifft nichts — den schickt der Server nie.
-
-**Die Regel, die sie korrekt macht: das Material wird JE PLATZIERUNG geklont,
-bevor es angefasst wird.** Der GLB-Lader hält eine `THREE.Group` je URL und
-gibt sie allen Platzierungen; `Object3D.clone()` kopiert die Knoten, TEILT aber
-die Material-Instanzen — ohne Klon hinge das Poster der Diele auch in der
-Küche. (Dieselbe Regel wie bei `applyDepthCut`.) Der Aufruf steht deshalb VOR
-Schnitt/Clip/Ghost: die klonen ihrerseits, was sie durchlaufen, und übernehmen
-das Bild damit von selbst.
-
-- `image` → `loadTexture(url)` (der Lader ist Parameter — Ladepolitik ist
-  App-Sache), dann `colorSpace = SRGBColorSpace`, `flipY = false` (glTF-UVs)
-  auf `map`, und `color = 0xffffff`, damit ein grauer Grundton das Bild nicht
-  herunter multipliziert.
-- `preset "glass"` → `GLASS_PRESET` (`opacity` 0,3 · `roughness` 0,06 ·
-  `metalness` 0 · `transmission` 0,85 nur, wenn das Material das Feld hat) plus
-  `transparent` und `DoubleSide` — eine einseitige Scheibe verschwindet, sobald
-  man um die Tür herumgeht.
-- `preset "mirror"` → ein **planarer Spiegel auf den eigenen Faces der
-  Scheibe** (`packages/scene-render/src/mirrorSurface.ts`). Die Ebene wird
-  EINMAL aus den Faces genau dieser Materialgruppe gemessen
-  (flächengewichteter Schwerpunkt, Normale aus der Summe der Face-Vektoren,
-  `planeOfFaces`); das Material wird durch ein `ShaderMaterial` mit
-  Spiegelkamera, schiefer Nah-Ebene und projizierter Textur ersetzt (die Mathe
-  von three.js `Reflector.js`, plus die Clipping-Chunks, damit der
-  Tiefenschnitt weiter greift), und der Reflexions-Durchgang hängt an
-  `mesh.onBeforeRender`. Das Material ist `DoubleSide`, und die Normale wird je
-  Frame zur Kamera gedreht: **beide Seiten einer Scheibe spiegeln.** Der
-  Payload trägt nur den Wert — die Ebene ist eine Eigenschaft des Meshes vor
-  dem Renderer, und in EINER Routine gemessen kann sie zwischen den Renderern
-  nicht auseinanderlaufen.
-
-  Während des Durchgangs versteckt sich **nur die Scheibe selbst**
-  (`material.visible = false` für die Dauer des verschachtelten Renders;
-  `projectObject` überspringt ein Material, das nicht sichtbar ist, einzeln wie
-  als Gruppe eines Material-Arrays). Der Rahmen um das Glas und die Kommode,
-  auf der der Spiegel steht, stehen damit in ihrem eigenen Spiegelbild — das
-  ganze Mesh zu verstecken hatte sie herausgeschnitten.
-
-  **Gespiegelt wird nur eine kohärente Scheibe**: |Σ Face-Vektoren| /
-  Σ |Face-Vektoren| ≥ 0,9 (`FACE_COHERENCE_MIN`). Die Schwelle ist gemessen,
-  nicht geraten — die Scheiben eines echten Wandspiegel-Props liegen bei
-  1,0000, die 134 Splitter einer Tür-Glasfläche bei 0,7384 (und 87° neben dem
-  eigenen Sidecar). Darunter — Splitter-Rauschen, oder beide Häute einer
-  Scheibe in EINER Materialgruppe — bleibt das Mesh, wie es modelliert wurde,
-  und `attachMirror` sagt es EINMAL auf der Konsole, mit Slot-Namen und Grund
-  (Schweigen wäre die schlechteste Antwort: der Autor hat „Mirror" gewählt und
-  sähe eine gewöhnliche Scheibe).
-
-  **Kosten sind App-Sache**, nicht Paket-Sache: der fünfte Parameter
-  `mirror?: MirrorOptions` (`textureSize` px · `maxPerFrame` · `maxDistanceM`
-  m) ist die Sichtpolitik des Aufrufers — der 3D-Client setzt 512 / 2 / 12 m
-  (`sceneRecipe.ts`), die Grundriss-Vorschau 512 / 1 / 12 m
-  (`FloorPlanPreview.tsx`), der Prop-Betrachter nimmt die Vorgaben
-  (512 / unbegrenzt / unbegrenzt). `maxPerFrame` ist ein **App-weites** Limit,
-  keines je Scheibe: das Paket hält je Wert EINEN `MirrorBudget`
-  (`sharedMirrorBudget`), den sich alle so angehängten Spiegel teilen. Gezählt
-  wird gegen `renderer.info.render.frame`, und jede gewährte Reflexion ist ein
-  verschachtelter Render, der genau diesen Zähler hochzählt — ein Budget je
-  Scheibe würde deshalb gar nichts begrenzen.
-
-  Und die Scheiben **wechseln sich ab**: three sortiert die Render-Liste nach
-  `material.id`, die Hooks feuern also in jedem Frame in derselben Reihenfolge,
-  und ein bloßes „die ersten N gewinnen" hätte dieselben N für immer bedient —
-  die Scheibe N+1 wäre NIE gerendert worden, und ein nie gerendertes
-  Render-Target ist schwarz, nicht „die letzte Textur". Der Budget-Zähler führt
-  deshalb die Scheiben mit, die im letzten Frame gefragt haben, und bedient je
-  Frame ein um `maxPerFrame` weitergerücktes Fenster daraus. Drei Scheiben bei
-  Limit 2 werden A,B — dann C,A — dann B,C bedient: **eine Scheibe über Budget
-  zeigt ein ein bis zwei Frames altes Spiegelbild, keine bleibt schwarz.**
-
-  Die **Distanz-Grenze gilt erst ab dem zweiten Durchgang**: eine Scheibe, die
-  noch nie gerendert hat, hat kein altes Bild zu behalten — ihr Render-Target
-  ist schwarz. Der erste Durchgang läuft deshalb unabhängig von `maxDistanceM`
-  (Budget und Rekursionsschutz gelten weiter), ab dem zweiten entscheidet die
-  Distanz. Rekursionsschutz: während ein Spiegel-Durchgang die Szene rendert,
-  startet kein zweiter — ein Spiegel im Spiegel zeigt das letzte Bild. Ein
-  Mesh, das im Frustum-Culling fällt, erreicht den Hook nie und kostet nichts.
-
-  **Erwartetes Rauschen**: ein Tiefenschnitt-Klon eines Spiegel-Materials lässt
-  three einmal „UniformsUtils: Textures of render targets cannot be cloned"
-  loggen — `UniformsUtils.clone` kopiert die Textur eines Render-Targets nicht.
-  Harmlos, weil `renderMirror` `tDiffuse` und die Textur-Matrix bei JEDEM Draw
-  auf die Material-Instanz schreibt, die tatsächlich gezeichnet wird.
-
-  Gewählt wird das Preset in der Oberfläche unter „Pane defaults" (Areas-Reiter
-  des Props) und im Bild-Varianten-Dialog; beide bieten „Glass" und „Mirror" an
-  (`PRESET_LABELS`, `frontend/src/tabs/props/propTypes.ts`).
-
-Zurück kommt die Liste der Klone. Sie gehört dem Aufrufer: jeder Klon besitzt
-die Textur, die für ihn geladen wurde, und `disposeSlotMaterials` gibt beides
-frei — bei einer Spiegel-Scheibe zusätzlich das Render-Target und den
-Mesh-Hook (Client: beim Stufenwechsel und im `unmountScene`; Vorschau: vor
-jedem Neuaufbau).
-
-`three` ist Parameter, kein Import — Paketregel.
-
-### Grenzen (bewusst)
-
-- Ein Prop-Ausweis, der ins Leere zeigt (oder ein Prop ohne Mesh), behält
-  seinen Spec mit leerem `variants` — dieselbe Regel wie bei hängenden
-  Raum-Platzierungen. Er bekommt KEINE `placeholder_dims`: eine Ersatzkiste
-  wird auf ihren Anker zentriert, und dieser Anker ist eine Kante.
-- Modell-Varianten (E2.3) hat ein Tür-Prop nicht — es liefert die primäre
-  Stufenkarte.
-
-### Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| Öffnung mit `prop_id` → ein `models[]`-Eintrag `role:"prop"`, `measure:"fit"`, `size_m [1,0 / 2,1]`, Anker (−1,5 / −1), `yaw` 180, `bottom_y` 0, `door {0, left, +1}` | `scripts/smoke_scene_recipe.py` **[3p]** |
-| `hinge: "right"` → Anker (−2,5 / −1), `yaw` 0, `swing` −1 | ebenda **[3p]** |
-| zweite Achse: `along` (0, 1) → Anker (0 / −3,3), `yaw` 270, `size_m [1,6 / 2,1]` | ebenda **[3p]** |
-| Blatt bleibt in `walls[]` (Außenrender) und trägt `door_prop` — Raumwand UND Kontur | ebenda **[3p]** |
-| Default greift, `prop_id` gewinnt, `door_prop:"none"` leert das Loch (kein Prop, kein Blatt) — und eine Tür ohne Wahl behält das flache Blatt | ebenda **[3p]** |
-| ROTE PROBE: Fenster und `passage` bekommen nie ein Tür-Prop, auch nicht per Default | ebenda **[3p]** |
-| Prop-Ausweis ins Leere: Spec bleibt, `variants` leer, keine `placeholder_dims` | ebenda **[3p]** |
-| Signatur bewegt sich für Location-Default UND neue Mesh-Signatur | ebenda **[3p]** |
-| `place()` mit `fit`: 0,5×2×0,1-Kiste auf `size_m [1,0 / 2,1]` → 1,0 × 2,1 × 0,2, Angelkante AUF dem Anker, bei `yaw` 270 läuft die Breite in +z | `client3d/scripts/smoke_place_rotation.mjs` **[7]** |
-| Materialnamen aus dem GLB (`materials[].name`, Header + JSON-Chunk) | `scripts/smoke_props_slots.py` **[1]** |
-| `detect_slots`: Präfix, feste Liste, Groß/Klein, Dedup, Reihenfolge — plus rote Probe („glasses", „slots_x", „picture_frame") | ebenda **[2]** |
-| Erkennung läuft beim Modell-Eintreffen NACH bake/retexture/LOD; Record trägt `slots` + `slots_auto true` | ebenda **[3]** |
-| …und auf der GENERATIONS-Kette, die `_store_bbox` überspringt (img2mesh-Dienst gefälscht) | ebenda **[3b]** |
-| Ein neues Mesh ERSETZT eine Auto-Liste — auch mit leerem Ergebnis | ebenda **[3c]** |
-| Patch-Pfad weist kaputte Listen ab und schreibt dabei nichts; gespeicherte Liste ist klein und dedupliziert | ebenda **[4]** |
-| Von Hand gepflegte (auch geleerte) Liste überlebt das nächste Modell | ebenda **[5]** |
-| Eine Platzierung/Öffnung mit `slot_values` verliert das Feld beim Speichern, und am Spec entsteht kein `slots` daraus | `scripts/smoke_scene_recipe.py` **[3p]** |
-| `applySlotMaterials`: das benannte Material bekommt eine `map`, das andere bleibt DASSELBE Objekt, und zwei Platzierungen derselben Cache-Gruppe haben VERSCHIEDENE Material-Instanzen | `scripts/smoke_slot_materials.mjs` **[1]/[2]** |
-| `applySlotMaterials` streift das Präfix ab: Materialien `slot_picture_1`/`slot_glass_1` werden von den Schlüsseln `picture_1`/`glass_1` gefüllt — plus rote Proben (roher Name als Schlüssel trifft nichts, `slotpicture_1` ohne Unterstrich ist kein Treffer, nur EIN Präfix fällt) | ebenda **[8]** |
-| Glas-Preset setzt `transparent` + die Konstanten, `transmission` nur wo das Feld existiert | ebenda **[3]** |
-| Preset `mirror`: die Ebene aus den Faces — Rechteck, Wicklung, gekippt, Bereiche samt Klemmung, degeneriert, NaN-Wache, Flächengewichtung gegen den einfachen Mittelwert, Kohärenzschwelle von beiden Seiten, Budget-Folge mit der Zwei-Spiegel-Lesart (optional ein lokales Prop gegen sein Sidecar, 1 cm / 2°) | `scripts/smoke_mirror_plane.mjs` |
-| Preset `mirror`: Spiegel-`ShaderMaterial` auf dem Klon, Nachbar-Material unberührt, gemessen wird die EIGENE Gruppe (`mirrorPlaneOf`), `DoubleSide`, EINE Warnung je Anhängen, erneutes Anhängen gibt das Erste frei, Hook setzen und zurückgeben, geteiltes Budget | `scripts/smoke_slot_materials.mjs` **[9]–[13]** |
-| `SLOT_PRESETS` == `MATERIAL_PRESETS`, `mirror` wird angenommen, Unbekanntes abgewiesen, kein Preset auf einer `picture`-Fläche | `scripts/smoke_props_slots.py` **[7]** |
-
-## Nachtrag 2026-08-27 (§ B2): Bild-Props (v5) — das Bild reitet auf der VARIANTE
+### Bild-Props (v5) — das Bild reitet auf der VARIANTE (§ B2)
 
 Ein Rahmen-Prop (Bilderrahmen, Tür mit Scheibe, Bildschirm, Schild) trägt seit
 `spec-picture-props.md` **Flächen** im Mesh: die Faces einer erkannten Fläche `k`
@@ -8531,7 +7500,7 @@ UVs 0…1. **Welches Bild** darin hängt, ist eine **Variante** des Props (D2) �
 keine Eigenschaft der Platzierung (D3: der Platzierungs-Picker ist entfernt) und
 kein eigenes Prop.
 
-### Woher `slots` am Spec kommt
+#### Woher `slots` am Spec kommt
 
 ```
 spec["slots"] = { **prop.area_defaults, **variante.slot_values }
@@ -8580,7 +7549,7 @@ aus `area_defaults` **und** aus den `slot_values` **jeder** Variante
 (`_prune_to_areas`). Der `label` bleibt: er ist der Name der Version, keine
 Beschreibung ihrer Werte. Am Spec steht danach kein toter Schlüssel mehr.
 
-### Felder am Varianten-Eintrag (`GET /world/props/{id}/variants`)
+#### Felder am Varianten-Eintrag (`GET /world/props/{id}/variants`)
 
 | Feld | Bedeutung |
 |---|---|
@@ -8588,7 +7557,7 @@ Beschreibung ihrer Werte. Am Spec steht danach kein toter Schlüssel mehr.
 | `label` | Anzeigename; hergeleitet aus den Bild-Dateinamen (Basisname ohne Endung, `", "`-verbunden), bei reinem Glas aus dem Preset |
 | `stale` | die **kopierte** Rahmen-Geometrie ist älter als das Mesh, das das Prop jetzt zeigt |
 
-### Die Kopie und `stale` (R4)
+#### Die Kopie und `stale` (R4)
 
 Eine Bild-Variante **kopiert** die primäre GLB unter ihren eigenen Stem
 (`ModelGallery.new_path` + `write_sidecar` + `select`), samt `<model>.glb.areas.json`
@@ -8615,7 +7584,7 @@ zu vergleichen gibt. `POST …/variants/{i}/recopy`
 kopiert erneut (neue Galerie-Datei, die alte bleibt als Historie stehen) und
 **behält die `slot_values`**.
 
-### Signatur
+#### Signatur
 
 `props._prop_record.model_signature` nimmt `area_defaults` und die
 `slot_values` **aller** Varianten mit auf. Ein Bildwechsel ändert weder Mesh
@@ -8624,7 +7593,7 @@ alte Poster an der Wand. Über `model_sig` an der Platzierung wandert das in die
 Raum- und damit in die Szenen-Signatur. Props, die nichts über Bilder sagen,
 behalten ihren Schlüssel Zeichen für Zeichen.
 
-### Handbeispiel
+#### Handbeispiel
 
 Rahmen-Prop mit den Flächen `picture_1` (Art `picture`) und `glass_1` (Art
 `glass`), `area_defaults = {"glass_1": {"preset": "glass"}}`, vier aktive
@@ -8638,7 +7607,7 @@ Varianten, davon Variante 1 mit
 | `{"prop_id": "frame", "variant": 5}` (5 mod 4 = 1) | wie Variante 1 — ein Index außerhalb wickelt, er 404t nie |
 | Tür-Prop ohne `area_defaults` | kein `slots`-Schlüssel |
 
-### API (admin-only, `app/routes/prop_variants.py`)
+#### API (admin-only, `app/routes/prop_variants.py`)
 
 | Route | Körper | Antwort |
 |---|---|---|
@@ -8656,7 +7625,7 @@ Preset an einer Bild-Fläche (und umgekehrt), erreichten Varianten-Cap (R5) und
 die primäre Variante bei `recopy`; 409, solange die Variante generiert — der
 Store weist das ein zweites Mal ab, ein Rennen kommt also nicht daran vorbei.
 
-### Die Beweise (§ B5a)
+#### Die Beweise (§ B5a)
 
 | Was | Wo |
 |---|---|
@@ -8671,7 +7640,7 @@ Store weist das ein zweites Mal ab, ein Rennen kommt also nicht daran vorbei.
 | Verschwundene Fläche: `area_defaults` UND `slot_values` jeder Variante gehen mit, `label` bleibt, am Spec kein toter Schlüssel | ebenda **[11]** |
 | Primäre Variante ohne aktives full-Mesh → nichts ist `stale` | ebenda **[11]** |
 
-### Das Türblatt als KNOTEN — `door.leaf_bbox` (spec-picture-props.md § 6, D7)
+#### Das Türblatt als KNOTEN — `door.leaf_bbox` (spec-picture-props.md § 6, D7)
 
 Ein generiertes Türbild zeigt immer Zarge **und** Blatt; bis hierher schwenkte
 der Client die ganze Gruppe. Jetzt schneidet Blender das Blatt geometrisch aus
@@ -8738,7 +7707,7 @@ zurückgesetzte Platte → Knoten `frame` 48 / `leaf` 12 Dreiecke, `leaf_bbox`
 wie oben, `delete` fügt zu einem Knoten zurück); die Heuristik ohne Blender:
 `scripts/smoke_picture_areas.py` Fixture F.
 
-## Nachtrag 2026-08-28 (§ B2): Bild-Props v2 — Flächen, Türblatt und Orientierung gehören zur MODELLDATEI
+### Bild-Props v2 — Flächen, Türblatt und Orientierung gehören zur MODELLDATEI (§ B2)
 
 **Anlass** (`development_instructions/befunde-bild-props-2026-08-28.md`, Wurzel 1,
 gemessen an einem echten Tür-Prop): jede Variante ist eine **eigene**
@@ -8748,7 +7717,7 @@ lagen **prop-weit** im Sidecar, der Areas-Tab und der Landing-Hook kannten nur
 die Primärvariante, und das Rezept las `leaf_bbox`/`area_defaults` vom Prop-Record.
 Entscheid **E1** (`spec-bild-props-v2.md`): **Flächen gehören zur Modelldatei.**
 
-### Datenmodell
+#### Datenmodell
 
 | Wo | Felder | Bemerkung |
 |---|---|---|
@@ -8767,7 +7736,7 @@ der Befunde. Ein Fix auf der aktiven Full-Datei wird auf die aktive Low-Datei
 kopiert; ein Fix, der auf eine erbende Low-Datei zielt, landet auf ihrer
 Full-Datei.
 
-### Rezept
+#### Rezept
 
 ```
 entry = variant_tiers[_variant_index(placement, len(model_variants))]   # die aufgelöste Variante
@@ -8793,7 +7762,7 @@ Kopien in Raum a (x −4…0, z −4…−1), `at [1, 1]` auf Variante 1 → Ank
 Variante 0 → `fix_euler 0`, **kein** `slots`, **kein** `leaf_bbox`. Tür-Spec
 mit `variant_tiers[0].rotation {y: 270}` → `fix_euler {0, 270, 0}`.
 
-### Routen
+#### Routen
 
 `GET/POST/PATCH/DELETE /world/props/{id}/areas[/{area_id}]?variant=<i>`
 (Query; ohne = Primärvariante; unbekannter Index 404). `GET` antwortet
@@ -8819,7 +7788,7 @@ einem Galerie-Klick unberührt (R15, jetzt je Variante), ein Split/Rename/
 Delete/Re-Copy auf Variante i stutzt beide Hälften **von i**. Beweise:
 `scripts/smoke_props_areas.py` Teil 3 [15]–[17], `scripts/smoke_prop_areas_migrate.py`.
 
-### Türblatt = Durchstich-Prisma (E2), Restzahl, `adopt` (E6) — 2026-08-28
+#### Türblatt = Durchstich-Prisma (E2), Restzahl, `adopt` (E6)
 
 **Anlass** (Befunde Wurzel 2, gemessen an `door-wood-f4b1d4`): der v1-Schnitt nahm
 nur die sichtbare **Haut** — 432 von 614 Blatt-Dreiecken in einer 1,8-cm-Schicht,
@@ -8862,7 +7831,7 @@ nicht 96. Beweise: `scripts/smoke_picture_areas.py` Fixture G (332 Prisma-Faces 
 [H] (Landing 332/168, `through` 10 → 332, Restzahl 2, G' 842 + Restzahl 8),
 `scripts/smoke_picture_areas_blender.py` [I] (adopt, Namenskollision) + [H] (R16).
 
-## Nachtrag 2026-08-27 (§ B2): Oberflächen-Raster (v6)
+### Oberflächen-Raster (v6) (§ B2)
 
 **Anlass** (User am Ort „Klippen"): „Die Laufhöhe des Avatars ist die Höhe des
 Landes darunter und nicht die Oberfläche des Dioramas (also mit Steinen, Höhen
@@ -8877,7 +7846,7 @@ schickt das Raster **inline am Platzierungs-Spec**, und **eine** Sample-Formel
 macht daraus eine Standhöhe — in beiden Renderern UND im Schritt-Tor des
 Servers. Der Renderer misst weiterhin nichts, er liest.
 
-### Die Entscheide (Kurzfassung)
+#### Die Entscheide (Kurzfassung)
 
 | Nr. | Frage | Entscheid |
 |---|---|---|
@@ -8894,7 +7863,7 @@ Servers. Der Renderer misst weiterhin nichts, er liest.
 | R2 | Ruling | Kopffreiheit 1,2 m statt Figurhöhe 1,7 m — eine niedrige Höhle bleibt begehbar, statt die Figur aufs Höhlendach zu heben |
 | R3 | Ruling | das höchste antwortende Raster gewinnt (Kiste auf Fels); keine `plateCeiling`-Kappung auf Rastern |
 
-### Das Backen — was im Raster steht
+#### Das Backen — was im Raster steht
 
 `app/blender/scripts/heightgrid.py`, gerufen über `runner.run("heightgrid", …)`
 und wie jede Blender-Stufe über einen LOD-Slot gegattet.
@@ -8941,7 +7910,7 @@ und wie jede Blender-Stufe über einen LOD-Slot gegattet.
 * **`values`** sind Zentimeter-Ints über `box_min.y`, zeilenweise
   `values[j*cols + i]`, `null` = keine Fläche.
 
-### Die Datei — `<modell>.surface.json`
+#### Die Datei — `<modell>.surface.json`
 
 `app/core/model_surface.py`. Sie liegt neben ihrem Modell
 (`raum_1.glb` → `raum_1.glb.surface.json`), matcht das Modell-Muster der
@@ -8979,7 +7948,7 @@ Zeile „baked 81×81 @ 0,25 m" verspricht eine Länge auf dem Boden, nicht in
 Modell-Einheiten. Ein Modell ohne jede nach oben weisende Fläche bekommt eine Datei
 voller `null` — sonst würde ewig neu gebacken.
 
-### Am Spec (§ B2)
+#### Am Spec (§ B2)
 
 | Feld | Wo | Bedeutung |
 |---|---|---|
@@ -9002,7 +7971,7 @@ verschiedene Raster zeigen, und `role:id:room` allein ließe die zweite die erst
 die Clients zum Neuladen. Die Raum-Metas gehen dafür OHNE ihre Raster in den
 Hash — die Zahlen stecken schon in den Kurz-Hashes.
 
-### Die eine Formel — `surfaceHeightAt` / `surface_height_at`
+#### Die eine Formel — `surfaceHeightAt` / `surface_height_at`
 
 `packages/scene-render/src/surface.ts` und der zeilengleiche Python-Zwilling in
 `app/core/model_surface.py`. Sie ist die exakte **Umkehr von `place()`** (§ B2)
@@ -9051,7 +8020,7 @@ nominellen Knoten gelesen. Ist die Box kein ganzes Vielfaches von `step`,
 extrapoliert der letzte Ring damit nach außen über bis zu einen Schritt Boden,
 den das Modell nicht bedeckt.
 
-### Vier Sprossen
+#### Vier Sprossen
 
 `tileWalkY` (`client3d/src/scene/tiles.ts`) hat seit v6 eine Sprosse mehr, und
 sie steht ganz oben:
@@ -9091,7 +8060,7 @@ Platzhalter für die Messung, die es nicht gab; eine Kiste über dem deklarierte
 Boden erzwingt die Reihenfolge ohnehin. `walk_y` bleibt das nominelle Bodenmaß
 für Schwellen (`threshold_base_y`), `plateCeiling` und die Raum-Deklaration.
 
-### Der Server steht auf demselben Raster
+#### Der Server steht auf demselben Raster
 
 `model_surface.stand_height_at(location, x, z)` =
 `max(relief.ground_at(x, z), was die Szene am Punkt darüber legt)` —
@@ -9142,7 +8111,7 @@ Geschosses über dem Läufer, gegen die niemand gemessen werden darf.
 `forget_surfaces` hängt an jedem Backen: ein Raum vergisst seine Location, ein
 Prop steht in vielen und vergisst deshalb alles.
 
-### Wann gebacken wird, und wer es auslöst
+#### Wann gebacken wird, und wer es auslöst
 
 1. **Beim Landen.** Beim Prop beide Mess-Pfade (`_store_bbox` und der
    Inline-Pfad der Generierung), beim Raum `select_model` — der Trichter, durch
@@ -9199,7 +8168,7 @@ als die Kategorie mit ihrer Datalist.
 Raster kostet je Raum ein paar hundert Kilobyte plus JSON-Parse — bei jedem
 Tastendruck im Lageplan-Editor.
 
-### Fehlerfälle
+#### Fehlerfälle
 
 | Fall | Verhalten |
 |---|---|
@@ -9211,7 +8180,7 @@ Tastendruck im Lageplan-Editor.
 | Client vor dem Server-Neustart (v5) | kein `surface`-Feld → die Sprosse antwortet nie |
 | Raster unter Terrain | `standY = max` → Terrain (Entscheid 5) |
 
-### Bewusst NICHT v1
+#### Bewusst NICHT v1
 
 * **Gebäude-Modelle und Karten-Props** (`world_props`) bekommen kein Raster
   (Entscheid 1) — Dioramen und Raum-Props.
@@ -9222,7 +8191,7 @@ Tastendruck im Lageplan-Editor.
   getragen (sie fragt nur Etage 0).
 * **Ohne endliches Datum** rechnet der Server nur mit Gelände.
 
-### Die Beweise (§ B5a)
+#### Die Beweise (§ B5a)
 
 | Was | Wo |
 |---|---|
@@ -9239,14 +8208,16 @@ Tastendruck im Lageplan-Editor.
 | Verify-Zeile `surface_scale` je Spec mit Raster: die gemessene Skala des platzierten Objekts gegen `max_m / extent_snapped` — die einzige Stelle, an der eine Loader-Abweichung Blender ↔ three sichtbar würde („Prüfe am Verbraucher") | `client3d/src/scene/sceneRecipe.ts`, `?debug3d=1` |
 | Verify-Zeile `surface_box` daneben: die EXAKTE Box der Fix-Gruppe (outer → yawG → fitG → fix, in Modell-Einheiten vor Yaw und Skala) gegen `box_max − box_min` und `box_min[1]` der Datei, als größte Abweichung der vier Zahlen. `surface_scale` vergleicht nur die größte Seite — ein Mesh, dessen Box in den anderen Achsen oder in der Unterkante abweicht, kommt dort grün durch, während jede Raster-Lesung um genau diese Differenz danebenliegt | ebenda |
 
-## Nachtrag 2026-08-28 (§ B): Marker sprechen PLATZ-TYPEN (v7)
+## C4. Plätze und Marker
+
+### Marker sprechen PLATZ-TYPEN (v7) (§ B)
 
 **Was sich ändert.** Ein Marker sagte bisher „hier spielt Clip `sit`"; jetzt
 sagt er „hier ist ein Sitzplatz". Das Vokabular ist die endliche Liste der
 **Platz-Typen** des Posen-Katalogs (`pose_catalog.get_groups()` — Start-Satz
 dieses Nachtrags: `seat` 0,314 / `bed` 0,631 / `floor` 0,051 / `counter` 0 /
 `stand` 0 als `root_drop`; **das Vokabular wurde am 2026-09-08 abgelöst**,
-siehe den Nachtrag „Ein Platz-Typ ist eine KÖRPERFORM" unten — die Liste
+siehe „Ein Platz-Typ ist eine KÖRPERFORM“ (§ C4) — die Liste
 bleibt hier stehen, weil die Herleitung `root_offset =
 groups[group].root_drop × 1,70` unten daran hängt und weiter gilt); welche
 Pose dort gespielt wird, entscheidet der Charakter, nicht der Marker
@@ -9343,192 +8314,7 @@ für `animation` — nirgends.
 height_m, facing}`. Das LLM-Einrichten (Template `tasks/furnish_needs.md`) schlägt je Möbel einen
 Marker mit `group` aus dieser Liste vor, keinen Clip-Kind mehr.
 
-## Nachtrag 2026-08-29 (§ A6/B1): TREPPEN v2 — der Lauf ist DATEN, der Boden bekommt ein Loch
-
-Der Nachtrag „TREPPEN — man geht in den ersten Stock" (v1, 2026-08-25) hat zwei
-Dinge ausdrücklich vertagt: die geführte Fahrt ENTLANG des Laufs und das Loch
-in der Decke, durch die der Lauf stößt. Beide werden hier nachgeholt, dazu ein
-Z-Fighting am Startviereck. **Freies WASD-Steigen bleibt vertagt** (eigener
-Strang, braucht eine Server-Höhenleiter für Rampen).
-
-### Befund
-
-- **Die Figur steigt IN der Treppe.** Die Fahrt setzte EIN Ziel — die Landung
-  am Kopf bzw. am Fuß — und überließ die Höhe der generischen Blende der
-  Lauf-Maschine. Auf dem Beispiel unten (Lauf 3,90 m, Etage 3,08 m) ist y nach
-  einer halben Sekunde zu 86 % da, XZ erst zu 35 %: aufwärts schwebt die Figur
-  gut anderthalb Meter über der Stufe, abwärts hängt sie darunter.
-- **Das Startviereck flimmert.** `stair_pad` und `elevator_pad` hatten ihre
-  OBERKANTE exakt auf dem Etagenboden — koplanar mit genau der Fläche, die sie
-  markieren. Jedes andere Boden-Primitiv hält seit „Ein Boden" die
-  `PROP_CLEARANCE`-Haarlinie von 0,01 m.
-- **Kein Loch.** Eine Platte war ein Ring, und `extras` sind bewusst nicht
-  etagengefiltert: die Treppe steht also in der gezeigten Etage und die
-  gezeigte Platte deckelt sie.
-- **Der Payload sagte nichts über den Lauf.** Nur Kästen. Wer Lauf, Steigung,
-  Stufenzahl oder Grundfläche brauchte, hat sie nachgerechnet — die
-  Admin-Plan-Vorschau tat genau das, mit einer zweiten Kopie der
-  Server-Formel.
-
-### 1. Pad-Abstand: OBERKANTE = Boden + `PROP_CLEARANCE`
-
-`stair_pad` (Fuß und Kopf) und `elevator_pad` liegen jetzt eine
-`PROP_CLEARANCE` (0,01 m) über ihrem Etagenboden:
-
-```
-center_y = storey_floor_y(level, storey) + PROP_CLEARANCE − THICKNESS/2
-```
-
-Damit wandert das Aufzugs-Pad auf Etage 0 von −0,025 auf **−0,015**, das
-Treppen-Fuß-Pad ebenso, das Kopf-Pad von 3,055 auf **3,065**. Kein Renderer
-braucht dafür einen `polygonOffset`.
-
-**Der Halte-Punkt ist damit die Pad-Oberkante, nichts mehr dazu.** Ein Client,
-der aus einem Pad einen Stopp macht, hat bisher `Oberkante + 0,01` gerechnet,
-weil die Oberkante der nackte Boden war; diese eigene Haarlinie **entfällt für
-BEIDE Pad-Arten** (`elevator_pad` wie `stair_pad`) — sonst steht die Figur
-2 cm über der Etage.
-
-### 2. `stairs[]` — der Lauf als Daten
-
-Neuer Wurzelblock neben `extras`, EIN Eintrag je autoriertem Lauf, in der
-Reihenfolge von `map3d.stairs`. Die `stair_step`/`stair_pad`-Kästen bleiben —
-sie sind das MESH; dieser Block ist die GEOMETRIE, aus der sie gebaut sind.
-Der Server rechnet einmal und speist beides (`scene_recipe._stair_flights`).
-
-| Feld | Was |
-|---|---|
-| `id` | Index des Laufs in `map3d.stairs` — dieselbe Zahl wie `stair` an den Kästen |
-| `from_level` / `to_level` | untere und obere Etage; `to_level` ist immer `from_level + 1` |
-| `at` | `[x, z]` — der FUSSPUNKT, wie autoriert, ebenen-lokal wie die Extras |
-| `dir_deg` | Aufstiegsrichtung ∈ {0, 90, 180, 270} |
-| `run_m` | Grundriss-Länge des Laufs = `steps · tread_m` |
-| `rise_m` | Steighöhe des GANZEN Laufs (der Etagenabstand). **Pro Stufe: `rise_m / steps`** |
-| `steps` | Stufenzahl |
-| `tread_m` / `width_m` | `STAIR_TREAD_M` 0,26 / `STAIR_WIDTH_M` 1,20, mitgeführt statt gespiegelt |
-| `foot` / `head` | `[x, y, z]` — die beiden STAND-Punkte: Pad-Mitte in XZ, Pad-OBERKANTE als y |
-| `footprint` | `[[x,z] × 4]` — das Rechteck `width_m × run_m` ab `at` entlang `dir` |
-
-**Umlaufsinn: die beiden Rechtecke laufen GEGENLÄUFIG, das ist Absicht.**
-`footprint` läuft GEGEN den Uhrzeigersinn in Kartensicht (x Ost, z Süd) — es
-ist Punkt für Punkt die Outline, die die Admin-Plan-Vorschau bisher selbst
-gerechnet hat, und sie ist ein SYMBOL. Der Loch-Ring in `plates[].holes`
-läuft IM Uhrzeigersinn, dem Umlaufsinn jeder gespeicherten Outline. Wer ein
-Loch braucht, nimmt also `plates[].holes` — `footprint` ist kein Ersatz dafür
-(es fehlt ihm das Kopf-Pad, und sein Umlaufsinn ist der andere).
-
-`foot`/`head` sind damit genau die Zahlen, die ein Client bisher aus den beiden
-Pads zusammengesucht und um 0,01 angehoben hat — **dieses eigene +0,01 im
-Client entfällt**, die Anhebung steckt jetzt in der Pad-Oberkante selbst.
-
-**Die Fahrt läuft AUF dem Lauf.** Der Client führt die Figur nicht mehr auf ein
-einzelnes Ziel zu, sondern liest die Höhe an ihrer aktuellen XZ aus dem Lauf:
-Projektion auf die Achse (`at`, `dir_deg`), `t = clamp(along / run_m, 0, 1)`,
-`y = foot.y + t · (head.y − foot.y)`. Das ist bewusst eine **Rampe**, keine
-Stufenfunktion: die Figur läuft mit einem Lauf-Clip, Treppenstufen-Ruckeln ist
-nicht gewünscht. Quer außerhalb der halben `width_m` gilt der Lauf nicht.
-
-### 3. `plates[].holes` — der Lauf stößt durch die Decke
-
-Jede Platte trägt jetzt `holes`: eine Liste von Ringen, die aus ihr
-AUSGESCHNITTEN sind. Das Feld ist immer da und meist `[]`.
-
-Ein Lauf schneidet sein Loch in die Etage, auf der er ANKOMMT
-(`from_level + 1`) — in die Etagenplatte dieser Etage UND in jede Raumplatte
-darauf, deren Outline die MITTE des Lochs enthält. Das Loch ist die
-Grundfläche VEREINIGT mit dem Kopf-Pad, als EIN achsparalleles Rechteck
-entlang `dir`:
-
-```
-Länge  = run_m + STAIR_PAD_GAP_M + STAIR_PAD_M      (ab `at`)
-Breite = max(STAIR_WIDTH_M, STAIR_PAD_M)
-```
-
-— damit fehlt der Boden auch noch dort, wo die Figur von der letzten Stufe auf
-die Landung tritt. Die Ecken laufen im UHRZEIGERSINN in Kartensicht, wie jede
-gespeicherte Outline.
-
-**Jeder Ring ist auf die Kontur SEINER Platte geclippt** (Task 5, Befund der
-Task-2-Review): ein Ring, der über die Outline hinausragt, wird von
-`THREE.Shape` nicht auf die Überlappung reduziert, sondern lässt die Platte sich
-selbst schneiden und ÜBERLAUFEN — gemessen an einer 8×6-Platte mit einem Ring
-2 m über der Ostkante: Deckfläche 82 m² statt 46. Der Server schneidet deshalb
-Ring gegen Outline (Sutherland–Hodgman, der Ring als konvexes Clip-Polygon, die
-Outline als Subjekt; `scene_recipe.clip_ring_to_outline`), und was in `holes`
-steht, liegt **immer innerhalb der `outline`**. Bleibt nichts übrig (< 3 Ecken
-oder Fläche < 1e-6 m² — eine Outline, die den Ring nur BERÜHRT), trägt die
-Platte kein Loch.
-
-**Ringe sind KANONISCH geschrieben**, im Payload wie nach dem Clip: gerundet
-wie jede Outline, im Uhrzeigersinn gewickelt und beginnend an der KLEINSTEN
-Ecke (kleinstes x, dann kleinstes z). Das (`along`, `across`)-Gerüst eines
-Laufs dreht sich mit `dir_deg`, und Sutherland–Hodgman gibt sein Ergebnis in
-der Reihenfolge des SUBJEKTS zurück — ohne diese Regel stünde dasselbe
-Rechteck je nach Richtung des Laufs und je nach Startpunkt der Plattenkontur
-anders da. Mit ihr gilt: ein Ring, der ganz innen liegt, kommt als DASSELBE
-Polygon zurück, Punkt für Punkt, in allen vier Richtungen.
-
-Welche Läufe eine Platte HÖRT, entscheidet weiterhin die Mitte (Etagenplatte:
-alle ihrer Etage; Raumplatte: nur die, deren Mitte in ihr liegt); WIE VIEL vom
-Ring sie trägt, entscheidet der Clip. Ein Lauf, der in eine Wand stößt, bleibt
-ein Autorenfehler — der Composer repariert die Treppe nicht, er hält nur die
-Platte heil.
-
-Kommt ein Lauf auf Etage 0 an (Kellerlauf), passiert nichts: dort gibt es seit
-„Ein Boden" E5a gar keine Platte.
-
-**Für beide Renderer heißt das zweierlei.** Wer die Platte trianguliert, hängt
-die Ringe als `Shape.holes` an (`buildPlate`, gleiches `sy`-Vorzeichen wie der
-Außenring). Wer BEGEHBARKEIT aus `outline` ableitet, muss sie ABZIEHEN:
-`pointInPolygon(outline) && !holes.some(pointInPolygon)` — sonst läuft die
-Figur über den offenen Schacht.
-
-### 4. Fahrstuhl: zwei Etagen fahren direkt
-
-Kennt eine Location genau zwei Etagen, hat der Fahrstuhl genau EINE Option.
-Der Picker klappt dafür nicht mehr auf — der Tastendruck fährt. Der HUD-Chip
-sagt dann „Press F to go up" bzw. „…to go down" statt einer Auswahl. Reine
-Client-Sache; am Payload ändert das nichts.
-
-### Handrechnung EG → OG (storey 3,00, `at` = (2, −2), `dir_deg` 90 → +X)
-
-Aus v1 unverändert: `base` 0,00 · `target` 3,08 · `steps` 15 · `run` 3,90.
-
-| Größe | Rechnung | Wert |
-|---|---|---|
-| `rise_m` | `target − base` | **3,08** (pro Stufe 3,08/15 = 0,205333…) |
-| `foot` | `at − dir·(0,45 + 0,05)`, y = 0,00 + 0,01 | **[1,50 / 0,01 / −2]** |
-| `head` | `at + dir·(3,90 + 0,50)`, y = 3,08 + 0,01 | **[6,40 / 3,09 / −2]** |
-| `footprint` | Breite 1,20 ab `at`, Querachse (0, +1) | **[[2 / −1,4], [5,9 / −1,4], [5,9 / −2,6], [2 / −2,6]]** |
-| Loch-Rechteck | Länge 3,90 + 0,05 + 0,90 = 4,85, Breite 1,20 | **[[2 / −2,6], [6,85 / −2,6], [6,85 / −1,4], [2 / −1,4]]** |
-| Loch-Mitte | `at + dir·(4,85/2)` | (4,425 / −2) → Etage **1** |
-
-Bei `dir_deg` 0 (Querachse (−1, 0)): `footprint` = [[1,4 / −2], [1,4 / 1,9],
-[2,6 / 1,9], [2,6 / −2]], `foot` = [2 / 0,01 / −2,5], `head` = [2 / 3,09 / 2,4].
-Kellerlauf (`from_level` −1): `rise_m` 2,92, `foot` y −2,91, `head` y 0,01.
-
-`SCENE_RECIPE_VERSION` 8 → **9**: dieselben Daten liefern einen neuen
-Wurzelblock, Löcher in den Platten und verschobene Pads — jede Szenensignatur
-muss sich bewegen, sonst behält jeder Client seine alte Szene.
-
-### Die Beweise (§ B5a)
-
-| Was | Wo |
-|---|---|
-| `stairs[]` auf dem Vertragsbeispiel: id/Etagen/`at`/`dir`, `steps` 15, `run_m` 3,90, `rise_m` 3,08, `tread_m`/`width_m`, `foot` [1,5 / 0,01 / −2], `head` [6,4 / 3,09 / −2], `footprint`; dazu `dir_deg` 0 und der Kellerlauf | `scripts/smoke_scene_recipe.py` **[5t]** |
-| `foot`/`head` = Pad-Mitte + halbe Pad-Dicke — Block und Kästen dürfen nicht auseinanderlaufen | ebenda **[5t]** |
-| Pad-Abstand: Aufzugs-Pad −0,015, Treppen-Pads −0,015 / 3,065 / −2,935, ROTE PROBEN auf die alten +0,055 und −0,025 | ebenda **[5]/[5s]** |
-| Plattenloch: Etagenplatte 1 und der Raum, in dem die Mitte liegt, tragen das Rechteck; ein Nachbarraum derselben Etage nicht; eine Platte ohne Lauf trägt `[]`; ROTE PROBE: ein Kellerlauf schneidet nirgends | ebenda **[2]/[2s]** |
-| Zwei Läufe auf DIESELBE Etage: die Etagenplatte trägt beide Ringe in Autorenreihenfolge, der Raum nur den, dessen Mitte in ihm liegt | ebenda **[2s]** |
-| Clipping: der Ring x 2…6,85 kommt an der ±5-Kontur UND im Raum „hall" (x 1…5) als x 2…5 an; ein Raum, in dessen Ecke er ragt, trägt nur die Überlappung; ein Ring, der ganz innen liegt, bleibt unverändert; ROTE PROBE: keine Platte trägt das rohe Rechteck | ebenda **[2s]** |
-| Kanonische Ringe: ein ganz innen liegender Lauf bleibt unverändert — nach Osten (`dir` 90, Ring x −2…2,85) UND nach Norden (`dir` 0, Ring `[[1,4,−2],[2,6,−2],[2,6,2,85],[1,4,2,85]]` ab der kleinsten Ecke) | ebenda **[2s]** |
-| `clip_ring_to_outline` von Hand: Identität (auch bei umgekehrt gewickelter Outline), Ost-Schnitt, Ecken-Schnitt, keine Überlappung → `[]`, blosse BERÜHRUNG → `[]`, Ergebnis im Uhrzeigersinn, Fläche 3,6 m² (beides am RÜCKGABEWERT gemessen) | ebenda **[2c]** |
-| `SCENE_RECIPE_VERSION` == 12 (die Konstante gehört dem ganzen Payload: nach dem Marker-`diorama` dieser Runde haben sie die Platz-Typ-Umbenennung und die Kontakt-Höhe des `root_offset` vom 2026-09-08 weitergedreht) | ebenda **[7i]** |
-| Begehbarkeit: Punkt IM Loch → keine Platte, Punkt daneben → Plattenoberkante | **noch nicht bewiesen — folgt mit Task 2** (`client3d/scripts/smoke_walk_math.mjs`) |
-| `stairY`-Rampe: t=0 → `foot.y`, Mitte, t=1 → `head.y`, vor dem Fuß geklemmt, quer daneben `null` | **noch nicht bewiesen — folgt mit Task 3** (ebenda) |
-| Fahrstuhl: `{levels:[0,1], current:0}` → einzige Option 1, `{[0,1], 1}` → 0, `{[0,1,2], 1}` → `null` | **noch nicht bewiesen — folgt mit Task 4** (ebenda) |
-
-## Nachtrag 2026-09-08 (§ A4/§ B): Ein Platz-Typ ist eine KÖRPERFORM (v11)
+### Ein Platz-Typ ist eine KÖRPERFORM (v11) (§ A4/§ B)
 
 **Was sich ändert.** Das Vokabular der Platz-Typen (`pose_catalog.get_groups()`,
 Nachtrag 2026-08-28) benannte Möbelsorten; es benennt jetzt Körperformen:
@@ -9637,7 +8423,7 @@ Gruppen.
 Glyph-Farben der Clients hängen daran; ohne Bump behielte jeder Client seine
 gecachte Szene und zeichnete graue Glyphen für Gruppen, die es nicht mehr gibt.
 
-### Die Beweise (§ B5a)
+#### Die Beweise (§ B5a)
 
 | Was | Wo |
 |---|---|
@@ -9651,133 +8437,1621 @@ gecachte Szene und zeichnete graue Glyphen für Gruppen, die es nicht mehr gibt.
 | Eine unbekannte Gruppe erzeugt eine MELDUNG (beide Sanitizer, das Szenen-Rezept einmal je Komposition, die Möblierung mit Eintrag im Bestätigungsdialog) — und wird trotzdem nicht korrigiert | ebenda **[8]** |
 | `code_version` == 12 | `scripts/smoke_scene_recipe.py` **[7i]** |
 
-## Nachtrag 2026-09-09 (§ A6/B1): TEXTUREN für Treppe und Fahrstuhl, die Treppe ist eine TREPPE (v13)
+## C5. Wasser und Uferrelief
 
-### Befund
+### Ein Wasser-Gesetz — W1 (Server) (§ A16.3 / § A16.7 / § A16.8 / § B1)
 
-Treppe und Fahrstuhl waren die einzigen Bauteile, die nur eine Farbe kannten
-(`style.stair_color`, `style.elevator_*_color`), während jede Wand und jede
-Platte ein `texture_kind` aus der Surface-Bibliothek trägt. Und ein Lauf war
-ein KEIL: jede Stufe ein massiver Kasten vom unteren Boden bis zum Auftritt —
-von unten und von der Seite ein Klotz, keine Treppe.
+*Etappe W1 aus `development_instructions/plan-fliessgewaesser.md`. Dieser
+Nachtrag **ersetzt** die Wasser-Aussagen von § A16.3 (die drei Zahlen, die
+Zonen-Wasser-Stufe), die `waters`-Liste in § A16.7, den Satz „die Fläche ist
+eben" in § A16.8 und die `zone_water_basis`-Erwähnung in der
+`height_sig`-Zeile (§ A1.3). W2 (Client) und W3 (Admin-UI) folgen; bis W2
+zeichnet der Client weiter EINE flache Platte — dafür fährt
+`water_level_effective` unverändert mit.*
 
-### 1. Drahtform (Autorenformat)
+**DAS GESETZ, in vier Sätzen.** Wasser ist eine **ART**, kein Name und kein
+Raum: `meta.water` am Terrain-Typ macht JEDE Art zur Wasser-Art, und die Art
+trägt die Vorgaben `water_depth_m` (0,2…20, Default 2,0) und `shore_ramp_m`
+(0…20, Default 3,0). Wasser ist eine **FLÄCHE auf der Karte**: eine gemalte
+Fläche überschreibt die beiden Zahlen, setzt ihren Spiegel und wählt ihr Bett.
+Der Spiegel ist ein **PROFIL**, keine Zahl: ohne Fließrichtung eine Konstante
+(der See von bisher), mit einer eine entlang der Fließachse geneigte Ebene.
+Und ein **RAUM hat kein Wasser mehr** — die fünfte Backstufe ist gelöscht.
 
-```json
-"stairs":        [ { "at": [2.0, -2.0], "from_level": 0, "dir_deg": 90,
-                     "texture_kind": "wooden_floor" } ],
-"elevator_kind": "dark_stone"
-```
+#### 1. Die Art trägt die Vorgaben, die Fläche überschreibt sie
 
-- `stairs[i].texture_kind?` — die Art JEDES Kastens dieses Laufs (Auftritte,
-  Setzstufen, Wangen, beide Pads). Pro Lauf, keine Kaskade, kein globales
-  Treppen-Kind: der Lauf ist wie ein Raum eine eigene Sache mit eigenem
-  Streifen im Editor (`PlanStairStrip`).
-- `elevator_kind?` — die Art der OPAKEN Fahrstuhlteile: Säulen, Dach, Pads,
-  Kabine. Glas bleibt Glas, die Kabinen-Deckkraft bleibt (`PlanElevatorStrip`).
-- Beide leer ⇒ exakt das bisherige Bild aus den `style`-Farben. Der Sanitizer
-  (`world_ops`) nimmt beide als String ≤ 60 Zeichen mit.
-
-### 2. Payload — `texture_kind` und `rotation` an `extras[]`
-
-- Jeder opake `extras`-Kasten darf `texture_kind` tragen; die Renderer kacheln
-  ihn EXAKT wie eine Wand — Auflösung über die Wand-Kette (kein
-  Boden-Fallback), Klon je Kasten, Kachelmaß in die UVs
-  (`applyWorldScaleWallUVs`, geteiltes Paket, jetzt auch von `buildExtra`
-  gerufen: `buildExtra(THREE, extra, material, tileM)`). Glas trägt nie eines.
-- `rotation?: [rx, ry, rz]` in GRAD, Euler XYZ (threes Vorgabe-Reihenfolge)
-  um die Kastenmitte; `size` ist die EIGENE Ausdehnung vor der Drehung. Heute
-  nur an der Wange. Ein Renderer wendet sie wörtlich an (`mesh.rotation.set`
-  in Radiant) — nichts wird zurückgerechnet.
-- `stair_step` ist WEG. Ein Lauf ist je Stufe `stair_tread` + `stair_riser`,
-  dazu zwei `stair_stringer` (`side` "left"|"right", bergauf gesehen) und
-  wie bisher zwei `stair_pad`. Alle tragen `level` (untere Etage) und
-  `stair` (Index). Wer Treppenteile filtert, prüft `kind.startsWith("stair_")`;
-  ein Pad liegt auf EINER Etage, jedes andere Teil spannt von `level` nach
-  `level + 1` (Admin-Solo-Ansicht).
-- `SCENE_RECIPE_VERSION` 12 → **13**.
-
-### 3. Das Rezept je Stufe (Server-Konstanten, echte Meter)
-
-| Konstante | Wert | Was |
-|---|---|---|
-| `STAIR_TREAD_THICKNESS` | 0,04 | Dicke des Auftritt-Bretts |
-| `STAIR_RISER_THICKNESS` | 0,03 | Dicke der Setzstufe |
-| `STAIR_STRINGER_DEPTH_M` | 0,16 | Höhe der Wange (quer zur Steigung) |
-| `STAIR_STRINGER_THICKNESS` | 0,05 | Dicke der Wange |
-
-`steps`, `rise`, `run`, `base`, `target` wie im Nachtrag 2026-08-25; `tt` =
-Auftrittdicke, `inner` = `STAIR_WIDTH_M − 2·STAIR_STRINGER_THICKNESS` = 1,10
-(die Breite ZWISCHEN den Wangen).
-
-```
-tread i : center = at + dir·(i+0,5)·TREAD ,  y = base + (i+1)·rise − tt/2
-          size   = TREAD entlang, tt hoch, inner quer
-riser i : center = at + dir·(i·TREAD + RISER/2) ,
-          y = base + (i+1)·rise − tt − (rise − tt)/2
-          size   = RISER entlang, (rise − tt) hoch, inner quer
-```
-
-Die Setzstufe endet unter dem eigenen Auftritt und beginnt auf dem Auftritt
-darunter — keine Fläche liegt doppelt.
-
-**Die Wange** ist ein Brett, dessen OBERKANTE die Linie durch die
-hinteren-unteren Auftrittkanten ist — von `(0, base − tt)` nach
-`(run, target − tt)` in (entlang, y). Damit berührt sie jede Stufe entlang
-einer KANTE und teilt mit keiner eine Fläche (kein Z-Fighting), und sie
-schließt an Fuß und Kopf bündig mit den Böden ab.
-
-```
-θ      = atan2(climb, run)          L = hypot(run, climb)
-along  = run/2 + sin θ · DEPTH/2    y = base − tt + climb/2 − cos θ · DEPTH/2
-across = ± (STAIR_WIDTH_M − THICKNESS)/2       ("left" = −, "right" = +)
-size   = L entlang, DEPTH hoch, THICKNESS quer
-rotation: dir ±x → [0, 0, ±θ] ; dir ±z → [∓θ, 0, 0]
-```
-
-Das Vorzeichen ist so gewählt, dass das FERNE Ende das hohe ist: eine Drehung
-um z um +θ hebt das +x-Ende, eine Drehung um x um +θ SENKT das +z-Ende — also
-`−θ` für einen Lauf nach +z. **Ein Kasten lässt sich nicht rechtwinklig
-abschneiden:** das Fußende sinkt `cos θ · DEPTH` (≈ 0,13) unter den unteren
-Boden über die ersten `sin θ · DEPTH` (≈ 0,10) Meter, das Kopfende reicht
-ebenso weit unter den oberen Boden — INS Loch, das der Lauf dort ohnehin
-schneidet. Auf Etage 0 verschluckt das Terrain das Fußende; auf einer
-deklarierten Etage steckt es im Bodenaufbau (Raumplatte +0,10).
-
-### Handrechnung EG → OG (storey 3,00, `at` = (2, −2), `dir_deg` 90 → +X)
-
-`steps` 15, `rise` 0,205333, `run` 3,90 wie gehabt; `tt` 0,04.
-
-| Primitiv | `center` | `size` | sonst |
+| Feld | Wo | Typ | Bedeutung |
 |---|---|---|---|
-| `stair_tread` i = 0 | [2,13 / 0,185333 / −2] | [0,26 / 0,04 / 1,10] | level 0 |
-| `stair_tread` i = 14 | [5,77 / 3,06 / −2] | [0,26 / 0,04 / 1,10] | Oberkante = 3,08 |
-| `stair_riser` i = 0 | [2,015 / 0,082667 / −2] | [0,03 / 0,165333 / 1,10] | |
-| `stair_riser` i = 14 | [5,655 / 2,957333 / −2] | [0,03 / 0,165333 / 1,10] | |
-| `stair_stringer` | [3,999582 / 1,437218 / −2 ∓ 0,575] | [4,969547 / 0,16 / 0,05] | rotation [0, 0, 38,2997] |
+| `meta.water` | **Art** | `bool` | Diese Bodenart IST Wasser. **Das EINE Prädikat** (`terrain_types.is_water_kind`) — Layer-Tabelle, Bake, Sanitizer und Lageplan fragen dieses und kein zweites. Das frühere zweite Buch (die Material-KLASSE der Surface-Bibliothek für Raumböden) ist ersatzlos weg. |
+| `meta.water_depth_m` | **Art** | 0,2…20 (2,0) | Vorgabe: wie tief das Bett unter dem Spiegel liegt, sobald die Uferrampe durch ist |
+| `meta.shore_ramp_m` | **Art** | 0…20 (3,0) | Vorgabe: wie weit INNERHALB des Umrisses die volle Tiefe erreicht ist. **0 ist ein WERT** (das Becken) und überlebt einen Save, wie `edge_blend_m` |
+| `meta.water_depth_m` / `meta.shore_ramp_m` | **Fläche** | dieselben Klemmen | Überschreiben die Vorgabe der Art. Fehlt der Schlüssel, antwortet die Art — deshalb wird ein unlesbarer Wert GELÖSCHT und nicht auf den Modul-Default gesetzt |
+| `meta.water_level` | **Fläche** | Welt-y (m) | Der Spiegel STEHENDEN Wassers. Fehlt er, leitet der Bake ihn her (Rand-Median); `save_area` friert ihn dann ein |
+| `meta.water_level_up` / `_down` | **Fläche** | Welt-y (m) | Die beiden Enden eines FLIESSENDEN Spiegels. Jedes überschreibt sein eigenes Ende; ein einfaches `water_level` setzt beide |
+| `meta.flow_dir_deg` | **Fläche** | 0…360, gewrappt | Die FLIESSRICHTUNG (stromabwärts) von POLYGON-Wasser. Buchstabiert wie jeder andere Yaw des Vertrags (§ A1.1): `dir = (sin θ, cos θ)`, also 0° nach +z, 90° nach +x. Sie treibt das Profil UND (ab W2) die Ripple-Scrollrichtung. Trägt die Fläche eine Linie, die sie entlangfließt, wird sie **ignoriert** (W4a) |
+| `meta.flow_along` | **Fläche** | `"forward"` / `"reverse"` / fehlt | **W4a:** Fließt eine mit dem LINIENWERKZEUG gezeichnete Fläche entlang ihrer Mittellinie (`meta.stroke.points`) — in Zeichenreihenfolge oder gegen sie; fehlt der Schlüssel, steht das Wasser. Alles andere verliert den Schlüssel. Ein Fluss macht Biegungen, und eine einzelne Gradzahl kann nicht sagen, wo ein Mäander langläuft |
+| `meta.flow_speed_m_s` | **Fläche** | 0…2 m/s, geklemmt, 2 Nachkommastellen | **Befund 2026-08-23 Nr. 2:** Wie schnell genau DIESE Fläche läuft. Überschreibt den `flow_speed`-Regler ihrer SURFACE-ART (Default **0,5 m/s** seit der Nutzer-Entscheidung 2026-08-25, davor 0,15, `surface_textures`), fehlt der Schlüssel, antwortet die Art. Reine OPTIK: Bake, Spiegel und Fließachse lesen ihn nicht, deshalb steht er auch nicht in `heightfield.WaterMeta`. Die Renderer bekommen ihn NICHT als Meter pro Sekunde, sondern als VERHÄLTNIS `Fläche ÷ Art` in der LÄNGE des Vertex-Attributs `aWaterFlow` (`waterFlowFactor`, `@anima/scene-render`) — der Shader rechnet `wSpeed = uFlowSpeed · wLen`, ein Material bleibt pro Art. Ohne Schlüssel ist die Länge exakt 1 (der Einheits-Tangens seit W4a), eine authorierte 0 wird auf 1e-3 geklemmt: 0 wäre die Länge, die der Shader als STEHEND liest, und stehendes Wasser driftet mit `uSpeed` = 0,25 m/s, also SCHNELLER |
+| `meta.bed_kind` | **Fläche** | Art-Id | Welche Bodenart der Layer-Bake UNTER dem Wasser malt. Default: die blanke Welt (`game.default_terrain_kind`) — genau die Ersetzung, die der Client bisher selbst vornahm |
 
-Wange: θ = atan2(3,08; 3,90) = 38,2997°, sin θ = 0,6197748, cos θ = 0,7847797,
-L = 4,969547; along = 1,95 + 0,0495820 = 1,9995820; y = −0,04 + 1,54 −
-0,0627824 = 1,4372176. Gegenprobe im Client (drei wendet die Euler an): die
-lokale Ecke (−L/2, +DEPTH/2, 0) landet auf **(2,00 / −0,04)**, die Ecke
-(+L/2, +DEPTH/2, 0) auf **(5,90 / 3,04)** — genau die Oberkanten-Linie.
-`dir_deg` 0: `size` x ↔ z, Wangen bei x = 2 ± 0,575, rotation
-[−38,2997, 0, 0]; 180 → [+38,2997, 0, 0]; 270 → [0, 0, −38,2997].
-Keller → EG: θ = atan2(2,92; 3,90) = 36,8229°, L = 4,872002, Wangen-Mitte
-y = −2,96 + 1,46 − 0,0640394 = −1,5640394.
+Die Art kann den SPIEGEL nicht beantworten: zwei Seen einer Art stehen auf zwei
+Höhen. Alles andere darf sie.
 
-### Editor
+#### 2. Das Spiegel-PROFIL — `water_level_at(x, z)`
 
-`PlanStairStrip` und `PlanElevatorStrip` tragen je ein `SurfaceKindSelect`
-„Texture" aus derselben Bibliotheksliste wie der Etagen-Reiter; leer heißt
-„Stair colour" bzw. „Elevator colours".
+`app/core/heightfield.WaterProfile` ist die reine Funktion, und sie fährt
+additiv im Payload mit (`meta.water_profile`, siehe Nr. 4). **Seit W4a ist die
+Achse eine POLYLINIE**, das Feld `axis`: Knoten `[x, z, s, level]` in
+Fließreihenfolge, `s` = Bogenlänge ab dem ersten Knoten, `level` = Welt-y dort.
 
-### Die Beweise (§ B5a)
+```
+s      = Bogenkoordinate des NÄCHSTEN Punktes auf der Polylinie
+         (jedes Segment mit Klemme projiziert, kürzester Abstand gewinnt)
+level  = linear zwischen den beiden Knoten, zwischen denen s liegt,
+         an beiden Enden geklemmt
+```
 
-| Zahl | Wo |
+* **Beide alten Gesetze sind Sonderfälle, kein Zweig daneben.** Stehendes
+  Wasser ist EIN Knoten (am Flächen-Schwerpunkt): der nächste Punkt ist dieser
+  Knoten, die Klemme antwortet überall sein Niveau. Ein gerader Fluss aus
+  `flow_dir_deg` ist ZWEI Knoten — die Extreme des Polygons auf der Achse mit
+  `level_up`/`level_down` —, und die Projektion auf dieses eine Segment IST das
+  `clamp((s − s_min)/(s_max − s_min), 0, 1)` von W1, Klemme inklusive.
+* **Warum überhaupt eine Polylinie:** projiziert man eine 180°-Schleife auf eine
+  Gerade, liegen Ober- und Unterlauf am selben Achsenpunkt und der Spiegel der
+  Biegung kann gar nicht fallen. Entlang der eigenen Linie kann er es immer.
+* **Die Knoten-Niveaus einer gezeichneten Linie**: je Knoten der **Median der
+  Naturhöhe über einen QUERSCHNITT** — 9 Proben senkrecht zur lokalen Tangente,
+  verteilt über `width_m`/2 + Uferrampe zu jeder Seite (der Rand-Median von oben,
+  lokal statt je Drittel). Danach **stromabwärts monoton** (laufendes Minimum):
+  Wasser fließt nie bergauf. Erst dann gewinnt der Autor: `water_level` macht
+  alle Knoten gleich (gezeichnet, aber stehend), `water_level_up`/`_down`
+  ersetzen den ersten/letzten Knoten und die inneren werden **affin** in die
+  neue Spanne eingepasst — ihre Form bleibt, ihre Enden werden die autorierten.
+* **Die Knoten sind NICHT die Klicks** (W5b, 2026-08-24). Vor den
+  Querschnitts-Medianen wird die gezeichnete Linie **nach Bogenlänge abgetastet**
+  — `heightfield.WATER_AXIS_STEP_M` = 2 m, je Teilstrecke gleichmäßig in
+  `ceil(Länge/Schritt)` Teile, die geklickten Punkte bleiben Knoten. Danach
+  laufen die Regeln oben unverändert (Median je Knoten, laufendes Minimum,
+  autorierte Enden). Zum Schluss wird die Knotenliste wieder **vereinfacht**:
+  Douglas-Peucker auf `(s, level)`, Toleranz `WATER_AXIS_SIMPLIFY_M` = 0,05 m,
+  je Teilstrecke mit den Klicks als festen Ankern, Abweichung **senkrecht in
+  der Höhe** gemessen (genau der Fehler, den ein Leser von `water_level_at`
+  sieht). Eingefügte Knoten liegen auf der geraden Teilstrecke zwischen zwei
+  Klicks, ihr Wegfall kann die Achse also nicht um einen Millimeter versetzen;
+  Klick-Knoten sind Biegungen und fallen nie weg. Ein Fluss über gleichmäßigem
+  Gefälle liefert damit exakt die gezeichneten Punkte, ein Fluss über eine
+  3-m-Kante zwei Knoten dies- und jenseits der Kante. Obergrenze
+  `WATER_AXIS_MAX_KNOTS` = 256 eingefügte Knoten (darüber wächst der Schritt).
+  **Grund:** mit Knoten nur an den Klicks war der Spiegel zwischen zwei Klicks
+  EINE Rampe — er sank lange vor der Kante unter den Boden (Carve schnitt eine
+  Schlucht) und stand lange danach in der Luft, und `waterfallsFrom` konnte die
+  Kante nicht sehen, weil kein Knoten in ihrer Nähe lag. `HEIGHT_BAKE_VERSION`
+  ist deshalb auf 3.
+* **Die beiden Enden von POLYGON-Wasser**, wo der Autor sie offen lässt: der
+  **Rand-Median des jeweiligen DRITTELS** der Achsen-Spanne — `level_up` über die
+  Randproben mit `s ≤ s_min + Spanne/3`, `level_down` über die mit
+  `s ≥ s_max − Spanne/3`. Ein Drittel und nicht „die zwei Extrempunkte": ein mit
+  vier Ecken gezeichneter Fluss hätte je Ende genau eine Probe und nähme sein
+  Niveau von einem willkürlichen Quadratmeter Landschaft.
+* **Die neun Zahlen bleiben** — für einen Leser, der die Polylinie nicht kennt,
+  die beste EINE geneigte Ebene: `level_up`/`level_down` sind das Niveau des
+  ERSTEN und des LETZTEN Knotens, `axis_x/axis_z` der erste Knoten (bei
+  Polygon-Wasser weiter der Flächen-Schwerpunkt), `flow_dir_deg` die Peilung der
+  **Sehne erster → letzter Knoten** (bei Polygon-Wasser die autorierte) und
+  `s_min`/`s_max` die Spanne auf dieser Sehne. Bei stehendem Wasser bleibt
+  `flow_dir_deg` `null` und `s_min == s_max == 0`.
+
+#### 3. Der Carve rechnet gegen das LOKALE Niveau
+
+```
+h = min(h, water_level_at(x, z) − water_depth_m · smoothstep(min(d_in/shore_ramp_m, 1)))
+```
+
+> **INVARIANTE 2, jetzt PUNKTWEISE.** Für jede Probe tiefer als `shore_ramp_m`
+> im Polygon gilt `h_final ≤ water_level_at(x, z) − ε`, `ε = min(depth, 0,25)` —
+> nicht gegen einen Mittelwert, sondern gegen den Spiegel AN DIESER STELLE.
+> Jenseits der Rampe ist `smoothstep(1) = 1` exakt, das zweite Argument des
+> `min` also `level_at(x,z) − depth`: arithmetisch, nicht gesampelt.
+
+**Die rote Gegenprobe steht im Smoke** (`scripts/smoke_height_bake.py` [8h]).
+Derselbe Fluss mit EINEM Spiegel auf dem Mittelniveau 5,0 lässt den Boden
+stromabwärts bei 2,35 stehen, während das lokale Niveau dort 1,025 ist — die
+Invariante ist um 1,575 m verletzt, und ein flacher Spiegel schneidet stromauf
+durch einen Boden, der 2,65 m über ihm liegt. Der geneigte Carve antwortet an
+derselben Stelle 0,025 und hält sie.
+
+#### 4. Payload — additiv, und `water_level_effective` bleibt
+
+`GET /world/terrain-areas` und `GET /play/terrain` liefern je Wasser-Fläche
+unverändert `meta.water_level_effective` und **zusätzlich** `meta.water_profile`:
+
+```jsonc
+"meta": {
+  "flow_dir_deg": 270,
+  "water_level_up": 7.4, "water_level_down": 2.6,
+  "water_level_effective": 5.0,          // OUTPUT: das MITTELNIVEAU des Profils
+  "water_depth_effective": 1.2,          // OUTPUT: die BETT-TIEFE des Carves
+  "water_profile": {                     // OUTPUT: die neun Zahlen …
+    "level_up": 7.4, "level_down": 2.6, "flow_dir_deg": 270.0,
+    "axis_x": 50.0, "axis_z": -30.0, "dir_x": -1.0, "dir_z": 0.0,
+    "s_min": -30.0, "s_max": 30.0,
+    // … und seit W4a die WAHRHEIT daneben: die Knoten [x, z, s, level] in
+    // Fließreihenfolge, auf 3 Nachkommastellen. Ein Knoten = stehend, zwei =
+    // die gerade Achse oben, N = die gezeichnete Linie.
+    "axis": [[80.0, -30.0, -30.0, 7.4], [20.0, -30.0, 30.0, 2.6]] } }
+```
+
+**`water_level_effective` ist ab jetzt das MITTELNIVEAU** (das Mittel der beiden
+Enden = das Niveau in der Mitte der eigenen Achse). Für stehendes Wasser ist es
+exakt der Spiegel, der es immer war; für einen Fluss ist es die eine Ebene, die
+an beiden Enden am wenigsten danebenliegt — die ehrlichste Zahl für den
+FLACHEN Client, den W2 ablöst. Wer die Wahrheit will, liest `water_profile` und
+wertet die Formel aus Nr. 2 selbst aus. Beides ist **Ausgabe** und wird nie in
+die Autorenfelder zurückgeschrieben (der Sanitizer wirft beide auf dem Weg
+hinein weg).
+
+**`water_depth_effective` ist dasselbe für das BETT** (W4b): die Tiefe, mit der
+der Carve wirklich gerechnet hat — die Vorgabe der ART, mit der Überschreibung
+der FLÄCHE und den Klemmen von Nr. 1 schon angewendet (`heightfield.water_meta`).
+Sie steht neben `water_level_effective`, weil sie dieselbe Art Antwort ist: das
+Ergebnis einer Auflösung, die ein Client sonst ein zweites Mal implementieren
+müsste. Er braucht sie, weil die **Deckkraft** einer Wasserfläche ¾ ihrer
+eigenen Tiefe ist (`client3d/src/scene/waterPlaneMath.waterOpaqueDepthM`,
+Vertex-Attribut `aWaterOpaque`): ein 1,2-m-Fluss ist ab 0,9 m Tiefe deckend, ein
+2-m-See erst ab 1,5 m — mit EINER Konstante blieb der schmale Fluss bis zur
+Mitte durchsichtig. Fehlt der Schlüssel (die Fläche hat kein gecarvtes Bett),
+rechnet der Client mit dem Vorgabe-See weiter.
+
+#### 5. Der Layer-Schnitt: Wasser trägt sein BETT
+
+Ein Wasser-Layer bleibt ein voller Layer — die Maske muss „hier ist Wasser"
+beantworten, für den Unterwuchs-Filter und für jede Punktabfrage. Was er
+**malt**, ist ab W1 der Boden DARUNTER:
+
+* `surface` des Layers = die Oberfläche der **Bett-Art** (`meta.bed_kind`,
+  Default: die blanke Welt). Der Wasser-Layer malt also nie die Wasser-Textur
+  auf das Gelände — der Spiegel ist eine eigene Fläche darüber, und den See
+  zweimal zu malen ließ die beiden gegeneinander arbeiten.
+* `edge_blend_m` = die Übergangsbreite der **Bett-Art**, sobald eine autoriert
+  ist; ohne autoriertes Bett bleibt es die der Wasser-Art (heutige Zahl).
+* Der Tabellen-Eintrag nennt sein Bett: **`bed_kind`** (additiv, nur auf
+  Wasser-Layern). Der Schlüssel eines Layers ist damit `(kind, edge_blend_m,
+  bed_kind)`: **zwei Teiche einer Art auf zwei Betten sind zwei Layer.**
+* Das Feld `water` jeder Tabellenzeile — Karten-Arten wie Boden-Arten —
+  kommt aus dem EINEN Prädikat.
+* **Die `waters`-Liste des Index ist WEG.** Es gibt keine Zonen-Wasser mehr zu
+  listen. (Der laufende Client liest sie als `index.waters ?? []` und zeichnet
+  dann keine Zonen-Platten mehr — kein Fehler, nur das Ende eines Features.)
+
+#### 6. Wasser verlässt den Lageplan — ersatzlos, ohne Kompat-Leser
+
+**Gelöscht** (keine Alias-Felder, keine Fallback-Reader):
+
+`heightfield.ZoneWaterInput` · `ZoneWaterStamp` · `HeightModel._build_zone_water`
+· `HeightModel._carve_zone` · `HeightModel.zone_water` ·
+`HeightModel.zone_water_level_by_room` · der Parameter `zone_waters` aller
+Bake-Einstiege · `models.heightfield.placed_zone_waters` · `zone_water_basis`
+(und ihr Eintrag in `height_sig`) · `terrain_layers.waters_payload` ·
+`is_water_floor` · `floor_water_meta` · `surface_classes` · die vier
+Wasser-Felder von `terrain_layers.Floor` · die drei Raum-Layout-Felder
+`water_level` / `water_depth_m` / `shore_ramp_m` (E5b-Regler) · das Feld
+`water_level_effective` im `floor_plan` der Szene.
+
+**Eine Boden-Art eines Raums darf keine Wasser-Art mehr sein.** Der Sanitizer
+(`world_ops._sanitize_room_layout`) wirft ein solches `surfaces.floor` mit einer
+Log-Zeile weg — an dem einen Schreibpfad, an dem es entstehen kann.
+
+**Stattdessen ein VERWEIS.** Der `floor_plan`-Eintrag eines Raums, dessen
+Grundriss (mehrheitlich, nach FLÄCHE) in einer gemalten Wasser-Fläche liegt,
+trägt additiv:
+
+```jsonc
+{ "room_id": "pond", "polygon_world": [...], "floor_kind": "sand",
+  "closed": false,
+  "map_water": { "area_id": "ta_pool", "kind": "water" } }
+```
+
+**Abgeleitet beim Komponieren, nie gespeichert** — deshalb kann er nicht
+hängen: verschwindet der See, verschwindet die Zeile. Mehrheit heißt STRIKT
+mehr als die Hälfte (genau halb liegt nicht darauf), gemessen auf einem festen
+32 × 32-Raster über der Hülle; bei Gleichstand gewinnt die SPÄTER gemalte
+Fläche — das Vorrangsgesetz des ganzen Bodens (§ A16.7), nicht ein hier
+erfundener Tie-Break. Raum-Semantik (Zugehörigkeit, Wahrnehmung) ändert sich
+nicht.
+
+#### 7. Signaturen
+
+* `height_sig` hasht `water_basis()` mit den **effektiven** Zahlen (Spiegel,
+  beide Enden, Fließrichtung, aufgelöste Tiefe/Rampe): eine Welt, die ihre
+  Art „river" von 2 m auf 6 m dreht, ändert jedes Flussbett, ohne dass eine
+  Fläche angefasst wird — und die Signatur trägt das mit. `zone_water_basis`
+  ist aus dem Basis-Objekt raus.
+* `layers_sig` hasht zusätzlich das **`bed_kind` je Fläche**: das Bett malt,
+  also gehört es in den Schnitt, nicht in die Höhe. `surface_classes` ist raus.
+
+#### 8. Die Beweise (§ B5a)
+
+| Skript | was es herleitet |
 |---|---|
-| 15 Auftritte, 15 Setzstufen, 2 Wangen, 2 Pads; ROTE PROBE „kein `stair_step` mehr"; jede Zahl der Handrechnung oben; Vorzeichen der Neigung für alle vier Richtungen; Keller-Wange | `scripts/smoke_scene_recipe.py` **[5s]** |
-| `texture_kind` auf allen 34 Kästen eines Laufs, auf keinem Fahrstuhlteil; ROTE PROBE ohne Kind; `elevator_kind` auf 7 opaken Teilen, auf keiner Scheibe | ebenda **[5s]**, **[5]** |
-| `code_version` 13 | ebenda **[7i]** |
-| Euler in Radiant, die zwei Oberkanten-Ecken der Wange (±x UND ±z), UV-Maximum je Fläche eines gekachelten Auftritts, `tileM` 0 lässt 0..1 | `packages/scene-render/scripts/smoke_extra_box.mjs` |
+| `scripts/smoke_height_bake.py` **[8]** | die Fließachse (Yaw-Konvention, Wrapping), die beiden Drittel-Rand-Mediane von Hand (7,4 / 2,6 aus 31 Randproben je Ende), `level_at(x) = 0,08·x + 1,0`, der Carve gegen das lokale Niveau, Art-Vorgabe gegen Flächen-Überschreibung, die ungeflaggte Art (kein Carve), Invariante 2 punktweise über 2916 Proben (schlechtester Abstand exakt die Tiefe 1,0 m), die **roten** Gegenproben gegen den konstanten Spiegel, das Einfrieren beider Enden beim Save und die neun Payload-Zahlen |
+| `scripts/smoke_height_bake.py` **[8k]** | **W4a:** die Fließachse als POLYLINIE — die drei Knoten-Niveaus 10/8/6 einer Haarnadel als Querschnitts-Mediane von Hand, das Niveau am mittleren Knoten (8,0) gegen die **rote** Gegenprobe der geraden W1-Sehne (6,0: die Biegung projiziert hinter das eigene Unterlauf-Ende), Bogenlängen 101/153 und die Mitten-Niveaus 9,0/7,0, der Carve gegen das lokale Niveau, das laufende Minimum (10/11/6 → 10/10/6, seit W5b mit dem Eckknoten dort, wo die Linie wieder auf 10 fällt: 10/10/**10**/6 bei (239,4 | 300), rückwärts gezeichnet 6/6/6), autorierte Enden 12/4 über 10/8/6 → 12/8/4, `water_level` = alle Knoten gleich, `flow_along` schlägt `flow_dir_deg`, der Sanitizer der zwei Wörter und das EINE Prädikat `is_flowing` samt Settle-Pfad |
+| `scripts/smoke_height_bake.py` **[8l]** | **W5b:** die Verdichtung der Achse — eine harte 3-m-Kante bei x = 41 (Höhenfläche mit `falloff_m` 0), ein mit ZWEI Klicks gezeichneter Fluss (0,0)→(100,0), Abtastung alle 2 m ⇒ Achse `[0,3] [40,3] [42,0] [100,0]`, der ganze Abfall in EINEM 2-m-Segment (Gefälle 1,5 ⇒ genau ein Wasserfall), Spiegel 10 m vor der Kante = 3,0 und 10 m danach = 0,0, Bett-Tiefe oberhalb exakt `water_depth_m`; **rote** Gegenproben der Zwei-Knoten-Rampe: 2,07 statt 3,0 (0,93 m unter den eigenen Ufern — „Wasser fast weg", Carve gräbt bis 1,07) und 1,47 statt 0,0 (1,47 m über dem Boden — „Wasserhügel"), Gefälle 0,03 ⇒ kein Fall. Zwillinge: `client3d/scripts/smoke_water_plane.mjs` **[4e]**, `client3d/scripts/smoke_waterfall.mjs` **[9]** |
+| `scripts/smoke_height_bake.py` **[9]** | die Löschung der fünften Stufe **namentlich**: 17 Symbole, die Bake-Signaturen, der `waters`-freie Index, die drei Raum-Wasserfelder und die gestrippte Wasser-Boden-Art |
+| `scripts/smoke_terrain_layers.py` **[13]** | Bett-Art als Layer (Oberfläche + eigene Übergangsbreite, zwei Betten = zwei Layer), die rote Probe „nichts malt die Wasser-Textur aufs Gelände", das EINE Prädikat Zeile für Zeile, und das **Kantengesetz**: dieselben zwei Rechtecke in zwei Malreihenfolgen geben die zwei Breiten |
+| `scripts/smoke_scene_recipe.py` **[4w]** | `map_water` von Hand (100 % / 75 % → Verweis; 50 % / 25 % / 0 % → keiner), Letzter-gewinnt, und dass der Eintrag sonst nichts über Wasser sagt |
+| `scripts/smoke_terrain_types.py`, `scripts/smoke_nav_grid.py` | Sanitizer der Art-Vorgaben bzw. der Bett-Carve unter der Laufregel |
+
+### Ein Wasser-Gesetz — W2 (Client) (§ A16.3 / § A16.7 / § A19 Nr. 5 / § G4)
+
+> **Der MESH-Teil dieses Nachtrags ist mit Wasser v2 K-A E5 tot**
+> (`liftToWaterProfile`, die Regelfläche, der Ufer-Shader `vWaterPlane`): das
+> Terrain hebt und schattiert seine eigenen Wasserpixel (Nachtrag „Das
+> Wasser-Raster", 7a/9/10). Was bleibt, ist die LESUNG — `waterProfileOf`,
+> `waterLevelAt` und das Verbot, `water_level_effective` zu lesen —, und die
+> gilt unverändert für Spielmechanik, Wasserfall-Erkennung und die
+> Raster-Quelle des Servers.
+
+*Etappe W2 aus `development_instructions/plan-fliessgewaesser.md`, die
+Lese-Seite von W1 (§ C5). Er **ersetzt** dessen Satz „bis W2 zeichnet
+der Client weiter EINE flache Platte", **streicht** die Zonen-Wasser-Aussagen
+von § A19 Nr. 5 ersatzlos und **präzisiert** § G4 (der Spiegel ist keine
+Platte mehr). Was der Server liefert, ändert W2 nicht um eine Zahl: die neun
+Zahlen von W1 werden jetzt ausgewertet statt gemittelt. W3 (Admin-UI) folgt.*
+
+**DAS GESETZ, in vier Sätzen.** Der Spiegel ist eine **REGELFLÄCHE**: jeder
+Vertex des Earcuts trägt `water_level_at` seines eigenen Ortes, ein See kommt
+dabei bitgleich flach heraus wie bisher. Die **Fließrichtung treibt die
+Ripple**, und zwar als **Vertex-Attribut**, weil das Material der ART gehört
+und die Strömung der FLÄCHE. Es gibt **EINE Wasserquelle**: die gemalten
+Flächen — der Zonen-Lookup ist gelöscht, und Schwimmen rechnet gegen das
+LOKALE Niveau. Und der Client **malt kein Bett mehr selbst**: er rendert die
+Oberfläche, die die Layer-Tabelle nennt.
+
+#### 1. Der Spiegel ist eine Regelfläche, keine Platte
+
+`scene/waterPlaneMath.ts` trägt den reinen TS-Zwilling der Server-Funktion:
+
+* `waterProfileOf(meta)` liest `meta.water_profile` — und **das ist der ganze
+  Wasser-Test**. Nur eine Fläche, die das eine Server-Prädikat
+  (`terrain_types.is_water_kind`) als Wasser gezählt hat, trägt ein Profil.
+  Die Material-KLASSE (`isWaterClass`) wird dafür **nicht mehr befragt**: sie
+  sagt, wie Wasser AUSSIEHT, und war das zweite Buch darüber, was Wasser IST.
+* `waterLevelAt(profile, x, z)` ist `heightfield.water_level_at`, Zeile für
+  Zeile, samt der beiden Klemmen — an den Enden liefert sie `level_up` bzw.
+  `level_down` **exakt**, nicht das Ergebnis einer Interpolation mit t = 0/1.
+* `liftToWaterProfile(positions, profile)` schreibt dieses Niveau in das `y`
+  jedes `(x, y, z)`-Tripels. Die Masche steht danach im Ursprung; ihre Höhe
+  ist absolut und darf nicht noch einmal verschoben werden.
+
+**KEINE UNTERTEILUNG, und das ist Arithmetik, kein Geschmack.** Das Profil ist
+in der Ebene linear, solange die Klemme nicht greift — und die greift nur
+AUSSERHALB von `[s_min, s_max]`, das sind die Extreme des Polygons selbst.
+Kein innerer Punkt erreicht den Knick, also gibt eine Regelfläche durch den
+Umriss die Funktion exakt wieder. Ein 60 m langer Fluss ist eine Handvoll
+Dreiecke.
+
+**DER UFER-SHADER BLIEB UNVERÄNDERT** — das ist der Befund von W2, nicht ein
+Versäumnis. `wsDepth = vWaterPlane.y − tlodHeight(vWaterPlane.xz)` liest die
+Höhe seit E4 aus der GEOMETRIE, nie aus einer Uniform; die Interpolation einer
+linearen Funktion über ein Dreieck IST diese Funktion, also misst er ohne eine
+Zeile Änderung gegen das lokale Niveau. Genau dieselbe Eigenschaft trug schon
+zwei Seen auf zwei Höhen auf EINEM Material.
+
+#### 2. Die Fließrichtung als Vertex-Attribut
+
+`aWaterFlow` (vec2) trägt die stromabwärtige Einheitsrichtung
+(`dir_x`/`dir_z`, für stehendes Wasser `(0, 0)`) und liegt auf der Spiegel-
+Geometrie, nicht in einer Uniform. **Der Grund ist die Materialbindung:**
+`ground.rebuildAreas` hält genau EIN Material je Wasser-ART für die ganze
+Welt; eine Uniform hätte also ein Material je FLÄCHE erzwungen, um zwei Floats
+zu sagen. Auf einer Masche von einem Dutzend Vertices sind zwei Floats nichts.
+
+Der Ripple-Patch (`@anima/scene-render` `materials.ts`) baut daraus einen
+Rahmen — `wAx` stromabwärts, `wAy` quer — und legt die beiden Scroll-Vektoren
+hinein. **Ohne Strömung ist der Rahmen der der Welt**, und die beiden Vektoren
+sind buchstäblich die Konstanten von vorher: `A = (1, 0.6)`,
+`B = −(0.8, 1.3)`. Mit Strömung laufen **beide Lagen stromabwärts**
+(`A = wAx + wAy·0.6`, `B = wAx·0.8 − wAy·1.3`) und nur ihre Querkomponenten
+sind gegenläufig — eine zweite Lage, die stromauf liefe, läse sich als zwei
+Flüsse. Die Beträge (`√1.36`, `√2.33`) sind rotationsinvariant, `uSpeed` bleibt
+also dieselben Meter pro Sekunde.
+
+**Eine Geometrie ohne das Attribut liest `(0, 0)`** — WebGL lässt ein
+ungebundenes Attribut auf seinem generischen Wert `(0, 0, 0, 1)`, den three nie
+schreibt. Jede Wasserfläche, die keine client3d-Spiegelmasche ist (allen voran
+die Böden der Admin-Vorschau), behält damit exakt ihr Aussehen.
+
+#### 3. Eine Wasserquelle — der Zonen-Lookup ist gelöscht
+
+**Gelöscht** (keine Alias-Felder, keine Fallback-Leser):
+`waterPlaneMath.zoneWaterAt` · `zoneWaterMirrors` · `ZoneMirror` ·
+`waterLevelOf` · der Zustand `ground.zoneWaters` · das Lesen von
+`index.waters` · die Zonen-Schleife in `rebuildAreas` · das **Borgen** eines
+beliebigen wasser-geflaggten Katalog-Eintrags für einen Raum-Bodenart-Namen ·
+`@anima/scene-render` `TerrainLayerWater` und das Feld `waters` von
+`TerrainLayerIndex`.
+
+`typeAt` liest den Spiegel damit aus genau einer Schleife: die letzte
+enthaltende gemalte Fläche gewinnt Art UND Niveau, und das Niveau ist
+`waterLevelAt(profile, x, z)` — **das lokale**, nicht `water_level_effective`.
+`floatRootY(groundY, levelAt, sink)` ist in seinem Gesetz unverändert; was sich
+geändert hat, ist was hineingereicht wird. Das ist der Unterschied zwischen
+einer Figur, die überall 0,6 m unter ihrer eigenen Wasserlinie hängt, und
+einer, die stromab 1,92 m ÜBER dem sichtbaren Wasser schwimmt und stromauf in
+1 m tiefem Wasser watet (die rote Gegenprobe im Smoke, von Hand gerechnet).
+
+`water_level_effective` fährt weiter mit und wird vom Client **nicht mehr
+gelesen**: es ist die eine Ebene für einen FLACHEN Konsumenten, und diesen
+Konsumenten gibt es hier nicht mehr.
+
+#### 4. Der Bett-Hack ist tot
+
+`layerGround.setLayerTable` ersetzte für jede Wasser-Zeile das Bild von Layer 0
+(`layer.water ? bare : layer`). Das war ein Renderer, der Boden erfindet: eine
+autorierte Kies-Sohle wurde auf die Default-Art der Welt zurückgeflacht. Seit
+W1 IST `surface` einer Wasser-Zeile schon die des Bettes und `bed_kind` nennt
+die Art dazu, also entfällt die Ersetzung ersatzlos. Wo der Client die ART
+statt der Oberfläche braucht (Farb-Fallback, Meter je Kachel), fragt er
+`layer.bed_kind || layer.kind`. `bed_kind` ist zusätzlich Teil des `layerKey`,
+denn zwei Teiche einer Art auf zwei Betten sind zwei Zeilen mit zwei Bildern —
+ohne das im Schlüssel bliebe das Slice-Array der alten Welt stehen.
+
+#### 5. Der Lageplan sagt nur noch Bescheid
+
+Ein `floor_plan`-Eintrag kann `map_water {area_id, kind}` tragen (W1 § 6). Der
+3D-Client liest es **absichtlich für nichts**: Raum-Semantik (Zugehörigkeit,
+Mitte, Stände, Pulk) kommt weiter aus `polygon_world`, Boden und Spiegel malt
+die KARTE. Eine Fläche zu unterdrücken gibt es nicht, weil Stockwerk 0 seit E5a
+ohnehin keine eigene malt. Das Feld `water_level_effective` von `SceneFloor`
+ist **ersatzlos gestrichen** — der Server sendet es seit W1 nicht mehr, W3 hat
+den letzten Leser (die Admin-Lageplan-Vorschau) entfernt, und der Typ nennt es
+seitdem nicht mehr.
+
+#### 6. Die Beweise (§ B5a)
+
+| Skript | was es herleitet |
+|---|---|
+| `client3d/scripts/smoke_water_plane.mjs` **[1]** | dass das PROFIL die einzige Wasserfrage ist: Mittelniveau allein ist keines, autoriertes Niveau keines, eine Zahl kaputt = kein Profil |
+| **[4]** | der Fixture-Fluss von Hand: Achse durch den Schwerpunkt (50, −30), `dir = (−1, 0)` aus 270°, `s_min/s_max = ∓30`, `level(x) = 0,08·x + 1,0` an sechs Stellen, beide Klemmen **exakt**, der See als entartete Spanne, der Flow-Vektor |
+| **[5]** | die geneigte Masche: vier Ecken auf 2,6 / 7,4 / 7,4 / 2,6 (4,8 m Gefälle auf 60 m), die Linearität an Hälfte, Viertel und ⅞ der Kante, und der See **bitgleich** flach (`Object.is`) samt `level + 0 == 0 + level` |
+| **[6]** | Schwimmen am lokalen Niveau: Bett `0,08·x`, Tiefe überall 1,0 m, Wurzel/Körper bei x = 26/50/74 — und die **roten** Gegenproben des flachen Mittelniveaus (1,92 m über dem sichtbaren Wasser stromab, Waten stromauf, ein Watet/Schwimmt-Umschlag bei genau x = 55, den es in Wahrheit nirgends gibt) |
+| **[7]** | der Ufer-Shader auf der Schräge: Alpha 20/27 an jedem x — und **rot**, dass die flache Platte oberhalb x = 62,5 negative Tiefe hätte und ganz weggeworfen würde |
+| **[8]** | die Löschung **namentlich**: acht Symbole dürfen in `client3d/src` und `packages/scene-render/src` in keiner Nicht-Kommentar-Zeile mehr stehen, `SceneFloor.water_level_effective` eingeschlossen — und `map_water` steht an seiner Stelle |
+| **[9]** | die Ripple-Richtung: der stehende Fall ergibt exakt die alten Konstanten, 0°/90°/270° geben beide Lagen stromabwärts mit gegenläufiger Querkomponente, und die Beträge bleiben rotationsinvariant |
+| `client3d/scripts/smoke_layer_cut.mjs` **[7b]** | der Bett-Fall: die Ersetzung ist weg, das Slice kommt aus `layer.surface`, Farbe und Kachelmaß fragen `bed_kind`, und `bed_kind` steht im `layerKey` |
+| `client3d/scripts/smoke_surface_patch.mjs` | **rot**: keine Bibliotheksfrage entscheidet mehr über Wasser |
+
+### Kein Relief am Wasserrand, und der Spiegel folgt seiner Achse überall — W5d (§ A16.3 / § G4)
+
+> **ÜBERHOLT — beide Hälften.** Der Client-Teil (Abschnitt 2,
+> `subdivideRibbonByAxis`) ist mit Wasser v2 K-A E5 gelöscht: es gibt kein
+> Spiegel-Mesh mehr, das man in Streifen schneiden könnte; das Terrain tastet
+> den Pegel pro Vertex aus dem Raster ab. Der SERVER-Teil (Abschnitt 1, das
+> reliefreie Band am Wasserrand) ist mit **K-A E6** zurückgebaut
+> (`HEIGHT_BAKE_VERSION` 8, Nachtrag „Der Rückbau der Ufer-Wächter" am Ende
+> dieses Dokuments): das Relief läuft wieder bis an die Wasserlinie, und die
+> Rand-Hälfte von § G4 ist dort neu geschrieben. Was hier steht, ist der
+> BEFUND, der zum Kragen führte — er gilt als Beschreibung des alten Defekts
+> weiter, die Regel nicht mehr.
+
+*Befund des Users nach Bake v4 + W5c: „Es sind noch immer Löcher zwischen
+Wasser und Land." Zwei getrennte Ursachen, beide numerisch überführt, beide an
+ihrer eigenen Stelle behoben. Screenshot-frei gemessen (§ B5a).*
+
+#### 1. Server: das Mikro-Relief endet am Wasser (`HEIGHT_BAKE_VERSION` 4 → 5)
+
+Der Spiegel einer Fläche ohne autorierten Pegel ist der **Median der
+Naturhöhen am eigenen Umriss**. Ein Umriss, der um ±1 m Mikro-Relief
+schwankt, hat damit die HÄLFTE seines Umfangs ÜBER dem eigenen Wasser — und
+die Bankklemme (v4) kann das nicht reparieren, weil sie nur hebt. Gemessen auf
+der Fixture von `scripts/smoke_height_bake.py` **[11]**: 1,344 m Spannweite
+über einen einzigen See, der höchste Randpunkt **0,466 m über seinem eigenen
+Spiegel**, und das gezeichnete Gelände stand schon auf dem **feinsten** Gitter
+(2 m) 0,389 m über dem Spiegel INNERHALB des Polygons.
+
+Neu (`HeightModel._relief_weight`): das Mikro-Relief wird mit einem Gewicht
+multipliziert, das **0 innerhalb des Polygons und auf dem Umriss** ist und über
+das `shore_ramp_m`-Band nach außen per `smoothstep` auf 1 zurückkommt — dieselbe
+Kurve und dieselbe Breite, die das Bett INNEN benutzt. Bei überlappenden Bändern
+gewinnt das kleinste Gewicht; `shore_ramp_m = 0` (das Becken) verblasst außerhalb
+nichts.
+
+> **DIE RAND-SCHRANKE, konstruktiv.** Eine Probe im Polygon wird aus den vier
+> Ecken IHRER Gitterzelle gezeichnet, die höchstens `step` Meter entfernt
+> liegen. Für `step ≤ shore_ramp_m` liegt jede dieser Ecken damit entweder im
+> Polygon (Carve: `h ≤` Spiegel) oder im reliefreien Band, wo der Boden die
+> Flächenhöhe plus Klemme ist — das gezeichnete Bild ist eine Konvexkombination
+> davon und steht also höchstens um `WATER_BANK_LIP_M` (0,1 m) über dem
+> Spiegel. Das ist die Rand-Hälfte von § G4; Invariante 2 oben bleibt die
+> Tiefen-Hälfte.
+
+**Die Bankklemme bleibt** — sie fängt jetzt genau das, was das Relief nicht
+mehr macht: HÖHENFLÄCHEN, die den Spiegel unterlaufen (Fixture [10]: Ufer bei
+−0,4 unter einem Spiegel bei 1,0, Hub 1,5 m). Ohne Relief am Rand ist sie kein
+zweites Buch mehr, sondern der einzige.
+
+#### 2. Client: die Streifen des Spiegel-Meshes sind eine ARRANGEMENT, kein Rest
+
+W5c teilte die Maske mit einem laufenden REST: der stromaufwärtige Teil jeder
+Querlinie war ein fertiger Streifen, nur der stromabwärtige wurde weiter
+geschnitten. Eine Halbebene ist UNENDLICH — bei jeder Maske, die sich zurück
+biegt (jeder Fluss mit einer Kurve), enthält der „stromauf"-Teil einer frühen
+Querlinie deshalb auch die Scheibe des fernen Arms, die zufällig auf dieser
+Seite liegt, und die Regelfläche darüber trägt ein Niveau vom falschen Ende des
+Flusses hinein. Dieselbe Asymmetrie erzeugte **T-Vertices**: eine spätere
+Querlinie teilt nur noch die Reste, während der schon fertige Streifen dieselbe
+Sehne ganz behält — eine Seite zeichnet die Sehne, die andere den Teilungspunkt.
+
+Neu (`waterPlaneMath.subdivideRibbonByAxis`): jede Querlinie wird JEDEM Stück
+angeboten; ein Stück, das sie sauber schneidet, wird durch seine beiden Hälften
+ersetzt, ein Stück, das sie verfehlt oder nur streift, bleibt ganz. Die Stücke
+kacheln die Maske weiterhin exakt, es geht keines verloren, und es gibt keinen
+T-Vertex mehr, weil jede Linie beide Seiten jeder Sehne teilt.
+
+Gemessen (`client3d/scripts/smoke_water_plane.mjs` **[5d]**, 8-m-Fluss mit
+90°-Knick, 61 Knoten, 15 360 Proben; Metrik ist triangulierungs-UNABHÄNGIG: die
+Ebene durch drei gehobene Ecken eines Stücks gegen `waterLevelAt`):
+
+| Regel | Ecke von der eigenen Ebene | Fläche gegen `waterLevelAt` |
+|---|---|---|
+| laufender Rest (W5c) | 0,1168 m | **0,3229 m** bei (56, 20) |
+| Arrangement (W5d) | 0,0322 m | **0,0322 m** bei (54, 2) |
+
+Der Rest von 0,0322 m ist nicht das Mesh: (54, 2) ist die INNENSEITE der Kurve,
+wo `waterLevelAt` selbst springt (eine Haaresbreite links projiziert auf den
+Ost-Schenkel, rechts auf den Nord-Schenkel, und deren Bogenkoordinaten liegen
+zwei halbe Bandbreiten auseinander). Der Schnitt landet AUF dem Sprung — mehr
+kann eine Fläche nicht, und es ist derselbe Sprung, mit dem die Bake das Bett
+gegraben hat. Kosten: ein Stück je Knoten (255 Stücke für einen 256-Knoten-
+Mäander, 15 ms), Deckel `WATER_STRIP_MAX` = 1024.
+
+### Das reliefreie Band bekommt sein eigenes Maß — W5e (Server) (§ A16.3 / § G4)
+
+> **ÜBERHOLT durch Wasser v2 K-A E6** (`HEIGHT_BAKE_VERSION` 8, Nachtrag „Der
+> Rückbau der Ufer-Wächter" am Ende dieses Dokuments): das reliefreie Band UND
+> die Bankklemme sind gelöscht, weil der Terrain-Vertex auf `max(h, w_level)`
+> gehoben wird und beide Defekte damit im Renderer beantwortet sind. Die Zahlen
+> unten bleiben als Beleg dafür lesbar, warum ein 1-m-Band nichts ausrichtete;
+> die Regel und die Konstante gibt es nicht mehr.
+
+*Befund des Users nach Bake v5: „die Wellen des angrenzenden Geländes am Rand
+des Wassers" sind KOMPLETT unverändert. Der Nachtrag **ersetzt** die Breiten-
+Aussage von W5d Nr. 1 (die Regel selbst bleibt); der Client ändert sich nicht.
+`HEIGHT_BAKE_VERSION` **5 → 6**.*
+
+#### Die Zahl, die es überführt
+
+W5d hat das Mikro-Relief am Wasser ausgeblendet und dafür das **`shore_ramp_m`**
+der Fläche als Bandbreite genommen — mit der Begründung, die zwei Hälften eines
+Ufers sollten eine Zahl teilen. Genau das war der Fehler: die beiden Zahlen
+beschreiben verschiedene DINGE. Der Rampenwert sagt, wie schnell das BETT fällt;
+das Band muss sagen, wie weit eine WELLE des Nachbargeländes niedergehalten
+wird. Die Saat-Art `river` deklariert 1,0 m Rampe (`shared/terrain/types.json`),
+`water` nimmt die 3,0 m Vorgabe — die autorierte Welle einer Wiese ist typisch
+**16 m** lang. Ein 1–4-m-Band liegt damit INNERHALB einer einzigen Flanke.
+
+Gemessen auf der Fixture von `scripts/smoke_height_bake.py` **[11h]** (See
+(0,0)–(40,40), Wiese Amplitude 1,0 / Welle 16, Probe 8 m östlich des Umrisses):
+
+| Bandbreite | Gewicht 1 m vom Umriss | Kamm 8 m draußen | Schlimmstes im 4-m-Kragen |
+|---|---|---|---|
+| 1 m (Saat `river`) | **1,0** | **0,968 m** | 0,772 m |
+| 3 m (Vorgabe `water`) | 1,0 | **0,968 m** | — |
+| 4 m (Fixture W5d) | 1,0 | **0,968 m** | — |
+| **16 m (v6)** | **0,0112** | **0,484 m** | **0,121 m** |
+
+Dreimal dieselbe Zahl: das Band hat den Kamm nie berührt, es hat nur den letzten
+Meter der Flanke umgeformt. Vom Wasser aus ist das exakt „nichts hat sich
+geändert".
+
+#### Die Regel (eine, `HeightModel._relief_weight`)
+
+    Band = max(shore_ramp_m, RELIEF_SHORE_FADE_M)      RELIEF_SHORE_FADE_M = 16 m
+
+`RELIEF_SHORE_FADE_M` ist **eine Flanke der Standardwelle**
+(`models.terrain.DEFAULT_RELIEF_WAVE_M` 32 / 2, im Smoke gegen diese Konstante
+geprüft, damit die beiden nicht auseinanderlaufen). Eine Welle steigt über eine
+Flanke und fällt über die nächste; ein Band, das kürzer als eine Flanke ist,
+kann eine Flanke nur eindellen. Das `max` sorgt dafür, dass das relieffreie Band
+nie INNERHALB des Bankklemmen-Bandes endet.
+
+**Bewusst NICHT die Welle der Nachbarfläche selbst.** Erstens spränge die
+Bandbreite an jeder Grenze zwischen zwei Reliefflächen, und ein Sprung im
+Gewicht ist eine Stufe im Boden — ein Uferdefekt gegen einen Naht-Riss getauscht.
+Zweitens geht `relief_wave_m` bis 200 m: ein Fluss durch eine hügelige Welt
+planierte dann einen 100-m-Korridor an beiden Ufern. Drittens braucht eine lange
+Welle gar kein breites Band — über 16 m einer 200-m-Welle steigt der Boden nur um
+etwa `Amplitude · 16/100`, das Band entlässt sie also von selbst sanft.
+
+**Kein Ausschalter mehr.** `shore_ramp_m = 0` heißt weiterhin „Becken mit einer
+Stufe als Ufer" und betrifft nur das BETT (Carve unverändert geprüft, [11e]);
+für das Relief der Nachbarfläche sagt diese Null nichts. Die Regel des Users ist
+ohne Ausnahme formuliert.
+
+**Wer das Relief autoriert, ist egal** ([11i]): das Gewicht ist Geometrie gegen
+den WASSER-Umriss und wird in `natural()` auf das fertige Rauschen angewandt —
+die Wiese nebenan, der Wald jenseits des Flusses und eine zweite Fläche über dem
+Wasser selbst werden vom selben Band verblasst.
+
+#### § G4, Rand-Hälfte: die Schranke wird nur besser
+
+Eine Probe im Polygon wird aus den vier Ecken ihrer Gitterzelle gezeichnet; eine
+Ecke AUSSERHALB liegt höchstens `step·√2` vom Umriss. Damit gilt (Fixture ohne
+Höhenfläche):
+
+    gezeichnet − Spiegel ≤ max(WATER_BANK_LIP_M, Amplitude · smoothstep(step·√2 / Band))
+
+Der zweite Term fällt monoton in `Band` — ein breiteres Band kann die Schranke
+nur senken. Auf dem 2-m-Gitter: `1,0 · smoothstep(2,83/16) = 0,083 m`, unter der
+Lippe (0,1 m) und damit **konstruktiv**, wo das 4-m-Band von v5 rechnerisch
+0,786 m zuließ und nur die Messung es rettete. Gemessen (**[11g]**):
+
+| Gitter | v6 gezeichnet über dem Spiegel | ohne Verblassen (rot) |
+|---|---|---|
+| 2 m | 0,0828 m (≤ Lippe, konstruktiv) | 0,3892 m |
+| 4 m | 0,0918 m (≤ Lippe) | 0,4260 m |
+| 8 m | 0,0979 m (≤ Lippe) | 0,4463 m |
+| 16 m | 0,2069 m (jenseits der Konstruktion) | 0,3571 m |
+
+#### Erreicht die Änderung eine laufende Welt?
+
+Ja, und das ist geprüft statt angenommen (**[11j]**): `height_sig()` hasht
+`code_version` = `HEIGHT_BAKE_VERSION`, die Signatur bewegt sich also allein
+durch den Versionssprung; `get_field()` nimmt die gespeicherte Rasterzeile aus
+`world_heightfield` NUR bei `stored.sig == sig`; die Kacheln, die der Client
+zeichnet, werden per Konstruktion nie persistiert (`get_tile`), und der Client
+holt Übersicht wie Kacheln neu, sobald `height_sig` im Worldmap-Payload springt.
+Es gibt kein zwischengespeichertes Artefakt, das den Neustart überlebt.
+
+---
+
+### Das Wasser-Raster — Wasser v2, K-A E1/E2 (§ A16.5 / § G2 / § G4)
+
+**Entschieden (User 2026-08-24):** `recherche-wasser-v2.md` § 4 **K-A** —
+„Wasser wird eine Bodenart". Der Umbau läuft in sechs Etappen
+(`plan-wasser-v2-ka.md`); **hier stehen E1 (Server) und E2 (Client)**. Der
+Wasserspiegel wird damit vom **gebauten Mesh** zum **abgetasteten Feld**. Was in
+diesem Nachtrag steht, ist additiv: die Polygon-Meshes von § A16.8 zeichnen
+unverändert weiter, der Terrain-Shader ist nicht angefasst, und `h_final`
+bewegt sich um keinen Millimeter.
+
+`HEIGHT_BAKE_VERSION` **6 → 7**. Nicht weil die Höhen anders herauskämen — der
+Spiegel war immer schon Eingabe des Carve und wird jetzt zusätzlich
+ausgeliefert — sondern weil die Kachel-NUTZLAST eine Funktion des Codes ist und
+eine v6-Kachel gar kein Wasserfeld hat. Der Sprung ist das Einzige, was eine
+laufende Welt zum Nachladen bringt (§ „Erreicht die Änderung eine laufende
+Welt?").
+
+#### 1. Die Auslieferung — zweites Feld derselben Kachel
+
+Kachelindex, Signatur, Cache, Stapelgröße und die Statistik-Persistenz sind
+**unverändert wiederverwendet**. Eine Kachel trägt zusätzlich:
+
+```jsonc
+"water": {
+  "level":  [[float|null, …], …],   // 129 × 129, Weltmeter; null = trocken
+  "flow_x": [[float, …], …],        // optional, siehe unten
+  "flow_z": [[float, …], …]
+}
+```
+
+- **Der Schlüssel FEHLT**, wenn die Kachel keinen Tropfen Wasser trägt — was
+  die meisten Kacheln der meisten Welten sind. Kein leeres Raster, keine Zeile
+  Nullen: dieselbe Aussage, die eine nicht indizierte Kachel über die Höhe
+  macht.
+- **`null` ist die einzige Maske.** `level[j][i]` ist der lokale Spiegel am
+  selben Stützpunkt, den `heights[j][i]` beschreibt — oder `null`, wenn dort
+  kein Wasser steht. Es ist NICHT der Umriss (siehe Dilatation).
+- **`flow_x`/`flow_z` fehlen GEMEINSAM**, wenn die ganze Kachel keinen Fluss
+  hat. Ein stehendes Gewässer hat eine Ein-Knoten-Achse und damit exakt (0, 0)
+  überall; zwei Gitter Nullen würden die Kachel verdoppeln, um nichts zu sagen.
+  Abwesenheit liest sich als „(0, 0) überall".
+- Rundung: `level` auf 3 Nachkommastellen wie `heights`, die Fließkomponenten
+  auf 6 wie `dir_x`/`dir_z` des Profils.
+
+#### 2. Die drei Regeln des Rasters (`HeightModel.water_at`)
+
+```
+level(p) = water_level_at(profile, p)     des OBERSTEN Wassers über p
+flow(p)  = water_flow_at(profile, p) · Faktor            desselben Wassers
+bedeckt  = INNERHALB des Umrisses ODER innerhalb WATER_RASTER_DILATION_M
+```
+
+**„Oberstes" ist die Regel des Bodens** — die zuletzt gemalte Fläche gewinnt,
+dieselbe, mit der `_kind_at` die Bodenart auflöst. **Innen schlägt dilatiert**,
+in zwei Durchgängen: der Ring außerhalb eines Flusses ist eine Filter-Reparatur
+und keine Autorenschaft, also muss ein Punkt, der wirklich in einem See liegt,
+den See lesen, auch wenn ein später gemalter Fluss dorthin reicht.
+
+**Der Wert im Ring ist die FORTGESETZTE Funktion**, nicht der nach außen
+getragene Randwert. `water_level_at` ist überall definiert (Projektion auf eine
+Polylinie plus Klemme), also bekommt ein Ringpunkt den Spiegel, den das Profil
+dort hätte — und genau das macht die bilineare Mischung INNERHALB des Umrisses
+exakt. Bewusst NICHT die Regel der Bankklemme (die liest den Pegel am NÄCHSTEN
+UMRISSPUNKT): die Klemme ist eine Aussage über den BODEN neben dem Wasser und
+darf kein Endniveau seitwärts über die Landschaft tragen, dies ist die
+analytische Fortsetzung eines Feldes.
+
+#### 3. Die Dilatationsregel — zwei Gitterschritte, und die Zahl ist eine Diagonale
+
+`WATER_RASTER_DILATION_STEPS = 2`, also **4 m** bei `TILE_STEP_M` = 2 m.
+
+Sei `P` ein Punkt INNERHALB eines Umrisses. Ein bilinearer Lookup bei `P` mischt
+die vier Ecken der Gitterzelle, in der `P` liegt. Liegt eine Ecke `C` außerhalb
+des Umrisses, dann schneidet die Strecke `P→C` den Umriss in einem `Q`, also
+
+```
+d(C, Umriss) ≤ |CQ| ≤ |CP| ≤ eine Zelldiagonale = √2 Schritte = 2,8284 m
+```
+
+**Ein Schritt deckt das nicht** (eine diagonale Ecke kann 2,83 m draußen
+liegen), **zwei decken es strikt**. Damit gilt konstruktiv: *jeder Punkt
+innerhalb jeder Wasserfläche liest vier definierte Ecken auf dem Basisgitter.*
+Ein `NaN`/`null` bedeutet **trockener Boden**, nie eine Lücke in den Daten.
+
+**Die Garantie gilt dem Basisgitter allein**, und das ist bewusst so. Die
+Mip-Pyramide des Clients dezimiert das Raster, der Ring ist also 2 Texel breit
+auf Stufe 0, eines auf Stufe 1 und darüber keines mehr — während dasselbe
+Diagonalargument auf jeder Stufe √2 **Texel** verlangt, d. h. 46 Basisschritte
+(92 m) auf der 64-m-Stufe. Einen Spiegel 92 m ins Land zu malen würde „das
+oberste Wasser über diesem Punkt" zu einer Aussage über Boden machen, den
+niemand Ufer nennt — für eine Stufe, auf der ein 6-m-Fluss ohnehin keine eigene
+Stützstelle mehr hat. Was eine grobe Stufe am Ufer falsch macht, deckt die
+Fragment-MASKE (E4), nie ein Loch im Boden.
+
+#### 4. Die Fließregel — der Server ist jetzt die Quelle
+
+`water_flow_at(profile, x, z, faktor)` ist die Zeile-für-Zeile-Übernahme von
+`client3d/src/scene/waterPlaneMath.waterFlowAt`: Achsentangente, an jedem Knoten
+über ein Fenster `min(halbe Vorstrecke, halbe Folgestrecke, 4 m)` kosinus-
+geblendet, am Knoten selbst exakt die normierte Winkelhalbierende. Die Regel
+wandert mit dem Mesh, das sie pro Vertex auswertete; die Zahlen bleiben
+identisch (Zwillingsprüfung: `scripts/smoke_height_bake.py` [12c] — der Client
+hat mit K-A E5 keinen zweiten Leser mehr, die Handrechnung steht seither
+vollständig in dessen Docstring).
+
+**Die LÄNGE ist der Fließ-Faktor** — die eigene Geschwindigkeit der Fläche geteilt
+durch den `flow_speed`-Regler ihrer ART (`heightfield.water_flow_factor`, der
+Zwilling von `@anima/scene-render waterFlowFactor`). Eine Fläche ohne eigenen
+Wert antwortet exakt 1, das Raster trägt dann die reine Einheitstangente.
+Warum ein Verhältnis und nicht die absolute Geschwindigkeit: der Regler der ART
+ist eine MATERIAL-Zahl, und eine Fläche darf nur skalieren, was das Material
+schon trägt.
+
+#### 5. Signatur und Statistik
+
+- **`height_sig` deckte die Wasser-Eingaben bereits** (`water_basis`: Polygon,
+  Pegel, Endniveaus, Bearing, `flow_along`, Linie, Breite, Tiefe, Uferrampe) —
+  **mit zwei Lücken, die dieser Umbau geschlossen hat**: `meta.flow_speed_m_s`
+  der Fläche und der `flow_speed`-Regler ihrer Art waren bis hierher reine
+  Optik, von niemandem gehasht. Jetzt SCHIFFT die Kachel den Fließvektor, also
+  sind beide Bake-Eingaben und stehen in `water_basis`. Sie sind die einzigen
+  Einträge dieser Signatur, die `h_final` um keinen Millimeter bewegen.
+- **`world_height_tile_stats` bleibt gültig.** `min`/`max`/`err` werden
+  ausschließlich von `heights` abgelesen (`tile_stats_from`), und der Pegel
+  ändert `h` nicht — die Zeilen bleiben also wahre Aussagen über ihr Raster.
+  Sie werden trotzdem neu berechnet, weil die Signatur (ihr Schlüssel) sich mit
+  `HEIGHT_BAKE_VERSION` bewegt; das ist der normale Weg und keine Migration.
+
+#### 6. Die gemessene Zahl: muss das Wasser-Raster feiner als 2 m sein?
+
+**Nein.** Gemessen auf der Haarnadel-Fixture (`smoke_height_bake.py` [8k]/[12d];
+drei Klicks A(150,300) → B(249,280) → C(201,260), 6 m breit, Maske
+(140,250)-(300,315)), bilinear gelesen gegen `water_level_at` an 321 × 321
+Proben innerhalb der Maske:
+
+| Gitter | größte Abweichung | davon auf „glatten" Zellen |
+|---|---|---|
+| **2 m** | **3,4347 m** | **0,0177 m** |
+| 1 m | 3,3638 m | 0,0088 m |
+| 0,5 m | 3,5273 m | 0,0015 m |
+
+„Glatt" heißt: alle vier Zellecken UND die Probe projizieren auf dasselbe
+Achsensegment, es läuft also keine Mittelachse durch die Zelle.
+
+**Die Lesart, und sie ist eindeutig:**
+
+1. Auf ihrem eigenen Gitter ist das Raster nicht „nah an" der Funktion, es IST
+   sie — Abweichung exakt 0 an jedem Stützpunkt.
+2. Die 3,4 m sind ein **Sprung von `water_level_at` selbst**. An der Innenseite
+   einer Haarnadel projiziert ein Punkt eine Haaresbreite links auf Schenkel 1
+   und rechts auf Schenkel 2; die Bogenkoordinaten unterscheiden sich um fast
+   die ganze Kehre. Gemessen fällt der Pegel bei z = 277,727 zwischen
+   x = 225,80 und x = 225,90 von 8,4414 auf 7,1463 — **1,2951 m über zehn
+   Zentimeter**. Halbieren und Vierteln des Gitters ändert die Zahl nicht
+   (3,36 / 3,53): *keine Auflösung löst einen Sprung auf.*
+3. Fern der Mittelachse ist das 2-m-Raster **auf 1,8 cm genau** und verhält
+   sich wie eine bilineare Lesung muss — zweiter Ordnung im Schritt
+   (0,0177 → 0,0088 → 0,0015).
+
+Ein feineres Wasser-Raster kauft also nichts. Der Rest ist eine Unstetigkeit
+des autorierten Spiegels und Sache der Fragment-Maske (E4), nicht der
+Payload-Auflösung. (Der W5d-Wert 0,0322 m stammt von der Bogen-Fixture von
+`smoke_water_plane.mjs` [5d] und beschreibt dieselbe Klasse: die Kante landet
+AUF dem Sprung, was das Beste ist, was eine Fläche kann.)
+
+#### 7. Client (E2) — Pyramide, Zwilling, Dezimierung
+
+- `client3d/src/scene/waterRaster.ts` hält das Feld je Kachel
+  (`WaterRaster`), wandelt `null` an der Wire-Grenze EINMAL in `NaN` und liefert
+  `rasterLevelAt` / `rasterFlowAt`. Die Leiter hat **keine Übersichts-Sprosse**:
+  das Übersichtsgitter trägt kein Wasser, also ist ein Punkt außerhalb der
+  geladenen Kacheln „hier ist kein Wasser bekannt".
+- **Die maskierte Mischung** (`waterBilinear`): eine Ecke mit Gewicht 0 wird
+  NICHT gelesen. Reines Fließkomma würde ihr `NaN` über `NaN · 0 = NaN`
+  weitertragen — und das ist kein Rundungsdetail: die Pyramide wird AN den
+  Gitterpunkten gefüllt (`tx = 0`), der Ring verlöre also sein äußerstes Texel,
+  die Dilatation fiele von 2 auf 1 Schritt und damit unter das √2, das die
+  Garantie oben braucht. Ergebnis: Löcher im Wasser entlang eines Gitters von
+  Linien.
+- **Die Wasser-Pyramide ist `buildPyramid`**, ohne eigene Regel:
+  - **Dezimierung = TEILMENGE, kein Mittelwert.** Der Spiegel ist stückweise
+    LINEAR, also IST jeder zweite Stützpunkt der Spiegel auf dem groben Gitter
+    — dasselbe Argument, das § G2 für die Höhen führt. Ein Boxfilter erzeugte
+    eine Fläche, die kein Profil beschreibt, und verschmierte das Ufer (er
+    mischte am Randtexel den Pegel mit seinem dilatierten Nachbarn). `min` wäre
+    ebenso eine andere Fläche und ist unnötig: unter K-A wird der Boden auf
+    `max(h, level)` gehoben, der Spiegel muss nicht pessimistisch sein.
+  - **Ein grobes Texel ist genau dann Wasser, wenn sein eigenes Basistexel es
+    ist.** Die Maske dezimiert MIT dem Pegel, weil sie der Pegel IST (`NaN`).
+    Jede andere Regel („Wasser, wenn EINES der vier", „…wenn ALLE vier") wäre
+    ein zweites Buch darüber, wo das Wasser steht.
+- `wlevelAt(pyr, x, z, k)` ist der CPU-Zwilling des GLSL, das E3 neben
+  `tlodHeight` gestellt hat (`tlodWaterAt`); die Uniformen `uTlodWater`,
+  `uTlodWaterGeom`, `uTlodWaterLevel` sind gebunden und aktuell und werden seit
+  E3 **von der Wasser-Variante des Terrain-Programms gelesen** (Punkt 7a). Es
+  gibt **keinen FERN-Zwilling** (Punkt 7 oben).
+
+#### 7a. Client (E3) — der Vertex-Hub, als ZWEITE Materialvariante
+
+Der Terrain-Vertex landet auf `y = max(h, w_level)`, wo das Raster einen Pegel
+hat. Vier Entscheidungen, alle in `client3d/src/scene/terrainLod.ts`:
+
+- **Zwei Programme, nicht eines.** Die Risiko-Regel aus `recherche-wasser-v2.md`
+  § 4 K-A ist bindend: trockener Boden darf für das Wasser nichts zahlen. Der
+  Besitzer baut deshalb ZWEI Materialien durch dieselbe Kette
+  (`ground.rebuildBase`), `patchTerrainLod(mat, water)` hängt den Hub nur an
+  eines davon, und der `customProgramCacheKey` des trockenen bleibt Zeichen für
+  Zeichen `…+terrain-lod` — three gibt ihm damit dasselbe `WebGLProgram` wie
+  vorher. Gezeichnet wird als zweiter Draw-Call aus einem zweiten
+  Instanz-Puffer, dessen Mesh KIND des trockenen ist (Sichtbarkeit und Lebens-
+  dauer bleiben „das Terrain", ganz).
+- **Das Tor ist die Kachelliste des Wasser-Rasters** (`nodeHasWater`): ein Stück
+  bekommt die Hub-Variante, wenn sein GESCHLOSSENES Rechteck eine Kachel mit
+  `water`-Feld berührt — `floor((x + size) / tile_m)`, ohne das `− 1e-6` von
+  `nodeBounds`. Damit gehört ein von zwei Stücken geteilter Vertex zu BEIDEN
+  Kachelspannen, beide laufen durch dasselbe Programm, und ein Riss an der Naht
+  ist konstruktiv unmöglich. (Der Server garantiert die andere Hälfte: eine
+  Kachel ohne `water`-Schlüssel hat in ihrem ganzen Fenster inklusive Rändern
+  keinen nassen Stützpunkt — `water_raster` antwortet sonst nicht None.)
+- **Der max wird PRO STUFE genommen, der Morph über das Paar**:
+  `y = mix( max(h₁,w₁), max(h₂,w₂), f )`, jede Lesung an ihrem eigenen
+  `nodeStep · 2^k`. Die andere Reihenfolge (erst die Spiegel mischen, dann ein
+  max) springt am Ufer um `level − h`, sobald `f` die 0 verlässt, weil die
+  maskierte Mischung eines nassen mit einem trockenen Texel für jedes Gewicht
+  > 0 trocken ist — gemessen 0,25 m auf der Ufer-Fixture.
+- **λ wird NIE gehoben.** `tlodMorphAt` misst weiter gegen `tlodHeight(p, 0.0)`,
+  also lesen beide Varianten dieselbe Morph-Koordinate und setzen einen
+  geteilten Vertex auf denselben Punkt.
+- **Trockentest ist `( w > h ) ? w : h`, nie `max()`**: das Sentinel ist das
+  `NaN` aus der Textur, und GLSL legt nicht fest, welchen Operanden `max` bei
+  einem NaN liefert.
+- **Statistik unangetastet.** `min`/`max`/`err` bleiben höhenrein (Punkt 5). Der
+  gehobene Spiegel kann über die Box eines Knotens ragen (höchstens um die
+  Wassertiefe dort) — das kostet nur LOD-DISTANZ, seit der Frustum-Cull weg ist,
+  und `|max(a,b) − max(c,d)| ≤ max(|a−c|,|b−d|)` hält den Stufenfehler unter
+  `max(err_h, err_w)`; der Carve schreibt die Spiegel-Variation ohnehin in das
+  Bett, ein gehobener Spiegel ist also FLACHER als das Bett, das er deckt.
+- **Die Wasser-Schattierung kam in E4** (siehe Abschnitt 9): in E3 wurde ein
+  gehobenes Pixel noch als der Boden gemalt, den es ersetzt. Die Polygon-Spiegel
+  zeichnen bis E5 weiter. Isolationsschalter **22** (`uTlodNoWater`, Uniform
+  statt Define) nimmt den Hub live heraus — und seit E4 die Schattierung mit
+  ihm, über dasselbe Uniform.
+
+#### 8. Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Raster = `water_level_at` auf dem Gitter, Dilatation, Diagonale | `scripts/smoke_height_bake.py` [12a]/[12b] |
+| Fließvektor = die Zahlen, die der Client vor K-A trug, Faktor | [12c] (Handrechnung dort; der Client-Zwilling ist mit E5 gelöscht) |
+| Kurveninnenseite: 2 m gegen 1 m gegen 0,5 m | [12d] |
+| Payload additiv, Flussfelder optional | [12e] |
+| Statistik ist höhenrein | [12f] |
+| Client liest die Server-Tabellen zurück, maskierte Mischung | `client3d/scripts/smoke_world_height.mjs` [W1]–[W4] |
+| Pyramide: Teilmenge, Sentinel, Ringverlust je Stufe, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [15] |
+| Hub `max(h, w)`, Ring-Sonden, Reihenfolge des Morphs, Tor | `client3d/scripts/smoke_terrain_lod.mjs` [16] |
+| Zweite Variante: GLSL-Pins, Cache-Key, `uTlodNoWater` | `client3d/scripts/smoke_terrain_lod.mjs` [17] |
+
+#### 9. Die Wasser-Schattierung im Terrain-Fragment (K-A E4)
+
+**Kein Payload ändert sich.** E4 ist reine Client-Darstellung: derselbe Bake,
+dieselben Kacheln, dieselbe zweite Materialvariante. Was dazukommt, ist die
+Antwort auf „wie sieht ein gehobenes Pixel aus" — bisher: wie der Boden, den es
+ersetzt.
+
+**Single-Layer-Water (Recherche § 3.3).** Ein Wasserpixel wird nicht mehr
+gemischt, sondern **im selben opaken Durchgang** schattiert: der Shader, der das
+Bett gerade texturiert hat, mischt das Wasser selbst dazu. Die Reihenfolge im
+Fragment, in Shader-Reihenfolge:
+
+1. nach `#include <metalnessmap_fragment>` — `tlodWaterSurface()`: Absorption
+   über die Tiefe auf die **Albedo** (nicht auf das fertige Licht: sonst wäre
+   tiefes Wasser ein flacher, unbeleuchteter Fleck, der nachts hell bliebe),
+   dazu Rauheit und Metallizität des Wassers, alles über **einen** Faktor `twA`;
+2. in `#include <normal_fragment_begin>` — `tlodWaterNormal()`: die
+   Ripple-Normale statt der Bodennormale, über denselben Faktor geblendet;
+3. vor `#include <opaque_fragment>` — `tlodWaterOut()`: Fresnel-Himmelsanteil
+   und Schaumband, die beiden Dinge, die keine Albedo sind.
+
+**Die Tiefe ist ein Varying, keine Textur-Lesung.** Der Vertex kennt Bett und
+Spiegel bereits (`h1/h2` gegen `l1/l2`), also fährt
+`vTlodWet = mix(l1 − h1, l2 − h2, f)` mit. Das ist exakt die Differenz der
+beiden linearen Interpolanten, die das Dreieck wirklich zeichnet — die
+Uferlinie liegt also genau dort, wo der gezeichnete Spiegel das gezeichnete
+Bett verlässt, und die 4 `texelFetch`, die der Mesh-Shader je Pixel für
+`tlodHeight` ausgab, entfallen ersatzlos.
+
+**Die Kurven sind die des Spiegels**, Konstante für Konstante:
+`waterShoreAlpha` (¾ der eigenen Bettiefe, W4b) ist jetzt die Absorption,
+`waterFoam`/`WATER_FOAM_BAND_M`/`_STRENGTH` das Schaumband,
+`waterEdgeFade` die Randrampe (ohne sie stünde der weiße Schaum als Stufe an
+der Wasserlinie, weil `waterFoam(0) = 1` ist). Ripple, Anisotropie, die zwei
+Geschwindigkeiten und die Wellen-Normalmap kommen unverändert aus
+`@anima/scene-render materials.ts` — die Textur wird **geteilt**, nicht
+nachgebaut.
+
+**Welche Wasserart ein Pixel ist**, beantwortet die **id-Maske des
+Layer-Compositors**: sie nennt je Texel das Paar (oben, darunter) und sagt
+nichts darüber, auf welcher Seite man steht — was hier reicht, weil ein Pixel,
+das gehoben wurde, definitionsgemäß im Wasser steht: die **Wasserhälfte** des
+Paars ist seine Art. Je Layer-Index liegt eine Zeile in einer kleinen
+`3 × n`-RGBA32F-Tabelle (Tint/`sky_mix`, `wave_m`/`speed`/`flow_speed`/
+Deckkraft-Tiefe, Rauheit/Metallizität/`is_water`). Zeilen, die kein Wasser sind,
+tragen den Look des **ersten** Wassers der Welt, damit ein Randpixel Wasser
+zeichnet und nicht den Ton einer Wiese.
+
+**Die Deckkraft-Tiefe ist damit pro ART und nicht mehr pro FLÄCHE** — eine echte
+Verengung gegenüber W4b, weil die Maske Arten kennt und keine Flächen. Die
+zuletzt gemalte Fläche einer Art gewinnt (die Regel, die der Server bei
+überlappenden Gewässern selbst benutzt). **E6 hat entschieden, dass das so
+bleibt** (Begründung im Nachtrag „Der Rückbau der Ufer-Wächter": der Look ist
+ein Art-Datensatz, ein billiger Rasterkanal mischte am Ufer gegen 0 und deckte
+die Wasserlinie zu, und der Gewinn wäre eine Art, die zweimal mit
+verschiedenen Tiefen gemalt wurde) — wer eine andere Deckkraft braucht, malt
+eine eigene ART.
+
+**Der Fließvektor** fährt als zweites Datenfeld neben dem Pegel mit
+(`uTlodFlow`, RG32F, **nur Stufe 0** derselben Lattice) und wird **im Fragment**
+gelesen (`waterShade.twFlowAt`, am eigenen XZ des Pixels, 4 `texelFetch`
+bilinear auf Stufe 0). Seine LÄNGE ist der Geschwindigkeitsfaktor der Fläche,
+`(0,0)` ist stilles Wasser.
+
+**Warum nicht im Vertex** (Nachtrag 2026-08-27, vorher stand hier genau das):
+Die Richtung ist glatt, ein Varying lag also nahe — nur ist das Feld es nicht.
+Der Server schreibt den Fluss ausschließlich ins Gewässer plus die 4 m
+Dilatation des Bakes, und die Vertices eines Terrain-Stücks stehen
+`baseStep · 2^level` Meter auseinander: 2 m auf Stufe 0, 16 m auf Stufe 3,
+64 m auf Stufe 5. Ein 6 m breiter Fluss ist mit Dilatation ein 14 m schmales
+Band — aus 16 m Abstand können **alle vier** Ecken einer Zelle daneben liegen,
+das Varying ist dann exakt `(0,0)`, und `twRipple` nimmt seinen STILL-Zweig:
+gezeichnetes stehendes Wasser, während die Punkt-Messung der Debug-Zeile am
+selben Ort 2 m/s meldet. Das ist kein Randfall, sondern die Mehrheit der
+Ausrichtungen ab Stufe 4. Der Fragment-Tap kennt die Stufe gar nicht und kann
+deshalb nicht kollabieren. `tlodFlowAt` und `vTlodFlow` sind ersatzlos
+gelöscht; der TS-Zwilling der GPU-Lesung heißt `terrainLod.gpuWaterFlowAt`.
+
+**Der Admin-Grundriss ist davon nicht betroffen.** Die Vorschau rendert das
+Wasser weiter als Spiegel-Mesh aus `packages/scene-render/materials.ts`, mit
+einem konstanten `aWaterFlow` je Fläche und ohne LOD — es gibt dort weder
+Lattice noch Stufen, an denen etwas ausfallen könnte.
+
+**Was das trockene Programm kostet: nichts.** Die dry-Variante bekommt weder
+Chunk noch Uniform noch Anker dazu; ihr Fragment ist Zeichen für Zeichen das
+von vorher (Beweis: `smoke_terrain_lod.mjs` [18]). **Was das nasse Programm
+kostet:** ein trockenes Pixel innerhalb der nassen Variante zahlt zwei
+Ableitungen und einen Vergleich; ein Wasserpixel zahlt seit dem Umzug **+4
+`texelFetch` im Fragment**, dafür fallen im Vertex **−4** weg (das wet-Vertex-
+Programm sinkt von 20 auf 16 Fetches, das dry bleibt unberührt).
+
+**Zurückgegebene Arbeit:** wo `twA == 1` (ab der Deckkraft-Tiefe) ist die
+Bodennormale unsichtbar und wird **nicht berechnet** — `tlodNormalAt` sind 16
+`texelFetch`, die dort entfallen. Die zweite Hälfte der Recherche-Erwartung
+(ein Slice statt vier in `lcSurface`) ist **nicht** umgesetzt: sie säße in
+`@anima/scene-render layerCut.ts`, also im geteilten Compositor, und würde das
+trockene Programm mitverändern.
+
+| Was | Wo |
+|---|---|
+| Absorption, Schaumband, Randrampe, Tint-Mix (Handtabellen) | `client3d/scripts/smoke_water_shade.mjs` [1]–[3] |
+| Look-Tabelle = die Defaults des Spiegels, Packung | ebenda [4] |
+| Flow-Frame: Identität bei Stille, 3:1 stromauf | ebenda [5] |
+| GLSL-Pins: Reihenfolge, Konstanten, `textureGrad`, Maskenpaar | ebenda [6] |
+| Fließvektor im Fragment: `twFlowAt` = Punktmessung auf jeder Stufe, das zurückgebaute Vertex-Blend geht ab Stufe 3 still | `client3d/scripts/smoke_flow_lod.mjs` |
+| Trockenes Programm unverändert, drei Einfügepunkte, Uniformen | `client3d/scripts/smoke_terrain_lod.mjs` [18] |
+| Tiefen-Varying, `liftedDepth`, und dass es KEIN Flow-Varying mehr gibt | ebenda [17] |
+
+#### 10. Der Rückbau des Spiegels (K-A E5)
+
+**Es gibt kein Wasser-Mesh mehr.** E3 hebt den Terrain-Vertex auf
+`max(h, w_level)`, E4 schattiert dasselbe Pixel als Wasser — die zweite,
+transparente Fläche darüber war seither ein Doppel, und E5 löscht sie samt
+allem, was nur sie gebraucht hat:
+
+| Was | Wo es stand |
+|---|---|
+| `buildWaterPlane`, `earcutStrips`, `patchWaterShore`, `WATER_SHORE_CACHE_KEY` | `client3d/src/scene/waterPlane.ts` (Datei gelöscht) |
+| `addMirror`, die Material-Karte je Wasser-Art, die Wasser-Mesh-Liste, der Textur-Preload der Flächen-Stufe, `materialFor` | `client3d/src/scene/ground.ts` |
+| `liftToWaterProfile`, `subdivideRibbonByAxis` (+ `crossNormalAt`, `clipHalfPlane`, `ringSignedArea`, `WATER_STRIP_MAX`, `WaterPoint2`), `waterFlowAt` (+ Blend-Fenster), `waterShoreGlsl`, `waterShoreBody`, `waterAlpha`, `WATER_SHORE_BAND_M`, `WATER_FOAM_ALPHA` | `client3d/src/scene/waterPlaneMath.ts` |
+| `isWaterClass` — die Ausnahme, mit der Natur-Boden und Schleier dem Wasser-Material auswichen | `client3d/src/scene/naturalGroundMath.ts` |
+| Attribute `aWaterFlow` / `aWaterOpaque`, der Ufer-`discard`, `depthWrite: false` und die Transparenz-Sortierung des Wassers | ebenda, mit den Meshes |
+
+**Was bleibt und WARUM:** `waterProfileOf` / `waterLevelAt` (Spielmechanik:
+`floatRootY`, `typeAt`, Waten/Schwimmen — dort muss der Pegel exakt sein, nicht
+gerastert; dazu die Wasserfall-Erkennung und die Look-Tabelle), die Uferkurven
+`waterOpaqueDepthM` / `waterShoreAlpha` / `waterFoam` / `waterEdgeFade` samt
+ihren Konstanten (das Terrain-Fragment schattiert mit genau diesen Zahlen), und
+der Fließ-FAKTOR `waterFlowFactor` im geteilten Paket — er ist jetzt die
+Kodierung, die der Server in das Raster bäckt und die der Terrain-Shader als
+Länge zurückliest.
+
+**Der Wasserfall bleibt, und hängt jetzt am Raster-Material statt am Spiegel.**
+`waterfallsFrom(profile, strokeWidthM(meta))` liest weiter die Achse aus der
+Nutzlast — die Erkennung ist unberührt. Neu ist nur die Herkunft der
+Wellennormalen des Vorhangs: `buildWaterfall(fall, sink)` holt sie mit
+`surfaceWaveNormal(THREE)` direkt aus `@anima/scene-render materials.ts`, also
+genau die Textur, die auch das Terrain-Fragment scrollt (Punkt 9), statt sie vom
+Material des Spiegels abzulesen. Die Vorhänge und Schaumscheiben sind damit die
+EINZIGEN Meshes, die eine gemalte Wasserfläche noch erzeugt — ein Blatt in der
+Luft ist das eine, was ein Höhenfeld nicht sein kann. Sie leben und sterben mit
+den Flächen (`ground.clearAreas`).
+
+**Isolationsschalter 11** heißt darum nicht mehr „Water planes hidden", sondern
+„Waterfalls hidden": die Wasser-OBERFLÄCHE ist Teil des Terrains und wird mit
+Schalter 22 (`noWater`) abgeschaltet.
+
+**Die Beweise (§ B5a):** `smoke_water_plane.mjs` behält die Abschnitte mit
+Lesern — Profil [1], Uferkurven [2]/[2a]/[2b]/[2d], Carve-Invariante [3], die
+Fixtures [4]/[4b]/[4d]/[4e], Waten/Schwimmen [6], Uferneigung [7] — und zählt
+in [8] die gelöschten Namen als ROTE Proben mit. Gestrichen sind die
+Mesh-Abschnitte [2c] (Ufer-GLSL), [4c]/[4d-flow]/[4e-flow]/[4f] (der
+Per-Vertex-Fließvektor; der Server prüft die Regel jetzt in
+`scripts/smoke_height_bake.py` [12c]), [5]/[5b] (der Lift) und [5c]/[5d] (die
+Streifen). `smoke_waterfall.mjs` prüft die neue Herkunft der Wellennormalen,
+`smoke_layer_cut.mjs`, `smoke_natural_ground.mjs`, `smoke_surface_patch.mjs` und
+`smoke_fog_veil.mjs` prüfen die eine verbliebene Material-Kette.
+
+---
+
+### Das Wasser-Raster nennt seine ART pro Texel — die zweite Hälfte von F-A (§ A16.5)
+
+*Ein Server-Umbau (`HEIGHT_BAKE_VERSION` **9 → 10**, additive Kachel-Nutzlast)
+und ein Client-Schnitt. v9 gab dem Renderer ein Feld, das sagt, **OB** ein Pixel
+in gemaltem Wasser steht (`sd`). **WELCHES** Wasser es ist, blieb bei der
+ID-Maske des Boden-Kompositors — und die beantwortet eine andere Frage.*
+
+#### 1. Der Befund
+
+Nutzer-Beleg vom 2026-08-25: „See UND Fluss zeigen Flecken, die wie
+**Waldboden** aussehen, teils durchscheinend, teils nicht; beim Fluss stimmt die
+**Fließrichtung** nicht; die gewünschte Rand-Transparenz funktioniert an
+**manchen** Seestellen."
+
+Alles davon steht in EINER Zeile des Fragments, die es bis v9 gab:
+
+```glsl
+layer = twIsWater( a ) ? a : b;     // (a, b) = das ID-Paar der Material-Maske
+```
+
+Das Paar nennt die **oberste GEMALTE Art** und die darunter. Das ist eine
+Aussage über den BODEN. Überall dort, wo das Wasser nicht die oberste gemalte
+Art ist — ein Fluss unter einer darüber gemalten Waldfläche, ein See mit
+`bed_kind`, jede Z-Order-Änderung — nennt das Paar **gar kein Wasser**, beide
+Hälften fallen durch `twIsWater`, und die Wahl landet auf einer
+Platzhalter-Zeile: dem **primären Wasser der Welt**.
+
+Gemessen auf der Fixture „Fluss durch darüber gemalten Wald"
+(`scripts/smoke_height_bake.py` **[12j]**, `terrain_layers.LayerModel`):
+
+| Größe | gemessen |
+|---|---|
+| ID-Paar in der Flussmitte (60, 40) | **(1, 1) = (g, g)** — der Wald |
+| dessen Ebene `water` | **false** — beide Hälften fallen durch |
+| eigene Ebene des Flusses | **2**, `water: true` — die Maske nennt sie hier nie |
+| Anteil der nassen Texel des Fensters mit falschem Paar | **alle** (Menge der Ebenen über alle nassen Texel = `{1}`) |
+
+Und was die falsche Zeile kostet, in Zahlen
+(`client3d/scripts/smoke_water_shade.mjs` **[11]**; tiefer See 4 m Bett →
+`opaque` 3,0 m, `flow_speed` 0; Fluss 1,2 m Bett → `opaque` 0,9 m,
+`flow_speed` 1,0 m/s):
+
+| bei 0,60 m Wassertiefe | richtige Zeile (Fluss) | gewählte Zeile (See) |
+|---|---|---|
+| Absorption `3t²−2t³` | `t = 2/3` → **20/27 = 0,740741** | `t = 0,2` → **0,104** |
+| Rest des BETTS im Bild | **7/27 = 0,259259** | **0,896** |
+| — Faktor | | **3,456× so viel Waldboden** |
+| Drift der Kämme (`flow_speed · |flow|`) | **1,0 m/s** | **0 m/s — nichts bewegt sich** |
+| Ripple-Wellenlänge | **1,2 m** | **2,0 m** |
+
+Das ist die ganze Beobachtung: „wie Waldboden" ist `1 − Absorption` mit der
+falschen `opaque`-Tiefe, „teils durchscheinend, teils nicht" ist derselbe Pixel
+bei anderer Tiefe, „Fließrichtung stimmt nicht" ist ein Muster, das gar nicht
+wandert (der RAHMEN kam immer aus dem Raster und war nie falsch), und „an
+manchen Seestellen richtig" sind genau die Stellen, an denen das Wasser zufällig
+doch die oberste gemalte Art ist.
+
+#### 2. Server (Bake v10): Palette + Index-Gitter
+
+```jsonc
+"water": {
+  "level":    [[float|null, …], …],   // unverändert
+  "sd":       [[float|null, …], …],   // unverändert (v9)
+  "kinds":    ["water", "river"],      // NEU: die Palette DIESES Fensters
+  "kind_idx": [[int, …], …],           // NEU: Index hinein, pro Texel
+  "flow_x":   [[float, …], …],         // unverändert, weiterhin optional
+  "flow_z":   [[float, …], …]
+}
+```
+
+- **`kind_idx[j][i]` nennt die Art des OBERSTEN Wassers** an diesem Texel —
+  dieselbe Entscheidung, die schon `level` und `sd` wählt. „Zuletzt gemaltes
+  Wasser gewinnt" ist EINE Entscheidung, und alle fünf Kanäle eines Texels
+  stammen aus demselben Wasser. `HeightModel.water_at` gibt die Art als fünften
+  Rückgabewert.
+- **Eine PALETTE statt eines Namens pro Texel.** Eine Kachel trägt ein oder zwei
+  Wasser; 129 × 129 Wiederholungen derselben Handvoll Wörter wären hunderte
+  Kilobyte. Und ein INDEX ist ohnehin genau das, was eine Look-Tabelle
+  indiziert. Die Reihenfolge ist „zuerst angetroffen" beim zeilenweisen Lauf
+  über das BESCHNITTENE Fenster; die Palette ist nie leer, solange die Kachel
+  existiert.
+- **`kind_idx` ist 0, wo `level` `null` ist, und bedeutet dort NICHTS.** Kein
+  zweites Sentinel: `level` IST die Maske dieses Rasters, und ein zweites würde
+  nur wiederholen, was das erste sagt — und jeden Leser zwingen, eine nullable
+  Ganzzahl durch eine Textur zu tragen, die keinen Platz dafür hat.
+- **Nichts wird geglättet oder gemischt.** Eine Art ist ein NAME; der Mittelwert
+  zweier Namen ist keiner. Das Gitter wird beschnitten wie `level` und `sd`.
+- `h_final` bewegt sich um keinen Millimeter. Der Zähler dreht sich, weil eine
+  v9-Kachel keine Palette trägt und der Renderer dann nichts hat, womit er seine
+  Look-Tabelle indizieren könnte.
+
+#### 3. Client: die Look-Tabelle ist nach ART geschlüsselt, die ID-Maske ist raus
+
+- **`WaterLook`-Tabelle: eine Zeile pro WASSERART** statt einer pro Ebene. Damit
+  fallen die Platzhalter-Zeilen weg (jede Bodenebene trug das primäre Wasser als
+  Attrappe) und mit ihnen das `is_water`-Flag im dritten Slot von Texel 2 — es
+  war nur dazu da, diese Attrappen wieder auszusortieren. Der Slot ist jetzt
+  Reserve. **Zeile 0 ist das primäre Wasser** und das, was eine unbekannte Art
+  liest (und jede v9-Kachel): schlimmster Fall „das falsche Wasser", nie ein
+  bodenfarbener See.
+- **`uTlodWaterKind`** — R32F auf dem BASIS-Gitter der Wasser-Pyramide, neben
+  `uTlodFlow` und `uTlodWaterSd` und ohne eigene Geometrie (das Gitter IST
+  `uTlodWaterLevel[0]` über `uTlodWaterGeom.xy`). Der Client löst den NAMEN aus
+  dem Raster über die aktuelle `rowOfKind`-Abbildung in eine ZEILE auf
+  (`terrainLod.buildKindRows`), damit die Tabelle jederzeit neu geordnet werden
+  darf, ohne dass der Bake je eine Zeilennummer eines Renderers kennt.
+- **NEAREST, nie bilinear** (`waterRaster.nearestIndex` / `rasterKindAt`, GLSL
+  `twKindRow`): eine Look-Zeile ist ein Name. Wo zwei Wasserarten INNERHALB
+  einer zusammenhängenden Fläche aneinanderstoßen, wechselt die Zeile an der
+  Texelkante statt zu blenden — **angenommen und hier notiert**: es ist ein
+  Meter-Sprung im Farbton zwischen zwei Wassern, die der Autor als zwei Wasser
+  gezeichnet hat.
+- **Was gestorben ist:** `bindLayerIdUniforms` (ganz, samt der zweiten
+  Sampler-Bindung), `uTlodWaterMask` / `uTlodWaterMaskGeom` im Wasser-Programm,
+  `twIsWater`, `WaterLook.isWater` und die Attrappen-Zeilen. Der Boden-Kompositor
+  behält seine Maske unverändert für den BODEN; geborgt wird nichts mehr.
+- **Die H2-Oberflächenterme reiten dieselbe Zeile**: Rauheit, Metalness,
+  Himmelsanteil und Ripple lesen `look1`/`look2` derselben Zeile — sie werden
+  mit demselben Schnitt richtig, ohne eigene Änderung.
+
+#### 4. Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Palette + `kind_idx` von Hand auf einer Zwei-Arten-Fixture (Überlappung, Ring, trockene Texel, Ein-Eintrag-Fenster) | `scripts/smoke_height_bake.py` **[12i]** |
+| Verurteilung „Fluss durch Wald": ID-Paar `(g, g)`, Ebene nicht Wasser, alle nassen Texel betroffen; Raster nennt `river` | ebenda **[12j]** |
+| Client-Zwilling: Draht → Palette/Gitter, `nearestIndex`-Regel, Wechsel an der Texelkante, v9-Kachel, Index außerhalb der Palette | `client3d/scripts/smoke_world_height.mjs` **[W4b]** |
+| Die Zahlen der falschen Zeile (3,456× Bett, 0 statt 1 m/s, 2,0 statt 1,2 m) | `client3d/scripts/smoke_water_shade.mjs` **[11]** |
+| GLSL: Zeile aus `twKindRow`, kein `twIsWater`, kein `uTlodWaterMask` | ebenda **[6]**, **[7]** |
+| Uniform-Bindung: `uTlodWaterKind` am Wasser-Programm, Maske an keinem | `client3d/scripts/smoke_terrain_lod.mjs` **[18]** ("the water shading lives in the water program only") |
+
+---
+
+### Der Rückbau der Ufer-Wächter — Wasser v2, K-A E6 (Server) (§ A16.3 / § G4)
+
+*Letzte Etappe des K-A-Umbaus. `HEIGHT_BAKE_VERSION` **7 → 8**: die Höhen
+kommen für unveränderte Daten anders heraus, jede laufende Welt bäckt neu.*
+
+#### Was gelöscht ist
+
+Zwei Bake-Stempel haben zwischen v4 und v7 den Rand jedes Gewässers geformt.
+Beide waren gegen **ein** Symptom der Mesh-Ära geschrieben — der Spiegel war
+eine eigene, durchsichtige FLÄCHE, und der Boden daneben wusste nichts von ihr:
+
+| Weg | Was er tat | Warum er sterben kann |
+|---|---|---|
+| **Bankklemme** (v4): `_bank_clamp`, `WATER_BANK_LIP_M`, `water_bank_box`, `_ring_nearest_point` | hielt den Boden im `shore_ramp_m`-Band AUSSERHALB des Umrisses auf mindestens `water_level_at(nächster Umrisspunkt) + 0,1 m`, mit linear ausblendendem Minimum | Boden unter dem Spiegel ist kein Loch mehr, sondern **Bett**: der Terrain-Vertex wird auf `max(h, w_level)` gehoben (E3), der Spiegel steht also nirgends mehr in der Luft |
+| **Relief-Fade** (v5/v6): `_relief_weight`, `_relief_fade_width`, `RELIEF_SHORE_FADE_M` | nahm das Mikro-Relief über einen Kragen von `max(shore_ramp_m, 16 m)` auf 0 zurück, innerhalb des Polygons ganz | Boden ÜBER dem Spiegel am Rand ist kein Loch mehr, sondern ein **Fels im See** — es gibt keine Platte, in die er ein Loch schneiden könnte |
+
+`h_final` hat damit wieder **drei** Stufen (`natural → carve → plateaus`), und
+ein Gewässer schreibt nur noch INNERHALB seines eigenen Umrisses. Kein
+Rückfall-Leser, kein Alias, keine Konfiguration: die Namen sind weg und werden
+namentlich als ROTE Proben geführt (`scripts/smoke_height_bake.py` **[10a]**).
+
+**Die Box, die eine Wasserfläche noch beansprucht** (`shaped_boxes`, Kachel-
+Index, Gitterwachstum), ist der Umriss **plus `WATER_RASTER_DILATION_M` = 4 m**
+statt plus `shore_ramp_m`. Das ist keine Kosmetik: was ein Gewässer außerhalb
+seines Umrisses noch schreibt, ist der **Dilatationsring** des Rasters, und eine
+Kachel, in die der Ring hineinreicht, muss indiziert sein — sonst endet der Ring
+an einer Kachelgrenze, also genau der bilineare Defekt, gegen den die Dilatation
+existiert. Die alte, mit `shore_ramp_m` gewachsene Box deckte ihn nie (ein
+legales `shore_ramp_m = 0` wuchs gar nicht).
+
+#### § G4, Rand-Hälfte — neu, und konstruktiv statt gemessen
+
+> **Die Rand-Hälfte von § G4 ist keine Schranke mehr, sondern eine Aussage über
+> den Vertexshader.** Was ein Renderer über Wasser zeichnet, ist
+> `y = max(h, w_level)` pro Morph-Abgriff (K-A E3) — **auf jeder gezeichneten
+> Stufe ist die Oberfläche eines Wasser-Texels also der Spiegel**, und der
+> existiert überall dort, wo die Basismaske Wasser sagt: die Wasser-Pyramide
+> DEZIMIERT als **Teilmenge** eines stückweise linearen Feldes und ein grobes
+> Texel ist genau dann Wasser, wenn sein eigenes Basis-Texel es ist (K-A E2,
+> `buildWaterPyramid`) — kein Mittelwert, kein `min`, keine zweite Maske. Daraus
+> folgt beides ohne Messung: Boden UNTER dem Spiegel kann nicht gezeichnet
+> werden (der `max` gibt den Spiegel zurück, es entsteht keine Lücke zwischen
+> Wasser und Land), und Boden ÜBER dem Spiegel wird als das gezeichnet, was er
+> ist — Fels im Wasser, kein Loch in einer Platte. Der Preis dieser Aussage ist
+> benannt: der Ring ist auf Stufe 0 zwei Texel breit, auf Stufe 1 eines und
+> darüber keines, die Garantie gilt also auf dem BASIS-Gitter; was eine grobe
+> Stufe am Ufer verfehlt, deckt die Fragment-MASKE (K-A E4), nie das Gelände.
+>
+> **Die Tiefen-Hälfte (Invariante 2) bleibt wörtlich stehen:** jenseits der
+> Ufer-Rampe liegt der Boden punktweise mindestens `ε` unter
+> `water_level_at(x, z)`, in JEDEM Raster. Sie ist die Aussage über den CARVE
+> und der Carve ist unverändert.
+>
+> **Die Dilatationsregel** (unverändert seit E1, hier als Teil von § G4
+> festgeschrieben): Pegel- und Fließraster müssen mindestens
+> `WATER_RASTER_DILATION_STEPS` = 2 Gitterschritte über jeden Umriss hinaus
+> fortgeschrieben sein, weil eine Zellecke eines nassen Punktes höchstens eine
+> Zell-DIAGONALE (√2 Schritte) außerhalb liegt; ein Schritt deckt das nicht,
+> zwei decken es strikt.
+
+Geprüft in `scripts/smoke_height_bake.py` **[10e]**: das 4-/8-/16-m-Gitter des
+Wasserrasters ist Texel für Texel jedes 2./4./8. Basis-Texel (Pegel wie
+Trocken-Sentinel), und über 7 857 nasse Proben ist `min(max(h, w) − w)` exakt
+**0,0** — nichts wird unter seinem eigenen Spiegel gezeichnet, obwohl 7 497
+dieser Proben im BAKE darunter liegen.
+
+#### Was zurückkommt — und was es kostet
+
+**Das Relief läuft wieder bis an die Wasserlinie** ([11a]–[11d], Fixture See
+(0,0)–(40,40) + Wiese Amplitude 1,0 / Welle 16):
+
+| | v6 (Kragen) | v8 (Rückbau) |
+|---|---|---|
+| Boden 1 m außerhalb des Umrisses | 1,1 % der Welle | **100 %** |
+| Schlimmste Welle im 4-m-Kragen | 0,1206 m | **0,772 m** |
+| Abgeleiteter Spiegel (Rand-Median) | exakt 0,0 (relieffreier Rand) | **0,1504 m**, Spannweite des Randes **1,344 m** |
+| Höchster Randpunkt über seinem Spiegel | 0,0 m | **0,466 m** — und das ist jetzt ein Fels, kein Loch |
+
+**Der Preis, als Zahl statt als Überraschung** ([10g]): ein Ufer, das unter dem
+Spiegel liegt, wird als Wasser gezeichnet, solange das Raster dort einen Pegel
+hat — also **bis zu 4 m über den autorierten Umriss hinaus**, und dort hört die
+Wasserfläche mit einer Stufe in Höhe der getragenen Tiefe auf (Fixture: 1,4 m).
+Die Bankklemme hat das nie verhindert (ihr Band ist `shore_ramp_m`, in der
+Vorgabe 3 m < 4 m, und darf 0 sein); sie hat nur den Boden, den sie deckte, hoch
+genug gemacht, dass er nicht hob. Wer die Wasserlinie exakt am gezeichneten
+Umriss haben will, malt das Ufer nicht unter den Spiegel — das ist eine
+Autoren-Aussage und keine Bake-Regel mehr.
+
+**Der Unterwasser-Geist stellt dieselbe Frage wie das Wasser** (Befund
+2026-08-27, Nachtrag zu diesem Preis): Ein Ding steht genau dann im Wasser, wenn
+Pegel UND `waterInside(sd)` es sagen — dasselbe Paar, aus dem `liftedHeight` den
+Wasser-Lift bildet (`ground.waterGhostAt` → `walk.ghostWaterLevel` +
+`walk.ghostCutY`, geprüft in `smoke_walk_math.mjs`). Ein für sich gelesener
+Pegel ist NIE eine Maske: er ist 4 m über jeden Umriss hinaus dilatiert, und der
+Boden in diesem Kragen liegt seit dem Rückbau bis zu 0,772 m darunter — also
+weit über den 0,05 m des Geist-Gates, weshalb ein Diorama auf dem trockenen Ufer
+halbtransparent geisterte, während die Figur daneben (sie liest den
+Polygon-Test `ground.typeAt`) fest blieb.
+
+#### Begehung und Navigation
+
+`world_height` liefert am Ufer jetzt Boden, der unter dem Spiegel liegen darf.
+Das ist für die Gates folgenlos und geprüft: **Waten/Schwimmen** liest das
+PROFIL (`water_level_at`, exakt, nicht das Raster) und nicht `h`, **Steigung
+und Stufe** lesen `h` — und `h` ist am Ufer jetzt glatter als vorher, weil die
+0,1-m-Lippe entlang jeder Uferlinie weg ist. Gemessen in
+`scripts/smoke_nav_grid.py`: der 30-m-Weg ins Seedorf kostet wieder
+**53,0 s** = 20 s Gras + 25 s Waten + 4 s/m · 2,0 m Abstieg ins Bett (v4–v7:
+53,664 s, weil die Lippe 0,166 m Auf und Ab dazugab). `smoke_slope_gate.py`
+ist unberührt — es misst Plateau-Rampen.
+
+#### Die Deckkraft-Tiefe bleibt PRO ART — Entscheidung, nicht Vertagung
+
+E4 hatte vorgemerkt, `water_depth_effective` pro FLÄCHE im Wasserraster
+mitzuliefern, weil die id-Maske nur Arten kennt. **Entschieden: sie bleibt pro
+Art**, und das ist ab hier die stehende Regel, kein offener Punkt.
+
+Gründe, in dieser Reihenfolge:
+
+1. **Der Wasser-Look IST ein Art-Datensatz.** Tint, `sky_mix`, `wave_m`,
+   `speed`, `flow_speed`, Rauheit und Metallizität kommen alle aus der
+   Surface-Bibliothek und können gar nicht pro Fläche sein. Ein Texel-Kanal für
+   das achte Feld machte EINEN Wert flächenscharf, während der Farbton, in den
+   er hineinblendet, artscharf bleibt.
+2. **Der billige Kanal wäre falsch.** Der Fließvektor fährt plain-bilinear
+   (der Server schreibt (0, 0) auf trockenen Punkten); eine Tiefe, die an
+   trockenen Ecken gegen 0 mischt, ergäbe `opaque_depth → 0` und damit
+   Absorption **1** genau an der Wasserlinie — ein deckender Saum am Ufer, also
+   die Defektklasse, gegen die die Stufe angetreten ist. Korrekt getragen
+   bräuchte sie die MASKIERTE Mischung des Pegels: entweder einen vierten Kanal
+   auf der R32F-Pegelpyramide (4× Texturspeicher auf JEDER Stufe) oder vier
+   zusätzliche `texelFetch` je Vertex. Beides ist nicht „billig".
+3. **Nutzlast.** Ein viertes Feld je nassem Texel ist rund +33 % auf jede nasse
+   Kachel, dauerhaft, für eine Zahl, die je Fläche konstant ist.
+4. **Der Gewinn ist eine Art, die ZWEIMAL mit verschiedenen Tiefen gemalt
+   wurde.** Dann gewinnt die zuletzt gemalte Fläche (die Regel, die der Server
+   bei überlappenden Gewässern selbst benutzt), und der Unterschied ist, wie
+   schnell das Bett verschwindet — nicht, wo Wasser ist und wie tief man watet
+   (beides liest das exakte Profil).
+
+Wer eine erkennbar andere Deckkraft braucht, malt eine eigene ART — das ist im
+Autorenmodell der vorgesehene Weg und kostet nichts.
+
+#### Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| Namen weg, `final` dreistufig, Version 8 | `scripts/smoke_height_bake.py` **[10a]**, **[10c]** |
+| Band außerhalb des Umrisses = autorierter Boden, Bett unverändert | ebenda **[10b]**, **[10d]** |
+| § G4-Rand-Hälfte: Teilmengen-Dezimierung + `min(max(h,w) − w) = 0` | ebenda **[10e]** |
+| Ring-Box, Dilatationsbreite, der 4-m-Preis mit seiner Stufe | ebenda **[10f]**, **[10g]** |
+| Relief bis an die Wasserlinie, wobbelnder Rand-Median, Kragen zurück | ebenda **[11a]**–**[11d]** |
+| 0-Rampen-Becken unverändert, Signatur erreicht die laufende Welt | ebenda **[11e]**, **[11f]** |
+| Wegkosten am See: 53,0 s statt 53,664 s, von Hand hergeleitet | `scripts/smoke_nav_grid.py` |
+
+---
+
+### Zwei Sichtbefunde am K-A-Wasser — Schaum-Deckung und Vorhang-Verdeckung (Client) (§ B5a)
+
+*Reine Renderer-Korrekturen. Keine Nutzlast, kein Bake, keine Signatur ändert
+sich; `HEIGHT_BAKE_VERSION` bleibt **8**.*
+
+#### 1. „Weiße Ränder und Ecken am Wasserrand" — der Schaum hat seine Deckung verloren
+
+Der Spiegel war eine DURCHSICHTIGE Fläche: er weißte sein eigenes Licht mit
+`foam · WATER_FOAM_STRENGTH` und wurde danach mit
+`alpha = clamp(shoreAlpha + foam · 0,15, 0, 1) · rim` über den Grund geblendet.
+Auf den Schirm kam also das **Produkt aller drei** Faktoren — am Rand drei
+kleine Zahlen, also eine Spitze. K-A E4 hat die ersten beiden übernommen und
+den dritten fallen gelassen, weil der Boden, den es schattiert, undurchsichtig
+ist und es kein Alpha mehr gibt, in das er fallen könnte.
+
+Gemessen auf der Seefixture (Deckungstiefe 1,5 m, Randrampe gesättigt):
+
+| Tiefe | Schaumband | Deckung | weiß VORHER | weiß NACHHER | Faktor |
+|---|---|---|---|---|---|
+| 0,15 m | 0,84375 | 0,1545625 | 0,50625 | 0,0782473 | 6,47× |
+| 0,30 m | 0,5 | 0,179 | 0,30 | 0,0537 | 5,59× |
+| 0,45 m | 0,15625 | 0,2394375 | 0,09375 | 0,0224473 | 4,18× |
+
+Am lautesten ist das genau dort, wo am wenigsten Wasser steht: auf der
+überfluteten Bank im Dilatationsring (E6 hat die Bankklemme absichtlich
+zurückgebaut, „der Lift deckt es ab") und an der Gitter-Treppe, auf der dieser
+Ring endet — die gemeldeten weißen Ränder UND Ecken. Auf einer gemäanderten
+6-m-Fixture mit 1,2-m-Mikrorelief ist das Schaumband quer gemessen **11,5 m**
+breit statt der ~3 m, die ein 3-m-Uferrampen-Fluss vorsieht, und **696 von 1968**
+Ringpunkten 3,5–7 m ausserhalb des Umrisses werden gehoben.
+
+**Regel jetzt** (`client3d/src/scene/waterShade.ts`, `waterFoamAt` und ihr
+GLSL-Zwilling): `foam · min(shoreAlpha + foam · WATER_FOAM_MIN_COVER, 1) · rim`.
+`WATER_FOAM_MIN_COVER` = 0,15 ist die Randzahl des Spiegels, wörtlich; die
+Deckung benutzt dieselbe Uferkurve, die die Absorption schon reitet — keine
+zweite Kurve. Nachweis: `smoke_water_shade.mjs` [2] (Handtabelle + die drei
+ROTEN Proben mit den kaputten Zahlen) und [6] (GLSL-Zeile, plus ROTE Probe,
+dass das nackte Band nicht mehr vorkommt).
+
+#### 2. „Der Wasserfall hat nur oben die Wasserfall-Textur" — der Vorhang stand in seiner eigenen Wand
+
+Unter K-A ist der Spiegel zwischen Lippe und Gumpen der BODEN: das Terrain wird
+auf `max(h, w_level)` gehoben, der Fall steht also als steile, **undurchsichtige,
+nasse Wand** über die Sehne des Laufs. Der Vorhang hing aber am Bogen-MITTELPUNKT
+über einen Lauf von `WATERFALL_LEAN · h` — steiler als diese Wand, sobald die
+Sehne länger als `0,3 h` ist, also bei jedem Fall flacher als 73°.
+
+Auf der Plan-Fixture (Fallhöhe 5,8 m, Sehne 3 m) mit `r` = Laufkoordinate ab dem
+Fallpunkt und `u` = Höhenanteil (0 = Gumpen, 1 = Lippe):
+
+```
+r_Wand(u) = 1,5 · (1 − 2u)        r_alt(u) = 0,87 · (1 − 2u)
+r_alt − r_Wand = −0,63 · (1 − 2u)   ->  −0,63 m am Fuß, < 0 für jedes u < 0,5
+```
+
+Genau die untere **Hälfte** stand hinter dem eigenen Wasser — deshalb war der
+Vorhang mit Isolationsschalter 22 („Water lift off") vollständig sichtbar. Die
+Wrap-Mode-Verdächtigung war falsch: `materials.makeWaveNormal` setzt
+`wrapS = wrapT = RepeatWrapping`, bevor sie irgendjemand sieht (im Smoke
+angenagelt).
+
+**Regel jetzt:** `Waterfall` trägt zusätzlich `chordM` (die Sehne des Laufs,
+in `runToFall` ohnehin berechnet). Der Vorhang hängt an der **Lippe** und
+bekommt den Lauf der Wand plus den Lean am Fuß:
+
+```
+top = (x, z) − dir · chordM/2                bot = (x, z) + dir · (chordM/2 + 0,3 h)
+r_neu(u) − r_Wand(u) = 0,3 h · (1 − u)   ->  1,74 / 0,87 / 0 m bei u = 0 / 0,5 / 1
+```
+
+Der obere Rand fällt damit exakt auf die Lippe (auf der Fixture Knoten B
+(20, 0)), der Fuß 1,74 m hinter den Wandfuß (Knoten C), und die Naht an der
+Lippe deckt der Vorhang-Shader mit seiner eigenen 6-%-Ausblendung ab. Nachweis:
+`smoke_waterfall.mjs` [9] — vier Ecken, drei Abstände, 101 Höhen ohne
+Verdeckung, plus die ROTEN Proben des alten Zustands.
+
+#### 3. Offen und NICHT gefixt: der Fluss zerfällt ab Mip 2
+
+Der dritte Befund („nur jeder zweite Abschnitt fließendes Wasser") ist gemessen,
+aber nicht behoben — er ist keine Panne in einer der drei verdächtigten Stellen,
+sondern die Auflösungsgrenze von K-A selbst. Auf derselben Mäander-Fixture:
+
+| Gitter | gehobene Flusspunkte | kleinstes interpoliertes \|flow\| |
+|---|---|---|
+| 2 m (Level 0) | 123 / 123 | 1,0000 |
+| 4 m (Level 1) | 123 / 123 | 0,9997 |
+| 8 m (Level 2) | **44 / 123** | 0,9996 |
+| 16 m (Level 3) | **0 / 123** | — |
+
+Der Fließvektor ist also überall in Ordnung (Server: 150 von 150 Gitterpunkten
+eines 700-m-Flusses über drei Kacheln tragen `|flow| = 1`, alle drei Kacheln
+liefern die Arrays; Client: der Varying fällt nirgends unter 0,9996, wo Wasser
+gehoben wird). Was verschwindet, ist der GEHOBENE Punkt: ein 6 m breites Bett
+mit ±3 m Carve hat auf einem 8-m-Gitter meist keinen Stützpunkt mehr im Bett,
+also ist `h_k ≥ w_k` und der Lift greift nicht. Das Mesh-Mirror hatte dieses
+Problem nicht — er war ein Polygon in voller Auflösung. Die drei ehrlichen
+Optionen (Level-Deckel für wasserführende Knoten, feineres Wasserraster, oder
+akzeptieren) sind eine Entscheidung, keine Fehlerbehebung.
+
+---
+
+### Die vier Befunde am K-A-Wasser — der `sd`-Kanal, das gehobene Ringband und der Fließ-Rahmen (§ A16.5 / § B5a)
+
+*Ein Server-Umbau (`HEIGHT_BAKE_VERSION` **8 → 9**, additive Kachel-Nutzlast)
+und drei Client-Korrekturen, die alle vier auf dieselbe Wurzel zurückgehen:
+**der Renderer hatte kein Feld, das sagt, wo der Autor das Wasser gemalt hat.**
+Der Pegel ist DILATIERT (4 m über jeden Umriss hinaus), also ist er keine Maske;
+die Material-Maske des Boden-Kompositors nennt die OBERSTE GEMALTE ART, also ist
+sie es auch nicht. Der Bake liefert die Antwort jetzt selbst.*
+
+#### 1. Die Befunde und ihre Zahlen
+
+| Befund | Ursache, gemessen |
+|---|---|
+| **F-A** „der See ist nur noch eine Sandfläche" | Das Tor von `95ea0ca0` las das ID-Paar der Material-Maske. Fixture (lake + gemalter Sand-Bett-Fläche, `app/core/terrain_layers.py`): das Paar in der Seemitte ist **(1, 1) = (sand, sand)** — keine Hälfte ist Wasser, also gab `twInside` **0** über die ganze Seefläche zurück und der gehobene Spiegel wurde als sein eigenes Bett gemalt. (Ein `bed_kind` OHNE gemalte Fläche allein tut das nicht: die Wasser-Ebene trägt weiter `water: true` und nur die SURFACE des Betts — auch gemessen.) |
+| **F-B** graue Randflecken, Treppen-Silhouette, „Avatar steht im Boden" | Das Dilatationsband wurde GEOMETRISCH gehoben. Fixture (flacher Boden 0, Spiegel 1,0, Umriss bei x = 10): jeder Vertex des 4-m-Bandes stieg **1,00 m** auf den Spiegel, gezeichnet als Boden, mit dem echten Boden 1 m darunter — dort steht die Figur (`waterPlaneMath.waterLevelAt` kennt die Dilatation nicht). Der äußere Rand des Bandes ist eine Gitter-Treppe. |
+| **F-C** „fließt nicht, alle paar Meter anders strukturiert" | Der Ripple-Rahmen ist die Achsentangente pro Vertex, und die springt an der MITTELACHSE — dieselbe Unstetigkeit, die § A16.5 Punkt 6 am Pegel mit 1,2951 m auf 10 cm gemessen hat. Hairpin-Fixture: **145,96°** zwischen zwei Gitterpunkten 2 m auseinander. |
+| **F1-Deckel** | Der Deckel maß die UNGETORTE Hebung, also die Breite von Körper **plus Ring**. Fixture (6-m-Fluss, Bank unter dem Spiegel): Deckel **2** statt **1** — für einen Fluss, dessen eigener Körper auf Stufe 2 schon zerfallen ist. |
+
+#### 2. Server (Bake v9): der vierte Kanal und der geglättete Fluss
+
+```jsonc
+"water": {
+  "level":  [[float|null, …], …],   // unverändert
+  "sd":     [[float|null, …], …],   // NEU: Meter, + innen, − im Ring, gleiche Maske
+  "flow_x": [[float, …], …],        // jetzt GEGLÄTTET
+  "flow_z": [[float, …], …]
+}
+```
+
+- **`sd` ist die vorzeichenbehaftete Distanz zum Umriss DESSELBEN Wassers**, aus
+  dem `level` stammt — die Nullmenge IST der gemalte Umriss. Ein Punkt innerhalb
+  zweier überlappender Seen liest die Distanz des OBERSTEN zu SEINEM Umriss;
+  „zuletzt gemalt gewinnt" ist EINE Entscheidung für alle vier Kanäle. Maske und
+  Rundung wie `level` (Millimeter, `null` auf genau denselben Texeln).
+  Kosten: ein zusätzlicher Ring-Durchlauf auf dem Innen-Zweig (der Ring-Zweig
+  misst die Distanz ohnehin, um sich zu entscheiden).
+- **`flow` läuft durch eine separable Box vom Radius
+  `WATER_FLOW_BLUR_M`** — und das ist `WATER_RASTER_DILATION_M`, nicht aus
+  Geschmack: das Raster ist genau so weit über jeden Umriss hinaus geschrieben,
+  also liegt die Box um jeden Punkt INNERHALB eines Umrisses noch ganz im
+  geschriebenen Bereich. Die Glättung mischt damit nie einen autorierten
+  Fließvektor mit dem (0, 0) echten Trockenbodens. Bei `TILE_STEP_M` = 2 m sind
+  das 2 Texel Radius, also eine 5 × 5-Box über 8 m.
+- **NICHT re-normalisiert.** Wo zwei Richtungen wirklich uneins sind, ist der
+  Mittelwert KÜRZER, und die Länge ist der Geschwindigkeits-Faktor: eine
+  anmutige Verlangsamung genau dort, wo das Feld mehrdeutig ist. Der
+  Stillwasser-Boden (1e-4) wird nie erreicht (kürzester gemessener Vektor
+  0,2952).
+- **Das Fenster wird mit RAND abgetastet und danach beschnitten** (`(129 + 2r)²`
+  statt `129²`, +6,3 %). Eine an der eigenen Kante geklemmte Box hinge davon ab,
+  aus welcher Kachel man einen Punkt liest — § G1 sagt, dass sie das nicht darf.
+  Geprüft: derselbe Punkt aus zwei Fenstern gibt bitgleich denselben Vektor.
+- **Pegel und `sd` werden NICHT geglättet.** Beide werden gegen eine SCHWELLE
+  gelesen; eine Glättung verschöbe die Wasserlinie vom autorierten Umriss weg.
+
+#### 3. Client: EIN Feld, ZWEI Stufen, dasselbe Sampler-Textstück
+
+`waterShade.waterSdGlsl()` ist ein einziger GLSL-Text, den beide Stufen der
+Wasser-Variante einbinden — Vertex und Fragment können keine Funktion teilen,
+also teilen sie diesen String. Das Gitter ist `uTlodWaterLevel[0]` über
+`uTlodWaterGeom.xy`, die Ausdehnung ist per `textureSize` das Nahfenster; außen
+antwortet er `TW_SD_DRY` (−10 000 m) statt ein Randtexel nach außen zu klemmen.
+Das Trocken-Sentinel ist eine ZAHL und nicht das `NaN` des Pegels: `sd` wird auf
+ein VORZEICHEN gelesen, also zieht eine trockene Ecke die einfache bilineare
+Mischung ins Negative — die richtige Richtung — und kann keine Mischung
+vergiften. Innerhalb eines Umrisses kann sie das nie tun (Dilatationsargument,
+§ A16.5 Punkt 3; nachgemessen an 6561 bzw. 1681 Proben).
+
+- **Der LIFT tort auf `sd ≥ 0`** (`tlodLift(h, p, nodeStep, sd)`). Die Distanz
+  wird EINMAL pro Vertex genommen, vor beiden Taps des Morph-Paares: sie ist
+  eine Funktion der Position allein, also tragen beide Terme dieselbe Zahl und
+  das Paar bleibt in `f` stetig — und zwei Stücke verschiedener Stufen, die sich
+  einen Vertex teilen, heben ihn beide oder keines.
+- **Der Ring behält seine Werte** und muss es: sie sind es, die die bilineare
+  Mischung INNERHALB des Umrisses das Profil reproduzieren lassen. Er ist
+  bilineare STÜTZE, nie eine Fläche.
+- **Das Fragment-Tor liest dasselbe `sd`**, mit einem weichen Band von
+  `max(ein Bildschirmpixel, 0,5 m)`. Die ID-Maske behält genau eine Aufgabe:
+  zu sagen, WELCHE Wasserart hier steht (`layer = twIsWater(a) ? a : b`). Die
+  `sd`-Hälfte von `bindLayerIdUniforms` ist wieder gelöscht — kein totes
+  Mechanismus-Paar.
+  **ÜBERHOLT am 2026-08-25 (Bake v10, siehe letzter Nachtrag):** auch diese
+  letzte Aufgabe war falsch besetzt — die Maske nennt die oberste GEMALTE Art,
+  nicht die Wasserart. Das Raster nennt seine Art seit v10 selbst
+  (`kinds` + `kind_idx`), und `bindLayerIdUniforms` ist ganz gelöscht.
+- **Der F1-Deckel misst die GETORTE Hebung**: `waterTileCaps` nimmt das
+  `sd`-Feld und zählt ein Texel nur, wenn es wirklich steigt. Sonst beschriebe
+  die Zahl nichts.
+
+#### 4. Der Fließ-Rahmen (F-C) — was die Glättung kauft, und was NICHT
+
+Gemessen als größter Winkel zwischen den Fließvektoren zweier BENACHBARTER
+Gitterpunkte innerhalb des Umrisses (`smoke_height_bake.py` [12h]):
+
+| Fixture | roh | ausgeliefert (Box r = 2) |
+|---|---|---|
+| **Mäander** — Fluss als Band um seine eigene Linie, 8 m breit | **1,80°** (p99 1,71, Mittel 0,52) | **1,49°** |
+| **Haarnadel** — Achse kehrt INNERHALB eines 160 × 65 m-Polygons um | **145,96°** | **66,32°** |
+
+**Die Lesart, und sie entscheidet gegen ein zusätzliches gröberes Abtasten:**
+ein autorierter Fluss hat den Sprung gar nicht — die Mittelachse seiner Linie
+liegt für jede Biegung sanfter als die halbe Breite AUSSERHALB des Bandes. Die
+146° gehören der Fixture, in der ein 6-m-Strich in einer seeförmigen Fläche
+umkehrt. Ein gröberes Rahmen-Sampling brächte dort 66° → 41° und kostete jedem
+schmalen Fluss die Fließrichtung an seinen Ufern; die Box ist die richtige,
+billige Versicherung, und mehr ist an dieser Stelle nicht zu holen.
+
+**Was danach übrig bleibt und NICHT behoben ist** (Messung, keine Vermutung):
+`twFrame` staucht die WELTKOORDINATE um die Fließachse, also verstärkt sich
+jede Rahmen-Änderung mit dem Abstand vom Weltursprung. Für eine Rahmen-Drehung
+`dθ` ist die zusätzliche uv-Verzerrung ≈ `(1 − 1/aniso) · |p| · dθ / λ`
+Wellenlängen. Auf der Mäander-Fixture (|p| ≈ 150 m, λ = 1,6 m, aniso = 3):
+Mittel 0,52°/2 m → Faktor 0,45, schlimmster Punkt 1,49°/2 m → 1,30 — also eine
+lokale Stauchung von 1,5× bis 2,3×, die `textureGrad` nicht kennt. Dazu kommt
+der DRIFT-Term: er wächst mit `uTlodTime` (Wrap bei 3600 s), und bei
+`sp` = 0,15 m/s sind das am Ende der Stunde 337 Wellenlängen Versatz — zwei
+Nachbarvertizes 0,52° auseinander liegen dann **3,06 Wellenlängen** auseinander,
+d. h. das Muster dekorreliert im Lauf von Minuten. Das ist die verbleibende
+Hälfte von „alle paar Meter anders strukturiert", und es ist ein
+Entwurfs-Thema (Flow-Map-Advektion mit periodischem Reset, oder die Anisotropie
+fallen lassen), keine Panne — deshalb steht es hier und nicht im Code.
+
+#### 5. Die Beweise (§ B5a)
+
+| Was | Wo |
+|---|---|
+| `sd` innen/auf dem Umriss/im Ring, bed_kind unberührt, 6561 Innen-Proben ≥ 0 | `scripts/smoke_height_bake.py` **[12g]** |
+| Nutzlast: gleiche Maske wie `level`, Rundung, Lattice | ebenda **[12g]** |
+| Blur-Radius = Dilatation, Winkel-Tabelle roh/ausgeliefert, keine Re-Normierung, Stillwasser bleibt still, Fenster-Naht | ebenda **[12h]** |
+| Client-Zwilling `rasterSdAt`: bilinear, Sentinel, 1681 Innen-Proben ≥ 0 | `client3d/scripts/smoke_world_height.mjs` **[W4a]** |
+| Lift-Tor: Ring hebt nicht mehr, „Figur neben dem Wasser", GLSL-Pins | `client3d/scripts/smoke_terrain_lod.mjs` **[16]**, **[17]** |
+| Deckel misst die getorte Hebung (2 → 1) | ebenda **[18] (e)** |
+| Fragment-Tor: eine Smoothstep, Band, ID-Maske nur noch für den Look | `client3d/scripts/smoke_water_shade.mjs` **[7]** |
+
+---
+
+---
+
+# Anhang — Änderungsverlauf
+
+Diese Tabelle ersetzt die Datums-Überschriften, die früher über den
+einzelnen Abschnitten standen. Sie ist die Auflösung für jede Verweisung
+der Form „Nachtrag <Datum>“ — im Code, in den Smokes und in diesem
+Dokument. **Sie ist Historie, kein Vertrag**: was gilt, steht in Teil A, B
+und C.
+
+| Datum | Abschnitt | präzisiert |
+|---|---|---|
+| 2026-07-24 | B5a. Verifikation: Arithmetik statt Screenshots | B5a. |
+| 2026-07-24 | B6. Divergenz-Fixliste (aus der Analyse von 2026-07-24) | B6. |
+| 2026-07-27 | Eine Wand, ein Besitzer (Kontur vs. Raumhülle) | § C1 |
+| 2026-08-05 | A12. Fog of War im Worldmap-Payload | A12. |
+| 2026-08-05 | A13. Die Grundfläche ist ein Raum | A13. |
+| 2026-08-06 | A14. Der Sperr-Zustand kommt vom Server | A14. |
+| 2026-08-07 | A1. Freie Weltkarte (Meter) | A1. |
+| 2026-08-09 | A11. Reise-Payload — Meter-Polyline (E3) | A11. |
+| 2026-08-14 | A17. Die Fernkulisse — `backdrop` im Worldmap-Payload | A17. |
+| 2026-08-16 | Der Schleier hat ein Gedächtnis | A12. |
+| 2026-08-19 | Ein Prop, mehrere Modell-Varianten | § B2 |
+| 2026-08-20 | A13a. Die Grundfläche trägt einen REDUZIERTEN Grundriss | A13a. |
+| 2026-08-20 | A8a. Paar-Interaktionen | A8a. |
+| 2026-08-20 | Dach-Modelle (`roof_only`) | § B1/B2 |
+| 2026-08-20 | Das Quellbild gehört der Variante | § C3 |
+| 2026-08-20 | Ein Prop steht überall gleich tief — `ground_offset_m` | § B2/§ A9/§ A9a |
+| 2026-08-21 | Ein Wasser-Gesetz — W1 (Server) | § A16.3 / § A16.7 / § A16.8 / § B1 |
+| 2026-08-21 | Ein Wasser-Gesetz — W2 (Client) | § A16.3 / § A16.7 / § A19 Nr. 5 / § G4 |
+| 2026-08-21 | Woher das Bild stammt (`origin`) — gestrichen | Anhang |
+| 2026-08-23 | A9b. Prop-Boxen | A9b. |
+| 2026-08-23 | Ein Prop steht auf einem Prop, und ein Prop darf halb sein | § B2 |
+| 2026-08-24 | Das Wasser-Raster — Wasser v2, K-A E1/E2 | § A16.5 / § G2 / § G4 |
+| 2026-08-24 | Das reliefreie Band bekommt sein eigenes Maß — W5e (Server) | § A16.3 / § G4 |
+| 2026-08-24 | Der Rückbau der Ufer-Wächter — Wasser v2, K-A E6 (Server) | § A16.3 / § G4 |
+| 2026-08-24 | Kein Relief am Wasserrand, und der Spiegel folgt seiner Achse überall — W5d | § A16.3 / § G4 |
+| 2026-08-24 | Zwei Sichtbefunde am K-A-Wasser — Schaum-Deckung und Vorhang-Verdeckung (Client) | § B5a |
+| 2026-08-25 | Das TÜRBLATT — eine Tür ist von außen SICHTBAR | § B1 |
+| 2026-08-25 | Das Wasser-Raster nennt seine ART pro Texel — die zweite Hälfte von F-A | § A16.5 |
+| 2026-08-25 | Die vier Befunde am K-A-Wasser — der `sd`-Kanal, das gehobene Ringband und der Fließ-Rahmen | § A16.5 / § B5a |
+| 2026-08-25 | Eine Tür ist ein LOCH, kein Schlitz — der Sturz | § B1 |
+| 2026-08-25 | Maß, Motiv, Einsinken und Marker gehören der VARIANTE — die Nutzlast bleibt Zeichen für Zeichen gleich | § B2/§ A9/§ A9a |
+| 2026-08-25 | TREPPEN — man geht in den ersten Stock | § A6/B1 |
+| 2026-08-27 | Bild-Props (v5) — das Bild reitet auf der VARIANTE | § B2 |
+| 2026-08-27 | Oberflächen-Raster (v6) | § B2 |
+| 2026-08-27 | Tür-Props + Slots (v5) | § B1/B2 |
+| 2026-08-28 | Bild-Props v2 — Flächen, Türblatt und Orientierung gehören zur MODELLDATEI | § B2 |
+| 2026-08-28 | Marker sprechen PLATZ-TYPEN (v7) | § B |
+| 2026-08-28 | Türblatt = Durchstich-Prisma, Restzahl, `adopt` | § C3 |
+| 2026-08-29 | TREPPEN v2 — der Lauf ist DATEN, der Boden bekommt ein Loch | § A6/B1 |
+| 2026-09-08 | Ein Platz-Typ ist eine KÖRPERFORM (v11) | § A4/§ B |
+| 2026-09-09 | A13b. Der Flur einer Etage ist ein Raum | A13b. |
+| 2026-09-09 | A13c. Hüllentüren | A13c. |
+| 2026-09-09 | TEXTUREN für Treppe und Fahrstuhl, die Treppe ist eine TREPPE (v13) | § A6/B1 |
+| 2026-09-21 | A11a. `model_sig` — die Modell-Signatur reist im Worldmap-Poll | A11a. |
+| 2026-09-21 | B1a. Der Poll: `ETag`/`304` und der Eingabe-Cache | B1a. |
+
+Die Vertrags-Stände v4 (2026-07-24), v5 (2026-07-28) und v6 (2026-08-19)
+stehen als Präambeln am Anfang des Dokuments, weil ihre Listen die
+späteren Abschnitte ausdrücklich überschreiben, wo sie sich widersprechen.
+
+## Ersatzlos gestrichene Abschnitte
+
+Was hier steht, gilt NICHT mehr; die Einträge bleiben, weil älterer Code
+und ältere Dokumente darauf verweisen.
+
+### Woher das Bild stammt (`origin`) — entfällt seit 2026-08-21
+
+Die Szenenkontext-Pipeline, die als einzige ein `origin` schrieb, ist ersatzlos
+entfernt. `GET /world/props/{id}/variants` liefert je Variante nur noch die vier
+Herkunftsfelder des Bildes (`backend`, `prompt`, `negative`, `generated_at`);
+`origin` / `origin_location` / `origin_location_id` / `origin_ts` gibt es nicht mehr.
+
+### EIN Boden, Teile 1–3 (2026-08-20) — ersetzt durch § A16
+
+Die drei Teile („der Anker des Gebäudemodells und die Steh-Höhe", „EIN Datum —
+der gezeichnete Boden der Etage", „die Natur zeichnet KEINE Platte") haben eine
+Welt beschrieben, in der es auf Etage 0 eine Etagenplatte (0,08 / 0,14 dick),
+Raumplatten (0,10), Zonenflächen (0,09 / 0,01), einen Kachel-Sockel
+(`SOCLE_Y_M` 0,045), einen Backstop (`tiles.tilePlateY`, −0,05 / −0,13 / 0,04)
+und ein Payload-Flag `natural_floor` gab. **Nichts davon existiert mehr** — die
+Etage-0-Höhe ist `h_final`, das Etage-0-Material ist der Layer-Bake.
+
+Was aus diesen Nachträgen WEITERGILT, steht in **§ A16.9**: der Anker eines
+Gebäudemodells ist seine BEGEHBARE Fläche und nicht seine Unterkante
+(`walk_y_world`, auf Etage 0 also schlicht `offset_y`); die Deklaration eines
+Raums (`walk_y_world` eines Dioramas) wird ZUERST gefragt und schlägt jede
+andere Sprosse; bei zwei Ansagen gewinnt die KLEINERE Hülle (v6 Nr. 6). Die
+übrigen Zahlen und Tabellen von damals stehen in der Git-Historie (`8672c756`,
+`47abc26b`, `8a44c891`).
+
+### Ein Boden, E1 / E3 / E4 / E5a / E5b (2026-08-21) — zusammengezogen in § A16
+
+Die fünf Etappen-Nachträge — E1 die reine Höhenfunktion, E3 der Layer-Schnitt,
+E4 der Wasserspiegel, E5a das Ende der Etage-0-Platten, E5b die Renderer aus
+Daten — sind in Etappe E6 zu EINEM Kapitel zusammengezogen: **§ A16 „Ein
+Boden"**. Dort steht der Stand als Gesetz statt als Etappen-Diff, samt der
+Beweiskarte (§ A16.11), die sagt, welcher Smoke welche Zahl herleitet.
+
+Die Etappen-Texte mit ihren Vorher/Nachher-Tabellen, ihren Zwischenzuständen
+(„bis E4 zeichnet Wasser noch seine Drape", „bis E5 rendern Zonenplatten
+weiter") und ihren Löschlisten stehen in der Git-Historie: `81a9bb3c` (E1),
+`2f501d0e` (E2), `9062dbf9` (E3), `9e85bb18` (E4), `c9874527` (E5a),
+`9b7a424d` (E5b), `67f776d0` (Zonen-Wasser im Schwimmen).
 

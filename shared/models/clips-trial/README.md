@@ -30,11 +30,16 @@ Collection files at the top level:
 
 `app/core/clip_catalog.py` + three admin-only routes in `app/routes/assets.py`:
 
-    GET  /assets/clip-catalog                  catalog + review state, merged
-    PUT  /assets/clip-catalog/{take}/status    {favorite?, rejected?}
-    POST /assets/clip-catalog/{take}/import    {kind, set, start_s, end_s,
-                                                loop_s, in_place, overwrite}
-    GET  /assets/animation-clips/trial/{rel}   one trial clip, for the preview
+    GET  /assets/clip-catalog                    catalog + review state, merged
+    PUT  /assets/clip-catalog/{take}/status      {favorite?, rejected?}
+    GET  /assets/clip-catalog/{take}/loop-window the window an import would cut
+    POST /assets/clip-catalog/{take}/import      {kind, set, start_s, end_s,
+                                                  loop_s, in_place, overwrite}
+    GET  /assets/animation-clips/trial/{rel}     one trial clip, for the preview
+
+`loop-window` answers start/end in take seconds with the SAME resampling and
+seam metric the converter uses, so the preview plays the clip the import will
+write — a second of CPU, no Blender.
 
 `_status.json` is this UI's own file — `{"takes": {"<id>": {"favorite",
 "rejected", "imported": [{kind, set, source, at}]}}}`. `favorite` and
