@@ -1636,7 +1636,7 @@ async def agent_loop_resume(user=Depends(require_admin)):
 
 @router.get("/agent-loop/lanes")
 def agent_loop_lanes(user=Depends(require_admin)):
-    """The cache lanes per LLM entry, for the table on the Agent-Loop page.
+    """The cache lanes per model (provider/model pool), for the Agent-Loop page.
 
     Thin adapter: everything is assembled in ``llm_lanes.admin_lane_view()``
     from the live LaneManager, the routing config and the in-memory cache ring
@@ -1684,8 +1684,8 @@ _AGENT_LOOP_HTML = """<!DOCTYPE html>
 </div>
 
 <div class="section">
-  <h2>Cache lanes (per LLM entry)</h2>
-  <div class="hint">One lane is one serialized slot of an LLM entry. It keeps the prompt beginning of its last call — a new call prefers the lane that already holds its own, so two alternating conversations keep their backend caches. Lane count: LLM Routing › LLMs › Lanes.</div>
+  <h2>Cache lanes (per model)</h2>
+  <div class="hint">One lane is one serialized slot of a model (provider / model). LLM entries that name the same model — one per temperature, say — share its lanes; they are listed under the model. A lane keeps the prompt beginning of its last call — a new call prefers the lane that already holds its own, so two alternating conversations keep their backend caches. Lane count: LLM Routing › LLMs › Lanes (one number per model).</div>
   <div id="lanes" class="data">—</div>
 </div>
 

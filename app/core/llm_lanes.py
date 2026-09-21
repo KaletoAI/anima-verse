@@ -226,6 +226,32 @@ def pool_key_for(provider_name: str, model: str) -> str:
     return f"{(provider_name or '?').strip()}/{(model or '?').strip()}"
 
 
+def lane_count_in(routing: Any, provider: str, model: str) -> int:
+    """Lanes of ``provider/model`` in a routing list — THE folding rule.
+
+    Several enabled entries may name the same provider+model (one per
+    sampling profile). They run against the same backend slot, so the pool is
+    one and the HIGHEST ``max_concurrent`` of them is the one in force. The
+    admin page keeps those entries on one number (LLM Routing › LLMs writes a
+    change to all of them); a hand-edited or older config may still disagree,
+    and then this is what decides. No enabled entry, no value, an unreadable
+    value = one lane.
+    """
+    found = 1
+    for entry in (routing or []):
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        if (entry.get("provider") or "").strip() != (provider or "").strip():
+            continue
+        if (entry.get("model") or "").strip() != (model or "").strip():
+            continue
+        try:
+            found = max(found, int(entry.get("max_concurrent") or 1))
+        except (TypeError, ValueError):
+            continue
+    return found
+
+
 def configured_lane_count(pool_key: str) -> int:
     """Lanes of this pool as the config has them right now.
 
@@ -238,21 +264,13 @@ def configured_lane_count(pool_key: str) -> int:
     all = one lane, which is the old behaviour.
     """
     provider, _, model = pool_key.partition("/")
-    found = 0
     try:
         from app.core import config
 
-        for entry in (config.get("llm_routing", []) or []):
-            if not isinstance(entry, dict) or entry.get("enabled") is False:
-                continue
-            if (entry.get("provider") or "").strip() != provider:
-                continue
-            if (entry.get("model") or "").strip() != model:
-                continue
-            found = max(found, int(entry.get("max_concurrent") or 1))
+        return lane_count_in(config.get("llm_routing", []), provider, model)
     except Exception as e:  # pragma: no cover - config must never break a call
         logger.debug("lane count for %s not readable: %s", pool_key, e)
-    return max(1, found)
+    return 1
 
 
 @dataclass(frozen=True)

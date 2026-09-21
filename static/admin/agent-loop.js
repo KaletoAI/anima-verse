@@ -180,7 +180,7 @@ function render() {
 // never replaced by a plausible sentence.
 function respondReasonText(code) {
   if (code === 'active') return 'already in a turn';
-  if (code === 'no_lane') return 'its LLM entry has no free lane';
+  if (code === 'no_lane') return 'its model has no free lane';
   return code || '';
 }
 
@@ -220,7 +220,7 @@ function renderLanes() {
   if (!el) return;
   const pools = (_lanes && _lanes.pools) || [];
   if (!pools.length) {
-    el.innerHTML = '<span class="muted">(no LLM entry configured)</span>';
+    el.innerHTML = '<span class="muted">(no LLM configured)</span>';
     return;
   }
   el.innerHTML = pools.map(renderPool).join('');
@@ -246,7 +246,8 @@ function renderPool(p) {
   if (!p.configured) html += '<span class="badge-warn">not in the routing config</span>';
   html += '</div>';
   if (p.entries && p.entries.length) {
-    html += '<div class="pool-entries">' + escapeHtml(p.entries.join(', ')) + '</div>';
+    html += '<div class="pool-entries">' + escapeHtml((p.entries.length === 1 ? 'LLM entry: ' : 'LLM entries sharing these lanes: ')
+      + p.entries.join(', ')) + '</div>';
   }
   if (p.started && (p.lanes || []).length) {
     html += '<table class="lane-table"><thead><tr>'

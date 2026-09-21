@@ -1034,6 +1034,9 @@ function renderMatchBadges(req, capsKey) {
 function onRoutingModelChanged(path) {
     if (!/^llm_routing\[\d+\]\.(model|provider)$/.test(path || '')) return;
     if (ACTIVE_SECTION === 'llm_routing' && ACTIVE_PAGE === 'tasks') renderLlmRoutingPage('tasks');
+    // The entry may have joined another model's lane pool — no re-render,
+    // only the lane fields and notes follow.
+    if (ACTIVE_SECTION === 'llm_routing' && ACTIVE_PAGE === 'llms') rtPoolMembershipChanged(path);
 }
 
 function toggleTaskPersistent(taskId, disable) {
@@ -1195,6 +1198,9 @@ function renderFields(fields, data, path) {
             desc += (desc ? ' ' : '') + '<span class="desc-default">Default: ' + esc(dv) + '</span>';
         }
         if (desc) html += '<div class="desc">' + desc + '</div>';
+        // `pool_shared`: one value for every llm_routing entry on the same
+        // provider+model (settings-routing.js names who shares it).
+        if (f.pool_shared) html += rtPoolNote(path);
         html += '</div></div>';
     }
     // Two-column grid: regular fields span both columns (unchanged look),
@@ -1222,7 +1228,8 @@ function renderInput(f, val, path) {
                 + (f.min !== undefined ? 'min="' + esc(f.min) + '" ' : '')
                 + (f.max !== undefined ? 'max="' + esc(f.max) + '" ' : '')
                 + _phAttr(f)
-                + 'step="1" onchange="setVal(\'' + sJs(path) + '\', parseInt(this.value) || 0)">';
+                + 'step="1" onchange="' + (f.pool_shared ? 'rtSetLanes' : 'setVal')
+                + '(\'' + sJs(path) + '\', parseInt(this.value) || 0)">';
         case 'float':
             return '<input type="number" id="' + esc(id) + '" value="' + esc(val) + '" '
                 + (f.min !== undefined ? 'min="' + esc(f.min) + '" ' : '')
@@ -1818,7 +1825,7 @@ function removeItem(path) {
 
 // Duplicates an array or dict entry (LLM routing, backends, ...). For dicts
 // a new key is prompted; for arrays the clone is appended after the original.
-// `name` fields get a "(Kopie)" suffix so the duplicate is distinguishable.
+// `name` fields get a "(copy)" suffix so the duplicate is distinguishable.
 function duplicateItem(path) {
     const parts = parsePath(path);
     let parent = CONFIG;
@@ -1827,14 +1834,14 @@ function duplicateItem(path) {
     }
     const last = parts[parts.length - 1];
     const original = (typeof last === 'number') ? parent[last] : parent[last];
-    if (!original) { toast('Eintrag nicht gefunden', 'error'); return; }
-    // Deep clone — Defaults sollen nicht mit dem Original geteilt werden.
+    if (!original) { toast('Entry not found', 'error'); return; }
+    // Deep clone — defaults must not be shared with the original.
     const copy = JSON.parse(JSON.stringify(original));
     if (copy && typeof copy === 'object' && 'name' in copy && copy.name) {
-        copy.name = String(copy.name) + ' (Kopie)';
+        copy.name = String(copy.name) + ' (copy)';
     }
     if (typeof last === 'number') {
-        // Array: direkt hinter Original einfuegen
+        // Array: insert right behind the original
         parent.splice(last + 1, 0, copy);
         const arrPath = path.replace(/\[\d+\]$/, '');
         SELECTED_ITEM[arrPath] = arrPath + '[' + (last + 1) + ']';

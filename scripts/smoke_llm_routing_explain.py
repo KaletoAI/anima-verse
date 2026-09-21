@@ -40,6 +40,16 @@ Expected (by hand from the resolver rule):
  12. entries[3].model_cooldown_s == 42 (rounded), entries[2].enabled False,
      entries[1].provider_available False; providers has 2 rows.
  13. Every task in TASK_TYPES appears exactly once in result["tasks"].
+
+Lane pools (one `max_concurrent` per provider+model — second config):
+  entries: P/gem on lanes 3 · P/gem on (no value) · P/gem OFF lanes 8 ·
+           P/big on lanes 2 · Q/gem on lanes "x" (unreadable)
+ 14. lane_count_in = highest value among the ENABLED entries of the pair:
+     P/gem → max(3, 1) = 3 (the disabled 8 does not count), P/big → 2,
+     Q/gem → 1 (unreadable = one lane), P/none → 1 (no entry).
+ 15. explain_routing reports the POOL's number on every entry, not the
+     entry's own field: lanes == [3, 3, 3, 2, 1] — the entry without a value
+     and the disabled one both show the 3 their model runs with.
 """
 from __future__ import annotations
 import os, sys
@@ -93,6 +103,21 @@ t = T["pose_embedding"]; check(t["via"] == "direct" and t["resolved"] is None an
 E = res["entries"]
 check(round(E[3]["model_cooldown_s"]) == 42 and E[2]["enabled"] is False and E[1]["provider_available"] is False and len(res["providers"]) == 2, "12. entries/providers")
 check(sorted(T) == sorted(TASK_TYPES) and len(res["tasks"]) == len(TASK_TYPES), "13. one row per catalog task")
+
+from app.core.llm_lanes import lane_count_in
+POOLS = {"providers": [{"name": "P", "type": "openai"}, {"name": "Q", "type": "openai"}],
+         "llm_routing": [
+    {"provider": "P", "model": "gem", "max_concurrent": 3, "tasks": []},
+    {"provider": "P", "model": "gem", "tasks": []},
+    {"provider": "P", "model": "gem", "enabled": False, "max_concurrent": 8, "tasks": []},
+    {"provider": "P", "model": "big", "max_concurrent": 2, "tasks": []},
+    {"provider": "Q", "model": "gem", "max_concurrent": "x", "tasks": []}]}
+R = POOLS["llm_routing"]
+check([lane_count_in(R, "P", "gem"), lane_count_in(R, "P", "big"), lane_count_in(R, "Q", "gem"),
+       lane_count_in(R, "P", "none")] == [3, 2, 1, 1], "14. lane_count_in folds per provider+model")
+res2 = explain_routing(POOLS, provider_lookup=lambda n: None, cooled_down=lambda p, m: None,
+                       disabled=set(), runtime_disabled=set())
+check([e["lanes"] for e in res2["entries"]] == [3, 3, 3, 2, 1], "15. entries carry their pool's lanes")
 
 print()
 if FAILS: print(f"{len(FAILS)} check(s) failed"); sys.exit(1)

@@ -27,7 +27,8 @@ h1 { font-size:18px; margin-top:0; }
 .pv-label.tool { background:#3a2f5f; color:#d2a8ff; }
 .pv-text { white-space:pre-wrap; word-break:break-word; color:#8b949e; max-width:560px; }
 .muted { color:#484f58; }
-/* Cache lanes (plan-cache-lanes.md § 6, item 10): one block per LLM entry. */
+/* Cache lanes (plan-cache-lanes.md § 6, item 10): one block per model
+   (provider/model pool — the LLM entries on it are listed inside). */
 .section .hint { color:#8b949e; font-size:11px; margin:0 0 8px; line-height:1.45; }
 .pool { margin:0 0 12px; padding:8px; background:#0d1117; border:1px solid #21262d; border-radius:5px; }
 .pool:last-child { margin-bottom:0; }

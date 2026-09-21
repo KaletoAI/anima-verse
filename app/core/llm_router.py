@@ -415,6 +415,7 @@ def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
     provider manager; the route passes the real ones. Nothing here mutates
     cooldown state.
     """
+    from app.core.llm_lanes import lane_count_in
     from app.core.llm_tasks import TASK_TYPES, CATEGORY_LABELS, is_task_gated_off
 
     routing = [e for e in (cfg.get("llm_routing") or []) if isinstance(e, dict)]
@@ -445,6 +446,9 @@ def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
         entries.append({"index": idx, "name": e.get("name") or "",
                         "provider": e.get("provider") or "", "model": e.get("model") or "",
                         "enabled": e.get("enabled") is not False, **st,
+                        # Lanes of the entry's provider+model POOL (shared by
+                        # every entry on that model), not the entry's own field.
+                        "lanes": lane_count_in(routing, e.get("provider") or "", e.get("model") or ""),
                         "tasks": [{"task": t.get("task"), "order": t.get("order")}
                                   for t in (e.get("tasks") or []) if isinstance(t, dict) and t.get("task")]})
 

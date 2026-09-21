@@ -18,24 +18,33 @@ resolves it against the `llm_routing` list in the world's `config.json`.
  "chat_template": "", "tasks": [{"task": "chat_stream", "order": 1}]}
 ```
 
-### Cache lanes — how many calls an entry runs at once
+### Cache lanes — how many calls a model runs at once
 
 `max_concurrent` on an entry (admin label **"Lanes"**, LLMs page) is not a
 throughput dial, it is how many different **prompt beginnings** may live on
 that model at the same time. One lane = one serialized execution slot of that
-entry; it remembers the **cache key** of its last call, `<prompt class>:<character>`
+model; it remembers the **cache key** of its last call, `<prompt class>:<character>`
 (`chat:Pip`, `thought:Pip`, `tool:Pip`, `bg:`). A call takes the lane
 that already holds its key, else an unused one, else the least recently used
 (`app/core/llm_lanes.py`).
 
-Why per entry and not per provider: a prompt cache lives on the model instance
+Why per model and not per provider: a prompt cache lives on the model instance
 that serves the alias. One router provider (an AI-Hub, say) hands several
 aliases to several hosts, so the provider is the wrong unit. The provider's own
 `max_concurrent` still sizes the channel's worker pool and caps GPU jobs — it
 does not limit LLM calls any more.
 
 Entries that share provider+model share ONE set of lanes (several sampling
-profiles, one backend slot); the highest `max_concurrent` among them wins.
+profiles — a temperature per task group — on one backend slot). A different
+temperature touches neither the lane nor the prompt cache: the cache key is
+`<prompt class>:<character>`, and sampling happens after the prompt is read.
+The LLMs page therefore keeps `max_concurrent` ONE number per model: a change
+is written to every entry on that model, an entry that joins a model takes its
+number, the field names who shares it, and a config that still disagrees is
+aligned to the value in force when the page opens. `lane_count_in()`
+(`app/core/llm_lanes.py`) is the one folding rule behind the pool, the
+Overview page and `/admin/agent-loop` — highest value among the enabled
+entries.
 
 What the rules guarantee, in short:
 

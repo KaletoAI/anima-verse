@@ -267,10 +267,13 @@ SECTIONS = {
             "max_concurrent": {
                 "type": "int",
                 "label": "Lanes (max concurrent)",
+                # One value per provider+model: the admin page writes it to every
+                # entry of that pool and names them (settings-routing.js).
+                "pool_shared": True,
                 "default": 1,
                 "min": 1,
                 "max": 16,
-                "description": "How many calls this LLM entry may run at the same time. Each lane is one serialized slot that remembers the prompt beginning it last served, and a new call prefers the lane that already holds its own beginning — so two alternating conversations keep their prompt caches instead of evicting each other. 1 = strictly one call after another. Raise it only as far as the backend really serves in parallel: more lanes mean more different prompt beginnings at once, and the backend drops the oldest cache. Lanes belong to the MODEL, not to this entry: entries that name the same provider+model share one set of lanes, and the HIGHEST value among them is the one in force. What the lanes are doing right now is on /admin/agent-loop.",
+                "description": "Lanes belong to the MODEL, not to this entry: every entry on the same provider+model (e.g. one per temperature) runs on ONE shared set of lanes, so this is one number for all of them — changing it here changes it on the others too. It is how many calls the model runs at the same time. Each lane is one serialized slot that remembers the prompt beginning it last served, and a new call prefers the lane that already holds its own beginning — so two alternating conversations keep their prompt caches instead of evicting each other. 1 = strictly one call after another. Raise it only as far as the backend really serves in parallel: more lanes mean more different prompt beginnings at once, and the backend drops the oldest cache. What the lanes are doing right now is on /admin/agent-loop.",
             },
             "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 200000, "placeholder": "provider default", "hide_for_embedding": True, "description": "Completion budget per request. For thinking models (GLM, DeepSeek-R1, …) the HIDDEN reasoning tokens count against it — too small a value cuts the visible answer mid-output. Empty = no cap sent (provider default)."},
             "chat_template": {
@@ -286,8 +289,9 @@ SECTIONS = {
         },
     },
     # Cache lanes — the global timings of the assignment rules
-    # (development_instructions/plan-cache-lanes.md § 5). HOW MANY lanes an
-    # LLM entry has is set per entry (LLM Routing › LLMs › Lanes); these three
+    # (development_instructions/plan-cache-lanes.md § 5). HOW MANY lanes a
+    # model has is one number per provider+model (LLM Routing › LLMs › Lanes,
+    # shared by every entry on that model); these three
     # decide who gets one when they are scarce. All of them are SYSTEM time.
     "lanes": {
         "label": "Cache Lanes",

@@ -85,6 +85,69 @@ function entriesLosingLastAssignment(routing, entryIdx) {
     const mine = ((routing[entryIdx] || {}).tasks || []).map(t => t && t.task).filter(Boolean);
     return mine.filter(tid => (chains[tid] || []).length === 1);
 }
+// Lanes belong to the MODEL: entries that name the same provider+model run on
+// ONE lane pool (app/core/llm_lanes.py → configured_lane_count), so their
+// `max_concurrent` is one shared number. These keep it one number in the
+// config too, instead of several fields of which only the highest counts.
+function poolKeyOf(entry) {
+    const p = String((entry && entry.provider) || '').trim();
+    const m = String((entry && entry.model) || '').trim();
+    return (p && m) ? p + '/' + m : '';
+}
+function poolSiblings(routing, idx) {
+    const key = poolKeyOf((routing || [])[idx]);
+    if (!key) return [];
+    const out = [];
+    (routing || []).forEach((e, i) => { if (i !== idx && poolKeyOf(e) === key) out.push(i); });
+    return out;
+}
+function _laneValue(entry) {
+    return Math.max(1, parseInt(entry && entry.max_concurrent, 10) || 1);
+}
+// What the server runs the pool of `indices` with: the highest value among the
+// ENABLED entries. A pool of disabled entries only has no running lanes; the
+// highest value is what it would come up with.
+function _lanesOf(routing, indices) {
+    const rows = indices.map(i => routing[i]).filter(Boolean);
+    const on = rows.filter(e => e.enabled !== false);
+    return (on.length ? on : rows).reduce((m, e) => Math.max(m, _laneValue(e)), 1);
+}
+function lanesInForce(routing, idx) {
+    return _lanesOf(routing, [idx].concat(poolSiblings(routing, idx)));
+}
+function setPoolLanes(routing, idx, value) {
+    const v = Math.max(1, parseInt(value, 10) || 1);
+    const touched = [idx].concat(poolSiblings(routing, idx)).filter(i => routing[i]);
+    for (const i of touched) routing[i].max_concurrent = v;
+    return touched;
+}
+// Entry `idx` just got a new provider/model: it takes the number of the pool
+// it joined. Alone in its pool it keeps its own.
+function adoptPoolLanes(routing, idx) {
+    const sibs = poolSiblings(routing, idx);
+    if (!sibs.length || !routing[idx]) return false;
+    const v = _lanesOf(routing, sibs);
+    if (_laneValue(routing[idx]) === v && routing[idx].max_concurrent) return false;
+    routing[idx].max_concurrent = v;
+    return true;
+}
+// Pools whose entries disagree get the value in force written into every one
+// of them — no behaviour change, the server already ran them with it.
+function normalizePoolLanes(routing) {
+    const seen = new Set(), changed = [];
+    (routing || []).forEach((entry, idx) => {
+        const key = poolKeyOf(entry);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        const members = [idx].concat(poolSiblings(routing, idx));
+        if (members.length < 2) return;
+        const v = _lanesOf(routing, members);
+        if (members.every(i => _laneValue(routing[i]) === v)) return;
+        for (const i of members) routing[i].max_concurrent = v;
+        changed.push({ pool: key, lanes: v });
+    });
+    return changed;
+}
 // <<< harness-extract:routingModel
 
 // ── User-facing strings ────────────────────────────────────────────────
@@ -123,6 +186,15 @@ const RT_TEXT = {
     assignOnTasksPage: 'Assign tasks on the Tasks page.', unknownTask: 'unknown task',
     deleteAsk: 'Delete "{name}"?', deleteLosing: 'These tasks would lose their only LLM: {tasks}',
     deleteNoLoss: 'No task loses its only LLM.', deleteConfirm: 'Delete',
+    // Lanes are one number per provider+model, shared by every entry on it.
+    lanesOne: '{n} lane', lanesMany: '{n} lanes', lanesShared: 'shared',
+    poolShared: 'Shared with {names} — same model ({pool}), ONE set of lanes. '
+              + 'Changing this number changes it for all of them.',
+    poolSharedOff: 'This entry is disabled; the running entries of {pool} use {n}.',
+    poolSynced: 'Lanes set to {n} for {names} — they share {pool}.',
+    poolAdopted: 'This entry now shares {pool} with {names} and took their lane count ({n}).',
+    poolAligned: 'Entries on the same model share one set of lanes. Differing values were '
+               + 'aligned to the value that was already in force: {pools}. Save to keep it.',
     // Overview page: what the server resolves right now.
     ovBanner: 'Shows the SAVED configuration as the server resolves it right now — '
             + 'unsaved changes on the other pages are not included.',
@@ -131,7 +203,7 @@ const RT_TEXT = {
     ovProviders: 'Providers', ovEntries: 'LLM entries', ovTasks: 'Tasks per category',
     colProvider: 'Provider', colType: 'Type', colEnabled: 'Enabled', colAvailable: 'Available',
     ovProviderMissing: 'provider missing', ovUnavailable: 'unavailable', ovCooldown: 'cooldown {n}s',
-    ovNoTasks: 'no tasks', ovSkipped: 'skipped: {why}', ovViaFallback: 'via fallback ({task})',
+    ovNoTasks: 'no tasks', ovLanesShared: 'shared with {names}', ovSkipped: 'skipped: {why}', ovViaFallback: 'via fallback ({task})',
     ovNone: 'none', ovGatedOff: 'gated off', ovDisabled: 'disabled',
     ovNoProviders: 'No providers configured.', ovNoEntries: 'No LLM entries configured.',
     suitabilityMoved: 'The Tool/Helper suitability test lives under Model Capabilities.',
@@ -162,6 +234,9 @@ let RT_KEEP_STATE = false;
 // Index of the LLM entry whose inline delete confirmation is open, or null.
 // Only one at a time — the box sits under that entry's accordion header.
 let RT_DELETE_ASK = null;
+// Pools whose lane counts were aligned when the LLMs page was opened
+// ([{pool, lanes}]), or null. Cleared by leaving the section's LLMs page.
+let RT_POOL_ALIGNED = null;
 
 // A value that ends up INSIDE an inline onclick="fn('…')": escaped for the
 // single-quoted JS literal first, then for the HTML attribute. Task ids and
@@ -192,6 +267,7 @@ async function renderLlmRoutingPage(pageId) {
     const content = document.getElementById('content');
     if (RT_KEEP_STATE) RT_KEEP_STATE = false; else RT_TASK_STATE = null;
     const page = pageId || 'tasks';
+    if (page !== 'llms') RT_POOL_ALIGNED = null;
     if (page === 'llms') return renderLlmRoutingLlmsPage(content);
     if (page === 'overview') return renderLlmRoutingOverviewPage(content);
     return renderLlmRoutingTasksPage(content);
@@ -598,6 +674,9 @@ function rtNewLlmCreate(taskId) {
     if (!isNaN(maxTok)) entry.max_tokens = maxTok;
     const routing = rtRouting();
     routing.push(entry);
+    // A second sampling profile of a model that already has an entry runs on
+    // that model's lanes — it starts with their number, not with 1.
+    adoptPoolLanes(routing, routing.length - 1);
     assignTask(routing, taskId, routing.length - 1);
     RT_NEW_FORM = null;
     rtRerender(RT_TEXT.saveHint);
@@ -655,10 +734,20 @@ async function renderLlmRoutingLlmsPage(content) {
     const routing = rtRouting();
 
     const fields = rtEntryFields(def);
+    // A config from before the lane count was kept in step may hold several
+    // values for one model. The notice stays up until the page is left, so a
+    // re-render (delete confirmation, …) does not make it vanish unread.
+    const aligned = normalizePoolLanes(routing);
+    if (aligned.length) RT_POOL_ALIGNED = aligned;
 
     let html = '<div class="section active">';
     html += '<h1 class="section-title">🧠 ' + esc(RT_TEXT.title) + ' › ' + esc(RT_TEXT.pageLlms) + '</h1>';
     html += '<div class="desc" style="margin-bottom:12px;">' + esc(RT_TEXT.llmsIntro) + '</div>';
+    if (RT_POOL_ALIGNED) {
+        const pools = RT_POOL_ALIGNED.map(a => a.pool + ' → ' + a.lanes).join(', ');
+        html += '<div class="rt-confirm" style="margin-bottom:12px;"><div class="rt-warn" style="font-size:12px;">'
+             + esc(rtFmt(RT_TEXT.poolAligned, { pools: pools })) + '</div></div>';
+    }
     html += '<div style="margin-bottom:12px;">';
     html += '<button class="btn btn-sm" onclick="addArrayItem(\'llm_routing\', \'array\')">' + esc(RT_TEXT.addLlm) + '</button>';
     html += '</div>';
@@ -700,6 +789,8 @@ function rtRenderEntryItem(def, fields, item, path, idx) {
     html += '<span class="chevron">▶</span> ';
     html += '<span class="title" style="margin-left:6px;">' + esc(label) + '</span>';
     if (item.enabled === false) html += '<span class="badge">' + esc(RT_TEXT.disabledBadge) + '</span>';
+    html += '<span class="rt-muted" style="margin-left:8px; font-size:11px;" data-pool-head="' + idx + '">'
+         + esc(rtPoolHeadText(idx)) + '</span>';
     html += '<button class="btn btn-sm" style="margin-left:8px;" title="' + esc(RT_TEXT.duplicateEntry)
          + '" onclick="event.stopPropagation(); duplicateItem(\'' + path + '\')">⧉</button>';
     html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" title="' + esc(RT_TEXT.deleteEntry)
@@ -711,6 +802,96 @@ function rtRenderEntryItem(def, fields, item, path, idx) {
     html += renderFields(fields, item, path);
     html += '</div></div>';
     return html;
+}
+
+// ── Lanes: one number per provider+model ───────────────────────────────
+function rtLanesText(n) {
+    return rtFmt(n === 1 ? RT_TEXT.lanesOne : RT_TEXT.lanesMany, { n: n });
+}
+
+function rtEntryName(idx) {
+    const e = rtRouting()[idx] || {};
+    return e.name || e.model || ('#' + (idx + 1));
+}
+
+// Collapsed accordion header: the lane count in force, and whether it is shared.
+function rtPoolHeadText(idx) {
+    const routing = rtRouting();
+    if (!poolKeyOf(routing[idx])) return '';
+    const shared = poolSiblings(routing, idx).length > 0;
+    return rtLanesText(lanesInForce(routing, idx)) + (shared ? ' · ' + RT_TEXT.lanesShared : '');
+}
+
+// The line under the Lanes field of an entry that shares its model. Called
+// from renderFields() in settings.js for a schema field with `pool_shared`.
+function rtPoolNote(entryPath) {
+    const m = /^llm_routing\[(\d+)\]$/.exec(entryPath || '');
+    if (!m) return '';
+    // Always in the DOM (hidden while the entry is alone on its model), so
+    // rtRefreshPools() can show it the moment a second entry joins.
+    const text = rtPoolNoteText(parseInt(m[1], 10));
+    return '<div class="desc rt-warn" style="text-decoration:none;" data-pool-note="' + m[1] + '"'
+         + (text ? '' : ' hidden') + '>' + text + '</div>';
+}
+
+function rtPoolNoteText(idx) {
+    const routing = rtRouting();
+    const sibs = poolSiblings(routing, idx);
+    if (!sibs.length) return '';
+    const pool = poolKeyOf(routing[idx]);
+    let text = rtFmt(RT_TEXT.poolShared, { names: sibs.map(rtEntryName).join(', '), pool: pool });
+    if (routing[idx].enabled === false) {
+        text += ' ' + rtFmt(RT_TEXT.poolSharedOff, { pool: pool, n: lanesInForce(routing, idx) });
+    }
+    return esc(text);
+}
+
+// Notes, header texts and Lanes inputs follow CONFIG without a re-render — a
+// re-render would collapse the accordion the admin is typing in.
+function rtRefreshPools() {
+    const routing = rtRouting();
+    document.querySelectorAll('[data-pool-note]').forEach(el => {
+        const text = rtPoolNoteText(parseInt(el.getAttribute('data-pool-note'), 10));
+        el.innerHTML = text;
+        el.hidden = !text;
+    });
+    document.querySelectorAll('[data-pool-head]').forEach(el => {
+        el.textContent = rtPoolHeadText(parseInt(el.getAttribute('data-pool-head'), 10));
+    });
+    routing.forEach((entry, i) => {
+        const input = document.getElementById('f-llm_routing[' + i + '].max_concurrent');
+        if (input && entry && entry.max_concurrent) input.value = entry.max_concurrent;
+    });
+}
+
+// onchange of the Lanes field (renderInput() in settings.js, `pool_shared`):
+// the number goes to every entry of the same provider+model.
+function rtSetLanes(path, value) {
+    const m = /^llm_routing\[(\d+)\]\.max_concurrent$/.exec(path || '');
+    if (!m) { setVal(path, value); return; }
+    const routing = rtRouting();
+    const idx = parseInt(m[1], 10);
+    const touched = setPoolLanes(routing, idx, value);
+    rtRefreshPools();
+    if (touched.length > 1) {
+        toast(rtFmt(RT_TEXT.poolSynced, { n: routing[idx].max_concurrent,
+            names: touched.map(rtEntryName).join(', '), pool: poolKeyOf(routing[idx]) }), 'success');
+    }
+}
+
+// Provider/model of an entry changed on the LLMs page (onRoutingModelChanged()
+// in settings.js): the entry may have joined another model's pool.
+function rtPoolMembershipChanged(path) {
+    const m = /^llm_routing\[(\d+)\]\./.exec(path || '');
+    if (!m) return;
+    const routing = rtRouting();
+    const idx = parseInt(m[1], 10);
+    const adopted = adoptPoolLanes(routing, idx);
+    rtRefreshPools();
+    if (adopted) {
+        toast(rtFmt(RT_TEXT.poolAdopted, { pool: poolKeyOf(routing[idx]), n: routing[idx].max_concurrent,
+            names: poolSiblings(routing, idx).map(rtEntryName).join(', ') }), 'success');
+    }
 }
 
 // The inline confirmation: which tasks would be left without any LLM.
@@ -870,6 +1051,15 @@ function rtOverviewBody(data) {
         html += '<span class="rt-muted" style="min-width:20px;">' + ((Number(e.index) || 0) + 1) + '.</span>';
         html += '<span>' + esc(name) + '</span>';
         html += '<span class="rt-muted">' + esc(e.provider || '?') + ' / ' + esc(e.model || '?') + '</span>';
+        if (e.lanes) {
+            // Same provider+model = one lane pool; name who shares it.
+            const mates = entries.filter(o => o !== e && o.enabled !== false && e.enabled !== false
+                && o.provider === e.provider && o.model === e.model)
+                .map(o => o.name || o.model || ('#' + ((Number(o.index) || 0) + 1)));
+            html += '<span class="rt-muted">' + esc(rtLanesText(e.lanes))
+                 + (mates.length ? ' · ' + esc(rtFmt(RT_TEXT.ovLanesShared, { names: mates.join(', ') })) : '')
+                 + '</span>';
+        }
         if (!e.provider_exists) {
             html += '<span class="rt-err" style="text-decoration:none;">' + esc(RT_TEXT.ovProviderMissing) + '</span>';
         } else if (!e.provider_available) {

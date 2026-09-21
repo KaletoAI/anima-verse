@@ -31,6 +31,29 @@
  *     → [{entry:2, task:"translation"}] (order of appearance).
  *  8. entriesLosingLastAssignment(R0_original, 1) → ["consolidation"]
  *     (intent still has entry 0; consolidation only lives on entry 1).
+ *
+ * Lane pools — one `max_concurrent` per provider+model. Fixture P0:
+ *   0: G/gem  on   lanes 3   "Tools"
+ *   1: G/gem  on   (none)    "Image"      → counts as 1
+ *   2: G/big  on   lanes 2   "Chat"
+ *   3: G/gem  OFF  lanes 8   "Helper"
+ *   4: G/     on   lanes 5   (no model → in no pool)
+ *   5: H/gem  on   lanes 4   (other provider → other pool)
+ *  9. poolKeyOf: 0 → "G/gem", 4 → "" ; poolSiblings(P0, 0) = [1, 3]
+ *     (same provider AND model, disabled ones included, never itself);
+ *     poolSiblings(P0, 2) = [] ; poolSiblings(P0, 4) = [] ; poolSiblings(P0, 5) = [].
+ * 10. lanesInForce mirrors the server (llm_lanes.lane_count_in): the highest
+ *     value among the ENABLED entries → G/gem = max(3, 1) = 3, the disabled 8
+ *     does not count — for entry 0, 1 AND 3. Entry 2 → 2. A pool of disabled
+ *     entries only (flip 0 and 1 off) shows what it would come up with: 8.
+ * 11. normalizePoolLanes(P0) writes 3 into entries 0, 1, 3 and reports
+ *     [{pool:"G/gem", lanes:3}]; entries 2, 4, 5 keep 2, 5, 4. A second run
+ *     reports [] (nothing disagrees any more).
+ * 12. setPoolLanes(P0, 1, 2) → touched [1, 0, 3], all three hold 2, entry 5
+ *     still 4. A value below 1 or NaN becomes 1.
+ * 13. adoptPoolLanes: entry 2 switches its model to "gem" → takes the pool's 3
+ *     (from its SIBLINGS, its own 2 does not vote) and returns true; an entry
+ *     alone in its pool returns false and keeps its number.
  */
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm');
@@ -41,7 +64,8 @@ const a = src.indexOf(BEGIN), b = src.indexOf(END);
 if (a < 0 || b < 0 || b < a) { console.error('FAIL: markers not found'); process.exit(1); }
 const sb = {}; vm.createContext(sb);
 vm.runInContext(src.slice(a + BEGIN.length, b) + '\n;' +
-  ['buildTaskChains','assignTask','unassignTask','moveTask','renumberTask','unknownAssignments','entriesLosingLastAssignment']
+  ['buildTaskChains','assignTask','unassignTask','moveTask','renumberTask','unknownAssignments','entriesLosingLastAssignment',
+   'poolKeyOf','poolSiblings','lanesInForce','setPoolLanes','adoptPoolLanes','normalizePoolLanes']
     .map(n => `this.${n} = ${n};`).join(''), sb);
 const fixture = () => JSON.parse(JSON.stringify([
   { provider: 'A', model: 'm0', enabled: true,  tasks: [{task:'chat_stream',order:1},{task:'intent',order:2}] },
@@ -70,4 +94,30 @@ sb.renumberTask(R6, 'x');
 check(eq(R6.map(e => e.tasks[0].order), [1,2,3]), '6. renumber ties by entry index');
 check(eq(sb.unknownAssignments(fixture(), new Set(['chat_stream','intent','consolidation'])), [{entry:2,task:'translation'}]), '7. unknown assignments');
 check(eq(sb.entriesLosingLastAssignment(fixture(), 1), ['consolidation']), '8. tasks losing their last assignment');
+
+const pools = () => JSON.parse(JSON.stringify([
+  { name: 'Tools',  provider: 'G', model: 'gem', enabled: true,  max_concurrent: 3 },
+  { name: 'Image',  provider: 'G', model: 'gem', enabled: true },
+  { name: 'Chat',   provider: 'G', model: 'big', enabled: true,  max_concurrent: 2 },
+  { name: 'Helper', provider: 'G', model: 'gem', enabled: false, max_concurrent: 8 },
+  { name: 'Blank',  provider: 'G', model: '',    enabled: true,  max_concurrent: 5 },
+  { name: 'Other',  provider: 'H', model: 'gem', enabled: true,  max_concurrent: 4 },
+]));
+const lanes = P => P.map(e => e.max_concurrent === undefined ? null : e.max_concurrent);
+let P = pools();
+check(sb.poolKeyOf(P[0]) === 'G/gem' && sb.poolKeyOf(P[4]) === '', '9. pool key needs provider AND model');
+check(eq(sb.poolSiblings(P, 0), [1, 3]), '9. siblings: same provider+model, disabled included, not itself');
+check(eq([2, 4, 5].map(i => sb.poolSiblings(P, i)), [[], [], []]), '9. other model / no model / other provider are alone');
+check(eq([0, 1, 3, 2].map(i => sb.lanesInForce(P, i)), [3, 3, 3, 2]), '10. in force = highest ENABLED value of the pool');
+let Poff = pools(); Poff[0].enabled = false; Poff[1].enabled = false;
+check(sb.lanesInForce(Poff, 0) === 8, '10. a pool of disabled entries shows its highest value');
+check(eq(sb.normalizePoolLanes(P), [{pool:'G/gem',lanes:3}]) && eq(lanes(P), [3, 3, 2, 3, 5, 4]), '11. normalize writes the value in force into the pool only');
+check(eq(sb.normalizePoolLanes(P), []), '11. second normalize finds nothing');
+P = pools();
+check(eq(sb.setPoolLanes(P, 1, 2), [1, 0, 3]) && eq(lanes(P), [2, 2, 2, 2, 5, 4]), '12. set writes through to every sibling');
+sb.setPoolLanes(P, 0, 0); const low = P[0].max_concurrent; sb.setPoolLanes(P, 0, 'x');
+check(low === 1 && P[3].max_concurrent === 1, '12. below 1 / NaN becomes 1');
+P = pools(); P[2].model = 'gem';
+check(sb.adoptPoolLanes(P, 2) === true && P[2].max_concurrent === 3, '13. joining a pool takes the siblings\' number');
+check(sb.adoptPoolLanes(P, 5) === false && P[5].max_concurrent === 4, '13. alone in its pool keeps its own');
 console.log(); if (fails) { console.log(fails + ' check(s) failed'); process.exit(1); } console.log('all checks passed');
