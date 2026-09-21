@@ -801,6 +801,53 @@ def list_pooled_characters() -> List[str]:
         return []
 
 
+def _prune_party_memberships(conn, character_name: str) -> None:
+    """Take a deleted character out of the JSON member/participant lists.
+
+    ``parties.members`` and ``intents.participants`` name characters inside a
+    JSON value, so no DELETE reaches them. A leftover member makes the travel
+    ticker write a position for a name that no longer exists on every single
+    tick (``_move_party_followers``), and a party whose last real follower is
+    gone would keep its survivor in a one-person party. Rows that are left
+    with nobody but the deleted character go entirely.
+    """
+    lowered = (character_name or "").strip().lower()
+    if not lowered:
+        return
+    # (table, id column, json column) — the JSON is a list for parties and a
+    # {role: name} dict for intents (same shapes character_reset prunes).
+    for table, id_col, json_col in (("parties", "party_id", "members"),
+                                    ("intents", "id", "participants")):
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name=?",
+                            (table,)).fetchone():
+            continue
+        for row_id, raw in conn.execute(
+                f"SELECT {id_col}, {json_col} FROM {table}").fetchall():
+            try:
+                members = json.loads(raw or "[]")
+            except Exception:
+                continue
+            if isinstance(members, dict):
+                kept: Any = {k: v for k, v in members.items()
+                             if str(v).strip().lower() != lowered}
+                changed = len(kept) != len(members)
+                empty = not kept
+            elif isinstance(members, list):
+                kept = [m for m in members
+                        if str(m).strip().lower() != lowered]
+                changed = len(kept) != len(members)
+                empty = not kept
+            else:
+                continue
+            if not changed:
+                continue
+            if empty:
+                conn.execute(f"DELETE FROM {table} WHERE {id_col}=?", (row_id,))
+            else:
+                conn.execute(f"UPDATE {table} SET {json_col}=? WHERE {id_col}=?",
+                             (json.dumps(kept, ensure_ascii=False), row_id))
+
+
 def delete_character(character_name: str) -> bool:
     """Entfernt einen Character vollstaendig: DB-Zeilen + Storage-Verzeichnis.
 
@@ -813,6 +860,15 @@ def delete_character(character_name: str) -> bool:
     met it. Own rows are covered by the sweep below; foreign ones are not,
     which is why the trace cleanup runs first (it needs the name to still
     resolve to a profile).
+
+    Step 0b detaches the character from the running mechanics that key on
+    OTHER columns than ``character_name`` — the same sequence
+    ``npc_pool.pool_npc`` runs when it retires an NPC. It has to happen
+    BEFORE the sweep, because the engines need the profile (and the
+    survivors') to still be readable: a leader that is only deleted from the
+    ``characters`` table leaves its ``parties`` row behind, and every
+    follower keeps reading ``role="follower"`` — losing the SetLocation verb
+    (the avatar: its compass) for good, with no leader left to disband.
     """
     if not character_name or character_name.lower() in _RESERVED_NAMES:
         return False
@@ -825,6 +881,36 @@ def delete_character(character_name: str) -> bool:
     except Exception as e:
         logger.warning("delete_character: trace cleanup for %s failed: %s",
                        character_name, e)
+
+    # 0b) Out of every running mechanic that assumes a present character —
+    # party, pair interaction, journey. Each step is the engine's OWN public
+    # entry, so the survivors get the full treatment (followers freed, the
+    # partner stood up, the pair anchor released) instead of a bare DELETE.
+    # Best effort per step: a failing detach must not stop the deletion, the
+    # DB sweep below removes the rows either way.
+    def _detach_party() -> None:
+        from app.core.party_engine import (clear_invites_for, is_in_party,
+                                           leave_party)
+        if is_in_party(character_name):
+            leave_party(character_name)
+        clear_invites_for(character_name)
+
+    def _detach_interaction() -> None:
+        from app.core.interaction_engine import (clear_invites_for,
+                                                 end_interaction)
+        end_interaction(character_name, reason="deleted")
+        clear_invites_for(character_name)
+
+    def _detach_journey() -> None:
+        from app.core.travel_engine import cancel_journey
+        cancel_journey(character_name)
+
+    for _step in (_detach_party, _detach_journey, _detach_interaction):
+        try:
+            _step()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("delete_character: detach step %s for %s failed: %s",
+                           _step.__name__, character_name, e)
 
     # 1) DB sweep
     try:
@@ -848,6 +934,25 @@ def delete_character(character_name: str) -> bool:
                 conn.execute("DELETE FROM llm_call_stats WHERE agent_name=?", (character_name,))
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='chat_messages'").fetchone():
                 conn.execute("DELETE FROM chat_messages WHERE partner=?", (character_name,))
+            # Tables that reference a character through OTHER columns than
+            # character_name — column names read off world_db_schema.py:
+            # parties(party_id, leader, members), party_invites(inviter,
+            # invitee), interaction_invites(inviter, invitee),
+            # intents(owner, participants). Step 0b already ended the live
+            # ones through the engines; this is the belt for rows whose
+            # counterpart never got that far (a stale invitation, a party
+            # row an earlier crash left behind).
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='parties'").fetchone():
+                conn.execute("DELETE FROM parties WHERE leader=?", (character_name,))
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='party_invites'").fetchone():
+                conn.execute("DELETE FROM party_invites WHERE inviter=? OR invitee=?",
+                             (character_name, character_name))
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_invites'").fetchone():
+                conn.execute("DELETE FROM interaction_invites WHERE inviter=? OR invitee=?",
+                             (character_name, character_name))
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='intents'").fetchone():
+                conn.execute("DELETE FROM intents WHERE owner=?", (character_name,))
+            _prune_party_memberships(conn, character_name)
     except Exception as e:
         logger.error("delete_character DB-Fehler fuer %s: %s", character_name, e)
         return False
@@ -998,18 +1103,24 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
     # Name injizieren (fuer TTS etc.)
     config["name"] = character_name
 
-    # Sprache aus Profil als tts_language injizieren (Profil hat Vorrang)
-    profile_lang = get_character_language(character_name)
+    # ONE profile load for both profile-derived fields below. They used to
+    # take one each (``get_character_language`` plus the decency read), and
+    # this function sits on hot loops — the travel ticker asks it per
+    # character per tick through ``get_known_locations``.
+    try:
+        _prof = get_character_profile(character_name) or {}
+    except Exception:
+        _prof = {}
+
+    # Sprache aus Profil als tts_language injizieren (Profil hat Vorrang).
+    # Same rule as ``get_character_language``: the profile's code, else 'de'.
+    profile_lang = (_prof.get("language", "") or "") or "de"
     if profile_lang:
         config["tts_language"] = profile_lang
 
     # decency_preference (Profil-Feld) fuer den Character-Editor mitladen —
     # free-text Stil-Hinweis fuer die Outfit-Erstellung (ersetzt outfit_exceptions).
-    try:
-        _prof = get_character_profile(character_name) or {}
-        config["decency_preference"] = _prof.get("decency_preference", "") or ""
-    except Exception:
-        config["decency_preference"] = ""
+    config["decency_preference"] = _prof.get("decency_preference", "") or ""
 
     return config
 
@@ -1074,11 +1185,20 @@ def get_character_appearance(character_name: str) -> str:
     return appearance
 
 
-def get_character_current_location(character_name: str = "") -> str:
-    """Gibt den aktuellen Aufenthaltsort des Characters zurueck (Character-Level)."""
+def get_character_current_location(character_name: str = "",
+                                   profile: Optional[Dict[str, Any]] = None) -> str:
+    """Gibt den aktuellen Aufenthaltsort des Characters zurueck (Character-Level).
+
+    ``profile``: an already-loaded character profile to read from — callers
+    that hold one anyway (the worldmap loop) pass it and save a DB round-trip
+    (same contract as ``travel_engine.get_journey``). The value lives in the
+    ``character_state`` column and is injected by ``get_character_profile``,
+    so a profile that came from there carries it.
+    """
     if not character_name:
         return ""
-    profile = get_character_profile(character_name)
+    if profile is None:
+        profile = get_character_profile(character_name)
     return profile.get("current_location", "")
 
 
@@ -1197,11 +1317,18 @@ def _schedule_background_variant(character_name: str) -> None:
                      character_name, _e)
 
 
-def get_movement_target(character_name: str) -> str:
-    """Returns the currently targeted travel destination location id (or '')."""
+def get_movement_target(character_name: str,
+                        profile: Optional[Dict[str, Any]] = None) -> str:
+    """Returns the currently targeted travel destination location id (or '').
+
+    ``profile``: an already-loaded profile to read from (see
+    ``get_character_current_location``). ``movement_target`` is a
+    ``character_state.meta`` key, injected on load like the state columns.
+    """
     if not character_name:
         return ""
-    profile = get_character_profile(character_name) or {}
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
     return (profile.get("movement_target") or "").strip()
 
 
@@ -1211,13 +1338,19 @@ def set_movement_target(character_name: str, location_id: str) -> None:
     target and journey always live and die together."""
     if not character_name:
         return
-    profile = get_character_profile(character_name)
-    new_target = (location_id or "").strip()
-    profile["movement_target"] = new_target
-    j = profile.get("journey")
-    if not new_target or (isinstance(j, dict) and j.get("target") != new_target):
-        profile.pop("journey", None)
-    save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3): ``journey``
+    # is a profile_json key and the save writes the whole blob, so a stale read
+    # here revives a cancelled journey or drops a running one. Leaf block — it
+    # calls nothing that takes this (non-re-entrant) lock again.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        new_target = (location_id or "").strip()
+        profile["movement_target"] = new_target
+        j = profile.get("journey")
+        if not new_target or (isinstance(j, dict) and j.get("target") != new_target):
+            profile.pop("journey", None)
+        save_character_profile(character_name, profile)
 
 
 def clear_movement_target(character_name: str) -> None:
@@ -1822,16 +1955,21 @@ def set_character_pos(character_name: str, x: float, z: float,
     return {"pos": {"x": fx, "z": fz}, "location_id": location_id}
 
 
-def get_character_pose_key(character_name: str) -> str:
+def get_character_pose_key(character_name: str,
+                           profile: Optional[Dict[str, Any]] = None) -> str:
     """Current pose CATALOG KEY — the one render/animation key.
 
     Written by ``set_pose_intent`` only; every image/animation lookup keys off
     this value, never off free text. For the display text (incl. the sleep
     state) use ``get_effective_activity``.
+
+    ``profile``: an already-loaded profile to read from (see
+    ``get_character_current_location``).
     """
     if not character_name:
         return ""
-    profile = get_character_profile(character_name)
+    if profile is None:
+        profile = get_character_profile(character_name)
     return (profile.get("pose_key") or "") if profile else ""
 
 
@@ -2015,14 +2153,24 @@ def clear_pose_intent(character_name: str) -> None:
     """
     if not character_name:
         return
-    profile = get_character_profile(character_name) or {}
-    if profile.get("pose_key") or profile.get("pose_flavor") or profile.get("place"):
-        old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
-        old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
-        profile["pose_key"] = ""
-        profile["pose_flavor"] = ""
-        profile["place"] = None          # the character stands up (§ 3.5)
-        save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # writes the whole profile_json blob out. ``stand_up`` stays OUTSIDE — it
+    # writes the profile itself and keyed_lock is a plain, non-re-entrant Lock.
+    changed = False
+    old_display = ""
+    old_place = None
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        if profile.get("pose_key") or profile.get("pose_flavor") or profile.get("place"):
+            changed = True
+            old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
+            old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
+            profile["pose_key"] = ""
+            profile["pose_flavor"] = ""
+            profile["place"] = None          # the character stands up (§ 3.5)
+            save_character_profile(character_name, profile)
+    if changed:
         if old_place:
             from app.core.room_stand import stand_up
             stand_up(character_name)
@@ -2052,7 +2200,8 @@ def _publish_activity_changed(character_name: str, pose: str, old_pose: str,
         pass
 
 
-def get_effective_activity(character_name: str) -> str:
+def get_effective_activity(character_name: str,
+                           profile: Optional[Dict[str, Any]] = None) -> str:
     """Display activity — mirrors the ``is_sleeping`` flag (B1).
 
     The flag is the authority for the sleep state; the stored pose stays
@@ -2062,16 +2211,18 @@ def get_effective_activity(character_name: str) -> str:
     """
     if not character_name:
         return ""
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
     try:
-        if is_character_sleeping(character_name):
+        if is_character_sleeping(character_name, profile=profile):
             return "Sleeping"
     except Exception:
         pass
-    profile = get_character_profile(character_name) or {}
     return profile.get("pose_flavor") or profile.get("pose_key") or ""
 
 
-def get_effective_pose_key(character_name: str) -> str:
+def get_effective_pose_key(character_name: str,
+                           profile: Optional[Dict[str, Any]] = None) -> str:
     """Render/animation key — mirrors the ``is_sleeping`` flag like
     ``get_effective_activity`` does for the display text.
 
@@ -2081,18 +2232,24 @@ def get_effective_pose_key(character_name: str) -> str:
     if not character_name:
         return ""
     try:
-        if is_character_sleeping(character_name):
+        if is_character_sleeping(character_name, profile=profile):
             return "sleeping"
     except Exception:
         pass
-    return get_character_pose_key(character_name)
+    return get_character_pose_key(character_name, profile=profile)
 
 
-def get_character_current_room(character_name: str) -> str:
-    """The current room id ("" when none)."""
+def get_character_current_room(character_name: str,
+                               profile: Optional[Dict[str, Any]] = None) -> str:
+    """The current room id ("" when none).
+
+    ``profile``: an already-loaded profile to read from (see
+    ``get_character_current_location``).
+    """
     if not character_name:
         return ""
-    profile = get_character_profile(character_name)
+    if profile is None:
+        profile = get_character_profile(character_name)
     return profile.get("current_room", "")
 
 
@@ -2202,10 +2359,13 @@ def get_character_current_feeling(character_name: str) -> str:
 
 def save_character_current_feeling(character_name: str, feeling: str):
     """Stores the current feeling."""
-    profile = get_character_profile(character_name)
-    old_feeling = profile.get("current_feeling", "")
-    profile["current_feeling"] = feeling
-    save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3).
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        old_feeling = profile.get("current_feeling", "")
+        profile["current_feeling"] = feeling
+        save_character_profile(character_name, profile)
     # Generate the background variant for the new mood so a current image is
     # ready by the time the character is switched to. Low-priority GPU task.
     if feeling and feeling != old_feeling:
@@ -2458,14 +2618,17 @@ def set_outfit_intent(character_name: str, intent: Dict[str, Any]) -> None:
     """Schreibt das vollstaendige Intent-Dict in character_state.meta."""
     if not character_name:
         return
-    profile = get_character_profile(character_name)
-    profile["outfit_intent"] = {
-        "forced_pieces": dict(intent.get("forced_pieces") or {}),
-        "forbidden_slots": list(intent.get("forbidden_slots") or []),
-        "target_outfit_type": intent.get("target_outfit_type") or None,
-        "locked": bool(intent.get("locked", False)),
-    }
-    save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3).
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        profile["outfit_intent"] = {
+            "forced_pieces": dict(intent.get("forced_pieces") or {}),
+            "forbidden_slots": list(intent.get("forbidden_slots") or []),
+            "target_outfit_type": intent.get("target_outfit_type") or None,
+            "locked": bool(intent.get("locked", False)),
+        }
+        save_character_profile(character_name, profile)
 
 
 def _update_outfit_intent(character_name: str, **changes) -> Dict[str, Any]:
@@ -3146,9 +3309,12 @@ def resolve_outfit_placeholders(outfit_text: str, character_name: str) -> str:
 
 def save_character_default_outfit(character_name: str, outfit: str):
     """Speichert das Default-Outfit"""
-    profile = get_character_profile(character_name)
-    profile["default_outfit"] = outfit
-    save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3).
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        profile["default_outfit"] = outfit
+        save_character_profile(character_name, profile)
 
 
 def get_character_default_outfit(character_name: str) -> str:
@@ -3258,6 +3424,64 @@ def list_available_characters(include_pooled: bool = False) -> List[str]:
     return sorted(characters)
 
 
+def list_active_journeys() -> List[Dict[str, Any]]:
+    """Who is on the road right now — ONE query for the whole cast.
+
+    Answers "who has a ``journey`` or a ``movement_target``?" without loading
+    a single full profile. The travel ticker asks this every 5 seconds, and
+    the honest answer is almost always "nobody": a full
+    ``get_character_profile`` per character (2 SELECTs + a template deepcopy
+    + the soul files) for that is the most expensive idle loop in the app.
+
+    The two fields live in DIFFERENT places, which is why this needs a join:
+    ``journey`` is an ordinary ``profile_json`` key, ``movement_target`` is a
+    ``character_state.meta`` key (see ``_STATE_META_KEYS``). Both are read
+    with ``json_extract`` so SQLite does the parsing.
+
+    Each hit is ``{"name", "journey", "movement_target", "current_location"}``
+    — enough for ``travel_engine.get_journey(name, profile=…)``, which reads
+    exactly ``journey`` and ``movement_target``.
+
+    The roster gate of :func:`list_available_characters` applies: a pooled or
+    reserved name is not on the map and therefore does not travel.
+    """
+    try:
+        rows = get_connection().execute(
+            "SELECT c.name, "
+            "       json_extract(c.profile_json, '$.journey'), "
+            "       COALESCE(json_extract(s.meta, '$.movement_target'), "
+            "                json_extract(c.profile_json, '$.movement_target')), "
+            "       COALESCE(s.current_location, ''), "
+            "       COALESCE(c.status, '') "
+            "FROM characters c "
+            "LEFT JOIN character_state s ON s.character_name = c.name "
+            "WHERE json_extract(c.profile_json, '$.journey') IS NOT NULL "
+            "   OR COALESCE(json_extract(s.meta, '$.movement_target'), '') <> '' "
+            "   OR COALESCE(json_extract(c.profile_json, '$.movement_target'), '') <> '' "
+            "ORDER BY c.name ASC"
+        ).fetchall()
+    except Exception as e:
+        logger.debug("list_active_journeys: %s", e)
+        return []
+    out: List[Dict[str, Any]] = []
+    for name, journey_raw, target_raw, current_location, status in rows:
+        if not _is_real_character(name) or status == POOLED_STATUS:
+            continue
+        journey: Any = None
+        if journey_raw:
+            try:
+                journey = json.loads(journey_raw)
+            except Exception:
+                journey = None
+        out.append({
+            "name": name,
+            "journey": journey if isinstance(journey, dict) else None,
+            "movement_target": (target_raw or "").strip(),
+            "current_location": current_location or "",
+        })
+    return out
+
+
 def get_character_user_data(character_name: str) -> Dict[str, Any]:
     """Laedt character-spezifische User-Daten (z.B. Anrede)"""
     character_dir = get_character_dir(character_name)
@@ -3345,9 +3569,15 @@ def get_character_images(character_name: str) -> List[str]:
     return [f.name for _, f in files]
 
 
-def get_character_profile_image(character_name: str) -> str:
-    """Gibt den Namen des Profilbildes zurueck"""
-    profile = get_character_profile(character_name)
+def get_character_profile_image(character_name: str,
+                                profile: Optional[Dict[str, Any]] = None) -> str:
+    """Gibt den Namen des Profilbildes zurueck.
+
+    ``profile``: an already-loaded profile to read from (see
+    ``get_character_current_location``).
+    """
+    if profile is None:
+        profile = get_character_profile(character_name)
     return profile.get("profile_image", "")
 
 
@@ -3358,20 +3588,26 @@ def add_character_image(character_name: str, image_filename: str) -> bool:
     sobald es im images/ Verzeichnis liegt. Diese Funktion setzt nur noch das
     initiale Profilbild.
     """
-    profile = get_character_profile(character_name)
-    if not profile.get("profile_image"):
-        profile["profile_image"] = image_filename
-        save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3).
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        if not profile.get("profile_image"):
+            profile["profile_image"] = image_filename
+            save_character_profile(character_name, profile)
     return True
 
 
 def set_character_profile_image(character_name: str, image_filename: str) -> bool:
     """Setzt das Profilbild"""
+    from app.core.keyed_lock import keyed_lock
     images_dir = get_character_images_dir(character_name)
     if (images_dir / image_filename).exists():
-        profile = get_character_profile(character_name)
-        profile["profile_image"] = image_filename
-        save_character_profile(character_name, profile)
+        # Read AND write under the per-character profile lock (DATA-3).
+        with keyed_lock("character_profile", character_name):
+            profile = get_character_profile(character_name)
+            profile["profile_image"] = image_filename
+            save_character_profile(character_name, profile)
         return True
     return False
 
@@ -4043,15 +4279,20 @@ def appear_in_world(character_name: str) -> bool:
     return True
 
 
-def is_character_sleeping(character_name: str) -> bool:
+def is_character_sleeping(character_name: str,
+                          profile: Optional[Dict[str, Any]] = None) -> bool:
     """Prueft ob der Character gerade wirklich schlaeft.
 
     Schritt 6 (May 2026): liest den is_sleeping-Flag aus character_state.
     Legacy-Fallback: wenn der Flag noch nicht migriert ist (alte Saves),
     zaehlt auch ``current_activity == "sleeping"``.
+
+    ``profile``: an already-loaded profile to read from (see
+    ``get_character_current_location``).
     """
     try:
-        profile = get_character_profile(character_name) or {}
+        if profile is None:
+            profile = get_character_profile(character_name) or {}
         return bool(profile.get("is_sleeping"))
     except Exception:
         return False
@@ -4070,34 +4311,41 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
     """
     if not deltas:
         return {}
-    try:
-        profile = get_character_profile(character_name) or {}
-    except Exception:
-        return {}
-    status = profile.get("status_effects", {}) or {}
-    if not status:
-        return {}
+    from app.core.keyed_lock import keyed_lock
     changes: Dict[str, Any] = {}
-    for key, delta in deltas.items():
-        if key not in status:
-            continue
+    # Read AND write under the per-character profile lock (DATA-3): a
+    # read-modify-write of ``status_effects`` whose save rewrites the whole
+    # profile_json blob. Leaf block — nothing inside takes the lock again;
+    # the history write below runs outside it.
+    with keyed_lock("character_profile", character_name):
         try:
-            d = int(delta)
-        except (ValueError, TypeError):
-            continue
-        if d == 0:
-            continue
-        try:
-            old = int(status[key])
-        except (ValueError, TypeError):
-            continue
-        new = max(0, min(100, old + d))
-        if new != old:
-            status[key] = new
-            changes[key] = {"old": old, "new": new}
+            profile = get_character_profile(character_name) or {}
+        except Exception:
+            return {}
+        status = profile.get("status_effects", {}) or {}
+        if not status:
+            return {}
+        for key, delta in deltas.items():
+            if key not in status:
+                continue
+            try:
+                d = int(delta)
+            except (ValueError, TypeError):
+                continue
+            if d == 0:
+                continue
+            try:
+                old = int(status[key])
+            except (ValueError, TypeError):
+                continue
+            new = max(0, min(100, old + d))
+            if new != old:
+                status[key] = new
+                changes[key] = {"old": old, "new": new}
+        if changes:
+            profile["status_effects"] = status
+            save_character_profile(character_name, profile)
     if changes:
-        profile["status_effects"] = status
-        save_character_profile(character_name, profile)
         try:
             _record_state_change(character_name, "effects", source or "chat",
                                  metadata={"changes": changes, "source": source})
@@ -4206,16 +4454,19 @@ def set_state_flag(character_name: str, flag: str, value) -> None:
     """
     if not character_name or not flag:
         return
-    profile = get_character_profile(character_name) or {}
-    profile[flag] = value if isinstance(value, str) and value else bool(value)
-    since = dict(profile.get("state_flag_since") or {})
-    if value:
-        # in-world duration stamp -> canonical GAME time
-        since[flag] = game_time().canonical()
-    else:
-        since.pop(flag, None)
-    profile["state_flag_since"] = since
-    save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3).
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        profile[flag] = value if isinstance(value, str) and value else bool(value)
+        since = dict(profile.get("state_flag_since") or {})
+        if value:
+            # in-world duration stamp -> canonical GAME time
+            since[flag] = game_time().canonical()
+        else:
+            since.pop(flag, None)
+        profile["state_flag_since"] = since
+        save_character_profile(character_name, profile)
 
 
 def stamp_state_flag_since(character_name: str, flag: str) -> None:
@@ -4223,12 +4474,15 @@ def stamp_state_flag_since(character_name: str, flag: str) -> None:
     set before the lifecycle executor existed, or after data edits)."""
     if not character_name or not flag:
         return
-    profile = get_character_profile(character_name) or {}
-    since = dict(profile.get("state_flag_since") or {})
-    # in-world duration stamp -> canonical GAME time
-    since[flag] = game_time().canonical()
-    profile["state_flag_since"] = since
-    save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3).
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        since = dict(profile.get("state_flag_since") or {})
+        # in-world duration stamp -> canonical GAME time
+        since[flag] = game_time().canonical()
+        profile["state_flag_since"] = since
+        save_character_profile(character_name, profile)
 
 
 def set_is_wet(character_name: str, value: bool) -> None:
@@ -4278,11 +4532,14 @@ def delete_character_image(character_name: str, image_filename: str) -> bool:
     image_path.unlink()
 
     # Profilbild zuruecksetzen falls noetig
-    profile = get_character_profile(character_name)
-    if profile.get("profile_image") == image_filename:
-        remaining = get_character_images(character_name)
-        profile["profile_image"] = remaining[0] if remaining else ""
-        save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3).
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        if profile.get("profile_image") == image_filename:
+            remaining = get_character_images(character_name)
+            profile["profile_image"] = remaining[0] if remaining else ""
+            save_character_profile(character_name, profile)
 
     # Metadaten-Datei loeschen
     meta_path = _get_image_meta_path(character_name, image_filename)

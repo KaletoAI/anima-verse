@@ -353,8 +353,19 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
             return None
         place, slot = chosen
         field = {"id": place["id"], "slot": slot, "room_id": room}
-        profile["place"] = field
-        save_character_profile(name, profile)
+        # LOCK ORDER: places-lock (held here) BEFORE character_profile —
+        # never the reverse, and never two characters' profile locks at once.
+        # The profile is READ AGAIN under the lock: the copy above was read
+        # for the seating decision, and writing that stale dict back is what
+        # loses a concurrent equip (which holds this very lock) — the whole
+        # profile_json blob is written out, so the other writer's fields go
+        # with it. The lock is released before ``set_character_pos``, which
+        # reaches ``save_character_current_location`` and ``release`` further
+        # down; a plain Lock is not re-entrant, so it must not be held there.
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name) or {}
+            profile["place"] = field
+            save_character_profile(name, profile)
         sx, sz = place["slots"][slot]
         # The point derives the location: a slot inside the room's own
         # location keeps the one the character has, and preserve_movement_
@@ -376,11 +387,19 @@ def release(name: str) -> None:
     the armchair and nobody walks across the room for it. A room that offers
     no free point leaves the position where it is.
     """
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
-    profile = get_character_profile(name) or {}
-    if profile.get("place"):
-        profile["place"] = None
-        save_character_profile(name, profile)
+    # Read AND write under the per-character profile lock (DATA-3): the whole
+    # profile_json blob is written out, so a stale read here would revert a
+    # concurrent equip. ``stand_up`` stays OUTSIDE — it writes the profile
+    # itself and a keyed_lock is a plain, non-re-entrant Lock.
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        released = bool(profile.get("place"))
+        if released:
+            profile["place"] = None
+            save_character_profile(name, profile)
+    if released:
         from app.core.room_stand import stand_up
         stand_up(name)
 
@@ -449,9 +468,15 @@ def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place
             fitting.sort(key=lambda p: _dist(mid, list(centre_of(p))))
         best = fitting[0]
         for name in (actor, partner):
-            prof = get_character_profile(name) or {}
-            prof["place"] = {"id": best["id"], "slot": PAIR_SLOT, "room_id": room}
-            save_character_profile(name, prof)
+            # ONE profile lock at a time (never both partners' at once — two
+            # threads seating the same pair from opposite ends would deadlock
+            # on a fixed pair order). Same order as ``assign``: places-lock
+            # first, then character_profile.
+            with keyed_lock("character_profile", name):
+                prof = get_character_profile(name) or {}
+                prof["place"] = {"id": best["id"], "slot": PAIR_SLOT,
+                                 "room_id": room}
+                save_character_profile(name, prof)
         cx, cz = centre_of(best)
         if not inside(loc, cx, cz):
             _warn_outside(loc, best, cx, cz)

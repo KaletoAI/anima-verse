@@ -669,46 +669,53 @@ def cleanup_expired_conditions(character_name: str) -> int:
     even without a new item/danger trigger.
     """
     try:
+        from app.core.keyed_lock import keyed_lock
         from app.models.character import get_character_profile, save_character_profile
-        _prof = get_character_profile(character_name)
-        _conditions = (_prof or {}).get("active_conditions", []) or []
-        if not _conditions:
-            return 0
-        _now = game_time()  # condition durations are in-world -> game clock
-        _active = []
-        for cond in _conditions:
-            if not isinstance(cond, dict):
+        # Read AND write under the per-character profile lock (DATA-3): the
+        # save writes the whole profile_json blob out, so a stale read would
+        # revert a concurrent writer's fields (place, journey, equip). Nothing
+        # inside this block writes a profile, so the non-re-entrant lock is
+        # safe here.
+        with keyed_lock("character_profile", character_name):
+            _prof = get_character_profile(character_name)
+            _conditions = (_prof or {}).get("active_conditions", []) or []
+            if not _conditions:
+                return 0
+            _now = game_time()  # condition durations are in-world -> game clock
+            _active = []
+            for cond in _conditions:
+                if not isinstance(cond, dict):
+                    _active.append(cond)
+                    continue
+                duration_h = cond.get("duration_hours", 0)
+                if duration_h:
+                    try:
+                        # ``started_at`` is a canonical GAME-time stamp.
+                        started = GameTime.parse(cond["started_at"])
+                        if (_now - started).hours > float(duration_h):
+                            logger.info("Condition '%s' expired for %s",
+                                        cond.get("name"), character_name)
+                            continue  # expired — drop it
+                    except (ValueError, KeyError, TypeError):
+                        # Unusable stamp: KEEP the condition (unchanged behaviour —
+                        # a broken stamp must not silently delete state). Logged
+                        # once per condition so a bad stamp is findable without
+                        # spamming the periodic tick.
+                        _warn_key = (character_name, str(cond.get("name") or ""),
+                                     str(cond.get("started_at") or ""))
+                        if _warn_key not in _UNPARSABLE_CONDITION_STAMPS:
+                            _UNPARSABLE_CONDITION_STAMPS.add(_warn_key)
+                            logger.warning(
+                                "Condition '%s' of %s has an unusable started_at "
+                                "(%r) — kept, cannot expire",
+                                cond.get("name"), character_name,
+                                cond.get("started_at"))
                 _active.append(cond)
-                continue
-            duration_h = cond.get("duration_hours", 0)
-            if duration_h:
-                try:
-                    # ``started_at`` is a canonical GAME-time stamp.
-                    started = GameTime.parse(cond["started_at"])
-                    if (_now - started).hours > float(duration_h):
-                        logger.info("Condition '%s' expired for %s",
-                                    cond.get("name"), character_name)
-                        continue  # expired — drop it
-                except (ValueError, KeyError, TypeError):
-                    # Unusable stamp: KEEP the condition (unchanged behaviour —
-                    # a broken stamp must not silently delete state). Logged
-                    # once per condition so a bad stamp is findable without
-                    # spamming the periodic tick.
-                    _warn_key = (character_name, str(cond.get("name") or ""),
-                                 str(cond.get("started_at") or ""))
-                    if _warn_key not in _UNPARSABLE_CONDITION_STAMPS:
-                        _UNPARSABLE_CONDITION_STAMPS.add(_warn_key)
-                        logger.warning(
-                            "Condition '%s' of %s has an unusable started_at "
-                            "(%r) — kept, cannot expire",
-                            cond.get("name"), character_name,
-                            cond.get("started_at"))
-            _active.append(cond)
-        removed = len(_conditions) - len(_active)
-        if removed:
-            _prof["active_conditions"] = _active
-            save_character_profile(character_name, _prof)
-        return removed
+            removed = len(_conditions) - len(_active)
+            if removed:
+                _prof["active_conditions"] = _active
+                save_character_profile(character_name, _prof)
+            return removed
     except Exception as e:
         logger.debug("Condition cleanup fehlgeschlagen fuer %s: %s", character_name, e)
         return 0
@@ -751,25 +758,33 @@ def apply_effects(character_name: str,
     from app.models.character import get_character_profile, save_character_profile
     changes: Dict[str, Any] = {}
     try:
-        profile = get_character_profile(character_name)
-        status = profile.get("status_effects", {}) or {}
-        changed = False
+        from app.core.keyed_lock import keyed_lock
+        # Read AND write under the per-character profile lock (DATA-3). The
+        # deltas below are a read-modify-write of ``status_effects`` AND the
+        # save rewrites the whole profile_json blob — two lost updates in one.
+        # Pure computation inside, no nested profile writer, so the
+        # non-re-entrant lock is safe.
+        with keyed_lock("character_profile", character_name):
+            profile = get_character_profile(character_name)
+            status = profile.get("status_effects", {}) or {}
+            changed = False
 
-        for key, delta in effects.items():
-            if not key.endswith("_change") or not delta:
-                continue
-            stat_key = key[:-7]  # "stamina_change" -> "stamina"
-            current = status.get(stat_key, 100)
-            new_val = max(0, min(100, current + int(delta)))
-            if new_val != current:
-                status[stat_key] = new_val
-                changes[stat_key] = {"old": current, "new": new_val}
-                changed = True
-                logger.info("%s%s: %s %d -> %d", log_prefix, character_name, stat_key, current, new_val)
+            for key, delta in effects.items():
+                if not key.endswith("_change") or not delta:
+                    continue
+                stat_key = key[:-7]  # "stamina_change" -> "stamina"
+                current = status.get(stat_key, 100)
+                new_val = max(0, min(100, current + int(delta)))
+                if new_val != current:
+                    status[stat_key] = new_val
+                    changes[stat_key] = {"old": current, "new": new_val}
+                    changed = True
+                    logger.info("%s%s: %s %d -> %d", log_prefix,
+                                character_name, stat_key, current, new_val)
 
-        if changed:
-            profile["status_effects"] = status
-            save_character_profile(character_name, profile)
+            if changed:
+                profile["status_effects"] = status
+                save_character_profile(character_name, profile)
     except Exception as e:
         logger.warning("Effects anwenden fehlgeschlagen: %s", e)
 
@@ -809,84 +824,91 @@ def apply_hourly_status_tick(character_name: str):
     _LAST_HOURLY_TICK[tick_key] = now
 
     try:
-        from app.models.character import get_character_profile, get_character_config, save_character_profile
-        from app.models.character_template import get_template
+        from app.core.keyed_lock import keyed_lock
+        # Read AND write under the per-character profile lock (DATA-3):
+        # the tick is a read-modify-write of ``status_effects`` and the
+        # save rewrites the whole profile_json blob with it. Everything
+        # inside only READS (config, template, current location), so the
+        # non-re-entrant lock cannot be re-taken here.
+        with keyed_lock("character_profile", character_name):
+            from app.models.character import get_character_profile, get_character_config, save_character_profile
+            from app.models.character_template import get_template
 
-        profile = get_character_profile(character_name)
-        config = get_character_config(character_name)
-        status = profile.get("status_effects", {})
+            profile = get_character_profile(character_name)
+            config = get_character_config(character_name)
+            status = profile.get("status_effects", {})
 
-        if not status:
-            return  # Keine Status-Werte initialisiert
+            if not status:
+                return  # Keine Status-Werte initialisiert
 
-        # Template laden fuer bar_hourly Werte
-        template_name = profile.get("template", "human-default")
-        template = get_template(template_name)
-        if not template:
-            return
+            # Template laden fuer bar_hourly Werte
+            template_name = profile.get("template", "human-default")
+            template = get_template(template_name)
+            if not template:
+                return
 
-        # Pro Stat-Feld die Stunden-Rate sammeln: Wach (``bar_hourly``) UND
-        # optional Schlaf (``bar_hourly_sleeping``). Letzteres ERSETZT die mit den
-        # Activities abgeschaffte aktivitaets-basierte Schlaf-Auffuellung — jetzt
-        # ZUSTANDS-getrieben (is_sleeping), von Activities entkoppelt, aber weiter
-        # rein TEMPLATE-getrieben (kein Hardcoding). Stats mit nur einem Schlaf-Wert
-        # (bar_hourly=0) werden ebenfalls erfasst.
-        stat_rates = {}  # stat_key -> (awake, sleeping_or_None)
-        for section in template.get("sections", []):
-            for field in section.get("fields", []):
-                if field.get("store") != "status_effects":
+            # Pro Stat-Feld die Stunden-Rate sammeln: Wach (``bar_hourly``) UND
+            # optional Schlaf (``bar_hourly_sleeping``). Letzteres ERSETZT die mit den
+            # Activities abgeschaffte aktivitaets-basierte Schlaf-Auffuellung — jetzt
+            # ZUSTANDS-getrieben (is_sleeping), von Activities entkoppelt, aber weiter
+            # rein TEMPLATE-getrieben (kein Hardcoding). Stats mit nur einem Schlaf-Wert
+            # (bar_hourly=0) werden ebenfalls erfasst.
+            stat_rates = {}  # stat_key -> (awake, sleeping_or_None)
+            for section in template.get("sections", []):
+                for field in section.get("fields", []):
+                    if field.get("store") != "status_effects":
+                        continue
+                    stat_key = field.get("key", "")
+                    if not stat_key:
+                        continue
+                    awake = field.get("bar_hourly", 0)
+                    sleeping = field.get("bar_hourly_sleeping", None)
+                    if awake or sleeping is not None:
+                        stat_rates[stat_key] = (awake, sleeping)
+
+            if not stat_rates:
+                return
+
+            # Ruhephase = schlafend ODER offmap/abwesend. Ein gesteuerter Avatar wird
+            # vom Spieler nie schlafen gelegt — die Erholung passiert, waehrend niemand
+            # ihn steuert und er von der Karte verschwunden ist (current_location leer).
+            # Solange zaehlt die Zeit wie Schlaf, damit Energie sich erholt statt zu
+            # verfallen. Template-getrieben ueber bar_hourly_sleeping (kein Hardcoding).
+            from app.models.character import get_character_current_location
+            is_sleeping = bool(profile.get("is_sleeping"))
+            is_offmap = not (get_character_current_location(character_name) or "").strip()
+            resting = is_sleeping or is_offmap
+            changed = False
+            for stat_key, (awake, sleeping) in stat_rates.items():
+                if stat_key not in status:
                     continue
-                stat_key = field.get("key", "")
-                if not stat_key:
+
+                # Im Ruhezustand den Schlaf-Wert nehmen (falls definiert), sonst Wach-Wert.
+                use_sleep = resting and sleeping is not None
+                base = sleeping if use_sleep else awake
+                # Character-Override: config.{stat}_hourly[_sleeping] ueberschreibt Template.
+                override_key = f"{stat_key}_hourly_sleeping" if use_sleep else f"{stat_key}_hourly"
+                try:
+                    hourly = int(config.get(override_key, base))
+                except (ValueError, TypeError):
+                    hourly = base
+
+                if not hourly:
                     continue
-                awake = field.get("bar_hourly", 0)
-                sleeping = field.get("bar_hourly_sleeping", None)
-                if awake or sleeping is not None:
-                    stat_rates[stat_key] = (awake, sleeping)
 
-        if not stat_rates:
-            return
+                current = status[stat_key]
+                new_val = max(0, min(100, current + hourly))
+                if new_val != current:
+                    status[stat_key] = new_val
+                    changed = True
+                    logger.debug("Hourly tick %s: %s %d -> %d (%+d/h%s)",
+                                 character_name, stat_key, current, new_val, hourly,
+                                 ", sleeping" if use_sleep else "")
 
-        # Ruhephase = schlafend ODER offmap/abwesend. Ein gesteuerter Avatar wird
-        # vom Spieler nie schlafen gelegt — die Erholung passiert, waehrend niemand
-        # ihn steuert und er von der Karte verschwunden ist (current_location leer).
-        # Solange zaehlt die Zeit wie Schlaf, damit Energie sich erholt statt zu
-        # verfallen. Template-getrieben ueber bar_hourly_sleeping (kein Hardcoding).
-        from app.models.character import get_character_current_location
-        is_sleeping = bool(profile.get("is_sleeping"))
-        is_offmap = not (get_character_current_location(character_name) or "").strip()
-        resting = is_sleeping or is_offmap
-        changed = False
-        for stat_key, (awake, sleeping) in stat_rates.items():
-            if stat_key not in status:
-                continue
-
-            # Im Ruhezustand den Schlaf-Wert nehmen (falls definiert), sonst Wach-Wert.
-            use_sleep = resting and sleeping is not None
-            base = sleeping if use_sleep else awake
-            # Character-Override: config.{stat}_hourly[_sleeping] ueberschreibt Template.
-            override_key = f"{stat_key}_hourly_sleeping" if use_sleep else f"{stat_key}_hourly"
-            try:
-                hourly = int(config.get(override_key, base))
-            except (ValueError, TypeError):
-                hourly = base
-
-            if not hourly:
-                continue
-
-            current = status[stat_key]
-            new_val = max(0, min(100, current + hourly))
-            if new_val != current:
-                status[stat_key] = new_val
-                changed = True
-                logger.debug("Hourly tick %s: %s %d -> %d (%+d/h%s)",
-                             character_name, stat_key, current, new_val, hourly,
-                             ", sleeping" if use_sleep else "")
-
-        if changed:
-            profile["status_effects"] = status
-            save_character_profile(character_name, profile)
-            logger.info("Hourly status tick fuer %s angewendet", character_name)
+            if changed:
+                profile["status_effects"] = status
+                save_character_profile(character_name, profile)
+                logger.info("Hourly status tick fuer %s angewendet", character_name)
 
         # (Force rules now run centrally in world_admin_tick
         # -> periodic_jobs._sub_force_rules; activity effects are gone —

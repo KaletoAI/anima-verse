@@ -56,7 +56,7 @@ location ids) is discarded on read together with its movement target.
 """
 import asyncio
 import math
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from app.core.game_time import GameDuration, GameTime
 from app.core.log import get_logger
@@ -603,10 +603,17 @@ def start_journey(character_name: str,
     # Walking away ends a running pair interaction for BOTH participants.
     from app.core.interaction_engine import end_interaction
     end_interaction(character_name, reason="journey")
-    profile = get_character_profile(character_name)
-    profile["journey"] = journey
-    profile["movement_target"] = target_id
-    save_character_profile(character_name, profile)
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # writes the whole profile_json blob, so a stale read would revert what a
+    # concurrent writer (an equip route, the seat assignment) just stored.
+    # ``end_interaction`` runs BEFORE the lock on purpose — it writes both
+    # partners' profiles itself, and a keyed_lock is not re-entrant.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        profile["journey"] = journey
+        profile["movement_target"] = target_id
+        save_character_profile(character_name, profile)
 
     st = journey_state(waypoints, journey["started_at_game"], game_time())
     try:
@@ -691,13 +698,18 @@ def start_journey_to_point(character_name: str, x: float,
     # Walking away ends a running pair interaction for BOTH participants.
     from app.core.interaction_engine import end_interaction
     end_interaction(character_name, reason="journey")
-    profile = get_character_profile(character_name)
-    profile["journey"] = journey
-    # A leftover target from an earlier trip would keep every reader pointing
-    # at a place this journey is not going to. Cleared in the SAME write —
-    # ``clear_movement_target`` would drop the journey dict with it.
-    profile["movement_target"] = ""
-    save_character_profile(character_name, profile)
+    # Same lock as ``start_journey`` — read and write of the profile blob
+    # under ``character_profile``, with ``end_interaction`` kept outside it.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        profile["journey"] = journey
+        # A leftover target from an earlier trip would keep every reader
+        # pointing at a place this journey is not going to. Cleared in the
+        # SAME write — ``clear_movement_target`` would drop the journey dict
+        # with it.
+        profile["movement_target"] = ""
+        save_character_profile(character_name, profile)
 
     st = journey_state(waypoints, journey["started_at_game"], game_time())
     try:
@@ -854,7 +866,8 @@ def _segment_perpendicular(waypoints: Sequence[Sequence[float]],
 
 def _move_party_followers(leader: str, leader_location: str, pos: Point,
                           waypoints: Sequence[Sequence[float]],
-                          seg: int, settle: bool = False) -> None:
+                          seg: int, settle: bool = False,
+                          locations: Optional[List[Dict[str, Any]]] = None) -> None:
     """Walk the leader's followers alongside them for this tick.
 
     Followers are a pure function of the leader's position, so nothing has to
@@ -872,6 +885,10 @@ def _move_party_followers(leader: str, leader_location: str, pos: Point,
     deterministic answer, no shrink-until-it-fits search whose result would
     depend on the step size.
 
+    ``locations``: the caller's location snapshot — the travel tick already
+    holds one, and loading the whole world a second time per travelling
+    leader is what this avoids. Omitted, the snapshot is fetched here.
+
     ``settle`` is the ARRIVAL: the party has stopped, so the formation point
     becomes a PREFERENCE rather than the result — ``room_stand.stand_up``
     keeps a follower whose slot is free exactly where the formation put it and
@@ -888,7 +905,8 @@ def _move_party_followers(leader: str, leader_location: str, pos: Point,
     if not followers:
         return
     px, pz = _segment_perpendicular(waypoints, seg)
-    locations = list_locations()
+    if locations is None:
+        locations = list_locations()
     for follower, offset in zip(followers, _follower_offsets(len(followers))):
         try:
             fx = round(pos[0] + px * offset, 2)
@@ -909,7 +927,8 @@ def _move_party_followers(leader: str, leader_location: str, pos: Point,
             logger.debug("party follow failed for %s: %s", follower, e)
 
 
-def _cancel_follower_journeys(leader: str) -> None:
+def _cancel_follower_journeys(leader: str,
+                              travelling: Optional[Set[str]] = None) -> None:
     """Followers do not travel on their own account.
 
     A follower that joined WHILE travelling keeps its own journey, and the
@@ -918,11 +937,19 @@ def _cancel_follower_journeys(leader: str) -> None:
     it after the party has long arrived somewhere else. A character loses
     SetLocation when it joins a party, so it loses the journey with it — on
     every tick the leader is on the road AND on the tick it arrives.
+
+    ``travelling``: the set of names that have a journey at all, as the tick
+    already established it (``list_active_journeys``). A follower outside it
+    provably has none, so it costs no profile load — which is the normal case
+    and used to be a full load per follower per tick.
     """
     from app.core.party_engine import party_followers
     for follower in party_followers(leader):
-        if follower and follower != leader \
-                and get_journey(follower) is not None:
+        if not follower or follower == leader:
+            continue
+        if travelling is not None and follower not in travelling:
+            continue
+        if get_journey(follower) is not None:
             cancel_journey(follower)
 
 
@@ -1305,10 +1332,20 @@ def advance_all_journeys() -> None:
     to (discovery by sight, E6) and records the ground they stand on in the
     exploration memory (2026-08-16). It runs as a second pass over the same
     character list and the same location snapshot — after, so a traveller sees
-    what THIS tick walked it past, not what the last one did.
+    what THIS tick walked it past, not what the last one did. That pass is
+    deliberately NOT narrowed to the travellers: a teleport, an admin move or
+    a scheduler jump puts someone beside a hut just as a road does, and this
+    is the one loop that sees all of them.
+
+    WHO travels is answered by ONE query (``list_active_journeys``), not by a
+    full profile load per character: the answer is almost always "nobody", and
+    a profile load costs two SELECTs, a template deepcopy and the soul files.
+    The hits carry their own ``journey``/``movement_target``/
+    ``current_location``, so the loop below hands them on instead of reading
+    them again.
     """
     from app.core.world_geometry import location_at_point
-    from app.models.character import (get_character_current_location,
+    from app.models.character import (list_active_journeys,
                                       list_available_characters,
                                       set_character_pos)
     from app.models.world import list_locations
@@ -1317,10 +1354,21 @@ def advance_all_journeys() -> None:
     # anyway, so there is nothing left to be lazy about.
     locations: List[Dict[str, Any]] = list_locations()
     names = list_available_characters()
+    active = list_active_journeys()
+    active_names = {a["name"] for a in active}
     now = game_time()
-    for name in names:
+    roster = set(names)
+    for entry in active:
+        name = entry["name"]
+        if name not in roster:
+            continue
         try:
-            j = get_journey(name)
+            # get_journey reads exactly these two keys — the query already
+            # produced them, so this is the profile it would have loaded.
+            j = get_journey(name, profile={
+                "journey": entry["journey"],
+                "movement_target": entry["movement_target"],
+            })
             if not j:
                 continue
             st = journey_state(j["waypoints"], j["started_at_game"], now)
@@ -1328,7 +1376,7 @@ def advance_all_journeys() -> None:
             # every comparison below has to read that as "no target place",
             # never as "the wilderness is the target".
             target_id = j.get("target") or ""
-            current_id = (get_character_current_location(name) or "").strip()
+            current_id = (entry["current_location"] or "").strip()
             # Leave re-check — ONLY while the character still stands in the
             # location it set off from. A leave rule forbids stepping OUT of a
             # place; once the point has left that footprint (current_location
@@ -1340,7 +1388,10 @@ def advance_all_journeys() -> None:
                 continue
             # Before the branch, so the ARRIVAL tick is covered too: a
             # follower that joined mid-journey must not walk on afterwards.
-            _cancel_follower_journeys(name)
+            # ``active_names`` is the tick's own answer to "who has a
+            # journey?" — a follower that is not in it needs no profile load
+            # to prove it has none.
+            _cancel_follower_journeys(name, active_names)
             if not st["arrived"]:
                 # …and only a journey that HAS a target place can cross into
                 # it early. For a point journey the derived location out in
@@ -1352,14 +1403,16 @@ def advance_all_journeys() -> None:
                     if ((at.get("id") or "") if at else "") == target_id:
                         _settle_arrival(name, j, st)   # early, but gated
                         continue
-                set_character_pos(name, st["pos"][0], st["pos"][1],
-                                  preserve_movement_target=True)
-                # Read the location back AFTER the write: it is what the
-                # leader's own point just derived, and the formation is not
-                # allowed to put a follower anywhere else.
+                written = set_character_pos(name, st["pos"][0], st["pos"][1],
+                                            preserve_movement_target=True)
+                # The location AFTER the write: it is what the leader's own
+                # point just derived, and the formation is not allowed to put
+                # a follower anywhere else. ``set_character_pos`` returns it,
+                # so no second profile load is needed to read it back.
                 _move_party_followers(
-                    name, (get_character_current_location(name) or "").strip(),
-                    st["pos"], j["waypoints"], st["seg"])
+                    name, (written.get("location_id") or "").strip(),
+                    st["pos"], j["waypoints"], st["seg"],
+                    locations=locations)
                 continue
             _settle_arrival(name, j, st)
         except Exception as e:
