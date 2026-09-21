@@ -240,6 +240,10 @@ export interface Room {
    *  writes it onto `__floor__<level>` entries and nowhere else. A corridor
    *  has no layout to carry a level in. */
   level?: number
+  /** Server flag: the image prompts changed (a content import, or an edit
+   *  that really changed a prompt), so the pictures no longer match the text.
+   *  Generating an image clears it; the editor can also mark it as read. */
+  prompt_changed?: boolean
 }
 
 // Optional 3D metadata for external 3D map clients (AV3D-1). The 2D UI
@@ -464,6 +468,9 @@ export interface Location {
    *  the edge, rule gates unchanged. The editor displays the flag, it does not
    *  judge. */
   has_entrance?: boolean
+  /** Server flag: the image prompts of the LOCATION changed — same meaning
+   *  as the room's own flag, see `Room.prompt_changed`. */
+  prompt_changed?: boolean
   /** Server findings about the DRAWN boundary (contract v6 Nr. 1), e.g.
    *  `boundary_self_intersection`. Absent = nothing to report. The scene
    *  payload states the same thing in its `problems[]`, but a bare location

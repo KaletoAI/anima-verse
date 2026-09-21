@@ -2255,6 +2255,22 @@
     "Russian": "Russisch",
     "Japanese": "Japanisch",
     "Chinese": "Chinesisch",
-    "Korean": "Koreanisch"
+    "Korean": "Koreanisch",
+    "Keep this outfit": "Dieses Outfit behalten",
+    "The character keeps this outfit: it does not change clothes on its own and the decency rule does not re-dress it.": "Der Character behält dieses Outfit: Er zieht sich nicht von selbst um, und die Anstandsregel zieht ihn nicht neu an.",
+    "Which room this image belongs to. \"No room\" keeps it at the location itself.": "Zu welchem Raum dieses Bild gehört. „Kein Raum“ belässt es beim Ort selbst.",
+    "no room": "kein Raum",
+    "Image assigned to {name}": "Bild {name} zugeordnet",
+    "the location": "dem Ort",
+    "The image prompts changed — the pictures here are older than the text.": "Die Bild-Prompts haben sich geändert — die Bilder hier sind älter als der Text.",
+    "Mark as up to date": "Als aktuell markieren",
+    "Marked as up to date": "Als aktuell markiert",
+    "Place on the map": "Auf der Karte platzieren",
+    "Puts the character at the picked location right away — a teleport: a running journey is cancelled, the activity is reset and a party follows along. Without a room it lands in the entry room.": "Setzt den Character sofort an den gewählten Ort — ein Teleport: Eine laufende Reise wird abgebrochen, die Aktivität zurückgesetzt, und eine Gruppe kommt mit. Ohne Raum landet er im Eingangsraum.",
+    "Place here": "Hier platzieren",
+    "Placing…": "Platziere …",
+    "Character placed": "Character platziert",
+    "Leave the party and place": "Gruppe verlassen und platzieren",
+    "{name} travels with {leader} and is taken along by them. Place {leader} instead, or let {name} leave the party first.": "{name} reist mit {leader} und wird von {leader} mitgenommen. Platziere stattdessen {leader}, oder lass {name} zuerst die Gruppe verlassen."
   }
 }

@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File, Query
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from app.core.auth_dependency import require_admin
 from app.core.http_files import etag_file_response
@@ -18,32 +19,25 @@ from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
 logger = get_logger("characters")
 
 from app.models.character import (
-    generate_random_appearance,
     get_character_appearance,
-    get_character_current_location,
     save_character_current_location,
     get_effective_activity,
     set_pose_intent,
     clear_pose_intent,
     get_character_current_feeling,
     save_character_current_feeling,
-    get_character_outfits,
-    add_character_outfit,
-    delete_character_outfit,
     update_outfit_image,
     get_character_dir,
     get_character_images_dir,
     add_character_image,
     get_character_images,
     get_character_image_comments,
-    add_character_image_comment,
     get_character_image_prompts,
     get_character_image_metadata,
     get_character_profile_image,
     set_character_profile_image,
     delete_character,
     delete_character_image,
-    cleanup_orphaned_images,
     get_character_skill_config,
     save_character_skill_config,
     get_character_profile,
@@ -56,11 +50,15 @@ from app.models.character import (
     get_character_outfits_dir,
     MODEL_RIG_VALUES)
 from app.core import character_ops
-from app.core.dependencies import reload_skill_manager, get_skill_manager
 
 from app.core.timeutils import utc_now, utc_now_iso
 
 router = APIRouter(prefix="/characters", tags=["characters"])
+
+
+class OutfitLockBody(BaseModel):
+    """Body of ``POST /characters/{name}/outfit-lock``."""
+    locked: bool
 
 
 @router.get("/available-models")
@@ -194,13 +192,6 @@ async def create_character(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{character_name}/generate-appearance")
-def generate_character_appearance(character_name: str) -> Dict[str, Any]:
-    """Generiert ein zufaelliges Aussehen"""
-    appearance = generate_random_appearance()
-    return {"character": character_name, "appearance": appearance}
-
-
 @router.get("/{character_name}/profile-image-prompt")
 def profile_image_prompt(character_name: str) -> Dict[str, Any]:
     """Aufgeloester Face Prompt als Default-Prompt fuer den Profilbild-Dialog
@@ -242,14 +233,25 @@ async def update_character_current_location(character_name: str, request: Reques
 
 
 @router.post("/{character_name}/place-on-map")
-async def place_character_on_map(character_name: str, request: Request) -> Dict[str, Any]:
-    """Drag&Drop-Platzierung: setzt current_location UND fuegt die Location
-    in die known_locations-Liste des Characters ein. Damit aktiviert der erste
-    Drop strict-mode (Listen-basierte Sichtbarkeit) — bis dahin ist der
-    Character auf Legacy-Verhalten (knowledge_item-Gating only).
+async def place_character_on_map(
+        character_name: str, request: Request,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Places a character by hand: location + room, as an admin TELEPORT.
+
+    ADMIN-ONLY. Writes under ``/characters/...`` are open to any logged-in
+    user for the characters they may touch; moving an arbitrary figure across
+    the world is not one of those — hence the explicit dependency on top of
+    the auth middleware.
+
+    Body: ``{"location_id", "current_room"?, "leave_party"?}``; the behaviour
+    and the gates are documented on ``character_ops.apply_place_on_map``.
     """
     try:
-        return await character_ops.apply_place_on_map(character_name, request)
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON")
+    try:
+        return await character_ops.apply_place_on_map(character_name, data)
     except HTTPException:
         raise
     except Exception as e:
@@ -570,50 +572,6 @@ def get_outfit_rules_route() -> Dict[str, Any]:
     return {"outfit_types": {}}
 
 
-@router.get("/{character_name}/decency-preference")
-def get_decency_preference(character_name: str) -> Dict[str, Any]:
-    """Liefert die free-text decency_preference des Characters (Stil-Hinweis,
-    ersetzt das alte outfit_exceptions-Modell)."""
-    from app.models.character import get_character_profile
-    profile = get_character_profile(character_name) or {}
-    return {"character": character_name,
-            "decency_preference": profile.get("decency_preference", "") or ""}
-
-
-@router.put("/{character_name}/decency-preference")
-async def set_decency_preference(character_name: str, request: Request) -> Dict[str, Any]:
-    """Speichert die free-text decency_preference (z.B. "often barefoot, no
-    underwear"). Reiner Stil-Hinweis fuer die Outfit-Erstellung — Bedeckung
-    entscheidet Decency."""
-    import asyncio
-    body = await request.json()
-    return await asyncio.to_thread(_set_decency_preference_sync,
-                                   character_name, body)
-
-
-def _set_decency_preference_sync(character_name: str,
-                                 body: Any) -> Dict[str, Any]:
-    """The blocking body of ``set_decency_preference`` — runs in the
-    threadpool.
-
-    SERIALIZED PER CHARACTER (``character_profile``): read the profile, change
-    one field, write the WHOLE profile back — in the threadpool that races
-    every other profile writer of the same character (the equip family above
-    all) and would overwrite its change with a pre-state copy.
-    """
-    from app.core.keyed_lock import keyed_lock
-    from app.models.character import get_character_profile, save_character_profile
-    pref = str((body or {}).get("decency_preference") or "").strip()
-    with keyed_lock("character_profile", character_name):
-        profile = get_character_profile(character_name) or {}
-        if pref:
-            profile["decency_preference"] = pref
-        else:
-            profile.pop("decency_preference", None)
-        save_character_profile(character_name, profile)
-    return {"status": "ok", "character": character_name, "decency_preference": pref}
-
-
 @router.post("/{character_name}/clear-expression-cache")
 def clear_expression_cache_route(character_name: str) -> Dict[str, Any]:
     """Deletes every cached expression image of this character. They are
@@ -622,52 +580,6 @@ def clear_expression_cache_route(character_name: str) -> Dict[str, Any]:
     from app.core.expression_regen import clear_expression_cache
     count = clear_expression_cache(character_name)
     return {"status": "ok", "character": character_name, "deleted": count}
-
-
-@router.get("/{character_name}/outfits")
-def get_character_outfits_route(character_name: str) -> Dict[str, Any]:
-    """Gibt alle definierten Outfits zurueck"""
-    outfits = get_character_outfits(character_name)
-    return {"character": character_name, "outfits": outfits}
-
-
-@router.post("/{character_name}/outfits")
-async def add_character_outfit_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Fuegt ein neues Outfit hinzu oder aktualisiert ein bestehendes.
-
-    Akzeptiert neues Format: {user_id, id?, name, outfit, locations[], activities[]}
-    """
-    import asyncio
-    data = await request.json()
-    return await asyncio.to_thread(_add_character_outfit_route_sync,
-                                   character_name, data)
-
-
-def _add_character_outfit_route_sync(character_name: str,
-                                     data: Any) -> Dict[str, Any]:
-    """The blocking body of ``add_character_outfit_route`` — runs in the
-    threadpool."""
-    try:
-        user_id = data.get("user_id", "")
-
-        outfit_data = {
-            "id": data.get("id", ""),
-            "name": data.get("name", ""),
-            "outfit": data.get("outfit", ""),
-            "pieces": data.get("pieces", []),
-            "remove_slots": data.get("remove_slots", []),
-            "pieces_colors": data.get("pieces_colors", {}),
-            "locations": data.get("locations", []),
-            "activities": data.get("activities", []),
-            "excluded_locations": data.get("excluded_locations", []),
-        }
-
-        outfit_id = add_character_outfit(character_name, outfit_data)
-        return {"status": "success", "character": character_name, "id": outfit_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{character_name}")
@@ -682,167 +594,38 @@ def delete_character_route(character_name: str) -> Dict[str, Any]:
     return {"status": "success", "deleted": character_name}
 
 
-@router.delete("/{character_name}/outfits")
-async def delete_character_outfit_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Loescht ein Outfit per ID."""
-    import asyncio
-    data = await request.json()
-    return await asyncio.to_thread(_delete_character_outfit_route_sync,
-                                   character_name, data)
-
-
-def _delete_character_outfit_route_sync(character_name: str,
-                                        data: Any) -> Dict[str, Any]:
-    """The blocking body of ``delete_character_outfit_route`` — runs in the
-    threadpool."""
-    try:
-        user_id = data.get("user_id", "")
-        outfit_id = data.get("id", "")
-        if not outfit_id:
-            raise HTTPException(status_code=400, detail="id fehlt")
-
-        success = delete_character_outfit(character_name, outfit_id=outfit_id)
-        if success:
-            return {"status": "success", "character": character_name, "id": outfit_id}
-        else:
-            raise HTTPException(status_code=404, detail="Outfit nicht gefunden")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/{character_name}/generate-profile-image")
 async def generate_profile_image_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Generates a new profile image via the core image service."""
     return await character_ops.generate_profile_image_core(character_name, request)
 
 
-@router.get("/{character_name}/outfits/{outfit_id}/image-prompt")
-def get_outfit_image_prompt(character_name: str, outfit_id: str) -> Dict[str, str]:
-    """Berechnet den Prompt fuer ein Outfit-Bild (Vorschau fuer Dialog)."""
-
-    outfits = get_character_outfits(character_name)
-    outfit_obj = next((o for o in outfits if o.get("id") == outfit_id), None)
-    if not outfit_obj:
-        raise HTTPException(status_code=404, detail="Outfit nicht gefunden")
-
-    outfit_description = outfit_obj.get("outfit", "")
-    from app.models.character_template import resolve_profile_tokens, get_template
-    profile = get_character_profile(character_name)
-    tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    if outfit_description and "{" in outfit_description:
-        outfit_description = resolve_profile_tokens(outfit_description, profile, template=tmpl, target_key="outfit")
-
-    return {"prompt": character_ops._build_outfit_image_prompt(character_name, outfit_description)}
-
-
-@router.post("/{character_name}/outfits/{outfit_id}/generate-image")
-async def generate_outfit_image_route(character_name: str, outfit_id: str, request: Request) -> Dict[str, Any]:
-    """Generates an outfit image via the core image service."""
-    return await character_ops.generate_outfit_image_core(character_name, outfit_id, request)
-
-
-@router.post("/{character_name}/outfits/generate-all-images")
-async def generate_all_outfit_images_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Generiert Bilder fuer alle Outfits eines Characters (Bulk, im Hintergrund).
-
-    Verwendet die gleiche Pipeline wie generate_outfit_image_route,
-    aber fuer jedes Outfit einzeln. Laeuft im Hintergrund ueber die Task-Queue.
-    """
-    import asyncio
-    data = await request.json()
-    return await asyncio.to_thread(_generate_all_outfit_images_route_sync,
-                                   character_name, data)
-
-
-def _generate_all_outfit_images_route_sync(character_name: str,
-                                           data: Any) -> Dict[str, Any]:
-    """The blocking body of ``generate_all_outfit_images_route`` — runs in the
-    threadpool."""
-    import threading
-    user_id = data.get("user_id", "")
-
-    outfits = get_character_outfits(character_name)
-    if not outfits:
-        return {"status": "error", "detail": "Keine Outfits vorhanden"}
-
-    # Einstellungen aus Dialog (ohne Prompt — wird pro Outfit berechnet)
-    workflow_name = data.get("workflow", "").strip()
-    backend_name = data.get("backend", "").strip()
-    loras_override = data.get("loras")
-    model_override = data.get("model_override", "").strip()
-
-    # Outfits mit Beschreibung filtern
-    eligible = [o for o in outfits if o.get("outfit", "").strip()]
-    if not eligible:
-        return {"status": "error", "detail": "Keine Outfits mit Beschreibung vorhanden"}
-
-    logger.info("Bulk Outfit-Bild Generierung: %s, %d Outfits", character_name, len(eligible))
-
-    threading.Thread(
-        target=character_ops.generate_all_outfit_images_worker,
-        args=(character_name, eligible, workflow_name, backend_name, loras_override, model_override),
-        daemon=True, name=f"bulk-outfit-{character_name}").start()
-    return {"status": "started", "count": len(eligible)}
-
-
-@router.get("/{character_name}/current-outfit")
-def get_current_outfit_route(character_name: str) -> Dict[str, Any]:
-    """Gibt das aktuelle Outfit basierend auf Location und Activity zurueck"""
-    from app.models.world import get_location_name as _get_loc_name
-    from app.models.character import get_character_current_room
-    from app.core.outfit_renderer import render_outfit
-    outfit = (render_outfit(character_name=character_name).get("full", "") or "").removeprefix("wearing: ")
-    current_location_id = get_character_current_location(character_name)
-    current_activity = get_effective_activity(character_name)
-    current_room = get_character_current_room(character_name)
-    return {
-        "character": character_name,
-        "current_outfit_description": outfit or "",
-        "current_location": _get_loc_name(current_location_id) if current_location_id else "",
-        "current_location_id": current_location_id or "",
-        "current_activity": current_activity or "",
-        "current_room": current_room or "",
-    }
-
-
-@router.post("/{character_name}/current-outfit/refresh")
-def refresh_current_outfit(character_name: str, request: Request) -> Dict[str, Any]:
-    """Decency-Compliance auf den Char anwenden und Outfit-Beschreibung zurueckliefern."""
-    from app.core.outfit_compliance import apply_outfit_compliance
-    from app.core.outfit_renderer import render_outfit
-    result = apply_outfit_compliance(character_name)
-    outfit_text = render_outfit(character_name=character_name).get("full", "")
-    return {"character": character_name,
-            "current_outfit_description": outfit_text,
-            "compliance": result}
-
-
 @router.get("/{character_name}/outfit-lock")
 def get_outfit_lock_route(character_name: str) -> Dict[str, Any]:
-    """Gibt den Sperrstatus des Outfits zurueck."""
+    """Whether this character's outfit is locked against automatic changes.
+
+    Response: ``{"character": <name>, "locked": <bool>}``.
+    """
     from app.models.character import is_outfit_locked
     return {"character": character_name, "locked": is_outfit_locked(character_name)}
 
 
 @router.post("/{character_name}/outfit-lock")
-async def set_outfit_lock_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Setzt/entfernt die Outfit-Sperre (blockiert Auto-Outfit-Aenderungen)."""
-    import asyncio
-    data = await request.json()
-    return await asyncio.to_thread(_set_outfit_lock_route_sync, character_name,
-                                   data)
+def set_outfit_lock_route(character_name: str,
+                          body: OutfitLockBody) -> Dict[str, Any]:
+    """Locks/unlocks the outfit — a plain ``def``, so FastAPI runs it in the
+    threadpool and the body needs no hand-rolled JSON parsing.
 
+    The lock is honoured by the two paths that would otherwise re-dress the
+    character on their own: ``outfit_compliance.apply_outfit_compliance``
+    skips with status ``locked``, and ``outfit_creation_skill`` refuses.
+    The write itself takes the per-character profile lock inside
+    ``set_outfit_locked``.
 
-def _set_outfit_lock_route_sync(character_name: str,
-                                data: Any) -> Dict[str, Any]:
-    """The blocking body of ``set_outfit_lock_route`` — runs in the
-    threadpool."""
+    Body: ``{"locked": <bool>}``. Response: the stored state, read back.
+    """
     from app.models.character import set_outfit_locked, is_outfit_locked
-    user_id = data.get("user_id", "").strip()
-    locked = bool(data.get("locked"))
-    set_outfit_locked(character_name, locked)
+    set_outfit_locked(character_name, bool(body.locked))
     return {"character": character_name, "locked": is_outfit_locked(character_name)}
 
 
@@ -878,40 +661,6 @@ def _set_decency_exempt_route_sync(character_name: str,
         pass
     return {"character": character_name,
             "exempt": bool(get_state_flags(character_name).get("decency_exempt"))}
-
-
-@router.get("/{character_name}/default-outfit")
-def get_default_outfit_route(character_name: str) -> Dict[str, Any]:
-    """Gibt das Default-Outfit zurueck"""
-    from app.models.character import get_character_default_outfit
-    outfit = get_character_default_outfit(character_name)
-    return {"character": character_name, "default_outfit": outfit or ""}
-
-
-@router.post("/{character_name}/default-outfit")
-async def update_default_outfit(character_name: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert das Default-Outfit"""
-    import asyncio
-    data = await request.json()
-    return await asyncio.to_thread(_update_default_outfit_sync,
-                                   character_name, data)
-
-
-def _update_default_outfit_sync(character_name: str,
-                                data: Any) -> Dict[str, Any]:
-    """The blocking body of ``update_default_outfit`` — runs in the
-    threadpool."""
-    try:
-        user_id = data.get("user_id", "")
-        outfit = data.get("default_outfit", "")
-
-        from app.models.character import save_character_default_outfit
-        save_character_default_outfit(character_name, outfit)
-        return {"status": "success", "character": character_name, "default_outfit": outfit}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Expression Image (mood + pose variants) ---
@@ -1185,25 +934,6 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
     raise HTTPException(status_code=404, detail="No variant available")
 
 
-@router.delete("/{character_name}/outfit-expression/cache")
-async def clear_outfit_expression_cache_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Clears the expression image cache for a character."""
-    import asyncio
-    data = await request.json()
-    return await asyncio.to_thread(_clear_outfit_expression_cache_route_sync,
-                                   character_name, data)
-
-
-def _clear_outfit_expression_cache_route_sync(character_name: str,
-                                              data: Any) -> Dict[str, Any]:
-    """The blocking body of ``clear_outfit_expression_cache_route`` —
-    runs in the threadpool."""
-    from app.core.expression_regen import clear_expression_cache
-    user_id = data.get("user_id", "")
-    count = clear_expression_cache(character_name)
-    return {"status": "success", "cleared": count}
-
-
 @router.get("/{character_name}/expressions")
 def list_expressions_route(character_name: str) -> Dict[str, Any]:
     """Lists all cached expression variants of a character with their
@@ -1322,16 +1052,6 @@ def get_belongings_route(character_name: str) -> Dict[str, Any]:
     /play/belongings, für den Game-Admin-Garderoben-Tab."""
     from app.routes.play import build_belongings
     return build_belongings(character_name)
-
-
-@router.get("/{character_name}/active-conditions")
-def get_active_conditions_route(character_name: str) -> Dict[str, Any]:
-    """Gibt aktive Conditions mit Icon/Label/Restdauer zurueck.
-
-    Abgelaufene Conditions werden gefiltert. Icons/Labels kommen aus den
-    Prompt-Filtern (Game Admin → Zustaende).
-    """
-    return character_ops.build_active_conditions(character_name)
 
 
 @router.post("/{character_name}/profile")
@@ -1502,33 +1222,6 @@ def get_character_image(character_name: str, image_filename: str):
                 status_code=404,
                 headers={"Cache-Control": "public, max-age=300"}
             )
-
-        media_type, _ = mimetypes.guess_type(str(image_path))
-        return FileResponse(
-            image_path,
-            media_type=media_type or "application/octet-stream",
-            headers={"Cache-Control": "no-cache"}
-        )
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/{character_name}/outfits/{image_filename}")
-def get_character_outfit_image(character_name: str, image_filename: str):
-    """Liefert ein Outfit-Referenzbild aus dem outfits/ Verzeichnis."""
-    from fastapi.responses import Response
-    try:
-        if ".." in image_filename or "/" in image_filename:
-            raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-
-        from app.models.character import get_character_outfits_dir
-        outfits_dir = get_character_outfits_dir(character_name)
-        image_path = outfits_dir / image_filename
-
-        if not image_path.exists():
-            return Response(status_code=404)
 
         media_type, _ = mimetypes.guess_type(str(image_path))
         return FileResponse(
@@ -2234,27 +1927,6 @@ def stop_character_outfit_batch(character_name: str) -> Dict[str, Any]:
     return {"status": "stopping" if outfit_batch.stop(character_name) else "idle"}
 
 
-@router.post("/{character_name}/images/{image_filename}/comment")
-async def save_image_comment_endpoint(character_name: str, image_filename: str, request: Request) -> Dict[str, Any]:
-    """Speichert einen Kommentar fuer ein Bild"""
-    import asyncio
-    body = await request.json()
-    return await asyncio.to_thread(_save_image_comment_endpoint_sync,
-                                   character_name, image_filename, body)
-
-
-def _save_image_comment_endpoint_sync(character_name: str, image_filename: str,
-                                      body: Any) -> Dict[str, Any]:
-    """The blocking body of ``save_image_comment_endpoint`` — runs in the
-    threadpool."""
-    try:
-        comment = body.get("comment", "")
-        add_character_image_comment(character_name, image_filename, comment)
-        return {"status": "success"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/{character_name}/profile-image/{image_filename}")
 def set_character_profile_image_endpoint(character_name: str, image_filename: str) -> Dict[str, Any]:
     """Setzt das Profilbild"""
@@ -2307,41 +1979,7 @@ def delete_image_animation(character_name: str, image_filename: str) -> Dict[str
     return {"status": "success", "deleted_video": deleted}
 
 
-@router.post("/{character_name}/cleanup-images")
-def cleanup_images_endpoint(character_name: str) -> Dict[str, Any]:
-    """Loescht verwaiste Bilddateien die nicht im Profil registriert sind."""
-    try:
-        return cleanup_orphaned_images(character_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 # --- Skills Management ---
-
-@router.post("/skills/reload")
-def reload_skills() -> Dict[str, Any]:
-    """Laedt alle Skills neu ohne Server-Neustart."""
-    try:
-        from app.skills.animate import reload_animate_services
-        reload_animate_services()
-        result = reload_skill_manager()
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/skills/list")
-def list_skills() -> Dict[str, Any]:
-    """Listet alle aktuell geladenen Skills auf"""
-    try:
-        skill_manager = get_skill_manager()
-        return {
-            "skills": skill_manager.get_skill_info(),
-            "count": len(skill_manager.skills)
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/{character_name}/skills/available")
 def get_available_skills_for_character(character_name: str) -> Dict[str, Any]:
@@ -2598,95 +2236,6 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
               backend_name, agent_config, loras, model_override, character_names, room_id,
               original_location_id, negative_prompt_override, _track_id, create_new,
               use_room, use_source_as_reference, _tq),
-        daemon=True).start()
-    return {"status": "started", "image": image_name, "track_id": _track_id}
-
-
-@router.post("/{character_name}/enhance-image-prompt")
-async def enhance_image_prompt(character_name: str, request: Request) -> Dict[str, Any]:
-    """Verbessert einen Image-Prompt via LLM direkt im Dialog.
-
-    Body: { user_id, prompt, improvement_request, llm_override? }
-    Returns: { prompt: "verbesserter prompt" }
-    """
-    return await character_ops.enhance_image_prompt_core(character_name, request)
-
-
-@router.post("/{character_name}/rebuild-image-prompt")
-async def rebuild_image_prompt(character_name: str, request: Request) -> Dict[str, Any]:
-    """Rebuilds the image prompt based on the adapter of the target backend.
-
-    Source of the values (mood, outfit, expression, location, ...):
-      1. PRIMARY: saved `canonical` dict from the image.json (from creation time)
-      2. FALLBACK: current character state (only for old images without canonical)
-
-    Body: { user_id, workflow? (backend match spec), canonical?, scene_text? }
-    Returns: { prompt, target_model, source: "saved"|"current" }
-    """
-    return await character_ops.rebuild_image_prompt_core(character_name, request)
-
-
-@router.post("/{character_name}/images/{image_name}/suggest-animate-prompt")
-async def suggest_animate_prompt(character_name: str, image_name: str, request: Request) -> Dict[str, str]:
-    """Generiert einen Animation-Prompt basierend auf der Bildanalyse via Tools-LLM."""
-    return await character_ops.suggest_animate_prompt_core(character_name, image_name, request)
-
-
-@router.post("/{character_name}/images/{image_name}/animate")
-async def animate_character_image(character_name: str, image_name: str, request: Request) -> Dict[str, Any]:
-    """Animiert ein Galerie-Bild als Video."""
-    import asyncio
-    body = await request.json()
-    return await asyncio.to_thread(_animate_character_image_sync,
-                                   character_name, image_name, body)
-
-
-def _animate_character_image_sync(character_name: str, image_name: str,
-                                  body: Any) -> Dict[str, Any]:
-    """The blocking body of ``animate_character_image`` — runs in the
-    threadpool."""
-    user_id = body.get("user_id", "")
-    if ".." in image_name or "/" in image_name:
-        raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-
-    images_dir = get_character_images_dir(character_name)
-    image_path = images_dir / image_name
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bild nicht gefunden")
-
-    prompt = body.get("prompt", "").strip()
-    if not prompt:
-        prompts = get_character_image_prompts(character_name)
-        prompt = prompts.get(image_name, "")
-    if not prompt:
-        raise HTTPException(status_code=422, detail="Kein Prompt angegeben")
-
-    service = body.get("service", "").strip()
-    try:
-        seconds = int(body.get("seconds") or 0)
-    except (TypeError, ValueError):
-        seconds = 0
-    # Optional LoRA slots from the animate dialog (gateway video aliases).
-    data = body
-    loras = []
-    for _l in (data.get("loras") or []):
-        if isinstance(_l, dict) and (_l.get("name") or "").strip() not in ("", "None"):
-            try:
-                _s = float(_l.get("strength", 1.0))
-            except (TypeError, ValueError):
-                _s = 1.0
-            loras.append({"name": _l["name"].strip(), "strength": _s})
-
-    from app.core.task_queue import get_task_queue
-    _tq = get_task_queue()
-    _track_id = _tq.track_start(
-        "image_animate", "Bild animieren", agent_name=character_name,
-        start_running=False)
-
-    import threading
-    threading.Thread(
-        target=character_ops.animate_image_worker,
-        args=(character_name, image_name, images_dir, image_path, prompt, service, _tq, _track_id, loras, seconds or None),
         daemon=True).start()
     return {"status": "started", "image": image_name, "track_id": _track_id}
 

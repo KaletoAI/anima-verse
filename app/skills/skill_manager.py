@@ -211,17 +211,6 @@ class SkillManager:
         skill = self.get_skill_by_name(tool_name)
         return getattr(skill, "action_hint", "") if skill else ""
 
-    def get_skill_info(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                'name': skill.name,
-                'description': skill.description,
-                'enabled': skill.enabled,
-                'type': skill.__class__.__name__
-            }
-            for skill in self.skills
-        ]
-
     def get_agent_usage_instructions(self, character_name: str,
                                      format_name: str = "",
                                      check_limits: bool = True) -> str:

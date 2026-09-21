@@ -48,12 +48,6 @@ def get_animate_services() -> List[Dict[str, Any]]:
         return []
 
 
-def reload_animate_services() -> None:
-    """No-op kept for existing callers: video backends live in the image
-    service, which is rebuilt on an ``image_generation`` config change."""
-    return None
-
-
 def animate_image(source_image_path: str, prompt: str, output_path: str,
                   service: str = "", loras=None, seconds=None) -> bool:
     """Renders a video from a still via a video backend (image-to-video).

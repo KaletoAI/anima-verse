@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPut } from '../../lib/api'
+import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
@@ -36,6 +36,63 @@ interface LocationEditorProps {
    *  guards selection changes against silently discarding it. */
   onDirty?: (dirty: boolean) => void
   onDeleted: () => void
+}
+
+/**
+ * "Prompt changed" marker — the server sets `prompt_changed` on a location or
+ * a room whenever its image prompts really changed (a content import, an edit
+ * that rewrote a prompt), which means the existing pictures no longer match
+ * the text. Generating an image clears it again; this is the manual way back
+ * for a flag that was set by accident.
+ *
+ * Backend: POST /world/locations/{id}/prompt-changed with
+ * `{value: false, room_id?}` — the route can set the flag too, the UI only
+ * ever clears it.
+ */
+export function PromptChangedBadge({
+  locationId,
+  roomId,
+  changed,
+  onCleared,
+}: {
+  locationId: string
+  /** Empty = the location's own flag. */
+  roomId?: string
+  changed: boolean | undefined
+  onCleared: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState(false)
+  if (!changed) return null
+  const clear = async () => {
+    setBusy(true)
+    try {
+      await apiPost(
+        `/world/locations/${encodeURIComponent(locationId)}/prompt-changed`,
+        { value: false, room_id: roomId || '' },
+      )
+      toast(t('Marked as up to date'))
+      onCleared()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="ga-form-hint" style={{
+      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+      margin: '4px 8px 0', padding: '4px 8px', borderRadius: 6,
+      background: 'rgba(224,160,6,0.14)', border: '1px solid rgba(224,160,6,0.45)',
+    }}>
+      <span>⚠ {t('The image prompts changed — the pictures here are older than the text.')}</span>
+      <button className="ga-btn ga-btn-sm" disabled={busy}
+        onClick={() => { void clear() }}>
+        {t('Mark as up to date')}
+      </button>
+    </div>
+  )
 }
 
 export function LocationEditor({ location, items, allLocations, onChanged, onDirty, onDeleted }: LocationEditorProps) {
@@ -699,6 +756,11 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
             />
           </>
         }
+      />
+      <PromptChangedBadge
+        locationId={location.id}
+        changed={location.prompt_changed}
+        onCleared={onChanged}
       />
       <nav className="ga-subtabs">
         {([

@@ -79,25 +79,6 @@ def _resolve_face_prompt(profile: dict, character_name: str, tmpl) -> str:
     return face.strip()
 
 
-def _build_outfit_image_prompt(character_name: str, outfit_description: str) -> str:
-    """Builds the prompt for an outfit image (separated: character + outfit + pose + expression)."""
-    import os
-    from app.core.prompt_builder import PromptBuilder
-    from app.core.expression_pose_maps import default_expression_prompt, default_pose_prompt
-
-    _builder = PromptBuilder(character_name)
-    _persons = _builder.detect_persons("", character_names=[character_name])
-    _actor = _persons[0].actor_label if _persons else character_name
-    _appearance = _persons[0].appearance if _persons else ""
-
-    # Style/framing come from the "outfit" use case — only the content here.
-    character_prompt = f"{_actor}, {_appearance}"
-    outfit_prompt = f"{_actor} is wearing {outfit_description}"
-    return ", ".join(p for p in [
-        character_prompt, outfit_prompt, default_pose_prompt(), default_expression_prompt(),
-    ] if p)
-
-
 def _soul_field_keys(template_id: str) -> set:
     """Set of profile keys whose content comes from an MD file (source_file)."""
     if not template_id:
@@ -1245,69 +1226,6 @@ def _lifetime_fields(profile: Dict[str, Any],
             "expires_at": expiry_stamp(ttl), "npc_permanent": False}
 
 
-def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    """Updates character profile fields (bulk update)."""
-    from app.models.character import get_character_profile, save_character_profile
-    user_id = data.get("user_id", "")
-    fields = data.get("fields", {})
-    if not fields:
-        raise HTTPException(status_code=400, detail="fields fehlt")
-
-    # Read AND write under the per-character profile lock (DATA-3): the bulk
-    # update writes the whole profile_json blob back, so a stale read drops
-    # every field a concurrent writer stored. Everything inside the span is a
-    # cached world/template read — no LLM, no image, no HTTP.
-    from app.core.keyed_lock import keyed_lock
-    with keyed_lock("character_profile", character_name):
-        profile = get_character_profile(character_name)
-
-        # current_location: resolve the name back to an ID so the world map keeps
-        # finding the character (GET returns the resolved name, POST gets it back).
-        if "current_location" in fields:
-            loc_val = fields["current_location"]
-            if loc_val:
-                from app.models.world import resolve_location, get_location_id
-                loc_id = get_location_id(loc_val)
-                if loc_id:
-                    fields["current_location"] = loc_id
-                else:
-                    loc_obj = resolve_location(loc_val)
-                    if loc_obj and loc_obj.get("id"):
-                        fields["current_location"] = loc_obj["id"]
-
-        # Filter out __custom__ sentinel values (UI placeholder for custom input)
-        for k, v in list(fields.items()):
-            if v == "__custom__":
-                fields[k] = ""
-
-        # Fields with source_file belong in MD files, NOT in the JSON profile.
-        # If someone sends them here, ignore them -- the soul editor is
-        # responsible (see /characters/{char}/soul/*).
-        _sf_keys = _soul_field_keys(profile.get("template", ""))
-        for k in list(fields.keys()):
-            if k in _sf_keys:
-                fields.pop(k, None)
-
-        # LIFETIME is derived, never typed. `expires_at` is a canonical GAME stamp
-        # and only the server owns that clock, so the temp-NPC form offers the
-        # DECISION (`lifetime` + `lifetime_hours`) and the stamp is recomputed
-        # here. Every other save leaves `expires_at` exactly as it was — otherwise
-        # editing a briefing would quietly hand the NPC a fresh day.
-        from app.models.character import is_temporary_npc
-        if ("lifetime" in fields or "lifetime_hours" in fields) \
-                and is_temporary_npc(character_name):
-            fields.update(_lifetime_fields(profile, fields))
-
-        profile.update(fields)
-        stored = save_character_profile(character_name, profile)
-    if not stored:
-        # The admin form must not answer "saved" for a value that is gone
-        # after the next reload.
-        raise HTTPException(status_code=500, detail="profile not stored")
-    return {"status": "success", "character": character_name,
-            "updated_fields": list(fields.keys())}
-
-
 def build_active_conditions(character_name: str) -> Dict[str, Any]:
     """Returns active conditions with icon/label/remaining duration.
 
@@ -1376,6 +1294,69 @@ def build_active_conditions(character_name: str) -> Dict[str, Any]:
             "source": cond.get("source", ""),
         })
     return {"character": character_name, "conditions": result}
+
+
+def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Updates character profile fields (bulk update)."""
+    from app.models.character import get_character_profile, save_character_profile
+    user_id = data.get("user_id", "")
+    fields = data.get("fields", {})
+    if not fields:
+        raise HTTPException(status_code=400, detail="fields fehlt")
+
+    # Read AND write under the per-character profile lock (DATA-3): the bulk
+    # update writes the whole profile_json blob back, so a stale read drops
+    # every field a concurrent writer stored. Everything inside the span is a
+    # cached world/template read — no LLM, no image, no HTTP.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+
+        # current_location: resolve the name back to an ID so the world map keeps
+        # finding the character (GET returns the resolved name, POST gets it back).
+        if "current_location" in fields:
+            loc_val = fields["current_location"]
+            if loc_val:
+                from app.models.world import resolve_location, get_location_id
+                loc_id = get_location_id(loc_val)
+                if loc_id:
+                    fields["current_location"] = loc_id
+                else:
+                    loc_obj = resolve_location(loc_val)
+                    if loc_obj and loc_obj.get("id"):
+                        fields["current_location"] = loc_obj["id"]
+
+        # Filter out __custom__ sentinel values (UI placeholder for custom input)
+        for k, v in list(fields.items()):
+            if v == "__custom__":
+                fields[k] = ""
+
+        # Fields with source_file belong in MD files, NOT in the JSON profile.
+        # If someone sends them here, ignore them -- the soul editor is
+        # responsible (see /characters/{char}/soul/*).
+        _sf_keys = _soul_field_keys(profile.get("template", ""))
+        for k in list(fields.keys()):
+            if k in _sf_keys:
+                fields.pop(k, None)
+
+        # LIFETIME is derived, never typed. `expires_at` is a canonical GAME stamp
+        # and only the server owns that clock, so the temp-NPC form offers the
+        # DECISION (`lifetime` + `lifetime_hours`) and the stamp is recomputed
+        # here. Every other save leaves `expires_at` exactly as it was — otherwise
+        # editing a briefing would quietly hand the NPC a fresh day.
+        from app.models.character import is_temporary_npc
+        if ("lifetime" in fields or "lifetime_hours" in fields) \
+                and is_temporary_npc(character_name):
+            fields.update(_lifetime_fields(profile, fields))
+
+        profile.update(fields)
+        stored = save_character_profile(character_name, profile)
+    if not stored:
+        # The admin form must not answer "saved" for a value that is gone
+        # after the next reload.
+        raise HTTPException(status_code=500, detail="profile not stored")
+    return {"status": "success", "character": character_name,
+            "updated_fields": list(fields.keys())}
 
 
 def apply_config_update(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2435,39 +2416,106 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
     }
 
 
-async def apply_place_on_map(character_name: str, request) -> Dict[str, Any]:
-    """Drag&Drop-Platzierung: setzt current_location UND fuegt die Location
-    in die known_locations-Liste des Characters ein. Damit aktiviert der erste
-    Drop strict-mode (Listen-basierte Sichtbarkeit) — bis dahin ist der
-    Character auf Legacy-Verhalten (knowledge_item-Gating only).
+async def apply_place_on_map(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """ADMIN placement: put a character at a location + room by hand.
+
+    This is a TELEPORT, not a move the character decided on. Everything an
+    arrival entails therefore happens through the PUBLIC setters the engines
+    use, never by writing the profile here:
+
+    * ``travel_engine.cancel_journey`` first — a running journey would keep
+      walking the figure away from where it was just put, and the journey is
+      only dropped by ``save_character_current_location`` when the location
+      really changes (placing inside the location one is currently nearest to
+      would leave it running),
+    * ``save_character_current_location`` does the rest of the arrival: it
+      ends a pair interaction, clears the pose (= the activity, see
+      ``get_effective_activity``), drags the metre position to the target,
+      discovers the place (``known_locations`` + sight), runs the outfit
+      compliance and PULLS THE PARTY along when this character leads one,
+    * ``save_character_current_room`` releases the held place, sets the room
+      and puts the figure on a free standing point (``room_stand.stand_up``).
+
+    Body: ``{"location_id": ..., "current_room": ... (optional, default the
+    target's entry room), "leave_party": true (optional, see below)}``.
+
+    Gates:
+
+    * unknown location or unknown room -> 400. A raw id written through would
+      leave the character standing nowhere,
+    * a party FOLLOWER owns no movement of its own (only the leader moves,
+      followers are pulled) -> 409 ``party_follower``. Placing one alone is a
+      state the party engine never produces; the admin either places the
+      LEADER (which pulls everyone) or says so explicitly with
+      ``leave_party: true``, which leaves the party first — leaving is always
+      allowed,
+    * a SLEEPING character is placed and stays asleep — no wake-up here: an
+      admin moving a figure on the map is not the character's own manual move,
+    * the ACTIVE AVATAR is allowed. Its client keeps reporting positions
+      (``POST /play/pos``), but a report that is suddenly far away from the
+      stored point is refused with the server's point in the body, which the
+      client snaps onto — the same correction path a party pull uses.
+
+    The avatar's block rules are checked as on every avatar move.
     """
-    from app.models.character import get_character_current_location, save_character_current_location
-    data = await request.json()
+    from app.models.character import (get_character_current_location,
+                                      save_character_current_location)
     location = (data.get("location_id") or data.get("current_location") or "").strip()
     room = (data.get("current_room") or "").strip()
     if not location:
-        raise HTTPException(status_code=400, detail="location_id fehlt")
+        raise HTTPException(status_code=400, detail="location_id is required")
 
-    from app.models.world import resolve_location as _resolve_loc, get_arrival_room_id
+    from app.models.world import (get_arrival_room_id, get_room_by_id,
+                                  resolve_location as _resolve_loc)
     from app.models.character import (
         add_known_location, get_character_current_room,
         save_character_current_room, clear_pose_intent)
 
     loc_obj = _resolve_loc(location)
-    location_to_save = loc_obj["id"] if loc_obj and loc_obj.get("id") else location
-    location_name_resp = loc_obj.get("name", location) if loc_obj else location
+    if not loc_obj or not loc_obj.get("id"):
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown location '{location}'")
+    location_to_save = loc_obj["id"]
+    location_name_resp = loc_obj.get("name", location_to_save)
 
-    # No room handed in → take the target's arrival room (entry room, or the
-    # ground when none is declared).
-    if not room and loc_obj:
+    # A named room has to BE a room of that place — the id goes straight into
+    # the profile and a typo would leave the character in a room nobody can
+    # render. No room handed in -> the target's arrival room (entry room, or
+    # the ground when none is declared).
+    if room:
+        if not get_room_by_id(loc_obj, room):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown room '{room}' in '{location_name_resp}'")
+    else:
         room = get_arrival_room_id(loc_obj)
+
+    # A follower is carried by its leader; it has no move of its own.
+    from app.core.party_engine import get_party_of, is_party_follower, leave_party
+    if is_party_follower(character_name):
+        if not data.get("leave_party"):
+            from app.core.i18n import t as _t
+            from app.models.character import get_character_language
+            _party = get_party_of(character_name) or {}
+            _lang = get_character_language(character_name) or "de"
+            raise HTTPException(status_code=409, detail={
+                "reason": "party_follower",
+                "leader": _party.get("leader", ""),
+                "message": _t(
+                    "{name} travels with {leader} and is taken along by them. "
+                    "Place {leader} instead, or let {name} leave the party "
+                    "first.", _lang).format(
+                        name=character_name,
+                        leader=_party.get("leader", "") or "the leader")})
+        leave_party(character_name)
 
     old_loc = get_character_current_location(character_name)
     old_room = get_character_current_room(character_name) or ""
     from app.models.account import get_active_character
     _is_avatar = (get_active_character() == character_name)
 
-    # Block-Regeln: Avatar darf nicht in geblockte Locations/Raeume.
+    # Block rules: the avatar may not be put into a blocked location/room —
+    # the same gates its own move walks through.
     if _is_avatar and (location_to_save != old_loc or (room and room != old_room)):
         from app.models.rules import check_leave, check_access
         if old_loc and location_to_save != old_loc:
@@ -2481,6 +2529,10 @@ async def apply_place_on_map(character_name: str, request) -> Dict[str, Any]:
             raise HTTPException(status_code=403,
                 detail={"reason": "block_enter", "message": enter_msg})
 
+    # The trip is over before the teleport, not because of it.
+    from app.core.travel_engine import cancel_journey
+    cancel_journey(character_name)
+
     add_known_location(character_name, location_to_save)
     save_character_current_location(character_name, location_to_save,
         _skip_compliance=_is_avatar)
@@ -2490,27 +2542,22 @@ async def apply_place_on_map(character_name: str, request) -> Dict[str, Any]:
             clear_pose_intent(character_name)
     elif room:
         save_character_current_room(character_name, room)
-    if _is_avatar:
-        _wake_avatar_on_manual_move(
-            character_name,
-            location_to_save != old_loc or bool(room and room != old_room))
 
     new_room = room or ''
     room_changed = (location_to_save != old_loc) or (new_room and new_room != old_room)
     room_entry_result = {"reactor": "", "silent_noticers": []}
-    # Roll-on-Entry: Cross-Location-Drop-on-Map löst sofort Würfel aus.
-    if _is_avatar and location_to_save != old_loc and loc_obj:
+    # Roll-on-entry: a cross-location placement of the avatar rolls at once.
+    if _is_avatar and location_to_save != old_loc:
         try:
             from app.core.random_events import try_roll_on_entry
             try_roll_on_entry(character_name, location_to_save, loc_obj)
         except Exception as _re:
-            logger.debug("try_roll_on_entry fehlgeschlagen: %s", _re)
+            logger.debug("try_roll_on_entry failed: %s", _re)
     if _is_avatar and room_changed:
         try:
             from app.core.room_entry import on_avatar_room_entry
             _room_label = ""
-            if new_room and loc_obj:
-                from app.models.world import get_room_by_id
+            if new_room:
                 _r = get_room_by_id(loc_obj, new_room)
                 if _r and _r.get("name"):
                     _room_label = _r["name"]
@@ -2531,6 +2578,7 @@ async def apply_place_on_map(character_name: str, request) -> Dict[str, Any]:
         "character": character_name,
         "current_location": location_name_resp,
         "current_location_id": location_to_save,
+        "current_room": new_room,
         "reactor": room_entry_result.get("reactor", ""),
         "silent_noticers": room_entry_result.get("silent_noticers", []),
     }
@@ -2674,268 +2722,6 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
         "current_room_id": current_room_id,
         "location_id": location_id,
     }
-
-
-async def enhance_image_prompt_core(character_name: str, request) -> Dict[str, Any]:
-    """Verbessert einen Image-Prompt via LLM direkt im Dialog.
-
-    Body: { user_id, prompt, improvement_request, llm_override? }
-    Returns: { prompt: "verbesserter prompt" }
-    """
-    from app.models.character import get_character_config
-    body = await request.json()
-    user_id = body.get("user_id", "")
-
-    prompt = body.get("prompt", "").strip()
-    improvement_request = body.get("improvement_request", "").strip()
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt fehlt")
-    if not improvement_request:
-        raise HTTPException(status_code=400, detail="improvement_request fehlt")
-
-    agent_config = get_character_config(character_name)
-    from app.skills.image_regenerate import enhance_prompt
-    # enhance_prompt macht einen blocking LLM-Call → Threadpool, sonst
-    # blockiert der Event-Loop bis das Tool-LLM antwortet (~1s+).
-    import asyncio as _asyncio
-    enhanced = await _asyncio.to_thread(
-        enhance_prompt, prompt, improvement_request, agent_config)
-    return {"prompt": enhanced}
-
-
-async def rebuild_image_prompt_core(character_name: str, request) -> Dict[str, Any]:
-    """Rebuilds the image prompt based on the adapter of the target backend.
-
-    Source of the values (mood, outfit, expression, location, ...):
-      1. PRIMARY: saved `canonical` dict from the image.json (from creation time)
-      2. FALLBACK: current character state (only for old images without canonical)
-
-    Body: { user_id, workflow? (backend match spec), canonical?, scene_text? }
-    Returns: { prompt, target_model, source: "saved"|"current" }
-    """
-    import asyncio
-
-    body = await request.json()
-    user_id = body.get("user_id", "")
-    workflow_name = body.get("workflow", "").strip()
-    saved_canonical = body.get("canonical") or None
-    scene_text = body.get("scene_text", "").strip()
-    location_id = body.get("location_id", "").strip()
-    room_id = body.get("room_id", "").strip()
-    reference_images = body.get("reference_images") or {}
-
-    def _build():
-        # Closure: location_id/room_id sind im outer scope nonlocal
-        nonlocal location_id, room_id
-
-        # Fallback: location_id/room_id aus reference_image_4 (Slot 4 = Raum-Hintergrund) ableiten
-        if not (location_id or room_id) and reference_images:
-            ref_room_img = reference_images.get("input_reference_image_4", "")
-            if ref_room_img:
-                try:
-                    from app.models.world import find_room_by_gallery_image
-                    _loc_from_ref, _room_from_ref = find_room_by_gallery_image(ref_room_img)
-                    if _loc_from_ref:
-                        location_id = location_id or _loc_from_ref
-                        room_id = room_id or _room_from_ref
-                        logger.info("rebuild: location/room aus Reference-Image '%s' aufgeloest (loc=%s room=%s)",
-                                    ref_room_img, location_id, room_id)
-                except Exception as _e:
-                    logger.debug("Reference-Image-Aufloesung fehlgeschlagen: %s", _e)
-
-        from app.imagegen.service import get_image_service
-        img_skill = get_image_service()
-        if not img_skill.enabled:
-            raise HTTPException(status_code=503, detail="image service not available")
-
-        from app.core.prompt_adapters import (
-            get_target_model, render as adapter_render,
-            maybe_enhance_via_llm, dict_to_canonical)
-
-        # Target model from the backend that would render for this character
-        # (explicit spec from the request wins, otherwise the agent's backend).
-        _be = img_skill.resolve_imagegen_target(workflow_name) if workflow_name else None
-        if not _be:
-            _be = img_skill._select_backend_for_agent(character_name)
-        target_model = get_target_model(
-            getattr(_be, "image_family", "") if _be else "",
-            getattr(_be, "model", "") if _be else "")
-
-        # 1) PRIMAERE Quelle: gespeichertes canonical
-        if saved_canonical and isinstance(saved_canonical, dict):
-            pv = dict_to_canonical(saved_canonical)
-            # Style/Negative bleiben wie gespeichert; der finale Style kommt beim
-            # echten Generieren aus dem Use-Case (image_generation_skill).
-
-            # sanitize_scene_prompt auch beim Rebuild ausfuehren — damit der
-            # neue Outfit-Extraction-Filter (wearing/posing/dressed) auch fuer
-            # Re-Creations greift. Sanitize ist idempotent: bei bereits
-            # bereinigten scenes findet es nichts und bleibt no-op.
-            if pv.scene_prompt:
-                from app.core.prompt_builder import PromptBuilder as _PB
-                _rebuild_builder = _PB(character_name)
-                pv.scene_prompt = _rebuild_builder.sanitize_scene_prompt(pv.scene_prompt, pv)
-
-            # Outfit-Enrichment: Wenn canonical.outfits leer aber reference_image_1
-            # vorhanden, das Outfit ueber die Bild-Datei aufloesen
-            if not pv.prompt_outfits and reference_images:
-                ref1 = reference_images.get("input_reference_image_1", "")
-                if ref1:
-                    try:
-                        from app.models.character import find_outfit_by_image
-                        _outfit = find_outfit_by_image(character_name, ref1)
-                        if _outfit:
-                            _outfit_text = (_outfit.get("outfit") or "").strip()
-                            if _outfit_text:
-                                _label = pv.persons[0].actor_label if pv.persons else character_name
-                                pv.prompt_outfits[1] = f"{_label} is wearing {_outfit_text}"
-                                logger.info("rebuild: Outfit '%s' aus Reference-Image '%s' aufgeloest",
-                                            _outfit.get("name", "?"), ref1)
-                    except Exception as _e:
-                        logger.debug("Outfit-Enrichment fehlgeschlagen: %s", _e)
-            # Location enrichment: when canonical.location is too short (just a
-            # name, no description), pull the room description from the world.
-            if pv.prompt_location and len(pv.prompt_location) < 30 and (location_id or room_id):
-                try:
-                    from app.models.world import get_location, get_room_by_id
-                    from app.core.timeutils import game_time
-                    _loc_data = get_location(location_id) if location_id else None
-                    if _loc_data:
-                        # Day/night is a GAME-clock question and the calendar
-                        # answers it: the season's sunrise/sunset, not a fixed
-                        # hour of the system clock.
-                        _is_day = game_time().is_day()
-                        _desc = ""
-                        # The room wins over the location.
-                        if room_id:
-                            _room = get_room_by_id(_loc_data, room_id)
-                            if _room:
-                                _desc = (_room.get("image_prompt_day", "") if _is_day else _room.get("image_prompt_night", "")) \
-                                        or _room.get("description", "")
-                        if not _desc:
-                            _desc = (_loc_data.get("image_prompt_day", "") if _is_day else _loc_data.get("image_prompt_night", "")) \
-                                    or _loc_data.get("description", "")
-                        if _desc:
-                            pv.prompt_location = f"{pv.prompt_location}, {_desc}"
-                            logger.info("rebuild: location enriched for a short canonical.location (room=%s loc=%s)",
-                                        room_id, location_id)
-                except Exception as _e:
-                    logger.debug("Location enrichment failed: %s", _e)
-            source = "saved"
-        else:
-            # 2) FALLBACK: aktueller State (nur fuer alte Bilder ohne canonical)
-            from app.core.prompt_builder import PromptBuilder, EntryPointConfig
-            builder = PromptBuilder(character_name)
-            persons = builder.detect_persons(scene_text or "")
-            pv = builder.collect_context(
-                persons, EntryPointConfig.chat(),
-                prompt_text=scene_text or "",
-                photographer_mode=False,
-                set_profile=False)
-            if scene_text:
-                pv.scene_prompt = builder.sanitize_scene_prompt(scene_text, pv)
-            # The final style/negative comes from the use-case at real
-            # generation time (image_generation_skill) — plain default here.
-            pv.prompt_style = "photorealistic"
-            pv.negative_prompt = ""
-            source = "current"
-
-            # Outfit-Enrichment auch im current-state Pfad: bei Bildern ohne canonical
-            # versuchen das ORIGINAL-Outfit ueber reference_image_1 wiederherzustellen
-            # (statt das aktuelle Char-Outfit zu nutzen).
-            if reference_images:
-                ref1 = reference_images.get("input_reference_image_1", "")
-                if ref1:
-                    try:
-                        from app.models.character import find_outfit_by_image
-                        _outfit = find_outfit_by_image(character_name, ref1)
-                        if _outfit:
-                            _outfit_text = (_outfit.get("outfit") or "").strip()
-                            if _outfit_text and persons:
-                                _label = persons[0].actor_label or character_name
-                                pv.prompt_outfits[1] = f"{_label} is wearing {_outfit_text}"
-                                logger.info("rebuild (current): Outfit '%s' aus Reference-Image '%s' aufgeloest",
-                                            _outfit.get("name", "?"), ref1)
-                                source = "current+ref_outfit"
-                    except Exception as _e:
-                        logger.debug("Outfit-Enrichment fehlgeschlagen: %s", _e)
-
-        assembled = adapter_render(pv, target_model)
-        template_prompt = assembled["input_prompt_positiv"]
-
-        # No LLM enhancement for the rebuild preview — the instruction lives
-        # in the use-case config and is applied at real generation time.
-        final_prompt, _method = maybe_enhance_via_llm(
-            template_prompt, pv,
-            target_model=target_model,
-            prompt_instruction="")
-        return {"prompt": final_prompt, "target_model": target_model, "source": source}
-
-    return await asyncio.to_thread(_build)
-
-
-async def suggest_animate_prompt_core(character_name: str, image_name: str, request) -> Dict[str, str]:
-    """Generiert einen Animation-Prompt basierend auf der Bildanalyse via Tools-LLM."""
-    from app.models.character import get_character_images_dir, add_character_image_metadata
-    import asyncio
-
-    body = await request.json()
-    user_id = body.get("user_id", "")
-    custom_system_prompt = body.get("system_prompt", "")
-    llm_override = body.get("llm_override", "").strip()
-
-    images_dir = get_character_images_dir(character_name)
-    image_path = images_dir / image_name
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bild nicht gefunden")
-
-    def _generate_prompt() -> str:
-        from app.models.character import _load_single_image_meta
-        meta = _load_single_image_meta(character_name, image_name)
-
-        # Bildanalyse aus Metadaten lesen oder neu generieren
-        image_analysis = meta.get("image_analysis", "")
-        if not image_analysis:
-            logger.info("[suggest-animate] Keine Bildanalyse vorhanden, generiere neu...")
-            try:
-                from app.imagegen.service import get_image_service
-                skill = get_image_service()
-                image_analysis = skill._generate_image_analysis(str(image_path), character_name)
-                if image_analysis:
-                    logger.info("[suggest-animate] Bildanalyse generiert (%d Zeichen)", len(image_analysis))
-                    add_character_image_metadata(character_name, image_name, {
-                        "image_analysis": image_analysis,
-                    })
-            except Exception as e:
-                logger.warning("[suggest-animate] Bildanalyse fehlgeschlagen: %s", e)
-
-        if not image_analysis:
-            raise ValueError("Bildanalyse nicht verfuegbar")
-
-        logger.info("[suggest-animate] Bildanalyse vorhanden (%d Zeichen), rufe LLM auf... (llm_override=%s)", len(image_analysis), llm_override or "")
-
-        from app.core.llm_router import llm_call
-        from app.core.prompt_templates import render_task
-        default_system, user_prompt = render_task(
-            "animation_prompt", image_analysis=image_analysis)
-        system_content = custom_system_prompt or default_system
-        response = llm_call(
-            task="instagram_caption",
-            system_prompt=system_content,
-            user_prompt=user_prompt,
-            agent_name=character_name)
-        result = (response.content or "").strip().strip('"').strip("'")
-        logger.info("[suggest-animate] Prompt generiert: %s", result[:100])
-        return result
-
-    try:
-        prompt = await asyncio.get_event_loop().run_in_executor(None, _generate_prompt)
-        return {"prompt": prompt}
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        logger.error("[suggest-animate] Fehlgeschlagen: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 def build_imagegen_workflows(character_name: str) -> Dict[str, Any]:
@@ -3196,289 +2982,6 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     return {"status": "success", "image": image_filename, "image_url": image_url}
 
 
-async def generate_outfit_image_core(character_name: str, outfit_id: str, request) -> Dict[str, Any]:
-    """Generates an outfit image via the core image service."""
-    from app.models.character import get_character_outfits, get_character_images_dir, update_outfit_image
-    from app.core.dependencies import get_skill_manager
-    import os
-    import json as _json
-    data = await request.json()
-    user_id = data.get("user_id", "")
-
-    # Outfit suchen
-    outfits = get_character_outfits(character_name)
-    outfit_obj = next((o for o in outfits if o.get("id") == outfit_id), None)
-    if not outfit_obj:
-        raise HTTPException(status_code=404, detail="Outfit nicht gefunden")
-
-    outfit_description = outfit_obj.get("outfit", "")
-    if not outfit_description:
-        raise HTTPException(status_code=400, detail="Outfit hat keine Beschreibung")
-
-    # Character-Profil laden: Appearance + Geschlecht (Tokens auflösen)
-    from app.models.character import get_character_profile, get_character_appearance
-    from app.models.character_template import resolve_profile_tokens, get_template
-    profile = get_character_profile(character_name)
-    tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-    appearance = get_character_appearance(character_name)
-    if appearance and "{" in appearance:
-        appearance = resolve_profile_tokens(appearance, profile, template=tmpl, target_key="character_appearance")
-    if outfit_description and "{" in outfit_description:
-        outfit_description = resolve_profile_tokens(outfit_description, profile, template=tmpl, target_key="outfit")
-
-    # Prompt: aus Dialog (wenn vorhanden) oder via Hilfsfunktion aufbauen
-    prompt_text = data.get("prompt", "").strip()
-    if not prompt_text:
-        prompt_text = _build_outfit_image_prompt(character_name, outfit_description)
-
-    # Image service (core engine — wave-6 split)
-    from app.imagegen.service import get_image_service
-    image_skill = get_image_service()
-    if not image_skill.enabled:
-        raise HTTPException(status_code=500, detail="Image service not available")
-
-    # Workflow/Backend/LoRA/Modell-Auswahl:
-    #   1) explizit aus Request
-    #   2) per-Character-Override (profile.outfit_imagegen) — MUSS vor dem
-    #      Skill-Default greifen, sonst generiert ein Character mit konfiguriertem
-    #      Flux faelschlich mit dem ersten geladenen Workflow (z.B. Z-Image).
-    #   3) ENV OUTFIT_IMAGEGEN_DEFAULT
-    workflow_name = data.get("workflow", "").strip()
-    backend_name = data.get("backend", "").strip()
-    loras_override = data.get("loras")
-    model_override = data.get("model_override", "").strip()
-    if not workflow_name and not backend_name:
-        try:
-            from app.models.character import get_character_profile as _gcp
-            _ovr = (_gcp(character_name) or {}).get("outfit_imagegen") or {}
-            if isinstance(_ovr, dict):
-                workflow_name = (_ovr.get("workflow") or "").strip()
-                if not model_override:
-                    model_override = (_ovr.get("model") or "").strip()
-                if loras_override is None and isinstance(_ovr.get("loras"), list):
-                    loras_override = _ovr.get("loras")
-        except Exception as _e:
-            logger.debug("outfit-image per-char override read failed: %s", _e)
-    if not workflow_name and not backend_name:
-        # Configured default (image_generation.outfit_imagegen_default, mirrored
-        # into the env by config._flatten_to_env): a backend glob, handed over
-        # unparsed — the image service resolves it (and tolerates a legacy
-        # "backend:" prefix).
-        workflow_name = os.environ.get("OUTFIT_IMAGEGEN_DEFAULT", "").strip()
-    # The spec (glob) is resolved by the skill itself at generation time
-    # (resolve_imagegen_target) — no pre-resolution here.
-
-    # Resolution from .env (portrait format for full-body outfits)
-    outfit_w = int(os.environ.get("OUTFIT_IMAGE_WIDTH", 0) or 0) or None
-    outfit_h = int(os.environ.get("OUTFIT_IMAGE_HEIGHT", 0) or 0) or None
-
-    # Appearance mitgeben damit Reference-Bilder aufgeloest werden (Flux2 braucht sie)
-    payload = {
-        "prompt": prompt_text,
-        "agent_name": character_name,
-        "user_id": "",
-        "auto_enhance": False,
-        "skip_gallery": True,
-        "image_use_case": "outfit",
-        "workflow": workflow_name,
-        "backend": backend_name,
-        "appearances": [{"name": character_name, "appearance": appearance or ""}],
-        "profile_only": True,
-    }
-    if outfit_w:
-        payload["override_width"] = outfit_w
-    if outfit_h:
-        payload["override_height"] = outfit_h
-    if loras_override is not None:
-        payload["loras"] = loras_override
-    if model_override:
-        payload["model_override"] = model_override
-    input_data = _json.dumps(payload)
-
-    try:
-        import asyncio
-        result = await asyncio.to_thread(image_skill.generate_from_input, input_data)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Bildgenerierung fehlgeschlagen: {str(e)}")
-
-    # Dateiname aus dem Ergebnis extrahieren (Skill gibt Markdown-Links zurueck)
-    import re
-    image_match = re.search(r'/characters/[^/]+/images/([^?)\n]+)', result)
-    if not image_match:
-        raise HTTPException(status_code=500, detail=f"Kein Bild im Ergebnis: {result[:200]}")
-
-    image_filename = image_match.group(1)
-
-    # Generiertes Bild von images/ nach outfits/ verschieben
-    from app.models.character import get_character_outfits_dir, postprocess_outfit_image
-    import shutil
-    images_dir = get_character_images_dir(character_name)
-    outfits_dir = get_character_outfits_dir(character_name)
-    src_path = images_dir / image_filename
-    dst_path = outfits_dir / image_filename
-    if src_path.exists():
-        shutil.move(str(src_path), str(dst_path))
-
-    # Hintergrund entfernen + transparente Raender abschneiden
-    # rembg/ONNX-Inferenz ist CPU-bound → Threadpool damit der Event-Loop nicht blockiert.
-    import asyncio as _asyncio
-    final_path = await _asyncio.to_thread(postprocess_outfit_image, dst_path)
-    final_filename = final_path.name
-
-    # Altes Outfit-Bild loeschen
-    old_image = outfit_obj.get("image", "")
-    if old_image and old_image != final_filename:
-        old_path = outfits_dir / old_image
-        if old_path.exists():
-            old_path.unlink()
-
-    # Outfit-Image-Feld + Metadaten aktualisieren
-    # Vollstaendige Metadaten aus der Generierung uebernehmen (Spec 1.2)
-    _gen_meta = getattr(image_skill, 'last_image_meta', {}) or {}
-    _image_meta = {
-        "provider": _gen_meta.get("backend_type", ""),
-        "service": _gen_meta.get("backend", ""),
-        "model": _gen_meta.get("model", ""),
-        "loras": _gen_meta.get("loras", loras_override or []),
-        "prompt": prompt_text,
-        "negative_prompt": _gen_meta.get("negative_prompt", ""),
-        "seed": _gen_meta.get("seed", 0),
-        "width": outfit_w or _gen_meta.get("width", 0),
-        "height": outfit_h or _gen_meta.get("height", 0),
-        "created_at": _gen_meta.get("created_at", ""),
-        "duration_s": _gen_meta.get("duration_s", 0),
-        "reference_images": _gen_meta.get("reference_images", {}),
-        "workflow": _gen_meta.get("workflow", workflow_name),
-        "model_override": model_override,
-    }
-    # Bild verknuepfen (loescht automatisch alte Variants).
-    # update_outfit_image schreibt die Sidecar-JSON neben dem PNG (Spec 1.2).
-    update_outfit_image(character_name, outfit_id, final_filename, image_meta=_image_meta)
-
-    image_url = f"/characters/{character_name}/outfits/{final_filename}"
-    return {"status": "success", "image": final_filename, "image_url": image_url}
-
-
-def generate_all_outfit_images_worker(character_name, eligible, workflow_name, backend_name, loras_override, model_override):
-    import json as _json
-    from app.core.dependencies import get_skill_manager
-    from app.models.character import get_character_profile, get_character_appearance, get_character_images_dir
-    from app.core.task_queue import get_task_queue
-    from app.models.character_template import resolve_profile_tokens, get_template
-    from app.models.character import (
-        get_character_outfits_dir, postprocess_outfit_image, update_outfit_image)
-    import shutil
-    import re
-
-    _tq = get_task_queue()
-    _track_id = _tq.track_start(
-        "bulk_outfit_images", f"Outfit-Bilder ({len(eligible)})",
-        agent_name=character_name)
-
-    profile = get_character_profile(character_name)
-    tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-
-    from app.imagegen.service import get_image_service
-    image_skill = get_image_service()
-    if not image_skill.enabled:
-        _tq.track_finish(_track_id, error="image service not available")
-        return
-
-    success_count = 0
-    for idx, outfit_obj in enumerate(eligible, 1):
-        outfit_id = outfit_obj.get("id", "")
-        outfit_name = outfit_obj.get("name", outfit_id[:8])
-        outfit_description = outfit_obj.get("outfit", "")
-
-        _tq.track_update_label(_track_id, f"Outfit {idx}/{len(eligible)}: {outfit_name}")
-        logger.info("Bulk Outfit %d/%d: %s (%s)", idx, len(eligible), outfit_name, outfit_id[:8])
-
-        # Tokens aufloesen
-        if outfit_description and "{" in outfit_description:
-            outfit_description = resolve_profile_tokens(
-                outfit_description, profile, template=tmpl, target_key="outfit")
-
-        # Prompt via Hilfsfunktion
-        prompt_text = _build_outfit_image_prompt(character_name, outfit_description)
-
-        # Appearance fuer Reference-Bilder
-        appearance = get_character_appearance(character_name)
-        if appearance and "{" in appearance:
-            appearance = resolve_profile_tokens(
-                appearance, profile, template=tmpl, target_key="character_appearance")
-
-        payload = {
-            "prompt": prompt_text,
-            "agent_name": character_name,
-            "user_id": "",
-            "auto_enhance": False,
-            "skip_gallery": True,
-            # Same style layer as the single outfit-image path — without
-            # this the bulk path silently fell back to the "character" style.
-            "image_use_case": "outfit",
-            "appearances": [{"name": character_name, "appearance": appearance or ""}],
-            "profile_only": True,
-        }
-        if workflow_name:
-            payload["workflow"] = workflow_name
-        if backend_name:
-            payload["backend"] = backend_name
-        if loras_override is not None:
-            payload["loras"] = loras_override
-        if model_override:
-            payload["model_override"] = model_override
-
-        try:
-            result = image_skill.generate_from_input(_json.dumps(payload))
-            match = re.search(r'/characters/[^/]+/images/([^?)\n]+)', result)
-            if not match:
-                logger.warning("Bulk Outfit %s: Kein Bild im Ergebnis", outfit_name)
-                continue
-
-            image_filename = match.group(1)
-            images_dir = get_character_images_dir(character_name)
-            outfits_dir = get_character_outfits_dir(character_name)
-            src_path = images_dir / image_filename
-            dst_path = outfits_dir / image_filename
-            if src_path.exists():
-                shutil.move(str(src_path), str(dst_path))
-
-            final_path = postprocess_outfit_image(dst_path)
-            final_filename = final_path.name
-
-            # Altes Bild loeschen
-            old_image = outfit_obj.get("image", "")
-            if old_image and old_image != final_filename:
-                old_path = outfits_dir / old_image
-                if old_path.exists():
-                    old_path.unlink()
-
-            # Metadaten
-            _gen_meta = getattr(image_skill, 'last_image_meta', {}) or {}
-            _image_meta = {
-                "provider": _gen_meta.get("backend_type", ""),
-                "service": _gen_meta.get("backend", ""),
-                "model": _gen_meta.get("model", ""),
-                "loras": _gen_meta.get("loras", []),
-                "prompt": prompt_text,
-                "negative_prompt": _gen_meta.get("negative_prompt", ""),
-                "seed": _gen_meta.get("seed", 0),
-                "workflow": _gen_meta.get("workflow", workflow_name),
-                "model_override": model_override,
-            }
-            # update_outfit_image schreibt PNG-Verknuepfung + Sidecar-JSON
-            update_outfit_image(character_name, outfit_id, final_filename, image_meta=_image_meta)
-
-            success_count += 1
-            logger.info("Bulk Outfit %s: Bild generiert -> %s", outfit_name, final_filename)
-
-        except Exception as e:
-            logger.error("Bulk Outfit %s fehlgeschlagen: %s", outfit_name, e)
-
-    _tq.track_finish(_track_id)
-    logger.info("Bulk Outfit-Bilder fertig: %d/%d erfolgreich", success_count, len(eligible))
-
-
 def regenerate_image_worker(character_name, image_path, prompt, improvement_request, workflow_name, backend_name, agent_config, loras, model_override, character_names, room_id, original_location_id, negative_prompt_override, _track_id, create_new, use_room, use_source_as_reference, _tq):
     from app.skills.image_regenerate import regenerate_image
     from app.models.character import add_character_image_prompt
@@ -3503,49 +3006,6 @@ def regenerate_image_worker(character_name, image_path, prompt, improvement_requ
         _tq.track_finish(_track_id)
     except Exception as e:
         logger.error("Bild-Regenerierung fehlgeschlagen: %s", e)
-        _tq.track_finish(_track_id, error=str(e))
-
-
-def animate_image_worker(character_name, image_name, images_dir, image_path, prompt, service, _tq, _track_id, loras=None, seconds=None):
-    from pathlib import Path
-    from app.models.character import add_character_image_metadata
-    from app.core.timeutils import utc_now_iso
-    _tq.track_activate(_track_id)
-    try:
-        from app.skills.animate import animate_image
-        from datetime import datetime
-        from app.core.llm_queue import get_llm_queue, Priority as _P
-
-        stem = Path(image_name).stem
-        video_name = f"{stem}.mp4"
-        output_path = str(images_dir / video_name)
-
-        # Run via provider queue (serialization + queue-panel visibility).
-        # gpu_type = the animation service id ("together"), which matches
-        # a channel of the same type if one exists.
-        success = get_llm_queue().submit_gpu_task(
-            provider_name=service,
-            task_type="image_animate",
-            priority=_P.IMAGE_GEN,
-            callable_fn=lambda: animate_image(
-                str(image_path), prompt, output_path, service=service,
-                loras=loras, seconds=seconds),
-            agent_name=character_name,
-            label="Animation",
-            gpu_type=service)
-
-        if not success:
-            _tq.track_finish(_track_id, error="Animation fehlgeschlagen")
-            return
-
-        # Video-Info in bestehende Bild-Metadaten schreiben
-        add_character_image_metadata(character_name, image_name, {
-            "animate_prompt": prompt,
-            "animate_created_at": utc_now_iso(),
-        })
-        _tq.track_finish(_track_id)
-    except Exception as e:
-        logger.error("Animation fehlgeschlagen: %s", e)
         _tq.track_finish(_track_id, error=str(e))
 
 

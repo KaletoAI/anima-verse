@@ -9,6 +9,7 @@ import { type ItemRef } from '../../lib/refs'
 import { GROUND_ROOM_ID, isFloorRoom, roomLabel, type Location, type Room } from './worldTypes'
 import { RoomItems } from './RoomItems'
 import { BuildingModelPanel } from './BuildingModelPanel'
+import { PromptChangedBadge } from './LocationEditor'
 
 // ── Room editor ────────────────────────────────────────────────────────────
 
@@ -78,6 +79,12 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
         onSave={save}
         onDelete={isReserved ? undefined : remove}
         deleteLabel={t('Remove room')}
+      />
+      <PromptChangedBadge
+        locationId={location.id}
+        roomId={room.id || ''}
+        changed={room.prompt_changed}
+        onCleared={onChanged}
       />
       {isGround ? (
         <p className="ga-form-hint" style={{ margin: '4px 8px 0' }}>

@@ -2650,21 +2650,6 @@ def delete_gallery_image(location_name: str, image_name: str) -> Dict[str, Any]:
     return {"status": "success", "deleted": image_name}
 
 
-def toggle_gallery_background(location_name: str, image_name: str) -> Dict[str, Any]:
-    """Toggle whether a gallery image is eligible as a background."""
-    loc = resolve_location(location_name)
-    loc_id = loc["id"] if loc and loc.get("id") else location_name
-
-    gallery_dir = get_gallery_dir(loc_id)
-    image_path = gallery_dir / image_name
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bild nicht gefunden")
-
-    is_eligible = toggle_background_image(loc_id, image_name)
-
-    return {"status": "success", "image": image_name, "is_background": is_eligible}
-
-
 def assign_gallery_image_room(location_name: str, image_name: str,
                               room_id: str) -> Dict[str, Any]:
     """Set the room of a gallery image."""

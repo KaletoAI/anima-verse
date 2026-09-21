@@ -4,7 +4,7 @@ import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ImageGenDialog, type ImageGenSubmit, type ImageView } from '../../components/ImageGenDialog'
 import { snapResolution } from '../../lib/imageSize'
-import { IMAGE_TYPES, isBuildingType, type GalleryResponse, type Location, type Room } from './worldTypes'
+import { IMAGE_TYPES, isBuildingType, roomLabel, type GalleryResponse, type Location, type Room } from './worldTypes'
 import { ImageSetDialog } from './ImageSetDialog'
 import { openLightbox } from '../../components/Lightbox'
 import { useEnlarge } from '../../components/ZoomButton'
@@ -20,6 +20,11 @@ interface GalleryCardProps {
   filename: string
   url: string
   type: string
+  /** Room this image is assigned to ('' = the location itself). */
+  room: string
+  /** Rooms of this location, for the assignment picker. */
+  roomOptions: Array<{ id: string; label: string }>
+  onSetRoom: (image: string, room: string) => void
   meta: { backend?: string; model?: string; loras?: string[] }
   isBusy: boolean
   /** Multi-select mode: the thumb toggles selection instead of zooming. */
@@ -39,6 +44,9 @@ const GalleryCard = memo(function GalleryCard({
   filename,
   url,
   type,
+  room,
+  roomOptions,
+  onSetRoom,
   meta,
   isBusy,
   selectMode,
@@ -104,6 +112,20 @@ const GalleryCard = memo(function GalleryCard({
             {IMAGE_TYPES.filter((x) => x !== '').map((tp) => (
               <option key={tp} value={tp}>
                 {tp}
+              </option>
+            ))}
+          </select>
+          <select
+            className="ga-input ga-gallery-type-select"
+            value={room}
+            disabled={isBusy}
+            onChange={(e) => onSetRoom(filename, e.target.value)}
+            title={t('Which room this image belongs to. "No room" keeps it at the location itself.')}
+          >
+            <option value="">— {t('no room')} —</option>
+            {roomOptions.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.label}
               </option>
             ))}
           </select>
@@ -233,6 +255,44 @@ export function LocationGallery({
 
   const types = data?.image_types || {}
   const metas = data?.image_metas || {}
+  const rooms = data?.image_rooms || {}
+
+  // The rooms an image can be assigned to. Every room of the place, labelled
+  // by `roomLabel` — that helper is the one spot that knows the reserved
+  // rooms (the ground, a storey corridor) and gives them a readable name, so
+  // no id constant appears here. A place's yard can carry pictures like any
+  // other room, hence nothing is filtered out.
+  const roomOptions = useMemo(
+    () => (location.rooms || [])
+      .filter((r) => (r.id || '').trim())
+      .map((r) => ({ id: r.id as string, label: roomLabel(r, t) || (r.id as string) })),
+    [location.rooms, t],
+  )
+
+  /** Assign an image to a room — '' clears the assignment (location level).
+   *  The assignment decides WHICH view the image shows up in, so the tile may
+   *  leave the current list right after this; the toast says where it went. */
+  const setRoom = useCallback(
+    async (image: string, roomId: string) => {
+      setBusy(image)
+      try {
+        await apiPost(
+          `/world/locations/${encodeURIComponent(locationId)}/gallery/${encodeURIComponent(image)}/room`,
+          { room: roomId },
+        )
+        const label = roomId
+          ? (roomOptions.find((r) => r.id === roomId)?.label || roomId)
+          : t('the location')
+        toast(t('Image assigned to {name}').replace('{name}', label))
+        await reload()
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      } finally {
+        setBusy(null)
+      }
+    },
+    [locationId, reload, roomOptions, t, toast],
+  )
 
   // Filter to the selected room (if provided): keep images explicitly
   // assigned to it; images without a room assignment fall back to the
@@ -708,6 +768,9 @@ export function LocationGallery({
               filename={filename}
               url={url}
               type={type}
+              room={rooms[filename] || ''}
+              roomOptions={roomOptions}
+              onSetRoom={setRoom}
               meta={meta}
               isBusy={isBusy}
               selectMode={selectMode}

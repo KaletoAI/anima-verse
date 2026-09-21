@@ -3297,27 +3297,6 @@ def _move_gallery_image_route_sync(location_name: str, image_name: str,
     return {"status": "success", "image": new_name, "target": target}
 
 
-@router.post("/locations/{location_name}/gallery/{image_name}/toggle-background")
-async def toggle_gallery_background(
-    location_name: str,
-    image_name: str,
-    request: Request) -> Dict[str, Any]:
-    """Toggled ob ein Galerie-Bild als Hintergrund in Frage kommt."""
-    body = await request.json()
-    return await asyncio.to_thread(_toggle_gallery_background_sync,
-                                   location_name, image_name, body)
-
-
-def _toggle_gallery_background_sync(location_name: str, image_name: str,
-                                    body: Any) -> Dict[str, Any]:
-    """The blocking body of ``toggle_gallery_background`` — runs in the
-    threadpool."""
-    user_id = body.get("user_id", "").strip()
-    if ".." in image_name or "/" in image_name:
-        raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-    return world_ops.toggle_gallery_background(location_name, image_name)
-
-
 @router.post("/locations/{location_name}/gallery/{image_name}/room")
 async def set_gallery_image_room_route(
     location_name: str,

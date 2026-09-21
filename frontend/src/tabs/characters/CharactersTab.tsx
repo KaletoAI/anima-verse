@@ -758,12 +758,14 @@ export function CharactersTab() {
   const placementUI =
     current && draft ? (
       <PlacementEditor
+        character={selected}
         current={current}
         draft={draft}
         setDraft={setDraft}
         currentFeeling={currentFeeling}
         locations={locations}
         rooms={rooms}
+        onPlaced={() => { void reloadCurrent(selected) }}
       />
     ) : null
 

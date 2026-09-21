@@ -1,9 +1,10 @@
 /**
- * WardrobeTab (Game-Admin) — Inventar + Outfit als Paper-Doll, identisch zum
- * /play-BelongingsPanel, aber für den GEWÄHLTEN Character (nicht den Avatar).
+ * WardrobeTab (Game-Admin) — inventory + outfit as a paper doll, identical to
+ * the /play BelongingsPanel but for the SELECTED character (not the avatar).
  *
- * Quelle: GET /characters/{c}/belongings (gleiche Form wie /play/belongings).
- * Setter: POST /inventory/characters/{c}/{equip,unequip,apply-outfit-set}.
+ * Source: GET /characters/{c}/belongings (same shape as /play/belongings).
+ * Setters: POST /inventory/characters/{c}/{equip,unequip,apply-outfit-set},
+ * GET/POST /characters/{c}/outfit-lock for the "keep this outfit" switch.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -13,7 +14,7 @@ import { FieldModelRefs } from './FieldModelRefs'
 import { PromptPreview } from './PromptPreview'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
 
-// Anker-Positionen (x%, y%) im Bild-Koordinatensystem (silhouette.svg).
+// Anchor positions (x%, y%) in the image coordinate system (silhouette.svg).
 const SLOT_ANCHOR: Record<string, [number, number]> = {
   head: [50, 6], neck: [50, 19], outer: [33, 40], top: [50, 33],
   underwear_top: [66, 33], bottom: [50, 55], underwear_bottom: [66, 55],
@@ -63,6 +64,57 @@ const EMPTY: Belongings = {
 }
 
 
+/**
+ * Outfit lock — "hands off this outfit".
+ *
+ * The server has honoured `outfit_intent.locked` all along (the decency
+ * compliance skips with status "locked", the outfit-creation skill refuses),
+ * but nothing in the React admin could set it. Backend:
+ * GET/POST /characters/{name}/outfit-lock.
+ */
+function OutfitLockSwitch({ character }: { character: string }) {
+  const { t } = useI18n()
+  const [locked, setLocked] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!character) { setLocked(null); return }
+    apiGet<{ locked?: boolean }>(`/characters/${encodeURIComponent(character)}/outfit-lock`)
+      .then((d) => setLocked(!!d.locked))
+      .catch(() => setLocked(false))
+  }, [character])
+
+  const toggle = useCallback(async () => {
+    if (locked === null || busy || !character) return
+    setBusy(true)
+    try {
+      const d = await apiPost<{ locked?: boolean }>(
+        `/characters/${encodeURIComponent(character)}/outfit-lock`,
+        { locked: !locked },
+      )
+      setLocked(!!d.locked)
+    } catch {
+      /* leave the state untouched on error */
+    } finally {
+      setBusy(false)
+    }
+  }, [character, locked, busy])
+
+  if (locked === null) return null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+        <input type="checkbox" checked={locked} disabled={busy}
+          onChange={() => { void toggle() }} />
+        <span>{t('Keep this outfit')}</span>
+      </label>
+      <span className="ga-form-hint" style={{ fontSize: '0.75em', opacity: 0.6 }}>
+        {t('The character keeps this outfit: it does not change clothes on its own and the decency rule does not re-dress it.')}
+      </span>
+    </div>
+  )
+}
+
 export function WardrobeTab({ character }: { character: string }) {
   const { t } = useI18n()
   const enc = encodeURIComponent(character)
@@ -79,7 +131,7 @@ export function WardrobeTab({ character }: { character: string }) {
       .catch(() => setOutfitTypes([]))
   }, [])
   const [busy, setBusy] = useState(false)
-  // Item-Vergabe (Items-an-Character): verfügbare Item-Defs + Auswahl.
+  // Granting items to the character: available item defs + the pick.
   const [allItems, setAllItems] = useState<Array<{ item_id: string; name: string; category?: string }>>([])
   const [pickId, setPickId] = useState('')
   const [pickQty, setPickQty] = useState(1)
@@ -115,7 +167,7 @@ export function WardrobeTab({ character }: { character: string }) {
     } catch { /* ignore */ } finally { setBusy(false) }
   }, [busy, load])
 
-  // Item an den Character geben (POST /inventory/characters/{c}).
+  // Give an item to the character (POST /inventory/characters/{c}).
   const grant = useCallback(async () => {
     if (!pickId || busy) return
     await act(`/inventory/characters/${enc}`, { item_id: pickId, quantity: pickQty })
@@ -123,7 +175,7 @@ export function WardrobeTab({ character }: { character: string }) {
     setPickQty(1)
   }, [pickId, pickQty, busy, act, enc])
 
-  // Item komplett aus dem Inventar entfernen.
+  // Remove the item from the inventory entirely.
   const removeItem = useCallback(async (itemId: string) => {
     if (busy) return
     setBusy(true)
@@ -165,9 +217,10 @@ export function WardrobeTab({ character }: { character: string }) {
 
   return (
     <div style={{ display: 'flex', gap: 12, height: '100%', minHeight: 0, fontSize: '0.9em' }}>
-      {/* ── Links: Item-Vergabe + Slot-Filter + Outfit-Liste ── */}
+      {/* ── Left: grant items + slot filter + outfit list ── */}
       <div style={{ flex: '1.5 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {/* Items an den Character geben */}
+        <OutfitLockSwitch character={character} />
+        {/* Give an item to the character */}
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <select className="ga-input" style={{ flex: 1, minWidth: 0, padding: '3px 8px', fontSize: '0.85em' }}
             value={pickId} disabled={busy} onChange={(e) => setPickId(e.target.value)}>
@@ -245,7 +298,7 @@ export function WardrobeTab({ character }: { character: string }) {
         )}
       </div>
 
-      {/* ── Mitte: Figur + Outfit-Symbole (Paper-Doll) ── */}
+      {/* ── Middle: figure + outfit markers (paper doll) ── */}
       <div style={{ flex: '0 0 auto', maxWidth: '32%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, overflow: 'hidden' }}>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
           <div ref={figRef} style={{ position: 'relative', height: '100%', display: 'inline-flex' }}>

@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import json
 import math
-import random
 import uuid
 
 from app.core.log import get_logger
@@ -2662,11 +2661,21 @@ def set_outfit_intent(character_name: str, intent: Dict[str, Any]) -> None:
 
 
 def _update_outfit_intent(character_name: str, **changes) -> Dict[str, Any]:
-    """Helper: Intent lesen, Felder mergen, schreiben. Returns das neue Intent."""
-    intent = get_outfit_intent(character_name)
-    intent.update(changes)
-    set_outfit_intent(character_name, intent)
-    return intent
+    """Helper: read the intent, merge fields, write it back. Returns the new
+    intent.
+
+    READ AND WRITE under the per-character profile lock (DATA-3): this is a
+    read-modify-write of ONE key of the profile, so without the span two
+    concurrent field changes (the lock switch and a forced piece, say) would
+    each write the other's pre-state back. ``keyed_lock`` is an RLock, so the
+    same lock taken again inside ``set_outfit_intent`` just nests.
+    """
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        intent = get_outfit_intent(character_name)
+        intent.update(changes)
+        set_outfit_intent(character_name, intent)
+        return intent
 
 
 def add_forbidden_slot(character_name: str, slot: str) -> None:
@@ -3352,38 +3361,6 @@ def get_character_default_outfit(character_name: str) -> str:
     if not character_name:
         return ""
     return get_character_profile(character_name).get("default_outfit", "")
-
-
-def generate_random_appearance() -> str:
-    """Generiert ein zufaelliges Aussehen fuer einen Character"""
-    genders = ["weiblich", "maennlich", "androgyn"]
-    gender = random.choice(genders)
-    hair_colors = ["blond", "bruenett", "schwarz", "rot", "silber", "platinblond", "kastanienbraun"]
-    hair_color = random.choice(hair_colors)
-    hair_lengths = ["kurz", "mittellang", "lang", "sehr lang"]
-    hair_length = random.choice(hair_lengths)
-    hairstyles = ["glatt", "wellig", "lockig", "geflochten", "hochgesteckt", "wild", "gepflegt"]
-    hairstyle = random.choice(hairstyles)
-    eye_colors = ["blau", "gruen", "braun", "grau", "bernsteinfarben", "haselnussbraun"]
-    eye_color = random.choice(eye_colors)
-    body_types = ["schlank", "athletisch", "kurvig", "kraeftig", "zierlich", "muskuloes"]
-    body_type = random.choice(body_types)
-    heights = ["klein", "durchschnittlich gross", "gross", "sehr gross"]
-    height = random.choice(heights)
-    clothing_styles = [
-        "elegant und geschaeftlich",
-        "laessig und sportlich",
-        "freizuegig und verfuehrerisch",
-        "gothic und dunkel",
-        "verspielt und feminin",
-        "minimalistisch und modern",
-        "extravagant und auffaellig",
-        "bequem und locker"
-    ]
-    clothing_style = random.choice(clothing_styles)
-
-    appearance = f"{gender}, {height}, {body_type}, {hair_length}es {hair_color}es {hairstyle} Haar, {eye_color}e Augen, Kleidungsstil: {clothing_style}"
-    return appearance
 
 
 def character_exists(name: str) -> bool:
@@ -4641,23 +4618,3 @@ def _cleanup_image_from_chats(character_name: str, image_filename: str):
         except Exception:
             pass
 
-
-def cleanup_orphaned_images(character_name: str) -> Dict[str, Any]:
-    """Loescht Bilddateien die nicht im Profil registriert sind.
-
-    Returns dict with deleted filenames and count.
-    """
-    profile = get_character_profile(character_name)
-    registered = set(profile.get("images", []))
-    images_dir = get_character_images_dir(character_name)
-
-    deleted = []
-    for f in images_dir.iterdir():
-        if f.is_file() and f.name not in registered:
-            f.unlink()
-            deleted.append(f.name)
-
-    if deleted:
-        logger.info("%s: %d orphaned image(s) deleted", character_name, len(deleted))
-
-    return {"character": character_name, "deleted": deleted, "count": len(deleted)}

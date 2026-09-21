@@ -2256,8 +2256,8 @@ def play_self(user=Depends(get_current_user)):
     except Exception as e:
         logger.debug("play_self status-effects failed: %s", e)
     try:
-        from app.routes.characters import get_active_conditions_route
-        out["conditions"] = get_active_conditions_route(avatar).get("conditions", []) or []
+        from app.core.character_ops import build_active_conditions
+        out["conditions"] = build_active_conditions(avatar).get("conditions", []) or []
     except Exception as e:
         logger.debug("play_self conditions failed: %s", e)
     try:
@@ -2333,8 +2333,8 @@ def _state_block(name: str) -> dict:
     except Exception:
         pass
     try:
-        from app.routes.characters import get_active_conditions_route
-        blk["conditions"] = get_active_conditions_route(name).get("conditions", []) or []
+        from app.core.character_ops import build_active_conditions
+        blk["conditions"] = build_active_conditions(name).get("conditions", []) or []
     except Exception:
         pass
     return blk

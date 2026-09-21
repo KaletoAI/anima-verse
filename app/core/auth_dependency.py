@@ -202,7 +202,7 @@ async def user_context_middleware(request: Request, call_next):
 _PUBLIC_CHARACTER_SEGMENTS = {
     "images", "profile-image", "expressions", "outfit-expression",
     "current-location", "current-activity", "current-feeling",
-    "current-outfit", "model", "model3d", "silhouette",
+    "model", "model3d", "silhouette",
 }
 
 # First segment after /characters/ that is a COLLECTION endpoint, not a
