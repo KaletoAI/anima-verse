@@ -26,6 +26,8 @@ from app.models.character_template import (
     get_template,
     resolve_profile_tokens)
 from app.core.timeutils import utc_now_iso
+from app.core.upload_limits import (ensure_image, guard_content_length,
+                                    read_upload_capped)
 
 router = APIRouter(prefix="/store", tags=["store"])
 
@@ -34,18 +36,24 @@ router = APIRouter(prefix="/store", tags=["store"])
 
 @router.post("/{user_id}/profile-image")
 async def upload_user_profile_image(request: Request) -> Dict[str, Any]:
-    """Laedt ein Profilbild fuer den User hoch und setzt es als aktives Profilbild."""
+    """Upload a profile image for the user and make it the active one.
+
+    Size and type are enforced by `app.core.upload_limits` (SEC-7): the
+    Content-Length is refused before the body is parsed, the read stops at the
+    cap, and the magic bytes must agree with the file-name extension.
+    """
     try:
+        guard_content_length(request, what="Profile image")
         form = await request.form()
         file = form.get("file")
 
         if not file:
-            raise HTTPException(status_code=400, detail="Keine Datei hochgeladen")
+            raise HTTPException(status_code=400, detail="No file uploaded")
 
         allowed_extensions = {"png", "jpg", "jpeg", "gif", "webp"}
         filename = file.filename.lower()
         if not any(filename.endswith(ext) for ext in allowed_extensions):
-            raise HTTPException(status_code=400, detail="Format nicht unterstuetzt")
+            raise HTTPException(status_code=400, detail="Unsupported format")
 
         images_dir = get_user_images_dir()
 
@@ -54,7 +62,8 @@ async def upload_user_profile_image(request: Request) -> Dict[str, Any]:
         image_filename = f"profile_{timestamp}{file_ext}"
         image_path = images_dir / image_filename
 
-        contents = await file.read()
+        contents = await read_upload_capped(file, what="Profile image")
+        ensure_image(contents, filename=filename, what="Profile image")
         image_path.write_bytes(contents)
 
         # Save profile image to active character (or legacy user profile)

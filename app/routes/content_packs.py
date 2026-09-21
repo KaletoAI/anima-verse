@@ -35,6 +35,7 @@ from app.core import config
 from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
+from app.core.upload_limits import read_upload_capped
 
 logger = get_logger("content_packs")
 
@@ -671,6 +672,13 @@ async def install_pack_url(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="url required")
     if pack_type not in SUPPORTED_TYPES:
         raise HTTPException(status_code=400, detail=f"unsupported pack type: {pack_type!r}")
+    # Same trust confirmation the catalog path enforces — an ad-hoc URL is the
+    # LEAST trustworthy source of the three, so it must not be the one entry
+    # that installs executable code without being asked (SEC-9).
+    if pack_type in CODE_PACK_TYPES and not bool(body.get("confirm_code")):
+        raise HTTPException(
+            status_code=428,
+            detail="skill_package installs executable code — resend with confirm_code=true")
 
     headers = _auth_header(token)
     tmp: Optional[Path] = None
@@ -692,6 +700,43 @@ async def install_pack_url(request: Request) -> Dict[str, Any]:
     return {"status": "success", "pack_type": pack_type, "result": result}
 
 
+def _archive_declared_type(content: bytes) -> str:
+    """The pack type the ARCHIVE itself declares, or "" when undecidable.
+
+    Content packs carry `manifest.json` with a `type` (a character export has
+    `character_name` instead); a skill package has no manifest.json at all but
+    a `plugin.yaml` at its root (`skill_package_io._package_root`). Never
+    raises — an unreadable archive simply declares nothing and the importer
+    produces the real error.
+    """
+    import zipfile as _zip
+    try:
+        zf = _zip.ZipFile(io.BytesIO(content))
+    except Exception:
+        return ""
+    try:
+        names = zf.namelist()
+        if "manifest.json" in names:
+            try:
+                m = json.loads(zf.read("manifest.json"))
+            except Exception:
+                return ""
+            if not isinstance(m, dict):
+                return ""
+            return str(m.get("type")
+                       or ("character" if m.get("character_name") else "") or "")
+        tops = {n.split("/", 1)[0] for n in names if n.strip("/")}
+        if "plugin.yaml" in names:
+            return "skill_package"
+        if len(tops) == 1 and f"{next(iter(tops))}/plugin.yaml" in names:
+            return "skill_package"
+    except Exception:
+        return ""
+    finally:
+        zf.close()
+    return ""
+
+
 @router.post("/install_upload")
 async def install_pack_upload(
     file: UploadFile = File(...),
@@ -699,13 +744,36 @@ async def install_pack_upload(
     overwrite: bool = Query(False, description="Replace an existing entity"),
     mode: str = Query("full", description="character packs: full | fresh (re-initialize)"),
     intro: str = Query("", description="character packs, mode=fresh: intro memory"),
+    confirm_code: bool = Query(False, description="skill_package only: confirm that installing runs its code"),
 ) -> Dict[str, Any]:
-    """Offline path: upload a pack ZIP directly."""
+    """Offline path: upload a pack ZIP directly.
+
+    A `skill_package` needs the SAME trust confirmation the catalog path
+    enforces (`confirm_code` on /install): the first call answers 428 and
+    names what would be installed, the second call repeats the upload with
+    `confirm_code=true` and installs. The check looks at the ARCHIVE too, so a
+    skill package uploaded under a data `pack_type` cannot slip past it.
+    """
     if pack_type not in SUPPORTED_TYPES:
         raise HTTPException(status_code=400, detail=f"unsupported pack type: {pack_type!r}")
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    content = await read_upload_capped(file, max_bytes=_max_pack_mb() * 1024 * 1024,
+                                       what="pack")
+    declared = _archive_declared_type(content)
+    if declared and declared != pack_type and (declared in CODE_PACK_TYPES
+                                               or pack_type in CODE_PACK_TYPES):
+        raise HTTPException(
+            status_code=400,
+            detail=f"archive declares type {declared!r}, upload says {pack_type!r} — "
+                   "an executable package must be installed as 'skill_package'")
+    if pack_type in CODE_PACK_TYPES or declared in CODE_PACK_TYPES:
+        if not confirm_code:
+            raise HTTPException(
+                status_code=428,
+                detail=("skill_package installs executable code — "
+                        f"{_describe_skill_package(content)}. "
+                        "Resend the same upload with confirm_code=true to install it."))
     try:
         result = _dispatch_install(pack_type, content, overwrite=overwrite,
                                    mode=mode, intro=intro)
@@ -714,6 +782,38 @@ async def install_pack_upload(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "success", "pack_type": pack_type, "result": result}
+
+
+def _describe_skill_package(content: bytes) -> str:
+    """One English line naming what a skill-package upload would install, for
+    the 428 body. Best effort — an unreadable manifest just says less."""
+    import zipfile as _zip
+    try:
+        zf = _zip.ZipFile(io.BytesIO(content))
+    except Exception:
+        return "the archive could not be read"
+    try:
+        names = zf.namelist()
+        member = "plugin.yaml"
+        if member not in names:
+            tops = {n.split("/", 1)[0] for n in names if n.strip("/")}
+            member = f"{tops.pop()}/plugin.yaml" if len(tops) == 1 else ""
+        if not member or member not in names:
+            return "the archive has no plugin.yaml"
+        import yaml as _yaml
+        manifest = _yaml.safe_load(zf.read(member).decode("utf-8")) or {}
+    except Exception:
+        return "the archive could not be read"
+    finally:
+        zf.close()
+    if not isinstance(manifest, dict):
+        return "the archive could not be read"
+    pkg = str(manifest.get("name") or "?")
+    verbs = [str((s.get("skill_id") if isinstance(s, dict) else s) or "")
+             for s in (manifest.get("skills") or [])]
+    verbs = [v for v in verbs if v]
+    tail = f" with the verb(s) {', '.join(verbs)}" if verbs else " with no verbs"
+    return f"it would install the package '{pkg}'{tail}"
 
 
 def _manifest_type(content: bytes) -> str:
@@ -883,7 +983,8 @@ async def preview_import(file: UploadFile = File(...)) -> Dict[str, Any]:
     without importing. Generic across all export types."""
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    content = await read_upload_capped(file, max_bytes=_max_pack_mb() * 1024 * 1024,
+                                       what="pack")
     from app.core.content_io import preview_import_zip
     try:
         return preview_import_zip(content)
@@ -903,7 +1004,8 @@ async def import_selected(
     `overwrite` are honoured per element. `mode`/`intro` apply to character imports."""
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    content = await read_upload_capped(file, max_bytes=_max_pack_mb() * 1024 * 1024,
+                                       what="pack")
     sel = {s.strip() for s in selected_ids.split(",") if s.strip()} or None
     try:
         result = _dispatch_install_selected(content, selected_ids=sel, overwrite=overwrite,
@@ -926,7 +1028,8 @@ async def character_intro_suggest(
     and uses the per-world briefing (world_setup). Returns {character, intro}."""
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    content = await read_upload_capped(file, max_bytes=_max_pack_mb() * 1024 * 1024,
+                                       what="pack")
 
     char_name = ""
     personality = ""

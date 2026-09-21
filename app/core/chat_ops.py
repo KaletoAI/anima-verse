@@ -148,7 +148,18 @@ async def build_unread_summary() -> Dict[str, Any]:
 
 
 async def save_chat_upload(request) -> Dict[str, Any]:
-    """Store an uploaded chat image and return a temporary image ID."""
+    """Store an uploaded chat image and return a temporary image ID.
+
+    Size and type are enforced by `app.core.upload_limits` (SEC-7): the
+    Content-Length is refused before the body is parsed at all, the read stops
+    at the cap, and the MAGIC BYTES decide whether this is an image — the file
+    name alone used to be the only check, so any file at all could be parked
+    in the world's upload dir under a `.png` name.
+    """
+    from app.core.upload_limits import (ensure_image, guard_content_length,
+                                        read_upload_capped)
+
+    guard_content_length(request, what="chat image")
     form = await request.form()
     file = form.get("file")
     if not file or not hasattr(file, "filename"):
@@ -158,9 +169,11 @@ async def save_chat_upload(request) -> Dict[str, Any]:
     if ext not in ALLOWED_IMAGE_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
+    content = await read_upload_capped(file, what="chat image")
+    ensure_image(content, filename=file.filename, what="chat image")
+
     image_id = f"{uuid.uuid4().hex[:12]}{ext}"
     dest = _get_chat_upload_dir() / image_id
-    content = await file.read()
     dest.write_bytes(content)
 
     return {"image_id": image_id, "filename": file.filename}

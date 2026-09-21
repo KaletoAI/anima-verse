@@ -120,11 +120,17 @@ async def import_rule_route(
     overwrite: bool = Query(False),
     target: str = Query("auto"),
 ) -> Dict[str, Any]:
-    """Import a single-rule ZIP."""
+    """Import a single-rule ZIP.
+
+    Player-reachable (POST /rules/import is not on the admin list), so the
+    body is capped by `server.max_upload_mb` (SEC-7) instead of being read
+    whole into memory.
+    """
     from app.core.content_io import import_rule_from_zip
+    from app.core.upload_limits import read_upload_capped
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    content = await read_upload_capped(file, what="Rule ZIP")
     try:
         return import_rule_from_zip(content, target=target, overwrite=overwrite)
     except FileExistsError as e:

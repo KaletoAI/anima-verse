@@ -22,14 +22,24 @@ The loader is intentionally minimal: Jinja2 with autoescape disabled
 placeholders raise loud errors instead of silently rendering empty),
 and `trim_blocks`/`lstrip_blocks` so that `{% if %}` blocks don't leak
 extra whitespace.
+
+The environment is a `SandboxedEnvironment` (SEC-9): templates are
+live-editable at /admin/templates, so a plain `Environment` would turn
+"may edit a prompt" into "may run code" via the classic
+`{{ ''.__class__.__mro__ }}` attribute chain. Prompt templates only ever
+interpolate strings, lists and dicts the caller passes in — none of them
+needs an underscore attribute or `.format`, so the sandbox costs nothing
+here and every escape route raises `SecurityError` instead.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
+from jinja2 import FileSystemLoader, StrictUndefined, Template
+from jinja2.sandbox import SandboxedEnvironment
 
 # Resolve template dir relative to repo root: <repo>/shared/templates/llm
 _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "shared" / "templates" / "llm"
@@ -39,8 +49,8 @@ _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "shared" / "templates" / "
 _package_template_dirs: List[Path] = []
 
 
-def _build_env() -> Environment:
-    return Environment(
+def _build_env() -> SandboxedEnvironment:
+    return SandboxedEnvironment(
         loader=FileSystemLoader(
             [str(_TEMPLATE_DIR)] + [str(p) for p in _package_template_dirs]),
         autoescape=False,
@@ -67,6 +77,9 @@ def register_package_template_dirs(dirs: List[Path]) -> None:
     _package_template_dirs = new_dirs
     _env = _build_env()
     _skill_meta_cache.clear()
+    # The cached templates are bound to the OLD env (and its loader), so an
+    # `{% include %}` in one would still resolve on the old search path.
+    _compiled_cache.clear()
 
 
 def template_search_dirs() -> List[Path]:
@@ -111,26 +124,53 @@ def _split_system_user(body: str) -> Tuple[str, str]:
     return system, user
 
 
+# Compiled bodies, keyed by template name -> (file, mtime_ns, size, Template).
+# `from_string` bypasses Jinja's own cache, so every render used to re-read the
+# file from disk and recompile it (LLM-9: 3.4 ms for chat/chat_stream.md, on
+# every single chat turn). Templates are live-editable at /admin/templates, so
+# the key carries the file's mtime+size: a saved edit changes both and the next
+# render recompiles by itself — no invalidation call anywhere.
+_compiled_cache: Dict[str, Tuple[str, int, int, Template]] = {}
+
+
+def _compile(template_name: str) -> Template:
+    """Compile a template's body (frontmatter stripped), cached by mtime."""
+    hit = _compiled_cache.get(template_name)
+    if hit is not None:
+        filename, mtime_ns, size, tmpl = hit
+        try:
+            st = os.stat(filename)
+            if st.st_mtime_ns == mtime_ns and st.st_size == size:
+                return tmpl
+        except OSError:
+            pass  # moved or deleted — fall through to a fresh lookup
+    raw, filename, _uptodate = _env.loader.get_source(_env, template_name)
+    tmpl = _env.from_string(_strip_frontmatter(raw))
+    if filename:
+        try:
+            st = os.stat(filename)
+            _compiled_cache[template_name] = (filename, st.st_mtime_ns,
+                                              st.st_size, tmpl)
+        except OSError:
+            pass
+    return tmpl
+
+
 def render_task(task: str, **vars) -> Tuple[str, str]:
     """Render `tasks/<task>.md` and return (system_prompt, user_prompt).
 
     Raises if the template is missing or a placeholder is undefined.
     """
-    template_name = f"tasks/{task}.md"
-    raw = _env.loader.get_source(_env, template_name)[0]
-    body = _strip_frontmatter(raw)
-    # Render the body (after frontmatter strip) so `{% include %}` etc. still
-    # works. We render via from_string to avoid double frontmatter handling.
-    rendered = _env.from_string(body).render(**vars)
+    # Compiled from the body (after frontmatter strip) so `{% include %}` etc.
+    # still works, and so frontmatter is not handled twice.
+    rendered = _compile(f"tasks/{task}.md").render(**vars)
     return _split_system_user(rendered)
 
 
 def render(template_path: str, **vars) -> str:
     """Render any single template file (sections/, chat/, ...) and return
     the result as a plain string."""
-    raw = _env.loader.get_source(_env, template_path)[0]
-    body = _strip_frontmatter(raw)
-    return _env.from_string(body).render(**vars).strip()
+    return _compile(template_path).render(**vars).strip()
 
 
 def template_exists(template_path: str) -> bool:

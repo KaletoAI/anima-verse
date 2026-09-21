@@ -55,6 +55,19 @@ SECTIONS = {
                 "sensitive": True,
                 "requires_restart": True,
             },
+            "max_upload_mb": {
+                "type": "int",
+                "label": "Max upload size (MB)",
+                "default": 25,
+                "min": 1,
+                "max": 4096,
+                "description": "Size cap for a single uploaded file on the player-facing "
+                               "routes (chat images, user gallery, profile picture, rule "
+                               "import). A larger upload is refused with 413 before its "
+                               "body is read, so one request can no longer fill the disk. "
+                               "Content packs keep their own, much larger cap — see "
+                               "Content Marketplace → Max pack size.",
+            },
             "cors_origins": {
                 "type": "text",
                 "label": "Allowed CORS origins",

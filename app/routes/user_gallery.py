@@ -15,6 +15,8 @@ from app.models.user_gallery import (
     save_user_gallery_comment,
     delete_user_gallery_image)
 from app.core.timeutils import utc_now_iso
+from app.core.upload_limits import (ensure_image, guard_content_length,
+                                    read_upload_capped)
 
 logger = get_logger("user_gallery")
 
@@ -60,18 +62,24 @@ def serve_user_gallery_image(filename: str):
 
 @router.post("")
 async def upload_user_gallery_image(request: Request) -> Dict[str, Any]:
-    """Laedt ein Bild in die User-Galerie hoch."""
+    """Upload an image into the user gallery.
+
+    Size and type are enforced by `app.core.upload_limits` (SEC-7): the
+    Content-Length is refused before the body is parsed, the read stops at the
+    cap, and the magic bytes must agree with the file-name extension.
+    """
     try:
+        guard_content_length(request, what="Gallery image")
         form = await request.form()
         file = form.get("file")
 
         if not file:
-            raise HTTPException(status_code=400, detail="Keine Datei hochgeladen")
+            raise HTTPException(status_code=400, detail="No file uploaded")
 
         allowed_extensions = {"png", "jpg", "jpeg", "gif", "webp"}
         filename = file.filename.lower()
         if not any(filename.endswith(ext) for ext in allowed_extensions):
-            raise HTTPException(status_code=400, detail="Format nicht unterstuetzt")
+            raise HTTPException(status_code=400, detail="Unsupported format")
 
         gallery_dir = get_user_gallery_dir()
         timestamp = int(time.time())
@@ -79,7 +87,8 @@ async def upload_user_gallery_image(request: Request) -> Dict[str, Any]:
         image_filename = f"user_{timestamp}{file_ext}"
         image_path = gallery_dir / image_filename
 
-        contents = await file.read()
+        contents = await read_upload_capped(file, what="Gallery image")
+        ensure_image(contents, filename=filename, what="Gallery image")
         image_path.write_bytes(contents)
 
         # Metadaten anlegen
