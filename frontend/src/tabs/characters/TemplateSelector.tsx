@@ -1,9 +1,11 @@
 /**
- * TemplateSelector — Character-Template wählen + wechseln (wie alte UI), oben
- * über der Identität. Wechsel via POST /characters/{name}/switch-template:
- *   mode=diff  → zeigt neue/entfallende Felder (In-App-Bestätigung, kein confirm())
- *   mode=apply → führt die Migration durch (Defaults setzen, alte Felder löschen)
- * Danach `onSwitched()` → Editor neu laden.
+ * TemplateSelector — pick and switch the character template (as in the old
+ * UI), above the identity block. Switching goes through
+ * POST /characters/{name}/switch-template:
+ *   mode=diff  → shows the fields gained/lost (confirmed in-app, never with a
+ *                browser dialog)
+ *   mode=apply → runs the migration (set defaults, drop the old fields)
+ * Afterwards `onSwitched()` → reload the editor.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'

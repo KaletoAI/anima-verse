@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { type ItemRef } from '../../lib/refs'
 
 // ── Room items panel ───────────────────────────────────────────────────────
@@ -47,9 +48,14 @@ export function RoomItems({
     reload()
   }, [reload])
 
-  const removeItem = useCallback(
-    async (itemId: string) => {
-      if (!window.confirm(t('Remove item from room?'))) return
+  // The click arms the in-app question, the dialog at the end removes.
+  const [pendingRemove, setPendingRemove] = useState('')
+  const removeItem = useCallback((itemId: string) => { setPendingRemove(itemId) }, [])
+  const doRemoveItem = useCallback(
+    async () => {
+      const itemId = pendingRemove
+      setPendingRemove('')
+      if (!itemId) return
       try {
         await apiDelete(
           `/inventory/rooms/${encodeURIComponent(locationId)}/${encodeURIComponent(roomId)}/${encodeURIComponent(itemId)}`,
@@ -60,7 +66,7 @@ export function RoomItems({
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [locationId, roomId, reload, t, toast],
+    [pendingRemove, locationId, roomId, reload, t, toast],
   )
 
   const addItem = useCallback(async () => {
@@ -136,6 +142,16 @@ export function RoomItems({
           + {t('Add')}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={!!pendingRemove}
+        title={t('Remove item from room')}
+        message={t('The item is taken out of this room. The item itself stays in the world.')}
+        confirmLabel={t('Remove')}
+        danger
+        onConfirm={() => { void doRemoveItem() }}
+        onClose={() => setPendingRemove('')}
+      />
     </div>
   )
 }

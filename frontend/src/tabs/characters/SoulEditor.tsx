@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -73,9 +74,12 @@ export function SoulEditor({ character }: { character: string }) {
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  const selectFile = useCallback(
+  // The "discard unsaved changes?" question is an in-app dialog: the click on
+  // another file parks the wanted section here, the dialog then loads it.
+  const [pendingSection, setPendingSection] = useState('')
+
+  const loadFile = useCallback(
     async (sec: string) => {
-      if (dirty && !window.confirm(t('Discard unsaved changes?'))) return
       try {
         const data = await apiGet<{ raw?: string; file_default?: string }>(
           `/characters/${encodeURIComponent(character)}/soul/file/${encodeURIComponent(sec)}`,
@@ -88,7 +92,14 @@ export function SoulEditor({ character }: { character: string }) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [character, dirty, t, toast],
+    [character, t, toast],
+  )
+  const selectFile = useCallback(
+    (sec: string) => {
+      if (dirty) { setPendingSection(sec); return }
+      void loadFile(sec)
+    },
+    [dirty, loadFile],
   )
 
   // Load file list when the character changes; auto-select the first file.
@@ -238,6 +249,16 @@ export function SoulEditor({ character }: { character: string }) {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!pendingSection}
+        title={t('Discard unsaved changes?')}
+        message={t('This file has unsaved edits. Opening another one throws them away.')}
+        confirmLabel={t('Discard')}
+        danger
+        onConfirm={() => { const sec = pendingSection; setPendingSection(''); void loadFile(sec) }}
+        onClose={() => setPendingSection('')}
+      />
     </div>
   )
 }

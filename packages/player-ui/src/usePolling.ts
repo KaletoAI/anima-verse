@@ -123,9 +123,25 @@ export function usePoll<T>(
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
 
+  // A new key addresses a DIFFERENT resource, so the payload of the old one is
+  // not stale data — it is the wrong data. Without this reset the caller keeps
+  // rendering (and acting on) the previous key's answer until the first fetch
+  // of the new key returns; the gallery then deletes a file of gallery A under
+  // the name of gallery B. Reset during render, not in an effect: an effect
+  // would still let one committed frame pair the new key with the old data.
+  // Guarded by a ref so that a changed `intervalMs`/`enabled` alone — the two
+  // other deps of the effect below — does NOT blank the panel.
+  const keyRef = useRef(key);
+  if (keyRef.current !== key) {
+    keyRef.current = key;
+    setData(null);
+    setError(null);
+  }
+
   useEffect(() => {
     if (!enabled) return;
     ensureInfra();
+    const subKey = key;
     let e = entries.get(key);
     if (!e) {
       e = {
@@ -144,6 +160,11 @@ export function usePoll<T>(
     }
     const sub: Subscriber = {
       cb: (d: unknown, err: unknown) => {
+        // The answer belongs to the key this subscription was made for. The
+        // cleanup below unsubscribes on a key change, but a fetch that is
+        // already awaiting notifies whoever is in the set when it returns —
+        // this keeps such a straggler off the new key's state.
+        if (keyRef.current !== subKey) return;
         setData(d as T | null);
         setError(err);
       },

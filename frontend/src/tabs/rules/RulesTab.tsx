@@ -4,6 +4,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } from '../../lib/refs'
 import { Field } from '../../components/Field'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
@@ -229,9 +230,16 @@ export function RulesTab() {
     }
   }, [draft, reload, t, toast])
 
-  const deleteOverride = useCallback(async () => {
+  // Both deletions ask in-app: the click arms, the dialog at the end acts.
+  // One state for the two questions — they cannot be open at the same time.
+  const [pendingDelete, setPendingDelete] = useState<'' | 'override' | 'rule'>('')
+  const deleteOverride = useCallback(() => {
     if (!draft || draft.isNew) return
-    if (!window.confirm(t('Remove world override of "{name}"?').replace('{name}', draft.name || draft.id))) return
+    setPendingDelete('override')
+  }, [draft])
+  const doDeleteOverride = useCallback(async () => {
+    setPendingDelete('')
+    if (!draft || draft.isNew) return
     try {
       await apiDelete(`/rules/${encodeURIComponent(draft.id)}?target=world`)
       toast(t('World override removed'))
@@ -242,9 +250,13 @@ export function RulesTab() {
     }
   }, [draft, reload, t, toast])
 
-  const deleteRule = useCallback(async () => {
+  const deleteRule = useCallback(() => {
     if (!draft || draft.isNew) return
-    if (!window.confirm(t('Delete rule "{name}"?').replace('{name}', draft.name || draft.id))) return
+    setPendingDelete('rule')
+  }, [draft])
+  const doDeleteRule = useCallback(async () => {
+    setPendingDelete('')
+    if (!draft || draft.isNew) return
     try {
       await apiDelete(`/rules/${encodeURIComponent(draft.id)}`)
       toast(t('Deleted'))
@@ -376,6 +388,22 @@ export function RulesTab() {
           <div className="ga-placeholder">{t('Click a rule or create a new one.')}</div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={pendingDelete === 'override' ? t('Remove world override') : t('Delete rule')}
+        message={(pendingDelete === 'override'
+          ? t('The world\u2019s own version of "{name}" is dropped; the shared rule stays in force.')
+          : t('Rule "{name}" is deleted and stops applying to this world.')
+        ).replace('{name}', draft ? draft.name || draft.id : '')}
+        confirmLabel={pendingDelete === 'override' ? t('Remove') : t('Delete')}
+        danger
+        onConfirm={() => {
+          if (pendingDelete === 'override') void doDeleteOverride()
+          else void doDeleteRule()
+        }}
+        onClose={() => setPendingDelete('')}
+      />
     </div>
   )
 }

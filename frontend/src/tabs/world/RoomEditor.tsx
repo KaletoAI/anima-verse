@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { type ItemRef } from '../../lib/refs'
 import { GROUND_ROOM_ID, isFloorRoom, roomLabel, type Location, type Room } from './worldTypes'
@@ -46,8 +47,11 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
     }
   }, [draft, location, room.id, onChanged, t, toast])
 
-  const remove = useCallback(async () => {
-    if (!window.confirm(t('Remove room "{name}"?').replace('{name}', room.name || room.id || ''))) return
+  // The click arms the in-app question, the dialog at the end removes.
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const remove = useCallback(() => { setConfirmRemove(true) }, [])
+  const doRemove = useCallback(async () => {
+    setConfirmRemove(false)
     try {
       const rooms = (location.rooms || []).filter((r) => r.id !== room.id)
       await apiPut(`/world/locations/${encodeURIComponent(location.id)}`, { rooms })
@@ -237,6 +241,17 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
         <RoomItems locationId={location.id} roomId={room.id || ''} items={items} />
       </div>
       )}
+
+      <ConfirmDialog
+        open={confirmRemove}
+        title={t('Remove room')}
+        message={t('Room "{name}" is removed from this location, with everything placed in it.')
+          .replace('{name}', room.name || room.id || '')}
+        confirmLabel={t('Remove')}
+        danger
+        onConfirm={() => { void doRemove() }}
+        onClose={() => setConfirmRemove(false)}
+      />
     </>
   )
 }

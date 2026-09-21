@@ -9,6 +9,7 @@ import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import { Silhouette } from '../../components/Silhouette'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
 import { useEnlarge } from '../../components/ZoomButton'
@@ -280,9 +281,16 @@ export function ItemsTab() {
     }
   }, [draft, loadOwners, reload, t, toast])
 
-  const remove = useCallback(async () => {
+  // The question is an in-app dialog: `remove` only arms it, `confirmRemove`
+  // below deletes.
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const remove = useCallback(() => {
     if (!draft || draft.isNew) return
-    if (!window.confirm(t('Delete item "{name}"?').replace('{name}', draft.name || draft.id))) return
+    setConfirmRemove(true)
+  }, [draft])
+  const doRemove = useCallback(async () => {
+    setConfirmRemove(false)
+    if (!draft || draft.isNew) return
     try {
       await apiDelete(`/inventory/items/${encodeURIComponent(draft.id)}`)
       toast(t('Deleted'))
@@ -633,6 +641,17 @@ export function ItemsTab() {
           <div className="ga-placeholder">{t('Select an item to manage image and owners.')}</div>
         )}
       </aside>
+
+      <ConfirmDialog
+        open={confirmRemove}
+        title={t('Delete item')}
+        message={t('Item "{name}" is removed from the world, including every copy characters carry.')
+          .replace('{name}', draft ? draft.name || draft.id : '')}
+        confirmLabel={t('Delete')}
+        danger
+        onConfirm={() => { void doRemove() }}
+        onClose={() => setConfirmRemove(false)}
+      />
     </div>
   )
 }

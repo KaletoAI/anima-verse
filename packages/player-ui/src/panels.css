@@ -349,6 +349,10 @@
 .ig-act.ig-del { margin-left: auto; }
 .ig-like:hover, .ig-like.ig-liked { color: #ed4956; }
 .ig-del:hover { color: #ed4956; }
+.ig-confirm { display: flex; align-items: center; gap: 8px; margin: 0 10px 6px; padding: 6px 8px; border-radius: 6px;
+  font-size: 12.5px; background: rgba(224,86,86,0.14); border: 1px solid rgba(224,86,86,0.4); }
+.ig-confirm-yes { border: 1px solid #e05656; background: #e05656; color: #fff; border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.ig-confirm-no { border: 1px solid var(--border, #30363d); background: transparent; color: inherit; border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 .ig-likedby { padding: 0 10px; font-size: 11px; opacity: 0.7; }
 .ig-caption { padding: 4px 10px; font-size: 13px; white-space: pre-wrap; }
 .ig-hashtag, .ig-mention { color: #4493f8; }

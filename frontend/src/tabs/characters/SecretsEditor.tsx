@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 
 /**
  * Per-character secrets editor (Characters → Secrets), ported from the legacy
@@ -124,9 +125,14 @@ export function SecretsEditor({ character }: { character: string }) {
     }
   }, [character, editingId, form, reload, t, toast])
 
-  const remove = useCallback(
-    async (s: Secret) => {
-      if (!window.confirm(t('Delete this secret?'))) return
+  // The click arms the in-app question; the dialog below performs the delete.
+  const [pendingDelete, setPendingDelete] = useState<Secret | null>(null)
+  const remove = useCallback((s: Secret) => { setPendingDelete(s) }, [])
+  const confirmRemove = useCallback(
+    async () => {
+      const s = pendingDelete
+      setPendingDelete(null)
+      if (!s) return
       try {
         await apiDelete(`/secrets/${encodeURIComponent(character)}/${encodeURIComponent(s.id)}`)
         await reload()
@@ -134,7 +140,7 @@ export function SecretsEditor({ character }: { character: string }) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [character, reload, t, toast],
+    [character, pendingDelete, reload, t, toast],
   )
 
   const generate = useCallback(async () => {
@@ -293,6 +299,16 @@ export function SecretsEditor({ character }: { character: string }) {
           </div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={t('Delete secret')}
+        message={t('The secret is removed from this character for good.')}
+        confirmLabel={t('Delete')}
+        danger
+        onConfirm={() => { void confirmRemove() }}
+        onClose={() => setPendingDelete(null)}
+      />
     </div>
   )
 }

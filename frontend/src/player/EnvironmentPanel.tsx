@@ -84,6 +84,15 @@ export function EnvironmentPanel({
   const [rendering, setRendering] = useState(false)
   const [renderErr, setRenderErr] = useState('')
   const [renderWarn, setRenderWarn] = useState('')
+  // The place the render belongs to, read at WRITE time, never from a closure:
+  // the panel is not remounted on travel (no `key` in PlayerApp), so a
+  // `requestRender` that captured `locationId` would still stamp the place the
+  // panel was mounted in onto a scene rendered somewhere else. A ref also
+  // covers the request that is in flight while the player arrives elsewhere —
+  // the server rendered the place it sees now, and so does this. Kept up to
+  // date on every render like posRef/bgIdRef below.
+  const locationIdRef = useRef(locationId)
+  locationIdRef.current = locationId
   const requestRender = useCallback(async (force: boolean) => {
     setRendering(true)
     setRenderErr('')
@@ -94,7 +103,7 @@ export function EnvironmentPanel({
       setRenderSig(d.sig || '')
       try {
         localStorage.setItem('play-scene-sig', d.sig || '')
-        localStorage.setItem('play-scene-sig-loc', locationId)
+        localStorage.setItem('play-scene-sig-loc', locationIdRef.current)
       } catch { /* ignore */ }
       setRenderWarn(d.warning || '')
       setRenderNonce((n) => n + 1)

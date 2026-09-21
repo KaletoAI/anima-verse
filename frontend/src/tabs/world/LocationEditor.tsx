@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { type ItemRef } from '../../lib/refs'
@@ -166,8 +167,11 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
     }
   }, [draft, location.id, onChanged, t, toast])
 
-  const remove = useCallback(async () => {
-    if (!window.confirm(t('Delete location "{name}"?').replace('{name}', location.name))) return
+  // The click arms the in-app question, the dialog at the end deletes.
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const remove = useCallback(() => { setConfirmRemove(true) }, [])
+  const doRemove = useCallback(async () => {
+    setConfirmRemove(false)
     try {
       await apiDelete(`/world/locations/${encodeURIComponent(location.name)}`)
       toast(t('Deleted'))
@@ -717,6 +721,17 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
         : tab === '2d' ? tab2d
         : tab === '3d' ? tab3d
         : tabFloor}
+
+      <ConfirmDialog
+        open={confirmRemove}
+        title={t('Delete location')}
+        message={t('Location "{name}" is deleted with all its rooms; characters standing there lose their place.')
+          .replace('{name}', location.name)}
+        confirmLabel={t('Delete')}
+        danger
+        onConfirm={() => { void doRemove() }}
+        onClose={() => setConfirmRemove(false)}
+      />
     </>
   )
 }

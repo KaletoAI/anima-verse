@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -262,17 +263,24 @@ export function IntentsTab() {
     [reload, t, toast],
   )
 
-  const handleDelete = useCallback(
-    async (id: string, title: string) => {
-      if (!window.confirm(t('Delete intent "{x}"?').replace('{x}', title))) return
+  // The click arms the in-app question, the dialog at the end deletes.
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null)
+  const handleDelete = useCallback((id: string, title: string) => {
+    setPendingDelete({ id, title })
+  }, [])
+  const confirmDelete = useCallback(
+    async () => {
+      const target = pendingDelete
+      setPendingDelete(null)
+      if (!target) return
       try {
-        await apiDelete(`/intents/${encodeURIComponent(id)}`)
+        await apiDelete(`/intents/${encodeURIComponent(target.id)}`)
         await reload()
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [reload, t, toast],
+    [pendingDelete, reload, t, toast],
   )
 
   return (
@@ -537,6 +545,17 @@ export function IntentsTab() {
           </div>
         </form>
       </section>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={t('Delete intent')}
+        message={t('Intent "{x}" is deleted; the character stops pursuing it.')
+          .replace('{x}', pendingDelete ? pendingDelete.title : '')}
+        confirmLabel={t('Delete')}
+        danger
+        onConfirm={() => { void confirmDelete() }}
+        onClose={() => setPendingDelete(null)}
+      />
     </div>
   )
 }

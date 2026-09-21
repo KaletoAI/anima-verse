@@ -239,45 +239,49 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
     [drafts, reload, t, toast],
   )
 
-  const remove = useCallback(
-    async (p: Post) => {
-      if (!window.confirm(t('Delete this post?'))) return
-      try {
-        await apiDelete(`/instagram/post/${encodeURIComponent(p.id)}`)
-        await reload()
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      }
-    },
-    [reload, t, toast],
-  )
+  // The three deletions ask INSIDE the post they belong to — the same inline
+  // confirmation strip GalleryPanel uses. A native `window.confirm` is no
+  // option here: this panel runs in the /play grid AND in the 3D client's HUD,
+  // where a browser dialog blocks the render loop and is suppressed outright
+  // while the pointer is locked — the click then appears to do nothing.
+  // At most one strip is open, and it is always the one of `pending.postId`.
+  const [pending, setPending] = useState<
+    { postId: string; kind: 'post' | 'image' | 'animation'; filename?: string } | null
+  >(null)
+  // Only a post that is still in the feed may keep an open question.
+  useEffect(() => {
+    setPending((cur) => (cur && (posts || []).some((p) => p.id === cur.postId) ? cur : null))
+  }, [posts])
 
-  const removeCarouselImage = useCallback(
-    async (p: Post, filename: string) => {
-      if (!filename || !window.confirm(t('Remove this image from the post?'))) return
-      try {
-        await apiDelete(
-          `/instagram/post/${encodeURIComponent(p.id)}/image/${encodeURIComponent(filename)}`,
-        )
-        await reload()
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-      }
-    },
-    [reload, t, toast],
-  )
+  const askRemove = useCallback((p: Post) => {
+    setPending({ postId: p.id, kind: 'post' })
+  }, [])
+  const askRemoveCarouselImage = useCallback((p: Post, filename: string) => {
+    if (!filename) return
+    setPending({ postId: p.id, kind: 'image', filename })
+  }, [])
+  const askDeleteAnimation = useCallback((p: Post) => {
+    setPending({ postId: p.id, kind: 'animation' })
+  }, [])
 
-  const deleteAnimation = useCallback(
-    async (p: Post) => {
-      if (!window.confirm(t('Delete this animation? The image stays.'))) return
+  const runPending = useCallback(
+    async () => {
+      const req = pending
+      setPending(null)
+      if (!req) return
+      const base = `/instagram/post/${encodeURIComponent(req.postId)}`
+      const path =
+        req.kind === 'post' ? base
+          : req.kind === 'animation' ? `${base}/animation`
+            : `${base}/image/${encodeURIComponent(req.filename || '')}`
       try {
-        await apiDelete(`/instagram/post/${encodeURIComponent(p.id)}/animation`)
+        await apiDelete(path)
         await reload()
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [reload, t, toast],
+    [pending, reload, t, toast],
   )
 
   // Poll the queue for the regenerate task; reload the feed each tick so the
@@ -458,7 +462,7 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
                       <button
                         className="ig-carousel-del"
                         title={t('Remove this image')}
-                        onClick={() => removeCarouselImage(p, filenames[idx] || '')}
+                        onClick={() => askRemoveCarouselImage(p, filenames[idx] || '')}
                       >
                         🗑
                       </button>
@@ -504,7 +508,7 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
                 </button>
               ) : null}
               {p.video_url ? (
-                <button className="ig-act" title={t('Delete animation')} onClick={() => deleteAnimation(p)}>
+                <button className="ig-act" title={t('Delete animation')} onClick={() => askDeleteAnimation(p)}>
                   <span style={{ position: 'relative', display: 'inline-block', lineHeight: 1 }}>
                     🎬
                     <span style={{ position: 'absolute', left: -2, right: -2, top: '46%', height: 2,
@@ -514,10 +518,28 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
               ) : null}
               <button className="ig-act ig-del"
                 title={hasCarousel ? t('Delete current image') : t('Delete post')}
-                onClick={() => (hasCarousel ? removeCarouselImage(p, filenames[idx] || '') : remove(p))}>
+                onClick={() => (hasCarousel ? askRemoveCarouselImage(p, filenames[idx] || '') : askRemove(p))}>
                 🗑️
               </button>
             </div>
+
+            {pending && pending.postId === p.id ? (
+              <div className="ig-confirm">
+                <span style={{ flex: 1 }}>
+                  {pending.kind === 'post'
+                    ? t('Delete this post?')
+                    : pending.kind === 'animation'
+                      ? t('Delete this animation? The image stays.')
+                      : t('Remove this image from the post?')}
+                </span>
+                <button className="ig-confirm-yes" onClick={() => { void runPending() }}>
+                  {pending.kind === 'image' ? t('Remove') : t('Delete')}
+                </button>
+                <button className="ig-confirm-no" onClick={() => setPending(null)}>
+                  {t('Cancel')}
+                </button>
+              </div>
+            ) : null}
 
             {p.liked_by && p.liked_by.length > 0 ? (
               <div className="ig-likedby" title={p.liked_by.join(', ')}>

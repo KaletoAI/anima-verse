@@ -5,6 +5,7 @@ import { useToast } from '../../lib/Toast'
 import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { ImportButton } from '../../components/ImportExport'
+import { PromptDialog } from '../../components/PromptDialog'
 import { loadItems, type ItemRef } from '../../lib/refs'
 import { STYLE_HINT_OPTIONS } from '../../lib/styleHints'
 import { DANGER_LEVELS, GROUND_ROOM_ID, floorRoomLevel, isFloorRoom, roomLabel, type Location, type Selection } from './worldTypes'
@@ -76,11 +77,16 @@ export function WorldTab() {
     } catch { /* malformed key — ignore */ }
   }, [])
 
-  const newLocation = useCallback(async () => {
-    const name = window.prompt(t('Name of the new location'))
-    if (!name?.trim()) return
+  // Both name questions are in-app dialogs (PromptDialog): the toolbar button
+  // only opens the dialog, its submit — which never hands over an empty or
+  // untrimmed value — creates. `copyName` is the prefill of the copy dialog.
+  const [askNewName, setAskNewName] = useState(false)
+  const [copyName, setCopyName] = useState('')
+  const newLocation = useCallback(() => { setAskNewName(true) }, [])
+  const createLocation = useCallback(async (name: string) => {
+    setAskNewName(false)
     try {
-      await apiPost('/world/locations', { name: name.trim(), description: '', rooms: [] })
+      await apiPost('/world/locations', { name, description: '', rooms: [] })
       toast(t('Location created'))
       await reload()
     } catch (e) {
@@ -88,15 +94,20 @@ export function WorldTab() {
     }
   }, [reload, t, toast])
 
-  const copyLocation = useCallback(async () => {
+  const copyLocation = useCallback(() => {
     if (!locations || !selection || selection.kind !== 'location') return
     const src = locations.find((l) => l.id === selection.locationId)
     if (!src) return
-    const newName = window.prompt(t('Name of the copy'), `${src.name} (copy)`)
-    if (!newName?.trim()) return
+    setCopyName(`${src.name} (copy)`)
+  }, [locations, selection])
+  const doCopyLocation = useCallback(async (newName: string) => {
+    setCopyName('')
+    if (!locations || !selection || selection.kind !== 'location') return
+    const src = locations.find((l) => l.id === selection.locationId)
+    if (!src) return
     try {
       await apiPost('/world/locations', {
-        name: newName.trim(),
+        name: newName,
         description: src.description || '',
         // Drop each room's id so the backend assigns FRESH ones — otherwise the
         // copy keeps the source's room IDs and everything keyed by room id
@@ -221,6 +232,24 @@ export function WorldTab() {
           </aside>
         </>
       )}
+
+      <PromptDialog
+        open={askNewName}
+        title={t('New place')}
+        label={t('Name of the new location')}
+        confirmLabel={t('Create')}
+        onSubmit={(name) => { void createLocation(name) }}
+        onClose={() => setAskNewName(false)}
+      />
+      <PromptDialog
+        open={!!copyName}
+        title={t('Copy place')}
+        label={t('Name of the copy')}
+        initialValue={copyName}
+        confirmLabel={t('Copy')}
+        onSubmit={(name) => { void doCopyLocation(name) }}
+        onClose={() => setCopyName('')}
+      />
     </div>
   )
 }

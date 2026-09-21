@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -216,9 +217,15 @@ export function SchedulerTab() {
     return calendar.seasons.reduce((max, s) => Math.max(max, s.days), 0) || 0
   }, [calendar.seasons, form.season])
 
-  const handleDelete = useCallback(
-    async (id: string) => {
-      if (!window.confirm(t('Delete job {id}?').replace('{id}', id))) return
+  // Asking and deleting are two steps: the question is an in-app dialog, so
+  // the click only arms it and the dialog's confirm does the work.
+  const [pendingDelete, setPendingDelete] = useState('')
+  const handleDelete = useCallback((id: string) => { setPendingDelete(id) }, [])
+  const confirmDelete = useCallback(
+    async () => {
+      const id = pendingDelete
+      setPendingDelete('')
+      if (!id) return
       try {
         await apiDelete(`/scheduler/jobs/${encodeURIComponent(id)}`)
       } catch (e) {
@@ -226,7 +233,7 @@ export function SchedulerTab() {
       }
       await reload()
     },
-    [reload, t, toast],
+    [pendingDelete, reload, t, toast],
   )
 
   const handleToggle = useCallback(
@@ -482,6 +489,16 @@ export function SchedulerTab() {
           </p>
         </form>
       </section>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={t('Delete job')}
+        message={t('Job {id} is removed from the scheduler.').replace('{id}', pendingDelete)}
+        confirmLabel={t('Delete')}
+        danger
+        onConfirm={() => { void confirmDelete() }}
+        onClose={() => setPendingDelete('')}
+      />
     </div>
   )
 }

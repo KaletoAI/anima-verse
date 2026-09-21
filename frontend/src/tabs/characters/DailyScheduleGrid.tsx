@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -205,9 +206,11 @@ export function DailyScheduleGrid({
     }
   }, [character, enabled, onSaved, t, toast])
 
-  const clearAll = useCallback(async () => {
-    if (!window.confirm(t('Delete the whole daily rhythm for {name}?').replace('{name}', character)))
-      return
+  // The click only arms the in-app question; the dialog at the end clears.
+  const [confirmClear, setConfirmClear] = useState(false)
+  const clearAll = useCallback(() => { setConfirmClear(true) }, [])
+  const doClearAll = useCallback(async () => {
+    setConfirmClear(false)
     setSaving(true)
     try {
       await apiDelete(`/scheduler/daily-schedule?character=${encodeURIComponent(character)}`)
@@ -336,6 +339,17 @@ export function DailyScheduleGrid({
           {t('Delete schedule')}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={confirmClear}
+        title={t('Delete schedule')}
+        message={t('The whole daily rhythm of {name} is deleted, together with the scheduler jobs it created.')
+          .replace('{name}', character)}
+        confirmLabel={t('Delete')}
+        danger
+        onConfirm={() => { void doClearAll() }}
+        onClose={() => setConfirmClear(false)}
+      />
     </div>
   )
 }
