@@ -718,11 +718,17 @@ def build_memory_list(character_name: str,
 
 
 def build_memory_relationships(character_name: str,
-                               history_limit: int = 10) -> Dict[str, Any]:
+                               history_limit: int = 10,
+                               lang: str = "en") -> Dict[str, Any]:
     """Tab "Relationships": sentiment, strength, tension + last N events.
 
     `memories_count` = how many memories have this partner set as
     related_character — a click in the frontend filters tab 2.
+
+    "Last met" is WORLD time: `last_interaction_game` is the canonical game
+    stamp and `last_interaction_label` the label the server renders for it —
+    the client never formats a game stamp itself. The system stamp is not in
+    the payload; nothing here sorts or filters by it.
     """
     from app.models.relationship import get_character_relationships
     from app.models.memory import load_memories
@@ -772,7 +778,9 @@ def build_memory_relationships(character_name: str,
             "sentiment_other_to_self": round(other_sent, 3),
             "romantic_tension": round(r.get("romantic_tension", 0.0), 3),
             "interaction_count": r.get("interaction_count", 0),
-            "last_interaction": r.get("last_interaction", ""),
+            "last_interaction_game": r.get("last_interaction_game", ""),
+            "last_interaction_label": game_label(
+                r.get("last_interaction_game", ""), lang),
             "memories_count": rel_count_by_partner.get(partner, 0),
             "history_recent": recent,
         })

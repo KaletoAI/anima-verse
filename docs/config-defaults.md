@@ -176,7 +176,12 @@ bekommt nur die festen Default-Deltas.
 
 Der Beziehungs-Zerfall ist nicht einstellbar: die Raten stehen als
 `DECAY_STRENGTH_PER_WEEK` (1.0) und `DECAY_ROMANTIC_PER_WEEK` (0.02) in
-`app/core/relationship_decay.py`.
+`app/core/relationship_decay.py`. Gemessen wird auf der SPIEL-Uhr — eine
+"Woche" sind sieben Spieltage (`GameDuration.of(days=7)`), die Schonfrist
+ebenfalls sieben Spieltage, und pro Lauf werden hoechstens zwei Wochen
+verrechnet. Der periodische Job wird stuendlich (Echtzeit) eingereiht; ein
+Paar wird erst wieder angefasst, wenn seit seinem `last_decay_game` ein ganzer
+Spieltag vergangen ist. Steht die Weltuhr still, zerfaellt nichts.
 
 ---
 

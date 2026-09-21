@@ -2431,14 +2431,19 @@ async def memory_consolidate_now(character_name: str,
 
 @router.get("/{character_name}/memory/relationships")
 def memory_relationships(character_name: str,
-                         history_limit: int = 10) -> Dict[str, Any]:
-    """Tab "Beziehungen": Sentiment, Strength, Tension + letzte N Events.
+                         history_limit: int = 10,
+                         lang: str = "en") -> Dict[str, Any]:
+    """Tab "Relationships": sentiment, strength, tension + last N events.
 
-    `memories_count` = wie viele Memories haben diesen Partner als
-    related_character gesetzt — Klick im Frontend filtert Tab 2.
+    `memories_count` = how many memories have this partner set as
+    related_character — a click in the frontend filters tab 2.
+
+    ``lang`` picks the language of the readable world-date label that
+    accompanies the pair's last meeting — the server renders it, the client
+    only shows it.
     """
     return character_ops.build_memory_relationships(
-        character_name, history_limit=history_limit)
+        character_name, history_limit=history_limit, lang=lang)
 
 
 @router.get("/{character_name}/memory/history")

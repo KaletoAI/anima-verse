@@ -224,7 +224,8 @@ stops acting autonomously).
 - **Story arcs** progress in the background with beats and per-beat scene images; the player reads
   them spoiler-free in the quest book. The Game-Admin's **Storyteller** tab lists them (title,
   status, participants, beats) and can **Generate arc** by hand or delete one.
-- **Relationships** with automatic decay over time and periodic summaries.
+- **Relationships** with automatic decay over GAME time (a "week" is seven game days;
+  a frozen or slow world clock slows the decay with it) and periodic summaries.
 - **Phone panel:** a phone-style chat layout in `/play` for remote conversations, with a
   world-configurable frame.
 

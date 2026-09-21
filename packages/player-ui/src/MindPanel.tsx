@@ -77,7 +77,10 @@ interface BondEvent { timestamp: string; type: string; initiator: string; summar
 interface BondItem {
   partner: string; type: string; strength: number
   sentiment_self_to_other: number; sentiment_other_to_self: number
-  romantic_tension: number; interaction_count: number; last_interaction: string
+  romantic_tension: number; interaction_count: number
+  // "Last met" in WORLD time: the canonical game stamp plus the label the
+  // server renders for it — the client never formats a game stamp itself.
+  last_interaction_game: string; last_interaction_label: string
   memories_count: number; history_recent: BondEvent[]
 }
 
@@ -639,23 +642,24 @@ function MemoriesView({ character, initialRelated = '' }: { character: string; i
 }
 
 // ---------------------------------------------------------------------------
-// Sektion „Beziehungen“ — Sentiment/Tension/Interaktionen je Partner
+// "Relationships" section — sentiment/tension/interactions per partner
 // ---------------------------------------------------------------------------
 function BondsView({ character, onOpenMemories }: {
   character: string; onOpenMemories?: (partner: string) => void
 }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const enc = encodeURIComponent(character)
   const [items, setItems] = useState<BondItem[] | null>(null)
-  const [open, setOpen] = useState<string>('')   // Partner mit ausgeklappter Historie
+  const [open, setOpen] = useState<string>('')   // partner whose history is expanded
 
   useEffect(() => {
     let alive = true
-    apiGet<{ items: BondItem[] }>(`/characters/${enc}/memory/relationships?history_limit=10`)
+    const params = new URLSearchParams({ history_limit: '10', lang })
+    apiGet<{ items: BondItem[] }>(`/characters/${enc}/memory/relationships?${params.toString()}`)
       .then((d) => { if (alive) setItems(d.items || []) })
       .catch(() => { if (alive) setItems([]) })
     return () => { alive = false }
-  }, [enc])
+  }, [enc, lang])
 
   if (items === null) return <EmptyState small icon="journal" title={t('Loading…')} />
   if (items.length === 0) return <EmptyState small icon="journal" title={t('No relationships')} />
@@ -682,7 +686,7 @@ function BondsView({ character, onOpenMemories }: {
               )}
               <span style={{ marginLeft: 'auto', flex: '0 0 auto', opacity: 0.5, fontSize: '0.8em' }}>{expanded ? '▾' : '▸'}</span>
             </div>
-            {/* Gerichtete Zuneigung als Balken (alte-UI-Darstellung) */}
+            {/* Directed affection as bars */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 5 }}>
               <SentBar v={b.sentiment_self_to_other} label={`${character} → ${b.partner}`} />
               <SentBar v={b.sentiment_other_to_self} label={`${b.partner} → ${character}`} />
@@ -690,7 +694,8 @@ function BondsView({ character, onOpenMemories }: {
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'baseline',
                           fontSize: '0.74em', opacity: 0.6, marginTop: 4 }}>
               <span>{t('{n}×').replace('{n}', String(b.interaction_count))}</span>
-              {b.last_interaction ? <span>· {sinceOf(b.last_interaction)}</span> : null}
+              {b.last_interaction_label
+                ? <span title={t('last met')}>· {b.last_interaction_label}</span> : null}
               {b.memories_count > 0 && onOpenMemories && (
                 <button onClick={(ev) => { ev.stopPropagation(); onOpenMemories(b.partner) }}
                   style={{ marginLeft: 'auto', background: 'none', border: 0, padding: 0, cursor: 'pointer',

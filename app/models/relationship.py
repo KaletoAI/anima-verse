@@ -1,20 +1,26 @@
 """Character Relationship / Social Graph Model.
 
-Zentrales Beziehungsmodell zwischen Charakteren.  Speichert Typ, Staerke,
-Sentiment (asymmetrisch) und eine kompakte Interaktions-History.
+The central relationship model between characters. Stores type, strength,
+sentiment (asymmetric) and a compact interaction history.
 
-Storage: world.db — Tabelle relationships
+Storage: world.db — table ``relationships``
 
-Typ-Logik:
-  - romantic_tension (0-1) unterscheidet romantische von rein freundschaftlichen
-    Beziehungen.  Beide koennen hohe Staerke haben.
-  - Typen: friend, romantic, rival, acquaintance, enemy, neutral
+Type logic:
+  - ``romantic_tension`` (0-1) separates romantic from purely friendly
+    relationships. Both can have a high strength.
+  - types: friend, romantic, rival, acquaintance, enemy, neutral
+
+Two clocks, two stamps: ``last_interaction`` is the SYSTEM stamp and only
+answers technical questions (it becomes the row's ``ts`` column, which orders
+the rows), while ``last_interaction_game`` is the canonical GAME stamp of the
+same event — everything the world says about WHEN two characters last met, and
+the only span the decay job measures (``app/core/relationship_decay.py``).
 """
 import json
 import uuid
 from datetime import datetime
 
-from app.core.timeutils import utc_now_iso
+from app.core.timeutils import game_time, utc_now_iso
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
@@ -58,7 +64,13 @@ def sentiment_label(value: float) -> str:
 # ---------------------------------------------------------------------------
 
 def _now_iso() -> str:
+    """SYSTEM stamp — row ordering and other technical questions."""
     return utc_now_iso()
+
+
+def _now_game() -> str:
+    """GAME stamp — the world's own answer to "when did this happen?"."""
+    return game_time().canonical()
 
 
 def _new_id() -> str:
@@ -71,7 +83,7 @@ def _sort_pair(a: str, b: str) -> Tuple[str, str]:
 
 
 def _row_to_rel(row) -> Dict[str, Any]:
-    """Konvertiert eine DB-Row in das Legacy-Dict-Format."""
+    """Convert a DB row into the dict format the callers use."""
     d = dict(row)
     meta = {}
     try:
@@ -96,6 +108,9 @@ def _row_to_rel(row) -> Dict[str, Any]:
     rel.setdefault("romantic_tension", 0.0)
     rel.setdefault("interaction_count", 0)
     rel.setdefault("last_interaction", d.get("ts", _now_iso()))
+    # ``last_interaction_game`` deliberately gets NO default here: its absence
+    # is what marks a pair written before the game stamps existed, and the
+    # decay job stamps such a pair once instead of charging it a backlog.
     rel.setdefault("history", [])
     rel.setdefault("created_at", d.get("ts", _now_iso()))
     rel["_db_id"] = d.get("id")
@@ -232,15 +247,17 @@ def _save_relationship(rel: Dict[str, Any]):
     a, b = _sort_pair(rel.get("character_a", ""), rel.get("character_b", ""))
     if not a or not b:
         return
+    # The row's ``ts`` column orders the rows — a technical question, so it
+    # carries the SYSTEM stamp. The world stamp travels in the meta blob.
     ts = rel.get("last_interaction", _now_iso())
-    # Content: Kern-Felder die abfragbar sein sollen
+    # Content: the core fields that must stay queryable
     content = {k: rel[k] for k in
                ("type", "strength", "sentiment_a_to_b", "sentiment_b_to_a",
                 "romantic_tension", "interaction_count")
                if k in rel}
     content["character_a"] = a
     content["character_b"] = b
-    # Meta: Rest
+    # Meta: everything else
     meta = {k: v for k, v in rel.items()
             if k not in ("character_a", "character_b", "_db_id",
                          "type", "strength", "sentiment_a_to_b", "sentiment_b_to_a",
@@ -334,11 +351,12 @@ def _ensure_relationship(char_a: str, char_b: str
     """Return (all_rels, target_rel), creating target if needed."""
     existing = get_relationship(char_a, char_b)
     if existing:
-        # Gib eine Dummy-Liste zurueck damit der Aufrufer save_relationships aufrufen kann
+        # Hand back a one-element list so the caller can call save_relationships
         return [existing], existing
 
     a, b = _sort_pair(char_a, char_b)
     now = _now_iso()
+    now_game = _now_game()
     new_rel: Dict[str, Any] = {
         "id": _new_id(),
         "character_a": a,
@@ -350,10 +368,11 @@ def _ensure_relationship(char_a: str, char_b: str
         "romantic_tension": 0.0,
         "interaction_count": 0,
         "last_interaction": now,
+        "last_interaction_game": now_game,
         "history": [],
         "created_at": now,
     }
-    # Direkt in DB schreiben
+    # Write straight to the DB
     _save_relationship(new_rel)
     return [new_rel], new_rel
 
@@ -445,6 +464,7 @@ def record_interaction(char_a: str,
     # Interaction count
     rel["interaction_count"] = rel.get("interaction_count", 0) + 1
     rel["last_interaction"] = _now_iso()
+    rel["last_interaction_game"] = _now_game()
 
     # Append to history (include per-entry sentiment delta for diary)
     avg_sent_delta = round((sentiment_delta_a + sentiment_delta_b) / 2.0, 3)

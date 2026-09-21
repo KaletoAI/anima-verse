@@ -28,7 +28,8 @@ The five rules, each reported as ``file:line  RULE  <line>``:
   C  ``parse_iso(`` on the same line as a PERSISTED GAME stamp
      (``started_at_game``, ``state_flag_since``, ``game_ts``,
      ``game_timestamp``, ``_registered_game``, ``sleep_start``, ``expires_at``,
-     ``run_date``, ``anchor_game``). Those are canonical ``Y0002-D109T14:00:00``
+     ``run_date``, ``anchor_game``, ``last_interaction_game``,
+     ``last_decay_game``). Those are canonical ``Y0002-D109T14:00:00``
      strings — ``parse_iso`` would raise, or worse, read a legacy row and hand
      back a real date.
   D  day keys built from a real date in ``app/core/day_consolidation.py``:
@@ -113,7 +114,8 @@ DATETIME_MEMBERS = (".strftime(", ".weekday()", ".month", ".date()",
 # ── rule C ──────────────────────────────────────────────────────────────
 GAME_STAMP_FIELDS = ("started_at_game", "state_flag_since", "game_ts",
                      "game_timestamp", "_registered_game", "sleep_start",
-                     "expires_at", "run_date", "anchor_game")
+                     "expires_at", "run_date", "anchor_game",
+                     "last_interaction_game", "last_decay_game")
 # The migration is the ONE place that legitimately reads a legacy ISO stamp
 # out of these fields — that is its whole job.
 WHITELIST_C = {"app/core/game_calendar_migration.py"}
@@ -261,6 +263,8 @@ PROBES: Tuple[Tuple[str, str, str], ...] = (
     ("app/core/travel_engine.py",
      '    started = parse_iso(journey["started_at_game"])', "C"),
     ("app/models/character.py", '    since = parse_iso(p["state_flag_since"])', "C"),
+    ("app/core/relationship_decay.py",
+     '    last = parse_iso(rel["last_interaction_game"])', "C"),
     ("app/core/day_consolidation.py",
      '    key = utc_now().strftime("%Y-%m-%d")', "D"),
     ("app/core/memory_service.py",

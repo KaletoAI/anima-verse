@@ -1,31 +1,31 @@
-"""World-Admin-Tick — zentraler Hintergrund-Job fuer alle administrativen
-Welt-Aktionen.
+"""World admin tick — the central background job for all administrative
+world actions.
 
-Frueher liefen mehrere periodic-Tasks parallel (status, assignment-expiry,
-random-events, relationship-decay). Konsolidiert auf EINEN Tick mit
-konfigurierbarem Intervall (Default 60s, ``world.admin_tick_interval_seconds``).
-Sub-Tasks haben eigene Frequenzen (per Modulo / Last-Run-Tracking) und
-laufen sequenziell innerhalb des Ticks — verhindert Race-Conditions
-zwischen den vorherigen parallelen Tasks und gibt einen einzigen
-Anpassungspunkt fuer die Welt-Tick-Frequenz.
+Several periodic tasks used to run in parallel (status, assignment expiry,
+random events, relationship decay). They are consolidated into ONE tick with a
+configurable interval (default 60s, ``world.admin_tick_interval_seconds``).
+Sub-tasks have their own frequencies (via modulo / last-run tracking) and run
+sequentially inside the tick — which removes the race conditions between the
+formerly parallel tasks and gives one single place to adjust the world tick
+frequency.
 
-Sub-Tasks die laufen pro Tick (mit eigener Sub-Frequenz):
-    - status_tick               — apply_hourly_status_tick (interner 1h-Gate)
-    - force_rules               — Pruefe alle Force-Rules pro Char (jeder Tick)
-    - assignment_expiry         — expire_overdue (jeder Tick)
-    - random_events_generate    — alle 3600s
-    - random_events_escalate    — alle 300s
-    - random_events_resolve     — alle 300s
-    - event_expiry              — alle 60s (GAME-Stunden-TTL der Events)
-    - relationship_decay        — alle 24h (Handler hat eigenen Cooldown)
+Sub-tasks that run per tick (each with its own sub-frequency):
+    - status_tick               — apply_hourly_status_tick (internal 1h gate)
+    - force_rules               — check every force rule per character (each tick)
+    - assignment_expiry         — expire_overdue (each tick)
+    - random_events_generate    — every 3600s
+    - random_events_escalate    — every 300s
+    - random_events_resolve     — every 300s
+    - event_expiry              — every 60s (the events' GAME-hour TTL)
+    - relationship_decay        — hourly (the handler decides per pair on the
+                                  GAME clock, at least one game day apart)
 
-Tick-Intervall ist im Game Admin → Settings → Server konfigurierbar.
-Bereich 10s-3600s. Jobs sind nicht einzeln deaktivierbar — wenn du sie
-nicht willst, setz das Intervall hoch oder deaktiviere die jeweilige
-Welt-Pause-Schalter.
+The tick interval is configurable in Game Admin → Settings → Server, range
+10s-3600s. Jobs cannot be disabled individually — if you do not want them,
+raise the interval or use the respective world pause switch.
 
 Public API:
-    start() / stop() — registriert vom server.py lifespan
+    start() / stop() — registered by the server.py lifespan
 """
 import asyncio
 from datetime import datetime
@@ -304,6 +304,15 @@ def _sub_event_expiry():
 
 
 def _sub_relationship_decay():
+    """Submit the relationship decay job.
+
+    Hourly, not daily: the decay spans are measured on the GAME clock, so a
+    world with a fast tick factor (or a deliberate clock jump) must be picked
+    up within the hour. The handler itself only touches a pair once a whole
+    GAME day has passed since that pair's last decay stamp, so an hourly
+    trigger costs nothing when the world clock barely moved — and nothing at
+    all while the world is frozen, where the periodic tick is skipped anyway.
+    """
     try:
         from app.core.task_queue import get_task_queue
         get_task_queue().submit(
@@ -486,7 +495,9 @@ _SUB_TASKS: List[tuple] = [
     # event can expire within a minute of real time; the block rules coupled
     # to a danger event are released with it.
     (_sub_event_expiry,              60,                    "event_expiry"),
-    (_sub_relationship_decay,        24 * 3600,             "relationship_decay"),
+    # 3600s — GAME-clock decay: the handler gates per pair on one game day,
+    # so the hourly trigger only decides how fast a clock jump is noticed.
+    (_sub_relationship_decay,        3600,                  "relationship_decay"),
     (_sub_variant_prune,             3600,                  "variant_prune"),
     (_sub_day_consolidation,         600,                   "day_consolidation"),
     (_sub_reap_orphaned_avatars,     300,                   "reap_orphaned_avatars"),
