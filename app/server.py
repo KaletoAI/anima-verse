@@ -563,9 +563,8 @@ async def lifespan(app: FastAPI):
     register_relationship_decay_handler()
     from app.core.intent_engine import register_intent_handlers
     register_intent_handlers()
-    from app.core.memory_service import register_consolidation_handler, register_migration_handler
+    from app.core.memory_service import register_consolidation_handler
     register_consolidation_handler()
-    register_migration_handler()
     from app.core.outfit_batch import register_outfit_batch_handler
     register_outfit_batch_handler()
     from app.core.npc_spawn import register_npc_spawn_handler
@@ -655,12 +654,6 @@ async def lifespan(app: FastAPI):
     from app.core.task_queue import get_task_queue
     get_task_queue().start()
     logger.info("Task-Queue Worker gestartet")
-
-    # Memory-System: Knowledge -> Memory Migration
-    logger.info("Memory-System: Migration pruefen...")
-    from app.core.memory_service import run_migration_for_all_users
-    run_migration_for_all_users()
-    logger.info("Memory-System bereit!")
 
     # Startup event: packages hook one-time bootstrap here (e.g. the
     # attraction package's romantic-interests extraction). Core names only
