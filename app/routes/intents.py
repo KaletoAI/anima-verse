@@ -12,8 +12,7 @@ from app.core.log import get_logger
 from app.core.timeutils import game_time
 from app.models.intents import (
     create_intent, get_intent, list_intents, update_intent,
-    delete_intent, cancel_intent, complete_intent, add_progress,
-    apply_trigger_on_create)
+    delete_intent, complete_intent, apply_trigger_on_create)
 
 logger = get_logger("intents_route")
 
@@ -120,36 +119,8 @@ def delete_route(intent_id: str) -> Dict[str, str]:
     return {"status": "deleted"}
 
 
-@router.post("/{intent_id}/cancel")
-def cancel_route(intent_id: str) -> Dict[str, str]:
-    if not cancel_intent(intent_id):
-        raise HTTPException(status_code=404, detail="Intent not found")
-    return {"status": "cancelled"}
-
-
 @router.post("/{intent_id}/complete")
 def complete_route(intent_id: str) -> Dict[str, str]:
     if not complete_intent(intent_id):
         raise HTTPException(status_code=404, detail="Intent not found")
     return {"status": "done"}
-
-
-@router.post("/{intent_id}/progress")
-async def progress_route(intent_id: str, request: Request) -> Dict[str, Any]:
-    import asyncio
-    data = await request.json()
-    return await asyncio.to_thread(_progress_route_sync, intent_id, data)
-
-
-def _progress_route_sync(intent_id: str, data: Any) -> Dict[str, Any]:
-    """The blocking body of ``progress_route`` — runs in the threadpool."""
-    character = (data.get("character") or "").strip()
-    note = (data.get("note") or "").strip()
-    if not character or not note:
-        raise HTTPException(status_code=400,
-                            detail="character and note are required")
-    result = add_progress(intent_id, character, note)
-    if not result:
-        raise HTTPException(status_code=404,
-                            detail="Intent or character not found")
-    return result

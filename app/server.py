@@ -12,7 +12,6 @@ class _SuppressHealthPolling(logging.Filter):
     _SUPPRESS = {
         "/queue/status",
         "/health",
-        "/notifications/unread-count",
     }
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -89,7 +88,7 @@ except Exception as _fje:
     logger.warning("furnish legacy job cleanup failed: %s", _fje)
 
 # Import routers
-from app.routes import auth, characters, chat, scheduler, instagram, world, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, intents, diary
+from app.routes import auth, characters, chat, scheduler, instagram, world, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, intents, diary
 from app.routes import admin_settings
 from app.routes import assets
 from app.routes import clip_catalog_loops
@@ -851,7 +850,6 @@ from app.routes import rules
 app.include_router(rules.router, tags=["rules"])
 from app.routes import content_packs
 app.include_router(content_packs.router)
-app.include_router(relationships.router, tags=["relationships"])
 app.include_router(intents.router, tags=["intents"])
 app.include_router(diary.router, tags=["diary"])
 app.include_router(secrets.router, tags=["secrets"])

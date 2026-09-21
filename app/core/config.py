@@ -1639,20 +1639,6 @@ def _atomic_write_json(path: Path, data: Any) -> None:
         raise
 
 
-def mask_sensitive(data: Any, _key: str = "") -> Any:
-    """Return a copy of data with sensitive values masked for display."""
-    if isinstance(data, dict):
-        result = {}
-        for k, v in data.items():
-            result[k] = mask_sensitive(v, k)
-        return result
-    if isinstance(data, list):
-        return [mask_sensitive(item, _key) for item in data]
-    if _is_sensitive(_key) and isinstance(data, str) and len(data) > 4:
-        return "***" + data[-4:]
-    return data
-
-
 def _resolve_path(obj: Any, path: str) -> Any:
     """Resolve a dot-notation path with optional array indices."""
     parts = re.split(r'\.|\[(\d+)\]', path)

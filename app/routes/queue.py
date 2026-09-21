@@ -105,32 +105,6 @@ def task_queue_status() -> Dict[str, Any]:
     return get_task_queue().get_status()
 
 
-@router.post("/tasks/{queue_name}/pause")
-async def pause_task_queue(queue_name: str) -> Dict[str, Any]:
-    """Pausiert eine Task-Queue (persistent, überlebt Neustart)."""
-    from app.core.task_queue import get_task_queue
-    get_task_queue().pause_queue(queue_name)
-    return {"status": "paused", "queue": queue_name}
-
-
-@router.post("/tasks/{queue_name}/resume")
-async def resume_task_queue(queue_name: str) -> Dict[str, Any]:
-    """Setzt eine pausierte Task-Queue fort."""
-    from app.core.task_queue import get_task_queue
-    get_task_queue().resume_queue(queue_name)
-    return {"status": "resumed", "queue": queue_name}
-
-
-@router.delete("/tasks/item/{task_id}")
-def cancel_bg_task(task_id: str) -> Dict[str, Any]:
-    """Bricht einen wartenden oder laufenden Background-Task ab."""
-    from app.core.task_queue import get_task_queue
-    ok = get_task_queue().cancel_task(task_id)
-    if ok:
-        return {"status": "cancelled", "task_id": task_id}
-    raise HTTPException(status_code=404, detail="Task nicht gefunden oder nicht pending/running")
-
-
 @router.post("/tasks/item/{task_id}/retry")
 def retry_bg_task(task_id: str) -> Dict[str, Any]:
     """Setzt einen fehlgeschlagenen Task auf 'pending' zurück."""
@@ -139,28 +113,6 @@ def retry_bg_task(task_id: str) -> Dict[str, Any]:
     if ok:
         return {"status": "retrying", "task_id": task_id}
     raise HTTPException(status_code=404, detail="Task nicht gefunden oder nicht failed/cancelled")
-
-
-@router.post("/tasks/item/{task_id}/move")
-def move_bg_task(task_id: str, queue_name: str = "") -> Dict[str, Any]:
-    """Verschiebt einen pending Task in eine andere Queue."""
-    if not queue_name:
-        raise HTTPException(status_code=400, detail="queue_name erforderlich")
-    from app.core.task_queue import get_task_queue
-    ok = get_task_queue().move_task(task_id, queue_name)
-    if ok:
-        return {"status": "moved", "task_id": task_id, "queue": queue_name}
-    raise HTTPException(status_code=404, detail="Task nicht gefunden oder nicht 'pending'")
-
-
-@router.post("/tasks/item/{task_id}/priority")
-def change_bg_task_priority(task_id: str, priority: int = 20) -> Dict[str, Any]:
-    """Ändert die Priorität eines pending Tasks (niedriger = schneller)."""
-    from app.core.task_queue import get_task_queue
-    ok = get_task_queue().change_priority(task_id, priority)
-    if ok:
-        return {"status": "updated", "task_id": task_id, "priority": priority}
-    raise HTTPException(status_code=404, detail="Task nicht gefunden oder nicht 'pending'")
 
 
 @router.delete("/tasks/clear")

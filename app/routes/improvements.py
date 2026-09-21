@@ -5,7 +5,7 @@ consumes.  Every decision lives in ``app/core/improvements`` — the engine owns
 the gates and the order, the store owns the rows, the registry owns the types.
 This module never names an improvement type.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -35,12 +35,6 @@ class CreateBody(BaseModel):
 class PreviewBody(BaseModel):
     type_id: str
     params: Dict[str, Any] = {}
-
-
-class PatchBody(BaseModel):
-    label: Optional[str] = None
-    params: Optional[Dict[str, Any]] = None
-    mode: Optional[str] = None
 
 
 class OrderBody(BaseModel):
@@ -166,26 +160,6 @@ def put_settings(body: SettingsBody) -> Dict[str, Any]:
     show the value that is really in effect."""
     store.set_settings(body.enabled, body.idle_minutes)
     return store.get_settings()
-
-
-@router.patch("/{improvement_id}")
-def patch_improvement(improvement_id: str, body: PatchBody) -> Dict[str, Any]:
-    improvement = _improvement_or_404(improvement_id)
-    fields: Dict[str, Any] = {}
-    if body.label is not None:
-        fields["label"] = body.label
-    if body.mode is not None:
-        fields["mode"] = body.mode
-    rescan = body.params is not None
-    if rescan:
-        fields["params"] = _validated(improvement["type_id"], body.params)
-    if fields:
-        store.update(improvement_id, **fields)
-    if rescan:
-        # New parameters mean a different subject list — the steps would
-        # otherwise still be the old query's.
-        engine.scan(improvement_id)
-    return store.get(improvement_id) or improvement
 
 
 @router.delete("/{improvement_id}")

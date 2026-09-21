@@ -348,12 +348,6 @@ def _is_infra_error(detail: str) -> bool:
     return any(mk in d for mk in _INFRA_MARKERS)
 
 
-def list_checks() -> List[Dict[str, str]]:
-    data = load_cases(auto_build=False)
-    return [{"id": c["id"], "label": c["label"], "category": c["category"]}
-            for c in data.get("cases", [])]
-
-
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

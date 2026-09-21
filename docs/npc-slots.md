@@ -202,7 +202,6 @@ at which the server checks them (`app/core/periodic_jobs.py`):
 | Route | What it does |
 | --- | --- |
 | `GET /npc/list` | Living and pooled temporary NPCs, with what a held-back one is waiting for |
-| `POST /npc/sweep` | Run the TTL and window sweeps now |
 | `POST /npc/{name}/pool` | Pool this NPC by hand |
 | `POST /npc/slots/{location_id}/fill` | Run the slot check of one location now — the same check the approaching avatar triggers. This is the editor's **"Fill now"** button |
 | `POST /npc/areas/{area_id}/fill` | The same for a painted area |

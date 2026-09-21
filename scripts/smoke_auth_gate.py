@@ -238,8 +238,12 @@ check("sensitive /inventory/characters/Kira",
       sens("/inventory/characters/Kira"), True)
 check("chars /inventory/characters/Kira",
       chars("/inventory/characters/Kira"), ["Kira"])
-check("sensitive /relationships/A/B", sens("/relationships/A/B"), True)
-check("chars /relationships/A/B", chars("/relationships/A/B"), ["A", "B"])
+# /relationships/* had its own rule in both helpers. The four routes under
+# that prefix were deleted (DE-14, user decision 2026-09-21) and nothing else
+# lives there, so the rule had to go with them — a prefix rule outliving its
+# routes silently governs whatever takes the name next.
+check("sensitive /relationships/A/B", sens("/relationships/A/B"), False)
+check("chars /relationships/A/B", chars("/relationships/A/B"), [])
 
 check("user GET /characters/Kira/export",
       status("GET", "/characters/Kira/export", "user"), 403)

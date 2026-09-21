@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request, Response, HTTPException, Depends, status
 from app.core.log import get_logger
 from app.core import sessions, users
 from app.core.auth_dependency import (
-    get_current_user, get_current_user_optional, require_admin)
+    get_current_user_optional, require_admin)
 
 logger = get_logger("auth")
 
@@ -160,12 +160,6 @@ def logout(request: Request, response: Response) -> Dict[str, Any]:
         sessions.delete_session(token)
     sessions.clear_session_cookie(response)
     return {"status": "success"}
-
-
-@router.get("/me")
-def me(user = Depends(get_current_user)) -> Dict[str, Any]:
-    """Liefert den aktuell eingeloggten User."""
-    return {"user": user}
 
 
 @router.get("/status")

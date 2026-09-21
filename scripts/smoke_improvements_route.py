@@ -33,9 +33,11 @@ recorded from a run.  A mini FastAPI app carries only this router, and
      must swap the head of the queue — that is the whole point of the entry
      order.
 
-  6. ``PATCH /improvements/{id}`` renames, and new params re-validate and
-     RE-SCAN: with the fake type reduced to one candidate, the patched entry
-     has one pending step left, the vanished one closed as done.
+  6. A shrinking candidate set: with the fake type reduced to one candidate,
+     ``POST /{id}/rescan`` reports {added 0, closed 1} and the vanished step
+     is 'done' while the surviving one stays 'pending'.  (Editing an entry's
+     label/params had its own ``PATCH /improvements/{id}`` — deleted on
+     2026-09-21 with DF-5, because no tab ever called it.)
 
   7. ``POST /{id}/pause`` takes an entry out of the queue view (status
      'paused'), ``resume`` puts it back ('open').  Paused, B contributes
@@ -276,20 +278,15 @@ check("the swap moves the head of the queue",
 check("…and the entry list follows",
       [i["label"] for i in client.get("/improvements").json()], ["B", "A"])
 
-# ── 6. patching an entry ─────────────────────────────────────────────────────
-print("\n6. PATCH /improvements/{id} renames, re-validates and re-scans")
+# ── 6. a shrinking candidate set ─────────────────────────────────────────────
+print("\n6. POST /{id}/rescan closes a candidate that vanished")
 FakeType.candidates = [("k1", "Zeta")]
-r = client.patch(f"/improvements/{A}",
-                 json={"label": "A2", "params": {"backend": "  z  "}})
-check("200", r.status_code, 200)
-check("the label and the trimmed params are stored",
-      (r.json()["label"], r.json()["params"]), ("A2", {"backend": "z"}))
-check("…and the rescan closed the candidate that vanished",
+check("the diff reports exactly one closure",
+      client.post(f"/improvements/{A}/rescan").json(), {"added": 0, "closed": 1})
+check("…and the vanished step is done while the survivor stays pending",
       {s["candidate_key"]: s["status"]
        for s in client.get(f"/improvements/{A}/steps").json()},
       {"k1": "pending", "k2": "done"})
-r = client.patch(f"/improvements/{A}", json={"params": {}})
-check("bad params are a 400", r.status_code, 400)
 
 # ── 7. pause / resume ────────────────────────────────────────────────────────
 print("\n7. POST /{id}/pause and /{id}/resume")
@@ -337,7 +334,6 @@ check("…and status agrees",
 
 # ── 10. unknown ids and types ────────────────────────────────────────────────
 print("\n10. unknown id → 404, unknown type → 400")
-check("PATCH", client.patch("/improvements/nope", json={"label": "x"}).status_code, 404)
 check("DELETE", client.delete("/improvements/nope").status_code, 404)
 check("pause", client.post("/improvements/nope/pause").status_code, 404)
 check("run-now", client.post("/improvements/nope/run-now").status_code, 404)

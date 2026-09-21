@@ -766,19 +766,6 @@ async def prompt_filters_import(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/settings/data")
-def settings_data(user=Depends(require_admin)):
-    """Return full config with sensitive fields masked.
-
-    Empty fields are pre-filled with their schema default so the user
-    immediately sees which fallback value applies.
-    """
-    import copy
-    data = copy.deepcopy(config.get_all())
-    _apply_schema_defaults(data)
-    return config.mask_sensitive(data)
-
-
 @router.get("/settings/raw")
 def settings_raw(user=Depends(require_admin)):
     """Return full config without masking (for save round-trip).
@@ -1434,13 +1421,6 @@ def providers_list(user=Depends(require_admin)):
                           if p.get("name")]}
 
 
-@router.get("/settings/llm-suitability-checks")
-def llm_suitability_checks(user=Depends(require_admin)):
-    """Metadaten der Eignungs-Checks (id/label/category) — fuer die UI-Vorschau."""
-    from app.core.model_suitability import list_checks
-    return {"checks": list_checks()}
-
-
 @router.get("/settings/llm-suitability-cases")
 def llm_suitability_cases(user=Depends(require_admin)):
     """Info zum eingefrorenen Fixture-Satz (Anzahl Faelle, pro Task, Build-Zeit)."""
@@ -1528,38 +1508,6 @@ def settings_restart_pending(user=Depends(require_admin)):
     und nur durch einen Restart wirksam werden.
     """
     return {"pending": config.restart_pending_fields()}
-
-
-@router.post("/settings/memory-consolidate")
-async def settings_memory_consolidate(request: Request, user=Depends(require_admin)):
-    """Triggert Memory-Konsolidierung sofort.
-
-    Body (alles optional):
-      - character: Wenn gesetzt, NUR fuer diesen Character. Sonst: alle.
-      - phase2_iterations: Wieviel mal Phase 2 hintereinander pro Character laufen
-        soll (Default 1). Pro Iteration werden bis zu 3 Tage Episodics
-        konsolidiert. Hilfreich um grosse Backlogs in einem Rutsch abzubauen.
-    """
-    body = await request.json() if request.headers.get('content-type','').startswith('application/json') else {}
-    character = (body.get('character') or '').strip()
-    iterations = max(1, min(20, int(body.get('phase2_iterations', 1))))
-
-    from app.core.background_queue import get_background_queue
-    from app.models.character import list_available_characters
-
-    targets = [character] if character else list_available_characters()
-    bq = get_background_queue()
-    submitted = 0
-    for ch in targets:
-        for _ in range(iterations):
-            bq.submit(
-                task_type="memory_consolidation",
-                payload={"character_name": ch},
-                priority=30,
-                agent_name=ch,
-                deduplicate=False)  # explizit kein dedup damit alle iter laufen
-            submitted += 1
-    return {"status": "success", "submitted": submitted, "characters": len(targets), "iterations": iterations}
 
 
 # ── Image Post-Processing (Downscale Migration) ───────────────────────
@@ -1684,27 +1632,6 @@ async def agent_loop_resume(user=Depends(require_admin)):
     if tq:
         tq.resume_queue("default")
     return {"status": "running"}
-
-
-@router.post("/agent-loop/bump")
-async def agent_loop_bump(request: Request, user=Depends(require_admin)):
-    """Manually bump a character — they think on the next slot.
-
-    Body: {"character": "<name>"}
-    Useful for debugging / forcing immediate attention without forced_thoughts.
-    """
-    body = await request.json()
-    return await asyncio.to_thread(_agent_loop_bump_sync, user, body)
-
-
-def _agent_loop_bump_sync(user, body: Any):
-    """The blocking body of ``agent_loop_bump`` — runs in the threadpool."""
-    name = (body.get("character") or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="character required")
-    from app.core.agent_loop import get_agent_loop
-    ok = get_agent_loop().bump(name)
-    return {"status": "queued" if ok else "skipped", "character": name}
 
 
 @router.get("/agent-loop/lanes")

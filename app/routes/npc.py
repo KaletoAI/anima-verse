@@ -46,19 +46,6 @@ def list_npcs_route() -> Dict[str, Any]:
                                         if not p.get("permanent"))}}
 
 
-@router.post("/sweep")
-async def sweep_route() -> Dict[str, Any]:
-    """Run the TTL sweep now (the periodic job does the same hourly).
-
-    "Removed" means moved to the pool since plan-npc-auto-spawn.md § 3 — the
-    NPC is out of the world, its profile is kept for the next spawn.
-    """
-    import asyncio
-    from app.core.npc_ops import sweep_expired_npcs
-    removed = await asyncio.to_thread(sweep_expired_npcs)
-    return {"removed": removed}
-
-
 @router.post("/{character_name}/pool")
 async def pool_npc_route(character_name: str) -> Dict[str, Any]:
     """Retire a living temporary NPC into the recycling pool by hand."""

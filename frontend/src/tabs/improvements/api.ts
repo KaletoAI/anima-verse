@@ -33,12 +33,6 @@ export function previewImprovement(
   return apiPost<PreviewResult>('/improvements/preview', { type_id, params })
 }
 
-export function patchImprovement(id: string, body: {
-  label?: string; params?: Record<string, string>; mode?: string
-}): Promise<Improvement> {
-  return apiPatch<Improvement>(`/improvements/${encodeURIComponent(id)}`, body)
-}
-
 export function deleteImprovement(id: string): Promise<unknown> {
   return apiDelete(`/improvements/${encodeURIComponent(id)}`)
 }

@@ -227,7 +227,7 @@ def _is_sensitive_character_path(path: str) -> bool:
     - /secrets/{name}/* — secrets are private
     - /inventory/characters/{name}/* — a character's inventory is private
       (the shared item catalog under /inventory/items is NOT character data)
-    - /diary/*, /relationships/*, /assignments/* — private
+    - /diary/*, /assignments/* — private
     """
     parts = _path_parts(path)
     if not parts:
@@ -244,7 +244,7 @@ def _is_sensitive_character_path(path: str) -> bool:
         return True
     if head == "inventory":
         return len(parts) >= 2 and parts[1] == "characters"
-    if head in ("diary", "relationships", "assignments"):
+    if head in ("diary", "assignments"):
         return True
     return False
 
@@ -253,14 +253,13 @@ def _extract_characters_from_path(path: str):
     """Extracts character names from character-scoped URLs.
 
     Returns List[str] — every character name referenced in the path
-    (e.g. /relationships/A/B → [A, B]).
+    (e.g. /diary/{user}/A → [A]).
 
     Matches:
       /characters/{name}/*
       /secrets/{name}/*
       /inventory/characters/{name}/*
       /diary/{user_id}/{name}/*
-      /relationships/{a}/{b}
     """
     parts = _path_parts(path)
     result = []
@@ -280,11 +279,6 @@ def _extract_characters_from_path(path: str):
         cand = parts[2]
         if cand not in _RESERVED_CHARACTER_NAMES:
             result.append(cand)
-    elif len(parts) >= 3 and parts[0] == "relationships":
-        # /relationships/{a}/{b}
-        for c in parts[1:3]:
-            if c not in _RESERVED_CHARACTER_NAMES:
-                result.append(c)
     return result
 
 

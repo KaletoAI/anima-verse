@@ -329,10 +329,6 @@ def get_character_relationships(character_name: str
         return []
 
 
-def get_all_relationships() -> List[Dict[str, Any]]:
-    return load_relationships()
-
-
 def _ensure_relationship(char_a: str, char_b: str
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Return (all_rels, target_rel), creating target if needed."""
@@ -478,68 +474,6 @@ def record_interaction(char_a: str,
         rel.get("sentiment_a_to_b", 0), rel.get("sentiment_b_to_a", 0),
         rel.get("romantic_tension", 0), interaction_type)
     return rel
-
-
-def reclassify_all_relationships(*, decay_blocked_tension: bool = True
-) -> Dict[str, Any]:
-    """Re-run classify_type on every relationship using current compatibility.
-
-    Used after changing romantic_blocked_with lists or other compatibility
-    inputs — fixes stale "romantic" types whose pairs are now hard-blocked.
-
-    If *decay_blocked_tension* is True, also resets romantic_tension to 0
-    for any pair where are_romantically_compatible() is now False. Without
-    this, a previously high tension would just slowly decay via
-    record_interaction.
-
-    Returns a summary dict with counts and a list of changed pairs.
-    """
-    rels = load_relationships()
-    changed: list = []
-    tension_reset = 0
-
-    for rel in rels:
-        a = rel.get("character_a", "")
-        b = rel.get("character_b", "")
-        if not a or not b:
-            continue
-
-        old_type = rel.get("type", "neutral")
-        old_tension = rel.get("romantic_tension", 0)
-        compatible = are_romantically_compatible(a, b)
-
-        if decay_blocked_tension and not compatible and old_tension > 0:
-            rel["romantic_tension"] = 0
-            tension_reset += 1
-
-        new_type = classify_type(
-            rel.get("strength", 0),
-            rel.get("sentiment_a_to_b", 0),
-            rel.get("sentiment_b_to_a", 0),
-            rel.get("romantic_tension", 0),
-            romantic_compatible=compatible)
-
-        if new_type != old_type or rel.get("romantic_tension", 0) != old_tension:
-            rel["type"] = new_type
-            _save_relationship(rel)
-            changed.append({
-                "character_a": a,
-                "character_b": b,
-                "old_type": old_type,
-                "new_type": new_type,
-                "old_romantic_tension": round(old_tension, 3),
-                "new_romantic_tension": round(rel.get("romantic_tension", 0), 3),
-                "compatible": compatible,
-            })
-
-    logger.info("reclassify_all: %d total, %d changed, %d tension reset",
-                len(rels), len(changed), tension_reset)
-    return {
-        "total": len(rels),
-        "changed": len(changed),
-        "tension_reset": tension_reset,
-        "details": changed,
-    }
 
 
 def update_relationship_manual(char_a: str,

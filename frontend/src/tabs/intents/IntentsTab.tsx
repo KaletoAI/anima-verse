@@ -10,8 +10,8 @@ import { clockSettings, formatGameTime, useClockSettings } from '../../lib/clock
  * Game-Admin "Intents" tab — the unified "Vorhaben & Aufgaben" store
  * (plan-intents-unified.md). Replaces the legacy assignments panel:
  * human-set tasks and character-owned intents live in one place. Admins
- * create/cancel/complete here; characters create their own via [INTENT:]
- * markers and retrospect goals.
+ * create, edit (PATCH), complete and delete here; characters create their own
+ * via [INTENT:] markers and retrospect goals.
  */
 
 interface Intent {
