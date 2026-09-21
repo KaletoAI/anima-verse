@@ -109,9 +109,18 @@ def candidate_rooms() -> List[Tuple[str, str, List[str]]]:
             break
         if len(names) < 2:
             continue
-        last = _last_scene.get(_room_key(loc, room))
-        if last is not None and (now - last) < interval:
-            continue
+        _room = _room_key(loc, room)
+        last = _last_scene.get(_room)
+        if last is not None:
+            _delta = now - last
+            if _delta < GameDuration.ZERO:
+                # Game clock set backwards -> re-anchor to now instead of
+                # standing still until the clock has caught up again
+                # (same treatment as random_events.check_and_generate).
+                _last_scene[_room] = now
+                continue
+            if _delta < interval:
+                continue
         if not npc_actions.avatar_at_place(names[0]):
             continue
         out.append((loc, room, sorted(names)[:max_npcs]))

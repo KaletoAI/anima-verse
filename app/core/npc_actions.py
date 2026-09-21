@@ -444,8 +444,16 @@ def candidates() -> List[str]:
             if get_character_status(name):
                 continue          # pooled or otherwise not in the world
             last = _last_action.get(name)
-            if last is not None and (now - last) < interval:
-                continue
+            if last is not None:
+                _delta = now - last
+                if _delta < GameDuration.ZERO:
+                    # Game clock set backwards -> re-anchor to now instead of
+                    # standing still until the clock has caught up again
+                    # (same treatment as random_events.check_and_generate).
+                    _last_action[name] = now
+                    continue
+                if _delta < interval:
+                    continue
             profile = get_character_profile(name) or {}
             home = profile.get("npc_home")
             if not (get_character_current_location(name) or "") and not home:

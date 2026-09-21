@@ -660,22 +660,30 @@ def validate_condition_references(condition: str) -> List[str]:
 _UNPARSABLE_CONDITION_STAMPS: set = set()
 
 
-def cleanup_expired_conditions(character_name: str) -> int:
+def cleanup_expired_conditions(character_name: str,
+                               profile: Optional[Dict[str, Any]] = None) -> int:
     """Remove expired conditions (``duration_hours`` exceeded) from
     ``active_conditions``. Returns the number of removed conditions.
 
     Called both from ``apply_effects`` (item/danger) and periodically
     (periodic_jobs status_tick) — so effects with a cooldown reliably fade
     even without a new item/danger trigger.
+
+    ``profile``: an already-loaded profile, used ONLY for the cheap "does this
+    character carry any condition at all?" question. Almost every call lands on
+    a character with an empty ``active_conditions`` list, and that answer needs
+    neither a second read nor the profile lock (SIM-7). Once there IS something
+    to look at, the profile is re-read UNDER the lock, because the save below
+    rewrites the whole ``profile_json`` blob and a stale read would revert a
+    concurrent writer's fields (place, journey, equip — DATA-3).
     """
     try:
         from app.core.keyed_lock import keyed_lock
         from app.models.character import get_character_profile, save_character_profile
-        # Read AND write under the per-character profile lock (DATA-3): the
-        # save writes the whole profile_json blob out, so a stale read would
-        # revert a concurrent writer's fields (place, journey, equip). Nothing
-        # inside this block writes a profile, so the non-re-entrant lock is
-        # safe here.
+        # Cheap, UNLOCKED pre-check: nothing to expire -> no lock, no write.
+        _pre = profile if profile is not None else get_character_profile(character_name)
+        if not ((_pre or {}).get("active_conditions") or []):
+            return 0
         with keyed_lock("character_profile", character_name):
             _prof = get_character_profile(character_name)
             _conditions = (_prof or {}).get("active_conditions", []) or []
@@ -803,23 +811,44 @@ def apply_hourly_status_tick(character_name: str):
 
     Called by the ThoughtLoop (every 60 s), but performs the change only once
     per GAME hour per character.
-    """
-    # Feature gate: status_effects off -> no hourly tick
-    try:
-        from app.models.character_template import is_feature_enabled
-        if not is_feature_enabled(character_name, "status_effects_enabled"):
-            return
-    except Exception:
-        pass
 
+    The stamp lives in RAM only, so the FIRST sight of a character after a
+    server start is anchored to ``now`` instead of counting as "an hour is
+    overdue" — otherwise every restart would charge a full hour of
+    ``bar_hourly`` immediately, and a developer restarting every ten game
+    minutes would get the decay six times over (SIM-3).
+    """
     tick_key = character_name
     # Hourly = one GAME hour (factor >1 -> decay ticks faster in real time).
     now = game_time()
 
-    # Check whether a game hour has passed since the last tick
+    # Check whether a game hour has passed since the last tick. The gate comes
+    # FIRST: on 59 of 60 ticks it ends the call before any profile is read.
     last_tick = _LAST_HOURLY_TICK.get(tick_key)
-    if last_tick is not None and (now - last_tick).seconds < 3600:
+    if last_tick is None:
+        # First sight (fresh process): anchor, charge nothing.
+        _LAST_HOURLY_TICK[tick_key] = now
+        return
+    delta = (now - last_tick).seconds
+    if delta < 0:
+        # Game clock was set backwards -> re-anchor to now instead of
+        # standing still until the clock has caught up (same treatment as
+        # random_events.check_and_generate and the scheduler's game anchor).
+        _LAST_HOURLY_TICK[tick_key] = now
+        return
+    if delta < 3600:
         return  # less than an hour ago
+
+    # Feature gate: status_effects off -> no hourly tick
+    try:
+        from app.models.character_template import is_feature_enabled
+        if not is_feature_enabled(character_name, "status_effects_enabled"):
+            # Re-anchor anyway: a character that switches the feature on must
+            # not be charged for the hours it spent switched off.
+            _LAST_HOURLY_TICK[tick_key] = now
+            return
+    except Exception:
+        pass
 
     _LAST_HOURLY_TICK[tick_key] = now
 

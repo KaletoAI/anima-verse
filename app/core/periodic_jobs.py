@@ -82,17 +82,24 @@ def _get_tick_interval() -> int:
 
 def _sub_status_tick():
     """Apply hourly stat decay to all characters. Internal 1h gating in
-    apply_hourly_status_tick — billig auch jede Minute aufzurufen."""
+    apply_hourly_status_tick — billig auch jede Minute aufzurufen.
+
+    ONE profile read per character per pass (SIM-7): the hourly tick gates on
+    its RAM stamp before touching storage at all, and the condition sweep only
+    needs to know whether ``active_conditions`` is empty — which the profile
+    loaded here already answers.
+    """
     try:
         from app.core.activity_engine import apply_hourly_status_tick, cleanup_expired_conditions
-        from app.models.character import list_available_characters
+        from app.models.character import get_character_profile, list_available_characters
         for name in list_available_characters():
             try:
                 apply_hourly_status_tick(name)
                 # Abklingzeit: abgelaufene Conditions (duration_hours) jede Minute
                 # entfernen — NICHT am 1h-Gate des Status-Ticks haengen, sonst
                 # klingen Effekte bis zu eine Stunde zu spaet ab.
-                cleanup_expired_conditions(name)
+                cleanup_expired_conditions(
+                    name, profile=get_character_profile(name))
             except Exception as e:
                 logger.debug("status_tick failed for %s: %s", name, e)
     except Exception as e:
@@ -128,6 +135,14 @@ def _sub_force_rules():
             OFFMAP_SLEEP_SENTINEL,
             _record_state_change)
         from app.models.account import is_player_controlled
+        from app.models.character import get_character_profile
+        from app.models.rules import load_rules
+        # Cheap global early-out (SIM-7): with no force rule in the world the
+        # per-character sweep below has nothing it could ever do, and this runs
+        # on EVERY world-admin tick (min_interval 0).
+        if not any(r.get("type") == "force" and r.get("condition")
+                   for r in load_rules()):
+            return
         for name in list_available_characters():
             try:
                 if is_player_controlled(name):
@@ -142,9 +157,14 @@ def _sub_force_rules():
                 # tatsaechlich was geaendert hat. Ohne Aenderung kein
                 # _record_state_change(forced_action) — sonst spammt eine
                 # Erschoepfungs-/Wake-Regel jede Minute das Tagebuch.
-                _before_loc = (get_character_current_location(name) or "").strip()
-                _before_room = (get_character_current_room(name) or "").strip()
-                _before_act = (get_effective_activity(name) or "").strip().lower()
+                # EIN Profil-Read fuer alle drei Felder statt drei (SIM-7).
+                _before_prof = get_character_profile(name)
+                _before_loc = (get_character_current_location(
+                    name, profile=_before_prof) or "").strip()
+                _before_room = (get_character_current_room(
+                    name, profile=_before_prof) or "").strip()
+                _before_act = (get_effective_activity(
+                    name, profile=_before_prof) or "").strip().lower()
 
                 # Offmap-Sentinel: nicht als echte Location speichern. Wenn
                 # home=__offmap__ → Char vom Grid nehmen via enter_offmap_sleep.
@@ -206,9 +226,15 @@ def _sub_force_rules():
                                 pass
 
                 # Nur loggen + ins Tagebuch wenn sich was geaendert hat.
-                _after_loc = (get_character_current_location(name) or "").strip()
-                _after_room = (get_character_current_room(name) or "").strip()
-                _after_act = (get_effective_activity(name) or "").strip().lower()
+                # Frischer Read (die Schreiber oben haben den Zustand geaendert),
+                # aber wieder nur EINER fuer alle drei Felder.
+                _after_prof = get_character_profile(name)
+                _after_loc = (get_character_current_location(
+                    name, profile=_after_prof) or "").strip()
+                _after_room = (get_character_current_room(
+                    name, profile=_after_prof) or "").strip()
+                _after_act = (get_effective_activity(
+                    name, profile=_after_prof) or "").strip().lower()
                 _changed = (_before_loc != _after_loc
                             or _before_room != _after_room
                             or _before_act != _after_act

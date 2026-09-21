@@ -726,17 +726,61 @@ def resolve_recipients(scope: str, actor: str) -> List[str]:
     return out
 
 
+def _like_escape(value: str) -> str:
+    """Escape a literal for a SQL ``LIKE`` pattern (ESCAPE '\\')."""
+    return (value.replace("\\", "\\\\")
+                 .replace("%", "\\%")
+                 .replace("_", "\\_"))
+
+
+def _tagged_memories_since(character_name: str, tag: str,
+                           cutoff_iso: str) -> List[Tuple[str, str]]:
+    """``(tags_json, content)`` of the character's memories that are NOT older
+    than ``cutoff_iso`` and carry ``tag``.
+
+    The window and the tag go into SQL instead of into a Python loop over
+    ``load_memories`` — that read pulled the COMPLETE ``memories`` table of the
+    character (``SELECT *``, every row turned into a dict) only to throw all
+    but a two- resp. thirty-minute window away, once for the actor and once
+    per recipient (up to RECIPIENT_CAP = 30) per act (SIM-6).
+
+    ``ts`` is the SYSTEM stamp of the row (``memory._entry_to_row``) — these
+    two windows are technical cooldown/dedup windows, so they stay on the
+    system clock exactly as before. The ``LIKE`` on the JSON ``tags`` column is
+    only a PRE-FILTER; the caller still decides on the parsed list, so the
+    result is identical to the old membership test.
+    """
+    try:
+        from app.core.db import get_connection
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT tags, content FROM memories "
+            "WHERE character_name=? AND ts>=? AND tags LIKE ? ESCAPE '\\' "
+            "ORDER BY ts DESC",
+            (character_name, cutoff_iso, f'%"{_like_escape(tag)}"%'),
+        ).fetchall()
+        return [(r["tags"] or "[]", r["content"] or "") for r in rows]
+    except Exception as e:
+        logger.debug("memory window query failed for %s: %s", character_name, e)
+        return []
+
+
+def _has_tag(tags_json: str, tag: str) -> bool:
+    """Exact membership in the JSON ``tags`` list — the check the old Python
+    filter did on ``m["tags"]``."""
+    try:
+        return tag in (json.loads(tags_json or "[]") or [])
+    except Exception:
+        return False
+
+
 def _sender_on_cooldown(actor: str, scope: str) -> bool:
     """True if the actor performed any action within the cooldown window."""
     try:
-        from app.models.memory import load_memories
         cutoff = (utc_now() - timedelta(minutes=SENDER_COOLDOWN_MIN)).isoformat()
         target_tag = f"action_performed:{scope}"
-        for m in load_memories(actor):
-            ts = m.get("timestamp") or ""
-            if ts < cutoff:
-                continue
-            if target_tag in (m.get("tags") or []):
+        for tags_json, _content in _tagged_memories_since(actor, target_tag, cutoff):
+            if _has_tag(tags_json, target_tag):
                 return True
     except Exception as e:
         logger.debug("Sender cooldown check failed: %s", e)
@@ -747,21 +791,15 @@ def _recipient_recently_perceived(recipient: str, actor: str, text: str) -> bool
     """True if this recipient already perceived a very similar action from this
     actor recently."""
     try:
-        from app.models.memory import load_memories
         cutoff = (utc_now() - timedelta(minutes=RECIPIENT_DEDUP_MIN)).isoformat()
         target_tag = f"action_witnessed:{actor}"
         text_norm = (text or "").strip().lower()[:80]
         if not text_norm:
             return False
-        for m in load_memories(recipient):
-            ts = m.get("timestamp") or ""
-            if ts < cutoff:
+        for tags_json, content in _tagged_memories_since(recipient, target_tag, cutoff):
+            if not _has_tag(tags_json, target_tag):
                 continue
-            tags = m.get("tags") or []
-            if target_tag not in tags:
-                continue
-            content = (m.get("content") or "").strip().lower()
-            if text_norm in content:
+            if text_norm in (content or "").strip().lower():
                 return True
     except Exception as e:
         logger.debug("Recipient dedup check failed: %s", e)

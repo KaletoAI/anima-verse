@@ -22,7 +22,7 @@ import random
 import re
 from datetime import datetime, timedelta
 
-from app.core.game_time import GameTime
+from app.core.game_time import GameDuration, GameTime
 from app.core.timeutils import parse_iso, utc_now, game_time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -175,12 +175,20 @@ def check_escalation():
             if already_escalated:
                 continue
 
-            # Alter des Events pruefen (TTL/2 vergangen?)
+            # Age of the event (half the TTL elapsed?). ``ttl_hours`` are GAME
+            # hours (app/models/events.py) and ``expires_at`` is a canonical
+            # game stamp, so the escalation window has to be measured on the
+            # GAME clock too. Measured in real hours it could never fire in an
+            # accelerated world: with factor 6 a danger event (ttl 8) is
+            # deleted after 80 real minutes while the escalation waited 4 real
+            # hours. ``created_at`` stays the SYSTEM stamp below, because
+            # _had_chat_since compares it against chat line timestamps.
             try:
                 created = parse_iso(event.get("created_at", ""))
                 ttl_hours = event.get("ttl_hours", 6)
-                half_ttl = timedelta(hours=ttl_hours / 2)
-                if utc_now() - created < half_ttl:
+                half_ttl = GameDuration.of(hours=ttl_hours / 2)
+                started_g = GameTime.parse(event.get("game_ts", ""))
+                if game_time() - started_g < half_ttl:
                     continue  # Noch nicht alt genug
             except (ValueError, TypeError):
                 continue
@@ -364,8 +372,11 @@ def _try_generate_for_location(loc_id: str, location: Dict[str, Any], char_names
     if active:
         latest = max(active, key=lambda e: e.get("created_at", ""))
         try:
-            last_time = parse_iso(latest.get("created_at", ""))
-            if (utc_now() - last_time).total_seconds() < cooldown_hours * 3600:
+            # GAME hours, like the per-hour dice gate above: in real hours a
+            # 2 h cooldown would mean 12 game hours at factor 6 (5 game days at
+            # factor 60), while the dice itself rolls once per GAME hour.
+            last_time = GameTime.parse(latest.get("game_ts", ""))
+            if game_time() - last_time < GameDuration.of(hours=cooldown_hours):
                 return
         except (ValueError, TypeError):
             pass
