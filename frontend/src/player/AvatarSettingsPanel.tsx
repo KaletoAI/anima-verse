@@ -9,7 +9,8 @@
  *  - Physique    = template columns 4,5 (physical values + appearance prompt incl. image)
  *  - Soul        = SoulEditor (respects locked sections)
  *  - Preferences = columns 2,10 without the social numbers → dressing preference + TTS,
- *                  plus the ACCOUNT language section (see LanguageSettings below)
+ *                  plus the ACCOUNT sections: language (LanguageSettings) and the
+ *                  own-password form (PasswordSettings)
  *
  * Social numbers, feature flags, stats and placement stay admin-only
  * (not in these columns / via excludeKeys). The user's own avatar is in
@@ -17,7 +18,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
-import { apiGet, apiPost } from '../lib/api'
+import { ApiError, apiGet, apiPost } from '../lib/api'
 import { TemplateTab } from '../tabs/characters/TemplateTab'
 import { BodyEditor } from '../tabs/characters/BodyEditor'
 import { type DynamicData } from '../tabs/characters/TemplateField'
@@ -151,6 +152,109 @@ function LanguageSettings() {
   )
 }
 
+/**
+ * Account password — NOT a character setting either.
+ *
+ * Posts to POST /auth/password, which verifies the current password through
+ * the same throttle the login uses and ends every OTHER session of this user
+ * (the one doing the change survives). The server owns every rule that
+ * matters; the two checks here only save a round trip.
+ */
+const MIN_PASSWORD_LENGTH = 8
+
+function PasswordSettings() {
+  const { t } = useI18n()
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [repeat, setRepeat] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  const submit = async () => {
+    setMessage('')
+    setFailed(false)
+    if (next !== repeat) {
+      setFailed(true)
+      setMessage(t('The two new passwords do not match.'))
+      return
+    }
+    if (next.length < MIN_PASSWORD_LENGTH) {
+      setFailed(true)
+      setMessage(t('The new password must be at least 8 characters long.'))
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await apiPost<{ sessions_ended?: number }>('/auth/password', {
+        current_password: current,
+        new_password: next,
+      })
+      const ended = res?.sessions_ended || 0
+      setMessage(
+        ended > 0
+          ? `${t('Password changed.')} ${ended} ${t('other session(s) were signed out.')}`
+          : t('Password changed.'),
+      )
+      setCurrent('')
+      setNext('')
+      setRepeat('')
+    } catch (e) {
+      setFailed(true)
+      const detail = e instanceof ApiError ? e.detail : null
+      setMessage(typeof detail === 'string' && detail ? t(detail) : t('Could not change the password.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const field = (
+    label: string,
+    value: string,
+    set: (v: string) => void,
+    autoComplete: string,
+  ) => (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <span>{t(label)}</span>
+      <input
+        className="ga-input"
+        type="password"
+        value={value}
+        autoComplete={autoComplete}
+        disabled={busy}
+        onChange={(e) => set(e.target.value)}
+      />
+    </label>
+  )
+
+  return (
+    <div className="ga-section" style={{ marginTop: 12 }}>
+      <h4>{t('Password')}</h4>
+      <div className="ga-field-hint">
+        {t('Changing it signs out every other device you are logged in on.')}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, maxWidth: 420 }}>
+        {field('Current password', current, setCurrent, 'current-password')}
+        {field('New password', next, setNext, 'new-password')}
+        {field('Repeat new password', repeat, setRepeat, 'new-password')}
+        <div>
+          <button
+            type="button"
+            className="ga-btn ga-btn-primary"
+            disabled={busy || !current || !next || !repeat}
+            onClick={() => void submit()}
+          >
+            {busy ? t('Changing…') : t('Change password')}
+          </button>
+        </div>
+        {message ? (
+          <div className={`ga-field-hint${failed ? ' ga-field-warn' : ''}`}>{message}</div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
   const { t, lang } = useI18n()
   const [sections, setSections] = useState<TmplSectionRaw[]>([])
@@ -276,6 +380,7 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
               excludeKeys={HIDE_KEYS}
             />
             <LanguageSettings />
+            <PasswordSettings />
           </>
         )}
         {sub === 'soul' && <SoulEditor character={avatar} />}

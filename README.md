@@ -252,7 +252,11 @@ stops acting autonomously).
   feature, down to its buttons in both clients. Marketplace installs land in `plugins/installed/`.
   **NSFW packages ship separately** and are never part of this repository.
 - **Auth & multi-user:** session cookies, bcrypt hashes, admin/user roles, per-user access lists for
-  characters, capped uploads and a per-user limit on concurrent GPU jobs.
+  characters, capped uploads and a per-user limit on concurrent GPU jobs. Everyone can change their
+  own password (`POST /auth/password`) — players in `/play` under **Avatar settings → Preferences →
+  Password**, admins under `/admin/users` → **Change my password**. A change ends every OTHER
+  session of that account and keeps the one doing it; an admin password reset under `/admin/users`
+  signs the target out everywhere.
 - **Logging & monitoring:** LLM call log (`/logs/llm`), image-prompt log (`/logs/image-prompts`),
   LLM stats, dashboard, `GET /health`, and a task queue inspectable from the CLI.
 - **i18n:** all UI strings are English at the source and translated through `t()`; translation maps
@@ -377,8 +381,11 @@ grep "BOOTSTRAP ADMIN" logs/main.log
 ```
 
 The password is stored only as a bcrypt hash and is never printed again, so pick it up before you do
-anything else. Log in on the form that `/play` shows, then change the password and add further users
-under `/admin/users`. No line at all means the world already has users.
+anything else. Log in on the form that `/play` shows, then open `/admin/users` and change it in the
+**Change my password** block (current + new + repeat) — the same page adds further users. Changing a
+password signs out every other session of that account; the one you are using stays. Players without
+admin rights find the same form in `/play` under **Avatar settings → Preferences → Password**.
+No line at all means the world already has users.
 
 ### Frontend development
 

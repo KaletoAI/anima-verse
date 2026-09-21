@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request, Response, HTTPException, Depends, status
 from app.core.log import get_logger
 from app.core import sessions, users
 from app.core.auth_dependency import (
-    get_current_user_optional, require_admin)
+    get_current_user, get_current_user_optional, require_admin)
 
 logger = get_logger("auth")
 
@@ -132,7 +132,7 @@ def _login_sync(response: Response, data: Any, client_ip: str = "",
         from app.models.account import restore_avatar_on_login
         restore_avatar_on_login(user)
     except Exception:
-        logger.warning("restore_avatar_on_login fehlgeschlagen fuer %s", user.get("username"))
+        logger.warning("restore_avatar_on_login failed for %s", user.get("username"))
 
     return {
         "status": "success",
@@ -164,11 +164,74 @@ def logout(request: Request, response: Response) -> Dict[str, Any]:
 
 @router.get("/status")
 def auth_status(user = Depends(get_current_user_optional)) -> Dict[str, Any]:
-    """Status ohne 401 — Frontend prueft ob Login noetig."""
+    """Status without a 401 — the frontend asks whether a login is needed."""
     return {"authenticated": user is not None, "user": user}
 
 
-# ── User-Verwaltung (Admin-only) ──────────────────────────────────────
+@router.post("/password")
+async def change_password(
+    request: Request,
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Changes the CALLER'S OWN password.
+
+    ``/auth/login|logout|status`` are on the gate's public allowlist, this one
+    deliberately is not — and ``Depends(get_current_user)`` is the second layer
+    that keeps it a 401 for an anonymous caller even if the allowlist ever
+    grows a ``/auth`` prefix rule.
+    """
+    import asyncio
+    data = await request.json()
+    return await asyncio.to_thread(
+        _change_password_sync, user, data, _client_ip(request),
+        request.cookies.get(sessions.SESSION_COOKIE_NAME) or "")
+
+
+def _change_password_sync(user: Dict[str, Any], data: Any, client_ip: str,
+                          keep_token: str) -> Dict[str, Any]:
+    """The blocking body of ``change_password`` — runs in the threadpool.
+
+    The current password is verified through the very same throttle the login
+    uses (same ``(username, client IP)`` key), because an endpoint that checks
+    a password without one is a login form without a lock on it.
+
+    Both values are stripped like ``_login_sync`` strips them: a password
+    stored with surrounding whitespace could never be typed back in at the
+    login form.
+    """
+    current = (data.get("current_password") or "").strip()
+    new = (data.get("new_password") or "").strip()
+    if not current or not new:
+        raise HTTPException(status_code=400,
+                            detail="Current and new password are required")
+
+    key = _failure_key(user["username"], client_ip)
+    _check_throttle(key)
+
+    if not users.check_user_password(user["username"], current):
+        _record_failure(key)
+        raise HTTPException(status_code=403, detail="Current password is wrong")
+    _clear_failures(key)
+
+    if new == current:
+        raise HTTPException(
+            status_code=400,
+            detail="The new password must differ from the current one")
+    try:
+        users.set_user_password(user["id"], new)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Every OTHER session still carries the credential that was just revoked.
+    # The calling one survives, or the change would log the user out of the
+    # page they changed it on.
+    ended = sessions.delete_other_sessions(user["id"], keep_token)
+    logger.info("Password changed: %s (%d other session(s) ended)",
+                user["username"], ended)
+    return {"status": "success", "sessions_ended": ended}
+
+
+# ── User management (admin-only) ──────────────────────────────────────
 
 @router.get("/users")
 def list_users_route(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -202,26 +265,39 @@ def _create_user_route_sync(_: Dict[str, Any], data: Any) -> Dict[str, Any]:
 @router.patch("/users/{user_id}")
 async def update_user_route(
     user_id: str, request: Request,
-    _: Dict[str, Any] = Depends(require_admin),
+    current: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     import asyncio
     data = await request.json()
-    return await asyncio.to_thread(_update_user_route_sync, user_id, _, data)
+    return await asyncio.to_thread(
+        _update_user_route_sync, user_id, current, data,
+        request.cookies.get(sessions.SESSION_COOKIE_NAME) or "")
 
 
-def _update_user_route_sync(user_id: str, _: Dict[str, Any],
-                            data: Any) -> Dict[str, Any]:
+def _update_user_route_sync(user_id: str, current: Dict[str, Any],
+                            data: Any, keep_token: str = "") -> Dict[str, Any]:
     """The blocking body of ``update_user_route`` — runs in the threadpool."""
     password = data.pop("password", None)
+    changed_password = False
     try:
         if password:
-            users.set_user_password(user_id, password)
+            changed_password = users.set_user_password(user_id, password)
         updated = users.update_user(user_id, **data) if data else True
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if not updated and not password:
-        raise HTTPException(status_code=404, detail="User nicht gefunden")
-    return {"status": "success"}
+    if not updated and not changed_password:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # A reset revokes the old credential, so the sessions that still hold it
+    # have to go. An admin resetting their OWN password here keeps the session
+    # doing it — same rule as POST /auth/password.
+    sessions_ended = 0
+    if changed_password:
+        if user_id == current["id"]:
+            sessions_ended = sessions.delete_other_sessions(user_id, keep_token)
+        else:
+            sessions_ended = sessions.delete_sessions_for_user(user_id)
+    return {"status": "success", "sessions_ended": sessions_ended}
 
 
 @router.delete("/users/{user_id}")
@@ -230,16 +306,17 @@ def delete_user_route(
     current: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     if current["id"] == user_id:
-        raise HTTPException(status_code=400, detail="Eigener Account nicht loeschbar")
+        raise HTTPException(status_code=400,
+                            detail="You cannot delete your own account")
     target = users.get_user_by_id(user_id)
     if not target:
-        raise HTTPException(status_code=404, detail="User nicht gefunden")
-    # Letzten Admin nicht loeschen
+        raise HTTPException(status_code=404, detail="User not found")
+    # Never delete the last admin.
     if target.get("role") == users.ROLE_ADMIN:
         admins = [u for u in users.list_users() if u.get("role") == users.ROLE_ADMIN]
         if len(admins) <= 1:
             raise HTTPException(status_code=400,
-                                detail="Letzter Admin kann nicht geloescht werden")
+                                detail="The last admin cannot be deleted")
     users.delete_user(user_id)
     sessions.delete_sessions_for_user(user_id)
     return {"status": "success"}

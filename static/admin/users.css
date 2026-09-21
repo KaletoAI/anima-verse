@@ -66,3 +66,19 @@ td .actions { display: flex; gap: 6px; }
 .toast { position: fixed; bottom: 20px; right: 20px; background: #238636; color: #fff; padding: 10px 16px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 2000; }
 .toast.show { opacity: 1; }
 .toast.error { background: #da3633; }
+
+/* Inline note under the toolbar — used after a password reset to say how many
+   sessions of the target user were signed out. Not a toast: it has to stay
+   readable while the admin looks at the table. */
+.note { display: none; margin-bottom: 14px; padding: 8px 12px; border-radius: 6px;
+        background: #12261a; border: 1px solid #2ea043; color: #7ee787; font-size: 12px; }
+.note.show { display: block; }
+
+/* "Change my password" — the logged-in admin's own account, POST /auth/password. */
+.own-password { margin-top: 20px; background: #161b22; border: 1px solid #30363d;
+                border-radius: 8px; padding: 16px; max-width: 480px; }
+.own-password h2 { font-size: 15px; margin-bottom: 6px; color: #e6edf3; }
+.own-password .hint { font-size: 12px; color: #8b949e; margin-bottom: 12px; }
+.pw-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.pw-msg { font-size: 12px; color: #7ee787; }
+.pw-msg.error { color: #f85149; }

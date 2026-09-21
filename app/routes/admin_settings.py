@@ -1941,7 +1941,7 @@ def _build_settings_html() -> str:
     <div class="nav-section-label">Server-Einstellungen</div>
     <div id="nav-links"></div>
     <div class="nav-section-label">Verwaltung</div>
-    <a href="#" data-section="_users" onclick="event.preventDefault(); activateIframe('_users', '/admin/users', 'User-Verwaltung')"><span class="nav-icon">👥</span> User-Verwaltung</a>
+    <a href="#" data-section="_users" onclick="event.preventDefault(); activateIframe('_users', '/admin/users', 'User management')"><span class="nav-icon">👥</span> User management</a>
     <a href="#" data-section="_models" onclick="event.preventDefault(); activateIframe('_models', '/admin/models', 'Model Capabilities')"><span class="nav-icon">🧩</span> Model Capabilities</a>
     <a href="#" data-section="_agent_loop" onclick="event.preventDefault(); activateIframe('_agent_loop', '/admin/agent-loop', 'Agent Loop')"><span class="nav-icon">🔄</span> Agent Loop</a>
     <a href="#" data-section="_templates" onclick="event.preventDefault(); activateIframe('_templates', '/admin/templates', 'LLM Templates')"><span class="nav-icon">📄</span> LLM Templates</a>
@@ -1979,51 +1979,75 @@ def _build_settings_html() -> str:
 def _build_users_html() -> str:
     """User management page (admin-only)."""
     return '''<!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>User-Verwaltung</title>
+<title>User management</title>
 <link rel="stylesheet" href="/static/admin/users.css">
 </head>
 <body>
 
-<h1>User-Verwaltung</h1>
+<h1>User management</h1>
 <div class="toolbar">
-    <button class="btn btn-primary" onclick="openEdit(null)">+ Neuer User</button>
+    <button class="btn btn-primary" onclick="openEdit(null)">+ New user</button>
 </div>
+
+<div class="note" id="reset-note"></div>
 
 <table id="users-table">
     <thead>
-        <tr><th>Benutzername</th><th>Rolle</th><th>Characters</th><th>Letzter Login</th><th></th></tr>
+        <tr><th>Username</th><th>Role</th><th>Characters</th><th>Last login</th><th></th></tr>
     </thead>
     <tbody id="users-tbody">
         <tr><td colspan="5" style="text-align:center;color:#8b949e;">Loading…</td></tr>
     </tbody>
 </table>
 
+<div class="own-password" id="own-password">
+    <h2>Change my password</h2>
+    <p class="hint">Changes the password of the account you are logged in with. Every
+       OTHER session of this account is signed out; this one stays.</p>
+    <div class="field">
+        <label>Current password</label>
+        <input type="password" id="pw-current" autocomplete="current-password">
+    </div>
+    <div class="field">
+        <label>New password</label>
+        <input type="password" id="pw-new" autocomplete="new-password">
+    </div>
+    <div class="field">
+        <label>Repeat new password</label>
+        <input type="password" id="pw-repeat" autocomplete="new-password">
+    </div>
+    <div class="pw-actions">
+        <button class="btn btn-primary" id="pw-submit" onclick="changeOwnPassword()">Change password</button>
+        <span class="pw-msg" id="pw-msg"></span>
+    </div>
+</div>
+
 <div class="modal-bg" id="modal-bg">
     <div class="modal">
-        <h2 id="modal-title">User anlegen</h2>
+        <h2 id="modal-title">Create user</h2>
         <div class="error-msg" id="modal-error"></div>
         <div class="field">
-            <label>Benutzername</label>
+            <label>Username</label>
             <input type="text" id="edit-username" autocomplete="off">
         </div>
         <div class="field">
-            <label>Rolle</label>
+            <label>Role</label>
             <select id="edit-role">
                 <option value="user">User</option>
                 <option value="admin">Admin</option>
             </select>
         </div>
         <div class="field">
-            <label id="edit-password-label">Passwort</label>
+            <label id="edit-password-label">Password</label>
             <input type="password" id="edit-password" autocomplete="new-password">
         </div>
         <div class="field">
             <label style="display:flex;align-items:center;gap:8px;">
-                Zugeordnete Characters
-                <button type="button" class="btn btn-sm" onclick="toggleAllChars(true)">Alle</button>
+                Assigned characters
+                <button type="button" class="btn btn-sm" onclick="toggleAllChars(true)">All</button>
                 <button type="button" class="btn btn-sm" onclick="toggleAllChars(false)">None</button>
             </label>
             <div class="chars-box" id="edit-chars-box"></div>

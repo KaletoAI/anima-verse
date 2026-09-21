@@ -145,9 +145,30 @@ def delete_session(token: str) -> None:
         conn.execute("DELETE FROM user_sessions WHERE token=?", (token,))
 
 
-def delete_sessions_for_user(user_id: str) -> None:
-    """Kicks every session of a user (e.g. after a password change)."""
+def delete_sessions_for_user(user_id: str) -> int:
+    """Kicks every session of a user (e.g. after an admin password reset).
+
+    Returns how many sessions were ended.
+    """
     with transaction() as conn:
-        conn.execute("DELETE FROM user_sessions WHERE user_id=?", (user_id,))
+        cur = conn.execute("DELETE FROM user_sessions WHERE user_id=?", (user_id,))
+        return cur.rowcount
 
 
+def delete_other_sessions(user_id: str, keep_token: str) -> int:
+    """Kicks every session of a user EXCEPT the one holding ``keep_token``.
+
+    A password change must invalidate the credential everywhere it is still
+    lying around, but not log out the browser that is doing the change. The
+    ``token`` column stores the opaque token verbatim (``create_session``
+    inserts exactly what the cookie carries), so the row to keep is addressed
+    by equality on that value — no hashing in between.
+
+    Returns how many sessions were ended.
+    """
+    with transaction() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_sessions WHERE user_id=? AND token<>?",
+            (user_id, keep_token or ""),
+        )
+        return cur.rowcount

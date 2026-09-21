@@ -29,7 +29,10 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
    ```
 
    The password is nowhere else — it is stored only as a bcrypt hash — so pick it up now. Open
-   `http://<host>:8000/` and log in with it, then set your own password under `/admin/users`.
+   `http://<host>:8000/` and log in with it, then set your own password under `/admin/users`: the
+   "Change my password" block at the bottom of that page takes the current password once and the
+   new one twice. Changing it signs out every other session of the account, not the one you are
+   using.
    (No line at all means the world already has users; log in with those.)
 
    Authentication is default-deny: without a session every endpoint answers `401`, a browser
