@@ -14,8 +14,9 @@ The worked example uses the lab hosts below — replace the IPs with your own:
 ## Architecture in one paragraph
 
 The container runs **only the FastAPI app** (chat orchestration, world simulation,
-admin UI, the built React SPA). It does **not** run an LLM — every chat/tool/vision
-call is routed over HTTP to the external LocalAI server. Text **embeddings** for
+admin UI, the built React SPA, and the skill packages from `plugins/`). It does **not**
+run an LLM — every chat/tool/vision call is routed over HTTP to the external LocalAI
+server. Text **embeddings** for
 pose matching run **inside** the container on CPU (`fastembed`/ONNX), so no
 embedding endpoint is required. Image generation, TTS etc. are optional
 external services configured later through the admin UI. There is **no `.env`
@@ -56,14 +57,14 @@ and reclaims VRAM before serving the next request. In the LocalAI settings
 With this, concurrent chat + image requests serialize on LocalAI's side (the
 second waits while the first model is reclaimed) instead of OOM-ing.
 
-**Optional — serialize on the Anima Verse side too.** Per-backend `max_concurrent`
-only limits parallelism *within* one backend. To make the chat provider and the
-image backend share **one** GPU slot (so Anima Verse never even dispatches a chat
-and an image gen at the same time), give them a **shared GPU label**: in
-`/admin/settings`, add a GPU entry with the same **Label** (e.g. `localai-gpu`) to
-both the LLM provider *and* each LocalAI image backend. Same label = same physical
-GPU = only one call (chat or image) runs at a time, the rest queue. Leave the
-label empty to keep the default per-channel behavior.
+**Optional — serialize on the Anima Verse side too.** `Max Concurrent` only limits
+parallelism *within* one channel. To make the chat provider and the image backend
+share **one** slot (so Anima Verse never even dispatches a chat and an image gen at
+the same time), give them the same **Serialize Group**: in `/admin/settings`, set the
+same free-text group name (e.g. `localai-gpu`) on the **LLM Provider** *and* on each
+LocalAI entry under **Media Generation → Backends**. Same group = one call at a time
+across those channels, the rest queue. Leave it empty to keep the default per-channel
+behavior.
 
 ---
 
@@ -149,7 +150,7 @@ docker compose logs -f   # follow startup; Ctrl-C to stop following
 3. Go to **`http://192.168.8.109:8100/admin/settings`**.
 
 4. **LLM Providers** — edit the provider named **`LocalAI`** and set its
-   **API Base** to your LocalAI URL:
+   **API Base URL** to your LocalAI URL:
 
    ```
    http://192.168.8.197:8080
@@ -158,20 +159,27 @@ docker compose logs -f   # follow startup; Ctrl-C to stop following
    Leave the API key empty (LocalAI accepts unauthenticated requests by default).
    Save.
 
-5. **LLM Routing** — the demo ships routing for several task groups
-   (`chat_stream`, `extraction`, `image_analysis`, `intent`, …) pre-pointed at the
-   `LocalAI` provider but with placeholder model names. Set the **model** field of
-   each routing row to a model your LocalAI actually serves (see
-   `GET /v1/models`).
+5. **LLM Routing** — the demo ships two LLM entries on the `LocalAI` provider: a
+   chat/RP model for `chat_stream`, `story_stream`, `storyteller` and `thought`, and a
+   small vision-capable model for the utility tasks (`intent`, `extraction`,
+   `extraction_chat_state`, `spell_detect`, `consolidation`, `relationship_summary`,
+   `image_prompt`, `image_recognition`, `translation`, `instagram_caption`, the
+   random-event and generation helpers). Open the **LLMs** page and set each entry's
+   **Model** to a model your LocalAI actually serves (see `GET /v1/models`); the
+   **Tasks** page shows which task ends up where and the **Overview** page shows what
+   the server would resolve right now.
 
-   **Minimal setup:** point **every** routing row at one general instruct model
-   that supports tool/function calling. That single model then drives chat,
-   thoughts, intent, summaries and image-prompt generation. Refine later if you
-   want a dedicated vision model for the `image_analysis` / `image_recognition`
-   tasks.
+   **Minimal setup:** one entry, one general instruct model with tool/function
+   calling, and give it every task. A task nobody routes falls back to its parent
+   (`npc_*` → `chat_stream`, `furnish` → `intent`, …), so the Tasks page does not have
+   to be filled completely. Refine later with a dedicated vision model for
+   `image_recognition`.
 
 6. Save. No restart needed for config changes — they take effect on the next LLM
-   call.
+   call. The one exception is **Server → Allowed CORS origins**, which is read at
+   startup: set it (and restart the container) only if something outside this server
+   calls the API — for example the 3D client, which is not part of the image and runs
+   as its own Vite process (`ANIMA_API=http://192.168.8.109:8100 npm run dev -w client3d`).
 
 > **Embeddings need no configuration.** Pose matching uses the built-in CPU
 > embedding model (`bge-small`, downloaded into the `anima_models` volume). It
@@ -189,7 +197,8 @@ With one chat-capable model routed, the following work against LocalAI:
   change on the map.
 - **Skills / tool calls** — outfit change, notifications, retrospection, etc.
   (needs a tool-calling-capable model; otherwise set the character to `rp_first`
-  chat mode under its settings).
+  chat mode under its settings). The verbs come from the `plugins/` packages baked
+  into the image — a character with no skills at all means the directory is missing.
 - **Memory / summaries** — daily summaries and consolidation run on the routed
   utility model.
 - **Pose matching** — handled locally via the embedding model.
@@ -262,4 +271,4 @@ run a different world, set it in `docker-compose.yml`:
 | Image render fails with `inference failed` only at larger sizes | The image model has a resolution ceiling on this GPU (e.g. `flux.2-klein-4b` only does small square sizes ≤768²). Lower the use-case / backend dimensions. |
 | Container `unhealthy` | `docker compose logs app` — usually a Python import or config error during boot. |
 | LocalAI unreachable from the container | Confirm `curl http://<localai>:8080/readyz` works **from the Docker host**; the container shares the host's LAN route. |
-| Character "promises" to move but never does | Wrong chat mode for the model — switch the character to `rp_first` and route a tool-capable model to the Tools tasks. |
+| Character "promises" to move but never does | Wrong chat mode for the model — switch the character to `rp_first` and route a tool-capable model to the `intent` task. |
