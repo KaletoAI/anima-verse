@@ -1,8 +1,9 @@
 /**
- * NoticeBanner — persistenter Hinweis-Banner in /play (B Tier 1).
- * Quelle: GET /play/notices (kritische Events am Ort, Bewegungs-Sperre,
- * ungelesene Notifications). Rendert nichts, wenn nichts anliegt.
- * Notifications sind per Klick als gelesen markierbar (POST /notifications/{id}/read).
+ * NoticeBanner — the persistent notice banner of /play (B tier 1).
+ * Source: GET /play/notices (critical events on the spot, a movement block,
+ * unread notifications). Renders nothing when nothing is pending.
+ * A notification is marked read with a click (POST /notifications/{id}/read);
+ * "Mark all as read" clears them in one go (POST /notifications/read-all).
  */
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
@@ -41,6 +42,14 @@ export function NoticeBanner() {
   const dismiss = useCallback(async (id: number) => {
     try { await apiPost(`/notifications/${id}/read`, {}) } catch { /* ignore */ }
     setN((prev) => ({ ...prev, notifications: prev.notifications.filter((x) => x.id !== id) }))
+  }, [])
+
+  // One click for the whole stack, offered from the second notification on —
+  // below that the × of the single row is the shorter way. Optimistic like
+  // dismiss: the row group disappears at once, the 5-s poll confirms it.
+  const dismissAll = useCallback(async () => {
+    try { await apiPost('/notifications/read-all', {}) } catch { /* ignore */ }
+    setN((prev) => ({ ...prev, notifications: [], unread_count: 0 }))
   }, [])
 
   const leaveParty = useCallback(async () => {
@@ -132,6 +141,16 @@ export function NoticeBanner() {
                          cursor: 'pointer', opacity: 0.7, fontSize: '1.1em', lineHeight: 1 }}>×</button>
             </div>
           ))}
+          {n.notifications.length > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
+              <button onClick={dismissAll}
+                style={{ border: '1px solid rgba(255,255,255,0.22)', background: 'rgba(16,18,24,0.94)',
+                         color: 'var(--text, #e6edf3)', cursor: 'pointer', borderRadius: 6,
+                         padding: '1px 8px', fontSize: 12 }}>
+                {t('Mark all as read')}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -1610,31 +1610,75 @@ def pick_up_item(character_name: str,
     room_id: str,
     item_id: str,
     quantity: int = 1) -> Dict[str, Any]:
-    """Character hebt ein Item aus einem Raum auf — Raum -> Inventar.
+    """The character picks an item up out of a room — room -> inventory.
 
-    Schreibt Memory + Diary-Eintrag beim Character.
+    Writes a memory entry. The counterpart of :func:`drop_item`.
 
-    Returns: {success: bool, error?: str, item_name: str}
+    THE ROOM SIDE IS THE CLAIM. Check and removal happen together under
+    ``world_write_lock`` (an RLock, so the nested
+    :func:`remove_item_from_room` re-enters it), and only then does the item
+    enter the inventory. That order is what makes two characters reaching for
+    the same last piece safe: the world lock hands the row to exactly one of
+    them, the loser sees an empty room. The old order (add first, remove
+    afterwards, removal result ignored) let both pass the check and both add —
+    one item in the room became two in two inventories.
+
+    LOCK ORDER: ``world_write_lock`` before ``keyed_lock("character_profile",
+    …)`` — the places lock before the profile, the same direction the rest of
+    the code base takes them (CLAUDE.md, "Data layer"). They are taken one
+    after the other here, never nested, so an inventory write never holds the
+    world lock.
+
+    A HIDDEN room item is not pickable: it has not been discovered, and the
+    room listing (``/play/belongings`` -> ``items_here``) and the NPC prompt
+    (``thought_context._build_room_items_block``) both skip it already.
+
+    Returns: {success: bool, error?: str, item_name: str, quantity: int}
     """
+    from app.core.keyed_lock import keyed_lock
+    from app.models.world import world_write_lock
+
     item = get_item(item_id)
     if not item:
-        return {"success": False, "error": "Item nicht gefunden"}
+        return {"success": False, "error": "Item not found"}
+    try:
+        quantity = max(1, int(quantity or 1))
+    except (TypeError, ValueError):
+        return {"success": False, "error": "Invalid quantity"}
 
-    # Im Raum vorhanden?
-    room_items = get_room_items(location_id, room_id)
-    in_room = next((ri for ri in room_items if ri.get("item_id") == item_id), None)
-    if not in_room:
-        return {"success": False, "error": "Item liegt nicht in diesem Raum"}
-    if int(in_room.get("quantity", 1)) < quantity:
-        return {"success": False, "error": "Nicht genug im Raum"}
+    # --- Room side: check and claim in ONE critical section ---------------
+    with world_write_lock:
+        room_items = get_room_items(location_id, room_id)
+        in_room = next((ri for ri in room_items if ri.get("item_id") == item_id), None)
+        if not in_room:
+            return {"success": False, "error": "That is not lying in this room"}
+        if in_room.get("hidden"):
+            return {"success": False, "error": "You cannot see that here"}
+        if int(in_room.get("quantity", 1) or 1) < quantity:
+            return {"success": False, "error": "There are not that many lying here"}
+        # Remember the placement so a failed hand-over can put it back exactly
+        # as it lay (a note or a discovery difficulty must not be lost).
+        was_hidden = bool(in_room.get("hidden"))
+        was_difficulty = int(in_room.get("discovery_difficulty", 0) or 0)
+        was_note = str(in_room.get("note", "") or "")
+        if not remove_item_from_room(location_id, room_id, item_id, quantity=quantity):
+            return {"success": False, "error": "That is not lying in this room"}
 
-    # Ins Inventar legen (kann fehlschlagen wenn voll)
-    if not add_to_inventory(character_name, item_id, quantity=quantity,
-        obtained_from=f"{location_id}/{room_id}", obtained_method="found"):
-        return {"success": False, "error": "Inventar voll oder Item nicht uebertragbar"}
-
-    # Aus Raum entfernen
-    remove_item_from_room(location_id, room_id, item_id, quantity=quantity)
+    # --- Inventory side: serialized per character -------------------------
+    # The same key the equip/unequip paths take, so a pickup cannot interleave
+    # with a wardrobe change of the same character.
+    with keyed_lock("character_profile", character_name):
+        added = add_to_inventory(character_name, item_id, quantity=quantity,
+                                 obtained_from=f"{location_id}/{room_id}",
+                                 obtained_method="found")
+    if not added:
+        # Hand-over failed (inventory full) — put the claim back. Until this
+        # line the item is out of the world; nobody else can take it, because
+        # the claim already removed it from the room.
+        add_item_to_room(location_id, room_id, item_id, quantity=quantity,
+                         hidden=was_hidden, discovery_difficulty=was_difficulty,
+                         note=was_note)
+        return {"success": False, "error": "Your hands are full"}
 
     item_name = item.get("name", item_id)
 
@@ -1644,10 +1688,10 @@ def pick_up_item(character_name: str,
             f"Ich habe '{item_name}' aufgehoben.",
             tags=["item", "event"])
     except Exception as e:
-        logger.debug("Pickup-Memory fehlgeschlagen: %s", e)
+        logger.debug("pickup memory failed: %s", e)
 
-    logger.info("%s hat '%s' aus %s/%s aufgehoben", character_name, item_name, location_id, room_id)
-    return {"success": True, "item_name": item_name}
+    logger.info("%s picked '%s' up in %s/%s", character_name, item_name, location_id, room_id)
+    return {"success": True, "item_name": item_name, "quantity": quantity}
 
 
 def drop_item(character_name: str,

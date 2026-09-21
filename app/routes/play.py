@@ -2625,11 +2625,67 @@ def build_belongings(character_name: str) -> dict:
     return out
 
 
+def _items_here(avatar: str) -> list:
+    """The VISIBLE items lying in the avatar's current room.
+
+    HIDDEN entries are skipped — the same rule the NPC prompt applies
+    (``thought_context._build_room_items_block``): an undiscovered item is not
+    part of the room anybody can see, so it is neither listed here nor
+    pickable via ``/play/pickup``.
+
+    ``image`` is the same boolean flag the inventory rows carry; the picture
+    itself is ``/inventory/items/<id>/image``, which the panel puts through
+    ``thumbUrl()`` like every other item icon.
+    """
+    if not avatar:
+        return []
+    out: list = []
+    try:
+        from app.core.i18n import localized
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room,
+                                          get_character_language)
+        from app.models.inventory import get_item, get_room_items
+        loc = get_character_current_location(avatar) or ""
+        if not loc:
+            return []
+        room = get_character_current_room(avatar) or ""
+        lang = get_character_language(avatar) or "de"
+        for ri in (get_room_items(loc, room) or []):
+            if ri.get("hidden"):
+                continue
+            iid = (ri.get("item_id") or "").strip()
+            it = get_item(iid) if iid else None
+            if not it:
+                continue
+            out.append({
+                "item_id": iid,
+                "name": localized(it, "name", lang) or iid,
+                "description": (localized(it, "description", lang) or "").strip(),
+                "quantity": int(ri.get("quantity", 1) or 1),
+                "image": bool(it.get("image")),
+            })
+    except Exception as e:  # noqa: BLE001
+        logger.debug("items_here failed: %s", e)
+    return out
+
+
 @router.get("/play/belongings")
 def play_belongings(user=Depends(get_current_user)):
-    """Belongings des aktiven Avatars."""
+    """Belongings of the active avatar, plus what lies in its room.
+
+    ``items_here`` rides along on THIS payload rather than on a poll of its
+    own: the Belongings panel already fetches this route every 5 s, and the
+    room's loose items belong to the same picture as the carried ones.
+    The Game-Admin wardrobe tab reads :func:`build_belongings` directly and
+    therefore does not get the field — it shows a character's belongings, not
+    a room.
+    """
     from app.models.account import get_active_character
-    return build_belongings((get_active_character() or "").strip())
+    avatar = (get_active_character() or "").strip()
+    out = build_belongings(avatar)
+    out["items_here"] = _items_here(avatar)
+    return out
 
 
 @router.post("/play/equip")
@@ -2875,6 +2931,59 @@ def _play_drop_sync(user, body: Any):
             actor=avatar, item=res.get("item_name") or item_id), source="inventory")
     except Exception as e:  # noqa: BLE001
         logger.debug("drop narration failed: %s", e)
+    return {"ok": True, **res}
+
+
+@router.post("/play/pickup")
+async def play_pickup(request: Request, user=Depends(get_current_user)):
+    """Pick an item up that lies in the avatar's current room."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_pickup_sync, user, body)
+
+
+def _play_pickup_sync(user, body: Any):
+    """The blocking body of ``play_pickup`` — runs in the threadpool.
+
+    The counterpart of :func:`_play_drop_sync`, and built exactly like it: the
+    SERVER derives location and room from the avatar's own state, the client
+    sends nothing but the item (and optionally how many). Whether the item may
+    be taken at all — present, visible, enough of it, room in the inventory —
+    is :func:`app.models.inventory.pick_up_item`'s decision, taken under the
+    world write lock.
+    """
+    from app.models.inventory import pick_up_item
+    from app.models.character import (get_character_current_location,
+                                      get_character_current_room)
+    avatar = _require_avatar()
+    item_id = str((body or {}).get("item_id") or "").strip()
+    if not item_id:
+        raise HTTPException(status_code=400, detail="item_id required")
+    raw_qty = (body or {}).get("quantity", 1)
+    try:
+        quantity = int(raw_qty if raw_qty not in (None, "") else 1)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="quantity must be a number")
+    if quantity < 1:
+        raise HTTPException(status_code=400, detail="quantity must be at least 1")
+    loc = get_character_current_location(avatar) or ""
+    room = get_character_current_room(avatar) or ""
+    if not loc:
+        raise HTTPException(status_code=400, detail="You are nowhere to pick anything up.")
+    res = pick_up_item(avatar, loc, room, item_id, quantity=quantity)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error") or "pickup failed")
+    # Direct action is world-visible: narrator line -> NPCs can react. Exactly
+    # what /play/drop does for the opposite move, no more.
+    try:
+        from app.core.i18n import t
+        from app.core.perception import announce_action
+        from app.models.character import get_character_language
+        lang = get_character_language(avatar) or "de"
+        announce_action(avatar, t("{actor} picks {item} up.", lang).format(
+            actor=avatar, item=res.get("item_name") or item_id), source="inventory")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("pickup narration failed: %s", e)
     return {"ok": True, **res}
 
 
@@ -3389,40 +3498,6 @@ def play_scenes(user=Depends(get_current_user), limit: int = 5):
             "location_name": loc_name, "room_name": room_name,
             "participants": others, "summary": sc.get("summary", ""),
         })
-    return out
-
-
-@router.get("/play/journal")
-def play_journal(user=Depends(get_current_user)):
-    """Gedächtnis + Tagebuch des Avatars (Tier 2, read-only). Avatar serverseitig
-    aufgelöst; reused load_memories + diary.get_diary_entries."""
-    from app.models.account import get_active_character
-    out = {"avatar": "", "memories": [], "diary": []}
-    avatar = (get_active_character() or "").strip()
-    if not avatar:
-        return out
-    out["avatar"] = avatar
-    try:
-        from app.models.memory import load_memories
-        mem = sorted((load_memories(avatar) or []),
-                     key=lambda m: m.get("timestamp", "") or "", reverse=True)[:40]
-        out["memories"] = [{
-            "content": m.get("content", "") or "",
-            "type": m.get("memory_type", "") or "",
-            "importance": m.get("importance", 0) or 0,
-            "with": m.get("related_character", "") or "",
-            "ts": m.get("timestamp", "") or "",
-            "tags": m.get("tags") or [],
-        } for m in mem]
-    except Exception as e:
-        logger.debug("play_journal memories failed: %s", e)
-    try:
-        from app.routes.diary import get_diary_entries
-        d = get_diary_entries(avatar, limit=40)
-        out["diary"] = [{"type": e.get("type", ""), "content": e.get("content", ""),
-                         "ts": e.get("timestamp", "")} for e in (d.get("entries") or [])]
-    except Exception as e:
-        logger.debug("play_journal diary failed: %s", e)
     return out
 
 

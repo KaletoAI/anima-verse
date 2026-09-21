@@ -205,17 +205,48 @@ def mark_read(notification_id: str) -> bool:
     return False
 
 
-def mark_all_read() -> int:
-    """Mark all notifications as read. Returns count of newly marked."""
+def mark_all_read(character_whitelist: Optional[List[str]] = None) -> int:
+    """Mark notifications as read. Returns count of newly marked.
+
+    character_whitelist: the SAME filter :func:`get_notifications` and
+    :func:`get_unread_count` take — only notifications whose sender
+    (``character``) or recipient (``metadata.to``) is in the list are marked.
+    Without it every unread row is marked, which is right for an admin sweep
+    and wrong for a player: it used to clear notifications of characters the
+    caller is not even allowed to SEE, and they were gone from the badge of
+    whoever the row really belonged to.
+    ``None`` = unrestricted (the same convention as the two readers); an
+    EMPTY list means "this user may see nothing" and marks nothing.
+    """
     try:
         with transaction() as conn:
-            count_row = conn.execute(
-                "SELECT COUNT(*) FROM notifications WHERE read=0"
-            ).fetchone()
-            count = count_row[0] if count_row else 0
-            if count:
-                conn.execute("UPDATE notifications SET read=1 WHERE read=0")
-            return count
+            if character_whitelist is None:
+                count_row = conn.execute(
+                    "SELECT COUNT(*) FROM notifications WHERE read=0"
+                ).fetchone()
+                count = count_row[0] if count_row else 0
+                if count:
+                    conn.execute("UPDATE notifications SET read=1 WHERE read=0")
+                return count
+            if not character_whitelist:
+                return 0
+            # Sender and recipient both live in the meta JSON blob, so the
+            # match happens in Python — exactly like get_unread_count.
+            allowed = set(character_whitelist)
+            ids = []
+            for row_id, meta_str in conn.execute(
+                    "SELECT id, meta FROM notifications WHERE read=0").fetchall():
+                try:
+                    meta = json.loads(meta_str or "{}")
+                except Exception:
+                    continue
+                char = meta.get("character", "")
+                to = (meta.get("metadata") or {}).get("to", "")
+                if char in allowed or (to and to in allowed):
+                    ids.append(row_id)
+            for row_id in ids:
+                conn.execute("UPDATE notifications SET read=1 WHERE id=?", (row_id,))
+            return len(ids)
     except Exception:
         return 0
 

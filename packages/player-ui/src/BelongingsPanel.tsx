@@ -11,6 +11,11 @@
  * targeted actions: Give, Drop and Cast. Their targets are ALWAYS the
  * characters present in the room (GET /play/others) — the server gate accepts
  * exactly those names.
+ *
+ * Below the list, "Lying here" shows what the SAME payload reports as
+ * items_here — the visible items on the floor of the avatar's room — with the
+ * counterpart of Drop: POST /play/pickup. The server derives location and room
+ * from the avatar, so the row sends nothing but the item id.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
@@ -67,17 +72,25 @@ const RARITY_COLOR: Record<string, string> = {
   common: 'rgba(255,255,255,0.18)', rare: '#5b9cff', unique: '#e0a106',
 }
 interface Equipped { item_id: string; name: string; image: boolean }
+/** An item lying in the avatar's room (server: /play/belongings -> items_here).
+ *  Hidden room items never appear here — they have not been discovered. */
+interface RoomItem {
+  item_id: string; name: string; description: string; quantity: number; image: boolean
+}
 interface Belongings {
   avatar: string; slot_order: string[]; slot_labels: Record<string, string>
   silhouette_url?: string
   slot_anchors?: Record<string, [number, number]>
   equipped: Record<string, Equipped>; items: Item[]
+  /** Absent when the payload comes from the Game-Admin wardrobe tab, which
+   *  shows a character and not a room. */
+  items_here?: RoomItem[]
   outfit_sets: Array<{ id: string; name: string }>; max_slots: number
 }
 
 const EMPTY: Belongings = {
   avatar: '', slot_order: [], slot_labels: {}, equipped: {}, items: [],
-  outfit_sets: [], max_slots: 0,
+  items_here: [], outfit_sets: [], max_slots: 0,
 }
 
 type Cat = 'all' | 'outfit' | 'consumable' | 'spell' | 'other'
@@ -426,6 +439,41 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
             )
           })}
         </div>
+        {/* ── Lying here: the room's loose items, one click to pick up ──
+            Only rendered when something is actually there; hidden (undiscovered)
+            items never reach the payload. Same row shape as the inventory list
+            above, with a muted edge so it reads as "not yours yet". */}
+        {(data.items_here || []).length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3,
+                        borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 6 }}>
+            <div style={{ fontSize: '0.74em', opacity: 0.55, letterSpacing: 0.4 }}>
+              {t('Lying here')}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3,
+                          maxHeight: 132, overflow: 'auto' }}>
+              {(data.items_here || []).map((it) => (
+                <div key={it.item_id} style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px',
+                  borderRadius: 6, borderLeft: '3px dashed rgba(255,255,255,0.22)',
+                  background: 'rgba(255,255,255,0.03)',
+                }}>
+                  <ItemIcon itemId={it.item_id} hasImage={it.image} emoji="📦" size={32} />
+                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {it.name}{it.quantity > 1 ? <span style={{ opacity: 0.6 }}> ×{it.quantity}</span> : null}
+                    </span>
+                    {it.description && (
+                      <span style={{ fontSize: '0.72em', opacity: 0.5, overflow: 'hidden',
+                                     textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.description}</span>
+                    )}
+                  </div>
+                  <button disabled={busy} style={btn()}
+                    onClick={() => act('/play/pickup', { item_id: it.item_id })}>{t('Pick up')}</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {data.outfit_sets.length > 0 && (
           <select className="ga-input" value="" disabled={busy} style={{ width: '100%' }}
             onChange={(e) => e.target.value && act('/play/self/outfit', { outfit_id: e.target.value })}>

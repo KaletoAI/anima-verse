@@ -54,9 +54,29 @@ export interface RecentTaskInfo {
   status?: string
   duration_s?: number
   created_at?: string
+  completed_at?: string
   error?: string
   provider?: string
   model?: string
+  /** True only for a FAILED row of the persistent TaskQueue whose worker can
+   *  really pick it up again — see collectRecent for why that is a small set. */
+  retryable?: boolean
+}
+
+/** A row of bg_tasks.recent (the persistent TaskQueue's own finished list). */
+interface BgTaskInfo {
+  task_id?: string
+  task_type?: string
+  status?: string
+  duration_s?: number
+  completed_at?: string
+  agent_name?: string
+  error?: string
+  label?: string
+  provider?: string
+  /** 'queued' (a real queue row a worker executes) or 'tracked' (a job that
+   *  runs elsewhere and is only mirrored into the table). */
+  task_origin?: string
 }
 
 interface ProviderChannel {
@@ -106,6 +126,7 @@ interface QueueStatus {
   active_tasks?: TrackedTaskInfo[]
   recent?: LLMTaskInfo[]
   recent_tasks?: TrackedTaskInfo[]
+  bg_tasks?: { recent?: BgTaskInfo[] }
 }
 
 /** Per agent: is an LLM call running, and is it a *reply* (vs. a thought)? */
@@ -125,9 +146,15 @@ export interface QueueSnapshot {
   agentActivity: Record<string, AgentActivity>
   /** LLM backends (channels) with availability + busy flag. */
   channels: ChannelStatus[]
+  /** Force an immediate re-fetch of /queue/status for every subscriber — what
+   *  an action on a row (cancel, retry) calls so the panel does not show the
+   *  old state until the next tick. */
+  refresh: () => Promise<void>
 }
 
-const EMPTY: QueueSnapshot = {
+const NOOP_REFRESH = async () => {}
+
+const EMPTY: Omit<QueueSnapshot, 'refresh'> = {
   llmTasks: [], pendingLLM: [], trackedTasks: [], recent: [], agentActivity: {}, channels: [],
 }
 
@@ -174,21 +201,53 @@ function collectPendingLLM(providers: Record<string, ProviderChannel> | undefine
 }
 
 /** "Recently": recently finished LLM calls (recent) + tracked tasks
- * (recent_tasks), merged and capped at 25 entries. */
+ * (recent_tasks) + the persistent queue's own finished rows (bg_tasks.recent),
+ * merged, deduplicated by task_id and capped at 25 entries.
+ *
+ * ONLY the third source can carry a RETRY, and that is why it is here at all:
+ *   • `recent` comes from the provider manager's in-memory ring of LLM calls —
+ *     there is no row for POST /queue/tasks/item/{id}/retry to reset.
+ *   • `recent_tasks` are TaskQueue rows, but with task_origin='tracked': they
+ *     mirror work that runs elsewhere (image/TTS/GPU), and the worker's
+ *     dequeue selects task_origin='queued' OR NULL. Resetting one to pending
+ *     would therefore never run it — it would sit in the panel as a pending
+ *     task forever.
+ *   • bg_tasks.recent with task_origin 'queued' (or unset) IS the worker's own
+ *     work, and retry_task() puts it back in front of a worker.
+ * bg_tasks.recent also contains the tracked rows, so those are filtered out
+ * here — otherwise every tracked task would appear twice.
+ */
 function collectRecent(d: QueueStatus): RecentTaskInfo[] {
   const out: RecentTaskInfo[] = []
+  const seen = new Set<string>()
+  const push = (r: RecentTaskInfo) => {
+    if (r.task_id) {
+      if (seen.has(r.task_id)) return
+      seen.add(r.task_id)
+    }
+    out.push(r)
+  }
   for (const tk of d.recent || []) {
-    out.push({
+    push({
       task_id: tk.task_id, label: tk.label, task_type: tk.task_type, agent_name: tk.agent_name,
       status: tk.status, duration_s: tk.duration_s, created_at: tk.created_at, error: tk.error,
       provider: tk.provider_name, model: tk.model,
     })
   }
   for (const tk of d.recent_tasks || []) {
-    out.push({
+    push({
       task_id: tk.task_id, label: tk.label, task_type: tk.task_type, agent_name: tk.agent_name,
       status: tk.status, duration_s: tk.duration_s, created_at: tk.created_at, error: tk.error,
       provider: tk.provider,
+    })
+  }
+  for (const tk of d.bg_tasks?.recent || []) {
+    if ((tk.task_origin || '') === 'tracked') continue
+    push({
+      task_id: tk.task_id, label: tk.label, task_type: tk.task_type, agent_name: tk.agent_name,
+      status: tk.status, duration_s: tk.duration_s, completed_at: tk.completed_at,
+      error: tk.error, provider: tk.provider,
+      retryable: (tk.status || '') === 'failed' && !!tk.task_id,
     })
   }
   return out.slice(0, 25)
@@ -237,10 +296,10 @@ function collectChannels(providers: Record<string, ProviderChannel> | undefined,
 // via the central poll hub — a single fetch, visibility pause and error backoff.
 // The fastest registered interval wins; TaskPanel passes 3000, the indicator 3000.
 export function useQueue(intervalMs = 2000): QueueSnapshot {
-  const { data } = usePoll<QueueStatus>(
+  const { data, refresh } = usePoll<QueueStatus>(
     'queue-status', () => apiGet<QueueStatus>('/queue/status'), { intervalMs })
 
-  return useMemo<QueueSnapshot>(() => {
+  const snapshot = useMemo<Omit<QueueSnapshot, 'refresh'>>(() => {
     if (!data) return EMPTY
     const llmTasks = collectLLM(data.providers)
     const agentActivity: Record<string, AgentActivity> = {}
@@ -259,6 +318,8 @@ export function useQueue(intervalMs = 2000): QueueSnapshot {
       channels: collectChannels(data.providers, data.active_tasks || []),
     }
   }, [data])
+
+  return { ...snapshot, refresh: refresh || NOOP_REFRESH }
 }
 
 /** Seconds since started_at (UTC ISO), or null when unknown. */

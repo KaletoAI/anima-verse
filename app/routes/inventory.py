@@ -757,38 +757,6 @@ def _give_inventory_item_route_sync(character_name: str, item_id: str,
     return {"ok": True, **result}
 
 
-@router.post("/characters/{character_name}/pickup")
-async def pickup_inventory_item_route(
-    character_name: str,
-    request: Request) -> Dict[str, Any]:
-    """Character hebt ein Item aus einem Raum auf — Raum -> Inventar.
-
-    Body: { user_id, location_id, room_id, item_id, quantity? }
-    Returns: { ok, item_name }
-    """
-    import asyncio
-    body = await request.json()
-    return await asyncio.to_thread(_pickup_inventory_item_route_sync,
-                                   character_name, body)
-
-
-def _pickup_inventory_item_route_sync(character_name: str,
-                                      body: Any) -> Dict[str, Any]:
-    """The blocking body of ``pickup_inventory_item_route`` — runs in the
-    threadpool."""
-    from app.models.inventory import pick_up_item
-    location_id = (body.get("location_id") or "").strip()
-    room_id = (body.get("room_id") or "").strip()
-    item_id = (body.get("item_id") or "").strip()
-    quantity = int(body.get("quantity") or 1)
-    if not (location_id and room_id and item_id):
-        raise HTTPException(status_code=400, detail="location_id, room_id und item_id sind Pflicht")
-    result = pick_up_item(character_name, location_id, room_id, item_id, quantity=quantity)
-    if not result.get("success"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Aufheben fehlgeschlagen"))
-    return {"ok": True, **result}
-
-
 # ============================================================
 # EQUIPMENT (Outfit-Pieces + sonstige Ausruestung)
 # ============================================================

@@ -27,6 +27,16 @@ def read_notification(notification_id: str) -> Dict[str, Any]:
 
 @router.post("/read-all")
 def read_all_notifications() -> Dict[str, Any]:
-    """Mark all notifications as read."""
-    count = mark_all_read()
+    """Mark as read what the player's notice banner shows.
+
+    The banner lists the ACTIVE AVATAR's notifications (``GET /play/notices``
+    filters by it), so "all" means exactly those — never the notifications of
+    characters the player is not looking at. Without an avatar there is no
+    banner and nothing to mark.
+    """
+    from app.models.account import get_active_character
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        return {"success": True, "marked": 0}
+    count = mark_all_read(character_whitelist=[avatar])
     return {"success": True, "marked": count}

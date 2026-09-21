@@ -1,16 +1,17 @@
 /**
- * TaskPanel — System-Task-/Queue-Anzeige, analog zur alten UI.
- * plan-room-conversation Phase 3.
+ * TaskPanel — the system task / queue display (plan-room-conversation phase 3).
  *
- * Zwei Gruppen aus GET /queue/status (via useQueue):
- *   • LLM-Calls (providers[*].chat_active) — die "X denkt …"-Einträge mit
- *     Label, Modell, laufender Dauer, Schätzung und Iteration.
- *   • Getrackte Tasks (active_tasks) — Bild-/Video-/TTS-/GPU-Tasks.
- * Poll alle 3 s; laufende Dauer tickt sekündlich lokal. Einzige Aktion ist das
- * Abbrechen einer Zeile (A6) — alles andere ist Anzeige.
+ * Two groups out of GET /queue/status (via useQueue):
+ *   • LLM calls (providers[*].chat_active) — the "X is thinking …" entries
+ *     with label, model, running duration, estimate and iteration.
+ *   • Tracked tasks (active_tasks) — image/video/TTS/GPU jobs.
+ * Polled every 3 s; the running duration ticks locally once a second.
+ * Two actions, everything else is display: CANCEL on a running/waiting row
+ * (A6), and RETRY on a failed row of the persistent queue — the only rows a
+ * worker can really pick up again (see RecentRow).
  */
 import { useCallback, useEffect, useState } from 'react'
-import { apiDelete } from './api'
+import { apiDelete, apiPost } from './api'
 import { useI18n } from './I18nProvider'
 import { useQueue, elapsedSeconds, type LLMTaskInfo, type TrackedTaskInfo, type RecentTaskInfo } from './useQueue'
 import { EmptyState } from './EmptyState'
@@ -107,7 +108,19 @@ function LLMRow({ tk, nowMs, pending, onCancel, cancelling }: {
   )
 }
 
-function RecentRow({ r }: { r: RecentTaskInfo }) {
+/**
+ * A finished row of the "Recently" block.
+ *
+ * A FAILED row gets a Retry when the server says it is retryable — that is
+ * true for the persistent TaskQueue's own rows only (see collectRecent in
+ * useQueue): an LLM call from the provider ring has no row to reset, and a
+ * tracked GPU/image job would be reset to pending without any worker ever
+ * dequeuing it. Permission-wise Retry sits exactly where Cancel sits: /queue
+ * is not an admin prefix, so a logged-in player reaches both.
+ */
+function RecentRow({ r, onRetry, retrying }: {
+  r: RecentTaskInfo; onRetry?: (id: string) => void; retrying?: boolean;
+}) {
   const { t } = useI18n()
   const failed = (r.status || '') === 'failed'
   const cancelled = (r.status || '') === 'cancelled'
@@ -116,8 +129,9 @@ function RecentRow({ r }: { r: RecentTaskInfo }) {
   const title = r.label || (r.agent_name || r.task_type || t('Task'))
   const dur = r.duration_s != null ? fmtDur(Math.round(r.duration_s)) : ''
   // Time of day of the entry — created_at is a UTC ISO stamp from the server,
-  // rendered in the configured world timezone and clock format.
-  const clock = formatTime(r.created_at, clockSettings())
+  // rendered in the configured world timezone and clock format. A row of the
+  // persistent queue carries completed_at instead; it is finished either way.
+  const clock = formatTime(r.created_at || r.completed_at, clockSettings())
   const meta = [clock, dur, r.provider, r.model].filter(Boolean).join(' · ')
   // Zwei Zeilen wie LLMRow/TrackedRow: Titel mit Ellipsis, Meta darunter mit
   // wordBreak — bei schmaler Panel-Breite bricht die Meta-Zeile um, statt
@@ -130,6 +144,19 @@ function RecentRow({ r }: { r: RecentTaskInfo }) {
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {title}
         </span>
+        {r.retryable && onRetry && r.task_id ? (
+          <button type="button" onClick={() => onRetry(r.task_id as string)} disabled={!!retrying}
+            title={retrying ? t('Retrying…') : t('Retry task')}
+            aria-label={retrying ? t('Retrying…') : t('Retry task')}
+            style={{
+              flex: '0 0 auto', border: '1px solid rgba(255,255,255,0.25)',
+              background: 'rgba(255,255,255,0.06)', color: 'inherit',
+              borderRadius: 6, padding: '0 6px', fontSize: '0.95em',
+              cursor: retrying ? 'default' : 'pointer', opacity: retrying ? 0.4 : 0.85,
+            }}>
+            {t('Retry')}
+          </button>
+        ) : null}
       </div>
       {meta ? (
         <div style={{ paddingLeft: 14, fontSize: '0.94em', opacity: 0.8, lineHeight: 1.3,
@@ -201,7 +228,7 @@ export function TaskPanel() {
   const { t } = useI18n()
   // Shared /queue/status feed via the poll hub (one fetch, visibility pause,
   // error backoff). GenerationIndicator subscribes to the same key.
-  const { llmTasks, pendingLLM, trackedTasks, recent, channels } = useQueue(3000)
+  const { llmTasks, pendingLLM, trackedTasks, recent, channels, refresh } = useQueue(3000)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [showRecent, setShowRecent] = useState(false)
   // Ids whose cancel is on its way out. EIN Endpunkt für beide Gruppen:
@@ -219,6 +246,23 @@ export function TaskPanel() {
       setCancelling((c) => { const n = { ...c }; delete n[id]; return n })
     }
   }, [])
+
+  // Ids whose retry is in flight. POST /queue/tasks/item/{id}/retry puts a
+  // FAILED row of the persistent queue back to pending; the snapshot is
+  // refreshed right away so the row moves out of "Recently" without waiting
+  // for the 3-s tick.
+  const [retrying, setRetrying] = useState<Record<string, boolean>>({})
+  const retry = useCallback(async (id: string) => {
+    setRetrying((r) => ({ ...r, [id]: true }))
+    try {
+      await apiPost(`/queue/tasks/item/${encodeURIComponent(id)}/retry`, {})
+      await refresh()
+    } catch {
+      // Gone or no longer failed: free the button again, the next poll decides.
+    } finally {
+      setRetrying((r) => { const n = { ...r }; delete n[id]; return n })
+    }
+  }, [refresh])
 
   // One-second UI clock (local, not a network poll) while anything with a
   // running duration / wait time is shown (running + pending LLM + tracked).
@@ -320,7 +364,8 @@ export function TaskPanel() {
           </button>
           {showRecent && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 4 }}>
-              {recent.map((r, i) => <RecentRow key={r.task_id || `rec${i}`} r={r} />)}
+              {recent.map((r, i) => <RecentRow key={r.task_id || `rec${i}`} r={r}
+                onRetry={retry} retrying={!!retrying[r.task_id || '']} />)}
             </div>
           )}
         </div>
