@@ -14,6 +14,9 @@ from typing import Any, Dict, List, Optional
 MAX_NOTIFICATIONS = 200
 
 from app.core.db import get_connection, transaction
+from app.core.log import get_logger
+
+logger = get_logger("notifications")
 
 
 def _row_to_notification(row) -> Dict[str, Any]:
@@ -55,7 +58,14 @@ def create_notification(character: str,
     content: str,
     notification_type: str = "message",
     metadata: Optional[Dict[str, Any]] = None) -> str:
-    """Create a new notification. Returns the notification ID."""
+    """Create a new notification.
+
+    Returns the notification id, or ``""`` when the row was NOT written
+    (DATA-13): the id used to come back unconditionally, so a failed INSERT
+    was reported to the caller as a created notification and the user simply
+    never saw it. An empty id means "nothing was stored" — a caller that
+    reports success has to check it.
+    """
     nid = uuid.uuid4().hex[:12]
     now = utc_now_iso()
     meta_blob = json.dumps({
@@ -77,8 +87,10 @@ def create_notification(character: str,
                 ")",
                 (MAX_NOTIFICATIONS,),
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("create_notification failed for %s (%s): %s",
+                     character, notification_type, e, exc_info=True)
+        return ""
     return nid
 
 

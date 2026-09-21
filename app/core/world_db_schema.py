@@ -155,6 +155,12 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
     "CREATE INDEX IF NOT EXISTS idx_chat_char_partner_ts ON chat_messages (character_name, partner, ts)",
+    # The partner-less reads — the whole 1:1 history of ONE character
+    # (``UnifiedChatManager.get_chat_history`` without a partner) and the day
+    # rollups (``history_manager._get_day_messages``: character_name + ts
+    # range) — cannot use the index above beyond its first column and scan
+    # every row of that character afterwards (DATA-12).
+    "CREATE INDEX IF NOT EXISTS idx_chat_char_ts ON chat_messages (character_name, ts)",
     "CREATE INDEX IF NOT EXISTS idx_chat_ts ON chat_messages (ts)",
 
     # ── Raum-Konversation: Wahrnehmungs-Stream ─────────────────────────

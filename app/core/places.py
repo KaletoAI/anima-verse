@@ -37,6 +37,7 @@ point, so a slot outside the location's boundary (a marker authored past
 the footprint) is bookkept but the figure stays put (:func:`inside`), and
 an unplaced location — no pin, no world frame — has no places at all.
 """
+import json
 import math
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -143,18 +144,82 @@ def where(name: str) -> Tuple[str, str]:
     return (get_character_current_location(name) or "", get_character_current_room(name) or "")
 
 
-def _present(location_id: str, room_id: str) -> List[Tuple[str, Dict[str, Any]]]:
-    """``(name, profile)`` of every roster character in the room — pooled
-    NPCs stand nowhere and are not on the roster. One profile read per
-    character: location, room and place all live in that dict."""
-    from app.models.character import get_character_profile, list_available_characters
-    out: List[Tuple[str, Dict[str, Any]]] = []
-    for n in list_available_characters():
-        prof = get_character_profile(n) or {}
-        if (prof.get("current_location") or "") == location_id \
-                and (prof.get("current_room") or "") == room_id:
-            out.append((n, prof))
+#: The census query behind :func:`_present` and :func:`location_occupancy`.
+#: Where a character STANDS (``current_location``/``current_room``) are
+#: ``character_state`` COLUMNS, what it SITS ON (``place``) is an ordinary
+#: ``profile_json`` key — it is not in ``character._STATE_META_KEYS`` — so the
+#: census is one join plus one ``json_extract``, the same shape
+#: ``character.list_active_journeys`` uses. ``json_valid`` guards the extract:
+#: a single unparsable blob must not abort the census for the whole room.
+_CENSUS_SQL = (
+    "SELECT c.name, COALESCE(c.status, ''), COALESCE(s.current_room, ''), "
+    "       CASE WHEN json_valid(c.profile_json) "
+    "            THEN json_extract(c.profile_json, '$.place') END "
+    "FROM characters c "
+    "LEFT JOIN character_state s ON s.character_name = c.name "
+    "WHERE COALESCE(s.current_location, '') = ? "
+)
+
+
+def _census(location_id: str, room_id: Optional[str]) -> List[Tuple[str, str, Optional[dict]]]:
+    """``(name, room_id, place)`` of every roster character in the location —
+    in ONE query, never a profile load per character (DATA-10).
+
+    ``room_id`` None asks about the whole location (:func:`location_occupancy`),
+    a room id restricts the census to that room. ``place`` is the parsed
+    profile field or None.
+
+    The roster gate is the one of ``list_available_characters``: names with a
+    leading underscore and reserved names are no characters, and a POOLED NPC
+    stands nowhere. That function's filesystem fallback has NO counterpart
+    here — world data is DB-only, and a world with no rows has nobody in any
+    room either.
+    """
+    from app.core.db import get_connection
+    from app.models.character import POOLED_STATUS, _is_real_character
+    sql = _CENSUS_SQL
+    params: List[Any] = [location_id]
+    if room_id is not None:
+        sql += "  AND COALESCE(s.current_room, '') = ? "
+        params.append(room_id)
+    sql += "ORDER BY c.name ASC"
+    try:
+        rows = get_connection().execute(sql, tuple(params)).fetchall()
+    except Exception as e:                 # a broken row must not break a pose
+        logger.warning("places: census failed for %s/%s: %s", location_id, room_id, e)
+        return []
+    out: List[Tuple[str, str, Optional[dict]]] = []
+    for name, status, room, place_raw in rows:
+        if not _is_real_character(name) or status == POOLED_STATUS:
+            continue
+        place: Any = None
+        if place_raw:
+            try:
+                place = json.loads(place_raw)
+            except Exception:
+                place = None
+        out.append((name, room or "", place if isinstance(place, dict) else None))
     return out
+
+
+def _present(location_id: str, room_id: str) -> List[Tuple[str, Dict[str, Any]]]:
+    """``(name, state)`` of every roster character in the room — pooled
+    NPCs stand nowhere and are not on the roster.
+
+    ONE query for the whole room (:func:`_census`), not one full profile per
+    roster character: ``assign`` holds ``keyed_lock("places", loc)`` around
+    this and ``room_offer`` runs it once per chat turn, so a 40-character
+    world used to pay 40 profile loads for a single sitting down.
+
+    ``state`` is NOT a profile — it carries exactly ``place``,
+    ``current_location`` and ``current_room``, the three fields the two
+    consumers read (:func:`occupancy` here, ``room_stand._mates``). Anything
+    else has to be read where it lives.
+    """
+    return [(name, {"place": place,
+                    "current_location": location_id,
+                    "current_room": room_id})
+            for name, _room, place in _census(location_id, room_id)]
 
 
 def _held_slot(pl: Any, place: Place, room_id: str) -> Optional[Any]:
@@ -634,19 +699,13 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
 
 def location_occupancy(location_id: str) -> Dict[str, Dict[str, List[Tuple[str, Any]]]]:
     """``{room_id: {place_id: [(name, slot), …]}}`` of the whole location
-    from ONE roster pass — for a caller that asks about every room (the
-    NPC director), where per-room :func:`occupancy` would read every
-    profile once per room. Same validation as :func:`occupancy`."""
-    from app.models.character import get_character_profile, list_available_characters
+    from ONE census query (:func:`_census`) — for a caller that asks about
+    every room (the NPC director), where per-room :func:`occupancy` would
+    query once per room. Same validation as :func:`occupancy`."""
     out: Dict[str, Dict[str, List[Tuple[str, Any]]]] = {}
     if not location_id:
         return out
-    for name in list_available_characters():
-        prof = get_character_profile(name) or {}
-        if (prof.get("current_location") or "") != location_id:
-            continue
-        room = prof.get("current_room") or ""
-        pl = prof.get("place")
+    for name, room, pl in _census(location_id, None):
         if not room or not isinstance(pl, dict):
             continue
         place = next((p for p in room_places(location_id, room) if p["id"] == pl.get("id")), None)

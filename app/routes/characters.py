@@ -15,7 +15,6 @@ from app.core.log import get_logger
 logger = get_logger("characters")
 
 from app.models.character import (
-    list_available_characters,
     generate_random_appearance,
     get_character_appearance,
     get_character_current_location,
@@ -82,17 +81,73 @@ def list_characters() -> Dict[str, Any]:
 
     Avatar-Auswahl (wer der User spielen KANN) laeuft ueber /account/characters
     und ist dort nach allowed_characters + playable_avatar gefiltert.
+
+    ONE query for the whole roster (DATA-11): all three fields come out of the
+    ``characters`` table, so this must not load a profile per character.
     """
-    from app.models.character import get_character_profile, is_temporary_npc
-    out = []
-    for name in list_available_characters():
-        profile = get_character_profile(name) or {}
-        out.append({
-            "name": name,
-            "template": profile.get("template") or "",
-            "temporary": is_temporary_npc(name),
-        })
-    return {"characters": out}
+    return {"characters": _roster_rows()}
+
+
+def _roster_rows() -> List[Dict[str, Any]]:
+    """``[{name, template, temporary}]`` for the whole roster from ONE query.
+
+    Both fields sit in the ``characters`` table, so nothing here needs a
+    profile load (DATA-11: ``get_character_profile`` + ``is_temporary_npc``
+    were two full profile loads plus a template deepcopy PER character —
+    80 loads for a 40-character roster).
+
+    ``template`` is resolved exactly the way ``get_character_profile`` does:
+    a ``template`` key IN the profile blob wins (even when it is empty or
+    null), the ``template`` COLUMN is the fallback. ``temporary`` is
+    ``character_template.template_feature(…, "temporary_npc")`` — a property
+    of the KIND of character, so the template features are read ONCE per
+    distinct template name, not once per character.
+
+    Roster gate = the one of ``list_available_characters``: reserved and
+    underscore names are no characters, a POOLED NPC is not in the world.
+    """
+    from app.core.db import get_connection
+    from app.models.character import POOLED_STATUS, _is_real_character
+    from app.models.character_template import get_template
+    try:
+        rows = get_connection().execute(
+            "SELECT name, COALESCE(status, ''), COALESCE(template, ''), "
+            "       json_valid(profile_json), "
+            "       CASE WHEN json_valid(profile_json) "
+            "            THEN json_type(profile_json, '$.template') END, "
+            "       CASE WHEN json_valid(profile_json) "
+            "            THEN json_extract(profile_json, '$.template') END "
+            "FROM characters ORDER BY name ASC"
+        ).fetchall()
+    except Exception as e:
+        logger.error("characters/list roster query failed: %s", e, exc_info=True)
+        return []
+    feature_cache: Dict[str, bool] = {}
+
+    def _temporary(template_name: str) -> bool:
+        key = template_name or "human-default"
+        if key not in feature_cache:
+            try:
+                tmpl = get_template(key) or {}
+                feature_cache[key] = bool((tmpl.get("features") or {}).get(
+                    "temporary_npc", False))
+            except Exception:
+                feature_cache[key] = False
+        return feature_cache[key]
+
+    out: List[Dict[str, Any]] = []
+    for name, status, tmpl_col, blob_ok, blob_type, blob_value in rows:
+        if not _is_real_character(name) or status == POOLED_STATUS:
+            continue
+        if not blob_ok:
+            template = ""            # an unreadable blob has no template
+        elif blob_type is not None:  # the key EXISTS in the blob and wins
+            template = blob_value or ""
+        else:
+            template = (tmpl_col or "").strip()
+        out.append({"name": name, "template": template,
+                    "temporary": _temporary(template)})
+    return out
 
 
 @router.get("/at-location")
