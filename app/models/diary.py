@@ -72,8 +72,6 @@ ENTRY_TYPES = {
     "outfit":             "Outfit",
     "effects":            "Effekte",
     "thought":            "Gedanke",
-    "assignment_update":  "Aufgaben-Update",
-    "assignment_done":    "Aufgabe erledigt",
     "daily_summary":      "Tagesrueckblick",
     "instagram_post":     "Instagram Post",
     "instagram_comment":  "Instagram Kommentar",
@@ -91,8 +89,6 @@ ENTRY_ICONS = {
     "outfit":             "\U0001f455",   # 👕
     "effects":            "\U0001f4ca",   # 📊
     "thought":            "\U0001f9e0",   # 🧠
-    "assignment_update":  "\U0001f4cb",   # 📋
-    "assignment_done":    "\u2705",       # ✅
     "daily_summary":      "\U0001f4d6",   # 📖
     "instagram_post":     "\U0001f4f8",   # 📸
     "instagram_comment":  "\U0001f4ac",   # 💬
@@ -840,35 +836,6 @@ def _collect_instagram(character_name: str, window: Window) -> List[Dict[str, An
     return result
 
 
-def _collect_assignments(character_name: str, window: Window) -> List[Dict[str, Any]]:
-    """Assignment progress from assignments.json."""
-    from app.models.assignments import _load_all
-    result = []
-    try:
-        for a in _load_all():
-            participant = a.get("participants", {}).get(character_name)
-            if not participant:
-                continue
-            title = a.get("title", a.get("id", ""))
-            for p in participant.get("progress", []):
-                ts = p.get("timestamp", "")
-                if not _in_window(ts, window):
-                    continue
-                note = p.get("note", "")
-                # Detect completion vs update
-                is_done = a.get("status") == "completed" and p == participant["progress"][-1]
-                etype = "assignment_done" if is_done else "assignment_update"
-                result.append({
-                    "type": etype,
-                    "content": f"[{title}] {note}",
-                    "timestamp": ts,
-                    "metadata": {"assignment_id": a.get("id", "")},
-                })
-    except Exception as e:
-        logger.debug("Assignment collect error: %s", e)
-    return result
-
-
 def _enrich_with_relationships(
     entries: List[Dict[str, Any]], character_name: str,
     window: Window) -> None:
@@ -1027,7 +994,6 @@ def generate_for_day(character_name: str,
     entries.extend(_collect_chat_events(character_name, window))
     entries.extend(_collect_instagram(character_name, window))
     entries.extend(_collect_event_resolutions(character_name, window))
-    entries.extend(_collect_assignments(character_name, window))
 
     # Add stored daily summaries — those carry their own game stamp.
     for e in _load_stored(character_name):

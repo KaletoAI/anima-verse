@@ -345,6 +345,8 @@ SCHEMA_STATEMENTS = [
         meta           TEXT DEFAULT '{}',
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
+    # Legacy table: no reader and no writer any more (the feature lives on as
+    # `intents`). Kept so existing worlds keep their schema unchanged.
     """CREATE TABLE IF NOT EXISTS assignments (
         id             TEXT PRIMARY KEY,
         character_name TEXT,
@@ -921,9 +923,9 @@ ALTER_MIGRATIONS = [
     # role='user' and ts > last_thought_at counts as "unread".
     ("character_state", "last_thought_at", "TEXT DEFAULT ''"),
     # prompt_filters: icon + image_modifier for the merged "conditions" tab
-    # (formerly status_modifiers.json). The icon is rendered in the character
-    # header badge, image_modifier goes into the image-generation prompt of
-    # active conditions.
+    # (formerly a separate status-modifier list). The icon is rendered in the
+    # character header badge, image_modifier goes into the image-generation
+    # prompt of active conditions.
     ("prompt_filters", "icon", "TEXT DEFAULT ''"),
     ("prompt_filters", "image_modifier", "TEXT DEFAULT ''"),
     # summaries: partner column for character-vs-character daily summaries

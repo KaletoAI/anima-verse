@@ -1,13 +1,12 @@
-"""Vereinheitlichte Intents (plan-intents-unified.md, Phase 1).
+"""Unified intents (plan-intents-unified.md).
 
-EIN Eintrag für alles, was ein Character tun soll/will — vom Menschen gesetzt
-(``source=human``, frühere Assignments) oder vom Character (``source=character``:
-Versprechen, Retrospect-Ziele). Mit Trigger-Bedingung (now/at_time/at_location/
-standing) + optionaler Aktion (meist leer = „bumpen mit Hint", Entscheidung 4).
+ONE entry for everything a character shall or wants to do — set by a human
+(``source=human``) or by the character itself (``source=character``: promises,
+retrospect goals). With a trigger condition (now/at_time/at_location/standing)
+plus an optional action (usually empty = "bump with a hint", decision 4).
 
-Phase 1: Datenmodell + CRUD + Migration der alten Assignments. Engine/Prompt/
-Erzeugung/Panel folgen in Phase 2+ — daher liest in Phase 1 noch nichts diese
-Tabelle (kein Verhaltenswechsel).
+Data model + CRUD live here; the engine (prompt block, character markers,
+trigger application) follows further down in this module.
 """
 from __future__ import annotations
 
@@ -259,39 +258,6 @@ def expire_overdue() -> int:
         except Exception:
             pass
     return n
-
-
-def migrate_assignments_to_intents() -> int:
-    """Idempotent: jede Assignment-Zeile, für die noch KEIN Intent mit gleicher
-    id existiert, als Intent (trigger=standing) anlegen. Lässt die assignments-
-    Tabelle unangetastet (Phase 1 = kein Verhaltenswechsel)."""
-    migrated = 0
-    try:
-        from app.models import assignments as _asg
-        rows = _asg._load_all()
-    except Exception as e:
-        logger.debug("migrate: load assignments failed: %s", e)
-        return 0
-    for a in rows or []:
-        aid = a.get("id") or ""
-        if not aid or get_intent(aid):
-            continue
-        parts = a.get("participants") or {}
-        owner = next(iter(parts.keys()), "") or a.get("character_name", "")
-        src = "character" if a.get("source") == "chat" else "human"
-        st = {"completed": "done", "expired": "expired"}.get(a.get("status", ""), "active")
-        create_intent(
-            intent_id=aid, owner=owner, title=a.get("title", ""),
-            description=a.get("description", ""), source=src,
-            participants=parts, trigger={"kind": "standing"}, action={},
-            priority=a.get("priority", 3), status=st,
-            location_id=a.get("location_id", ""), target_count=a.get("target_count", 0),
-            outfit_hint=a.get("outfit_hint", ""), expires_at=a.get("expires_at") or "",
-            meta={"migrated_from": "assignment"})
-        migrated += 1
-    if migrated:
-        logger.info("Intents-Migration: %d Assignment(s) -> intents", migrated)
-    return migrated
 
 
 # ====================================================================

@@ -43,15 +43,6 @@ _migrate_config_file(_paths.get_config_path())
 from app.core.db import init_schema as _init_db_schema
 _init_db_schema()
 
-# One-time migration: old status_modifiers.json -> prompt_filters table.
-# Idempotent: only when the file exists and its entries are not in the DB
-# yet. The file is renamed to *.migrated afterwards.
-try:
-    from app.core.prompt_filters import migrate_status_modifiers_once
-    migrate_status_modifiers_once()
-except Exception:
-    pass
-
 # One-time migration (2026-09-08): the gitignored catalog overlay files
 # (<axis>_catalog.local.json, per installation) become the WORLD layer of the
 # pose/expression catalog in world.db. Each file is renamed to *.migrated, so
@@ -320,15 +311,6 @@ async def lifespan(app: FastAPI):
     except Exception as _pae:
         logger.warning("prop area migration failed: %s", _pae)
 
-    # Unified intents (plan-intents-unified.md, phase 1): mirror existing
-    # assignments idempotently into the intents table. No behaviour change —
-    # assignments stay the driving source in phase 1.
-    try:
-        from app.models.intents import migrate_assignments_to_intents
-        migrate_assignments_to_intents()
-    except Exception as _ie:
-        logger.debug("intents migration failed: %s", _ie)
-
     # Soul values (personality/presence/tasks/soul/beliefs/lessons/goals) live
     # in the character's soul/*.md files. Saves used to leave a second copy in
     # profile_json that no UI showed and no reset reached, but that the prompt
@@ -401,14 +383,6 @@ async def lifespan(app: FastAPI):
     # Migration: Variant-Dateinamen mit Character-Name prefixen
     from app.core.expression_regen import migrate_variant_filenames
     migrate_variant_filenames()
-
-    # Migration: legacy weekly/monthly rollup JSON files -> summaries table
-    # (DB-only convention; idempotent — no-op once the files are gone).
-    try:
-        from app.core.memory_service import migrate_rollup_summaries_to_db
-        migrate_rollup_summaries_to_db()
-    except Exception as _rme:
-        logger.debug("rollup-summaries migration failed: %s", _rme)
 
     # Migration: rename the legacy narrator-speaker sentinel to the canonical
     # STORYTELLER_SPEAKER in all persisted rows (idempotent, world_kv-marked).
