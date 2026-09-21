@@ -739,8 +739,8 @@ async def chat(request: Request) -> StreamingResponse:
     # coroutine, NOT inside the generate() async generator below — a
     # ContextVar.set() in an async-generator body leaks into whoever resumes
     # it (PEP 568 was never implemented). generate() is driven by the
-    # asyncio.create_task(mgr.feed_from_generator(...)) at the end of this
-    # function, and create_task COPIES this context — so every LLM call of
+    # mgr.start_feed(...) at the end of this function, whose create_task
+    # COPIES this context — so every LLM call of
     # the turn (spell detect, chat stream, tools, post-processing) carries
     # this trace id, and the generator's own context writes stay in the copy.
     begin_trace("user_chat", current_agent)
@@ -909,28 +909,13 @@ async def chat(request: Request) -> StreamingResponse:
     _image_display_url = ""  # URL for frontend display in saved message
     _has_image = bool(image_id or image_url)
     if _has_image:
-        image_path = None
-        if image_id:
-            # Uploaded image
-            _upload_path = _get_chat_upload_dir() / image_id
-            if _upload_path.exists() and ".." not in image_id:
-                image_path = str(_upload_path)
-                _image_display_url = f"/chat/upload-image/{image_id}"
-        elif image_url:
-            # Character library image — resolve to filesystem path
-            # URL format: /characters/{name}/images/{filename}?user_id={uid}
-            import urllib.parse
-            _parsed = urllib.parse.urlparse(image_url)
-            _parts = _parsed.path.strip("/").split("/")
-            if len(_parts) >= 3 and _parts[0] == "characters" and _parts[2] == "images":
-                _char_name = _parts[1]
-                _img_file = "/".join(_parts[3:])
-                if ".." not in _img_file and ".." not in _char_name:
-                    _img_dir = get_character_images_dir(_char_name)
-                    _resolved = _img_dir / _img_file
-                    if _resolved.exists():
-                        image_path = str(_resolved)
-                        _image_display_url = image_url
+        # One resolver for both kinds of attachment. Writing it a second time
+        # here is what produced the broken display URL: the serve route is
+        # /chat/{user_id}/upload-image/{id}, so a three-segment
+        # /chat/upload-image/{id} matches nothing and the image stayed a
+        # broken icon in the saved message.
+        _resolved_path, _image_display_url = resolve_chat_image(image_id, image_url)
+        image_path = _resolved_path or None
 
         if image_path:
             # Start analysis — wir warten unten synchron darauf, damit das
@@ -1593,7 +1578,7 @@ async def chat(request: Request) -> StreamingResponse:
     _task_owner = (_req_user or {}).get("id", "") if _req_user else ""
     mgr = get_chat_task_manager()
     task_id = mgr.create_task(user_id=_task_owner)
-    asyncio.create_task(mgr.feed_from_generator(task_id, generate()))
+    mgr.start_feed(task_id, generate())
     return JSONResponse({"task_id": task_id})
 
 

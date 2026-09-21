@@ -818,11 +818,22 @@ class LaneManager:
         immediately and the busy ones as they are released — taking a lane
         away from a running call would be the one thing lanes exist to
         prevent.
+
+        Waiters are woken only when the pool really CHANGED. The queue path
+        calls ``sync_from_config`` before every single lane attempt, and a
+        full pool retries every 0.15 s per pending task: an unconditional
+        ``notify_all`` on the one process-wide condition would be hundreds of
+        thundering herds per second across ALL pools, each woken thread
+        recomputing R1-R4 for every waiter — in exactly the situation where
+        the CPU belongs to the running calls. A lane count changes when an
+        admin saves, not when a task asks.
         """
         with self._cond:
             pool = self._ensure_pool(pool_key, lanes)
+            before = (pool.target, len(pool.lanes))
             self._set_target(pool, lanes)
-            self._cond.notify_all()
+            if (pool.target, len(pool.lanes)) != before:
+                self._cond.notify_all()
 
     def sync_from_config(self, pool_key: str) -> None:
         """Applies the configured lane count of this pool.

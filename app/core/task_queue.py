@@ -414,7 +414,7 @@ class TaskQueue:
                    SET status='pending', error='', result=NULL,
                        started_at=NULL, completed_at=NULL, duration_s=0
                    WHERE task_id=?""",
-                (task_id))
+                (task_id,))
             conn.commit()
         self._wake_event.set()
         logger.info("Task wird wiederholt: %s", task_id)
@@ -445,23 +445,36 @@ class TaskQueue:
             return True
         return False
 
-    def clear_completed(self, older_than_hours: float = 24, queue_name: str = "") -> int:
-        """Deletes completed/failed/cancelled tasks older than N hours."""
+    # Statuses a cleanup may delete. A task that is pending or running is
+    # never one of them, whatever the caller asks for.
+    _CLEARABLE_STATUSES = ("completed", "failed", "cancelled", "interrupted")
+
+    def clear_completed(self, older_than_hours: float = 24, queue_name: str = "",
+                        status: str = "") -> int:
+        """Deletes finished tasks older than N hours.
+
+        ``status`` narrows the deletion to a single finished status (the same
+        filter ``queue_cli.py clear --status`` offers); an unknown status
+        deletes nothing instead of everything.
+        """
         from datetime import timedelta
         cutoff = (utc_now() - timedelta(hours=older_than_hours)).isoformat(timespec="seconds")
+        if status:
+            statuses = tuple(s for s in (status,) if s in self._CLEARABLE_STATUSES)
+            if not statuses:
+                logger.info("Bereinigt: 0 Tasks (unbekannter Status '%s')", status)
+                return 0
+        else:
+            statuses = self._CLEARABLE_STATUSES
+        placeholders = ",".join("?" * len(statuses))
+        sql = (f"DELETE FROM tasks WHERE status IN ({placeholders}) "
+               "AND completed_at < ?")
+        params: List[Any] = [*statuses, cutoff]
+        if queue_name:
+            sql += " AND queue_name=?"
+            params.append(queue_name)
         with self._write_lock, self._connect() as conn:
-            if queue_name:
-                cur = conn.execute(
-                    """DELETE FROM tasks
-                       WHERE status IN ('completed','failed','cancelled','interrupted')
-                       AND completed_at < ? AND queue_name=?""",
-                    (cutoff, queue_name))
-            else:
-                cur = conn.execute(
-                    """DELETE FROM tasks
-                       WHERE status IN ('completed','failed','cancelled','interrupted')
-                       AND completed_at < ?""",
-                    (cutoff))
+            cur = conn.execute(sql, tuple(params))
             conn.commit()
         logger.info("Bereinigt: %d Tasks", cur.rowcount)
         return cur.rowcount
@@ -547,21 +560,33 @@ class TaskQueue:
             conn.close()
 
     def _dequeue(self) -> Optional[Dict[str, Any]]:
-        """Atomically picks the next pending queued task (not tracked)."""
+        """Atomically picks the next pending queued task (not tracked).
+
+        The paused queue names are excluded IN the SELECT instead of the head
+        row being fetched and then thrown away: a paused queue holds back its
+        own tasks only. Otherwise one pending task of a paused queue (and
+        "default" is what the AgentLoop pause switch pauses) stops every other
+        queue behind it — background, improvements, instagram (LLM-4).
+        Priority ordering is unchanged.
+        """
         now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
+            paused = [r["queue_name"] for r in conn.execute(
+                "SELECT queue_name FROM queue_paused WHERE paused=1").fetchall()]
+            pause_clause = ""
+            if paused:
+                pause_clause = (" AND queue_name NOT IN ("
+                                + ",".join("?" * len(paused)) + ")")
             row = conn.execute(
-                """SELECT task_id, task_type, payload, priority, queue_name,
+                f"""SELECT task_id, task_type, payload, priority, queue_name,
                           agent_name, retry_count, max_retries
                    FROM tasks
                    WHERE status='pending'
                    AND (task_origin='queued' OR task_origin IS NULL)
+                   {pause_clause}
                    ORDER BY priority ASC, created_at ASC
-                   LIMIT 1""").fetchone()
+                   LIMIT 1""", tuple(paused)).fetchone()
             if not row:
-                return None
-            # Skip if queue is paused
-            if self._is_paused(row["queue_name"]):
                 return None
             conn.execute(
                 "UPDATE tasks SET status='running', started_at=? WHERE task_id=?",
@@ -792,10 +817,15 @@ class TaskQueue:
         logger.info("Worker aktiv: %s", threading.current_thread().name)
 
         while not self._stopped:
+            # Clear BEFORE looking for work: submit() commits its row and only
+            # then sets the event, so a set that lands between clear() and
+            # _dequeue() is already covered by the row this _dequeue sees.
+            # Clearing AFTER a successful wait() would drop the notification
+            # for a task this worker has not looked at yet (LLM-14).
+            self._wake_event.clear()
             task = self._dequeue()
             if task is None:
                 self._wake_event.wait(timeout=10)
-                self._wake_event.clear()
                 continue
 
             task_id = task["task_id"]

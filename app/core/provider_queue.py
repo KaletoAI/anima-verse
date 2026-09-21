@@ -1050,11 +1050,22 @@ class ProviderQueue:
         arrived (what R2/R3 will read in phase 2).
         """
         from app.core.llm_lanes import (
-            LaneTimeout, cache_key_for, get_lane_manager, pool_key_for,
+            LaneTimeout, cache_key_for, get_lane_manager, lane_priority_for,
+            pool_key_for,
         )
         pool_key = pool_key_for(task.provider_name or self.provider.name,
                                 task.model)
         task._cache_key = cache_key_for(task.task_type, task.agent_name)
+        # Same derivation as the streaming path (_acquire_chat_lane): in the
+        # lanes a call ranks by its PROMPT class, never by the queue priority.
+        # The rp_first tool decision is submitted as task_type "intent" with
+        # Priority.CHAT (chat_engine._run_tool_phase, after the reply) — taken
+        # literally it would rank as a conversation and walk past R3's
+        # affinity wait, R4's conversation hold and an R7 reservation, and so
+        # displace the very conversations those rules protect. `task.priority`
+        # itself is untouched: it is what pauses the queue and what the panel
+        # shows.
+        task._lane_priority = lane_priority_for(task.task_type)
         manager = get_lane_manager()
         # Live config: an admin save changes the lane count without a restart.
         manager.sync_from_config(pool_key)
@@ -1062,7 +1073,7 @@ class ProviderQueue:
             task._lane_arrived = manager.now()
         try:
             task._lane_handle = manager.acquire_lane(
-                pool_key, task._cache_key, task.priority,
+                pool_key, task._cache_key, task._lane_priority,
                 timeout=0, arrived=task._lane_arrived, label=task.task_type)
             return True
         except LaneTimeout:

@@ -6,6 +6,8 @@ Every format defines:
 - example: template for examples (with {tool_name} and {input} placeholders)
 - pattern: regex that detects tool calls in the LLM answer
 - stream_pattern: regex for early detection while streaming
+- stream_markers: lowercase literals, at least ONE of which must occur in any
+  text that stream_pattern can match (cheap prefilter, see find_stream_tool_call)
 - direct_pattern: regex for direct tool calls in user messages
 """
 import json
@@ -39,6 +41,7 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
         "example": '<tool name="{tool_name}">{input}</tool>',
         "pattern": r'<tool\s+name="(\w+)">([\s\S]*?)</tool>',
         "stream_pattern": r'<tool\s+name="(\w+)">([\s\S]*?)</tool>',
+        "stream_markers": ("<tool",),
         "direct_pattern": r'^<tool\s+name="(\w+)">([\s\S]*?)</tool>$',
     },
     "natural_en": {
@@ -55,6 +58,7 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
         "example": "Use {tool_name} for: {input}",
         "pattern": r"(?:I\s+)?[Uu]se\s+(\w+)\s+for:\s*(.*?)(?:\n|$)",
         "stream_pattern": r"(?:I\s+)?[Uu]se\s+(\w+)\s+for:\s*(.*?)(?:\n|$)",
+        "stream_markers": ("for:",),
         "direct_pattern": r"^(?:I\s+)?[Uu]se\s+(\w+)\s+for:\s*(.*?)$",
     },
     "natural_de": {
@@ -73,6 +77,7 @@ TOOL_FORMATS: Dict[str, Dict[str, Any]] = {
         "example": "Ich nutze {tool_name} für: {input}",
         "pattern": r"(?:Ich\s+)?[Nn]utze\s+(\w+)\s+f(?:ü|ue)r:\s*(.*?)(?:\n|$)",
         "stream_pattern": r"(?:Ich\s+)?[Nn]utze\s+(\w+)\s+f(?:ü|ue)r:\s*(.*?)(?:\n|$)",
+        "stream_markers": ("für:", "fuer:"),
         "direct_pattern": r"^(?:Ich\s+)?[Nn]utze\s+(\w+)\s+f(?:ü|ue)r:\s*(.*?)$",
     },
 }
@@ -491,15 +496,41 @@ def find_tool_calls(format_name: str, text: str,
     return filtered
 
 
+# Literals that gate the expensive scan in find_stream_tool_call: every
+# stream_pattern of every format AND the universal fallback need one of them,
+# so a text without any of them cannot contain a tool call.
+_STREAM_MARKERS: Tuple[str, ...] = tuple(sorted(
+    {m for fmt in TOOL_FORMATS.values() for m in fmt["stream_markers"]}
+    # The known-tool fallback below: "... for:" / "... für:" / "... fuer:"
+    | {"for:", "für:", "fuer:"}
+))
+
+
 def find_stream_tool_call(format_name: str, text: str,
                           known_tools: Optional[Dict] = None) -> Optional[re.Match]:
     """Checks whether a tool call is detected in the streaming text.
 
     Checks ALL known formats, not only the configured one.
 
+    The caller runs this per chunk over the WHOLE accumulated answer, so the
+    regexes would rescan the same text once per chunk — quadratic, on the
+    event loop (measured 434 ms for one 8000-character answer). A cheap
+    substring gate runs first: none of the patterns can match without one of
+    ``_STREAM_MARKERS`` being present, and the C-level ``in`` test over the
+    whole text is orders of magnitude cheaper than four regex scans. The
+    result is unchanged — the gate only skips work that could not match.
+    ``casefold()`` is deliberate: it never drops characters, so it cannot
+    hide a marker that ``re.IGNORECASE`` would still find.
+
     Returns:
         re.Match object when found, else None
     """
+    if not text:
+        return None
+    folded = text.casefold()
+    if not any(marker in folded for marker in _STREAM_MARKERS):
+        return None
+
     # 1. Configured format first
     fmt = get_format(format_name)
     match = re.search(fmt["stream_pattern"], text, re.IGNORECASE)

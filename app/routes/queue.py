@@ -166,9 +166,10 @@ def change_bg_task_priority(task_id: str, priority: int = 20) -> Dict[str, Any]:
 @router.delete("/tasks/clear")
 def clear_bg_tasks(hours: float = 24.0, status: str = "",
                    queue_name: str = "") -> Dict[str, Any]:
-    """Löscht alte abgeschlossene Tasks aus der Datenbank."""
+    """Delete old finished tasks; ``status`` narrows it to one finished status."""
     from app.core.task_queue import get_task_queue
-    deleted = get_task_queue().clear_completed(older_than_hours=hours, queue_name=queue_name)
+    deleted = get_task_queue().clear_completed(older_than_hours=hours, queue_name=queue_name,
+                                                   status=status)
     return {"status": "ok", "deleted": deleted}
 
 

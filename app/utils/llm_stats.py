@@ -19,10 +19,16 @@ from app.core.log import get_logger
 
 logger = get_logger("llm_stats")
 
-# Maximale Anzahl Calls pro (model, task, provider)-Bucket. Hoch genug fuer
-# Admin-Auswertungen ueber laengere Zeitraeume; Schaetzer braucht weiterhin nur
-# die letzten ~200, was via ORDER BY ts DESC LIMIT geliefert wird.
+# Maximum number of calls kept per (model, task, provider) bucket. High enough
+# for admin evaluations over longer periods. RETENTION only — it is the limit
+# of the DELETE in record_call and must not be used as a read limit.
 _BUCKET_LIMIT = 5000
+# How many of the most recent calls the estimator reads per bucket. The median
+# and the p90 of a remaining-time display need the recent behaviour of the
+# model, not weeks-old hardware states — and reading the full retention window
+# meant up to 3 x 5000 rows plus three Python sorts BEFORE every single LLM
+# call (the estimate runs per task start and per chat registration).
+_READ_WINDOW = 200
 # Mindest-Samples damit der primaere Bucket genutzt wird (sonst Fallback)
 _MIN_TASK_SAMPLES = 5
 
@@ -134,6 +140,7 @@ def _fetch_bucket(model: str, task: Optional[str], provider: Optional[str]):
     """Holt die letzten N Eintraege fuer den angegebenen Bucket.
 
     `task=None` oder `provider=None` heisst "egal" (kein WHERE-Filter).
+    Es werden hoechstens `_READ_WINDOW` Zeilen gelesen (juengste zuerst).
     Returns Liste von (in_tokens, out_tokens, duration_s).
     """
     conn = get_connection()
@@ -145,7 +152,7 @@ def _fetch_bucket(model: str, task: Optional[str], provider: Optional[str]):
     if provider is not None:
         where.append("provider = ?")
         params.append(provider)
-    params.append(_BUCKET_LIMIT)
+    params.append(_READ_WINDOW)
     sql = (
         "SELECT in_tokens, out_tokens, duration_s "
         "FROM llm_call_stats "

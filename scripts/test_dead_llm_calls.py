@@ -36,10 +36,12 @@ Checks (expected values derived by hand from the code, not recorded from a run):
      still leave the character override dead.
   8. NO ``async def`` under ``app/routes/`` calls into the pose write path
      inline — see the ``_BLOCKING_CALLEES`` note for why that still holds now
-     that no LLM sits in the chain. Scanned callees: ``set_pose_intent`` and
-     the three one-hop entries ``_extract_activity`` / ``_extract_mood``
-     (``chat.py``) and ``execute_cast`` (``spell_engine.py``).
-     Plus: the six known sites must KEEP their offload — the absence scan
+     that no LLM sits in the chain. Scanned callees: ``set_pose_intent``, the
+     one-hop entries ``_extract_activity`` / ``_extract_mood`` (``chat.py``)
+     and ``execute_cast`` (``spell_engine.py``), and the two named sync bodies
+     ``_play_set_activity_sync`` / ``_play_set_mood_sync`` (``play.py``) that
+     a route may only reach through a thread.
+     Plus: the seven known sites must KEEP their offload — the absence scan
      alone would also pass if the call were simply deleted.
 
 Why checks 6 and 8 work on the source, not on a live call: the only caller of
@@ -96,12 +98,19 @@ def loc(obj) -> str:
 # coroutine still stalls the event loop and with it every SSE stream. The bound
 # shrank from "up to 3 x 300 s" to "however long the DB lock is held" —
 # shorter, not zero, and an SSE stream must not pay it.
-#   set_pose_intent   app/models/character.py  (the chain itself)
-#   _extract_activity app/routes/chat.py       -> set_pose_intent
-#   _extract_mood     app/routes/chat.py       (same extraction pair)
-#   execute_cast      app/core/spell_engine.py -> set_pose_intent
+#   set_pose_intent          app/models/character.py  (the chain itself)
+#   _extract_activity        app/routes/chat.py       -> set_pose_intent
+#   _extract_mood            app/routes/chat.py       (same extraction pair)
+#   execute_cast             app/core/spell_engine.py -> set_pose_intent
+#   _play_set_activity_sync  app/routes/play.py       -> set_pose_intent
+#   _play_set_mood_sync      app/routes/play.py       (sibling: profile write)
+# The two `_play_*_sync` helpers ARE the blocking body of their route — the
+# route may only reach them through a thread. Naming them here keeps the guard
+# on the whole chain: without them, moving the blocking work into a named sync
+# helper and calling that helper inline would pass unnoticed.
 _BLOCKING_CALLEES = {"set_pose_intent", "_extract_activity", "_extract_mood",
-                     "execute_cast"}
+                     "execute_cast", "_play_set_activity_sync",
+                     "_play_set_mood_sync"}
 
 # Deliberate inline exceptions: {(file, async def name, callee): reason}.
 # Empty today — every site under app/routes/ is offloaded. The mechanism
@@ -114,7 +123,13 @@ _ALLOWED_INLINE: dict = {}
 # Sites that must keep their offload. The scan above only proves the ABSENCE
 # of an inline call — deleting the call entirely would pass it too.
 _EXPECTED_OFFLOADS = (
-    ("app/routes/play.py", "play_set_activity", "set_pose_intent"),
+    # play_set_activity/play_set_mood no longer call the blocking work
+    # themselves: each awaits `asyncio.to_thread(<name>_sync, ...)`, and the
+    # sync helper is what reaches set_pose_intent (play.py, two call sites).
+    # The expectation therefore names the HELPER — that is the offload the
+    # route must keep.
+    ("app/routes/play.py", "play_set_activity", "_play_set_activity_sync"),
+    ("app/routes/play.py", "play_set_mood", "_play_set_mood_sync"),
     ("app/routes/characters.py", "update_character_current_activity", "set_pose_intent"),
     ("app/routes/group_chat.py", "generate", "_extract_activity"),
     ("app/routes/group_chat.py", "generate", "_extract_mood"),
@@ -205,8 +220,8 @@ def _iter_blocking_calls_in_coroutines():
                     continue
                 yield (f"{rel}:{node.lineno}",
                        f"async def {fn.name} calls {name}(...) inline — that "
-                       f"chain reaches set_pose_intent, whose synchronous "
-                       f"profile write blocks on the world-DB write lock and "
+                       f"chain ends in a synchronous profile write (the pose "
+                       f"chain) which blocks on the world-DB write lock and "
                        f"stalls the event loop and every SSE stream; wrap it "
                        f"in await asyncio.to_thread(...)")
 

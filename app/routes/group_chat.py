@@ -752,7 +752,7 @@ async def group_chat(request: Request):
 
     mgr = get_chat_task_manager()
     task_id = mgr.create_task()
-    asyncio.create_task(mgr.feed_from_generator(task_id, generate()))
+    mgr.start_feed(task_id, generate())
     return JSONResponse({"task_id": task_id})
 
 
