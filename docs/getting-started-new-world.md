@@ -52,7 +52,10 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
      physical GPU the same group name so their calls run one at a time.
    - **LLM Models (Simple)** — pick a provider + model per job category (chat / tools / helper /
      vision / embedding). This fills the advanced routing automatically. Embedding can run built-in
-     (`Embedding → Backend: internal`) with no external endpoint.
+     (`Embedding → Backend: internal`) with no external endpoint. Its default model is English-only:
+     if your world is not played in English and the situational memory block is on, switch
+     `Embedding → Internal Model` to the multilingual `paraphrase-multilingual-mpnet-base` — the
+     Validate button on the settings page reports that combination as a warning.
    - **LLM Routing (Advanced)** (only if you want to route a single job differently) has **three**
      pages: **Tasks** — one row per task with its ordered chain of LLM entries (the order IS the
      position, you do not type a number); **LLMs** — the entries themselves (`Provider`, `Model`,

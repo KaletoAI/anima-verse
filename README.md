@@ -105,7 +105,10 @@ stops acting autonomously).
 - **Model capabilities** (`/admin/models`): tool-calling, vision, JSON strictness, model class and
   more per model — stored once for all worlds in `shared/config/model_capabilities.json`.
 - **Built-in text embeddings** (`fastembed` / ONNX, CPU — no external endpoint needed) used for pose
-  matching; `auto` / `internal` / `external`, configurable in the admin UI.
+  matching; `auto` / `internal` / `external`, configurable in the admin UI. The default built-in model
+  is English-only — a world played in another language should pick the multilingual
+  `paraphrase-multilingual-mpnet-base` model, and the Validate button on `/admin/settings` warns about
+  the mismatch whenever the situational memory block is switched on.
 
 ### Chat & memory
 - Real-time streaming chat over Server-Sent Events.

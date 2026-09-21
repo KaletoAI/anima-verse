@@ -18,6 +18,7 @@ def validate_config(config: dict) -> List[Dict[str, Any]]:
     issues.extend(_check_tts(config))
     issues.extend(_check_skills(config))
     issues.extend(_check_server(config))
+    issues.extend(_check_embedding(config))
     return issues
 
 
@@ -213,6 +214,24 @@ def _check_imagegen_ref(val: str, backends: list, section: str, label: str, issu
     be_names = {b.get("name", "") for b in backends}
     if not any(fnmatch.fnmatch(str(n).lower(), pl) for n in be_names):
         issues.append(_warn(section, f"{label} default: no backend matches '{pat}'"))
+
+
+# ── Embedding Checks ──
+
+def _check_embedding(config: dict) -> list:
+    """The built-in model must be able to read the language of the world.
+
+    Only a warning, never an error: the configuration still runs, it just
+    ranks badly. The account language is read live (it is changed in the
+    Player UI, not here), so the finding reflects the language as it is at
+    the moment the admin validates.
+    """
+    from app.core.embedding import (english_model_language_mismatch,
+                                    language_mismatch_message)
+    found = english_model_language_mismatch(config)
+    if not found:
+        return []
+    return [_warn("embedding", language_mismatch_message(*found))]
 
 
 # ── TTS Checks ──
