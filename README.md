@@ -54,6 +54,10 @@ backend.
 **Default-deny authentication.** Without a session every route answers `401` (a browser navigation
 gets redirected to a login form instead), and non-admins get `403` on the admin surfaces. Only the
 two React shells, `/static`, `/i18n`, the login round trip and `/health` are reachable anonymously.
+**World-level data is admin-only:** every `POST`/`PUT`/`PATCH`/`DELETE` under `/world`, `/rules`,
+`/intents`, `/events`, `/templates`, `/inventory/items` and `/inventory/rooms` needs the admin role,
+as do the global queue controls. A player still reads all of it, and keeps every write that belongs
+to playing — chat, movement, own inventory and outfit, gifts, scene photos, cancelling own tasks.
 
 **Three frontends, one project:**
 

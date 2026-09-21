@@ -34,6 +34,10 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
 
    Authentication is default-deny: without a session every endpoint answers `401`, a browser
    navigation is redirected to the login form, and a non-admin gets `403` on the admin surfaces.
+   Building the world is an admin act on top of that: every write (`POST`/`PUT`/`PATCH`/`DELETE`)
+   under `/world`, `/rules`, `/intents`, `/events`, `/templates`, `/inventory/items` and
+   `/inventory/rooms`, plus the global queue controls, answers `403` for a plain player — reading
+   stays open, and so does everything a player does while playing.
 
 3. **Configure server-side settings** at `http://<host>:8000/admin/settings`, top to bottom. The
    minimum before anything works:

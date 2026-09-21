@@ -329,20 +329,60 @@ _ADMIN_PREFIXES = (
     "/story-dev",
     "/scheduler",
 )
-# Readable for a player, writable only for an admin. /templates/{id} is what
-# the player's own avatar settings render from (character settings come from
-# the template, never from a hardcoded form) — writing a template is not.
-_ADMIN_WRITE_PREFIXES = ("/templates",)
+# Readable for a player, writable only for an admin — segment-wise prefixes,
+# write methods only (GET/HEAD stay open everywhere).
+#
+# WORLD-LEVEL DATA IS ADMIN-ONLY (user decision 2026-09-21). Everything under
+# these prefixes describes the world itself, not one player's turn: locations,
+# rooms, props and their variants (routes/prop_variants.py registers under
+# /world too), surface textures, the game clock, the rule book, the intent
+# catalogue, world events and the shared item catalogue. Authoring them is an
+# admin act; playing in the world is not.
+#
+# /templates/{id} is what the player's own avatar settings render from
+# (character settings come from the template, never from a hardcoded form) —
+# writing a template is not.
+_ADMIN_WRITE_PREFIXES = (
+    "/templates",
+    "/world",             # incl. routes/prop_variants.py, which registers here
+    "/rules",
+    "/intents",
+    "/events",
+    "/inventory/items",   # the shared item catalogue (incl. /items/import)
+    "/inventory/rooms",   # what lies around in a room
+    # NOT /inventory/characters/* — that is character-scoped, already limited
+    # by the allowed_characters filter, and the player's GiftPicker posts
+    # /inventory/characters/{avatar}/{item_id}/give.
+)
+
+# Writes that stay open to any logged-in player although they lie under one of
+# the prefixes above. Exact path match, no prefix semantics, and it exempts
+# from the write rules only — never from _ADMIN_EXACT or _ADMIN_PREFIXES.
+_PLAYER_WRITE_EXCEPTIONS = {
+    # The "Improve" button of the image-generation dialog (frontend
+    # components/ImageGenDialog.tsx, slotted into the player's scene-photo and
+    # regenerate flows). It rewrites the prompt text the player just typed and
+    # touches no world data at all.
+    "/world/imagegen-enhance-prompt",
+}
+
 # Single state-changing routes that belong to an otherwise player-facing
-# router. /inventory/items/import and /characters/import unpack an uploaded
-# ZIP into the storage directory; /characters/create makes a new character.
+# router. /characters/import unpacks an uploaded ZIP into the storage
+# directory; /characters/create makes a new character.
 _ADMIN_EXACT = {
-    "/inventory/items/import",
     "/characters/import",
     "/characters/create",
 }
-# Deleting a location, a prop or a surface texture is an admin act.
-_ADMIN_DELETE_PREFIXES = ("/world",)
+# Global queue control — write methods only. Resuming every paused provider
+# queue and clearing the finished-task table act on everybody's jobs, so they
+# are admin acts; cancelling or retrying ONE task is not, and stays with the
+# player's TaskPanel (DELETE /queue/tasks/{id}, POST /queue/tasks/item/{id}/retry).
+# Exact matches on purpose: /queue/tasks/clear and /queue/tasks/{task_id} share
+# a shape, so a prefix rule here would take the per-task cancel with it.
+_ADMIN_WRITE_EXACT = {
+    "/queue/force-resume",
+    "/queue/tasks/clear",
+}
 _WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 
 
@@ -367,18 +407,20 @@ def is_admin_only_path(path: str, method: str) -> bool:
     if any(_under(path, p) for p in _ADMIN_PREFIXES):
         return True
     if method in _WRITE_METHODS:
-        if any(_under(path, p) for p in _ADMIN_WRITE_PREFIXES):
+        if path in _PLAYER_WRITE_EXCEPTIONS:
+            return False
+        if path in _ADMIN_WRITE_EXACT:
             return True
-    if method == "DELETE":
-        if any(_under(path, p) for p in _ADMIN_DELETE_PREFIXES):
+        if any(_under(path, p) for p in _ADMIN_WRITE_PREFIXES):
             return True
         # DELETE /characters/{name} removes the character itself. Deeper
         # deletes under a character (a gallery image, an animation) stay with
         # the player and are covered by the allowed_characters filter.
-        parts = _path_parts(path)
-        if (len(parts) == 2 and parts[0] == "characters"
-                and parts[1] not in _RESERVED_CHARACTER_NAMES):
-            return True
+        if method == "DELETE":
+            parts = _path_parts(path)
+            if (len(parts) == 2 and parts[0] == "characters"
+                    and parts[1] not in _RESERVED_CHARACTER_NAMES):
+                return True
     return False
 
 

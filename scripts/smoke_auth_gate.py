@@ -82,6 +82,66 @@ D) THE SECURE COOKIE (SEC-5c) — ``sessions.is_secure_request``:
      ("https", "http")            -> False   (header wins, first hop counts)
      ("http",  "https, http")     -> True    (first entry = client-facing hop)
 
+E) WORLD-LEVEL WRITES ARE ADMIN-ONLY (user decision 2026-09-21) — the table
+   below is ``is_admin_only_path(path, method)`` read off the four rules by
+   hand. Writes are POST/PUT/PATCH/DELETE (``_WRITE_METHODS``); GET and HEAD
+   are untouched by all four, so every GET row is False.
+
+     1. everything under /world (incl. the prop-variant routes, which
+        ``app/routes/prop_variants.py`` registers under the same prefix) —
+        True for a write, with exactly ONE exception:
+        POST /world/imagegen-enhance-prompt, the "Improve" button of the
+        image-generation dialog, which the player UI reaches and which only
+        rewrites the prompt text the player typed (``_PLAYER_WRITE_EXCEPTIONS``).
+        The old ``_ADMIN_DELETE_PREFIXES = ("/world",)`` is folded into this
+        rule; DELETE /characters/{name} keeps its own rule.
+     2. everything under /rules, /intents, /events — True for a write.
+     3. /inventory: writes under /inventory/items (the shared catalogue, which
+        now covers the formerly exact /inventory/items/import) and under
+        /inventory/rooms are True; /inventory/characters/... stays False —
+        it is character-scoped and the allowed_characters filter governs it
+        (the player's GiftPicker posts
+        POST /inventory/characters/{avatar}/{item_id}/give).
+     4. /queue: POST /queue/force-resume and DELETE /queue/tasks/clear are
+        True (global queue control); DELETE /queue/tasks/{task_id} and
+        POST /queue/tasks/item/{task_id}/retry stay False (the player's
+        TaskPanel cancels and retries its own jobs). /queue/tasks/clear and
+        /queue/tasks/{task_id} share a shape, so these two are EXACT matches,
+        never a prefix.
+
+   Prefix neighbours: ``_under`` is segment-wise, so /worldly, /rulesx,
+   /eventsful, /intentsful and /inventory/itemsy are NOT under the rules above
+   and stay False even for a write.
+
+F) NO PLAYER SURFACE POSTS TO AN ADMIN-ONLY PATH — a source scan, not a
+   request. It walks every write call (``apiPost``/``apiPut``/``apiPatch``/
+   ``apiDelete``/``apiUpload`` and ``fetch(url, { method: ... })``) in the
+   files a logged-in PLAYER can reach:
+
+     packages/player-ui/src/**            the shared player panels
+     frontend/src/player/**               the /play shell
+     frontend/src/components/ImageGenDialog.tsx   slotted into /play
+     frontend/src/tabs/characters/{TemplateTab,TemplateSectionForm,BodyEditor,
+                                    SoulEditor,FieldImage}.tsx
+                                          pulled in by AvatarSettingsPanel
+     client3d/src/**                      the 3D client
+
+   and asserts that none of their URL literals is admin-only under the rules
+   of E. Template placeholders (``${...}``) become one opaque segment and a
+   query string is cut off, so ``/queue/tasks/${id}`` is checked as
+   ``/queue/tasks/X``. A future player feature that posts to /world therefore
+   fails this smoke instead of silently 403ing in the browser.
+
+   One documented exemption, verified by hand in the source:
+     POST /world/compose-preview (ImageGenDialog) — both call sites are
+     guarded by ``composeKey``, which is empty unless the ``composeRequest``
+     prop is passed. The only caller that passes it is
+     frontend/src/tabs/world/LocationGallery.tsx (Game-Admin); the three
+     ImageGenDialog instantiations in frontend/src/player/PlayerApp.tsx do not.
+   Not in the scanned set, for the same kind of reason: GameClock posts
+   /world/game-time, but /play renders it ``readOnly`` (PlayerApp.tsx), which
+   draws a plain <span> and no editor.
+
 Usage:  ./.venv/bin/python scripts/smoke_auth_gate.py
 """
 import os
@@ -280,6 +340,195 @@ check("http, no header", sec("http", ""), False)
 check("http, x-forwarded-proto https", sec("http", "https"), True)
 check("https, x-forwarded-proto http", sec("https", "http"), False)
 check("http, 'https, http'", sec("http", "https, http"), True)
+
+print()
+print("E) world-level writes are admin-only")
+admin_only = auth_dependency.is_admin_only_path
+
+# (method, path, expected) — see section E of the docstring for the derivation.
+WRITE_RULE_CASES = [
+    # Rule 1 — /world (and the prop-variant routes registered under it)
+    ("POST", "/world/locations", True),
+    ("PUT", "/world/locations/tavern", True),
+    ("PATCH", "/world/locations/tavern", True),
+    ("DELETE", "/world/locations/tavern", True),
+    ("POST", "/world/game-time", True),
+    ("POST", "/world/compose-preview", True),
+    ("POST", "/world/prop-variants/chair/split", True),
+    ("DELETE", "/world/surface-textures/forest", True),
+    ("GET", "/world/locations", False),
+    ("HEAD", "/world/locations", False),
+    ("GET", "/world", False),
+    # the one player exception
+    ("POST", "/world/imagegen-enhance-prompt", False),
+    ("GET", "/world/imagegen-enhance-prompt", False),
+    # ... exact, not a prefix: a deeper path is admin-only again
+    ("POST", "/world/imagegen-enhance-prompt/x", True),
+    # Rule 2 — /rules, /intents, /events
+    ("POST", "/rules", True),
+    ("PUT", "/rules/r1", True),
+    ("DELETE", "/rules/r1", True),
+    ("GET", "/rules", False),
+    ("POST", "/intents", True),
+    ("DELETE", "/intents/i1", True),
+    ("GET", "/intents", False),
+    ("POST", "/events", True),
+    ("DELETE", "/events/e1", True),
+    ("GET", "/events", False),
+    # Rule 3 — /inventory
+    ("POST", "/inventory/items", True),
+    ("PUT", "/inventory/items/apple", True),
+    ("DELETE", "/inventory/items/apple", True),
+    ("POST", "/inventory/items/import", True),
+    ("POST", "/inventory/items/apple/generate-image", True),
+    ("POST", "/inventory/rooms/tavern/bar", True),
+    ("DELETE", "/inventory/rooms/tavern/bar/apple", True),
+    ("GET", "/inventory/items", False),
+    ("GET", "/inventory/rooms/tavern/bar", False),
+    ("POST", "/inventory/characters/Mara/apple/give", False),
+    ("POST", "/inventory/characters/Mara/equip", False),
+    ("DELETE", "/inventory/characters/Mara/apple", False),
+    # Rule 4 — /queue
+    ("POST", "/queue/force-resume", True),
+    ("DELETE", "/queue/tasks/clear", True),
+    ("DELETE", "/queue/tasks/abc", False),
+    ("POST", "/queue/tasks/item/abc/retry", False),
+    ("GET", "/queue/status", False),
+    ("GET", "/queue/tasks/status", False),
+    ("GET", "/queue/force-resume", False),
+    # Segment-wise prefixes: the neighbours are NOT matched
+    ("POST", "/worldly", False),
+    ("POST", "/worldly/locations", False),
+    ("POST", "/rulesx", False),
+    ("POST", "/intentsful/x", False),
+    ("POST", "/eventsful/x", False),
+    ("POST", "/inventory/itemsy", False),
+    ("POST", "/inventory/roomsy/x", False),
+    ("POST", "/queue/force-resumed", False),
+]
+for _m, _p, _exp in WRITE_RULE_CASES:
+    check(f"admin_only {_m} {_p}", admin_only(_p, _m), _exp)
+
+# The same rules end to end through the mounted middleware: a player is
+# refused, an admin passes, and the open routes stay open for the player.
+for _m, _p in [("POST", "/world/locations"), ("DELETE", "/world/locations/x"),
+               ("POST", "/rules"), ("POST", "/intents"), ("POST", "/events"),
+               ("POST", "/inventory/items"), ("POST", "/inventory/rooms/a/b"),
+               ("POST", "/queue/force-resume"), ("DELETE", "/queue/tasks/clear")]:
+    check(f"user {_m} {_p}", status(_m, _p, "user"), 403)
+    check(f"admin {_m} {_p}", status(_m, _p, "admin"), 200)
+for _m, _p in [("POST", "/world/imagegen-enhance-prompt"),
+               ("POST", "/inventory/characters/Mara/apple/give"),
+               ("DELETE", "/queue/tasks/abc"),
+               ("POST", "/queue/tasks/item/abc/retry"),
+               ("GET", "/world/locations"), ("GET", "/rules"),
+               ("GET", "/events"), ("GET", "/inventory/items")]:
+    check(f"user {_m} {_p}", status(_m, _p, "user"), 200)
+
+print()
+print("F) no player surface writes to an admin-only path")
+
+import re  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[1]
+# Every file a logged-in player's browser can execute — see section F.
+PLAYER_TREES = [
+    REPO / "packages" / "player-ui" / "src",
+    REPO / "frontend" / "src" / "player",
+    REPO / "client3d" / "src",
+]
+PLAYER_FILES = [
+    REPO / "frontend" / "src" / "components" / "ImageGenDialog.tsx",
+    REPO / "frontend" / "src" / "tabs" / "characters" / "TemplateTab.tsx",
+    REPO / "frontend" / "src" / "tabs" / "characters" / "TemplateSectionForm.tsx",
+    REPO / "frontend" / "src" / "tabs" / "characters" / "BodyEditor.tsx",
+    REPO / "frontend" / "src" / "tabs" / "characters" / "SoulEditor.tsx",
+    REPO / "frontend" / "src" / "tabs" / "characters" / "FieldImage.tsx",
+]
+# Write calls whose URL IS admin-only but which no player can trigger. Each
+# entry needs a reason that was verified in the source, not a hunch.
+SCAN_EXEMPT = {
+    ("POST", "/world/compose-preview"):
+        "ImageGenDialog: guarded by composeKey, set only via the composeRequest "
+        "prop — passed by tabs/world/LocationGallery.tsx (Game-Admin), never by "
+        "the three ImageGenDialog sites in player/PlayerApp.tsx",
+}
+
+_CALL_RE = re.compile(
+    r"(?:api(?P<api>Post|Put|Patch|Delete|Upload)\s*(?:<[^()]*?>)?\s*\(|fetch\s*\()")
+_METHOD_RE = re.compile(r"method\s*:\s*['\"](\w+)['\"]")
+_API_METHOD = {"Post": "POST", "Put": "PUT", "Patch": "PATCH",
+               "Delete": "DELETE", "Upload": "POST"}
+
+
+def _string_literal(tail: str):
+    """The first argument when it is a plain/template string, else None."""
+    tail = tail.lstrip()
+    if not tail or tail[0] not in "'\"`":
+        return None
+    quote, i, out = tail[0], 1, []
+    while i < len(tail) and tail[i] != quote:
+        if tail[i] == "\\":
+            i += 2
+            continue
+        out.append(tail[i])
+        i += 1
+    return "".join(out)
+
+
+def _normalise(url: str) -> str:
+    """`${expr}` -> one opaque segment, query string dropped."""
+    return re.sub(r"\$\{[^}]*\}", "X", url).split("?")[0].split("#")[0]
+
+
+def _scan(text: str):
+    """Yields (method, normalised_url) for every write call with a literal URL."""
+    for m in _CALL_RE.finditer(text):
+        tail = text[m.end():m.end() + 600]
+        lit = _string_literal(tail)
+        if lit is None or not lit.startswith("/"):
+            continue
+        api = m.group("api")
+        if api:
+            method = _API_METHOD[api]
+        else:
+            # A bare fetch() without an options object is a GET.
+            hit = _METHOD_RE.search(tail)
+            method = hit.group(1).upper() if hit else "GET"
+        if method not in auth_dependency._WRITE_METHODS:
+            continue
+        yield method, _normalise(lit)
+
+
+sources = list(PLAYER_FILES)
+for tree in PLAYER_TREES:
+    check(f"player tree exists: {tree.relative_to(REPO)}", tree.is_dir(), True)
+    sources += [p for p in tree.rglob("*") if p.suffix in (".ts", ".tsx")]
+
+found, offenders = {}, []
+for src in sorted(set(sources)):
+    if not src.is_file():
+        check(f"player file exists: {src.relative_to(REPO)}", False, True)
+        continue
+    for method, url in _scan(src.read_text(errors="replace")):
+        found.setdefault((method, url), set()).add(str(src.relative_to(REPO)))
+for (method, url), where in sorted(found.items()):
+    if not admin_only(url, method):
+        continue
+    if (method, url) in SCAN_EXEMPT:
+        continue
+    offenders.append(f"{method} {url}  <- {', '.join(sorted(where))}")
+
+print(f"  scanned {len(sources)} files, {len(found)} distinct write calls")
+# A lower bound so a broken regex cannot pass by finding nothing. Counted on
+# 2026-09-21: 55 distinct (method, url) write pairs across 146 scanned files.
+check("write calls found (>= 40)", len(found) >= 40, True)
+check("player writes hitting an admin-only path", offenders, [])
+# The exemption list must not rot: every entry has to still be found and still
+# be admin-only, otherwise it is silently covering nothing.
+for key in SCAN_EXEMPT:
+    check(f"exemption still present {key[0]} {key[1]}",
+          key in found and admin_only(key[1], key[0]), True)
 
 print()
 if FAILS:
