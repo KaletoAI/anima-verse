@@ -20,6 +20,11 @@ import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 import { useToast } from './Toast'
 import { useEnlarge } from './ZoomButton'
+import { thumbUrl, thumbWidth } from './thumbs'
+
+/** Item picture in the detail modal — 110 CSS px; the magnifier opens the
+ *  ORIGINAL file. */
+const DETAIL_W = thumbWidth(110)
 
 // Anker-Positionen (x%, y%) im KOORDINATENSYSTEM DES BILDES (silhouette.svg ist
 // 896×1216, die Figur liegt zentral). Hier werden die Symbole der getragenen
@@ -41,7 +46,8 @@ function ItemIcon({ itemId, hasImage, emoji, size }: { itemId: string; hasImage:
       justifyContent: 'center', fontSize: Math.round(size * 0.6), lineHeight: 1,
     }}>
       {hasImage && !failed
-        ? <img src={`/inventory/items/${encodeURIComponent(itemId)}/image`} alt=""
+        ? <img src={thumbUrl(`/inventory/items/${encodeURIComponent(itemId)}/image`, thumbWidth(size))} alt=""
+            loading="lazy" decoding="async"
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
             onError={() => setFailed(true)} />
         : emoji}
@@ -167,7 +173,7 @@ function ItemDetailModal({ itemId, slotLabels, onClose, onChanged }: {
           <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', gap: 12 }}>
               {item.image_url && (
-                <img src={item.image_url} alt="" {...enlarge({ src: item.image_url, alt: item.name }, {
+                <img src={thumbUrl(item.image_url, DETAIL_W)} alt="" {...enlarge({ src: item.image_url, alt: item.name }, {
                   width: 110, height: 110, objectFit: 'cover', borderRadius: 8,
                   flex: '0 0 auto', background: 'rgba(255,255,255,0.06)',
                 })} />

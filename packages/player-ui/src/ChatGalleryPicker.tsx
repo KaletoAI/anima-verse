@@ -13,6 +13,10 @@ import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
 import { apiGet } from './api'
 import { ZoomButton } from './ZoomButton'
+import { thumbUrl, thumbWidth } from './thumbs'
+
+/** Grid tile: `minmax(96px, 1fr)`. The magnifier opens the ORIGINAL. */
+const TILE_W = thumbWidth(96)
 
 interface LibImage {
   filename: string
@@ -94,8 +98,10 @@ export function ChatGalleryPicker({
                       }}
                     >
                       <img
-                        src={img.url}
+                        src={thumbUrl(img.url, TILE_W)}
                         alt={img.filename}
+                        loading="lazy"
+                        decoding="async"
                         style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                       />
                       <ZoomButton item={{ src: img.url, alt: img.filename }} />

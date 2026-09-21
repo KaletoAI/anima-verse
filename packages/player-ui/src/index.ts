@@ -8,6 +8,7 @@ export * from './icons';
 export * from './Toast';
 export * from './Lightbox';
 export * from './ZoomButton';
+export * from './thumbs';
 export * from './useQueue';
 export * from './SceneView';
 export * from './ScenesRecap';

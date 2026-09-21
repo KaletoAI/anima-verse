@@ -11,6 +11,10 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiDelete } from '../../lib/api'
 import { openLightbox } from '../../components/Lightbox'
 import { GalleryAccess } from './GalleryAccess'
+import { thumbUrl, thumbWidth } from '@anima/player-ui'
+
+/** Grid tile: `minmax(120px, 1fr)`. The lightbox keeps the ORIGINAL. */
+const TILE_W = thumbWidth(120)
 
 interface ImagesResp {
   character: string
@@ -82,7 +86,7 @@ export function GalleryTab({ character }: { character: string }) {
                   background: 'var(--bg, #0d1117)',
                   border: isProfile ? '2px solid var(--accent, #6aa9ff)' : '1px solid var(--border, #30363d)',
                 }}>
-                  <img src={imgUrl(f)} alt={f} loading="lazy" title={f} onClick={() => openOne(f)}
+                  <img src={thumbUrl(imgUrl(f), TILE_W)} alt={f} loading="lazy" decoding="async" title={f} onClick={() => openOne(f)}
                     style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', cursor: 'zoom-in' }} />
 
                   {isProfile && (

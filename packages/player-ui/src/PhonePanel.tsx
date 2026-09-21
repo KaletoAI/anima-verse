@@ -14,6 +14,7 @@ import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
 import { useLightbox } from './Lightbox'
 import { useEnlarge } from './ZoomButton'
+import { thumbUrl, thumbWidth } from './thumbs'
 
 interface Conversation {
   partner: string; avatar_url: string; last: string; last_ts: string
@@ -117,7 +118,7 @@ export function PhonePanel() {
         <div style={HEAD}>
           <button onClick={() => setSelected(null)} style={BACK_BTN} title={t('Back')}>‹</button>
           {conv?.avatar_url
-            ? <img src={conv.avatar_url} alt="" {...enlarge({ src: conv.avatar_url, alt: selected }, AVATAR)} />
+            ? <img src={thumbUrl(conv.avatar_url, AVATAR_W)} alt="" loading="lazy" decoding="async" {...enlarge({ src: conv.avatar_url, alt: selected }, AVATAR)} />
             : <span style={AVATAR_FB}>{selected[0]}</span>}
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{selected}</div>
@@ -188,7 +189,7 @@ export function PhonePanel() {
         {convs.map((c) => (
           <div key={c.partner} onClick={() => openConv(c.partner)} style={CONTACT_ROW}>
             {c.avatar_url
-              ? <img src={c.avatar_url} alt="" style={AVATAR} />
+              ? <img src={thumbUrl(c.avatar_url, AVATAR_W)} alt="" loading="lazy" decoding="async" style={AVATAR} />
               : <span style={AVATAR_FB}>{c.partner[0]}</span>}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
@@ -220,6 +221,8 @@ const SEND_BTN: CSSProperties = { flex: '0 0 auto', background: 'var(--accent, #
 const NEW_BTN: CSSProperties = { background: 'transparent', border: '1px solid var(--border, #30363d)', color: 'inherit', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', fontSize: 12 }
 const BACK_BTN: CSSProperties = { background: 'transparent', border: 'none', color: 'inherit', fontSize: 22, lineHeight: 1, cursor: 'pointer', padding: '0 4px' }
 const CONTACT_ROW: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid var(--border, #30363d)', cursor: 'pointer' }
+/** Chat avatar: 30 CSS px (AVATAR below). The magnifier opens the ORIGINAL. */
+const AVATAR_W = thumbWidth(30)
 const AVATAR: CSSProperties = { width: 30, height: 30, borderRadius: '50%', objectFit: 'cover', flex: '0 0 auto' }
 const AVATAR_FB: CSSProperties = { width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-hover, #1f2937)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto', textTransform: 'uppercase' }
 const BUBBLE: CSSProperties = { padding: '6px 10px', borderRadius: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }

@@ -24,6 +24,12 @@ import { Icon } from './icons'
 import { EmptyState } from './EmptyState'
 import { formatDateTime } from './clockFormat'
 import { clockSettings, useClockSettings } from './clockSettings'
+import { thumbUrl, thumbWidth } from './thumbs'
+
+/** Tile width the grid below targets: `minmax(72px, 1fr)` in a panel column,
+ *  so a tile is ~72-110 CSS px wide. One bucket for the whole grid — the
+ *  lightbox further down keeps the ORIGINAL file. */
+const TILE_W = thumbWidth(96)
 
 interface ImgInfo {
   prompt: string; model: string; backend: string; from_character: string
@@ -282,7 +288,7 @@ export function GalleryPanel({ regenDialog }: GalleryPanelProps = {}) {
                   style={{ position: 'relative', padding: 0, borderRadius: 6, overflow: 'hidden', cursor: 'pointer',
                     border: img.is_profile ? '2px solid var(--accent,#6aa9ff)' : '1px solid rgba(255,255,255,0.15)',
                     background: 'rgba(255,255,255,0.05)', aspectRatio: '3/4' }}>
-                  <img src={img.url} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                  <img src={thumbUrl(img.url, TILE_W)} alt="" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                   {img.postprocessed && (
                     <span title={t('Edited externally')} style={{ position: 'absolute', top: 2, right: 2, fontSize: '0.65em',
                       background: 'rgba(160,90,210,0.9)', color: '#fff', borderRadius: 3, padding: '0 3px' }}>✎</span>

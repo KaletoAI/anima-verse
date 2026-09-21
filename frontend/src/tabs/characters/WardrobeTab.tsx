@@ -11,6 +11,7 @@ import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
 import { PromptPreview } from './PromptPreview'
+import { thumbUrl, thumbWidth } from '@anima/player-ui'
 
 // Anker-Positionen (x%, y%) im Bild-Koordinatensystem (silhouette.svg).
 const SLOT_ANCHOR: Record<string, [number, number]> = {
@@ -28,7 +29,8 @@ function ItemIcon({ itemId, hasImage, emoji, size }: { itemId: string; hasImage:
       justifyContent: 'center', fontSize: Math.round(size * 0.6), lineHeight: 1,
     }}>
       {hasImage && !failed
-        ? <img src={`/inventory/items/${encodeURIComponent(itemId)}/image`} alt=""
+        ? <img src={thumbUrl(`/inventory/items/${encodeURIComponent(itemId)}/image`, thumbWidth(size))} alt=""
+            loading="lazy" decoding="async"
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
             onError={() => setFailed(true)} />
         : emoji}

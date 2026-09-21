@@ -12,6 +12,10 @@ import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
 import { ZoomButton } from './ZoomButton'
+import { thumbUrl, thumbWidth } from './thumbs'
+
+/** Item tile: `minmax(120px, 1fr)`. The magnifier opens the ORIGINAL. */
+const TILE_W = thumbWidth(120)
 
 interface InventoryEntry {
   item_id: string
@@ -172,8 +176,10 @@ export function GiftPicker({
                       {it.item_image ? (
                         <>
                           <img
-                            src={`/inventory/items/${encodeURIComponent(it.item_id)}/image`}
+                            src={thumbUrl(`/inventory/items/${encodeURIComponent(it.item_id)}/image`, TILE_W)}
                             alt={it.item_name || it.item_id}
+                            loading="lazy"
+                            decoding="async"
                             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                           />
                           <ZoomButton item={{ src: `/inventory/items/${encodeURIComponent(it.item_id)}/image`, alt: it.item_name || it.item_id }} />

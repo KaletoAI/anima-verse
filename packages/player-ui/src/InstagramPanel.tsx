@@ -20,9 +20,13 @@ import { usePoll } from './usePolling'
 import { useToast } from './Toast'
 import { useLightbox } from './Lightbox'
 import { useEnlarge } from './ZoomButton'
+import { thumbUrl, thumbWidth } from './thumbs'
 import { Icon } from './icons'
 import { formatDateTime } from './clockFormat'
 import { clockSettings, useClockSettings } from './clockSettings'
+
+/** Post-header avatar: 28 CSS px (.ig-avatar in panels.css). */
+const AVATAR_W = thumbWidth(28)
 
 interface Reaction {
   emoji?: string
@@ -411,7 +415,9 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
               ) : (
                 <img
                   className="ig-avatar"
-                  src={`/characters/${encodeURIComponent(agent)}/images/profile`}
+                  src={thumbUrl(`/characters/${encodeURIComponent(agent)}/images/profile`, AVATAR_W)}
+                  loading="lazy"
+                  decoding="async"
                   alt={agent}
                   {...enlarge({ src: `/characters/${encodeURIComponent(agent)}/images/profile`, alt: agent })}
                   onError={() => setAvatarFail((m) => ({ ...m, [agent]: true }))}

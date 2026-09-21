@@ -10,6 +10,7 @@ import { ApiError, apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
+import { thumbUrl, thumbWidth } from './thumbs'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 /** The avatar's relationship TO this character, as `/play/others` sends it.
@@ -54,6 +55,9 @@ function whereabouts(c: CharState, t: (s: string) => string): string {
     : c.activity
   return [doing, place].filter(Boolean).join(', ')
 }
+
+/** Roster portrait: 44 CSS px. The magnifier opens the ORIGINAL. */
+const AVATAR_W = thumbWidth(44)
 
 function portraitUrl(c: CharState): string {
   return c.profile_image
@@ -249,7 +253,7 @@ export function OthersPanel() {
           border: c.in_party ? '1px solid rgba(120,170,255,0.55)' : '1px solid rgba(255,255,255,0.08)',
         }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <img src={portraitUrl(c)} alt={c.name}
+            <img src={thumbUrl(portraitUrl(c), AVATAR_W)} alt={c.name} loading="lazy" decoding="async"
               onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
               {...enlarge({ src: portraitUrl(c), alt: c.name },
                 { width: 44, height: 44, borderRadius: 6, objectFit: 'cover', flex: '0 0 auto', background: 'rgba(255,255,255,0.08)' })} />

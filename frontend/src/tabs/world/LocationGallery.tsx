@@ -8,6 +8,11 @@ import { IMAGE_TYPES, isBuildingType, type GalleryResponse, type Location, type 
 import { ImageSetDialog } from './ImageSetDialog'
 import { openLightbox } from '../../components/Lightbox'
 import { useEnlarge } from '../../components/ZoomButton'
+import { thumbUrl, thumbWidth } from '@anima/player-ui'
+
+/** Card thumb: 100 CSS px (.ga-gallery-thumb). The card's click and the
+ *  move dialog keep the ORIGINAL file. */
+const TILE_W = thumbWidth(100)
 
 // ── Gallery — list, type-change, night-variant, delete, enlarge. ───────────
 
@@ -67,7 +72,7 @@ const GalleryCard = memo(function GalleryCard({
             color: '#fff', border: '1px solid rgba(255,255,255,0.6)',
           }}>{isSelected ? '✓' : ''}</span>
         ) : null}
-        <img src={url} alt={filename} />
+        <img src={thumbUrl(url, TILE_W)} alt={filename} loading="lazy" decoding="async" />
       </button>
       <div className="ga-gallery-card-body">
         <div className="ga-gallery-meta">
