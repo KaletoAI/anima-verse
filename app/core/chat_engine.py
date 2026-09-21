@@ -787,7 +787,26 @@ def run_chat_turn(
     # transcript) set the trigger explicitly, else the LLM has no last user turn.
     if not ctx.get("room_mode") or not ctx["messages"]:
         messages.append({"role": "user", "content": incoming_message})
-    messages = attach_moment(messages, ctx["moment_content"])
+    # The few memories that fit THIS line, BEHIND the scene state and inside
+    # the same user turn (app/core/memory_situational.py): it is built for the
+    # RESPONDER — its own facts and open promises — and queried with the
+    # utterance it is answering, which is what the room model calls the
+    # trigger. A line the responder never perceived produces no turn here, so
+    # a whisper it did not hear can never select memories for it.
+    # It rides on the moment instead of a second mechanism so there stays ONE
+    # place that writes the last user turn (attach_moment). Failure is silence
+    # (the module never raises), and this runs on the caller's thread by
+    # design: run_chat_turn is synchronous and its callers hand it to a
+    # worker (agent_loop: asyncio.to_thread), so the embedding call — the only
+    # one per turn, the candidate vectors come from the cache — never sits on
+    # the event loop.
+    from app.core import memory_situational
+    _situational = memory_situational.build_situational_block(
+        responder, incoming_message)
+    _moment = ctx["moment_content"]
+    if _situational:
+        _moment = f"{_moment}\n\n{_situational}" if _moment else _situational
+    messages = attach_moment(messages, _moment)
 
     # Label for the task panel — shows who-to-whom via which trigger
     if task_type == "talk_to":

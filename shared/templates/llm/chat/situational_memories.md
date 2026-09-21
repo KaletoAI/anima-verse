@@ -1,6 +1,8 @@
 {# The situational memory block. Rendered by
    ``app/core/memory_situational.py:render_block`` and appended to the CURRENT
-   USER TURN of a chat reply (app/routes/chat.py) — never to the system
+   USER TURN of a room reply, BEHIND the scene state: the one attach point is
+   ``app/core/chat_engine.py:run_chat_turn`` (it hangs the block on the moment
+   and ``attach_moment`` writes the last user turn). Never into the system
    prompt, whose cached prefix has to stay byte-identical.
 
    These are the character's own facts and open promises that came out closest

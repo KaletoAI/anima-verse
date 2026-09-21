@@ -334,6 +334,14 @@ def build_situational_block(character_name: str, message: str) -> str:
         if block:
             logger.info("[%s] situational memories: %d attached (best %.2f)",
                         character_name, len(entries), entries[0].get("score", 0.0))
+            # One DEBUG line with every score of this turn — the INFO line
+            # above stays at "how many, how close" and neither of them ever
+            # carries memory CONTENT: the block itself is in the prompt that
+            # logs/llm_calls.jsonl records, and that is the one place it
+            # belongs.
+            logger.debug("[%s] situational memories: %d attached, scores %s",
+                         character_name, len(entries),
+                         ", ".join(f"{e.get('score', 0.0):.3f}" for e in entries))
         return block
     except Exception as e:
         logger.debug("[%s] situational memory block failed: %s",
