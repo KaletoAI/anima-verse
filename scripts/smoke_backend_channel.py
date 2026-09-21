@@ -42,11 +42,19 @@ for two submissions A and B on the SAME backend exactly one order is possible:
       what keeps "busy is not broken" alive across the queue boundary.
 """
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# The storage root MUST be redirected BEFORE the first app import that can
+# open a world DB: paths.init otherwise falls back to worlds/demo — the world
+# tracked in git — and app.core.provider_queue would write into its world.db
+# (scripts/smoke_scripts_storage_lint.py enforces this).
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="backend-channel-storage-"))
 
 from app.core import provider_manager as pm_mod  # noqa: E402
 from app.core.provider import Provider  # noqa: E402

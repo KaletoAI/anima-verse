@@ -36,23 +36,48 @@ class SendMessageSkill(PluginSkill):
     SKILL_ID = "send_message"
 
     def handle_intent(self, intent_type, payload):
-        """[INTENT: send_message]: post the follow-up via the chat endpoint
-        (silent) so it lands in the regular history/stream."""
-        import os as _os
-        import requests as _requests
-        message = payload.get("message", "") or payload.get("content", "")
+        """[INTENT: send_message]: deliver the follow-up IN-PROCESS.
+
+        The intent runs on a TaskQueue worker thread inside this very server
+        (``intent_engine._dispatch_intent``). It used to POST to this server's
+        own ``/chat/{user_id}`` instead, which the default-deny auth gate now
+        answers with 401 — a background thread carries no session cookie. The
+        self-call was wrong before that too: the endpoint reads neither
+        ``agent`` nor ``silent``, its ``{user_id}`` segment is not even a
+        parameter (and ``payload["user_id"]`` is always empty, see
+        ``intent_engine._submit_to_task_queue``), so the follow-up arrived as a
+        USER utterance addressed to whoever the current chat partner was.
+
+        The verb itself IS the in-process delivery: ``execute`` writes both
+        history rows, bridges to Telegram, notifies and bumps the recipient.
+        The recipient is the one the intent named; with none, the follow-up is
+        meant for the player, i.e. their avatar.
+        """
+        import json as _json
+        message = str(payload.get("message") or payload.get("content") or "").strip()
         if not message:
             return {"success": False, "error": "missing message"}
-        try:
-            port = _os.environ.get("PORT", "8000")
-            resp = _requests.post(
-                f"http://localhost:{port}/chat/{payload.get('user_id', '')}",
-                json={"agent": payload.get("agent_name", ""),
-                      "message": message, "silent": True},
-                timeout=60)
-            return {"success": resp.ok, "status": resp.status_code}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        sender = str(payload.get("agent_name") or "").strip()
+        if not sender:
+            return {"success": False, "error": "missing agent_name"}
+
+        target = str(payload.get("to") or payload.get("target")
+                     or payload.get("recipient") or "").strip()
+        if not target:
+            from app.models.account import get_active_character
+            target = (get_active_character() or "").strip()
+        if not target:
+            return {"success": False,
+                    "error": "no recipient (intent named none, no avatar active)"}
+
+        args = {"agent_name": sender, "to": target, "message": message}
+        initiator = str(payload.get("initiator") or "").strip()
+        if initiator:
+            args["initiator"] = initiator
+        result = self.execute(_json.dumps(args, ensure_ascii=False))
+        success = bool(result) and not str(result).startswith("Error:") \
+            and "not found" not in str(result) and "cannot message" not in str(result)
+        return {"success": success, "result": str(result)[:500]}
 
     def defer_for_attachment(self, raw_input: str) -> bool:
         """attach_image requests must run AFTER this turn's deferred image

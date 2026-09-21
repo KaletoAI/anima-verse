@@ -66,6 +66,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# Throwaway storage root BEFORE the first app import. app.utils.llm_logger
+# reaches world.db through llm_stats.record_call; without this, paths.init
+# would resolve to worlds/demo — the world tracked in git
+# (scripts/smoke_scripts_storage_lint.py enforces this). Check 10 keeps
+# tokens_output at 0 so record_call is not called at all, but the redirect is
+# what makes that independent of the logger's internals.
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="llm-cache-usage-storage-"))
+
 from openai.types.chat import ChatCompletionChunk  # noqa: E402
 
 from app.core import llm_client  # noqa: E402

@@ -17,21 +17,28 @@ Infermatic) in the [README](../README.md#getting-started).
    On first start you'll see a warning that no `config.json` was found — the server boots anyway;
    everything is configured through the admin UI.
 
-2. **Log in as the bootstrap admin.** Open `http://<host>:8000/` and log in with the credentials
-   printed in the startup log:
+2. **Log in as the bootstrap admin.** On the first start of a world that has no users yet, the
+   server creates the user `admin` with a **random** password and prints it **once**, at WARNING
+   level, to stderr and `logs/main.log`:
 
-   ```
-   username: admin
-   password: admin1234
+   ```bash
+   grep "BOOTSTRAP ADMIN" logs/main.log
+   # === BOOTSTRAP ADMIN CREATED === username='admin' password='…' — shown ONCE, log in and change it. ===
    ```
 
-   Change this immediately under `/admin/users` — the bootstrap credentials are intentionally
-   trivial and not safe for any real deployment.
+   The password is nowhere else — it is stored only as a bcrypt hash — so pick it up now. Open
+   `http://<host>:8000/` and log in with it, then set your own password under `/admin/users`.
+   (No line at all means the world already has users; log in with those.)
 
 3. **Configure server-side settings** at `http://<host>:8000/admin/settings`, top to bottom. The
    minimum before anything works:
 
-   - **Server** — set a real `JWT Secret`.
+   - **Server** — set a real `JWT Secret`. Also `Allowed CORS origins` (`server.cors_origins`) as
+     soon as something calls this API from **another** origin: one origin per line (scheme + host
+     + port, no trailing slash), e.g. the Vite dev servers (`:5173`, `:5183`) or a 3D client on a
+     different machine. `/play` and `/game-admin` are delivered by this server itself and need no
+     entry; empty means no cross-origin access at all, a wildcard is not supported, and a change
+     **takes effect only after a restart**.
    - **LLM Providers** — at least one provider (Ollama, OpenAI-compatible, Anthropic) with `name`,
      `type` and `api_base`. Optional `serialize_group`: give the provider and any image backend
      sharing the same physical GPU the same group name so their calls run one at a time.
@@ -39,6 +46,11 @@ Infermatic) in the [README](../README.md#getting-started).
      vision / embedding). This fills the advanced routing automatically. Embedding can run built-in
      ("Internal") with no external endpoint.
    - *(optional)* **Image Backends**, **TTS** — only for the corresponding features.
+   - *(optional)* **Telegram** — `Webhook secret token` (`telegram.webhook_secret`). Until it is
+     set, `POST /telegram/webhook` is **refused** for every caller. Pass the same value as
+     `secret_token` when you register the webhook with Telegram's `setWebhook`; Telegram returns
+     it in the `X-Telegram-Bot-Api-Secret-Token` header and the server compares the two. Stored in
+     `secrets.json`.
 
    API keys, the JWT secret and passwords are written to a separate **`secrets.json`** next to
    `config.json` (gitignored), so the demo world can ship with an empty `config.json` and each user

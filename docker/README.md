@@ -14,8 +14,13 @@ and edited at `/admin/settings`. The image ships the demo world with content.
 git clone https://github.com/KaletoAI/anima-verse.git
 cd anima-verse/docker
 docker compose up -d --build
-# → http://<host>:8100   (login: admin / admin1234)
+# → http://<host>:8100
+docker compose logs | grep "BOOTSTRAP ADMIN"   # the one-time admin password
 ```
+
+The seeded demo world has no users, so the first start creates the user `admin` with a **random**
+password and logs it **once** (WARNING level). Pick it up from `docker compose logs` and change it
+under `/admin/users` — it is stored only as a hash and is never printed again.
 
 Then open `/admin/settings`, set the **LocalAI** provider's API base to your LLM
 server, and assign models under **LLM Routing**.

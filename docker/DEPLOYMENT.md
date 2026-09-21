@@ -133,14 +133,18 @@ docker compose logs -f   # follow startup; Ctrl-C to stop following
 ## Step 4 — First-run configuration (point it at LocalAI)
 
 1. Open `http://192.168.8.109:8100/` in a browser.
-2. Log in with the demo world's bootstrap admin account:
+2. Log in with the bootstrap admin account. The seeded demo world has no users, so the first
+   start created the user `admin` with a **random** password and logged it **once** at WARNING
+   level:
 
-   ```
-   username: admin
-   password: admin1234
+   ```bash
+   docker compose logs | grep "BOOTSTRAP ADMIN"
+   # === BOOTSTRAP ADMIN CREATED === username='admin' password='…' — shown ONCE, log in and change it. ===
    ```
 
-   (Change it under `/admin/users` for anything beyond a throwaway test.)
+   The password is stored only as a bcrypt hash and is never printed again, so copy it out of the
+   log now. Change it under `/admin/users` once you are in. (`docker compose down -v` resets the
+   volume to the fresh demo world — the next start then logs a NEW bootstrap password.)
 
 3. Go to **`http://192.168.8.109:8100/admin/settings`**.
 

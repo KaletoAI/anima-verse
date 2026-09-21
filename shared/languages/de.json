@@ -2210,6 +2210,11 @@
     "tilt": "Neigung",
     "roll": "Kippung",
     "floor shift": "Bodenversatz",
-    "calibration box": "Kalibrier-Quader"
+    "calibration box": "Kalibrier-Quader",
+    "Wrong username or password.": "Benutzername oder Passwort falsch.",
+    "Too many failed login attempts. Try again later.": "Zu viele fehlgeschlagene Anmeldeversuche. Bitte später erneut versuchen.",
+    "Username and password required": "Benutzername und Passwort erforderlich",
+    "Not authenticated": "Nicht angemeldet",
+    "Outfit does not fit a {decency} room — missing: {slots}. No suitable clothing in the inventory.": "Outfit passt nicht in einen {decency}-Raum — es fehlt: {slots}. Keine passende Kleidung im Inventar."
   }
 }

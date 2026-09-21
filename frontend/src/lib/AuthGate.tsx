@@ -90,8 +90,16 @@ function LoginForm({ onSuccess }: { onSuccess: (u: AuthUser) => void }) {
         onSuccess(r.user)
       }
     } catch (e) {
+      // Whatever we show comes from the server (`detail`), so it goes through
+      // t() — the known strings ("Too many failed login attempts…") have a
+      // German entry in shared/languages/de.json, anything else falls through
+      // unchanged. api.ts turns a 401 into the `auth:required` sentinel and
+      // drops the status, so the wrong-password case arrives BOTH ways.
       const status = (e as { status?: number }).status
-      setError(status === 401 ? t('Wrong username or password.') : (e as Error).message)
+      const raw = (e as Error).message || ''
+      setError(t(status === 401 || raw === 'auth required'
+        ? 'Wrong username or password.'
+        : raw))
     } finally {
       setBusy(false)
     }

@@ -10,7 +10,7 @@ Usage:  ./.venv/bin/python scripts/smoke_backend_runner.py
 
 THE RULE, and where it was dead code
 ---------------------------------------------------------------------------
-``run_on_backend`` (app/imagegen/selection.py) documents four outcomes:
+``run_on_backend`` (app/imagegen/selection.py) documents five outcomes:
 
   - ``BackendBusyError``  = load, not a defect -> NO cooldown, re-raised
     typed so the queue boundary retries it.
@@ -19,6 +19,8 @@ THE RULE, and where it was dead code
     ``_re_4xx`` matches 400/401/403/404/405/413/422, "Bad Request",
     "Unprocessable" — deliberately NOT 402: no credit means the backend
     cannot deliver, so a quota error IS a cooldown (decision E3).
+  - ``NoBackendChannelError`` = the config disabled this backend (or left it
+    without a URL) -> no cooldown, re-raised typed so it is skipped.
   - every other exception -> ``mark_unhealthy(..., 300s)``, re-raised.
   - empty result -> ``mark_unhealthy(..., 300s)`` + ``RuntimeError``.
 
@@ -42,6 +44,13 @@ Hand-derived expectations
       mark_unhealthy 1x.
   [4b] op raises ``RuntimeError("... (HTTP 402): no credit")`` -> cooldown,
       mark_unhealthy 1x — the deliberate exception to [1].
+  [4c] op raises ``NoBackendChannelError`` (app/core/provider_manager — the
+      named backend has no queue channel, i.e. the config disabled it or it
+      has no URL) -> the SAME treatment as busy: mark_unhealthy 0x,
+      ``available`` still True, re-raised TYPED so the caller skips this
+      backend. Before 2026-09-21 it fell into the generic branch and a merely
+      DISABLED backend was put on a 300 s cooldown — which then outlived
+      re-enabling it in the admin UI.
   [5] ``OpenAIDiffusionBackend._generate`` with a ``_post_gateway`` that
       raises the 400 RuntimeError must RAISE it. Before the fix: ``[]``.
       Checked for the generations path AND the edits/inpaint path, because
@@ -65,6 +74,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.core.provider_manager import NoBackendChannelError  # noqa: E402
 from app.imagegen.base import BackendBusyError, ImageBackend  # noqa: E402
 from app.imagegen import selection as selection_mod  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
@@ -137,6 +147,12 @@ run_case("empty", lambda b: [], "RuntimeError", 1, False)
 print("[4b] 402 quota stays a cooldown (decision E3)")
 run_case("402", _raiser(RuntimeError("fake: Quota/credit limit reached (HTTP 402): x")),
          "RuntimeError", 1, False)
+
+print("[4c] a backend without a queue channel is disabled, not broken")
+run_case("no-channel",
+         _raiser(NoBackendChannelError(
+             "Backend 'fake' has no queue channel (disabled or without API URL)")),
+         "NoBackendChannelError", 0, True)
 
 print("[5] openai_diffusion hands the HTTP error on instead of swallowing it")
 for label, method, kwargs in (

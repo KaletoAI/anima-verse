@@ -27,6 +27,24 @@ _re_4xx = re.compile(r"\b(?:HTTP\s*)?4(?:00|01|03|04|05|13|22)\b|Bad Request|Unp
 _BACKEND_COOLDOWN_SECONDS = 300.0
 
 
+def _no_channel_error():
+    """``NoBackendChannelError``, imported lazily.
+
+    ``app.core.provider_manager`` imports ``app.imagegen.registry`` (which
+    imports every backend), so this module keeps the direction one-way and
+    resolves the class on the error path only. Falls back to a never-matching
+    class if the import fails, so the generic handler below keeps its old
+    behaviour instead of the pool breaking.
+    """
+    try:
+        from app.core.provider_manager import NoBackendChannelError
+        return NoBackendChannelError
+    except Exception:   # pragma: no cover — cycle/partial import only
+        class _Never(Exception):
+            pass
+        return _Never
+
+
 class BackendPool:
     """Backend pool: cost-based selection, glob matching and fallback chain.
 
@@ -272,6 +290,12 @@ class BackendPool:
           the request, or a job died on the input we sent): backend stays
           available (the service is reachable, the request is broken) —
           re-raised.
+        - NoBackendChannelError = a CONFIGURATION statement, not a defect: the
+          backend has no queue channel because it is disabled or has no URL.
+          A cooldown on it would be meaningless (it is not selectable anyway)
+          and harmful (it would outlive re-enabling it in the admin UI by up
+          to 300 s). No cooldown, re-raised typed so the caller skips this
+          backend instead of retrying the same one.
         - Other exceptions / empty result: cooldown + raise.
 
         op(backend) -> List[bytes] | [] | None
@@ -291,6 +315,14 @@ class BackendPool:
             # typed exception survives to the retry layer.
             logger.warning("Backend-Runner: %s ausgelastet — kein Cooldown, "
                            "kein Backend-Wechsel", backend.name)
+            raise
+        except _no_channel_error() as e:
+            # A backend without a queue channel is a backend the config
+            # disabled (or one without an API URL). That is a statement about
+            # the configuration, not about the backend's health — so it must
+            # simply be skipped, never cooled down.
+            logger.warning("Backend-Runner: %s has no queue channel (%s) — "
+                           "no cooldown, this backend is skipped", backend.name, e)
             raise
         except Exception as e:
             _err_str = str(e)
