@@ -78,6 +78,18 @@ Sections:
       structured outfit keeps EXACTLY its pre-change key, derived by hand
       from the OLD formula.
 
+  [5d] …so the DRESSED STATE re-queues the finishing job like the text does.
+      `outfit_worn` false signs as "no clothes" ([5b]/[5c]) — the dressed and
+      the undressed NPC are two cache entries, each with its own default
+      expression and mesh. The save hook used to compare `outfit_description`
+      alone, so flipping Dressed queued nothing: the undressed entry was
+      never rendered and every view kept serving the dressed picture. The
+      hook now compares the worn text (`outfit_renderer.free_text_outfit`).
+      By hand: No → one job; a save that changes nothing → none; back to Yes
+      → one job (it renders only what `npc_assets_complete` misses, so the
+      entry that already exists costs nothing); "true" → True is the same
+      state in another shape → none.
+
   [6] TTL is GAME time. `expiry_stamp(2)` must land exactly 2 game hours after
       now — 7200 game seconds, checked as a number, not as a formatted string.
       No TTL yields "" (lives forever), a negative TTL yields "" as well.
@@ -533,6 +545,46 @@ check("a wardrobe character's variant key is untouched by the free text",
 check("...and the free-text NPC does NOT share the bare-outfit key any more",
       key_apron == f"{NPC}_" + hashlib.md5(
           b"neutral:standing:").hexdigest()[:12], False)
+
+# ---------------------------------------------------------------------------
+print("\n[5d] Flipping the dressed state re-queues the finishing job")
+# The submit is stubbed: the point is WHETHER the save hook asks for a job,
+# not what the queue does with it. The NPC stands in the world (status ""),
+# nothing is pending.
+import app.core.npc_assets as npc_assets  # noqa: E402
+
+_jobs = []
+_real_submit = npc_assets.submit_assets_job
+_real_awaiting = npc_assets.is_awaiting_assets
+npc_assets.submit_assets_job = (
+    lambda name, *a, **kw: (_jobs.append((name, kw.get("place"))), "job")[1])
+npc_assets.is_awaiting_assets = lambda name: False
+
+npc_profile["outfit_worn"] = "false"
+save_character_profile(NPC, npc_profile)
+check("Dressed = No queues one render job that places nobody",
+      _jobs, [(NPC, False)])
+check("...because the undressed default variant is another cache entry",
+      _cache_key("", "", NPC, {}, []), f"{NPC}_" + hashlib.md5(
+          b"neutral:standing:no clothes").hexdigest()[:12])
+
+_jobs.clear()
+save_character_profile(NPC, npc_profile)
+check("a save that leaves the wardrobe alone queues nothing", _jobs, [])
+
+npc_profile["outfit_worn"] = "true"
+save_character_profile(NPC, npc_profile)
+check("Dressed = Yes queues one again", _jobs, [(NPC, False)])
+
+_jobs.clear()
+npc_profile["outfit_worn"] = True
+save_character_profile(NPC, npc_profile)
+check('"true" -> True is the same state, not a re-dressing', _jobs, [])
+npc_profile["outfit_worn"] = "true"
+save_character_profile(NPC, npc_profile)
+
+npc_assets.submit_assets_job = _real_submit
+npc_assets.is_awaiting_assets = _real_awaiting
 
 # ---------------------------------------------------------------------------
 print("\n[6] TTL is measured in GAME seconds")

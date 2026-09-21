@@ -196,6 +196,12 @@ def on_outfit_description_changed(name: str, old: str, new: str) -> Optional[str
     and the NPC has to be finished again — otherwise it keeps wearing the old
     clothes in every picture until somebody pools and revives it.
 
+    ``old``/``new`` are the WORN text (``outfit_renderer.free_text_outfit``),
+    so flipping ``outfit_worn`` counts as a re-dressing too: undressed signs
+    as "no clothes" and owns a default expression and a mesh of its own. The
+    job renders only what ``npc_assets_complete`` misses, so flipping back to
+    a state that was rendered before costs nothing.
+
     Called from the ONE choke point every editing path runs through
     (``character.save_character_profile``). Returns the task id, or None when
     nothing was queued. Four conditions, and each of them says no for a

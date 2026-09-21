@@ -36,6 +36,15 @@
  * `trigger` is what makes the route pass `ignore_feature_gate=True` — the one
  * documented way past the closed variant gate, the same one the finishing job
  * takes. The answer is 202 ("generating"), so the image is polled afterwards.
+ *
+ * ONE URL, TWO PICTURES: the dressed and the undressed NPC (`outfit_worn`) are
+ * two cache entries on the server, but this view asks for both with the same
+ * query — the server reads the dressed state from the profile. The route
+ * answers `max-age=3600`, and a Save remounts this field, so a counter that
+ * restarts at 1 would hand the browser the very URL it cached for the OTHER
+ * state. The nonce therefore starts at the clock. And because that Save queues
+ * the missing render by itself (`npc_assets.on_outfit_description_changed`), a
+ * missing picture keeps being asked for instead of being declared absent.
  */
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -46,13 +55,17 @@ import { openLightbox } from '../../components/Lightbox'
 /** How long the re-render is polled for before the view gives up (4 s steps). */
 const POLL_LIMIT = 45
 
+/** …and how long a MISSING picture is waited for. Longer: the job a Save
+ *  queued renders the mesh first and this picture last. */
+const WAIT_LIMIT = 225
+
 /** Floor for the picture in a column that has little height to give. */
 const MIN_H = 320
 
 export function DefaultExpressionField({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
-  const [nonce, setNonce] = useState(1)
+  const [nonce, setNonce] = useState(() => Date.now())
   const [polls, setPolls] = useState(0)
   const [rendering, setRendering] = useState(false)
   const [ready, setReady] = useState<boolean | null>(null)
@@ -69,9 +82,11 @@ export function DefaultExpressionField({ character }: { character: string }) {
 
   // Poll while a render is running — the generator is a background thread, so
   // nothing tells this view when the file lands.
+  // The same poll waits for a picture that is simply not there yet.
+  const waiting = !rendering && ready === false
   useEffect(() => {
-    if (!rendering) return
-    if (polls >= POLL_LIMIT) {
+    if (!rendering && !waiting) return
+    if (polls >= (rendering ? POLL_LIMIT : WAIT_LIMIT)) {
       setRendering(false)
       return
     }
@@ -80,7 +95,7 @@ export function DefaultExpressionField({ character }: { character: string }) {
       setNonce((n) => n + 1)
     }, 4000)
     return () => window.clearTimeout(id)
-  }, [rendering, polls])
+  }, [rendering, waiting, polls])
 
   const rerender = async () => {
     if (rendering) return

@@ -50,6 +50,22 @@ def is_outfit_worn(profile: Optional[Dict[str, Any]]) -> bool:
     return bool(worn)
 
 
+def free_text_outfit(profile: Optional[Dict[str, Any]]) -> str:
+    """What a free-text wardrobe WEARS right now, as ``render_outfit`` says it.
+
+    ``NO_CLOTHES_TEXT`` for an undressed character, ``"wearing: <text>"`` for
+    a dressed one, "" when no ``outfit_description`` is set. It is the string
+    the per-outfit caches sign (``model_refs.outfit_signature_raw``), so
+    "did this save re-dress the character" is asked of THIS and not of the
+    description alone — the dressed state changes the picture just as much
+    (``npc_assets.on_outfit_description_changed``).
+    """
+    if not is_outfit_worn(profile):
+        return NO_CLOTHES_TEXT
+    described = str((profile or {}).get("outfit_description") or "").strip()
+    return "wearing: " + described if described else ""
+
+
 def collect_covered_slots(equipped_pieces: Dict[str, str]) -> Set[str]:
     """Alle Slots, die durch ein anderes Piece via `covers` verdeckt werden."""
     covered: Set[str] = set()
@@ -297,16 +313,14 @@ def render_outfit(
     #    a real wardrobe. Every consumer of `full` (chat "You are wearing",
     #    image prompts, 3D) inherits it from this one place.
     if not full:
-        described = str(profile.get("outfit_description") or "").strip()
+        full = free_text_outfit(profile)
         if not is_outfit_worn(profile):
             # Undressed is a STATEMENT, not the absence of one. Dropping the
             # wardrobe text used to leave nothing in its place, and an image
             # prompt with no clothing line at all renders whatever the model
             # feels like putting on. It goes through `fallback` as well, so
             # the image path phrases it WITHOUT an "is wearing".
-            fallback_text = full = NO_CLOTHES_TEXT
-        elif described:
-            full = "wearing: " + described
+            fallback_text = full
 
     return {
         "pieces": pieces_text,
