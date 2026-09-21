@@ -25,10 +25,11 @@ shared/templates/llm/
 └── tasks/     # one per llm_call() task, split into "## system" / "## user"
 ```
 
-A skill package brings its own templates along: `plugins/<pkg>/templates/llm/`
-is searched before the shared directory (`prompt_templates.template_search_dirs`),
-which is where `tasks/instagram_caption.md` and every `skills/<verb>.md` of a
-migrated package live.
+A skill package brings its own templates along. The search order is **shared tree
+first, then the package dirs** (`prompt_templates.template_search_dirs`) — a package
+can add a template, not override one. That is where
+`plugins/instagram/templates/llm/tasks/instagram_caption.md` and every
+`skills/<verb>.md` of a migrated package live.
 
 | Template | Task | Caller | Purpose |
 |---|---|---|---|
@@ -210,7 +211,7 @@ from app.core.prompt_templates import render, render_task
 system_prompt, user_prompt = render_task("extraction_memory",
     user_display="Player",
     user_message="...",
-    character_name="Hellena",
+    character_name="Mira Sol",
     ...)
 
 # Plain templates (no system/user split):

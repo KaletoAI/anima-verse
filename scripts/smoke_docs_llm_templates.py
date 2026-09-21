@@ -41,7 +41,8 @@ about itself — that nothing is missing.
 FAILS BEFORE / PASSES AFTER
 ---------------------------
 Confirmed by running part A against the previous revision of the document
-(`git show 74693e4f: (the pinned pre-fix revision — HEAD would compare the file with itself once this is committed) docs/llm-templates.md`) — see the last block of the output:
+(`git show 74693e4f:docs/llm-templates.md` — a PINNED commit, never `HEAD:`, which
+would compare the file with itself once this revision is committed) — see the last block of the output:
 17 templates are missing there.
 """
 import re
@@ -121,7 +122,8 @@ def main():
                              cwd=REPO, capture_output=True, text=True,
                              check=True).stdout
     except Exception as e:                                   # pragma: no cover
-        check("git show 74693e4f: (the pinned pre-fix revision — HEAD would compare the file with itself once this is committed) docs/llm-templates.md", False, str(e))
+        check("git show 74693e4f:docs/llm-templates.md (pinned pre-fix revision)",
+              False, str(e))
     else:
         old_missing = missing_from(old, "tasks")
         check("the previous revision was missing 17 tasks/ templates",

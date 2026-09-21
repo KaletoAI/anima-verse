@@ -9,8 +9,9 @@ nowhere in the code any more (all `TOGETHER_ANIMATE_*`, `PROACTIVE_*`,
 four source files that had been deleted. Both halves are mechanical, so both
 are checked here instead of being re-verified by hand every few months.
 
-Pure text work: `git grep` over the tracked tree plus a plain read of the
-document. No server, no world DB, nothing from `app` is imported.
+Mostly text work: `git grep` over the tracked tree plus a plain read of the
+document. The one import is `app/core/config_schema.py` (part D) — a pure data
+module, read against a throwaway storage dir. No server, no world DB.
 
 WHAT IS CHECKED, and where every expected value comes from
 -----------------------------------------------------------
@@ -29,15 +30,24 @@ B) Every `app/…`, `plugins/…` or `docker/…` path named in the Datei column
    exists on disk. Expected: all of them. This is the `test -f` half of the
    finding — four paths had been deleted with their modules.
 
-C) The two settings the document gained (`server.max_upload_mb`,
-   `server.cors_origins`) are still fields of
-   `app/core/config_schema.py`. They are config.json settings, not names of
-   the A-kind, so A would not see them.
+C) The config.json settings the document names in its own right
+   (`server.max_upload_mb`, `server.max_inflight_jobs_per_user`,
+   `server.cors_origins`) are still fields of `app/core/config_schema.py`.
+   They are config.json settings, not names of the A-kind, so A would not
+   see them.
+
+D) Every `<section>.<field>` path the Quelle column gives as the source of a
+   bridged name has that field in `app/core/config_schema.py` — unless the
+   row says "(nur config.json)", which is this document's marker for a value
+   that IS bridged but has no schema field and therefore no admin form. That
+   marker is a claim too, so it is checked the other way round: such a leaf
+   must NOT be a schema field.
 
 FAILS BEFORE / PASSES AFTER
 ---------------------------
 Confirmed by running A and B against the previous revision of the document
-(`git show 74693e4f: (the pinned pre-fix revision — HEAD would compare the file with itself once this is committed) docs/config-defaults.md`) — see the last block of the output:
+(`git show 74693e4f:docs/config-defaults.md` — a PINNED commit, never `HEAD:`, which
+would compare the file with itself once this revision is committed) — see the last block of the output:
 19 names without a hit and four missing files there, none here.
 """
 import re
@@ -89,6 +99,33 @@ def names_without_hit(names):
     return [n for n in names if n not in found]
 
 
+def _schema_field(dotted):
+    """The config_schema field a dotted config.json path points at, or None."""
+    import os
+    import tempfile
+    os.environ.setdefault("STORAGE_DIR", tempfile.mkdtemp(prefix="smoke_docs_cfg_"))
+    sys.path.insert(0, str(REPO))
+    from app.core.config_schema import SECTIONS
+    parts = dotted.split(".")
+    if parts[0] == "skills" and len(parts) == 3:
+        # A package contributes its own subsection (plugin.yaml config_schema),
+        # merged under "skills" at load time — the core schema does not have it.
+        import yaml
+        man = REPO / "plugins" / parts[1] / "plugin.yaml"
+        if not man.exists():
+            return None
+        meta = yaml.safe_load(man.read_text(encoding="utf-8")) or {}
+        sub = (meta.get("config_schema") or {}).get(parts[1]) or {}
+        f = (sub.get("fields") or {}).get(parts[2])
+        return f if isinstance(f, dict) else None
+    node = SECTIONS.get(parts[0])
+    for key in parts[1:]:
+        if not isinstance(node, dict):
+            return None
+        node = node.get("fields", node).get(key)
+    return node if isinstance(node, dict) and "fields" not in node else None
+
+
 def main():
     doc = DOC.read_text(encoding="utf-8")
     names = documented_names(doc)
@@ -102,20 +139,38 @@ def main():
     gone = [p for p in paths if not (REPO / p).exists()]
     check("no Datei column points at a deleted module", not gone, str(gone))
 
-    print("C) the two config.json settings are still in the schema")
+    print("C) the config.json settings are still in the schema")
     schema = (REPO / "app" / "core" / "config_schema.py").read_text(encoding="utf-8")
-    for field in ("max_upload_mb", "cors_origins"):
+    for field in ("max_upload_mb", "max_inflight_jobs_per_user", "cors_origins"):
         check(f"config_schema.py defines {field}", f'"{field}": {{' in schema)
         check(f"docs/config-defaults.md mentions {field}", field in doc)
 
-    print("D) A and B against the PREVIOUS revision (must find what DS-11 "
+    print("D) every Quelle path resolves the way the row claims")
+    schema_only, json_only = [], []
+    for row in [ln for ln in doc.splitlines() if ln.startswith("| `")]:
+        m = re.search(r"\| `((?:[a-z_]+\.)+[a-z_0-9]+)`([^|]*)\|", row)
+        if not m:
+            continue
+        declared = _schema_field(m.group(1)) is not None
+        if "nur config.json" in m.group(2):
+            if declared:
+                json_only.append(m.group(1))
+        elif not declared:
+            schema_only.append(m.group(1))
+    check("every admin-settable source is a config_schema field",
+          not schema_only, str(schema_only))
+    check("every \"nur config.json\" source really has no schema field",
+          not json_only, str(json_only))
+
+    print("E) A and B against the PREVIOUS revision (must find what DS-11 "
           "reported)")
     try:
         old = subprocess.run(["git", "show", "74693e4f:docs/config-defaults.md"],
                              cwd=REPO, capture_output=True, text=True,
                              check=True).stdout
     except Exception as e:                                   # pragma: no cover
-        check("git show 74693e4f: (the pinned pre-fix revision — HEAD would compare the file with itself once this is committed) docs/config-defaults.md", False, str(e))
+        check("git show 74693e4f:docs/config-defaults.md (pinned pre-fix revision)",
+              False, str(e))
     else:
         old_dead = names_without_hit(documented_names(old))
         check("the pre-fix revision documented at least 19 unknown names",

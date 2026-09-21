@@ -9,7 +9,11 @@ This page is the reference for authoring those slots and for the settings that
 bound them. The mechanics live in `app/core/npc_spawn.py` (slots, approach
 trigger, wanderers), `app/core/npc_home.py` (home areas),
 `app/core/npc_windows.py` (time windows) and `app/core/npc_pool.py`
-(recycling).
+(recycling). The finish gate that holds an NPC back until its assets exist is
+`app/core/npc_assets.py`; the admin routes are `app/routes/npc.py`. Checks:
+`scripts/smoke_npc_*.py` (spawn, home, windows, actions, assets, conversation,
+pool_size, skills, templates, ttl, addressable) and
+`scripts/smoke_temporary_npc.py`.
 
 ## The slot object
 
@@ -18,11 +22,11 @@ The same object is authored on two surfaces (see below) and has these keys:
 | key | type | default | meaning |
 | --- | --- | --- | --- |
 | `role` | string | — | The slot's identity. Required: without it the slot cannot be counted, filled or recycled. It is stamped on the NPC as `npc_slot_role`, and a pool hit is matched on it. |
-| `template` | string | `""` | The character template a sheet must have to fill this slot. `""` = any temporary NPC. Keeps an animal slot from being handed a human. |
+| `template` | string | `""` | The character template a sheet must have to fill this slot. `""` = any temporary NPC. Keeps an animal slot from being handed a human. **The slot editor has no field for it** — today it is reachable through the API or a content pack only. |
 | `count_min` | int 0…20 | `1` | How many NPCs of this role the place wants. The gap the spawn tries to close. |
-| `count_max` | int 0…20 | `count_min` | The ceiling. Raised to `count_min` when an author inverts the two. |
+| `count_max` | int 0…20 | `max(count_min, 1)` | The ceiling. Raised to `count_min` when an author inverts the two. Note the floor: a slot with `count_min: 0` and no `count_max` gets `1`. |
 | `briefing` | string | `""` | One line of prose the generator is given ("a weary barkeeper who has run this place for thirty years"). |
-| `room` | string | `""` | Which room of the location the NPC stands in. LOCATION slots only. |
+| `room` | string | `""` | Which room of the location the NPC stands in. `""` is not "roomless": the NPC goes to the location's arrival room (`world.get_arrival_room_id`), which the editor offers as „— arrival room —". LOCATION slots only. |
 | `radius_m` | int ≥ 0 | `0` | The slot's HOME AREA. `0` = the room placement above; above 0 the NPC stands at a free point within that many metres of the place and roams there. Wins over `room`. LOCATION slots only. |
 | `when` | string | `""` | The slot's time window (see below). |
 | `character` | string | `""` | BINDS the slot to one existing temporary NPC (see below). `""` = the ordinary pool-or-generate path. |
@@ -92,8 +96,14 @@ The job then counts: a slot is filled when enough LIVING NPCs carry its tag.
 NPCs the finish gate is still holding back count too — their assets are already
 paid for and they will walk in by themselves. For each gap the job takes a
 **pool hit** of the same role first (a finished character sheet, no LLM turn at
-all) and only runs the three-stage generation pipeline when the pool has
-nobody.
+all) and only generates when the pool has nobody. The generation pipeline is
+generate → validate → repair → apply; the automatic path **skips the LLM
+validator** and runs one generate turn plus, if the sheet is rejected, one
+repair turn.
+
+**A frozen world spawns nobody.** The check runs in the worker, not in the
+position report: the job is queued as usual and returns `{"skipped": "world
+frozen"}`.
 
 ## Binding a slot to one NPC (`character`)
 
@@ -150,6 +160,67 @@ one of her. An authored `count_min: 3` would report a gap that can never close.
 | `npc.scene_batch` | `1` | How many rooms at most get a director scene in one check. |
 | `npc.scene_max_npcs` | `3` | Participants of one director scene. |
 
+## Lifetime: slot TTL, or the NPC's own setting
+
+`npc.slot_ttl_game_hours` is the default. A single NPC can override it in
+**Character config → Temporary NPC → Lifetime**, which knows three modes:
+
+* `default` — the world setting applies;
+* `custom` — `lifetime_hours` game hours instead;
+* `permanent` — `npc_permanent` is written and `expires_at` cleared.
+
+A permanent sheet is never TTL-swept, never drawn from the role-matched pool,
+invisible to the pool cap, and not pooled when a wanderer arrives. Binding a
+slot to it (`character`) is the documented way to bring it back.
+
+## Wanderers
+
+`npc.wanderer_quota` NPCs are kept walking between known places; they count
+towards `npc.max_alive` and live at most `npc.wanderer_ttl_game_hours`. The
+wanderer tick settles arrivals first and then queues at most **one** new
+wanderer. On arrival the NPC either turns around towards a new place or is
+pooled — a coin flip, except that a permanent wanderer always turns around and
+one that is currently in a conversation is left standing.
+
+## How often the server looks
+
+The settings above are in GAME minutes and hours; these are the REAL intervals
+at which the server checks them (`app/core/periodic_jobs.py`):
+
+| Job | Every |
+| --- | --- |
+| TTL sweep (`npc_ops.sweep_expired_npcs`) | 3600 s |
+| Time-window sweep (`npc_ops.sweep_closed_windows`) | 120 s |
+| Wanderer tick | 300 s |
+| Action tick | 60 s |
+| Director scenes | 60 s |
+
+## Admin actions and the `/npc` API
+
+`app/routes/npc.py` (all admin):
+
+| Route | What it does |
+| --- | --- |
+| `GET /npc/list` | Living and pooled temporary NPCs, with what a held-back one is waiting for |
+| `POST /npc/sweep` | Run the TTL and window sweeps now |
+| `POST /npc/{name}/pool` | Pool this NPC by hand |
+| `POST /npc/slots/{location_id}/fill` | Run the slot check of one location now — the same check the approaching avatar triggers. This is the editor's **"Fill now"** button |
+| `POST /npc/areas/{area_id}/fill` | The same for a painted area |
+| `POST /npc/generate` | The manual generation dialog (SSE) |
+
+## When an NPC goes away
+
+Pooling (`npc_pool.pool_npc`) and deleting (`character.delete_character`) run
+the same detach sequence, and in this order: traces in other characters'
+memories are cleaned up, then **party → journey → pair interaction** are ended
+through each engine's own public entry, then the NPC is unplaced. Pooling then
+scrubs the profile (`expires_at`, `npc_wanderer`, `npc_home`, a
+`npc_pooled_reason`) and sets the character status to pooled; deleting goes on
+to wipe every table row that carries the name and the character's directory.
+
+Anything that hangs its own state on a character name has to ride along on that
+sequence — see `docs/skill-core-api.md` → „Charakter-Profil & Ort".
+
 ## The action tick and roaming
 
 A living temporary NPC gets an action turn every
@@ -163,11 +234,15 @@ turn has two variants:
   journey, so its position is a pure function of the game clock like every
   other journey).
 
-Not a candidate: a sleeping NPC, one mid-journey, one in a conversation with an
-avatar, and — for the home variant — anyone in a **party**. A follower is
+Not a candidate: a sleeping NPC, one mid-journey, one busy in a running pair
+interaction, one in a conversation with an avatar, and — for the home variant —
+anyone in a **party**. A follower is
 dragged along by its leader and loses its own travel; a leader's roaming
 journey to a free point would move it and nobody else and strand its followers
 where they set out from.
+
+A home-variant turn that OPENS a conversation does not walk in that turn — the
+NPC stays where it is so the line has somebody to be said to.
 
 ## The `activity_home_enabled` template feature
 
@@ -180,9 +255,11 @@ contradicting source of both.
 The gate closes every surface at once:
 
 * the Game-Admin "Activity & Home" sub-tab is hidden;
-* `save_character_daily_schedule` refuses the write, which closes the
+* `save_character_daily_schedule` refuses the write, which empties the
   `POST /scheduler/daily-schedule` route, the DELETE asymmetry and the
-  `schedule:` rule condition that reads those rows;
+  `schedule:` rule condition that reads those rows. Careful: the route still
+  answers `{"status": "success"}` — it ignores the `False` return, so nothing
+  is stored but the caller is told otherwise;
 * `SchedulerManager.sync_daily_schedule` writes no jobs;
 * `POST /characters/{name}/home-location` answers 409.
 

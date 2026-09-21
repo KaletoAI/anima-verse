@@ -1,8 +1,10 @@
 # LLM-Blender models — parametric assets instead of image-to-3D
 
 **Status:** v1 shipped 2026-08-20 — **the roof, and only the roof.**
-Programme: `development_instructions/plan-assets-im-szenenkontext.md`, Etappe 4b.
-Numbers: `scripts/smoke_roof_model.py` (every expectation hand-derived from this file).
+Programme: `development_instructions/done/plan-assets-im-szenenkontext.md`, Etappe 4b.
+Numbers: `./.venv/bin/python scripts/smoke_roof_model.py` — every expectation is
+hand-derived in its docstring; its last section needs a Blender binary and is
+skipped without one.
 
 ## Why
 
@@ -24,19 +26,22 @@ description**, never Python. Nothing is `exec`'d, nothing can crash the builder,
 and an answer that makes no sense becomes a plain gable.
 
 Consequence for the world builder: for a simple building the image-to-3D path is
-**no longer needed** — recipe shell + generated roof is a complete building.
-That is why the map stubs deliberately do not carry building image prompts.
+**not required** — recipe shell + generated roof is a complete building, which is
+why the map stubs carry no building image prompts. It is not retired, though:
+`shared/world_dev_schemas/location.md` still asks for `image_prompt_building`,
+and `POST /world/locations/{id}/exterior/render` deliberately feeds the img2mesh
+path from a rendered exterior (see „Other Blender jobs" below).
 
 ## The pipeline
 
 ```
-build_roof_description(location)   what is KNOWN: outline, storeys, eaves
+build_roof_description(location_id)  what is KNOWN: outline, storeys, eaves
         ↓
-propose_roof(location)             ONE LLM call (task `roof_design`)
-        ↓                          → validate_description(): clamps, defaults
+propose_roof(location_id)            ONE LLM call (task `roof_design`)
+        ↓                            → validate_description(): clamps, defaults
    [ the admin sees and edits every number — propose, THEN build ]
         ↓
-build_job(location, description)   pure geometry: vertices, faces, materials
+build_job(location_id, description)  pure geometry: vertices, faces, materials
         ↓                          + the placement the sidecar needs
 roof_build.py (Blender, dumb)      builds, paints, exports ONE unrigged GLB
         ↓
@@ -69,6 +74,10 @@ What the LLM emits, and the only thing it may emit:
 }
 ```
 
+`gable_tone` is schema-only today: the template does not ask for it and the panel
+has no field, so the second material path is reachable through a hand-written API
+body alone.
+
 `validate_description()` **never raises and never rejects**. An unknown form
 becomes `gable`, a pitch outside the range is clamped to it, `#abc` is expanded
 to `#aabbcc`, an unreadable colour becomes the kind's default tone, and a flat
@@ -97,8 +106,11 @@ it is showing. The feature works without an LLM; the LLM makes it interesting.
 | 2 | `map3d.boundary` | the drawn plot boundary — coarser, but authored |
 | 3 | union of the room shells (`room_recipe.compose_recipe`) | derived, and marked as such |
 
-The first two are exactly what `scene_recipe._plates` uses for its level plates,
-so the roof sits on the polygon the walls stand on. The third exists because a
+**Known gap:** `scene_recipe._plates` no longer reads the bare `map3d.outline`.
+Since the per-storey outlines (2026-09-06) it resolves `map3d.level_outlines` for
+the level it draws, while `roof_model.footprint()` still reads `map3d.outline`
+only. A building that narrows upward therefore gets a roof sized to its ground
+floor. The third exists because a
 location may have rooms and neither of the drawn shapes; it is composed through
 `room_recipe` rather than read off `layout`, because that is where a room's
 outline is decided. No source at all → `ok: false`, and the route answers 409
@@ -117,7 +129,7 @@ deterministic and right for the huts and houses this exists for.
 ```
 storeys        = max(room level ≥ 0) + 1        (a basement raises nothing)
 eaves height   = storeys × storey_height_m      2 × 3.00 m = 6.00 m
-roof base plane = eaves − EAVES_SINK (0.10)     = 5.90 m
+roof base plane = eaves − EAVES_SINK_M (0.10)   = 5.90 m
 ```
 
 Why the sink: the contour walls of the top storey really end at
@@ -166,22 +178,26 @@ offset_y = roof base + AABB min y − LEVEL_PLATE_TOP
 
 The standard § B2 building placement then puts the mesh exactly on the vertices
 it was built from. For the 10 × 8 m example at 30°/0.40 m:
-`width_m 10.80`, `offset 5.00 / 4.00`, `offset_y 5.58906`, ridge at **8.2094 m**.
+`width_m 10.80`, `offset 5.00 / 4.00`, `offset_y 5.5891`, ridge at **8.2094 m**.
+(Every vertex is rounded to four decimals server-side, so 5.5891 is the stored
+value — the un-rounded ideal is 5.58906.)
 
 ### The frame, converted once
 
 `(x, y, z)_scene → (x, −z, y)_blender` in `build_job`. The glTF exporter's own conversion
 (`Blender (x, y, z) → glTF (x, z, −y)`) brings it back, so the stored GLB speaks
-the **scene frame** like every other building model. The smoke checks this on
-the exported accessor's min/max, not on a screenshot.
+the **scene frame** like every other building model. The smoke checks the job's
+own vertex list against `roof_geometry()`, and — with a Blender binary — the
+script's reported counts and bbox against the same numbers. Never a screenshot.
 
 ## 3. The Blender script — `app/blender/scripts/roof_build.py`
 
 Consumes `{mesh: {vertices, faces, face_material}, materials, export}`, builds
 the mesh, assigns one material index per face, shades flat (a smoothed ridge
 reads as a dent), exports ONE GLB, and reports back what it built — vertex,
-face, triangle and material counts plus the bbox in the job's own frame. That
-report is the § B5a verification: numbers against numbers.
+face, triangle and material counts, the GLB's `bytes`, plus the bbox in the job's
+own frame. That report is the § B5a verification: numbers against numbers. The
+script also runs Blender's own `mesh.validate()` before exporting.
 
 Deterministic: same description over the same footprint → the same job JSON to
 the last decimal (rounded server-side) → the same mesh.
@@ -192,8 +208,10 @@ the last decimal (rounded server-side) → the same mesh.
 (`app/core/location_model3d.py`) with the sidecar
 
 ```
-rig "none", format glb, source "roof_build", tier full (+ selected for low),
-roof_only true, roof {the description}, width_m/offset_x/offset_z/offset_y
+rig "none", format glb, source "roof_build", backend "blender",
+tier full (+ selected for low), roof_only true, roof {the description},
+width_m/offset_x/offset_z/offset_y, eaves_height_m, footprint_source,
+location, created_at
 ```
 
 so **the whole existing display path serves it unchanged**: `/play/locations/{id}/model`,
@@ -233,8 +251,10 @@ own far-view shell **keeps it** and puts the roof on top. Minimal and guarded:
   3. the tier swap disposes only the material clones the swap really replaced
      (`!tile.roofMats.includes(m)`) — the kept shell's clones must survive.
 
-Everything else about the spec stays a building's: `display: "shell"`, so the
-roof fades on zoom-in exactly as a roof should, and the admin's floor-plan
+Everything else about the spec stays a building's, `display` included — it is
+computed per location (`shell_area` for a detailed area, `ground`, otherwise
+`shell`), and in the ordinary `shell` case the roof fades on zoom-in exactly as a
+roof should, and the admin's floor-plan
 preview renders it through the same shared `place()`.
 
 Written up for both renderers in `docs/schnittstellen-3d.md`,
@@ -242,9 +262,10 @@ Written up for both renderers in `docs/schnittstellen-3d.md`,
 
 ## 5. UI
 
-`frontend/src/tabs/world/BuildingModelPanel.tsx` → **`RoofBuilder`**, next to
-the mesh generation and the upload, buildings only, hidden without a usable
-Blender (the same gate the distance-mesh action uses).
+`frontend/src/tabs/world/BuildingModelPanel.tsx` → **`RoofBuilder`**, in the
+Blender block right after the exterior render, buildings only (no room), hidden
+without a usable Blender — `model3d.blender.usable`, i.e. `runner.is_available()`
+server-side, the same gate the distance-mesh action uses.
 
 1. **🏠 Generate roof (LLM)** → `POST /world/locations/{id}/roof/propose`
 2. The proposal is shown **editable**: form dropdown, pitch slider (disabled for
@@ -253,11 +274,73 @@ Blender (the same gate the distance-mesh action uses).
    note saying whether the LLM answered or the defaults are showing.
 3. **Build roof** → `POST /world/locations/{id}/roof/generate` → background job,
    the panel's existing pending poll shows it and picks up the new model.
+   **Cancel** drops the proposal.
+
+A second build writes a NEW gallery file and re-points both tier selections; the
+old roof stays in the gallery. Two builds cannot overlap: the generate route
+claims the job for that location (`claim_job(location_id, kind="roof")`) and
+answers `{"status": "already_running"}` while one is in flight.
+
+What the two routes answer when something is missing: **404** unknown location ·
+**409** no footprint to roof (with the hint what to draw) · **503** Blender not
+usable ("the roof is built locally, not on a backend") · **400** a request body
+that is not an object.
 
 Propose-then-build, no silent magic. The description is validated again on the
 way in: what the UI sends is a suggestion, not a contract.
 
-## 6. What v1 deliberately does NOT do
+## 6. Prerequisites and settings
+
+Blender runs **locally**, not on a generation backend. Everything is configured
+under `/admin/settings → Image/Video Generation → Blender refinement (3D)`
+(config path prefix `image_generation.`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `blender_enabled` | `true` | Master switch for every Blender job |
+| `blender_executable` | `` | Explicit path. Empty = discovery: `which blender`, then `/opt/blender*/blender`, `/usr/local/blender*/blender`, `~/tools/blender*/blender` |
+| `blender_timeout_s` | `120` | Per job |
+| `blender_keep_original` | `true` | Keep the pre-refinement file |
+| `blender_auto_retexture` | `true` | Re-encode textures after a generation |
+| `blender_jpeg_quality` | `85` | for that re-encode |
+| `blender_max_texture_size` | `0` | `0` = do not downscale |
+| `blender_auto_normalize` | `true` | Real height, feet on the ground, origin |
+| `blender_auto_bake_vc` | `true` | Vertex-colour meshes get UVs + a texture |
+| `blender_bake_vc_target_tris` | `40000` | Triangle budget for that bake |
+| `blender_auto_lod` | `true` | Build the reduced distance stage |
+| `blender_lod_ratio_character` / `_prop` / `_room` / `_building` | `0.4` / `0.25` / `0.5` / `0.5` | Triangle ratio of that stage |
+
+The roof path itself reads three of them: `blender_enabled`,
+`blender_executable` and `blender_timeout_s`. The one gate every caller asks is
+`app/blender/runner.is_available()` (enabled AND an executable AND a version),
+surfaced to the UI as `model3d.blender.usable`.
+
+**The runner contract.** `runner.run()` invokes
+`blender --background --factory-startup --python-exit-code 1 --python <script> --
+<job>/args.json` — arguments, never stdin. `args.json` is
+`{inputs: {slot: path}, params: {}, out_dir, result}`; the script writes its
+answer to the `result` file as `{ok, error, data, outputs}` (`_common.py` does
+both halves), and the runner moves the declared outputs into `out_dir` and
+returns `{ok, error, data, outputs, seconds}`.
+
+## 7. Other Blender jobs
+
+The roof is the only job an LLM designs; it is not the only Blender job.
+`app/blender/scripts/` holds the rest, each one the same "the server thinks,
+Blender builds" shape: geometry repair and measurement (`normalize.py`,
+`measure.py`, `diagnose.py`), texture work (`bake_vc.py`, `retexture.py`,
+`picture_areas.py`), distance stages (`lod.py`), the walkable-surface grid
+(`heightgrid.py`), the clip pipeline (`fbx_clip.py`, `cmu_clip.py`,
+`clip_orient.py`, `clip_roll.py`, `rig_export.py`, `_cmu.py`) and the building
+exterior render (`exterior.py`). `app/blender/refine.py` is the façade for the
+character/prop refinement; it has no roof path.
+
+`exterior.py` is worth knowing about here: it renders a building exterior from a
+stated vertex list and files the result as a `building-front` gallery image, so
+the ordinary image→mesh route can take it from there. Its button sits directly
+above the roof builder in the same panel.
+
+## 8. What v1 deliberately does NOT do
 
 * no free-form Blender code — see the top of this file;
 * no roof over a concave polygon (rectangularized, § 2);
