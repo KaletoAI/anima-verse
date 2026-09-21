@@ -8,8 +8,8 @@ directly:
 | `index.html` → `src/main.tsx` | `static/game_admin/index.html` | `/game-admin` | **Game-Admin** — world building in 20 tabs |
 | `play.html` → `src/player/main.tsx` | `static/game_admin/play.html` | `/play` | **Player UI** — the game itself |
 
-`vite.config.ts` sets `base: '/static/game_admin/'`, so the hashed asset URLs resolve for both
-pages. The Python routes (`app/routes/game_admin.py`, `app/routes/play.py`) only hand out the built
+`vite.config.ts` builds with `base: '/static/game_admin/'`, so the hashed asset URLs resolve for
+both pages (in dev the base is `/` — see the proxy rule below). The Python routes (`app/routes/game_admin.py`, `app/routes/play.py`) only hand out the built
 shell with a `no-cache` header — they contain no markup, so a UI change needs no server restart,
 only a rebuild.
 
@@ -31,20 +31,21 @@ npm run lint -w frontend     # the ONLY lint script; runs from the root and cove
                              # frontend/ + packages/player-ui/src + packages/scene-render/src
 ```
 
-The dev server proxies API calls to the Python server on `:8000` (list in `vite.config.ts`). The
-Game-Admin page is opened directly at `http://localhost:5173/`, the player page at
-`http://localhost:5173/play.html`.
+**The dev server forwards everything it does not serve itself** to the Python server on
+`:8000` (`ANIMA_API` overrides the address) — there is no list of API prefixes any more, because a
+list can only rot and a missing entry does not 404: Vite would answer the call with its own HTML and
+a `200`, `res.json()` would fail and the component would blow up far from the cause. The few paths
+Vite keeps are named in `frontend/dev-proxy-rule.js`: its own namespaces (`/@…`, `/__…`), `/src/…`,
+`/node_modules/…`, the `public/` files and the two HTML entries — plus `/play` and `/game-admin`
+*exactly*, which are pages in production while `/play/…` is API, so the pages open at
+`http://localhost:5173/` (Game-Admin) and `http://localhost:5173/play` (player) and the backend's
+`302 /play?return=…` login redirect lands on the dev page. `scripts/smoke_vite_proxy.py` guards
+it: every route of the FastAPI decorators must be forwarded, and `server.proxy` must keep its single
+catch-all key.
 
-> **A missing proxy prefix does not 404.** Vite answers with its own `index.html`, so the caller
-> gets `200` + HTML, `res.json()` fails and `apiGet` resolves to `null` — which then explodes deep
-> inside a component. The forwarded list in `vite.config.ts` is shorter than the set of prefixes
-> the two pages actually call, so parts of the app only work when served by FastAPI on `:8000`.
-> Sweep both sides before relying on the dev server:
->
-> ```bash
-> grep -rohE "api(Get|Post|Put|Delete)\(\s*[\`'\"]/[a-zA-Z0-9_-]+" frontend/src | sed -E "s/.*[\`'\"]//" | sort -u
-> grep -rohE "[\`'\"]/[a-zA-Z0-9_-]+" packages/player-ui/src/*.tsx | sort -u
-> ```
+> `base` is `/static/game_admin/` only for the build; while the dev server runs it is `/`, because
+> `/static/…` is a backend path here (both HTML entries link the theme CSS and the favicon from
+> there) and the dev server cannot forward a prefix it serves itself.
 
 ## Layout
 
