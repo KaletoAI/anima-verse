@@ -667,6 +667,10 @@ export class FigureLibrary {
   private tierWanted = new Map<string, FigureTier>();
   /** Bereits geladene Stufen je Charakter — Rückwechsel ist damit sofort. */
   private tierCache = new Map<string, Map<FigureTier, LoadedModel>>();
+  /** Models of a character that is loading a REPLACEMENT (outfit change):
+   *  already out of the caches, still drawn by the figure on screen. Freed in
+   *  `freeRetired` the moment the new model is announced. */
+  private retired = new Map<string, LoadedModel[]>();
   /** Server-Clips: kind -> (set|'' -> Clip) */
   private clipIndex = new Map<string, Map<string, THREE.AnimationClip>>();
   /** Root path of every pair-clip half (`<kind>__<role>`), clip-frame metres */
@@ -895,11 +899,102 @@ export class FigureLibrary {
     }
     if (!info?.signature || info.signature === known) return false;
     console.info(`[figures] ${charName}: Modell geändert (${known} -> ${info.signature}) — lade neu`);
+    // The old mesh leaves the caches here, but NOT the GPU: a Figure built
+    // from it is still on screen until the replacement arrives (see
+    // `retireModels`). Freeing it now would only make three.js upload it
+    // again on the very next frame.
+    this.retireModels(charName);
     this.apiModels.delete(charName);
     this.apiSignature.delete(charName);
     this.tierCache.delete(charName);   // beide Stufen gehören zum alten Mesh
     this.fetchCharacterModel(charName);
     return true;
+  }
+
+  /**
+   * Put every model of ONE character aside for disposal — the active one and
+   * both tier editions, which are the same objects (`fetchCharacterModel`
+   * caches the model it installs, `syncTier` only ever activates a cached
+   * one), so the set deduplicates them.
+   *
+   * WHY THEY ARE NOT DISPOSED RIGHT HERE: a figure on screen is a
+   * `SkeletonUtils.clone` of the template and SHARES its geometry, materials
+   * and textures. The swap runs in this order — signature change → old model
+   * out of the caches → download → `onModelReady` → `npcs.rebuild` drops the
+   * old figure → the next `update` instantiates the new one. Until that
+   * notification the old clone renders every frame; disposing its buffers
+   * would not free anything, three.js would just re-upload them.
+   */
+  private retireModels(charName: string) {
+    const old = new Set<LoadedModel>();
+    const active = this.apiModels.get(charName);
+    if (active) old.add(active);
+    for (const m of this.tierCache.get(charName)?.values() ?? []) old.add(m);
+    if (!old.size) return;
+    const list = this.retired.get(charName) ?? [];
+    list.push(...old);
+    this.retired.set(charName, list);
+  }
+
+  /** Free the retired models of a character — called once the REPLACEMENT is
+   *  live, i.e. right after `onModelReady`. A model that found its way back
+   *  into the caches is skipped, so the caches stay the authority on what is
+   *  in use. A character whose model vanished server-side (404 on the reload)
+   *  keeps its retired entries on purpose: nothing rebuilt its figure, so the
+   *  old clone is still what is drawn. */
+  private freeRetired(charName: string) {
+    const list = this.retired.get(charName);
+    if (!list?.length) return;
+    this.retired.delete(charName);
+    const inUse = new Set<LoadedModel>();
+    const active = this.apiModels.get(charName);
+    if (active) inUse.add(active);
+    for (const m of this.tierCache.get(charName)?.values() ?? []) inUse.add(m);
+    let freed = 0;
+    for (const m of list) {
+      if (inUse.has(m)) continue;
+      this.disposeModel(m);
+      freed += 1;
+    }
+    if (freed) console.info(`[figures] ${charName}: ${freed} altes Modell/Modelle freigegeben`);
+  }
+
+  /**
+   * Give ONE loaded model's GPU resources back: every mesh geometry, every
+   * material of those meshes and the textures those materials own.
+   *
+   * The texture slots are read OFF THE MATERIAL (`isTexture` among its own
+   * properties) instead of from a hand-written list: a generated character
+   * GLB brings whatever the exporter wrote — `map`, `normalMap`,
+   * `roughnessMap`, `metalnessMap`, `emissiveMap`, `aoMap`, `alphaMap` … — and
+   * a fixed list quietly leaks the slot nobody thought of. `envMap` is the one
+   * exception: where it is set at all it is the engine's shared PMREM
+   * (`glbMaterials.setModelEnvironment`) and belongs to the engine.
+   *
+   * Only ever called on models from `apiModels`/`tierCache`. The manifest
+   * models in `this.models` are shared between characters through
+   * `assignments` and must outlive every single figure.
+   */
+  private disposeModel(model: LoadedModel) {
+    const materials = new Set<THREE.Material>();
+    model.template.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.geometry?.dispose();
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        if (m) materials.add(m);
+      }
+    });
+    const textures = new Set<THREE.Texture>();
+    for (const m of materials) {
+      for (const [slot, value] of Object.entries(m as unknown as Record<string, unknown>)) {
+        if (slot === 'envMap') continue;
+        const tex = value as THREE.Texture | null;
+        if (tex?.isTexture) textures.add(tex);
+      }
+    }
+    for (const tex of textures) tex.dispose();
+    for (const m of materials) m.dispose();
   }
 
   /** Gewünschte Distanz-Stufe einer Figur setzen (view state — WANN full/low
@@ -1097,6 +1192,11 @@ export class FigureLibrary {
         if (info.signature) this.apiSignature.set(charName, info.signature);
         console.info(`[figures] ${charName}: Modell vom Server (${info.format}/${info.rig}/${tier}, ${model.clips.length} Clips, ${(model.height * 100).toFixed(0)} cm)`);
         this.onModelReady?.(charName);
+        // The replacement is live now — whoever holds figures rebuilds them in
+        // `onModelReady` (`npcs.rebuild`), so the clone of the PREVIOUS model
+        // is off the scene by the time this line runs. Only now may its
+        // buffers and textures go.
+        this.freeRetired(charName);
       } catch (e) {
         // Transienter Fehler (Netzwerk, 5xx, Textur): nicht als "hat keins"
         // cachen, sondern später erneut versuchen.
@@ -1649,12 +1749,30 @@ export class Figure {
     this.ghost.set(waterLevel);
   }
 
-  /** Give this figure's underwater ghost up — called where the figure leaves
-   *  the scene (`NpcLayer`). Everything else the figure owns is shared with the
-   *  model template and outlives it; the ghost's materials are its own, and its
-   *  registration is what toggle 22 walks. */
+  /** Give this figure's own resources up — called where the figure leaves the
+   *  scene (`NpcLayer`). Geometry, materials and textures are NOT among them:
+   *  those belong to the model template and are shared with every other clone
+   *  of it (`FigureLibrary.disposeModel` is what frees them, once the template
+   *  itself is retired). The ghost's materials, the mixer's bindings and the
+   *  skeleton's bone texture are per figure, and those go here. */
   dispose() {
     this.ghost.dispose();
+    // The mixer's bindings hold the clone bone by bone; without this they keep
+    // it — and through it the template — alive for as long as anything still
+    // references the mixer.
+    this.mixer.stopAllAction();
+    this.mixer.uncacheRoot(this.mixer.getRoot());
+    this.actions.clear();
+    this.current = null;
+    this.transition = null;
+    // `SkeletonUtils.clone` builds a NEW THREE.Skeleton per figure, and the
+    // renderer hangs a bone texture on it — per figure, not per model.
+    // `Skeleton.dispose()` frees exactly that texture and nothing else (the
+    // ghost shares the same skeleton, so the second call is a no-op).
+    this.root.traverse((o) => {
+      const skinned = o as THREE.SkinnedMesh;
+      if (skinned.isSkinnedMesh) skinned.skeleton?.dispose();
+    });
   }
 
   faceTowards(dir: THREE.Vector3, snap = false) {
