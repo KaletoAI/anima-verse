@@ -45,6 +45,6 @@ def _handle_social_dialog(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def register_social_dialog_handler():
-    """Registriert den Social-Dialog-Handler bei der BackgroundQueue."""
-    from app.core.background_queue import get_background_queue
-    get_background_queue().register_handler("social_dialog", _handle_social_dialog)
+    """Registers the social-dialog handler in the task queue."""
+    from app.core.task_queue import get_task_queue
+    get_task_queue().register_handler("social_dialog", _handle_social_dialog)

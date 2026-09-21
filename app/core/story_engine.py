@@ -493,10 +493,10 @@ class StoryArcEngine:
 
 
 # ---------------------------------------------------------------------------
-# BackgroundQueue Handler
+# Task-queue handlers
 # ---------------------------------------------------------------------------
 def _handle_story_arc_generate(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Handler for arc generation via the BackgroundQueue.
+    """Handler for arc generation via the task queue.
 
     Arcs belong to the WORLD, not to a user: the handler used to refuse an
     empty ``user_id``, and every caller has passed an empty one since the
@@ -511,7 +511,7 @@ def _handle_story_arc_generate(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _handle_story_arc_advance(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Handler fuer Arc-Advancement via BackgroundQueue."""
+    """Handler for arc advancement via the task queue."""
     user_id = payload.get("user_id", "")
     arc_id = payload.get("arc_id", "")
     summary = payload.get("interaction_summary", "")
@@ -527,7 +527,7 @@ def _handle_story_arc_advance(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _handle_story_arc_resolve(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Handler fuer Arc-Resolution via BackgroundQueue."""
+    """Handler for arc resolution via the task queue."""
     user_id = payload.get("user_id", "")
     arc_id = payload.get("arc_id", "")
 
@@ -556,10 +556,10 @@ def get_story_engine() -> StoryArcEngine:
 
 
 def register_story_engine_handler():
-    """Registriert Story-Engine-Handler bei der BackgroundQueue."""
-    from app.core.background_queue import get_background_queue
-    bq = get_background_queue()
-    bq.register_handler("story_arc_generate", _handle_story_arc_generate)
-    bq.register_handler("story_arc_advance", _handle_story_arc_advance)
-    bq.register_handler("story_arc_resolve", _handle_story_arc_resolve)
-    logger.info("BackgroundQueue-Handler registriert")
+    """Registers the story-engine handlers in the task queue."""
+    from app.core.task_queue import get_task_queue
+    tq = get_task_queue()
+    tq.register_handler("story_arc_generate", _handle_story_arc_generate)
+    tq.register_handler("story_arc_advance", _handle_story_arc_advance)
+    tq.register_handler("story_arc_resolve", _handle_story_arc_resolve)
+    logger.info("Task-queue handlers registered")

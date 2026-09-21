@@ -949,10 +949,10 @@ class ThoughtRunner:
         if arc_context and (full_response or had_notification_tool):
             try:
                 from app.models.story_arcs import get_active_arcs
-                from app.core.background_queue import get_background_queue
+                from app.core.task_queue import get_task_queue
                 active_arcs = get_active_arcs(character_name)
                 for arc in active_arcs:
-                    get_background_queue().submit("story_arc_advance", {
+                    get_task_queue().submit("story_arc_advance", {
                         "user_id": "",
                         "arc_id": arc["id"],
                         "interaction_summary": (full_response or notification_content)[:300],

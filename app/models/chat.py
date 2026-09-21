@@ -1,7 +1,12 @@
-"""Chat history — thin wrapper around the unified chat storage.
+"""Chat history — the dict-based interface to the chat storage.
 
-DEPRECATED: these functions exist for backward compatibility.
-Use app.models.unified_chat.UnifiedChatManager instead.
+This is THE module core code and skill packages use to read a chat history and
+to save a message; it is documented as core API in ``docs/skill-core-api.md``.
+It speaks plain dicts, which is what callers and templates want.
+
+``app.models.unified_chat.UnifiedChatManager`` is the storage implementation
+behind it (world.db, table ``chat_messages``) and works with ``Message``
+objects — reach for it directly only when you really need those.
 """
 from typing import Dict, List, Optional
 

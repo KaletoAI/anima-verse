@@ -106,7 +106,7 @@ REMOVED_TASKS = {
         "no caller passes llm_task='thought_greeting'; run_thought_turn is only "
         "ever called with its default 'thought'",
     "memory_consolidation":
-        "not an LLM task at all but a BackgroundQueue task_type "
+        "not an LLM task at all but a task-queue task_type "
         "(app/core/memory_service.py). Its handler calls _llm_summarize, which "
         "routes on 'consolidation'. The queue task keeps the name — do not "
         "confuse the two",

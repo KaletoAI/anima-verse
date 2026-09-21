@@ -1015,9 +1015,9 @@ class SchedulerManager:
 
             logger.info("SocialDialog %s <-> %s: dialog! (roll %d <= %d%%)", agent, other, roll, probability)
 
-            # Run asynchronously via the BackgroundQueue
-            from app.core.background_queue import get_background_queue
-            get_background_queue().submit("social_dialog", {
+            # Run asynchronously via the task queue
+            from app.core.task_queue import get_task_queue
+            get_task_queue().submit("social_dialog", {
                 "user_id": "",
                 "sender": agent,
                 "target": other,

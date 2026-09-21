@@ -130,9 +130,8 @@ def clear_bg_tasks(hours: float = 24.0, status: str = "",
 @router.post("/story-arc/generate", dependencies=[Depends(require_admin)])
 def trigger_story_arc_generate() -> Dict[str, Any]:
     """Triggert manuell eine Story-Arc-Generierung."""
-    from app.core.background_queue import get_background_queue
-    bq = get_background_queue()
-    bq.submit("story_arc_generate", {"user_id": ""})
+    from app.core.task_queue import get_task_queue
+    get_task_queue().submit("story_arc_generate", {"user_id": ""})
     return {"status": "submitted", "user_id": ""}
 
 

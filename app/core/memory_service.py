@@ -726,14 +726,14 @@ def handle_memory_consolidation(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def submit_consolidation_for_all():
-    """Erstellt Consolidation-Tasks fuer alle Characters in der Queue."""
+    """Submits a consolidation task for every character to the task queue."""
     from app.models.character import list_available_characters
-    from app.core.background_queue import get_background_queue
+    from app.core.task_queue import get_task_queue
 
-    bq = get_background_queue()
+    tq = get_task_queue()
     count = 0
     for char_name in list_available_characters():
-        bq.submit(
+        tq.submit(
             task_type="memory_consolidation",
             payload={"character_name": char_name},
             priority=30,
@@ -742,20 +742,20 @@ def submit_consolidation_for_all():
         count += 1
 
     if count:
-        logger.info("Memory-Konsolidierung: %d Tasks eingereicht", count)
+        logger.info("Memory consolidation: %d tasks submitted", count)
 
 
 def register_consolidation_handler():
-    """Registriert den Consolidation-Handler in der BackgroundQueue."""
-    from app.core.background_queue import get_background_queue
-    bq = get_background_queue()
-    bq.register_handler("memory_consolidation", handle_memory_consolidation)
-    logger.info("Memory Consolidation Handler registriert")
+    """Registers the consolidation handler in the task queue."""
+    from app.core.task_queue import get_task_queue
+    tq = get_task_queue()
+    tq.register_handler("memory_consolidation", handle_memory_consolidation)
+    logger.info("Memory consolidation handler registered")
 
 
-# Legacy-Wrapper (fuer bestehende Aufrufe)
+# Legacy wrapper (for existing callers)
 def run_consolidation_for_all_users():
-    """Erstellt Consolidation-Tasks in der Queue (non-blocking)."""
+    """Submits the consolidation tasks to the queue (non-blocking)."""
     submit_consolidation_for_all()
 
 

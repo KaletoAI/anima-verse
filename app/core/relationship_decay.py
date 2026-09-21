@@ -1,7 +1,7 @@
 """Relationship decay — periodic background job that weakens idle
 relationships and re-classifies their type.
 
-Runs in the BackgroundQueue, submitted by the periodic sub-job
+Runs in the task queue, submitted by the periodic sub-job
 ``relationship_decay`` (every 24 h, see ``app/core/periodic_jobs.py``).
 
 Rules:
@@ -147,8 +147,8 @@ def handle_relationship_decay(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def register_relationship_decay_handler():
-    """Registers the handler in the BackgroundQueue."""
-    from app.core.background_queue import get_background_queue
-    bq = get_background_queue()
-    bq.register_handler("relationship_decay", handle_relationship_decay)
+    """Registers the handler in the task queue."""
+    from app.core.task_queue import get_task_queue
+    tq = get_task_queue()
+    tq.register_handler("relationship_decay", handle_relationship_decay)
     logger.info("Relationship decay handler registered")

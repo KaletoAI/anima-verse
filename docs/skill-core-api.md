@@ -320,15 +320,21 @@ der Storyteller-Fallback in `routes/play.py`. Die Storyteller-Whitelist
 Das TakePhoto-VERB (`plugins/take_photo`, SKILL_ID `image_generation`) ist nur die
 LLM-Tool-Oberfläche — Pakete, die Bilder brauchen, rufen den Service.
 
-## Queues — `app.core.task_queue` / `app.core.background_queue` ✅
+## Queue — `app.core.task_queue` ✅
+
+Es gibt **eine** Queue. Sie ist persistent (SQLite, `task_queue.db`): eingereichte
+Tasks überleben einen Neustart, sind im Admin-Panel und in `queue_cli.py` sichtbar
+und werden von einem festen Worker-Pool (`_NUM_WORKERS`, heute 2) in
+Prioritätsreihenfolge abgearbeitet — es laufen also bis zu zwei Tasks gleichzeitig.
 
 | Funktion | Semantik |
 |---|---|
-| `get_task_queue()` | Die persistente Task-Queue (überlebt Neustarts; Admin-Panel, `queue_cli.py`) — für Arbeit, die ein Ergebnis produziert |
-| `get_background_queue()` | Die flüchtige In-Process-Queue — für Nacharbeit, deren Verlust beim Neustart egal ist (Beispiel: Social-Reaktionen) |
+| `get_task_queue()` | Singleton der Queue |
+| `TaskQueue.submit(task_type, payload, queue_name, priority, agent_name, max_retries, deduplicate)` | Task einreihen, gibt die `task_id` zurück. `queue_name` ist nur ein Label (UI + Pause-Schalter), kein eigener Worker; `priority` niedriger = früher (Default 20); `deduplicate=True` überspringt die Einreichung, solange ein Task desselben `task_type` (mit demselben `agent_name`, falls gesetzt) pending/running ist, und gibt dann `""` zurück |
+| `TaskQueue.register_handler(task_type, handler)` | Registriert den Handler eines `task_type` — eine Funktion, die das `payload`-Dict bekommt und ein Ergebnis-Dict zurückgibt. Beim Start des Pakets aufrufen, sonst scheitert ein eingereihter Task mit „kein Handler" |
 
-Ein Verb blockiert nie minutenlang im `execute()`. Lange Arbeit wandert in eine der
-beiden Queues; das Verb antwortet dem LLM sofort, was es angestoßen hat.
+Ein Verb blockiert nie minutenlang im `execute()`. Lange Arbeit wandert in die
+Queue; das Verb antwortet dem LLM sofort, was es angestoßen hat.
 
 ## Hooks — `app.core.hooks` ✅ (F5-light)
 

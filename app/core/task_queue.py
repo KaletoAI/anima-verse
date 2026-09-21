@@ -1,20 +1,24 @@
-"""Persistent Task Queue — SQLite-backed, multi-queue, prioritized, pausierbar.
+"""Persistent task queue — SQLite-backed, multi-queue, prioritized, pausable.
 
-Ersetzt BackgroundQueue mit persistenter, restartfähiger Queue.
+This is the ONE background queue of the server: every deferred job (memory
+consolidation, story arcs, social dialog, package background work, …) is
+submitted here via ``get_task_queue().submit(...)`` and executed by a fixed
+pool of ``_NUM_WORKERS`` worker threads — so up to that many tasks run at the
+same time, in priority order.
 
 Features:
-  - Persistent via SQLite (kein Task-Verlust bei Neustart)
-  - Mehrere named Queues (z.B. "default", "GamingPC", "EvoX2")
-  - Prioritäten (niedriger Wert = höhere Priorität)
-  - Pause/Resume pro Queue (überlebt Neustart)
-  - Tasks verschiebbar (Queue, Priorität)
-  - Auto-Retry konfigurierbar
-  - Tracked Tasks: extern laufende Tasks (GPU, TTS) werden fuer
-    einheitliche UI-Sichtbarkeit in derselben DB registriert
+  - Persistent via SQLite (no task loss on restart)
+  - Several named queues (e.g. "background", "GamingPC", "EvoX2") — the name is
+    a label for the UI and for pausing, it does not route to its own worker
+  - Priorities (lower value = higher priority)
+  - Pause/resume per queue name (survives a restart)
+  - Tasks can be moved (queue, priority)
+  - Configurable auto-retry
+  - Tracked tasks: externally running jobs (GPU, TTS) are registered in the
+    same DB so the UI shows them alongside the queued ones
   - CLI: python queue_cli.py <command>
 
-Config (.env):
-    TASK_QUEUE_QUEUES=default:1
+Environment:
     TASK_QUEUE_MAX_RETRIES=0
 """
 import json
@@ -87,8 +91,9 @@ _SCHEMA_STMTS = [
 class TaskQueue:
     """Persistent, multi-queue task processor backed by SQLite.
 
-    Drop-in replacement for BackgroundQueue with the same submit() /
-    register_handler() API plus management operations (pause, retry, move, …).
+    ``submit()`` / ``register_handler()`` are the whole submission API; on top
+    of them come the management operations (pause, retry, move, …) the admin
+    panel and ``queue_cli.py`` use.
     """
 
     def __init__(self) -> None:
@@ -194,7 +199,7 @@ class TaskQueue:
             return 0
 
     # ------------------------------------------------------------------
-    # Public API — compatible with BackgroundQueue
+    # Public API — submission and handler registration
     # ------------------------------------------------------------------
 
     def register_handler(self, task_type: str, handler: Callable) -> None:

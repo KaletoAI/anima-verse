@@ -2,13 +2,13 @@
 
 Lives in the instagram package (wave 5). The core emits generic hooks
 (instagram.post_created / instagram.user_comment, see app/core/hooks.py);
-this module subscribes and runs the reactions in the background queue.
+this module subscribes and runs the reactions in the task queue.
 
-Wenn ein Character einen Instagram-Post erstellt, "sehen" andere Characters
-den Post basierend auf der Popularitaet des Posters. Reaktionen werden als
-Knowledge-Eintraege fuer beide Characters gespeichert.
+When a character creates an Instagram post, other characters "see" the post
+based on the poster's popularity. Reactions are stored as knowledge entries
+for both characters.
 
-Laeuft in der BackgroundQueue (ein Task gleichzeitig).
+Runs as a task-queue job (persistent, executed by the shared worker pool).
 """
 import base64
 import os
@@ -22,16 +22,16 @@ from app.models.character import (
 from app.models.memory import upsert_relationship_memory as upsert_character_relationship
 from app.models.instagram import add_character_like, get_instagram_dir, load_image_meta
 from app.models.relationship import record_interaction as _record_rel
-from app.core.background_queue import get_background_queue
+from app.core.task_queue import get_task_queue
 
 from app.core.log import get_logger
 logger = get_logger("social_reactions")
 
 
 def _handle_instagram_reaction(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Background-Queue Handler fuer instagram_reaction Tasks.
+    """Task-queue handler for instagram_reaction tasks.
 
-    payload: user_id, poster_name, post (dict mit caption, image_prompt, id, ...)
+    payload: user_id, poster_name, post (dict with caption, image_prompt, id, ...)
     """
     user_id = payload["user_id"]
     poster_name = payload["poster_name"]
@@ -227,10 +227,10 @@ def _analyze_image(image_path: str, poster_name: str) -> Optional[str]:
 
 
 def _handle_user_comment_reaction(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Background-Queue Handler: Character soll auf einen User-Kommentar reagieren.
+    """Task-queue handler: the character reacts to a user comment.
 
-    Triggert einen forcierten Gedanken fuer den Poster — der entscheidet via
-    Tool-Call (InstagramReply) wie er antwortet.
+    Triggers a forced thought for the poster — it decides via tool call
+    (InstagramReply) how to answer.
 
     payload: user_id, character_name, post_id, commenter_name, comment_text, post
     """
@@ -268,14 +268,14 @@ _registered = False
 
 
 def ensure_registered():
-    """Idempotent package wiring: background-queue handlers + core hook
+    """Idempotent package wiring: task-queue handlers + core hook
     subscriptions. Called from the package's skill constructors."""
     global _registered
     if _registered:
         return
-    bq = get_background_queue()
-    bq.register_handler("instagram_reaction", _handle_instagram_reaction)
-    bq.register_handler("instagram_user_comment_reaction", _handle_user_comment_reaction)
+    tq = get_task_queue()
+    tq.register_handler("instagram_reaction", _handle_instagram_reaction)
+    tq.register_handler("instagram_user_comment_reaction", _handle_user_comment_reaction)
     from app.core import hooks
     hooks.register("instagram.post_created", trigger_social_reactions)
     hooks.register("instagram.user_comment", trigger_user_comment_reaction)
@@ -283,16 +283,16 @@ def ensure_registered():
 
 
 def trigger_social_reactions(poster_name: str, post: Dict[str, Any]):
-    """Einstiegspunkt: Gibt einen instagram_reaction Task in die Queue.
+    """Entry point: submits an instagram_reaction task to the queue.
 
-    Wird nach create_post() aufgerufen.
+    Called after create_post().
     """
     from app.core import config as _cfg
     if not bool(_cfg.get("social_reactions.enabled", True)):
         return
 
-    bq = get_background_queue()
-    bq.submit("instagram_reaction", {
+    tq = get_task_queue()
+    tq.submit("instagram_reaction", {
         "user_id": "",
         "poster_name": poster_name,
         "post": post,
@@ -302,13 +302,13 @@ def trigger_social_reactions(poster_name: str, post: Dict[str, Any]):
 def trigger_user_comment_reaction(character_name: str, post_id: str,
                                    commenter_name: str, comment_text: str,
                                    comment_id: str = "", post: dict = None):
-    """Triggert Character-Reaktion auf einen User-Kommentar."""
+    """Triggers a character reaction to a user comment."""
     from app.core import config as _cfg
     if not bool(_cfg.get("social_reactions.enabled", True)):
         return
 
-    bq = get_background_queue()
-    bq.submit("instagram_user_comment_reaction", {
+    tq = get_task_queue()
+    tq.submit("instagram_user_comment_reaction", {
         "user_id": "",
         "agent_name": character_name,
         "post_id": post_id,

@@ -305,8 +305,8 @@ def _sub_event_expiry():
 
 def _sub_relationship_decay():
     try:
-        from app.core.background_queue import get_background_queue
-        get_background_queue().submit(
+        from app.core.task_queue import get_task_queue
+        get_task_queue().submit(
             "relationship_decay", {}, deduplicate=True)
     except Exception as e:
         logger.debug("relationship_decay sub error: %s", e)
