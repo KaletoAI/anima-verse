@@ -73,6 +73,9 @@ def _strip_runtime_keys(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _item_dir_for(item_id: str, *, shared: bool) -> Path:
+    """The item's file directory. Both helpers run the id through
+    ``inventory.require_item_id`` — an id out of a ZIP is attacker-controlled
+    and must never become a path component of its own choosing."""
     from app.models.inventory import _get_item_dir, _get_shared_item_dir
     return _get_shared_item_dir(item_id) if shared else _get_item_dir(item_id)
 
@@ -146,6 +149,16 @@ def restore_embedded_items(zf: zipfile.ZipFile) -> List[str]:
         return []
     if not isinstance(item_rows, list) or not item_rows:
         return []
+
+    # EVERY id from the ZIP through the filter BEFORE anything is written:
+    # these ids become DB keys and directory names below. A pack that carries
+    # one the filter would change is rejected as a whole (ValueError -> 400),
+    # never silently renamed — a renamed item would break the outfit/room
+    # references that travel with it.
+    from app.models.inventory import require_item_id
+    for row in item_rows:
+        if isinstance(row, dict) and (row.get("id") or "").strip():
+            require_item_id(row.get("id"))
 
     existing = _existing_item_ids()
     # items.json holds the flattened get_item() shape (meta spread to top
@@ -299,10 +312,12 @@ def _persist_imported_item(
         delete_item,
     )
 
+    from app.models.inventory import require_item_id
+
     item = _strip_runtime_keys(item)
-    original_id = item.get("id") or ""
-    if not original_id:
-        raise ValueError("item has no id")
+    # The id becomes a DB key AND the name of the directory the ZIP's files
+    # are written into — it is checked here, before either happens.
+    original_id = require_item_id(item.get("id") or "")
 
     taken = _existing_item_ids()
     renamed = False
@@ -331,7 +346,24 @@ def _restore_item_files(
     zf: zipfile.ZipFile, original_id: str, final_id: str, *, shared: bool
 ) -> int:
     """Copy ZIP files for one item into its (possibly renamed) target dir."""
+    from app.core.paths import get_shared_dir, get_storage_dir
+    from app.models.inventory import require_item_id
+
+    # Belt and braces around an `rmtree` on a path built from ZIP content:
+    # the id is filtered (require_item_id, also inside _item_dir_for) AND the
+    # resolved directory has to sit under the items directory it belongs to.
+    # A rmtree one directory too high would take the whole storage with it.
+    require_item_id(final_id)
+    require_item_id(original_id)
     dst_dir = _item_dir_for(final_id, shared=shared)
+    base = ((get_shared_dir() if shared else get_storage_dir()) / "items")
+    try:
+        resolved = dst_dir.resolve()
+        inside = resolved.is_relative_to(base.resolve()) and resolved != base.resolve()
+    except (OSError, ValueError):
+        inside = False
+    if not inside:
+        raise ValueError(f"item file target outside the items directory: {dst_dir}")
     if dst_dir.exists():
         shutil.rmtree(dst_dir)
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -368,9 +400,8 @@ def import_item_from_zip(
     if not isinstance(rows, list) or len(rows) != 1:
         raise ValueError("db/items.json must contain exactly one item")
     item = rows[0]
-    original_id = item.get("id") or manifest.get("item_id") or ""
-    if not original_id:
-        raise ValueError("item id missing")
+    from app.models.inventory import require_item_id
+    original_id = require_item_id(item.get("id") or manifest.get("item_id") or "")
 
     if overwrite is False and original_id in _existing_item_ids():
         raise FileExistsError(
@@ -897,8 +928,8 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     """
     import uuid
     from app.models.world import (
-        GROUND_ROOM_ID, _load_world_data, _save_world_data, ensure_floor_rooms,
-        get_gallery_dir, is_floor_room,
+        GROUND_ROOM_ID, ensure_floor_rooms,
+        get_gallery_dir, is_floor_room, upsert_location, world_write_lock,
     )
 
     try:
@@ -957,20 +988,20 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     # stands in a location that is being created, so nothing is evicted.
     ensure_floor_rooms(loc.setdefault("rooms", []), loc.get("map3d"))
 
-    loc["name"] = _free_location_name((loc.get("name") or "Imported location").strip())
-    if loc.get("image_prompt_day") or loc.get("image_prompt_night"):
-        loc["prompt_changed"] = True
-    # Placement is reset — the import lands unplaced (pos_x IS NULL); the user
-    # places it in the map editor. Without this the copy sits exactly ON the
-    # original.
-    for key in ("pos_x", "pos_z", "yaw_deg"):
-        loc.pop(key, None)
-
-    data = _load_world_data()
-    locations = data.get("locations", [])
-    locations.append(loc)
-    data["locations"] = locations
-    _save_world_data(data)
+    # The free name and the insert belong together — under the world write
+    # lock nothing can take the name in between — and only the ONE new
+    # location is written: an import must not touch, let alone delete, the
+    # places that were already there.
+    with world_write_lock:
+        loc["name"] = _free_location_name((loc.get("name") or "Imported location").strip())
+        if loc.get("image_prompt_day") or loc.get("image_prompt_night"):
+            loc["prompt_changed"] = True
+        # Placement is reset — the import lands unplaced (pos_x IS NULL); the
+        # user places it in the map editor. Without this the copy sits exactly
+        # ON the original.
+        for key in ("pos_x", "pos_z", "yaw_deg"):
+            loc.pop(key, None)
+        upsert_location(loc)
 
     # Move gallery files
     gallery_dir = get_gallery_dir(new_loc_id)
@@ -1565,6 +1596,13 @@ def import_bundle_from_zip(
     rows = json.loads(zf.read("db/items.json"))
     if not isinstance(rows, list) or not rows:
         raise ValueError("db/items.json must be a non-empty list")
+
+    # Every id of the bundle through the filter before the first write — one
+    # bad id rejects the pack, it is never imported under a changed name.
+    from app.models.inventory import require_item_id
+    for r in rows:
+        if isinstance(r, dict) and (r.get("id") or "").strip():
+            require_item_id(r.get("id"))
 
     if selected_ids is not None:
         rows = [r for r in rows if r.get("id") in selected_ids]

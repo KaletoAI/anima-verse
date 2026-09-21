@@ -53,7 +53,96 @@ def _migrate_room_image_prompts(data: Dict[str, Any]) -> bool:
     return changed
 
 
+# --- Read cache -----------------------------------------------------------
+# WHY. ``get_location_by_id`` (90 call sites), ``list_locations`` (54) and
+# ``resolve_location`` (36) each re-read and re-parse the WHOLE world; the
+# travel ticker does it once per traveller every five seconds and a chat turn
+# dozens of times. The world only changes when one of the three writers below
+# runs, so the parse is cached and a write bumps a generation counter.
+#
+# WHAT IS HANDED OUT ARE COPIES. Half the callers mutate what they got back
+# (load → change one location → save), so the cache stores each location's
+# JSON TEXT and every read parses its own object. json.loads is C-fast, keeps
+# no reference to cached state, and is measurably cheaper than a deepcopy of
+# the same dict (scripts/smoke_world_cache.py prints both).
+#
+# The key is the DB path, so switching world/storage (``paths.init``) cannot
+# serve the previous world's locations.
+_world_cache_lock = threading.Lock()
+_world_generation = 0
+_world_cache: Dict[str, Any] = {"key": None, "gen": None,
+                                "texts": None, "by_id": None}
+
+
+def _bump_world_generation() -> None:
+    """A location write happened — the cached parse is stale."""
+    global _world_generation
+    with _world_cache_lock:
+        _world_generation += 1
+        _world_cache["gen"] = None
+        _world_cache["texts"] = None
+        _world_cache["by_id"] = None
+
+
+def _world_cache_key() -> str:
+    try:
+        from app.core.db import get_db_path
+        return str(get_db_path())
+    except Exception:
+        return ""
+
+
+def _cached_texts() -> Optional[List[str]]:
+    """The active world's locations as JSON texts, or None when the cache is
+    cold/stale. Never returns objects — the caller parses its own."""
+    key = _world_cache_key()
+    with _world_cache_lock:
+        if (_world_cache["texts"] is not None
+                and _world_cache["key"] == key
+                and _world_cache["gen"] == _world_generation):
+            return _world_cache["texts"]
+    return None
+
+
+def _fill_world_cache(locations: List[Dict[str, Any]], gen_at_read: int) -> None:
+    """Store the parse — unless a write landed while we were reading it."""
+    key = _world_cache_key()
+    try:
+        texts = [json.dumps(loc, ensure_ascii=False) for loc in locations]
+    except (TypeError, ValueError):
+        return   # something in there is not JSON — simply do not cache
+    by_id: Dict[str, str] = {}
+    for loc, text in zip(locations, texts):
+        lid = loc.get("id") if isinstance(loc, dict) else None
+        if lid and lid not in by_id:
+            by_id[str(lid)] = text
+    with _world_cache_lock:
+        if _world_generation != gen_at_read:
+            return
+        _world_cache.update(key=key, gen=gen_at_read, texts=texts, by_id=by_id)
+
+
 def _load_world_data() -> Dict[str, Any]:
+    """The world data (locations plus their rooms) — cached, copies only.
+
+    Same answer as a fresh read: every call returns freshly parsed dicts that
+    the caller may mutate without touching the cache or another caller.
+    """
+    texts = _cached_texts()
+    if texts is not None:
+        try:
+            return {"locations": [json.loads(t) for t in texts]}
+        except (TypeError, ValueError):
+            pass   # fall through to a fresh read
+    gen_at_read = _world_generation
+    data = _read_world_data_uncached()
+    locations = data.get("locations", [])
+    if isinstance(locations, list):
+        _fill_world_cache(locations, gen_at_read)
+    return data
+
+
+def _read_world_data_uncached() -> Dict[str, Any]:
     """Loads the world data from the DB (locations plus their rooms).
 
     A location comes out of the ``meta`` blob as a complete dict whenever the
@@ -210,137 +299,254 @@ def _load_world_data() -> Dict[str, Any]:
 
 _world_file_lock = threading.Lock()
 
+#: ONE process-wide lock for every write to the locations/rooms tables — and,
+#: just as importantly, for the read-modify-write block around it: a caller
+#: that loads the world, changes a location and stores it again holds this
+#: from the load to the upsert. Re-entrant on purpose, because the upsert
+#: acquires it again.
+#:
+#: WHY. Until 2026-09-21 every writer handed the WHOLE world snapshot to
+#: ``_save_world_data``, which deleted every location the snapshot did not
+#: mention, and nothing serialized the load against the save. Two threads that
+#: had both read the world before either wrote therefore deleted each other's
+#: fresh locations — an NPC dropping an item in a room could purge a place the
+#: editor had just created, silently. Delete-by-absence is now opt-in
+#: (:func:`replace_all_locations`); everything else upserts what it touched.
+world_write_lock = threading.RLock()
 
-def _save_world_data(data: Dict[str, Any]):
-    """Speichert die Weltdaten in die DB (Locations + Raeume als Upsert)."""
-    now = utc_now_iso()
-    locations = data.get("locations", [])
-    try:
-        with transaction() as conn:
-            existing_loc_ids = {r[0] for r in conn.execute(
-                "SELECT id FROM locations"
-            ).fetchall()}
-            new_loc_ids = {loc.get("id") for loc in locations if loc.get("id")}
 
-            for lid in existing_loc_ids - new_loc_ids:
-                conn.execute("DELETE FROM locations WHERE id=?", (lid,))
+def _write_location_rows(conn, locations: List[Dict[str, Any]],
+                         now: str) -> None:
+    """Upsert the given locations and their rooms into an OPEN transaction.
 
-            for loc in locations:
-                lid = loc.get("id")
-                if not lid:
-                    continue
-                # No entry_room default is written here any more: the field is
-                # optional (plan-grundflaeche.md § 6), and filling it in on
-                # every save made "empty = arrive on the ground" unreachable.
-                # A value pointing at a deleted room is answered by
-                # get_entry_room_id, which reads it as "none declared".
-                conn.execute("""
-                    INSERT INTO locations
-                        (id, name, description, pos_x, pos_z, yaw_deg, outfit_type,
-                         image_prompt_day, image_prompt_night,
-                         visible_when, accessible_when, background_images, meta,
-                         decency, style_hint, swim_allowed, activity_hint,
-                         created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        name=excluded.name,
-                        description=excluded.description,
-                        pos_x=excluded.pos_x,
-                        pos_z=excluded.pos_z,
-                        yaw_deg=excluded.yaw_deg,
-                        outfit_type=excluded.outfit_type,
-                        image_prompt_day=excluded.image_prompt_day,
-                        image_prompt_night=excluded.image_prompt_night,
-                        visible_when=excluded.visible_when,
-                        accessible_when=excluded.accessible_when,
-                        background_images=excluded.background_images,
-                        meta=excluded.meta,
-                        decency=excluded.decency,
-                        style_hint=excluded.style_hint,
-                        swim_allowed=excluded.swim_allowed,
-                        activity_hint=excluded.activity_hint,
-                        updated_at=excluded.updated_at
-                """, (
-                    lid,
-                    loc.get("name", ""),
-                    loc.get("description", ""),
-                    loc.get("pos_x"),
-                    loc.get("pos_z"),
-                    float(loc.get("yaw_deg") or 0.0),
-                    loc.get("outfit_type", ""),
-                    loc.get("image_prompt_day", ""),
-                    loc.get("image_prompt_night", ""),
-                    json.dumps(loc.get("visible_when", []), ensure_ascii=False),
-                    json.dumps(loc.get("accessible_when", []), ensure_ascii=False),
-                    json.dumps(loc.get("background_images", []), ensure_ascii=False),
-                    json.dumps(loc, ensure_ascii=False),
-                    loc.get("decency", "") or "",
-                    loc.get("style_hint", "") or "",
-                    1 if loc.get("swim_allowed") else 0,
-                    loc.get("activity_hint", "") or "",
-                    now,
-                    now,
-                ))
+    Rooms that are MISSING from a location's ``rooms`` list are deleted —
+    within that one location, because a location dict is the unit of editing
+    (a room the editor removed arrives as a list that simply lacks it).
+    Locations that are not in ``locations`` are never touched here: deleting a
+    place is explicit (:func:`delete_location_row`, or the opt-in
+    :func:`replace_all_locations`).
+    """
+    for loc in locations:
+        lid = loc.get("id")
+        if not lid:
+            continue
+        # No entry_room default is written here any more: the field is
+        # optional (plan-grundflaeche.md § 6), and filling it in on
+        # every save made "empty = arrive on the ground" unreachable.
+        # A value pointing at a deleted room is answered by
+        # get_entry_room_id, which reads it as "none declared".
+        conn.execute("""
+            INSERT INTO locations
+                (id, name, description, pos_x, pos_z, yaw_deg, outfit_type,
+                 image_prompt_day, image_prompt_night,
+                 visible_when, accessible_when, background_images, meta,
+                 decency, style_hint, swim_allowed, activity_hint,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name,
+                description=excluded.description,
+                pos_x=excluded.pos_x,
+                pos_z=excluded.pos_z,
+                yaw_deg=excluded.yaw_deg,
+                outfit_type=excluded.outfit_type,
+                image_prompt_day=excluded.image_prompt_day,
+                image_prompt_night=excluded.image_prompt_night,
+                visible_when=excluded.visible_when,
+                accessible_when=excluded.accessible_when,
+                background_images=excluded.background_images,
+                meta=excluded.meta,
+                decency=excluded.decency,
+                style_hint=excluded.style_hint,
+                swim_allowed=excluded.swim_allowed,
+                activity_hint=excluded.activity_hint,
+                updated_at=excluded.updated_at
+        """, (
+            lid,
+            loc.get("name", ""),
+            loc.get("description", ""),
+            loc.get("pos_x"),
+            loc.get("pos_z"),
+            float(loc.get("yaw_deg") or 0.0),
+            loc.get("outfit_type", ""),
+            loc.get("image_prompt_day", ""),
+            loc.get("image_prompt_night", ""),
+            json.dumps(loc.get("visible_when", []), ensure_ascii=False),
+            json.dumps(loc.get("accessible_when", []), ensure_ascii=False),
+            json.dumps(loc.get("background_images", []), ensure_ascii=False),
+            json.dumps(loc, ensure_ascii=False),
+            loc.get("decency", "") or "",
+            loc.get("style_hint", "") or "",
+            1 if loc.get("swim_allowed") else 0,
+            loc.get("activity_hint", "") or "",
+            now,
+            now,
+        ))
 
-                # Upsert rooms
-                rooms = loc.get("rooms", [])
-                existing_room_ids = {r[0] for r in conn.execute(
-                    "SELECT id FROM rooms WHERE location_id=?", (lid,)
-                ).fetchall()}
-                new_room_ids = {r.get("id") for r in rooms if r.get("id")}
-                for rid in existing_room_ids - new_room_ids:
-                    # Room ids are unique per LOCATION — without the second
-                    # condition this deletes another location's room of the
-                    # same id (every location has the ground room).
-                    conn.execute(
-                        "DELETE FROM rooms WHERE id=? AND location_id=?",
-                        (rid, lid))
+        # Upsert rooms
+        rooms = loc.get("rooms", [])
+        existing_room_ids = {r[0] for r in conn.execute(
+            "SELECT id FROM rooms WHERE location_id=?", (lid,)
+        ).fetchall()}
+        new_room_ids = {r.get("id") for r in rooms if r.get("id")}
+        for rid in existing_room_ids - new_room_ids:
+            # Room ids are unique per LOCATION — without the second
+            # condition this deletes another location's room of the
+            # same id (every location has the ground room).
+            conn.execute(
+                "DELETE FROM rooms WHERE id=? AND location_id=?",
+                (rid, lid))
 
-                for room in rooms:
-                    rid = room.get("id")
-                    if not rid:
-                        continue
-                    conn.execute("""
-                        INSERT INTO rooms (id, location_id, name, outfit_type, meta,
-                                           decency, style_hint, swim_allowed,
-                                           activity_hint)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(location_id, id) DO UPDATE SET
-                            name=excluded.name,
-                            outfit_type=excluded.outfit_type,
-                            meta=excluded.meta,
-                            decency=excluded.decency,
-                            style_hint=excluded.style_hint,
-                            swim_allowed=excluded.swim_allowed,
-                            activity_hint=excluded.activity_hint
-                    """, (
-                        rid,
-                        lid,
-                        room.get("name", ""),
-                        room.get("outfit_type", ""),
-                        json.dumps(room, ensure_ascii=False),
-                        room.get("decency", "") or "",
-                        room.get("style_hint", "") or "",
-                        1 if room.get("swim_allowed") else 0,
-                        room.get("activity_hint", "") or "",
-                    ))
-    except Exception as e:
-        logger.error("_save_world_data DB-Fehler: %s", e)
-    # THE PLATEAU FOLLOWS THE PLACE (E8 task 4; "Ein Boden" E1 § G5 made it a
-    # LAW). The world's relief is levelled flat under every footprint that
-    # draws a built floor (``draws_built_floor``), so moving, turning,
-    # resizing, placing, deleting — or closing a room of — such a location
-    # changes the heightfield, and with it what every client draws and what
-    # the walking rule judges. This is the one writer of the location table,
-    # so it is the one place that has to say so.
-    # AFTER the transaction: the re-raster reads the locations back, and it
-    # must read the written ones. It costs a signature compare when nothing
-    # moved.
+        for room in rooms:
+            rid = room.get("id")
+            if not rid:
+                continue
+            conn.execute("""
+                INSERT INTO rooms (id, location_id, name, outfit_type, meta,
+                                   decency, style_hint, swim_allowed,
+                                   activity_hint)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(location_id, id) DO UPDATE SET
+                    name=excluded.name,
+                    outfit_type=excluded.outfit_type,
+                    meta=excluded.meta,
+                    decency=excluded.decency,
+                    style_hint=excluded.style_hint,
+                    swim_allowed=excluded.swim_allowed,
+                    activity_hint=excluded.activity_hint
+            """, (
+                rid,
+                lid,
+                room.get("name", ""),
+                room.get("outfit_type", ""),
+                json.dumps(room, ensure_ascii=False),
+                room.get("decency", "") or "",
+                room.get("style_hint", "") or "",
+                1 if room.get("swim_allowed") else 0,
+                room.get("activity_hint", "") or "",
+            ))
+
+
+def _after_world_write() -> None:
+    """Runs AFTER the transaction of every location write.
+
+    Drops the read cache — whoever reads next must see what was just written —
+    and re-rasters the relief.
+
+    THE PLATEAU FOLLOWS THE PLACE (E8 task 4; "Ein Boden" E1 § G5 made it a
+    LAW). The world's relief is levelled flat under every footprint that
+    draws a built floor (``draws_built_floor``), so moving, turning,
+    resizing, placing, deleting — or closing a room of — such a location
+    changes the heightfield, and with it what every client draws and what
+    the walking rule judges. The location table has exactly three writers
+    (upsert, delete, replace) and all three end here, so this is the one
+    place that has to say so.
+    AFTER the transaction: the re-raster reads the locations back, and it
+    must read the written ones. It costs a signature compare when nothing
+    moved.
+    """
+    _bump_world_generation()
     try:
         from app.models.heightfield import note_world_write
         note_world_write()
     except Exception as e:   # noqa: BLE001 — a cache must never fail a write
         logger.warning("heightfield refresh after a world write failed: %s", e)
+
+
+def _upsert_locations(locations: List[Dict[str, Any]]) -> None:
+    rows = [l for l in (locations or [])
+            if isinstance(l, dict) and l.get("id")]
+    if not rows:
+        return
+    with world_write_lock:
+        try:
+            with transaction() as conn:
+                _write_location_rows(conn, rows, utc_now_iso())
+        except Exception as e:
+            logger.error("upsert_location DB-Fehler: %s", e)
+        _after_world_write()
+
+
+def upsert_location(location: Dict[str, Any]) -> None:
+    """Write exactly ONE location (and its rooms). The mutation path.
+
+    Everything that loads the world, changes ONE place and stores it again
+    goes through here — under :data:`world_write_lock`, and touching no row
+    but this location's. That is what keeps an item drop in a room from
+    rewriting (and, before 2026-09-21, deleting) the rest of the world.
+    """
+    _upsert_locations([location])
+
+
+def upsert_locations(locations: List[Dict[str, Any]]) -> None:
+    """Write SEVERAL locations in one transaction — the migrations and the
+    sweeps that touch many places at once. Still no delete-by-absence."""
+    _upsert_locations(locations)
+
+
+def delete_location_row(location_id: str) -> bool:
+    """Delete ONE location and its rooms. True when a row was removed.
+
+    The row-level counterpart of :func:`upsert_location`: a place disappears
+    because someone said so, never because it was missing from a snapshot.
+    """
+    lid = (location_id or "").strip()
+    if not lid:
+        return False
+    gone = False
+    with world_write_lock:
+        try:
+            with transaction() as conn:
+                # The rooms go first: the FK cascade would take them too, but
+                # only while PRAGMA foreign_keys is on.
+                conn.execute("DELETE FROM rooms WHERE location_id=?", (lid,))
+                gone = conn.execute(
+                    "DELETE FROM locations WHERE id=?", (lid,)).rowcount > 0
+        except Exception as e:
+            logger.error("delete_location_row DB-Fehler (%s): %s", lid, e)
+            return False
+        _after_world_write()
+    return gone
+
+
+def replace_all_locations(data: Any) -> None:
+    """Make the world BE this snapshot — every location the snapshot does not
+    mention is deleted.
+
+    Delete-by-absence lives here and nowhere else. It is what a world-level
+    import or a test fixture that builds a world from scratch wants, and it
+    is exactly what a normal mutation must never get: two threads that both
+    loaded the world before either wrote used to delete each other's fresh
+    locations this way.
+    """
+    locations = (data.get("locations", []) if isinstance(data, dict)
+                 else list(data or []))
+    rows = [l for l in locations if isinstance(l, dict) and l.get("id")]
+    keep = {l["id"] for l in rows}
+    with world_write_lock:
+        try:
+            with transaction() as conn:
+                existing = {r[0] for r in conn.execute(
+                    "SELECT id FROM locations").fetchall()}
+                for lid in existing - keep:
+                    conn.execute("DELETE FROM rooms WHERE location_id=?", (lid,))
+                    conn.execute("DELETE FROM locations WHERE id=?", (lid,))
+                _write_location_rows(conn, rows, utc_now_iso())
+        except Exception as e:
+            logger.error("replace_all_locations DB-Fehler: %s", e)
+        _after_world_write()
+
+
+def _save_world_data(data: Dict[str, Any]) -> None:
+    """Upsert every location of the snapshot (locations + their rooms).
+
+    NOT a full replace: a location that is missing from ``data`` stays where
+    it is. Whoever really means "the world is now exactly this" says so with
+    :func:`replace_all_locations`; whoever changed ONE place says
+    :func:`upsert_location`.
+    """
+    _upsert_locations(data.get("locations", []) if isinstance(data, dict)
+                      else list(data or []))
 
 
 # === Welt-Settings (world_kv) ===
@@ -636,33 +842,34 @@ def add_room(location_id: str, room_name: str, description: str = "",
     """
     # Validation
     description = _validate_room_description(description)
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            rooms = loc.setdefault("rooms", [])
-            # Duplicate check (case-insensitive), including the corridors'
-            # default names.
-            taken = {r.get("name", "").lower() for r in rooms}
-            taken |= {floor_room_display_name(r).lower() for r in rooms
-                      if is_floor_room(str(r.get("id") or ""))}
-            if room_name.lower() in taken:
-                logger.warning("Room '%s' already exists in location %s", room_name, location_id)
-                return None
-            new_room = {
-                "id": _generate_room_id(),
-                "name": room_name,
-                "description": description,
-                "image_prompt_day": image_prompt_day,
-                "image_prompt_night": image_prompt_night,
-                "activities": [],
-            }
-            if image_prompt_day or image_prompt_night:
-                new_room["prompt_changed"] = True
-            rooms.append(new_room)
-            _save_world_data(data)
-            logger.info("Room '%s' added to location %s (id=%s)", room_name, location_id, new_room["id"])
-            return new_room
-    return None
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") == location_id:
+                rooms = loc.setdefault("rooms", [])
+                # Duplicate check (case-insensitive), including the corridors'
+                # default names.
+                taken = {r.get("name", "").lower() for r in rooms}
+                taken |= {floor_room_display_name(r).lower() for r in rooms
+                          if is_floor_room(str(r.get("id") or ""))}
+                if room_name.lower() in taken:
+                    logger.warning("Room '%s' already exists in location %s", room_name, location_id)
+                    return None
+                new_room = {
+                    "id": _generate_room_id(),
+                    "name": room_name,
+                    "description": description,
+                    "image_prompt_day": image_prompt_day,
+                    "image_prompt_night": image_prompt_night,
+                    "activities": [],
+                }
+                if image_prompt_day or image_prompt_night:
+                    new_room["prompt_changed"] = True
+                rooms.append(new_room)
+                upsert_location(loc)
+                logger.info("Room '%s' added to location %s (id=%s)", room_name, location_id, new_room["id"])
+                return new_room
+        return None
 
 
 def update_room_description(location_id: str, room_id: str,
@@ -675,24 +882,25 @@ def update_room_description(location_id: str, room_id: str,
     if not new_description and image_prompt_day is None and image_prompt_night is None:
         logger.warning("Raum-Beschreibung nach Validierung leer und kein image_prompt — Update abgelehnt")
         return False
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            for room in loc.get("rooms", []):
-                if room.get("id") == room_id:
-                    if new_description:
-                        room["description"] = new_description
-                    if image_prompt_day is not None:
-                        if image_prompt_day != room.get("image_prompt_day", ""):
-                            room["prompt_changed"] = True
-                        room["image_prompt_day"] = image_prompt_day
-                    if image_prompt_night is not None:
-                        if image_prompt_night != room.get("image_prompt_night", ""):
-                            room["prompt_changed"] = True
-                        room["image_prompt_night"] = image_prompt_night
-                    _save_world_data(data)
-                    return True
-    return False
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") == location_id:
+                for room in loc.get("rooms", []):
+                    if room.get("id") == room_id:
+                        if new_description:
+                            room["description"] = new_description
+                        if image_prompt_day is not None:
+                            if image_prompt_day != room.get("image_prompt_day", ""):
+                                room["prompt_changed"] = True
+                            room["image_prompt_day"] = image_prompt_day
+                        if image_prompt_night is not None:
+                            if image_prompt_night != room.get("image_prompt_night", ""):
+                                room["prompt_changed"] = True
+                            room["image_prompt_night"] = image_prompt_night
+                        upsert_location(loc)
+                        return True
+        return False
 
 
 def append_room_props(location_id: str, room_id: str,
@@ -714,56 +922,59 @@ def append_room_props(location_id: str, room_id: str,
         return False
     from app.core.world_ops import _sanitize_room_layout, sanitize_ground_layout
     is_ground = room_id == GROUND_ROOM_ID
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") != location_id:
-            continue
-        for room in loc.get("rooms", []):
-            if room.get("id") != room_id:
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") != location_id:
                 continue
-            layout = room.get("layout")
-            if not isinstance(layout, dict):
-                if not is_ground:
+            for room in loc.get("rooms", []):
+                if room.get("id") != room_id:
+                    continue
+                layout = room.get("layout")
+                if not isinstance(layout, dict):
+                    if not is_ground:
+                        return False
+                    layout = {}
+                merged = dict(layout)
+                merged["props"] = list(layout.get("props") or []) + list(placements)
+                clean = (sanitize_ground_layout(merged) if is_ground
+                         else _sanitize_room_layout(merged))
+                if not clean:
                     return False
-                layout = {}
-            merged = dict(layout)
-            merged["props"] = list(layout.get("props") or []) + list(placements)
-            clean = (sanitize_ground_layout(merged) if is_ground
-                     else _sanitize_room_layout(merged))
-            if not clean:
-                return False
-            room["layout"] = clean
-            _save_world_data(data)
-            # Accepted props bring markers — the seat inventory is stale.
-            from app.core import places; places.invalidate()
-            logger.info("Room %s: %d prop placements accepted",
-                        room_id, len(placements))
-            return True
-    return False
+                room["layout"] = clean
+                upsert_location(loc)
+                # Accepted props bring markers — the seat inventory is stale.
+                from app.core import places; places.invalidate()
+                logger.info("Room %s: %d prop placements accepted",
+                            room_id, len(placements))
+                return True
+        return False
 
 
 def clear_room_prompt_changed(location_id: str, room_id: str) -> bool:
     """Remove the prompt_changed flag from a room. Returns True on success."""
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            for room in loc.get("rooms", []):
-                if room.get("id") == room_id:
-                    if room.pop("prompt_changed", None):
-                        _save_world_data(data)
-                    return True
-    return False
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") == location_id:
+                for room in loc.get("rooms", []):
+                    if room.get("id") == room_id:
+                        if room.pop("prompt_changed", None):
+                            upsert_location(loc)
+                        return True
+        return False
 
 
 def clear_location_prompt_changed(location_id: str) -> bool:
     """Remove the prompt_changed flag from a location. Returns True on success."""
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            if loc.pop("prompt_changed", None):
-                _save_world_data(data)
-            return True
-    return False
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") == location_id:
+                if loc.pop("prompt_changed", None):
+                    upsert_location(loc)
+                return True
+        return False
 
 
 def list_locations() -> List[Dict[str, Any]]:
@@ -915,38 +1126,68 @@ def location_visible_to_character(character_name: str,
 
 def room_visible_to_character(character_name: str,
                                 location: Dict[str, Any],
-                                room: Dict[str, Any]) -> bool:
-    """True wenn der Character sowohl das Location- als auch das Raum-
-    Wissens-Item hat (beide optional)."""
-    if not location_visible_to_character(character_name, location):
+                                room: Dict[str, Any],
+                                context: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True when the character has the location's AND the room's knowledge
+    item (both optional).
+
+    ``context``: a ``visibility_context()`` result for this character; when
+    given, its precomputed sets replace the per-call DB reads — of the
+    location gate below AND of this room's item. Same answer, no lookup.
+    """
+    if not location_visible_to_character(character_name, location, context):
         return False
     if not isinstance(room, dict):
         return False
     iid = (room.get("knowledge_item_id") or "").strip()
     if not iid:
         return True
-    return _character_has_item(character_name, iid)
+    return iid in context["items"] if context is not None \
+        else _character_has_item(character_name, iid)
 
 
 def list_locations_for_character(character_name: str) -> List[Dict[str, Any]]:
     """Liefert alle Locations die der Character dank Wissens-Items sehen darf.
     Raeume werden pro Location ebenfalls gefiltert — nur sichtbare bleiben im
     zurueckgelieferten 'rooms'-Array.
+
+    The character's known list and inventory are fetched ONCE
+    (``visibility_context``) and passed down. Without it a 30-location world
+    with 7 rooms each asked for the character config and the inventory 240
+    times — per chat turn.
     """
+    ctx = visibility_context(character_name)
     visible = []
     for loc in list_locations():
-        if not location_visible_to_character(character_name, loc):
+        if not location_visible_to_character(character_name, loc, ctx):
             continue
         rooms = [r for r in (loc.get("rooms") or [])
-                 if room_visible_to_character(character_name, loc, r)]
+                 if room_visible_to_character(character_name, loc, r, ctx)]
         visible.append({**loc, "rooms": rooms})
     return visible
 
 
 def get_location_by_id(location_id: str) -> Optional[Dict[str, Any]]:
-    """Gibt einen Ort per exakter ID-Suche zurueck."""
+    """Gibt einen Ort per exakter ID-Suche zurueck.
+
+    Served from the read cache's id index when it is warm — one parse instead
+    of one per location of the world.
+    """
     if not location_id:
         return None
+    if _cached_texts() is None:
+        _load_world_data()          # warm the cache, then use the index
+    with _world_cache_lock:
+        by_id = _world_cache["by_id"] if (
+            _world_cache["key"] == _world_cache_key()
+            and _world_cache["gen"] == _world_generation) else None
+        text = by_id.get(location_id) if by_id else None
+    if text is not None:
+        try:
+            return json.loads(text)
+        except (TypeError, ValueError):
+            pass
     for location in list_locations():
         if location.get("id") == location_id:
             return location
@@ -1237,36 +1478,37 @@ def migrate_ground_rooms_once() -> Dict[str, int]:
     if get_world_setting("migration.ground_room_v1", "") == "done":
         return counts
     try:
-        data = _load_world_data()
-        collisions: set = set()
-        changed = False
-        for loc in data.get("locations", []):
-            lid = str(loc.get("id") or "")
-            action = ground_room_action(loc)
-            # The former location field `ground_name` becomes the room's own
-            # name and is gone from the location for good; empty keeps the
-            # translated default.
-            name = str(loc.pop("ground_name", "") or "").strip()
-            if name:
-                changed = True
-            if action == "add":
-                loc.setdefault("rooms", []).append({
-                    "id": GROUND_ROOM_ID,
-                    "name": name,
-                    "description": "",
-                    "activities": [],
-                })
-                counts["locations"] += 1
-                changed = True
-            elif action == "present":
-                collisions.add(lid)
-                counts["collisions"] += 1
-                logger.warning(
-                    "ground-room migration: location %s (%s) already has a "
-                    "room with the reserved id %r — skipped, nothing moved "
-                    "there", lid, loc.get("name", ""), GROUND_ROOM_ID)
-        if changed:
-            _save_world_data(data)
+        with world_write_lock:
+            data = _load_world_data()
+            collisions: set = set()
+            changed = False
+            for loc in data.get("locations", []):
+                lid = str(loc.get("id") or "")
+                action = ground_room_action(loc)
+                # The former location field `ground_name` becomes the room's own
+                # name and is gone from the location for good; empty keeps the
+                # translated default.
+                name = str(loc.pop("ground_name", "") or "").strip()
+                if name:
+                    changed = True
+                if action == "add":
+                    loc.setdefault("rooms", []).append({
+                        "id": GROUND_ROOM_ID,
+                        "name": name,
+                        "description": "",
+                        "activities": [],
+                    })
+                    counts["locations"] += 1
+                    changed = True
+                elif action == "present":
+                    collisions.add(lid)
+                    counts["collisions"] += 1
+                    logger.warning(
+                        "ground-room migration: location %s (%s) already has a "
+                        "room with the reserved id %r — skipped, nothing moved "
+                        "there", lid, loc.get("name", ""), GROUND_ROOM_ID)
+            if changed:
+                upsert_locations(data.get("locations", []))
 
         # Which locations have a usable ground now — collisions excluded.
         rooms_by_loc: Dict[str, List[str]] = {}
@@ -1401,44 +1643,45 @@ def migrate_floor_rooms_once() -> Dict[str, int]:
     if get_world_setting("migration.floor_rooms_v1", "") == "done":
         return counts
     try:
-        data = _load_world_data()
-        changed = False
-        evicted: List[Tuple[str, List[str]]] = []
-        for loc in data.get("locations", []):
-            rooms = loc.get("rooms")
-            if not isinstance(rooms, list):
-                # A blob with ``rooms: null`` must not abort the whole run.
-                loc["rooms"] = rooms = []
-            before = len(rooms)
-            removed = ensure_floor_rooms(rooms, loc.get("map3d"))
-            # The removals are added back in: a location that loses one stale
-            # corridor and gains one real one has the same room count, and
-            # the bare length delta would report "0 added".
-            added = len(rooms) - before + len(removed)
-            lid = loc.get("id")
-            if removed:
-                # A hand-authored or imported ``__floor__X`` on a storey no
-                # room stands on: it goes, and whoever stood in it lands on
-                # the ground (spec § 2.4). The eviction itself waits for the
-                # save below — see there.
-                logger.warning(
-                    "floor-room migration: location %s: corridor room(s) on "
-                    "storeys without rooms removed: %s", lid, ", ".join(removed))
-                evicted.append((lid, removed))
-                changed = True
-            doors = count_corridor_doors(loc)
-            if added or doors:
-                logger.info(
-                    "floor-room migration: location %s (%s): %d corridor(s) "
-                    "added, %d door(s) now lead into a corridor%s",
-                    lid, loc.get("name", ""), added, doors,
-                    (": " + ", ".join(corridor_door_rooms(loc))) if doors else "")
-                counts["locations"] += 1
-                counts["corridors"] += added
-                counts["doors"] += doors
-            changed = changed or bool(added)
-        if changed:
-            _save_world_data(data)
+        with world_write_lock:
+            data = _load_world_data()
+            changed = False
+            evicted: List[Tuple[str, List[str]]] = []
+            for loc in data.get("locations", []):
+                rooms = loc.get("rooms")
+                if not isinstance(rooms, list):
+                    # A blob with ``rooms: null`` must not abort the whole run.
+                    loc["rooms"] = rooms = []
+                before = len(rooms)
+                removed = ensure_floor_rooms(rooms, loc.get("map3d"))
+                # The removals are added back in: a location that loses one stale
+                # corridor and gains one real one has the same room count, and
+                # the bare length delta would report "0 added".
+                added = len(rooms) - before + len(removed)
+                lid = loc.get("id")
+                if removed:
+                    # A hand-authored or imported ``__floor__X`` on a storey no
+                    # room stands on: it goes, and whoever stood in it lands on
+                    # the ground (spec § 2.4). The eviction itself waits for the
+                    # save below — see there.
+                    logger.warning(
+                        "floor-room migration: location %s: corridor room(s) on "
+                        "storeys without rooms removed: %s", lid, ", ".join(removed))
+                    evicted.append((lid, removed))
+                    changed = True
+                doors = count_corridor_doors(loc)
+                if added or doors:
+                    logger.info(
+                        "floor-room migration: location %s (%s): %d corridor(s) "
+                        "added, %d door(s) now lead into a corridor%s",
+                        lid, loc.get("name", ""), added, doors,
+                        (": " + ", ".join(corridor_door_rooms(loc))) if doors else "")
+                    counts["locations"] += 1
+                    counts["corridors"] += added
+                    counts["doors"] += doors
+                changed = changed or bool(added)
+            if changed:
+                upsert_locations(data.get("locations", []))
         # AFTER THE SAVE, like every write path: the room is gone from the
         # blob first, then the characters standing in it are moved. The other
         # way round a crash in between would leave a character pointing at a
@@ -1565,32 +1808,33 @@ def migrate_room_exits_once() -> Dict[str, int]:
     try:
         from app.core.room_recipe import _abs_outline
 
-        data = _load_world_data()
-        changed = False
-        for loc in data.get("locations", []):
-            for room in loc.get("rooms") or []:
-                if not isinstance(room, dict):
-                    continue
-                layout = room.get("layout")
-                if not isinstance(layout, dict) or layout.get("exit") is None:
-                    continue
-                counts["rooms"] += 1
-                opening = project_exit_to_opening(layout)
-                if opening:
-                    layout.setdefault("openings", []).append(opening)
-                    counts["openings"] += 1
-                elif len(_abs_outline(layout)) < 3:
-                    counts["broken"] += 1
-                    logger.warning(
-                        "exit-door migration: room %s of location %s has an "
-                        "exit but no usable hull — dropped",
-                        room.get("id", ""), loc.get("id", ""))
-                else:
-                    counts["skipped"] += 1
-                layout.pop("exit", None)
-                changed = True
-        if changed:
-            _save_world_data(data)
+        with world_write_lock:
+            data = _load_world_data()
+            changed = False
+            for loc in data.get("locations", []):
+                for room in loc.get("rooms") or []:
+                    if not isinstance(room, dict):
+                        continue
+                    layout = room.get("layout")
+                    if not isinstance(layout, dict) or layout.get("exit") is None:
+                        continue
+                    counts["rooms"] += 1
+                    opening = project_exit_to_opening(layout)
+                    if opening:
+                        layout.setdefault("openings", []).append(opening)
+                        counts["openings"] += 1
+                    elif len(_abs_outline(layout)) < 3:
+                        counts["broken"] += 1
+                        logger.warning(
+                            "exit-door migration: room %s of location %s has an "
+                            "exit but no usable hull — dropped",
+                            room.get("id", ""), loc.get("id", ""))
+                    else:
+                        counts["skipped"] += 1
+                    layout.pop("exit", None)
+                    changed = True
+            if changed:
+                upsert_locations(data.get("locations", []))
         set_world_setting("migration.room_exit_doors_v1", "done")
         logger.info(
             "exit-door migration: %d room(s) with an exit point, %d door(s) "
@@ -1626,22 +1870,23 @@ def migrate_clear_entry_rooms_once() -> Dict[str, int]:
     if get_world_setting("migration.ground_room_v1", "") != "done":
         return counts
     try:
-        data = _load_world_data()
-        changed = False
-        for loc in data.get("locations", []):
-            if not isinstance(loc, dict):
-                continue
-            if not str(loc.get("entry_room") or "").strip():
-                continue
-            logger.info(
-                "entry-room migration: location %s (%s) had entry room %r — "
-                "cleared", loc.get("id", ""), loc.get("name", ""),
-                loc["entry_room"])
-            loc["entry_room"] = ""
-            counts["locations"] += 1
-            changed = True
-        if changed:
-            _save_world_data(data)
+        with world_write_lock:
+            data = _load_world_data()
+            changed = False
+            for loc in data.get("locations", []):
+                if not isinstance(loc, dict):
+                    continue
+                if not str(loc.get("entry_room") or "").strip():
+                    continue
+                logger.info(
+                    "entry-room migration: location %s (%s) had entry room %r — "
+                    "cleared", loc.get("id", ""), loc.get("name", ""),
+                    loc["entry_room"])
+                loc["entry_room"] = ""
+                counts["locations"] += 1
+                changed = True
+            if changed:
+                upsert_locations(data.get("locations", []))
         set_world_setting("migration.clear_entry_room_v1", "done")
         logger.info(
             "entry-room migration: %d location(s) cleared — arrivals land on "
@@ -1716,158 +1961,158 @@ def add_location(name: str, description: str,
             places in bulk (a map draft): there a name is a label, not a key,
             and two mills on the same river are two mills.
     """
-    data = _load_world_data()
-    locations = data.get("locations", [])
+    with world_write_lock:
+        data = _load_world_data()
+        locations = data.get("locations", [])
 
-    # Room-IDs sicherstellen
-    if rooms is not None:
-        for room in rooms:
-            if not room.get("id"):
-                room["id"] = _generate_room_id()
+        # Room-IDs sicherstellen
+        if rooms is not None:
+            for room in rooms:
+                if not room.get("id"):
+                    room["id"] = _generate_room_id()
 
-    # Find the location to update: by ID when one is given (unambiguous),
-    # otherwise by name.
-    def _is_target(loc: Dict[str, Any]) -> bool:
-        return (loc.get("id") == location_id) if location_id else (loc.get("name") == name)
+        # Find the location to update: by ID when one is given (unambiguous),
+        # otherwise by name.
+        def _is_target(loc: Dict[str, Any]) -> bool:
+            return (loc.get("id") == location_id) if location_id else (loc.get("name") == name)
 
-    for location in ([] if create_new else locations):
-        if _is_target(location):
-            location["description"] = description
-            # An ID-based update writes the (possibly new) name along.
-            if location_id and name:
-                location["name"] = name
-            removed_corridors: List[str] = []
-            if rooms is not None:
-                # The old rooms as a lookup for the prompt_changed comparison
-                # AND for keeping server state (items, prompt_changed, ...).
-                # On a room edit the frontend sends only the fields it knows —
-                # items placed separately via /inventory/rooms are missing
-                # from its list and would otherwise be dropped on save.
-                old_rooms_by_id = {r["id"]: r for r in location.get("rooms", []) if r.get("id")}
-                # Fields the room editor does NOT manage — taken from the
-                # stored room on update when they are not submitted.
-                _server_state_fields = ("items",)
-                for room in rooms:
-                    old_room = old_rooms_by_id.get(room.get("id"))
-                    if old_room:
-                        # Keep the server-state fields the frontend left out
-                        for fld in _server_state_fields:
-                            if fld not in room and fld in old_room:
-                                room[fld] = old_room[fld]
-                        # Set prompt_changed only when the prompts really changed
-                        day_changed = room.get("image_prompt_day", "") != old_room.get("image_prompt_day", "")
-                        night_changed = room.get("image_prompt_night", "") != old_room.get("image_prompt_night", "")
-                        if day_changed or night_changed:
-                            room["prompt_changed"] = True
-                        else:
-                            # Keep the existing prompt_changed state
-                            if old_room.get("prompt_changed"):
+        for location in ([] if create_new else locations):
+            if _is_target(location):
+                location["description"] = description
+                # An ID-based update writes the (possibly new) name along.
+                if location_id and name:
+                    location["name"] = name
+                removed_corridors: List[str] = []
+                if rooms is not None:
+                    # The old rooms as a lookup for the prompt_changed comparison
+                    # AND for keeping server state (items, prompt_changed, ...).
+                    # On a room edit the frontend sends only the fields it knows —
+                    # items placed separately via /inventory/rooms are missing
+                    # from its list and would otherwise be dropped on save.
+                    old_rooms_by_id = {r["id"]: r for r in location.get("rooms", []) if r.get("id")}
+                    # Fields the room editor does NOT manage — taken from the
+                    # stored room on update when they are not submitted.
+                    _server_state_fields = ("items",)
+                    for room in rooms:
+                        old_room = old_rooms_by_id.get(room.get("id"))
+                        if old_room:
+                            # Keep the server-state fields the frontend left out
+                            for fld in _server_state_fields:
+                                if fld not in room and fld in old_room:
+                                    room[fld] = old_room[fld]
+                            # Set prompt_changed only when the prompts really changed
+                            day_changed = room.get("image_prompt_day", "") != old_room.get("image_prompt_day", "")
+                            night_changed = room.get("image_prompt_night", "") != old_room.get("image_prompt_night", "")
+                            if day_changed or night_changed:
                                 room["prompt_changed"] = True
-                    else:
-                        # New room — set the flag when it carries prompts
-                        if room.get("image_prompt_day") or room.get("image_prompt_night"):
-                            room.setdefault("prompt_changed", True)
-                # The ground is not the author's to delete — a submitted list
-                # without it gets it back, keeping the name it had.
-                ensure_ground_room(rooms, list(old_rooms_by_id.values()))
-                # The corridors follow the storeys this list uses: a storey
-                # that gained its first room gets one, a storey that lost its
-                # last one loses it — and whoever stood in that corridor is
-                # put on the ground, because no storey holds them any more.
-                removed_corridors = ensure_floor_rooms(
-                    rooms, location.get("map3d"), list(old_rooms_by_id.values()))
-                location["rooms"] = rooms
-                location.pop("activities", None)
-            if image_prompt_day is not None:
-                if image_prompt_day != location.get("image_prompt_day", ""):
-                    location["prompt_changed"] = True
-                location["image_prompt_day"] = image_prompt_day
-            if image_prompt_night is not None:
-                if image_prompt_night != location.get("image_prompt_night", ""):
-                    location["prompt_changed"] = True
-                location["image_prompt_night"] = image_prompt_night
-            if image_prompt_building is not None:
-                location["image_prompt_building"] = image_prompt_building
-            # Location-level semantic fields — only when given.
-            if decency is not None:
-                location["decency"] = decency
-            if style_hint is not None:
-                location["style_hint"] = style_hint
-            if swim_allowed is not None:
-                location["swim_allowed"] = bool(swim_allowed)
-            if indoor is not None:
-                location["indoor"] = indoor
-            if activity_hint is not None:
-                location["activity_hint"] = activity_hint
-            if danger_level is not None:
-                try:
-                    location["danger_level"] = max(0, min(5, int(danger_level)))
-                except (TypeError, ValueError):
-                    pass
-            # Backfill a missing ID
-            if not location.get("id"):
-                location["id"] = _generate_location_id()
-            _save_world_data(data)
-            # Only now: whoever stood in a corridor that just vanished is
-            # moved onto the ground. The room list is stored FIRST, exactly
-            # like the ground migration writes — the character rows are
-            # corrected against a list that really lost that corridor, never
-            # against one a failed save left untouched.
-            if removed_corridors:
-                evict_rooms_to_ground(str(location.get("id") or ""),
-                                      removed_corridors)
-            return location
+                            else:
+                                # Keep the existing prompt_changed state
+                                if old_room.get("prompt_changed"):
+                                    room["prompt_changed"] = True
+                        else:
+                            # New room — set the flag when it carries prompts
+                            if room.get("image_prompt_day") or room.get("image_prompt_night"):
+                                room.setdefault("prompt_changed", True)
+                    # The ground is not the author's to delete — a submitted list
+                    # without it gets it back, keeping the name it had.
+                    ensure_ground_room(rooms, list(old_rooms_by_id.values()))
+                    # The corridors follow the storeys this list uses: a storey
+                    # that gained its first room gets one, a storey that lost its
+                    # last one loses it — and whoever stood in that corridor is
+                    # put on the ground, because no storey holds them any more.
+                    removed_corridors = ensure_floor_rooms(
+                        rooms, location.get("map3d"), list(old_rooms_by_id.values()))
+                    location["rooms"] = rooms
+                    location.pop("activities", None)
+                if image_prompt_day is not None:
+                    if image_prompt_day != location.get("image_prompt_day", ""):
+                        location["prompt_changed"] = True
+                    location["image_prompt_day"] = image_prompt_day
+                if image_prompt_night is not None:
+                    if image_prompt_night != location.get("image_prompt_night", ""):
+                        location["prompt_changed"] = True
+                    location["image_prompt_night"] = image_prompt_night
+                if image_prompt_building is not None:
+                    location["image_prompt_building"] = image_prompt_building
+                # Location-level semantic fields — only when given.
+                if decency is not None:
+                    location["decency"] = decency
+                if style_hint is not None:
+                    location["style_hint"] = style_hint
+                if swim_allowed is not None:
+                    location["swim_allowed"] = bool(swim_allowed)
+                if indoor is not None:
+                    location["indoor"] = indoor
+                if activity_hint is not None:
+                    location["activity_hint"] = activity_hint
+                if danger_level is not None:
+                    try:
+                        location["danger_level"] = max(0, min(5, int(danger_level)))
+                    except (TypeError, ValueError):
+                        pass
+                # Backfill a missing ID
+                if not location.get("id"):
+                    location["id"] = _generate_location_id()
+                upsert_location(location)
+                # Only now: whoever stood in a corridor that just vanished is
+                # moved onto the ground. The room list is stored FIRST, exactly
+                # like the ground migration writes — the character rows are
+                # corrected against a list that really lost that corridor, never
+                # against one a failed save left untouched.
+                if removed_corridors:
+                    evict_rooms_to_ground(str(location.get("id") or ""),
+                                          removed_corridors)
+                return location
 
-    # New location — set prompt_changed for every room that has prompts.
-    if rooms is not None:
-        for room in rooms:
-            if room.get("image_prompt_day") or room.get("image_prompt_night"):
-                room.setdefault("prompt_changed", True)
-    # Every location has a ground, including one created after the one-time
-    # migration has already run.
-    new_rooms = list(rooms or [])
-    ensure_ground_room(new_rooms)
-    # A brand-new location has no ``map3d`` yet, so it never opts into a
-    # ground-floor corridor here; the first write that brings one syncs it.
-    ensure_floor_rooms(new_rooms, None)
-    new_location = {
-        "id": _generate_location_id(),
-        "name": name,
-        "description": description,
-        "rooms": new_rooms,
-        "image_prompt_day": image_prompt_day or "",
-        "image_prompt_night": image_prompt_night or "",
-        "image_prompt_building": image_prompt_building or "",
-        "decency": decency or "",
-        "style_hint": style_hint or "",
-        "swim_allowed": bool(swim_allowed),
-        "indoor": indoor or "",
-        "activity_hint": activity_hint or "",
-    }
-    if danger_level is not None:
-        try:
-            new_location["danger_level"] = max(0, min(5, int(danger_level)))
-        except (TypeError, ValueError):
-            pass
-    if image_prompt_day or image_prompt_night:
-        new_location["prompt_changed"] = True
-    locations.append(new_location)
-    data["locations"] = locations
-    _save_world_data(data)
-    return new_location
+        # New location — set prompt_changed for every room that has prompts.
+        if rooms is not None:
+            for room in rooms:
+                if room.get("image_prompt_day") or room.get("image_prompt_night"):
+                    room.setdefault("prompt_changed", True)
+        # Every location has a ground, including one created after the one-time
+        # migration has already run.
+        new_rooms = list(rooms or [])
+        ensure_ground_room(new_rooms)
+        # A brand-new location has no ``map3d`` yet, so it never opts into a
+        # ground-floor corridor here; the first write that brings one syncs it.
+        ensure_floor_rooms(new_rooms, None)
+        new_location = {
+            "id": _generate_location_id(),
+            "name": name,
+            "description": description,
+            "rooms": new_rooms,
+            "image_prompt_day": image_prompt_day or "",
+            "image_prompt_night": image_prompt_night or "",
+            "image_prompt_building": image_prompt_building or "",
+            "decency": decency or "",
+            "style_hint": style_hint or "",
+            "swim_allowed": bool(swim_allowed),
+            "indoor": indoor or "",
+            "activity_hint": activity_hint or "",
+        }
+        if danger_level is not None:
+            try:
+                new_location["danger_level"] = max(0, min(5, int(danger_level)))
+            except (TypeError, ValueError):
+                pass
+        if image_prompt_day or image_prompt_night:
+            new_location["prompt_changed"] = True
+        upsert_location(new_location)
+        return new_location
 
 
 def rename_location(location_id: str, new_name: str) -> Optional[Dict[str, Any]]:
     """Benennt einen Ort um. ID bleibt gleich."""
-    data = _load_world_data()
-    locations = data.get("locations", [])
+    with world_write_lock:
+        data = _load_world_data()
+        locations = data.get("locations", [])
 
-    for location in locations:
-        if location.get("id") == location_id:
-            location["name"] = new_name
-            _save_world_data(data)
-            return location
-    return None
+        for location in locations:
+            if location.get("id") == location_id:
+                location["name"] = new_name
+                upsert_location(location)
+                return location
+        return None
 
 
 def get_entry_room_id(location: Dict[str, Any]) -> str:
@@ -1944,39 +2189,40 @@ def update_location_position(location_id: str, pos_x: Optional[float],
     occupants with it instead of leaving them outside the footprint they
     are recorded in. Unplacing leaves the characters' points untouched.
     """
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            _old_x, _old_z = loc.get("pos_x"), loc.get("pos_z")
-            _old_yaw = loc.get("yaw_deg")
-            if pos_x is None or pos_z is None:
-                loc.pop("pos_x", None)
-                loc.pop("pos_z", None)
-                loc.pop("yaw_deg", None)
-            else:
-                # Validate BOTH values before the first write, so a junk
-                # pos_z cannot leave a half-moved location behind.
-                _px = round(_finite_number(pos_x, "pos_x"), 2)
-                _pz = round(_finite_number(pos_z, "pos_z"), 2)
-                _yaw = (None if yaw_deg is None
-                        else round(_finite_number(yaw_deg, "yaw_deg"), 1) % 360.0)
-                loc["pos_x"] = _px
-                loc["pos_z"] = _pz
-                if _yaw is not None:
-                    loc["yaw_deg"] = _yaw
-            _save_world_data(data)
-            # Occupant sync AFTER the position write — local import, like the
-            # other character cross-references in this module.
-            from app.models.character import _shift_location_occupants
-            _shift_location_occupants(
-                location_id,
-                None if _old_x is None else float(_old_x),
-                None if _old_z is None else float(_old_z),
-                None if _old_yaw is None else float(_old_yaw),
-                loc.get("pos_x"), loc.get("pos_z"),
-                loc.get("yaw_deg"))
-            return loc
-    return None
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") == location_id:
+                _old_x, _old_z = loc.get("pos_x"), loc.get("pos_z")
+                _old_yaw = loc.get("yaw_deg")
+                if pos_x is None or pos_z is None:
+                    loc.pop("pos_x", None)
+                    loc.pop("pos_z", None)
+                    loc.pop("yaw_deg", None)
+                else:
+                    # Validate BOTH values before the first write, so a junk
+                    # pos_z cannot leave a half-moved location behind.
+                    _px = round(_finite_number(pos_x, "pos_x"), 2)
+                    _pz = round(_finite_number(pos_z, "pos_z"), 2)
+                    _yaw = (None if yaw_deg is None
+                            else round(_finite_number(yaw_deg, "yaw_deg"), 1) % 360.0)
+                    loc["pos_x"] = _px
+                    loc["pos_z"] = _pz
+                    if _yaw is not None:
+                        loc["yaw_deg"] = _yaw
+                upsert_location(loc)
+                # Occupant sync AFTER the position write — local import, like the
+                # other character cross-references in this module.
+                from app.models.character import _shift_location_occupants
+                _shift_location_occupants(
+                    location_id,
+                    None if _old_x is None else float(_old_x),
+                    None if _old_z is None else float(_old_z),
+                    None if _old_yaw is None else float(_old_yaw),
+                    loc.get("pos_x"), loc.get("pos_z"),
+                    loc.get("yaw_deg"))
+                return loc
+        return None
 
 
 def cleanup_orphan_backgrounds() -> Dict[str, int]:
@@ -1993,31 +2239,32 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
 
     Idempotent. Returns stats.
     """
-    data = _load_world_data()
-    locations = data.get("locations", [])
-    gallery_root = get_storage_dir() / "world_gallery"
+    with world_write_lock:
+        data = _load_world_data()
+        locations = data.get("locations", [])
+        gallery_root = get_storage_dir() / "world_gallery"
 
-    pruned_bgs = 0
-    pruned_meta = 0
-    touched_locs = 0
-    touched_meta_files = 0
+        pruned_bgs = 0
+        pruned_meta = 0
+        touched_locs = 0
+        touched_meta_files = 0
 
-    # DB entries: prune dead background_images references.
-    for loc in locations:
-        loc_id = loc.get("id") or ""
-        if not loc_id:
-            continue
-        gallery_dir = gallery_root / loc_id
-        bgs = loc.get("background_images", [])
-        if bgs:
-            valid = [img for img in bgs if (gallery_dir / img).exists()]
-            if len(valid) != len(bgs):
-                loc["background_images"] = valid
-                pruned_bgs += len(bgs) - len(valid)
-                touched_locs += 1
+        # DB entries: prune dead background_images references.
+        for loc in locations:
+            loc_id = loc.get("id") or ""
+            if not loc_id:
+                continue
+            gallery_dir = gallery_root / loc_id
+            bgs = loc.get("background_images", [])
+            if bgs:
+                valid = [img for img in bgs if (gallery_dir / img).exists()]
+                if len(valid) != len(bgs):
+                    loc["background_images"] = valid
+                    pruned_bgs += len(bgs) - len(valid)
+                    touched_locs += 1
 
-    if touched_locs:
-        _save_world_data(data)
+        if touched_locs:
+            upsert_locations(data.get("locations", []))
 
     # Meta-JSONs: image_types/rooms/metas/prompts pro Owner-Dir.
     if gallery_root.exists():
@@ -2208,22 +2455,27 @@ def delete_location(identifier: str) -> bool:
     the auto-sleep down its no-path branch every single time. So every
     reference goes with the place — see :func:`purge_location_references`.
     """
-    data = _load_world_data()
-    locations = data.get("locations", [])
-    target_ids = {loc.get("id") for loc in locations
-                  if loc.get("id") == identifier or loc.get("name") == identifier}
-    if not target_ids:
-        return False
+    with world_write_lock:
+        locations = list_locations()
+        target_ids = {loc.get("id") for loc in locations
+                      if loc.get("id") == identifier or loc.get("name") == identifier}
+        target_ids = {tid for tid in target_ids if tid}
+        if not target_ids:
+            return False
 
-    new_locations = [loc for loc in locations if loc.get("id") not in target_ids]
-    if len(new_locations) < len(locations):
-        data["locations"] = new_locations
-        _save_world_data(data)
-        # AFTER the write: the reference sweep reads the world list to decide
-        # what is dangling, so it has to see the place already gone.
-        purge_location_references(target_ids)
-        return True
-    return False
+        # One explicit DELETE per place, never "everything the snapshot does
+        # not mention" — a concurrent writer's fresh location is none of this
+        # delete's business.
+        removed = False
+        for tid in target_ids:
+            if delete_location_row(tid):
+                removed = True
+        if removed:
+            # AFTER the write: the reference sweep reads the world list to
+            # decide what is dangling, so it has to see the place already gone.
+            purge_location_references(target_ids)
+            return True
+        return False
 
 
 def cleanup_orphan_location_references() -> Dict[str, int]:
@@ -2396,6 +2648,12 @@ def migrate_transit_places_once() -> Dict[str, int]:
     runs at every boot. Characters whose ``current_location`` pointed at a
     deleted id are logged by name — an admin places them anew.
     """
+    with world_write_lock:
+        return _migrate_transit_places_locked()
+
+
+def _migrate_transit_places_locked() -> Dict[str, int]:
+    """The body of :func:`migrate_transit_places_once`, under the write lock."""
     import shutil
     data = _load_world_data()
     locations = data.get("locations", [])
@@ -2441,8 +2699,12 @@ def migrate_transit_places_once() -> Dict[str, int]:
                 l.pop(k)
                 fields_stripped += 1
     if victims or fields_stripped:
-        data["locations"] = survivors
-        _save_world_data(data)
+        # Explicit deletes for the victims, an upsert for the survivors — the
+        # snapshot is never handed over as "this is the whole world".
+        for vid in victim_ids:
+            delete_location_row(vid)
+        if fields_stripped:
+            upsert_locations(survivors)
         if victim_ids:
             # The migration deletes places like any other delete does, so it
             # owes the same reference sweep — otherwise it hands the world a
@@ -2612,39 +2874,41 @@ def toggle_background_image(location_id: str, image_name: str) -> bool:
 
     Returns True wenn das Bild jetzt markiert ist, False wenn entfernt.
     """
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            bg_images = loc.get("background_images", [])
-            # Altes Einzelfeld migrieren
-            if "background_image" in loc:
-                old_bg = loc.pop("background_image", "")
-                if old_bg and old_bg not in bg_images:
-                    bg_images.append(old_bg)
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") == location_id:
+                bg_images = loc.get("background_images", [])
+                # Altes Einzelfeld migrieren
+                if "background_image" in loc:
+                    old_bg = loc.pop("background_image", "")
+                    if old_bg and old_bg not in bg_images:
+                        bg_images.append(old_bg)
 
-            if image_name in bg_images:
-                bg_images.remove(image_name)
-                loc["background_images"] = bg_images
-                _save_world_data(data)
-                return False
-            else:
-                bg_images.append(image_name)
-                loc["background_images"] = bg_images
-                _save_world_data(data)
-                return True
-    return False
+                if image_name in bg_images:
+                    bg_images.remove(image_name)
+                    loc["background_images"] = bg_images
+                    upsert_location(loc)
+                    return False
+                else:
+                    bg_images.append(image_name)
+                    loc["background_images"] = bg_images
+                    upsert_location(loc)
+                    return True
+        return False
 
 
 def remove_background_image(location_id: str, image_name: str) -> None:
     """Entfernt ein Bild aus der Hintergrund-Liste (z.B. bei Bild-Loeschung)."""
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") == location_id:
-            bg_images = loc.get("background_images", [])
-            if image_name in bg_images:
-                bg_images.remove(image_name)
-                loc["background_images"] = bg_images
-                _save_world_data(data)
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") == location_id:
+                bg_images = loc.get("background_images", [])
+                if image_name in bg_images:
+                    bg_images.remove(image_name)
+                    loc["background_images"] = bg_images
+                    upsert_location(loc)
 
 
 def _location_id_of(location_identifier: str) -> str:
@@ -2902,45 +3166,46 @@ def migrate_map_images_once() -> Dict[str, int]:
     """
     images_deleted = 0
     fields_stripped = 0
-    data = _load_world_data()
-    changed = False
-    for loc in data.get("locations", []):
-        for k in _MAP_ICON_KEYS:
-            if k in loc:
-                loc.pop(k)
-                fields_stripped += 1
-                changed = True
-        lid = loc.get("id") or ""
-        if not lid:
-            continue
-        # The cheap file check comes first: _load_gallery_meta resolves the id
-        # through a full world load, so a location without a gallery must not
-        # pay for one.
-        if not (get_storage_dir() / "world_gallery" / lid / "gallery_meta.json").exists():
-            continue
-        meta = _load_gallery_meta(lid)
-        types = meta.get("image_types") or {}
-        victims = [fn for fn, t in types.items() if t in _MAP_ICON_TYPES]
-        if not victims:
-            continue
-        gdir = get_gallery_dir(lid)
-        for fn in victims:
-            p = gdir / fn
-            if p.exists():
-                p.unlink()
-            types.pop(fn, None)
-            for section in ("image_metas", "rooms"):
-                if isinstance(meta.get(section), dict):
-                    meta[section].pop(fn, None)
-            _drop_gallery_prompt(gdir, fn)
-            if fn in (loc.get("background_images") or []):
-                loc["background_images"].remove(fn)
-                changed = True
-            images_deleted += 1
-        meta["image_types"] = types
-        _save_gallery_meta(lid, meta)
-    if changed:
-        _save_world_data(data)
+    with world_write_lock:
+        data = _load_world_data()
+        changed = False
+        for loc in data.get("locations", []):
+            for k in _MAP_ICON_KEYS:
+                if k in loc:
+                    loc.pop(k)
+                    fields_stripped += 1
+                    changed = True
+            lid = loc.get("id") or ""
+            if not lid:
+                continue
+            # The cheap file check comes first: _load_gallery_meta resolves the id
+            # through a full world load, so a location without a gallery must not
+            # pay for one.
+            if not (get_storage_dir() / "world_gallery" / lid / "gallery_meta.json").exists():
+                continue
+            meta = _load_gallery_meta(lid)
+            types = meta.get("image_types") or {}
+            victims = [fn for fn, t in types.items() if t in _MAP_ICON_TYPES]
+            if not victims:
+                continue
+            gdir = get_gallery_dir(lid)
+            for fn in victims:
+                p = gdir / fn
+                if p.exists():
+                    p.unlink()
+                types.pop(fn, None)
+                for section in ("image_metas", "rooms"):
+                    if isinstance(meta.get(section), dict):
+                        meta[section].pop(fn, None)
+                _drop_gallery_prompt(gdir, fn)
+                if fn in (loc.get("background_images") or []):
+                    loc["background_images"].remove(fn)
+                    changed = True
+                images_deleted += 1
+            meta["image_types"] = types
+            _save_gallery_meta(lid, meta)
+        if changed:
+            upsert_locations(data.get("locations", []))
     if images_deleted or fields_stripped:
         logger.info("map icons removed: %d images, %d fields",
                     images_deleted, fields_stripped)

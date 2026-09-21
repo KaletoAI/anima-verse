@@ -1260,47 +1260,48 @@ def _apply_surfaces(location_id: str, room_id: str,
         return False
     from app.core.world_ops import _sanitize_room_layout
     from app.models.world import (GROUND_ROOM_ID, _load_world_data,
-                                  _save_world_data)
+                                  upsert_location, world_write_lock)
     if room_id == GROUND_ROOM_ID:
         # The yard's layout stores placements and nothing else (§ A13a); a
         # surface there would be a promise this path cannot keep — and stage 1
         # never proposes one for it.
         return False
-    data = _load_world_data()
-    for loc in data.get("locations", []):
-        if loc.get("id") != location_id:
-            continue
-        for room in loc.get("rooms", []):
-            if room.get("id") != room_id:
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") != location_id:
                 continue
-            layout = room.get("layout")
-            if not isinstance(layout, dict):
-                logger.warning("room_furnish %s: no layout to skin — the "
-                               "confirmed surfaces are dropped", room_id)
-                return False
-            stored = layout.get("surfaces") if isinstance(
-                layout.get("surfaces"), dict) else {}
-            merged = dict(stored)
-            for slot in ("floor", "wall"):
-                kind = str(surfaces.get(slot) or "").strip()
-                if kind and not str(stored.get(slot) or "").strip():
-                    merged[slot] = kind
-            if merged == stored:
-                return False
-            clean = _sanitize_room_layout({**layout, "surfaces": merged})
-            if not clean:
-                logger.warning("room_furnish %s: the sanitizer refused the "
-                               "skinned layout (%s) — surfaces not applied",
-                               room_id, json.dumps(merged))
-                return False
-            room["layout"] = clean
-            _save_world_data(data)
-            logger.info("room_furnish %s: surfaces applied (%s)", room_id,
-                        json.dumps(clean.get("surfaces") or {}))
-            return True
-    logger.warning("room_furnish %s: room not found in location %s — the "
-                   "confirmed surfaces are dropped", room_id, location_id)
-    return False
+            for room in loc.get("rooms", []):
+                if room.get("id") != room_id:
+                    continue
+                layout = room.get("layout")
+                if not isinstance(layout, dict):
+                    logger.warning("room_furnish %s: no layout to skin — the "
+                                   "confirmed surfaces are dropped", room_id)
+                    return False
+                stored = layout.get("surfaces") if isinstance(
+                    layout.get("surfaces"), dict) else {}
+                merged = dict(stored)
+                for slot in ("floor", "wall"):
+                    kind = str(surfaces.get(slot) or "").strip()
+                    if kind and not str(stored.get(slot) or "").strip():
+                        merged[slot] = kind
+                if merged == stored:
+                    return False
+                clean = _sanitize_room_layout({**layout, "surfaces": merged})
+                if not clean:
+                    logger.warning("room_furnish %s: the sanitizer refused the "
+                                   "skinned layout (%s) — surfaces not applied",
+                                   room_id, json.dumps(merged))
+                    return False
+                room["layout"] = clean
+                upsert_location(loc)
+                logger.info("room_furnish %s: surfaces applied (%s)", room_id,
+                            json.dumps(clean.get("surfaces") or {}))
+                return True
+        logger.warning("room_furnish %s: room not found in location %s — the "
+                       "confirmed surfaces are dropped", room_id, location_id)
+        return False
 
 
 def accept(room_id: str, placements: Any = None) -> Dict[str, Any]:

@@ -101,7 +101,7 @@ from plugins.movement.blocks import known_locations_section  # noqa: E402
 from app.models.world import (  # noqa: E402
     _load_world_data, _save_world_data, add_location,
     cleanup_orphan_location_references, delete_location,
-    update_location_position)
+    replace_all_locations, update_location_position)
 
 FAILURES = []
 CHECKED = 0
@@ -201,7 +201,7 @@ check_true("… and the one it IS at does not",
 # A place the world no longer has: the role survives, the place does not.
 data = _load_world_data()
 data["locations"] = [l for l in data["locations"] if l.get("id") != DOOMED]
-_save_world_data(data)
+replace_all_locations(data)
 block = _build_daily_schedule_block("plan_npc")
 check_true("a deleted place is dropped from the line", DOOMED not in block,
            block)
@@ -217,13 +217,13 @@ check("a placeless, roleless hour produces no line",
 
 # Fail-open: with no readable world list nothing may be judged orphaned.
 _saved = _load_world_data()
-_save_world_data({"locations": []})
+replace_all_locations({"locations": []})
 set_plan("plan_npc", [{"hour": 9, "location": DOOMED, "role": "assistant",
                        "sleep": False}])
 check_true("an unreadable world judges nothing orphaned",
            DOOMED in _build_daily_schedule_block("plan_npc"),
            _build_daily_schedule_block("plan_npc"))
-_save_world_data(_saved)
+replace_all_locations(_saved)
 # Case [1] left plan_npc pointing at the destroyed DOOMED. Sweep it now, so
 # the counts in case [4] can be exact statements about GYM alone.
 cleanup_orphan_location_references()
@@ -273,7 +273,7 @@ set_plan("gym_npc", [{"hour": 9, "location": GYM, "role": "trainer",
 # was made, before delete_location swept up after itself.
 data = _load_world_data()
 data["locations"] = [l for l in data["locations"] if l.get("id") != GYM]
-_save_world_data(data)
+replace_all_locations(data)
 check("nothing swept it yet: the gym is still known",
       sorted(get_known_locations("gym_npc")), sorted([HOME, GYM]))
 

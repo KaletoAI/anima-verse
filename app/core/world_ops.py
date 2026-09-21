@@ -2024,83 +2024,90 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                   or map3d is not None or npc_slots is not None)
     if _has_extra and location:
         from app.models.world import (
-            _load_world_data, _save_world_data, ensure_floor_rooms,
-            evict_rooms_to_ground,
+            _load_world_data, ensure_floor_rooms, upsert_location,
+            evict_rooms_to_ground, world_write_lock,
         )
-        wdata = _load_world_data()
-        _evict_corridors: List[str] = []
-        for _l in wdata.get("locations", []):
-            if _l.get("id") == location.get("id"):
-                if danger_level is not None:
-                    try:
-                        _l["danger_level"] = max(0, min(5, int(danger_level)))
-                    except (TypeError, ValueError):
-                        pass
-                if event_settings is not None:
-                    _l["event_settings"] = event_settings
-                if outfit_type is not None:
-                    _l["outfit_type"] = (outfit_type or "").strip()
-                if decency is not None:
-                    _v = (decency or "").strip().lower()
-                    _l["decency"] = _v if _v in ("public", "private", "nude_ok") else ""
-                if style_hint is not None:
-                    _l["style_hint"] = (style_hint or "").strip()
-                if swim_allowed is not None:
-                    _l["swim_allowed"] = bool(swim_allowed)
-                if activity_hint is not None:
-                    _l["activity_hint"] = (activity_hint or "").strip()
-                if knowledge_item_id is not None:
-                    _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
-                if default_door_prop_id is not None:
-                    # THE PLACE'S OWN DOOR (2026-08-27): every door opening
-                    # that names no prop of its own gets this one, unless it
-                    # opts out with ``door_prop: "none"``. Normalized through
-                    # the ONE prop-id rule, so a typo cannot become a
-                    # directory name; empty = no default.
-                    from app.core.props import safe_prop_id
-                    _l["default_door_prop_id"] = safe_prop_id(
-                        str(default_door_prop_id or ""))
-                if indoor is not None:
-                    _v = (indoor or "").strip().lower()
-                    _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
-                if terrain is not None:
-                    _l["terrain"] = (terrain or "").strip()
-                if map3d is not None:
-                    _m3 = _sanitize_map3d(map3d)
-                    if _m3:
-                        _l["map3d"] = _m3
-                    else:
-                        _l.pop("map3d", None)
-                    # The corridors are re-synced against the map3d that was
-                    # just stored — this is the write the ground-floor opt-in
-                    # (``map3d.ground_corridor``) travels through. Whoever
-                    # stood in a corridor that just vanished is moved only
-                    # AFTER the save below, against a room list that really
-                    # lost it — same order as ``add_location``.
-                    _evict_corridors += ensure_floor_rooms(
-                        _l.setdefault("rooms", []), _l.get("map3d"))
-                if entry_room is not None:
-                    # AFTER the map3d block, never before: only a room this
-                    # place really has counts, and the ground-floor hallway
-                    # comes into existence in that very block. One request may
-                    # switch ``ground_corridor`` on AND declare ``__floor__0``
-                    # the arrival room (spec § 4) — of the reserved corridors
-                    # only that one, nobody arrives in a basement corridor.
-                    _l["entry_room"] = valid_entry_room(
-                        _l.get("rooms") or [], entry_room)
-                if npc_slots is not None:
-                    # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
-                    # Sanitized by the one function the spawn logic reads them
-                    # with, so what the editor saves and what the trigger
-                    # counts can never be two different shapes.
-                    from app.core.npc_spawn import normalize_slots
-                    _slots = normalize_slots(npc_slots)
-                    if _slots:
-                        _l["npc_slots"] = _slots
-                    else:
-                        _l.pop("npc_slots", None)
-                break
-        _save_world_data(wdata)
+        with world_write_lock:
+            _target = None
+            wdata = _load_world_data()
+            _evict_corridors: List[str] = []
+            for _l in wdata.get("locations", []):
+                if _l.get("id") == location.get("id"):
+                    if danger_level is not None:
+                        try:
+                            _l["danger_level"] = max(0, min(5, int(danger_level)))
+                        except (TypeError, ValueError):
+                            pass
+                    if event_settings is not None:
+                        _l["event_settings"] = event_settings
+                    if outfit_type is not None:
+                        _l["outfit_type"] = (outfit_type or "").strip()
+                    if decency is not None:
+                        _v = (decency or "").strip().lower()
+                        _l["decency"] = _v if _v in ("public", "private", "nude_ok") else ""
+                    if style_hint is not None:
+                        _l["style_hint"] = (style_hint or "").strip()
+                    if swim_allowed is not None:
+                        _l["swim_allowed"] = bool(swim_allowed)
+                    if activity_hint is not None:
+                        _l["activity_hint"] = (activity_hint or "").strip()
+                    if knowledge_item_id is not None:
+                        _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
+                    if default_door_prop_id is not None:
+                        # THE PLACE'S OWN DOOR (2026-08-27): every door opening
+                        # that names no prop of its own gets this one, unless it
+                        # opts out with ``door_prop: "none"``. Normalized through
+                        # the ONE prop-id rule, so a typo cannot become a
+                        # directory name; empty = no default.
+                        from app.core.props import safe_prop_id
+                        _l["default_door_prop_id"] = safe_prop_id(
+                            str(default_door_prop_id or ""))
+                    if indoor is not None:
+                        _v = (indoor or "").strip().lower()
+                        _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
+                    if terrain is not None:
+                        _l["terrain"] = (terrain or "").strip()
+                    if map3d is not None:
+                        _m3 = _sanitize_map3d(map3d)
+                        if _m3:
+                            _l["map3d"] = _m3
+                        else:
+                            _l.pop("map3d", None)
+                        # The corridors are re-synced against the map3d that was
+                        # just stored — this is the write the ground-floor opt-in
+                        # (``map3d.ground_corridor``) travels through. Whoever
+                        # stood in a corridor that just vanished is moved only
+                        # AFTER the save below, against a room list that really
+                        # lost it — same order as ``add_location``.
+                        _evict_corridors += ensure_floor_rooms(
+                            _l.setdefault("rooms", []), _l.get("map3d"))
+                    if entry_room is not None:
+                        # AFTER the map3d block, never before: only a room this
+                        # place really has counts, and the ground-floor hallway
+                        # comes into existence in that very block. One request may
+                        # switch ``ground_corridor`` on AND declare ``__floor__0``
+                        # the arrival room (spec § 4) — of the reserved corridors
+                        # only that one, nobody arrives in a basement corridor.
+                        _l["entry_room"] = valid_entry_room(
+                            _l.get("rooms") or [], entry_room)
+                    if npc_slots is not None:
+                        # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
+                        # Sanitized by the one function the spawn logic reads them
+                        # with, so what the editor saves and what the trigger
+                        # counts can never be two different shapes.
+                        from app.core.npc_spawn import normalize_slots
+                        _slots = normalize_slots(npc_slots)
+                        if _slots:
+                            _l["npc_slots"] = _slots
+                        else:
+                            _l.pop("npc_slots", None)
+                    _target = _l
+                    break
+            if _target is not None:
+                # ONE location written, under the lock the fresh read
+                # above was taken with — a parallel editor's new place
+                # is none of this edit's business.
+                upsert_location(_target)
         if _evict_corridors:
             evict_rooms_to_ground(str(location.get("id") or ""),
                                   _evict_corridors)
@@ -2176,95 +2183,102 @@ def update_location_with_extras(location_id: str,
                   or chattiness_given)
     if _has_extra:
         from app.models.world import (
-            _load_world_data, _save_world_data, ensure_floor_rooms,
-            evict_rooms_to_ground,
+            _load_world_data, ensure_floor_rooms, upsert_location,
+            evict_rooms_to_ground, world_write_lock,
         )
-        wdata = _load_world_data()
-        _evict_corridors: List[str] = []
-        for _l in wdata.get("locations", []):
-            if _l.get("id") == location_id:
-                if danger_level is not None:
-                    try:
-                        _l["danger_level"] = max(0, min(5, int(danger_level)))
-                    except (TypeError, ValueError):
-                        pass
-                if event_settings is not None:
-                    _l["event_settings"] = event_settings
-                if outfit_type is not None:
-                    _l["outfit_type"] = (outfit_type or "").strip()
-                if decency is not None:
-                    _v = (decency or "").strip().lower()
-                    _l["decency"] = _v if _v in ("public", "private", "nude_ok") else ""
-                if style_hint is not None:
-                    _l["style_hint"] = (style_hint or "").strip()
-                if swim_allowed is not None:
-                    _l["swim_allowed"] = bool(swim_allowed)
-                if chattiness_given:
-                    # How likely a bystander chimes in on a line that was not
-                    # addressed to them (plan-gespraechs-auswahl.md § 3.2).
-                    # Empty — or anything that is no number at all — takes the
-                    # override away, so the world value from the chat settings
-                    # counts again; a number is clamped into [0, 1].
-                    try:
-                        if chattiness is None or chattiness == "":
-                            raise ValueError
-                        _l["chattiness"] = max(0.0, min(1.0, float(chattiness)))
-                    except (TypeError, ValueError):
-                        _l.pop("chattiness", None)
-                if activity_hint is not None:
-                    _l["activity_hint"] = (activity_hint or "").strip()
-                if knowledge_item_id is not None:
-                    _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
-                if default_door_prop_id is not None:
-                    # THE PLACE'S OWN DOOR (2026-08-27): every door opening
-                    # that names no prop of its own gets this one, unless it
-                    # opts out with ``door_prop: "none"``. Normalized through
-                    # the ONE prop-id rule, so a typo cannot become a
-                    # directory name; empty = no default.
-                    from app.core.props import safe_prop_id
-                    _l["default_door_prop_id"] = safe_prop_id(
-                        str(default_door_prop_id or ""))
-                if indoor is not None:
-                    _v = (indoor or "").strip().lower()
-                    _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
-                if terrain is not None:
-                    _l["terrain"] = (terrain or "").strip()
-                if map3d is not None:
-                    _m3 = _sanitize_map3d(map3d)
-                    if _m3:
-                        _l["map3d"] = _m3
-                    else:
-                        _l.pop("map3d", None)
-                    # The corridors are re-synced against the map3d that was
-                    # just stored — this is the write the ground-floor opt-in
-                    # (``map3d.ground_corridor``) travels through. Whoever
-                    # stood in a corridor that just vanished is moved only
-                    # AFTER the save below, against a room list that really
-                    # lost it — same order as ``add_location``.
-                    _evict_corridors += ensure_floor_rooms(
-                        _l.setdefault("rooms", []), _l.get("map3d"))
-                if entry_room is not None:
-                    # AFTER the map3d block, never before: only a room this
-                    # place really has counts, and the ground-floor hallway
-                    # comes into existence in that very block. One request may
-                    # switch ``ground_corridor`` on AND declare ``__floor__0``
-                    # the arrival room (spec § 4) — of the reserved corridors
-                    # only that one, nobody arrives in a basement corridor.
-                    _l["entry_room"] = valid_entry_room(
-                        _l.get("rooms") or [], entry_room)
-                if npc_slots is not None:
-                    # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
-                    # Sanitized by the one function the spawn logic reads them
-                    # with, so what the editor saves and what the trigger
-                    # counts can never be two different shapes.
-                    from app.core.npc_spawn import normalize_slots
-                    _slots = normalize_slots(npc_slots)
-                    if _slots:
-                        _l["npc_slots"] = _slots
-                    else:
-                        _l.pop("npc_slots", None)
-                break
-        _save_world_data(wdata)
+        with world_write_lock:
+            _target = None
+            wdata = _load_world_data()
+            _evict_corridors: List[str] = []
+            for _l in wdata.get("locations", []):
+                if _l.get("id") == location_id:
+                    if danger_level is not None:
+                        try:
+                            _l["danger_level"] = max(0, min(5, int(danger_level)))
+                        except (TypeError, ValueError):
+                            pass
+                    if event_settings is not None:
+                        _l["event_settings"] = event_settings
+                    if outfit_type is not None:
+                        _l["outfit_type"] = (outfit_type or "").strip()
+                    if decency is not None:
+                        _v = (decency or "").strip().lower()
+                        _l["decency"] = _v if _v in ("public", "private", "nude_ok") else ""
+                    if style_hint is not None:
+                        _l["style_hint"] = (style_hint or "").strip()
+                    if swim_allowed is not None:
+                        _l["swim_allowed"] = bool(swim_allowed)
+                    if chattiness_given:
+                        # How likely a bystander chimes in on a line that was not
+                        # addressed to them (plan-gespraechs-auswahl.md § 3.2).
+                        # Empty — or anything that is no number at all — takes the
+                        # override away, so the world value from the chat settings
+                        # counts again; a number is clamped into [0, 1].
+                        try:
+                            if chattiness is None or chattiness == "":
+                                raise ValueError
+                            _l["chattiness"] = max(0.0, min(1.0, float(chattiness)))
+                        except (TypeError, ValueError):
+                            _l.pop("chattiness", None)
+                    if activity_hint is not None:
+                        _l["activity_hint"] = (activity_hint or "").strip()
+                    if knowledge_item_id is not None:
+                        _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
+                    if default_door_prop_id is not None:
+                        # THE PLACE'S OWN DOOR (2026-08-27): every door opening
+                        # that names no prop of its own gets this one, unless it
+                        # opts out with ``door_prop: "none"``. Normalized through
+                        # the ONE prop-id rule, so a typo cannot become a
+                        # directory name; empty = no default.
+                        from app.core.props import safe_prop_id
+                        _l["default_door_prop_id"] = safe_prop_id(
+                            str(default_door_prop_id or ""))
+                    if indoor is not None:
+                        _v = (indoor or "").strip().lower()
+                        _l["indoor"] = _v if _v in ("indoor", "outdoor") else ""
+                    if terrain is not None:
+                        _l["terrain"] = (terrain or "").strip()
+                    if map3d is not None:
+                        _m3 = _sanitize_map3d(map3d)
+                        if _m3:
+                            _l["map3d"] = _m3
+                        else:
+                            _l.pop("map3d", None)
+                        # The corridors are re-synced against the map3d that was
+                        # just stored — this is the write the ground-floor opt-in
+                        # (``map3d.ground_corridor``) travels through. Whoever
+                        # stood in a corridor that just vanished is moved only
+                        # AFTER the save below, against a room list that really
+                        # lost it — same order as ``add_location``.
+                        _evict_corridors += ensure_floor_rooms(
+                            _l.setdefault("rooms", []), _l.get("map3d"))
+                    if entry_room is not None:
+                        # AFTER the map3d block, never before: only a room this
+                        # place really has counts, and the ground-floor hallway
+                        # comes into existence in that very block. One request may
+                        # switch ``ground_corridor`` on AND declare ``__floor__0``
+                        # the arrival room (spec § 4) — of the reserved corridors
+                        # only that one, nobody arrives in a basement corridor.
+                        _l["entry_room"] = valid_entry_room(
+                            _l.get("rooms") or [], entry_room)
+                    if npc_slots is not None:
+                        # The NPC slots of this place (plan-npc-auto-spawn.md § 1).
+                        # Sanitized by the one function the spawn logic reads them
+                        # with, so what the editor saves and what the trigger
+                        # counts can never be two different shapes.
+                        from app.core.npc_spawn import normalize_slots
+                        _slots = normalize_slots(npc_slots)
+                        if _slots:
+                            _l["npc_slots"] = _slots
+                        else:
+                            _l.pop("npc_slots", None)
+                    _target = _l
+                    break
+            if _target is not None:
+                # ONE location written, under the lock the fresh read
+                # above was taken with — a parallel editor's new place
+                # is none of this edit's business.
+                upsert_location(_target)
         if _evict_corridors:
             evict_rooms_to_ground(location_id, _evict_corridors)
         from app.core import places; places.invalidate()
@@ -2861,7 +2875,8 @@ def set_location_prompt_changed(location_id: str, room_id: str,
 
     Without ``room_id`` the flag is set/removed at location level.
     """
-    from app.models.world import _load_world_data, _save_world_data
+    from app.models.world import (_load_world_data, upsert_location,
+                                  world_write_lock)
 
     if not value:
         # Remove the flag
@@ -2873,22 +2888,23 @@ def set_location_prompt_changed(location_id: str, room_id: str,
             raise HTTPException(status_code=404, detail="Location/Raum nicht gefunden")
         return {"status": "success", "prompt_changed": False}
     else:
-        # Set the flag
-        data = _load_world_data()
-        for loc in data.get("locations", []):
-            if loc.get("id") == location_id:
-                if room_id:
-                    for room in loc.get("rooms", []):
-                        if room.get("id") == room_id:
-                            room["prompt_changed"] = True
-                            _save_world_data(data)
-                            return {"status": "success", "prompt_changed": True}
-                    raise HTTPException(status_code=404, detail="Raum nicht gefunden")
-                else:
-                    loc["prompt_changed"] = True
-                    _save_world_data(data)
-                    return {"status": "success", "prompt_changed": True}
-        raise HTTPException(status_code=404, detail="Location nicht gefunden")
+        # Set the flag — fresh read under the write lock, one location back.
+        with world_write_lock:
+            data = _load_world_data()
+            for loc in data.get("locations", []):
+                if loc.get("id") == location_id:
+                    if room_id:
+                        for room in loc.get("rooms", []):
+                            if room.get("id") == room_id:
+                                room["prompt_changed"] = True
+                                upsert_location(loc)
+                                return {"status": "success", "prompt_changed": True}
+                        raise HTTPException(status_code=404, detail="Raum nicht gefunden")
+                    else:
+                        loc["prompt_changed"] = True
+                        upsert_location(loc)
+                        return {"status": "success", "prompt_changed": True}
+            raise HTTPException(status_code=404, detail="Location nicht gefunden")
 
 
 # === Gallery image generation ===

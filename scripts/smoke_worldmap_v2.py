@@ -156,7 +156,8 @@ from app.models.character import (  # noqa: E402
     save_character_current_location, save_character_profile,
     set_character_pos, set_known_locations)
 from app.models.world import (  # noqa: E402
-    _load_world_data, _save_world_data, add_location, update_location_position)
+    _load_world_data, _save_world_data, add_location, replace_all_locations,
+    update_location_position)
 from app.routes import play  # noqa: E402
 
 FAILURES = []
@@ -406,7 +407,7 @@ def main() -> int:
     # (c) terrain-only world: nothing placed, but the painted map remains.
     _data = _load_world_data()
     _data["locations"] = []
-    _save_world_data(_data)
+    replace_all_locations(_data)
     only = build_worldmap_payload("demo_avatar", show_all=True)
     check("no locations left", ids(only), [])
     check("terrain-only world still has a frame", only.get("world_bounds"),

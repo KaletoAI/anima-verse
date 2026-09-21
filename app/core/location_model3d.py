@@ -301,79 +301,83 @@ def migrate_scale_frame_once() -> Dict[str, int]:
     Idempotent via a world_kv flag; touches map3d in world.db and the model
     sidecars. Returns a small stats dict for the boot log.
     """
-    from app.models.world import (_load_world_data, _save_world_data,
-                                  get_world_setting, set_world_setting)
+    from app.models.world import (_load_world_data, upsert_locations,
+                                  get_world_setting, set_world_setting,
+                                  world_write_lock)
     if get_world_setting(_SCALE_FRAME_FLAG):
         return {}
     stats = {"locations": 0, "plan_width": 0, "storey": 0, "sidecars": 0}
-    wdata = _load_world_data()
-    changed = False
-    for loc in wdata.get("locations") or []:
-        if not isinstance(loc, dict):
-            continue
-        loc_id = str(loc.get("id") or "")
-        map3d = loc.get("map3d")
-        owner = _owner_id(loc_id) if loc_id else ""
-        building = find_building_model(loc_id) if owner else None
-        b_meta = read_sidecar(building) if building else {}
+    with world_write_lock:
+        wdata = _load_world_data()
+        changed = False
+        for loc in wdata.get("locations") or []:
+            if not isinstance(loc, dict):
+                continue
+            loc_id = str(loc.get("id") or "")
+            map3d = loc.get("map3d")
+            owner = _owner_id(loc_id) if loc_id else ""
+            building = find_building_model(loc_id) if owner else None
+            b_meta = read_sidecar(building) if building else {}
 
-        if isinstance(map3d, dict) and map3d:
-            plan_w = _explicit_plan_width(map3d)
-            if plan_w <= 0 and building:
-                plan_w = _legacy_plan_width(building, b_meta)
-                if plan_w > 0:
-                    map3d["plan_width_m"] = round(plan_w, 2)
-                    stats["plan_width"] += 1
+            if isinstance(map3d, dict) and map3d:
+                plan_w = _explicit_plan_width(map3d)
+                if plan_w <= 0 and building:
+                    plan_w = _legacy_plan_width(building, b_meta)
+                    if plan_w > 0:
+                        map3d["plan_width_m"] = round(plan_w, 2)
+                        stats["plan_width"] += 1
+                        changed = True
+                # k as it was BEFORE this migration — the old square was 8 m.
+                k_old = 8.0 / plan_w if plan_w > 0 else 1.0
+                if not map3d.get("storey_height_m"):
+                    storey_real = 0.0
+                    try:
+                        floors = float(b_meta.get("floors") or 0)
+                        height = float(b_meta.get("height_m") or 0)
+                    except (TypeError, ValueError):
+                        floors = height = 0.0
+                    if floors > 0 and height > 0:
+                        storey_real = height / floors
+                    elif map3d.get("level_height"):
+                        # was WORLD metres — back to real
+                        storey_real = float(map3d["level_height"]) / (k_old or 1.0)
+                    if storey_real > 0:
+                        map3d["storey_height_m"] = round(
+                            min(max(storey_real, 0.5), 50.0), 2)
+                        stats["storey"] += 1
+                        changed = True
+                if map3d.pop("level_height", None) is not None:
                     changed = True
-            # k as it was BEFORE this migration — the old square was 8 m.
+                stats["locations"] += 1
+
+            if not owner:
+                continue
+            # Sidecars: drop the two per-axis dials and the retired
+            # auto-measurement, convert walk_y from world to real metres.
+            room_ids = [str(r.get("id") or "") for r in (loc.get("rooms") or [])
+                        if isinstance(r, dict) and r.get("id")]
+            plan_w = _explicit_plan_width(loc.get("map3d"))
             k_old = 8.0 / plan_w if plan_w > 0 else 1.0
-            if not map3d.get("storey_height_m"):
-                storey_real = 0.0
-                try:
-                    floors = float(b_meta.get("floors") or 0)
-                    height = float(b_meta.get("height_m") or 0)
-                except (TypeError, ValueError):
-                    floors = height = 0.0
-                if floors > 0 and height > 0:
-                    storey_real = height / floors
-                elif map3d.get("level_height"):
-                    # was WORLD metres — back to real
-                    storey_real = float(map3d["level_height"]) / (k_old or 1.0)
-                if storey_real > 0:
-                    map3d["storey_height_m"] = round(
-                        min(max(storey_real, 0.5), 50.0), 2)
-                    stats["storey"] += 1
-                    changed = True
-            if map3d.pop("level_height", None) is not None:
-                changed = True
-            stats["locations"] += 1
-
-        if not owner:
-            continue
-        # Sidecars: drop the two per-axis dials and the retired
-        # auto-measurement, convert walk_y from world to real metres.
-        room_ids = [str(r.get("id") or "") for r in (loc.get("rooms") or [])
-                    if isinstance(r, dict) and r.get("id")]
-        plan_w = _explicit_plan_width(loc.get("map3d"))
-        k_old = 8.0 / plan_w if plan_w > 0 else 1.0
-        for room_id in [""] + room_ids:
-            for path in _list_files(owner, room_id):
-                meta = read_sidecar(path)
-                if not meta:
-                    continue
-                touched = False
-                for dead in ("height_m", "floors", *_MEASURED_KEYS):
-                    if meta.pop(dead, None) is not None:
+            for room_id in [""] + room_ids:
+                for path in _list_files(owner, room_id):
+                    meta = read_sidecar(path)
+                    if not meta:
+                        continue
+                    touched = False
+                    for dead in ("height_m", "floors", *_MEASURED_KEYS):
+                        if meta.pop(dead, None) is not None:
+                            touched = True
+                    walk = meta.get("walk_y")
+                    if walk is not None and float(walk or 0) > 0 and k_old > 0:
+                        meta["walk_y"] = round(float(walk) / k_old, 3)
                         touched = True
-                walk = meta.get("walk_y")
-                if walk is not None and float(walk or 0) > 0 and k_old > 0:
-                    meta["walk_y"] = round(float(walk) / k_old, 3)
-                    touched = True
-                if touched:
-                    write_sidecar(path, meta)
-                    stats["sidecars"] += 1
-    if changed:
-        _save_world_data(wdata)
+                    if touched:
+                        write_sidecar(path, meta)
+                        stats["sidecars"] += 1
+        if changed:
+            # Only an upsert: a boot migration must not delete a place that
+            # is simply not in its snapshot.
+            upsert_locations(wdata.get("locations") or [])
     set_world_setting(_SCALE_FRAME_FLAG, "done")
     return stats
 

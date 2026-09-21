@@ -13,6 +13,7 @@ Storage:
 """
 import json
 import random
+import re as _re_module
 import uuid
 from datetime import date, datetime
 
@@ -49,8 +50,39 @@ def _get_items_file() -> Path:
     return sd / "items.json"
 
 
+# An item id becomes a DIRECTORY NAME (``storage/items/<id>``,
+# ``shared/items/<id>``) and a DB key, so it has to survive being a path
+# component — and an id from an uploaded pack is attacker-controlled. The
+# policy is the same idea as ``props.safe_prop_id``: letters, digits,
+# underscore and dash, first character alphanumeric, length capped. No dot at
+# all, so ``..`` cannot even be spelled; no slash, backslash or NUL, so the id
+# can never leave its parent directory or name an absolute path.
+# Deliberately case-insensitive on top of the prop rule: ``add_item`` only
+# ever mints lowercase ids (``_slugify_item_id``), but an id that came in with
+# an older import is not worth rejecting over its case.
+_ITEM_ID_RE = _re_module.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def safe_item_id(item_id: str) -> str:
+    """The item id, or '' when it is not one. Never renames — a caller that
+    gets '' raises rather than silently importing under a different id."""
+    iid = (item_id or "").strip()
+    return iid if _ITEM_ID_RE.match(iid) else ""
+
+
+def require_item_id(item_id: str) -> str:
+    """``safe_item_id`` or ValueError (the routes answer that with a 400)."""
+    iid = safe_item_id(item_id)
+    if not iid:
+        raise ValueError(
+            f"invalid item id {str(item_id)[:80]!r} — allowed are letters, "
+            f"digits, '_' and '-' (max 128 characters, first character a "
+            f"letter or digit)")
+    return iid
+
+
 def _get_item_dir(item_id: str) -> Path:
-    item_dir = get_storage_dir() / "items" / item_id
+    item_dir = get_storage_dir() / "items" / require_item_id(item_id)
     item_dir.mkdir(parents=True, exist_ok=True)
     return item_dir
 
@@ -66,7 +98,7 @@ def _get_shared_items_file() -> Path:
 
 
 def _get_shared_item_dir(item_id: str) -> Path:
-    d = _get_shared_dir() / "items" / item_id
+    d = _get_shared_dir() / "items" / require_item_id(item_id)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -768,78 +800,80 @@ def add_item_to_room(location_id: str,
     hidden: bool = False,
     discovery_difficulty: int = 0,
     note: str = "") -> bool:
-    """Platziert ein Item in einem Raum."""
-    from app.models.world import list_locations
+    """Platziert ein Item in einem Raum.
+
+    Reads the world FRESH under ``world_write_lock`` and writes back exactly
+    the one location the item lands in. Before 2026-09-21 this handed the
+    whole world snapshot to the writer, so an item drop deleted every
+    location another thread had created in the meantime.
+    """
+    from app.models.world import (_load_world_data, upsert_location,
+                                  world_write_lock)
 
     # Item existiert?
     item = get_item(item_id)
     if not item:
         return False
 
-    locations = list_locations()
-    for loc in locations:
-        if loc.get("id") == location_id:
-            for room in loc.get("rooms", []):
-                if room.get("id") == room_id:
-                    room_items = room.get("items", [])
-                    # Bereits vorhanden? Quantity erhoehen
-                    for ri in room_items:
-                        if ri.get("item_id") == item_id:
-                            ri["quantity"] = ri.get("quantity", 1) + quantity
-                            ri["hidden"] = hidden
-                            ri["discovery_difficulty"] = discovery_difficulty
-                            if note:
-                                ri["note"] = note
-                            _save_locations(locations)
-                            return True
-                    # Neu hinzufuegen
-                    room_items.append({
-                        "item_id": item_id,
-                        "quantity": max(1, quantity),
-                        "hidden": hidden,
-                        "discovery_difficulty": max(0, min(5, discovery_difficulty)),
-                        "note": note.strip(),
-                    })
-                    room["items"] = room_items
-                    _save_locations(locations)
-                    logger.info("Item %s in Raum %s/%s platziert", item_id, location_id, room_id)
-                    return True
-    return False
+    with world_write_lock:
+        for loc in _load_world_data().get("locations", []):
+            if loc.get("id") == location_id:
+                for room in loc.get("rooms", []):
+                    if room.get("id") == room_id:
+                        room_items = room.get("items", [])
+                        # Bereits vorhanden? Quantity erhoehen
+                        for ri in room_items:
+                            if ri.get("item_id") == item_id:
+                                ri["quantity"] = ri.get("quantity", 1) + quantity
+                                ri["hidden"] = hidden
+                                ri["discovery_difficulty"] = discovery_difficulty
+                                if note:
+                                    ri["note"] = note
+                                upsert_location(loc)
+                                return True
+                        # Neu hinzufuegen
+                        room_items.append({
+                            "item_id": item_id,
+                            "quantity": max(1, quantity),
+                            "hidden": hidden,
+                            "discovery_difficulty": max(0, min(5, discovery_difficulty)),
+                            "note": note.strip(),
+                        })
+                        room["items"] = room_items
+                        upsert_location(loc)
+                        logger.info("Item %s in Raum %s/%s platziert", item_id, location_id, room_id)
+                        return True
+        return False
 
 
 def remove_item_from_room(location_id: str,
     room_id: str,
     item_id: str,
     quantity: int = 1) -> bool:
-    """Entfernt ein Item (oder reduziert Quantity) aus einem Raum."""
-    from app.models.world import list_locations
+    """Entfernt ein Item (oder reduziert Quantity) aus einem Raum.
 
-    locations = list_locations()
-    for loc in locations:
-        if loc.get("id") == location_id:
-            for room in loc.get("rooms", []):
-                if room.get("id") == room_id:
-                    room_items = room.get("items", [])
-                    for ri in room_items:
-                        if ri.get("item_id") == item_id:
-                            ri["quantity"] = ri.get("quantity", 1) - quantity
-                            if ri["quantity"] <= 0:
-                                room_items.remove(ri)
-                            room["items"] = room_items
-                            _save_locations(locations)
-                            logger.info("Item %s aus Raum %s/%s entfernt", item_id, location_id, room_id)
-                            return True
-    return False
-
-
-def _save_locations(locations: List[Dict[str, Any]]):
-    """Speichert Locations (inkl. Raum-Items) in die DB.
-
-    Delegiert an `_save_world_data` in world.py — Welt liegt komplett
-    in den `locations`/`rooms`-Tabellen.
+    Same rule as :func:`add_item_to_room`: fresh read under the world write
+    lock, and only the one location is written back.
     """
-    from app.models.world import _save_world_data
-    _save_world_data({"locations": locations})
+    from app.models.world import (_load_world_data, upsert_location,
+                                  world_write_lock)
+
+    with world_write_lock:
+        for loc in _load_world_data().get("locations", []):
+            if loc.get("id") == location_id:
+                for room in loc.get("rooms", []):
+                    if room.get("id") == room_id:
+                        room_items = room.get("items", [])
+                        for ri in room_items:
+                            if ri.get("item_id") == item_id:
+                                ri["quantity"] = ri.get("quantity", 1) - quantity
+                                if ri["quantity"] <= 0:
+                                    room_items.remove(ri)
+                                room["items"] = room_items
+                                upsert_location(loc)
+                                logger.info("Item %s aus Raum %s/%s entfernt", item_id, location_id, room_id)
+                                return True
+        return False
 
 
 def find_item_location(item_id: str,

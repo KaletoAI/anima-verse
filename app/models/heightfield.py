@@ -538,9 +538,10 @@ def height_sig() -> str:
 def note_world_write() -> None:
     """Something that MIGHT shape the ground was written — re-raster if it did.
 
-    Called by the ONE writer of the world data (``world._save_world_data``),
-    which is a location write of every kind: a move, a turn, a resize, a new
-    place, a deletion — and equally a rename or a room edit, which change no
+    Called by every writer of the world data (``world.upsert_location``,
+    ``delete_location_row``, ``replace_all_locations`` — all three end in
+    ``world._after_world_write``), which is a location write of every kind:
+    a move, a turn, a resize, a new place, a deletion — and equally a rename or a room edit, which change no
     plateau at all. Since the micro-relief (2026-08-13) also by the terrain
     writers, ``models.terrain.save_area``/``delete_area`` and
     ``core.terrain_types.save_world_type``/``delete_world_type``: a painted
