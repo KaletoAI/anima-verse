@@ -277,6 +277,10 @@ class ProviderQueue:
         self._history_limit: int = 30
         self._pending_tasks: List[LLMTask] = []
         self._futures: Dict[str, Any] = {}  # task_id -> Future (for running task cancel)
+        # GPU callables that outran their watchdog and are STILL running. Each
+        # entry keeps holding the execution slot (and the serialize gate) of
+        # its task until it really ends — see _abandon_gpu_callable.
+        self._abandoned_gpu: List[Dict[str, Any]] = []
 
     def reconfigure(self, provider: Provider, *, max_concurrent: int = 0,
                     chat_pause_enabled: bool = True, serialize_group: str = "",
@@ -313,9 +317,17 @@ class ProviderQueue:
 
     def is_busy(self) -> bool:
         """A task is running or waiting on this queue — the ProviderManager
-        must keep such a queue across a reload instead of replacing it."""
+        must keep such a queue across a reload instead of replacing it.
+
+        An open CHAT registration counts as busy too: it holds a cache lane
+        that only this object can give back (register_chat_done finds its
+        queue by task id). Pruning it would strand the lane for the lifetime
+        of the process (LLM-1). So does a GPU callable that outran its
+        watchdog and still runs: it holds an execution slot of this channel.
+        """
         with self._lock:
-            return bool(self._current_tasks) or not self._queue.empty()
+            return (bool(self._current_tasks) or bool(self._chat_tasks)
+                    or bool(self._abandoned_gpu) or not self._queue.empty())
 
     def submit(
         self,
@@ -872,6 +884,7 @@ class ProviderQueue:
             pending = [t.to_dict() for t in self._pending_tasks
                        if t.status == "pending"]
             recent = [t.to_dict() for t in reversed(self._history[-20:])]
+            abandoned = len(self._abandoned_gpu)
 
         return {
             "provider": self.provider.name,
@@ -884,6 +897,10 @@ class ProviderQueue:
             "current_tasks": current,
             "pending": pending,
             "recent": recent,
+            # Callables that outran their watchdog and still occupy a slot of
+            # this channel: the channel is working even though no task object
+            # says so, and the next GPU task waits for the slot.
+            "abandoned_gpu": abandoned,
         }
 
     def _worker_count(self) -> int:
@@ -941,20 +958,56 @@ class ProviderQueue:
         streaming, generate() never runs its finally, the chat_tasks entry
         stays behind.
         """
+        cleaned = self._release_chat_registrations(self._STALE_CHAT_TIMEOUT)
+        for entry in cleaned:
+            logger.warning("[%s] Stale Chat bereinigt: %s (%s) nach %ds",
+                          self._queue_name, entry["agent"], entry["chat_task"],
+                          self._STALE_CHAT_TIMEOUT)
+
+    def force_release_chats(self) -> List[Dict[str, str]]:
+        """Releases ALL chat registrations of this queue, whatever their age.
+
+        The emergency exit behind ``POST /queue/force-resume``, and the ONLY
+        way to do it: clearing ``_chat_tasks`` from outside leaves every cache
+        lane busy forever and a held serialize gate closed for good (LLM-2).
+        Same order as the stale cleanup — lane by task id, then the gate once
+        the last registration is gone.
+
+        Returns one ``{"chat_task": id, "agent": name}`` per released entry.
+        """
+        released = self._release_chat_registrations(0.0, forced=True)
+        for entry in released:
+            logger.warning("[%s] Chat-Registrierung erzwungen freigegeben: %s (%s)",
+                           self._queue_name, entry["agent"], entry["chat_task"])
+        return released
+
+    def _release_chat_registrations(self, max_age: float,
+                                    forced: bool = False) -> List[Dict[str, str]]:
+        """Drops every chat registration older than ``max_age`` (all of them
+        when ``forced``) and gives back what they hold.
+
+        The order is the point: the cache lane goes back by TASK ID (the entry
+        is already gone by then), and the serialize gate only after the last
+        registration has left — a half-done cleanup is worse than none, which
+        is why both callers share this body.
+        """
         now = time.monotonic()
-        cleaned = []
+        cleaned: List[Dict[str, str]] = []
         with self._lock:
             if not self._chat_tasks:
-                return
+                return cleaned
             stale_ids = []
             for tid, task in self._chat_tasks.items():
+                if forced:
+                    stale_ids.append(tid)
+                    continue
                 t_created = getattr(task, "_monotonic_created", 0.0)
                 if t_created <= 0:
                     # Legacy entry without a timestamp → treat as stale at once
                     stale_ids.append(tid)
                     continue
                 age = now - t_created
-                if age > self._STALE_CHAT_TIMEOUT:
+                if age > max_age:
                     stale_ids.append(tid)
 
             for tid in stale_ids:
@@ -962,7 +1015,7 @@ class ProviderQueue:
                 self._release_chat_lane(tid)
                 task.status = "completed"
                 self._history.append(task)
-                cleaned.append((task.agent_name, tid))
+                cleaned.append({"chat_task": tid, "agent": task.agent_name})
 
             if len(self._history) > self._history_limit:
                 self._history = self._history[-self._history_limit:]
@@ -970,13 +1023,12 @@ class ProviderQueue:
             if remaining == 0:
                 self._chat_registered_at = 0.0
 
-        for agent, tid in cleaned:
-            logger.warning("[%s] Stale Chat bereinigt: %s (%s) nach %ds",
-                          self._queue_name, agent, tid, self._STALE_CHAT_TIMEOUT)
         if cleaned and remaining == 0:
             self._chat_active.set()
-            self._release_serialize_gate_if_held()  # stale chat gone -> release gate
-            logger.info("[%s] Queue fortgesetzt (alle stale Chats bereinigt)", self._queue_name)
+            self._release_serialize_gate_if_held()  # last chat gone -> release gate
+            logger.info("[%s] Queue fortgesetzt (keine aktiven Chats mehr)",
+                        self._queue_name)
+        return cleaned
 
     def _acquire_lane(self, task: LLMTask) -> bool:
         """Tries ONCE to take a cache lane for a queued LLM task. Never blocks.
@@ -1016,6 +1068,86 @@ class ProviderQueue:
         except LaneTimeout:
             task._lane_handle = None
             return False
+
+    # An abandoned GPU callable gets ONE more watchdog budget to finish by
+    # itself before the channel writes it off. The budget it just overran is
+    # the only honest measure of "far too long" available here.
+    _ABANDONED_WAIT_FACTOR = 1.0
+    # How often the reaper looks at the future. Short enough that the slot is
+    # free again right after the callable ends, and short enough that the
+    # daemon thread never delays process exit by more than one slice.
+    _ABANDONED_POLL_S = 0.25
+
+    def _abandon_gpu_callable(self, task: LLMTask, future: Any,
+                              budget: float) -> None:
+        """Leaves the slot (and the serialize gate) of a timed-out GPU task
+        with the callable that is STILL running, and starts the thread that
+        takes both back.
+
+        The watchdog frees the SUBMITTER — a finished result must not be
+        thrown away and a healthy backend must not be cooled down. It must
+        NOT free the BACKEND: the abandoned callable is still rendering on
+        that GPU, and "never two image generations in parallel on the same
+        backend" is a hard rule of this project. So the execution slot stays
+        occupied, which is exactly what keeps the next GPU task of this
+        channel waiting — and, on a channel with several slots, keeps only
+        ONE of them occupied while the others carry on.
+
+        The reaper is a daemon thread and not the next worker: nothing
+        guarantees that another GPU task ever arrives, and until one did, a
+        held serialize gate would block every OTHER channel of the same group
+        (an LLM provider on the same GPU included).
+        """
+        entry = {
+            "future": future,
+            "task_id": task.task_id,
+            "budget": budget,
+            "deadline": time.monotonic() + budget * self._ABANDONED_WAIT_FACTOR,
+            "gate_held": self._serialize_gate is not None,
+        }
+        with self._lock:
+            self._abandoned_gpu.append(entry)
+        threading.Thread(
+            target=self._reap_abandoned_gpu, args=(entry,), daemon=True,
+            name=f"ProviderQueue-{self._queue_name}-reaper").start()
+
+    def _reap_abandoned_gpu(self, entry: Dict[str, Any]) -> None:
+        """Waits for an abandoned callable and gives its slot back.
+
+        Bounded by one more watchdog budget: past that the callable counts as
+        hung, and a channel that would never work again is worse than the
+        parallel run the wait prevents. Either way the reference is dropped.
+        """
+        future = entry["future"]
+        budget = entry["budget"]
+        logger.warning(
+            "[%s] GPU-Callable laeuft nach dem Watchdog weiter: %s — Slot "
+            "bleibt belegt, hoechstens %ss lang",
+            self._queue_name, entry["task_id"], round(budget, 2))
+        t0 = time.monotonic()
+        while not future.done() and time.monotonic() < entry["deadline"]:
+            time.sleep(self._ABANDONED_POLL_S)
+        waited = round(time.monotonic() - t0, 2)
+        if future.done():
+            logger.warning(
+                "[%s] Verlassenes GPU-Callable beendet: %s (nach %ss) — Slot frei",
+                self._queue_name, entry["task_id"], waited)
+        else:
+            logger.error(
+                "[%s] Verlassenes GPU-Callable haengt: %s — laeuft ueber das "
+                "doppelte Budget hinaus, gilt als haengend, Kanal laeuft weiter",
+                self._queue_name, entry["task_id"])
+        self._drop_abandoned_gpu(entry)
+
+    def _drop_abandoned_gpu(self, entry: Dict[str, Any]) -> None:
+        """Gives back what the abandoned callable held — exactly once."""
+        with self._lock:
+            if entry not in self._abandoned_gpu:
+                return
+            self._abandoned_gpu.remove(entry)
+        if entry["gate_held"] and self._serialize_gate is not None:
+            self._serialize_gate.release()
+        self._semaphore.release()
 
     def _release_slot(self, task: LLMTask) -> None:
         """Gives back what _worker_loop took for this task — a permit for a
@@ -1105,7 +1237,15 @@ class ProviderQueue:
             if task._gpu_callable is not None:
                 # The permit wait can be long; do not hold other tasks for it.
                 self._flush_deferred(deferred)
-                self._semaphore.acquire()
+                if not self._semaphore.acquire(blocking=False):
+                    with self._lock:
+                        _abandoned = len(self._abandoned_gpu)
+                    if _abandoned:
+                        logger.warning(
+                            "[%s] Naechster GPU-Task wartet: %d verlassene(s) "
+                            "Callable(s) belegen noch einen Slot dieses Kanals",
+                            self._queue_name, _abandoned)
+                    self._semaphore.acquire()
             elif not self._acquire_lane(task):
                 # The pool of THIS task is full. Hold it back and carry on
                 # with the next task: lanes belong to the MODEL, workers to
@@ -1168,15 +1308,26 @@ class ProviderQueue:
             t0 = time.monotonic()
             task_timeout = self.provider.timeout or 300  # default 5 min
             gpu_callable = task._gpu_callable
+            # Set when the watchdog fired on a callable that is still running:
+            # slot and serialize gate then belong to that callable, not to the
+            # task that is about to be closed (see _abandon_gpu_callable).
+            gpu_abandoned = False
 
             if gpu_callable:
-                # GPU-slot task: run the callable (e.g. image generation)
+                # GPU-slot task: run the callable (e.g. image generation).
+                # The executor is NOT a context manager here: its __exit__
+                # does shutdown(wait=True), so after a watchdog timeout the
+                # worker would sit in it until the callable ends anyway — the
+                # timeout freed nothing and the result that arrived meanwhile
+                # was thrown away (IMG-2). Explicit shutdown(wait=False)
+                # instead, and the finished result is taken if it is there.
+                executor = ThreadPoolExecutor(max_workers=1)
+                future = None
                 try:
-                    with ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(gpu_callable)
-                        with self._lock:
-                            self._futures[task.task_id] = future
-                        result = _wait_for_future(future, task, task_timeout)
+                    future = executor.submit(gpu_callable)
+                    with self._lock:
+                        self._futures[task.task_id] = future
+                    result = _wait_for_future(future, task, task_timeout)
                     task.result = result
                     task.status = "completed"
                     task.duration_s = round(time.monotonic() - t0, 2)
@@ -1189,11 +1340,42 @@ class ProviderQueue:
                     logger.info("[%s] GPU-Task abgebrochen: %s (%ss)",
                                 self._queue_name, task.task_id, task.duration_s)
                 except FuturesTimeoutError:
-                    task.status = "failed"
-                    task.error = f"Task timeout nach {task_timeout}s"
                     task.duration_s = round(time.monotonic() - t0, 2)
-                    logger.error("[%s] GPU-Task Timeout: %s nach %ds",
-                                 self._queue_name, task.task_id, task_timeout)
+                    _late = None
+                    if future is not None and future.done() and not future.cancelled():
+                        try:
+                            _late = future.result(timeout=0)
+                        except Exception:
+                            _late = None
+                    if _late is not None:
+                        # It finished in the same breath — a result in hand is
+                        # a result, and the render behind it has been paid for.
+                        task.result = _late
+                        task.status = "completed"
+                        logger.warning(
+                            "[%s] GPU-Task nach Watchdog (%ds) doch fertig: %s (%ss)",
+                            self._queue_name, task_timeout, task.task_id,
+                            task.duration_s)
+                    else:
+                        task.status = "failed"
+                        task.error = f"Task timeout nach {task_timeout}s"
+                        if future is not None and not future.done():
+                            # Still rendering on that backend — its slot stays
+                            # occupied so the channel starts nothing next to it.
+                            gpu_abandoned = True
+                            self._abandon_gpu_callable(task, future, task_timeout)
+                        # A watchdog timeout is LOAD, not a defect: the budget
+                        # it measures is the backend's own (HTTP timeout, or
+                        # max_queue_wait + max_wait for a polling backend), so
+                        # overrunning it means the GPU is still working. Typed
+                        # as BackendBusyError it survives the queue boundary
+                        # and the runner retries WITHOUT a cooldown, instead
+                        # of taking a healthy backend out for 5 minutes.
+                        from app.imagegen.base import BackendBusyError
+                        task._exception = BackendBusyError(
+                            f"{self._queue_name}: no result within {task_timeout}s")
+                        logger.error("[%s] GPU-Task Timeout: %s nach %ds",
+                                     self._queue_name, task.task_id, task_timeout)
                 except Exception as e:
                     if task._cancelled:
                         task.status = "cancelled"
@@ -1243,6 +1425,10 @@ class ProviderQueue:
                                 logger.error("[%s] GPU-Task Fehler: %s: %s",
                                              self._queue_name, task.task_id, e, exc_info=True)
                 finally:
+                    # wait=False: the worker leaves even while the callable is
+                    # still running. A thread it cannot stop must not keep the
+                    # whole channel standing (see the note above).
+                    executor.shutdown(wait=False)
                     with self._lock:
                         self._futures.pop(task.task_id, None)
             else:
@@ -1349,11 +1535,13 @@ class ProviderQueue:
             # Unblock caller
             task._done_event.set()
 
-            # Release the serialize gate (before the slot, reverse acquire order)
-            if self._serialize_gate is not None:
-                self._serialize_gate.release()
-
-            self._release_slot(task)
+            # Release the serialize gate (before the slot, reverse acquire
+            # order) — unless an abandoned callable still holds both: it is
+            # the one occupying the backend, and its reaper gives them back.
+            if not gpu_abandoned:
+                if self._serialize_gate is not None:
+                    self._serialize_gate.release()
+                self._release_slot(task)
 
             self._queue.task_done()
 

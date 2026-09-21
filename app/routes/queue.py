@@ -3,10 +3,6 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from app.core.log import get_logger
-
-logger = get_logger("queue_route")
-
 router = APIRouter(prefix="/queue", tags=["queue"])
 
 
@@ -79,28 +75,19 @@ def cancel_task(task_id: str) -> Dict[str, Any]:
 
 @router.post("/force-resume")
 async def force_resume_queues() -> Dict[str, Any]:
-    """Erzwingt Fortsetzen aller pausierten Provider-Queues.
+    """Forces every paused provider queue to resume.
 
-    Bereinigt veraltete Chat-Registrierungen die verhindern, dass
-    Hintergrund-Tasks verarbeitet werden.
+    Clears chat registrations that keep background tasks from running. The
+    bookkeeping belongs to the ProviderQueue: it hands back the cache lane
+    and the serialize gate, in that order. Clearing ``_chat_tasks`` from
+    here instead left both occupied for good (LLM-2).
     """
+    import asyncio
     from app.core.provider_manager import get_provider_manager
 
     pm = get_provider_manager()
-    resumed = []
-    for name, pq in pm.channels.items():
-        with pq._lock:
-            if pq._chat_tasks:
-                for tid, task in list(pq._chat_tasks.items()):
-                    task.status = "completed"
-                    pq._history.append(task)
-                    resumed.append({"provider": name, "chat_task": tid, "agent": task.agent_name})
-                pq._chat_tasks.clear()
-                pq._chat_registered_at = 0.0
-        if any(r["provider"] == name for r in resumed):
-            pq._chat_active.set()
-            logger.warning("Force-resume: %s — %d chat(s) cleared", name,
-                           sum(1 for r in resumed if r["provider"] == name))
+    # Releasing takes each queue's lock — keep it off the event loop.
+    resumed = await asyncio.to_thread(pm.force_resume_all_chats)
 
     if resumed:
         return {"status": "resumed", "cleared": resumed}

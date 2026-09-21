@@ -24,6 +24,24 @@ logger = get_logger("provider_mgr")
 # gpu_type values that mean "any LLM channel" in find_channel()
 _LLM_GPU_TYPES = {"ollama", "openai", "llm"}
 
+# Headroom on top of a backend's own job budget before the queue watchdog
+# declares the task dead. The backend has to give up FIRST — its own timeout
+# (or its max_wait/max_queue_wait polling budget) is what knows whether the
+# job is lost, and it answers typed (BackendBusyError = load, no cooldown).
+_WATCHDOG_HEADROOM_S = 60
+
+
+class NoBackendChannelError(RuntimeError):
+    """A job names an image/video/mesh backend that has no queue channel.
+
+    A backend without a channel is a backend the config disabled (or one whose
+    URL is missing). Its job must NOT be routed onto the channel of another
+    backend of the same api_type: that channel belongs to a different
+    URL/GPU, so the job would occupy a foreign GPU slot while running against
+    an endpoint that channel never serializes (IMG-5). Failing here names the
+    real cause instead.
+    """
+
 
 class ProviderManager:
     """Orchestrates all providers and their queues."""
@@ -35,6 +53,11 @@ class ProviderManager:
         self.channels: Dict[str, ProviderQueue] = {}
         # Synthetic Provider objects backing per-backend image channels
         self._backend_providers: Dict[str, Provider] = {}
+        # Every CONFIGURED image/video/mesh backend name — including the ones
+        # that got no channel (disabled, no URL, unknown type). submit_gpu_task
+        # uses it to tell "this is a backend of ours without a channel" apart
+        # from "this name is not a backend at all".
+        self._known_backend_names: set = set()
         # Serialize-group gates: keyed by serialize_group name. Channels
         # (LLM providers + image backends) with the same group share one
         # Semaphore(1) -> only ONE call at a time within the group (e.g. an
@@ -66,10 +89,15 @@ class ProviderManager:
         second task onto a busy ``concurrent=1`` backend (observed 2026-08-03,
         double mesh run ending in gateway timeouts). See
         :meth:`ProviderQueue.reconfigure`.
+
+        The maps are built LOCALLY and rebound in ONE step at the end: readers
+        (worker threads, the event loop) iterate them without a lock, and a
+        ``clear()`` + refill lets them see an empty or half-filled map — a chat
+        registration looked up in that moment is simply not found and its lane
+        leaks (LLM-15). A rebind is atomic for those readers.
         """
-        self.providers.clear()
-        self.channels.clear()
-        self._backend_providers.clear()
+        new_providers: Dict[str, Provider] = {}
+        new_channels: Dict[str, ProviderQueue] = {}
 
         n = 1
         while True:
@@ -104,14 +132,14 @@ class ProviderManager:
                 max_concurrent=max_concurrent,
                 timeout=timeout)
 
-            self.providers[name] = provider
+            new_providers[name] = provider
 
             # One channel per provider, keyed by the provider name.
             # chat_pause makes sense exactly when the provider shares local
             # GPU contention with something else — which is what a
             # serialize_group expresses. Cloud providers without a group
             # never pause their background tasks for streaming chats.
-            self._channel(name, provider,
+            self._channel(name, provider, new_channels,
                           max_concurrent=max_concurrent,
                           chat_pause_enabled=bool(serialize_group),
                           serialize_group=serialize_group)
@@ -122,15 +150,22 @@ class ProviderManager:
                        n, name, ptype, max_concurrent, timeout_info, group_info)
             n += 1
 
-        if not self.providers:
+        if not new_providers:
             logger.warning("No providers configured (PROVIDER_1_NAME not found in config)")
 
         # Channels for image backends — every backend gets its own channel
         # for serialization (one queue per URL/endpoint).
-        self._load_backend_channels()
+        new_backend_providers, known_backend_names = self._load_backend_channels(
+            new_channels)
+
+        self.providers = new_providers
+        self.channels = new_channels
+        self._backend_providers = new_backend_providers
+        self._known_backend_names = known_backend_names
         self._prune_queues()
 
-    def _channel(self, key: str, provider: Provider, *,
+    def _channel(self, key: str, provider: Provider,
+                 channels: Dict[str, ProviderQueue], *,
                  max_concurrent: int, chat_pause_enabled: bool,
                  serialize_group: str) -> ProviderQueue:
         """One channel for ``key`` — reusing a surviving queue object so
@@ -150,7 +185,7 @@ class ProviderManager:
                                serialize_group=serialize_group)
             pq._serialize_gate = gate
         self._queues[key] = pq
-        self.channels[key] = pq
+        channels[key] = pq
         return pq
 
     def _prune_queues(self) -> None:
@@ -162,13 +197,22 @@ class ProviderManager:
                 continue
             self._queues.pop(key, None)
 
-    def _load_backend_channels(self) -> None:
+    def _load_backend_channels(
+            self, channels: Dict[str, ProviderQueue]
+    ) -> Tuple[Dict[str, Provider], set]:
         """Creates one channel per enabled image backend.
 
         Reads SKILL_IMAGEGEN_N_* envs (written by app.core.config.update_env_from_config).
         Each enabled backend gets a synthetic Provider + ProviderQueue, keyed
-        as ``backend:<name>`` in self.channels.
+        as ``backend:<name>`` in ``channels``.
+
+        Returns ``(backend_providers, known_backend_names)`` — the second set
+        holds EVERY configured backend name, channel or not, so
+        :meth:`submit_gpu_task` can tell a channel-less backend of ours apart
+        from a name that is no backend at all.
         """
+        backend_providers: Dict[str, Provider] = {}
+        known_names: set = set()
         # Same upper bound the image service loads backends up to — otherwise a
         # backend past the bound loads but never gets a queue channel.
         from app.core.config import MAX_IMAGE_BACKENDS
@@ -177,6 +221,7 @@ class ProviderManager:
             name = os.environ.get(f"{prefix}NAME", "").strip()
             if not name:
                 break
+            known_names.add(name)
             enabled = os.environ.get(f"{prefix}ENABLED", "true").strip().lower() in ("true", "1", "yes")
             if not enabled:
                 continue
@@ -200,15 +245,16 @@ class ProviderManager:
                 max_concurrent = 1
             # Backend HTTP timeout (configurable per backend). The queue task
             # timeout (synth.timeout) gets some headroom so the backend's own
-            # HTTP timeout fires FIRST and the queue doesn't kill the task
-            # early. Unset = None -> queue default 300 (backend uses its own
+            # budget runs out FIRST and the queue doesn't kill the task early.
+            # Unset = None -> queue default 300 (backend uses its own
             # default 120).
             _to_str = os.environ.get(f"{prefix}TIMEOUT", "").strip()
             try:
                 _backend_timeout = int(_to_str) if _to_str else None
             except ValueError:
                 _backend_timeout = None
-            synth_timeout = (_backend_timeout + 30) if _backend_timeout else None
+            synth_timeout = self._watchdog_timeout(api_type, prefix,
+                                                   _backend_timeout)
             serialize_group = os.environ.get(f"{prefix}SERIALIZE_GROUP", "").strip()
 
             synth = Provider(
@@ -223,19 +269,59 @@ class ProviderManager:
             # then enforces 'backend reachable' independently.
             synth.available = True
 
-            self._backend_providers[name] = synth
+            backend_providers[name] = synth
 
             channel_key = f"backend:{name}"
             # Serialize-group gate: a backend with the same group as an LLM
             # provider (or another backend) shares its Semaphore(1) -> image
             # and chat calls serialize (e.g. one physical GPU).
-            self._channel(channel_key, synth,
+            self._channel(channel_key, synth, channels,
                           max_concurrent=max_concurrent,
                           chat_pause_enabled=False,
                           serialize_group=serialize_group)
             group_info = f", serialize_group={serialize_group}" if serialize_group else ""
-            logger.info("  -> Backend-Channel %s: %s (%s, concurrent=%d%s)",
-                        channel_key, api_url, api_type, max_concurrent, group_info)
+            logger.info("  -> Backend-Channel %s: %s (%s, concurrent=%d%s, watchdog=%s)",
+                        channel_key, api_url, api_type, max_concurrent, group_info,
+                        f"{synth_timeout}s" if synth_timeout else "queue default")
+
+        return backend_providers, known_names
+
+    @staticmethod
+    def _watchdog_timeout(api_type: str, env_prefix: str,
+                          backend_timeout: Optional[int]) -> Optional[int]:
+        """The queue watchdog for ONE backend channel, from the job budget.
+
+        The HTTP ``timeout`` only bounds a single request. A polling backend
+        (mesh/video/civitai) sends its request in seconds and then POLLS for
+        the result: its real budget is ``max_queue_wait`` (time allowed to sit
+        in the gateway's queue) plus ``max_wait`` (time allowed to render).
+        Measuring such a job against ``timeout + 30`` declared a legitimate
+        600-s video dead after 90 s, threw the finished MP4 away and cooled a
+        perfectly healthy backend down for 5 minutes (IMG-2).
+
+        So: ``max(timeout, max_queue_wait + max_wait) + headroom``. The
+        numbers are read off a throwaway backend INSTANCE, because the
+        defaults differ per backend class (600 / 900 / 300) and only the class
+        knows them — the constructors parse env and nothing else, no network,
+        no state. A backend type without those attributes keeps the plain
+        HTTP-timeout rule.
+        """
+        from app.imagegen.registry import BACKEND_REGISTRY
+        max_wait = 0
+        max_queue_wait = 0
+        backend_class = BACKEND_REGISTRY.get(api_type)
+        if backend_class is not None:
+            try:
+                probe = backend_class(name="_budget_probe", api_url="",
+                                      cost=0.0, env_prefix=env_prefix)
+                max_wait = int(getattr(probe, "max_wait", 0) or 0)
+                max_queue_wait = int(getattr(probe, "max_queue_wait", 0) or 0)
+            except Exception as e:
+                logger.debug("watchdog budget probe for %s failed: %s", api_type, e)
+        job_budget = max_queue_wait + max_wait
+        if job_budget <= 0:
+            return (backend_timeout + 30) if backend_timeout else None
+        return max(backend_timeout or 0, job_budget) + _WATCHDOG_HEADROOM_S
 
     def get_systems_config(self) -> List[Dict[str, Any]]:
         """Builds systems list for dashboard grouping.
@@ -283,10 +369,14 @@ class ProviderManager:
         for provider in self.providers.values():
             if provider.check_availability():
                 available_count += 1
-        # Remove channels for unavailable providers (channel key = provider name)
-        for name, p in self.providers.items():
-            if not p.available:
-                self.channels.pop(name, None)
+        # Remove channels for unavailable providers (channel key = provider
+        # name). Rebound in one step, not popped one by one: readers iterate
+        # this dict without a lock (LLM-15). The queue objects themselves stay
+        # in self._queues, which is where a running registration is found.
+        unavailable = {name for name, p in self.providers.items() if not p.available}
+        if unavailable:
+            self.channels = {key: pq for key, pq in self.channels.items()
+                             if key not in unavailable}
         logger.info("%d/%d provider(s) available", available_count, len(self.providers))
         return available_count
 
@@ -422,8 +512,18 @@ class ProviderManager:
                                         task_type=task_type, label=label)
 
     def register_chat_done(self, task_id: str) -> None:
-        """Finds which provider queue owns this task_id and marks done."""
-        for pq in self.channels.values():
+        """Finds which provider queue owns this task_id and marks done.
+
+        Searches ``_queues``, not ``channels``: a handle must go back exactly
+        where it was taken. ``channels`` is the ROUTING view and a provider
+        that failed its health probe during a reload loses its entry there
+        (:meth:`check_all_availability`) while its queue keeps running — the
+        registration made on it would then never be found, its cache lane
+        would stay busy for the lifetime of the process and the queue would
+        stay paused (LLM-1). ``_queues`` is the LIFECYCLE view and holds every
+        queue ever built.
+        """
+        for pq in self._queues.values():
             if task_id in pq._chat_tasks:
                 pq.register_chat_done(task_id)
                 return
@@ -436,7 +536,7 @@ class ProviderManager:
         it has to ask for the lane its registration took. Unknown task id or a
         registration that runs unlaned gives ``(None, "")``.
         """
-        for pq in self.channels.values():
+        for pq in self._queues.values():
             task = pq._chat_tasks.get(task_id)
             if task is None:
                 continue
@@ -529,7 +629,7 @@ class ProviderManager:
 
         owner = None
         if chat_task_id:
-            for pq in self.channels.values():
+            for pq in self._queues.values():
                 if chat_task_id in pq._chat_tasks:
                     owner = pq
                     break
@@ -556,7 +656,7 @@ class ProviderManager:
     def register_chat_iteration(self, task_id: str,
                                  iteration: int, max_iterations: int) -> None:
         """Find owning channel and update iteration progress."""
-        for pq in self.channels.values():
+        for pq in self._queues.values():
             if task_id in pq._chat_tasks:
                 pq.register_chat_iteration(task_id, iteration, max_iterations)
                 return
@@ -632,6 +732,13 @@ class ProviderManager:
         1. ImageBackend channel: provider_name matches an image backend → ``backend:<name>``
         2. Dynamic routing: gpu_type set → find_channel() by type/load
         3. Fallback by provider name (channel key = provider name)
+
+        A named backend NEVER falls through to steps 2/3: ``gpu_type`` is the
+        api_type, so find_channel() would hand the job the channel of a
+        DIFFERENT backend of the same type — another URL, another GPU. It
+        would then block that backend's slot while running unserialized
+        against its own endpoint (IMG-5). A backend of ours without a channel
+        is disabled or has no URL, and that is what the caller hears.
         """
         # 1. ImageBackend channel lookup: backend name → ``backend:<name>``
         if provider_name and provider_name in self._backend_providers:
@@ -639,6 +746,10 @@ class ProviderManager:
             if pq:
                 return pq.submit_gpu_task(task_type, priority, callable_fn,
                                           agent_name, label)
+        if provider_name and provider_name in self._known_backend_names:
+            raise NoBackendChannelError(
+                f"Backend '{provider_name}' has no queue channel "
+                f"(disabled or without API URL) — no job runs on it")
 
         # 2. Dynamic routing by channel type
         if gpu_type:
@@ -655,6 +766,29 @@ class ProviderManager:
                                           agent_name, label)
 
         raise Exception(f"No channel for gpu_type='{gpu_type}', provider='{provider_name}'")
+
+    def force_resume_all_chats(self) -> List[Dict[str, Any]]:
+        """Emergency exit: releases EVERY chat registration on EVERY queue.
+
+        The one entry point behind ``POST /queue/force-resume``. It walks
+        ``_queues`` (not ``channels``): a registration can sit on a queue whose
+        channel a reload dropped, and that is exactly the state the emergency
+        exit exists for. Each queue releases its own registrations under its
+        own lock, in the order of the stale cleanup — cache lane first, then
+        the serialize gate — so nothing is left holding either (LLM-2).
+
+        Returns one dict per released registration:
+        ``{"provider": <channel key>, "chat_task": <id>, "agent": <name>}``.
+        """
+        released: List[Dict[str, Any]] = []
+        for key, pq in list(self._queues.items()):
+            entries = pq.force_release_chats()
+            for entry in entries:
+                released.append({"provider": key, **entry})
+            if entries:
+                logger.warning("Force-resume: %s — %d chat(s) cleared",
+                               key, len(entries))
+        return released
 
     def cancel_task(self, task_id: str) -> bool:
         """Cancels a pending task across all channels."""
