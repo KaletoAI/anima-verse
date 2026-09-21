@@ -162,18 +162,31 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         _chat_mode = (get_character_config(character_name) or {}).get("chat_mode", "")
     except Exception:
         _chat_mode = ""
+    # The "only your own turn" rule closes the most common defect of this
+    # prompt: the chat_stream template states it explicitly, this one never
+    # did, and models filled the gap by writing whole scenes including other
+    # characters' dialogue. Measured 2026-09-21 over 873 real logged answers:
+    # speaks_for_others was the dominant hard fail (249 cases, 29 % of logged
+    # thought answers), and none of 1155 thought prompts carried any rule
+    # against it. It sits at the very end of the prompt on purpose — the tail
+    # is the one place a change cannot invalidate a cached prefix.
+    _own_turn_rule = (
+        " Write ONLY your own words and actions. Everyone else acts on their "
+        "own turn: never write, quote or decide what another character says, "
+        "does, thinks or feels — not even their reaction to you. You may "
+        "notice what someone is visibly doing, but you do not move them.")
     if _chat_mode == "rp_first":
         ctx["action_instruction"] = (
             "Decide what you want to do next. Pick ONE meaningful action and "
             "play it out fully IN CHARACTER — narrate what you do and say as "
             "prose, first person. Do NOT write tool calls, JSON, function "
-            "syntax or field lists; just act it out. If nothing relevant "
-            "right now, reply only with: SKIP.")
+            "syntax or field lists; just act it out." + _own_turn_rule
+            + " If nothing relevant right now, reply only with: SKIP.")
     else:
         ctx["action_instruction"] = (
             "Decide what you want to do next. Pick ONE meaningful action and "
-            "execute the corresponding tool. If nothing relevant, reply only "
-            "with: SKIP.")
+            "execute the corresponding tool." + _own_turn_rule
+            + " If nothing relevant, reply only with: SKIP.")
 
     # Skill prompt contributions as (package_id, text) parts → the joined string
     # (skill_context_blocks) plus an internal parts list for fine-grained
