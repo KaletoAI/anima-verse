@@ -732,14 +732,23 @@ def run_chat_turn(
         from app.models.account import is_player_controlled
         if is_player_controlled(responder):
             ts = utc_now_iso()
-            save_message({
-                "role": "user", "content": incoming_message, "timestamp": ts,
-                "speaker": speaker, "medium": medium,
-            }, character_name=responder, partner_name=speaker)
-            save_message({
-                "role": "assistant", "content": incoming_message, "timestamp": ts,
-                "speaker": speaker, "medium": medium,
-            }, character_name=speaker, partner_name=responder)
+            _stored = [
+                save_message({
+                    "role": "user", "content": incoming_message, "timestamp": ts,
+                    "speaker": speaker, "medium": medium,
+                }, character_name=responder, partner_name=speaker),
+                save_message({
+                    "role": "assistant", "content": incoming_message, "timestamp": ts,
+                    "speaker": speaker, "medium": medium,
+                }, character_name=speaker, partner_name=responder),
+            ]
+            # A lost write here is what the avatar will NOT find in their
+            # inbox on the next refresh — there is no turn left to abort, so
+            # it is logged loudly and the (empty) answer stays the same.
+            if not all(_stored):
+                logger.error("run_chat_turn: avatar delivery %s -> %s NOT stored "
+                             "(%d of 2 writes failed) — the message is lost",
+                             speaker, responder, _stored.count(False))
             logger.info("run_chat_turn: Avatar %s — kein Auto-Reply, "
                         "Message von %s gespeichert (User antwortet selbst)",
                         responder, speaker)
@@ -910,22 +919,33 @@ def run_chat_turn(
     # history and is part of the cutover
     # (plan-history-consolidation-cleanup.md, phase 3).
     if not ctx.get("room_mode"):
-        save_message({
-            "role": "user", "content": incoming_message, "timestamp": ts,
-            "speaker": speaker, "medium": medium,
-        }, character_name=responder, partner_name=speaker)
-        save_message({
-            "role": "assistant", "content": clean, "timestamp": ts,
-            "speaker": responder, "medium": medium,
-        }, character_name=responder, partner_name=speaker)
-        save_message({
-            "role": "assistant", "content": incoming_message, "timestamp": ts,
-            "speaker": speaker, "medium": medium,
-        }, character_name=speaker, partner_name=responder)
-        save_message({
-            "role": "user", "content": clean, "timestamp": ts,
-            "speaker": responder, "medium": medium,
-        }, character_name=speaker, partner_name=responder)
+        _stored = [
+            save_message({
+                "role": "user", "content": incoming_message, "timestamp": ts,
+                "speaker": speaker, "medium": medium,
+            }, character_name=responder, partner_name=speaker),
+            save_message({
+                "role": "assistant", "content": clean, "timestamp": ts,
+                "speaker": responder, "medium": medium,
+            }, character_name=responder, partner_name=speaker),
+            save_message({
+                "role": "assistant", "content": incoming_message, "timestamp": ts,
+                "speaker": speaker, "medium": medium,
+            }, character_name=speaker, partner_name=responder),
+            save_message({
+                "role": "user", "content": clean, "timestamp": ts,
+                "speaker": responder, "medium": medium,
+            }, character_name=speaker, partner_name=responder),
+        ]
+        # The answer has already been produced and is returned either way —
+        # aborting the turn over a lost history row would throw away work AND
+        # the reply. What must not happen is that it passes silently: the
+        # reply then lives in this thread's context only and is gone on the
+        # next reload (DATA-13).
+        if not all(_stored):
+            logger.error("run_chat_turn: chat history %s <-> %s NOT stored "
+                         "(%d of 4 writes failed) — the turn is not in the DB",
+                         speaker, responder, _stored.count(False))
 
     # Pending-Report Sofort-Trigger: if the speaker owes someone a report
     # back, bump them in the AgentLoop so they think on the next slot.

@@ -93,7 +93,8 @@ def get_character_dir(character_name: str, *, create: bool = False) -> Path:
     return character_dir
 
 
-def _record_state_change(character_name: str, change_type: str, value: str, metadata: dict = None):
+def _record_state_change(character_name: str, change_type: str, value: str,
+                         metadata: dict = None) -> bool:
     """Append a state change (location/activity) to state_history DB table.
 
     Lightweight log used by the Diary to show location/activity changes.
@@ -105,6 +106,11 @@ def _record_state_change(character_name: str, change_type: str, value: str, meta
     in the character's "Recently experienced" block, the diary day — is read
     off ``game_ts``; it cannot be derived from ``ts`` afterwards, because the
     clock re-anchors on set/factor/freeze.
+
+    Returns True when the entry was written, False when it was not (DATA-13).
+    A lost entry used to be a ``logger.debug`` line: the diary silently missed
+    the move and nothing in the log said why. The TRIM is guarded separately —
+    it is housekeeping, and its failure does not make the entry unwritten.
     """
     ts = utc_now_iso()
     game_ts = game_time().canonical()
@@ -122,7 +128,14 @@ def _record_state_change(character_name: str, change_type: str, value: str, meta
                 VALUES (?, ?, ?, ?)
             """, (character_name, ts, game_ts,
                   json.dumps(state_entry, ensure_ascii=False)))
-        # Trim: max 200 entries per character
+    except Exception as e:
+        logger.error("_record_state_change DB error for %s (%s): %s",
+                     character_name, change_type, e, exc_info=True)
+        return False
+
+    # Trim: max 200 entries per character. Housekeeping only — a failure here
+    # leaves the entry written, so it must not turn into a False.
+    try:
         conn = get_connection()
         total = conn.execute(
             "SELECT COUNT(*) FROM state_history WHERE character_name=?",
@@ -139,7 +152,9 @@ def _record_state_change(character_name: str, change_type: str, value: str, meta
             """, (character_name, excess))
             conn.commit()
     except Exception as e:
-        logger.debug("_record_state_change DB-Fehler fuer %s: %s", character_name, e)
+        logger.warning("_record_state_change trim failed for %s: %s",
+                       character_name, e)
+    return True
 
 
 def record_access_denied(character_name: str,
@@ -354,7 +369,12 @@ def get_character_profile(character_name: str) -> Dict[str, Any]:
     _inject_soul_md_values eingelesen — beim Speichern werden diese Felder
     aus profile_json entfernt, also muessen sie beim Lesen re-injiziert
     werden, sonst fehlt z.B. character_task im ThoughtLoop.
-    Fallback auf JSON-Datei falls kein DB-Eintrag vorhanden.
+
+    There is no JSON fallback (DATA-17): world data is DB-only, nothing has
+    written ``character_profile.json`` since the migration, and the fallback
+    turned a DB error into "a character without a personality" instead of a
+    visible failure. A DB error is logged at ERROR with its traceback; an
+    unknown character yields the empty default profile the callers expect.
     """
     try:
         conn = get_connection()
@@ -386,23 +406,8 @@ def get_character_profile(character_name: str) -> Dict[str, Any]:
             _inject_soul_md_values(character_name, profile)
             return profile
     except Exception as e:
-        logger.debug("get_character_profile DB-Fehler fuer %s: %s", character_name, e)
-
-    # Fallback: JSON-Datei (vor Migration oder bei DB-Fehler)
-    character_dir = get_character_dir(character_name)
-    profile_path = character_dir / "character_profile.json"
-    old_path = character_dir / "profile.json"
-    if not profile_path.exists() and old_path.exists():
-        old_path.rename(profile_path)
-        logger.info("Migration: %s -> %s", old_path, profile_path)
-
-    if profile_path.exists():
-        try:
-            _p = json.loads(profile_path.read_text())
-            _inject_soul_md_values(character_name, _p)
-            return _p
-        except Exception:
-            pass
+        logger.error("get_character_profile DB error for %s: %s",
+                     character_name, e, exc_info=True)
 
     return {
         "character_name": character_name,
@@ -502,7 +507,7 @@ def _is_real_character(name: str) -> bool:
 
 
 def save_character_profile(character_name: str, profile: Dict[str, Any],
-                           create_new: bool = False):
+                           create_new: bool = False) -> bool:
     """Speichert das Profil eines Characters in der DB.
 
     Stellt sicher dass die Soul-MD-Dateien gemaess Template existieren
@@ -513,11 +518,22 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     BESTEHENDE Charaktere — wenn der Name unbekannt ist, wird das als Bug
     behandelt (z.B. ein LLM hat "Lirien" statt "Lirien Edwinsdottir"
     durchgereicht) und das Schreiben verworfen.
+
+    Returns True when the row was committed, False when NOTHING was stored —
+    a reserved or unknown name, or a failed write (DATA-13). The failure used
+    to be a log line the caller could not see: ``POST /characters/{name}/
+    profile`` answered ``{"status": "success"}``, the UI showed the new value
+    (it is in the returned dict) and it was gone after the next reload.
+    The function does NOT raise: of its ~230 call sites almost none sits in a
+    try that expects an exception, and a good many sit in a broad
+    ``except Exception: logger.debug(...)`` — raising would make the failure
+    LESS visible, not more. It is logged at ERROR with its traceback instead,
+    and the boolean lets a caller that reports success check.
     """
     if character_name.lower() in _RESERVED_NAMES:
         logger.warning("save_character_profile: reservierter Name '%s' uebersprungen",
                        character_name)
-        return
+        return False
 
     # Existenz-Check — wenn nicht create_new, muss Character bereits existieren
     if not create_new:
@@ -537,7 +553,7 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                 "kein Save (Geister-Character verhindert). Wenn das ein "
                 "neuer Charakter sein soll, ueber POST /characters/create "
                 "anlegen.", character_name)
-            return
+            return False
 
     # The outfit text a temporary NPC WEARS, read before it is overwritten —
     # every asset of such an NPC (portrait, T-pose, mesh signature, default
@@ -553,8 +569,9 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
         logger.debug("outfit-edit hook: reading the old outfit of %s failed: %s",
                      character_name, _oe)
 
-    character_dir = get_character_dir(character_name, create=True)
-    profile_path = character_dir / "character_profile.json"
+    # Materialize the character directory — the soul MD files below live in
+    # it, and the existence heuristics of the other save paths read it.
+    get_character_dir(character_name, create=True)
 
     profile["character_name"] = character_name
     profile["created_by"] = ""
@@ -601,11 +618,12 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     except Exception as _se:
         logger.debug("ensure/populate soul files failed for %s: %s", character_name, _se)
 
-    # JSON-Sidecar und DB-Blob bekommen das gestrippte Profil
+    # Der DB-Blob bekommt das gestrippte Profil
     profile_to_store = profile
 
     # In DB schreiben
     now = utc_now_iso()
+    _stored = True
     try:
         with transaction() as conn:
             # Read existing config_json so the config patch can be merged
@@ -704,9 +722,14 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                     values,
                 )
     except Exception as e:
-        logger.error("save_character_profile DB-Fehler fuer %s: %s", character_name, e)
+        logger.error("save_character_profile DB error for %s: %s",
+                     character_name, e, exc_info=True)
+        _stored = False
 
     # Caller erwartet dass der uebergebene Dict weiterhin die Runtime-Keys hat
+    # — sie wurden oben aus dem Dict GEPOPPT, das hier gibt sie zurueck. Das
+    # gilt auch nach einem Fehlschlag: sonst faende der Aufrufer seine eigenen
+    # Keys nicht mehr vor.
     profile.update(state_values)
     for k, v in state_meta.items():
         profile[k] = v
@@ -721,7 +744,10 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     # npc_assets.on_outfit_description_changed for the rule (and for why the
     # NPC is NOT pooled for it). Swallowed on purpose: no profile save may
     # fail because a queue submit did.
-    if _old_outfit is not None:
+    # ONLY after a stored write: re-rendering an NPC for an outfit that never
+    # reached the DB is exactly the "as if it had been saved" the review
+    # asked for (DATA-13) — the picture would then contradict the profile.
+    if _stored and _old_outfit is not None:
         try:
             from app.core.npc_assets import on_outfit_description_changed
             on_outfit_description_changed(
@@ -730,6 +756,8 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
         except Exception as _he:  # noqa: BLE001
             logger.debug("outfit-edit hook failed for %s: %s",
                          character_name, _he)
+
+    return _stored
 
 
 def is_temporary_npc(character_name: str) -> bool:
@@ -983,38 +1011,6 @@ def get_character_personality(character_name: str) -> str:
     return profile.get("character_personality", "")
 
 
-def _get_character_config_path(character_name: str, *, create: bool = False) -> Path:
-    """Pfad zur Character-Config JSON-Datei.
-
-    Wenn ``create=False`` (Default), wird das Character-Verzeichnis NICHT
-    angelegt — das ist wichtig für reine Read-Pfade (``get_character_config``),
-    weil sonst eine bloße Status-Abfrage über einen Geister-Character
-    (z. B. ein längst gelöschter, der nur noch im Browser-State des Users
-    steckt) das Verzeichnis neu erschafft und damit die "Existence"-Heuristik
-    in ``get_character_config`` triggert, die wiederum eine leere DB-Reihe
-    schreibt. ``create=True`` nutzt nur ``save_character_config``.
-
-    Migration: Benennt alte agent_config.json / llm_config.json automatisch um.
-    """
-    character_dir = get_character_dir(character_name, create=create)
-    new_path = character_dir / "character_config.json"
-    # Migration läuft nur wenn das Verzeichnis schon existiert (read- und
-    # write-Pfade); für nicht-existierende Characters ist nichts zu migrieren.
-    if not character_dir.exists():
-        return new_path
-    # Migration from agent_config.json
-    old_agent_path = character_dir / "agent_config.json"
-    if not new_path.exists() and old_agent_path.exists():
-        old_agent_path.rename(new_path)
-        logger.info("Migration: %s -> %s", old_agent_path, new_path)
-    # Migration from llm_config.json
-    old_llm_path = character_dir / "llm_config.json"
-    if not new_path.exists() and old_llm_path.exists():
-        old_llm_path.rename(new_path)
-        logger.info("Migration: %s -> %s", old_llm_path, new_path)
-    return new_path
-
-
 def _get_character_defaults() -> Dict[str, Any]:
     """Character-Default-Config. LLM-Wahl erfolgt zentral ueber den Router."""
     return {
@@ -1040,6 +1036,11 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
 
     Das Profil-Feld 'language' wird automatisch als 'tts_language' injiziert,
     damit die TTS-Kette die richtige Sprache verwendet.
+
+    There is no JSON fallback (DATA-17): world data is DB-only and nothing has
+    written ``character_config.json`` since the migration — the reader only
+    masked DB errors, which then looked like "this character has no config"
+    and silently produced the defaults.
     """
     if not character_name:
         return {}
@@ -1059,17 +1060,8 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
         if row and row[0] and row[0] != "{}":
             config = json.loads(row[0])
     except Exception as e:
-        logger.debug("get_character_config DB-Fehler fuer %s: %s", character_name, e)
-
-    # Fallback: JSON-Datei
-    if not config:
-        config_path = _get_character_config_path(character_name)
-        if config_path.exists():
-            try:
-                with open(config_path) as f:
-                    config = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                config = None
+        logger.error("get_character_config DB error for %s: %s",
+                     character_name, e, exc_info=True)
 
     if config is None:
         # Auto-Create darf nur greifen wenn der Character TATSAECHLICH existiert
@@ -1125,18 +1117,23 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
     return config
 
 
-def save_character_config(character_name: str, config: Dict[str, Any]):
+def save_character_config(character_name: str, config: Dict[str, Any]) -> bool:
     """Speichert die per-Character Konfiguration in DB.
 
     Akzeptiert nur Updates fuer Characters die bereits per save_character_profile
     angelegt wurden (oder ein Verzeichnis haben). So legt ein versehentlich aus
     einem LLM-Output durchgereichter Vorname (z.B. "Lirien" statt
     "Lirien Edwinsdottir") keinen neuen Geister-Character an.
+
+    Returns True when the row was committed, False when nothing was stored —
+    a reserved or unknown name, or a failed write (DATA-13). Same reasoning as
+    ``save_character_profile``: logged at ERROR with its traceback, never
+    raised.
     """
     if character_name.lower() in _RESERVED_NAMES:
         logger.warning("save_character_config: reservierter Name '%s' uebersprungen",
                        character_name)
-        return
+        return False
 
     # Existence check: row in the characters table OR directory present
     try:
@@ -1152,7 +1149,7 @@ def save_character_config(character_name: str, config: Dict[str, Any]):
         logger.warning("save_character_config: Character '%s' existiert nicht — "
                        "kein DB-Insert (Geister-Character verhindert)",
                        character_name)
-        return
+        return False
 
     now = utc_now_iso()
     try:
@@ -1170,8 +1167,11 @@ def save_character_config(character_name: str, config: Dict[str, Any]):
                 now,
                 now,
             ))
+        return True
     except Exception as e:
-        logger.error("save_character_config DB-Fehler fuer %s: %s", character_name, e)
+        logger.error("save_character_config DB error for %s: %s",
+                     character_name, e, exc_info=True)
+        return False
 
 
 def get_character_appearance(character_name: str) -> str:
@@ -3411,7 +3411,7 @@ def character_exists(name: str) -> bool:
 
 
 def list_available_characters(include_pooled: bool = False) -> List[str]:
-    """Listet alle verfuegbaren Characters aus der DB (Fallback: Dateisystem).
+    """Listet alle verfuegbaren Characters aus der DB.
 
     Filterung:
       - Namen mit fuehrendem Underscore (_messaging_frame, _system) sind
@@ -3428,36 +3428,22 @@ def list_available_characters(include_pooled: bool = False) -> List[str]:
         loop and every character picker at once. ``include_pooled=True`` is for
         the pool's own bookkeeping and for the name-collision check — a pooled
         name is still taken.
+
+    The roster IS the DB table (DATA-17): the filesystem fallback that used to
+    run for a world without rows read ``character_profile.json`` files that
+    nothing writes any more, and it hid a failing query behind a world that
+    merely looked empty. A DB error is logged at ERROR and answers "nobody".
     """
     try:
         conn = get_connection()
         rows = conn.execute(
             "SELECT name, COALESCE(status,'') FROM characters ORDER BY name ASC"
         ).fetchall()
-        # The FS fallback below is for a world with NO rows at all — a world
-        # whose every row is pooled has a roster, and that roster is empty.
-        if rows:
-            return [r[0] for r in rows if _is_real_character(r[0])
-                    and (include_pooled or r[1] != POOLED_STATUS)]
     except Exception as e:
-        logger.debug("list_available_characters DB-Fehler: %s", e)
-
-    # Fallback: Dateisystem
-    characters = []
-    characters_dir = get_user_characters_dir()
-    if characters_dir.exists():
-        for character_dir in characters_dir.iterdir():
-            if not character_dir.is_dir():
-                continue
-            if not _is_real_character(character_dir.name):
-                continue
-            profile_path = character_dir / "character_profile.json"
-            old_path = character_dir / "profile.json"
-            if not profile_path.exists() and old_path.exists():
-                old_path.rename(profile_path)
-            if profile_path.exists():
-                characters.append(character_dir.name)
-    return sorted(characters)
+        logger.error("list_available_characters DB error: %s", e, exc_info=True)
+        return []
+    return [r[0] for r in rows if _is_real_character(r[0])
+            and (include_pooled or r[1] != POOLED_STATUS)]
 
 
 def list_active_journeys() -> List[Dict[str, Any]]:

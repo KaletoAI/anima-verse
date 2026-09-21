@@ -795,6 +795,12 @@ class SchedulerManager:
                 content=message,
                 notification_type=notification_type,
                 metadata=metadata)
+            if not nid:
+                # "" means the INSERT did not happen (DATA-13) — the job log
+                # must not show a notification nobody will ever see.
+                logger.error("notify: notification for %s was NOT stored", agent)
+                return {"success": False, "action": "notify",
+                        "error": "notification not stored"}
             logger.info("Notification created: %s (%s)", nid, agent)
             return {"success": True, "action": "notify", "notification_id": nid}
         except Exception as e:

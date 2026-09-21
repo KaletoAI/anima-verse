@@ -199,19 +199,32 @@ class SendMessageSkill(PluginSkill):
         try:
             from app.models.chat import save_message
             # Recipient history: sender as originator (role=user)
-            save_message({
-                "role": "user", "content": message, "timestamp": ts,
-                "speaker": sender_name, "medium": "messaging",
-                "metadata": _msg_meta,
-            }, character_name=target_name, partner_name=sender_name)
-            # Sender history: sender as author (role=assistant)
-            save_message({
-                "role": "assistant", "content": message, "timestamp": ts,
-                "speaker": sender_name, "medium": "messaging",
-                "metadata": _msg_meta,
-            }, character_name=sender_name, partner_name=target_name)
+            _stored = [
+                save_message({
+                    "role": "user", "content": message, "timestamp": ts,
+                    "speaker": sender_name, "medium": "messaging",
+                    "metadata": _msg_meta,
+                }, character_name=target_name, partner_name=sender_name),
+                # Sender history: sender as author (role=assistant)
+                save_message({
+                    "role": "assistant", "content": message, "timestamp": ts,
+                    "speaker": sender_name, "medium": "messaging",
+                    "metadata": _msg_meta,
+                }, character_name=sender_name, partner_name=target_name),
+            ]
         except Exception as e:
             self.ctx.logger.error("SendMessage: saving chat history failed: %s", e)
+            _stored = [False, False]
+        # The recipient's inbox IS the delivery — a lost write means the DM
+        # was never sent, so the tool result says so instead of promising a
+        # reply that can never come (DATA-13).
+        if not all(_stored):
+            self.ctx.logger.error(
+                "SendMessage: chat-history save for %s -> %s failed "
+                "(%d of 2 writes) — the message was not delivered",
+                sender_name, target_name, _stored.count(False))
+            return (f"Error: the message to {target_name} could not be "
+                    f"stored and was NOT delivered.")
 
         # Push bridge (Telegram option B): if the target is a Telegram-bound
         # avatar of this sender (NPC), deliver the message to the Telegram

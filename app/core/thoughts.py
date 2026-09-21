@@ -957,12 +957,22 @@ class ThoughtRunner:
                 ts = utc_now()
                 date_str = game_time().label(_char_lang(character_name))
                 from app.models.account import get_player_identity as _get_pi_save
-                save_message({
+                _stored = save_message({
                     "role": "assistant",
                     "content": f"[Gedanken-Nachricht | {location_name} | {date_str}] {clean_content}",
                     "timestamp": ts.isoformat(),
                 }, character_name, partner_name=_get_pi_save(""))
-                logger.info("%s: In Chat-History gespeichert", character_name)
+                if _stored:
+                    logger.info("%s: In Chat-History gespeichert", character_name)
+                else:
+                    # The thought turn itself is done and its other effects
+                    # (notification, Telegram) already happened — there is
+                    # nothing to roll back. But the character will NOT
+                    # remember having said this, so it must not pass quietly
+                    # (DATA-13).
+                    logger.error("%s: thought message NOT stored in the chat "
+                                 "history — the character will not remember it",
+                                 character_name)
 
             except Exception as e:
                 logger.error("Chat-History Fehler: %s", e)

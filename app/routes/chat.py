@@ -1472,14 +1472,28 @@ async def chat(request: Request) -> StreamingResponse:
                 if _image_display_url:
                     _img_md = f"![Bild]({_image_display_url})"
                     _saved_user_content = f"{_img_md}\n\n{user_input}" if user_input else _img_md
-                save_message({
+                _user_stored = save_message({
                     "role": "user", "content": _saved_user_content, "timestamp": timestamp,
                     "speaker": "user", "medium": medium,
                 }, current_agent)
-                save_message({
+                _reply_stored = save_message({
                     "role": "assistant", "content": clean_response, "timestamp": timestamp,
                     "speaker": current_agent, "medium": medium,
                 }, current_agent)
+                # DATA-13: the turn used to report success no matter what the
+                # DB did — the exchange stood in the UI and was gone after the
+                # next reload. This endpoint answers over SSE (the HTTP
+                # status is long sent by now), so the honest equivalent of a
+                # 500 is an error event on the same stream.
+                if not (_user_stored and _reply_stored):
+                    logger.error(
+                        "chat turn for %s NOT stored (user=%s, reply=%s) — "
+                        "the message is not in the DB",
+                        current_agent, _user_stored, _reply_stored)
+                    yield ("data: " + json.dumps(
+                        {"error": "message not stored",
+                         "stored": {"user": bool(_user_stored),
+                                    "reply": bool(_reply_stored)}}) + "\n\n")
 
             # LLM-Logging erfolgt per-Iteration im StreamingAgent
 

@@ -1009,10 +1009,20 @@ class CharacterBotPoller:
                 timestamp=timestamp,
                 speaker=self.character_name,
                 medium="telegram")
-            UnifiedChatManager.save_message(user_msg, self.character_name,
-                                            partner_name=partner)
-            UnifiedChatManager.save_message(assistant_msg, self.character_name,
-                                            partner_name=partner)
+            stored = [
+                UnifiedChatManager.save_message(user_msg, self.character_name,
+                                                partner_name=partner),
+                UnifiedChatManager.save_message(assistant_msg, self.character_name,
+                                                partner_name=partner),
+            ]
+            # The Telegram reply has already been sent — there is no turn left
+            # to abort. But a lost row means the character does not remember
+            # the exchange, so it is logged loudly instead of silently
+            # (DATA-13).
+            if not all(stored):
+                logger.error("[%s] chat history NOT stored (%d of 2 writes "
+                             "failed) — the Telegram turn is not in the DB",
+                             self.character_name, stored.count(False))
         except Exception as e:
             logger.error("[%s] Failed to save chat history: %s", self.character_name, e)
 

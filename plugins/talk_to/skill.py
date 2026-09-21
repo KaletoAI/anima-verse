@@ -180,18 +180,29 @@ class TalkToSkill(PluginSkill):
         # and a shouted one carries location-wide.
         _meta = {"volume": volume} if volume else {}
         try:
-            save_message({
-                "role": "user", "content": message, "timestamp": ts,
-                "speaker": sender_name, "medium": "in_person",
-                "metadata": _meta,
-            }, character_name=target_name, partner_name=sender_name)
-            save_message({
-                "role": "assistant", "content": message, "timestamp": ts,
-                "speaker": sender_name, "medium": "in_person",
-                "metadata": _meta,
-            }, character_name=sender_name, partner_name=target_name)
+            stored = [
+                save_message({
+                    "role": "user", "content": message, "timestamp": ts,
+                    "speaker": sender_name, "medium": "in_person",
+                    "metadata": _meta,
+                }, character_name=target_name, partner_name=sender_name),
+                save_message({
+                    "role": "assistant", "content": message, "timestamp": ts,
+                    "speaker": sender_name, "medium": "in_person",
+                    "metadata": _meta,
+                }, character_name=sender_name, partner_name=target_name),
+            ]
         except Exception as e:
             self.ctx.logger.error("TalkTo: chat-history save failed: %s", e)
+            return f"Error saving message to {target_name}."
+        # A write that merely returned False is the same lost message as one
+        # that raised (DATA-13) — and the recipient's inbox IS the delivery
+        # here, so the tool must not report a line that was never said.
+        if not all(stored):
+            self.ctx.logger.error(
+                "TalkTo: chat-history save for %s -> %s failed (%d of 2 writes) "
+                "— the message was not delivered",
+                sender_name, target_name, stored.count(False))
             return f"Error saving message to {target_name}."
 
         # Bump the recipient so they react soon, not on their normal slot.

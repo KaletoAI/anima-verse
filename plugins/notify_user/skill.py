@@ -75,6 +75,14 @@ class NotifyUserSkill(PluginSkill):
                 content=input_text,
                 notification_type="message",
                 metadata={"trigger": "thought"})
+            if not nid:
+                # "" means the INSERT did not happen (DATA-13). Nothing was
+                # shown to anyone, so this must not report success — and the
+                # cooldown is NOT armed for a notification that never was.
+                self.ctx.logger.error(
+                    "Notification for %s was NOT stored", character_name)
+                return ("Error sending the notification: it could not be "
+                        "stored and was not delivered.")
             _last_notification_ts[character_name] = now_mono
 
             # IMPORTANT: also store as a chat message in the history so the
@@ -89,21 +97,32 @@ class NotifyUserSkill(PluginSkill):
                 avatar = get_player_identity("")
                 if avatar and avatar != character_name:
                     ts = utc_now_iso()
-                    save_message({
-                        "role": "assistant",
-                        "content": input_text,
-                        "timestamp": ts,
-                        "speaker": character_name,
-                        "medium": "messaging",
-                    }, character_name=character_name, partner_name=avatar)
-                    # Mirror into the avatar inbox so a reload shows the entry
-                    save_message({
-                        "role": "user",
-                        "content": input_text,
-                        "timestamp": ts,
-                        "speaker": character_name,
-                        "medium": "messaging",
-                    }, character_name=avatar, partner_name=character_name)
+                    _mirrored = [
+                        save_message({
+                            "role": "assistant",
+                            "content": input_text,
+                            "timestamp": ts,
+                            "speaker": character_name,
+                            "medium": "messaging",
+                        }, character_name=character_name, partner_name=avatar),
+                        # Mirror into the avatar inbox so a reload shows the entry
+                        save_message({
+                            "role": "user",
+                            "content": input_text,
+                            "timestamp": ts,
+                            "speaker": character_name,
+                            "medium": "messaging",
+                        }, character_name=avatar, partner_name=character_name),
+                    ]
+                    # The notification itself IS stored at this point, so the
+                    # call does not fail — but the character would not
+                    # remember what it announced, which is exactly what this
+                    # mirror exists for (DATA-13).
+                    if not all(_mirrored):
+                        self.ctx.logger.error(
+                            "Notification → chat history for %s NOT stored "
+                            "(%d of 2 writes failed)",
+                            character_name, _mirrored.count(False))
             except Exception as _se:
                 self.ctx.logger.debug("Notification → chat history failed: %s", _se)
 

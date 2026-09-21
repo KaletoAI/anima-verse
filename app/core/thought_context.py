@@ -841,8 +841,14 @@ def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
         partner = p_partner if p_char == character_name else p_char
         if not partner:
             return ""
+        # The window is EXACTLY ``limit`` messages, so it belongs in SQL
+        # (DATA-12): the pair history is never pruned, and this block only
+        # ever shows the last few. ``get_chat_history`` bounds the merged
+        # pair view with a cutoff that is a superset of the tail and then
+        # trims it to the same rows, so the block is byte-identical.
         history = UnifiedChatManager.get_chat_history(
-            character_name=character_name, partner_name=partner)
+            character_name=character_name, partner_name=partner,
+            limit=limit if limit else None)
         if not history:
             return ""
         recent = history[-limit:] if limit else history
