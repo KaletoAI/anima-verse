@@ -3981,13 +3981,17 @@ def _play_messages_send_sync(user, body: Any):
         raise HTTPException(status_code=400, detail="Kein Selbstgespräch")
     ts = utc_now_iso()
     # Empfänger-Inbox: vom Avatar eingehend (role=user)
-    save_message({"role": "user", "content": content, "timestamp": ts,
+    _stored_out = save_message({"role": "user", "content": content, "timestamp": ts,
                   "speaker": avatar, "medium": "messaging"},
                  character_name=partner, partner_name=avatar)
     # Avatar-eigene History (role=assistant aus Avatar-Sicht)
-    save_message({"role": "assistant", "content": content, "timestamp": ts,
+    _stored_in = save_message({"role": "assistant", "content": content, "timestamp": ts,
                   "speaker": avatar, "medium": "messaging"},
                  character_name=avatar, partner_name=partner)
+    if not (_stored_out and _stored_in):
+        # A message that did not reach the DB must not be marked read, must not
+        # bump the recipient and must not be reported as sent.
+        raise HTTPException(status_code=500, detail="message not stored")
     _phone_set_read(avatar, partner, ts)
     # Charakter bumpen (antwortet in eigener Zeit, darf ignorieren)
     try:

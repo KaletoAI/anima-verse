@@ -27,13 +27,23 @@ Hand-derived expectations:
   [1] room_places("lounge") has 3 places, s2.slots == [[0.7,-3],[1.3,-3]],
       s1.root_offset == 0.413 (0.243 × 1.70 = 0.4131, millimetres).
       where("Ann") == (house, "lounge").
+  [0] The five start on a ROW of their own, 0.8 m apart at z = −3.5:
+      Ann (−3.5), Bob (−2.7), Cid (−1.9), Dan (−1.1), Eve (−0.3). Writing
+      the room runs room_stand.stand_up, which keeps a point that is free
+      and walks the character otherwise; 0.8 m clears MATE_CLEAR_M = 0.70 m
+      and 0.5 m clears WALL_CLEAR_M = 0.35 m off the south and west edges,
+      so every one of them keeps the point the fixture wrote. (On ONE shared
+      point the rule would walk the last four — which is why the two
+      "position untouched" checks below used to fail.)
   [2] assign: Ann "sitting" → s1. All seats have 0 occupants, so the nearest
       slot to Ann's point (−3.5, −3.5) wins: s1 slot (−3, −3) is
       √(0.5² + 0.5²) = 0.71 m away, s2 slot 0 (0.7, −3) is
       √(4.2² + 0.5²) = 4.23 m. Ann's map position becomes (−3, −3).
-      Bob "sitting" → s2 slot 0 (s1 full). Cid "sitting" → s2 slot 1.
-      Dan "sitting" → None (no free seat), his position (−3.5, −3.5) is
-      untouched and his profile carries no place. Bob "reading" keeps
+      Bob "sitting" → s2 slot 0: s1 is full, and from (−2.7, −3.5) slot 0
+      (0.7, −3) is √(3.4² + 0.5²) = 3.44 m while slot 1 (1.3, −3) is
+      √(4.0² + 0.5²) = 4.03 m. Cid "sitting" → s2 slot 1 (the only one
+      left). Dan "sitting" → None (no free seat), his position (−1.1, −3.5)
+      is untouched and his profile carries no place. Bob "reading" keeps
       s2 slot 0 (same group). Bob "sleeping" → b1 (group change frees
       s2 slot 0), Bob stands at (−2, 0); Dan "sitting" now gets s2 slot 0.
       occupancy: s1 [Ann/0], s2 [Dan/0, Cid/1], b1 [Bob/0].
@@ -44,7 +54,7 @@ Hand-derived expectations:
       from s1 (−3, −3) — with assign(prefer="s1") takes s1 anyway, position
       (−3, −3). Eve (never placed) with assign(prefer="s1") raises
       PlaceUnavailable, her profile stays without a place and her position
-      (−3.5, −3.5) is untouched. The inventory is cached: after b1 is
+      (−0.3, −3.5) is untouched. The inventory is cached: after b1 is
       removed from the layout, room_places still lists it until
       invalidate(); afterwards Bob's held b1 reads as no place.
   [4] The setter. Ann holds s1 without a pose: clear_pose_intent releases
@@ -357,16 +367,37 @@ def person(name: str, x: float, z: float) -> None:
     save_character_current_room(name, "lounge")
 
 
-for _n in ("Ann", "Bob", "Cid", "Dan", "Eve"):
-    person(_n, -3.5, -3.5)
+#: Where each character starts. ONE POINT EACH, deliberately: writing the
+#: room runs ``room_stand.stand_up``, which keeps ``near`` when ``near`` is
+#: free and otherwise walks the character to the nearest free raster point.
+#: A free point needs MATE_CLEAR_M = 0.70 m to everybody else in the room and
+#: WALL_CLEAR_M = 0.35 m to every room edge (app/core/room_stand.py). Five
+#: characters on one point means four forced walks — and the checks below ask
+#: where an UNMOVED bystander stands, so the fixture must not walk anybody.
+#: The row lies at z = −3.5, i.e. 0.5 m off the room's south edge (z = −4),
+#: and runs from x = −3.5 (0.5 m off the west edge, x = −4) eastwards in
+#: steps of 0.8 m > 0.70 m. Every point is therefore free for the character
+#: that takes it, and stand_up writes nothing.
+#: Ann keeps (−3.5, −3.5) because [2] measures her distance to the two seats
+#: from there.
+START = {"Ann": (-3.5, -3.5), "Bob": (-2.7, -3.5), "Cid": (-1.9, -3.5),
+         "Dan": (-1.1, -3.5), "Eve": (-0.3, -3.5)}
+for _n, (_x, _z) in START.items():
+    person(_n, _x, _z)
 
 
 def field(place_id: str, slot) -> dict:
     return {"id": place_id, "slot": slot, "room_id": "lounge"}
 
 
+# ── [0] the fixture itself ──────────────────────────────────────────────
+print("[0] fixture")
+check("every start point survives the room write — nobody is walked",
+      all(get_character_pos(n) == {"x": x, "z": z} for n, (x, z) in START.items()),
+      str({n: get_character_pos(n) for n in START}))
+
 # ── [1] inventory ───────────────────────────────────────────────────────
-print("[1] inventory")
+print("\n[1] inventory")
 pl = {p["id"]: p for p in places.room_places(HOUSE, "lounge")}
 check("three places", sorted(pl) == ["b1", "s1", "s2"], str(sorted(pl)))
 check("s1 slot is (−3, −3)", pl.get("s1", {}).get("slots") == [[-3.0, -3.0]],
@@ -400,7 +431,7 @@ check("Cid → s2/1", places.assign("Cid", "sitting") == field("s2", 1))
 check("Cid stands on slot 1", get_character_pos("Cid") == {"x": 1.3, "z": -3.0},
       str(get_character_pos("Cid")))
 check("Dan → None (no free seat)", places.assign("Dan", "sitting") is None)
-check("Dan's position untouched", get_character_pos("Dan") == {"x": -3.5, "z": -3.5},
+check("Dan's position untouched", get_character_pos("Dan") == {"x": -1.1, "z": -3.5},
       str(get_character_pos("Dan")))
 check("Dan holds no place", not (get_character_profile("Dan") or {}).get("place"))
 check("Bob keeps s2/0 on reading (same group)",
@@ -450,7 +481,7 @@ try:
 except places.PlaceUnavailable as e:
     check("prefer on a taken s1 raises PlaceUnavailable", True, str(e))
 check("Eve holds no place", not (get_character_profile("Eve") or {}).get("place"))
-check("Eve's position untouched", get_character_pos("Eve") == {"x": -3.5, "z": -3.5})
+check("Eve's position untouched", get_character_pos("Eve") == {"x": -0.3, "z": -3.5})
 check("PlaceUnavailable is a ValueError", issubclass(places.PlaceUnavailable, ValueError))
 
 write_layout([m for m in MARKERS if m["id"] != "b1"])

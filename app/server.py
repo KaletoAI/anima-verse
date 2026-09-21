@@ -892,6 +892,10 @@ app.include_router(observer_route.router)
 app.include_router(play_route.router)
 app.include_router(api_images_route.router)
 app.include_router(assist_route.router)
+from app.routes import shared_lists as shared_lists_route
+app.include_router(shared_lists_route.router)
+from app.routes import thumbnails as thumbnails_route
+app.include_router(thumbnails_route.router)
 
 # Static files (the legacy vanilla-JS UI in templates/index.html was removed)
 app.mount("/static", StaticFiles(directory="static"), name="static")

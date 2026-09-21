@@ -1,27 +1,10 @@
 import { type Dispatch, type SetStateAction } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+import { useMoods } from '../../lib/moods'
 import { Field } from '../../components/Field'
 import type { LocationRef, RoomRef } from '../../lib/refs'
 import { roomLabel } from '../world/worldTypes'
 import type { CurrentLocation, DraftPlacement } from './CharactersTab'
-
-// Canonical moods — kept in sync with shared/config/moods.json. Updating
-// the file requires updating this list, but moods rarely change so the
-// duplication is acceptable; alternative would be a /moods endpoint.
-const MOODS: Array<{ id: string; label: string }> = [
-  { id: 'pleased', label: 'pleased' },
-  { id: 'happy', label: 'happy' },
-  { id: 'relaxed', label: 'relaxed' },
-  { id: 'refreshed', label: 'refreshed' },
-  { id: 'creative', label: 'creative' },
-  { id: 'chatty', label: 'chatty' },
-  { id: 'chatting', label: 'chatting' },
-  { id: 'exuberant', label: 'exuberant' },
-  { id: 'euphoric', label: 'euphoric' },
-  { id: 'exhausted', label: 'exhausted' },
-  { id: 'drunk', label: 'drunk' },
-  { id: 'sweating', label: 'sweating' },
-]
 
 /**
  * Editable "current state" placement — rendered as a special slot
@@ -43,6 +26,7 @@ export function PlacementEditor({
   rooms: RoomRef[]
 }) {
   const { t } = useI18n()
+  const moods = useMoods()
   return (
     <>
       <div className="ga-form-row">
@@ -107,12 +91,12 @@ export function PlacementEditor({
             onChange={(e) => setDraft({ ...draft, feeling: e.target.value })}
           >
             <option value="">— {t('none')} —</option>
-            {draft.feeling && !MOODS.some((m) => m.id === draft.feeling) ? (
+            {draft.feeling && !moods.includes(draft.feeling) ? (
               <option value={draft.feeling}>{draft.feeling}</option>
             ) : null}
-            {MOODS.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
+            {moods.map((m) => (
+              <option key={m} value={m}>
+                {m}
               </option>
             ))}
           </select>

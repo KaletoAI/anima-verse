@@ -1,18 +1,20 @@
 import { useRef } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
+import { useMoods } from '../lib/moods'
 
 /**
  * Two-column editor for activity / item effects.
  *
  * Left: textarea where each line is `key: value`. Right: clickable stats
- * (numeric `_change` keys derived from character templates) and moods
- * (from shared/config/moods.json). Clicking a stat appends
- * `<stat>_change: ` to the textarea on a fresh line; clicking a mood
- * appends `mood_influence: <id>`.
+ * (numeric `_change` keys derived from character templates) and moods.
+ * Clicking a stat appends `<stat>_change: ` to the textarea on a fresh
+ * line; clicking a mood appends `mood_influence: <id>`.
  *
- * The lists are loaded once per mount; if either fetch fails we fall
- * back to a hard-coded canonical set so the editor stays useful even
- * without the optional endpoints.
+ * The moods come from the server (`shared/config/moods.json` via
+ * `useMoods`), so this editor and the character placement editor offer the
+ * same list — the two hand-kept copies had already drifted apart. The chips
+ * are quick-insert helpers, not validation: any key and any mood can be
+ * typed straight into the textarea.
  */
 const FALLBACK_STATS = [
   'stamina',
@@ -24,20 +26,6 @@ const FALLBACK_STATS = [
   'submission',
   'popularity',
   'trustworthiness',
-]
-
-const FALLBACK_MOODS = [
-  'pleased',
-  'happy',
-  'relaxed',
-  'refreshed',
-  'creative',
-  'chatty',
-  'exuberant',
-  'euphoric',
-  'exhausted',
-  'drunk',
-  'sweating',
 ]
 
 export function EffectsEditor({
@@ -52,12 +40,10 @@ export function EffectsEditor({
   placeholder?: string
 }) {
   const { t } = useI18n()
-  // Hard-coded canonical lists — stats come from the character templates
-  // and moods from shared/config/moods.json. Users can still type any
-  // custom key directly in the textarea; the chips are quick-insert
-  // helpers, not validation. If the canonical lists drift, update these.
+  // Stats are still the hard-coded canonical set from the character
+  // templates; moods come from the shared catalog on the server.
   const stats = FALLBACK_STATS
-  const moods = FALLBACK_MOODS
+  const moods = useMoods()
   const taRef = useRef<HTMLTextAreaElement | null>(null)
 
   const appendLine = (line: string) => {

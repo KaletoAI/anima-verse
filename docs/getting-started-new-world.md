@@ -6,6 +6,8 @@ Infermatic) in the [README](../README.md#getting-started).
 
 > If a step is unclear, see [`images/getting-started/`](images/getting-started/) for a
 > few annotated screenshots. They are not linked inline, since UIs evolve faster than screenshots.
+> The two `llm-routing-*.png` show the OLDER single-page "LLM Routing" mask (one `+ Add LLM`
+> list, task rows with a free order number); routing is three pages today — see step 3.
 
 1. **Start the server with a brand-new world name.** Pick any name that does not yet exist under
    `worlds/`:
@@ -45,6 +47,11 @@ Infermatic) in the [README](../README.md#getting-started).
    - **LLM Models (Simple)** — pick a provider + model per job category (chat / tools / helper /
      vision / embedding). This fills the advanced routing automatically. Embedding can run built-in
      ("Internal") with no external endpoint.
+   - **LLM Routing** (the advanced view, only if you want to route a single job differently) has
+     **three** pages: **Tasks** — one row per task with its ordered chain of LLM entries (the
+     order IS the position, you do not type a number); **LLMs** — the entries themselves
+     (provider, model, sampling, `Lanes`); **Overview** — what the server resolves right now.
+     A task nobody routed falls back to its parent, so you never have to fill all of them.
    - *(optional)* **Image Backends**, **TTS** — only for the corresponding features.
    - *(optional)* **Telegram** — `Webhook secret token` (`telegram.webhook_secret`). Until it is
      set, `POST /telegram/webhook` is **refused** for every caller. Pass the same value as
@@ -59,9 +66,12 @@ Infermatic) in the [README](../README.md#getting-started).
 4. **Create your first character.** Character creation lives in the game UI, not in
    `/admin/settings`. Open the **Game-Admin** at `/game-admin` → **Characters → `+ New`**:
 
-   1. Pick a template — e.g. **Human (Roleplay)** for a typical chat partner. Others:
-      `Human (Default)` (pure NPC), `Animal (Default)`, `Human (Roleplay NSFW)`, plus anything you
-      add under `shared/templates/character/`.
+   1. Pick a template — e.g. **Human (Roleplay)** for a typical chat partner. This repo ships
+      three more: **Human Standard** (pure NPC), **Animal**, and **Temporary NPC** (for the
+      short-lived NPCs the world spawns by itself). `Character Base` is the shared base every one
+      of them inherits from and is not offered. Further templates — including the NSFW ones — come
+      with a content/skill package from the marketplace, or you add your own under
+      `shared/templates/character/`.
    2. Enter a name (e.g. `Rowan Kell`).
    3. The template-driven editor opens on the new character — fill in appearance, personality
       (soul), outfits, etc. The character is auto-added to your access list.

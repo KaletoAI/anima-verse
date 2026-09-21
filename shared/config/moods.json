@@ -1,9 +1,9 @@
 {
   "_meta": {
-    "purpose": "Canonical mood catalog. The mood-influence field on activities (and similar mood-source state) stores values from this catalog as English IDs. UI rendering looks up the localized label via shared/languages/<lang>.json — the keys are the IDs verbatim (e.g. 'pleased', 'exhausted'). Adding a new mood: append an entry here, then add the same id as a key to each languages/*.json with the localized translation.",
+    "purpose": "Mood suggestion catalog. A mood is FREE TEXT in the backend — `current_feeling` is stored verbatim and `mood_influence` is applied verbatim (app/core/activity_engine.py -> apply_effects), and nothing validates either against this list; app/core/expression_pose_maps.py resolves whatever text arrives onto an expression key. So this file is the curated list the ADMIN UI offers, not a vocabulary: it is the single source for the mood picker in the character placement editor and for the mood chips in the effects editor, served by GET /admin/shared-lists/moods (app/routes/shared_lists.py). Adding a mood: append an entry here, then add the same id as a key to each shared/languages/*.json with the localized label. Order is the display order.",
     "schema": {
       "id": "canonical English identifier — used as the value of mood_influence and current_feeling",
-      "label_de": "OPTIONAL display label in German (UI)"
+      "label_de": "OPTIONAL German label for reference; UI rendering looks the label up in shared/languages/<lang>.json, where the ids are the keys verbatim"
     }
   },
   "moods": [

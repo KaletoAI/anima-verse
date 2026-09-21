@@ -1823,10 +1823,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "RELATIONSHIP_SUMMARY_ENABLED", rel.get("summary_enabled", True))
     _set(env, "RELATIONSHIP_SUMMARY_INTERVAL_MINUTES", rel.get("summary_interval_minutes", 120))
 
-    # Social
-    sr = config.get("social_reactions", {})
-    _set(env, "SOCIAL_REACTIONS_ENABLED", sr.get("enabled", True))
-
     # Thoughts — AgentLoop pacing.
     # AgentLoop liest die Werte direkt via config.get() (kein env-Bridge
     # mehr noetig); Mapping bleibt nur fuer Backward-Compat falls Code

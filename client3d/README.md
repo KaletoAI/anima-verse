@@ -50,8 +50,20 @@ npm run build -w client3d            # tsc --noEmit && vite build -> client3d/di
 ANIMA_API=http://<server>:8000 npm run dev -w client3d
 ```
 
-Der Vite-Dev-Proxy leitet `/auth /play /world /characters /state /events /assets`
-dorthin weiter. `CLIENT3D_PORT` verschiebt den Port, wenn 5183 belegt ist.
+Welche Präfixe der Vite-Dev-Proxy dorthin weiterleitet, steht im Array
+`proxied` in [`vite.config.ts`](vite.config.ts) — das ist die maßgebliche
+Liste, nicht diese hier. Stand heute sind es 16:
+
+```
+/auth /play /world /characters /state /events /assets /account /tts
+/chat /inventory /queue /i18n /diary /instagram /static
+```
+
+Die Liste muss **vollständig** bleiben: ein fehlendes Präfix liefert keinen 404,
+sondern Vites `index.html` — der Aufrufer bekommt 200 + HTML, `res.json()`
+scheitert und der Fehler platzt weit weg von der Ursache. `CLIENT3D_PORT`
+verschiebt den Port, wenn 5183 belegt ist.
+(`scripts/smoke_docs_client3d_readme.py` hält Liste und Config zusammen.)
 
 ## Verify (§ B5a)
 
@@ -80,7 +92,13 @@ als Zonen AUF der Modelloberfläche. Ihr Payload-Raumeintrag trägt `overlay`
 
 ## Architektur
 
-- Vite + TypeScript + Three.js (vanilla, bewusst kein React), CSS2DRenderer für Labels.
+- Vite + TypeScript + Three.js, CSS2DRenderer für Labels. Die **Szene** ist
+  vanilla Three.js — kein React, kein Framework darin. Das **HUD** dagegen ist
+  React: `src/hud/` enthält acht `.tsx`-Dateien (`Hud`, `GameMenu`, `Minimap`,
+  `PerfOverlay`, `TitleScreen`, `CharacterPlaque`, `ChatPortraits`, `mount`)
+  und zieht die geteilten Spieler-Panels aus `@anima/player-ui`; `react`,
+  `react-dom` und `@vitejs/plugin-react` stehen entsprechend in der
+  `package.json`.
 - `@anima/scene-render` — geteilt mit der Admin-Vorschau: `placeModelSpec()`
   (§ B2), Raum-Clip (§ B1), Verify-Diff (§ B5a), die Primitiv-Builder
   (Platte/Wand/Extra-Box/Platzhalter) samt ihren Verify-Soll-Feldern und die
