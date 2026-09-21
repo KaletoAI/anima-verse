@@ -755,9 +755,11 @@ async def prompt_filters_import(
 ):
     """Import a states ZIP. Default merges; replace_all=true wipes first."""
     from app.core.content_io import import_states_from_zip
+    from app.core.upload_limits import max_pack_bytes, read_upload_capped
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    content = await read_upload_capped(file, max_bytes=max_pack_bytes(),
+                                       what="States ZIP")
     try:
         return import_states_from_zip(content, replace_all=replace_all)
     except ValueError as e:

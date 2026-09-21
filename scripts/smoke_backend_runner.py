@@ -10,7 +10,7 @@ Usage:  ./.venv/bin/python scripts/smoke_backend_runner.py
 
 THE RULE, and where it was dead code
 ---------------------------------------------------------------------------
-``run_on_backend`` (app/imagegen/selection.py) documents five outcomes:
+``run_on_backend`` (app/imagegen/selection.py) documents six outcomes:
 
   - ``BackendBusyError``  = load, not a defect -> NO cooldown, re-raised
     typed so the queue boundary retries it.
@@ -21,6 +21,8 @@ THE RULE, and where it was dead code
     cannot deliver, so a quota error IS a cooldown (decision E3).
   - ``NoBackendChannelError`` = the config disabled this backend (or left it
     without a URL) -> no cooldown, re-raised typed so it is skipped.
+  - ``TooManyJobsError`` = the submitter's own per-user job quota -> no
+    cooldown, re-raised typed (429).
   - every other exception -> ``mark_unhealthy(..., 300s)``, re-raised.
   - empty result -> ``mark_unhealthy(..., 300s)`` + ``RuntimeError``.
 
@@ -44,6 +46,13 @@ Hand-derived expectations
       mark_unhealthy 1x.
   [4b] op raises ``RuntimeError("... (HTTP 402): no credit")`` -> cooldown,
       mark_unhealthy 1x — the deliberate exception to [1].
+  [4d] op raises ``TooManyJobsError`` (the SUBMITTER is already at
+      ``server.max_inflight_jobs_per_user``, so ``submit_gpu_task`` refused
+      before the job was queued): mark_unhealthy 0x, ``available`` still
+      True, re-raised TYPED — it carries status 429 and IS the answer the
+      caller sends. Without its own branch it fell into the generic one
+      (``_re_4xx`` does not match 429) and ONE user hitting his quota took
+      a healthy backend away from everyone else for 300 s.
   [4c] op raises ``NoBackendChannelError`` (app/core/provider_manager — the
       named backend has no queue channel, i.e. the config disabled it or it
       has no URL) -> the SAME treatment as busy: mark_unhealthy 0x,
@@ -68,13 +77,34 @@ Hand-derived expectations
       to the default selection and says so itself, so the pool announcing
       "fail-fast" for the same event produced a contradictory log pair.
 """
+import atexit
 import logging
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+
+def _scratch(prefix: str) -> str:
+    path = tempfile.mkdtemp(prefix=prefix)
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
+
+
+# Throwaway storage and clip library BEFORE the first app import: the queue
+# modules imported below resolve their DB path from paths, and without this
+# the default world would be worlds/demo, which is tracked in git.
+os.environ["ANIMATION_CLIPS_DIR"] = _scratch("backend-runner-clips-")
+
+from app.core import paths  # noqa: E402
+
+paths.init(_scratch("backend-runner-storage-"))
+
 from app.core.provider_manager import NoBackendChannelError  # noqa: E402
+from app.core.provider_queue import TooManyJobsError  # noqa: E402
 from app.imagegen.base import BackendBusyError, ImageBackend  # noqa: E402
 from app.imagegen import selection as selection_mod  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
@@ -153,6 +183,12 @@ run_case("no-channel",
          _raiser(NoBackendChannelError(
              "Backend 'fake' has no queue channel (disabled or without API URL)")),
          "NoBackendChannelError", 0, True)
+
+print("[4d] a user's own job quota is not a backend defect")
+run_case("too-many-jobs", _raiser(TooManyJobsError(4, 4, "generation job")),
+         "TooManyJobsError", 0, True)
+check("too-many-jobs: the 429 reaches the caller",
+      TooManyJobsError(4, 4, "generation job").status_code, 429)
 
 print("[5] openai_diffusion hands the HTTP error on instead of swallowing it")
 for label, method, kwargs in (

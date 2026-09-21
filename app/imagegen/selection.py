@@ -11,6 +11,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
+from app.core.provider_queue import TooManyJobsError
 from app.imagegen.base import (BackendBusyError, GatewayRejectedError,
                                ImageBackend)
 
@@ -290,6 +291,11 @@ class BackendPool:
           the request, or a job died on the input we sent): backend stays
           available (the service is reachable, the request is broken) —
           re-raised.
+        - TooManyJobsError = the SUBMITTER's own quota
+          (``server.max_inflight_jobs_per_user``), refused before the job was
+          queued: no cooldown, re-raised typed so the 429 reaches the caller.
+          Blaming the backend for one user's load would take it away from
+          everyone else for 5 minutes, which is exactly backwards.
         - NoBackendChannelError = a CONFIGURATION statement, not a defect: the
           backend has no queue channel because it is disabled or has no URL.
           A cooldown on it would be meaningless (it is not selectable anyway)
@@ -315,6 +321,13 @@ class BackendPool:
             # typed exception survives to the retry layer.
             logger.warning("Backend-Runner: %s ausgelastet — kein Cooldown, "
                            "kein Backend-Wechsel", backend.name)
+            raise
+        except TooManyJobsError:
+            # The user asked for more parallel jobs than he may have. Nothing
+            # was queued and the backend never saw the request — it is healthy
+            # and stays in the pool. Typed re-raise: it IS the 429 answer.
+            logger.warning("Backend-Runner: %s — per-user job limit reached, "
+                           "no cooldown", backend.name)
             raise
         except _no_channel_error() as e:
             # A backend without a queue channel is a backend the config

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from app.core.timeutils import parse_iso, utc_now
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import quote
 
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import HTMLResponse
@@ -172,9 +173,12 @@ def activity_feed(hours: int = Query(24, ge=0)):
                 beat_meta = {}
                 scene_img = beat.get("scene_image")
                 if scene_img and scene_img.get("filename") and scene_img.get("character"):
+                    # Both segments are DATA (a character name, a stored file
+                    # name): percent-encode them, or a name with a space, a
+                    # "#" or a "?" builds a URL that points somewhere else.
                     beat_meta["image_url"] = (
-                        f"/characters/{scene_img['character']}/images/"
-                        f"{scene_img['filename']}"
+                        f"/characters/{quote(str(scene_img['character']), safe='')}"
+                        f"/images/{quote(str(scene_img['filename']), safe='')}"
                     )
                 events.append({
                     "type": "story_beat",

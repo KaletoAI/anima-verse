@@ -18,6 +18,9 @@ image has to look like:
   rejects an image whose pixel count would blow up on decode.
 
 The cap is ``server.max_upload_mb`` (Admin → Settings → Server), default 25.
+Two kinds of upload have their own, deliberately larger ceiling:
+:data:`MODEL_UPLOAD_MAX_BYTES` for a 3D model (GLB/FBX + texture) and
+:func:`max_pack_bytes` for a ZIP import, which is the marketplace's own cap.
 ``config.get`` returns ``None`` for a plain scalar until the settings page has
 been saved once — ``migrate_file()`` seeds no scalar defaults — so the schema
 default is the fallback, the same shape ``server._cors_origins`` uses.
@@ -40,6 +43,14 @@ _CHUNK = 1024 * 1024
 #: ``MAX_IMAGE_PIXELS`` (~178 MP) stays untouched: it is a process-wide global
 #: and the generation pipeline must not be re-tuned from an upload guard.
 MAX_IMAGE_PIXELS = 64_000_000
+
+#: Cap for an uploaded 3D MODEL (GLB/FBX + its texture). Deliberately its own
+#: number and not ``server.max_upload_mb``: a rigged character mesh with an
+#: embedded 2K texture is tens of megabytes, while the player-facing image cap
+#: is meant to stay small. It is the ONE ceiling for every model upload route
+#: (character, location, room, prop) — each of them used to carry its own copy
+#: of the same 100 MB.
+MODEL_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 
 #: Magic-byte prefixes per image format. WebP needs the second check below
 #: ("RIFF" + 4 size bytes + "WEBP"), so it is not in this table.
@@ -75,6 +86,21 @@ def max_upload_bytes() -> int:
     except (TypeError, ValueError):
         mb = int(field["default"])
     return max(int(field["min"]), min(int(field["max"]), mb)) * 1024 * 1024
+
+
+def max_pack_bytes() -> int:
+    """The configured cap for an uploaded ZIP pack, in bytes.
+
+    An import route takes a whole content pack (a character, a location, a
+    prop, an item bundle, a states block), which is legitimately far bigger
+    than a picture — so it gets the marketplace's cap
+    (``content_marketplace.max_pack_mb``, default 500 MB) instead of
+    ``server.max_upload_mb``. Delegates to the ONE function that reads that
+    field, so an upload and a catalog download can never drift apart; the
+    import is local because that function lives in the marketplace route.
+    """
+    from app.routes.content_packs import _max_pack_mb
+    return _max_pack_mb() * 1024 * 1024
 
 
 def _mb(nbytes: int) -> str:
@@ -142,6 +168,19 @@ def sniff_image_format(data: bytes) -> str:
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "webp"
     return ""
+
+
+def ensure_mp4(data: bytes, *, what: str = "video") -> None:
+    """Validate uploaded bytes as an MP4 by its ``ftyp`` box (415 otherwise).
+
+    The character gallery accepts short clips beside its pictures, and a clip
+    is checked the same way a picture is: by what the bytes say, not by the
+    name. An ISO base-media file starts with a box length followed by the
+    ``ftyp`` type at offset 4.
+    """
+    if len(data) < 12 or data[4:8] != b"ftyp":
+        raise HTTPException(status_code=415,
+                            detail=f"{what} is not an MP4 file")
 
 
 def ensure_image(data: bytes, *, filename: str = "",

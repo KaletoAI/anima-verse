@@ -25,6 +25,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 
+from fastapi import HTTPException
+
 from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,6 +41,122 @@ logger = get_logger("provider_queue")
 
 class _CancelledByUser(Exception):
     """Internal signal: task was cancelled by user."""
+
+
+# ── Per-user job admission (SEC-7) ────────────────────────────────────────
+#
+# An ordinary logged-in user could ask for generation work in a loop: every
+# request enqueued another image/video/mesh job, the GPU was taken for as long
+# as the script kept running, and with a cloud provider every one of them cost
+# money. The gate is deliberately NOT a rate limit over time but a cap on what
+# is OWED at one moment: N jobs in flight per user, the (N+1)-th refused BEFORE
+# anything is queued, and finishing one frees the slot again.
+#
+# WHO a job belongs to is read from ``auth_dependency.current_user_ctx`` — the
+# ContextVar the request middleware sets. It survives a route body running in
+# the threadpool and an ``asyncio.to_thread`` hop (both copy the caller's
+# context), but NOT a bare ``threading.Thread``: work handed to one of those
+# arrives here with no user and counts as the server's own. That is the same
+# rule the server's real background work falls under (agent loop, scheduler,
+# tickers, queue workers) — it is never limited, and neither is an admin.
+#
+# The persistent queue (``task_queue.TaskQueue.submit``) is deliberately NOT
+# capped: it carries ENGINE work — intents, memory consolidation, NPC assets —
+# that merely runs on whichever thread triggered it, so a quota there would
+# drop exactly that work while the GPU stays as reachable as before. It
+# records the submitter for the queue view and admits everything.
+
+class TooManyJobsError(HTTPException):
+    """One user asked for more work at once than the cap allows.
+
+    An ``HTTPException`` on purpose: that is the ONE place the refusal is
+    mapped to a status code, so every route the exception leaves answers 429
+    through FastAPI's built-in handler and no route has to learn about the
+    cap. Raised before the task exists — nothing is queued.
+    """
+
+    def __init__(self, running: int, cap: int, what: str = "job"):
+        self.running = running
+        self.cap = cap
+        super().__init__(
+            status_code=429,
+            detail=(f"Too many {what}s in flight ({running} of {cap}). "
+                    "Wait for one to finish before starting another "
+                    "(server.max_inflight_jobs_per_user)."))
+
+
+_inflight_lock = threading.Lock()
+#: user id -> number of GPU jobs this user currently has in flight.
+_inflight_jobs: Dict[str, int] = {}
+
+
+def max_inflight_jobs_per_user() -> int:
+    """The configured per-user in-flight cap (``server.max_inflight_jobs_per_user``).
+
+    Unset, empty or unparsable falls back to the SCHEMA default: ``config.get``
+    returns None for a plain scalar until the settings page has been saved once
+    (same quirk ``upload_limits.max_upload_bytes`` works around). 0 = unlimited.
+    """
+    from app.core import config
+    from app.core.config_schema import SECTIONS
+    field = SECTIONS["server"]["fields"]["max_inflight_jobs_per_user"]
+    raw = config.get("server.max_inflight_jobs_per_user", None)
+    if raw is None or raw == "":
+        raw = field["default"]
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(field["default"])
+    return max(int(field["min"]), min(int(field["max"]), value))
+
+
+def limited_user_key() -> str:
+    """The id of the user this submission is limited for, "" when none is.
+
+    "" means unlimited and covers both cases deliberately: an admin, and work
+    that reaches the queue without a user in the context — the server's own.
+    """
+    from app.core import users
+    from app.core.auth_dependency import get_current_user_from_ctx
+    user = get_current_user_from_ctx()
+    if not user or user.get("role") == users.ROLE_ADMIN:
+        return ""
+    return str(user.get("id") or user.get("username") or "")
+
+
+@contextmanager
+def user_job_slot(what: str = "generation job"):
+    """Hold one of the current user's in-flight slots for the block.
+
+    Raises :class:`TooManyJobsError` instead of entering the block when the
+    user is already at the cap. A no-op (no bookkeeping at all) for an admin,
+    for server-internal work and while the cap is 0.
+    """
+    key = limited_user_key()
+    cap = max_inflight_jobs_per_user() if key else 0
+    if not key or cap <= 0:
+        yield
+        return
+    with _inflight_lock:
+        running = _inflight_jobs.get(key, 0)
+        if running >= cap:
+            raise TooManyJobsError(running, cap, what)
+        _inflight_jobs[key] = running + 1
+    try:
+        yield
+    finally:
+        with _inflight_lock:
+            left = _inflight_jobs.get(key, 1) - 1
+            if left > 0:
+                _inflight_jobs[key] = left
+            else:
+                _inflight_jobs.pop(key, None)
+
+
+def inflight_jobs_snapshot() -> Dict[str, int]:
+    """Copy of the per-user in-flight counters (admin panel / checks)."""
+    with _inflight_lock:
+        return dict(_inflight_jobs)
 
 
 def _trace_fields() -> Tuple[str, str]:
@@ -415,7 +533,25 @@ class ProviderQueue:
         The callable runs while holding the GPU slot (semaphore). Used for image
         generation on backends that share a GPU with this LLM provider.
         Blocks until the callable completes and returns its result.
+
+        Admission first (SEC-7): a non-admin user who already has
+        ``server.max_inflight_jobs_per_user`` jobs owed gets a
+        :class:`TooManyJobsError` (429) here, before the task exists. Because
+        this call blocks for the whole life of the job, holding the slot for
+        the duration of the method IS the in-flight count — the slot comes
+        back however the job ends, including a cancel or a failure.
         """
+        with user_job_slot("generation job"):
+            return self._submit_gpu_task(task_type, priority, callable_fn,
+                                         agent_name=agent_name, label=label)
+
+    def _submit_gpu_task(
+        self,
+        task_type: str,
+        priority: int,
+        callable_fn,
+        agent_name: str = "", label: str = "") -> Any:
+        """The queueing half of :meth:`submit_gpu_task`, past the admission."""
         task = LLMTask(
             task_id=f"gpu_{uuid.uuid4().hex[:8]}",
             task_type=task_type,

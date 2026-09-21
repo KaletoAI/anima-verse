@@ -42,9 +42,6 @@ logger = get_logger("prop_variants")
 
 router = APIRouter(prefix="/world", tags=["world"])
 
-#: Same ceiling as the unqualified upload route.
-_PROP_MODEL_MAX_BYTES = 100 * 1024 * 1024
-
 
 def _variant(prop_id: str, index: int) -> int:
     """Validate prop + variant index, or raise the 404. Returns the index."""
@@ -547,11 +544,12 @@ async def prop_variant_upload(prop_id: str, index: int,
     same ``force`` escape hatch as the unqualified upload route)."""
     from app.core.model_validate import validate_static_glb
     from app.core.props import save_uploaded_glb
+    from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES,
+                                        read_upload_capped)
     from app.routes.world import _tier
     _variant(prop_id, index)
-    contents = await file.read()
-    if len(contents) > _PROP_MODEL_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="Model too large")
+    contents = await read_upload_capped(file, max_bytes=MODEL_UPLOAD_MAX_BYTES,
+                                        what="Prop model")
     result = validate_static_glb(contents)
     forced = str(force or "").strip().lower() in ("1", "true", "yes")
     if not result["ok"] and not forced:

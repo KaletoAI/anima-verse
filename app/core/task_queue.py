@@ -270,12 +270,27 @@ class TaskQueue:
         deduplicate: if True, skip submission when a task with the same
                      task_type is already pending or running.
                      Returns empty string if skipped.
+
+        The SUBMITTER is recorded: ``auth_dependency.current_user_ctx`` (the
+        ContextVar the request middleware sets) is written to the ``user_id``
+        column, which existed but was never filled — it makes a row in the
+        queue view attributable. Empty means the server's own work: the agent
+        loop, the scheduler, a ticker, or an admin, whose rows are not
+        attributed to a player. Nothing is refused here. This queue carries
+        ENGINE work — intents, memory consolidation, NPC assets — that merely
+        happens to run on whichever thread triggered it, so a per-user quota
+        would drop exactly that work and protect nothing; the GPU jobs a user
+        can really flood with are admitted in
+        ``ProviderQueue.submit_gpu_task``.
         """
         if max_retries < 0:
             max_retries = MAX_RETRIES_DEFAULT
 
         if not queue_name:
             queue_name = "background"
+
+        from app.core.provider_queue import limited_user_key
+        user_id = limited_user_key()
 
         task_id = f"task_{uuid.uuid4().hex[:12]}"
         now = utc_now_iso()
@@ -294,12 +309,12 @@ class TaskQueue:
             conn.execute(
                 """INSERT INTO tasks
                    (task_id, queue_name, task_type, priority, status, payload,
-                    created_at, agent_name, max_retries)
-                   VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
+                    created_at, agent_name, user_id, max_retries)
+                   VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
                 (
                     task_id, queue_name, task_type, priority,
                     json.dumps(payload, ensure_ascii=False),
-                    now, agent_name, max_retries))
+                    now, agent_name, user_id, max_retries))
             conn.commit()
 
         logger.info(

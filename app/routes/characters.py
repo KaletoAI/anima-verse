@@ -11,6 +11,9 @@ from typing import Dict, Any, List, Optional
 from app.core.auth_dependency import require_admin
 from app.core.http_files import etag_file_response
 from app.core.log import get_logger
+from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
+                                    ensure_mp4, guard_content_length,
+                                    max_pack_bytes, read_upload_capped)
 
 logger = get_logger("characters")
 
@@ -1388,6 +1391,7 @@ def _update_config_route_sync(character_name: str,
 async def upload_character_image(character_name: str, request: Request) -> Dict[str, Any]:
     """Laedt ein Bild hoch"""
     try:
+        guard_content_length(request, what="Gallery file")
         form = await request.form()
         file = form.get("file")
 
@@ -1406,7 +1410,13 @@ async def upload_character_image(character_name: str, request: Request) -> Dict[
         image_filename = f"{character_name}_{timestamp}{file_ext}"
         image_path = images_dir / image_filename
 
-        contents = await file.read()
+        # Size and type from the BYTES, not from the name (SEC-7): the
+        # gallery serves what lands here back to every client.
+        contents = await read_upload_capped(file, what="Gallery file")
+        if filename.endswith(".mp4"):
+            ensure_mp4(contents, what="Gallery clip")
+        else:
+            ensure_image(contents, filename=filename, what="Gallery image")
         image_path.write_bytes(contents)
 
         add_character_image(character_name, image_filename)
@@ -1544,8 +1554,7 @@ def get_character_outfit_image(character_name: str, image_filename: str):
 # An uploaded model is the manual OVERRIDE; without one the routes serve the
 # generated mesh of the currently worn outfit (app/core/model3d.py), so a
 # client has exactly one place to ask.
-
-_MODEL_MAX_BYTES = 100 * 1024 * 1024
+# The size ceiling for an upload is upload_limits.MODEL_UPLOAD_MAX_BYTES.
 
 
 def _resolve_character_model(character_name: str):
@@ -1778,6 +1787,9 @@ async def upload_character_model3d(character_name: str, request: Request) -> Dic
     try:
         from app.core.model_validate import validate_fbx, validate_glb
         from app.core.model3d import save_uploaded_model
+        # Model + texture together, so twice the ceiling is the honest bound.
+        guard_content_length(request, max_bytes=2 * MODEL_UPLOAD_MAX_BYTES,
+                             what="Character model")
         form = await request.form()
         file = form.get("file")
         if not file:
@@ -1789,13 +1801,12 @@ async def upload_character_model3d(character_name: str, request: Request) -> Dic
         if not get_character_dir(character_name).exists():
             raise HTTPException(status_code=404, detail="Character not found")
 
-        contents = await file.read()
-        if len(contents) > _MODEL_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+        contents = await read_upload_capped(
+            file, max_bytes=MODEL_UPLOAD_MAX_BYTES, what="Character model")
         tex_file = form.get("texture")
-        texture = await tex_file.read() if tex_file else None
-        if texture is not None and len(texture) > _MODEL_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="Texture too large")
+        texture = await read_upload_capped(
+            tex_file, max_bytes=MODEL_UPLOAD_MAX_BYTES,
+            what="Model texture") if tex_file else None
 
         if filename.endswith(".glb"):
             result = validate_glb(contents)
@@ -2746,7 +2757,8 @@ async def import_character(
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
 
-    content = await file.read()
+    content = await read_upload_capped(file, max_bytes=max_pack_bytes(),
+                                       what="Character ZIP")
     try:
         return import_character_from_zip(content, overwrite=overwrite)
     except FileExistsError as e:

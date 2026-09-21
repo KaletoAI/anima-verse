@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from app.core.log import get_logger
 from app.core.auth_dependency import require_admin
+from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
+                                    guard_content_length, max_pack_bytes,
+                                    read_upload_capped)
 
 logger = get_logger("world")
 
@@ -862,8 +865,7 @@ def delete_location_route(
 # Source is a gallery image of type "building-<view>"; generation goes through
 # the mesh backend (rig "none") on the queue channel. Auth matches the other
 # location-content routes (create/update/delete) — no separate admin gate.
-
-_LOCATION_MODEL_MAX_BYTES = 100 * 1024 * 1024
+# The size ceiling for every model upload is upload_limits.MODEL_UPLOAD_MAX_BYTES.
 
 
 @router.get("/locations/{location_id}/model3d/status")
@@ -1129,6 +1131,8 @@ async def location_model3d_upload(location_id: str, request: Request) -> Dict[st
     from app.core.model_validate import validate_static_glb
     if not get_location_by_id(location_id):
         raise HTTPException(status_code=404, detail="Location not found")
+    guard_content_length(request, max_bytes=MODEL_UPLOAD_MAX_BYTES,
+                         what="Building model")
     form = await request.form()
     file = form.get("file")
     if not file:
@@ -1136,9 +1140,8 @@ async def location_model3d_upload(location_id: str, request: Request) -> Dict[st
     if not (file.filename or "").lower().endswith(".glb"):
         raise HTTPException(status_code=400,
                             detail="Building models must be a GLB (embedded texture, no rig)")
-    contents = await file.read()
-    if len(contents) > _LOCATION_MODEL_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+    contents = await read_upload_capped(file, max_bytes=MODEL_UPLOAD_MAX_BYTES,
+                                        what="Building model")
     result = validate_static_glb(contents)
     force = str(form.get("force") or "").strip().lower() in ("1", "true", "yes")
     if not result["ok"] and not force:
@@ -1510,6 +1513,8 @@ async def room_model3d_upload(location_id: str, room_id: str,
     from app.core.location_model3d import save_uploaded_building
     from app.core.model_validate import validate_static_glb
     _require_room(location_id, room_id)
+    guard_content_length(request, max_bytes=MODEL_UPLOAD_MAX_BYTES,
+                         what="Room model")
     form = await request.form()
     file = form.get("file")
     if not file:
@@ -1517,9 +1522,8 @@ async def room_model3d_upload(location_id: str, room_id: str,
     if not (file.filename or "").lower().endswith(".glb"):
         raise HTTPException(status_code=400,
                             detail="Room models must be a GLB (embedded texture, no rig)")
-    contents = await file.read()
-    if len(contents) > _LOCATION_MODEL_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+    contents = await read_upload_capped(file, max_bytes=MODEL_UPLOAD_MAX_BYTES,
+                                        what="Room model")
     result = validate_static_glb(contents)
     force = str(form.get("force") or "").strip().lower() in ("1", "true", "yes")
     if not result["ok"] and not force:
@@ -1843,7 +1847,8 @@ async def surface_texture_upload(kind: str, file: UploadFile = File(...),
     generation this may CREATE the kind: pass ``kind`` as ``-`` and a ``name``
     form field, and the server derives the id and answers with it."""
     from app.core.surface_textures import save_uploaded
-    contents = await file.read()
+    contents = await read_upload_capped(file, what="Texture")
+    ensure_image(contents, filename=(file.filename or ""), what="Texture")
     res = save_uploaded("" if kind == "-" else kind, contents, name=name)
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail=res.get("error") or "upload failed")
@@ -1907,11 +1912,6 @@ def surface_texture_delete(kind: str, file: str = "") -> Dict[str, Any]:
 # Prop library CRUD (single furnishing objects). Read-serving is /assets/props;
 # the 3D map client reads the library from there. Placement into a room (the
 # room recipe) is Fable's part and lives elsewhere.
-
-_PROP_MODEL_MAX_BYTES = 100 * 1024 * 1024
-#: A product shot is stored downscaled to 1024 px — anything beyond this is a
-#: file that was never meant to be one.
-_PROP_SOURCE_MAX_BYTES = 20 * 1024 * 1024
 
 
 @router.get("/props")
@@ -2065,7 +2065,8 @@ async def import_prop_route(
     from app.core.content_io import import_prop_from_zip
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    content = await read_upload_capped(file, max_bytes=max_pack_bytes(),
+                                       what="Prop ZIP")
     try:
         return import_prop_from_zip(content, overwrite=overwrite)
     except ValueError as e:
@@ -2406,9 +2407,8 @@ async def prop_upload(prop_id: str, file: UploadFile = File(...),
     if not (file.filename or "").lower().endswith(".glb"):
         raise HTTPException(status_code=400,
                             detail="Props must be a GLB (embedded texture, no rig)")
-    contents = await file.read()
-    if len(contents) > _PROP_MODEL_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
+    contents = await read_upload_capped(file, max_bytes=MODEL_UPLOAD_MAX_BYTES,
+                                        what="Prop model")
     result = validate_static_glb(contents)
     forced = str(force or "").strip().lower() in ("1", "true", "yes")
     if not result["ok"] and not forced:
@@ -2440,9 +2440,8 @@ async def _prop_source_upload(prop_id: str, file: UploadFile,
         raise HTTPException(status_code=400, detail="view must be front, back, left or right")
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
-    contents = await file.read()
-    if len(contents) > _PROP_SOURCE_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="Image too large (max 20 MB)")
+    contents = await read_upload_capped(file, what="Product shot")
+    ensure_image(contents, filename=(file.filename or ""), what="Product shot")
     if not save_source_image(prop_id, contents, variant, view=view):
         raise HTTPException(status_code=400, detail="Not a readable image")
     return {"status": "ok"}
@@ -2888,7 +2887,8 @@ async def import_map_layout_route(
     from app.core.content_io import import_map_layout_from_zip
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    content = await read_upload_capped(file, max_bytes=max_pack_bytes(),
+                                       what="Map layout ZIP")
     try:
         return import_map_layout_from_zip(content)
     except ValueError as e:
@@ -2922,7 +2922,8 @@ async def import_location_route(
     from app.core.content_io import import_location_from_zip
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    content = await read_upload_capped(file, max_bytes=max_pack_bytes(),
+                                       what="Location ZIP")
     try:
         return import_location_from_zip(content)
     except ValueError as e:
@@ -2987,15 +2988,18 @@ async def upload_location_background(location_name: str, request: Request) -> Di
     Orts, registriert es als Background und mappt es ggf. auf den Raum —
     derselbe Speicher-/Registrierpfad wie die Generierung.
     """
+    guard_content_length(request, what="Background image")
     form = await request.form()
     file = form.get("file")
     room_id = (form.get("room_id") or "").strip() if isinstance(form.get("room_id"), str) else ""
     if not file:
         raise HTTPException(status_code=400, detail="file fehlt")
 
+    filename = getattr(file, "filename", "") or ""
+    contents = await read_upload_capped(file, what="Background image")
+    ensure_image(contents, filename=filename, what="Background image")
     return world_ops.save_uploaded_background(
-        location_name, getattr(file, "filename", "") or "",
-        await file.read(), room_id)
+        location_name, filename, contents, room_id)
 
 
 @router.post("/locations/{location_name}/background")

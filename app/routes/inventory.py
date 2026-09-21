@@ -95,7 +95,9 @@ async def import_item_route(
     from app.core.content_io import import_item_from_zip, import_bundle_from_zip
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
-    content = await file.read()
+    from app.core.upload_limits import max_pack_bytes, read_upload_capped
+    content = await read_upload_capped(file, max_bytes=max_pack_bytes(),
+                                       what="Item ZIP")
     # Sniff manifest to decide single vs bundle.
     import zipfile, json as _json
     try:

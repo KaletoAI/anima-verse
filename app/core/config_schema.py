@@ -68,6 +68,22 @@ SECTIONS = {
                                "Content packs keep their own, much larger cap — see "
                                "Content Marketplace → Max pack size.",
             },
+            "max_inflight_jobs_per_user": {
+                "type": "int",
+                "label": "Max jobs in flight per user",
+                "default": 4,
+                "min": 0,
+                "max": 1000,
+                "description": "How many image/video/mesh jobs ONE non-admin user may "
+                               "have running on the generation backends at the same "
+                               "time. A further request is refused with 429 before "
+                               "anything is queued, so a script in a loop can no longer "
+                               "take the GPU for itself; the backend is not blamed for "
+                               "it and keeps serving everyone else. Admins and the "
+                               "server's own work (agent loop, scheduler, tickers) are "
+                               "never limited, and background tasks of the persistent "
+                               "queue do not count. 0 = unlimited.",
+            },
             "cors_origins": {
                 "type": "text",
                 "label": "Allowed CORS origins",
