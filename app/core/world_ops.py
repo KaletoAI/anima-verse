@@ -477,18 +477,23 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
 
     characters = []
     for name in list_available_characters():
-        loc_id = get_character_current_location(name) or ""
-        pos = get_character_pos(name)
-        if not loc_id and pos is None:
-            continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
-        # ONE profile load per character, shared by the fog gate below, the
-        # journey, the animation-set chain and the height — this loop runs per
-        # character on every worldmap request.
+        # ONE profile load per character — it is the FIRST thing read, and
+        # every reader below takes it as ``profile=``: location, room, target,
+        # profile image, activity, pose key, sleep flag, journey, animation
+        # sets, height, interaction and place all live in this one dict
+        # (``get_character_profile`` merges the character_state columns in).
+        # This loop runs per character on a 3-second poll per connected
+        # client, so a second load of the same blob is pure waste: it costs
+        # two SQLite queries, a json.loads and a deep-copied template each.
         try:
             from app.models.character import get_character_profile as _gcp
             _prof = _gcp(name) or {}
         except Exception:
             _prof = {}
+        loc_id = get_character_current_location(name, profile=_prof) or ""
+        pos = get_character_pos(name)
+        if not loc_id and pos is None:
+            continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
         # The active journey (or None), read BEFORE the fog gate because the
         # wilderness rule asks whether this character is travelling.
         # NOTE: this reader can WRITE — a stored v1 journey (cell path) is
@@ -536,12 +541,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # in it.
         if name != avatar and _under_veil(loc_id, pos):
             continue
-        mt = get_movement_target(name) or ""
-        prof = get_character_profile_image(name) or ""
-        activity = get_effective_activity(name) or ""
+        mt = get_movement_target(name, profile=_prof) or ""
+        prof = get_character_profile_image(name, profile=_prof) or ""
+        activity = get_effective_activity(name, profile=_prof) or ""
         # The DISPLAY text above, the render KEY here — the animation is
         # resolved from the catalog key, never from the free-text flavor.
-        pose_key = get_effective_pose_key(name) or ""
+        pose_key = get_effective_pose_key(name, profile=_prof) or ""
         # AV3D-6: which clip a 3D figure plays. The KIND comes from the pose
         # catalog entry's `animation`, the SET from the character (its clip
         # family: lady/man/dog/…). Both may be empty — then the client keeps
@@ -674,7 +679,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # only fall back to the location centre when it is null.
             "pos": pos,
             "height_cm": cm,
-            "room_id": get_character_current_room(name) or "",
+            "room_id": get_character_current_room(name, profile=_prof) or "",
             "activity": activity,
             "activity_animation": _bridge or resolve_pose_animation(pose_key),
             "animation_set": (anim_sets[0] if anim_sets else ""),
@@ -2815,20 +2820,17 @@ async def generate_location_background(location_name: str,
     params["seed"] = _rnd.randint(1, 2**31 - 1)
 
     # Backend fallback engine: tries primary, falls back to the next
-    # available backend on failure. Local GPU backends go through the
-    # GPU provider queue → never two in parallel per backend.
+    # available backend on failure. EVERY backend goes through its
+    # per-backend GPU queue channel → never two in parallel per backend.
     _log_meta = {"agent_name": location.get("name", location_name),
                  "original_prompt": prompt, "auto_enhance": False,
                  "compose": _composed.meta}
     def _op(b):
-        if getattr(b, "api_type", "") == "a1111":
-            from app.core.llm_queue import get_llm_queue, Priority as _P
-            return get_llm_queue().submit_gpu_task(
-                provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
-                callable_fn=lambda: b.generate(full_prompt, negative, params,
-                                               log_meta=_log_meta),
-                agent_name=location.get("name", location_name), gpu_type=b.api_type)
-        return b.generate(full_prompt, negative, params, log_meta=_log_meta)
+        return img_skill.run_on_backend_channel(
+            b,
+            lambda: b.generate(full_prompt, negative, params, log_meta=_log_meta),
+            task_type="image_gen",
+            agent_name=location.get("name", location_name))
     try:
         images, backend = await asyncio.to_thread(
             lambda: img_skill.run_on_backend(backend, op=_op))
@@ -3367,13 +3369,9 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                     except Exception:
                         pass
                     return b.generate(full_prompt, negative, params, log_meta=_log_meta)
-                if getattr(b, "api_type", "") == "a1111":
-                    from app.core.llm_queue import get_llm_queue, Priority as _P
-                    return get_llm_queue().submit_gpu_task(
-                        provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
-                        callable_fn=_gen, agent_name=location.get("name", location_name),
-                        gpu_type=b.api_type)
-                return _gen()
+                return img_skill.run_on_backend_channel(
+                    b, _gen, task_type="image_gen",
+                    agent_name=location.get("name", location_name))
             try:
                 images, backend = await asyncio.to_thread(
                     lambda: img_skill.run_on_backend(backend, op=_op))
@@ -3635,13 +3633,9 @@ async def generate_time_variant_core(location_name: str, image_name: str,
                 except Exception:
                     pass
                 return b.generate(full_prompt, negative, params, log_meta=_log_meta)
-            if getattr(b, "api_type", "") == "a1111":
-                from app.core.llm_queue import get_llm_queue, Priority as _P
-                return get_llm_queue().submit_gpu_task(
-                    provider_name=b.name, task_type="image_gen", priority=_P.IMAGE_GEN,
-                    callable_fn=_gen, agent_name=location.get("name", location_name),
-                    gpu_type=b.api_type)
-            return _gen()
+            return img_skill.run_on_backend_channel(
+                b, _gen, task_type="image_gen",
+                agent_name=location.get("name", location_name))
         try:
             images, backend = await asyncio.to_thread(
                 lambda: img_skill.run_on_backend(backend, op=_op))
