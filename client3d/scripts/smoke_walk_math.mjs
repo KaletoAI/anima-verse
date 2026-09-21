@@ -808,7 +808,7 @@
  * figure onto the slab above it.
  *
  * --- THE HEADLINE OF E5: built and natural are ONE chain -------------------
- * § A19 no. 2 of docs/schnittstellen-3d.md states the ladder in one line:
+ * § A16.9 of docs/schnittstellen-3d.md states the ladder in one line:
  *
  *     storey_floor_y(level, storey) = level·storey + (0 if level == 0 else 0.08)
  *
@@ -4934,7 +4934,7 @@ async function main() {
     recipeFloorAt([{ top: 3.08, outline: CONTOUR }], 3.0, -2.0, UP), 3.08);
 
   console.log('\nground — the HEADLINE: built and natural are ONE chain');
-  // Hand-derived from § A19 no. 2, both columns, storey 2.8 m, no dials:
+  // Hand-derived from § A16.9, both columns, storey 2.8 m, no dials:
   //   storey_floor_y(0, 2.8) = 0·2.8 + 0 = 0.00        (the terrain)
   //   _plate_top(level 0)    = 0.00                     for EVERY kind of room
   //   prop    bottom_y = 0.00 + 0.00 + PROP_CLEARANCE    0.01 = 0.01
@@ -4943,7 +4943,7 @@ async function main() {
   const PROP_CLEARANCE = 0.01;        // server, hand-quoted
   const DIORAMA_CLEARANCE = 0.02;     // server, hand-quoted
   const STOREY_M = 2.8;
-  /** § A19 no. 2 in one line, written out here rather than imported — the
+  /** § A16.9 in one line, written out here rather than imported — the
    *  point of a derivation is that it is independent of the thing it checks. */
   const storeyFloorY = (level, storey) => level * storey + (level === 0 ? 0 : 0.08);
   const plateTop = (level, kind) => (level === 0 ? 0

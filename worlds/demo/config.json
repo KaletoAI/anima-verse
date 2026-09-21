@@ -3,9 +3,9 @@
     {
       "name": "LocalAI",
       "enabled": true,
-      "serialize_group": "4070",
+      "serialize_group": "gpu0",
       "api_key": "",
-      "api_base": "http://192.168.8.197:8080/v1",
+      "api_base": "http://localhost:8080/v1",
       "timeout": 300,
       "type": "openai",
       "max_concurrent": 1
@@ -23,10 +23,6 @@
         },
         {
           "task": "story_stream",
-          "order": 1
-        },
-        {
-          "task": "group_chat_stream",
           "order": 1
         },
         {
@@ -118,9 +114,9 @@
       {
         "name": "LocalAI-Flux",
         "enabled": true,
-        "serialize_group": "4070",
+        "serialize_group": "gpu0",
         "api_type": "localai",
-        "api_url": "http://192.168.8.197:8080",
+        "api_url": "http://localhost:8080",
         "api_key": "",
         "model": "flux.2-klein-4b",
         "cost": 1,
@@ -132,9 +128,9 @@
       {
         "name": "LocalAI-ZImage",
         "enabled": true,
-        "serialize_group": "4070",
+        "serialize_group": "gpu0",
         "api_type": "localai",
-        "api_url": "http://192.168.8.197:8080",
+        "api_url": "http://localhost:8080",
         "api_key": "",
         "model": "Z-Image-Turbo",
         "cost": 1,
@@ -602,74 +598,8 @@
     "postprocess_enabled": false,
     "postprocess_trigger_url": "",
     "location_image_width": 512,
-    "location_image_height": 512,
-    "lora_triggers": [
-      {
-        "lora": "Flux2-9B-BreastSlider(-10to16).safetensors",
-        "word": "",
-        "source": "manual",
-        "backends": [
-          "LocalAI-Flux9"
-        ],
-        "missing_on": []
-      },
-      {
-        "lora": "Flux1-Dev-RPGmaps_v5.safetensors",
-        "word": "rpgmap",
-        "source": "manual",
-        "backends": [
-          "LocalAI-Flux1-Dev"
-        ],
-        "missing_on": []
-      }
-    ]
+    "location_image_height": 512
   },
-  "log_level": "INFO",
-  "storage_dir": "./storage",
-  "short_term_days": 3,
-  "mid_term_days": 30,
-  "long_term_days": 90,
-  "max_messages": 100,
-  "max_semantic": 50,
-  "commitment_max_days": 5,
-  "commitment_completed_days": 3,
-  "service_url": "http://localhost:8005",
-  "service_port": 8005,
-  "service_det_size": 640,
-  "service_omp_num_threads": 4,
-  "service_enabled": true,
-  "service_debug": false,
-  "enabled": true,
-  "blend": 1,
-  "codeformer_weight": 0.7,
-  "color_correction": true,
-  "sharpen": true,
-  "sharpen_strength": 0.5,
-  "auto": false,
-  "chunk_size": 300,
-  "backend": "xtts",
-  "fallback_backend": "",
-  "max_prompt_entries": 20,
-  "max_entries": 200,
-  "daily_summary_days": 7,
-  "batch_size": 5,
-  "max_input_tokens": 12000,
-  "max_output_tokens": 1500,
-  "search_max_candidates": 50,
-  "search_max_return": 8,
-  "summary_enabled": true,
-  "summary_interval_minutes": 120,
-  "base_probability": 5,
-  "resolution_proactive": true,
-  "resolution_cooldown_minutes": 15,
-  "interval_hours": 24,
-  "min_memories": 5,
-  "max_active_arcs": 2,
-  "cooldown_hours": 6,
-  "max_beats": 5,
-  "beat_images": true,
-  "available_themes": "default,minimal,dark",
-  "prompt": "photorealistic modern smartphone, isolated on white, screen is pure chroma green, centered, no person, no reflection, top-down product photo",
   "skills": {
     "instagram": {
       "enabled": true
@@ -741,7 +671,6 @@
     "commitment_max_days": 5,
     "commitment_completed_days": 3
   },
-  "animation": {},
   "tts": {
     "enabled": false,
     "auto": false,
@@ -781,5 +710,6 @@
   },
   "messaging_frame": {
     "prompt": "photorealistic modern smartphone, isolated on white, screen is pure chroma green, centered, no person, no reflection, top-down product photo"
-  }
+  },
+  "llm_lanes_migrated": true
 }

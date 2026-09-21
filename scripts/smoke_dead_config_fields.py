@@ -12,7 +12,9 @@ normalises only in memory and NEVER touches a file, while the explicit
 idempotent. Before the split, every script that merely opened a world rewrote
 its tracked config.json.
 
-The fixture is the table of the 13 fields from the finding — written out by
+The fixture is the table of the 14 fields — the 13 of the finding plus
+``server.jwt_secret`` (2026-09-21: sessions are opaque random tokens, nothing
+signs a JWT) — written out by
 hand here, so the constant in app/core/config.py cannot quietly grow or
 shrink without this file disagreeing:
 
@@ -24,6 +26,7 @@ shrink without this file disagreeing:
     chat             : auto_wake_stamina
     inventory        : item_image_width, item_image_height
     random_events    : event_image_denoise_strength
+    server           : jwt_secret
 
 Beside the flat table there is a NESTED strip: ``image_generation.use_cases``
 entries whose render occasion is gone — ``map`` and ``mapfit``, removed with
@@ -111,6 +114,7 @@ EXPECTED_DEAD = {
     "chat": {"auto_wake_stamina"},
     "inventory": {"item_image_width", "item_image_height"},
     "random_events": {"event_image_denoise_strength"},
+    "server": {"jwt_secret"},
 }
 
 # The nested strip's table, by hand: use-case entries with no render occasion.
@@ -128,6 +132,7 @@ LIVING = {
     "inventory": {"max_items": 50},
     "random_events": {"enabled": True},
     "ui": {"downscale_item_max_dim": 768},                  # image_postprocess.py
+    "server": {"log_level": "INFO"},
 }
 
 
@@ -140,7 +145,7 @@ def check(cond, msg):
 
 
 def build_fixture() -> dict:
-    """A world config carrying all 13 dead fields plus living neighbours."""
+    """A world config carrying all 14 dead fields plus living neighbours."""
     cfg = copy.deepcopy(LIVING)
     dead_values = {
         "comfy_default_workflow": "flux.json",
@@ -156,6 +161,7 @@ def build_fixture() -> dict:
         "item_image_width": 512,
         "item_image_height": 512,
         "event_image_denoise_strength": 0.6,
+        "jwt_secret": "change-me",
     }
     for section, keys in EXPECTED_DEAD.items():
         for key in keys:
@@ -177,9 +183,9 @@ def main():
     print("1) the constant matches the finding's table")
     actual = {s: set(k) for s, k in cfgmod.DEAD_CONFIG_FIELDS.items()}
     check(actual == EXPECTED_DEAD,
-          f"DEAD_CONFIG_FIELDS == 13 fields of the table (got {actual})")
-    check(sum(len(v) for v in actual.values()) == 13,
-          "13 fields in total")
+          f"DEAD_CONFIG_FIELDS == 14 fields of the table (got {actual})")
+    check(sum(len(v) for v in actual.values()) == 14,
+          "14 fields in total")
     check(set(cfgmod.DEAD_USE_CASES) == EXPECTED_DEAD_USE_CASES,
           f"DEAD_USE_CASES == map + mapfit (got {set(cfgmod.DEAD_USE_CASES)})")
     check(not (EXPECTED_DEAD_USE_CASES & set(cfgmod._DEFAULT_IMAGE_USE_CASES)),
@@ -188,7 +194,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "config.json"
 
-        print("2) the strip removes exactly the 13 — in memory, no file")
+        print("2) the strip removes exactly the 14 — in memory, no file")
         cfg = build_fixture()
         changed = cfgmod._strip_dead_config_fields(cfg)
         check(changed is True, "returns True on the first run")
@@ -237,7 +243,7 @@ def main():
         print("5) top-level strays (worlds older than the sectioning)")
         check(set(cfgmod.DEAD_TOPLEVEL_FIELDS)
               == {k for keys in EXPECTED_DEAD.values() for k in keys},
-              "DEAD_TOPLEVEL_FIELDS == the same 13 names, flat")
+              "DEAD_TOPLEVEL_FIELDS == the same 14 names, flat")
         # worlds/demo and worlds/hotopia look exactly like this: the two item
         # sizes sit at the top level and there is NO inventory section.
         old = {

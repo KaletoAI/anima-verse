@@ -1177,7 +1177,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     roomPlateTop.set(plate.room_id, plate.top_y);
   }
 
-  // ── THE FLOORS OF THE ROOMS, as data (§ A19 no. 3, E5b) ─────────────────
+  // ── THE FLOORS OF THE ROOMS, as data (§ A16.9, E5b) ─────────────────────
   // One entry per room the payload gives a hull, and it is the ONLY frame the
   // room's centre, its stands, its label rectangle and its NPC huddle come out
   // of — the 6 x 6 raycast raster that used to find them is deleted.
@@ -1766,7 +1766,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     tile.declaredFloors.push({ roomId: room.room_id, top, outline: room.outline });
   }
 
-  // ── The stands of every room, from DATA (§ A19 no. 3, E5b) ──────────────
+  // ── The stands of every room, from DATA (§ A16.9, E5b) ──────────────────
   // A diorama's `walk_y_world` is the strongest declaration there is (§ B6
   // no. 7) and outranks the storey plate / overlay height already written into
   // the entry; it is folded in HERE because the models arrive asynchronously.

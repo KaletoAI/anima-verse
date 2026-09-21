@@ -54,8 +54,8 @@ DB_PATH = _load_env_db_path()
 # ---------------------------------------------------------------------------
 def _connect() -> sqlite3.Connection:
     if not DB_PATH.exists():
-        print(f"FEHLER: Datenbank nicht gefunden: {DB_PATH}", file=sys.stderr)
-        print("Starte zuerst den Server oder prüfe TASK_QUEUE_DB in .env", file=sys.stderr)
+        print(f"ERROR: database not found: {DB_PATH}", file=sys.stderr)
+        print("Start the server first, or check TASK_QUEUE_DB in .env", file=sys.stderr)
         sys.exit(1)
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -114,10 +114,10 @@ def cmd_list(args: argparse.Namespace) -> None:
     conn.close()
 
     if not rows:
-        print("Keine Tasks gefunden.")
+        print("No tasks found.")
         return
 
-    print(f"{'TASK_ID':<20} {'QUEUE':<12} {'TYPE':<28} {'PRIO':>4} {'STATUS':<11} {'CREATED':<16} {'AGENT':<14} {'ERR'}")
+    print(f"{'TASK_ID':<20} {'QUEUE':<12} {'TYPE':<28} {'PRIO':>4} {'STATUS':<11} {'CREATED':<16} {'CHARACTER':<14} {'ERR'}")
     print("-" * 115)
     for r in rows:
         err = (r["error"] or "")[:30]
@@ -126,9 +126,9 @@ def cmd_list(args: argparse.Namespace) -> None:
         print(
             f"{r['task_id']:<20} {r['queue_name']:<12} {r['task_type']:<28} "
             f"{r['priority']:>4} {_c(status_padded, r['status'])} "
-            f"{ts:<16} {(r['agent_name'] or ''):<14} {err}"
+            f"{ts:<16} {(r['character_name'] or ''):<14} {err}"
         )
-    print(f"\n{len(rows)} Task(s) angezeigt.")
+    print(f"\n{len(rows)} task(s) shown.")
 
 
 def cmd_info(args: argparse.Namespace) -> None:
@@ -138,7 +138,7 @@ def cmd_info(args: argparse.Namespace) -> None:
     ).fetchone()
     conn.close()
     if not row:
-        print(f"Task nicht gefunden: {args.task_id}")
+        print(f"Task not found: {args.task_id}")
         return
     d = dict(row)
     print(f"\n{'='*60}")
@@ -170,9 +170,9 @@ def cmd_cancel(args: argparse.Namespace) -> None:
     conn.commit()
     conn.close()
     if cur.rowcount:
-        print(f"✓ Task abgebrochen: {args.task_id}")
+        print(f"\u2713 Task cancelled: {args.task_id}")
     else:
-        print(f"Task nicht gefunden oder nicht 'pending': {args.task_id}")
+        print(f"Task not found, or not 'pending': {args.task_id}")
 
 
 def cmd_retry(args: argparse.Namespace) -> None:
@@ -187,10 +187,10 @@ def cmd_retry(args: argparse.Namespace) -> None:
     conn.commit()
     conn.close()
     if cur.rowcount:
-        print(f"✓ Task auf 'pending' zurückgesetzt: {args.task_id}")
-        print("  → Server-Worker wird den Task beim nächsten Zyklus aufnehmen.")
+        print(f"\u2713 Task reset to 'pending': {args.task_id}")
+        print("  -> the server worker picks it up on its next cycle.")
     else:
-        print(f"Task nicht gefunden oder nicht failed/cancelled: {args.task_id}")
+        print(f"Task not found, or not failed/cancelled: {args.task_id}")
 
 
 def cmd_move(args: argparse.Namespace) -> None:
@@ -202,9 +202,9 @@ def cmd_move(args: argparse.Namespace) -> None:
     conn.commit()
     conn.close()
     if cur.rowcount:
-        print(f"✓ Task verschoben: {args.task_id} → {args.queue}")
+        print(f"\u2713 Task moved: {args.task_id} -> {args.queue}")
     else:
-        print(f"Task nicht gefunden oder nicht 'pending': {args.task_id}")
+        print(f"Task not found, or not 'pending': {args.task_id}")
 
 
 def cmd_priority(args: argparse.Namespace) -> None:
@@ -216,9 +216,9 @@ def cmd_priority(args: argparse.Namespace) -> None:
     conn.commit()
     conn.close()
     if cur.rowcount:
-        print(f"✓ Priorität gesetzt: {args.task_id} → {args.priority}")
+        print(f"\u2713 Priority set: {args.task_id} -> {args.priority}")
     else:
-        print(f"Task nicht gefunden oder nicht 'pending': {args.task_id}")
+        print(f"Task not found, or not 'pending': {args.task_id}")
 
 
 def cmd_pause(args: argparse.Namespace) -> None:
@@ -232,8 +232,8 @@ def cmd_pause(args: argparse.Namespace) -> None:
     )
     conn.commit()
     conn.close()
-    print(f"✓ Queue pausiert: {args.queue}")
-    print("  → Laufende Tasks werden fertiggestellt. Neue Tasks warten.")
+    print(f"\u2713 Queue paused: {args.queue}")
+    print("  -> running tasks finish; new ones wait.")
 
 
 def cmd_resume(args: argparse.Namespace) -> None:
@@ -247,8 +247,8 @@ def cmd_resume(args: argparse.Namespace) -> None:
     )
     conn.commit()
     conn.close()
-    print(f"✓ Queue fortgesetzt: {args.queue}")
-    print("  → Server-Worker nimmt beim nächsten Zyklus wieder auf.")
+    print(f"\u2713 Queue resumed: {args.queue}")
+    print("  -> the server worker resumes on its next cycle.")
 
 
 def cmd_clear(args: argparse.Namespace) -> None:
@@ -262,12 +262,12 @@ def cmd_clear(args: argparse.Namespace) -> None:
     )
     conn.commit()
     conn.close()
-    print(f"✓ {cur.rowcount} Task(s) gelöscht (älter als {args.hours}h, status: {statuses})")
+    print(f"\u2713 {cur.rowcount} task(s) deleted (older than {args.hours}h, status: {statuses})")
 
 
 def cmd_stats(args: argparse.Namespace) -> None:
     conn = _connect()
-    print(f"\nDatenbank: {DB_PATH}\n")
+    print(f"\nDatabase: {DB_PATH}\n")
 
     # Per-queue stats
     queues = conn.execute(
@@ -282,7 +282,7 @@ def cmd_stats(args: argparse.Namespace) -> None:
     print("-" * 65)
     for q in queues:
         qn = q["queue_name"]
-        paused = "JA" if paused_map.get(qn) else "nein"
+        paused = "YES" if paused_map.get(qn) else "no"
         counts = {
             r["status"]: r["cnt"]
             for r in conn.execute(
@@ -300,9 +300,9 @@ def cmd_stats(args: argparse.Namespace) -> None:
     oldest = conn.execute(
         "SELECT created_at FROM tasks ORDER BY created_at ASC LIMIT 1"
     ).fetchone()
-    print(f"\nGesamt: {total} Tasks")
+    print(f"\nTotal: {total} tasks")
     if oldest:
-        print(f"Ältester Eintrag: {_fmt_dt(oldest[0])}")
+        print(f"Oldest entry: {_fmt_dt(oldest[0])}")
 
     # Failed tasks with errors
     failed = conn.execute(
@@ -310,7 +310,7 @@ def cmd_stats(args: argparse.Namespace) -> None:
         " WHERE status='failed' ORDER BY completed_at DESC LIMIT 5"
     ).fetchall()
     if failed:
-        print(f"\nLetzte Fehler:")
+        print("\nLatest errors:")
         for f in failed:
             print(f"  {f['task_id']} [{f['queue_name']}] {f['task_type']}: {(f['error'] or '')[:80]}")
 
@@ -322,67 +322,67 @@ def cmd_stats(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="TaskQueue CLI — Queue verwalten ohne Server",
+        description="TaskQueue CLI \u2014 manage the queue without the server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     # list
-    p_list = sub.add_parser("list", help="Tasks anzeigen")
-    p_list.add_argument("-q", "--queue", default="", help="Queue-Name filtern")
+    p_list = sub.add_parser("list", help="List tasks")
+    p_list.add_argument("-q", "--queue", default="", help="Filter by queue name")
     p_list.add_argument("-s", "--status", default="pending",
                         help="Status: pending|running|failed|cancelled|completed|all")
-    p_list.add_argument("-n", "--limit", type=int, default=50, help="Max Zeilen")
+    p_list.add_argument("-n", "--limit", type=int, default=50, help="Max rows")
     p_list.set_defaults(func=cmd_list)
 
     # info
-    p_info = sub.add_parser("info", help="Task-Details anzeigen")
+    p_info = sub.add_parser("info", help="Show task details")
     p_info.add_argument("task_id")
     p_info.set_defaults(func=cmd_info)
 
     # cancel
-    p_cancel = sub.add_parser("cancel", help="Pending Task abbrechen")
+    p_cancel = sub.add_parser("cancel", help="Cancel a pending task")
     p_cancel.add_argument("task_id")
     p_cancel.set_defaults(func=cmd_cancel)
 
     # retry
-    p_retry = sub.add_parser("retry", help="Fehlgeschlagenen Task wiederholen")
+    p_retry = sub.add_parser("retry", help="Retry a failed task")
     p_retry.add_argument("task_id")
     p_retry.set_defaults(func=cmd_retry)
 
     # move
-    p_move = sub.add_parser("move", help="Task in andere Queue verschieben")
+    p_move = sub.add_parser("move", help="Move a task to another queue")
     p_move.add_argument("task_id")
-    p_move.add_argument("queue", help="Ziel-Queue-Name")
+    p_move.add_argument("queue", help="Target queue name")
     p_move.set_defaults(func=cmd_move)
 
     # priority
-    p_prio = sub.add_parser("priority", help="Task-Priorität ändern (niedriger = schneller)")
+    p_prio = sub.add_parser("priority", help="Change a task's priority (lower = sooner)")
     p_prio.add_argument("task_id")
-    p_prio.add_argument("priority", type=int, help="Neue Priorität (z.B. 10=hoch, 30=niedrig)")
+    p_prio.add_argument("priority", type=int, help="New priority (e.g. 10=high, 30=low)")
     p_prio.set_defaults(func=cmd_priority)
 
     # pause
-    p_pause = sub.add_parser("pause", help="Queue pausieren")
-    p_pause.add_argument("queue", help="Queue-Name")
+    p_pause = sub.add_parser("pause", help="Pause a queue")
+    p_pause.add_argument("queue", help="Queue name")
     p_pause.set_defaults(func=cmd_pause)
 
     # resume
-    p_resume = sub.add_parser("resume", help="Queue fortsetzen")
-    p_resume.add_argument("queue", help="Queue-Name")
+    p_resume = sub.add_parser("resume", help="Resume a queue")
+    p_resume.add_argument("queue", help="Queue name")
     p_resume.set_defaults(func=cmd_resume)
 
     # clear
-    p_clear = sub.add_parser("clear", help="Alte abgeschlossene Tasks löschen")
+    p_clear = sub.add_parser("clear", help="Delete old finished tasks")
     p_clear.add_argument("--hours", type=float, default=24.0,
-                         help="Älter als N Stunden löschen (default: 24)")
+                         help="Delete entries older than N hours (default: 24)")
     p_clear.add_argument("--status", default="",
-                         help="Nur diesen Status löschen (completed/failed/cancelled)")
+                         help="Delete only this status (completed/failed/cancelled)")
     p_clear.set_defaults(func=cmd_clear)
 
     # stats
-    p_stats = sub.add_parser("stats", help="Queue-Statistiken")
+    p_stats = sub.add_parser("stats", help="Queue statistics")
     p_stats.set_defaults(func=cmd_stats)
 
     args = parser.parse_args()

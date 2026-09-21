@@ -8,16 +8,25 @@ also spot-checks the invariants that cannot be seen in a fixture: every
 primitive in world metres, every model spec complete for the ONE place()
 routine, every marker/doorway resolved.
 
+IT WORKS ON A COPY. ``worlds/demo`` is TRACKED in git, and the read path is
+not provably read-only: ``config.load`` normalises in memory but the world DB
+opens with ``PRAGMA journal_mode=WAL`` and every app module behind it may
+write. So the world directory is copied into a throwaway dir first and
+``paths.init`` is pointed at the COPY — the original is never opened. That
+also makes the run safe while the server has the real world open.
+
 Usage:  ./.venv/bin/python scripts/smoke_scene_demo.py [world_dir]
         (default world_dir = worlds/demo)
 """
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Contract § B1 — the top-level key list of the scene payload, read off the
-# spec block in docs/schnittstellen-3d.md § B1 (not off a run): the eighteen
+# spec block in docs/schnittstellen-3d.md § B1 (not off a run): the twenty
 # keys the composer ALWAYS answers with. ``exits`` used to be here and is
 # gone — a location's ways out are ``doorways[]`` (the finished thresholds of
 # plan-betreten-und-tueren.md § 4.1) and ``boundary_openings[]`` (§ B1 Nr. 13)
@@ -48,9 +57,20 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 
 def main() -> int:
-    world = sys.argv[1] if len(sys.argv) > 1 else "worlds/demo"
+    world = Path(sys.argv[1] if len(sys.argv) > 1 else "worlds/demo")
+    if not world.is_dir():
+        print(f"[skip] no world directory at {world}")
+        return 0
+    # The copy is what everything below opens — see the module docstring.
+    tmp = tempfile.TemporaryDirectory(prefix="smoke_scene_demo_")
+    copy = Path(tmp.name) / world.name
+    shutil.copytree(world, copy)
+    print(f"[copy] {world} -> {copy} (the tracked world is never opened)")
+
     import app.core.paths as paths
-    paths.init(world)
+    paths.init(str(copy))
+    assert paths.get_storage_dir().resolve() == copy.resolve(), \
+        f"storage root is {paths.get_storage_dir()}, not the copy"
     try:
         from app.core import config
         config.load(paths.get_config_path())
@@ -68,6 +88,7 @@ def main() -> int:
     best = max(locations, key=score) if locations else None
     if not best or score(best)[0] == 0:
         print(f"[skip] {world} has no location with a room layout")
+        tmp.cleanup()
         return 0
     loc_id = best.get("id") or ""
     print(f"\nLocation: {best.get('name')} ({loc_id}) — "
@@ -155,6 +176,7 @@ def main() -> int:
           == (len(sc["walls"]), len(sc["plates"]), len(sc["models"])))
 
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
+    tmp.cleanup()
     return 1 if FAILURES else 0
 
 

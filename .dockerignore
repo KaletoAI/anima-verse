@@ -16,9 +16,21 @@
 *.pyo
 .pids
 
-# Frontend-Quellen: NICHT im Image noetig — die gebauten Assets liegen
+# Frontend-/Client-Quellen: NICHT im Image noetig — die gebauten Assets liegen
 # bereits unter static/game_admin/ (committed). Spart den grossen node_modules-Transfer.
+# Der Dockerfile kopiert nur app/, static/, shared/, plugins/, worlds/, start.sh,
+# fetch_models.sh, pyproject.toml, README.md und docker/docker-entrypoint.sh —
+# alles andere hier ist reiner Context-Ballast.
 frontend
+client3d
+packages
+node_modules
+**/node_modules
+
+# Arbeitsstaende, die nie in ein Image gehoeren.
+development_instructions
+graphify-out
+.superpowers
 
 # Lokale Modell-Binaries (werden im Image via fetch_models.sh / Lazy-Download geholt)
 models

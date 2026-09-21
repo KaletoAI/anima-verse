@@ -405,7 +405,7 @@ worlds/{world}/
   world.db                  # primary data store (see above)
   task_queue.db             # persistent task queue
   config.json               # per-world config: LLM providers, media backends, TTS, routing, …
-  secrets.json              # API keys / JWT secret / passwords (gitignored, overlaid at load)
+  secrets.json              # API keys / passwords (gitignored, overlaid at load)
   world_setup.json          # optional per-world briefing injected into prompts
   knowledge/                # source files for the knowledge-extraction skill
   characters/{Name}/        # per-character galleries, generated images, outfits, soul/, 3D models

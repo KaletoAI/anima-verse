@@ -41,7 +41,7 @@ _BOOT_RESTART_SNAPSHOT: Optional[dict] = None
 
 # Fields that contain sensitive data (API keys, passwords, secrets)
 SENSITIVE_FIELDS = {
-    "api_key", "password", "jwt_secret", "secret", "auth_token",
+    "api_key", "password", "secret", "auth_token",
 }
 
 
@@ -1057,6 +1057,9 @@ DEAD_CONFIG_FIELDS: dict = {
         "scene_prompt_collage",
     ),
     "chat": ("auto_wake_stamina",),
+    # Sessions are opaque random tokens (app/core/sessions.py), nothing signs
+    # a JWT — the field was schema, validator warning and env bridge only.
+    "server": ("jwt_secret",),
     "inventory": ("item_image_width", "item_image_height"),
     "random_events": ("event_image_denoise_strength",),
 }
@@ -1682,7 +1685,6 @@ def _flatten_to_env(config: dict) -> None:
     # Server
     server = config.get("server", {})
     _set(env, "LOG_LEVEL", server.get("log_level", "INFO"))
-    _set(env, "JWT_SECRET", server.get("jwt_secret", ""))
     _set(env, "STORAGE_DIR", server.get("storage_dir", "./storage"))
 
     # Providers (1-indexed)
@@ -1710,8 +1712,6 @@ def _flatten_to_env(config: dict) -> None:
     # Image Generation
     ig = config.get("image_generation", {})
     _set(env, "SKILL_IMAGEGEN_ENABLED", ig.get("enabled", True))
-    _set(env, "SKILL_IMAGEGEN_NAME", ig.get("name", "ImageGenerator"))
-    _set(env, "SKILL_IMAGEGEN_DESCRIPTION", ig.get("description", ""))
     _set(env, "OUTFIT_IMAGE_WIDTH", ig.get("outfit_image_width", 832))
     _set(env, "OUTFIT_IMAGE_HEIGHT", ig.get("outfit_image_height", 1216))
     _set(env, "LOCATION_IMAGE_WIDTH", ig.get("location_image_width", 1280))
@@ -1792,18 +1792,15 @@ def _flatten_to_env(config: dict) -> None:
     # Skills
     skills = config.get("skills", {})
 
+    # The searx package reads its own settings through the plugin context
+    # (`skills.searx.*`, declared in plugins/searx/plugin.yaml). Only the
+    # ENABLED gate still has an env fallback (app/plugins/loader.py).
     searx = skills.get("searx", {})
     _set(env, "SKILL_SEARX_ENABLED", searx.get("enabled", False))
-    _set(env, "SKILL_SEARX_URL", searx.get("url", ""))
-    _set(env, "SKILL_SEARX_NAME", searx.get("name", "WebSearch"))
-    _set(env, "SKILL_SEARX_DESCRIPTION", searx.get("description", ""))
-    _set(env, "SKILL_SEARX_ENGINES", searx.get("engines", ""))
-    _set(env, "SKILL_SEARX_CATEGORIES", searx.get("categories", ""))
-    _set(env, "SKILL_SEARX_NUM_RESULTS", searx.get("num_results", 5))
 
+    # `name`/`description` of a skill come from its skills/<id>.md template
+    # since the plugin migration — the bridge used to set env vars nobody read.
     oc = skills.get("outfit_change", {})
-    _set(env, "SKILL_OUTFIT_CHANGE_NAME", oc.get("name", "ChangeOutfit"))
-    _set(env, "SKILL_OUTFIT_CHANGE_DESCRIPTION", oc.get("description", ""))
     _set(env, "SKILL_OUTFIT_CHANGE_GENERATE_IMAGE", oc.get("generate_image", True))
     _set(env, "SKILL_OUTFIT_CHANGE_LANGUAGE", oc.get("language", "en"))
     _set(env, "SKILL_OUTFIT_CHANGE_MAX_OUTFITS", oc.get("max_outfits", 10))

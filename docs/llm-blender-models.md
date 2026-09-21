@@ -102,15 +102,22 @@ it is showing. The feature works without an LLM; the LLM makes it interesting.
 
 | # | Source | Why |
 |---|---|---|
-| 1 | `map3d.outline` | the DRAWN building contour — the author said where the building is |
+| 1 | the drawn building contour of the **topmost storey** (`scene_recipe._outline_world(map3d, storeys-1)`) | the author said where the building is |
 | 2 | `map3d.boundary` | the drawn plot boundary — coarser, but authored |
 | 3 | union of the room shells (`room_recipe.compose_recipe`) | derived, and marked as such |
 
-**Known gap:** `scene_recipe._plates` no longer reads the bare `map3d.outline`.
-Since the per-storey outlines (2026-09-06) it resolves `map3d.level_outlines` for
-the level it draws, while `roof_model.footprint()` still reads `map3d.outline`
-only. A building that narrows upward therefore gets a roof sized to its ground
-floor. The third exists because a
+**The contour is per storey, and the roof takes the top one.** Since 2026-09-06
+`map3d.level_outlines` overrides `map3d.outline` from one storey upward, so a
+building that narrows as it rises has a different footprint on every level.
+`footprint()` therefore asks `scene_recipe._outline_world(map3d, storeys(loc) - 1)`
+— the very call `scene_recipe._plates` makes for the level it draws, cascade
+(`outline_source_level`: downward, stopping at the ground floor) and
+`map3d.outline` fallback included. Nothing is re-derived here; geometry lives in
+one place. Until this was fixed a narrowing tower got a roof cut to its widest
+storey — a brim hanging in the air. Existing roof GLBs are stored building
+models and are NOT re-cut: a roof already built keeps its old footprint until
+somebody presses **🏠 Generate roof (LLM) → Build roof** again in the location's
+`BuildingModelPanel` (World tab). The third source exists because a
 location may have rooms and neither of the drawn shapes; it is composed through
 `room_recipe` rather than read off `layout`, because that is where a room's
 outline is decided. No source at all → `ok: false`, and the route answers 409

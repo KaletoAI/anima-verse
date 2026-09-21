@@ -12,8 +12,8 @@
  * sit/lie targets came out of 36 rays shot down at the room's PLATE mesh: the
  * dominant 7 cm height bin was the floor, a reference ray at the door repaired
  * it where a generated mesh had holes, and everything within 12 cm of that
- * floor was a stand. Storey 0 has no plate to ray any more (§ A19 no. 1), so
- * the shape comes from `floor_plan` (§ A19 no. 3) and the height from the one
+ * floor was a stand. Storey 0 has no plate to ray any more (§ A16.9), so
+ * the shape comes from `floor_plan` (§ A16.9) and the height from the one
  * height function at the point being asked about. The rules under test are the
  * pure half of that, `client3d/src/game/ground.ts`; the lookups around them
  * live in `scene/tiles.deriveRoomSpots`.

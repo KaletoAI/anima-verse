@@ -99,7 +99,6 @@ from app.routes import secrets
 from app.routes import inventory
 from app.routes import account
 from app.routes import i18n as i18n_route
-from app.routes import state as state_route
 from app.routes import game_admin as game_admin_route
 from app.routes import world_setup as world_setup_route
 from app.routes import storyteller as storyteller_route
@@ -859,7 +858,6 @@ app.include_router(secrets.router, tags=["secrets"])
 app.include_router(inventory.router, tags=["inventory"])
 app.include_router(i18n_route.router, tags=["i18n"])
 app.include_router(account.router)
-app.include_router(state_route.router)
 app.include_router(game_admin_route.router)
 app.include_router(world_setup_route.router)
 app.include_router(storyteller_route.router)

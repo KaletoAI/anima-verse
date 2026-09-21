@@ -48,13 +48,6 @@ SECTIONS = {
                 "choices": ["DEBUG", "INFO", "WARNING", "ERROR"],
                 "default": "INFO",
             },
-            "jwt_secret": {
-                "type": "password",
-                "label": "JWT Secret",
-                "description": "Secret key for JWT token signing. Change in production!",
-                "sensitive": True,
-                "requires_restart": True,
-            },
             "max_upload_mb": {
                 "type": "int",
                 "label": "Max upload size (MB)",
@@ -883,16 +876,10 @@ SECTIONS = {
         "label": "Skills",
         "icon": "🛠",
         "subsections": {
-            "searx": {
-                "label": "SearX Web Search",
-                "fields": {
-                    "enabled": {"type": "bool", "label": "Enabled", "default": False},
-                    "url": {"type": "str", "label": "SearX URL"},
-                    "engines": {"type": "str", "label": "Engines", "default": "google,duckduckgo,bing", "description": "Comma-separated search engines"},
-                    "categories": {"type": "str", "label": "Categories", "default": "general"},
-                    "num_results": {"type": "int", "label": "Max results", "default": 5, "min": 1, "max": 50},
-                },
-            },
+            # SearX lives in plugins/searx/plugin.yaml — the core names no
+            # skill package (plan-skill-plugin-architecture.md R1), and a
+            # package carries its own admin section so deleting the folder
+            # takes the settings with it.
             "outfit_change": {
                 "label": "Outfit Change",
                 "fields": {
@@ -1514,7 +1501,7 @@ def iter_restart_required_paths() -> list:
     """Sammelt alle Schema-Pfade mit `requires_restart: true`.
 
     Liefert eine Liste von dot-notation Pfaden, die einem geladenen Config-Dict
-    entsprechen — z.B. ``server.jwt_secret`` oder
+    entsprechen — z.B. ``server.cors_origins`` oder
     ``providers[*].api_url`` (Wildcard fuer alle Array-Items).
     """
     paths = []

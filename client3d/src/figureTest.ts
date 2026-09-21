@@ -1,10 +1,12 @@
-// Diagnose-Seite: /figure-test.html?model=Kira&clip=idle
+// Diagnose-Seite: /figure-test.html?model=<Charaktername>&clip=idle
 // Rendert eine Figur isoliert, groß und neutral beleuchtet.
+// `model` ist PFLICHT: welche Charaktere es gibt, weiß nur die geladene Welt —
+// ein eingebauter Name wäre der Cast genau einer Welt.
 import * as THREE from 'three';
 import { FigureLibrary } from './scene/figures';
 
 const params = new URLSearchParams(location.search);
-const who = params.get('model') ?? 'Kira';
+const who = params.get('model') ?? '';
 const clipKind = (params.get('clip') ?? 'idle') as 'idle' | 'walk' | 'run';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -75,6 +77,16 @@ if (rawUrl) {
       document.title = 'Raw: ' + rawUrl;
     }
   });
+} else if (!who) {
+  document.title = 'Figur-Test: ?model= fehlt';
+  const hint = document.createElement('div');
+  hint.style.cssText =
+    'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
+    'font:16px/1.5 system-ui,sans-serif;color:#fff;text-align:center;padding:2rem';
+  hint.textContent =
+    'Kein Modell gewählt. Aufruf: /figure-test.html?model=<Charaktername>'
+    + ' (optional &clip=idle|walk|run, oder &raw=/models/x.glb).';
+  document.body.appendChild(hint);
 } else {
   const show = () => {
     const f = lib.instantiate(who);

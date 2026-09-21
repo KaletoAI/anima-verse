@@ -1,4 +1,4 @@
-"""SearX Search Plugin - Privacy-respecting Metasuchmaschine"""
+"""SearX search plugin - privacy-respecting meta search engine."""
 from typing import Any, Dict, List
 from urllib.parse import urlencode
 
@@ -9,15 +9,15 @@ from app.skills.base import ToolSpec
 
 class SearXPlugin(PluginSkill):
     """
-    SearX Search Skill fuer Web-Suchen ueber eine selbst-gehostete SearX-Instanz.
-    Nutzt die SearX JSON-API direkt fuer strukturierte Ergebnisse mit Titeln,
-    URLs, Snippets und Timestamps.
+    SearX search skill for web searches through a self-hosted SearX instance.
+    Uses the SearX JSON API directly for structured results with titles,
+    URLs, snippets and timestamps.
 
-    Konfiguration:
-        .env (Defaults):
-            SKILL_SEARX_URL, SKILL_SEARX_ENGINES, SKILL_SEARX_CATEGORIES,
-            SKILL_SEARX_NUM_RESULTS
-        Per-Agent (storage/users/{user}/agents/{agent}/skills/searx.json):
+    Configuration:
+        World config (admin: Settings -> Skills -> SearX Web Search), declared
+        by this package's own ``config_schema``:
+            skills.searx.url, .engines, .categories, .num_results
+        Per character:
             engines, categories, num_results
     """
 
@@ -29,29 +29,31 @@ class SearXPlugin(PluginSkill):
         self.name = "WebSearch"
         self.description = "Searches the web for current information via SearX meta search engine"
 
-        self.searx_host = ctx.get_env('SKILL_SEARX_URL', 'http://localhost:8888').rstrip('/')
+        self.searx_host = str(
+            ctx.get_config('skills.searx.url', 'http://localhost:8888')
+            or 'http://localhost:8888').rstrip('/')
 
         self._defaults = {
-            "engines": (ctx.get_env('SKILL_SEARX_ENGINES') or '').strip(),
-            "categories": (ctx.get_env('SKILL_SEARX_CATEGORIES') or '').strip(),
-            "num_results": ctx.get_env_int('SKILL_SEARX_NUM_RESULTS', 10),
+            "engines": str(ctx.get_config('skills.searx.engines') or '').strip(),
+            "categories": str(ctx.get_config('skills.searx.categories') or '').strip(),
+            "num_results": int(ctx.get_config('skills.searx.num_results', 5) or 5),
         }
 
-        # Teste Verbindung
+        # Connection test
         try:
             resp = ctx.http.get(
                 f"{self.searx_host}/search",
                 params={"q": "test", "format": "json"},
                 timeout=5)
             if resp.ok:
-                ctx.logger.info("SearX erreichbar: %s", self.searx_host)
+                ctx.logger.info("SearX reachable: %s", self.searx_host)
             else:
-                ctx.logger.warning("SearX nicht erreichbar: HTTP %d", resp.status_code)
+                ctx.logger.warning("SearX not reachable: HTTP %d", resp.status_code)
         except Exception as e:
-            ctx.logger.error("SearX Verbindungsfehler: %s", e)
+            ctx.logger.error("SearX connection error: %s", e)
 
     def _search(self, query: str, engines: str, categories: str, num_results: int) -> List[Dict]:
-        """Fuehrt eine Suche ueber die SearX JSON-API aus."""
+        """Run one search through the SearX JSON API."""
         params = {
             "q": query,
             "format": "json",
@@ -72,7 +74,12 @@ class SearXPlugin(PluginSkill):
         return results
 
     def _format_results(self, results: List[Dict], query: str) -> str:
-        """Formatiert Suchergebnisse als gut lesbaren Text fuer den LLM."""
+        """Format the search results as readable text for the LLM.
+
+        The wording stays German on purpose: the strings below are what the
+        LLM reads, and `save_as_memory` recognises a failed run by their
+        first word ("Fehler" / "Keine Ergebnisse").
+        """
         if not results:
             return f"Keine Ergebnisse fuer '{query}' gefunden."
 
@@ -138,25 +145,25 @@ class SearXPlugin(PluginSkill):
                 self.ctx.logger.debug("Engines: %s", engines)
             if categories:
                 self.ctx.logger.debug("Categories: %s", categories)
-            self.ctx.logger.debug("Max Ergebnisse: %d", num_results)
+            self.ctx.logger.debug("Max results: %d", num_results)
 
             results = self._search(query, engines, categories, num_results)
             formatted = self._format_results(results, query)
 
-            self.ctx.logger.info("%d Ergebnisse gefunden", len(results))
+            self.ctx.logger.info("%d result(s) found", len(results))
             return formatted
 
         except Exception as e:
-            self.ctx.logger.error("Fehler bei der Suche: %s", e)
+            self.ctx.logger.error("Search failed: %s", e)
             return f"Fehler bei der Suche: {e}"
 
     def memorize_result(self, result: str, character_name: str) -> bool:
-        """Speichert Web-Suchergebnisse als Memory (fuer Scheduler-Aufrufe)."""
+        """Store web search results as a memory (for scheduler calls)."""
         if not result or result.startswith("Fehler") or result.startswith("Keine Ergebnisse"):
             return False
         try:
             from app.models.memory import add_memory
-            # Ergebnis kuerzen — nur die ersten 1500 Zeichen sind relevant
+            # Shorten the result — only the first 1500 characters matter
             content = result[:1500]
             add_memory(
                 character_name=character_name,

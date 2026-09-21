@@ -22,7 +22,7 @@
  * relief. E2 took the terrain's own vertices into the vertex shader, E3 turned
  * every painted ground into a CUT in that one surface, E4 made the last drape —
  * the water — a FLAT mirror, and E5b deleted the scene's own 17 x 17 relief
- * (§ A19 no. 6). Nothing drapes anything any more, so
+ * (§ A16.1). Nothing drapes anything any more, so
  * `packages/scene-render/src/gridMesh.ts` and `terrain.ts` are deleted and
  * there is nothing left here to derive by hand.
  *

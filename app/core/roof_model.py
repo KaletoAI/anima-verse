@@ -229,16 +229,28 @@ def footprint(location: Dict[str, Any]) -> Dict[str, Any]:
     its level plates (``scene_recipe._plates``), plus one fallback it does not
     need because a location without any of them has no walls either:
 
-    1. ``map3d.outline`` — the DRAWN building contour. The author said where
+    1. the DRAWN building contour OF THE TOPMOST STOREY. The author said where
        the building is; nothing may outvote that.
     2. ``map3d.boundary`` — the drawn plot boundary. Coarser, but authored.
     3. the union of the room shells — derived, and marked as such.
 
+    "OF THE TOPMOST STOREY" is the whole point of source 1: the contour has
+    been PER STOREY since 2026-09-06 (``map3d.level_outlines``), and the roof
+    sits on the walls of the highest storey, not on the ground floor. A tower
+    that narrows as it rises used to get a roof cut to its widest storey —
+    a brim hanging in the air. The cascade is not re-derived here: the storey's
+    footprint comes from ``scene_recipe._outline_world``, the same call
+    ``_plates`` makes, so contour and roof can never disagree (geometry lives
+    in ONE place). That helper already falls back to ``map3d.outline`` when the
+    storey inherits nothing.
+
     Returns ``{source, points, ok}``; ``ok`` False means there is nothing to
     roof (no contour, no boundary, no room with a layout).
     """
+    from app.core.scene_recipe import _outline_world
     map3d = location.get("map3d") or {}
-    pts = _polygon(map3d.get("outline"))
+    top_level = storeys(location) - 1
+    pts = _polygon(_outline_world(map3d, top_level))
     if pts:
         return {"source": "outline", "points": pts, "ok": True}
     from app.core.world_geometry import polygon_points

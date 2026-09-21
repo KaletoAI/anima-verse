@@ -65,8 +65,8 @@
  * field (`sampleWorldHeight`, the bilinear reading — the server's own) plus the
  * scene relief of the INNERMOST enclosing location that had a field, composed
  * by `game/ground.groundLift`. "Ein Boden" E5b deletes the second term with the
- * field it read: a location has no 17 x 17 relief of its own any more (§ A19
- * no. 6, decision 1), local relief is authored through the map's HEIGHT AREAS,
+ * field it read: a location has no 17 x 17 relief of its own any more
+ * (§ A16.1, decision 1), local relief is authored through the map's HEIGHT AREAS,
  * and `reliefLiftAt` became one line — then lost its last caller with the
  * room huddle (T4) and is gone with it. The walk verdict is unchanged
  * (`client3d/src/game/walk.slopeBlocks`), and both are checked against the
@@ -429,7 +429,7 @@ const STEP = 0.4;
 const SLOPE = 40;
 // `groundLift(worldHeight, patches)` IS GONE ("Ein Boden" E5b): it added the
 // innermost enclosing LOCATION's own 17 x 17 relief on top of the world field,
-// and that field is deleted (§ A19 no. 6, decision 1 — local relief is
+// and that field is deleted (§ A16.1, decision 1 — local relief is
 // authored through the map's height areas). What used to be
 // `groundLift(sampleWorldHeight(...), patches)` is `sampleWorldHeight(...)`,
 // full stop, which left `main.reliefLiftAt` a one-line wrapper — deleted with

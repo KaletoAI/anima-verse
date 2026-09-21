@@ -444,7 +444,7 @@ export interface SwingingDoor {
  * THE FLOOR OF ONE ROOM of a mounted scene, as the spot derivation reads it.
  *
  * `hull` is the room polygon in TILE-LOCAL metres. On storey 0 it comes from
- * `floor_plan[].polygon_world` (§ A19 no. 3) — the scene frame IS the tile
+ * `floor_plan[].polygon_world` (§ A16.9, § B1) — the scene frame IS the tile
  * frame — and on a declared storey from the room block's own `outline`, which
  * is the same polygon the plate up there is drawn from.
  *
@@ -618,7 +618,7 @@ export interface Tile {
    *  foot the payload names and is not lifted afterwards. */
   roomDoors: Map<string, THREE.Vector3>;
   /** THE STOREY-0 FLOORS of the mounted scene, as the spot derivation reads
-   *  them (§ A19 no. 3, "Ein Boden" E5b): the room hull in TILE-LOCAL metres
+   *  them (§ A16.9, "Ein Boden" E5b): the room hull in TILE-LOCAL metres
    *  plus the floor the payload DECLARES for it, where it declares one. Filled
    *  from `floor_plan` (level 0), from the storey plate (level != 0) and from
    *  the overlay block (a zone on an area model); `deriveRoomSpots` turns each
@@ -1020,7 +1020,7 @@ export function deriveCorridorCentres(tile: Tile): void {
  * reference ray at the door (generated meshes have holes), and called
  * everything within 12 cm of it a stand. Storey 0 draws no plate to ray any
  * more, so the two halves come from where they always belonged: the SHAPE from
- * `floor_plan` (§ A19 no. 3) and the HEIGHT from the one height function at the
+ * `floor_plan` (§ A16.9) and the HEIGHT from the one height function at the
  * point being asked about.
  *
  * THE FLOOR, in data rungs only (`roomFloorWorldY`): the BAKED SURFACE where

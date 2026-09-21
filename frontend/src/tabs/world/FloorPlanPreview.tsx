@@ -1159,7 +1159,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         }
       }
 
-      // ── Storey-0 floors (§ A19 no. 3) ────────────────────────────────
+      // ── Storey-0 floors (§ A16.9) ───────────────────────────────────
       // `plates[]` carries DECLARED storeys only since E5a; storey 0 has no
       // plate at all. Its height is the terrain (`h_final`) and its material
       // is the layer bake, and what the payload still ships is the SHAPE:

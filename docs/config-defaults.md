@@ -39,18 +39,20 @@ existiert.
 
 ## Service URLs
 
-| Name | Quelle | Default | Leser |
-|---|---|---|---|
-| `SKILL_SEARX_URL` | `skills.searx.url` (nur config.json) | `http://localhost:8888` | plugins/searx/skill.py |
+Keine mehr über die Env-Bridge. Die SearX-Instanz stand bis 2026-09-21 als
+`SKILL_SEARX_URL` hier; seitdem deklariert `plugins/searx/plugin.yaml` ein eigenes
+`config_schema` und das Paket liest `skills.searx.url` direkt über den Plugin-Kontext
+(`/admin/settings → Skills → SearX Web Search`).
 
 ---
 
 ## TTS (Text-to-Speech)
 
-Die fünf allgemeinen Felder stehen in `/admin/settings → Text-to-Speech`. Die
-**Backend-URLs und -Stimmen darunter haben kein Schema-Feld** — sie existieren nur in
-`config.json` und werden gebrückt, aber nicht von der Admin-UI angeboten (siehe
-„Offene Punkte").
+Die fünf allgemeinen Felder stehen in `/admin/settings → Text-to-Speech`, die
+Backend-URLs und -Stimmen darunter in dessen **Untersektionen** `XTTS v2`,
+`Magpie (NVIDIA Riva)` und `F5-TTS` (`config_schema.SECTIONS["tts"]["subsections"]`).
+Alles hier ist also admin-einstellbar; `app/core/tts_service.py` liest die Werte über
+die Env-Bridge, deren Defaults den Schema-Defaults entsprechen.
 
 | Name | Quelle | Default | Leser |
 |---|---|---|---|
@@ -59,16 +61,16 @@ Die fünf allgemeinen Felder stehen in `/admin/settings → Text-to-Speech`. Die
 | `TTS_BACKEND` | `tts.backend` → Text-to-Speech | `xtts` | app/core/tts_service.py |
 | `TTS_FALLBACK_BACKEND` | `tts.fallback_backend` → Text-to-Speech | `` | app/core/tts_service.py |
 | `TTS_CHUNK_SIZE` | `tts.chunk_size` → Text-to-Speech | `300` | app/core/tts_service.py |
-| `TTS_XTTS_URL` | `tts.xtts.url` (nur config.json) | `http://localhost:8020` | app/core/tts_service.py |
-| `TTS_XTTS_SPEAKER_WAV` | `tts.xtts.speaker_wav` (nur config.json) | `` | app/core/tts_service.py |
-| `TTS_XTTS_LANGUAGE` | `tts.xtts.language` (nur config.json) | `de` | app/core/tts_service.py |
-| `TTS_MAGPIE_URL` | `tts.magpie.url` (nur config.json) | `http://localhost:9000` | app/core/tts_service.py |
-| `TTS_MAGPIE_VOICE` | `tts.magpie.voice` (nur config.json) | `` | app/core/tts_service.py |
-| `TTS_MAGPIE_LANGUAGE` | `tts.magpie.language` (nur config.json) | `de-DE` | app/core/tts_service.py |
-| `TTS_F5_URL` | `tts.f5.url` (nur config.json) | `http://localhost:7860` | app/core/tts_service.py |
-| `TTS_F5_SPEED` | `tts.f5.speed` (nur config.json) | `1.0` | app/core/tts_service.py |
-| `TTS_F5_NFE_STEPS` | `tts.f5.nfe_steps` (nur config.json) | `32` | app/core/tts_service.py |
-| `TTS_F5_REMOVE_SILENCE` | `tts.f5.remove_silence` (nur config.json) | `false` | app/core/tts_service.py |
+| `TTS_XTTS_URL` | `tts.xtts.url` → XTTS v2 | `http://localhost:8020` | app/core/tts_service.py |
+| `TTS_XTTS_SPEAKER_WAV` | `tts.xtts.speaker_wav` → XTTS v2 | `` | app/core/tts_service.py |
+| `TTS_XTTS_LANGUAGE` | `tts.xtts.language` → XTTS v2 | `de` | app/core/tts_service.py |
+| `TTS_MAGPIE_URL` | `tts.magpie.url` → Magpie | `http://localhost:9000` | app/core/tts_service.py |
+| `TTS_MAGPIE_VOICE` | `tts.magpie.voice` → Magpie | `` | app/core/tts_service.py |
+| `TTS_MAGPIE_LANGUAGE` | `tts.magpie.language` → Magpie | `de-DE` | app/core/tts_service.py |
+| `TTS_F5_URL` | `tts.f5.url` → F5-TTS | `http://localhost:7860` | app/core/tts_service.py |
+| `TTS_F5_SPEED` | `tts.f5.speed` → F5-TTS | `1.0` | app/core/tts_service.py |
+| `TTS_F5_NFE_STEPS` | `tts.f5.nfe_steps` → F5-TTS | `32` | app/core/tts_service.py |
+| `TTS_F5_REMOVE_SILENCE` | `tts.f5.remove_silence` → F5-TTS | `false` | app/core/tts_service.py |
 
 Die Sprecher-WAVs für das Voice-Cloning liegen im Repo-Root unter `voices/` und werden
 von `app/routes/tts.py` gelistet — lokale Nutzerdaten, nicht im Git.
@@ -229,15 +231,23 @@ gelesen und gesetzt (Sprachcode + Übersetzungsmodus). Die Auswahlliste kommt au
 
 ## Offene Punkte (Befunde, kein Ist-Zustand)
 
-- `server.jwt_secret` ist **tot**. Sitzungen sind seit der Auth-Überarbeitung
-  undurchsichtige Zufalls-Tokens (`app/core/sessions.py`, `secrets.token_urlsafe(32)`),
-  im Prozess gehalten — es gibt kein JWT mehr im Code. Das Feld steht noch im Schema
-  (samt Validator-Warnung) und die Bridge setzt `JWT_SECRET`, aber niemand liest es.
-- Die TTS-Backend-URLs (`tts.xtts.*`, `tts.magpie.*`, `tts.f5.*`) haben keine
-  Schema-Felder und damit keine Admin-Oberfläche. Wer sie ändern will, muss
-  `config.json` von Hand anfassen — bei laufendem Server überschreibt ein Speichern in
-  der Admin-UI solche Edits.
-- Dasselbe gilt für `skills.searx.url`: `plugins/searx/plugin.yaml` deklariert kein
-  `config_schema`, das Paket hängt noch an der Env-Bridge (`env_prefix:
-  "SKILL_SEARX_"`). Ein `config_schema` im Manifest würde ihm die Admin-Seite
-  „Skills → SearX" geben — so, wie es für Pakete vorgesehen ist.
+- `_apply_schema_defaults` (`app/routes/admin_settings.py`) füllt Defaults nur für
+  `fields` einer Sektion und für `sub_arrays`, **nicht für `subsections`**. Die
+  TTS-Backend-Felder und die Skill-Untersektionen zeigen ihren Default daher als
+  grauen Platzhalter, materialisieren ihn aber nicht in `config.json`. Wirksam ist er
+  trotzdem — die Env-Bridge und die Leser tragen denselben Wert als Code-Default.
+
+Erledigt (2026-09-21, Teil der Config-Altlasten-Runde):
+
+- `server.jwt_secret` ist entfernt — Schema-Feld, Validator-Warnung, `JWT_SECRET`-Bridge
+  und der `SENSITIVE_FIELDS`-Eintrag. Sitzungen sind undurchsichtige Zufalls-Tokens
+  (`app/core/sessions.py`, `secrets.token_urlsafe(32)`); es gab nie ein JWT im Code. Ein
+  Weltordner, der das Feld noch in `config.json` trägt, wird beim Laden bereinigt
+  (`config.DEAD_CONFIG_FIELDS["server"]`).
+- Die TTS-Backend-URLs (`tts.xtts.*`, `tts.magpie.*`, `tts.f5.*`) haben sehr wohl
+  Schema-Felder — sie liegen in den `subsections` der TTS-Sektion, die die Admin-Seite
+  rendert (`static/admin/settings.js`). Der frühere Befund war falsch; er kam daher,
+  dass der Doku-Wächter `subsections` nicht durchlief. Beides ist korrigiert.
+- `skills.searx.url`: `plugins/searx/plugin.yaml` deklariert jetzt ein eigenes
+  `config_schema` (Admin-Seite „Skills → SearX Web Search"), das Paket liest die Werte
+  über `ctx.get_config`, und `env_prefix` samt Env-Lesern ist weg.

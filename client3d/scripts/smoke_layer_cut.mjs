@@ -514,7 +514,7 @@ for (const dead of ['AREA_RENDER_ORDER_BASE', 'AREA_POLYGON_OFFSET',
   'WATER_DRAPE_LIFT_M', 'drapeArea', 'areaCellM',
   // …and with E5b the drape machinery itself, plus the scene relief it was
   // built for: the package files `gridMesh.ts` and `terrain.ts` are deleted
-  // (§ A19 no. 6), so not one of these names may be imported any more.
+  // (§ A16.1), so not one of these names may be imported any more.
   'subdivideOnGrid', 'gridStepFor', 'GRID_MAX_CELLS',
   'sampleTerrain', 'drapeGeometry', 'TERRAIN_CELLS']) {
   checkEq(`\`${dead}\` is gone from the code`, liveMentions(dead), []);

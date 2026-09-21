@@ -262,12 +262,6 @@ def _check_skills(config: dict) -> list:
 
 def _check_server(config: dict) -> list:
     issues = []
-    server = config.get("server", {})
-
-    jwt = server.get("jwt_secret", "")
-    if not jwt or jwt == "your-secret-key-change-in-production":
-        issues.append(_warn("server", "JWT secret is the default value — change it for production"))
-
     # Story engine references
     se = config.get("story_engine", {})
     if se.get("enabled"):

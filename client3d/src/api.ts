@@ -751,7 +751,7 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
     // landings and the floor they eat. The client reads them instead of
     // measuring a staircase back out of the `stair_*` boxes in `extras`.
     stairs: arr<SceneStairs>(data.stairs),
-    // THE STOREY-0 ROOMS AS DATA (§ A19 no. 3) — what replaced the storey-0
+    // THE STOREY-0 ROOMS AS DATA (§ A16.9, payload shape § B1) — what replaced the storey-0
     // plates. Same defensiveness as `plates`: a hull of fewer than three points
     // encloses nothing, so it names no floor.
     floor_plan: arr<SceneFloor>(data.floor_plan)
@@ -783,8 +783,8 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
       ? (data.boundary_openings as SceneBoundaryOpening[]) : undefined,
     // Detail mode of the location (v5.2 no. 10) — applies without a model too.
     area_detail: data.area_detail === true ? true : undefined,
-    // `terrain` and `natural_floor` ARE NOT READ ANY MORE (E5a, § A19 no. 1
-    // and no. 6): the scene's own 17 x 17 relief is deleted, and "this
+    // `terrain` and `natural_floor` ARE NOT READ ANY MORE (E5a, § A16.9 and
+    // § A16.1): the scene's own 17 x 17 relief is deleted, and "this
     // location stands on the terrain" is true of every location now.
   };
 }

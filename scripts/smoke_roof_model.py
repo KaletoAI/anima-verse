@@ -68,6 +68,22 @@ overhang 0.40 m, ridge axis auto.
    → 6 vertices, 5 faces, body height 5.080682 m.
 
 7. FLAT: a slab of 0.12 m on the wall head — 8 vertices, 6 faces, height 0.12.
+
+8. PER-STOREY FOOTPRINT. The contour has been per storey since 2026-09-06
+   (`map3d.level_outlines`, cascade `scene_recipe.outline_source_level`:
+   downward, stopping at the ground floor), and a roof sits on the walls of the
+   TOPMOST storey. The fixture has rooms on levels 0 and 1, so
+   `storeys()` = 2 and the roof asks for level 1. Three hand cases over it:
+
+     a) `level_outlines = {"1": (2,2)-(8,6)}` — the upper storey is drawn
+        smaller: 6 × 4 m, centre (5, 4). The roof must take THAT, not the
+        10 × 8 ground floor → length 6, depth 4.
+     b) `level_outlines = {"0": (1,1)-(9,7)}` — nothing drawn on level 1, so
+        the cascade inherits from the nearest LOWER storey that has one:
+        8 × 6 m, centre (5, 4) → length 8, depth 6.
+     c) `level_outlines = {"-1": (3,3)-(7,5)}` — a basement never redefines the
+        house (the cascade stops at level 0), so level 1 falls back to the
+        global `map3d.outline` → the fixture's 10 × 8, length 10, depth 8.
 """
 import sys
 from pathlib import Path
@@ -237,6 +253,34 @@ def part_footprint():
     fp3 = rm.footprint(rooms_only)
     check("room union is the last source", fp3["source"], "rooms")
     check("room union covers both rooms (4 corners each)", len(fp3["points"]), 8)
+
+    # [8] The contour is PER STOREY — the roof takes the TOPMOST one.
+    # The fixture is two storeys (rooms on level 0 and 1), so level 1 decides.
+    narrows = fixture_location()
+    narrows["map3d"]["level_outlines"] = {"1": [[2, 2], [8, 2], [8, 6], [2, 6]]}
+    fp_top = rm.footprint(narrows)
+    check("narrowing tower: source is still the drawn contour",
+          fp_top["source"], "outline")
+    rect_top = rm.oriented_bbox(fp_top["points"])
+    check("upper storey 6 x 4 -> length 6", rect_top["length"], 6.0, 1e-6)
+    check("upper storey 6 x 4 -> depth 4", rect_top["depth"], 4.0, 1e-6)
+    check_vec("upper storey centre", rect_top["center"], [5.0, 4.0], 1e-6)
+
+    inherited = fixture_location()
+    inherited["map3d"]["level_outlines"] = {"0": [[1, 1], [9, 1], [9, 7], [1, 7]]}
+    rect_inh = rm.oriented_bbox(rm.footprint(inherited)["points"])
+    check("level 1 inherits level 0 (8 x 6) -> length 8", rect_inh["length"],
+          8.0, 1e-6)
+    check("level 1 inherits level 0 (8 x 6) -> depth 6", rect_inh["depth"],
+          6.0, 1e-6)
+
+    cellar = fixture_location()
+    cellar["map3d"]["level_outlines"] = {"-1": [[3, 3], [7, 3], [7, 5], [3, 5]]}
+    rect_cellar = rm.oriented_bbox(rm.footprint(cellar)["points"])
+    check("a basement never shrinks the roof -> length 10",
+          rect_cellar["length"], 10.0, 1e-6)
+    check("a basement never shrinks the roof -> depth 8",
+          rect_cellar["depth"], 8.0, 1e-6)
 
     bare = {"id": "x", "name": "Nothing", "map3d": {}, "rooms": []}
     check("nothing to roof", rm.footprint(bare)["ok"], False)

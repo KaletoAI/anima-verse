@@ -226,7 +226,7 @@ export function standY(walkY: number, terrainY: number): number {
 //
 // `groundLift`/`ScenePatch` followed it in E5b, for the same reason one rung
 // further in: they added a LOCATION's own relief on top of the world one, and
-// the scene's 17 x 17 field is deleted (§ A19 no. 6, decision 1). "The ground
+// the scene's 17 x 17 field is deleted (§ A16.1, decision 1). "The ground
 // at a world point" is `heightAt` and nothing plus it.
 
 // ── The stands of a room, derived from its POLYGON (E5b) ─────────────────
@@ -235,7 +235,7 @@ export function standY(walkY: number, terrainY: number): number {
 // of 6 x 6 rays shot down at the room's plate mesh: the dominant height bin
 // was the floor, a reference ray at the door repaired it where the mesh had
 // holes, and everything within 12 cm of it was a stand. Storey 0 has no plate
-// to ray any more, so the shape travels as data (`floor_plan`, § A19 no. 3)
+// to ray any more, so the shape travels as data (`floor_plan`, § A16.9)
 // and the height comes from the ONE height function at the point being asked
 // about. The two rules that survive that move are here, pure.
 

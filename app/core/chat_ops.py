@@ -5,9 +5,6 @@ remain thin HTTP adapters (auth, request parsing, response types, FileResponse/
 StreamingResponse). HTTPExceptions embedded mid-logic moved along unchanged.
 Shared helpers that stay in app/routes/chat.py (external importers rely on them)
 are pulled in via function-scope lazy imports to avoid a module-level cycle.
-
-``build_unread_summary`` no longer has an HTTP route of its own — the unread
-badges ride along in the /state snapshot, which calls it directly.
 """
 import uuid
 from pathlib import Path
@@ -31,39 +28,6 @@ def _get_chat_upload_dir() -> Path:
     d.mkdir(parents=True, exist_ok=True)
     return d
 
-
-
-async def build_unread_summary() -> Dict[str, Any]:
-    """Per-character latest assistant-message timestamps for unread badges."""
-    from app.models.account import get_player_identity
-    avatar = get_player_identity("")
-    if not avatar:
-        return {"avatar": "", "chats": {}}
-
-    from app.core.db import get_connection
-    try:
-        conn = get_connection()
-        # Per character: fetch all assistant timestamps from the last 7 days.
-        # Limit 30 per character to keep the response compact.
-        rows = conn.execute(
-            "SELECT character_name, ts FROM chat_messages "
-            "WHERE partner=? AND role='assistant' AND character_name<>? "
-            "  AND ts > datetime('now', '-7 days') "
-            "ORDER BY ts DESC LIMIT 500",
-            (avatar, avatar)).fetchall()
-        per_char: Dict[str, Dict[str, Any]] = {}
-        for char, ts in rows:
-            if not char:
-                continue
-            slot = per_char.setdefault(char, {"latest": "", "recent": []})
-            if not slot["latest"]:
-                slot["latest"] = ts or ""
-            if len(slot["recent"]) < 30:
-                slot["recent"].append(ts or "")
-        chats = per_char
-    except Exception as e:
-        return {"avatar": avatar, "chats": {}, "error": str(e)}
-    return {"avatar": avatar, "chats": chats}
 
 
 async def save_chat_upload(request) -> Dict[str, Any]:

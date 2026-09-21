@@ -38,7 +38,7 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
 3. **Configure server-side settings** at `http://<host>:8000/admin/settings`, top to bottom. The
    minimum before anything works:
 
-   - **Server** — set a real `JWT Secret`. Also `Allowed CORS origins` (`server.cors_origins`) as
+   - **Server** — set `Allowed CORS origins` (`server.cors_origins`) as
      soon as something calls this API from **another** origin: one origin per line (scheme + host
      + port, no trailing slash), e.g. the Vite dev servers (`:5173`, `:5183`) or a 3D client on a
      different machine. `/play` and `/game-admin` are delivered by this server itself and need no
@@ -64,7 +64,7 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
    - *(optional)* **Media Generation → Backends** for image / video / mesh backends,
      **Text-to-Speech**, **Game calendar** — only for the corresponding features.
 
-   API keys, the JWT secret and passwords are written to a separate **`secrets.json`** next to
+   API keys and passwords are written to a separate **`secrets.json`** next to
    `config.json` (gitignored), so the demo world can ship with an empty `config.json` and each user
    fills in their own keys.
 

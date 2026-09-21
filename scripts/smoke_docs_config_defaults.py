@@ -42,6 +42,24 @@ D) Every `<section>.<field>` path the Quelle column gives as the source of a
    that IS bridged but has no schema field and therefore no admin form. That
    marker is a claim too, so it is checked the other way round: such a leaf
    must NOT be a schema field.
+   The resolver walks `fields` AND `subsections` (2026-09-21). It used to walk
+   `fields` only, so every subsection leaf looked undeclared — which is how the
+   document came to claim the TTS backend URLs had no admin form although
+   `/admin/settings → Text-to-Speech → XTTS v2` has offered them all along
+   (`static/admin/settings.js` renders `subsections`).
+
+F) THE INVERSE OF D, straight from the code and without the document: every
+   config leaf that `config._flatten_to_env` bridges into an env var must have
+   a schema field. A bridged value is a setting the app reads at runtime; one
+   without a field can only be changed by editing `config.json` by hand, and a
+   running server overwrites such an edit on the next admin save. The paths are
+   read out of the AST of `_flatten_to_env` — `x = config.get("sec", {})` /
+   `y = x.get("sub", {})` build the prefix, every `_set(env, "NAME", <var>.get(
+   "<field>", …))` is one leaf. Expected answer, derived by hand from the
+   function: ZERO leaves without a field. The dynamic blocks (the numbered
+   provider / backend loops and the F5 language loop) carry no string literal
+   for their field and are simply not seen — they are array items, whose
+   fields live under `sub_arrays` / `is_array`, not flat leaves.
 
 FAILS BEFORE / PASSES AFTER
 ---------------------------
@@ -109,21 +127,75 @@ def _schema_field(dotted):
     parts = dotted.split(".")
     if parts[0] == "skills" and len(parts) == 3:
         # A package contributes its own subsection (plugin.yaml config_schema),
-        # merged under "skills" at load time — the core schema does not have it.
+        # merged under "skills" at load time. If it does not, the leaf may
+        # still be a core subsection (skills.outfit_change.* has no package),
+        # so this is a first LOOK, not the whole answer.
         import yaml
         man = REPO / "plugins" / parts[1] / "plugin.yaml"
-        if not man.exists():
-            return None
-        meta = yaml.safe_load(man.read_text(encoding="utf-8")) or {}
-        sub = (meta.get("config_schema") or {}).get(parts[1]) or {}
-        f = (sub.get("fields") or {}).get(parts[2])
-        return f if isinstance(f, dict) else None
+        if man.exists():
+            meta = yaml.safe_load(man.read_text(encoding="utf-8")) or {}
+            sub = (meta.get("config_schema") or {}).get(parts[1]) or {}
+            f = (sub.get("fields") or {}).get(parts[2])
+            if isinstance(f, dict):
+                return f
     node = SECTIONS.get(parts[0])
     for key in parts[1:]:
         if not isinstance(node, dict):
             return None
-        node = node.get("fields", node).get(key)
+        # A leaf may sit in this node's `fields` OR in one of its
+        # `subsections` (tts.xtts.url, skills.outfit_change.language …).
+        step = None
+        for holder in ("fields", "subsections"):
+            box = node.get(holder)
+            if isinstance(box, dict) and key in box:
+                step = box[key]
+                break
+        node = step
     return node if isinstance(node, dict) and "fields" not in node else None
+
+
+def bridged_leaves():
+    """Every `<section>.<field>` path `config._flatten_to_env` bridges.
+
+    Read out of the AST, not by importing and running the function: the
+    bridge WRITES os.environ, and a check script must not.
+    """
+    import ast
+    src = (REPO / "app" / "core" / "config.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "_flatten_to_env")
+
+    def dotted_get(call, prefix):
+        """`<known var>.get("<literal>", …)` -> its dotted path, else None."""
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "get"
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id in prefix and call.args
+                and isinstance(call.args[0], ast.Constant)
+                and isinstance(call.args[0].value, str)):
+            return None
+        return (prefix[call.func.value.id] + "." + call.args[0].value).lstrip(".")
+
+    prefix = {"config": ""}
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            path = dotted_get(node.value, prefix)
+            if path is not None:
+                prefix[node.targets[0].id] = path
+
+    leaves = {}
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "_set" and len(node.args) >= 3):
+            continue
+        name = (node.args[1].value
+                if isinstance(node.args[1], ast.Constant) else "?")
+        for sub in ast.walk(node.args[2]):
+            path = dotted_get(sub, prefix)
+            if path is not None:
+                leaves.setdefault(path, name)
+    return leaves
 
 
 def main():
@@ -161,6 +233,22 @@ def main():
           not schema_only, str(schema_only))
     check("every \"nur config.json\" source really has no schema field",
           not json_only, str(json_only))
+
+    print("F) every bridged config leaf has a schema field")
+    leaves = bridged_leaves()
+    check(f"the AST reader found the bridge's leaves ({len(leaves)})",
+          len(leaves) >= 60, str(len(leaves)))
+    undeclared = sorted(f"{path} ({env})" for path, env in leaves.items()
+                        if _schema_field(path) is None)
+    check("no bridged setting is missing its config_schema field",
+          not undeclared, str(undeclared))
+    # Counter-check: the resolver is not answering "declared" to everything.
+    check("the resolver says None for an invented leaf",
+          _schema_field("tts.xtts.no_such_field") is None)
+    check("the resolver finds a SUBSECTION leaf",
+          _schema_field("tts.xtts.url") is not None)
+    check("the resolver finds a plain section leaf",
+          _schema_field("server.log_level") is not None)
 
     print("E) A and B against the PREVIOUS revision (must find what DS-11 "
           "reported)")

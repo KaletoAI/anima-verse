@@ -106,7 +106,7 @@ export interface SceneStairs {
 
 /**
  * ONE STOREY-0 ROOM AS DATA — what replaced the storey-0 plates ("Ein Boden"
- * E5a, § A19 no. 3).
+ * E5a, § A16.9).
  *
  * Storey 0 draws no plate any more: its height is the terrain (`h_final`) and
  * its material is the layer bake. What a consumer still needs is the SHAPE, so
@@ -752,7 +752,7 @@ export interface ScenePayload {
    *  basements. Storey 0 has none — its floor is the terrain and its material
    *  is the layer bake; what is left of it is `floor_plan`. */
   plates: ScenePlate[]
-  /** The storey-0 rooms as polygons + floor kinds (E5a, § A19 no. 3) — always
+  /** The storey-0 rooms as polygons + floor kinds (E5a, § A16.9) — always
    *  present, empty for a location without a level-0 room. */
   floor_plan: SceneFloor[]
   walls: SceneWall[]
@@ -782,7 +782,7 @@ export interface ScenePayload {
    *  `display: shell_area` on the building spec is merely its per-model
    *  consequence. */
   area_detail?: boolean
-  // `terrain` and `natural_floor` ARE GONE (E5a, § A19 no. 1 and no. 6). The
+  // `terrain` and `natural_floor` ARE GONE (E5a, § A16.9 and § A16.1). The
   // first was the scene's own 17 x 17 relief; the second told a renderer that
   // THIS location stood on the terrain rather than on a slab — a distinction
   // that meant something only while there were two grounds. On storey 0 every

@@ -5285,9 +5285,10 @@ Grad-Konvention 0 = Nord), Client-Seite in
 
 Die Etappen-Kapitel „Ein Boden" (E1/E3/E4/E5a/E5b) trugen zeitweise die
 Nummern § A18 bis § A20. Sie sind zu **§ A16** verschmolzen; die Nummern
-bleiben als Stub stehen, weil sie nicht neu vergeben werden dürfen — und weil
-**Code-Kommentare und Smokes bis heute auf § A19 Nr. 1–6 verweisen**. Die
-Auflösung:
+bleiben als Stub stehen, weil sie nicht neu vergeben werden dürfen. Die
+Code-Kommentare und Smokes, die bis 2026-09-21 auf § A19 Nr. 1–6 zeigten, sind
+auf die Zielparagraphen umgehängt; diese Tabelle bleibt als Auflösung stehen
+(ältere Stände und Commit-Nachrichten nennen die alten Nummern weiter):
 
 | alte Fundstelle | die Regel steht heute in |
 |---|---|

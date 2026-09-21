@@ -1469,7 +1469,7 @@ export function createGround(): Ground {
   /** WHICH library entry a ground kind wears. The terrain TYPE's own answer
    *  first (`surfaces` of the catalog) — and where the catalog does not know
    *  the kind at all, THE KIND CARRIES ITSELF, which is the server's own rule
-   *  for a ROOM FLOOR (§ A19 no. 4: `surfaces.floor` is a library id directly).
+   *  for a ROOM FLOOR (§ A16.7 / § A16.9: `surfaces.floor` is a library id).
    *  A zone water's `kind` arrives that way, and without this it would have
    *  looked up nothing and come out as a matte plane instead of water. */
   function surfaceOf(kind: string): string {
