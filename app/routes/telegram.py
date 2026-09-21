@@ -1,11 +1,21 @@
 """
 Telegram Routes - Multi-Channel Chat Integration
 
-Endpoints für Telegram Bot Webhook und User Registration
+Endpoints for the Telegram bot webhook and user registration.
+
+Auth: every route here is admin-only EXCEPT the webhook, which Telegram calls
+and which therefore carries its own credential — the shared secret
+``telegram.webhook_secret``, returned by Telegram in the
+``X-Telegram-Bot-Api-Secret-Token`` header. Without a configured secret the
+webhook is closed: it used to accept any POST, which let anyone who reached
+the port push arbitrary text into a character (and receive the character's
+answer in their own chat).
 """
-from fastapi import APIRouter, Request, HTTPException
-from typing import Dict, Any
-import json
+import hmac
+from fastapi import APIRouter, Depends, Header, Request, HTTPException
+from typing import Any, Dict, Optional
+from app.core import config
+from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
 
 logger = get_logger("telegram")
@@ -15,20 +25,51 @@ from app.models.unified_chat import get_unified_chat_manager
 from app.models.channel import Message, ChannelType
 from app.models.account import save_user_name
 
-router = APIRouter(prefix="/telegram", tags=["telegram"])
+router = APIRouter(prefix="/telegram", tags=["telegram"],
+                   dependencies=[Depends(require_admin)])
+
+# The webhook is the ONE route Telegram itself calls, so it cannot carry an
+# admin session. It gets its own router without the admin dependency.
+webhook_router = APIRouter(prefix="/telegram", tags=["telegram"])
+
+_WEBHOOK_SECRET_WARNED = False
 
 
-@router.post("/webhook")
-async def telegram_webhook(request: Request) -> Dict[str, Any]:
+def _check_webhook_secret(provided: Optional[str]) -> None:
+    """Compares the Telegram secret token, constant-time.
+
+    No configured secret = the webhook stays closed. Warned ONCE, so a world
+    that never uses Telegram does not fill the log with it.
     """
-    Webhook Endpoint für Telegram Bot
-    
-    Telegram sendet Updates hierher via HTTP POST
-    
-    Konfigurieren mit:
+    global _WEBHOOK_SECRET_WARNED
+    expected = (config.get("telegram.webhook_secret") or "").strip()
+    if not expected:
+        if not _WEBHOOK_SECRET_WARNED:
+            _WEBHOOK_SECRET_WARNED = True
+            logger.warning(
+                "Telegram webhook refused: no telegram.webhook_secret configured. "
+                "Set it under /admin/settings -> Telegram and pass the same value "
+                "as secret_token to the Telegram setWebhook call.")
+        raise HTTPException(status_code=401, detail="webhook secret not configured")
+    if not provided or not hmac.compare_digest(provided.strip(), expected):
+        raise HTTPException(status_code=401, detail="invalid webhook secret")
+
+
+@webhook_router.post("/webhook")
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: Optional[str] = Header(
+        default=None, alias="X-Telegram-Bot-Api-Secret-Token"),
+) -> Dict[str, Any]:
+    """
+    Webhook endpoint for the Telegram bot.
+
+    Telegram POSTs its updates here. Register it WITH the secret token:
     curl -X POST https://api.telegram.org/botXXX:YYY/setWebhook \
-         -d "url=https://yourdomain.com/telegram/webhook"
+         -d "url=https://yourdomain.com/telegram/webhook" \
+         -d "secret_token=<telegram.webhook_secret>"
     """
+    _check_webhook_secret(x_telegram_bot_api_secret_token)
     try:
         data = await request.json()
         

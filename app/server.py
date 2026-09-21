@@ -35,7 +35,9 @@ _paths.init()
 # read-only; migrate_file() is the ONE place that persists the dead-field strip
 # and the default seeding — the running world's config.json stays current,
 # while every script that merely loads a world leaves it untouched.
-from app.core.config import load as _load_config, migrate_file as _migrate_config_file
+from app.core.config import (load as _load_config,
+                             migrate_file as _migrate_config_file,
+                             get as _config_get)
 _load_config(_paths.get_config_path())
 _migrate_config_file(_paths.get_config_path())
 
@@ -767,16 +769,59 @@ async def lifespan(app: FastAPI):
 # Initialize FastAPI app
 app = FastAPI(title="Agent System API", version="2.0", lifespan=lifespan)
 
-# CORS Middleware
+
+def _cors_origins() -> list:
+    """The origins allowed to call this API cross-site (server.cors_origins).
+
+    `allow_origins=["*"]` together with `allow_credentials=True` makes
+    Starlette mirror back whatever Origin asked, so any page a user opened in
+    the same network could read this API's answers (SEC-3). Same-origin calls
+    — the two SPAs served from this server — need no entry at all; the list is
+    for the separately served dev/3D clients.
+
+    Read once at import: the config is already loaded at the top of this
+    module, and CORSMiddleware bakes its headers at construction. Changing the
+    list therefore needs a server restart.
+    """
+    from app.core.config_schema import SECTIONS as _SECTIONS
+    raw = _config_get("server.cors_origins", None)
+    if raw is None:
+        # The key is absent until an admin saves the settings page once —
+        # migrate_file() does not seed plain scalar defaults. Falling back to
+        # the schema's own default keeps ONE source of truth and stops a world
+        # that has never opened /admin/settings from locking the dev clients
+        # out entirely.
+        raw = _SECTIONS["server"]["fields"]["cors_origins"]["default"]
+    if isinstance(raw, str):
+        items = [x.strip() for x in raw.replace(",", "\n").splitlines()]
+    else:
+        items = [str(x).strip() for x in (raw or [])]
+    return [x for x in items if x]
+
+
+# Middleware ORDER matters and reads bottom-up: `add_middleware` prepends, so
+# the LAST one added is the outermost. Execution is therefore
+#   player_activity -> user_context -> CORS -> auth gate -> router
+# The gate sits innermost on purpose: it needs the user that
+# user_context_middleware resolved, a CORS preflight (OPTIONS) is answered by
+# CORSMiddleware before it ever gets there, and its own 401/403 answers still
+# travel back out through CORSMiddleware and so carry the CORS headers a
+# cross-origin client needs to SEE the 401 instead of a network error.
+
+# Default-deny auth gate (SEC-2): no session -> 401, except an explicit
+# allowlist; logged-in non-admins are kept out of the admin surfaces.
+from app.core.auth_dependency import auth_gate_middleware, user_context_middleware
+app.middleware("http")(auth_gate_middleware)
+
+# CORS Middleware — named origins only, never "*" with credentials.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Erlaubt alle Domains (nur für Entwicklung!)
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"])
 
 # User-Context-Middleware: setzt current_user_ctx aus Session-Cookie pro Request
-from app.core.auth_dependency import user_context_middleware
 app.middleware("http")(user_context_middleware)
 
 # The ONE place the user-activity stamp is written: only humans issue HTTP
@@ -811,6 +856,9 @@ app.include_router(world.router, tags=["world"])
 # routes are an extension of the prop library and belong beside it.
 app.include_router(prop_variants_route.router)
 app.include_router(telegram.router, tags=["telegram"])
+# The Telegram webhook is the one route Telegram itself calls: its own router
+# without the admin dependency, authenticated by the shared webhook secret.
+app.include_router(telegram.webhook_router, tags=["telegram"])
 app.include_router(templates.router)
 app.include_router(story.router)
 app.include_router(story_dev.router)

@@ -42,7 +42,7 @@ _BOOT_RESTART_SNAPSHOT: Optional[dict] = None
 # Fields that contain sensitive data (API keys, passwords, secrets)
 SENSITIVE_FIELDS = {
     "api_key", "password", "jwt_secret", "bot_token", "secret",
-    "auth_token",
+    "auth_token", "webhook_secret",
 }
 
 

@@ -4,6 +4,7 @@ Eine User-Tabelle pro Welt. Rollen: admin | user.
 Admin hat vollen Zugriff, user ist beschraenkt auf zugeordnete Characters.
 """
 import json
+import secrets
 import uuid
 from datetime import datetime
 
@@ -23,8 +24,10 @@ ROLE_USER = "user"
 VALID_ROLES = {ROLE_ADMIN, ROLE_USER}
 
 DEFAULT_ADMIN_USERNAME = "admin"
-DEFAULT_ADMIN_PASSWORD = "admin1234"
 MIN_PASSWORD_LENGTH = 8
+# Length of the one-time bootstrap password. token_urlsafe(n) yields ~1.3*n
+# characters of base64url, so 18 bytes is a ~24-character password.
+BOOTSTRAP_PASSWORD_BYTES = 18
 
 
 def _now_iso() -> str:
@@ -207,10 +210,14 @@ def ensure_default_admin() -> None:
         logger.info("Default-Admin aus account.json migriert: %s", acc["user_name"])
         return
 
-    # Frische Welt: Default-Admin mit Default-Passwort
-    create_user(DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, role=ROLE_ADMIN)
+    # Fresh world: bootstrap admin with a RANDOM password. A fixed default
+    # ("admin1234") made every freshly created world takeable by anyone who
+    # knew the project. The password exists only in this one log line — it is
+    # never stored in clear text anywhere — so it has to be picked up now.
+    password = secrets.token_urlsafe(BOOTSTRAP_PASSWORD_BYTES)
+    create_user(DEFAULT_ADMIN_USERNAME, password, role=ROLE_ADMIN)
     logger.warning(
-        "Default-Admin angelegt: username='%s' password='%s' — "
-        "bitte im Admin-UI aendern!",
-        DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD,
+        "=== BOOTSTRAP ADMIN CREATED === username='%s' password='%s' — "
+        "shown ONCE, log in and change it. ===",
+        DEFAULT_ADMIN_USERNAME, password,
     )

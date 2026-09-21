@@ -37,11 +37,36 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def set_session_cookie(response, token: str) -> None:
+def is_secure_request(scheme: str, forwarded_proto: str = "") -> bool:
+    """Is this request served over HTTPS?
+
+    ``X-Forwarded-Proto`` wins when present: behind a reverse proxy that
+    terminates TLS, the request reaching uvicorn is plain http even though the
+    browser spoke https, and only the header knows. A proxy may append its own
+    value to an existing list, so the FIRST entry (the client-facing hop) is
+    the one that counts.
+    """
+    first = (forwarded_proto or "").split(",")[0].strip().lower()
+    if first:
+        return first == "https"
+    return (scheme or "").lower() == "https"
+
+
+def request_is_secure(request) -> bool:
+    """``is_secure_request`` for a Starlette request."""
+    return is_secure_request(request.url.scheme,
+                            request.headers.get("x-forwarded-proto", ""))
+
+
+def set_session_cookie(response, token: str, secure: bool = False) -> None:
     """Writes the session cookie onto a response (login AND every slide).
 
     Lives here, not in the auth route, because the middleware re-issues the
     cookie on sliding refresh and core must not import routes.
+
+    ``secure`` comes from the request scheme: on https the cookie must never
+    travel over a plain-http connection, on http it MUST NOT carry the flag or
+    the browser would drop it and no local setup could log in at all.
     """
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -49,6 +74,7 @@ def set_session_cookie(response, token: str) -> None:
         max_age=SESSION_TTL_HOURS * 3600,
         httponly=True,
         samesite="lax",
+        secure=secure,
         path="/",
     )
 

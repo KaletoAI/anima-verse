@@ -18,6 +18,7 @@ Endpoint:
   characters/Vallerie/images/Vallerie_177....png
 covering every image kind (characters, events, instagram, world_gallery, items).
 """
+import hmac
 import json
 from datetime import datetime
 
@@ -62,7 +63,9 @@ def _require_api_key(provided: Optional[str]) -> None:
     expected = (config.get("server.api_key") or "").strip()
     if not expected:
         raise HTTPException(status_code=503, detail="server api_key not configured")
-    if not provided or provided.strip() != expected:
+    # compare_digest, not ==: a plain comparison returns as soon as two bytes
+    # differ, which leaks the length of the shared prefix over many requests.
+    if not provided or not hmac.compare_digest(provided.strip(), expected):
         raise HTTPException(status_code=401, detail="invalid api key")
 
 

@@ -150,22 +150,31 @@ async def user_context_middleware(request: Request, call_next):
             path = request.url.path
             method = request.method.upper()
             chars = _extract_characters_from_path(path)
-            if chars:
-                allowed = set(user.get("allowed_characters") or [])
-                is_write = method in ("POST", "PUT", "PATCH", "DELETE")
-                is_sensitive = _is_sensitive_character_path(path)
-                blocked_char = ""
-                for c in chars:
-                    if c in allowed:
-                        continue
-                    if is_write or is_sensitive:
-                        blocked_char = c
-                        break
-                if blocked_char:
-                    return JSONResponse(
-                        status_code=403,
-                        content={"detail": f"Kein Zugriff auf Character '{blocked_char}'"},
-                    )
+            allowed = set(user.get("allowed_characters") or [])
+            is_write = method in ("POST", "PUT", "PATCH", "DELETE")
+            is_sensitive = _is_sensitive_character_path(path)
+            blocked_char = ""
+            for c in chars:
+                if c in allowed:
+                    continue
+                if is_write or is_sensitive:
+                    blocked_char = c
+                    break
+            if blocked_char:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": f"No access to character '{blocked_char}'"},
+                )
+            # A path classified sensitive whose character we cannot name is a
+            # refusal, not a pass: that gap is what let /secrets/{name} and the
+            # inventory import through before (SEC-6). Only paths the
+            # classifier calls sensitive reach this, so the ordinary
+            # non-character player routes are untouched.
+            if is_sensitive and not chars:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "No access to this character data"},
+                )
         response = await call_next(request)
         # Sliding sessions have two halves: the DB row (done in get_session) and
         # the browser cookie. Without re-issuing it, the browser drops the cookie
@@ -173,46 +182,70 @@ async def user_context_middleware(request: Request, call_next):
         # requests only; an anonymous request never gets a cookie.
         refresh_token = getattr(request.state, "session_refresh_token", "")
         if user and refresh_token and not _sets_session_cookie(response):
-            sessions.set_session_cookie(response, refresh_token)
+            sessions.set_session_cookie(
+                response, refresh_token,
+                secure=sessions.request_is_secure(request))
         return response
     finally:
         current_user_ctx.reset(token)
 
 
-# Sensitive paths — readable only with allowed_characters (or as admin)
-_SENSITIVE_SEGMENTS = {
-    "profile", "personality", "config", "appearance", "scheduler",
-    "knowledge", "memories", "secrets", "diary", "assignments",
-    "evolution", "generate-appearance", "generate-task",
-    "thoughts", "notifications", "story-arcs", "soul",
+# Character-scoped URLs: which path segments ANY logged-in user may read for
+# ANY character. Everything else under a character is sensitive.
+#
+# Inverted on purpose (SEC-6): the old list named the sensitive segments, so
+# every segment nobody had thought of — /export, /memory/*, /outfit-batch — was
+# public by accident. The public set is small, finite and derived from what the
+# Player UI and the 3D client actually need to show the OTHER characters in a
+# room: their pictures, their portrait, where they are, what they are doing and
+# their 3D model.
+_PUBLIC_CHARACTER_SEGMENTS = {
+    "images", "profile-image", "expressions", "outfit-expression",
+    "current-location", "current-activity", "current-feeling",
+    "current-outfit", "model", "model3d", "silhouette",
 }
+
+# First segment after /characters/ that is a COLLECTION endpoint, not a
+# character name (/characters/list, /characters/at-location, ...).
+_RESERVED_CHARACTER_NAMES = {
+    "list", "chatbots", "at-location", "animate", "available-models",
+    "outfit-rules", "outfit-lora-options", "skills", "create", "import",
+    "graph", "migrate", "backfill", "",
+}
+
+
+def _path_parts(path: str):
+    from urllib.parse import unquote
+    return [unquote(p) for p in path.split("/") if p]
 
 
 def _is_sensitive_character_path(path: str) -> bool:
     """Checks whether the path touches sensitive character data.
 
-    - /characters/{name}/profile, /personality, /scheduler/*, /knowledge, ...
-    - /inventory/characters/{name}/* — the inventory is private
-    - /diary/*/{name}/* — the diary is private
-    - /relationships/... — relationships are private
+    - /characters/{name}/{segment} — sensitive unless the segment is public
+    - /characters/{name} — the character itself (read/delete)
+    - /secrets/{name}/* — secrets are private
+    - /inventory/characters/{name}/* — a character's inventory is private
+      (the shared item catalog under /inventory/items is NOT character data)
+    - /diary/*, /relationships/*, /assignments/* — private
     """
-    from urllib.parse import unquote
-    parts = [unquote(p) for p in path.split("/") if p]
+    parts = _path_parts(path)
+    if not parts:
+        return False
+    head = parts[0]
 
-    if len(parts) >= 1 and parts[0] == "inventory":
-        return True  # the whole inventory subtree is sensitive
-    if len(parts) >= 1 and parts[0] == "diary":
-        return True
-    if len(parts) >= 1 and parts[0] == "relationships":
-        return True
-    if len(parts) >= 1 and parts[0] == "assignments":
-        return True
-
-    if len(parts) >= 3 and parts[0] == "characters":
-        # /characters/{name}/{segment}
-        seg = parts[2]
-        if seg in _SENSITIVE_SEGMENTS:
+    if head == "characters":
+        if len(parts) < 2 or parts[1] in _RESERVED_CHARACTER_NAMES:
+            return False
+        if len(parts) == 2:
             return True
+        return parts[2] not in _PUBLIC_CHARACTER_SEGMENTS
+    if head == "secrets":
+        return True
+    if head == "inventory":
+        return len(parts) >= 2 and parts[1] == "characters"
+    if head in ("diary", "relationships", "assignments"):
+        return True
     return False
 
 
@@ -224,37 +257,185 @@ def _extract_characters_from_path(path: str):
 
     Matches:
       /characters/{name}/*
+      /secrets/{name}/*
       /inventory/characters/{name}/*
       /diary/{user_id}/{name}/*
-      /assignments-for-character/{name}/* (if it exists)
       /relationships/{a}/{b}
     """
-    from urllib.parse import unquote
-    parts = [unquote(p) for p in path.split("/") if p]
+    parts = _path_parts(path)
     result = []
-
-    reserved = {
-        "list", "chatbots", "at-location", "animate", "available-models",
-        "outfit-rules", "outfit-lora-options",
-        "graph", "migrate", "backfill", "",
-    }
 
     if len(parts) >= 2 and parts[0] == "characters":
         cand = parts[1]
-        if cand not in reserved:
+        if cand not in _RESERVED_CHARACTER_NAMES:
+            result.append(cand)
+    elif len(parts) >= 2 and parts[0] == "secrets":
+        cand = parts[1]
+        if cand not in _RESERVED_CHARACTER_NAMES:
             result.append(cand)
     elif len(parts) >= 3 and parts[0] == "inventory" and parts[1] == "characters":
         result.append(parts[2])
     elif len(parts) >= 3 and parts[0] == "diary":
         # /diary/{user_id}/{name}
         cand = parts[2]
-        if cand not in reserved:
+        if cand not in _RESERVED_CHARACTER_NAMES:
             result.append(cand)
     elif len(parts) >= 3 and parts[0] == "relationships":
         # /relationships/{a}/{b}
         for c in parts[1:3]:
-            if c not in reserved:
+            if c not in _RESERVED_CHARACTER_NAMES:
                 result.append(c)
     return result
 
 
+# ── Default-deny gate (SEC-2) ─────────────────────────────────────────
+#
+# Authentication used to be per route: a request without a session simply ran
+# through every middleware and reached the router, so hundreds of endpoints
+# answered anonymous callers. The gate turns that around — everything needs a
+# session unless it is on the allowlist below.
+#
+# The allowlist is what an unauthenticated BROWSER needs to reach a login form,
+# plus the two endpoints that carry their own credential:
+#   /                      -> redirect to /play
+#   /play, /game-admin     -> the React shells; both render <AuthGate>, which
+#                             shows the login form itself. A 401 here would
+#                             hand back JSON and no login form could ever load.
+#   /static/*              -> the built bundles + CSS the shells load
+#   /i18n/*                -> <I18nProvider> wraps <AuthGate>; the login form is
+#                             already translated
+#   /auth/login|logout|status -> the login round trip itself
+#   /health, /favicon.ico  -> liveness + the browser's automatic icon request
+#   /telegram/webhook      -> authenticated by X-Telegram-Bot-Api-Secret-Token
+#   /api/images            -> authenticated by X-API-Key
+_PUBLIC_EXACT = {
+    "/",
+    "/health",
+    "/favicon.ico",
+    "/play", "/play/",
+    "/game-admin", "/game-admin/",
+    "/auth/login", "/auth/logout", "/auth/status",
+    "/telegram/webhook",
+    "/api/images",
+}
+_PUBLIC_PREFIXES = ("/static", "/i18n")
+
+# Coarse second rule: prefixes a logged-in NON-admin has no business in. This
+# is not a substitute for the per-route Depends(require_admin) that some of
+# these routers already carry — it is the blanket for the routers that carry
+# none at all. Annotating ~250 single routes would be the alternative.
+_ADMIN_PREFIXES = (
+    "/admin",          # settings, users, models, agent-loop, assist, observer,
+                       # storyteller, world-setup
+    "/api/content",    # marketplace (installs executable packages)
+    "/dashboard",
+    "/improvements",
+    "/logs",
+    "/npc",
+    "/world-dev",
+    "/story",          # storyteller files (raw read/write/delete)
+    "/story-dev",
+    "/scheduler",
+    "/telegram",       # the webhook is on the public list above
+)
+# Readable for a player, writable only for an admin. /templates/{id} is what
+# the player's own avatar settings render from (character settings come from
+# the template, never from a hardcoded form) — writing a template is not.
+_ADMIN_WRITE_PREFIXES = ("/templates",)
+# Single state-changing routes that belong to an otherwise player-facing
+# router. /inventory/items/import and /characters/import unpack an uploaded
+# ZIP into the storage directory; /characters/create makes a new character.
+_ADMIN_EXACT = {
+    "/inventory/items/import",
+    "/characters/import",
+    "/characters/create",
+}
+# Deleting a location, a prop or a surface texture is an admin act.
+_ADMIN_DELETE_PREFIXES = ("/world",)
+_WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def _under(path: str, prefix: str) -> bool:
+    """True when ``path`` IS ``prefix`` or lies below it — segment-wise, so
+    ``/playful`` never counts as being under ``/play``."""
+    return path == prefix or path.startswith(prefix + "/")
+
+
+def is_public_path(path: str) -> bool:
+    """True for the paths that answer without a session."""
+    if path in _PUBLIC_EXACT:
+        return True
+    return any(_under(path, p) for p in _PUBLIC_PREFIXES)
+
+
+def is_admin_only_path(path: str, method: str) -> bool:
+    """True when only an admin may call this path with this method."""
+    method = method.upper()
+    if path in _ADMIN_EXACT:
+        return True
+    if any(_under(path, p) for p in _ADMIN_PREFIXES):
+        return True
+    if method in _WRITE_METHODS:
+        if any(_under(path, p) for p in _ADMIN_WRITE_PREFIXES):
+            return True
+    if method == "DELETE":
+        if any(_under(path, p) for p in _ADMIN_DELETE_PREFIXES):
+            return True
+        # DELETE /characters/{name} removes the character itself. Deeper
+        # deletes under a character (a gallery image, an animation) stay with
+        # the player and are covered by the allowed_characters filter.
+        parts = _path_parts(path)
+        if (len(parts) == 2 and parts[0] == "characters"
+                and parts[1] not in _RESERVED_CHARACTER_NAMES):
+            return True
+    return False
+
+
+def wants_html(method: str, accept: str) -> bool:
+    """True for a browser NAVIGATION rather than an API call.
+
+    A navigation gets a redirect to the login page (a JSON 401 would just be
+    printed as text in the address bar); everything else — fetch/XHR, <img>,
+    the three.js loaders — gets the 401 its client already knows how to
+    handle (it raises `auth:required` and the SPA shows its login form).
+    """
+    return method.upper() in ("GET", "HEAD") and "text/html" in (accept or "").lower()
+
+
+def login_redirect_target(path: str) -> str:
+    """Where an anonymous navigation is sent so the user can sign in.
+
+    Both shells render <AuthGate>, and its login form reads ``?return=`` and
+    navigates there after a successful login.
+    """
+    from urllib.parse import quote
+    base = "/game-admin" if any(_under(path, p) for p in _ADMIN_PREFIXES) else "/play"
+    return f"{base}?return={quote(path, safe='/')}"
+
+
+async def auth_gate_middleware(request: Request, call_next):
+    """Default-deny: no session -> 401 (or a redirect for a navigation).
+
+    Registered so that it runs INSIDE user_context_middleware — it reads the
+    user that one has already resolved into the contextvar. CORS preflights
+    are never gated: they carry no cookie by definition and are answered by
+    CORSMiddleware further in.
+    """
+    from fastapi.responses import JSONResponse, RedirectResponse
+
+    path = request.url.path
+    method = request.method.upper()
+
+    if method == "OPTIONS" or is_public_path(path):
+        return await call_next(request)
+
+    user = current_user_ctx.get()
+    if not user:
+        if wants_html(method, request.headers.get("accept", "")):
+            return RedirectResponse(url=login_redirect_target(path), status_code=302)
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+    if user.get("role") != users.ROLE_ADMIN and is_admin_only_path(path, method):
+        return JSONResponse(status_code=403, content={"detail": "Admin role required"})
+
+    return await call_next(request)

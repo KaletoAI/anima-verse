@@ -55,6 +55,21 @@ SECTIONS = {
                 "sensitive": True,
                 "requires_restart": True,
             },
+            "cors_origins": {
+                "type": "text",
+                "label": "Allowed CORS origins",
+                "default": "http://localhost:5173\nhttp://127.0.0.1:5173\n"
+                           "http://localhost:5183\nhttp://127.0.0.1:5183",
+                "description": "Origins that may call this API from ANOTHER origin, one "
+                               "per line (scheme + host + port, no trailing slash). The "
+                               "UIs this server delivers itself (/play, /game-admin) are "
+                               "same-origin and need no entry — this is for the Vite dev "
+                               "servers and for a 3D client running on another machine. "
+                               "Empty = no cross-origin access at all. A wildcard is not "
+                               "supported: with credentials it would let any web page a "
+                               "user opens read this API. Takes effect after a restart.",
+                "requires_restart": True,
+            },
             "storage_dir": {
                 "type": "str",
                 "label": "Storage Directory",
@@ -1257,6 +1272,25 @@ SECTIONS = {
                         "default": True,
                     },
                 },
+            },
+        },
+    },
+    "telegram": {
+        "label": "Telegram",
+        "icon": "✈",
+        "fields": {
+            "webhook_secret": {
+                "type": "password",
+                "label": "Webhook secret token",
+                "description": "Shared secret for POST /telegram/webhook. Telegram sends it "
+                               "back in the X-Telegram-Bot-Api-Secret-Token header; the "
+                               "server compares it and refuses every other caller. Pass the "
+                               "same value as secret_token when registering the webhook via "
+                               "setWebhook. Until this is set the webhook stays CLOSED — "
+                               "without it anyone who reaches the port can inject player "
+                               "messages. Stored in secrets.json.",
+                "sensitive": True,
+                "requires_restart": False,
             },
         },
     },

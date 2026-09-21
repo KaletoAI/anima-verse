@@ -320,19 +320,16 @@ class TelegramChannel(ChannelInterface):
         if not text or not chat_id:
             return
         
-        # Mappe Chat-ID zu User-ID
-        user_id = self.chat_to_user_mapping.get(chat_id)
-        if not user_id:
-            # Auto-Registrierung mit Telegram User Info
-            user_id = f"telegram_{chat_id}"
-            # Nutze Telegram Name wenn vorhanden
-            if from_user.get("first_name"):
-                display_name = from_user.get("first_name")
-                if from_user.get("last_name"):
-                    display_name += f" {from_user['last_name']}"
-                user_id = display_name
-        
-        # Füge zu Queue hinzu
+        # An unknown chat is dropped, never adopted. Auto-registering it made
+        # every stranger who reached this webhook a player: their text went
+        # into a character and the character's answer went back to THEIR chat.
+        # A chat is bound by an admin via POST /telegram/register/{user_id}.
+        if chat_id not in self.chat_to_user_mapping:
+            logger.warning("Telegram webhook: unknown chat_id %s dropped "
+                           "(register it first)", chat_id)
+            return
+
+        # Add to the queue
         await self.message_queue.put({
             "user_id": "",
             "content": text,
