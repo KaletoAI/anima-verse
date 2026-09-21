@@ -1377,8 +1377,10 @@ class ImageService:
           (a)  ``to_avatar_gallery`` -> the avatar (e.g. the SendImage intent).
           (b)  a recipient named in the prompt ("for Diego", "to Enzo") -> that
                recipient's gallery. Works for background thoughts too.
-          (c)  the avatar is ACTIVELY chatting with the creating NPC -> the
-               avatar's gallery.
+          (c)  the avatar is HERE with the creating NPC (same room, or within
+               earshot out in the open — ``perception.addressable_for``) ->
+               the avatar's gallery. That is what "we are in a conversation"
+               means since the room perception stream replaced the 1:1 chat.
           (d)  otherwise the creator keeps the picture (a background thought
                with no clear recipient).
 
@@ -1415,20 +1417,20 @@ class ImageService:
                                 "the prompt names it as the addressee)",
                                 recipient, character_name)
                     return recipient
-                _is_active_chat = False
-                try:
-                    from app.routes.chat import _get_chat_partner
-                    _is_active_chat = (
-                        (_get_chat_partner() or "").strip() == character_name)
-                except Exception:
-                    pass
-                if _is_active_chat and _avatar and _avatar != character_name:
+                _with_avatar = False
+                if _avatar and _avatar != character_name:
+                    try:
+                        from app.core.perception import addressable_for
+                        _with_avatar = character_name in addressable_for(_avatar)
+                    except Exception as _pe:  # noqa: BLE001
+                        logger.debug("co-presence check failed: %s", _pe)
+                if _with_avatar:
                     logger.info("Image goes to the avatar's gallery "
-                                "(agent=%s -> avatar=%s, source=active_chat)",
+                                "(agent=%s -> avatar=%s, source=co_present)",
                                 character_name, _avatar)
                     return _avatar
                 logger.info("Image stays with its creator '%s' (rp_context=True, "
-                            "no recipient detected, no active chat with the avatar)",
+                            "no recipient detected, the avatar is not here)",
                             character_name)
         except Exception as _gt_err:  # noqa: BLE001
             logger.debug("Gallery target resolve failed: %s", _gt_err)

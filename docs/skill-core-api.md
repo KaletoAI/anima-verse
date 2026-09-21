@@ -206,7 +206,7 @@ hängt, räumt ihn über denselben Weg auf (Check:
 | `app.core.perception.nearby_in_the_open(character_name, pos=None) -> List[str]` | Wer im Freien in Hörweite ist (Raum-Roster ∪ Radius) |
 | `app.core.agent_loop.get_agent_loop().bump(character_name, hint='', perception_template='', perception_vars=None, tool_whitelist=None) -> bool` ✅ | Charakter für einen zeitnahen Thought-Turn vormerken. `hint` ist die Zeile, die er dabei liest; `tool_whitelist` schränkt die angebotenen Verben ein. Liefert `False`, wenn er keinen Turn bekommen kann (z.B. temporärer NPC) |
 | `app.models.memory.add_memory(character_name, content, memory_type='semantic', importance=3, tags=None, context='', related_character='', …)` | Erinnerung anlegen |
-| `app.models.account.is_player_controlled(character_name)` / `get_active_character()` ✅ / `get_chat_partner()` ✅ / `get_player_identity(default='user')` ✅ | Avatar-Erkennung, aktueller Gesprächspartner, Anzeigename des Spielers |
+| `app.models.account.is_player_controlled(character_name)` / `get_active_character()` ✅ / `get_player_identity(default='user')` ✅ | Avatar-Erkennung, Anzeigename des Spielers. Einen festen 1:1-Gesprächspartner gibt es nicht mehr — wer gerade beisammen ist, sagt `app.core.perception.addressable_for(character_name)` |
 
 ## Chat & Messaging ✅ (talk_to / send_message / notify_user)
 

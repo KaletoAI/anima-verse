@@ -334,7 +334,7 @@ def build_chat_context(
     from app.models.character import (
         get_character_config,
         get_character_language_instruction)
-    from app.models.account import get_active_character, get_chat_partner
+    from app.models.account import get_player_identity
     from app.models.chat import get_chat_history
     from app.utils.history_manager import (
         get_time_based_history, get_cached_summary, refresh_summary_if_uncovered,
@@ -345,9 +345,12 @@ def build_chat_context(
     _chat_instance = resolve_llm(chat_llm_task(character_name),
                                  agent_name=character_name)
     lang_instruction = get_character_language_instruction(character_name)
-    # The player's active character is the conversation partner identity.
-    # Avatar identity, never the login name — "admin" used to leak in here.
-    user_display_name = get_active_character() or get_chat_partner() or "user"
+    # The player IS the avatar. ``get_player_identity`` is the one place that
+    # says so and keeps a login name out of character contexts; "user" is its
+    # sentinel for "no avatar", which the extraction below filters again.
+    # (The old ``get_chat_partner()`` fallback named the AGENT as the player's
+    # display name and has had no writer since the store routes were removed.)
+    user_display_name = get_player_identity("user")
 
     # Auto-derive the medium when it is not set
     if medium is None:

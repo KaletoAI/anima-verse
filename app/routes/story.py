@@ -18,7 +18,6 @@ from app.core.paths import get_storage_dir as _get_storage_dir
 
 from app.core.dependencies import get_skill_manager
 from app.core.streaming import StreamingAgent, ContentEvent
-from app.models.account import get_user_profile
 from app.models.character import (
     get_character_config,
     get_character_profile,
@@ -520,11 +519,12 @@ def _visualize_scene(character_name: str, text: str,
     _persons = _pb.detect_persons(text)
     appearances = [{"name": p.name, "appearance": p.appearance} for p in _persons]
 
-    # Story-Visualisierung: Nur den Character zeigen, nicht den User
-    user_profile = get_user_profile()
-    user_name = user_profile.get("user_name", "")
-    if user_name:
-        appearances = [p for p in appearances if p["name"] != user_name]
+    # Story visualisation shows the character, not the player: the player is
+    # the active avatar (the account's old login name is frozen data).
+    from app.models.account import get_active_character
+    avatar = get_active_character()
+    if avatar:
+        appearances = [p for p in appearances if p["name"] != avatar]
 
     # Story: Character immer einbeziehen — er erlebt die Story
     char_names = [p["name"] for p in appearances]

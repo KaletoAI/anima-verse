@@ -16,7 +16,7 @@ from app.core.db import get_connection, transaction
 
 logger = get_logger("unified_chat")
 
-# get_user_name absichtlich nicht importiert — Login-Name wuerde sonst als
+# The account login name is deliberately not used here — it would otherwise count as
 # Partner-Key in chat_messages leaken. Stattdessen wird get_player_identity
 # in _resolve_partner_key benutzt (lazy import dort).
 from app.models.channel import Message
@@ -171,7 +171,7 @@ class UnifiedChatManager:
                     deduped.append(r)
                 rows = deduped
                 # Frueher gab es einen Fallback auf den Account-Login-Namen
-                # (get_user_name) als Partner — der hat aber nur bestehende
+                # (the account login name) als Partner — der hat aber nur bestehende
                 # Admin-Chats sichtbar gemacht und neue Avatar-Chats blieben
                 # leer wenn jemand kurzzeitig keinen Avatar gewaehlt hatte.
                 # Entfernt: Login-Name ist kein gueltiger Partner-Key.

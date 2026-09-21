@@ -87,10 +87,6 @@ def save_user_profile(profile: Dict[str, Any]):
         get_logger("account").error("save_user_profile DB-Fehler: %s", e)
 
 
-def get_user_name() -> str:
-    return get_user_profile().get("user_name", "")
-
-
 # Login-Namen die NIE als Character/Speaker durchsickern duerfen — sie
 # tauchen sonst in chat_messages.partner, relationships.from_char und in
 # Prompt-Templates als "Was admin gesagt hat..." auf. Reserviert spiegelt
@@ -109,8 +105,8 @@ def get_player_identity(default: str = "user") -> str:
     (z.B. "admin"), der sonst als pseudo-Character in die Welt leaken
     wuerde.
 
-    Aufrufer die wirklich den Login-Namen brauchen (Admin-UI,
-    Authentifizierungs-Logging) sollten ``get_user_name`` direkt rufen.
+    The login name itself is not a person in the world; it is read
+    directly from the ``users`` table where authentication needs it.
     """
     ac = (get_active_character() or "").strip()
     if ac and ac.lower() not in _RESERVED_LOGIN_NAMES:
@@ -490,19 +486,6 @@ set_current_character = set_active_character
 get_current_agent = get_active_character
 
 
-def get_chat_partner() -> str:
-    """Der Character mit dem der aktuelle User chattet (Chat-Agent).
-
-    Per-User via Middleware-ContextVar. Ohne Request-Context (Background-Task)
-    gibt es keinen Chat-Partner — kein globaler Fallback, sonst wuerde ein
-    stale Wert als Gespraechspartner fuer fremde Charaktere durchsickern.
-    """
-    us = _current_user_settings()
-    if us is not None:
-        return us.get("chat_partner", "") or ""
-    return ""
-
-
 def is_player_controlled(character_name: str) -> bool:
     """Check whether *character_name* is currently steered by a human player.
 
@@ -558,17 +541,20 @@ def get_all_avatars() -> set:
 
 
 def get_user_gender() -> str:
-    """Return the gender of the player's active character (fallback: account profile)."""
+    """Return the gender of the player's active character.
+
+    The player is the AVATAR. Without one there is nobody whose gender could
+    be meant — the old tail fallback read an ``account.gender`` key that has
+    had no writer since the store routes were removed.
+    """
     active = get_active_character()
     if active:
         try:
             from app.models.character import get_character_profile
-            g = get_character_profile(active).get("gender", "")
-            if g:
-                return g
+            return get_character_profile(active).get("gender", "")
         except Exception:
             pass
-    return get_user_profile().get("gender", "")
+    return ""
 
 
 # --- Passwort-Verwaltung ---
@@ -615,20 +601,23 @@ def get_user_images_dir() -> Path:
 
 
 def get_user_profile_image() -> str:
+    """Profile image file name of the player's active character.
+
+    Empty without an avatar — the ``account.profile_image`` key the tail
+    fallback used to read has had no writer since the store routes went.
+    """
     active = get_active_character()
     if active:
         try:
             from app.models.character import get_character_profile_image
-            img = get_character_profile_image(active)
-            if img:
-                return img
+            return get_character_profile_image(active) or ""
         except Exception:
             pass
-    return get_user_profile().get("profile_image", "")
+    return ""
 
 
 def get_user_appearance() -> str:
-    """Return the appearance of the player's active character."""
+    """Return the appearance of the player's active character (else "")."""
     active = get_active_character()
     if active:
         try:
@@ -647,4 +636,7 @@ def get_user_appearance() -> str:
         except Exception:
             pass
 
-    return get_user_profile().get("user_appearance", "")
+    # No avatar -> no person. ``account.user_appearance`` lost its only writer
+    # with the store routes, so the old tail fallback could only ever serve a
+    # value frozen in an existing world.
+    return ""

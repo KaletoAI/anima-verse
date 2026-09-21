@@ -79,20 +79,22 @@ class TalkToSkill(PluginSkill):
         if target_name == sender_name:
             return "You cannot talk to yourself."
 
-        # Chat-partner check: TalkTo is for THIRD parties — the current chat
-        # partner receives statements directly through the RP, so a TalkTo
-        # call would be redundant.
-        try:
-            from app.models.account import get_chat_partner
-            current_partner = (get_chat_partner() or "").strip()
-            if current_partner and target_name == current_partner:
-                return (
-                    f"{target_name} is already in the current conversation — "
-                    f"address them directly through your RP speech, not via TalkTo. "
-                    f"TalkTo is only for third characters within earshot."
-                )
-        except Exception:
-            pass
+        # TalkTo is for THIRD parties. In a reactive chat turn the character
+        # is ALREADY answering somebody — the prose of that turn is delivered
+        # to them — so a TalkTo aimed back at them would only repeat it. Who
+        # that is comes from the TURN, not from a stored chat partner: the
+        # executor puts the speaker of the triggering utterance into
+        # ``initiator`` (chat_engine.build_chat_context), which is the avatar's
+        # name when the player spoke. An autonomous thought turn carries no
+        # initiator at all — there the verb IS the only way spoken words reach
+        # anyone, avatar included, so nothing is refused here.
+        initiator = str(data.get("initiator") or "").strip()
+        if initiator and target_name == initiator:
+            return (
+                f"{target_name} is the one you are answering right now — "
+                f"address them directly through your RP speech, not via TalkTo. "
+                f"TalkTo is only for third characters within earshot."
+            )
 
         # Earshot check. Inside a location it is the ROOM, outside it is the
         # hearing radius — the same boundary the perception fan-out uses when
@@ -155,7 +157,6 @@ class TalkToSkill(PluginSkill):
         # Pending-Report: when the skill was triggered from a chat with a
         # third party (chain of command), record that the sender owes a
         # follow-up to whoever asked them to talk.
-        initiator = data.get("initiator", "").strip()
         if initiator and initiator != sender_name:
             try:
                 from app.core.pending_reports import add_report

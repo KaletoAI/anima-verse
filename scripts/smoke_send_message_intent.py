@@ -24,11 +24,12 @@ Three things are wrong with that, and the auth gate only made the first fatal:
   * ``payload["user_id"]`` is ALWAYS the empty string: the payload is built in
     ``intent_engine._submit_to_task_queue`` as ``{"user_id": "", "agent_name":
     …, "intent_type": …, **intent.params}``.  The URL was ``/chat/``.
-  * The endpoint reads neither ``agent`` nor ``silent`` (grep both in
-    app/routes/chat.py) — it takes its responder from ``_get_chat_partner()``
-    and treats ``message`` as what the PLAYER typed.  So on the happy path the
-    character's own follow-up would have been recorded as a user utterance to
-    whoever the current chat partner happened to be, and answered by an LLM.
+  * The endpoint read neither ``agent`` nor ``silent``; it took its responder
+    from the account's stored 1:1 chat partner and treated ``message`` as what
+    the PLAYER typed.  So on the happy path the character's own follow-up
+    would have been recorded as a user utterance to whoever that stored
+    partner happened to be, and answered by an LLM.  (Both the route and that
+    stored partner are gone — conversations happen in the room.)
   * ``os.environ["PORT"]`` is an env read, which this project forbids
     (CLAUDE.md: "no .env file, no environment variables").
 

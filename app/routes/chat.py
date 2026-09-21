@@ -82,15 +82,6 @@ def _strip_tool_hallucinations(text: str) -> str:
     return text.strip()
 
 
-# --- Chat partner helper ---
-
-def _get_chat_partner() -> str:
-    """Read the current chat partner (who we talk TO) — per-user via account."""
-    from app.models.account import get_chat_partner
-    return get_chat_partner()
-
-
-
 # --- Chat Image Upload Endpoint ---
 
 from app.core.paths import get_storage_dir as _get_storage_dir

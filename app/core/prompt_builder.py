@@ -35,7 +35,6 @@ from app.models.account import (
     get_active_character,
     get_user_appearance,
     get_user_gender,
-    get_user_profile,
     get_user_profile_image,
     get_user_images_dir)
 from app.models.world import get_background_path, get_location, get_room_by_id
@@ -329,19 +328,20 @@ class PromptBuilder:
         return persons
 
     def _avatar_name(self) -> str:
-        """Name des User-Avatars (aktiver Character, sonst Login-Name)."""
-        return (
-            get_active_character()
-            or get_user_profile().get("user_name", "")
-        )
+        """Name of the player's avatar — empty when the player controls none.
+
+        The avatar IS the player in the world. The account login name used to
+        serve as a fallback here, which drew a person who exists nowhere: with
+        no avatar there is nobody to put in the picture.
+        """
+        return get_active_character()
 
     def _is_avatar_name(self, name: str) -> bool:
-        """True wenn name den User-Avatar referenziert (active_character ODER Login-Name)."""
+        """True when *name* refers to the player's avatar."""
         if not name:
             return False
         active = get_active_character()
-        login = get_user_profile().get("user_name", "")
-        return name == active or (bool(login) and name == login)
+        return bool(active) and name == active
 
     def _persons_from_appearances(self, appearances: List[Dict[str, str]]) -> List[Person]:
         """Konvertiert bestehende Appearance-Dicts in Person-Objekte."""
@@ -406,15 +406,11 @@ class PromptBuilder:
                     name=self.character_name, appearance=appearance,
                     gender=gender, is_agent=True))
 
-        # 2. User-Avatar: Avatar-Name, Login-Name oder Du-Pronomen
+        # 2. User-Avatar: Avatar-Name oder Du-Pronomen
         avatar_name = self._avatar_name()
-        login_name = get_user_profile().get("user_name", "")
         if avatar_name:
-            name_candidates = {avatar_name.lower()}
-            if login_name:
-                name_candidates.add(login_name.lower())
             user_mentioned = (
-                any(re.search(r'\b' + re.escape(n) + r'\b', padded) for n in name_candidates)
+                re.search(r'\b' + re.escape(avatar_name.lower()) + r'\b', padded) is not None
                 or any(p in padded for p in _USER_PRONOUNS)
             )
             if user_mentioned:
