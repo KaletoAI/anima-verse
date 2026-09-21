@@ -668,7 +668,6 @@ def _set_decency_exempt_route_sync(character_name: str,
 @router.get("/{character_name}/outfit-expression")
 def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "",
                           pieces: str = "", items: str = "",
-                          piece_colors: str = "",
                           override: int = 0, trigger: int = 0, force: int = 0,
                           fallback: str = ""):
     """Returns the expression/pose variant for current mood + pose + equipped.
@@ -705,7 +704,7 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
     # default — so the frontend finds the variant cache that matches
     # chat/scheduler. Override mode allows empty params (a set preview is
     # generic).
-    _is_override = bool(override or pieces or items or piece_colors)
+    _is_override = bool(override or pieces or items)
     if not _is_override:
         if not mood:
             try:
@@ -729,7 +728,6 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
     # the wardrobe) do not kick off generations en masse.
     _eq_pieces: Optional[Dict[str, str]] = None
     _eq_items: Optional[List[str]] = None
-    _eq_meta: Optional[Dict[str, Dict[str, Any]]] = None
     if _is_override:
         _eq_pieces = {}
         for pair in pieces.split(","):
@@ -741,30 +739,17 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
             if slot and iid:
                 _eq_pieces[slot] = iid
         _eq_items = [s.strip() for s in items.split(",") if s.strip()]
-        # piece_colors: "slot:color,slot:color" — only for slots that are in pieces
-        _eq_meta = {}
-        for pair in piece_colors.split(","):
-            pair = pair.strip()
-            if not pair or ":" not in pair:
-                continue
-            slot, color = pair.split(":", 1)
-            slot, color = slot.strip(), color.strip()
-            if slot and color and slot in _eq_pieces:
-                _eq_meta[slot] = {"color": color}
     else:
         try:
             from app.models.inventory import get_equipped_pieces, get_equipped_items
             _eq_pieces = get_equipped_pieces(character_name)
             _eq_items = get_equipped_items(character_name)
-            # equipped_pieces_meta (colour override) was dropped in step 3.
-            _eq_meta = None
         except Exception:
-            _eq_pieces, _eq_items, _eq_meta = None, None, None
+            _eq_pieces, _eq_items = None, None
 
     # Check cache
     cached = get_cached_expression(character_name, mood, pose_key,
-                                    equipped_pieces=_eq_pieces, equipped_items=_eq_items,
-                                    equipped_pieces_meta=_eq_meta)
+                                    equipped_pieces=_eq_pieces, equipped_items=_eq_items)
     if cached and force:
         # Force regenerate: delete the cached PNG + sidecar so the trigger
         # path below renders the variant anew.
@@ -824,7 +809,6 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
             default_cached = get_cached_expression(
                 character_name, "", "",
                 equipped_pieces=_eq_pieces, equipped_items=_eq_items,
-                equipped_pieces_meta=_eq_meta,
             )
         except Exception:
             default_cached = None
@@ -856,8 +840,7 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
     # selected set without putting it on first).
     if _is_override and not trigger:
         if is_generating(character_name, mood, pose_key,
-                         equipped_pieces=_eq_pieces, equipped_items=_eq_items,
-                         equipped_pieces_meta=_eq_meta):
+                         equipped_pieces=_eq_pieces, equipped_items=_eq_items):
             if _want_fallback:
                 fb = _serve_fallback()
                 if fb is not None:
@@ -869,14 +852,12 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
         raise HTTPException(status_code=404, detail="No variant in the cache")
 
     if has_failed(character_name, mood, pose_key,
-                  equipped_pieces=_eq_pieces, equipped_items=_eq_items,
-                  equipped_pieces_meta=_eq_meta):
+                  equipped_pieces=_eq_pieces, equipped_items=_eq_items):
         if force or trigger:
             # Force/trigger: clear the failed marker so a retry is possible
             from app.core.expression_regen import clear_failed_marker
             clear_failed_marker(character_name, mood, pose_key,
-                                equipped_pieces=_eq_pieces, equipped_items=_eq_items,
-                                equipped_pieces_meta=_eq_meta)
+                                equipped_pieces=_eq_pieces, equipped_items=_eq_items)
         else:
             raise HTTPException(status_code=404, detail="Variant generation failed")
 
@@ -898,7 +879,6 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
     # rendering) coalesce so one chat turn does not produce 3 variants.
     started = trigger_expression_generation(character_name, mood, pose_key,
                                              equipped_pieces=_eq_pieces, equipped_items=_eq_items,
-                                             equipped_pieces_meta=_eq_meta,
                                              ignore_cooldown=True,
                                              ignore_feature_gate=bool(trigger),
                                              coalesce=not bool(trigger))
@@ -913,8 +893,7 @@ def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "
             content={"status": "generating", "mood": mood, "pose_key": pose_key})
     # Competing request: another one has just started it → 202 instead of 404
     if is_generating(character_name, mood, pose_key,
-                     equipped_pieces=_eq_pieces, equipped_items=_eq_items,
-                     equipped_pieces_meta=_eq_meta):
+                     equipped_pieces=_eq_pieces, equipped_items=_eq_items):
         if _want_fallback:
             fb = _serve_fallback()
             if fb is not None:

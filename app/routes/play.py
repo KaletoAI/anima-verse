@@ -3725,14 +3725,10 @@ def _play_set_outfit_sync(user, body: Any):
         slots = (((get_item(pid) or {}).get("outfit_piece") or {}).get("slots") or [])
         if slots:
             pieces_by_slot[slots[0]] = pid
-    pieces_meta = {}
-    for _slot, _color in (target.get("pieces_colors") or {}).items():
-        if _color and pieces_by_slot.get(_slot):
-            pieces_meta[_slot] = {"color": str(_color).strip()}
     with keyed_lock("character_profile", avatar):
         apply_equipped_pieces(avatar, pieces=pieces_by_slot,
                               remove_slots=list(target.get("remove_slots") or []),
-                              pieces_meta=pieces_meta, source="play_outfit")
+                              source="play_outfit")
     # Direct action is world-visible: narrator line -> NPCs can react.
     try:
         from app.core.perception import announce_action

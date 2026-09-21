@@ -922,15 +922,12 @@ def _apply_equipped_route_sync(character_name: str,
     user_id = (body.get("user_id") or "").strip()
     pieces = body.get("pieces") or {}
     remove_slots = body.get("remove_slots") or []
-    pieces_meta = body.get("pieces_meta") or {}
     if not isinstance(pieces, dict):
         raise HTTPException(status_code=400, detail="pieces must be {slot: item_id}")
-    if not isinstance(pieces_meta, dict):
-        pieces_meta = {}
     with keyed_lock("character_profile", character_name):
         result = apply_equipped_pieces(character_name,
             pieces=pieces, remove_slots=remove_slots,
-            pieces_meta=pieces_meta, source="ui_wardrobe")
+            source="ui_wardrobe")
     return {
         "status": "ok",
         "changed": result["changed"],
@@ -995,19 +992,10 @@ def _apply_outfit_set_route_sync(character_name: str,
         if slots:
             pieces_by_slot[slots[0]] = pid
 
-    # Gespeicherte Farben pro Slot in pieces_meta uebersetzen
-    saved_colors = target.get("pieces_colors") or {}
-    pieces_meta: Dict[str, Dict[str, Any]] = {}
-    if isinstance(saved_colors, dict):
-        for _slot, _color in saved_colors.items():
-            if _color and pieces_by_slot.get(_slot):
-                pieces_meta[_slot] = {"color": str(_color).strip()}
-
     with keyed_lock("character_profile", character_name):
         result = apply_equipped_pieces(character_name,
             pieces=pieces_by_slot,
             remove_slots=list(target.get("remove_slots") or []),
-            pieces_meta=pieces_meta,
             source="outfit_preset")
     return {
         "status": "ok",

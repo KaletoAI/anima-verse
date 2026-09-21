@@ -1927,16 +1927,9 @@ def equip_piece(character_name: str, item_id: str,
         eq[s] = item_id
     profile["equipped_pieces"] = eq
 
-    # Farb-Meta: alle Slots die durch dieses Equip ein neues Item bekommen
-    # haben verlieren ihre Farbe. Eigene unveraenderte Slots behalten sie.
-    meta = profile.get("equipped_pieces_meta") or {}
-    meta_changed = False
-    for s in slots:
-        if s in meta:
-            meta.pop(s, None)
-            meta_changed = True
-    if meta_changed:
-        profile["equipped_pieces_meta"] = meta
+    # Dead key from the abolished per-slot colour override: drop it here so an
+    # old profile blob cleans itself up on its next outfit change.
+    profile.pop("equipped_pieces_meta", None)
     save_character_profile(character_name, profile)
     logger.info("equip_piece [%s]: slots=%s item=%s%s",
                 character_name, slots, item_id,
@@ -1954,8 +1947,7 @@ def unequip_piece(character_name: str,
 
     Multi-slot pieces come off completely: every slot the item sits in is
     cleared. The piece stays in the inventory, it is just no longer equipped.
-    The colour meta of every affected slot is dropped. ``source`` is the
-    caller context for the state-history entry.
+    ``source`` is the caller context for the state-history entry.
     """
     from app.models.character import get_character_profile, save_character_profile
     profile = get_character_profile(character_name)
@@ -1978,10 +1970,9 @@ def unequip_piece(character_name: str,
     for s in cleared_slots:
         eq.pop(s, None)
     profile["equipped_pieces"] = eq
-    meta = profile.get("equipped_pieces_meta") or {}
-    for s in cleared_slots:
-        meta.pop(s, None)
-    profile["equipped_pieces_meta"] = meta
+    # Dead key from the abolished per-slot colour override: drop it here so an
+    # old profile blob cleans itself up on its next outfit change.
+    profile.pop("equipped_pieces_meta", None)
     save_character_profile(character_name, profile)
     logger.info("unequip_piece [%s]: item=%s slots=%s",
                 character_name, removed, cleared_slots)
@@ -2046,7 +2037,6 @@ def apply_equipped_pieces(character_name: str, *,
     pieces: Optional[Dict[str, str]] = None,
     items: Optional[List[str]] = None,
     remove_slots: Optional[List[str]] = None,
-    pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
     source: str = "") -> Dict[str, Any]:
     """Atomic equip change with diff detection.
 
@@ -2057,9 +2047,6 @@ def apply_equipped_pieces(character_name: str, *,
     items:  target state of the non-piece items (list). None = untouched.
     remove_slots: slots that are explicitly cleared (also without a `pieces`
             argument).
-    pieces_meta: optional per-slot metadata (e.g. {"outer": {"color": "red"}}).
-            Merged into equipped_pieces_meta and overriding the auto-cleanup
-            logic (whoever supplies meta has the final say).
     source: caller context, for the log line and the state-history entry
             (ui_wardrobe, skill, ...).
 
@@ -2182,58 +2169,12 @@ def apply_equipped_pieces(character_name: str, *,
 
     changed = (target_pieces != before_pieces) or (target_items != before_items)
 
-    # Meta-Handling: zuerst Auto-Cleanup (Slots wo Item wechselt/leer wird),
-    # dann Overrides aus pieces_meta anwenden.
-    meta = dict(profile.get("equipped_pieces_meta") or {})
-    incoming_meta_slots = set((pieces_meta or {}).keys())
-    meta_changed = False
     if changed:
-        for _slot in list(meta.keys()):
-            if _slot in incoming_meta_slots:
-                continue  # Explizit gesetzter Slot — nicht automatisch raeumen
-            _new_iid = target_pieces.get(_slot)
-            _old_iid = before_pieces.get(_slot)
-            if not _new_iid or _new_iid != _old_iid:
-                meta.pop(_slot, None)
-                meta_changed = True
-
-    if pieces_meta:
-        for _slot, _slot_meta in pieces_meta.items():
-            if not isinstance(_slot_meta, dict):
-                continue
-            color = (_slot_meta.get("color") or "").strip()
-            if not target_pieces.get(_slot):
-                # Kein Piece im Slot -> keine Meta sinnvoll, evtl. bestehende entfernen
-                if _slot in meta:
-                    meta.pop(_slot, None)
-                    meta_changed = True
-                continue
-            # Rarity-Gate: nur "generic" Outfits nehmen Farben an
-            _it = get_item(target_pieces[_slot]) or {}
-            _rarity = (_it.get("rarity") or "common").lower()
-            if _rarity != "generic" and color:
-                if _slot in meta:
-                    meta.pop(_slot, None)
-                    meta_changed = True
-                continue
-            current = meta.get(_slot) or {}
-            new_entry = dict(current)
-            if color:
-                new_entry["color"] = color
-            else:
-                new_entry.pop("color", None)
-            if new_entry:
-                if meta.get(_slot) != new_entry:
-                    meta[_slot] = new_entry
-                    meta_changed = True
-            elif _slot in meta:
-                meta.pop(_slot, None)
-                meta_changed = True
-
-    if changed or meta_changed:
         profile["equipped_pieces"] = target_pieces
         profile["equipped_items"] = target_items
-        profile["equipped_pieces_meta"] = meta
+        # Dead key from the abolished per-slot colour override: drop it here so
+        # an old profile blob cleans itself up on its next outfit change.
+        profile.pop("equipped_pieces_meta", None)
         save_character_profile(character_name, profile)
         logger.info(
             "apply_equipped_pieces [%s] source=%s pieces=%d items=%d changed=1",
@@ -2246,38 +2187,36 @@ def apply_equipped_pieces(character_name: str, *,
         # sets), so a mere top swap would claim "put on hoodie, slacks, shoes"
         # although slacks and shoes never came off. The character reads its
         # own log in the prompt — it must not contain actions that never
-        # happened. `meta_changed` alone (a pure colour change) is no worn-
-        # state change at all and writes nothing.
-        if changed:
-            def _unique(ids: Iterable[str]) -> List[str]:
-                out: List[str] = []
-                for iid in ids:
-                    if iid and iid not in out:
-                        out.append(iid)
-                return out
+        # happened.
+        def _unique(ids: Iterable[str]) -> List[str]:
+            out: List[str] = []
+            for iid in ids:
+                if iid and iid not in out:
+                    out.append(iid)
+            return out
 
-            before_ids = set(before_pieces.values()) | set(before_items)
-            after_ids = set(target_pieces.values()) | set(target_items)
-            newly_on = _unique(
-                [i for i in target_pieces.values() if i not in before_ids]
-                + [i for i in target_items if i not in before_ids])
-            newly_off = _unique(
-                [i for i in before_pieces.values() if i not in after_ids]
-                + [i for i in before_items if i not in after_ids])
-            _record_outfit_history(
-                character_name, "unequip", newly_off,
-                [s for s, i in before_pieces.items() if i in newly_off], source)
-            # No `displaced` here: this path already writes the unequip entry
-            # above, so naming the same pieces twice would only inflate the
-            # log.
-            _record_outfit_history(
-                character_name, "equip", newly_on,
-                [s for s, i in target_pieces.items() if i in newly_on], source)
+        before_ids = set(before_pieces.values()) | set(before_items)
+        after_ids = set(target_pieces.values()) | set(target_items)
+        newly_on = _unique(
+            [i for i in target_pieces.values() if i not in before_ids]
+            + [i for i in target_items if i not in before_ids])
+        newly_off = _unique(
+            [i for i in before_pieces.values() if i not in after_ids]
+            + [i for i in before_items if i not in after_ids])
+        _record_outfit_history(
+            character_name, "unequip", newly_off,
+            [s for s, i in before_pieces.items() if i in newly_off], source)
+        # No `displaced` here: this path already writes the unequip entry
+        # above, so naming the same pieces twice would only inflate the
+        # log.
+        _record_outfit_history(
+            character_name, "equip", newly_on,
+            [s for s, i in target_pieces.items() if i in newly_on], source)
         _notify_outfit_changed(character_name, source)
 
     return {
         "status": "ok",
-        "changed": changed or meta_changed,
+        "changed": changed,
         "applied": applied,
         "cleared": cleared,
         "skipped": skipped,
@@ -2285,7 +2224,6 @@ def apply_equipped_pieces(character_name: str, *,
         "pieces_after": target_pieces,
         "items_before": before_items,
         "items_after": target_items,
-        "meta_after": meta,
     }
 
 

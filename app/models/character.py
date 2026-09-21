@@ -253,9 +253,8 @@ _STATE_META_KEYS = ("equipped_pieces", "equipped_items",
                     "current_activity_detail",
                     "movement_target",
                     "state_flag_since")     # flag -> canonical GameTime (lifecycle)
-# Entfernt in Schritt 8 (Cleanup, May 2026):
+# Removed in step 8 (cleanup, May 2026):
 # - runtime_outfit_skip → outfit_intent.forbidden_slots
-# - equipped_pieces_meta → Items eindeutig, Farbe im prompt_fragment
 
 # Per-Character User-Config (nicht Stamm) — wandern in config_json, nicht profile_json.
 # Beim Laden aus config_json in Profile injiziert (fuer Abwaerts-Kompatibilitaet der
@@ -3100,13 +3099,8 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
                     existing["pieces"] = list(outfit_data["pieces"] or [])
                 if "remove_slots" in outfit_data:
                     existing["remove_slots"] = list(outfit_data["remove_slots"] or [])
-                if "pieces_colors" in outfit_data:
-                    _pc = outfit_data.get("pieces_colors") or {}
-                    if isinstance(_pc, dict):
-                        existing["pieces_colors"] = {
-                            str(k): str(v).strip()
-                            for k, v in _pc.items() if v and str(v).strip()
-                        }
+                # Dead key of the abolished per-slot colour override.
+                existing.pop("pieces_colors", None)
                 save_character_outfits(character_name, outfits)
                 return outfit_id
 
@@ -3116,18 +3110,12 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
     name = outfit_data.get("name", "")
     if not name or not name.strip():
         name = _next_outfit_name(outfits)
-    _raw_pc = outfit_data.get("pieces_colors") or {}
-    _pieces_colors = {
-        str(k): str(v).strip()
-        for k, v in _raw_pc.items() if v and str(v).strip()
-    } if isinstance(_raw_pc, dict) else {}
     outfits.append({
         "id": outfit_id,
         "name": name,
         "outfit": outfit_data.get("outfit", ""),
         "pieces": list(outfit_data.get("pieces", []) or []),
         "remove_slots": list(outfit_data.get("remove_slots", []) or []),
-        "pieces_colors": _pieces_colors,
         "locations": outfit_data.get("locations", []),
         "activities": outfit_data.get("activities", []),
         "excluded_locations": outfit_data.get("excluded_locations", []),

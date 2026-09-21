@@ -1,19 +1,18 @@
-"""Outfit-Renderer: zentrale Quelle für Outfit-Beschreibungen.
+"""Outfit renderer: the central source of outfit descriptions.
 
 Plan: development_instructions/plan-outfit-system-rethink.md §4
 
-Eine Quelle, eine Cover-Berechnung, ein Render-Pfad. Wird von Chat-
-Appearance UND Bild-Prompt-Generation (expression_regen, image_generation)
-genutzt.
+One source, one cover computation, one render path. Used by the chat
+appearance AND by image prompt generation (expression_regen,
+image_generation).
 
-Wichtige Designentscheidungen:
-- equipped_pieces_meta (Pro-Slot Farb-Override) wird NICHT mehr gelesen.
-  Items sind eindeutig — Farbe steckt im prompt_fragment des Items selbst.
-  Plan §5, Entscheidung 2026-05-13.
-- Multi-Slot-Pieces werden nur EINMAL gerendert (am ersten Slot in
-  VALID_PIECE_SLOTS-Reihenfolge).
-- Cover-Logik: `covers` schluckt Slots komplett, `partially_covers`
-  formuliert "X underneath Y".
+Key design decisions:
+- Per-slot colour overrides do not exist. Items are unambiguous — the colour
+  sits in the item's own prompt_fragment. Plan §5, decision 2026-05-13.
+- Multi-slot pieces are rendered only ONCE (at the first slot in
+  VALID_PIECE_SLOTS order).
+- Cover logic: `covers` swallows slots entirely, `partially_covers` phrases
+  "X underneath Y".
 """
 from typing import Any, Dict, List, Optional, Set, Tuple
 

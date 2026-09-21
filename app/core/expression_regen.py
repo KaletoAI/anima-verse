@@ -91,16 +91,11 @@ def _safe_name(name: str) -> str:
 
 
 def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
-                        equipped_items: Optional[list] = None,
-                        equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
+                        equipped_items: Optional[list] = None) -> str:
     """Stable signature of the worn items (pieces + other equipment).
 
     Slot order is sorted so the same equip set always produces the same hash;
     items alphabetically.
-
-    The equipped_pieces_meta parameter stays in the signature for existing
-    callers but is ignored — colour overrides were dropped in step 3
-    (May 2026, plan §5).
     """
     parts = []
     if equipped_pieces:
@@ -145,7 +140,6 @@ def _cache_key(mood: str, pose_key: str,
                character_name: str = "",
                equipped_pieces: Optional[Dict[str, str]] = None,
                equipped_items: Optional[list] = None,
-               equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
                state_fp: Optional[str] = None) -> str:
     """Build a deterministic cache key.
 
@@ -165,8 +159,6 @@ def _cache_key(mood: str, pose_key: str,
     NPC) it is the free-text ``outfit_description`` the image is actually
     rendered from. Without it every such character in the world shared one
     key and editing the outfit text invalidated nothing.
-    ``equipped_pieces_meta`` is still accepted for existing callers and still
-    ignored (colour overrides were dropped in step 3, May 2026).
 
     ``state_fp``: fingerprint of the triggered image-modifier state
     (model_refs.state_fingerprint). ``None`` = look it up live for
@@ -193,8 +185,7 @@ def _cache_key(mood: str, pose_key: str,
 def get_cached_expression(character_name: str,
                           mood: str, pose_key: str,
                           equipped_pieces: Optional[Dict[str, str]] = None,
-                          equipped_items: Optional[list] = None,
-                          equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> Optional[Path]:
+                          equipped_items: Optional[list] = None) -> Optional[Path]:
     """Check if a cached expression image exists. Returns path or None.
 
     On a hit, updates the sidecar JSON with ``last_used_at`` (unix ts) and
@@ -202,7 +193,7 @@ def get_cached_expression(character_name: str,
     variants to evict when a character exceeds its cap.
     """
     expr_dir = _get_expressions_dir(character_name)
-    key = _cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)
+    key = _cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)
     for ext in (".png", ".jpg", ".webp"):
         path = expr_dir / f"{key}{ext}"
         if path.exists():
@@ -213,14 +204,13 @@ def get_cached_expression(character_name: str,
 
 def peek_cached_expression(character_name: str, mood: str, pose_key: str,
                            equipped_pieces: Optional[Dict[str, str]] = None,
-                           equipped_items: Optional[list] = None,
-                           equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> Optional[Path]:
+                           equipped_items: Optional[list] = None) -> Optional[Path]:
     """Like get_cached_expression but WITHOUT the side effect (no sidecar
     touch) — for version/existence checks on every poll, so use_count/LRU
     stay honest."""
     expr_dir = _get_expressions_dir(character_name)
     key = _cache_key(mood, pose_key, character_name, equipped_pieces,
-                     equipped_items, equipped_pieces_meta)
+                     equipped_items)
     for ext in (".png", ".jpg", ".webp"):
         path = expr_dir / f"{key}{ext}"
         if path.exists():
@@ -370,21 +360,20 @@ def prune_variants_all(max_per_char: Optional[int] = None) -> int:
 
 def is_generating(character_name: str, mood: str, pose_key: str,
                   equipped_pieces: Optional[Dict[str, str]] = None,
-                  equipped_items: Optional[list] = None,
-                  equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+                  equipped_items: Optional[list] = None) -> bool:
     """True while a generation runs OR waits inside the coalesce window.
 
     A pending coalesce counts as generating so the frontend polling does not
     fire a new trigger per poll (which would reset the debounce timer) and
     gets a 202 until the image is actually there.
     """
-    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
+    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)}"
     with _generating_lock:
         if key in _generating:
             return True
         pending = _pending_triggers.get(character_name)
         if pending:
-            pending_key = f"{character_name}:{_cache_key(pending.get('mood', ''), pending.get('pose_key', ''), character_name, pending.get('equipped_pieces'), pending.get('equipped_items'), pending.get('equipped_pieces_meta'))}"
+            pending_key = f"{character_name}:{_cache_key(pending.get('mood', ''), pending.get('pose_key', ''), character_name, pending.get('equipped_pieces'), pending.get('equipped_items'))}"
             if pending_key == key:
                 return True
     return False
@@ -392,10 +381,9 @@ def is_generating(character_name: str, mood: str, pose_key: str,
 
 def has_failed(character_name: str, mood: str, pose_key: str,
                equipped_pieces: Optional[Dict[str, str]] = None,
-               equipped_items: Optional[list] = None,
-               equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+               equipped_items: Optional[list] = None) -> bool:
     """Check if generation recently failed for this combo (avoids retry loops)."""
-    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
+    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)}"
     with _generating_lock:
         return key in _failed
 
@@ -496,11 +484,10 @@ def invalidate_variants_for_item(item_id: str) -> int:
 
 def clear_failed_marker(character_name: str, mood: str, pose_key: str,
                          equipped_pieces: Optional[Dict[str, str]] = None,
-                         equipped_items: Optional[list] = None,
-                         equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
+                         equipped_items: Optional[list] = None) -> None:
     """Removes the failed marker for one combination so the generation can be
     attempted again."""
-    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
+    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)}"
     with _generating_lock:
         _failed.discard(key)
 
@@ -654,7 +641,6 @@ def trigger_expression_generation(character_name: str,
                                   mood: str, pose_key: str,
                                   equipped_pieces: Optional[Dict[str, str]] = None,
                                   equipped_items: Optional[list] = None,
-                                  equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
                                   ignore_cooldown: bool = False,
                                   ignore_feature_gate: bool = False,
                                   prompt_prefix: Optional[str] = None,
@@ -706,18 +692,16 @@ def trigger_expression_generation(character_name: str,
             character_name, mood, pose_key,
             equipped_pieces=equipped_pieces,
             equipped_items=equipped_items,
-            equipped_pieces_meta=equipped_pieces_meta,
             ignore_cooldown=ignore_cooldown,
             prompt_prefix=prompt_prefix)
 
     new_key = _cache_key(mood, pose_key, character_name,
-                         equipped_pieces, equipped_items, equipped_pieces_meta)
+                         equipped_pieces, equipped_items)
     request = {
         "mood": mood,
         "pose_key": pose_key,
         "equipped_pieces": equipped_pieces,
         "equipped_items": equipped_items,
-        "equipped_pieces_meta": equipped_pieces_meta,
         "ignore_cooldown": ignore_cooldown,
         "prompt_prefix": prompt_prefix,
     }
@@ -729,8 +713,7 @@ def trigger_expression_generation(character_name: str,
                                        existing.get("pose_key", ""),
                                        character_name,
                                        existing.get("equipped_pieces"),
-                                       existing.get("equipped_items"),
-                                       existing.get("equipped_pieces_meta"))
+                                       existing.get("equipped_items"))
             if existing_key == new_key:
                 # Identical request — do NOT reset the timer (frontend-polling
                 # protection), but raise ignore_cooldown if the new caller set it
@@ -773,7 +756,6 @@ def _do_trigger_expression_generation(character_name: str,
                                        mood: str, pose_key: str,
                                        equipped_pieces: Optional[Dict[str, str]] = None,
                                        equipped_items: Optional[list] = None,
-                                       equipped_pieces_meta: Optional[Dict[str, Dict[str, Any]]] = None,
                                        ignore_cooldown: bool = False,
                                        prompt_prefix: str = "") -> bool:
     """The actual trigger logic: cooldown check, dedup, thread spawn.
@@ -794,7 +776,7 @@ def _do_trigger_expression_generation(character_name: str,
         now = _time.monotonic()
     _last_expression_time[character_name] = now
 
-    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items, equipped_pieces_meta)}"
+    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)}"
     with _generating_lock:
         if key in _generating:
             return False
