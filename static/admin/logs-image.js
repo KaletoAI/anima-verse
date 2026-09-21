@@ -54,7 +54,7 @@ function renderEntries(entries, searchTerm) {
         const promptPreview = (e.original_prompt || '').substring(0, 80);
         const charBadge = e.service ? `<span class="badge badge-character">${esc(e.service)}</span>` : '';
         const modelBadge = e.model ? `<span class="badge badge-model">${esc(e.model)}</span>` : '';
-        const seedBadge = e.seed ? `<span class="badge badge-seed">seed:${e.seed}</span>` : '';
+        const seedBadge = e.seed ? `<span class="badge badge-seed">seed:${esc(e.seed)}</span>` : '';
         const enhanceBadge = e.auto_enhance ? '<span class="badge badge-enhance">enhanced</span>' : '';
         const loraList = (e.loras || []).filter(l => l.name && l.name !== 'None');
         const loraBadge = loraList.length > 0 ? `<span class="badge badge-lora">LoRA: ${esc(loraList.map(l => l.name).join(', '))}</span>` : '';
@@ -66,7 +66,7 @@ function renderEntries(entries, searchTerm) {
         div.innerHTML = `
             <div class="entry-header" onclick="toggleEntry(this)">
                 <span class="badge badge-number">#${entryNum}</span>
-                <span class="badge badge-time">${e.starttime || ''}</span>
+                <span class="badge badge-time">${esc(e.starttime || '')}</span>
                 ${charBadge}
                 <span class="badge badge-backend">${esc(backendName)}</span>
                 ${modelBadge}
@@ -165,8 +165,7 @@ function fmtText(text, searchTerm) {
 }
 
 function esc(s) {
-    if (!s) return '';
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function escRx(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 

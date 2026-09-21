@@ -39,8 +39,8 @@ function renderTable() {
             '<td class="chars">' + escapeHtml(charList) + '</td>' +
             '<td>' + escapeHtml(u.last_login || '—') + '</td>' +
             '<td class="actions">' +
-                '<button class="btn btn-sm" onclick="openEdit(\'' + u.id + '\')">Edit</button>' +
-                '<button class="btn btn-sm btn-danger" onclick="deleteUser(\'' + u.id + '\')">Del</button>' +
+                '<button class="btn btn-sm" onclick="openEdit(\'' + escJs(u.id) + '\')">Edit</button>' +
+                '<button class="btn btn-sm btn-danger" onclick="deleteUser(\'' + escJs(u.id) + '\')">Del</button>' +
             '</td>' +
         '</tr>';
     }).join('');
@@ -128,8 +128,15 @@ async function deleteUser(userId) {
     } catch (e) { toast('Error: ' + e.message, 'error'); }
 }
 
+// A value that ends up INSIDE an inline onclick="fn('…')" crosses two
+// grammars: escape it for the single-quoted JS literal first, then for the
+// double-quoted HTML attribute. Same shape as rtJs() in settings-routing.js.
+function escJs(s) {
+    return escapeHtml(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+}
+
 function escapeHtml(s) {
-    return String(s).replace(/[&<>"\']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function toast(msg, type) {

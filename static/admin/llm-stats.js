@@ -139,18 +139,18 @@ function renderTable() {
         row += '<td class="left model">' + escapeHtml(r.model) + "</td>";
         row += '<td class="left provider">' + escapeHtml(r.provider || "—") + "</td>";
         if (grouped) row += '<td class="left agent">' + escapeHtml(r.agent_name || "—") + "</td>";
-        row += "<td>" + r.calls + "</td>";
+        row += "<td>" + escapeHtml(r.calls) + "</td>";
         row += "<td>" + r.avg_duration.toFixed(2) + "</td>";
         row += "<td>" + r.min_duration.toFixed(2) + "</td>";
         row += "<td>" + r.max_duration.toFixed(2) + "</td>";
         row += "<td>" + r.p90_duration.toFixed(2) + "</td>";
-        row += "<td>" + r.avg_in_tokens + "</td>";
-        row += "<td>" + r.avg_out_tokens + "</td>";
+        row += "<td>" + escapeHtml(r.avg_in_tokens) + "</td>";
+        row += "<td>" + escapeHtml(r.avg_out_tokens) + "</td>";
         const cfg = r.avg_max_tokens;
-        row += '<td class="' + (cfg ? "" : "dim") + '">' + (cfg || "—") + "</td>";
-        row += "<td>" + r.avg_total_tokens + "</td>";
-        row += "<td>" + r.max_in_tokens + "</td>";
-        row += "<td>" + r.max_total_tokens + "</td>";
+        row += '<td class="' + (cfg ? "" : "dim") + '">' + escapeHtml(cfg || "—") + "</td>";
+        row += "<td>" + escapeHtml(r.avg_total_tokens) + "</td>";
+        row += "<td>" + escapeHtml(r.max_in_tokens) + "</td>";
+        row += "<td>" + escapeHtml(r.max_total_tokens) + "</td>";
         row += "</tr>";
         return row;
     }).join("");
@@ -163,9 +163,7 @@ function sortBy(key) {
 }
 
 function escapeHtml(s) {
-    return String(s == null ? "" : s)
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 applyPreset("24h");

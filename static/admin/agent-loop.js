@@ -122,15 +122,12 @@ function render() {
       const tsMin = (r.started_at || '').slice(0, 16);
       const url = '/logs/llm?character=' + encodeURIComponent(r.agent)
                 + '&search=' + encodeURIComponent(tsMin);
-      // Try the admin sidebar navigation (parent.activateIframe) first — then
-      // only the iframe content is swapped inside the admin layout and the
-      // sidebar links stay intact. Fallback: direct navigation (e.g. when the
-      // agent-loop page was opened standalone).
-      const onclick = "event.preventDefault();"
-        + " try { if (window.parent && window.parent.activateIframe) {"
-        + " window.parent.activateIframe('_llm_log', '" + url + "', 'LLM Log'); return; } } catch(e) {}"
-        + " window.location = '" + url + "';";
-      logLink = ` <a href="${url}" onclick="${onclick}" title="Open in LLM log" style="margin-left:6px;text-decoration:none;color:#58a6ff;">🔍</a>`;
+      // The URL travels in a data- attribute and the click is wired up with
+      // addEventListener below, NOT in an inline onclick: the agent name is
+      // part of the URL and encodeURIComponent deliberately leaves `'` alone,
+      // so an inline handler would let a name like `x'-alert(1)-'x` close the
+      // JS string literal inside the attribute.
+      logLink = ` <a href="${escapeHtml(url)}" class="log-link" data-log-url="${escapeHtml(url)}" title="Open in LLM log" style="margin-left:6px;text-decoration:none;color:#58a6ff;">🔍</a>`;
     }
     // Multi-line preview: untruncated RP answer + Tool-LLM answer when the
     // turn captured them; otherwise fall back to the short preview string.
@@ -154,7 +151,24 @@ function render() {
       startedShort = AdminClock.stamp(r.started_at, {month: '2-digit', day: '2-digit'})
         || r.started_at.replace('T', ' ').split('.')[0];
     }
-    tr.innerHTML = `<td>${escapeHtml(r.agent)}</td><td>${escapeHtml(startedShort)}</td><td>${r.duration_s}s</td><td class="${cls}">${escapeHtml(r.outcome)}</td><td>${tagsCell}</td><td>${preview}</td>`;
+    tr.innerHTML = `<td>${escapeHtml(r.agent)}</td><td>${escapeHtml(startedShort)}</td><td>${escapeHtml(r.duration_s)}s</td><td class="${cls}">${escapeHtml(r.outcome)}</td><td>${tagsCell}</td><td>${preview}</td>`;
+    // Try the admin sidebar navigation (parent.activateIframe) first — then
+    // only the iframe content is swapped inside the admin layout and the
+    // sidebar links stay intact. Fallback: direct navigation (e.g. when the
+    // agent-loop page was opened standalone).
+    for (const a of tr.querySelectorAll('a.log-link')) {
+      a.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const target = a.dataset.logUrl || '';
+        try {
+          if (window.parent && window.parent.activateIframe) {
+            window.parent.activateIframe('_llm_log', target, 'LLM Log');
+            return;
+          }
+        } catch (e) { /* cross-origin parent: fall through to navigation */ }
+        window.location = target;
+      });
+    }
     tbody.appendChild(tr);
   }
 }
@@ -244,7 +258,7 @@ function renderPool(p) {
       const forCell = lane.busy
         ? secs(lane.running_s)
         : (lane.used ? 'idle ' + secs(lane.idle_s) : '');
-      html += '<tr><td>' + lane.lane_id + '</td>'
+      html += '<tr><td>' + escapeHtml(lane.lane_id) + '</td>'
         + '<td>' + (lane.hot_key ? escapeHtml(lane.hot_key) : '<span class="muted">never used</span>') + '</td>'
         + '<td>' + (lane.busy ? escapeHtml(lane.label || '?') : '<span class="muted">—</span>') + '</td>'
         + '<td>' + escapeHtml(forCell) + '</td>'
@@ -300,7 +314,9 @@ function renderPool(p) {
   return html;
 }
 
-function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 async function togglePause() {
   const ep = (_state && _state.paused) ? '/admin/agent-loop/resume' : '/admin/agent-loop/pause';

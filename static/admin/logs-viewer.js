@@ -135,11 +135,11 @@ function renderTraceHeader(g, traceId) {
     const times = members.map(m => m.starttime || '').filter(Boolean).sort();
     const firstTime = times[0] || '';
     g.anchor = firstTime;
-    const total = Math.max(traceTotals[traceId] || 0, members.length);
+    const total = Math.max(Number(traceTotals[traceId]) || 0, members.length);
     const countTxt = total > members.length
         ? members.length + ' of ' + total + ' calls'
         : members.length + (members.length === 1 ? ' call' : ' calls');
-    const sumDur = members.reduce((acc, m) => acc + (m.duration_s || 0), 0);
+    const sumDur = members.reduce((acc, m) => acc + (Number(m.duration_s) || 0), 0);
     const errCount = members.filter(m => m.error).length;
     if (errCount) g.el.classList.add('trace-error');
 
@@ -193,8 +193,8 @@ function expandTrace(root) {
 function buildEntry(e, globalIdx, searchTerm) {
     const entryNum = totalEntries - globalIdx;
     const tokens = e.tokens || {};
-    const duration = e.duration_s ? e.duration_s.toFixed(1) + 's' : '';
-    const tokenStr = (tokens.input || 0) + '/' + (tokens.output || 0);
+    const duration = e.duration_s ? (Number(e.duration_s) || 0).toFixed(1) + 's' : '';
+    const tokenStr = (Number(tokens.input) || 0) + '/' + (Number(tokens.output) || 0);
     // Prompt tokens the backend served from its prefix cache. The field only
     // exists when the backend reported it — absent is "not reported", not 0.
     const cacheBadge = (typeof tokens.cached === 'number')
@@ -218,12 +218,12 @@ function buildEntry(e, globalIdx, searchTerm) {
     div.innerHTML = `
         <div class="entry-header" onclick="toggleEntry(this)">
             <span class="badge badge-number">#${entryNum}</span>
-            <span class="badge badge-time">${e.starttime || ''}</span>
+            <span class="badge badge-time">${escapeHtml(e.starttime || '')}</span>
             <span class="badge badge-task" title="${escapeHtml(tplTitle)}">${escapeHtml(tplName)}</span>
             ${roleBadge}
             ${charBadge}
             ${provBadge}
-            <span class="badge badge-model">${e.model || '?'}</span>
+            <span class="badge badge-model">${escapeHtml(e.model || '?')}</span>
             <span class="badge badge-tokens">${tokenStr} tok</span>
             ${cacheBadge}
             <span class="badge badge-duration">${duration}</span>
@@ -295,7 +295,7 @@ function formatText(text, searchTerm) {
 
 function formatMessages(messages, searchTerm) {
     return messages.map(m => {
-        const role = (m && m.role) || 'unknown';
+        const role = String((m && m.role) || 'unknown');
         const content = (m && m.content) || '';
         const cls = 'role-' + role.replace(/[^a-z0-9]/gi, '');
         return `<div class="msg-turn ${cls}">
@@ -306,8 +306,7 @@ function formatMessages(messages, searchTerm) {
 }
 
 function escapeHtml(s) {
-    if (!s) return '';
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function escapeRegex(s) {

@@ -867,7 +867,7 @@ function rtOverviewBody(data) {
     for (const e of entries) {
         const name = e.name || rtEntryLabel({ name: e.name, model: e.model, provider: e.provider }, e.index);
         html += '<div class="rt-chain-row' + (e.enabled === false ? ' off' : '') + '">';
-        html += '<span class="rt-muted" style="min-width:20px;">' + ((e.index || 0) + 1) + '.</span>';
+        html += '<span class="rt-muted" style="min-width:20px;">' + ((Number(e.index) || 0) + 1) + '.</span>';
         html += '<span>' + esc(name) + '</span>';
         html += '<span class="rt-muted">' + esc(e.provider || '?') + ' / ' + esc(e.model || '?') + '</span>';
         if (!e.provider_exists) {

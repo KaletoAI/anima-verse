@@ -538,7 +538,21 @@ function renderTable() {
     }
 }
 
-function _esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+// A URL from server data before it goes into src=/href=: only a relative
+// path, http(s) or a data: image may pass. Anything else — javascript:,
+// vbscript:, a "data:text/html" — collapses to the empty string.
+function _safeUrl(u) {
+    const s = String(u == null ? '' : u).replace(/[\u0000-\u001F\u007F]/g, '').trim();
+    if (!s || s.startsWith('//')) return '';
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^data:image\/(png|jpe?g|gif|webp);/i.test(s)) return s;
+    if (/^[a-z][a-z0-9+.\-]*:/i.test(s)) return '';
+    return s;
+}
+
+function _esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 // --- Bucket helpers ---
 function _makeBuckets() {
@@ -683,7 +697,7 @@ function renderActivityFeed() {
                 </div>
                 <div class="activity-text">${_esc(e.summary || '')}</div>
                 ${e.detail ? `<div class="activity-detail">${_esc(e.detail)}</div>` : ''}
-                ${imgUrl ? `<img class="activity-beat-img" src="${imgUrl}" alt="Beat Bild" onclick="this.classList.toggle('expanded')">` : ''}
+                ${imgUrl ? `<img class="activity-beat-img" src="${_esc(_safeUrl(imgUrl))}" alt="Beat Bild" onclick="this.classList.toggle('expanded')">` : ''}
             </div>
         </div>`;
     }).join('');

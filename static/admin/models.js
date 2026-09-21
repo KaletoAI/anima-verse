@@ -114,7 +114,7 @@ function renderModels(models) {
         const row = document.createElement('tr');
         row.className = m.has_result ? 'row-documented' : 'row-unknown';
         const caps = m.capabilities || {};
-        const sizeStr = m.size_gb ? m.size_gb + ' GB' : '';
+        const sizeStr = m.size_gb ? esc(m.size_gb) + ' GB' : '';
         const paramStr = m.parameter_size ? ' (' + esc(m.parameter_size) + ')' : '';
         const hasInstr = caps.tool_instruction ? ' has-instruction' : '';
         const instrId = 'instr-' + cssId(m.name);
@@ -259,7 +259,7 @@ function testBadge(caps, modelName) {
 
     let html = '<span class="test-badge ' + cls + '" title="' + esc(tooltip) + '">' + esc(score)
         + (inherited ? ' *' : '');
-    if (hall > 0) html += ' <span class="test-detail">(' + hall + ' warn)</span>';
+    if (hall > 0) html += ' <span class="test-detail">(' + esc(hall) + ' warn)</span>';
     html += '</span>';
     if (inherited) html += '<span class="test-date" style="color:#d29922;" title="' + esc(testedFull) + '">\u21aa inherited: ' + esc(testedBare) + '</span>';
     if (verdict) {
@@ -278,7 +278,7 @@ function capToggle(modelName, field, value) {
     if (value === true) { cls = 'cap-yes'; label = 'Ja'; }
     else if (value === false) { cls = 'cap-no'; label = 'Nein'; }
     else { cls = 'cap-unknown'; label = '?'; }
-    return `<span class="cap-toggle ${cls}" data-model="${esc(modelName)}" data-field="${field}" data-value="${value}" onclick="toggleCap(this)">${label}</span>`;
+    return `<span class="cap-toggle ${cls}" data-model="${esc(modelName)}" data-field="${field}" data-value="${esc(value)}" onclick="toggleCap(this)">${label}</span>`;
 }
 
 function toggleCap(el) {
@@ -372,11 +372,13 @@ async function deletePattern(pattern) {
 }
 
 function esc(s) {
-    if (s == null) return '';
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+// A value that ends up INSIDE an inline onclick="fn('…')" crosses two
+// grammars: escape it for the single-quoted JS literal first, then for the
+// double-quoted HTML attribute. Same shape as rtJs() in settings-routing.js.
 function escJs(s) {
-    return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return esc(String(s == null ? '' : s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
 }
 function cssId(s) {
     return String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -455,7 +457,7 @@ async function suitCasesInfo() {
         const i = await r.json();
         const bt = i.by_task || {};
         const parts = Object.keys(bt).map(k => k + ':' + bt[k]);
-        el.innerHTML = (i.total || 0) + ' frozen test cases from log'
+        el.innerHTML = esc(i.total || 0) + ' frozen test cases from log'
             + (parts.length ? ' (' + esc(parts.join(', ')) + ')' : '')
             + (i.built_at ? ' · built ' + esc(i.built_at) : '')
             + ' <button class="btn" style="margin-left:6px;" onclick="suitRebuild()">Rebuild from log</button>';
@@ -537,8 +539,8 @@ function suitRenderJob(job) {
         status.textContent = 'Running… (' + (job.done || 0) + '/' + (job.total || '?') + ')';
     } else if (job.status === 'done') {
         const s = job.summary || {}; const v = s.verdict || {}; const sp = s.speed || {};
-        const speedTxt = (sp.tok_per_s ? ' · ⚡ ' + sp.tok_per_s + ' tok/s' : '')
-            + (sp.avg_latency_s ? ' · Ø ' + sp.avg_latency_s + 's/Call' : '');
+        const speedTxt = (sp.tok_per_s ? ' · ⚡ ' + esc(sp.tok_per_s) + ' tok/s' : '')
+            + (sp.avg_latency_s ? ' · Ø ' + esc(sp.avg_latency_s) + 's/Call' : '');
         const infraTxt = (s.infra || s.saved === false)
             ? ' <span style="color:#d29922;">⚠ NOT saved (infrastructure error — provider unreachable)</span>'
             : '';
@@ -546,7 +548,7 @@ function suitRenderJob(job) {
             + (v.tool ? '<span style="color:#3fb950;">SUITABLE</span>' : '<span style="color:#f85149;">not suitable</span>')
             + ' · Helper: ' + (v.helper ? '<span style="color:#3fb950;">suitable</span>' : '<span style="color:#f85149;">not suitable</span>')
             + ' · Score ' + esc(s.score || '') + ' (Tool ' + esc(s.tool || '') + ', Helper ' + esc(s.helper || '')
-            + ', Halluz ' + (s.hallucinations || 0) + ')' + speedTxt + infraTxt;
+            + ', Halluz ' + esc(s.hallucinations || 0) + ')' + speedTxt + infraTxt;
     } else if (job.status === 'error') {
         status.innerHTML = '<span style="color:#f85149;">Error: ' + esc(job.error || '') + '</span>';
     } else {
@@ -555,8 +557,8 @@ function suitRenderJob(job) {
     prog.innerHTML = checks.map(c => {
         const icon = c.infra ? '🔌' : (c.ok ? '✅' : (c.hallucinated ? '⚠️' : '❌'));
         const color = c.infra ? '#8b949e' : (c.ok ? '#3fb950' : (c.hallucinated ? '#d29922' : '#f85149'));
-        const spd = (c.duration_s ? ' <span style="opacity:.5;">' + c.duration_s + 's'
-            + (c.tok_s ? ', ' + c.tok_s + ' tok/s' : '') + '</span>' : '');
+        const spd = (c.duration_s ? ' <span style="opacity:.5;">' + esc(c.duration_s) + 's'
+            + (c.tok_s ? ', ' + esc(c.tok_s) + ' tok/s' : '') + '</span>' : '');
         return '<div style="padding:2px 0; border-bottom:1px solid #21262d; font-size:13px;">'
             + '<span style="color:' + color + ';">' + icon + '</span> '
             + '<span style="opacity:.6;">[' + esc(c.category) + ']</span> '

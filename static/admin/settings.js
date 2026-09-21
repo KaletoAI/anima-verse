@@ -55,7 +55,7 @@ async function init() {
         // ein anderer Tab kuerzlich gespeichert hat).
         loadRestartPending();
     } catch (e) {
-        document.getElementById('content').innerHTML = '<div class="loading" style="color:#f85149;">Error loading config: ' + e.message + '</div>';
+        document.getElementById('content').innerHTML = '<div class="loading" style="color:#f85149;">Error loading config: ' + esc(e.message) + '</div>';
     }
 }
 
@@ -129,9 +129,9 @@ function buildNav() {
         // der einfachen LLM-Models-Seite).
         if (sec.nav_sub) {
             a.className = 'nav-sub';
-            a.innerHTML = '<span class="nav-icon">›</span> ' + sec.label;
+            a.innerHTML = '<span class="nav-icon">›</span> ' + esc(sec.label);
         } else {
-            a.innerHTML = '<span class="nav-icon">' + (sec.icon || '') + '</span> ' + sec.label;
+            a.innerHTML = '<span class="nav-icon">' + esc(sec.icon || '') + '</span> ' + esc(sec.label);
         }
         a.dataset.section = key;
         a.onclick = (e) => { e.preventDefault(); activateSection(key); };
@@ -144,7 +144,7 @@ function buildNav() {
                 const pa = document.createElement('a');
                 pa.className = 'nav-sub';
                 pa.href = '#' + navKey(key, page.id);
-                pa.innerHTML = '<span class="nav-icon">›</span> ' + page.label;
+                pa.innerHTML = '<span class="nav-icon">›</span> ' + esc(page.label);
                 pa.dataset.section = navKey(key, page.id);
                 pa.onclick = (e) => { e.preventDefault(); activateSection(key, page.id); };
                 nav.appendChild(pa);
@@ -159,7 +159,7 @@ function buildNav() {
                 const sa = document.createElement('a');
                 sa.className = 'nav-sub';
                 sa.href = '#' + subKey;
-                sa.innerHTML = '<span class="nav-icon">›</span> ' + arrDef.label;
+                sa.innerHTML = '<span class="nav-icon">›</span> ' + esc(arrDef.label);
                 sa.dataset.section = subKey;
                 sa.onclick = (e) => { e.preventDefault(); activateSection(subKey); };
                 nav.appendChild(sa);
@@ -205,7 +205,7 @@ function activateIframe(key, url, title) {
     // Load iframe
     const content = document.getElementById('content');
     content.classList.add('iframe-mode');
-    content.innerHTML = '<iframe src="' + url + '" title="' + esc(title) + '"></iframe>';
+    content.innerHTML = '<iframe src="' + esc(safeUrl(url)) + '" title="' + esc(title) + '"></iframe>';
 }
 
 // World-Badge im Sidebar — auf jeder Seite + iframe-Children einsehbar.
@@ -236,7 +236,7 @@ function renderUseCasesMasterDetail(path) {
     html += '<div class="md-grid"><div class="md-list"><table class="md-table"><thead><tr><th>Use-Case</th></tr></thead><tbody>';
     for (const uc of ucs) {
         const active = (uc === sel) ? ' active' : '';
-        html += '<tr class="md-row' + active + '" onclick="selectMasterItem(\'' + path + '\', \'' + uc + '\')"><td>' + esc(uc) + '</td></tr>';
+        html += '<tr class="md-row' + active + '" onclick="selectMasterItem(\'' + sJs(path) + '\', \'' + sJs(uc) + '\')"><td>' + esc(uc) + '</td></tr>';
     }
     html += '</tbody></table></div>';
     html += '<div class="md-detail">' + renderUseCaseDetail(sel) + '</div></div>';
@@ -254,7 +254,7 @@ function renderUseCaseDetail(uc) {
     html += '<div class="field" style="margin:0 0 14px 0">'
           + '<label style="font-size:.85em;display:flex;align-items:center;gap:6px">'
           + '<input type="checkbox" ' + (getVal(llmPath) ? 'checked' : '') + ' '
-          + 'onchange="setVal(\'' + llmPath + '\', this.checked)"> Compose via LLM (opt-in)</label>'
+          + 'onchange="setVal(\'' + sJs(llmPath) + '\', this.checked)"> Compose via LLM (opt-in)</label>'
           + '<div class="hint" style="opacity:.7;font-size:.78em;margin-top:2px">'
           + 'When enabled, an LLM rewrites the composed prompt into one coherent, '
           + 'positively-exhaustive English prompt. Shown editable in the render dialog.</div>'
@@ -278,12 +278,12 @@ function renderUseCaseDetail(uc) {
                 ? ' <button type="button" class="btn btn-sm" '
                   + 'style="margin-left:8px;font-size:.72em;padding:1px 6px;vertical-align:middle" '
                   + 'title="Copy the built-in default into this field to edit it" '
-                  + 'onclick="copyUseCaseDefault(\'' + p + '\', \'' + uc + '\', \'' + fam + '\', \'' + fld + '\')">Copy default</button>'
+                  + 'onclick="copyUseCaseDefault(\'' + sJs(p) + '\', \'' + sJs(uc) + '\', \'' + sJs(fam) + '\', \'' + fld + '\')">Copy default</button>'
                 : '';
             html += '<div class="field" style="margin-bottom:8px"><label style="font-size:.8em;opacity:.8">' + esc(lbl) + copyBtn + '</label>';
             html += '<textarea rows="2" style="width:100%;font-family:inherit;resize:vertical" '
                   + 'placeholder="' + esc(def) + '" '
-                  + 'onchange="setVal(\'' + p + '\', this.value)">' + esc(val) + '</textarea>';
+                  + 'onchange="setVal(\'' + sJs(p) + '\', this.value)">' + esc(val) + '</textarea>';
             // The subject slot: the composer weaves the subject INTO the style
             // sentence where the placeholder sits (early tokens steer diffusion).
             if (fld === 'prompt_style') {
@@ -356,7 +356,7 @@ function renderLoraTriggersEditor(path) {
              + 'in the dialogs, marked "(missing)". Backends without a listing (CivitAI, Together): '
              + 'add entries manually; no backend assigned = offered on all backends.</p>';
     html += '<div style="margin-bottom:12px;display:flex;gap:8px">'
-          + '<button class="btn btn-sm" onclick="addLoraTrigger(\'' + path + '\')">+ Add</button>'
+          + '<button class="btn btn-sm" onclick="addLoraTrigger(\'' + sJs(path) + '\')">+ Add</button>'
           + '<button class="btn btn-sm" onclick="syncLoraLibrary()">⟳ Discover now</button>'
           + '<button class="btn btn-sm btn-danger" onclick="clearDiscoveredLoras()">🗑 Delete discovered</button></div>';
     if (!items.length) {
@@ -373,10 +373,10 @@ function renderLoraTriggersEditor(path) {
         // it a manual claim — ltRename also warns on duplicate names).
         html += '<input type="text" autocomplete="off" value="' + esc(it.lora || '') + '" '
               + 'placeholder="LoRA name (as the backend lists it)" style="flex:3;min-width:0" '
-              + 'onchange="ltRename(\'' + ip + '\', this)">';
+              + 'onchange="ltRename(\'' + sJs(ip) + '\', this)">';
         // Column 2: activation word.
         html += '<input type="text" value="' + esc(it.word || '') + '" placeholder="Activation word" '
-              + 'style="flex:2;min-width:0" onchange="ltTouch(\'' + ip + '\', \'word\', this.value); setVal(\'' + ip + '.word\', this.value)">';
+              + 'style="flex:2;min-width:0" onchange="ltTouch(\'' + sJs(ip) + '\', \'word\', this.value); setVal(\'' + sJs(ip + '.word') + '\', this.value)">';
         // Column 3: backend associations. Discovered entries: sync-owned,
         // read-only. Manual entries: editable chips; empty = all backends.
         html += '<div style="flex:3;min-width:0;display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding-top:4px">';
@@ -393,7 +393,7 @@ function renderLoraTriggersEditor(path) {
                                         : 'This backend has the LoRA') + '">'
                   + esc(bn)
                   + (isManual ? ' <a style="cursor:pointer;text-decoration:none" title="Remove backend" '
-                              + 'onclick="ltRemoveBackend(\'' + ip + '\', \'' + esc(bn) + '\')">✕</a>' : '')
+                              + 'onclick="ltRemoveBackend(\'' + sJs(ip) + '\', \'' + sJs(bn) + '\')">✕</a>' : '')
                   + '</span>';
         }
         if (isManual) {
@@ -406,7 +406,7 @@ function renderLoraTriggersEditor(path) {
             }
             if (opts) {
                 html += '<select title="Assign a backend" style="font-size:10px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:2px 4px" '
-                      + 'onchange="ltAddBackend(\'' + ip + '\', this.value)">'
+                      + 'onchange="ltAddBackend(\'' + sJs(ip) + '\', this.value)">'
                       + '<option value="">+ backend…</option>' + opts + '</select>';
             }
         }
@@ -417,7 +417,7 @@ function renderLoraTriggersEditor(path) {
               + '<span class="badge" title="' + (src === 'discovered' ? 'Found by the backend scan' : 'Created/edited by hand') + '" '
               + 'style="font-size:10px;' + (src === 'discovered' ? 'background:#1f3a5f;color:#79c0ff;' : '') + '">' + src + '</span>'
               + '</span>';
-        html += '<button class="btn btn-sm btn-danger" title="Delete" onclick="removeItem(\'' + ip + '\')">✕</button>';
+        html += '<button class="btn btn-sm btn-danger" title="Delete" onclick="removeItem(\'' + sJs(ip) + '\')">✕</button>';
         html += '</div>';
     }
     return html;
@@ -537,7 +537,7 @@ function renderSection(key, pageId) {
     const content = document.getElementById('content');
 
     let html = '<div class="section active">';
-    html += '<h1 class="section-title">' + (sec.icon || '') + ' ' + sec.label + '</h1>';
+    html += '<h1 class="section-title">' + esc(sec.icon || '') + ' ' + esc(sec.label) + '</h1>';
     // Section-level description (what the whole section is for) — array
     // sections have no top-level fields to hang a note on.
     if (sec.description) html += '<div class="desc" style="margin-bottom:14px; white-space:pre-line;">' + sec.description + '</div>';
@@ -552,7 +552,7 @@ function renderSection(key, pageId) {
         for (const [subKey, sub] of Object.entries(sec.subsections)) {
             const subData = data[subKey] || {};
             html += '<div class="subsection">';
-            html += '<div class="subsection-title">' + sub.label + '</div>';
+            html += '<div class="subsection-title">' + esc(sub.label) + '</div>';
             html += renderFields(sub.fields, subData, key + '.' + subKey);
             html += '</div>';
         }
@@ -565,7 +565,7 @@ function renderSection(key, pageId) {
     // Array sections (providers)
     if (sec.is_array) {
         html += '<div style="margin-bottom: 12px;">';
-        html += '<button class="btn btn-sm" onclick="addArrayItem(\'' + key + '\', \'array\')">+ Add ' + sec.label + '</button>';
+        html += '<button class="btn btn-sm" onclick="addArrayItem(\'' + sJs(key) + '\', \'array\')">+ Add ' + esc(sec.label) + '</button>';
         html += '</div>';
         html += renderArrayItems(sec, data || [], key);
     }
@@ -588,7 +588,7 @@ function renderSubArrayPage(key) {
     const parentData = (CONFIG[parentKey] && typeof CONFIG[parentKey] === 'object') ? CONFIG[parentKey] : {};
 
     let html = '<div class="section active">';
-    html += '<h1 class="section-title">' + (sec.icon || '') + ' ' + sec.label + ' — ' + arrDef.label + '</h1>';
+    html += '<h1 class="section-title">' + esc(sec.icon || '') + ' ' + esc(sec.label) + ' — ' + esc(arrDef.label) + '</h1>';
     html += renderSubArrayBody(arrDef, parentData, parentKey, arrKey);
     html += '</div>';
     content.innerHTML = html;
@@ -603,7 +603,7 @@ function renderSubArrayBody(arrDef, parentData, parentKey, arrKey) {
     if (arrDef.use_cases_editor) return renderUseCasesMasterDetail(path);
     if (arrDef.lora_triggers_editor) return renderLoraTriggersEditor(path);
     if (arrDef.master_detail) return renderMasterDetail(arrDef, items, path);
-    let html = '<div style="margin-bottom:12px;"><button class="btn btn-sm" onclick="addArrayItem(\'' + path + '\', \'' + (arrDef.is_dict ? 'dict' : 'array') + '\')">+ Add</button></div>';
+    let html = '<div style="margin-bottom:12px;"><button class="btn btn-sm" onclick="addArrayItem(\'' + sJs(path) + '\', \'' + (arrDef.is_dict ? 'dict' : 'array') + '\')">+ Add</button></div>';
     if (arrDef.is_dict) html += renderDictItems(arrDef, items, path);
     else html += renderArrayItems(arrDef, items, path);
     return html;
@@ -620,9 +620,9 @@ function renderPagedSection(key, pageId) {
     const data = (cfgVal !== undefined && cfgVal !== null && typeof cfgVal === 'object') ? cfgVal : {};
 
     let html = '<div class="section active">';
-    html += '<h1 class="section-title">' + (sec.icon || '') + ' ' + sec.label
+    html += '<h1 class="section-title">' + esc(sec.icon || '') + ' ' + esc(sec.label)
           + ' <span style="color:#8b949e;">›</span> '
-          + (page.icon ? page.icon + ' ' : '') + page.label + '</h1>';
+          + (page.icon ? esc(page.icon) + ' ' : '') + esc(page.label) + '</h1>';
     if (page.description) {
         html += '<div class="desc" style="margin-bottom:14px; white-space:pre-line;">' + page.description + '</div>';
     }
@@ -640,7 +640,7 @@ function renderPagedSection(key, pageId) {
         // Only label the block when it shares the page with something else —
         // a page holding just one sub-array already says so in its title.
         if (hasFields || page.sub_arrays.length > 1) {
-            html += '<div class="subsection-title" style="margin-top:18px;">' + (arrDef.label || arrKey) + '</div>';
+            html += '<div class="subsection-title" style="margin-top:18px;">' + esc(arrDef.label || arrKey) + '</div>';
         }
         html += renderSubArrayBody(arrDef, data, key, arrKey);
     }
@@ -1108,7 +1108,7 @@ function renderFields(fields, data, path) {
         }
         if (f.type === 'group_header') {
             // Visual separator without data binding (groups the fields below)
-            html += '<div class="subsection-title" style="margin-top:18px;">' + f.label + '</div>';
+            html += '<div class="subsection-title" style="margin-top:18px;">' + esc(f.label) + '</div>';
             continue;
         }
         if (f.type === 'note') {
@@ -1123,14 +1123,14 @@ function renderFields(fields, data, path) {
             // body aus angegebenen Geschwister-Feldern auf.
             const btnId = 'btn-' + (path + '.' + fKey).replace(/\W+/g, '-');
             const bodyFrom = JSON.stringify(f.body_from || []);
-            const confirmMsg = f.confirm ? esc(f.confirm) : '';
-            const previewUrl = f.preview_url ? esc(f.preview_url) : '';
+            const confirmMsg = f.confirm ? sJs(f.confirm) : '';
+            const previewUrl = f.preview_url ? sJs(f.preview_url) : '';
             html += '<div class="field">';
             html += '<label></label>';
             html += '<div class="input-wrap">';
             html += '<button type="button" id="' + btnId + '" class="btn btn-primary" '
-                + 'onclick="runActionButton(\'' + esc(f.endpoint) + '\', \'' + (f.method || 'POST') + '\', '
-                + '\'' + path + '\', ' + bodyFrom.replace(/"/g, '&quot;') + ', \'' + confirmMsg + '\', this, \'' + previewUrl + '\')">'
+                + 'onclick="runActionButton(\'' + sJs(f.endpoint) + '\', \'' + sJs(f.method || 'POST') + '\', '
+                + '\'' + sJs(path) + '\', ' + esc(bodyFrom) + ', \'' + confirmMsg + '\', this, \'' + previewUrl + '\')">'
                 + esc(f.label) + '</button>';
             if (f.description) html += '<div class="desc">' + f.description + '</div>';
             html += '</div></div>';
@@ -1176,11 +1176,11 @@ function renderFields(fields, data, path) {
             : '';
         // Fields irrelevant for embedding entries (tasks of the "embedding"
         // group), e.g. temperature/max_tokens — toggled by a post-pass.
-        const embedAttr = f.hide_for_embedding ? ' data-embedhide-entry="' + path + '"' : '';
+        const embedAttr = f.hide_for_embedding ? ' data-embedhide-entry="' + esc(path) + '"' : '';
         // `half: true` fields occupy one grid column instead of both, so two
         // adjacent half fields (e.g. Width | Height) share one row.
         html += '<div class="field' + (f.half ? ' field-half' : '') + '"' + embedAttr + '>';
-        html += '<label for="f-' + fullPath + '">' + f.label + pill + '</label>';
+        html += '<label for="f-' + esc(fullPath) + '">' + esc(f.label) + pill + '</label>';
         html += '<div class="input-wrap">';
         html += renderInput(f, val, fullPath);
         // Show the schema default next to the description so the effective
@@ -1216,31 +1216,31 @@ function renderInput(f, val, path) {
     const id = 'f-' + path;
     switch (f.type) {
         case 'bool':
-            return '<input type="checkbox" id="' + id + '" ' + (val ? 'checked' : '') + ' onchange="setVal(\'' + path + '\', this.checked)">';
+            return '<input type="checkbox" id="' + esc(id) + '" ' + (val ? 'checked' : '') + ' onchange="setVal(\'' + sJs(path) + '\', this.checked)">';
         case 'int':
-            return '<input type="number" id="' + id + '" value="' + esc(val) + '" '
-                + (f.min !== undefined ? 'min="' + f.min + '" ' : '')
-                + (f.max !== undefined ? 'max="' + f.max + '" ' : '')
+            return '<input type="number" id="' + esc(id) + '" value="' + esc(val) + '" '
+                + (f.min !== undefined ? 'min="' + esc(f.min) + '" ' : '')
+                + (f.max !== undefined ? 'max="' + esc(f.max) + '" ' : '')
                 + _phAttr(f)
-                + 'step="1" onchange="setVal(\'' + path + '\', parseInt(this.value) || 0)">';
+                + 'step="1" onchange="setVal(\'' + sJs(path) + '\', parseInt(this.value) || 0)">';
         case 'float':
-            return '<input type="number" id="' + id + '" value="' + esc(val) + '" '
-                + (f.min !== undefined ? 'min="' + f.min + '" ' : '')
-                + (f.max !== undefined ? 'max="' + f.max + '" ' : '')
+            return '<input type="number" id="' + esc(id) + '" value="' + esc(val) + '" '
+                + (f.min !== undefined ? 'min="' + esc(f.min) + '" ' : '')
+                + (f.max !== undefined ? 'max="' + esc(f.max) + '" ' : '')
                 + _phAttr(f)
-                + 'step="' + (f.step || 0.1) + '" onchange="setVal(\'' + path + '\', parseFloat(this.value) || 0)">';
+                + 'step="' + esc(f.step || 0.1) + '" onchange="setVal(\'' + sJs(path) + '\', parseFloat(this.value) || 0)">';
         case 'select':
             let opts = (f.choices || []).map(c => '<option value="' + esc(c) + '"' + (c == val ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
             const onChg = f.triggers_rerender
-                ? "setVal('" + path + "', this.value); renderSection(ACTIVE_SECTION)"
-                : "setVal('" + path + "', this.value)";
-            return '<select id="' + id + '" onchange="' + onChg + '">' + opts + '</select>';
+                ? "setVal('" + sJs(path) + "', this.value); renderSection(ACTIVE_SECTION)"
+                : "setVal('" + sJs(path) + "', this.value)";
+            return '<select id="' + esc(id) + '" onchange="' + onChg + '">' + opts + '</select>';
         case 'password':
-            return '<div class="pw-wrap"><input type="password" id="' + id + '" value="' + esc(val) + '" onchange="setVal(\'' + path + '\', this.value)">'
+            return '<div class="pw-wrap"><input type="password" id="' + esc(id) + '" value="' + esc(val) + '" onchange="setVal(\'' + sJs(path) + '\', this.value)">'
                 + '<button class="pw-toggle" type="button" onclick="togglePw(this)">👁</button></div>';
         case 'text':
-            return '<textarea id="' + id + '" ' + _phAttr(f)
-                + 'onchange="setVal(\'' + path + '\', this.value)">' + esc(val) + '</textarea>';
+            return '<textarea id="' + esc(id) + '" ' + _phAttr(f)
+                + 'onchange="setVal(\'' + sJs(path) + '\', this.value)">' + esc(val) + '</textarea>';
         case 'provider_select':
             return renderProviderSelect(val, path);
         case 'model_select':
@@ -1256,9 +1256,9 @@ function renderInput(f, val, path) {
         case 'imagegen_target_select':
             return renderImagegenTargetSelect(val, path);
         default: // str / number
-            return '<input type="text" id="' + id + '" value="' + esc(val) + '" '
+            return '<input type="text" id="' + esc(id) + '" value="' + esc(val) + '" '
                 + _phAttr(f)
-                + 'onchange="setVal(\'' + path + '\', this.value)">';
+                + 'onchange="setVal(\'' + sJs(path) + '\', this.value)">';
     }
 }
 
@@ -1266,19 +1266,19 @@ function renderProviderSelect(val, path) {
     const providers = CONFIG.providers || [];
     let opts = '<option value="">— Auto —</option>';
     for (const p of providers) {
-        opts += '<option value="' + esc(p.name) + '"' + (p.name === val ? ' selected' : '') + '>' + esc(p.name) + ' (' + p.type + ')</option>';
+        opts += '<option value="' + esc(p.name) + '"' + (p.name === val ? ' selected' : '') + '>' + esc(p.name) + ' (' + esc(p.type) + ')</option>';
     }
-    return '<select id="f-' + path + '" onchange="setVal(\'' + path + '\', this.value); refreshModelSelect(\'' + path + '\'); onRoutingModelChanged(\'' + path + '\')">' + opts + '</select>';
+    return '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value); refreshModelSelect(\'' + sJs(path) + '\'); onRoutingModelChanged(\'' + sJs(path) + '\')">' + opts + '</select>';
 }
 
 function renderModelSelect(val, path) {
     // The provider is read from the sibling field at click time (not baked in at
     // render time) — otherwise the button would still point at the old provider
     // after a provider switch and fetch the wrong model list.
-    let select = '<select id="f-' + path + '" onchange="setVal(\'' + path + '\', this.value); onRoutingModelChanged(\'' + path + '\')">';
+    let select = '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value); onRoutingModelChanged(\'' + sJs(path) + '\')">';
     select += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
     select += '</select>';
-    select += ' <button class="btn btn-sm" onclick="loadModels(\'' + path + '\')">Load Models</button>';
+    select += ' <button class="btn btn-sm" onclick="loadModels(\'' + sJs(path) + '\')">Load Models</button>';
     return select;
 }
 
@@ -1294,7 +1294,7 @@ function renderImagegenSelect(val, path) {
     }
     let opts = '';
     for (const s of sugg) opts += '<option value="' + esc(s) + '">';
-    return '<input type="text" id="f-' + path + '" list="dl-' + path + '" value="' + esc(val || '') + '" placeholder="e.g. LocalAI-Flux" onchange="setVal(\'' + path + '\', this.value)"><datalist id="dl-' + path + '">' + opts + '</datalist>';
+    return '<input type="text" id="f-' + esc(path) + '" list="dl-' + esc(path) + '" value="' + esc(val || '') + '" placeholder="e.g. LocalAI-Flux" onchange="setVal(\'' + sJs(path) + '\', this.value)"><datalist id="dl-' + esc(path) + '">' + opts + '</datalist>';
 }
 
 function renderImagegenBackendSelect(val, path) {
@@ -1306,7 +1306,7 @@ function renderImagegenBackendSelect(val, path) {
         opts += '<option value="' + esc(be.name) + '"' + (be.name === val ? ' selected' : '') + '>' + esc(lbl) + '</option>';
     }
     // onchange: setVal + Geschwister-Modell-Select neu fuellen falls vorhanden
-    return '<select id="f-' + path + '" onchange="setVal(\'' + path + '\', this.value); refreshImagegenModelSelect(\'' + path + '\')">' + opts + '</select>';
+    return '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value); refreshImagegenModelSelect(\'' + sJs(path) + '\')">' + opts + '</select>';
 }
 
 // Geschwister-Modell-Select neu laden wenn Backend gewechselt wird
@@ -1372,7 +1372,7 @@ async function loadImagegenTargets() {
 
 function renderImagegenTargetSelect(val, path) {
     // Initial mit aktuellem Wert rendern; Liste wird async nachgeladen
-    let html = '<select id="f-' + path + '" onchange="setVal(\'' + path + '\', this.value)">';
+    let html = '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value)">';
     if (val) html += '<option value="' + esc(val) + '" selected>' + esc(val) + '</option>';
     html += '<option value="">— Auto (Cloud bevorzugt) —</option>';
     html += '</select>';
@@ -1399,14 +1399,14 @@ function renderImagegenModelSelect(val, path) {
     parts[parts.length - 1] = 'backend';
     const backendPath = parts.join('.');
     const backendName = getVal(backendPath) || '';
-    let html = '<select id="f-' + path + '" onchange="setVal(\'' + path + '\', this.value)">';
+    let html = '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value)">';
     if (val) {
         html += '<option value="' + esc(val) + '" selected>' + esc(val) + '</option>';
     } else {
         html += '<option value="">— Backend-Default —</option>';
     }
     html += '</select>';
-    html += ' <button class="btn btn-sm" onclick="loadImagegenBackendModels(\'' + path + '\', \'' + esc(backendName) + '\')">Load Models</button>';
+    html += ' <button class="btn btn-sm" onclick="loadImagegenBackendModels(\'' + sJs(path) + '\', \'' + sJs(backendName) + '\')">Load Models</button>';
     return html;
 }
 
@@ -1419,9 +1419,9 @@ function renderImagegenModelCombo(val, path) {
     const parts = path.split('.');
     const base = parts.slice(0, -1).join('.');
     const dlId = 'dl-' + path.replace(/[^a-zA-Z0-9]/g, '-');
-    let html = '<input type="text" list="' + dlId + '" id="f-' + path + '" value="' + esc(val) + '" placeholder="z.B. flux.2-klein-4b" onchange="setVal(\'' + path + '\', this.value)">';
+    let html = '<input type="text" list="' + dlId + '" id="f-' + esc(path) + '" value="' + esc(val) + '" placeholder="z.B. flux.2-klein-4b" onchange="setVal(\'' + sJs(path) + '\', this.value)">';
     html += '<datalist id="' + dlId + '"></datalist>';
-    html += ' <button class="btn btn-sm" type="button" onclick="loadImagegenModelCombo(\'' + path + '\', \'' + base + '\')">Load Models</button>';
+    html += ' <button class="btn btn-sm" type="button" onclick="loadImagegenModelCombo(\'' + sJs(path) + '\', \'' + sJs(base) + '\')">Load Models</button>';
     return html;
 }
 
@@ -1462,7 +1462,7 @@ function _itemLabel(item, labelField, fallback) {
 }
 
 function renderArrayItems(def, items, path) {
-    let html = '<div id="arr-' + path + '">';
+    let html = '<div id="arr-' + esc(path) + '">';
     // Index erhalten (Pfade referenzieren echten Array-Index), Reihenfolge
     // alphabetisch wenn def.sort_alphabetically gesetzt ist.
     const order = items.map((it, i) => ({ idx: i, label: _itemLabel(it, def.item_label_field, 'Item ' + i) }));
@@ -1477,7 +1477,7 @@ function renderArrayItems(def, items, path) {
 }
 
 function renderDictItems(def, items, path) {
-    let html = '<div id="arr-' + path + '">';
+    let html = '<div id="arr-' + esc(path) + '">';
     const entries = Object.entries(items).map(([k, item]) => ({ key: k, item, label: _itemLabel(item, def.item_label_field, k) }));
     if (def.sort_alphabetically) {
         entries.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
@@ -1492,14 +1492,14 @@ function renderDictItems(def, items, path) {
 function renderArrayItem(def, item, path, index, labelField) {
     const label = _itemLabel(item, labelField, 'Item ' + index);
     const openClass = OPEN_ITEMS.has(path) ? ' open' : '';
-    let html = '<div class="array-item' + openClass + '" id="item-' + path + '">';
-    html += '<div class="array-item-header" onclick="toggleArrayItem(this, \'' + path + '\')">';
+    let html = '<div class="array-item' + openClass + '" id="item-' + esc(path) + '">';
+    html += '<div class="array-item-header" onclick="toggleArrayItem(this, \'' + sJs(path) + '\')">';
     html += '<span class="chevron">▶</span> ';
     html += '<span class="title" style="margin-left:6px;">' + esc(label) + '</span>';
     if (item.enabled === false) html += '<span class="badge">deaktiviert</span>';
     if (item.type) html += '<span class="badge">' + esc(item.type || item.api_type || '') + '</span>';
-    html += '<button class="btn btn-sm" style="margin-left:8px;" title="Als neuen Eintrag duplizieren" onclick="event.stopPropagation(); duplicateItem(\'' + path + '\')">⧉</button>';
-    html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" onclick="event.stopPropagation(); removeItem(\'' + path + '\')">✕</button>';
+    html += '<button class="btn btn-sm" style="margin-left:8px;" title="Als neuen Eintrag duplizieren" onclick="event.stopPropagation(); duplicateItem(\'' + sJs(path) + '\')">⧉</button>';
+    html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" onclick="event.stopPropagation(); removeItem(\'' + sJs(path) + '\')">✕</button>';
     html += '</div>';
     html += '<div class="array-item-body">';
     html += renderFields(def.fields, item, path);
@@ -1600,7 +1600,7 @@ function renderMasterDetail(def, items, path) {
     html += '</tr></thead><tbody>';
     for (const o of order) {
         const active = (o.itemPath === sel) ? ' active' : '';
-        html += '<tr class="md-row' + active + '" onclick="selectMasterItem(\'' + path + '\', \'' + o.itemPath + '\')">';
+        html += '<tr class="md-row' + active + '" onclick="selectMasterItem(\'' + sJs(path) + '\', \'' + sJs(o.itemPath) + '\')">';
         for (const c of cols) html += '<td>' + renderMdCell(c, o.item) + '</td>';
         html += '</tr>';
     }
@@ -1608,10 +1608,10 @@ function renderMasterDetail(def, items, path) {
         html += '<tr><td colspan="' + cols.length + '"><span class="md-empty">Keine Eintraege</span></td></tr>';
     }
     html += '</tbody></table>';
-    html += '<button class="btn btn-sm" style="margin-top:10px;" onclick="addArrayItem(\'' + path + '\', \'' + (def.is_dict ? 'dict' : 'array') + '\')">+ Add</button>';
+    html += '<button class="btn btn-sm" style="margin-top:10px;" onclick="addArrayItem(\'' + sJs(path) + '\', \'' + (def.is_dict ? 'dict' : 'array') + '\')">+ Add</button>';
     html += '</div>';
     // Rechts: Detail
-    html += '<div class="md-detail" id="detail-' + path + '">';
+    html += '<div class="md-detail" id="detail-' + esc(path) + '">';
     html += renderMasterDetailBody(def, items, path, sel);
     html += '</div>';
     html += '</div>';
@@ -1633,8 +1633,8 @@ function renderMasterDetailBody(def, items, path, sel) {
     let html = '<div class="md-detail-head">';
     html += '<span class="md-detail-title">' + esc(label) + '</span>';
     html += '<span style="flex:1;"></span>';
-    html += '<button class="btn btn-sm" title="Als neuen Eintrag duplizieren" onclick="duplicateItem(\'' + sel + '\')">⧉</button>';
-    html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" title="Loeschen" onclick="removeItem(\'' + sel + '\')">✕</button>';
+    html += '<button class="btn btn-sm" title="Als neuen Eintrag duplizieren" onclick="duplicateItem(\'' + sJs(sel) + '\')">⧉</button>';
+    html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" title="Loeschen" onclick="removeItem(\'' + sJs(sel) + '\')">✕</button>';
     html += '</div>';
     html += renderFields(def.fields, item, sel);
     return html;
@@ -1926,12 +1926,12 @@ async function validateConfig() {
         if (issues.length === 0) {
             html += '<h3>No issues found</h3>';
         } else {
-            html += '<h3>' + result.errors + ' errors, ' + result.warnings + ' warnings</h3>';
+            html += '<h3>' + esc(result.errors) + ' errors, ' + esc(result.warnings) + ' warnings</h3>';
             for (const issue of issues) {
-                html += '<div class="validate-issue ' + issue.level + '">';
+                html += '<div class="validate-issue ' + esc(issue.level) + '">';
                 html += '<span class="badge">' + (issue.level === 'error' ? 'ERROR' : 'WARN') + '</span>';
                 html += '<span>' + esc(issue.message) + '</span>';
-                html += '<span class="section-link" onclick="activateSection(\'' + issue.section + '\')">' + issue.section + '</span>';
+                html += '<span class="section-link" onclick="activateSection(\'' + sJs(issue.section) + '\')">' + esc(issue.section) + '</span>';
                 html += '</div>';
             }
         }
@@ -2069,9 +2069,26 @@ function togglePw(btn) {
 }
 
 // ── Helpers ──
+// A value that ends up INSIDE an inline handler's single-quoted JS literal,
+// e.g. onclick="fn('…')": escape it for the JS string first, then for the
+// double-quoted HTML attribute. Same shape as rtJs() in settings-routing.js.
+// Config paths carry raw dict keys from config.json, so they need both steps.
+function sJs(s) {
+    return esc(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+}
+
+// A URL from data before it goes into src=/href=: only a relative path or
+// http(s) may pass. Anything else — javascript:, vbscript:, data: — is dropped.
+function safeUrl(u) {
+    const v = String(u == null ? '' : u).replace(/[\u0000-\u001F\u007F]/g, '').trim();
+    if (!v || v.startsWith('//')) return '';
+    if (/^https?:\/\//i.test(v)) return v;
+    if (/^[a-z][a-z0-9+.\-]*:/i.test(v)) return '';
+    return v;
+}
+
 function esc(s) {
-    if (s === null || s === undefined) return '';
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 function toast(msg, type) {
