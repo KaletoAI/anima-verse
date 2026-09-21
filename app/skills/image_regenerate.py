@@ -346,18 +346,16 @@ def regenerate_image(character_name: str,
             # Negative: call override wins, otherwise use-case
             _gen_neg = _orig_neg or _bucp.get("prompt_negative", "")
             _bp = dict(_orig_params)
-            # GPU queue for local backends, direct otherwise
-            if getattr(b, "api_type", "") == "a1111":
-                from app.core.llm_queue import get_llm_queue, Priority
-                logger.info("GPU-Task (Backend=%s)", b.name)
-                return get_llm_queue().submit_gpu_task(
-                    provider_name=b.name,
-                    task_type="image_regen",
-                    priority=Priority.NORMAL,
-                    callable_fn=lambda: b.generate(_gen_prompt, _gen_neg, _bp, log_meta=_log_meta),
-                    agent_name=character_name,
-                    gpu_type=b.api_type)
-            return b.generate(_gen_prompt, _gen_neg, _bp, log_meta=_log_meta)
+            # EVERY backend goes through the backend's GPU channel — two
+            # generations must never run in parallel on one backend.
+            from app.core.llm_queue import Priority
+            logger.info("GPU-Task (Backend=%s)", b.name)
+            return skill.run_on_backend_channel(
+                b,
+                lambda: b.generate(_gen_prompt, _gen_neg, _bp, log_meta=_log_meta),
+                task_type="image_regen",
+                agent_name=character_name,
+                priority=Priority.NORMAL)
         return _op
 
     # Kontext fuers ZENTRALE Logging in backend.generate() (final_prompt, Backend,

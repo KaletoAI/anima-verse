@@ -3951,11 +3951,20 @@ def _map_water_ref(polygon: Optional[List[List[float]]],
     ground (§ A16.7): ``waters`` arrives in paint order, so a later lake painted
     over an earlier one is the one a room on both is said to lie on.
     """
-    from app.core.world_geometry import point_in_polygon
+    # The rings are parsed ONCE and probed with the pre-parsed primitives of
+    # app/core/heightfield.py (``_ring`` / ``_inside_ring``) — the same ray
+    # casting as ``world_geometry.point_in_polygon``, spelled the same way, but
+    # without rebuilding the point list on each of the 1024 probes. A malformed
+    # or degenerate ring yields None there exactly as point_in_polygon yields
+    # False for every probe, so the answer does not change.
+    from app.core.heightfield import _inside_ring, _ring
     if not polygon or len(polygon) < 3 or not waters:
         return None
-    xs = [float(p[0]) for p in polygon]
-    zs = [float(p[1]) for p in polygon]
+    hull = _ring(polygon)
+    if hull is None:
+        return None
+    xs = [p[0] for p in hull]
+    zs = [p[1] for p in hull]
     min_x, max_x, min_z, max_z = min(xs), max(xs), min(zs), max(zs)
     if max_x <= min_x or max_z <= min_z:
         return None
@@ -3966,15 +3975,26 @@ def _map_water_ref(polygon: Optional[List[List[float]]],
         pz = min_z + (j + 0.5) * step_z
         for i in range(MAP_WATER_SAMPLES):
             px = min_x + (i + 0.5) * step_x
-            if point_in_polygon(px, pz, polygon):
+            if _inside_ring(px, pz, hull):
                 probes.append((px, pz))
     if not probes:
         return None
     best: Optional[Dict[str, str]] = None
     best_share = 0.5
     for area in waters:
-        ring = area.get("polygon")
-        inside = sum(1 for px, pz in probes if point_in_polygon(px, pz, ring))
+        ring = _ring(area.get("polygon"))
+        if ring is None:
+            continue
+        # Bounding-box pre-test: a lake whose box does not reach the hull's box
+        # cannot hold a single probe, and in a normal world that is almost every
+        # pair. STRICTLY disjoint only — a touching box still runs the probes,
+        # so no borderline case changes its answer.
+        rxs = [p[0] for p in ring]
+        rzs = [p[1] for p in ring]
+        if (max(rxs) < min_x or min(rxs) > max_x
+                or max(rzs) < min_z or min(rzs) > max_z):
+            continue
+        inside = sum(1 for px, pz in probes if _inside_ring(px, pz, ring))
         share = inside / len(probes)
         # A MAJORITY, so STRICTLY more than half — a room lying exactly half on
         # the water is not on it, and a tie between two lakes is won by the

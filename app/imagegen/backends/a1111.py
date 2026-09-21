@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import ImageBackend
+from app.imagegen.base import BackendBusyError, ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -97,7 +97,9 @@ class A1111Backend(ImageBackend):
             )
         except requests.exceptions.Timeout:
             logger.error(f"{self.name} Timeout nach 600s")
-            raise
+            # BUSY IS NOT BROKEN: the WebUI answered so far, it is just still
+            # rendering -> retry elsewhere without a cooldown.
+            raise BackendBusyError(f"{self.name}: request timeout after 600s")
         except requests.exceptions.ConnectionError as e:
             logger.error(f"{self.name} Verbindungsfehler: Kann API nicht erreichen ({self.api_url}): {str(e)[:200]}")
             raise
@@ -107,6 +109,11 @@ class A1111Backend(ImageBackend):
 
         logger.info(f"{self.name} Response: HTTP {resp.status_code}, {len(resp.content)} bytes")
         logger.debug(f"Content-Type: {resp.headers.get('content-type', 'N/A')}")
+
+        if resp.status_code in (429, 503):
+            # Rate limit / "model is loading" — load, not a defect.
+            logger.warning(f"{self.name}: HTTP {resp.status_code} (busy)")
+            raise BackendBusyError(f"{self.name}: HTTP {resp.status_code} (busy)")
 
         if resp.status_code != 200:
             error_body = resp.text[:500] if hasattr(resp, 'text') else 'N/A'

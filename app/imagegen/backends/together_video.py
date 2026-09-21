@@ -19,7 +19,7 @@ from typing import Any, Dict, List
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import ImageBackend
+from app.imagegen.base import BackendBusyError, ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -136,6 +136,12 @@ class TogetherVideoBackend(ImageBackend):
         except Exception as e:
             logger.error("%s: Verbindungsfehler: %s", self.name, e)
             return []
+        if resp.status_code in (429, 503):
+            # Rate limit / no capacity — load, not a defect (no cooldown).
+            logger.warning("%s: Video-Job abgewiesen HTTP %d (ausgelastet)",
+                           self.name, resp.status_code)
+            raise BackendBusyError(
+                f"{self.name}: HTTP {resp.status_code} (ausgelastet)")
         if resp.status_code not in (200, 201, 202):
             logger.error("%s: Video-Job fehlgeschlagen HTTP %d - %s",
                          self.name, resp.status_code, resp.text[:300])
@@ -175,5 +181,11 @@ class TogetherVideoBackend(ImageBackend):
             except Exception as e:
                 logger.warning("%s: Poll-Fehler: %s", self.name, e)
                 continue
-        logger.error("%s: Timeout nach %ds", self.name, self.max_wait)
-        return []
+        # max_wait exhausted while the job was still queued or rendering (a
+        # reported "failed" returns above): that is LOAD, not a defect — the
+        # typed exception survives the queue boundary and is retried WITHOUT a
+        # cooldown, exactly as civitai/_gateway_job do it.
+        logger.warning("%s: Timeout nach %ds — Job laeuft noch", self.name,
+                       self.max_wait)
+        raise BackendBusyError(
+            f"{self.name}: polling timeout after {self.max_wait}s")

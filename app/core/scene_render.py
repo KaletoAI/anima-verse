@@ -587,20 +587,16 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
                  "compose": _composed.meta,
                  "prompt_location": state.get("location", "")}
     try:
-        from app.core.llm_queue import get_llm_queue, Priority as _P
-        if backend.api_type == "a1111":
-            images = get_llm_queue().submit_gpu_task(
-                provider_name=backend.name,
-                task_type="scene_render",
-                priority=_P.IMAGE_GEN,
-                callable_fn=lambda: backend.generate(prompt, negative, params,
-                                                     log_meta=_log_meta),
-                agent_name=avatar,
-                label=f"Scene: {state['label']}",
-                gpu_type=backend.api_type)
-        else:
-            images = backend.generate(prompt, negative, params,
-                                      log_meta=_log_meta)
+        # EVERY backend goes through the backend's GPU channel — two
+        # generations must never run in parallel on one backend.
+        from app.imagegen.service import get_image_service
+        images = get_image_service().run_on_backend_channel(
+            backend,
+            lambda: backend.generate(prompt, negative, params,
+                                     log_meta=_log_meta),
+            task_type="scene_render",
+            agent_name=avatar,
+            label=f"Scene: {state['label']}")
     except Exception as e:
         logger.error("scene render failed (%s): %s", backend.name, e)
         _tq.track_finish(_track_id, error=str(e))

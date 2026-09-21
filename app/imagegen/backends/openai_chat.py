@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import ImageBackend
+from app.imagegen.base import BackendBusyError, ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -104,9 +104,12 @@ class OpenAIChatImageBackend(ImageBackend):
                 json=payload,
                 timeout=self.timeout
             )
-        except requests.exceptions.Timeout as e:
-            logger.error(f"{self.name} Timeout nach 120s")
-            raise
+        except requests.exceptions.Timeout:
+            logger.error(f"{self.name} Timeout nach {self.timeout}s")
+            # BUSY IS NOT BROKEN: the endpoint is reachable, the request just
+            # outran its budget -> retry elsewhere without a cooldown.
+            raise BackendBusyError(
+                f"{self.name}: request timeout after {self.timeout}s")
         except requests.exceptions.ConnectionError as e:
             logger.error(f"{self.name} Verbindungsfehler: {self.api_url}: {str(e)[:200]}")
             raise
@@ -117,6 +120,11 @@ class OpenAIChatImageBackend(ImageBackend):
         # Check the response status
         logger.info(f"{self.name} Response: HTTP {resp.status_code}, {len(resp.content)} bytes")
         logger.debug(f"Content-Type: {resp.headers.get('content-type', 'N/A')}")
+
+        if resp.status_code in (429, 503):
+            # Rate limit / service busy — load, not a defect.
+            logger.warning(f"{self.name}: HTTP {resp.status_code} (busy)")
+            raise BackendBusyError(f"{self.name}: HTTP {resp.status_code} (busy)")
 
         # On error: log the response body for debugging
         if resp.status_code != 200:

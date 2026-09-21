@@ -465,21 +465,15 @@ def generate_item_image_sync(
                  "compose": (_compose_meta
                              or {"use_case": "item", "settings_applied": True})}
     try:
-        from app.core.llm_queue import get_llm_queue, Priority as _P
-        _is_local = backend.api_type == "a1111"
-        if _is_local:
-            images = get_llm_queue().submit_gpu_task(
-                provider_name=backend.name,
-                task_type="item_image",
-                priority=_P.IMAGE_GEN,
-                callable_fn=lambda: backend.generate(prompt_text, negative, params,
-                                                     log_meta=_log_meta),
-                agent_name=item.get("name", item_id),
-                label=f"Item: {item.get('name', item_id)}",
-                gpu_type=backend.api_type)
-        else:
-            images = backend.generate(prompt_text, negative, params,
-                                      log_meta=_log_meta)
+        # EVERY backend goes through the backend's GPU channel — two
+        # generations must never run in parallel on one backend.
+        images = img_service.run_on_backend_channel(
+            backend,
+            lambda: backend.generate(prompt_text, negative, params,
+                                     log_meta=_log_meta),
+            task_type="item_image",
+            agent_name=item.get("name", item_id),
+            label=f"Item: {item.get('name', item_id)}")
     except Exception as e:
         logger.error("Item-Bild [%s] fehlgeschlagen: %s", item_id, e)
         return False

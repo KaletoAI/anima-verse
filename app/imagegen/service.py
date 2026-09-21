@@ -482,21 +482,33 @@ class ImageService:
             log_missing=log_missing)
 
     @staticmethod
-    def _run_on_backend_channel(backend: ImageBackend, gen_fn, *,
-                                task_type: str, agent_name: str):
+    def run_on_backend_channel(backend: ImageBackend, gen_fn, *,
+                               task_type: str, agent_name: str = "",
+                               label: str = "", priority: int = -1):
         """Run ``gen_fn()`` on the backend's per-backend GPU queue channel — the
         same serialization every image render uses, so two generations never run
         in parallel on one backend (video and mesh used to run straight off a
         daemon thread, past the channel). Blocks until the channel worker returns
         the result; busy/defect exceptions propagate typed for the fallback
-        engine."""
+        engine.
+
+        Public on the façade: every render occasion in the app goes through here,
+        not only the ones inside this module. ``label`` defaults to the backend
+        name (that is what the queue panel shows); ``priority`` defaults to
+        ``Priority.IMAGE_GEN``.
+
+        Must NOT be called from inside a channel worker of the SAME backend: the
+        worker holds one of the channel's permits while it blocks on the nested
+        task, so a nested submission onto a single-slot channel deadlocks. Every
+        caller today runs on an HTTP threadpool thread, its own daemon thread or
+        a TaskQueue worker — none of them is a ProviderQueue worker."""
         from app.core.llm_queue import get_llm_queue, Priority
         return get_llm_queue().submit_gpu_task(
             provider_name=backend.name,
             task_type=task_type,
-            priority=Priority.IMAGE_GEN,
+            priority=(Priority.IMAGE_GEN if priority < 0 else priority),
             callable_fn=gen_fn,
-            agent_name=agent_name, label=backend.name,
+            agent_name=agent_name, label=(label or backend.name),
             gpu_type=backend.api_type)
 
     def generate_video(self, source_image_path: str, action_prompt: str,
@@ -531,7 +543,7 @@ class ImageService:
                                         log_meta={"agent_name": character_name,
                                                   "original_prompt": action_prompt,
                                                   "media": "video"})
-            return self._run_on_backend_channel(
+            return self.run_on_backend_channel(
                 backend, _gen, task_type="video_generation",
                 agent_name=character_name)
         try:
@@ -651,7 +663,20 @@ class ImageService:
                     "generate_mesh: Backend '%s' liefert rig=%s, benoetigt wird "
                     "rig=%s — waehle passendes Backend", primary.name,
                     getattr(primary, "mesh_rig", "?"), rig)
+                # A rig mismatch is the one case that may re-pick: the named
+                # alias CANNOT deliver what the caller needs.
                 primary = None
+            elif not primary:
+                # A mesh generation never falls back between mesh backends: a
+                # wrong alias binds unusably (splat aliases have no UVs), and a
+                # multi-view request would silently lose its extra views. Say so
+                # instead of rendering somewhere else (generate_video does the
+                # same at this place).
+                logger.warning("generate_mesh: Backend '%s' nicht verfuegbar — "
+                               "kein Fallback auf ein anderes Mesh-Backend",
+                               backend_glob)
+                return {"ok": False,
+                        "error": f"mesh backend '{backend_glob}' unavailable"}
         if not primary:
             meshes = self.list_mesh_backends(rig)
             primary = meshes[0] if meshes else None
@@ -673,7 +698,7 @@ class ImageService:
                 # viewer's FBXLoader died on "cannot find the version number").
                 meta = list(getattr(backend, "last_result_files", []) or [])
                 return {"blobs": blobs, "files": meta} if blobs else []
-            return self._run_on_backend_channel(
+            return self.run_on_backend_channel(
                 backend, _gen, task_type="mesh_generation",
                 agent_name=character_name)
         try:
@@ -810,7 +835,7 @@ class ImageService:
                                                    "media": "mesh"})
                 meta = list(getattr(backend, "last_result_files", []) or [])
                 return {"blobs": blobs, "files": meta} if blobs else []
-            return self._run_on_backend_channel(
+            return self.run_on_backend_channel(
                 backend, _gen, task_type="mesh_generation", agent_name="system")
         try:
             result, used = self.run_on_backend(primary, _op)

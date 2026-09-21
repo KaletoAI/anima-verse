@@ -313,21 +313,16 @@ def _do_generate(event_id: str,
                  "original_prompt": image_prompt, "auto_enhance": False,
                  "compose": _composed.meta}
     try:
-        from app.core.llm_queue import get_llm_queue, Priority as _P
-        is_local = backend.api_type == "a1111"
-        if is_local:
-            images = get_llm_queue().submit_gpu_task(
-                provider_name=backend.name,
-                task_type="event_image",
-                priority=_P.IMAGE_GEN,
-                callable_fn=lambda: backend.generate(full_prompt, negative, params,
-                                                     log_meta=_log_meta),
-                agent_name="system",
-                label=f"Event: {event_id}{' (after)' if resolved else ''}",
-                gpu_type=backend.api_type)
-        else:
-            images = backend.generate(full_prompt, negative, params,
-                                      log_meta=_log_meta)
+        # EVERY backend goes through the backend's GPU channel — two
+        # generations must never run in parallel on one backend.
+        from app.imagegen.service import get_image_service
+        images = get_image_service().run_on_backend_channel(
+            backend,
+            lambda: backend.generate(full_prompt, negative, params,
+                                     log_meta=_log_meta),
+            task_type="event_image",
+            agent_name="system",
+            label=f"Event: {event_id}{' (after)' if resolved else ''}")
     except Exception as e:
         logger.error("Event-Bild [%s] Backend-Fehler: %s", event_id, e)
         return None

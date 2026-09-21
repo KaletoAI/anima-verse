@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import ImageBackend
+from app.imagegen.base import BackendBusyError, ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -134,12 +134,20 @@ class TogetherBackend(ImageBackend):
                 if _429_retries >= _max_429:
                     error_msg = resp.text[:300] or '(leer)'
                     logger.error(f"{self.name}: Rate-Limit (429) nach {_max_429} Versuchen — Abbruch")
-                    raise RuntimeError(f"{self.name}: HTTP 429 (Rate-Limit): {error_msg[:160]}")
+                    # Rate limit = LOAD, not a defect -> no cooldown.
+                    raise BackendBusyError(
+                        f"{self.name}: HTTP 429 (Rate-Limit): {error_msg[:160]}")
                 _429_retries += 1
                 _wait = self._rate_limit_wait(resp, _429_retries)
                 logger.warning(f"{self.name}: Rate-Limit (429), warte {_wait:.1f}s (Versuch {_429_retries}/{_max_429})")
                 time.sleep(_wait)
                 continue
+            if resp.status_code == 503:
+                # Service busy / no capacity — load, not a defect.
+                error_msg = resp.text[:300] or '(leer)'
+                logger.warning(f"{self.name}: HTTP 503 (ausgelastet): {error_msg[:160]}")
+                raise BackendBusyError(
+                    f"{self.name}: HTTP 503 (ausgelastet): {error_msg[:160]}")
             if resp.status_code != 400:
                 if resp.status_code != 200:
                     error_msg = resp.text[:500] or '(leer)'
@@ -248,9 +256,13 @@ class TogetherBackend(ImageBackend):
                 logger.error(f"{self.name}: Keine Bilder in Response")
             return images
 
+        except BackendBusyError:
+            raise  # load, not a defect — the fallback engine skips the cooldown
         except requests.Timeout:
             logger.error(f"{self.name}: Timeout nach {self.timeout}s")
-            return []
+            # The endpoint is reachable, the request just outran its budget.
+            raise BackendBusyError(
+                f"{self.name}: request timeout after {self.timeout}s")
         except RuntimeError:
             return []
         except Exception as e:

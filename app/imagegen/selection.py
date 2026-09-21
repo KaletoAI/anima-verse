@@ -117,12 +117,12 @@ class BackendPool:
         for b in self.backends:
             if not b.available:
                 continue
-            # Per-agent override takes precedence, otherwise the .env default
-            agent_inst = agent_instances.get(b.name, {})
-            if "enabled" in agent_inst:
-                is_enabled = bool(agent_inst["enabled"])
-            else:
-                is_enabled = b.instance_enabled
+            # The per-agent flag only ever RESTRICTS: a character may deselect
+            # a backend, but must not revive a globally disabled one. A frozen
+            # snapshot in the character's skill config would otherwise keep
+            # picking a backend that has no queue channel any more.
+            agent_inst = agent_instances.get(b.name) or {}
+            is_enabled = b.instance_enabled and bool(agent_inst.get("enabled", True))
             if is_enabled:
                 # Inpaint + video backends never enter normal agent image render
                 if self._is_inpaint_backend(b) or self._media_of(b) != "image":
@@ -221,8 +221,9 @@ class BackendPool:
 
         Filters:
         - b.available (live status; channel_health may set this False)
-        - b.instance_enabled (.env flag)
-        - per-agent override (agent_config.instances[name].enabled)
+        - b.instance_enabled (global flag)
+        - per-agent override (agent_config.instances[name].enabled) — it can
+          only take a backend AWAY, never add a globally disabled one back
         - media kind (image/video) — image and video are never mixed
 
         Sorted ascending by effective_cost. NO round-robin here — the
@@ -239,11 +240,9 @@ class BackendPool:
                 continue
             if self._media_of(b) != media:
                 continue
-            agent_inst = agent_instances.get(b.name, {})
-            if "enabled" in agent_inst:
-                if not bool(agent_inst["enabled"]):
-                    continue
-            elif not b.instance_enabled:
+            # Per-agent flag restricts only — see _select_backend_for_agent.
+            agent_inst = agent_instances.get(b.name) or {}
+            if not (b.instance_enabled and bool(agent_inst.get("enabled", True))):
                 continue
             out.append(b)
 
