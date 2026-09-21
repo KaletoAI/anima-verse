@@ -41,7 +41,7 @@ Checks (expected values derived by hand from the code, not recorded from a run):
      and ``execute_cast`` (``spell_engine.py``), and the two named sync bodies
      ``_play_set_activity_sync`` / ``_play_set_mood_sync`` (``play.py``) that
      a route may only reach through a thread.
-     Plus: the five known sites must KEEP their offload — the absence scan
+     Plus: the four known sites must KEEP their offload — the absence scan
      alone would also pass if the call were simply deleted.
 
 Why checks 6 and 8 work on the source, not on a live call: the only caller of
@@ -134,7 +134,6 @@ _EXPECTED_OFFLOADS = (
     # The offload moved into the ONE shared cast path behind /play/cast-self
     # and /play/cast (docstring there); the route itself only awaits it.
     ("app/routes/play.py", "_cast_from_inventory", "execute_cast"),
-    ("app/routes/inventory.py", "cast_spell_on_self_route", "execute_cast"),
 )
 
 

@@ -3941,11 +3941,16 @@ def get_character_scheduler_logs(character_name: str) -> List[Dict[str, Any]]:
             return []
         placeholders = ",".join("?" * len(job_ids))
         rows = conn.execute(
-            f"SELECT job_id, ts, status, result FROM scheduler_logs "
+            f"SELECT job_id, ts, game_ts, status, manual, result FROM scheduler_logs "
             f"WHERE job_id IN ({placeholders}) ORDER BY ts DESC LIMIT 500",
             job_ids,
         ).fetchall()
-        return [{"job_id": r[0], "timestamp": r[1], "status": r[2], "result": r[3] or ""} for r in rows]
+        # ``timestamp`` is the SYSTEM stamp the rows are ordered by,
+        # ``game_ts`` the canonical WORLD stamp the run happened at (empty for
+        # rows written before the column existed).
+        return [{"job_id": r[0], "timestamp": r[1], "game_ts": r[2] or "",
+                 "status": r[3], "manual": bool(r[4]), "result": r[5] or ""}
+                for r in rows]
     except Exception as e:
         get_logger("character").warning("get_character_scheduler_logs DB-Fehler fuer %s: %s", character_name, e)
     # Fallback: JSON-Datei
@@ -3978,12 +3983,15 @@ def save_character_scheduler_logs(character_name: str, logs: List[Dict[str, Any]
                 elif _result is None:
                     _result = ""
                 conn.execute(
-                    "INSERT INTO scheduler_logs (job_id, ts, status, result) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT INTO scheduler_logs "
+                    "(job_id, ts, game_ts, status, manual, result) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         job_id,
                         log_entry.get("timestamp", utc_now_iso()),
+                        log_entry.get("game_ts", "") or "",
                         log_entry.get("status", ""),
+                        1 if log_entry.get("manual") else 0,
                         _result,
                     )
                 )

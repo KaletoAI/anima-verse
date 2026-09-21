@@ -20,6 +20,7 @@ import {
   pictureFrameLocal, type GhostSpec, type LocationView,
 } from './PlacementLayer'
 import { LocationViewSwitch } from './LocationViewSwitch'
+import { MapLayoutBackup } from './MapLayoutBackup'
 import { surfaceColorMap } from './roomShapes'
 import { TerrainLayer, scatterColor, typeColor } from './TerrainLayer'
 import { HeightLayer } from './HeightLayer'
@@ -2841,6 +2842,10 @@ export function MapTab() {
             disabled={!bounds}>
             {t('Fit view')}
           </button>
+          {/* Where every place STANDS, saved and put back — next to Reload
+              because it is the same kind of act: it changes no geometry of
+              its own, it replaces what the server holds. */}
+          <MapLayoutBackup onRestored={() => { void reloadAll() }} />
           {/* THE DRAFT. Both buttons exist only while there IS one: a Save
               that is permanently greyed out teaches nothing about when it
               would do something, and a Discard with nothing to discard is a

@@ -132,11 +132,18 @@ def list_installed_skill_packages() -> List[Dict[str, Any]]:
             meta = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
         except Exception:
             pass
+        verbs = [str((s.get("skill_id") if isinstance(s, dict) else s) or "")
+                 for s in (meta.get("skills") or [])]
         out.append({
             "id": entry.name,
             "name": str(meta.get("name") or entry.name),
             "version": str(meta.get("version") or ""),
             "description": str(meta.get("description") or ""),
+            # Where it came from, as far as anything records it: a marketplace
+            # install and nothing else lands under plugins/installed/. The
+            # catalog it was pulled from is not persisted at install time.
+            "source": f"plugins/{_installed_root().name}/{entry.name}",
+            "verbs": [v for v in verbs if v],
         })
     return out
 
@@ -145,9 +152,16 @@ def remove_skill_package(package_id: str) -> Dict[str, Any]:
     """Delete an installed skill package (R7: folder removal is complete).
     Only touches plugins/installed/ — repo packages are never removable."""
     pkg_id = (package_id or "").strip()
-    if not pkg_id or "/" in pkg_id or pkg_id in (".", ".."):
+    if (not pkg_id or "/" in pkg_id or "\\" in pkg_id or "\0" in pkg_id
+            or pkg_id in (".", "..")):
         raise ValueError(f"invalid package id: {pkg_id!r}")
-    dest = _installed_root() / pkg_id
+    root = _installed_root()
+    dest = root / pkg_id
+    # Belt and braces after the id check: whatever the id spelled, the folder
+    # that is about to be deleted must be a DIRECT child of plugins/installed
+    # — a symlinked or otherwise escaping path is refused, not followed.
+    if dest.resolve().parent != root.resolve():
+        raise ValueError(f"invalid package id: {pkg_id!r}")
     if not dest.exists() or not dest.is_dir():
         raise FileNotFoundError(f"skill package '{pkg_id}' not installed")
     shutil.rmtree(dest)

@@ -12,7 +12,10 @@ same temp dir.
 The 2026-09-21 decision ("Punkt 3") deleted the old vanilla-UI outfit /
 character / location routes EXCEPT four functions that have no replacement.
 Each of the four gets a control in the React Game-Admin; this check pins the
-BACKEND halves plus the route inventory the UI talks to.
+BACKEND halves plus the route inventory the UI talks to. The follow-up
+decision ("Punkt 6") deleted the callerless leftovers that get NO new UI
+(DE-5/13/14/15/16/19, DF-5); those paths are appended to DELETED below, the
+ones that stay to KEPT.
 
 Hand-derived expectations
 =========================
@@ -117,8 +120,15 @@ Hand-derived expectations
       * ``/inventory/characters/{n}/{item}/use``, ``…/cast-self`` and
         ``…/drop`` bypassed the avatar and party checks that ``/play/use-item``,
         ``/play/cast`` and ``/play/drop`` make. Their siblings ``…/give``,
-        ``…/pickup``, ``…/equip``, ``…/unequip`` and ``…/apply-outfit-set``
-        stay.
+        ``…/equip``, ``…/unequip`` and ``…/apply-outfit-set`` stay.
+
+    The PICKUP half of "Punkt 6" appended two more paths to DELETED and two to
+    KEPT, both at the END of their list so a parallel edit of the same file
+    merges. Gone: ``…/pickup``, the last caller-less pickup path, and ``GET
+    /play/journal``, which no client ever called. New: ``POST /play/pickup``,
+    the counterpart of ``/play/drop`` and the first way a player has ever had
+    to take a dropped item back, plus ``GET /play/belongings``, which now
+    carries the room's loose items (``items_here``) for it.
 """
 import os
 import sys
@@ -413,6 +423,40 @@ DELETED = [
     ("POST", "/inventory/characters/{character_name}/{item_id}/use"),
     ("POST", "/inventory/characters/{character_name}/{item_id}/cast-self"),
     ("POST", "/inventory/characters/{character_name}/{item_id}/drop"),
+    # 2026-09-21, "Punkt 6": routes of the removed vanilla UI that have no
+    # caller and get no new UI (DE-5, DE-13, DE-14, DE-15, DE-16, DE-19, DF-5).
+    ("POST", "/queue/tasks/{queue_name}/pause"),
+    ("POST", "/queue/tasks/{queue_name}/resume"),
+    ("DELETE", "/queue/tasks/item/{task_id}"),
+    ("POST", "/queue/tasks/item/{task_id}/move"),
+    ("POST", "/queue/tasks/item/{task_id}/priority"),
+    ("GET", "/notifications"),
+    ("GET", "/notifications/unread-count"),
+    ("DELETE", "/notifications/{notification_id}"),
+    ("GET", "/notifications/style"),
+    ("PUT", "/notifications/style"),
+    ("GET", "/relationships/"),
+    ("GET", "/relationships/{char_a}/{char_b}"),
+    ("PUT", "/relationships/{char_a}/{char_b}"),
+    ("POST", "/relationships/reclassify-all"),
+    ("GET", "/templates/coverage/{character_name}"),
+    ("POST", "/templates/coverage/{character_name}/seed"),
+    ("GET", "/templates/readiness/{character_name}"),
+    ("GET", "/admin/settings/data"),
+    ("GET", "/admin/settings/llm-suitability-checks"),
+    ("POST", "/admin/settings/memory-consolidate"),
+    ("POST", "/admin/agent-loop/bump"),
+    ("GET", "/auth/me"),
+    ("POST", "/npc/sweep"),
+    ("POST", "/intents/{intent_id}/cancel"),
+    ("POST", "/intents/{intent_id}/progress"),
+    ("PATCH", "/improvements/{improvement_id}"),
+    # Appended 2026-09-21 ("Punkt 6", pickup): /play/pickup replaced it, and it
+    # had no caller. Its sibling routes under /inventory/characters/{n}/ stay.
+    ("POST", "/inventory/characters/{character_name}/pickup"),
+    # No caller either: the Mind panel reads memories and the diary through
+    # their own routes.
+    ("GET", "/play/journal"),
 ]
 KEPT = [
     ("GET", "/characters/{character_name}/outfit-lock"),
@@ -441,10 +485,39 @@ KEPT = [
     ("POST", "/play/cast"),
     ("POST", "/play/drop"),
     ("POST", "/inventory/characters/{character_name}/{item_id}/give"),
-    ("POST", "/inventory/characters/{character_name}/pickup"),
     ("POST", "/inventory/characters/{character_name}/equip"),
     ("POST", "/inventory/characters/{character_name}/unequip"),
     ("POST", "/inventory/characters/{character_name}/apply-outfit-set"),
+    # The survivors of the 2026-09-21 "Punkt 6" round: each of these either
+    # has a live caller today or is getting a control right now.
+    ("POST", "/queue/tasks/item/{task_id}/retry"),
+    ("GET", "/queue/status"),
+    ("DELETE", "/queue/tasks/{task_id}"),
+    ("GET", "/queue/tasks/status"),
+    ("DELETE", "/queue/tasks/clear"),
+    ("POST", "/queue/force-resume"),
+    ("POST", "/queue/story-arc/generate"),
+    ("DELETE", "/queue/story-arc/{arc_id}"),
+    ("GET", "/queue/story-arc/status"),
+    ("POST", "/notifications/{notification_id}/read"),
+    ("POST", "/notifications/read-all"),
+    ("GET", "/templates/list"),
+    ("GET", "/templates/{template_name}"),
+    ("POST", "/templates/{template_name}"),
+    ("DELETE", "/templates/{template_name}"),
+    ("GET", "/admin/settings/raw"),
+    ("GET", "/auth/status"),
+    ("PATCH", "/intents/{intent_id}"),
+    ("POST", "/intents/{intent_id}/complete"),
+    ("DELETE", "/intents/{intent_id}"),
+    ("PATCH", "/improvements/order"),
+    ("DELETE", "/improvements/{improvement_id}"),
+    # Appended 2026-09-21 ("Punkt 6"): the player-facing pickup — the
+    # counterpart of /play/drop — plus the payload it rides on. The Retry and
+    # Mark-all-as-read routes the player panels newly call are already listed
+    # above by the route round.
+    ("POST", "/play/pickup"),
+    ("GET", "/play/belongings"),
 ]
 
 import app.server as server  # noqa: E402

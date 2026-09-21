@@ -4,6 +4,7 @@ import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { summarizeImport, type ImportResult } from '../../lib/importNotes'
 import { CollectionBuilder } from './CollectionBuilder'
+import { InstalledSkillPackages } from './InstalledSkillPackages'
 import { useEnlarge } from '../../components/ZoomButton'
 import { ListPane } from '../../components/ListPane'
 
@@ -260,6 +261,9 @@ export function MarketplaceTab() {
         <button className="ga-btn ga-btn-sm" onClick={() => setBuilding(true)}>
           {t('Build collection')}
         </button>
+        {/* Reachable without a catalog too: what is already installed can
+            always be looked at and removed. */}
+        <InstalledSkillPackages />
         {building ? <CollectionBuilder onClose={() => setBuilding(false)} /> : null}
       </div>
     )
@@ -390,6 +394,7 @@ export function MarketplaceTab() {
             })
           )}
         </ul>
+        <InstalledSkillPackages />
       </ListPane>
       <section className="ga-twocol-right">
         {!selected ? (

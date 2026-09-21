@@ -610,15 +610,30 @@ class SchedulerManager:
         except Exception as e:
             logger.error("Stale-job purge of %s failed: %s", job_id, e)
 
-    def _execute_job(self, job_config: Dict[str, Any]):
-        """Executes a job based on its configuration."""
+    def _execute_job(self, job_config: Dict[str, Any],
+                     manual: bool = False) -> Dict[str, Any]:
+        """Executes a job based on its configuration.
+
+        ``manual=True`` is the admin's "Run now": the job runs ONCE, out of
+        band, and the SCHEDULE is left exactly as it was. That is why a manual
+        run writes ``last_manual_execution`` instead of ``last_execution`` —
+        the latter is the game-time ANCHOR (``_game_anchor``), so writing it
+        would push an interval job's next fire by a full period and mark a
+        cron occurrence as already covered. For the same reason a manual run
+        never removes a one-time job: the one shot it was created for is still
+        pending.
+
+        Returns what happened, so a caller can say it: ``{"status":
+        "success"|"error"|"skipped", "reason": <machine code>, "action":
+        <action type>, "result": <handler result>}``.
+        """
         job_id = job_config.get('id')
         action = job_config.get('action', {})
         action_type = action.get('type')
-        user_id = job_config.get('user_id', '')
         agent = job_config.get('character', job_config.get('agent', ''))
 
-        logger.info("Executing job: %s (%s)", job_id, action_type)
+        logger.info("Executing job: %s (%s)%s", job_id, action_type,
+                    " [manual]" if manual else "")
 
         # World freeze: scheduled jobs do not fire while the world is
         # frozen (robust for jobs created during the freeze, too).
@@ -626,31 +641,40 @@ class SchedulerManager:
             from app.models.world import is_world_frozen
             if is_world_frozen():
                 logger.info("Job %s skipped: world frozen", job_id)
-                self._log_execution(job_id, "skipped", {"reason": "world frozen"})
-                return
+                self._log_execution(job_id, "skipped", {"reason": "world frozen"},
+                                    manual=manual)
+                return {"status": "skipped", "reason": "world_frozen",
+                        "action": action_type}
         except Exception:
             pass
 
-        # Sleep check: sleeping characters do not execute jobs.
-        if agent and user_id:
+        # Sleep check: sleeping characters do not execute jobs. The gate used
+        # to read ``if agent and user_id`` — and ``user_id`` has been empty on
+        # every job since the multiuser refactor, so the check never ran and
+        # sleeping characters kept acting.
+        if agent:
             from app.models.character import is_character_sleeping
             if is_character_sleeping(agent):
                 logger.info("Job %s skipped: %s is asleep", job_id, agent)
-                self._log_execution(job_id, "skipped", {"reason": "character asleep"})
+                self._log_execution(job_id, "skipped", {"reason": "character asleep"},
+                                    manual=manual)
                 # Re-anchor: the occurrence counts as consumed ("slept
                 # through it"), otherwise the game-time dispatcher would
-                # retry every 30s until the character wakes up.
-                job_config["last_execution"] = {
-                    "timestamp": utc_now_iso(),
-                    "game_timestamp": game_time().canonical(),
-                    "success": False,
-                    "skipped": "sleeping",
-                }
-                try:
-                    self._save_jobs_for_character(agent)
-                except Exception as e:
-                    logger.error("Saving last_execution failed: %s", e)
-                return
+                # retry every 30s until the character wakes up. A MANUAL run
+                # consumes nothing — it was never an occurrence.
+                if not manual:
+                    job_config["last_execution"] = {
+                        "timestamp": utc_now_iso(),
+                        "game_timestamp": game_time().canonical(),
+                        "success": False,
+                        "skipped": "sleeping",
+                    }
+                    try:
+                        self._save_jobs_for_character(agent)
+                    except Exception as e:
+                        logger.error("Saving last_execution failed: %s", e)
+                return {"status": "skipped", "reason": "character_asleep",
+                        "action": action_type}
 
         try:
             result = None
@@ -707,25 +731,22 @@ class SchedulerManager:
                 logger.warning("Unknown action type: %s", action_type)
                 result = {"success": False, "error": f"Unknown action type: {action_type}"}
 
-            self._log_execution(job_id, "success", result)
+            self._log_execution(job_id, "success", result, manual=manual)
             logger.info("Job succeeded: %s", job_id)
-            job_config["last_execution"] = {
-                "timestamp": utc_now_iso(),
-                "game_timestamp": game_time().canonical(),
-                "success": True
-            }
+            self._record_execution(job_config, True, manual)
+            outcome = {"status": "success", "action": action_type,
+                       "result": result}
 
         except Exception as e:
             logger.error("Executing job %s failed: %s", job_id, e)
-            self._log_execution(job_id, "error", {"error": str(e)})
-            job_config["last_execution"] = {
-                "timestamp": utc_now_iso(),
-                "game_timestamp": game_time().canonical(),
-                "success": False
-            }
+            self._log_execution(job_id, "error", {"error": str(e)}, manual=manual)
+            self._record_execution(job_config, False, manual)
+            outcome = {"status": "error", "action": action_type,
+                       "error": str(e)}
 
-        # Remove one-time (date trigger) jobs after execution
-        if job_config.get('trigger', {}).get('one_time'):
+        # Remove one-time (date trigger) jobs after execution — never on a
+        # manual run: the shot the job was created for has not been fired.
+        if not manual and job_config.get('trigger', {}).get('one_time'):
             try:
                 self.jobs_data['jobs'] = [
                     j for j in self.jobs_data['jobs'] if j.get('id') != job_id
@@ -741,6 +762,25 @@ class SchedulerManager:
                 self._save_jobs_for_character(agent)
             except Exception as e:
                 logger.error("Saving last_execution failed: %s", e)
+
+        return outcome
+
+    @staticmethod
+    def _record_execution(job_config: Dict[str, Any], success: bool,
+                          manual: bool) -> None:
+        """Stamps the run on the job.
+
+        A scheduled run writes ``last_execution`` — which IS the game-time
+        anchor the next due-ness is measured from. A manual run writes
+        ``last_manual_execution``, a display-only field nothing schedules on.
+        """
+        stamp = {
+            "timestamp": utc_now_iso(),
+            "game_timestamp": game_time().canonical(),
+            "success": success,
+        }
+        key = "last_manual_execution" if manual else "last_execution"
+        job_config[key] = stamp
 
     def _action_send_message(self, action: Dict[str, Any], agent: str) -> Dict[str, Any]:
         """Phase-3: instead of writing the message straight into the
@@ -1013,14 +1053,24 @@ class SchedulerManager:
             logger.error("extract_files failed: %s", e)
             return {"success": False, "error": str(e)}
 
-    def _log_execution(self, job_id: str, status: str, result: Any):
-        """Logs a job execution into the per-character log file."""
-        from app.models.character import get_character_scheduler_logs, save_character_scheduler_logs
+    def _log_execution(self, job_id: str, status: str, result: Any,
+                       manual: bool = False):
+        """Logs a job execution into the per-character log.
+
+        Two stamps, both of them on purpose: ``timestamp`` is the SYSTEM time
+        the row is ordered by, ``game_ts`` the WORLD stamp the run happened at
+        — the scheduler schedules on the game calendar, so "when did this job
+        last run" is a world answer. The reader renders the label from
+        ``game_ts``; it never formats a calendar itself.
+        """
+        from app.models.character import save_character_scheduler_logs
 
         log_entry = {
             "timestamp": utc_now_iso(),
+            "game_ts": game_time().canonical(),
             "job_id": job_id,
             "status": status,
+            "manual": manual,
             "result": result
         }
 
@@ -1035,10 +1085,11 @@ class SchedulerManager:
             character = job.get("character", job.get("agent", ""))
             if character:
                 try:
-                    logs = get_character_scheduler_logs(character)
-                    logs.append(log_entry)
-                    logs = logs[-1000:]
-                    save_character_scheduler_logs(character, logs)
+                    # ONE row per run. This used to read the whole log back,
+                    # append and save it again — and the saver plainly INSERTs
+                    # what it is handed, with no id to update on, so every
+                    # execution re-inserted the entire history.
+                    save_character_scheduler_logs(character, [log_entry])
                     return
                 except Exception as e:
                     logger.error("Logging failed: %s", e)
@@ -1271,7 +1322,13 @@ class SchedulerManager:
         }
 
     def run_job_now(self, job_id: str) -> Dict[str, Any]:
-        """Runs a job immediately (regardless of its schedule)."""
+        """Runs a job ONCE, right now, leaving its schedule untouched.
+
+        The regular schedule is not shifted and the next tick does not repeat
+        the run — see ``_execute_job(manual=True)`` for why. The job's own
+        refusals (frozen world, sleeping character) come back as
+        ``outcome.status == "skipped"`` with a machine-readable ``reason``.
+        """
         job = None
         for j in self.jobs_data['jobs']:
             if j['id'] == job_id:
@@ -1281,9 +1338,11 @@ class SchedulerManager:
         if job is None:
             return {"success": False, "error": f"job {job_id} not found"}
 
-        self._execute_job(job)
+        outcome = self._execute_job(job, manual=True)
 
-        return {"success": True, "message": f"job {job_id} is running"}
+        return {"success": outcome.get("status") != "error",
+                "job_id": job_id,
+                "outcome": outcome}
 
     def get_jobs(self, agent: Optional[str] = None) -> List[Dict[str, Any]]:
         """Returns all jobs (optionally filtered by character)."""

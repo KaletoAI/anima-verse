@@ -496,11 +496,13 @@ class StoryArcEngine:
 # BackgroundQueue Handler
 # ---------------------------------------------------------------------------
 def _handle_story_arc_generate(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Handler fuer Arc-Generierung via BackgroundQueue."""
-    user_id = payload.get("user_id", "")
-    if not user_id:
-        return {"success": False, "error": "user_id fehlt"}
+    """Handler for arc generation via the BackgroundQueue.
 
+    Arcs belong to the WORLD, not to a user: the handler used to refuse an
+    empty ``user_id``, and every caller has passed an empty one since the
+    multiuser refactor — so a queued generation always answered "user_id
+    fehlt" and no arc was ever generated from the trigger route.
+    """
     engine = get_story_engine()
     arc = engine.generate_arc()
     if arc:

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
@@ -11,6 +11,59 @@ interface Job {
   trigger?: Record<string, unknown>
   action?: { type?: string; [k: string]: unknown }
   enabled?: boolean
+}
+
+/**
+ * One row of `GET /scheduler/jobs/{id}/logs`. `game_label` is the WORLD-time
+ * label the server rendered from `game_ts` — this tab never formats a
+ * calendar itself (CLAUDE.md: the server computes labels, clients render).
+ * `timestamp` is the system stamp the rows are ordered by and the only thing
+ * a row written before `game_ts` existed has.
+ */
+interface JobLog {
+  timestamp?: string
+  game_ts?: string
+  game_label?: string
+  status?: string
+  manual?: boolean
+  result?: unknown
+}
+
+/** What `POST /scheduler/jobs/{id}/run` answers. */
+interface RunOutcome {
+  status?: string
+  reason?: string
+  action?: string
+  error?: string
+  result?: unknown
+}
+
+/** The last N runs the expandable log shows — the route's own default is 100. */
+const LOG_LIMIT = 20
+
+/** One line about what a run did, out of the handler's own result dict.
+ *  A stored log row carries the dict JSON-encoded (that is what the column
+ *  holds), a fresh run hands it over as an object — both arrive here. */
+function describeResult(result: unknown): string {
+  if (result === null || result === undefined) return ''
+  if (typeof result === 'string') {
+    const text = result.trim()
+    if (text.startsWith('{')) {
+      try {
+        return describeResult(JSON.parse(text))
+      } catch {
+        return text
+      }
+    }
+    return text
+  }
+  if (typeof result !== 'object') return String(result)
+  const r = result as Record<string, unknown>
+  for (const key of ['error', 'reason', 'note', 'result', 'action']) {
+    const v = r[key]
+    if (typeof v === 'string' && v) return v
+  }
+  return JSON.stringify(result).slice(0, 160)
 }
 
 /**
@@ -167,13 +220,20 @@ function describeTrigger(
 }
 
 export function SchedulerTab() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const { toast } = useToast()
   const [jobs, setJobs] = useState<Job[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [submitting, setSubmitting] = useState(false)
   const [calendar, setCalendar] = useState<CalendarInfo>(EMPTY_CALENDAR)
+  // A frozen world makes the scheduler refuse EVERY run, manual ones
+  // included (SchedulerManager._execute_job checks is_world_frozen first), so
+  // the button says so instead of producing a "skipped" toast.
+  const [frozen, setFrozen] = useState(false)
+  const [running, setRunning] = useState('')
+  const [openLog, setOpenLog] = useState('')
+  const [logs, setLogs] = useState<JobLog[] | null>(null)
 
   const reload = useCallback(async () => {
     try {
@@ -182,6 +242,14 @@ export function SchedulerTab() {
       setError(null)
     } catch (e) {
       setError((e as Error).message)
+    }
+    try {
+      const f = await apiGet<{ frozen?: boolean }>('/world/freeze-status')
+      setFrozen(!!f.frozen)
+    } catch {
+      // A failing freeze probe must not grey out the buttons — the run
+      // itself reports a frozen world as a skip.
+      setFrozen(false)
     }
   }, [])
 
@@ -234,6 +302,68 @@ export function SchedulerTab() {
       await reload()
     },
     [pendingDelete, reload, t, toast],
+  )
+
+  const loadLogs = useCallback(async (id: string) => {
+    try {
+      const data = await apiGet<{ data?: JobLog[] }>(
+        `/scheduler/jobs/${encodeURIComponent(id)}/logs`
+        + `?limit=${LOG_LIMIT}&lang=${encodeURIComponent(lang)}`)
+      setLogs(data.data || [])
+    } catch (e) {
+      setLogs([])
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [lang, t, toast])
+
+  // "Run now" runs the job ONCE, out of band: the server leaves the
+  // schedule untouched (no re-anchoring, no double fire on the next tick),
+  // and answers with what actually happened.
+  const handleRun = useCallback(
+    async (id: string) => {
+      setRunning(id)
+      try {
+        const res = await apiPost<{ outcome?: RunOutcome }>(
+          `/scheduler/jobs/${encodeURIComponent(id)}/run`, {})
+        const outcome = res.outcome || {}
+        if (outcome.status === 'skipped') {
+          const why = outcome.reason === 'world_frozen'
+            ? t('the world is frozen')
+            : outcome.reason === 'character_asleep'
+              ? t('the character is asleep')
+              : outcome.reason || ''
+          toast(t('Job {id} did not run — {why}').replace('{id}', id)
+            .replace('{why}', why), 'error')
+        } else if (outcome.status === 'error') {
+          toast(t('Job {id} failed').replace('{id}', id)
+            + ': ' + (outcome.error || ''), 'error')
+        } else {
+          const note = describeResult(outcome.result)
+          toast(t('Job {id} ran').replace('{id}', id) + (note ? ': ' + note : ''))
+        }
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      } finally {
+        setRunning('')
+      }
+      if (openLog === id) await loadLogs(id)
+      await reload()
+    },
+    [loadLogs, openLog, reload, t, toast],
+  )
+
+  const toggleLog = useCallback(
+    async (id: string) => {
+      if (openLog === id) {
+        setOpenLog('')
+        setLogs(null)
+        return
+      }
+      setOpenLog(id)
+      setLogs(null)
+      await loadLogs(id)
+    },
+    [openLog, loadLogs],
   )
 
   const handleToggle = useCallback(
@@ -316,8 +446,13 @@ export function SchedulerTab() {
                 const enabled = job.enabled !== false
                 const trig = describeTrigger(job.trigger, calendar, t)
                 const id = job.id || ''
+                // A marker job is a display row the dispatcher never fires
+                // (SchedulerManager._schedule_job) — running it by hand would
+                // hand its non-action to the executor.
+                const isMarker = String(job.trigger?.type ?? '') === 'marker'
                 return (
-                  <tr key={id}>
+                  <Fragment key={id}>
+                  <tr>
                     <td>{id || '?'}</td>
                     <td>
                       {owner ? (
@@ -332,6 +467,25 @@ export function SchedulerTab() {
                       {enabled ? t('enabled') : t('paused')}
                     </td>
                     <td className="ga-or-actions-col">
+                      <button
+                        className="ga-btn ga-btn-sm"
+                        disabled={!!running || frozen || isMarker}
+                        title={frozen
+                          ? t('The world is frozen — the scheduler refuses every run until it is resumed.')
+                          : isMarker
+                            ? t('A display-only job has nothing to run.')
+                            : t('Run this job once now. Its schedule stays as it is — the next regular run is not moved.')}
+                        onClick={() => { void handleRun(id) }}
+                      >
+                        {running === id ? t('Running…') : t('Run now')}
+                      </button>{' '}
+                      <button
+                        className="ga-btn ga-btn-sm"
+                        title={t('The last runs of this job')}
+                        onClick={() => { void toggleLog(id) }}
+                      >
+                        {openLog === id ? t('Hide log') : t('Log')}
+                      </button>{' '}
                       <button className="ga-btn ga-btn-sm" onClick={() => handleToggle(id)}>
                         {enabled ? t('Pause') : t('Resume')}
                       </button>{' '}
@@ -343,6 +497,51 @@ export function SchedulerTab() {
                       </button>
                     </td>
                   </tr>
+                  {openLog === id ? (
+                    <tr>
+                      <td colSpan={6}>
+                        {logs === null ? (
+                          <span className="ga-sched-muted">{t('Loading…')}</span>
+                        ) : logs.length === 0 ? (
+                          <span className="ga-sched-muted">
+                            {t('This job has not run yet.')}
+                          </span>
+                        ) : (
+                          <table className="ga-sched-table">
+                            <thead>
+                              <tr>
+                                <th>{t('When (world time)')}</th>
+                                <th>{t('Outcome')}</th>
+                                <th>{t('Message')}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {logs.slice().reverse().map((row, i) => (
+                                <tr key={`${row.timestamp ?? ''}-${i}`}>
+                                  <td>
+                                    {/* The server renders the world label; a
+                                        row from before `game_ts` existed has
+                                        only its system stamp. */}
+                                    {row.game_label || row.timestamp || '?'}
+                                    {row.manual ? ' · ' + t('manual') : ''}
+                                  </td>
+                                  <td
+                                    className={row.status === 'success'
+                                      ? 'ga-status-ok'
+                                      : 'ga-status-paused'}
+                                  >
+                                    {row.status || '?'}
+                                  </td>
+                                  <td>{describeResult(row.result)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 )
               })
             )}

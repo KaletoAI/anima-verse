@@ -1,7 +1,9 @@
 """Queue status endpoint — shows all running and recent tasks."""
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.core.auth_dependency import require_admin
 
 router = APIRouter(prefix="/queue", tags=["queue"])
 
@@ -125,7 +127,7 @@ def clear_bg_tasks(hours: float = 24.0, status: str = "",
     return {"status": "ok", "deleted": deleted}
 
 
-@router.post("/story-arc/generate")
+@router.post("/story-arc/generate", dependencies=[Depends(require_admin)])
 def trigger_story_arc_generate() -> Dict[str, Any]:
     """Triggert manuell eine Story-Arc-Generierung."""
     from app.core.background_queue import get_background_queue
@@ -134,7 +136,7 @@ def trigger_story_arc_generate() -> Dict[str, Any]:
     return {"status": "submitted", "user_id": ""}
 
 
-@router.delete("/story-arc/{arc_id}")
+@router.delete("/story-arc/{arc_id}", dependencies=[Depends(require_admin)])
 def delete_story_arc(arc_id: str) -> Dict[str, Any]:
     """Löscht einen einzelnen Story Arc."""
     from app.models.story_arcs import remove_arc
@@ -144,7 +146,7 @@ def delete_story_arc(arc_id: str) -> Dict[str, Any]:
     return {"status": "deleted", "arc_id": arc_id}
 
 
-@router.get("/story-arc/status")
+@router.get("/story-arc/status", dependencies=[Depends(require_admin)])
 def story_arc_status() -> Dict[str, Any]:
     """Zeigt alle Story Arcs eines Users."""
     from app.models.story_arcs import get_all_arcs

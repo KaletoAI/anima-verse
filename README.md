@@ -136,6 +136,9 @@ stops acting autonomously).
   (`setlocation`, `go_to_character`, `cancel_travel`) or a teleport spell — never by RP text claiming
   a cross-location jump. **Activity is free text**, driven by the room's activity hint plus the
   model's own output; there is no activity library.
+- **Map layout backup:** the Map tab's **Download layout** saves where every location stands
+  (position and rotation in metres) as a ZIP, **Restore layout** puts them back — matched by id,
+  characters travelling along, terrain untouched (`/world/map/export`, `/world/map/import`).
 - **A cross-location move is a journey, not a jump:** the path is walked in metres over the painted
   terrain and the position is a pure function of the game clock, so a frozen world freezes every
   journey and all clients derive the same position.
@@ -212,7 +215,8 @@ stops acting autonomously).
   storyteller engine), `interact` (two present characters play a synchronised pair animation),
   `party`, `retrospect`, `take_photo`, `notify_user`, `set_pose`, `sleep`, `consume_item`.
 - **Story arcs** progress in the background with beats and per-beat scene images; the player reads
-  them spoiler-free in the quest book.
+  them spoiler-free in the quest book. The Game-Admin's **Storyteller** tab lists them (title,
+  status, participants, beats) and can **Generate arc** by hand or delete one.
 - **Relationships** with automatic decay over time and periodic summaries.
 - **Phone panel:** a phone-style chat layout in `/play` for remote conversations, with a
   world-configurable frame.
@@ -223,11 +227,15 @@ stops acting autonomously).
 - **Web search** via a self-hosted SearX/SearXNG package; **n8n** webhook calls; a **markdown
   writer** so characters keep their own diary and notes.
 - **Scheduler:** per-character jobs (`interval` / `cron` / `date`) on the game calendar, with actions
-  like send-message, execute-tool or set-status.
+  like send-message, execute-tool or set-status. Each job row carries **Run now** — one run out of
+  band that leaves the schedule where it is — and an expandable **Log** of its last runs in world
+  time (time, outcome, message).
 - **Improvements queue:** the Game-Admin collects "this world could use X" findings as typed,
   gated work items and runs them through the task queue.
 - **Content marketplace:** install content and skill packages from one or more configured catalogs
-  (each cached per world, optional auth token).
+  (each cached per world, optional auth token). **Installed skill packages** are listed in the same
+  tab and can be removed again — installing runs code, so it asks for an explicit confirmation;
+  removing deletes the folder under `plugins/installed/` and reloads the skills.
 
 ### Platform
 - **Plugin system:** every skill is a self-contained package under the top-level `plugins/`

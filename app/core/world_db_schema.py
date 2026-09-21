@@ -885,6 +885,14 @@ ALTER_MIGRATIONS = [
     # backfilled once by app/core/game_calendar_migration.py (group
     # ``memories``); a row that stays empty simply gets no time prefix.
     ("memories", "game_ts", "TEXT DEFAULT ''"),
+    # scheduler_logs: the WORLD stamp a job ran at (canonical GameTime) and
+    # whether an admin started that run by hand ("Run now"). ts stays the
+    # SYSTEM stamp the rows are ordered by; the scheduler schedules on the
+    # game calendar, so "when did this job last run" is a world answer and the
+    # per-job log in the Game-Admin shows it. Old rows keep an empty game_ts
+    # and count as scheduled.
+    ("scheduler_logs", "game_ts", "TEXT DEFAULT ''"),
+    ("scheduler_logs", "manual", "INTEGER DEFAULT 0"),
     # events: game time the event started (canonical GameTime). ts stays the
     # SYSTEM stamp for ordering; the prompt/UI time of an event is game time,
     # and so is its TTL (``expires_at``) — a storm lasting two hours means two

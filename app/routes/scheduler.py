@@ -2,7 +2,6 @@
 Scheduler API Routes - Zeitgesteuerte Jobs per Character
 """
 
-import threading
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
@@ -123,32 +122,21 @@ def toggle_job(job_id: str):
 
 @router.post("/jobs/{job_id}/run")
 def run_job_now(job_id: str):
-    """Fuehrt einen Job sofort aus (im Hintergrund-Thread)."""
+    """Runs one job immediately, out of band.
+
+    Synchronous on purpose: this is a sync ``def``, so FastAPI runs it in the
+    threadpool and the event loop is free either way — and the caller gets the
+    REAL outcome instead of "it started somewhere". The job's schedule is not
+    touched (``SchedulerManager.run_job_now``).
+    """
     try:
         manager = get_scheduler_manager()
+        result = manager.run_job_now(job_id)
 
-        # Pruefen ob Job existiert
-        job = None
-        for j in manager.jobs_data['jobs']:
-            if j['id'] == job_id:
-                job = j
-                break
+        if "error" in result and not result.get("success"):
+            raise HTTPException(status_code=404, detail=result["error"])
 
-        if job is None:
-            raise HTTPException(status_code=404, detail=f"Job {job_id} nicht gefunden")
-
-        # Job im Hintergrund-Thread ausfuehren (blockiert nicht den Event-Loop)
-        thread = threading.Thread(
-            target=manager._execute_job,
-            args=(job,),
-            daemon=True
-        )
-        thread.start()
-
-        return {
-            "status": "success",
-            "message": f"Job {job_id} wird im Hintergrund ausgefuehrt"
-        }
+        return {"status": "success", **result}
 
     except HTTPException:
         raise
@@ -156,9 +144,22 @@ def run_job_now(job_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _with_game_labels(logs: List[Dict[str, Any]], lang: str) -> List[Dict[str, Any]]:
+    """Adds the rendered world-calendar label to every log row.
+
+    The SERVER renders the label (CLAUDE.md: "server computes labels, clients
+    render") — a row written before ``game_ts`` existed simply gets an empty
+    one.
+    """
+    from app.core.character_ops import game_label
+    return [{**row, "game_label": game_label(row.get("game_ts", "") or "", lang)}
+            for row in logs]
+
+
 @router.get("/jobs/{job_id}/logs")
 def get_job_logs(job_id: str, limit: int = 100,
-                 character: Optional[str] = None):
+                 character: Optional[str] = None,
+                 lang: str = "en"):
     """Gibt Logs fuer einen Job zurueck."""
     try:
         manager = get_scheduler_manager()
@@ -166,7 +167,7 @@ def get_job_logs(job_id: str, limit: int = 100,
         return {
             "status": "success",
             "count": len(logs),
-            "data": logs
+            "data": _with_game_labels(logs, lang)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -174,7 +175,8 @@ def get_job_logs(job_id: str, limit: int = 100,
 
 @router.get("/logs")
 def get_all_logs(limit: int = 100,
-                 character: Optional[str] = None):
+                 character: Optional[str] = None,
+                 lang: str = "en"):
     """Gibt alle Job-Logs zurueck."""
     try:
         manager = get_scheduler_manager()
@@ -182,7 +184,7 @@ def get_all_logs(limit: int = 100,
         return {
             "status": "success",
             "count": len(logs),
-            "data": logs
+            "data": _with_game_labels(logs, lang)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

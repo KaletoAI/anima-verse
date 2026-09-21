@@ -140,6 +140,10 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
     continuous plane in metres (`pos_x` / `pos_z` plus `yaw_deg`), saved on drop. Characters travel
     along that plane as timed journeys, not in jumps.
 
+    The map toolbar's **Download layout** saves that arrangement as a ZIP and **Restore layout**
+    puts every location back where the file says it stood (matched by id — terrain, strokes and
+    height areas are not part of it). Worth doing before a big rearrangement.
+
 11. **(Optional) Gate a room behind an item.** In the Game-Admin:
 
     1. **Items → New item** — create the gating item (e.g. a key) and give it to the character(s)
