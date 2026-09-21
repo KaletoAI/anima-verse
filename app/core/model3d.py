@@ -57,23 +57,28 @@ def set_model3d_options(character_name: str,
                         updates: Dict[str, Any]) -> Dict[str, Any]:
     """Merges mesh-generation overrides into the character profile.
     ``no_fingers=None`` clears the override (back to the backend default)."""
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
-    profile = get_character_profile(character_name) or {}
-    opts = dict(profile.get("model3d_opts") or {})
-    if "no_fingers" in updates:
-        nf = updates["no_fingers"]
-        if nf is None:
-            opts.pop("no_fingers", None)
-        else:
-            opts["no_fingers"] = bool(nf)
-    if "auto_generate" in updates:
-        if updates["auto_generate"]:
-            opts["auto_generate"] = True
-        else:
-            opts.pop("auto_generate", None)
-    profile["model3d_opts"] = opts
-    save_character_profile(character_name, profile)
-    return get_model3d_options(character_name)
+    # Read AND write under the per-character profile lock (DATA-3). The
+    # read-back that forms the answer stays inside, so the caller is told what
+    # this write stored and not what a later one did. Leaf span.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        opts = dict(profile.get("model3d_opts") or {})
+        if "no_fingers" in updates:
+            nf = updates["no_fingers"]
+            if nf is None:
+                opts.pop("no_fingers", None)
+            else:
+                opts["no_fingers"] = bool(nf)
+        if "auto_generate" in updates:
+            if updates["auto_generate"]:
+                opts["auto_generate"] = True
+            else:
+                opts.pop("auto_generate", None)
+        profile["model3d_opts"] = opts
+        save_character_profile(character_name, profile)
+        return get_model3d_options(character_name)
 
 
 def get_model3d_dir(character_name: str) -> Path:

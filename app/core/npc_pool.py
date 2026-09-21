@@ -127,16 +127,24 @@ def pool_npc(name: str, reason: str = "") -> bool:
 
     # 3) Off the map, then out of the roster.
     _unplace(name)
-    profile = get_character_profile(name) or {}
-    profile["expires_at"] = ""           # a pooled NPC has no lifetime left
-    profile["npc_wanderer"] = False
-    profile.pop("wander_target", None)
-    # The HOME AREA goes with the slot stamps: a recycled sheet may come back
-    # as a barkeeper in another town, and yesterday's forest circle would send
-    # it walking into a place it has nothing to do with (spec § E3).
-    profile.pop("npc_home", None)
-    profile["npc_pooled_reason"] = (reason or "").strip()
-    save_character_profile(name, profile)
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # rewrites the whole profile_json blob. The detach steps above stay
+    # OUTSIDE it — exactly as in ``character.delete_character`` step 0b —
+    # because ``_end_interaction`` takes BOTH partners' profile locks and
+    # ``_end_journey``/``_end_party`` write profiles of their own.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        profile["expires_at"] = ""       # a pooled NPC has no lifetime left
+        profile["npc_wanderer"] = False
+        profile.pop("wander_target", None)
+        # The HOME AREA goes with the slot stamps: a recycled sheet may come
+        # back as a barkeeper in another town, and yesterday's forest circle
+        # would send it walking into a place it has nothing to do with
+        # (spec § E3).
+        profile.pop("npc_home", None)
+        profile["npc_pooled_reason"] = (reason or "").strip()
+        save_character_profile(name, profile)
     set_character_status(name, POOLED_STATUS)
     logger.info("Temporary NPC '%s' pooled (%s)", name, reason or "expired")
 
@@ -271,62 +279,69 @@ def revive_from_pool(name: str, location_id: str, room_id: str = "",
     if not name or not is_temporary_npc(name):
         return False
 
-    profile = get_character_profile(name) or {}
-    # THE SHEET'S OWN LIFETIME DECISION SURVIVES THE POOL, in both non-default
-    # modes. `lifetime` is what an admin picked in the config form (Character
-    # config → Temporary NPC → Lifetime); pooling keeps every key but the
-    # stamp, so a revive must not overwrite that decision with the slot's TTL:
-    #
-    # * `permanent` — no stamp at all. The lifetime decision is what stops the
-    #   sheet being handed the lifetime it was just relieved of.
-    # * `custom` — its OWN hours. Stamping the slot TTL here left the dropdown
-    #   saying "3 hours" while the NPC actually died after the slot's 24, and
-    #   the disagreement came back on every single revive.
-    #
-    # Everyone else is stamped exactly as `npc_ops.apply_npc` stamps a fresh
-    # NPC: the TTL the caller (slot or wanderer) hands in.
-    own_hours = 0.0
-    if str(profile.get("lifetime") or "").strip().lower() == "custom":
-        try:
-            own_hours = float(profile.get("lifetime_hours") or 0)
-        except (TypeError, ValueError):
-            own_hours = 0.0
-    permanent = is_permanent_npc(profile)
-    if permanent and not profile.get("npc_permanent"):
-        # SELF-HEAL, in the same save. This is the one path that would
-        # otherwise restamp such a sheet: a profile made permanent before
-        # `npc_permanent` existed carries the mode alone, and the admin list
-        # then showed "expires in …" next to "permanent". Writing the derived
-        # flag here repairs the sheet on the spot instead of leaving the class
-        # of old sheets to be fixed one "Make permanent" click at a time.
-        profile["npc_permanent"] = True
-        logger.info("Revive of '%s': lifetime says permanent, the flag was "
-                    "missing — writing it instead of stamping a new TTL", name)
-    profile["expires_at"] = (
-        "" if permanent
-        else expiry_stamp(own_hours if own_hours > 0 else ttl_hours))
-    profile["npc_slot_role"] = (slot_role or "").strip()
-    # BOTH slot stamps are written on every revive, one of them empty: a
-    # recycled sheet may carry yesterday's stamp of the OTHER kind (pooling
-    # keeps them, so `take_from_pool` can match on the role), and a stale
-    # `npc_slot_area` would keep counting towards a wood this NPC has left.
-    area_id = str((home or {}).get("area_id") or "").strip()
-    profile["npc_slot_location"] = (location_id or "").strip() if slot_role else ""
-    profile["npc_slot_area"] = area_id if slot_role else ""
-    profile["npc_wanderer"] = bool(wanderer)
-    # The road before the placement — the gate's job is what sends a
-    # held-back wanderer off, so it must already know where to (see
-    # ``npc_ops.apply_npc`` for the same three lines on the generated path).
-    if wanderer and wander_target:
-        profile["wander_origin"] = location_id
-        profile["wander_target"] = wander_target
-    profile["npc_briefing"] = (briefing or "").strip() or profile.get("npc_briefing", "")
-    profile["outfit_worn"] = True
-    task = str(profile.get("standing_task") or "").strip()
-    if task:
-        profile["current_activity"] = task
-    profile.pop("npc_pooled_reason", None)
-    save_character_profile(name, profile)
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # at the end of this span rewrites the whole profile_json blob. Leaf span
+    # — everything after it (the skill set, the finish gate, the placement)
+    # writes on its own and must not run under this lock.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        # THE SHEET'S OWN LIFETIME DECISION SURVIVES THE POOL, in both
+        # non-default modes. `lifetime` is what an admin picked in the
+        # config form (Character config → Temporary NPC → Lifetime); pooling
+        # keeps every key but the stamp, so a revive must not overwrite that
+        # decision with the slot's TTL:
+        #
+        # * `permanent` — no stamp at all. The lifetime decision is what stops the
+        #   sheet being handed the lifetime it was just relieved of.
+        # * `custom` — its OWN hours. Stamping the slot TTL here left the dropdown
+        #   saying "3 hours" while the NPC actually died after the slot's 24, and
+        #   the disagreement came back on every single revive.
+        #
+        # Everyone else is stamped exactly as `npc_ops.apply_npc` stamps a fresh
+        # NPC: the TTL the caller (slot or wanderer) hands in.
+        own_hours = 0.0
+        if str(profile.get("lifetime") or "").strip().lower() == "custom":
+            try:
+                own_hours = float(profile.get("lifetime_hours") or 0)
+            except (TypeError, ValueError):
+                own_hours = 0.0
+        permanent = is_permanent_npc(profile)
+        if permanent and not profile.get("npc_permanent"):
+            # SELF-HEAL, in the same save. This is the one path that would
+            # otherwise restamp such a sheet: a profile made permanent before
+            # `npc_permanent` existed carries the mode alone, and the admin list
+            # then showed "expires in …" next to "permanent". Writing the derived
+            # flag here repairs the sheet on the spot instead of leaving the class
+            # of old sheets to be fixed one "Make permanent" click at a time.
+            profile["npc_permanent"] = True
+            logger.info("Revive of '%s': lifetime says permanent, the flag was "
+                        "missing — writing it instead of stamping a new TTL", name)
+        profile["expires_at"] = (
+            "" if permanent
+            else expiry_stamp(own_hours if own_hours > 0 else ttl_hours))
+        profile["npc_slot_role"] = (slot_role or "").strip()
+        # BOTH slot stamps are written on every revive, one of them empty: a
+        # recycled sheet may carry yesterday's stamp of the OTHER kind (pooling
+        # keeps them, so `take_from_pool` can match on the role), and a stale
+        # `npc_slot_area` would keep counting towards a wood this NPC has left.
+        area_id = str((home or {}).get("area_id") or "").strip()
+        profile["npc_slot_location"] = (location_id or "").strip() if slot_role else ""
+        profile["npc_slot_area"] = area_id if slot_role else ""
+        profile["npc_wanderer"] = bool(wanderer)
+        # The road before the placement — the gate's job is what sends a
+        # held-back wanderer off, so it must already know where to (see
+        # ``npc_ops.apply_npc`` for the same three lines on the generated path).
+        if wanderer and wander_target:
+            profile["wander_origin"] = location_id
+            profile["wander_target"] = wander_target
+        profile["npc_briefing"] = (briefing or "").strip() or profile.get("npc_briefing", "")
+        profile["outfit_worn"] = True
+        task = str(profile.get("standing_task") or "").strip()
+        if task:
+            profile["current_activity"] = task
+        profile.pop("npc_pooled_reason", None)
+        save_character_profile(name, profile)
 
     # THE STANDARD SKILL SET, exactly as `apply_npc` writes it for a freshly
     # generated NPC — this is the SECOND way an NPC enters the world, and

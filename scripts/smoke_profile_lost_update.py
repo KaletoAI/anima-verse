@@ -51,6 +51,40 @@ Hand-derived expectations:
       This is what makes [1] and [2] a statement about the lock rather than
       about timing — if [3] passed too, the interleaving would not be
       reaching the bug at all.
+
+Round 2 (2026-09-21) — one case per class of site the second wave locked:
+
+  [4] ``save_character_current_location`` vs the equip side. Pre-state:
+      ``current_location`` "home", empty ``default_outfit``. The equip thread
+      reads that, then the character is moved to "market". Afterwards BOTH:
+        * ``default_outfit`` == "coat"   (the equip side's change survived)
+        * ``current_location`` == "market"
+      ``current_location`` is a ``character_state`` COLUMN and the save writes
+      every column the dict carries, so the stale equip write teleports the
+      character back to "home" — a figure that walked away and is reported at
+      its old address by everything that reads the roster.
+
+  [5] ``interaction_engine.end_interaction`` vs an equip on the PARTNER. The
+      pair is seeded directly (two profiles with the same ``interaction``
+      block — no clip, no catalogue, the state is what matters). The equip
+      thread reads the PARTNER's profile, then A ends the interaction for
+      both. Afterwards BOTH:
+        * the partner has no ``interaction`` left
+        * the partner's ``default_outfit`` == "coat"
+      Unlocked, the partner's stale write puts the ``interaction`` block back:
+      B keeps playing a duet with an A that has already stood up, and holds
+      the pair seat for it.
+
+  [6] Two threads, crossed: A ends its interaction with B while B ends its
+      interaction with A. ``pair_profile_locks`` takes both profile locks in
+      SORTED-NAME order, so both threads queue for the same first lock and
+      one of them simply finds the pair already ended. 40 rounds, joined with
+      a timeout — a hang is a FAILURE, never a stuck run.
+      [6b] is the control: the same two threads with a deliberately
+      call-ordered helper (each takes ITS OWN name first) deadlock, and the
+      harness must SEE that as a timeout. Without it, [6] would prove nothing
+      — a test that cannot fail is not a test. Its two threads stay parked
+      for good; they are daemons on two names nothing else uses.
 """
 import os
 import sys
@@ -182,6 +216,144 @@ def main():
     check("[3] control: the stale equip write DID resurrect the journey "
           "(so the interleaving really reaches the bug)",
           isinstance(prof.get("journey"), dict), repr(prof.get("journey")))
+
+    # ── [4] save_character_current_location vs equip ────────────────────
+    from app.models.character import save_character_current_location
+
+    def seed_at_home():
+        save_character_profile(NAME, {
+            "character_name": NAME, "template": "human-default",
+            "default_outfit": "", "current_location": "home",
+            "current_room": "",
+        }, create_new=True)
+
+    seed_at_home()
+    read_done = threading.Event()
+    t = threading.Thread(target=equip_side, args=(read_done, True),
+                         name="equip-sim-loc")
+    t.start()
+    read_done.wait(5.0)
+    save_character_current_location(NAME, "market")
+    t.join(10.0)
+    prof = get_character_profile(NAME)
+    print(f"\n[4] save_character_current_location vs equip: "
+          f"default_outfit={prof.get('default_outfit')!r} "
+          f"current_location={prof.get('current_location')!r}")
+    check("[4] the equip side's field survived",
+          prof.get("default_outfit") == "coat", repr(prof.get("default_outfit")))
+    check("[4] the character really is at the new place",
+          (prof.get("current_location") or "") == "market",
+          repr(prof.get("current_location")))
+
+    # ── [5] end_interaction vs an equip on the PARTNER ──────────────────
+    from app.core.interaction_engine import end_interaction
+
+    A, B = "Alba", "Bodo"
+
+    def seed_pair(a=A, b=B, inter_id="pair-1"):
+        """Two profiles bound to one another — the state end_interaction reads.
+
+        ``pose_key`` equals the interaction's, so both sides take the
+        ``clear_pose_intent`` branch (no room, no places lookup needed), and
+        ``place`` is None so nobody is stood up from a seat that is not there.
+        """
+        for name, other, role in ((a, b, "a"), (b, a, "b")):
+            save_character_profile(name, {
+                "character_name": name, "template": "human-default",
+                "default_outfit": "", "place": None,
+                "pose_key": "hugging", "pose_flavor": "",
+                "interaction": {"id": inter_id, "kind": "hug", "role": role,
+                                "partner": other, "pose_key": "hugging",
+                                "anchor": {"x": 0.0, "z": 0.0, "yaw": 0.0,
+                                           "place_id": None},
+                                "started_at_game": "Y0001-D001T12:00:00",
+                                "clip_duration_s": 2.0, "loop": True},
+            }, create_new=True)
+
+    seed_pair()
+    partner_read = threading.Event()
+
+    def equip_partner():
+        # The equip route's read-modify-write, on B, under B's own lock.
+        with keyed_lock("character_profile", B):
+            prof_b = get_character_profile(B)
+            partner_read.set()
+            time.sleep(HOLD_S)
+            prof_b["default_outfit"] = "coat"
+            save_character_profile(B, prof_b)
+
+    tb = threading.Thread(target=equip_partner, name="equip-sim-partner")
+    tb.start()
+    partner_read.wait(5.0)
+    end_interaction(A, reason="smoke")
+    tb.join(10.0)
+    pb = get_character_profile(B)
+    print(f"\n[5] end_interaction vs equip on the partner: "
+          f"default_outfit={pb.get('default_outfit')!r} "
+          f"interaction={'yes' if isinstance(pb.get('interaction'), dict) else 'no'}")
+    check("[5] the partner's equip field survived",
+          pb.get("default_outfit") == "coat", repr(pb.get("default_outfit")))
+    check("[5] the partner is really out of the interaction",
+          not isinstance(pb.get("interaction"), dict),
+          repr(pb.get("interaction")))
+
+    # ── [6] crossed ends: A ends with B while B ends with A ─────────────
+    rounds, crossed_ok = 40, True
+    for i in range(rounds):
+        seed_pair(inter_id=f"pair-x{i}")
+        gate = threading.Barrier(2, timeout=10.0)
+
+        def cross(who):
+            gate.wait()
+            end_interaction(who, reason="smoke-cross")
+
+        t1 = threading.Thread(target=cross, args=(A,), daemon=True)
+        t2 = threading.Thread(target=cross, args=(B,), daemon=True)
+        t1.start(); t2.start()
+        t1.join(15.0); t2.join(15.0)
+        if t1.is_alive() or t2.is_alive():
+            crossed_ok = False
+            break
+    check(f"[6] {rounds} crossed ends, no thread hung", crossed_ok,
+          "sorted-name order keeps both threads on the same first lock")
+    pa, pb = get_character_profile(A), get_character_profile(B)
+    check("[6] and the pair is ended on both sides",
+          not isinstance(pa.get("interaction"), dict)
+          and not isinstance(pb.get("interaction"), dict),
+          f"{pa.get('interaction')!r} / {pb.get('interaction')!r}")
+
+    # ── [6b] control: a CALL-ordered pair lock really does deadlock ──────
+    # Two throwaway names nothing else touches: these two threads never come
+    # back, which is exactly the point — the harness has to see it.
+    from contextlib import contextmanager
+
+    @contextmanager
+    def call_order_locks(mine, theirs):
+        """The WRONG helper: each caller takes its own name first."""
+        with keyed_lock("character_profile", mine):
+            time.sleep(0.05)          # make the window certain, not likely
+            with keyed_lock("character_profile", theirs):
+                yield
+
+    stuck_gate = threading.Barrier(2, timeout=10.0)
+    finished: list = []
+
+    def wrong_order(mine, theirs):
+        stuck_gate.wait()
+        with call_order_locks(mine, theirs):
+            pass
+        finished.append(mine)
+
+    d1 = threading.Thread(target=wrong_order, args=("Xander", "Xenia"),
+                          daemon=True)
+    d2 = threading.Thread(target=wrong_order, args=("Xenia", "Xander"),
+                          daemon=True)
+    d1.start(); d2.start()
+    d1.join(3.0); d2.join(3.0)
+    check("[6b] control: call-ordered locks DO deadlock, and the join "
+          "timeout sees it",
+          d1.is_alive() and d2.is_alive() and not finished,
+          f"finished={finished}")
 
     print("\n" + "=" * 72)
     if FAILURES:

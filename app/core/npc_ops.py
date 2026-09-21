@@ -377,37 +377,43 @@ def apply_npc(data: Dict[str, Any], location_id: str, room_id: str = "",
                                        created_by=created_by or "npc_generator")
 
     # Bookkeeping the generator is not allowed to set.
-    profile = get_character_profile(name) or {}
-    profile["npc_briefing"] = (briefing or "").strip()
-    profile["expires_at"] = expiry_stamp(ttl_hours)
-    profile["outfit_worn"] = True
-    # THE SLOT TAG. What makes an NPC count towards a location's slot is this
-    # pair on its profile — never its name, never its role text in prose
-    # (feedback_no_name_resolution). An NPC without a slot (manual, wanderer)
-    # simply carries empty ones.
-    # A slot lives EITHER at a place or on a painted area (spec § E3.2), never
-    # at both — the two stamps are what the two counts read, and writing both
-    # (one of them empty) is what keeps them from ever describing one NPC
-    # twice.
-    profile["npc_slot_role"] = (slot_role or "").strip()
-    profile["npc_slot_location"] = (location_id or "").strip() if slot_role else ""
-    profile["npc_slot_area"] = (str((home or {}).get("area_id") or "").strip()
-                                if slot_role else "")
-    profile["npc_wanderer"] = bool(wanderer)
-    # THE ROAD IS STAMPED BEFORE THE PLACEMENT. The finish gate may hold this
-    # NPC back, and the job it queues is what sends the wanderer off later —
-    # so where it is going has to be on the profile (and in that payload)
-    # before anybody asks for a placement, not one line afterwards.
-    if wanderer and wander_target:
-        profile["wander_origin"] = location_id
-        profile["wander_target"] = wander_target
-    # The standing task IS the activity baseline — one field, two consumers:
-    # the chat prompt renders it (in_prompt), the world shows it as what the
-    # NPC is doing.
-    task = str(profile.get("standing_task") or "").strip()
-    if task:
-        profile["current_activity"] = task
-    save_character_profile(name, profile)
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # rewrites the whole profile_json blob, and ``_apply_character_internal``
+    # above has just written this very profile. Leaf span — the skill set, the
+    # finish gate and the placement all follow outside it.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        profile["npc_briefing"] = (briefing or "").strip()
+        profile["expires_at"] = expiry_stamp(ttl_hours)
+        profile["outfit_worn"] = True
+        # THE SLOT TAG. What makes an NPC count towards a location's slot is this
+        # pair on its profile — never its name, never its role text in prose
+        # (feedback_no_name_resolution). An NPC without a slot (manual, wanderer)
+        # simply carries empty ones.
+        # A slot lives EITHER at a place or on a painted area (spec § E3.2), never
+        # at both — the two stamps are what the two counts read, and writing both
+        # (one of them empty) is what keeps them from ever describing one NPC
+        # twice.
+        profile["npc_slot_role"] = (slot_role or "").strip()
+        profile["npc_slot_location"] = (location_id or "").strip() if slot_role else ""
+        profile["npc_slot_area"] = (str((home or {}).get("area_id") or "").strip()
+                                    if slot_role else "")
+        profile["npc_wanderer"] = bool(wanderer)
+        # THE ROAD IS STAMPED BEFORE THE PLACEMENT. The finish gate may hold this
+        # NPC back, and the job it queues is what sends the wanderer off later —
+        # so where it is going has to be on the profile (and in that payload)
+        # before anybody asks for a placement, not one line afterwards.
+        if wanderer and wander_target:
+            profile["wander_origin"] = location_id
+            profile["wander_target"] = wander_target
+        # The standing task IS the activity baseline — one field, two consumers:
+        # the chat prompt renders it (in_prompt), the world shows it as what the
+        # NPC is doing.
+        task = str(profile.get("standing_task") or "").strip()
+        if task:
+            profile["current_activity"] = task
+        save_character_profile(name, profile)
 
     # THE STANDARD SKILL SET, before the gate: a held-back NPC is a finished
     # character sheet waiting for its pictures, and its verbs are part of that
@@ -598,9 +604,18 @@ def sweep_expired_npcs() -> int:
             if is_permanent_npc(profile):
                 if (profile.get("expires_at")
                         or not profile.get("npc_permanent")):
-                    profile["npc_permanent"] = True
-                    profile["expires_at"] = ""
-                    save_character_profile(name, profile)
+                    # Read AGAIN under the per-character profile lock and heal
+                    # only OUR two keys (DATA-3): the copy above was read for
+                    # the decision, and writing it back would drop whatever a
+                    # concurrent writer stored. ``pool_npc`` below stays
+                    # outside — it takes this lock itself and reaches
+                    # ``end_interaction`` (two profile locks).
+                    from app.core.keyed_lock import keyed_lock
+                    with keyed_lock("character_profile", name):
+                        profile = get_character_profile(name) or {}
+                        profile["npc_permanent"] = True
+                        profile["expires_at"] = ""
+                        save_character_profile(name, profile)
                     logger.info("Sweep: '%s' is permanent — the stale TTL is "
                                 "cleared and the flag written, not pooled",
                                 name)

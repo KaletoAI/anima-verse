@@ -328,21 +328,28 @@ def row(payload, name: str) -> dict:
     return {}
 
 
+#: The revision the "before" side is read from: the parent of the commit that
+#: handed ``profile=`` down the worldmap loop (2862b391). Pinned, not ``HEAD`` —
+#: once that commit is HEAD, comparing against HEAD compares the file with itself.
+BASELINE_REV = "2862b391^"
+
+
 def load_head_module():
-    """HEAD's ``app/core/world_ops.py`` as a second, throwaway module.
+    """The PRE-FIX ``app/core/world_ops.py`` (``BASELINE_REV``) as a second,
+    throwaway module.
 
     Read-only: ``git show`` touches no git state, and the source is written
     into a temp directory, never into the tree. ``None`` when git or the
     revision is unavailable."""
     try:
-        out = subprocess.run(["git", "show", "HEAD:app/core/world_ops.py"],
+        out = subprocess.run(["git", "show", f"{BASELINE_REV}:app/core/world_ops.py"],
                              cwd=str(REPO), capture_output=True, text=True,
                              timeout=60)
     except Exception as e:
         print(f"  --  git unavailable ({e}) — old/new comparison skipped")
         return None
     if out.returncode != 0 or not out.stdout:
-        print("  --  HEAD:app/core/world_ops.py unavailable — "
+        print(f"  --  {BASELINE_REV}:app/core/world_ops.py unavailable — "
               "old/new comparison skipped")
         return None
     path = Path(tempfile.mkdtemp(prefix="worldmap-loads-head-")) / "wo_head.py"
@@ -418,10 +425,18 @@ def main() -> int:
     if head is None:
         print("  --  skipped")
     else:
-        old_admin, old_calls, old_secs = build_counted(
-            head.build_worldmap_payload, None, True)
-        old_fog, old_fog_calls, _ = build_counted(
-            head.build_worldmap_payload, "npc_lead", False)
+        try:
+            old_admin, old_calls, old_secs = build_counted(
+                head.build_worldmap_payload, None, True)
+            old_fog, old_fog_calls, _ = build_counted(
+                head.build_worldmap_payload, "npc_lead", False)
+        except Exception as e:
+            # The pinned revision is a historical file running against
+            # today's modules; when they drift apart it stops being a
+            # reference. Sections [1] and [2] are the durable checks.
+            print(f"  --  baseline no longer runs against this tree ({e}) — skipped")
+            head = None
+    if head is not None:
         check("admin payload identical (sha256/16)", canonical(old_admin),
               canonical(admin))
         check("fogged payload identical (sha256/16)", canonical(old_fog),

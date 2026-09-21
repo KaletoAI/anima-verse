@@ -1253,47 +1253,53 @@ def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str,
     if not fields:
         raise HTTPException(status_code=400, detail="fields fehlt")
 
-    profile = get_character_profile(character_name)
+    # Read AND write under the per-character profile lock (DATA-3): the bulk
+    # update writes the whole profile_json blob back, so a stale read drops
+    # every field a concurrent writer stored. Everything inside the span is a
+    # cached world/template read — no LLM, no image, no HTTP.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
 
-    # current_location: resolve the name back to an ID so the world map keeps
-    # finding the character (GET returns the resolved name, POST gets it back).
-    if "current_location" in fields:
-        loc_val = fields["current_location"]
-        if loc_val:
-            from app.models.world import resolve_location, get_location_id
-            loc_id = get_location_id(loc_val)
-            if loc_id:
-                fields["current_location"] = loc_id
-            else:
-                loc_obj = resolve_location(loc_val)
-                if loc_obj and loc_obj.get("id"):
-                    fields["current_location"] = loc_obj["id"]
+        # current_location: resolve the name back to an ID so the world map keeps
+        # finding the character (GET returns the resolved name, POST gets it back).
+        if "current_location" in fields:
+            loc_val = fields["current_location"]
+            if loc_val:
+                from app.models.world import resolve_location, get_location_id
+                loc_id = get_location_id(loc_val)
+                if loc_id:
+                    fields["current_location"] = loc_id
+                else:
+                    loc_obj = resolve_location(loc_val)
+                    if loc_obj and loc_obj.get("id"):
+                        fields["current_location"] = loc_obj["id"]
 
-    # Filter out __custom__ sentinel values (UI placeholder for custom input)
-    for k, v in list(fields.items()):
-        if v == "__custom__":
-            fields[k] = ""
+        # Filter out __custom__ sentinel values (UI placeholder for custom input)
+        for k, v in list(fields.items()):
+            if v == "__custom__":
+                fields[k] = ""
 
-    # Fields with source_file belong in MD files, NOT in the JSON profile.
-    # If someone sends them here, ignore them -- the soul editor is
-    # responsible (see /characters/{char}/soul/*).
-    _sf_keys = _soul_field_keys(profile.get("template", ""))
-    for k in list(fields.keys()):
-        if k in _sf_keys:
-            fields.pop(k, None)
+        # Fields with source_file belong in MD files, NOT in the JSON profile.
+        # If someone sends them here, ignore them -- the soul editor is
+        # responsible (see /characters/{char}/soul/*).
+        _sf_keys = _soul_field_keys(profile.get("template", ""))
+        for k in list(fields.keys()):
+            if k in _sf_keys:
+                fields.pop(k, None)
 
-    # LIFETIME is derived, never typed. `expires_at` is a canonical GAME stamp
-    # and only the server owns that clock, so the temp-NPC form offers the
-    # DECISION (`lifetime` + `lifetime_hours`) and the stamp is recomputed
-    # here. Every other save leaves `expires_at` exactly as it was — otherwise
-    # editing a briefing would quietly hand the NPC a fresh day.
-    from app.models.character import is_temporary_npc
-    if ("lifetime" in fields or "lifetime_hours" in fields) \
-            and is_temporary_npc(character_name):
-        fields.update(_lifetime_fields(profile, fields))
+        # LIFETIME is derived, never typed. `expires_at` is a canonical GAME stamp
+        # and only the server owns that clock, so the temp-NPC form offers the
+        # DECISION (`lifetime` + `lifetime_hours`) and the stamp is recomputed
+        # here. Every other save leaves `expires_at` exactly as it was — otherwise
+        # editing a briefing would quietly hand the NPC a fresh day.
+        from app.models.character import is_temporary_npc
+        if ("lifetime" in fields or "lifetime_hours" in fields) \
+                and is_temporary_npc(character_name):
+            fields.update(_lifetime_fields(profile, fields))
 
-    profile.update(fields)
-    save_character_profile(character_name, profile)
+        profile.update(fields)
+        save_character_profile(character_name, profile)
     return {"status": "success", "character": character_name,
             "updated_fields": list(fields.keys())}
 
@@ -1689,20 +1695,26 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
     # above for those renders (different backend, different LoRA ecosystem —
     # no merge). Empty = the normal LoRAs apply.
     clean_tpose_loras = _clean_lora_list(body.get("tpose_loras"))
-    prof = get_character_profile(character_name) or {}
-    # Always write (even empty) -- otherwise a clear does not persist:
-    # outfit_imagegen lives in config_json and is only transferred on save when
-    # the key is PRESENT in the profile. A del leaves the old config value in
-    # place. Empty workflow + no LoRAs = override deleted. ``model`` is dropped
-    # (it comes from the workflow).
-    if workflow or tpose_workflow or clean_loras or clean_tpose_loras:
-        prof["outfit_imagegen"] = {"workflow": workflow,
-                                   "tpose_workflow": tpose_workflow,
-                                   "loras": clean_loras,
-                                   "tpose_loras": clean_tpose_loras}
-    else:
-        prof["outfit_imagegen"] = {}
-    save_character_profile(character_name, prof)
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # rewrites the whole profile_json blob. No image is generated here — this
+    # only stores the workflow/model/LoRA override the service reads later —
+    # so the span is a leaf and holds no lock across a backend call.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        prof = get_character_profile(character_name) or {}
+        # Always write (even empty) -- otherwise a clear does not persist:
+        # outfit_imagegen lives in config_json and is only transferred on save when
+        # the key is PRESENT in the profile. A del leaves the old config value in
+        # place. Empty workflow + no LoRAs = override deleted. ``model`` is dropped
+        # (it comes from the workflow).
+        if workflow or tpose_workflow or clean_loras or clean_tpose_loras:
+            prof["outfit_imagegen"] = {"workflow": workflow,
+                                       "tpose_workflow": tpose_workflow,
+                                       "loras": clean_loras,
+                                       "tpose_loras": clean_tpose_loras}
+        else:
+            prof["outfit_imagegen"] = {}
+        save_character_profile(character_name, prof)
     return {"status": "ok", "workflow": workflow,
             "tpose_workflow": tpose_workflow, "loras": clean_loras,
             "tpose_loras": clean_tpose_loras}
@@ -1804,8 +1816,20 @@ def build_status_effects(character_name: str) -> Dict[str, Any]:
             status_changed = True
 
     if status_changed:
-        profile["status_effects"] = status
-        save_character_profile(character_name, profile)
+        # Read AGAIN under the per-character profile lock and re-apply only
+        # OUR keys (DATA-3, the pattern ``places.assign`` uses): the copy read
+        # at the top of this function was read for the template walk above,
+        # and writing it back would drop everything a concurrent writer stored
+        # since. Only the missing defaults are filled in, never overwritten —
+        # a value another thread just wrote wins.
+        from app.core.keyed_lock import keyed_lock
+        with keyed_lock("character_profile", character_name):
+            profile = get_character_profile(character_name) or {}
+            status = dict(profile.get("status_effects") or {})
+            for stat_key, stat_default in stat_defaults.items():
+                status.setdefault(stat_key, stat_default)
+            profile["status_effects"] = status
+            save_character_profile(character_name, profile)
 
     # Return in template order -- otherwise Self/Others panels show the same
     # stats in different (stored) orders.
@@ -1906,41 +1930,49 @@ def apply_template_switch(character_name: str, data: Dict[str, Any]) -> Dict[str
             "removed": removed,
         }
 
-    # mode == "apply": run the migration
+    # mode == "apply": run the migration.
+    # Read AGAIN under the per-character profile lock and apply the migration
+    # to THAT copy (DATA-3): the read at the top of this function fed the diff
+    # above, which may have been computed a while ago, and the save below
+    # rewrites the whole profile_json blob. The template lookups all happened
+    # outside the lock; nothing inside it takes another lock.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
 
-    # 1. Fill new fields with defaults
-    status = profile.get("status_effects", {})
-    for item in added:
-        default_val = item.get("default")
-        key = item["key"]
-        store = item.get("store", "")
-        if store == "status_effects":
-            if default_val is not None and key not in status:
-                status[key] = default_val
-        elif store == "config":
-            config[key] = default_val if default_val is not None else ""
-        else:
-            profile[key] = default_val if default_val is not None else ""
+        # 1. Fill new fields with defaults
+        status = profile.get("status_effects", {})
+        for item in added:
+            default_val = item.get("default")
+            key = item["key"]
+            store = item.get("store", "")
+            if store == "status_effects":
+                if default_val is not None and key not in status:
+                    status[key] = default_val
+            elif store == "config":
+                config[key] = default_val if default_val is not None else ""
+            else:
+                profile[key] = default_val if default_val is not None else ""
 
-    # 2. Remove old fields
-    for item in removed:
-        key = item["key"]
-        store = item.get("store", "")
-        if store == "status_effects":
-            status.pop(key, None)
-            config.pop(key + "_hourly", None)
-        elif store == "config":
-            config.pop(key, None)
-        else:
-            profile.pop(key, None)
+        # 2. Remove old fields
+        for item in removed:
+            key = item["key"]
+            store = item.get("store", "")
+            if store == "status_effects":
+                status.pop(key, None)
+                config.pop(key + "_hourly", None)
+            elif store == "config":
+                config.pop(key, None)
+            else:
+                profile.pop(key, None)
 
-    profile["status_effects"] = status
+        profile["status_effects"] = status
 
-    # 4. Set the template in the profile
-    profile["template"] = new_template_name
+        # 4. Set the template in the profile
+        profile["template"] = new_template_name
 
-    # 5. Save
-    save_character_profile(character_name, profile)
+        # 5. Save
+        save_character_profile(character_name, profile)
     save_character_config(character_name, config)
 
     return {

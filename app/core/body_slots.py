@@ -118,20 +118,25 @@ def slot_values(character_name: str) -> Dict[str, Dict[str, Any]]:
 
 def set_slot_value(character_name: str, slot_id: str, attr: str, value: Any) -> None:
     """Editor API: store one attribute value (empty value removes it)."""
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
-    profile = get_character_profile(character_name) or {}
-    vals = dict(profile.get("body_slots") or {})
-    slot = dict(vals.get(slot_id) or {})
-    if value in (None, ""):
-        slot.pop(attr, None)
-    else:
-        slot[attr] = value
-    if slot:
-        vals[slot_id] = slot
-    else:
-        vals.pop(slot_id, None)
-    profile["body_slots"] = vals
-    save_character_profile(character_name, profile)
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # rewrites the whole profile_json blob, so a stale read here drops every
+    # field a concurrent writer stored. Leaf span, nothing else locks inside.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        vals = dict(profile.get("body_slots") or {})
+        slot = dict(vals.get(slot_id) or {})
+        if value in (None, ""):
+            slot.pop(attr, None)
+        else:
+            slot[attr] = value
+        if slot:
+            vals[slot_id] = slot
+        else:
+            vals.pop(slot_id, None)
+        profile["body_slots"] = vals
+        save_character_profile(character_name, profile)
 
 
 # ---------------------------------------------------------------------------

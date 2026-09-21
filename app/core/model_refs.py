@@ -268,15 +268,19 @@ def get_auto_kinds(character_name: str) -> Dict[str, bool]:
 
 def set_auto_kinds(character_name: str, updates: Dict[str, Any]) -> Dict[str, bool]:
     """Merges per-image auto-render toggles into the character profile."""
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
-    profile = get_character_profile(character_name) or {}
-    current = profile.get("model_ref_auto") or {}
-    merged = {k: bool(current.get(k, True)) for k in REF_KINDS}
-    for key, val in (updates or {}).items():
-        if key in REF_KINDS:
-            merged[key] = bool(val)
-    profile["model_ref_auto"] = merged
-    save_character_profile(character_name, profile)
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # rewrites the whole profile_json blob. Leaf span.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        current = profile.get("model_ref_auto") or {}
+        merged = {k: bool(current.get(k, True)) for k in REF_KINDS}
+        for key, val in (updates or {}).items():
+            if key in REF_KINDS:
+                merged[key] = bool(val)
+        profile["model_ref_auto"] = merged
+        save_character_profile(character_name, profile)
     return merged
 
 
@@ -295,15 +299,19 @@ def get_view_kinds(character_name: str) -> Dict[str, bool]:
 def set_view_kinds(character_name: str, updates: Dict[str, Any]) -> Dict[str, bool]:
     """Merges per-view toggles for the extra T-pose renders into the character
     profile."""
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
-    profile = get_character_profile(character_name) or {}
-    current = profile.get("model_ref_views") or {}
-    merged = {k: bool(current.get(k, False)) for k in TPOSE_VIEWS}
-    for key, val in (updates or {}).items():
-        if key in TPOSE_VIEWS:
-            merged[key] = bool(val)
-    profile["model_ref_views"] = merged
-    save_character_profile(character_name, profile)
+    # Read AND write under the per-character profile lock (DATA-3), same leaf
+    # span as ``set_auto_kinds``.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        current = profile.get("model_ref_views") or {}
+        merged = {k: bool(current.get(k, False)) for k in TPOSE_VIEWS}
+        for key, val in (updates or {}).items():
+            if key in TPOSE_VIEWS:
+                merged[key] = bool(val)
+        profile["model_ref_views"] = merged
+        save_character_profile(character_name, profile)
     return merged
 
 

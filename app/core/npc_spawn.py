@@ -798,28 +798,35 @@ def _fill_bound_slot(name: str, slot: Dict[str, Any], where: str,
                        "the slot stays empty", role, where, name)
         return ""
 
-    profile = get_character_profile(name) or {}
-    if (str(profile.get("npc_slot_role") or "").strip().lower() == role.lower()
-            and str(profile.get("npc_slot_location") or "").strip() == location_id
-            and str(profile.get("npc_slot_area") or "").strip() == area_id):
-        return name
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # rewrites the whole profile_json blob. The "already in this slot" answer
+    # is read under the same lock, so it can never be given from a copy that
+    # a concurrent re-stamp has already superseded. Leaf span —
+    # ``cancel_journey`` and ``place_npc`` below write profiles of their own.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        if (str(profile.get("npc_slot_role") or "").strip().lower() == role.lower()
+                and str(profile.get("npc_slot_location") or "").strip() == location_id
+                and str(profile.get("npc_slot_area") or "").strip() == area_id):
+            return name
 
-    # BOTH stamps, one of them empty — the same rule ``revive_from_pool``
-    # follows: a sheet that held a slot of the other kind yesterday would
-    # otherwise keep counting towards it.
-    profile["npc_slot_role"] = role
-    profile["npc_slot_location"] = location_id
-    profile["npc_slot_area"] = area_id
-    # A bound slot is a STANDING post. Whatever the sheet was doing as a
-    # traveller ends here, or the journey ticker would walk it straight out of
-    # the slot it was just put into.
-    profile["npc_wanderer"] = False
-    profile.pop("wander_target", None)
-    if home is None and radius_m <= 0:
-        # A room slot has no home area; a stale one from the NPC's last post
-        # would send the action tick roaming into a place it has left.
-        profile.pop("npc_home", None)
-    save_character_profile(name, profile)
+        # BOTH stamps, one of them empty — the same rule ``revive_from_pool``
+        # follows: a sheet that held a slot of the other kind yesterday would
+        # otherwise keep counting towards it.
+        profile["npc_slot_role"] = role
+        profile["npc_slot_location"] = location_id
+        profile["npc_slot_area"] = area_id
+        # A bound slot is a STANDING post. Whatever the sheet was doing as a
+        # traveller ends here, or the journey ticker would walk it straight
+        # out of the slot it was just put into.
+        profile["npc_wanderer"] = False
+        profile.pop("wander_target", None)
+        if home is None and radius_m <= 0:
+            # A room slot has no home area; a stale one from the NPC's last
+            # post would send the action tick roaming into a place it has left.
+            profile.pop("npc_home", None)
+        save_character_profile(name, profile)
     try:
         from app.core.travel_engine import cancel_journey
         cancel_journey(name)
@@ -1029,9 +1036,17 @@ def _settle_wanderer(name: str) -> bool:
     permanent = is_permanent_npc(profile)
     if origin and origin != here and (permanent or random.random() < 0.5):
         # Turn around instead of vanishing (§ 5, 50/50).
-        profile["wander_target"] = origin
-        profile["wander_origin"] = here
-        save_character_profile(name, profile)
+        # Read AGAIN under the per-character profile lock and set only OUR two
+        # keys (DATA-3): the copy above was read for the decision chain, and
+        # writing it back would drop what a concurrent writer stored in the
+        # meantime. ``_send_wanderer`` stays outside — it starts a journey and
+        # takes this lock itself.
+        from app.core.keyed_lock import keyed_lock
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name) or {}
+            profile["wander_target"] = origin
+            profile["wander_origin"] = here
+            save_character_profile(name, profile)
         if _send_wanderer(name, origin):
             logger.info("Wanderer '%s' turns around towards %s", name, origin)
             return True

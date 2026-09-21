@@ -1488,64 +1488,78 @@ def save_character_current_location(character_name: str = "", location: str = ""
     dragged follower from triggering a party drag of its own (recursion).
     """
     from datetime import datetime
-    profile = get_character_profile(character_name)
-    old_location = profile.get("current_location", "")
-    old_room = profile.get("current_room", "")
-    target = (profile.get("movement_target") or "").strip()
-    location_changed = bool(location) and location != old_location
-    if location_changed:
-        # A pair clip holds two figures at ONE anchor. Leaving the place ends
-        # it for both — the journey and the teleport already do this on their
-        # own paths, but a plot/admin override (force_set_status, a scheduler
-        # rule) reaches this function directly. The engine writes both
-        # profiles itself, so ours is re-read afterwards.
+    from app.core.keyed_lock import keyed_lock
+    # A pair clip holds two figures at ONE anchor. Leaving the place ends
+    # it for both — the journey and the teleport already do this on their
+    # own paths, but a plot/admin override (force_set_status, a scheduler
+    # rule) reaches this function directly. The engine writes both
+    # profiles itself, so ours is read fresh under the lock afterwards.
+    #
+    # BEFORE THE LOCK, on purpose — the same placement ``travel_engine``
+    # already uses: ``end_interaction`` takes BOTH partners' profile locks
+    # in sorted-name order, so calling it while holding ours would ask for
+    # the partner's lock out of order whenever our name sorts later. Two
+    # partners leaving a room at the same moment would deadlock on that.
+    # The decision needs the current location only, which is one cheap
+    # read of its own.
+    if location and location != (get_character_current_location(character_name) or ""):
         from app.core.interaction_engine import end_interaction
-        if end_interaction(character_name, reason="location"):
-            profile = get_character_profile(character_name)
-            old_room = profile.get("current_room", "")
-    # A POINT journey (travel_engine.start_journey_to_point) walks to a free
-    # (x, z) and therefore stamps NO movement_target — the journey dict alone
-    # says a trip is running, so the abort below has to ask for both.
-    if location_changed and (target or isinstance(profile.get("journey"), dict)):
-        # A manual teleport (no _preserve_movement_target) aborts the trip —
-        # the caller just overrode the journey. A programmed travel step only
-        # clears target + journey on arrival (a point journey has no target to
-        # arrive AT, so its in-flight crossing of a footprint keeps walking).
-        if not _preserve_movement_target:
-            profile["movement_target"] = ""
-            profile.pop("journey", None)
-        elif location == target:
-            profile["movement_target"] = ""
-            profile.pop("journey", None)
-    profile["current_location"] = location
-    profile["location_changed_at"] = utc_now_iso()
-    # On a location change, set current_room directly to the ARRIVAL room of
-    # the NEW location (instead of just clearing it): the declared entry room
-    # when there is one, otherwise the ground (plan-grundflaeche.md § 6).
-    # Otherwise every caller that sets no room explicitly afterwards (avatar
-    # move, teleport, scheduler) leaves a roomless character — its utterances
-    # get room_id='' and drop out of the room-filtered chat window. A caller
-    # can still set a specific room at the new place afterwards (wins, because
-    # later). Off-map sentinel / unknown location -> empty: no location, no
-    # ground to stand on.
-    if location and location != old_location:
-        from app.models.world import get_location_by_id, get_arrival_room_id
-        _new_loc = get_location_by_id(location)
-        profile["current_room"] = get_arrival_room_id(_new_loc) if _new_loc else ""
-    # Clear the pose on a real location change — it belongs to the old place
-    # and would go stale otherwise ("casting a spell" stays stuck after
-    # walking away). Central for ALL movement paths: Move skill, SetLocation,
-    # teleport spell, scheduler, drag&drop. A teleport deliberately does NOT
-    # become "walking" — nobody walked, so just clear it.
-    old_pose = (profile.get("pose_flavor") or profile.get("pose_key") or "")
-    if location_changed:
-        profile["pose_key"] = ""
-        profile["pose_flavor"] = ""
-    # Reset intent.forbidden_slots on a real location change: the
-    # deliberately empty slots from the chat ("undresses") applied to the OLD
-    # location. At the new place the ordinary decency rule takes over again.
-    # (Lifecycle per plan-outfit-system-rethink.md § 3)
-    save_character_profile(character_name, profile)
+        end_interaction(character_name, reason="location")
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # writes the WHOLE profile_json blob, so a stale read drops every field
+    # a concurrent writer (an equip route, the seat assignment) stored in
+    # between. The span ends AT the save — everything below it (position
+    # sync, ``stand_up``, compliance, the party drag) writes profiles of its
+    # own, and the party drag writes ANOTHER character's.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        old_location = profile.get("current_location", "")
+        old_room = profile.get("current_room", "")
+        target = (profile.get("movement_target") or "").strip()
+        location_changed = bool(location) and location != old_location
+        # A POINT journey (travel_engine.start_journey_to_point) walks to a free
+        # (x, z) and therefore stamps NO movement_target — the journey dict alone
+        # says a trip is running, so the abort below has to ask for both.
+        if location_changed and (target or isinstance(profile.get("journey"), dict)):
+            # A manual teleport (no _preserve_movement_target) aborts the trip —
+            # the caller just overrode the journey. A programmed travel step only
+            # clears target + journey on arrival (a point journey has no target to
+            # arrive AT, so its in-flight crossing of a footprint keeps walking).
+            if not _preserve_movement_target:
+                profile["movement_target"] = ""
+                profile.pop("journey", None)
+            elif location == target:
+                profile["movement_target"] = ""
+                profile.pop("journey", None)
+        profile["current_location"] = location
+        profile["location_changed_at"] = utc_now_iso()
+        # On a location change, set current_room directly to the ARRIVAL room of
+        # the NEW location (instead of just clearing it): the declared entry room
+        # when there is one, otherwise the ground (plan-grundflaeche.md § 6).
+        # Otherwise every caller that sets no room explicitly afterwards (avatar
+        # move, teleport, scheduler) leaves a roomless character — its utterances
+        # get room_id='' and drop out of the room-filtered chat window. A caller
+        # can still set a specific room at the new place afterwards (wins, because
+        # later). Off-map sentinel / unknown location -> empty: no location, no
+        # ground to stand on.
+        if location and location != old_location:
+            from app.models.world import get_location_by_id, get_arrival_room_id
+            _new_loc = get_location_by_id(location)
+            profile["current_room"] = get_arrival_room_id(_new_loc) if _new_loc else ""
+        # Clear the pose on a real location change — it belongs to the old place
+        # and would go stale otherwise ("casting a spell" stays stuck after
+        # walking away). Central for ALL movement paths: Move skill, SetLocation,
+        # teleport spell, scheduler, drag&drop. A teleport deliberately does NOT
+        # become "walking" — nobody walked, so just clear it.
+        old_pose = (profile.get("pose_flavor") or profile.get("pose_key") or "")
+        if location_changed:
+            profile["pose_key"] = ""
+            profile["pose_flavor"] = ""
+        # Reset intent.forbidden_slots on a real location change: the
+        # deliberately empty slots from the chat ("undresses") applied to the OLD
+        # location. At the new place the ordinary decency rule takes over again.
+        # (Lifecycle per plan-outfit-system-rethink.md § 3)
+        save_character_profile(character_name, profile)
     # Seamless world (Aug 2026): the metre position is the truth for WHERE a
     # character stands, so a REAL location change drags it along — the
     # character lands at the centre of the target location. A target location
@@ -2066,10 +2080,22 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
     # place they just stored.
     place = _seat_for_pose(character_name, key, prefer)
     if not unchanged:
-        profile = get_character_profile(character_name) or {}
-        profile["pose_key"] = key
-        profile["pose_flavor"] = flavor
-        save_character_profile(character_name, profile)
+        # Read AND write under the per-character profile lock (DATA-3). The
+        # copy read at the top of this function is the DECISION read only —
+        # the write re-reads here, because ``_seat_for_pose`` (places.assign)
+        # and a possible ``end_interaction`` have written the profile since,
+        # and the save puts the whole blob back.
+        #
+        # Only this pair is locked. ``_seat_for_pose`` above takes the
+        # places-lock BEFORE this one (the documented order) and
+        # ``end_interaction`` takes two profile locks — both must stay
+        # outside, or the order would be inverted.
+        from app.core.keyed_lock import keyed_lock
+        with keyed_lock("character_profile", character_name):
+            profile = get_character_profile(character_name) or {}
+            profile["pose_key"] = key
+            profile["pose_flavor"] = flavor
+            save_character_profile(character_name, profile)
     _publish_activity_changed(character_name, flavor or key, old_display, key,
                               place, old_place)
 
@@ -2260,26 +2286,36 @@ def save_character_current_room(character_name: str, room_id: str,
 
     _party_drag: True only for a party follower dragged along (recursion
     guard, like save_character_current_location)."""
-    profile = get_character_profile(character_name)
-    old_room = profile.get("current_room", "")
-    if room_id != old_room:
-        # A pair clip holds two figures at ONE anchor in one room. Walking
-        # out of that room ends it for both — the same rule a journey, a
-        # teleport and a new pose already follow; without it the partner
-        # keeps playing a duet with someone who left. The engine loads and
-        # saves both profiles itself, so ours is re-read afterwards and the
-        # room is written into a fresh copy.
+    from app.core.keyed_lock import keyed_lock
+    # A pair clip holds two figures at ONE anchor in one room. Walking out of
+    # that room ends it for both — the same rule a journey, a teleport and a
+    # new pose already follow; without it the partner keeps playing a duet
+    # with someone who left.
+    #
+    # BEFORE THE LOCK, exactly as in ``save_character_current_location``:
+    # ``end_interaction`` takes both partners' profile locks in sorted-name
+    # order, and holding ours while asking for the partner's would invert that
+    # order for half the name pairs. The profile is read fresh under the lock
+    # afterwards, so the room is written into a copy that already has whatever
+    # the interaction end stored.
+    if room_id != (get_character_current_room(character_name) or ""):
         from app.core.interaction_engine import end_interaction
-        if end_interaction(character_name, reason="room"):
-            profile = get_character_profile(character_name)
-    cur_loc = profile.get("current_location", "")
-    profile["current_room"] = room_id
-    if room_id != old_room:
-        # A place is per room (plan-posen-plaetze.md § 3.5): whoever leaves
-        # the room stands up from its seat — in the SAME profile write, so
-        # no reader ever sees the lounge's armchair held from the kitchen.
-        profile["place"] = None
-    save_character_profile(character_name, profile)
+        end_interaction(character_name, reason="room")
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # writes the whole profile_json blob. The span ends at the save —
+    # ``stand_up``, the party drag (another character's profile) and the
+    # compliance run below all write profiles of their own.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        old_room = profile.get("current_room", "")
+        cur_loc = profile.get("current_location", "")
+        profile["current_room"] = room_id
+        if room_id != old_room:
+            # A place is per room (plan-posen-plaetze.md § 3.5): whoever leaves
+            # the room stands up from its seat — in the SAME profile write, so
+            # no reader ever sees the lounge's armchair held from the kitchen.
+            profile["place"] = None
+        save_character_profile(character_name, profile)
 
     # WHERE IN THE ROOM the character now stands is the server's word (T4):
     # the free point nearest the one it arrived on — the doorstep of a walk,
@@ -4141,17 +4177,22 @@ def enter_offmap_sleep(character_name: str) -> bool:
 
     Returns True when something changed.
     """
-    profile = get_character_profile(character_name) or {}
-    current_loc = (profile.get("current_location") or "").strip()
-    current_room = (profile.get("current_room") or "").strip()
-    if not current_loc and not current_room:
-        # Already off-map (or never assigned) — nothing to store.
-        return False
-    profile["_offmap_return_location"] = current_loc
-    profile["_offmap_return_room"] = current_room
-    profile["current_location"] = ""
-    profile["current_room"] = ""
-    save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # writes the whole profile_json blob. Leaf span — nothing inside it takes
+    # another lock; the position write and the state event follow outside.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        current_loc = (profile.get("current_location") or "").strip()
+        current_room = (profile.get("current_room") or "").strip()
+        if not current_loc and not current_room:
+            # Already off-map (or never assigned) — nothing to store.
+            return False
+        profile["_offmap_return_location"] = current_loc
+        profile["_offmap_return_room"] = current_room
+        profile["current_location"] = ""
+        profile["current_room"] = ""
+        save_character_profile(character_name, profile)
     # Seamless world (§ A1.4): the worldmap reads "no location + a metre
     # point" as WILDERNESS. Leaving the old point behind would therefore put
     # the sleeper in the open field instead of off the map — so the point goes
@@ -4181,25 +4222,30 @@ def wake_from_offmap(character_name: str) -> bool:
 
     Returns True when the character was brought back.
     """
-    profile = get_character_profile(character_name) or {}
-    if (profile.get("current_location") or "").strip():
-        # Standing somewhere already — nothing to do.
-        return False
-    return_loc = (profile.get("_offmap_return_location") or "").strip()
-    if not return_loc:
-        return False
-    return_room = (profile.get("_offmap_return_room") or "").strip()
-    profile["current_location"] = return_loc
-    if return_room:
-        profile["current_room"] = return_room
-    profile.pop("_offmap_return_location", None)
-    profile.pop("_offmap_return_room", None)
-    # Reset the pose on waking — otherwise the expression image keeps showing
-    # the sleep/old pose (wake writes the profile directly, i.e. without the
-    # pose reset of save_character_current_location).
-    profile["pose_key"] = ""
-    profile["pose_flavor"] = ""
-    save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3), same leaf
+    # span as ``enter_offmap_sleep``: the location lookup, the position write
+    # and the state event all come after the save, outside the lock.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        if (profile.get("current_location") or "").strip():
+            # Standing somewhere already — nothing to do.
+            return False
+        return_loc = (profile.get("_offmap_return_location") or "").strip()
+        if not return_loc:
+            return False
+        return_room = (profile.get("_offmap_return_room") or "").strip()
+        profile["current_location"] = return_loc
+        if return_room:
+            profile["current_room"] = return_room
+        profile.pop("_offmap_return_location", None)
+        profile.pop("_offmap_return_room", None)
+        # Reset the pose on waking — otherwise the expression image keeps
+        # showing the sleep/old pose (wake writes the profile directly, i.e.
+        # without the pose reset of save_character_current_location).
+        profile["pose_key"] = ""
+        profile["pose_flavor"] = ""
+        save_character_profile(character_name, profile)
     # Seamless world: enter_offmap_sleep cleared the metre point, so waking has
     # to put one back — a character with a location but no point has no place
     # on the map. Replicated here instead of routing through
@@ -4239,34 +4285,41 @@ def appear_in_world(character_name: str) -> bool:
     """
     if wake_from_offmap(character_name):
         return True
-    profile = get_character_profile(character_name) or {}
-    if (profile.get("current_location") or "").strip():
-        return False  # steht schon irgendwo
-    target = None
-    try:
-        from app.models.world import get_location, get_arrival_room_id, list_locations
-        cfg = get_character_config(character_name) or {}
-        home = (cfg.get("home_location") or "").strip()
-        if home and home != OFFMAP_SLEEP_SENTINEL:
-            target = get_location(home)
-        if target is None:
-            locs = list_locations()
-            target = locs[0] if locs else None
-        if not target:
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3). The whole
+    # decision runs inside it, because the fallback chain reads the profile's
+    # own home location: the world lookups are cached reads and take no lock
+    # of their own, and ``wake_from_offmap`` (which takes this very lock) has
+    # already returned above.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        if (profile.get("current_location") or "").strip():
+            return False  # steht schon irgendwo
+        target = None
+        try:
+            from app.models.world import get_location, get_arrival_room_id, list_locations
+            cfg = get_character_config(character_name) or {}
+            home = (cfg.get("home_location") or "").strip()
+            if home and home != OFFMAP_SLEEP_SENTINEL:
+                target = get_location(home)
+            if target is None:
+                locs = list_locations()
+                target = locs[0] if locs else None
+            if not target:
+                return False
+            loc_id = target.get("id") or ""
+            if not loc_id:
+                return False
+            room_id = get_arrival_room_id(target)
+        except Exception as e:
+            get_logger("character").error("appear_in_world fuer %s fehlgeschlagen: %s", character_name, e)
             return False
-        loc_id = target.get("id") or ""
-        if not loc_id:
-            return False
-        room_id = get_arrival_room_id(target)
-    except Exception as e:
-        get_logger("character").error("appear_in_world fuer %s fehlgeschlagen: %s", character_name, e)
-        return False
-    profile["current_location"] = loc_id
-    if room_id:
-        profile["current_room"] = room_id
-    profile.pop("_offmap_return_location", None)
-    profile.pop("_offmap_return_room", None)
-    save_character_profile(character_name, profile)
+        profile["current_location"] = loc_id
+        if room_id:
+            profile["current_room"] = room_id
+        profile.pop("_offmap_return_location", None)
+        profile.pop("_offmap_return_room", None)
+        save_character_profile(character_name, profile)
     # AV3D-3: bypass path — publish the placement explicitly.
     try:
         from app.core.state_events import publish as _publish_state
@@ -4382,34 +4435,41 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     """
     if not character_name:
         return
-    profile = get_character_profile(character_name) or {}
-    was = bool(profile.get("is_sleeping"))
-    profile["is_sleeping"] = bool(value)
-    if value != was:
-        # "sleeping" is the canonical preset key (the synonyms schlafen /
-        # schlafend / pennen point at it), so everything downstream matches.
-        profile["current_activity"] = "sleeping" if value else ""
-    # Change stamp for the flag lifecycle (same bookkeeping as set_state_flag).
-    _since = dict(profile.get("state_flag_since") or {})
-    if value:
-        # in-world duration stamp -> canonical GAME time
-        _since["is_sleeping"] = game_time().canonical()
-    else:
-        _since.pop("is_sleeping", None)
-    profile["state_flag_since"] = _since
-    # Waking up (True->False): drop the sleep/old pose, otherwise the
-    # expression image stays stuck on "sleeping". (wake_from_offmap does the
-    # same, but only applies to off-map sleepers.)
-    if was and not value:
-        profile["pose_key"] = ""
-        profile["pose_flavor"] = ""
-        # The bed goes with the sleep. Falling asleep took a lying place
-        # (below); keeping it awake would leave the figure standing on the
-        # mattress with no pose, and every renderer draws it there because
-        # the place, not the pose, says where a body is. Same rule as
-        # ``clear_pose_intent``: whoever gives up the pose stands up.
-        profile["place"] = None
-    save_character_profile(character_name, profile)
+    from app.core.keyed_lock import keyed_lock
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # writes the whole profile_json blob. The span ends at the save —
+    # ``end_interaction`` (two profile locks) and ``places.assign`` (the
+    # places-lock, which by the documented order comes BEFORE this one) both
+    # run below it and must not be reached while this lock is held.
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        was = bool(profile.get("is_sleeping"))
+        profile["is_sleeping"] = bool(value)
+        if value != was:
+            # "sleeping" is the canonical preset key (the synonyms schlafen /
+            # schlafend / pennen point at it), so everything downstream matches.
+            profile["current_activity"] = "sleeping" if value else ""
+        # Change stamp for the flag lifecycle (same bookkeeping as set_state_flag).
+        _since = dict(profile.get("state_flag_since") or {})
+        if value:
+            # in-world duration stamp -> canonical GAME time
+            _since["is_sleeping"] = game_time().canonical()
+        else:
+            _since.pop("is_sleeping", None)
+        profile["state_flag_since"] = _since
+        # Waking up (True->False): drop the sleep/old pose, otherwise the
+        # expression image stays stuck on "sleeping". (wake_from_offmap does
+        # the same, but only applies to off-map sleepers.)
+        if was and not value:
+            profile["pose_key"] = ""
+            profile["pose_flavor"] = ""
+            # The bed goes with the sleep. Falling asleep took a lying place
+            # (below); keeping it awake would leave the figure standing on the
+            # mattress with no pose, and every renderer draws it there because
+            # the place, not the pose, says where a body is. Same rule as
+            # ``clear_pose_intent``: whoever gives up the pose stands up.
+            profile["place"] = None
+        save_character_profile(character_name, profile)
     # Only on the transition awake -> asleep, and AFTER the save above:
     # places.assign writes profile["place"] itself, so an earlier call would
     # be overwritten by our own write. A failure here must not keep anyone

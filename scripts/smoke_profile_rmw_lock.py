@@ -40,6 +40,12 @@ Deliberate limits of the rule (so the result is honest rather than clever):
   * The lock KEY is not compared — only the namespace ``"character_profile"``.
     A keyed lock on the wrong key would be a different (much rarer) bug and
     proving the key is the character would need type inference.
+  * ``interaction_engine.pair_profile_locks(a, b)`` counts as the lock too.
+    It IS that lock, twice: a pair write touches BOTH partners' blobs, and
+    the helper takes ``keyed_lock("character_profile", …)`` for each of them
+    in sorted-name order (the one fixed order that keeps two threads ending
+    the same pair from opposite ends out of a deadlock). Spelling the two
+    acquires out at every call site would be the same thing written worse.
 
 EXPECTED RESULT: zero unexpected violations. Every site that is deliberately
 left unlocked stands in ALLOWLIST below WITH ITS REASON. The file is scanned
@@ -56,6 +62,8 @@ SCAN_DIRS = ("app", "plugins")
 READ = "get_character_profile"
 WRITE = "save_character_profile"
 LOCK_NS = "character_profile"
+#: Helpers that ARE ``keyed_lock(LOCK_NS, …)`` — see the docstring.
+LOCK_HELPERS = ("pair_profile_locks",)
 
 #: ``<path>::<function>`` sites this check accepts WITHOUT the lock, each with
 #: the reason it is safe (or who owns the fix). Anything not listed fails.
@@ -63,7 +71,9 @@ ALLOWLIST = {
     # --- the lock lives one level up, in the HTTP route -------------------
     "app/models/inventory.py::equip_piece":
         "routes/inventory.py + routes/play.py take keyed_lock('character_profile') "
-        "around the call; locking again would deadlock (keyed_lock is a plain Lock)",
+        "around the call — the route owns the whole equip span, which is wider "
+        "than this function (the lock is re-entrant since 2026-09-21, so a "
+        "second acquire here would be legal but would not widen anything)",
     "app/models/inventory.py::unequip_piece":
         "same: the equip/unequip routes hold the lock around this call",
     "app/models/inventory.py::apply_equipped_pieces":
@@ -93,79 +103,12 @@ ALLOWLIST = {
     "app/models/character_template.py::migrate_prune_stale_stats_once":
         "boot migration, same window",
 
-    # --- NEEDS COORDINATOR: real DATA-3 sites in files this fix round -----
-    # --- does not own. Each one is a genuine unprotected read-modify-write,
-    # --- reported to the coordinator rather than patched from here.
-    "app/core/body_slots.py::set_slot_value":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/character_ops.py::apply_profile_update":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/character_ops.py::apply_outfit_imagegen":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/character_ops.py::build_status_effects":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/character_ops.py::apply_template_switch":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/model3d.py::set_model3d_options":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/model_refs.py::set_auto_kinds":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/model_refs.py::set_view_kinds":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/npc_assets.py::gate_placement":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/npc_assets.py::_place":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/npc_home.py::_put_at_point":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/npc_ops.py::apply_npc":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/npc_ops.py::sweep_expired_npcs":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/npc_pool.py::pool_npc":
-        "NEEDS COORDINATOR — not this round's file set; the span also contains "
-        "leave_party/cancel_journey/end_interaction, so it needs the same "
-        "treatment as save_character_current_location",
-    "app/core/npc_pool.py::revive_from_pool":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/npc_spawn.py::_fill_bound_slot":
-        "NEEDS COORDINATOR — not this round's file set",
-    "app/core/npc_spawn.py::_settle_wanderer":
-        "NEEDS COORDINATOR — not this round's file set (see also SIM-9)",
-    "app/models/inventory.py::apply_item_effects":
-        "NEEDS COORDINATOR — inventory.py is another implementer's file",
+    # --- the private pack: read-only from this repo ----------------------
     "plugins/undress/skill.py::execute":
-        "NEEDS COORDINATOR — plugin package, not this round's file set",
-
-    # --- character.py sites that CANNOT take the lock as it is today ------
-    # keyed_lock hands out a plain threading.Lock, which is NOT re-entrant.
-    # Each span below calls, directly or indirectly, something that now takes
-    # this very lock — locking here would deadlock the request thread.
-    "app/models/character.py::save_character_current_location":
-        "NEEDS COORDINATOR — the span contains end_interaction(), which reaches "
-        "clear_pose_intent -> places.release; both take this lock now. Needs an "
-        "RLock in app/core/keyed_lock.py (not this round's file) or the "
-        "interaction end pulled out of the span",
-    "app/models/character.py::save_character_current_room":
-        "NEEDS COORDINATOR — same shape as save_character_current_location",
-    "app/models/character.py::set_pose_intent":
-        "NEEDS COORDINATOR — calls places.assign / _seat_for_pose inside the "
-        "span, and those take this lock",
-    "app/models/character.py::set_is_sleeping":
-        "NEEDS COORDINATOR — calls places.assign inside the span",
-    "app/models/character.py::enter_offmap_sleep":
-        "NEEDS COORDINATOR — calls the location setter inside the span",
-    "app/models/character.py::wake_from_offmap":
-        "NEEDS COORDINATOR — calls the location setter inside the span",
-    "app/models/character.py::appear_in_world":
-        "NEEDS COORDINATOR — calls wake_from_offmap (which writes the profile) "
-        "inside the span",
-    "app/core/interaction_engine.py::start_interaction":
-        "NEEDS COORDINATOR — another implementer's file; it writes BOTH "
-        "partners' profiles, which needs a name-ordered acquisition",
-    "app/core/interaction_engine.py::end_interaction":
-        "NEEDS COORDINATOR — same file, and it is called from inside "
-        "save_character_current_location",
+        "SYMLINK into the private anima-verse-packs repo — read-only here. "
+        "Reported to the coordinator: its execute() reads the profile, edits "
+        "equipped_pieces and saves, and needs the same "
+        "keyed_lock('character_profile', <name>) span as the equip routes",
 }
 
 
@@ -176,7 +119,10 @@ def _is_call(node, name):
 
 
 def _is_profile_lock(node):
-    """True for ``keyed_lock("character_profile", …)`` as a context manager."""
+    """True for ``keyed_lock("character_profile", …)`` as a context manager —
+    or for one of :data:`LOCK_HELPERS`, which are that lock by definition."""
+    if any(_is_call(node, h) for h in LOCK_HELPERS):
+        return True
     if not _is_call(node, "keyed_lock") or not node.args:
         return False
     first = node.args[0]

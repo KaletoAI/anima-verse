@@ -48,6 +48,7 @@ pair without a reachable seat is refused.
 """
 import math
 import uuid
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.game_time import GameDuration, GameTime
@@ -72,6 +73,37 @@ MAX_START_DISTANCE_M = 4.5
 # Wide enough that an invitation survives the walk over, far short of "two
 # dots on the same map" — the start still insists on MAX_START_DISTANCE_M.
 OPEN_FIELD_REACH_M = 40.0
+
+
+# ------------------------------------------------------------- the pair lock
+
+@contextmanager
+def pair_profile_locks(a: str, b: str):
+    """Both partners' profile locks, ALWAYS in sorted-name order.
+
+    A pair write touches TWO ``profile_json`` blobs, and each save rewrites
+    the whole blob — so both halves have to be read and written under their
+    own ``keyed_lock("character_profile", …)`` or the partner's concurrent
+    equip/seat write is lost (DATA-3). Two locks at once is the one place a
+    deadlock can be built here, so the order is FIXED by name: whoever wants
+    both takes ``min(a, b)`` first. Two threads ending the same pair from
+    opposite ends then queue up instead of each holding what the other wants.
+
+    ``keyed_lock`` is re-entrant, so a caller that already holds ONE of the
+    two names may pass through — as long as it holds the alphabetically
+    EARLIER one. Holding the later name and then entering here is the
+    inversion this order exists to forbid, which is why
+    ``save_character_current_location`` / ``save_character_current_room`` /
+    ``set_is_sleeping`` call ``end_interaction`` outside their own lock.
+
+    Same name twice (never a real pair) is harmless: the re-entrant lock is
+    simply taken twice.
+    """
+    from app.core.keyed_lock import keyed_lock
+    first, second = sorted((str(a or ""), str(b or "")))
+    with keyed_lock("character_profile", first):
+        with keyed_lock("character_profile", second):
+            yield
 
 
 # ------------------------------------------------------------------ reading
@@ -329,16 +361,28 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
     inter_id = uuid.uuid4().hex[:12]
     started = game_time().canonical()
     roles = (meta.get("geometry") or {}).get("roles") or {}
-    for name, role, other in ((who_a, "a", who_b), (who_b, "b", who_a)):
-        # Re-read: assign_pair just wrote the place into both profiles.
-        prof = profiles[name] = get_character_profile(name) or {}
-        prof["interaction"] = {
-            "id": inter_id, "kind": kind, "role": role, "partner": other,
-            "pose_key": pose_key, "anchor": anchor,
-            "started_at_game": started,
-            "clip_duration_s": round(clip_duration, 3), "loop": loop,
-        }
-        save_character_profile(name, prof)
+    halves = ((who_a, "a", who_b), (who_b, "b", who_a))
+    # BOTH interaction blobs in ONE locked span, in sorted-name order
+    # (DATA-3): each save rewrites a whole profile_json, so a concurrent
+    # equip on either partner would otherwise be dropped — and the pair must
+    # not be half-written, or the other half sees a partner that is not bound.
+    with pair_profile_locks(who_a, who_b):
+        for name, role, other in halves:
+            # Re-read: assign_pair just wrote the place into both profiles.
+            prof = profiles[name] = get_character_profile(name) or {}
+            prof["interaction"] = {
+                "id": inter_id, "kind": kind, "role": role, "partner": other,
+                "pose_key": pose_key, "anchor": anchor,
+                "started_at_game": started,
+                "clip_duration_s": round(clip_duration, 3), "loop": loop,
+            }
+            save_character_profile(name, prof)
+    # OUTSIDE the locks: both of these write the profile themselves and reach
+    # the places-lock (``set_pose_intent`` -> ``places.assign``), which by the
+    # documented order comes BEFORE ``character_profile``. Neither reads the
+    # other partner, so running them after both blobs are stored changes
+    # nothing but the order in which two independent figures are placed.
+    for name, role, other in halves:
         # The game-state position is where the clip holds the figure at the
         # anchor moment — perception, rules and the map all see them there.
         # Unless that point lies outside the location (a marker authored
@@ -392,15 +436,23 @@ def end_interaction(character_name: str, reason: str = "ended") -> bool:
     from app.core.state_events import publish
     from app.models.character import (clear_pose_intent, get_character_profile,
                                       save_character_profile)
-    prof = get_character_profile(character_name) or {}
-    inter = get_interaction(character_name, prof)
+    inter = get_interaction(character_name)
     if not inter:
         return False
     partner = inter["partner"]
-    for name in (character_name, partner):
-        p = prof if name == character_name else (get_character_profile(name) or {})
-        cur = p.get("interaction")
-        if isinstance(cur, dict) and cur.get("id") == inter["id"]:
+    # BOTH profiles under BOTH locks, in sorted-name order (DATA-3). The
+    # standing-up that follows is collected here and run AFTERWARDS:
+    # ``clear_pose_intent`` and ``room_stand.stand_up`` write the profile
+    # themselves and reach the places-lock, which comes BEFORE
+    # ``character_profile`` in the documented order — doing them inside would
+    # invert it.
+    stand: list = []
+    with pair_profile_locks(character_name, partner):
+        for name in (character_name, partner):
+            p = get_character_profile(name) or {}
+            cur = p.get("interaction")
+            if not (isinstance(cur, dict) and cur.get("id") == inter["id"]):
+                continue
             p.pop("interaction", None)
             same_pose = (p.get("pose_key") or "") == inter.get("pose_key")
             if not same_pose:
@@ -408,10 +460,12 @@ def end_interaction(character_name: str, reason: str = "ended") -> bool:
                 # still on, clear_pose_intent below stands the character up.
                 p["place"] = None
             save_character_profile(name, p)
-            if same_pose:
-                clear_pose_intent(name)
-            else:
-                stand_up(name)
+            stand.append((name, same_pose))
+    for name, same_pose in stand:
+        if same_pose:
+            clear_pose_intent(name)
+        else:
+            stand_up(name)
     publish("interaction_ended", character_name, partner=partner,
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)
     logger.info("interaction %s ended (%s)", inter["id"], reason)

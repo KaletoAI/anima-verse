@@ -30,6 +30,16 @@ Cases [1]–[3] — the lock itself (`app/core/keyed_lock.py`):
   - the guard is not held while a lock is: a thread holding
     ``keyed_lock("ns", "a")`` must not stop another thread from getting
     ``keyed_lock("ns", "b")`` — otherwise the "per key" is a lie under load.
+  - RE-ENTRANT (2026-09-21): the SAME thread may enter the same key again and
+    again (three nested ``with`` blocks come back out cleanly), because a
+    locked read-modify-write now calls other locked read-modify-writes of the
+    same character — ``set_is_sleeping`` under an equip route, ``consume_item``
+    under ``/play/consume``. With a plain ``Lock`` that request thread would
+    deadlock on itself. ANOTHER thread must still block: re-entrancy is per
+    OWNER, not an open door, and the whole point of the lock is that two
+    request threads cannot be inside the same profile's span at once. Both
+    halves are checked, the blocking half with a timeout so a broken lock
+    fails the run instead of hanging it.
 
 Case [4] — `app/routes/poses.py` catalog writes (finding 1):
   - ``_catalog_txn`` locks namespace "pose_catalog" keyed by the catalog FILE
@@ -104,6 +114,48 @@ def check(label: str, got, want) -> None:
         FAILURES.append(f"{label}: {got!r} != {want!r}")
 
 
+def _held_by_someone(lock) -> bool:
+    """True when the lock is held — asked from a THREAD OF ITS OWN.
+
+    ``threading.RLock`` exposes no ``locked()``, and asking from the owning
+    thread would be useless anyway (it may re-enter). A foreign thread's
+    non-blocking acquire answers the question the checks actually ask: is a
+    different thread shut out right now?
+    """
+    out: list = []
+
+    def probe() -> None:
+        got = lock.acquire(blocking=False)
+        out.append(got)
+        if got:
+            lock.release()
+
+    t = threading.Thread(target=probe, daemon=True)
+    t.start()
+    t.join(5.0)
+    return bool(out) and not out[0]
+
+
+def _try_from_thread(lock, timeout: float) -> bool:
+    """Did a FOREIGN thread get the lock within ``timeout``? Releases it again.
+
+    The thread is joined before the answer is read, so the result never
+    depends on how the two threads happened to be scheduled.
+    """
+    out: list = []
+
+    def probe() -> None:
+        got = lock.acquire(timeout=timeout)
+        out.append(got)
+        if got:
+            lock.release()
+
+    t = threading.Thread(target=probe, daemon=True)
+    t.start()
+    t.join(timeout + 10.0)
+    return bool(out) and out[0]
+
+
 def replace_spy(record: list):
     """Stands in for ``os.replace`` and records what the target looked like
     BEFORE the rename — the proof that nothing was truncated in place."""
@@ -168,6 +220,37 @@ def main() -> int:
     worker.join(10.0)
     held.release()
     check("another key is free while one is held", got_other, [True])
+
+    print("\n[3b] re-entrant: the owner may re-enter, a stranger still waits")
+    reentrant = keyed_lock("reentry", "a")
+    depth_ok = True
+    try:
+        with reentrant:
+            with reentrant:
+                with reentrant:
+                    # Three levels deep is the real shape: a route locks, the
+                    # setter it calls locks, the engine below that locks.
+                    depth_ok = _held_by_someone(reentrant)
+    except RuntimeError:
+        depth_ok = False
+    check("the same thread nests three levels deep", depth_ok, True)
+    check("...and is free again afterwards",
+          _held_by_someone(reentrant), False)
+
+    # Held TWICE by this thread: an outsider must stay out at depth 2, stay
+    # out after ONE release (a doubly-held lock is not unlocked by one), and
+    # get in only after the LAST release.
+    reentrant.acquire()
+    reentrant.acquire()
+    at_depth_2 = _try_from_thread(reentrant, 0.5)
+    reentrant.release()
+    at_depth_1 = _try_from_thread(reentrant, 0.5)
+    reentrant.release()
+    when_free = _try_from_thread(reentrant, 5.0)
+    check("another thread is shut out while the owner holds it twice",
+          at_depth_2, False)
+    check("...still shut out after ONE of the two releases", at_depth_1, False)
+    check("...and gets in once the last release lands", when_free, True)
 
     print("\n[4] the pose catalog: one lock per FILE, atomic write")
     import app.core.pose_catalog as pose_catalog
@@ -309,8 +392,11 @@ def main() -> int:
 
     def spy_save_room(name, room_id, **kw):
         # The proof that the span COVERS the write, not merely that a lock was
-        # asked for somewhere in the function.
-        held.append((name, keyed_lock("avatar_state", name).locked()))
+        # asked for somewhere in the function. Asked from ANOTHER thread:
+        # since the keyed lock is re-entrant, the owning thread can always
+        # take it again, so only an outsider's failed try says "held" (and a
+        # ``threading.RLock`` has no ``locked()`` to ask).
+        held.append((name, _held_by_someone(keyed_lock("avatar_state", name))))
 
     saved = {
         "keyed_lock": keyed_lock_mod.keyed_lock,

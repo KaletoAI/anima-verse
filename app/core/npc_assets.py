@@ -269,9 +269,14 @@ def gate_placement(name: str, location_id: str, room_id: str = "",
 
     # The Game-Admin pool list renders this reason — without it a held-back
     # NPC would sit in the pool as a blank row nobody can explain.
-    profile = get_character_profile(name) or {}
-    profile["npc_pooled_reason"] = GATE_REASON_PREFIX + ", ".join(missing)
-    save_character_profile(name, profile)
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # rewrites the whole profile_json blob. Leaf span — the status write and
+    # the job submission follow outside it.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        profile["npc_pooled_reason"] = GATE_REASON_PREFIX + ", ".join(missing)
+        save_character_profile(name, profile)
     set_character_status(name, POOLED_STATUS)
     task_id = submit_assets_job(name, location_id, room_id, wanderer,
                                 wander_target, radius_m, home)
@@ -470,11 +475,15 @@ def _place(name: str, location_id: str, room_id: str,
             f"NPC '{name}' could not be placed at {where}"
             f"{f'/{room_id}' if room_id else ''} — see the npc_home warning "
             f"for what failed")
-    # …and only now is it not waiting any more. Re-read, because `place_npc`
-    # writes the profile itself (the home stamp and the position).
-    profile = get_character_profile(name) or {}
-    if profile.pop("npc_pooled_reason", None) is not None:
-        save_character_profile(name, profile)
+    # …and only now is it not waiting any more. Re-read UNDER THE LOCK,
+    # because `place_npc` writes the profile itself (the home stamp and the
+    # position) and the save below rewrites the whole blob (DATA-3). The
+    # placement stays outside the lock: it writes profiles of its own.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        if profile.pop("npc_pooled_reason", None) is not None:
+            save_character_profile(name, profile)
 
 
 def _handle_npc_assets(payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -366,9 +366,14 @@ def _put_at_point(name: str, home: Home) -> bool:
     point = random_point(home)
     if point is None:
         return False
-    profile = get_character_profile(name) or {}
-    profile["npc_home"] = home
-    save_character_profile(name, profile)
+    # Read AND write under the per-character profile lock (DATA-3): the save
+    # rewrites the whole profile_json blob. ``set_character_pos`` stays
+    # OUTSIDE — it writes the profile itself and reaches the location setter.
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        profile["npc_home"] = home
+        save_character_profile(name, profile)
     set_character_pos(name, point[0], point[1])
     logger.info("NPC '%s' roams %s — placed at %s", name,
                 describe(home) or home, point)

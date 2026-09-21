@@ -1429,30 +1429,36 @@ def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Di
         cond_name = (effects.get("apply_condition") or "").strip()
         if cond_name:
             try:
+                from app.core.keyed_lock import keyed_lock
                 from app.models.character import get_character_profile, save_character_profile, _record_state_change
-                profile = get_character_profile(character_name)
-                active = profile.get("active_conditions", [])
-                if not any(c.get("name") == cond_name for c in active):
-                    duration = int(effects.get("condition_duration_hours") or 2)
-                    active.append({
-                        "name": cond_name,
-                        "source": f"item:{item.get('name', item_id)}",
-                        # Who handed over / gifted the item (the giver) — for the
-                        # {giver} substitution and the Mind-tab display. Kept for
-                        # the lifetime of the condition.
-                        "source_character": (giver or "").strip(),
-                        # in-world duration -> canonical GAME-time stamp
-                        "started_at": game_time().canonical(),
-                        "duration_hours": max(1, duration),
-                    })
-                    profile["active_conditions"] = active
-                    save_character_profile(character_name, profile)
-                    _record_state_change(character_name, "condition", cond_name,
-                                          metadata={"source": f"item:{item_id}",
-                                                    "duration_hours": max(1, duration)})
-                    condition_applied = cond_name
-                    logger.info("Condition '%s' aktiviert fuer %s (Quelle: item %s)",
-                                 cond_name, character_name, item_id)
+                # Read AND write under the per-character profile lock
+                # (DATA-3): the save rewrites the whole profile_json blob.
+                # The lock is re-entrant, so the equip/consume routes that
+                # already hold this very lock pass straight through.
+                with keyed_lock("character_profile", character_name):
+                    profile = get_character_profile(character_name)
+                    active = profile.get("active_conditions", [])
+                    if not any(c.get("name") == cond_name for c in active):
+                        duration = int(effects.get("condition_duration_hours") or 2)
+                        active.append({
+                            "name": cond_name,
+                            "source": f"item:{item.get('name', item_id)}",
+                            # Who handed over / gifted the item (the giver) — for the
+                            # {giver} substitution and the Mind-tab display. Kept for
+                            # the lifetime of the condition.
+                            "source_character": (giver or "").strip(),
+                            # in-world duration -> canonical GAME-time stamp
+                            "started_at": game_time().canonical(),
+                            "duration_hours": max(1, duration),
+                        })
+                        profile["active_conditions"] = active
+                        save_character_profile(character_name, profile)
+                        _record_state_change(character_name, "condition", cond_name,
+                                              metadata={"source": f"item:{item_id}",
+                                                        "duration_hours": max(1, duration)})
+                        condition_applied = cond_name
+                        logger.info("Condition '%s' aktiviert fuer %s (Quelle: item %s)",
+                                     cond_name, character_name, item_id)
             except Exception as e:
                 logger.warning("Condition-Apply fuer Item %s fehlgeschlagen: %s", item_id, e)
     return {"success": True, "changes": changes, "condition_applied": condition_applied}

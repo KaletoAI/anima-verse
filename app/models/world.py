@@ -597,14 +597,27 @@ def is_world_frozen() -> bool:
 
 
 def set_world_frozen(frozen: bool) -> None:
-    """Friert die Welt ein (True) oder taut sie wieder auf (False).
+    """Freezes the world (True) or thaws it again (False).
 
-    Freeze stoppt auch die GAME-Uhr (on_freeze_change re-ankert sie);
-    Unfreeze laesst sie ab dem eingefrorenen Stand weiterlaufen."""
+    Freezing also stops the GAME clock (``on_freeze_change`` re-anchors it);
+    thawing lets it run on from the frozen instant.
+
+    IDEMPOTENT (SIM-1): a call that does not change the flag returns without
+    writing anything and without calling the hook. Two open Game-Admin tabs,
+    a browser back or a repeated POST all send the state that is already set,
+    and re-anchoring the clock for an unchanged state moves it (a second
+    freeze adds the frozen real span, a second unfreeze subtracts the span
+    since the unfreeze). ``timeutils.on_freeze_change`` guards itself with
+    the persisted ``anchors_frozen`` marker; this is the second belt, and it
+    also saves the pointless world_kv write and log line.
+    """
     from app.core.timeutils import on_freeze_change
-    set_world_setting(WORLD_FROZEN_KEY, "1" if frozen else "0")
+    want = bool(frozen)
+    if is_world_frozen() == want:
+        return
+    set_world_setting(WORLD_FROZEN_KEY, "1" if want else "0")
     try:
-        on_freeze_change(frozen)
+        on_freeze_change(want)
     except Exception as e:
         logger.warning("game clock freeze hook failed: %s", e)
 
