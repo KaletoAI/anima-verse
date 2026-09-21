@@ -5,16 +5,15 @@ tree twenty times over. It now carries an ORDERED LIST of variants, each a
 gallery of its own (own resolution tiers, own history) — see
 ``app/core/props.py`` for the storage and the primary-variant contract.
 
-These routes are the variant-scoped twins of the prop gallery endpoints in
-``routes/world.py``: everything under ``/world/props/{id}/variants/{i}/…``
-does to ONE variant what the unqualified route does to the primary one, plus
-the verbs the strip itself needs (list, add, toggle, delete) and one per field
-the VARIANT owns (2026-08-25): ``/dims``, ``/description``,
-``/ground-offset``, ``/markers``, ``/seasons``, ``/face-targets`` (v2 E5:
-what this version should cost in triangles). One route per kind of value,
-so the body shape can be read off the path. The gallery bodies and the HTTP
-mapping are shared with the unqualified routes — the helpers are imported, not
-copied, so a change to one answers for both.
+Everything under ``/world/props/{id}/variants/{i}/…`` addresses ONE variant:
+its mesh gallery (list, select, upload, shrink, LOD, delete, serve), its
+source images per view, its own generate run, plus the verbs the strip itself
+needs (list, add, toggle, delete). THE MESH GALLERY IS ADDRESSED HERE AND
+NOWHERE ELSE (2026-09-21): the unqualified shorthands for the primary variant
+that used to sit in ``routes/world.py`` are gone, because a panel that used
+them would silently edit variant 1 while the admin looks at variant 3. The
+gallery bodies and the HTTP mapping still share their helpers with
+``routes/world.py`` — they are imported, not copied.
 
 PICTURE VARIANTS (spec-picture-props.md § 5, 2026-08-27) are three more verbs
 of the same list: ``POST /variants/picture`` appends a variant that carries a
@@ -23,12 +22,15 @@ COPY of the frame's mesh and the pictures on it, ``POST
 the frame again after it was re-split. All three are admin-only and answer 400
 with the store's own reason — the Areas tab shows it verbatim.
 
-THE ADMIN PANEL DOES NOT USE THE FIVE FIELD ROUTES ANY MORE (2026-08-25): it
-keeps a local draft and writes it through ``POST /world/props/{id}/bulk``
-(``props.bulk_update``), one request and one sidecar write for the whole prop.
-They stay because they are the readable API — one path, one kind of value —
-and because the batch runs their sanitizers verbatim (the appliers in
-``core/props.py`` ARE their bodies), so neither can drift into a laxer way in.
+THE PER-FIELD VARIANT ROUTES ARE GONE (2026-09-21): ``/dims``,
+``/description``, ``/ground-offset``, ``/markers``, ``/seasons`` and
+``/face-targets`` wrote the very fields the batch save owns, but without its
+"everything is checked before anything is written" rule — two ways in, one of
+them laxer. The one way in is ``POST /world/props/{id}/bulk``
+(``props.bulk_update``), one request and one sidecar write for the whole prop;
+its appliers ARE the bodies those routes used to have. ``/area-defaults``,
+``/slot-values`` and ``/picture`` stay: they are the picture-prop verbs the
+Areas tab calls and the batch does not carry them.
 """
 from typing import Any, Dict
 
@@ -235,44 +237,6 @@ async def prop_variant_area_defaults(
             "area_defaults": entry["area_defaults"], "variant": entry}
 
 
-@router.post("/props/{prop_id}/variants/{index}/face-targets")
-async def prop_variant_face_targets(
-        prop_id: str, index: int, request: Request,
-        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """What this variant should COST in triangles — body
-    ``{target_faces_high?, target_faces_low?}`` (spec-bild-props-v2.md E5).
-
-    Each field is three-valued: OMITTED keeps the stored budget, ``null``
-    clears it (the backend's own default / the configured distance-mesh ratio
-    takes over again), a number stores it. Outside 100 … 2,000,000 it is a 400
-    and nothing is written — a face budget is what a GPU job is billed for, so
-    a slipped digit is refused rather than rounded.
-
-    The budgets are the DEFAULT of every run that names none: the generate
-    dialog, the automatic improvement, the mesh→mesh reduction and the CPU
-    distance mesh (which turns the low budget into its Decimate ratio)."""
-    from app.core.props import set_variant_face_targets
-    _variant(prop_id, index)
-    body = await _body(request)
-    # Only the fields the BODY names reach the store — an omitted key must
-    # keep its budget, which a `None` default could not tell from a clear.
-    patch: Dict[str, Any] = {}
-    if "target_faces_high" in body:
-        patch["high"] = body["target_faces_high"]
-    if "target_faces_low" in body:
-        patch["low"] = body["target_faces_low"]
-    try:
-        entry = set_variant_face_targets(prop_id, index, **patch)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Variant not found")
-    return {"status": "ok", "index": index,
-            "target_faces_high": entry["target_faces_high"],
-            "target_faces_low": entry["target_faces_low"],
-            "variant": entry}
-
-
 @router.post("/props/{prop_id}/variants/{index}/recopy")
 def prop_variant_recopy(
         prop_id: str, index: int,
@@ -319,127 +283,6 @@ async def prop_variant_active(prop_id: str, index: int,
         raise HTTPException(status_code=409,
                             detail="A prop needs at least one active variant")
     return {"status": "ok", "index": index, "active": active}
-
-
-@router.post("/props/{prop_id}/variants/{index}/seasons")
-async def prop_variant_seasons(prop_id: str, index: int,
-                               request: Request) -> Dict[str, Any]:
-    """Tag one variant with the seasons it depicts (body: ``{seasons: [name,
-    …]}``; ``[]`` clears the tag).
-
-    An in-season variant renders, an out-of-season one does not — that is the
-    whole rule (E2c). Never refused for a running generation: a tag moves no
-    file and renumbers nothing. The answer carries the SANITIZED list, so the
-    strip shows what was really stored."""
-    from app.core.props import list_variants, set_variant_seasons
-    _variant(prop_id, index)
-    body = await _body(request)
-    if not set_variant_seasons(prop_id, index, body.get("seasons")):
-        raise HTTPException(status_code=404, detail="Variant not found")
-    return {"status": "ok", "index": index,
-            "seasons": list_variants(prop_id)[index]["seasons"]}
-
-
-@router.post("/props/{prop_id}/variants/{index}/dims")
-async def prop_variant_dims(prop_id: str, index: int,
-                            request: Request) -> Dict[str, Any]:
-    """Set this variant's real size (body: ``{width_m?, depth_m?, height_m?}``).
-
-    A variant is a whole version of the object, and versions differ in size —
-    a sapling beside the grown pine. Only the keys the body names are touched,
-    so the three inputs of the strip can be committed one at a time; a null /
-    empty / unusable value LEAVES THE CURRENT ONE STANDING, because there is
-    nothing to inherit and a variant with no size is not a state a payload may
-    carry. Storing a size clears this variant's ``dims_estimated``. Never
-    refused for a running generation: a size moves no file and renames no stem.
-
-    The answer carries what was really stored, so the strip re-renders from
-    the server's own numbers."""
-    from app.core.props import list_variants, set_variant_dims
-    _variant(prop_id, index)
-    body = await _body(request)
-    if not set_variant_dims(prop_id, index, body):
-        raise HTTPException(status_code=404, detail="Variant not found")
-    entry = list_variants(prop_id)[index]
-    return {"status": "ok", "index": index, "dims": entry["dims"],
-            "dims_estimated": entry["dims_estimated"]}
-
-
-@router.post("/props/{prop_id}/variants/{index}/description")
-async def prop_variant_description(prop_id: str, index: int,
-                                   request: Request) -> Dict[str, Any]:
-    """Give one variant its OWN generation subject (body:
-    ``{description: str}``; blank clears it and a render of this variant
-    composes from the prop's NAME).
-
-    A sibling verb rather than a field of the ``/dims`` patch, for the same
-    reason ``/seasons`` is one: that route's whole contract is "numbers,
-    clamped to (0, 100], every key optional", and a free-text field with its
-    own sanitation and its own clearing rule inside it would make the body
-    shape a union nobody can read off the path. One verb, one kind of value.
-
-    Never refused for a running generation: the text is read when a render
-    starts, so changing it now touches nothing in flight."""
-    from app.core.props import list_variants, set_variant_description
-    _variant(prop_id, index)
-    body = await _body(request)
-    if not set_variant_description(prop_id, index, body.get("description")):
-        raise HTTPException(status_code=404, detail="Variant not found")
-    entry = list_variants(prop_id)[index]
-    return {"status": "ok", "index": index,
-            "description": entry["description"]}
-
-
-@router.post("/props/{prop_id}/variants/{index}/ground-offset")
-async def prop_variant_ground_offset(prop_id: str, index: int,
-                                     request: Request) -> Dict[str, Any]:
-    """How deep THIS variant stands in the ground (body:
-    ``{ground_offset_m: float}``, ± 5 m in centimetre steps).
-
-    Negative sinks the mesh, positive lifts it, and it applies WHEREVER this
-    version stands: manual placements, room and yard scatter, painted terrain
-    scatter, world props. The default 0.0 — and every junk value — clears the
-    key: "stands on the ground" is stored as absence and in no other shape, so
-    no payload carries a zero for it. The per-placement ``offset_y`` in the
-    room editor stays the trim of ONE instance on top of this.
-
-    Its own verb next to ``/dims`` for the same reason ``/description`` is one:
-    one route, one kind of value, one clearing rule. Never refused for a
-    running generation — a sink moves no file and renames no stem."""
-    from app.core.props import list_variants, set_variant_ground_offset
-    _variant(prop_id, index)
-    body = await _body(request)
-    if not set_variant_ground_offset(prop_id, index,
-                                     body.get("ground_offset_m")):
-        raise HTTPException(status_code=404, detail="Variant not found")
-    entry = list_variants(prop_id)[index]
-    return {"status": "ok", "index": index,
-            "ground_offset_m": entry["ground_offset_m"]}
-
-
-@router.post("/props/{prop_id}/variants/{index}/markers")
-async def prop_variant_markers(prop_id: str, index: int,
-                               request: Request) -> Dict[str, Any]:
-    """Replace THIS variant's object-local marker list (body: ``{markers:
-    [{id?, group, at: [u,v,w], capacity?, spacing_m?, slot_axis?,
-    facing?}]}``) — same
-    vocabulary as room markers (``group`` = a place type of the pose catalog),
-    object-local frame.
-
-    ``at`` are fractions of THIS variant's mesh bounding box, which is why the
-    list belongs to the variant and to no other: a seat authored on the grown
-    chair sits somewhere else on the broken one. An empty list clears the key.
-
-    The answer carries the SANITIZED list, so the editor re-renders from what
-    was really stored (invalid entries are dropped individually, the list is
-    capped at 50)."""
-    from app.core.props import list_variants, set_variant_markers
-    _variant(prop_id, index)
-    body = await _body(request)
-    if not set_variant_markers(prop_id, index, body.get("markers")):
-        raise HTTPException(status_code=404, detail="Variant not found")
-    entry = list_variants(prop_id)[index]
-    return {"status": "ok", "index": index, "markers": entry["markers"]}
 
 
 @router.delete("/props/{prop_id}/variants/{index}")

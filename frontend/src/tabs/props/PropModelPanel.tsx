@@ -11,10 +11,10 @@
  *
  * Since E2.3 a prop carries several such galleries — one per MODEL VARIANT,
  * picked in `PropVariantStrip` above. Every call here therefore goes to the
- * variant-scoped routes (`/world/props/{id}/variants/{i}/…`); the unqualified
- * ones remain on the server as the shorthand for the primary variant, but a
- * panel that used them would silently edit variant 1 while the admin looks at
- * variant 3.
+ * variant-scoped routes (`/world/props/{id}/variants/{i}/…`) — the only ones
+ * left since 2026-09-21. The unqualified shorthands for the primary variant
+ * are deleted: a panel that used them would silently edit variant 1 while the
+ * admin looks at variant 3.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { type FaceTargets } from '../../components/faceBudget'

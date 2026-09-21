@@ -98,6 +98,27 @@ Hand-derived expectations
           ``auth_dependency._PUBLIC_CHARACTER_SEGMENTS`` — the route it named
           no longer exists, and a stale entry there widens access for
           whatever route takes the name next.
+
+    The 2026-09-21 decision ("Punkt 5") added three groups of SUPERSEDED
+    duplicates to the same two lists (DE-7/DE-8/DE-10). Each is a second way
+    into data that another route already owns, so what 5a/5b pin is the pair:
+    the duplicate is gone AND the surviving one answers.
+      * the six per-field prop-variant routes (``/dims``, ``/description``,
+        ``/ground-offset``, ``/markers``, ``/seasons``, ``/face-targets``)
+        wrote what ``POST /world/props/{id}/bulk`` writes, but without its
+        "check everything before writing anything" rule.
+        ``/area-defaults``, ``/slot-values``, ``/picture`` and ``/recopy``
+        STAY — the Areas tab calls them and the batch does not carry them.
+      * the eight unqualified prop MESH routes in ``routes/world.py`` were the
+        shorthand for variant 1 of what ``…/variants/{i}/…`` does to the
+        variant the admin has open. ``POST /world/props/{id}/generate`` stays
+        (it APPENDS a variant, which is why the Props tab calls it
+        unqualified).
+      * ``/inventory/characters/{n}/{item}/use``, ``…/cast-self`` and
+        ``…/drop`` bypassed the avatar and party checks that ``/play/use-item``,
+        ``/play/cast`` and ``/play/drop`` make. Their siblings ``…/give``,
+        ``…/pickup``, ``…/equip``, ``…/unequip`` and ``…/apply-outfit-set``
+        stay.
 """
 import os
 import sys
@@ -372,6 +393,26 @@ DELETED = [
     ("POST", "/characters/{character_name}/images/{image_name}/suggest-animate-prompt"),
     ("POST", "/characters/{character_name}/images/{image_name}/animate"),
     ("POST", "/world/locations/{location_name}/gallery/{image_name}/toggle-background"),
+    # DE-7 — the per-field variant routes, superseded by the batch save.
+    ("POST", "/world/props/{prop_id}/variants/{index}/face-targets"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/seasons"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/dims"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/description"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/ground-offset"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/markers"),
+    # DE-8 — the unqualified prop mesh routes (shorthand for variant 1).
+    ("POST", "/world/props/{prop_id}/upload"),
+    ("POST", "/world/props/{prop_id}/source"),
+    ("GET", "/world/props/{prop_id}/models"),
+    ("POST", "/world/props/{prop_id}/models/select"),
+    ("POST", "/world/props/{prop_id}/models/shrink"),
+    ("POST", "/world/props/{prop_id}/models/lod"),
+    ("DELETE", "/world/props/{prop_id}/models"),
+    ("GET", "/world/props/{prop_id}/models/files/{filename}"),
+    # DE-10 — the inventory action routes, superseded by /play/*.
+    ("POST", "/inventory/characters/{character_name}/{item_id}/use"),
+    ("POST", "/inventory/characters/{character_name}/{item_id}/cast-self"),
+    ("POST", "/inventory/characters/{character_name}/{item_id}/drop"),
 ]
 KEPT = [
     ("GET", "/characters/{character_name}/outfit-lock"),
@@ -381,6 +422,29 @@ KEPT = [
     ("POST", "/instagram/post/{post_id}/animate"),
     ("POST", "/world/locations/{location_name}/gallery/{image_name}/room"),
     ("POST", "/world/locations/{location_id}/prompt-changed"),
+    # The survivors of the three duplicate groups above (2026-09-21).
+    ("POST", "/world/props/{prop_id}/bulk"),
+    ("POST", "/world/props/{prop_id}/generate"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/area-defaults"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/slot-values"),
+    ("POST", "/world/props/{prop_id}/variants/picture"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/recopy"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/upload"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/source"),
+    ("GET", "/world/props/{prop_id}/variants/{index}/models"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/models/select"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/models/shrink"),
+    ("POST", "/world/props/{prop_id}/variants/{index}/models/lod"),
+    ("DELETE", "/world/props/{prop_id}/variants/{index}/models"),
+    ("GET", "/world/props/{prop_id}/variants/{index}/models/files/{filename}"),
+    ("POST", "/play/use-item"),
+    ("POST", "/play/cast"),
+    ("POST", "/play/drop"),
+    ("POST", "/inventory/characters/{character_name}/{item_id}/give"),
+    ("POST", "/inventory/characters/{character_name}/pickup"),
+    ("POST", "/inventory/characters/{character_name}/equip"),
+    ("POST", "/inventory/characters/{character_name}/unequip"),
+    ("POST", "/inventory/characters/{character_name}/apply-outfit-set"),
 ]
 
 import app.server as server  # noqa: E402

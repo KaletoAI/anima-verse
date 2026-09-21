@@ -2394,40 +2394,13 @@ def _prop_rotation_sync(prop_id: str, data: Any, variant: Optional[int],
     return {"status": "ok", **out}
 
 
-@router.post("/props/{prop_id}/upload")
-async def prop_upload(prop_id: str, file: UploadFile = File(...),
-                      force: str = "", tier: str = "") -> Dict[str, Any]:
-    """Upload a GLB as a NEW model of the prop and make it the active one of
-    its resolution tier (validated as an unrigged GLB with an embedded
-    texture, like the building models; force=1 stores despite errors)."""
-    from app.core.props import get_prop, save_uploaded_glb
-    from app.core.model_validate import validate_static_glb
-    if not get_prop(prop_id):
-        raise HTTPException(status_code=404, detail="Prop not found")
-    if not (file.filename or "").lower().endswith(".glb"):
-        raise HTTPException(status_code=400,
-                            detail="Props must be a GLB (embedded texture, no rig)")
-    contents = await read_upload_capped(file, max_bytes=MODEL_UPLOAD_MAX_BYTES,
-                                        what="Prop model")
-    result = validate_static_glb(contents)
-    forced = str(force or "").strip().lower() in ("1", "true", "yes")
-    if not result["ok"] and not forced:
-        raise HTTPException(status_code=422, detail={
-            "reason": "invalid_model",
-            "errors": result["errors"],
-            "warnings": result["warnings"],
-        })
-    if not save_uploaded_glb(prop_id, contents, _tier(tier)):
-        raise HTTPException(status_code=404, detail="Prop not found")
-    return {"status": "ok", "warnings": result["warnings"]}
-
-
 async def _prop_source_upload(prop_id: str, file: UploadFile,
                               variant: Any = None,
                               view: str = "front") -> Dict[str, Any]:
     """Store an uploaded image as ONE view of a variant's source image — the
-    body of both source-upload routes (unqualified = the primary variant, the
-    twin in ``routes/prop_variants.py`` = the one the admin has open).
+    body of the source-upload route in ``routes/prop_variants.py``, which
+    names the variant the admin has open. It lives here because the prop
+    upload helpers (caps, image check, tiering) do.
 
     ``view`` picks one of the four views (front by default); the extra views
     are the further input images a multi-view mesher takes.
@@ -2445,103 +2418,6 @@ async def _prop_source_upload(prop_id: str, file: UploadFile,
     if not save_source_image(prop_id, contents, variant, view=view):
         raise HTTPException(status_code=400, detail="Not a readable image")
     return {"status": "ok"}
-
-
-@router.post("/props/{prop_id}/source")
-async def prop_source_upload(prop_id: str, file: UploadFile = File(...),
-                             view: str = "front") -> Dict[str, Any]:
-    """Upload the product-shot image of the prop's PRIMARY variant — the
-    picture a re-mesh ("3D from this image") then works from (``?view=``
-    picks one of the four views; default front). Any readable image format;
-    it is stored as a PNG of at most 1024 px, alpha kept."""
-    return await _prop_source_upload(prop_id, file, view=view)
-
-
-@router.get("/props/{prop_id}/models")
-def prop_models(prop_id: str) -> Dict[str, Any]:
-    """The prop's mesh gallery: ``{models, tiers, none_selected,
-    shrink_backends}`` — the same shape the building/room panel reads from
-    /model3d/status, minus the img2mesh backend list (the props tab already
-    carries that one)."""
-    from app.core.props import get_model_info, get_prop
-    if not get_prop(prop_id):
-        raise HTTPException(status_code=404, detail="Prop not found")
-    return get_model_info(prop_id)
-
-
-@router.post("/props/{prop_id}/models/select")
-async def prop_model_select(prop_id: str, request: Request) -> Dict[str, Any]:
-    """Make a stored mesh the ACTIVE one of a resolution tier (body:
-    {file, tier?}) — what the clients get via /assets/props/{id}/model?tier=.
-    An empty {file} deselects: on the default tier nothing is rendered until
-    another one is chosen/generated, on any other tier that tier ceases to
-    exist."""
-    data = await request.json()
-    return await asyncio.to_thread(_prop_model_select_sync, prop_id, data)
-
-
-def _prop_model_select_sync(prop_id: str, data: Any) -> Dict[str, Any]:
-    """The blocking body of ``prop_model_select`` — runs in the threadpool."""
-    from app.core.props import get_prop, select_model
-    if not get_prop(prop_id):
-        raise HTTPException(status_code=404, detail="Prop not found")
-    filename = str((data or {}).get("file") or "").strip()
-    tier = _tier((data or {}).get("tier"))
-    if not select_model(prop_id, filename, tier=tier):
-        raise HTTPException(status_code=404, detail="Model not found")
-    return {"status": "success", "active": filename, "tier": tier}
-
-
-@router.post("/props/{prop_id}/models/shrink")
-async def prop_model_shrink(prop_id: str, request: Request) -> Dict[str, Any]:
-    """Reduce a STORED mesh of the prop to a low variant (body: {file,
-    backend?, face_num?, texture_size?}) via a mesh→mesh backend. The result
-    is a NEW gallery file, always selected for tier ``low``. Background job —
-    poll /world/props for pending. A source mesh without UVs/texture answers
-    400 with the reason (it can never be reduced)."""
-    from app.core.props import get_prop, model_file_path, trigger_shrink
-    if not get_prop(prop_id):
-        raise HTTPException(status_code=404, detail="Prop not found")
-    body = _shrink_body(await request.json())
-    if not model_file_path(prop_id, body["source_file"]):
-        raise HTTPException(status_code=404, detail="Model not found")
-    return _shrink_start(trigger_shrink, prop_id, **body)
-
-
-@router.post("/props/{prop_id}/models/lod")
-def prop_model_lod(prop_id: str, ratio: float = 0) -> Dict[str, Any]:
-    """Build the prop's distance mesh from its full mesh on the CPU (Blender
-    Decimate) — the "Build distance mesh" button.
-
-    ``ratio`` is the target fraction of the triangle count (default: the
-    configured one for props). The result is a NEW gallery file selected as
-    ``low``; an existing low mesh stays stored and can be selected back."""
-    from app.core.props import build_low_tier, get_prop
-    if not get_prop(prop_id):
-        raise HTTPException(status_code=404, detail="Prop not found")
-    return _lod_result(build_low_tier, prop_id, ratio=ratio, kind="prop")
-
-
-@router.delete("/props/{prop_id}/models")
-def prop_model_delete(prop_id: str, file: str = "") -> Dict[str, Any]:
-    """Remove ONE stored mesh (?file=<name>) or all of them (no param).
-    Deleting a selected file re-points the selection."""
-    from app.core.props import delete_model, get_prop
-    if not get_prop(prop_id):
-        raise HTTPException(status_code=404, detail="Prop not found")
-    return {"status": "success", "removed": delete_model(prop_id, file.strip())}
-
-
-@router.get("/props/{prop_id}/models/files/{filename}")
-def prop_model_file(prop_id: str, filename: str, request: Request):
-    """Serve ONE stored mesh by filename — the admin gallery previews
-    non-active files with it (clients only ever see the selected ones)."""
-    from app.core.http_files import etag_file_response
-    from app.core.props import model_file_path
-    p = model_file_path(prop_id, filename)
-    if not p:
-        raise HTTPException(status_code=404, detail="Model not found")
-    return etag_file_response(p, request, "model/gltf-binary")
 
 
 # ── Picture areas (spec-picture-props.md § 2 / § 5, admin-only) ──

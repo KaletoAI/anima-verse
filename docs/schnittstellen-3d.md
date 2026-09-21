@@ -7184,8 +7184,8 @@ Alias, sondern derselbe Primär-Varianten-Vertrag wie beim Mesh. Ein Index,
 für den das Prop keine Variante hat, ist 404.
 
 **Hochladen.** `POST /world/props/{id}/variants/{i}/source` (Multipart,
-`file`); unqualifiziert `POST /world/props/{id}/source` für die primäre
-Variante. Das Bild wird als PNG mit höchstens 1024 px abgelegt, **Alpha
+`file`) — seit 2026-09-21 der einzige Weg; die unqualifizierte Kurzform für
+die primäre Variante ist gelöscht. Das Bild wird als PNG mit höchstens 1024 px abgelegt, **Alpha
 bleibt erhalten** — ein freigestelltes Bild ist außerhalb des
 Objekts transparent, und ein plattgerechnetes Bild gäbe dem Mesher einen
 Hintergrund zurück, den er gerade loswerden sollte.

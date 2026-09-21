@@ -253,8 +253,12 @@ def main() -> int:
                 if idx != i:
                     log(f"  variant slot landed at {idx}, expected {i} — using {idx}")
                     i = idx
-            api.call("POST", f"/world/props/{prop_id}/variants/{i}/description",
-                     {"description": subject})
+            # The batch save is the ONE way into a variant's fields since the
+            # per-field routes were deleted (2026-09-21): the body maps the
+            # STORE INDEX (a JSON object key, hence the str) to the patch, and
+            # nothing is written unless the whole body checks out.
+            api.call("POST", f"/world/props/{prop_id}/bulk",
+                     {"variants": {str(i): {"description": subject}}})
             body = dict(gen_body_base)
             if entry.get("reference"):
                 body.update({"front_reference": True, "reference_variant": 0})

@@ -2784,14 +2784,19 @@ PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor", "slots",
 #: still sends ``height_m`` here would report "Saved" over a value that never
 #: reached anything. ``area_defaults`` joined them with v2 E1 (2026-08-28):
 #: a pane default describes ONE variant's mesh.
+#: Since 2026-09-21 the five batch fields name the BATCH SAVE and the place
+#: inside its body (``variants.<store index>.<field>``, :func:`bulk_update`);
+#: the per-field variant routes they used to name are deleted, and an error
+#: message that sends a client to a 404 is worse than no message at all.
 MOVED_TO_VARIANT = {
-    "width_m": "POST /world/props/{id}/variants/{i}/dims",
-    "depth_m": "POST /world/props/{id}/variants/{i}/dims",
-    "height_m": "POST /world/props/{id}/variants/{i}/dims",
-    "dims_estimated": "POST /world/props/{id}/variants/{i}/dims",
-    "description": "POST /world/props/{id}/variants/{i}/description",
-    "ground_offset_m": "POST /world/props/{id}/variants/{i}/ground-offset",
-    "markers": "POST /world/props/{id}/variants/{i}/markers",
+    "width_m": "POST /world/props/{id}/bulk -> variants.<i>.dims",
+    "depth_m": "POST /world/props/{id}/bulk -> variants.<i>.dims",
+    "height_m": "POST /world/props/{id}/bulk -> variants.<i>.dims",
+    "dims_estimated": "POST /world/props/{id}/bulk -> variants.<i>.dims",
+    "description": "POST /world/props/{id}/bulk -> variants.<i>.description",
+    "ground_offset_m":
+        "POST /world/props/{id}/bulk -> variants.<i>.ground_offset_m",
+    "markers": "POST /world/props/{id}/bulk -> variants.<i>.markers",
     AREA_DEFAULTS_KEY: "POST /world/props/{id}/variants/{i}/area-defaults",
 }
 
