@@ -123,3 +123,18 @@ def list_languages() -> List[Dict[str, str]]:
             logger.warning("failed to load %s: %s", path, e)
     _LANGUAGES_CACHE = items
     return items
+
+
+def language_name(code: str) -> str:
+    """English name of a language code, from the same single source.
+
+    ``shared/config/languages.json`` is the ONE list; every prompt that has to
+    name the language ("Always respond in German.") and every UI option list
+    reads it through here. An unknown code is returned unchanged so a prompt
+    still says something usable.
+    """
+    code = (code or "").strip()
+    for opt in list_languages():
+        if opt.get("value") == code:
+            return str(opt.get("label") or code)
+    return code

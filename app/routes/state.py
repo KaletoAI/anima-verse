@@ -179,8 +179,8 @@ async def snapshot(
     # einzigen Round-Trip macht.
     unread: Dict[str, Any] = {"avatar": "", "chats": {}}
     try:
-        from app.routes.chat import chat_unread_summary
-        unread = await chat_unread_summary()
+        from app.core.chat_ops import build_unread_summary
+        unread = await build_unread_summary()
     except Exception as e:
         logger.debug("state: unread-summary fetch failed: %s", e)
 

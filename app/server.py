@@ -13,7 +13,6 @@ class _SuppressHealthPolling(logging.Filter):
         "/queue/status",
         "/health",
         "/notifications/unread-count",
-        "/history?limit=",  # Chat-History polling vom Frontend
     }
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -90,9 +89,8 @@ except Exception as _fje:
     logger.warning("furnish legacy job cleanup failed: %s", _fje)
 
 # Import routers
-from app.routes import auth, store, characters, chat, group_chat, scheduler, instagram, world, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, intents, diary
+from app.routes import auth, characters, chat, scheduler, instagram, world, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, relationships, intents, diary
 from app.routes import admin_settings
-from app.routes import user_gallery
 from app.routes import assets
 from app.routes import clip_catalog_loops
 from app.routes import game_audio
@@ -660,11 +658,6 @@ async def lifespan(app: FastAPI):
     get_task_queue().start()
     logger.info("Task-Queue Worker gestartet")
 
-    # Chat-Task-Manager: Cleanup-Loop starten
-    from app.core.chat_task_manager import get_chat_task_manager
-    get_chat_task_manager().start_cleanup_loop()
-    logger.info("ChatTaskManager bereit!")
-
     # Memory-System: Knowledge -> Memory Migration
     logger.info("Memory-System: Migration pruefen...")
     from app.core.memory_service import run_migration_for_all_users
@@ -827,7 +820,6 @@ async def player_activity_middleware(request, call_next):
 
 # Include routers
 app.include_router(auth.router)
-app.include_router(store.router)
 app.include_router(assets.router)
 app.include_router(clip_catalog_loops.router)
 app.include_router(game_audio.router)
@@ -835,7 +827,6 @@ app.include_router(poses_route.router)
 app.include_router(characters.router)
 app.include_router(npc_route.router)
 app.include_router(chat.router)
-app.include_router(group_chat.router, tags=["group_chat"])
 app.include_router(scheduler.router, prefix="/scheduler", tags=["scheduler"])
 app.include_router(instagram.router, tags=["instagram"])
 app.include_router(world.router, tags=["world"])
@@ -864,7 +855,6 @@ app.include_router(content_packs.router)
 app.include_router(relationships.router, tags=["relationships"])
 app.include_router(intents.router, tags=["intents"])
 app.include_router(diary.router, tags=["diary"])
-app.include_router(user_gallery.router)
 app.include_router(secrets.router, tags=["secrets"])
 app.include_router(inventory.router, tags=["inventory"])
 app.include_router(i18n_route.router, tags=["i18n"])

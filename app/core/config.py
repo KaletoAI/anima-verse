@@ -1848,11 +1848,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "STORY_ENGINE_BEAT_IMAGES", se.get("beat_images", True))
     _set(env, "STORY_ENGINE_IMAGEGEN_DEFAULT", se.get("imagegen_default", ""))
 
-    # UI
-    ui = config.get("ui", {})
-    _set(env, "DEFAULT_THEME", ui.get("default_theme", "default"))
-    _set(env, "AVAILABLE_THEMES", ui.get("available_themes", "default,minimal,dark"))
-
     # Purge stale image/video/mesh backend blocks BEFORE writing: this bridge
     # only ever set keys, never removed them. A deleted backend therefore left
     # its SKILL_IMAGEGEN_{N}_* block behind and would come back as a phantom

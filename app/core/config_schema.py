@@ -1189,15 +1189,9 @@ SECTIONS = {
         },
     },
     "ui": {
-        "label": "UI / Themes & Image Downscaling",
+        "label": "UI / Image Downscaling",
         "icon": "🎨",
         "fields": {
-            "default_theme": {
-                "type": "select",
-                "label": "Default Theme",
-                "choices": ["default", "minimal", "dark"],
-            },
-            "available_themes": {"type": "str", "label": "Verfügbare Themes", "default": "default,minimal,dark"},
             "_grp_downscale": {"type": "group_header", "label": "Image Downscaling"},
             "downscale_enabled": {
                 "type": "bool",

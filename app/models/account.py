@@ -118,40 +118,50 @@ def get_player_identity(default: str = "user") -> str:
     return default
 
 
-def save_user_name(name: str):
+#: The two account settings the Player UI edits under "Language"
+#: (GET/POST /account/language). ``native`` = the characters answer in the
+#: account language directly; ``translate`` = they write in their own language
+#: and the translation layer handles the rest, so no language instruction goes
+#: into the prompt at all.
+TRANSLATION_MODES = ("native", "translate")
+DEFAULT_SYSTEM_LANGUAGE = "de"
+DEFAULT_TRANSLATION_MODE = "native"
+
+
+def get_language_settings() -> Dict[str, str]:
+    """The account's ``system_language`` + ``translation_mode``, defaults filled."""
     profile = get_user_profile()
-    profile["user_name"] = name
-    save_user_profile(profile)
+    return {
+        "system_language": (profile.get("system_language")
+                            or DEFAULT_SYSTEM_LANGUAGE),
+        "translation_mode": (profile.get("translation_mode")
+                             or DEFAULT_TRANSLATION_MODE),
+    }
 
 
-def _build_language_name_map() -> dict:
-    """Reads language code -> English name from shared/config/languages.json."""
-    try:
-        from app.core.paths import get_config_dir
-        path = get_config_dir() / "languages.json"
-        if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return {
-                opt["value"]: opt["label"]
-                for opt in data.get("languages", [])
-                if "value" in opt and "label" in opt
-            }
-    except Exception:
-        pass
-    from app.models.character import LANGUAGE_MAP
-    return LANGUAGE_MAP
+def save_language_settings(system_language: str, translation_mode: str) -> None:
+    """Persist both language settings in one read-modify-write.
+
+    Serialized against the other account-profile writers
+    (``set_active_character``, the notification settings) — the whole settings
+    blob is rewritten, so an unlocked RMW would drop the other writer's key.
+    """
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("account_profile", "1"):
+        profile = get_user_profile()
+        profile["system_language"] = system_language
+        profile["translation_mode"] = translation_mode
+        save_user_profile(profile)
 
 
 def get_user_language_instruction() -> str:
     """Derives the language instruction from system_language + translation_mode."""
-    profile = get_user_profile()
-    lang = profile.get("system_language", "de") or "de"
-    mode = profile.get("translation_mode", "native") or "native"
+    from app.core.i18n import language_name
 
-    if mode == "translate":
+    settings = get_language_settings()
+    if settings["translation_mode"] == "translate":
         return ""
-    lang_name = _build_language_name_map().get(lang, lang)
-    return f"Always respond in {lang_name}."
+    return f"Always respond in {language_name(settings['system_language'])}."
 
 
 def _current_user_settings() -> Optional[Dict[str, Any]]:
@@ -493,11 +503,6 @@ def get_chat_partner() -> str:
     return ""
 
 
-def set_chat_partner(character_name: str) -> None:
-    """Setzt den Chat-Partner fuer den aktuellen User (per-User, DB-only)."""
-    _update_current_user_settings({"chat_partner": character_name})
-
-
 def is_player_controlled(character_name: str) -> bool:
     """Check whether *character_name* is currently steered by a human player.
 
@@ -593,22 +598,6 @@ def check_user_password(password: str) -> bool:
     if not password_hash:
         return False
     return verify_password(password, password_hash)
-
-
-# --- Theme Preference ---
-
-def get_user_theme() -> str:
-    import os
-    theme = get_user_profile().get("theme", "")
-    if not theme:
-        theme = os.getenv("DEFAULT_THEME", "default")
-    return theme
-
-
-def save_user_theme(theme: str):
-    profile = get_user_profile()
-    profile["theme"] = theme
-    save_user_profile(profile)
 
 
 def get_user_images_dir() -> Path:

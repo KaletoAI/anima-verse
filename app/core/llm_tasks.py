@@ -50,7 +50,6 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # Streaming / RP
     "chat_stream":        {"label": "Chat (Stream)",            "priority": Priority.CHAT,   "category": "chat", "cache_class": "chat"},
     "story_stream":       {"label": "Story (Stream)",           "priority": Priority.HIGH,   "category": "chat",   "gate": "story_engine.enabled"},
-    "group_chat_stream":  {"label": "Group-Chat (Stream)",      "priority": Priority.CHAT,   "category": "chat", "cache_class": "chat"},
     "storyteller":        {"label": "Storyteller (Action)",     "priority": Priority.CHAT,   "category": "chat"},
 
     # Tool / Decision LLM
@@ -242,8 +241,8 @@ REQUIREMENT_BADGE_LABELS: Dict[str, Dict[str, str]] = {
 #   latency_sensitive — someone is actively waiting (user turn, streaming, the
 #                       tool phase of a reply); False = background job.
 #
-# STATUS: mixed. The three creative-chat tasks (`chat_stream`,
-# `group_chat_stream`, `thought`) carry REASONED values from section A1 of
+# STATUS: mixed. The creative-chat tasks (`chat_stream`, `thought`) carry
+# REASONED values from section A1 of
 # plan-llm-routing-review.md — measurement in
 # .superpowers/sdd/plan-llm-routing-review/task-A1.1-report.md, decisions in
 # task-A1.3-report.md. Every OTHER profile is still the first pass derived from
@@ -252,7 +251,7 @@ REQUIREMENT_BADGE_LABELS: Dict[str, Dict[str, str]] = {
 # `pose_embedding` has NO profile on purpose: it does not run over the chat
 # providers but over app/core/embedding.py and the /v1/embeddings endpoint.
 #
-# A1 result that shapes all three chat profiles: the dominant repetition is a
+# A1 result that shapes the chat profiles: the dominant repetition is a
 # COPY out of the task's own prompt (the "recent thoughts" block), measured
 # across three models on two providers and on a MoE as well as on dense models
 # — so it is not an architecture property and `arch` stays "any" (A1.1 § 2.6,
@@ -269,11 +268,6 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     "story_stream": {
         "tools": False, "vision": False, "json": False, "min_context": 16384,
         "model_class": "large", "arch": "dense", "hallucination_risk": "high",
-        "creative": True, "language_de": True, "latency_sensitive": True,
-    },
-    "group_chat_stream": {
-        "tools": True, "vision": False, "json": False, "min_context": 16384,
-        "model_class": "large", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": True, "latency_sensitive": True,
     },
     "storyteller": {

@@ -131,7 +131,6 @@ _SURFACE_CLASSES: Dict[str, str] = {
     "character_talk": "chat",
     "talk_to": "chat",
     "send_message": "chat",
-    "group_chat": "chat",
     "story": DEFAULT_CACHE_CLASS,
 }
 

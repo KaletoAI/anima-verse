@@ -2236,6 +2236,25 @@
     "Delete this animation? The image stays.": "Diese Animation löschen? Das Bild bleibt.",
     "The world’s own version of \"{name}\" is dropped; the shared rule stays in force.": "Die welteigene Fassung von „{name}\" entfällt; die geteilte Regel gilt weiter.",
     "Freeze the world — pauses ticks, agent loop & scheduler while you build. Image generation & LLM tools keep working.": "Welt einfrieren — pausiert Ticks, Agent-Loop und Scheduler, während du baust. Bildgenerierung und LLM-Tools laufen weiter.",
-    "World is frozen — autonomous simulation is paused (image generation & LLM tools still work). Click to resume.": "Welt ist eingefroren — die autonome Simulation ist pausiert (Bildgenerierung und LLM-Tools laufen weiter). Klicken zum Fortsetzen."
+    "World is frozen — autonomous simulation is paused (image generation & LLM tools still work). Click to resume.": "Welt ist eingefroren — die autonome Simulation ist pausiert (Bildgenerierung und LLM-Tools laufen weiter). Klicken zum Fortsetzen.",
+    "Account language": "Account-Sprache",
+    "Translation mode": "Übersetzungsmodus",
+    "Characters answer in this language": "Charaktere antworten in dieser Sprache",
+    "Characters keep their own language": "Charaktere behalten ihre eigene Sprache",
+    "Applies to the whole world, not just this character.": "Gilt für die ganze Welt, nicht nur für diesen Charakter.",
+    "Could not load the language settings": "Spracheinstellungen konnten nicht geladen werden",
+    "Could not save the language settings": "Spracheinstellungen konnten nicht gespeichert werden",
+    "German": "Deutsch",
+    "English": "Englisch",
+    "French": "Französisch",
+    "Spanish": "Spanisch",
+    "Italian": "Italienisch",
+    "Portuguese": "Portugiesisch",
+    "Dutch": "Niederländisch",
+    "Polish": "Polnisch",
+    "Russian": "Russisch",
+    "Japanese": "Japanisch",
+    "Chinese": "Chinesisch",
+    "Korean": "Koreanisch"
   }
 }

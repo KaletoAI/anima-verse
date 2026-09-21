@@ -130,7 +130,6 @@ them can be read on its own; [7]-[9] switch on exactly the one they measure.
       npc_action/Bo               -> bg:Bo          no cache_class: borrows the
                                                     chat MODEL, writes its own
                                                     one-sentence prompt
-      group_chat/Kira             -> chat:Kira      surface, chat prompt
       user_chat/Kira              -> chat:Kira      surface, chat prompt
       character_talk/Kira         -> chat:Kira      surface, chat prompt
       story/Nox                   -> bg:Nox         surface of the storyteller:
@@ -735,7 +734,6 @@ for task, agent, want in [
     ("chat_stream", "Kira", "chat:Kira"),
     ("npc_talk", "Bo", "chat:Bo"),
     ("npc_action", "Bo", "bg:Bo"),
-    ("group_chat", "Kira", "chat:Kira"),
     ("user_chat", "Kira", "chat:Kira"),
     ("character_talk", "Kira", "chat:Kira"),
     ("story", "Nox", "bg:Nox"),

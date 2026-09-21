@@ -436,10 +436,10 @@ def _try_generate_secret_hint_event(loc_id: str,
     # Prompt fuer subtilen Hinweis — Sprache des betroffenen Characters
     # (Welt-Narration, nicht die User-UI-Sprache).
     from app.core.llm_router import llm_call
+    from app.core.i18n import language_name
     from app.models.character import get_character_language
     _lang = (get_character_language(target_char) or "de")
-    LANG_NAMES = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian"}
-    lang_name = LANG_NAMES.get(_lang, _lang)
+    lang_name = language_name(_lang)
 
     observers = [c for c in char_names if c != target_char]
     from app.core.prompt_templates import render_task
@@ -524,11 +524,10 @@ def _generate_event(loc_id: str,
     cat_desc = cat_info.get("description", category)
 
     # Account language
-    from app.models.account import get_user_profile
-    _profile = get_user_profile()
-    _lang = _profile.get("system_language", "de") or "de"
-    LANG_NAMES = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "ja": "Japanese"}
-    lang_name = LANG_NAMES.get(_lang, _lang)
+    from app.core.i18n import language_name
+    from app.models.account import get_language_settings
+    _lang = get_language_settings()["system_language"]
+    lang_name = language_name(_lang)
     # In-world calendar date — the season name is a localized data field, so
     # it follows the same language as the rest of this prompt.
     game_date = _now.date_label(_lang)
@@ -686,11 +685,10 @@ def _escalate_event(event: Dict[str, Any]):
     location_id = event.get("location_id", "")
 
     # Sprache des Accounts
-    from app.models.account import get_user_profile
-    _profile = get_user_profile()
-    _lang = _profile.get("system_language", "de") or "de"
-    LANG_NAMES = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "ja": "Japanese"}
-    lang_name = LANG_NAMES.get(_lang, _lang)
+    from app.core.i18n import language_name
+    from app.models.account import get_language_settings
+    _lang = get_language_settings()["system_language"]
+    lang_name = language_name(_lang)
 
     sys_prompt, user_prompt = render_task(
         "random_event_escalation",
@@ -909,9 +907,9 @@ def _generate_solution_rp(actor: str, event: Dict[str, Any],
 
     personality = get_character_personality(actor) or ""
     joint_txt = f" You are with {', '.join(joint)}." if joint else ""
+    from app.core.i18n import language_name
     _lang = (get_character_language(actor) or "de")
-    LANG_NAMES = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "ja": "Japanese"}
-    lang_name = LANG_NAMES.get(_lang, _lang)
+    lang_name = language_name(_lang)
 
     from app.core.prompt_templates import render_task
     sys_prompt, user_prompt = render_task(

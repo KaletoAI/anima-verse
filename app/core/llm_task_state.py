@@ -37,15 +37,14 @@ PRESETS = {
         "outfit_generation",
     ],
     "chat_only": [
-        # everything except chat_stream, group_chat_stream, extraction
-        # and npc_talk
+        # everything except chat_stream, extraction and npc_talk
     ],
 }
 
 
 def _chat_only_disabled() -> List[str]:
     # npc_talk: a temporary NPC's reply IS chat (npc_scene, the director, is not).
-    keep = {"chat_stream", "group_chat_stream", "extraction", "npc_talk"}
+    keep = {"chat_stream", "extraction", "npc_talk"}
     return [t for t in TASK_TYPES.keys() if t not in keep]
 
 
