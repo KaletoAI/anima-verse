@@ -8,21 +8,34 @@ import { Field } from '../../components/Field'
  * Per-character skill manager (Characters → Skills), ported from the legacy
  * editor's loadEditorSkills: a list of skills with an enable checkbox each and
  * a dynamic config panel rendered from the skill's `config_fields` metadata
- * (bool / int / float / str / locations). Backed by:
- *   GET  /characters/{c}/skills/available          (list + fields + current values)
+ * (bool / int / float / str / locations / choice). Backed by:
+ *   GET  /characters/{c}/skills/available          (list + fields + current values
+ *                                                   + `option_sources` for `choice`)
  *   PUT  /characters/{c}/skills/{skill}/enabled    (toggle)
  *   POST /characters/{c}/skills/{skill}            (merge config fields)
  *
- * The image_generation / video_generation skills have their own dedicated
- * config (backends, LoRAs, …) via separate routes — those land in their own
- * editor; here they appear with just the enable toggle.
+ * A `choice` field names an `options_source`; the server ships that source's
+ * options with the list (e.g. the world's image/video backends). The empty
+ * option always means "world default", and a stored value the source no
+ * longer offers stays selectable, marked "(unavailable)" — the server flags
+ * it via `value_unavailable`. No skill id appears in this file.
  */
 
 interface ConfigField {
   type: string
   default: unknown
   label?: string
+  // Help text under the input (English from the server, translated via t()).
+  description?: string
   value?: unknown
+  // type === 'choice': name of the server-side option source, and whether the
+  // stored value is missing from it (removed/offline backend).
+  options_source?: string
+  value_unavailable?: boolean
+}
+interface ChoiceOption {
+  value: string
+  label: string
 }
 interface SkillInfo {
   skill_id: string
@@ -49,6 +62,7 @@ export function SkillsTab({ character }: { character: string }) {
   const { toast } = useToast()
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [locations, setLocations] = useState<LocationOpt[]>([])
+  const [optionSources, setOptionSources] = useState<Record<string, ChoiceOption[]>>({})
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<string>('')  // skill_id im Detail-Pane
 
@@ -56,11 +70,14 @@ export function SkillsTab({ character }: { character: string }) {
     if (!character) return
     setLoading(true)
     try {
-      const d = await apiGet<{ skills?: SkillInfo[]; locations?: LocationOpt[] }>(
-        `/characters/${encodeURIComponent(character)}/skills/available`,
-      )
+      const d = await apiGet<{
+        skills?: SkillInfo[]
+        locations?: LocationOpt[]
+        option_sources?: Record<string, ChoiceOption[]>
+      }>(`/characters/${encodeURIComponent(character)}/skills/available`)
       setSkills(d.skills || [])
       setLocations(d.locations || [])
+      setOptionSources(d.option_sources || {})
     } catch (e) {
       toast(t('Failed to load') + ': ' + (e as Error).message, 'error')
       setSkills([])
@@ -256,8 +273,9 @@ export function SkillsTab({ character }: { character: string }) {
                   <SkillField
                     key={fieldName}
                     field={field}
-                    label={field.label || fieldName}
+                    label={t(field.label || fieldName)}
                     locations={locations}
+                    options={optionSources[field.options_source || ''] || []}
                     onChangeLocal={(v) => setFieldValue(current.skill_id, fieldName, v)}
                     onCommit={(v) => saveField(current.skill_id, fieldName, v)}
                   />
@@ -285,22 +303,26 @@ function SkillField({
   field,
   label,
   locations,
+  options,
   onChangeLocal,
   onCommit,
 }: {
   field: ConfigField
   label: string
   locations: LocationOpt[]
+  options: ChoiceOption[]
   onChangeLocal: (v: unknown) => void
   onCommit: (v: unknown) => void
 }) {
   const { t } = useI18n()
   const type = field.type
   const value = field.value
+  const hint = field.description ? t(field.description) : undefined
 
   if (type === 'bool') {
     return (
-      <label className="ga-form-check" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <label className="ga-form-check" style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        title={hint}>
         <input
           type="checkbox"
           checked={!!value}
@@ -316,7 +338,7 @@ function SkillField({
 
   if (type === 'int' || type === 'float') {
     return (
-      <Field label={label}>
+      <Field label={label} hint={hint}>
         <input
           className="ga-input"
           type="number"
@@ -343,7 +365,7 @@ function SkillField({
       onCommit(next)
     }
     return (
-      <Field label={label} hint={t('Empty = all visitable locations.')}>
+      <Field label={label} hint={hint || t('Empty = all visitable locations.')}>
         {locations.length === 0 ? (
           <div style={{ opacity: 0.6, fontSize: '0.85em' }}>{t('No locations.')}</div>
         ) : (
@@ -368,9 +390,39 @@ function SkillField({
     )
   }
 
+  if (type === 'choice') {
+    // Options come from the server-side source named by the field. The empty
+    // entry is the "world default" every choice field has; a stored value the
+    // source does not offer any more is appended so it stays selectable and
+    // visible instead of silently turning into the default.
+    const current = value === undefined || value === null ? '' : String(value)
+    return (
+      <Field label={label} hint={hint}>
+        <select
+          className="ga-input"
+          value={current}
+          onChange={(e) => {
+            onChangeLocal(e.target.value)
+            onCommit(e.target.value)
+          }}
+        >
+          <option value="">{t('— world default —')}</option>
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label || o.value}
+            </option>
+          ))}
+          {field.value_unavailable && current ? (
+            <option value={current}>{current + ' ' + t('(unavailable)')}</option>
+          ) : null}
+        </select>
+      </Field>
+    )
+  }
+
   // str (and any unknown type) → plain text input.
   return (
-    <Field label={label}>
+    <Field label={label} hint={hint}>
       <input
         className="ga-input"
         type="text"

@@ -1580,6 +1580,51 @@ def skill_dependency_block(character_name: str, skill_id: str) -> str:
         return ""
 
 
+def _media_backend_options(media: str) -> List[Dict[str, str]]:
+    """Enabled AND currently available backends of one media kind as
+    ``{value, label}``, cheapest first.
+
+    Reads the in-memory pool only — no ``check_availability()`` re-probe: this
+    runs on every load of the Skills tab, and probing a dead endpoint there
+    would stall the page for its timeout.
+    """
+    try:
+        from app.imagegen.service import get_image_service
+        svc = get_image_service()
+    except Exception as e:
+        logger.debug("backend options (%s): %s", media, e)
+        return []
+    if not getattr(svc, "enabled", False):
+        return []
+    picked = [b for b in svc.backends
+              if getattr(b, "MEDIA_TYPE", "image") == media
+              and getattr(b, "instance_enabled", False) and b.available]
+    picked.sort(key=lambda b: (b.cost if b.cost is not None else 999999, b.name))
+    return [{"value": b.name, "label": b.name} for b in picked]
+
+
+def skill_option_source(source: str) -> List[Dict[str, str]]:
+    """Options for a skill config field of type ``choice``.
+
+    A field declares ``"options_source": "<name>"``; this is the ONE place
+    that maps such a name to its option list, so no skill id is named in the
+    UI or the route. Every source reads in-memory state only.
+
+    Known sources:
+      ``image_backends`` — backends with ``MEDIA_TYPE == "image"``
+      ``video_backends`` — backends with ``MEDIA_TYPE == "video"``
+
+    An unknown name yields an empty list: the field then still renders (empty
+    entry = world default, plus a stored value marked unavailable).
+    """
+    if source == "image_backends":
+        return _media_backend_options("image")
+    if source == "video_backends":
+        return _media_backend_options("video")
+    logger.warning("Unknown skill config option source '%s'", source)
+    return []
+
+
 def build_available_skills(character_name: str) -> Dict[str, Any]:
     """Returns all globally loaded skills with per-character enabled state and config fields."""
     from app.core.dependencies import get_skill_manager
@@ -1590,6 +1635,10 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
     except Exception:
         package_of_skill = None
     skills = []
+    # Option lists for "choice" fields, keyed by their options_source name.
+    # Filled lazily: a source is computed at most ONCE per request, and only
+    # when a loaded skill actually declares it.
+    option_sources: Dict[str, List[Dict[str, str]]] = {}
     for skill in skill_manager.skills:
         skill_id = skill.SKILL_ID
         if not skill_id:
@@ -1609,6 +1658,17 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
                     field_info["value"] = config[field_name]
                 else:
                     field_info["value"] = field_info["default"]
+                # "choice" field: resolve its option list and flag a stored
+                # value the source does not offer any more (a backend that was
+                # removed or is offline). It stays selectable and marked —
+                # same spirit as the LoRA library's "(missing)" entries.
+                src = field_info.get("options_source")
+                if src:
+                    if src not in option_sources:
+                        option_sources[src] = skill_option_source(src)
+                    val = str(field_info.get("value") or "").strip()
+                    field_info["value_unavailable"] = bool(val) and val not in {
+                        o["value"] for o in option_sources[src]}
 
         _cap_pkg = None
         if package_of_skill is not None:
@@ -1642,7 +1702,10 @@ def build_available_skills(character_name: str) -> Dict[str, Any]:
     all_locations = [{"id": loc.get("id", ""), "name": loc.get("name", "")}
                      for loc in list_locations() if loc.get("id")]
 
-    return {"skills": skills, "locations": all_locations}
+    return {"skills": skills, "locations": all_locations,
+            # {source_name: [{value, label}, ...]} for the "choice" fields
+            # above — one list per source, not per field.
+            "option_sources": option_sources}
 
 
 def _clean_lora_list(raw: Any) -> List[Dict[str, Any]]:
@@ -1703,40 +1766,6 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
     return {"status": "ok", "workflow": workflow,
             "tpose_workflow": tpose_workflow, "loras": clean_loras,
             "tpose_loras": clean_tpose_loras}
-
-
-def apply_videogen_config(character_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    """Saves the VideoGen config (ImageGen + animation settings)."""
-    from app.models.character import get_character_skill_config, save_character_skill_config
-    user_id = data.get("user_id", "").strip()
-
-    config = get_character_skill_config(character_name, "video_generation") or {}
-
-    # ImageGen fields
-    for key in ("imagegen_backend", "imagegen_workflow", "imagegen_model", "animate_service"):
-        if key in data:
-            config[key] = str(data[key]).strip()
-
-    # Normalize LoRA lists
-    def _normalize_loras(loras):
-        if not loras:
-            return []
-        out = []
-        for l in loras:
-            name = (l.get("name") or "").strip() or "None"
-            try:
-                strength = float(l.get("strength", 1.0))
-            except (TypeError, ValueError):
-                strength = 1.0
-            out.append({"name": name, "strength": strength})
-        return out
-
-    for key in ("imagegen_loras",):
-        if key in data:
-            config[key] = _normalize_loras(data[key])
-
-    save_character_skill_config(character_name, "video_generation", config)
-    return {"status": "success"}
 
 
 def build_status_effects(character_name: str) -> Dict[str, Any]:
@@ -2721,140 +2750,6 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
         "rooms": rooms,
         "current_room_id": current_room_id,
         "location_id": location_id,
-    }
-
-
-def build_imagegen_workflows(character_name: str) -> Dict[str, Any]:
-    """Returns all available generation options (image backends)."""
-    import os
-    from app.core.dependencies import get_skill_manager
-    from app.models.character import get_character_skill_config
-    from app.imagegen.service import get_image_service
-    imagegen = get_image_service()
-    if not imagegen.enabled:
-        raise HTTPException(status_code=404, detail="Image service not available")
-
-    # Re-probe currently unavailable backends — otherwise the dialog keeps
-    # showing a backend as "not available" even though the service came back
-    # online in the meantime. The recovery hook in check_availability also
-    # triggers channel_health.force_poll(), so downstream GPU routing
-    # decisions see the fresh status too.
-    for _b in imagegen.backends:
-        if _b.instance_enabled and not _b.available:
-            try:
-                _b.check_availability()
-            except Exception:
-                pass
-
-    agent_config = get_character_skill_config(character_name, "image_generation") or {}
-
-    # Collect all available generation options (backends only).
-    options = []
-    agent_instances = agent_config.get("instances", {})
-    for b in imagegen.backends:
-        if not b.available:
-            continue
-        # Per-agent enabled check
-        agent_inst = agent_instances.get(b.name, {})
-        is_enabled = bool(agent_inst["enabled"]) if "enabled" in agent_inst else b.instance_enabled
-        if not is_enabled:
-            continue
-        # Derive target style from image family / backend model name (e.g.
-        # Qwen-Image -> qwen, FLUX -> flux, Z-Image URN -> z_image).
-        try:
-            from app.core.prompt_adapters import get_target_model as _gtm
-            _target_style = _gtm(
-                getattr(b, "image_family", "") or "", getattr(b, 'model', "") or "")
-        except Exception:
-            _target_style = "z_image"
-        opt = {
-            "type": "backend",
-            "name": b.name,
-            "label": b.name,
-            "negative_prompt": getattr(b, 'negative_prompt', ""),
-            "cost": b.cost,
-            "available": True,
-            "target_model": _target_style,
-            "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
-            # RESOLVED tri-state (auto/yes/no -> bool, one rule in
-            # negation_fold.backend_supports_negative, read off the backend
-            # instance). False = no negative input: the dialog hides the
-            # field and the composer folds the negative into the prompt.
-            "supports_negative_prompt": bool(
-                getattr(b, "supports_negative_prompt", True)),
-        }
-        # Backend with a model list (e.g. Together.ai) — offer as a selection.
-        backend_models = getattr(b, 'available_models', [])
-        if backend_models:
-            opt["models"] = backend_models
-            opt["default_model"] = getattr(b, 'model', backend_models[0])
-        options.append(opt)
-
-    # Sort by cost — the UI can show "cheapest first".
-    options.sort(key=lambda o: (o.get("cost") if o.get("cost") is not None else 999999, o.get("label", "")))
-
-    # Default preselection per area from .env
-    defaults = {}
-    for env_key, area in [
-        ("OUTFIT_IMAGEGEN_DEFAULT", "outfit"),
-        ("EXPRESSION_IMAGEGEN_DEFAULT", "expression"),
-        ("LOCATION_IMAGEGEN_DEFAULT", "location"),
-        ("SKILL_INSTAGRAM_IMAGEGEN_DEFAULT", "instagram"),
-    ]:
-        val = os.environ.get(env_key, "").strip()
-        if val:
-            defaults[area] = val  # e.g. "backend:CivitAI"
-
-    return {
-        "character": character_name,
-        "options": options,
-        "defaults": defaults,
-    }
-
-
-def build_videogen_options(character_name: str) -> Dict[str, Any]:
-    """Returns all selection options for the VideoGen config:
-    ImageGen backends/models/LoRAs + animation services/LoRAs."""
-    from app.core.dependencies import get_skill_manager
-    from app.models.character import get_character_skill_config
-    sm = get_skill_manager()
-
-    # --- ImageGen options (backends) ---
-    from app.imagegen.service import get_image_service
-    imagegen = get_image_service()
-    imagegen_options = []
-    if imagegen.enabled:
-        for b in imagegen.backends:
-            if not b.available:
-                continue
-            opt: Dict[str, Any] = {
-                "type": "backend",
-                "name": b.name,
-                "label": b.name,
-            }
-            backend_models = getattr(b, 'available_models', [])
-            if backend_models:
-                opt["models"] = backend_models
-                opt["default_model"] = getattr(b, 'model', backend_models[0])
-            imagegen_options.append(opt)
-
-    # --- Animation options ---
-    from app.skills.animate import get_animate_services
-    animate_services = get_animate_services()
-
-    # --- Current per-character config ---
-    current_config = get_character_skill_config(character_name, "video_generation") or {}
-
-    return {
-        "imagegen_options": imagegen_options,
-        "animate_services": animate_services,
-        "current_config": {
-            "imagegen_backend": current_config.get("imagegen_backend", ""),
-            "imagegen_workflow": current_config.get("imagegen_workflow", ""),
-            "imagegen_model": current_config.get("imagegen_model", ""),
-            "imagegen_loras": current_config.get("imagegen_loras", []),
-            "animate_service": current_config.get("animate_service", ""),
-        },
     }
 
 

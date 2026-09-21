@@ -285,6 +285,60 @@ Konstruktor sie als Kwargs (`def __init__(self, config, ctx, active: bool)`) —
 Klasse, mehrere Verben (Muster: `plugins/decency_exempt`, `plugins/sleep`,
 `plugins/party`, `plugins/wet`).
 
+### Per-Character-Config (`get_config_fields`)
+
+`_defaults` legt die per-Character speicherbaren Schlüssel fest; die Felder
+selbst rendert der Skills-Tab (Characters → Skills) **generisch** aus
+`get_config_fields()`. Ohne Überschreibung leitet `BaseSkill` Typ und Label aus
+den `_defaults`-Werten ab; wer Label, Hilfetext oder einen der beiden
+Nicht-Skalar-Typen will, überschreibt die Methode.
+
+| `type` | Eingabe im Skills-Tab | Wert |
+|---|---|---|
+| `bool` | Checkbox | `true`/`false` |
+| `int` / `float` | Zahlenfeld | Zahl |
+| `str` | Textfeld | String |
+| `locations` | Liste aller Locations mit Checkboxen | Liste von Location-IDs |
+| `choice` | Dropdown, gefüllt vom Server | String (leer = Standard) |
+
+Optional bei jedem Feld: `"label"` (Überschrift) und `"description"`
+(Hilfetext unter der Eingabe). Beide sind **englisch** und laufen im Frontend
+durch `t()`; die Übersetzung gehört nach `shared/languages/<lang>.json`.
+
+Ein `choice`-Feld nennt seine Optionen nicht selbst, sondern **eine Quelle**:
+
+```python
+def get_config_fields(self):
+    return {
+        "animate_service": {
+            "type": "choice",
+            "options_source": "video_backends",
+            "default": "",
+            "label": "Video service",
+            "description": "Video backend that animates the still. Empty = the cheapest available one.",
+        },
+    }
+```
+
+`GET /characters/{name}/skills/available` liefert die Optionen aller
+vorkommenden Quellen einmal pro Aufruf mit, als
+`option_sources: {"<quelle>": [{"value", "label"}, …]}`. Bekannte Quellen
+(`character_ops.skill_option_source` — die EINZIGE Stelle, die Namen auf
+Listen abbildet):
+
+| `options_source` | Optionen |
+|---|---|
+| `image_backends` | aktivierte und gerade verfügbare Backends mit `MEDIA_TYPE == "image"`, günstigstes zuerst |
+| `video_backends` | dieselbe Regel für `MEDIA_TYPE == "video"` |
+
+Regeln, die für jedes `choice`-Feld gelten und die das Frontend generisch
+umsetzt: die **leere** Option bedeutet „Welt-Standard"; ein gespeicherter
+Wert, den die Quelle nicht mehr anbietet (entferntes oder offline gegangenes
+Backend), bleibt wählbar und wird als `(unavailable)` markiert — der Server
+setzt dafür `value_unavailable: true` am Feld. Die Quellen lesen nur
+In-Memory-Zustand: der Skills-Tab lädt sie bei jedem Öffnen, ein Probe-Aufruf
+gegen ein totes Backend würde die Seite blockieren.
+
 Optionale Überschreibungen aus `BaseSkill`, die der Core generisch abfragt:
 `visible_for(character_name)`, `defer_for_attachment(raw_input)`,
 `thought_context_block(character_name)`, `handle_intent(intent_type, payload)`,

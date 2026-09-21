@@ -2271,6 +2271,19 @@
     "Placing…": "Platziere …",
     "Character placed": "Character platziert",
     "Leave the party and place": "Gruppe verlassen und platzieren",
-    "{name} travels with {leader} and is taken along by them. Place {leader} instead, or let {name} leave the party first.": "{name} reist mit {leader} und wird von {leader} mitgenommen. Platziere stattdessen {leader}, oder lass {name} zuerst die Gruppe verlassen."
+    "{name} travels with {leader} and is taken along by them. Place {leader} instead, or let {name} leave the party first.": "{name} reist mit {leader} und wird von {leader} mitgenommen. Platziere stattdessen {leader}, oder lass {name} zuerst die Gruppe verlassen.",
+    "— world default —": "— Welt-Standard —",
+    "(unavailable)": "(nicht verfügbar)",
+    "Image backend": "Bild-Backend",
+    "Backend that renders the still frame. Empty = the cheapest available one.": "Backend, das das Standbild rendert. Leer = das günstigste verfügbare.",
+    "Image model override": "Bild-Modell-Override",
+    "Model name passed to that backend. Empty = the backend's configured model.": "Modellname, der an dieses Backend geht. Leer = das im Backend konfigurierte Modell.",
+    "Video service": "Video-Dienst",
+    "Video backend that animates the still. Empty = the cheapest available one.": "Video-Backend, das das Standbild animiert. Leer = das günstigste verfügbare.",
+    "Max. new rooms per location": "Max. neue Räume pro Location",
+    "Locations to design": "Locations zum Gestalten",
+    "Max. pieces per day": "Max. Pieces pro Tag",
+    "Max. pieces in inventory": "Max. Pieces im Inventar",
+    "Language of piece names": "Sprache der Piece-Namen"
   }
 }

@@ -4,13 +4,18 @@ Ablauf:
   1. Generate the image via the core image service (full flow incl. analysis)
   2. Bild mit dem Animation Service animieren (Together.ai)
 
-Per-Character Konfiguration (skills/video_generation.json):
-  - imagegen_backend:    Backend-Name fuer die Bildgenerierung (Standbild)
-  - imagegen_workflow:   Workflow-Name fuer die Bildgenerierung
-  - imagegen_model:      Model-Override fuer die Bildgenerierung
-  - imagegen_loras:      LoRA-Liste fuer die Bildgenerierung [{name, strength}, ...]
-  - animate_service:     Video-Backend-Name/Glob (MEDIA_TYPE==video im
-                         image_generation-Pool; leer = guenstigstes verfuegbares)
+Per-character configuration (Characters -> Skills, rendered generically from
+``get_config_fields``):
+  - imagegen_backend:    image backend for the still frame (MEDIA_TYPE=="image"
+                         in the image_generation pool; empty = world default,
+                         i.e. the cheapest available one)
+  - imagegen_model:      model override handed to that backend (free text —
+                         the backend abstraction has no model list)
+  - animate_service:     video backend name/glob (MEDIA_TYPE=="video" in the
+                         image_generation pool; empty = cheapest available)
+
+LoRAs are NOT configured here: they come from the character's image settings
+and the backend's own configuration (Characters -> Image).
 """
 
 import json
@@ -58,9 +63,7 @@ class VideoGenerationSkill(BaseSkill):
 
         self._defaults = {
             "imagegen_backend": "",
-            "imagegen_workflow": "",
             "imagegen_model": "",
-            "imagegen_loras": [],
             "animate_service": "",
         }
 
@@ -69,12 +72,43 @@ class VideoGenerationSkill(BaseSkill):
     # ------------------------------------------------------------------
 
     def get_config_fields(self) -> Dict[str, Dict[str, Any]]:
-        """Config-Felder werden dynamisch im Frontend gerendert (Dropdowns).
+        """Declares the three settings for the generic Skills-tab renderer.
 
-        Gibt leer zurueck — die eigentliche Config-UI wird via
-        _loadVideoGenConfig() im Frontend aufgebaut (analog zu ImageGen).
+        The two backend picks are ``choice`` fields: the option list is not
+        in the declaration but comes from a named source the server resolves
+        (``character_ops.skill_option_source``), so the dropdown always shows
+        the backends this world has right now. The empty option means "world
+        default" in both cases.
         """
-        return {}
+        return {
+            "imagegen_backend": {
+                "type": "choice",
+                "options_source": "image_backends",
+                "default": "",
+                "label": "Image backend",
+                "description": ("Backend that renders the still frame. "
+                                "Empty = the cheapest available one."),
+            },
+            "imagegen_model": {
+                # Free text on purpose: this is the ``model_override`` the
+                # service hands to the backend, and the backend abstraction
+                # has no model list (only two of the backend types even carry
+                # an ``available_models`` attribute, filled by a live probe).
+                "type": "str",
+                "default": "",
+                "label": "Image model override",
+                "description": ("Model name passed to that backend. "
+                                "Empty = the backend's configured model."),
+            },
+            "animate_service": {
+                "type": "choice",
+                "options_source": "video_backends",
+                "default": "",
+                "label": "Video service",
+                "description": ("Video backend that animates the still. "
+                                "Empty = the cheapest available one."),
+            },
+        }
 
     # ------------------------------------------------------------------
     # ImageGen Skill Referenz
@@ -155,20 +189,18 @@ class VideoGenerationSkill(BaseSkill):
                 "rp_context": rp_context,
             }
 
-            # Per-Character ImageGen-Overrides anwenden
+            # Per-character ImageGen overrides. No ``workflow`` and no
+            # ``loras`` here: ``workflow`` is only a SOFT backend glob in the
+            # service (ComfyUI is gone, no backend reads it) and would merely
+            # duplicate ``backend``; the LoRAs of this render come from the
+            # backend's own configuration.
             _backend = cfg.get("imagegen_backend", "")
-            _workflow = cfg.get("imagegen_workflow", "")
             _model = cfg.get("imagegen_model", "")
-            _loras = cfg.get("imagegen_loras")
 
             if _backend:
                 imagegen_input["backend"] = _backend
-            if _workflow:
-                imagegen_input["workflow"] = _workflow
             if _model:
                 imagegen_input["model_override"] = _model
-            if _loras:
-                imagegen_input["loras"] = _loras
 
             img_result = image_skill.generate_from_input(json.dumps(imagegen_input))
 

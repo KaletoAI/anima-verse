@@ -127,7 +127,18 @@ class BaseSkill(ABC):
         """Gibt die konfigurierbaren Felder mit Typ-Info und Defaults zurueck.
 
         Returns:
-            Dict[field_name, {"type": "str"|"bool"|"int"|"float", "default": value, "label": str}]
+            Dict[field_name, {"type": ..., "default": value, "label": str}]
+
+        Field types the generic Skills-tab renderer knows (see docs/plugins.md
+        "Per-Character-Config"): ``bool``, ``int``, ``float``, ``str``,
+        ``locations`` and ``choice``. A ``choice`` field adds
+        ``"options_source": "<name>"``; the server resolves that name to its
+        option list (``character_ops.skill_option_source``) and ships it with
+        the skill list, so the skill declares WHICH list, never its contents.
+        Optional ``"description"``: help text under the input.
+
+        The derivation below covers the value types of ``_defaults``; a skill
+        that wants ``locations``/``choice`` or a real label overrides this.
         """
         fields = {}
         for key, default_val in self._defaults.items():

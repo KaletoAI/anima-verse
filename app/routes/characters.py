@@ -2319,39 +2319,6 @@ async def import_character(
         raise HTTPException(status_code=500, detail=f"Import failed: {e}")
 
 
-# --- Image-Generation Option Endpoints ---
-
-@router.get("/{character_name}/skills/image_generation/workflows")
-def get_imagegen_workflows(character_name: str) -> Dict[str, Any]:
-    """Returns all available generation options (image backends)."""
-    return character_ops.build_imagegen_workflows(character_name)
-
-
-# --- VideoGeneration Skill Config ---
-
-@router.get("/{character_name}/skills/video_generation/options")
-def get_videogen_options(character_name: str) -> Dict[str, Any]:
-    """Returns all selection options for the VideoGen config:
-    ImageGen backends/models/LoRAs + animation services/LoRAs."""
-    return character_ops.build_videogen_options(character_name)
-
-
-@router.post("/{character_name}/skills/video_generation/config")
-async def save_videogen_config(character_name: str, request: Request) -> Dict[str, Any]:
-    """Speichert die VideoGen-Config (ImageGen + Animation Einstellungen)."""
-    import asyncio
-    data = await request.json()
-    return await asyncio.to_thread(_save_videogen_config_sync, character_name,
-                                   data)
-
-
-def _save_videogen_config_sync(character_name: str,
-                               data: Any) -> Dict[str, Any]:
-    """The blocking body of ``save_videogen_config`` — runs in the
-    threadpool."""
-    return character_ops.apply_videogen_config(character_name, data)
-
-
 # --- Memory/Knowledge Endpoints ---
 
 @router.delete("/{character_name}/knowledge/{entry_id}")

@@ -81,12 +81,12 @@ class DescribeRoomSkill(BaseSkill):
             "max_custom_rooms": {
                 "type": "int",
                 "default": self._defaults["max_custom_rooms"],
-                "label": "Max. neue Räume pro Location",
+                "label": "Max. new rooms per location",
             },
             "design_locations": {
                 "type": "locations",
                 "default": [],
-                "label": "Locations zum Gestalten",
+                "label": "Locations to design",
             },
         }
 

@@ -131,11 +131,11 @@ class OutfitCreationSkill(BaseSkill):
     def get_config_fields(self) -> dict:
         fields = super().get_config_fields()
         if "max_daily_items" in fields:
-            fields["max_daily_items"]["label"] = "Max. Pieces pro Tag"
+            fields["max_daily_items"]["label"] = "Max. pieces per day"
         if "max_inventory_pieces" in fields:
-            fields["max_inventory_pieces"]["label"] = "Max. Pieces im Inventar"
+            fields["max_inventory_pieces"]["label"] = "Max. pieces in inventory"
         if "outfit_language" in fields:
-            fields["outfit_language"]["label"] = "Sprache der Piece-Namen"
+            fields["outfit_language"]["label"] = "Language of piece names"
         return fields
 
     # ------------------------------------------------------------------
