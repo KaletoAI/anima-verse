@@ -2303,6 +2303,7 @@
     "Free text per direction: how one addresses the other. The speaking character gets its own direction in the chat prompt, so the form of address stays the same from turn to turn. Example: “formal, calls her Harbour Mistress” / “informal, nickname Pip”.": "Freitext je Richtung: wie der eine den anderen anspricht. Der sprechende Character bekommt seine eigene Richtung in den Chat-Prompt, so bleibt die Anrede von Zug zu Zug gleich. Beispiel: „siezt sie, nennt sie Hafenmeisterin“ / „duzt ihn, Spitzname Pip“.",
     "Media generation is disabled for this world (Admin → Settings → Media Generation)": "Medienerzeugung ist für diese Welt deaktiviert (Admin → Settings → Media Generation)",
     "Media generation off": "Medienerzeugung aus",
-    "media off": "Medien aus"
+    "media off": "Medien aus",
+    "Character could not be saved.": "Der Charakter konnte nicht gespeichert werden."
   }
 }

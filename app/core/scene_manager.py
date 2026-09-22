@@ -67,7 +67,7 @@ DEFAULT_SCENE_MAX_PERCEPTIONS = 400
 # hygiene runs on the wall clock.
 #
 # That makes the horizon deliberately ASYMMETRIC to the readers: the daily
-# recap reads back 7 GAME days (``recent_daily_entries``, DAILY_SUMMARY_DAYS),
+# recap reads back 7 GAME days (``recent_daily_entries``, ``knowledge.daily_summary_days``),
 # which at a factor > 1 is a much shorter real span than these 7 system days.
 # The retention therefore keeps rows LONGER than any reader needs, never
 # shorter — which is the safe direction for a cleanup rule.

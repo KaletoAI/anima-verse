@@ -782,7 +782,8 @@ function rtEntryFields(def) {
 }
 
 // One accordion item. Mirrors renderArrayItem() (settings.js) — kept separate
-// because the delete button must not reach removeItem()/confirm().
+// because the delete button must not reach removeItem() — an llm_routing
+// entry's removal has to renumber its tasks' chains (rtDeleteEntryConfirm).
 function rtRenderEntryItem(def, fields, item, path, idx) {
     const label = _itemLabel(item, def.item_label_field, 'Item ' + idx);
     const openClass = OPEN_ITEMS.has(path) ? ' open' : '';

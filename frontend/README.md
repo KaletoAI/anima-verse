@@ -34,8 +34,10 @@ npm run lint -w frontend     # the ONLY lint script; runs from the root and cove
 **The dev server forwards everything it does not serve itself** to the Python server on
 `:8000` (`ANIMA_API` overrides the address) — there is no list of API prefixes any more, because a
 list can only rot and a missing entry does not 404: Vite would answer the call with its own HTML and
-a `200`, `res.json()` would fail and the component would blow up far from the cause. The few paths
-Vite keeps are named in `frontend/dev-proxy-rule.js`: its own namespaces (`/@…`, `/__…`), `/src/…`,
+a `200`, `res.json()` would fail and the component would blow up far from the cause. The rule is the
+shared one of [`packages/dev-proxy-rule/`](../packages/README.md) (client3d's dev server uses it
+too), bound to this app's pages in `frontend/dev-proxy-rule.js`. The few paths
+Vite keeps: its own namespaces (`/@…`, `/__…`), `/src/…`,
 `/node_modules/…`, the `public/` files and the two HTML entries — plus `/play` and `/game-admin`
 *exactly*, which are pages in production while `/play/…` is API, so the pages open at
 `http://localhost:5173/` (Game-Admin) and `http://localhost:5173/play` (player) and the backend's

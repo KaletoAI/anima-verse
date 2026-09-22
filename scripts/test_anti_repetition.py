@@ -32,9 +32,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # The storage root and the clip library MUST be redirected BEFORE the first
-# app import: paths.init otherwise falls back to worlds/demo — the world that
-# is tracked in git — and app.utils.history_manager would open its world.db and
-# leave the working tree dirty.
+# app import: app.utils.history_manager reaches its world.db through paths,
+# and without a storage root every world access raises StorageNotInitialised —
+# there is no default world any more, so nothing here can land in the tracked
+# worlds/demo.
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
     prefix="anti-repetition-clips-")
 

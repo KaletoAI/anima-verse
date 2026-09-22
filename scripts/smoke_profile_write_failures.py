@@ -90,6 +90,26 @@ EXPECTED, derived by hand from the contracts (not from current output):
       and the bounded read is the same tail as the unbounded one: 7 messages
       stored, ``limit=3`` yields the last 3 dicts of the full history, and no
       argument still yields all 7.
+
+  [9] A FAILED CREATION IS A 500, AND IT LEAVES NOTHING BEHIND.
+      ``character_ops.create_character_core`` ignored the boolean of
+      ``save_character_profile(..., create_new=True)`` and answered
+      ``{"status": "success"}`` after a failed write — and then went on to
+      write the ``known_locations`` config, the skill defaults and the
+      creator's ``allowed_characters`` for a character that has no row.
+      ``save_character_profile`` materializes ``characters/<Name>/`` BEFORE
+      the DB write (``get_character_dir(create=True)``), so the folder is the
+      half-created state to clean up. With the save monkeypatched to do
+      exactly that — create the folder, return False — the expected answer,
+      derived from the contract and not from a run, is:
+        (a) ``HTTPException`` with ``status_code`` 500;
+        (b) no row in ``characters`` for that name;
+        (c) no ``characters/<Name>/`` folder;
+        (d) the creator's follow-up writes never ran — checked through
+            ``save_character_skill_config``, which is monkeypatched to count
+            its calls and must stay at zero.
+      On the old code (a) was no exception at all and (b)–(d) were a
+      character folder, three skill rows and a success message.
 """
 import logging
 import os
@@ -365,6 +385,64 @@ check("the unbounded read still returns everything", len(full) == 7,
 check("limit=3 returns the last three of them",
       [m.get("content") for m in tail] == [m.get("content") for m in full[-3:]],
       f"{[m.get('content') for m in tail]} vs {[m.get('content') for m in full[-3:]]}")
+
+print("[9] a failed creation is a 500 and leaves nothing behind")
+import asyncio  # noqa: E402
+
+from fastapi import HTTPException  # noqa: E402
+
+from app.core import character_ops  # noqa: E402
+
+FAILED_NAME = "Tumbler"
+skill_calls = []
+
+
+class FakeRequest:
+    """Just enough of a Request for create_character_core's early half."""
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.cookies = {}
+        self.headers = {}
+
+    async def json(self):
+        return self._payload
+
+
+def _save_that_fails(name, profile, create_new=False):
+    # Mirrors the real function's order: the folder first, then the write that
+    # does not happen.
+    ch.get_character_dir(name, create=True)
+    return False
+
+
+_real_save = ch.save_character_profile
+_real_skill_save = ch.save_character_skill_config
+ch.save_character_profile = _save_that_fails
+ch.save_character_skill_config = lambda *a, **kw: skill_calls.append(a)
+try:
+    raised = None
+    try:
+        asyncio.run(character_ops.create_character_core(
+            FakeRequest({"character_name": FAILED_NAME,
+                         "template": "human-default"})))
+    except HTTPException as exc:
+        raised = exc
+finally:
+    ch.save_character_profile = _real_save
+    ch.save_character_skill_config = _real_skill_save
+
+check("(a) a failed save raises HTTPException 500",
+      raised is not None and raised.status_code == 500,
+      repr(raised.status_code if raised else None))
+row = db.get_connection().execute(
+    "SELECT 1 FROM characters WHERE name=?", (FAILED_NAME,)).fetchone()
+check("(b) no character row was created", row is None, repr(row))
+check("(c) no character folder was left behind",
+      not (ch.get_user_characters_dir() / FAILED_NAME).exists(),
+      str(ch.get_user_characters_dir() / FAILED_NAME))
+check("(d) the follow-up writes never ran", skill_calls == [],
+      f"{len(skill_calls)} skill config writes")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 for f in FAILURES:

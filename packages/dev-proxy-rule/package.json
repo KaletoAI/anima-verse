@@ -1,0 +1,10 @@
+{
+  "name": "@anima/dev-proxy-rule",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Die EINE Dev-Proxy-Regel beider Vite-Apps: was Vite selbst beantwortet, alles andere geht ans Backend. Wird per relativem Pfad importiert (kein Workspace-Link noetig), damit vite.config.ts sie ohne npm-Link buendeln kann.",
+  "exports": {
+    ".": "./index.js"
+  }
+}

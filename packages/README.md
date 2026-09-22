@@ -1,18 +1,19 @@
 # `packages/` — the shared workspaces
 
-Two private npm workspaces that both browser apps of this repository depend on. They exist for one
+Three private npm workspaces that both browser apps of this repository depend on. They exist for one
 reason: everything in here used to exist **twice**, once in `frontend/` and once in `client3d/`, and
 the two copies drifted. What both apps need lives here; what is a matter of view state stays in each
 app.
 
-Neither package is published, bundled or built on its own. They are TypeScript sources consumed
-through the workspace link (`"@anima/player-ui": "*"` in the consumer's `package.json`), so the
-consuming app's Vite build compiles them and the consuming app's `tsc` type-checks them.
+No package is published, bundled or built on its own. The two UI packages are TypeScript sources
+consumed through the workspace link (`"@anima/player-ui": "*"` in the consumer's `package.json`), so
+the consuming app's Vite build compiles them and the consuming app's `tsc` type-checks them.
 
 | Package | Directory | Consumed by |
 |---|---|---|
 | `@anima/player-ui` | `packages/player-ui/` | `frontend/` (the `/play` Player UI) and `client3d/` (the 3D HUD) |
 | `@anima/scene-render` | `packages/scene-render/` | `frontend/` (the admin floor-plan preview) and `client3d/` (the 3D world) |
+| `@anima/dev-proxy-rule` | `packages/dev-proxy-rule/` | both `vite.config.ts` — the one dev-proxy rule |
 
 ---
 
@@ -74,6 +75,33 @@ logic and editor overlays. View state belongs to each app. If a rendering bug is
 renderer, the fix is in the wrong place — it belongs in the payload spec, in this package, or it is
 genuinely view state.
 
+## `@anima/dev-proxy-rule`
+
+The ONE rule of a dev server: **what Vite answers itself, everything else goes to the backend.**
+Both apps forwarded a hand-kept LIST of backend prefixes before, and both lists rotted — a prefix
+missing from one does not 404, the dev server answers the API call with its own HTML and a `200`,
+`res.json()` fails and the component blows up far from the cause. client3d's list still named the
+long-gone `/state` while 150 of the 547 backend routes had no entry at all.
+
+`createDevTarget({ publicDir, entries, aliases })` returns the function the Vite `bypass` hook
+wants: the path Vite serves, or `null` for "proxy this". What Vite owns is small and fixed (`/@…`,
+`/__…`, `/src/…`, `/node_modules/…`) plus the two things that differ per app and are therefore
+parameters: the HTML entries and `public/`. An entry `x.html` answers `/x.html`, `/x` and `/x/` —
+nothing deeper, which is what keeps the player PAGE `/play` apart from the player API `/play/…`.
+
+Two details set this package apart from its neighbours:
+
+- It is **plain JavaScript with node builtins only** (`index.d.ts` beside it for the typed import).
+  A `vite.config.ts` is bundled before it runs, and `scripts/smoke_vite_proxy.py` imports the module
+  with `node` — so the guard checks the very function the dev server uses.
+- It is imported by **relative path** (`../packages/dev-proxy-rule/index.js`), not through the
+  workspace link, so a fresh checkout's dev server works before the first `npm install`.
+
+Each app binds the rule to its own pages in its own `dev-proxy-rule.js` (`frontend/`: `index.html`
+at `/` and `/game-admin`, `play.html` at `/play`; `client3d/`: `index.html`, `figure-test.html`,
+`floorplan.html`). `scripts/smoke_vite_proxy.py` runs every route of the FastAPI decorators through
+both bindings.
+
 ---
 
 ## Working on them
@@ -86,7 +114,7 @@ npm run build:admin          # tsc -b && vite build — type-checks player-ui th
 npm run build:client3d       # tsc --noEmit && vite build — the same for both packages
 ```
 
-There is no `build` or `test` script inside either package, and none is wanted: a build step would
+There is no `build` or `test` script inside any of the packages, and none is wanted: a build step would
 reintroduce a stale artefact between the source and its two consumers. Type errors surface in
 whichever app imports the changed file, so **build both** after a change here — `npm run build` at
 the root does exactly that.

@@ -50,9 +50,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # The storage root MUST be redirected BEFORE the first app import that can
-# open a world DB: paths.init otherwise falls back to worlds/demo — the world
-# tracked in git — and app.core.provider_queue would write into its world.db
-# (scripts/smoke_scripts_storage_lint.py enforces this).
+# open a world DB: app.core.provider_queue reaches its world.db through paths,
+# and without a storage root every world access raises StorageNotInitialised —
+# there is no default world any more, so nothing here can land in the tracked
+# worlds/demo (scripts/smoke_scripts_storage_lint.py enforces this).
 from app.core import paths  # noqa: E402
 paths.init(tempfile.mkdtemp(prefix="backend-channel-storage-"))
 

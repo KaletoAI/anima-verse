@@ -181,7 +181,7 @@ function renderUnmatched(entries) {
             <td>
                 <button class="btn-instr${hasInstr}" title="Tool Instruction" onclick="toggleInstruction('${instrId}')">&#9881;</button>
                 <span class="save-indicator" id="save-${cssId(e.pattern)}">saved</span>
-                <button class="btn btn-danger" style="font-size:11px;padding:2px 8px;margin-left:4px;" onclick="deletePattern('${escJs(e.pattern)}')">X</button>
+                <button class="btn btn-danger" style="font-size:11px;padding:2px 8px;margin-left:4px;" onclick="armDeletePattern(this, '${escJs(e.pattern)}')">X</button>
             </td>
         `;
         body.appendChild(row);
@@ -361,8 +361,44 @@ async function addPattern() {
     loadData();
 }
 
+// Inline confirmation instead of a browser confirm(): the X turns into
+// "Delete <pattern>? [Delete] [Cancel]" inside the row it belongs to
+// (CLAUDE.md, "Frontend"; scripts/smoke_no_native_dialogs.py).
+// Built as DOM nodes with real listeners, not as an HTML string: the pattern
+// is arbitrary user text and never has to cross an attribute grammar this way.
+function armDeletePattern(btn, pattern) {
+    const strip = document.createElement('span');
+    const question = document.createElement('span');
+    question.style.cssText = 'font-size:11px;color:#c9d1d9;margin-left:4px;';
+    question.textContent = 'Delete ' + pattern + '?';
+    const yes = _smallButton('Delete', 'btn btn-danger');
+    yes.onclick = () => deletePattern(pattern);
+    const no = _smallButton('Cancel', 'btn');
+    no.onclick = () => cancelDeletePattern(no, pattern);
+    strip.appendChild(question);
+    strip.appendChild(yes);
+    strip.appendChild(no);
+    btn.replaceWith(strip);
+}
+
+// Puts the row's X button back, without refetching the whole table.
+function cancelDeletePattern(btn, pattern) {
+    const strip = btn.parentElement;
+    const x = _smallButton('X', 'btn btn-danger');
+    x.onclick = () => armDeletePattern(x, pattern);
+    strip.replaceWith(x);
+}
+
+function _smallButton(label, cls) {
+    const b = document.createElement('button');
+    b.className = cls;
+    b.style.cssText = 'font-size:11px;padding:2px 8px;margin-left:4px;';
+    b.textContent = label;
+    return b;
+}
+
+// Only reachable from the armed strip above, so the question has been answered.
 async function deletePattern(pattern) {
-    if (!confirm('Really delete pattern "' + pattern + '"?')) return;
     await fetch('/admin/models/capabilities', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },

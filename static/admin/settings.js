@@ -1775,11 +1775,97 @@ function _ensureContainer(path, leafType) {
     return obj;
 }
 
+// ── In-page dialogs ──
+// A native confirm()/prompt() is a modal of the BROWSER: it cannot be styled,
+// it cannot be translated and it blocks the main thread while it is up
+// (CLAUDE.md, "Frontend"; scripts/smoke_no_native_dialogs.py). These two build
+// the same question as an overlay of this page and resolve a Promise, so the
+// call sites keep reading top to bottom.
+function _askOverlay(build) {
+    return new Promise(resolve => {
+        const bg = document.createElement('div');
+        bg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);'
+            + 'display:flex;align-items:center;justify-content:center;z-index:1000;';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:#161b22;border:1px solid #30363d;'
+            + 'border-radius:8px;padding:20px;width:420px;max-width:92vw;color:#e6edf3;';
+        bg.appendChild(box);
+        let done = false;
+        const close = value => {
+            if (done) return;
+            done = true;
+            document.removeEventListener('keydown', onKey);
+            bg.remove();
+            resolve(value);
+        };
+        const onKey = ev => {
+            if (ev.key === 'Escape') { ev.preventDefault(); close(null); }
+        };
+        document.addEventListener('keydown', onKey);
+        // A click on the backdrop itself (not inside the box) cancels.
+        bg.addEventListener('mousedown', ev => { if (ev.target === bg) close(null); });
+        build(box, close);
+        document.body.appendChild(bg);
+    });
+}
+
+function _askButtonRow(box, okLabel, okClass, onOk, onCancel) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:16px;';
+    const cancel = document.createElement('button');
+    cancel.className = 'btn';
+    cancel.textContent = 'Cancel';
+    cancel.onclick = onCancel;
+    const ok = document.createElement('button');
+    ok.className = 'btn ' + okClass;
+    ok.textContent = okLabel;
+    ok.onclick = onOk;
+    row.appendChild(cancel);
+    row.appendChild(ok);
+    box.appendChild(row);
+    return ok;
+}
+
+// Yes/no question. Resolves true only when the user confirms.
+function askConfirm(message, okLabel) {
+    return _askOverlay((box, close) => {
+        const p = document.createElement('p');
+        p.style.cssText = 'margin:0;font-size:14px;line-height:1.5;';
+        p.textContent = message;
+        box.appendChild(p);
+        const ok = _askButtonRow(box, okLabel || 'OK', 'btn-danger',
+            () => close(true), () => close(false));
+        setTimeout(() => ok.focus(), 0);
+    });
+}
+
+// One line of text. Resolves the string, or null when the user cancels.
+function askText(message, defaultValue) {
+    return _askOverlay((box, close) => {
+        const label = document.createElement('label');
+        label.style.cssText = 'display:block;font-size:13px;margin-bottom:8px;';
+        label.textContent = message;
+        box.appendChild(label);
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = defaultValue || '';
+        input.style.cssText = 'width:100%;background:#0d1117;color:#c9d1d9;'
+            + 'border:1px solid #30363d;border-radius:6px;padding:6px 10px;font-size:13px;';
+        input.onkeydown = ev => {
+            if (ev.key === 'Enter') { ev.preventDefault(); close(input.value); }
+        };
+        box.appendChild(input);
+        _askButtonRow(box, 'OK', 'btn-primary',
+            () => close(input.value), () => close(null));
+        setTimeout(() => { input.focus(); input.select(); }, 0);
+    });
+}
+
 // ── Actions ──
-function addArrayItem(path, type) {
+async function addArrayItem(path, type) {
     const obj = _ensureContainer(path, type);
     if (type === 'dict') {
-        const id = prompt('New entry key:');
+        const id = await askText('New entry key:', '');
         if (!id) return;
         // Keep the key dot-free: the editor addresses fields via dot notation
         // and split('.') breaks on a dot INSIDE the key. The display name
@@ -1803,8 +1889,8 @@ function addArrayItem(path, type) {
     renderSection(ACTIVE_SECTION);
 }
 
-function removeItem(path) {
-    if (!confirm('Remove this item?')) return;
+async function removeItem(path) {
+    if (!await askConfirm('Remove this item?', 'Remove')) return;
     const parts = parsePath(path);
     let obj = CONFIG;
     for (let i = 0; i < parts.length - 1; i++) {
@@ -1828,7 +1914,7 @@ function removeItem(path) {
 // Duplicates an array or dict entry (LLM routing, backends, ...). For dicts
 // a new key is prompted; for arrays the clone is appended after the original.
 // `name` fields get a "(copy)" suffix so the duplicate is distinguishable.
-function duplicateItem(path) {
+async function duplicateItem(path) {
     const parts = parsePath(path);
     let parent = CONFIG;
     for (let i = 0; i < parts.length - 1; i++) {
@@ -1848,13 +1934,13 @@ function duplicateItem(path) {
         const arrPath = path.replace(/\[\d+\]$/, '');
         SELECTED_ITEM[arrPath] = arrPath + '[' + (last + 1) + ']';
     } else {
-        // Dict: neuen Key vom User abfragen — punktfrei halten (Dot-Notation
-        // im Editor zerbricht sonst, s. addArrayItem).
-        const rawKey = prompt('Neuer Schluessel fuer den Klon:', String(last) + '_copy');
+        // Dict: ask the user for a new key — keep it dot-free (the editor's
+        // dot notation breaks otherwise, see addArrayItem).
+        const rawKey = await askText('New key for the clone:', String(last) + '_copy');
         if (!rawKey) return;
         const newKey = rawKey.replace(/[.\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
-        if (!newKey) { toast('Ungueltiger Schluessel', 'error'); return; }
-        if (parent[newKey] !== undefined) { toast('Schluessel existiert bereits: ' + newKey, 'error'); return; }
+        if (!newKey) { toast('Invalid key', 'error'); return; }
+        if (parent[newKey] !== undefined) { toast('Key already exists: ' + newKey, 'error'); return; }
         parent[newKey] = copy;
         const arrPath = path.replace(/\.[^.\[\]]+$/, '');
         SELECTED_ITEM[arrPath] = arrPath + '.' + newKey;
@@ -1965,7 +2051,7 @@ async function validateConfig() {
 // Generischer Action-Button-Handler — schickt POST/DELETE/etc an einen Endpoint
 // mit Body aus angegebenen Geschwister-Feldern. Genutzt von schema-Type "button".
 async function runActionButton(endpoint, method, path, bodyFrom, confirmMsg, btn, previewUrl) {
-    if (confirmMsg && !confirm(confirmMsg)) return;
+    if (confirmMsg && !await askConfirm(confirmMsg)) return;
     const body = {};
     // Werte aus DOM lesen (frischste Quelle — auch wenn User getippt aber
     // noch nicht gespeichert hat). Fallback auf CONFIG, dann auf

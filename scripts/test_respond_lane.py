@@ -68,9 +68,10 @@ def scratch(prefix):
 
 
 # Storage and clip library MUST be redirected BEFORE the first app import:
-# without it the default world is worlds/demo, which is tracked in git, and
 # AgentLoop's pause gate (_is_paused -> is_world_frozen -> get_connection)
-# would open its world.db and leave the working tree dirty.
+# reaches its world.db through paths, and without a storage root every world
+# access raises StorageNotInitialised — there is no default world any more, so
+# nothing here can land in the tracked worlds/demo.
 STORAGE = Path(scratch("respond-lane-storage-"))
 os.environ["ANIMATION_CLIPS_DIR"] = scratch("respond-lane-clips-")
 

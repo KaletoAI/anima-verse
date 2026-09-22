@@ -93,6 +93,8 @@ SCHEMA_STATEMENTS = [
         category TEXT DEFAULT '',
         meta     TEXT DEFAULT '{}'
     )""",
+    # Legacy table: no reader and no writer any more. Kept so existing worlds
+    # keep their schema unchanged.
     """CREATE TABLE IF NOT EXISTS status_modifiers (
         id     TEXT PRIMARY KEY,
         name   TEXT NOT NULL,

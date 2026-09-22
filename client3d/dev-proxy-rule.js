@@ -1,6 +1,6 @@
 /**
  * This app's dev-proxy rule: the shared rule of
- * `packages/dev-proxy-rule/index.js` bound to the Game-Admin/Player pages.
+ * `packages/dev-proxy-rule/index.js` bound to the 3D client's pages.
  *
  * Why a file of its own instead of the parameters sitting in
  * `vite.config.ts`: `scripts/smoke_vite_proxy.py` imports THIS module with
@@ -10,25 +10,20 @@
  * `import.meta.url` points at this directory — also when Vite bundles the
  * config, because it inlines this file into a temporary module next to
  * `vite.config.ts` and defines `import.meta.url` to that path. Both ways
- * `./public/` is `frontend/public/`.
+ * `./public/` is `client3d/public/`, which holds `/models/manifest.json` and
+ * the test meshes: those must stay Vite's, they have no backend route.
  *
- * The entries: `index.html` is the Game-Admin (also at `/`), `play.html` the
- * Player UI (also at `/play` and `/play/` — `/play/…` is API and goes to the
- * backend). `/game-admin` is the production page path of `index.html` and
- * does not follow from a file name, so it is an alias.
+ * The entries are the three of `build.rollupOptions.input`. This client has
+ * no `play.html`, so `/play` and `/play/…` are backend API here, as are
+ * `/game-admin` and `/static/…` (the shared `BelongingsPanel` falls back to
+ * `/static/game_admin/silhouette.svg`).
  */
 import { createDevTarget } from '../packages/dev-proxy-rule/index.js'
 
-export const ENTRIES = ['index.html', 'play.html']
-
-export const ALIASES = {
-  '/game-admin': '/index.html',
-  '/game-admin/': '/index.html',
-}
+export const ENTRIES = ['index.html', 'figure-test.html', 'floorplan.html']
 
 /** The path Vite serves for a request, or `null` when it is the backend's. */
 export const viteDevTarget = createDevTarget({
   publicDir: new URL('./public/', import.meta.url),
   entries: ENTRIES,
-  aliases: ALIASES,
 })

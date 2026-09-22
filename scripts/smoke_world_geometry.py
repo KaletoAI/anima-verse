@@ -58,9 +58,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # The storage root, pointed at a throwaway world BEFORE any app import — see
-# the docstring. `paths.get_storage_dir()` auto-initializes on first call and
-# falls back to ./worlds/demo, so an import that touches paths at module level
-# would reach the running server's DB.
+# the docstring. `paths.get_storage_dir()` raises StorageNotInitialised until
+# something sets a root, and there is no default world any more, so an import
+# that touches paths at module level gets this throwaway world and never the
+# running server's DB.
 _TMP_STORAGE = tempfile.TemporaryDirectory(prefix="smoke_world_geometry_")
 os.environ["STORAGE_DIR"] = _TMP_STORAGE.name
 

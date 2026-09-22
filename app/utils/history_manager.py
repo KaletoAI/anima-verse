@@ -796,7 +796,8 @@ def get_recent_daily_summaries(character_name: str,
     `partner` set: only that partner's summaries.
     """
     if days <= 0:
-        days = int(os.environ.get("DAILY_SUMMARY_DAYS", "7"))
+        from app.core import config
+        days = int(config.get("knowledge.daily_summary_days", 7) or 7)
 
     summaries = load_daily_summaries(character_name)  # day_key -> {partner: text}
     if not summaries:
@@ -1093,13 +1094,15 @@ def _is_bad_summary(summary: str) -> bool:
 def backfill_missing_daily_summaries(character_name: str):
     """Creates missing day summaries for past GAME days — one per partner.
 
-    Checks the last 7 game days. Skips today (updated separately) and
-    (day, partner) pairs that already have a summary.
+    Checks the last ``knowledge.daily_summary_days`` game days (default 7).
+    Skips today (updated separately) and (day, partner) pairs that already
+    have a summary.
     """
     from app.core.day_consolidation import recent_game_day_keys
 
     existing = load_daily_summaries(character_name)  # {day_key: {partner: text}}
-    days = int(os.environ.get("DAILY_SUMMARY_DAYS", "7"))
+    from app.core import config
+    days = int(config.get("knowledge.daily_summary_days", 7) or 7)
 
     backfilled = 0
     max_backfill_per_run = 2  # cap per run so the queue does not block

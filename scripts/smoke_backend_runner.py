@@ -95,8 +95,9 @@ def _scratch(prefix: str) -> str:
 
 
 # Throwaway storage and clip library BEFORE the first app import: the queue
-# modules imported below resolve their DB path from paths, and without this
-# the default world would be worlds/demo, which is tracked in git.
+# modules imported below reach their world.db through paths, and without a
+# storage root every world access raises StorageNotInitialised — there is no
+# default world any more, so nothing here can land in the tracked worlds/demo.
 os.environ["ANIMATION_CLIPS_DIR"] = _scratch("backend-runner-clips-")
 
 from app.core import paths  # noqa: E402

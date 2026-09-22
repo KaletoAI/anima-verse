@@ -2086,6 +2086,32 @@ def apply_template_switch(character_name: str, data: Dict[str, Any]) -> Dict[str
     }
 
 
+def _cleanup_failed_character_dir(character_name: str) -> None:
+    """Remove the folder a failed creation left behind.
+
+    ``save_character_profile`` materializes ``characters/<Name>/`` (with the
+    soul MD files) before it writes the row, so a failed write leaves a folder
+    that makes the half-created character look like an existing one to every
+    directory-based existence heuristic. Only ever called right after a failed
+    CREATION, so the folder cannot hold anything worth keeping.
+    """
+    import shutil
+    from app.models.character import get_user_characters_dir
+    try:
+        base = get_user_characters_dir().resolve()
+        target = (base / character_name).resolve()
+        # Containment check before an rmtree -- the name is validated, this is
+        # the belt for it (CLAUDE.md, "Security model").
+        if target == base or base not in target.parents:
+            logger.error("create_character: refusing to remove %s", target)
+            return
+        if target.is_dir():
+            shutil.rmtree(target)
+    except Exception as e:  # noqa: BLE001 -- cleanup must not mask the 500
+        logger.warning("create_character: could not remove the folder of "
+                       "'%s' after a failed save: %s", character_name, e)
+
+
 async def create_character_core(request) -> Dict[str, Any]:
     """Creates a new character with an empty profile and an assigned template."""
     from app.models.account import get_language_settings, set_current_character
@@ -2122,7 +2148,16 @@ async def create_character_core(request) -> Dict[str, Any]:
     }
     # Explicit creation -- save_character_profile otherwise blocks unknown
     # names (protection against ghost characters from LLM output).
-    save_character_profile(character_name, initial_profile, create_new=True)
+    # It returns False (it never raises) when NOTHING was stored. Everything
+    # below -- known_locations, the skill defaults, allowed_characters, the
+    # current-character switch -- builds on a character row that then does not
+    # exist, and the answer used to be {"status": "success"} all the same.
+    # The directory is materialized BEFORE the DB write, so a failed save
+    # leaves an empty character folder behind: remove it, then fail loudly.
+    if not save_character_profile(character_name, initial_profile, create_new=True):
+        _cleanup_failed_character_dir(character_name)
+        raise HTTPException(status_code=500, detail=t(
+            "Character could not be saved.", lang))
 
     # Initialize known_locations explicitly as an empty list. Without this
     # field the legacy bypass in the SetLocation skill kicks in and the char

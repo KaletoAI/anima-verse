@@ -6,6 +6,5 @@
  * file only makes it typed for `vite.config.ts`.
  */
 export declare const ENTRIES: string[]
-export declare const ALIASES: Record<string, string>
 /** The path Vite serves for `url`, or `null` when it belongs to the backend. */
 export declare const viteDevTarget: (url: string) => string | null

@@ -61,8 +61,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Throwaway storage BEFORE any app import: paths.init() falls back to
-# ./worlds/demo, and a check script must never touch tracked world data.
+# Throwaway storage BEFORE any app import: without a storage root every world
+# access raises StorageNotInitialised, and a check script must never touch
+# tracked world data.
 STORAGE = Path(tempfile.mkdtemp(prefix="gallery-size-smoke-"))
 os.environ["STORAGE_DIR"] = str(STORAGE)
 

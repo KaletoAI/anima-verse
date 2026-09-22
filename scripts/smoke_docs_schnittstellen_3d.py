@@ -51,8 +51,9 @@ place, or a reader has to hunt for it, which is how four keys went missing.
 No server, no real world: storage and the clip library are redirected to
 temporary directories BEFORE the first app import, exactly as
 `scripts/smoke_scene_recipe.py` and `scripts/smoke_worldmap_v2.py` do — an
-app import that finds no `--world` falls back to `worlds/demo`, whose
-`world.db` is tracked in git.
+app import that finds no storage root raises `StorageNotInitialised`, and
+there is no default world any more, so the tracked `worlds/demo` stays out of
+reach.
 """
 import os
 import re

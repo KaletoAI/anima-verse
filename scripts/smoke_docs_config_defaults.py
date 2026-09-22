@@ -48,6 +48,15 @@ D) Every `<section>.<field>` path the Quelle column gives as the source of a
    `/admin/settings → Text-to-Speech → XTTS v2` has offered them all along
    (`static/admin/settings.js` renders `subsections`).
 
+G) Every row whose Quelle column names a `config.json` path claims the value
+   reaches the code through the env bridge under the NAME in the first column.
+   Checked against the same AST reading of `_flatten_to_env` that part F uses:
+   every such name must be one the bridge sets. Expected: all of them. A
+   removed bridge line slips past A, because the anchor tends to live on in a
+   comment somewhere — `DAILY_SUMMARY_DAYS` did in `app/core/scene_manager.py`
+   after `app/utils/history_manager.py` moved to
+   `config.get("knowledge.daily_summary_days")` on 2026-09-22.
+
 F) THE INVERSE OF D, straight from the code and without the document: every
    config leaf that `config._flatten_to_env` bridges into an env var must have
    a schema field. A bridged value is a setting the app reads at runtime; one
@@ -249,6 +258,24 @@ def main():
           _schema_field("tts.xtts.url") is not None)
     check("the resolver finds a plain section leaf",
           _schema_field("server.log_level") is not None)
+
+    print("G) every row that claims to be bridged really is")
+    # A row with a `config.json` path in the Quelle column says: "change it in
+    # the admin UI, and `_flatten_to_env` puts it under this NAME". When the
+    # bridge line for that leaf goes away (a reader moved to `config.get(...)`
+    # — `knowledge.daily_summary_days` did on 2026-09-22), the row becomes a
+    # lie that check A does not see: the NAME usually survives somewhere in a
+    # comment, which is a hit for A. Expected, derived from the two columns
+    # themselves: every such NAME is one the AST found in `_flatten_to_env`.
+    bridge_names = set(bridged_leaves().values())
+    unbridged = []
+    for row in [ln for ln in doc.splitlines() if ln.startswith("| `")]:
+        m = re.match(r"\| `([A-Z][A-Z0-9_]+)` \| `((?:[a-z_]+\.)+[a-z_0-9]+)`",
+                     row)
+        if m and m.group(1) not in bridge_names:
+            unbridged.append(f"{m.group(1)} ({m.group(2)})")
+    check("no row names an anchor the bridge no longer sets",
+          not unbridged, str(unbridged))
 
     print("E) A and B against the PREVIOUS revision (must find what DS-11 "
           "reported)")

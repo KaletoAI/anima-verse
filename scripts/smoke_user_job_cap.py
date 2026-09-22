@@ -92,8 +92,9 @@ def scratch(prefix: str) -> str:
     return path
 
 
-# Throwaway storage and clip library BEFORE the first app import: without it
-# the default world is worlds/demo, which is tracked in git.
+# Throwaway storage and clip library BEFORE the first app import: without a
+# storage root every world access raises StorageNotInitialised — there is no
+# default world any more, so nothing here can land in the tracked worlds/demo.
 os.environ["ANIMATION_CLIPS_DIR"] = scratch("job-cap-clips-")
 
 from app.core import paths  # noqa: E402

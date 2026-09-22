@@ -1792,7 +1792,6 @@ def _flatten_to_env(config: dict) -> None:
 
     # Knowledge
     kn = config.get("knowledge", {})
-    _set(env, "DAILY_SUMMARY_DAYS", kn.get("daily_summary_days", 7))
     _set(env, "SKILL_KNOWLEDGE_BATCH_SIZE", kn.get("batch_size", 5))
     _set(env, "SKILL_KNOWLEDGE_MAX_INPUT_TOKENS", kn.get("max_input_tokens", 12000))
     _set(env, "SKILL_KNOWLEDGE_MAX_OUTPUT_TOKENS", kn.get("max_output_tokens", 1500))

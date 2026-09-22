@@ -2788,7 +2788,7 @@ def _play_use_item_sync(user, body: Any):
 
 async def _cast_from_inventory(avatar: str, target: str, item_id: str) -> dict:
     """Cast a spell item of the avatar on ``target`` — the ONE cast path behind
-    /play/cast-self and /play/cast.
+    /play/cast.
 
     Runs through spell_engine.execute_cast (honours copy_on_give, effect-item
     handover, cast activity). NOT consume_item (the spell would vanish despite
@@ -2825,15 +2825,6 @@ async def _cast_from_inventory(avatar: str, target: str, item_id: str) -> dict:
             "chance": int(res.get("chance") or 0), "roll": int(res.get("roll") or 0),
             "delivered_item_name": res.get("delivered_item_name") or "",
             "hint": res.get("hint") or ""}
-
-
-@router.post("/play/cast-self")
-async def play_cast_self(request: Request, user=Depends(get_current_user)):
-    """Cast a spell from the inventory on the avatar itself."""
-    avatar = _require_avatar()
-    body = await request.json()
-    item_id = str((body or {}).get("item_id") or "").strip()
-    return await _cast_from_inventory(avatar, avatar, item_id)
 
 
 @router.post("/play/cast")
@@ -3907,16 +3898,44 @@ def _msg_portrait(name: str) -> str:
 
 
 def _messaging_partners(avatar: str) -> list:
-    """Distinct 1:1-Konversationspartner des Avatars (beide Speicher-Richtungen)."""
+    """The avatar's distinct 1:1 conversation partners (both storage directions).
+
+    BOUNDED BY TIME, on purpose. The contact list is polled by the phone panel,
+    and without a ``ts`` filter each half of the UNION reads every row it can
+    reach: ``character_name=?`` uses only the first column of
+    ``idx_chat_char_partner_ts`` and then walks the character's whole history,
+    and ``partner=?`` has no index at all and scans the entire table — the
+    largest one in the world DB (DATA-12).
+
+    The horizon is the SAME one the retention job prunes by
+    (``memory.chat_retention_days``, SYSTEM days): a conversation whose rows
+    that job may already have deleted has no business in the contact list
+    either. With the cutoff both halves become range scans —
+    ``(character_name, ts)`` for the first, ``(ts)`` for the second. ``0``
+    means "keep forever" there, so it means "no cutoff" here as well.
+    The wire shape is unchanged: the same distinct partner names.
+    """
+    from datetime import timedelta
+    # The ONE place that resolves the horizon (including its default) — a
+    # second copy of the number here would drift away from the pruner.
+    from app.core.chat_retention import _configured_days
     from app.core.db import get_connection
+    from app.core.timeutils import utc_now
+    days = _configured_days()
+    sql = ("SELECT partner AS other FROM chat_messages "
+           "WHERE character_name=? AND partner!=''{cut} "
+           "UNION "
+           "SELECT character_name AS other FROM chat_messages "
+           "WHERE partner=? AND character_name!=''{cut}")
+    if days > 0:
+        cutoff = (utc_now() - timedelta(days=days)).isoformat(timespec="seconds")
+        params = (avatar, cutoff, avatar, cutoff)
+        sql = sql.format(cut=" AND ts>=?")
+    else:
+        params = (avatar, avatar)
+        sql = sql.format(cut="")
     try:
-        rows = get_connection().execute(
-            "SELECT partner AS other FROM chat_messages "
-            "WHERE character_name=? AND partner!='' "
-            "UNION "
-            "SELECT character_name AS other FROM chat_messages "
-            "WHERE partner=? AND character_name!=''",
-            (avatar, avatar)).fetchall()
+        rows = get_connection().execute(sql, params).fetchall()
     except Exception as e:
         logger.debug("messaging partners query failed: %s", e)
         return []

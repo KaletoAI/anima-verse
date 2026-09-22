@@ -107,8 +107,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Storage MUST be redirected BEFORE the first app import: otherwise the
-# default world is worlds/demo, which is tracked in git.
+# Storage MUST be redirected BEFORE the first app import: without a storage
+# root every world access raises StorageNotInitialised — there is no default
+# world any more, so nothing here can land in the tracked worlds/demo.
 STORAGE = Path(tempfile.mkdtemp(prefix="chime-dispatch-storage-"))
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
     prefix="chime-dispatch-clips-")

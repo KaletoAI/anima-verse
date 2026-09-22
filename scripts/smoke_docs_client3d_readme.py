@@ -4,10 +4,14 @@
 Usage:  ./.venv/bin/python scripts/smoke_docs_client3d_readme.py
 
 Covers review finding DC-11. The README named seven proxy prefixes while
-`client3d/vite.config.ts` forwards sixteen, and called the client "vanilla,
+`client3d/vite.config.ts` forwarded sixteen, and called the client "vanilla,
 deliberately no React" while eight `.tsx` files sit in its HUD. A missing
 prefix does not 404 — Vite answers with its own `index.html` — so a half list
-in the README is the exact trap the config's own comment warns about.
+in the README is the exact trap the config's own comment warned about. The
+list is gone since 2026-09-22: the dev proxy is the inverted rule of
+`packages/dev-proxy-rule/`, and this guard now keeps BOTH free of a prefix
+list (a list is what rots; `scripts/smoke_vite_proxy.py` checks the rule
+itself).
 
 Pure text work: three files are read and compared. No server, no world DB,
 nothing from `app` is imported.
@@ -15,12 +19,15 @@ nothing from `app` is imported.
 WHAT IS CHECKED, and where every expected value comes from
 -----------------------------------------------------------
 
-A) The prefixes the README lists are EXACTLY the `proxied` array of
-   `client3d/vite.config.ts`. Expected value = that array; the config is the
-   thing Vite actually reads, so it is the specification and the README is
-   the copy.
+A) `client3d/vite.config.ts` carries NO list of backend prefixes any more
+   and gets its dev-proxy decision from `./dev-proxy-rule.js`. Expected value
+   hand-derived from the rule that replaced the list: the config is the thing
+   Vite reads, so a list reappearing there is the regression.
 
-B) The README states the count the array has ("Stand heute sind es N").
+B) The README does not list proxy prefixes either, and names the rule module
+   instead. Expected value: a code span of two or more single-segment
+   `/name` items is what a prefix list looks like (see `readme_prefixes`) —
+   there must be none.
 
 C) The README does not claim the client has no React while React is a
    dependency: if `client3d/package.json` lists `react`, the phrase
@@ -42,11 +49,12 @@ F) The two environment variables the client is steered with are named
 
 G) FAILS BEFORE / PASSES AFTER
 ---------------------------
-Confirmed by running A, B and C against the previous revision of the README,
-`git show 74693e4f:client3d/README.md` — an EXPLICIT hash, never `HEAD:`
-(once this is committed HEAD would compare the file with itself). See the
-last block of the output: that revision lists 7 of the 16 prefixes and
-carries the unqualified React claim.
+Confirmed against two EXPLICIT revisions, never `HEAD:` (once this is
+committed HEAD would compare the files with themselves): `git show
+6e78bf17:client3d/vite.config.ts` still carries the 16-entry `proxied` array
+that A now forbids, and `git show 74693e4f:client3d/README.md` typesets a
+prefix list that B now forbids and carries the unqualified React claim. See
+the last block of the output.
 """
 import json
 import re
@@ -72,8 +80,9 @@ def check(label, ok, detail=""):
         _failures.append(label)
 
 
-def config_prefixes():
-    src = VITE.read_text(encoding="utf-8")
+def config_prefixes(src=None):
+    """The `proxied` prefix list of a `vite.config.ts` — empty since it is gone."""
+    src = VITE.read_text(encoding="utf-8") if src is None else src
     m = re.search(r"const proxied\s*=\s*\[(.*?)\]", src, re.S)
     if not m:
         return []
@@ -104,18 +113,20 @@ def readme_prefixes(text):
 
 def main():
     readme = README.read_text(encoding="utf-8")
+
+    print("A) the config decides by the inverted rule, not by a prefix list")
     cfg = config_prefixes()
-    check("vite.config.ts still has a `proxied` array", bool(cfg), str(cfg))
+    check("vite.config.ts has no `proxied` prefix list any more", not cfg, str(cfg))
+    check("vite.config.ts uses ./dev-proxy-rule.js",
+          "./dev-proxy-rule.js" in VITE.read_text(encoding="utf-8"))
+    check("dev-proxy-rule.js binds the SHARED rule",
+          "packages/dev-proxy-rule/index.js"
+          in (REPO / "client3d" / "dev-proxy-rule.js").read_text(encoding="utf-8"))
 
-    print(f"A) the README lists exactly the forwarded prefixes ({len(cfg)})")
+    print("B) the README does not carry a prefix list either")
     listed = readme_prefixes(readme)
-    missing = [p for p in cfg if p not in listed]
-    extra = [p for p in listed if p not in cfg]
-    check("no forwarded prefix missing from the README", not missing, str(missing))
-    check("the README invents no prefix", not extra, str(extra))
-
-    print("B) the README states the right count")
-    check(f"the README says {len(cfg)}", f"es {len(cfg)}" in readme or f"sind es {len(cfg)}" in readme)
+    check("the README lists no proxy prefixes", not listed, str(listed))
+    check("the README names the rule module", "dev-proxy-rule.js" in readme)
 
     print("C) the React statement matches package.json and src/hud/")
     deps = json.loads(PKG.read_text(encoding="utf-8")).get("dependencies", {})
@@ -152,7 +163,16 @@ def main():
     check(f"the README states the number of client smokes ({len(smokes)})",
           str(len(smokes)) in readme, str(len(smokes)))
 
-    print("G) the same three checks against the PREVIOUS revision")
+    print("G) the same checks against the PINNED previous revisions")
+    try:
+        old_cfg = subprocess.run(["git", "show", "6e78bf17:client3d/vite.config.ts"],
+                                 cwd=REPO, capture_output=True, text=True,
+                                 check=True).stdout
+    except Exception as e:                                   # pragma: no cover
+        check("git show of the pinned pre-fix revision 6e78bf17", False, str(e))
+    else:
+        check("the previous config carried a 16-entry `proxied` list",
+              len(config_prefixes(old_cfg)) == 16, str(config_prefixes(old_cfg)))
     try:
         old = subprocess.run(["git", "show", "74693e4f:client3d/README.md"],
                              cwd=REPO, capture_output=True, text=True,
@@ -160,9 +180,8 @@ def main():
     except Exception as e:                                   # pragma: no cover
         check("git show of the pinned pre-fix revision 74693e4f", False, str(e))
     else:
-        old_missing = [p for p in cfg if p not in readme_prefixes(old)]
-        check("the previous revision was missing 9 of the prefixes",
-              len(old_missing) == 9, f"{len(old_missing)}: {old_missing}")
+        check("the previous README typeset a prefix list",
+              len(readme_prefixes(old)) >= 2, str(readme_prefixes(old)))
         check("the previous revision carried the unqualified React claim",
               "bewusst kein React" in old)
 

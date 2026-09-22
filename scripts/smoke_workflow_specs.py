@@ -57,8 +57,9 @@ sys.path.insert(0, str(REPO))
 
 # Point the storage root at a throwaway directory BEFORE any app import — the
 # config load path writes to the world's config.json (dead-field strip, spec
-# rewrite), and paths.init() falls back to ./worlds/demo when STORAGE_DIR is
-# unset. Same reflex as scripts/smoke_dead_config_fields.py.
+# rewrite), and without STORAGE_DIR there is no world at all: paths.init()
+# raises StorageNotInitialised, so the tracked worlds/demo cannot be reached.
+# Same reflex as scripts/smoke_dead_config_fields.py.
 _TMP_STORAGE = tempfile.TemporaryDirectory(prefix="smoke_workflow_specs_")
 os.environ.setdefault("STORAGE_DIR", _TMP_STORAGE.name)
 

@@ -353,7 +353,8 @@ def main():
                         help="Liste verfuegbarer LLMs ausgeben")
     parser.add_argument("--world", type=str,
                         help="World-Name (Unterordner in worlds/). Bestimmt welcher storage/config "
-                             "geladen wird. Default: worlds/demo")
+                             "geladen wird. Pflicht, wenn STORAGE_DIR nicht gesetzt ist — "
+                             "eine Default-Welt gibt es nicht.")
     parser.add_argument("--llm", type=str,
                         help="LLM als 'provider::model' (z.B. local-llm::qwen3-8b)")
     parser.add_argument("--source", type=str,

@@ -126,8 +126,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-# Storage + clip library FIRST: paths.init otherwise falls back to worlds/demo,
-# the world that is tracked in git.
+# Storage + clip library FIRST: without a storage root every world access
+# raises StorageNotInitialised — there is no default world any more, so
+# nothing here can land in the tracked worlds/demo.
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="frozen-account-clips-")
 
 from app.core import paths  # noqa: E402

@@ -64,19 +64,26 @@ wertet `start.sh` aus (`vite --port`), nicht `vite.config.ts`, in dem 5183
 fest steht. `./start.sh --with-3d` loggt nach `logs/client3d.log` und legt die
 PID unter `.pids/client3d.pid` ab; `./start.sh --stop` beendet beide Prozesse.
 
-Welche Präfixe der Vite-Dev-Proxy dorthin weiterleitet, steht im Array
-`proxied` in [`vite.config.ts`](vite.config.ts) — das ist die maßgebliche
-Liste, nicht diese hier. Stand heute sind es 16:
+**Der Dev-Server leitet alles weiter, was er nicht selbst beantwortet.** Eine
+Liste von API-Präfixen gibt es nicht mehr: sie hatte 16 Einträge, davon einen
+toten (`/state`), während 150 der 547 Backend-Routen fehlten — und ein
+fehlendes Präfix liefert keinen 404, sondern Vites `index.html`: der Aufrufer
+bekommt 200 + HTML, `res.json()` scheitert und der Fehler platzt weit weg von
+der Ursache. Umgekehrt ist die Menge klein und bekannt. Was **Vite** gehört,
+steht in [`dev-proxy-rule.js`](dev-proxy-rule.js) — die gemeinsame Regel aus
+`packages/dev-proxy-rule/`, hier an die Seiten dieses Clients gebunden:
 
 ```
-/auth /play /world /characters /state /events /assets /account /tts
-/chat /inventory /queue /i18n /diary /instagram /static
+/@…  /__…  /src/…  /node_modules/…  index.html  figure-test.html  floorplan.html  public/
 ```
 
-Die Liste muss **vollständig** bleiben: ein fehlendes Präfix liefert keinen 404,
-sondern Vites `index.html` — der Aufrufer bekommt 200 + HTML, `res.json()`
-scheitert und der Fehler platzt weit weg von der Ursache.
-(`scripts/smoke_docs_client3d_readme.py` hält Liste und Config zusammen.)
+Die drei HTML-Einstiege beantwortet Vite auch ohne Endung (`/floorplan`,
+`/figure-test`), `index.html` zusätzlich unter `/`; `public/` ist vor allem
+`/models/…` (Manifest und Test-Meshes). Alles andere geht ans Backend — auch
+`/play/…`, `/static/…` und `/game-admin`, denn eine Player- oder Admin-Seite
+hat dieser Client nicht. (`scripts/smoke_vite_proxy.py` prüft die Regel gegen
+alle Routen der FastAPI-Dekoratoren, `scripts/smoke_docs_client3d_readme.py`
+hält README und Config zusammen.)
 
 ## Seiten
 

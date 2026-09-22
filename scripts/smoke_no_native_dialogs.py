@@ -47,6 +47,13 @@ That number is not an observation either: the rule admits no exception, so any
 find is a defect.  The review of 2026-09-20 (finding UI-7) counted 16 call
 sites — 14 `window.confirm` and 2 `window.prompt` — which is why this check
 exists; run part 2 against those revisions of the files and it reports 16.
+`static/admin` joined the scanned trees on 2026-09-22 and carried six more:
+`users.js` deleteUser, `models.js` deletePattern, and `settings.js`
+addArrayItem / removeItem / duplicateItem / runActionButton — four bare
+`confirm(` and two bare `prompt(`, which the detector catches because the
+`window.` prefix is optional in the pattern above.  All six were replaced (an
+inline confirmation strip in the row, and `askConfirm` / `askText` in
+`settings.js`), so the expected count for that tree is zero as well.
 """
 from __future__ import annotations
 
@@ -57,11 +64,18 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 # The TypeScript/JavaScript UI trees the rule covers.
+#
+# `static/admin` is in the list since 2026-09-22. The Python-rendered admin
+# pages are a UI like any other — `/admin/settings` and `/admin/users` are
+# where a world is configured — and they had six native dialogs between them
+# (`static/admin/users.js`, `models.js`, `settings.js`). They are plain
+# scripts, not a build tree, so the directory is scanned as it lies.
 SCAN_DIRS = [
     "frontend/src",
     "packages/player-ui/src",
     "packages/scene-render/src",
     "client3d/src",
+    "static/admin",
 ]
 SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".mjs"}
 

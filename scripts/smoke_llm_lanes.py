@@ -455,7 +455,8 @@ def scratch(prefix):
 
 
 # Storage and clip library are redirected BEFORE the first app import: without
-# it the default world is worlds/demo, which is tracked in git.
+# a storage root every world access raises StorageNotInitialised — there is no
+# default world any more, so nothing here can land in the tracked worlds/demo.
 os.environ["ANIMATION_CLIPS_DIR"] = scratch("llm-lanes-clips-")
 
 from app.core import paths  # noqa: E402

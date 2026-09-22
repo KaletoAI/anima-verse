@@ -2,6 +2,11 @@
 let USERS = [];
 let CHARS = [];
 let EDIT_ID = null;
+// The row whose delete button was armed. A native confirm() is a BROWSER
+// modal: unstyled, untranslatable, and it blocks the main thread — so the
+// question is asked in the row itself (the same inline strip the player
+// panels use).
+let CONFIRM_DELETE_ID = null;
 
 async function loadAll() {
     try {
@@ -38,9 +43,12 @@ function renderTable() {
             '<td class="' + roleClass + '">' + escapeHtml(u.role) + '</td>' +
             '<td class="chars">' + escapeHtml(charList) + '</td>' +
             '<td>' + escapeHtml(u.last_login || '—') + '</td>' +
-            '<td class="actions">' +
-                '<button class="btn btn-sm" onclick="openEdit(\'' + escJs(u.id) + '\')">Edit</button>' +
-                '<button class="btn btn-sm btn-danger" onclick="deleteUser(\'' + escJs(u.id) + '\')">Del</button>' +
+            '<td class="actions">' + (u.id === CONFIRM_DELETE_ID
+                ? '<span style="align-self:center;color:#c9d1d9;font-size:12px;">Delete ' + escapeHtml(u.username) + '?</span>' +
+                  '<button class="btn btn-sm btn-danger" onclick="deleteUser(\'' + escJs(u.id) + '\')">Delete</button>' +
+                  '<button class="btn btn-sm" onclick="cancelDelete()">Cancel</button>'
+                : '<button class="btn btn-sm" onclick="openEdit(\'' + escJs(u.id) + '\')">Edit</button>' +
+                  '<button class="btn btn-sm btn-danger" onclick="armDelete(\'' + escJs(u.id) + '\')">Del</button>') +
             '</td>' +
         '</tr>';
     }).join('');
@@ -124,20 +132,34 @@ async function saveEdit() {
     }
 }
 
+// Arms the inline confirmation of one row — only ever one at a time.
+function armDelete(userId) {
+    CONFIRM_DELETE_ID = userId;
+    renderTable();
+}
+
+function cancelDelete() {
+    CONFIRM_DELETE_ID = null;
+    renderTable();
+}
+
+// Only reachable from the armed row's "Delete" button, so the question has
+// been answered by the time this runs.
 async function deleteUser(userId) {
     const u = USERS.find(x => x.id === userId);
-    if (!u) return;
-    if (!confirm('Really delete user "' + u.username + '"?')) return;
+    CONFIRM_DELETE_ID = null;
+    if (!u) { renderTable(); return; }
     try {
         const resp = await fetch('/auth/users/' + userId, { method: 'DELETE' });
         if (!resp.ok) {
             const d = await resp.json().catch(() => ({}));
             toast(d.detail || 'Error', 'error');
+            renderTable();
             return;
         }
         toast('User deleted');
         await loadAll();
-    } catch (e) { toast('Error: ' + e.message, 'error'); }
+    } catch (e) { toast('Error: ' + e.message, 'error'); renderTable(); }
 }
 
 function showNote(msg) {

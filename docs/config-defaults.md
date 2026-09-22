@@ -101,8 +101,12 @@ hier, sondern in `docs/llm-task-mapping.md`.
 | `MEMORY_MAX_SEMANTIC` | `memory.max_semantic` → Memory | `50` | app/models/memory.py |
 | `MEMORY_COMMITMENT_MAX_DAYS` | `memory.commitment_max_days` → Memory | `5` | app/core/memory_service.py |
 | `MEMORY_COMMITMENT_COMPLETED_DAYS` | `memory.commitment_completed_days` → Memory | `3` | app/core/memory_service.py |
-| `DAILY_SUMMARY_DAYS` | `knowledge.daily_summary_days` → Knowledge System | `7` | app/utils/history_manager.py, app/core/scene_manager.py |
 | `MOOD_HISTORY_MAX_ENTRIES` | — | `500` | app/models/memory.py |
+
+Die Zahl der Tages-Zusammenfassungen stand bis 2026-09-22 als `DAILY_SUMMARY_DAYS`
+hier; seitdem liest `app/utils/history_manager.py` `knowledge.daily_summary_days`
+(Default `7`) direkt über `config.get(...)`, und die Bridge setzt den Namen nicht mehr
+(`/admin/settings → Knowledge System`).
 
 ---
 
@@ -209,11 +213,13 @@ Spieltag vergangen ist. Steht die Weltuhr still, zerfaellt nichts.
 
 | Name | Quelle | Default | Leser |
 |---|---|---|---|
-| `STORAGE_DIR` | `server.storage_dir` → Server | `./worlds/demo` | app/core/paths.py |
+| `STORAGE_DIR` | `server.storage_dir` → Server | `./worlds/demo` (gesetzt von `start.sh` / `docker/docker-entrypoint.sh`, nicht von `paths.py`) | app/core/paths.py |
 
 Achtung, Henne und Ei: **welche Welt geöffnet wird, entscheidet der Start**
 (`./start.sh --world NAME` / `--storage /pfad`, sonst die Umgebungsvariable, sonst
-`./worlds/demo`). `paths.init()` läuft VOR `config.load()`; der gebrückte Wert aus
+`./worlds/demo` — diesen Default setzt `start.sh`; `paths.init()` selbst kennt keinen
+und wirft ohne Argument und ohne `STORAGE_DIR` `StorageNotInitialised`). `paths.init()`
+läuft VOR `config.load()`; der gebrückte Wert aus
 `config.json` wird also gesetzt, wählt aber nichts mehr aus.
 
 ---

@@ -30,9 +30,10 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Storage and clip library MUST be redirected BEFORE the first app import:
-# without it the default world is worlds/demo, which is tracked in git, and
-# llm_stats.record_call (reached through _log_task_result) would INSERT into
-# its world.db and leave the working tree dirty.
+# llm_stats.record_call (reached through _log_task_result) reaches its
+# world.db through paths, and without a storage root every world access raises
+# StorageNotInitialised — there is no default world any more, so nothing here
+# can land in the tracked worlds/demo.
 STORAGE = Path(tempfile.mkdtemp(prefix="finish-reason-storage-"))
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
     prefix="finish-reason-clips-")

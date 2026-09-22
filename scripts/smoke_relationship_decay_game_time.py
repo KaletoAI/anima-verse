@@ -126,8 +126,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 REPO = Path(__file__).resolve().parents[1]
 
 # The storage root and the clip library MUST be redirected BEFORE the first
-# app import: paths.init otherwise falls back to worlds/demo, the world that
-# is tracked in git.
+# app import: without a storage root every world access raises
+# StorageNotInitialised — there is no default world any more, so nothing here
+# can land in the tracked worlds/demo.
 STORAGE = Path(tempfile.mkdtemp(prefix="reldecay-game-storage-"))
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="reldecay-game-clips-")
 

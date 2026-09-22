@@ -16,8 +16,9 @@ page is reloaded.
 Runs against a THROWAWAY storage directory — never touches a real world, never
 starts a server, makes no LLM/image call. Storage and the clip library are
 redirected BEFORE the first app import, exactly as ``scripts/smoke_scene_cache.py``
-and ``scripts/smoke_scene_recipe.py`` do: an app import that finds no
-``--world`` falls back to ``worlds/demo``, whose ``world.db`` is tracked in git.
+and ``scripts/smoke_scene_recipe.py`` do: an app import that finds no storage
+root raises ``StorageNotInitialised``, and there is no default world any more,
+so the tracked ``worlds/demo`` stays out of reach.
 
 WHY THIS FILE EXISTS — the two gaps it pins
 -------------------------------------------

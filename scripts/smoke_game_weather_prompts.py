@@ -54,9 +54,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 # The storage root and the clip library MUST be redirected BEFORE the first
-# app import: paths.init otherwise falls back to worlds/demo — the world that
-# is tracked in git — and app.core.prompt_compose_llm would open its
-# world.db and leave the working tree dirty.
+# app import: app.core.prompt_compose_llm reaches its world.db through paths,
+# and without a storage root every world access raises StorageNotInitialised —
+# there is no default world any more, so nothing here can land in the tracked
+# worlds/demo.
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
     prefix="game-weather-prompts-clips-")
 

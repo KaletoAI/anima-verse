@@ -918,7 +918,7 @@ SECTIONS = {
         "label": "Social Reactions",
         "icon": "👥",
         "fields": {
-            "enabled": {"type": "bool", "label": "Aktiviert", "default": True, "description": "Wenn ein Character postet, reagieren andere Characters (Background-Queue)"},
+            "enabled": {"type": "bool", "label": "Enabled", "default": True, "description": "When a character posts, other characters react to it (runs in the task queue)."},
         },
     },
     "thoughts": {

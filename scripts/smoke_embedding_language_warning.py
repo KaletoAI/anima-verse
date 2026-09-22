@@ -77,8 +77,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Storage and the clip library are redirected BEFORE the first app import:
-# paths.init otherwise falls back to worlds/demo — the world tracked in git —
-# and importing app.models.account would open its world.db.
+# app.models.account reaches its world.db through paths, and without a storage
+# root every world access raises StorageNotInitialised — there is no default
+# world any more, so nothing here can land in the tracked worlds/demo.
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
     prefix="embedding-lang-clips-")
 

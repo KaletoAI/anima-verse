@@ -68,11 +68,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # Point the storage root at a throwaway directory BEFORE any app import, the
 # same way smoke_worldmap_v2.py does. This matters because the thing under
 # test WRITES: config.migrate_file() persists the strip/seed pass into the
-# world's config.json. paths.init() falls back to ./worlds/demo when
-# STORAGE_DIR is unset (app/core/paths.py, resolved against the CURRENT
-# WORKING DIRECTORY), and get_storage_dir() auto-initializes on first call —
-# so a stray migrate_file() from an import chain would edit tracked world
-# data. A check script must never do that.
+# world's config.json. There is no default world any more — paths.init()
+# without an argument and without STORAGE_DIR raises StorageNotInitialised,
+# and so does get_storage_dir() before anything initialised it — so this
+# redirect is what gives a stray migrate_file() from an import chain a
+# throwaway world to write into instead of failing the run. Tracked world
+# data stays out of reach either way; a check script must never touch it.
 #
 # Two deliberate changes over the previous guard:
 #   * assignment, not setdefault — an inherited STORAGE_DIR (a shell that
