@@ -3745,11 +3745,20 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
                ground_kind: str = "",
                door_prop_sigs: Optional[Dict[str, str]] = None,
                surface_sigs: Optional[Dict[str, str]] = None,
-               corridor_levels: Optional[Set[int]] = None) -> str:
+               corridor_levels: Optional[Set[int]] = None,
+               walkable_props: Optional[Dict[str, bool]] = None) -> str:
     """Change detection for the whole scene — a SUPERSET of the room recipe's
     signature: the room signatures already cover layouts, neighbour openings
     and prop sidecars, and the model metas add every anchor dial (floors,
     height_m, width_m, walk_y, rotation, offsets). Polling it is enough.
+
+    THE INVARIANT (§ B1a): this hash is a SUPERSET of every input the payload
+    reads — a mutation that changes the payload moves it. The other way round
+    is deliberately NOT promised: an input that only sometimes reaches the
+    payload (a lake nowhere near this location) may move the signature without
+    moving a byte, which costs a needless remount and never a stale scene.
+    ``scripts/smoke_scene_signature_superset.py`` mutates the world one input
+    at a time and measures exactly that.
 
     ``ground_kind`` is in here as the RESOLVED kind, not as the raw
     ``terrain`` text: it is what the payload carries, and it also moves when
@@ -3790,16 +3799,48 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
     ``map3d``. Without them a corridor appearing or vanishing left the
     signature exactly where it was, and a polling client kept the old
     ``corridors[]`` — and the old door rule with it, which turns unlinked
-    doors into hull holes or interior gaps."""
+    doors into hull holes or interior gaps.
+
+    THE PAINTED TERRAIN is in here as ``models.terrain.terrain_sig()`` (the
+    areas plus the effective type catalog), because ``floor_plan[].map_water``
+    is composed from it: :func:`_painted_waters` asks the painted world which
+    lake a room's hull lies on, and that answer reaches this hash through no
+    stored value of the location — paint a lake under a house and the room
+    recipes, the model metas and ``map3d`` all stay exactly where they were.
+    The token is the same ``terrain_sig`` the cache fingerprint uses, so the
+    two cannot disagree about what "the terrain changed" means. A world whose
+    terrain is unreadable contributes the empty string, which is not a hole:
+    ``_painted_waters`` swallows the very same failure and composes no water
+    reference either, so "" is the signature of the payload that is really
+    served. The world RELIEF is deliberately NOT in here — ``water_areas``
+    takes the painted areas and the catalog as arguments and reads no height,
+    and no other payload field asks the height field anything.
+
+    THE WALKABLE PROPS are in here as ``{prop_id: bool}`` over the props this
+    location really places, for the same reason the door props are: it is a
+    fact of the PROP that no room signature covers. ``"walkable" in tags``
+    decides whether a placement ships ``walkable`` and its baked lattice, and
+    a prop's ``tags`` reach neither the placement entry (which carries dims,
+    tiers and ``model_sig``) nor ``model_signature`` (mesh selection plus the
+    picture part) — so untagging a crate used to silently leave every running
+    client walking on it. One entry per prop id, not per placement: the tag is
+    a property of the prop, so two copies of the same crate say the same thing
+    twice."""
     import hashlib
     import json
     season = season_token()
+    try:
+        from app.models.terrain import terrain_sig
+        terrain = terrain_sig()
+    except Exception:              # noqa: BLE001 — no world, no painted water
+        terrain = ""
     payload = {
         "code_version": SCENE_RECIPE_VERSION,
         "map3d": location.get("map3d") or {},
         "plan_width_m": round(float(plan_width_m or 0), 3),
         "ground_kind": ground_kind,
         "season": season,
+        "terrain": terrain,
         "rooms": {str(r.get("room_id") or ""): r.get("signature") or ""
                   for r in recipes},
         "building_meta": building_meta or {},
@@ -3816,6 +3857,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
         "door_props": door_prop_sigs or {},
         "surfaces": surface_sigs or {},
         "corridors": sorted(corridor_levels or ()),
+        "walkable_props": walkable_props or {},
     }
     return hashlib.md5(json.dumps(payload, sort_keys=True,
                                   default=str).encode()).hexdigest()
@@ -4415,11 +4457,22 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             block_sig(m["surface"])
         for m in models if isinstance(m, dict) and m.get("surface")}
 
+    # WHICH PLACED PROPS CARRY THE WALKABLE TAG — collected off the finished
+    # specs, exactly like ``door_prop_sigs`` and ``surface_sigs`` above, and
+    # handed to the signature and nowhere else. ``"walkable" in tags``
+    # (:func:`_prop_models`) is the one payload decision that hangs on a
+    # prop's TAGS, and tags reach no room recipe and no ``model_signature``.
+    # One entry per prop id, True or False: an untagged prop has to be IN the
+    # dict, or losing the tag would look like losing the placement.
+    walkable_props = {str(m.get("id") or ""): bool(m.get("walkable"))
+                      for m in models
+                      if isinstance(m, dict) and m.get("role") == "prop"}
+
     out = {
         "signature": _signature(location, plan_width_m, recipes,
                                 building_meta, room_metas, ground_kind,
                                 door_prop_sigs, surface_sigs,
-                                corridor_levels),
+                                corridor_levels, walkable_props),
         "rooms": room_blocks,
         # The location's FOOTPRINT as a polygon in the scene frame (contract
         # v6 Nr. 1 + Nr. 4): the drawn ``map3d.boundary`` where there is one,

@@ -58,32 +58,35 @@ Hand-derived expectations
          payload and its ``signature`` both move.
       b) a PROP edit — the crate's sidecar loses its ``walkable`` tag, the
          very field ``_prop_models`` reads off the record. The payload moves
-         (the two crates stop carrying ``walkable``) — and ``signature`` does
-         NOT, because no room-recipe signature covers a prop's tags. That is a
-         pre-existing gap of ``_signature``, not of this cache, and it is
-         exactly why the ETag is the FINGERPRINT: a ``304`` built on
-         ``signature`` would hand a client the old scene here.
-         Props are the one input with no signature of their own, which is what
-         the fingerprint's per-file ``stat`` over ``<storage>/props/<id>/``
-         is for.
+         (the two crates stop carrying ``walkable``) and ``signature`` moves
+         with it: since the superset round the flag of every placed prop is a
+         signature input (``_signature``'s ``walkable_props``). It used to be
+         a GAP — no room-recipe signature covers a prop's tags — and it is
+         guarded in ``scripts/smoke_scene_signature_superset.py`` now.
+         Props are still the one input with no signature of their own, which
+         is what the fingerprint's per-file ``stat`` over
+         ``<storage>/props/<id>/`` is for.
       c) a TERRAIN change FAR AWAY — a painted water area at (40…50, 40…50),
          nowhere near the 20 m square. The fingerprint is a deliberate
-         SUPERSET, so this recomposes; the payload is byte-identical, which
-         is the honest answer and the price of never being stale.
+         SUPERSET, so this recomposes; the payload is byte-identical apart
+         from its ``signature``, which moves with the painted world
+         (``terrain_sig`` covers the world, not a bounding box) — a superset
+         may, and that is the price of never being stale.
       d) a TERRAIN change UNDER the location — water painted over the whole
          square. ``floor_plan`` gains its ``map_water`` reference, so the
-         payload really moves — and ``signature`` stands still for it as well
-         (``_signature`` hashes map3d, the room recipes and the model metas;
-         the painted terrain reaches it through none of them). Second
-         pre-existing gap, same conclusion as (b).
+         payload really moves, and ``signature`` moves with it: the painted
+         terrain is a signature input since the superset round. Second
+         former gap, same conclusion as (b).
 
     WHAT THE FINGERPRINT-ETag PRESERVES. Both gaps used to be papered over by
     the poll itself: the client refetched the whole payload every minute and
     stored it, remounting only on a ``signature`` change. A ``304`` keyed on
     ``signature`` would have taken that away. Keyed on the fingerprint it does
     not: whenever the payload can have changed, the fingerprint has moved and
-    a full answer goes out — the client stores it and (correctly) does not
-    remount.
+    a full answer goes out — the client stores it and remounts only where the
+    signature says so. The ETag stays the FINGERPRINT even now that the two
+    gaps are closed: it is known before anything is composed, so a ``304``
+    costs no composition, and it is the stricter of the two.
 
 [3] the route. ``play_location_scene`` with a stand-in request:
 
@@ -136,6 +139,13 @@ from app.routes import play as play_routes  # noqa: E402
 
 FAILURES = []
 CHECKED = 0
+
+
+def without_sig(payload: dict) -> str:
+    """The payload as canonical JSON WITHOUT its own ``signature`` field — the
+    dump that answers "did anything ELSE move?"."""
+    return json.dumps({k: v for k, v in payload.items() if k != "signature"},
+                      sort_keys=True, default=str)
 
 
 def check(label: str, actual, expected) -> None:
@@ -274,20 +284,22 @@ def main() -> int:
     check("…the crates are no longer walkable",
           [m.get("walkable") for m in after_prop["models"]
            if m.get("role") == "prop"], [None, None])
-    # …and `signature` does NOT move for it (see the docstring, [2b]): no room
-    # recipe hashes a prop's tags. The fingerprint does, which is why the ETag
-    # is the fingerprint.
-    check("…while `signature` stands still — the gap the ETag closes",
-          after_prop["signature"] == after_loc["signature"], True)
+    # …and `signature` moves with it (see the docstring, [2b]): the walkable
+    # flag of every placed prop is a signature input since the superset round.
+    check("…and `signature` moves with it — the closed gap",
+          after_prop["signature"] != after_loc["signature"], True)
 
     save_area({"kind": "water",    # (c) a terrain change far away
                "polygon": [[40.0, 40.0], [50.0, 40.0], [50.0, 50.0]],
                "z_order": 0})
     far, c5, _ = counted(scene, WAREHOUSE)
     check("a terrain change composes again (the superset)", c5["compose"], 1)
-    check("…and 40 m away it changes nothing",
-          json.dumps(far, sort_keys=True)
-          == json.dumps(after_prop, sort_keys=True), True)
+    # Everything BUT the signature: the painted world is a signature input, so
+    # a lake 40 m away moves the hash without moving a byte of the scene. A
+    # superset may — the dump that answers "did anything else move?" must not
+    # contain the answer.
+    check("…and 40 m away it changes nothing in the scene",
+          without_sig(far) == without_sig(after_prop), True)
 
     save_area({"kind": "water",    # (d) water UNDER the location
                "polygon": [[-12.0, -12.0], [12.0, -12.0],
@@ -297,14 +309,13 @@ def main() -> int:
     check("water under the square composes again", c5b["compose"], 1)
     check("…and the floor plan names it",
           bool((under["floor_plan"] or [{}])[0].get("map_water")), True)
-    # …and `signature` stands still here too: `_signature` hashes map3d, the
-    # room recipes and the model metas — the painted terrain reaches it
-    # through none of them. Second pre-existing gap, same conclusion as (b).
-    check("…while `signature` stands still again",
-          under["signature"] == far["signature"], True)
-    check("…but the payload really moved",
-          json.dumps(under, sort_keys=True)
-          != json.dumps(far, sort_keys=True), True)
+    # …and `signature` moves here too: the painted terrain is an input of
+    # `_signature` since the superset round. Second closed gap, same
+    # conclusion as (b).
+    check("…and `signature` moves again",
+          under["signature"] != far["signature"], True)
+    check("…because the payload really moved",
+          without_sig(under) != without_sig(far), True)
 
     _, c6, _ = counted(scene, WAREHOUSE)
     check("and it is cached again right after", c6["compose"], 0)

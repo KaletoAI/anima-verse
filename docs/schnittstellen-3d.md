@@ -5331,7 +5331,10 @@ Admin-Regler weg: der Sanitizer verwirft das Feld, es hat keinen Schreiber.
                              # dazu die aktuelle Jahreszeit als Token
                              # (E2c): Prop-Varianten und Boden-Texturen
                              # wechseln mit der Spielzeit, ohne dass ein
-                             # gespeicherter Wert sich bewegt
+                             # gespeicherter Wert sich bewegt; dazu das
+                             # gemalte Gelände (`terrain_sig`) und der
+                             # walkable-Schalter jedes platzierten Props
+                             # (§ B1a: Obermenge aller Payload-Eingänge)
   boundary,                  # [[x,z],…] — der Fußabdruck der Location im
                              # SZENEN-Rahmen (= lokale Meter um den Anker-Pin,
                              # dieselben Punkte wie in der Worldmap-Zeile,
@@ -5826,16 +5829,42 @@ Zwei Dinge, additiv, am Payload ändert sich **nichts**:
    gebackene Gitter). Er ist absichtlich eine **Obermenge**: eine
    überflüssige Neukomposition ist billig, eine veraltete Szene nicht.
 
-**Was der Fingerabdruck-ETag bewahrt.** `signature` hat Lücken: eine Änderung
-an den `tags` eines Props (also am `walkable`-Schalter im Payload) und ein
-gemaltes Gewässer unter der Location bewegen das Payload, aber nicht die
-Signatur — kein Raum-Rezept hasht Prop-Tags, und das gemalte Gelände erreicht
-`_signature` über keinen seiner Eingänge. Bisher fing der Poll das auf: der
-Client holte jede Minute das ganze Payload und legte es ab, remountete nur bei
-Signaturwechsel. Ein `304` auf `signature` hätte genau das kassiert. Auf den
-Fingerabdruck gestellt nicht: sobald sich das Payload ändern KANN, hat sich der
-Fingerabdruck bewegt, die volle Antwort geht raus, der Client legt sie ab und
-remountet (richtigerweise) nicht. Nachgewiesen in
+**Die Signatur ist eine Obermenge — das Gesetz.** `signature` deckt **jeden
+Eingang ab, den das Payload liest**: eine Mutation, die das Payload verändert,
+bewegt die Signatur. Die Gegenrichtung wird bewusst **nicht** versprochen — ein
+Eingang, der das Payload nur manchmal erreicht (ein See 40 m weiter), darf die
+Signatur bewegen, ohne ein Byte zu ändern. Ein überflüssiges Remount ist billig,
+eine veraltete Szene nicht. Der Client baut eine Location **nur** neu, wenn sich
+`signature` ändert (`sceneRecipe.sweep`); was die Signatur verpasst, sieht er bis
+zum Reload nicht. Gemessen wird das Gesetz in
+`scripts/smoke_scene_signature_superset.py`: eine Mutation nach der anderen
+(Prop-Tag, Gelände-Art, Gewässer an/aus, Relief, Raum-Layout, Standard-Türprop,
+Jahreszeit, Raum-Meta, neue Etage samt Flur) plus Leerläufe, die nichts bewegen
+dürfen — verglichen wird das kanonisch serialisierte Payload **ohne** sein
+`signature`-Feld.
+
+Zwei Eingänge fehlten bis 2026-09-22 und sind jetzt drin:
+
+* **die `tags` eines Props** (`terrain_sig`-Nachbar `walkable_props`): ob eine
+  Platzierung `walkable` und ihr gebackenes Lauf-Gitter mitschickt, entscheidet
+  `"walkable" in tags` — und Tags erreichen weder den Placement-Eintrag des
+  Raum-Rezepts (dims, Tiers, `model_sig`) noch `model_signature` selbst
+  (Mesh-Auswahl + Bild-Teil). Ein entferntes Tag ließ jeden laufenden Client
+  weiter über die Kiste gehen.
+* **das gemalte Gelände** (`models.terrain.terrain_sig()`): `floor_plan[].map_water`
+  entsteht aus den gemalten Flächen und dem effektiven Typ-Katalog; auf der
+  Location ist davon nichts gespeichert. Das **Relief** steht bewusst *nicht*
+  in der Signatur — `heightfield.water_areas` bekommt Flächen und Katalog als
+  Argumente und liest keine Höhe, und kein anderes Payload-Feld fragt das
+  Höhenfeld etwas ([M7] misst genau das).
+
+**Was der Fingerabdruck-ETag trotzdem bewahrt.** Der ETag bleibt der
+**Fingerabdruck**, nicht `signature`: er steht fest, bevor irgendetwas
+komponiert ist (ein `304` kostet also keine Komposition), und er ist der
+strengere der beiden — er bewegt sich bei jeder Eingabe, auch bei denen, die
+das Payload nur manchmal erreichen. Sobald sich das Payload ändern KANN, hat
+sich der Fingerabdruck bewegt, die volle Antwort geht raus, der Client legt sie
+ab und remountet genau dann, wenn `signature` es sagt. Nachgewiesen in
 `scripts/smoke_scene_cache.py` [2b]/[2d].
 
 Die **Draft-Vorschau** (`POST /play/scene-preview`, § B3) bleibt ungecacht —
