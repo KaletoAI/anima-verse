@@ -14,7 +14,7 @@ from app.core.improvements.base import Candidate, CandidateBusy
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
-from app.imagegen.base import BackendBusyError
+from app.imagegen.base import BackendBusyError, media_generation_enabled
 from app.models.world import is_world_frozen
 
 logger = get_logger("improvements.engine")
@@ -103,7 +103,12 @@ def ordered_queue() -> List[Dict[str, Any]]:
 
 def submit_allowed() -> Tuple[bool, str]:
     """(may a step be submitted right now, why not) — the reason is what the
-    admin panel shows: disabled | frozen | busy | active | ok."""
+    admin panel shows: media_off | disabled | frozen | busy | active | ok."""
+    # Every improvement type generates media (models, images, bakes), so the
+    # world's media master switch stops the whole pipeline — checked first
+    # because it is the cheapest read and needs no DB at all.
+    if not media_generation_enabled():
+        return False, "media_off"
     settings = store.get_settings()
     if not settings["enabled"]:
         return False, "disabled"

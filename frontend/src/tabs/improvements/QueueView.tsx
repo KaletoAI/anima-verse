@@ -233,6 +233,7 @@ export function QueueView() {
 
   const gate = (() => {
     switch (status.reason) {
+      case 'media_off': return t('Media generation off')
       case 'disabled': return t('Engine off')
       case 'frozen': return t('World frozen')
       case 'busy': return t('Step running')

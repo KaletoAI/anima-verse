@@ -116,6 +116,14 @@ hier, sondern in `docs/llm-task-mapping.md`.
 | `IMAGE_ANALYSIS_PROMPT` | `image_generation.image_analysis_prompt` → Media Generation | langer Vorgabetext im Schema | app/imagegen/service.py |
 | `IMAGE_ANALYSIS_LANGUAGE` | — | `de` | app/imagegen/service.py |
 
+Der **Hauptschalter** `image_generation.enabled` („Media generation enabled",
+Admin-Sektion „Media Generation") wird NICHT in eine Env-Variable gebrückt: er
+wird live gelesen (`app/imagegen/base.py::media_generation_enabled`). Aus ist
+aus — jede Bild-, Video- und Mesh-Erzeugung der Welt wird an der zentralen
+Übergabe `ImageService.run_on_backend_channel` mit `MediaGenerationDisabled`
+abgelehnt (HTTP 409), es wird kein Task eingereiht, und vorhandene Medien
+werden weiter ausgeliefert. Default: `true`.
+
 Einen Prompt-Prefix für Outfit-/Profilbilder gibt es nicht mehr: Stil und
 Bildausschnitt kommen aus dem jeweiligen **Use-Case** (`image.use_cases.<uc>`,
 Admin-Sektion „Image/Video Generation"). Die Blender-Einstellungen für 3D-Modelle

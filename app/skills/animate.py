@@ -14,6 +14,7 @@ and the ``TOGETHER_ANIMATE_*`` config were retired — see
 from typing import Any, Dict, List
 
 from app.core.log import get_logger
+from app.imagegen.base import MediaGenerationDisabled
 
 logger = get_logger("animate")
 
@@ -58,7 +59,10 @@ def animate_image(source_image_path: str, prompt: str, output_path: str,
         output_path: where the ``.mp4`` is written.
         service: video-backend name/glob (empty = cheapest available).
 
-    Returns True on success, False on error.
+    Returns True on success, False on error — except when the world has media
+    generation switched off: that is a refusal, not a failed render, so
+    ``MediaGenerationDisabled`` travels on to the caller (the route maps it to
+    409, a queue job records its message).
     """
     try:
         return _image_service().generate_video(
@@ -68,6 +72,8 @@ def animate_image(source_image_path: str, prompt: str, output_path: str,
             backend_glob=service,
             loras=loras,
             seconds=seconds)
+    except MediaGenerationDisabled:
+        raise
     except Exception as e:
         logger.error("animate_image fehlgeschlagen: %s", e)
         return False

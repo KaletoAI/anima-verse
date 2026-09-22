@@ -524,7 +524,6 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
         try:
             from app.skills.animate import animate_image
             from app.models.instagram import load_feed as _load_feed, save_feed as _save_feed
-            from app.core.llm_queue import get_llm_queue, Priority as _P
             from pathlib import Path as _Path
             from datetime import datetime
 
@@ -532,19 +531,16 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
             video_name = f"{stem}.mp4"
             output_path = str(instagram_dir / video_name)
 
-            # Run via provider queue (serialization + queue-panel visibility).
-            # gpu_type = the animation service id ("together"), which matches
-            # a channel of the same type if one exists.
-            success = get_llm_queue().submit_gpu_task(
-                provider_name=service,
-                task_type="image_animate",
-                priority=_P.IMAGE_GEN,
-                callable_fn=lambda: animate_image(
-                    str(image_path), prompt, output_path, service=service,
-                    loras=loras, seconds=seconds or None),
-                agent_name=character_name,
-                label="Instagram Animation",
-                gpu_type=service)
+            # EXACTLY ONE queue entry, and it is not made here: animate_image
+            # -> ImageService.generate_video submits onto the video backend's
+            # own channel. Submitting here as well put that submission INSIDE a
+            # GPU worker, and a nested submit onto a single-slot channel
+            # deadlocks (CLAUDE.md). This call runs on its own daemon thread,
+            # the tracked task above is what the queue panel shows — the same
+            # shape app/skills/video_generation_skill.py has always used.
+            success = animate_image(
+                str(image_path), prompt, output_path, service=service,
+                loras=loras, seconds=seconds or None)
 
             if not success:
                 _tq.track_finish(_track_id, error="Animation fehlgeschlagen")

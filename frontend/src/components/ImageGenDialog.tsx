@@ -46,6 +46,10 @@ interface ImagegenOption {
 interface ImagegenOptionsResponse {
   options: ImagegenOption[]
   default_location?: string
+  // World master switch (image_generation.enabled). False = the server
+  // refuses every render with 409, so the dialog blocks its own submit
+  // instead of letting the user compose a prompt for nothing.
+  media_generation_enabled?: boolean
 }
 
 /** Answer of POST /world/compose-preview (app/core/prompt_compose.py). */
@@ -242,6 +246,7 @@ export function ImageGenDialog({
   const [negative, setNegative] = useState('')
   const [selectedChars, setSelectedChars] = useState<string[]>([])
   const [options, setOptions] = useState<ImagegenOption[] | null>(null)
+  const [mediaOff, setMediaOff] = useState(false)
   const [defaultLocationOpt, setDefaultLocationOpt] = useState<string>('')
   const [optionKey, setOptionKey] = useState<string>('') // selected backend name
   const [loraSlots, setLoraSlots] = useState<LoraDefault[]>(
@@ -330,6 +335,7 @@ export function ImageGenDialog({
     apiGet<ImagegenOptionsResponse>('/world/imagegen-options')
       .then((d) => {
         setOptions(d.options || [])
+        setMediaOff(d.media_generation_enabled === false)
         setDefaultLocationOpt(d.default_location || '')
       })
       .catch(() => setOptions([]))
@@ -560,6 +566,11 @@ export function ImageGenDialog({
           </button>
         </div>
         <div className="ga-modal-body">
+          {mediaOff ? (
+            <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
+              {t('Media generation is disabled for this world (Admin → Settings → Media Generation)')}
+            </div>
+          ) : null}
           {!options ? (
             <div className="ga-loading">{t('Loading…')}</div>
           ) : !options.length ? (
@@ -935,7 +946,7 @@ export function ImageGenDialog({
           <button
             className="ga-btn ga-btn-primary"
             onClick={handleSubmit}
-            disabled={submitting || enhancing || !currentOption || sourceRefBlocked}
+            disabled={submitting || enhancing || !currentOption || sourceRefBlocked || mediaOff}
           >
             {submitting ? '…' : t('Generate')}
           </button>

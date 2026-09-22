@@ -356,11 +356,21 @@ class DescribeRoomSkill(BaseSkill):
                 params["seed"] = _rnd.randint(1, 2**31 - 1)
 
                 logger.info("Raum-Bild Generierung gestartet fuer %s/%s", location_id, room_id)
-                images = backend.generate(
-                    full_prompt, negative, params,
-                    log_meta={"agent_name": location.get("name", location_id),
-                              "original_prompt": prompt, "auto_enhance": False,
-                              "compose": _composed.meta})
+                # Through the service's ONE handoff: the per-backend channel
+                # (two renders never run in parallel on one backend) and the
+                # world's media master switch both live there. This runs on
+                # its own daemon thread, never in a queue worker, so the
+                # submission cannot nest into its own channel.
+                from app.imagegen.service import get_image_service
+                _log_meta = {"agent_name": location.get("name", location_id),
+                             "original_prompt": prompt, "auto_enhance": False,
+                             "compose": _composed.meta}
+                images = get_image_service().run_on_backend_channel(
+                    backend,
+                    lambda: backend.generate(full_prompt, negative, params,
+                                             log_meta=_log_meta),
+                    task_type="image_generation",
+                    label=f"Room image: {location_id}/{room_id}")
                 if not images:
                     logger.warning("Raum-Bild Generierung fehlgeschlagen fuer %s/%s", location_id, room_id)
                     return

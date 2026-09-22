@@ -24,6 +24,7 @@ from app.core.expression_pose_maps import (
     get_pose_prompt,
     is_partner_activity,
     resolve_expression_key)
+from app.imagegen.base import media_generation_enabled
 
 logger = get_logger(__name__)
 
@@ -667,6 +668,14 @@ def trigger_expression_generation(character_name: str,
     # Style/framing come from the "expression" use case (no env prefix).
     if prompt_prefix is None:
         prompt_prefix = ""
+
+    # The world's media master switch. Expression triggers are the most
+    # frequent render request in the app (every chat turn fires a few), so
+    # they stop HERE instead of filling the queue with refusals.
+    if not media_generation_enabled():
+        logger.info("Expression trigger [%s]: skipped — media generation is "
+                    "disabled for this world", character_name)
+        return False
 
     if not ignore_feature_gate:
         try:

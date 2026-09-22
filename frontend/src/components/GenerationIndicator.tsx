@@ -6,7 +6,10 @@ import { usePoll } from '../player/usePolling'
  * Compact header indicator for running/pending generations (image/video/TTS/
  * GPU tasks). Shares the /queue/status poll with the player TaskPanel (same
  * hub key = one fetch) and shows "▶ N / ⏳ M"; the tooltip lists the titles.
- * Invisible when nothing runs.
+ * Invisible when nothing runs — except while the world's media master switch
+ * (`image_generation.enabled`) is off, which the same poll carries: then it
+ * says so, because otherwise a world that generates nothing looks like a world
+ * where nothing happens to be running.
  */
 interface ActiveTask {
   task_id?: string
@@ -17,14 +20,17 @@ interface ActiveTask {
   agent_name?: string
 }
 
+type QueueStatus = { active_tasks?: ActiveTask[]; media_generation_enabled?: boolean }
+
 export function GenerationIndicator() {
   const { t } = useI18n()
-  const { data } = usePoll<{ active_tasks?: ActiveTask[] }>(
-    'queue-status', () => apiGet<{ active_tasks?: ActiveTask[] }>('/queue/status'),
+  const { data } = usePoll<QueueStatus>(
+    'queue-status', () => apiGet<QueueStatus>('/queue/status'),
     { intervalMs: 3000 })
   const tasks = data?.active_tasks || []
+  const mediaOff = data?.media_generation_enabled === false
 
-  if (!tasks.length) return null
+  if (!tasks.length && !mediaOff) return null
 
   const running = tasks.filter((x) => (x.status || '') === 'running')
   const pending = tasks.filter((x) => (x.status || '') === 'pending')
@@ -36,7 +42,9 @@ export function GenerationIndicator() {
 
   return (
     <span
-      title={tip}
+      title={mediaOff
+        ? `${t('Media generation is disabled for this world (Admin → Settings → Media Generation)')}${tip ? `\n${tip}` : ''}`
+        : tip}
       aria-label={t('Generations in progress')}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: '0.82em',
@@ -51,6 +59,7 @@ export function GenerationIndicator() {
       }} />
       {running.length > 0 ? <span>▶ {running.length}</span> : null}
       {pending.length > 0 ? <span style={{ opacity: 0.65 }}>⏳ {pending.length}</span> : null}
+      {mediaOff ? <span style={{ opacity: 0.75 }}>{t('media off')}</span> : null}
     </span>
   )
 }

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from app.core.log import get_logger
+from app.imagegen.base import MediaGenerationDisabled
 
 logger = get_logger("scene_photo")
 
@@ -200,6 +201,10 @@ def take_scene_photo(avatar: str,
             negative_prompt_override=(negative_prompt or "").strip(),
             create_new=True,
             use_room=bool(use_room))
+    except MediaGenerationDisabled:
+        # The world's master switch: not a failed render but a refusal, and
+        # the route maps it to a 409 the player sees verbatim.
+        raise
     except Exception as e:
         logger.error("scene photo generation failed: %s", e)
         return {"ok": False, "error": str(e)}

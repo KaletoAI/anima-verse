@@ -5970,17 +5970,16 @@ def _render_source(prop_id: str, backend_glob: str,
     _log_meta = {"agent_name": f"Prop {prop_id}", "original_prompt": prompt,
                  "auto_enhance": False,
                  "compose": {"use_case": use_case, "settings_applied": True}}
-    from app.core.llm_queue import get_llm_queue, Priority
-    images = get_llm_queue().submit_gpu_task(
-        provider_name=backend.name,
-        task_type="prop_source" if view == "front" else f"prop_source_{view}",
-        priority=Priority.IMAGE_GEN,
-        callable_fn=lambda: backend.generate(prompt, negative, params,
-                                             log_meta=_log_meta),
+    # Through the service's ONE handoff — that is where the per-backend
+    # channel and the world's media master switch live.
+    from app.imagegen.service import get_image_service
+    images = get_image_service().run_on_backend_channel(
+        backend,
+        lambda: backend.generate(prompt, negative, params, log_meta=_log_meta),
+        task_type=("prop_source" if view == "front" else f"prop_source_{view}"),
         agent_name="system",
         label=(f"Prop source: {prop_id}" if view == "front"
-               else f"Prop source ({view}): {prop_id}"),
-        gpu_type=backend.api_type)
+               else f"Prop source ({view}): {prop_id}"))
     if not images:
         logger.warning("Prop %s: empty source render", prop_id)
         return False

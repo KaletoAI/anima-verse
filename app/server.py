@@ -20,7 +20,7 @@ class _SuppressHealthPolling(logging.Filter):
 
 
 logging.getLogger("uvicorn.access").addFilter(_SuppressHealthPolling())
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
@@ -832,6 +832,21 @@ from app.routes import shared_lists as shared_lists_route
 app.include_router(shared_lists_route.router)
 from app.routes import thumbnails as thumbnails_route
 app.include_router(thumbnails_route.router)
+
+from app.imagegen.base import MediaGenerationDisabled
+
+
+# The ONE HTTP mapping of the world's media master switch: every route that
+# calls the image service synchronously (render, regenerate, scene photo, mesh,
+# video) ends here when `image_generation.enabled` is off, instead of repeating
+# the same try/except in three dozen routes. 409 Conflict = the request is
+# fine, the world's state refuses it.
+@app.exception_handler(MediaGenerationDisabled)
+async def media_generation_disabled_handler(_request, exc: MediaGenerationDisabled):
+    return JSONResponse(status_code=409,
+                        content={"detail": str(exc) or
+                                 "Media generation is disabled for this world"})
+
 
 # Static files (the legacy vanilla-JS UI in templates/index.html was removed)
 app.mount("/static", StaticFiles(directory="static"), name="static")

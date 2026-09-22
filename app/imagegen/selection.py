@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from app.core.log import get_logger
 from app.core.provider_queue import TooManyJobsError
 from app.imagegen.base import (BackendBusyError, GatewayRejectedError,
-                               ImageBackend)
+                               ImageBackend, MediaGenerationDisabled)
 
 logger = get_logger("image_gen")
 
@@ -302,6 +302,8 @@ class BackendPool:
           and harmful (it would outlive re-enabling it in the admin UI by up
           to 300 s). No cooldown, re-raised typed so the caller skips this
           backend instead of retrying the same one.
+        - MediaGenerationDisabled = the world's media master switch is off:
+          the backend was never asked. No cooldown, re-raised typed.
         - Other exceptions / empty result: cooldown + raise.
 
         op(backend) -> List[bytes] | [] | None
@@ -336,6 +338,15 @@ class BackendPool:
             # simply be skipped, never cooled down.
             logger.warning("Backend-Runner: %s has no queue channel (%s) — "
                            "no cooldown, this backend is skipped", backend.name, e)
+            raise
+        except MediaGenerationDisabled:
+            # The world switched media generation off. Like the missing
+            # channel this is a CONFIGURATION statement, not a defect: the
+            # backend never saw the request. A cooldown would outlive the
+            # switch being turned back on by up to 300 s, so every backend of
+            # the world would stay dead for five more minutes.
+            logger.info("Backend-Runner: %s not asked — media generation is "
+                        "disabled for this world (no cooldown)", backend.name)
             raise
         except Exception as e:
             _err_str = str(e)

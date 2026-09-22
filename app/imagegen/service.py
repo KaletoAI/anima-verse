@@ -16,7 +16,8 @@ import requests
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
 from app.imagegen.backends.openai_mesh import (MESH2MESH_CATEGORY,
                                                MESH_UPLOAD_MAX_BYTES)
-from app.imagegen.base import BackendBusyError
+from app.imagegen.base import (BackendBusyError, MediaGenerationDisabled,
+                               media_generation_enabled)
 from app.imagegen.selection import BackendPool, _BACKEND_COOLDOWN_SECONDS
 
 from app.core.config import MAX_IMAGE_BACKENDS
@@ -501,7 +502,16 @@ class ImageService:
         worker holds one of the channel's permits while it blocks on the nested
         task, so a nested submission onto a single-slot channel deadlocks. Every
         caller today runs on an HTTP threadpool thread, its own daemon thread or
-        a TaskQueue worker — none of them is a ProviderQueue worker."""
+        a TaskQueue worker — none of them is a ProviderQueue worker.
+
+        This is also THE gate of the world's media master switch: because every
+        image, video and mesh generation crosses this one handoff, the switch is
+        checked here — BEFORE the task is queued and before a GPU slot is taken,
+        so a world with media generation off does not collect a queue full of
+        jobs that fail one by one in a worker."""
+        if not media_generation_enabled():
+            raise MediaGenerationDisabled(
+                "Media generation is disabled for this world")
         from app.core.llm_queue import get_llm_queue, Priority
         return get_llm_queue().submit_gpu_task(
             provider_name=backend.name,
@@ -563,6 +573,10 @@ class ImageService:
         try:
             result, _used = self.run_on_backend(
                 primary, _op, character_name=character_name)
+        except MediaGenerationDisabled:
+            # The world's master switch is not a failed render: the reason has
+            # to reach the caller instead of collapsing into a bare False.
+            raise
         except Exception as e:
             logger.error("generate_video fehlgeschlagen: %s", e)
             return False
@@ -720,6 +734,9 @@ class ImageService:
             # runner; there is no cross-backend fallback anywhere anymore.
             result, used = self.run_on_backend(
                 primary, _op, character_name=character_name)
+        except MediaGenerationDisabled:
+            # Master switch, not a failed generation — see generate_video.
+            raise
         except Exception as e:
             logger.error("generate_mesh fehlgeschlagen: %s", e)
             return {"ok": False, "error": str(e)}
@@ -853,6 +870,9 @@ class ImageService:
                 backend, _gen, task_type="mesh_generation", agent_name="system")
         try:
             result, used = self.run_on_backend(primary, _op)
+        except MediaGenerationDisabled:
+            # Master switch, not a failed generation — see generate_video.
+            raise
         except Exception as e:
             logger.error("generate_mesh_variant fehlgeschlagen: %s", e)
             return {"ok": False, "error": str(e)}
@@ -1453,6 +1473,16 @@ class ImageService:
                 LoRAs from stored configuration are filtered out instead, so
                 an automatic render never fails over a stale config value.
         """
+        # The world's master switch, checked BEFORE anything is parsed or
+        # selected. The central gate in run_on_backend_channel would catch this
+        # path too, but only after a backend was picked — and this function's
+        # contract is a STRING, not an exception (the LLM tool surface, the
+        # instagram post and npc_assets all read its prefix).
+        if not media_generation_enabled():
+            logger.info("Image generation refused: media generation is "
+                        "disabled for this world")
+            return "Error: Media generation is disabled for this world"
+
         if not self.enabled:
             return "Image generation is not available. No instance configured or reachable."
 
@@ -1954,19 +1984,15 @@ class ImageService:
                         pass
                     return b.generate(_p, _n, params, log_meta=_log_meta)
 
-                # ALLE Backends laufen ueber die channel-limitierte GPU-Queue:
-                # submit_gpu_task matcht per provider_name den backend:<name>-Channel
-                # mit dessen max_concurrent. Frueher liefen Cloud-/OpenAI-Backends
-                # direkt (return _gen()) → unbegrenzt parallel; jetzt wartet ein
-                # Job, wenn das Backend-Limit erreicht ist (wie bei ComfyUI/A1111).
-                from app.core.llm_queue import get_llm_queue, Priority as _P
-                return get_llm_queue().submit_gpu_task(
-                    provider_name=b.name,
-                    task_type="image_generation",
-                    priority=_P.IMAGE_GEN,
-                    callable_fn=_gen,
-                    agent_name=character_name, label=b.name,
-                    gpu_type=b.api_type)
+                # EVERY backend runs over the channel-limited GPU queue: the
+                # channel matches backend:<name> with its own max_concurrent,
+                # so a job waits once that backend's limit is reached (as with
+                # ComfyUI/A1111). Cloud/OpenAI backends used to run directly
+                # (return _gen()) → unlimited parallelism. It is also the ONE
+                # handoff that checks the world's media master switch.
+                return self.run_on_backend_channel(
+                    b, _gen, task_type="image_generation",
+                    agent_name=character_name)
 
             try:
                 images, backend = self.run_on_backend(

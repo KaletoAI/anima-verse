@@ -2544,10 +2544,15 @@ def build_imagegen_options() -> Dict[str, Any]:
     """Returns available image-generation backends (without character binding)."""
     from app.core.prompt_adapters import get_target_model
 
+    from app.imagegen.base import media_generation_enabled
     from app.imagegen.service import get_image_service
+    # The world's master switch travels with every options answer: the render
+    # dialogs disable their Generate button on it instead of letting the user
+    # compose a prompt that the server will only refuse (409).
+    media_on = media_generation_enabled()
     imagegen = get_image_service()
     if not imagegen.enabled:
-        return {"options": []}
+        return {"options": [], "media_generation_enabled": media_on}
 
     options = []
     # Backends (CivitAI, Together, LocalAI, …). Every ENABLED backend is
@@ -2621,7 +2626,7 @@ def build_imagegen_options() -> Dict[str, Any]:
         options.append(opt)
     # Default preselection for locations
     loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
-    result = {"options": options}
+    result = {"options": options, "media_generation_enabled": media_on}
     # Global outfit default (match spec, e.g. "backend:LocalAI-Flux") — the
     # character-render match UI shows it when no override is set.
     result["outfit_imagegen_default"] = (os.environ.get("OUTFIT_IMAGEGEN_DEFAULT") or "").strip()

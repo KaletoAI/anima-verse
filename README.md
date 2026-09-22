@@ -189,6 +189,9 @@ stops acting autonomously).
   returns one MP4; **3D meshes** are another (`openai_mesh`). Backends are matched per use case with
   cost-based selection and failover — except mesh backends, which never fall back onto each other
   because a wrong-rig mesh binds unusably.
+- **One master switch:** *Admin → Settings → Media Generation → „Media generation enabled"* turns
+  every image, video and 3D-mesh generation of the world off — requests are refused with a clear
+  message and nothing is queued, while existing media stay served.
 - **Use-case-driven styling:** every render occasion is a *use case* and the style belongs to the
   use case; `image_family` (`natural` prose for Flux/Qwen vs. `keywords` tags for Z-Image/SD) selects
   both the prompt adapter and the style family.

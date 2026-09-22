@@ -1697,7 +1697,6 @@ def _flatten_to_env(config: dict) -> None:
 
     # Image Generation
     ig = config.get("image_generation", {})
-    _set(env, "SKILL_IMAGEGEN_ENABLED", ig.get("enabled", True))
     _set(env, "OUTFIT_IMAGE_WIDTH", ig.get("outfit_image_width", 832))
     _set(env, "OUTFIT_IMAGE_HEIGHT", ig.get("outfit_image_height", 1216))
     _set(env, "LOCATION_IMAGE_WIDTH", ig.get("location_image_width", 1280))

@@ -37,6 +37,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
+from app.imagegen.base import media_generation_enabled
 
 logger = get_logger("npc_assets")
 
@@ -268,6 +269,13 @@ def gate_placement(name: str, location_id: str, room_id: str = "",
                                       is_temporary_npc, save_character_profile,
                                       set_character_status)
     if not name or not require_assets() or not is_temporary_npc(name):
+        return False
+    # Media generation off: nothing will ever render these assets, so holding
+    # the NPC back would pool it forever and queue a job per NPC that only
+    # fails. It is placed as it is, exactly like with the gate switched off.
+    if not media_generation_enabled():
+        logger.info("NPC '%s' placed without assets — media generation is "
+                    "disabled for this world", name)
         return False
     missing = npc_assets_complete(name)
     if not missing:

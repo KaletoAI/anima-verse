@@ -19,6 +19,7 @@ async def queue_status() -> Dict[str, Any]:
     import asyncio
     from app.core.provider_manager import get_provider_manager
     from app.core.task_queue import get_task_queue
+    from app.imagegen.base import media_generation_enabled
 
     pm = get_provider_manager()
     # get_combined_status() takes per-channel locks — run in the threadpool
@@ -53,6 +54,10 @@ async def queue_status() -> Dict[str, Any]:
         "recent_tasks": await asyncio.to_thread(tq.get_tracked_recent),
         # Background tasks (flat, no named queues)
         "bg_tasks": tq_status,
+        # World master switch (image_generation.enabled) — a plain in-memory
+        # config read, so the polled panel/header can show "media off" without
+        # a second request.
+        "media_generation_enabled": media_generation_enabled(),
     }
 
 

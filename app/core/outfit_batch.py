@@ -45,6 +45,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.timeutils import utc_now_iso
+from app.imagegen.base import media_generation_enabled
 
 logger = get_logger(__name__)
 
@@ -529,6 +530,14 @@ def start(character_name: str, slots_filter: Optional[Dict[str, Any]] = None,
     pending/running batch per character). ``coherent_only`` travels IN the
     payload, so a run resumed after a restart filters as it was started.
     """
+    # The world's media master switch, checked BEFORE the work is counted: a
+    # batch is the biggest single producer of render tasks in this app, and a
+    # queue full of jobs that each die at the gate helps nobody.
+    if not media_generation_enabled():
+        logger.info("Outfit combos %s: not queued — media generation is "
+                    "disabled for this world", character_name)
+        return {"ok": False,
+                "error": "Media generation is disabled for this world"}
     options = combo_options(character_name)
     if not options:
         return {"ok": False, "error": "no outfit pieces in this inventory"}

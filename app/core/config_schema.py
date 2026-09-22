@@ -536,7 +536,7 @@ SECTIONS = {
             },
         ],
         "fields": {
-            "enabled": {"type": "bool", "label": "Aktiviert", "default": True},
+            "enabled": {"type": "bool", "label": "Media generation enabled", "default": True, "description": "Master switch for every image, video and 3D-mesh generation of this world. Off: requests are refused with a clear message and no task is queued; existing media stay served. Per-backend switches still apply when on."},
 
             # --- Post-Processing Hand-off ---
             "postprocess_enabled": {"type": "bool", "label": "Post-Processing aktiviert", "default": False, "description": "Nach dem Erzeugen eines geeigneten Bildes einen externen Post-Processing-Dienst benachrichtigen. Der Dienst liest das Bild selbst (Galerie-API / Dateisystem) und schreibt das Ergebnis ueber den API-Endpoint zurueck. Dieses Programm bearbeitet keine Bilder selbst und sendet keine Bild-Bytes."},

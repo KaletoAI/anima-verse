@@ -36,6 +36,30 @@ class BackendBusyError(Exception):
     """
 
 
+class MediaGenerationDisabled(RuntimeError):
+    """The WORLD has media generation switched off (``image_generation.enabled``).
+
+    Deliberately NOT a :class:`BackendBusyError`: nothing is loaded, nothing is
+    broken and nothing will change by retrying — an admin has to turn the
+    switch back on. So this exception must never buy a retry and never a
+    backend cooldown (``selection.run_on_backend`` re-raises it untouched); the
+    persistent queue ends such a task as FAILED with this message, and a
+    synchronous route answers 409 with it (handler in ``app/server.py``).
+    """
+
+
+def media_generation_enabled() -> bool:
+    """The world's master switch for image, video and 3D-mesh generation
+    (``image_generation.enabled``, Admin → Settings → Media Generation).
+
+    Read LIVE on every call, never cached in a service instance: the admin
+    saves the switch into the running config, and a pool that was built while
+    it was on must not keep rendering afterwards.
+    """
+    from app.core import config
+    return bool(config.get("image_generation.enabled", True))
+
+
 class GatewayRejectedError(RuntimeError):
     """The request could never work — the INPUT was refused, not the backend.
 
