@@ -620,8 +620,8 @@ class AgentLoop:
         if not (leaver and from_loc):
             return
         try:
-            from app.core.room_entry import _list_characters_in_room
-            present = [c for c in _list_characters_in_room(from_loc, from_room)
+            from app.core.room_entry import characters_in_room
+            present = [c for c in characters_in_room(from_loc, from_room)
                        if c and c != leaver and _is_agent_eligible(c)]
             if not present:
                 return
@@ -668,7 +668,7 @@ class AgentLoop:
         Returns {"obligatory": [...], "chime": [...]} of the characters
         actually bumped.
         """
-        from app.core.room_entry import _list_characters_in_room
+        from app.core.room_entry import characters_in_room
         # exclude: characters that deliberately must NOT react here (e.g. an
         # NPC invited to a party who already answers via the consent path —
         # otherwise a double reaction).
@@ -708,7 +708,7 @@ class AgentLoop:
         # spoken from inside a location it reaches nobody out there.
         from app.core.perception import VOLUME_WHISPER, nearby_in_the_open
         if location_id:
-            in_earshot = list(_list_characters_in_room(location_id, room_id))
+            in_earshot = list(characters_in_room(location_id, room_id))
             if volume != VOLUME_WHISPER:
                 _room = set(in_earshot)
                 in_earshot += [c for c in nearby_in_the_open(speaker)

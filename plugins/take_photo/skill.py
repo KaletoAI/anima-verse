@@ -35,7 +35,7 @@ def _avatar_in_room(character_name: str) -> str:
     A character the map places nowhere has no room and therefore no partner —
     the honest answer for a wanderer between two locations.
     """
-    from app.core.room_entry import _list_characters_in_room
+    from app.core.room_entry import characters_in_room
     from app.models.account import get_active_character, get_all_avatars
     from app.models.character import (get_character_current_location,
                                       get_character_current_room)
@@ -45,8 +45,8 @@ def _avatar_in_room(character_name: str) -> str:
         return ""
     room_id = (get_character_current_room(character_name) or "").strip()
     avatars = get_all_avatars()
-    present = [c for c in _list_characters_in_room(location_id, room_id,
-                                                   exclude=character_name)
+    present = [c for c in characters_in_room(location_id, room_id,
+                                            exclude=character_name)
                if c in avatars]
     if not present:
         return ""

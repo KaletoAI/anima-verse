@@ -287,7 +287,7 @@ def present_partners(name: str) -> List[Dict[str, str]]:
     ``{name, role, task, activity}`` each.
 
     Earshot follows the perception model — the same room inside a location
-    (``room_entry._list_characters_in_room``), the hearing circle outside
+    (``room_entry.characters_in_room``), the hearing circle outside
     (``perception.nearby_in_the_open``). Only temporary NPCs: avatars and
     ordinary characters are never offered (spec § 8). Asleep, travelling or
     mid-interaction ones are left out — they could not answer.
@@ -302,8 +302,8 @@ def present_partners(name: str) -> List[Dict[str, str]]:
         room = get_character_current_room(name) or ""
         if not room:
             return []
-        from app.core.room_entry import _list_characters_in_room
-        names = _list_characters_in_room(loc, room, exclude=name)
+        from app.core.room_entry import characters_in_room
+        names = characters_in_room(loc, room, exclude=name)
     else:
         from app.core.perception import nearby_in_the_open
         names = nearby_in_the_open(name)

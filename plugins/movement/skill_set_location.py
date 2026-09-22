@@ -310,8 +310,8 @@ class SetLocationSkill(PluginSkill):
                 # tell "I have never been told about this place" from "the
                 # place stands on no map at all", so both read alike.
                 try:
-                    from app.models.character import _record_state_change
-                    _record_state_change(character_name, "travel_failed",
+                    from app.models.character import record_state_change
+                    record_state_change(character_name, "travel_failed",
                         location_name,
                         metadata={"location_id": location_id,
                                   "reason": reason})

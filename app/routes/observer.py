@@ -22,18 +22,18 @@ router = APIRouter(prefix="/admin/observer", tags=["observer"],
 @router.get("/presence")
 def presence():
     """Alle Locations/Raeume mit den aktuell anwesenden Characters."""
-    from app.core.room_entry import _list_characters_in_room
+    from app.core.room_entry import characters_in_room
     from app.models.world import list_locations
 
     out = []
     for loc in list_locations():
         lid = loc.get("id", "")
-        all_in_loc = _list_characters_in_room(lid, "")
+        all_in_loc = characters_in_room(lid, "")
         seen = set()
         rooms_out = []
         for r in (loc.get("rooms") or []):
             rid = r.get("id", "")
-            present = _list_characters_in_room(lid, rid)
+            present = characters_in_room(lid, rid)
             seen.update(present)
             rooms_out.append({"room_id": rid, "name": r.get("name", ""),
                               "present": present})

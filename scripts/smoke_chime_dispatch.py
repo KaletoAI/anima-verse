@@ -172,7 +172,7 @@ def use_rng(draw: float, pick: int = 0) -> None:
 def set_world(present=PRESENT, partners=None, avatars=(AVATAR,),
               chattiness=0.5):
     """Stub everything the dispatch reads from the world."""
-    room_entry._list_characters_in_room = lambda loc, room: list(present)
+    room_entry.characters_in_room = lambda loc, room: list(present)
     character.get_character_current_location = lambda name: LOC
     character.get_movement_target = lambda name: ""
     account.is_player_controlled = lambda name: name in avatars

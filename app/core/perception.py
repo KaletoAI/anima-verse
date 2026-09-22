@@ -283,7 +283,7 @@ def _resolve_presence(location_id: str, room_id: str, *, speaker: str = "",
     ``speaker``/``speaker_pos`` are the centre of that circle; the speaker
     must not appear in its own ``nearby`` list.
     """
-    from app.core.room_entry import _list_characters_in_room
+    from app.core.room_entry import characters_in_room
     nearby = _nearby_in_the_open(speaker, speaker_pos)
     if not location_id:
         return [], [], nearby
@@ -291,8 +291,8 @@ def _resolve_presence(location_id: str, room_id: str, *, speaker: str = "",
     # query answers for it like for any other. The second call passes ""
     # deliberately — that IS the "everyone in the location" query, and the
     # difference of the two sets is who is within shouting distance.
-    room_members = _list_characters_in_room(location_id, room_id)
-    all_in_loc = _list_characters_in_room(location_id, "")
+    room_members = characters_in_room(location_id, room_id)
+    all_in_loc = characters_in_room(location_id, "")
     rm = set(room_members)
     location_others = [c for c in all_in_loc if c not in rm]
     return room_members, location_others, nearby
@@ -413,7 +413,7 @@ def nearby_in_the_open(character_name: str,
 
     The ONE wilderness-presence computation — the prompt builders, the
     reaction dispatch and TalkTo all ask this instead of each inventing a
-    distance rule (the room paths likewise share ``_list_characters_in_room``).
+    distance rule (the room paths likewise share ``characters_in_room``).
     Empty for a character the map does not place; callers that must tell
     "nobody around" from "we do not know" read the point themselves and pass
     it in, which also saves the second lookup.
@@ -430,7 +430,7 @@ def _addressable(location_id: str, room_id: str,
 
     Room list FIRST (when there is a location at all), then the earshot circle
     around ``pos`` — one list, deduplicated, order preserved. Both halves are
-    the EXISTING rosters: ``room_entry._list_characters_in_room`` and
+    the EXISTING rosters: ``room_entry.characters_in_room`` and
     ``_nearby_in_the_open``; nothing here invents a second distance rule or a
     second room rule.
 
@@ -440,12 +440,12 @@ def _addressable(location_id: str, room_id: str,
     — a pooled NPC has no metre point at all today, but the two lists must not
     be allowed to drift apart on that.
     """
-    from app.core.room_entry import _list_characters_in_room
+    from app.core.room_entry import characters_in_room
     from app.models.character import list_available_characters
 
     names: List[str] = []
     if location_id:
-        names.extend(_list_characters_in_room(location_id, room_id))
+        names.extend(characters_in_room(location_id, room_id))
     names.extend(_nearby_in_the_open(exclude or "", pos))
 
     roster = set(list_available_characters())

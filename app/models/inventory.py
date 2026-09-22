@@ -1470,7 +1470,7 @@ def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Di
         if cond_name:
             try:
                 from app.core.keyed_lock import keyed_lock
-                from app.models.character import get_character_profile, save_character_profile, _record_state_change
+                from app.models.character import get_character_profile, save_character_profile, record_state_change
                 # Read AND write under the per-character profile lock
                 # (DATA-3): the save rewrites the whole profile_json blob.
                 # The lock is re-entrant, so the equip/consume routes that
@@ -1493,9 +1493,9 @@ def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Di
                         })
                         profile["active_conditions"] = active
                         save_character_profile(character_name, profile)
-                        _record_state_change(character_name, "condition", cond_name,
-                                              metadata={"source": f"item:{item_id}",
-                                                        "duration_hours": max(1, duration)})
+                        record_state_change(character_name, "condition", cond_name,
+                                             metadata={"source": f"item:{item_id}",
+                                                       "duration_hours": max(1, duration)})
                         condition_applied = cond_name
                         logger.info("Condition '%s' aktiviert fuer %s (Quelle: item %s)",
                                      cond_name, character_name, item_id)
@@ -1814,7 +1814,7 @@ def _record_outfit_history(character_name: str, action: str,
     if not ids:
         return
     try:
-        from app.models.character import _record_state_change
+        from app.models.character import record_state_change
         names = [((get_item(i) or {}).get("name") or i) for i in ids]
         meta: Dict[str, Any] = {
             "action": action,
@@ -1827,7 +1827,7 @@ def _record_outfit_history(character_name: str, action: str,
         if gone:
             meta["displaced"] = [((get_item(i) or {}).get("name") or i)
                                  for i in gone[:6]]
-        _record_state_change(character_name, "outfit", ", ".join(names[:6]), meta)
+        record_state_change(character_name, "outfit", ", ".join(names[:6]), meta)
     except Exception as e:
         logger.debug("outfit history [%s/%s] failed: %s", character_name, action, e)
 

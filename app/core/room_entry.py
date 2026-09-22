@@ -1,11 +1,12 @@
-"""Avatar-Raumwechsel: Anwesende Characters bemerken den Eintritt.
+"""Avatar room change: the characters present notice the entry.
 
-Wird aufgerufen wenn der User-Avatar einen Raum (oder Location) betritt.
-Waehlt einen geeigneten Character im Zielraum, der via forced_thought +
-TalkTo-Whitelist auf den Eintritt reagiert.
+Called when the user's avatar enters a room (or location). Picks a suitable
+character in the target room, who reacts to the entry via forced_thought +
+TalkTo whitelist.
 
-Cooldown: pro (reactor, avatar) max 1 Greeting in GREETING_COOLDOWN_MIN
-Minuten — gespeichert als Memory-Tag `room_greeting:{avatar}`.
+Cooldown: per (reactor, avatar) at most one greeting within
+GREETING_COOLDOWN_MIN minutes — stored as the memory tag
+`room_greeting:{avatar}`.
 """
 import random
 from datetime import datetime, timedelta
@@ -20,7 +21,7 @@ logger = get_logger("room_entry")
 GREETING_COOLDOWN_MIN = 30
 
 
-def _list_characters_in_room(location_id: str, room_id: str, exclude: str = "") -> List[str]:
+def characters_in_room(location_id: str, room_id: str, exclude: str = "") -> List[str]:
     """Characters in the same room — or, with an empty ``room_id``, everyone in
     the location (the deliberate "the whole location" query, e.g. for a shout).
 
@@ -181,17 +182,17 @@ def on_avatar_room_entry(avatar_name: str,
                           room_id: str = "",
                           location_label: str = "",
                           room_label: str = "") -> dict:
-    """Hook nach Avatar-Raumwechsel. Triggert ggf. eine Greeting-Reaktion.
+    """Hook after an avatar room change. May trigger a greeting reaction.
 
-    Returns: dict mit
-      - reactor: Name des reagierenden Characters (oder "")
-      - silent_noticers: Liste der Characters die bemerkt aber geschwiegen haben
+    Returns: dict with
+      - reactor: name of the reacting character (or "")
+      - silent_noticers: characters that noticed but stayed silent
     """
     result = {"reactor": "", "silent_noticers": []}
     if not avatar_name or not location_id:
         return result
-    candidates = _list_characters_in_room(location_id, room_id, exclude=avatar_name)
-    logger.info("on_avatar_room_entry: avatar=%s loc=%s room=%s -> %d Kandidaten: %s",
+    candidates = characters_in_room(location_id, room_id, exclude=avatar_name)
+    logger.info("on_avatar_room_entry: avatar=%s loc=%s room=%s -> %d candidates: %s",
                  avatar_name, location_id, room_id, len(candidates), candidates)
     if not candidates:
         return result
@@ -199,7 +200,7 @@ def on_avatar_room_entry(avatar_name: str,
     reactor, silent = pick_reactor(avatar_name, candidates)
     result["silent_noticers"] = silent
     if not reactor:
-        logger.info("on_avatar_room_entry: kein Reactor gewaehlt (avatar=%s, %d Kandidaten, %d silent)",
+        logger.info("on_avatar_room_entry: no reactor picked (avatar=%s, %d candidates, %d silent)",
                      avatar_name, len(candidates), len(silent))
         return result
 

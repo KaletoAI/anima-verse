@@ -332,7 +332,7 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     Returns None when the avatar has no location or the room has no
     background image (nothing to compose onto).
     """
-    from app.core.room_entry import _list_characters_in_room
+    from app.core.room_entry import characters_in_room
     from app.core.world_ops import resolve_background_path
     from app.models.character import (get_character_current_location,
                                       get_character_current_room)
@@ -360,7 +360,7 @@ def build_scene_state(avatar: str) -> Optional[Dict[str, Any]]:
     from app.core.prompt_compose import outdoor_conditions as _conditions
     conditions = _conditions(outdoor)
 
-    names = [avatar] + [n for n in (_list_characters_in_room(loc, room) or [])
+    names = [avatar] + [n for n in (characters_in_room(loc, room) or [])
                         if n != avatar]
     mode = get_scene_render_mode()
     from app.models.character import get_movement_target

@@ -8,7 +8,7 @@ No server, no real world DB — throwaway storage via ``paths.init`` plus a
 freshly created schema, filled with 200 memory rows placed BY HAND around both
 window edges.
 
-Review 2026-09-20, finding SIM-6: ``_sender_on_cooldown`` and
+Review 2026-09-20, finding SIM-6: ``sender_on_cooldown`` and
 ``_recipient_recently_perceived`` called ``memory.load_memories``, i.e.
 ``SELECT * FROM memories WHERE character_name=?`` — the COMPLETE memory of a
 character, every row turned into a dict — only to keep a 2- resp. 30-minute
@@ -164,19 +164,19 @@ with db.transaction() as conn:
 print("A) sender cooldown (2 minutes)")
 # ---------------------------------------------------------------------------
 seed(ACTOR, [entry(1, ["action_performed", "action_performed:here"], "acted")])
-check("A1 tagged row 1 min ago", act_engine._sender_on_cooldown(ACTOR, "here"), True)
+check("A1 tagged row 1 min ago", act_engine.sender_on_cooldown(ACTOR, "here"), True)
 
 seed(ACTOR, [entry(3, ["action_performed", "action_performed:here"], "acted"),
              entry(9, ["action_performed", "action_performed:here"], "acted")])
 check("A2 newest tagged row 3 min ago",
-      act_engine._sender_on_cooldown(ACTOR, "here"), False)
+      act_engine.sender_on_cooldown(ACTOR, "here"), False)
 
 seed(ACTOR, [entry(1, ["action_performed", "action_performed:location"], "acted")])
-check("A3 wrong scope tag", act_engine._sender_on_cooldown(ACTOR, "here"), False)
-check("A3 right scope tag", act_engine._sender_on_cooldown(ACTOR, "location"), True)
+check("A3 wrong scope tag", act_engine.sender_on_cooldown(ACTOR, "here"), False)
+check("A3 right scope tag", act_engine.sender_on_cooldown(ACTOR, "location"), True)
 
 seed(ACTOR, [])
-check("A4 no memories at all", act_engine._sender_on_cooldown(ACTOR, "here"), False)
+check("A4 no memories at all", act_engine.sender_on_cooldown(ACTOR, "here"), False)
 
 # ---------------------------------------------------------------------------
 print("B) recipient dedup (30 minutes)")
@@ -234,7 +234,7 @@ check("C0 row count", len(memory_model.load_memories(ACTOR)), 200)
 
 for scope in ("here", "location"):
     check(f"C sender scope={scope} matches the old filter",
-          act_engine._sender_on_cooldown(ACTOR, scope),
+          act_engine.sender_on_cooldown(ACTOR, scope),
           ORACLE_sender(ACTOR, scope))
 for text in (TEXT, "take 8", "nothing like this"):
     check(f"C recipient text={text!r} matches the old filter",
@@ -254,7 +254,7 @@ def _raiser(name):
 memory_model.load_memories = _raiser
 try:
     check("D1 sender check works without load_memories",
-          act_engine._sender_on_cooldown(ACTOR, "location"), True)
+          act_engine.sender_on_cooldown(ACTOR, "location"), True)
     check("D2 recipient check works without load_memories",
           act_engine._recipient_recently_perceived(RECIPIENT, ACTOR, "take 8"),
           True)

@@ -3778,7 +3778,7 @@ def play_get_figures(bg: str = "", user=Depends(get_current_user)):
     Source is the character data (not user settings) → the placement applies
     to all players. A position is keyed to (room, bg_id, expr_version): for a
     new image the entry is missing → the frontend uses its default position."""
-    from app.core.room_entry import _list_characters_in_room
+    from app.core.room_entry import characters_in_room
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                        get_character_current_room,
@@ -3790,7 +3790,7 @@ def play_get_figures(bg: str = "", user=Depends(get_current_user)):
         return {"positions": positions}
     loc = get_character_current_location(avatar) or ""
     room = get_character_current_room(avatar) or ""
-    names = list(_list_characters_in_room(loc, room)) if loc else []
+    names = list(characters_in_room(loc, room)) if loc else []
     if avatar not in names:
         names.append(avatar)
     for name in names:
@@ -3816,7 +3816,7 @@ async def play_save_figures(request: Request, user=Depends(get_current_user)):
 
 def _play_save_figures_sync(user, body: Any):
     """The blocking body of ``play_save_figures`` — runs in the threadpool."""
-    from app.core.room_entry import _list_characters_in_room
+    from app.core.room_entry import characters_in_room
     from app.models.account import get_active_character
     from app.models.character import (get_character_current_location,
                                        get_character_current_room,
@@ -3830,7 +3830,7 @@ def _play_save_figures_sync(user, body: Any):
         return {"ok": True}
     loc = get_character_current_location(avatar) or ""
     room = get_character_current_room(avatar) or ""
-    allowed = set(_list_characters_in_room(loc, room)) if loc else set()
+    allowed = set(characters_in_room(loc, room)) if loc else set()
     allowed.add(avatar)
     for name, p in positions.items():
         if name not in allowed or not isinstance(p, dict):

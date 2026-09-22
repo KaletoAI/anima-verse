@@ -484,8 +484,8 @@ def _check_present(character_name: str, target_name: str,
         if not loc:
             return False, f"{target_name} nicht hier (kein Ort)"
         room = room_id or get_character_current_room(character_name)
-        from app.core.room_entry import _list_characters_in_room
-        present = _list_characters_in_room(loc, room)
+        from app.core.room_entry import characters_in_room
+        present = characters_in_room(loc, room)
         if target_name in present:
             return True, ""
         return False, f"{target_name} nicht im selben Raum"

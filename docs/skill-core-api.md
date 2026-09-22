@@ -187,6 +187,7 @@ Position schreiben, um jemanden woanders hin zu bringen.
 | `get_character_dir(character_name, *, create=False) -> Path` | Per-Charakter-Storage-Verzeichnis — für Pakete mit eigenen Dateien (markdown_writer schreibt nach `<dir>/documents/<folder>/`) |
 | `get_character_skill_config(character_name, skill_name) -> Dict` / `save_character_skill_config(character_name, skill_name, config)` | Per-Charakter-Skill-Config. Normalerweise nicht direkt rufen — `BaseSkill._get_effective_config` liefert Defaults + Overrides typisiert |
 | `record_access_denied(character_name, location_id, location_name, reason, rule_name='', action='enter')` | Abgewiesenen Zutritt vermerken (Gedächtnis + UI-Hinweis) |
+| `record_state_change(character_name, change_type, value, metadata=None) -> bool` | Eine Zustandsänderung (Ort, Raum, Outfit, Entdeckung, fehlgeschlagene Reise …) in die `state_history` schreiben — die Quelle des Tagebuchs und der „Zuletzt erlebt"-Zeilen; `False` heißt: nichts geschrieben (Rückgabe prüfen), Ringpuffer 200 Einträge pro Charakter |
 
 **Viele Leser nehmen `profile=`.** Wer das Profil ohnehin geladen hat, reicht es durch
 und spart den zweiten DB-Zugriff: `get_character_current_location`,
@@ -207,6 +208,7 @@ hängt, räumt ihn über denselben Weg auf (Check:
 |---|---|
 | `app.core.perception.record_utterance(*, speaker, content, volume='normal', addressees=None, location_id=None, room_id=None, source='', …) -> Optional[int]` | Erzähler-/Sprechakt-Zeile in den Raum-Stream |
 | `app.core.perception.nearby_in_the_open(character_name, pos=None) -> List[str]` | Wer im Freien in Hörweite ist (Raum-Roster ∪ Radius) |
+| `app.core.room_entry.characters_in_room(location_id, room_id, exclude='') -> List[str]` | Wer gerade im selben Raum steht (Raum-ID ODER Raum-Name wird gematcht); leeres `room_id` heißt bewusst „die ganze Location", `exclude` lässt einen Namen weg |
 | `app.core.agent_loop.get_agent_loop().bump(character_name, hint='', perception_template='', perception_vars=None, tool_whitelist=None) -> bool` ✅ | Charakter für einen zeitnahen Thought-Turn vormerken. `hint` ist die Zeile, die er dabei liest; `tool_whitelist` schränkt die angebotenen Verben ein. Liefert `False`, wenn er keinen Turn bekommen kann (z.B. temporärer NPC) |
 | `app.models.memory.add_memory(character_name, content, memory_type='semantic', importance=3, tags=None, context='', related_character='', …)` | Erinnerung anlegen |
 | `app.models.account.is_player_controlled(character_name)` / `get_active_character()` ✅ / `get_player_identity(default='user')` ✅ | Avatar-Erkennung, Anzeigename des Spielers. Einen festen 1:1-Gesprächspartner gibt es nicht mehr — wer gerade beisammen ist, sagt `app.core.perception.addressable_for(character_name)` |
@@ -314,6 +316,11 @@ Storyteller-Pipeline (Szenen-Kontext, Storyteller-LLM, Event-Verdikt, Erzähler-
 in den Stream, Memories/Diary/Bumps). Konsumenten: das Act-VERB (`plugins/act`) und
 der Storyteller-Fallback in `routes/play.py`. Die Storyteller-Whitelist
 (`app.models.storyteller.list_skill_keys()`) ist dynamisch = alle geladenen Skills.
+
+| Funktion | Semantik |
+|---|---|
+| `extract_text_and_scope(ctx) -> tuple` | Aktionstext + Reichweite (`here`/`location`) aus dem Tool-JSON ziehen — die EINE Lesart des Act-Inputs, damit Verb und Route denselben Text sehen |
+| `sender_on_cooldown(actor, scope) -> bool` | Hat der Akteur in den letzten `SENDER_COOLDOWN_MIN` Minuten in dieser Reichweite schon gehandelt? |
 
 ## Bild-/Video-/Mesh-Service — `app.imagegen.service` ✅
 

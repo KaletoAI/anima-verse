@@ -98,8 +98,8 @@ def get_character_dir(character_name: str, *, create: bool = False) -> Path:
     return character_dir
 
 
-def _record_state_change(character_name: str, change_type: str, value: str,
-                         metadata: dict = None) -> bool:
+def record_state_change(character_name: str, change_type: str, value: str,
+                        metadata: dict = None) -> bool:
     """Append a state change (location/activity) to state_history DB table.
 
     Lightweight log used by the Diary to show location/activity changes.
@@ -134,7 +134,7 @@ def _record_state_change(character_name: str, change_type: str, value: str,
             """, (character_name, ts, game_ts,
                   json.dumps(state_entry, ensure_ascii=False)))
     except Exception as e:
-        logger.error("_record_state_change DB error for %s (%s): %s",
+        logger.error("record_state_change DB error for %s (%s): %s",
                      character_name, change_type, e, exc_info=True)
         return False
 
@@ -157,7 +157,7 @@ def _record_state_change(character_name: str, change_type: str, value: str,
             """, (character_name, excess))
             conn.commit()
     except Exception as e:
-        logger.warning("_record_state_change trim failed for %s: %s",
+        logger.warning("record_state_change trim failed for %s: %s",
                        character_name, e)
     return True
 
@@ -168,11 +168,11 @@ def record_access_denied(character_name: str,
     reason: str,
     rule_name: str = "",
     action: str = "enter") -> None:
-    """Protokolliert einen verweigerten Ortswechsel fuers Tagebuch.
+    """Record a denied location change for the diary.
 
-    ``action`` unterscheidet Eintritts- ("enter") und Verlassens-Blockaden
-    ("leave"). Wird ins Metadata-Dict geschrieben, damit Diary-Renderer und
-    Recent-Activity die Richtung anzeigen koennen.
+    ``action`` separates entry ("enter") from exit ("leave") blocks. It goes
+    into the metadata dict so the diary renderer and the recent-activity view
+    can show the direction.
     """
     metadata = {
         "location_id": location_id,
@@ -182,7 +182,7 @@ def record_access_denied(character_name: str,
     }
     if rule_name:
         metadata["rule_name"] = rule_name
-    _record_state_change(character_name, "access_denied", location_name or location_id, metadata
+    record_state_change(character_name, "access_denied", location_name or location_id, metadata
     )
 
 
@@ -225,9 +225,9 @@ def _replace_last_state_entry(character_name: str, change_type: str, value: str,
                     )
                 return
     except Exception as e:
-        logger.debug("_replace_last_state_entry DB-Fehler fuer %s: %s", character_name, e)
+        logger.debug("_replace_last_state_entry DB error for %s: %s", character_name, e)
     # No existing entry found — add new
-    _record_state_change(character_name, change_type, value, metadata)
+    record_state_change(character_name, change_type, value, metadata)
 
 
 # Runtime-Keys: werden in character_state gespeichert, in profile_json NICHT.
@@ -1660,7 +1660,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
                 _e)
     # Record the location history (only on a real change)
     if location and location != old_location:
-        _record_state_change(character_name, "location", location)
+        record_state_change(character_name, "location", location)
         # Auto-discovery: whoever actually ENTERS a place knows it from now
         # on — otherwise they could not go back (visibility-restricted travel
         # would see their own position as unknown). Safely idempotent;
@@ -2363,8 +2363,8 @@ def save_character_current_room(character_name: str, room_id: str,
         # stored in its history, and the ground's default word is translated.
         _lang = get_character_language(character_name) or "de"
         room_name = _room_name_for(room_id, cur_loc, _lang)
-        _record_state_change(character_name, "room", room_id,
-                              metadata={"name": room_name, "old": old_room})
+        record_state_change(character_name, "room", room_id,
+                             metadata={"name": room_name, "old": old_room})
         # C1: movement trace (storyteller) on a room change WITHIN the same
         # location. Guard: both rooms belong to the current location, so the
         # room reset during a cross-location move (the old room belongs to the
@@ -4353,8 +4353,8 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
             save_character_profile(character_name, profile)
     if changes:
         try:
-            _record_state_change(character_name, "effects", source or "chat",
-                                 metadata={"changes": changes, "source": source})
+            record_state_change(character_name, "effects", source or "chat",
+                                metadata={"changes": changes, "source": source})
         except Exception:
             pass
     return changes

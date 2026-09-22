@@ -93,14 +93,14 @@ def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
     descriptions) WITHOUT generating — feeds the image-gen dialog."""
     from app.models.character import (get_character_current_location,
                                       get_character_current_room)
-    from app.core.room_entry import _list_characters_in_room
+    from app.core.room_entry import characters_in_room
 
     loc = get_character_current_location(avatar) or ""
     room = get_character_current_room(avatar) or ""
     if not loc:
         return {"ok": False, "error": "Avatar has no location."}
 
-    present = [c for c in (_list_characters_in_room(loc, room) or [])
+    present = [c for c in (characters_in_room(loc, room) or [])
                if c != avatar]
     # The photographer stays behind the camera — unless they are part of
     # what there is to photograph. In a running pair the avatar is a

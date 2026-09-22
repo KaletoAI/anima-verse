@@ -19,7 +19,7 @@ a traceback and then carried straight on: it updated the CALLER's dict with
 the runtime keys and fired the outfit hook, and it returned nothing at all, so
 ``POST /characters/{name}/profile`` answered ``{"status": "success"}``. The UI
 showed the new value (it is in the returned dict) and it was gone after the
-next reload. ``save_character_config`` did the same; ``_record_state_change``
+next reload. ``save_character_config`` did the same; ``record_state_change``
 logged its loss at DEBUG.
 Three readers then covered the tracks: ``get_character_profile``,
 ``get_character_config`` and ``list_available_characters`` caught the DB error
@@ -33,7 +33,7 @@ EXPECTED, derived by hand from the contracts (not from current output):
         save_character_profile(name, {...}, create_new=True) -> True, and the
         row is in ``characters``.
         save_character_config(name, {...}) -> True, row updated.
-        _record_state_change(name, "location", "market") -> True, one row in
+        record_state_change(name, "location", "market") -> True, one row in
         ``state_history``.
       None of the three takes an argument that changes on success.
 
@@ -48,7 +48,7 @@ EXPECTED, derived by hand from the contracts (not from current output):
   [3] THE FAILURE IS LOGGED AT ERROR WITH A TRACEBACK.
         One ERROR record per failed call on the ``character`` logger, and
         ``record.exc_info`` is set — without it the line names the exception
-        but not the statement that raised it. ``_record_state_change`` used
+        but not the statement that raised it. ``record_state_change`` used
         DEBUG, so it logged nothing at all at this level.
 
   [4] THE RETURN VALUE CARRIES INFORMATION.
@@ -184,8 +184,8 @@ check("the row carries the value", stored_config().get("importance") == 1,
       repr(stored_config().get("importance")))
 
 before_state = state_rows()
-ok = ch._record_state_change(NAME, "location", "market")
-check("_record_state_change -> True", ok is True, repr(ok))
+ok = ch.record_state_change(NAME, "location", "market")
+check("record_state_change -> True", ok is True, repr(ok))
 check("the row is there", state_rows() == before_state + 1)
 
 print("[2]/[3] a failing write is False, silent on disk and loud in the log")
@@ -198,7 +198,7 @@ try:
                                              "mood": "furious"})
     res_c = ch.save_character_config(NAME, {"importance": 3})
     before_state = state_rows()
-    res_s = ch._record_state_change(NAME, "location", "harbour")
+    res_s = ch.record_state_change(NAME, "location", "harbour")
 finally:
     ch.transaction = _real_tx
     ch.logger.removeHandler(log)
@@ -209,7 +209,7 @@ check("the stored profile still says calm", stored_profile().get("mood") == "cal
 check("save_character_config -> False", res_c is False, repr(res_c))
 check("the stored config still says 1", stored_config().get("importance") == 1,
       repr(stored_config().get("importance")))
-check("_record_state_change -> False", res_s is False, repr(res_s))
+check("record_state_change -> False", res_s is False, repr(res_s))
 check("no state_history row was added", state_rows() == before_state)
 
 errors = [r for r in log.records if r.levelno >= logging.ERROR]

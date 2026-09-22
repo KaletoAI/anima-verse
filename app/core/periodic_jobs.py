@@ -135,7 +135,7 @@ def _sub_force_rules():
             save_character_current_room,
             enter_offmap_sleep, wake_from_offmap,
             OFFMAP_SLEEP_SENTINEL,
-            _record_state_change)
+            record_state_change)
         from app.models.account import is_player_controlled
         from app.models.character import get_character_profile
         from app.models.rules import load_rules
@@ -155,11 +155,11 @@ def _sub_force_rules():
                 go_to = force.get("go_to") or "stay"
                 dest_loc, dest_room = resolve_force_destination(name, go_to)
 
-                # Vorher-Snapshot: erlaubt am Ende zu erkennen ob die Regel
-                # tatsaechlich was geaendert hat. Ohne Aenderung kein
-                # _record_state_change(forced_action) — sonst spammt eine
-                # Erschoepfungs-/Wake-Regel jede Minute das Tagebuch.
-                # EIN Profil-Read fuer alle drei Felder statt drei (SIM-7).
+                # Before-snapshot: lets us tell at the end whether the rule
+                # really changed anything. No change, no
+                # record_state_change(forced_action) — otherwise an
+                # exhaustion/wake rule spams the diary every minute.
+                # ONE profile read for all three fields instead of three (SIM-7).
                 _before_prof = get_character_profile(name)
                 _before_loc = (get_character_current_location(
                     name, profile=_before_prof) or "").strip()
@@ -244,7 +244,7 @@ def _sub_force_rules():
                 if not _changed:
                     continue
 
-                _record_state_change(
+                record_state_change(
                     name, "forced_action",
                     force.get("message") or force.get("rule_name") or "",
                     metadata={"rule": force.get("rule_name", ""),

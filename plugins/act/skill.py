@@ -33,7 +33,7 @@ class ActSkill(PluginSkill):
             return "Act Skill is disabled."
 
         from app.core.act_engine import (
-            perform_act, _extract_text_and_scope, _sender_on_cooldown,
+            perform_act, extract_text_and_scope, sender_on_cooldown,
             SENDER_COOLDOWN_MIN)
 
         ctx = self._parse_base_input(raw_input)
@@ -41,13 +41,13 @@ class ActSkill(PluginSkill):
         if not actor:
             return "Error: actor context missing."
 
-        text, scope = _extract_text_and_scope(ctx)
+        text, scope = extract_text_and_scope(ctx)
         if not text:
             return "Error: empty action text."
         if scope not in ("here", "location"):
             scope = "here"
 
-        if _sender_on_cooldown(actor, scope):
+        if sender_on_cooldown(actor, scope):
             return (f"You acted very recently — wait at least "
                     f"{SENDER_COOLDOWN_MIN} minutes before the next action.")
 

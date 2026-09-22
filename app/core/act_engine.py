@@ -713,8 +713,8 @@ def resolve_recipients(scope: str, actor: str) -> List[str]:
     actor_room = (get_character_current_room(actor) or "").strip()
 
     if scope == "here":
-        from app.core.room_entry import _list_characters_in_room
-        return _list_characters_in_room(actor_loc, actor_room, exclude=actor)
+        from app.core.room_entry import characters_in_room
+        return characters_in_room(actor_loc, actor_room, exclude=actor)
 
     from app.models.character import list_available_characters
     out: List[str] = []
@@ -774,7 +774,7 @@ def _has_tag(tags_json: str, tag: str) -> bool:
         return False
 
 
-def _sender_on_cooldown(actor: str, scope: str) -> bool:
+def sender_on_cooldown(actor: str, scope: str) -> bool:
     """True if the actor performed any action within the cooldown window."""
     try:
         cutoff = (utc_now() - timedelta(minutes=SENDER_COOLDOWN_MIN)).isoformat()
@@ -927,7 +927,7 @@ def _bump_with_perception(recipient: str, actor: str, narration: str, scope: str
         logger.debug("Act bump failed for %s: %s", recipient, e)
 
 
-def _extract_text_and_scope(ctx: Dict[str, Any]) -> tuple:
+def extract_text_and_scope(ctx: Dict[str, Any]) -> tuple:
     """Pull text + scope out of the JSON tool-input."""
     text = ""
     scope = "here"

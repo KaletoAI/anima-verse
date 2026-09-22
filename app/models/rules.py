@@ -801,7 +801,7 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
     from app.core.discovery import get_discovery_range_m, locations_within
     from app.models.character import (
         get_character_current_location, get_character_pos, get_known_locations,
-        add_known_location, _record_state_change)
+        add_known_location, record_state_change)
     from app.models.world import (
         list_locations, location_knowledge_gate_open, visibility_context)
 
@@ -868,7 +868,7 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
         message = (localized(rule, "message", _lang) or "").strip() \
             or f"Discovered a new place: {loc_name}"
         try:
-            _record_state_change(character_name, "discovery", loc_name,
+            record_state_change(character_name, "discovery", loc_name,
                 metadata={"location_id": discovered_id,
                           "rule_id": rule.get("id", ""),
                           "rule_name": rule.get("name", "")})
