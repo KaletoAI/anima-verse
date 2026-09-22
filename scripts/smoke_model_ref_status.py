@@ -5,7 +5,8 @@ No server, no world, no DB: every reader of world data the status path
 touches (outfit state, humanoid flag, extra views, auto toggles) is replaced
 by a stub, the render itself (``_fire_kinds`` / ``generate_model_ref_images``)
 by a recorder, and the module's internal tables (``_pending_timers``,
-``_running``) are driven directly. Nothing under worlds/ is read or written.
+``_running``) are driven directly. Storage is a throwaway temp dir, so
+nothing under worlds/ is read or written.
 
 What the status must say, derived BY HAND from the contract in
 ``get_render_status``:
@@ -46,11 +47,19 @@ What the status must say, derived BY HAND from the contract in
 Usage:  ./.venv/bin/python scripts/smoke_model_ref_status.py
 """
 import sys
+import tempfile
 import threading
 from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Throwaway storage BEFORE the first app import. The stubs cover the status
+# path, but one reader underneath (``get_character_profile``) still reaches
+# world.db; without a storage root that read raises — and before paths lost
+# its worlds/demo fallback it opened the TRACKED demo world instead.
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="model-ref-status-storage-"))
 
 from app.core import model_refs as mr  # noqa: E402
 from app.core.timeutils import parse_iso, utc_now  # noqa: E402

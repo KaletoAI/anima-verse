@@ -25,7 +25,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
-# Initialize storage paths first (CLI --storage / --world / STORAGE_DIR env)
+# Initialize storage paths first. The world is chosen by whoever STARTS the
+# server — start.sh (--world / --storage) and docker-entrypoint.sh (WORLD) both
+# export STORAGE_DIR, and start.sh supplies the ./worlds/demo default. There is
+# no fallback here on purpose: importing this module without STORAGE_DIR raises
+# paths.StorageNotInitialised instead of silently opening the tracked demo world.
 from app.core import paths as _paths
 _paths.init()
 

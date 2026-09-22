@@ -136,9 +136,18 @@ no contour piece yields to a room wall).
 import json
 import math
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Throwaway storage BEFORE the first app import. The fixtures are literal
+# dicts, but the composer asks the pose catalog for its marker groups, and the
+# WORLD layer of that catalog lives in world.db — without a storage root that
+# read raises (and before paths lost its worlds/demo fallback it silently
+# opened the demo world, which is tracked in git).
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="exterior-render-storage-"))
 
 from app.core import exterior_render as ex                        # noqa: E402
 from app.core import scene_recipe as sr                           # noqa: E402

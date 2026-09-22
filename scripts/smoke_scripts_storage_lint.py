@@ -6,23 +6,31 @@ Usage:  ./.venv/bin/python scripts/smoke_scripts_storage_lint.py
 THE RULE, derived from app/core/paths.py (``init`` resolution order)
 
 ``paths.init()`` resolves the storage root as: explicit argument, else the
-``STORAGE_DIR`` environment variable, else ``./worlds/demo``.  And
-``get_storage_dir()`` auto-initialises on first call, so a script that never
-calls ``init`` silently lands in ``worlds/demo`` — which is TRACKED in git
-(CLAUDE.md: "worlds/demo/ **is** tracked in git").  Any app module that opens
-``world.db`` therefore writes into the shipped demo world and leaves the
-working tree dirty.  It has happened repeatedly; the two most recent cases:
+``STORAGE_DIR`` environment variable — and nothing else.  There is NO default
+world any more: without either, ``init`` and ``get_storage_dir()`` raise
+``paths.StorageNotInitialised``.  The default ``worlds/demo`` moved to the one
+place that STARTS the server (``start.sh``, ``docker/docker-entrypoint.sh``,
+both export ``STORAGE_DIR``).
+
+That is what part 3 of this check pins down.  Until 2026-09-22 the resolution
+ended in ``./worlds/demo`` and ``get_storage_dir()`` auto-initialised on first
+call, so a script that never called ``init`` silently landed in the demo world
+— which is TRACKED in git (CLAUDE.md: "worlds/demo/ **is** tracked in git").
+Any app module that opened ``world.db`` therefore wrote into the shipped demo
+world and left the working tree dirty.  It happened repeatedly; two cases:
 
   * scripts/test_finish_reason.py — ``_log_task_result`` -> ``llm_logger``
     -> ``llm_stats.record_call`` -> ``INSERT INTO llm_call_stats``.
   * scripts/test_respond_lane.py — ``AgentLoop()`` -> ``_is_paused`` ->
     ``is_world_frozen`` -> ``get_connection`` -> ``PRAGMA journal_mode=WAL``.
 
-So: a script that imports a world-DB module MUST set a throwaway storage root
-BEFORE that import — ``paths.init(<temp>)`` or the ``STORAGE_DIR`` env var.
-"Before" is literal for a MODULE-LEVEL import: it executes at load time and
-``get_storage_dir`` caches whatever it resolved first.  An import inside a
-function runs on the call instead, so there any redirect in the file counts.
+The raise makes such a reach LOUD, but a script must still not rely on it: a
+script that imports a world-DB module MUST set a throwaway storage root BEFORE
+that import — ``paths.init(<temp>)`` or the ``STORAGE_DIR`` env var.
+"Before" is literal for a MODULE-LEVEL import: it executes at load time, and
+whatever it touches at load time is decided by the storage root of that
+moment.  An import inside a function runs on the call instead, so there any
+redirect in the file counts.
 ``app.core.paths`` itself is exempt — it is what one calls ``init`` on.
 
 THE CRITERION IS DELIBERATELY NARROW
@@ -69,17 +77,21 @@ recorded from a run:
      (prose is not code — and the sentence that says no redirect is needed
      used to BE the redirect, for a text search)
  10. ``paths.init()`` with NO argument, then the DB import       -> offender
-     (no argument and no ``STORAGE_DIR`` resolves to worlds/demo, see above)
+     (no argument means the env decides — which for a check is no redirect at
+     all; today it raises, before 2026-09-22 it silently took worlds/demo)
  11. only ``os.environ.get("STORAGE_DIR")`` is READ              -> offender
      (a read leaves the resolution order untouched)
  12. ``os.environ.setdefault("STORAGE_DIR", tmp)`` before it     -> clean
      (a write, just a conditional one — scripts here use this form)
 
-Exit code 0 = every candidate redirects its storage.  Exit 1 lists the ones
-that do not — including the line numbers that decide the verdict.
+Exit code 0 = paths.py has no default world AND every candidate redirects its
+storage.  Exit 1 lists what is wrong — including the line numbers that decide
+a script's verdict.
 """
 import ast
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -363,6 +375,87 @@ def scan(db_modules: set):
     return offenders, candidates
 
 
+# ------------------------------------------------------- paths.py behaviour
+
+NO_DEFAULT_PROBE = """
+import app.core.paths as p
+
+# 1. nothing initialised -> the accessor must raise, never resolve
+try:
+    p.get_storage_dir()
+    print("get_storage_dir:NO-RAISE")
+except p.StorageNotInitialised as e:
+    print("get_storage_dir:RAISE:" + str(e))
+except Exception as e:                      # any other type is a failure too
+    print("get_storage_dir:WRONG-TYPE:" + type(e).__name__)
+
+# 2. init() with neither argument nor STORAGE_DIR must raise as well
+try:
+    p.init()
+    print("init:NO-RAISE")
+except p.StorageNotInitialised:
+    print("init:RAISE")
+except Exception as e:
+    print("init:WRONG-TYPE:" + type(e).__name__)
+
+# 3. the shared/ accessors are repo-relative: they must work WITHOUT storage
+try:
+    print("shared:" + p.get_shared_dir().name
+          + "," + p.get_config_dir().name
+          + "," + p.get_animation_clips_dir().name
+          + "," + p.get_rig_file().name)
+except Exception as e:
+    print("shared:RAISED:" + type(e).__name__)
+"""
+
+EXPECTED_MESSAGE = ("storage not initialised — call app.core.paths.init(<dir>) "
+                    "or set STORAGE_DIR before touching world data")
+
+
+def paths_has_no_default() -> None:
+    """Part 3: paths.py names no world, and an uninitialised read raises.
+
+    Source check first (a literal ``worlds/demo`` in ``init`` is the very bug),
+    then the behaviour, measured where it matters: a SUBPROCESS with a clean
+    environment — no ``STORAGE_DIR``, nothing this process initialised.
+    """
+    print("3. app/core/paths.py has no default world")
+    src = (REPO / "app" / "core" / "paths.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    init_fn = next((n for n in tree.body
+                    if isinstance(n, ast.FunctionDef) and n.name == "init"), None)
+    check("paths.py defines init()", init_fn is not None)
+    if init_fn is not None:
+        literals = [c.value for c in ast.walk(init_fn)
+                    if isinstance(c, ast.Constant) and isinstance(c.value, str)
+                    and "worlds/demo" in c.value]
+        check("init() contains no 'worlds/demo' literal", not literals,
+              ", ".join(literals))
+
+    # Clean environment: no STORAGE_DIR (the point), and no ANIMATION_* path
+    # override either — those legitimately move the shared/ accessors, and a
+    # test runner that sets one must not change this verdict.
+    env = {k: v for k, v in os.environ.items()
+           if k != "STORAGE_DIR" and not k.startswith("ANIMATION_")}
+    env["PYTHONPATH"] = str(REPO)
+    out = subprocess.run([sys.executable, "-c", NO_DEFAULT_PROBE],
+                         capture_output=True, text=True, cwd=str(REPO), env=env)
+    lines = dict(line.split(":", 1) for line in out.stdout.splitlines() if ":" in line)
+    if out.returncode != 0:
+        check("the probe runs", False, out.stderr.strip()[-300:])
+        return
+    got = lines.get("get_storage_dir", "")
+    check("get_storage_dir() raises StorageNotInitialised when uninitialised",
+          got.startswith("RAISE"), got)
+    check("…with the documented message",
+          got == "RAISE:" + EXPECTED_MESSAGE, got)
+    check("init() without argument and without STORAGE_DIR raises",
+          lines.get("init") == "RAISE", lines.get("init", ""))
+    check("the shared/ accessors work without storage",
+          lines.get("shared") == "shared,config,clips,reference.fbx",
+          lines.get("shared", ""))
+
+
 def main() -> int:
     db_modules = world_db_modules()
     self_test(db_modules)
@@ -378,6 +471,9 @@ def main() -> int:
         print(f"  FAIL {name} — imports {mod} on line {line}{late}")
     if not offenders:
         print("  OK  every candidate redirects its storage before the import")
+
+    print()
+    paths_has_no_default()
 
     print()
     if FAILURES:

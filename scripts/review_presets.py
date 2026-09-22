@@ -4,8 +4,11 @@
 Laesst ein LLM alle Presets (Keys + Prompt + Synonyme) einer Datei bewerten
 und schreibt einen angereicherten Ziel-JSON mit Review-Block pro Eintrag.
 
+Needs a world (it reads that world's LLM routing/config): pass --world <name>
+(-> worlds/<name>) or set STORAGE_DIR. There is no default world.
+
 Usage:
-  python scripts/review_presets.py --list
+  python scripts/review_presets.py --world demo --list
   python scripts/review_presets.py --llm local-llm::qwen3-8b \
       --source shared/templates/expression/expression_presets.json \
       --target /tmp/expression_review.json
@@ -43,8 +46,8 @@ from typing import Any, Dict, List, Optional
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
-# CLI vor-Parsing nur fuer --world (muss vor paths.init() passieren).
-# Die volle Argument-Parser-Logik kommt spaeter in main().
+# CLI pre-parsing for --world only (it has to happen before paths.init()).
+# The full argument parser follows later in main().
 import os as _os  # noqa: E402
 _world_override = None
 for i, _arg in enumerate(sys.argv):
@@ -55,16 +58,23 @@ for i, _arg in enumerate(sys.argv):
         _world_override = _arg.split("=", 1)[1]
         break
 
-# Bootstrap genauso wie in app/server.py:
-#   1. paths.init()  — Storage-Dir (via --world / STORAGE_DIR / default) setzen
-#   2. config.load() — JSON-Config laden, os.environ befuellen
-#   3. provider_manager initialisieren — liest Provider aus Env
-#   4. llm_router nutzen — LLMInstance fuer explizite Model-Overrides
+# Bootstrap exactly like app/server.py:
+#   1. paths.init()  — set the storage dir (via --world or STORAGE_DIR; there
+#      is NO default world any more, so without either this exits)
+#   2. config.load() — load the JSON config, fill os.environ
+#   3. initialise provider_manager — reads the providers from the env
+#   4. use llm_router — LLMInstance for explicit model overrides
 from app.core import paths as _paths_mod  # noqa: E402
-if _world_override:
-    _paths_mod.init(Path("worlds") / _world_override)
-else:
-    _paths_mod.init()
+try:
+    if _world_override:
+        _paths_mod.init(Path("worlds") / _world_override)
+    else:
+        _paths_mod.init()
+except _paths_mod.StorageNotInitialised as _e:
+    print(f"ERROR: {_e}\n"
+          "       This tool reads a real world: pass --world <name> "
+          "(-> worlds/<name>) or set STORAGE_DIR.", file=sys.stderr)
+    sys.exit(2)
 
 from app.core.config import load as _load_config  # noqa: E402
 _load_config(_paths_mod.get_config_path())

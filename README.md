@@ -368,7 +368,7 @@ pip install -e .
 ```bash
 chmod 755 start.sh        # first time only
 
-./start.sh                  # storage: ./storage
+./start.sh                  # storage: ./worlds/demo (the default)
 ./start.sh --world NAME     # open or create worlds/NAME — e.g. --world demo
 ./start.sh --storage /path  # use an arbitrary storage directory
 ./start.sh --with-3d        # also start the 3D client as a second process
@@ -598,8 +598,9 @@ python queue_cli.py clear      # old completed/failed (--hours, --status)
 python queue_cli.py stats
 ```
 
-It is the one place that still reads a root `.env` (the key `TASK_QUEUE_DB`, default
-`./storage/task_queue.db`); point it at `worlds/<world>/task_queue.db` for a world. Do not query a
+It is the one place that still reads a root `.env` (the key `TASK_QUEUE_DB`); without that key it
+takes `$STORAGE_DIR/task_queue.db`, and with neither it says so instead of guessing a world —
+`STORAGE_DIR=worlds/<world> python queue_cli.py stats`. Do not query a
 world's databases while the server is running — SQLite locks; the `logs/*.jsonl` files are always
 free to read.
 
@@ -619,6 +620,13 @@ ls scripts/smoke_*.py                              # the rest (200+)
 
 A check derives its expected numbers **by hand from the specification, in its docstring** — a script
 that only records the current output proves nothing.
+
+**A script that touches world data must name its world.** There is no default: `app/core/paths.py`
+resolves the storage root from an explicit `paths.init(<dir>)` argument, else `STORAGE_DIR`, and
+raises otherwise. A check therefore points `paths.init()` at a throwaway temp directory before it
+imports anything that opens a database, and a tool meant for a real world gets `STORAGE_DIR=worlds/<name>`
+(`scripts/smoke_scripts_storage_lint.py` guards the rule). The default `worlds/demo` lives in
+`start.sh` and `docker/docker-entrypoint.sh` — the places that start the server — not in the code.
 
 ---
 

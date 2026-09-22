@@ -244,6 +244,12 @@ class FakeService:
     def _select_backend(self):
         return FakeBackend()
 
+    # The one handoff every render crosses (media master switch, 1044158c):
+    # the stub runs the callable inline, no queue, no GPU slot.
+    @staticmethod
+    def run_on_backend_channel(backend, gen_fn, **kw):
+        return gen_fn()
+
     def generate_mesh(self, *, source_image_path, output_path, **kw):
         MESH_INPUTS.append(Path(source_image_path).name)
         # …and the whole call, for the face-target section: what the store

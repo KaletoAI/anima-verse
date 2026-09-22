@@ -3,7 +3,7 @@
 # Start/stop script for Agent System services
 #
 # Usage:
-#   ./start.sh                       Start the main app (default storage: ./storage)
+#   ./start.sh                       Start the main app (default storage: ./worlds/demo)
 #   ./start.sh --world demo          Start with storage: ./worlds/demo
 #   ./start.sh --storage /path/to/x  Start with custom storage directory
 #   ./start.sh --stop                Stop the main app
@@ -302,7 +302,7 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             echo "Usage: $0 [--stop|--restart|--status] [--with-3d] [--world NAME|--storage PATH]"
             echo ""
-            echo "  (no flags)       Start the main app (storage: ./storage)"
+            echo "  (no flags)       Start the main app (storage: ./worlds/demo)"
             echo "  --world NAME     Use ./worlds/NAME as storage directory"
             echo "  --storage PATH   Use custom storage directory"
             echo "  --with-3d        Also start the 3D client (separate process,"
@@ -325,11 +325,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Export storage directory for Python app
+# Export storage directory for Python app.
+# This is THE place the default world lives: app/core/paths.py has none any
+# more (it raises instead of silently opening the tracked worlds/demo), so
+# start.sh always hands the server an explicit directory.
+#   --world/--storage  >  an STORAGE_DIR already in the environment  >  worlds/demo
 if [[ -n "$STORAGE_ARG" ]]; then
     export STORAGE_DIR="$STORAGE_ARG"
-    echo "[config] Storage directory: $STORAGE_DIR"
+else
+    export STORAGE_DIR="${STORAGE_DIR:-$SCRIPT_DIR/worlds/demo}"
 fi
+echo "[config] Storage directory: $STORAGE_DIR"
 
 # ── Load specific config from .env ────────────────────────────────────────────
 # Only extract specific keys we need (source would fail on unquoted values with spaces)

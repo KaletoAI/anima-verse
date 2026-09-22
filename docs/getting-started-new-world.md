@@ -19,6 +19,13 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
    On first start you'll see a warning that no `config.json` was found — the server boots anyway;
    everything is configured through the admin UI.
 
+   `--world NAME` (or `--storage PATH`) is how the world is chosen; without a flag `start.sh` opens
+   the bundled `worlds/demo`. The choice is handed to the app as `STORAGE_DIR`, and it is the only
+   way: there is no default inside the code, so anything started by hand — `uvicorn app.server:app`,
+   `queue_cli.py`, a script under `scripts/` — needs `STORAGE_DIR=worlds/NAME` (or an explicit
+   `paths.init(<dir>)`) and otherwise stops with "storage not initialised" instead of quietly
+   writing into the demo world.
+
 2. **Log in as the bootstrap admin.** On the first start of a world that has no users yet, the
    server creates the user `admin` with a **random** password and prints it **once**, at WARNING
    level, to stderr and `logs/main.log`:

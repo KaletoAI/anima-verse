@@ -20,7 +20,11 @@ Usage:
     python queue_cli.py clear --status failed         # delete only failed
     python queue_cli.py stats                         # queue statistics
 
-Config: reads TASK_QUEUE_DB from .env (default: ./storage/task_queue.db)
+Which database?  There is no default world (app/core/paths.py raises rather
+than opening the tracked demo world), so point this CLI at one:
+    TASK_QUEUE_DB=<file>          in the legacy root .env, or
+    STORAGE_DIR=./worlds/<name>   in the environment  ->  <that>/task_queue.db
+Without either it exits with that message instead of guessing.
 """
 import argparse
 import json
@@ -32,30 +36,45 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# Load .env for DB path (minimal — no dependencies needed)
+# Resolve the queue DB (minimal — no dependencies, no app import)
 # ---------------------------------------------------------------------------
-def _load_env_db_path() -> Path:
+NO_DB = ("no task queue database selected — set TASK_QUEUE_DB in the root .env "
+         "or point STORAGE_DIR at a world (e.g. STORAGE_DIR=./worlds/demo)")
+
+
+def _resolve_db_path():
+    """TASK_QUEUE_DB from the legacy root .env, else ``$STORAGE_DIR/task_queue.db``.
+
+    No fallback: a guessed path used to mean the tracked demo world, so an
+    unselected world is an error message, not a silent default.
+    """
     env_path = Path(__file__).resolve().parent / ".env"
-    db_val = "./storage/task_queue.db"
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("TASK_QUEUE_DB="):
-                db_val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                break
-    return Path(db_val)
+                val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if val:
+                    return Path(val)
+    storage = os.environ.get("STORAGE_DIR", "").strip()
+    if storage:
+        return Path(storage) / "task_queue.db"
+    return None
 
 
-DB_PATH = _load_env_db_path()
+DB_PATH = _resolve_db_path()
 
 
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
 def _connect() -> sqlite3.Connection:
+    if DB_PATH is None:
+        print(f"ERROR: {NO_DB}", file=sys.stderr)
+        sys.exit(1)
     if not DB_PATH.exists():
         print(f"ERROR: database not found: {DB_PATH}", file=sys.stderr)
-        print("Start the server first, or check TASK_QUEUE_DB in .env", file=sys.stderr)
+        print("Start the server first, or check TASK_QUEUE_DB / STORAGE_DIR", file=sys.stderr)
         sys.exit(1)
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -267,7 +286,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
 
 def cmd_stats(args: argparse.Namespace) -> None:
     conn = _connect()
-    print(f"\nDatabase: {DB_PATH}\n")
+    print(f"\nDatabase: {DB_PATH if DB_PATH else NO_DB}\n")
 
     # Per-queue stats
     queues = conn.execute(

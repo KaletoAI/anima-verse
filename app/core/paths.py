@@ -6,6 +6,19 @@ defining its own ``STORAGE_DIR = Path("./storage")``.
 Initialization order (in server.py):
     1. paths.init(storage_dir)          # from CLI / env
     2. config.load(paths.get_config_path())  # config.json lives inside storage
+
+THERE IS NO DEFAULT WORLD.  ``init`` takes the explicit argument, else the
+``STORAGE_DIR`` environment variable, and raises ``StorageNotInitialised``
+when it has neither; ``get_storage_dir()`` raises the same when nothing was
+initialised at all.  The old silent fallback to ``./worlds/demo`` made every
+script that reached world data before initialising — even lazily, e.g.
+``game_time()`` -> world_kv -> a world-DB connection — write into the demo
+world, which is TRACKED in git.  The default now lives where the server is
+started (``start.sh``, ``docker/docker-entrypoint.sh``), not in this module.
+
+Paths under ``shared/`` (templates, languages, schemas, clips, rig) are
+repo-relative and deliberately need NO storage: a pure-shared script works
+without a world.
 """
 
 import os
@@ -15,30 +28,48 @@ from typing import Optional, Union
 _storage_dir: Optional[Path] = None
 _project_root: Path = Path(__file__).resolve().parent.parent.parent
 
+_NOT_INITIALISED = (
+    "storage not initialised — call app.core.paths.init(<dir>) or set "
+    "STORAGE_DIR before touching world data"
+)
+
+
+class StorageNotInitialised(RuntimeError):
+    """No storage root was chosen before world data was touched."""
+
 
 def init(storage_dir: Optional[Union[str, Path]] = None) -> Path:
-    """Set the storage root.  Called once at server startup.
+    """Set the storage root.  Called once by whoever starts server or script.
 
     Resolution order:
         1. Explicit *storage_dir* argument  (from CLI ``--storage`` / ``--world``)
         2. ``STORAGE_DIR`` environment variable
-        3. ``./storage`` (default, backward-compatible)
+
+    No third step: without either, this raises ``StorageNotInitialised``
+    instead of quietly picking the tracked demo world.
     """
     global _storage_dir
 
     if storage_dir:
         _storage_dir = Path(storage_dir).resolve()
     else:
-        _storage_dir = Path(os.environ.get("STORAGE_DIR", "./worlds/demo")).resolve()
+        env = os.environ.get("STORAGE_DIR", "").strip()
+        if not env:
+            raise StorageNotInitialised(_NOT_INITIALISED)
+        _storage_dir = Path(env).resolve()
 
     _storage_dir.mkdir(parents=True, exist_ok=True)
     return _storage_dir
 
 
 def get_storage_dir() -> Path:
-    """Return the base storage directory.  Auto-initializes on first call."""
+    """Return the base storage directory.
+
+    Raises ``StorageNotInitialised`` when no world was selected — every other
+    storage-derived accessor inherits that.
+    """
     if _storage_dir is None:
-        init()
+        raise StorageNotInitialised(_NOT_INITIALISED)
     return _storage_dir
 
 
@@ -193,9 +224,10 @@ def get_test_figure_dir() -> Path:
 def get_templates_dir() -> Path:
     """Character templates directory (shared across all worlds).
 
-    Seit der Reorganisation gibt es Unterordner fuer Character/User/Expression/Pose —
-    diese Funktion zeigt explizit auf `character/`, damit Listing kein Type-Filter
-    mehr braucht. Expression/Pose-Presets haben eigene Helfer (get_expression_dir, etc.).
+    Since the reorganisation there are subfolders for Character/User/Expression/
+    Pose — this function points explicitly at `character/`, so listing needs no
+    type filter any more. Expression/pose presets have their own helpers
+    (get_expression_dir, etc.).
     """
     return get_shared_dir() / "templates" / "character"
 
