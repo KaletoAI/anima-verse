@@ -407,7 +407,6 @@ def extract_instagram_interactions(text: str) -> Optional[Dict[str, Any]]:
     skip_keys = {
         'likes', 'kommentare', 'comments', 'bild', 'image', 'caption',
         'captions', 'hashtags', 'interaktionen', 'interactions',
-        'new_assignment', 'assignment_update', 'assignment_done',
     }
     for author, comment_text in comment_pattern:
         if author.lower() in skip_keys:

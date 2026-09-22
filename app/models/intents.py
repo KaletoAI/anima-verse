@@ -354,45 +354,61 @@ _MARK_DONE = _re.compile(r"\[INTENT_DONE:\s*(\w+)\s*\]", _re.IGNORECASE)
 _MARK_PROG = _re.compile(r"\[INTENT_PROGRESS:\s*(\w+)\s*\|\s*([^\]]+)\]", _re.IGNORECASE)
 
 
-def parse_and_apply_intent_markers(character_name: str, text: str) -> int:
-    """Verarbeitet die Character-Marker einer LLM-Antwort:
-      ``[INTENT: <Titel> | <Beschreibung> | when=… | prio=N]`` → neuer Intent
-      ``[INTENT_DONE: <id>]``        → Intent abschließen
-      ``[INTENT_PROGRESS: <id>|...]`` → Fortschritt notieren
-    Gibt die Anzahl verarbeiteter Marker zurück."""
-    n = 0
+def parse_and_apply_intent_markers(character_name: str,
+                                   text: str) -> List[Dict[str, Any]]:
+    """Applies the character markers of an LLM answer.
+
+      ``[INTENT: <title> | <description> | when=… | prio=N | by=player]``
+                                      → new intent
+      ``[INTENT_DONE: <id>]``         → complete an intent
+      ``[INTENT_PROGRESS: <id>|...]`` → note progress
+
+    ``by=player`` means the task was given by the person in the conversation,
+    which is exactly what ``source="human"`` records; anything else (and a
+    missing ``by=``) is the character's own plan, ``source="character"``. The
+    marker grammar itself is taught by
+    ``shared/templates/llm/chat/intent_markers.md``.
+
+    Returns the intents CREATED by this text (in marker order) — the caller
+    uses them for the player feedback line; ``len()`` is the former count of
+    processed ``[INTENT:]`` markers.
+    """
+    created: List[Dict[str, Any]] = []
     for m in _MARK_DONE.finditer(text or ""):
-        if complete_intent(m.group(1)):
-            n += 1
+        complete_intent(m.group(1))
     for m in _MARK_PROG.finditer(text or ""):
-        if add_progress(m.group(1), character_name, m.group(2).strip()):
-            n += 1
+        add_progress(m.group(1), character_name, m.group(2).strip())
     for m in _MARK_NEW.finditer(text or ""):
         parts = [p.strip() for p in m.group(1).split("|")]
         title = parts[0] if parts else ""
         if not title:
             continue
-        desc, when, prio = "", "standing", 3
+        desc, when, prio, source = "", "standing", 3, "character"
         for p in parts[1:]:
-            if p.lower().startswith("when="):
+            low = p.lower()
+            if low.startswith("when="):
                 when = p.split("=", 1)[1].strip()
-            elif p.lower().startswith("prio="):
+            elif low.startswith("prio="):
                 try:
                     prio = int(p.split("=", 1)[1].strip())
                 except Exception:
                     prio = 3
+            elif low.startswith("by="):
+                source = "human" if p.split("=", 1)[1].strip().lower() == "player" \
+                    else "character"
             elif "=" not in p and not desc:
                 desc = p
         trig = _when_to_trigger(when)
         it = create_intent(
-            owner=character_name, title=title, description=desc, source="character",
+            owner=character_name, title=title, description=desc, source=source,
             participants={character_name: {"role": "", "progress": []}},
             trigger=trig, priority=prio,
             location_id=trig.get("location_id", "") if trig.get("kind") == "at_location" else "",
             expires_at=trig.get("run_date", "") if trig.get("kind") == "at_time" else "")
         apply_trigger_on_create(it)
-        n += 1
-    return n
+        if it:
+            created.append(it)
+    return created
 
 
 def strip_intent_markers(text: str) -> str:

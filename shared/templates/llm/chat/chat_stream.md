@@ -117,12 +117,8 @@ The pose key is one of the keys listed after a place (or under "Anywhere here") 
 {% endif %}
 {% if intent_tracking_enabled %}
 
-Plans & tasks: If you take on an ongoing plan, or the user assigns you a task, record it with a marker at the END of your response on its own line:
-[INTENT: <title> | <description> | when=<standing|now|in:2h|at_location:Place> | prio=<1-5>]
-  when: standing=ongoing, now=act on it right away, in:2h=in 2 hours (or in:30m / in:1d), at_location:<Place>=when you next enter that place
-  prio: 1=critical, 3=normal, 5=background
-To advance or finish one you already have: [INTENT_PROGRESS: <id> | <note>] or [INTENT_DONE: <id>]
-Only for genuine plans or tasks — never for hypothetical, past, or one-off roleplay actions.
+Plans & tasks: If you take on an ongoing plan, or the person you talk to gives you a task, record it with a marker at the END of your response on its own line:
+{% include "chat/intent_markers.md" %}
 {% endif %}
 
 {{ lang_instruction }}

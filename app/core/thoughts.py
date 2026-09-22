@@ -275,7 +275,8 @@ class ThoughtRunner:
         from app.models.character import get_character_current_location
         from app.core.dependencies import get_skill_manager
         from app.core.llm_router import resolve_llm
-        from app.core.streaming import StreamingAgent, ContentEvent, ToolResultEvent
+        from app.core.streaming import (StreamingAgent, ContentEvent,
+                                        ExtractionEvent, ToolResultEvent)
         from app.core.tool_formats import build_tool_instruction, get_format_for_model
         from app.models.notifications import create_notification
         from app.models.chat import save_message
@@ -603,6 +604,12 @@ class ThoughtRunner:
 
         # Agent ausfuehren und Response sammeln
         full_response = ""
+        # Markers the rp_first tool LLM harvested from its own decision text
+        # (ExtractionEvent). They are NOT part of the RP prose — without
+        # collecting them here they were yielded into the void, and the
+        # [INTENT:] / fallback markers of the tool LLM never reached the
+        # post-processing or the intent parser below.
+        extracted_markers = ""
         had_notification_tool = False
         notification_tool_content = ""
         # Synthetischer Trigger fuer den Thought-Turn. Englisch — die Antwort-
@@ -690,6 +697,10 @@ class ThoughtRunner:
             async for event in agent.stream(system_prompt, recent_history, user_input):
                 if isinstance(event, ContentEvent):
                     full_response += event.content
+                elif isinstance(event, ExtractionEvent):
+                    if event.markers:
+                        extracted_markers += (
+                            ("\n" if extracted_markers else "") + event.markers)
                 elif isinstance(event, ToolResultEvent):
                     _tool_exec_counts[event.tool_name] = _tool_exec_counts.get(event.tool_name, 0) + 1
                     if event.tool_name in _user_notification_tool_names():
@@ -760,9 +771,23 @@ class ThoughtRunner:
 
         # LLM-Logging erfolgt per-Iteration im StreamingAgent
 
-        # State-Marker extrahieren (Location, Activity, Mood, Assignments)
-        # Gleiche Logik wie im regulaeren Chat — damit Ortswechsel, Outfit-Reset
-        # und Activity-Updates auch im Gedanken-Modus funktionieren.
+        # Tool-LLM markers onto the answer — after the hallucination cleanup
+        # (so they cannot be mistaken for a narrated tool call) and after the
+        # admin preview (which shows what the character SAID). Only the lines
+        # the RP text does not already carry: the tool LLM reads the RP and
+        # copies markers it finds there, and applied twice one plan would
+        # become two intents.
+        if extracted_markers:
+            _new_marker_lines = [
+                ln for ln in (l.strip() for l in extracted_markers.splitlines())
+                if ln and ln not in full_response]
+            if _new_marker_lines:
+                full_response = (full_response + "\n"
+                                 + "\n".join(_new_marker_lines)).strip()
+
+        # Extract the state markers (location, activity, mood, intents) —
+        # the same logic as in the regular chat, so a place change, an outfit
+        # reset and an activity update also work in thought mode.
         if full_response and full_response.strip().upper() != "SKIP":
             try:
                 from app.core.chat_engine import post_process_response

@@ -267,7 +267,7 @@ def build_tool_instruction(format_name: str, tools: List[Any],
     # STRICT OUTPUT targets ONLY the tool-call format. Important: do NOT ban
     # square brackets / markdown wholesale — the rp_first tool LLM gets this
     # block as its system prompt AND is expected to emit markers (**I feel ...**)
-    # and [INTENT:/NEW_ASSIGNMENT:] lines afterwards. What is forbidden is a
+    # and [INTENT: ...] lines afterwards. What is forbidden is a
     # TOOL call in a foreign shape, not brackets as such.
     parts.append(
         "\nSTRICT OUTPUT:\n"
@@ -275,7 +275,7 @@ def build_tool_instruction(format_name: str, tools: List[Any],
         "no phrases like \"Based on...\", \"We need to analyse...\", \"Let me...\".\n"
         "- A TOOL CALL is ONLY the exact tag syntax shown above. Never write a tool "
         "call any other way: not in [square brackets], not as a \"TOOLS:\" list or an "
-        "\"[INTENT: execute_tool ...]\" line, not in **markdown** or bold, "
+        "\"[INTENT: ...]\" marker line, not in **markdown** or bold, "
         "not buried inside a sentence."
     )
 

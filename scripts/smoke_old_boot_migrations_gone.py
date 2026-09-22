@@ -4,7 +4,7 @@
 Usage:  ./.venv/bin/python scripts/smoke_old_boot_migrations_gone.py
 
 Needs no server, no world DB, no node_modules and imports nothing from
-``app`` — it reads source text and parses two files with ``ast``.
+``app`` — it reads source text only.
 
 WHAT WAS REMOVED (user decision 2026-09-21; no old world needs them any more)
 
@@ -39,11 +39,13 @@ THE RULE
   three legacy JSON file names may reappear in the shipped sources.  Each of
   them would be code reading a file or table that nothing writes.
 
-  Positively, the ONE piece of the old assignment module that is still live
-  must stay live: ``strip_assignment_tags`` cleans the ``[NEW_ASSIGNMENT: …]``
-  markers (still offered by the thought prompt) out of text on its way to a
-  user.  It must remain defined in ``app/models/assignments.py`` and remain
-  imported by ``app/core/chat_engine.py``.
+  The LAST piece of the old assignment module went with the unified intent
+  markers: the rp_first tool prompt no longer offers ``[NEW_ASSIGNMENT: …]``
+  (it teaches ``[INTENT: … | by=player]`` now), so nothing emits the tag any
+  more and ``strip_assignment_tags`` had nothing left to strip.  Both its call
+  sites read a FRESH LLM answer, never stored history, so no display path lost
+  a cleaner.  ``app/models/assignments.py`` is therefore gone as well, and the
+  marker name itself is a needle below.  The ``assignments`` TABLE stays.
 
 WHAT IS SCANNED
 
@@ -77,7 +79,6 @@ EXPECTED RESULT, derived by hand
   before and after — they guard against over-deletion, not against the old
   state.
 """
-import ast
 import sys
 from pathlib import Path
 
@@ -91,6 +92,8 @@ NEEDLES = [
     "status_modifiers.json",
     "weekly_summaries.json",
     "monthly_summaries.json",
+    "NEW_ASSIGNMENT",
+    "strip_assignment_tags",
 ]
 
 TARGETS = [
@@ -113,8 +116,6 @@ TEXT_SUFFIXES = {
 }
 
 ASSIGNMENTS_FILE = ROOT / "app" / "models" / "assignments.py"
-CHAT_ENGINE_FILE = ROOT / "app" / "core" / "chat_engine.py"
-LIVE_FUNC = "strip_assignment_tags"
 
 
 def iter_files():
@@ -133,24 +134,6 @@ def iter_files():
             if f.suffix.lower() not in TEXT_SUFFIXES:
                 continue
             yield f
-
-
-def _defines(path: Path, name: str) -> bool:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-               and n.name == name
-               for n in ast.walk(tree))
-
-
-def _imports_from_assignments(path: Path, name: str) -> bool:
-    """True if the file has a ``from …assignments import <name>`` anywhere
-    (module level or inside a function — chat_engine imports it lazily)."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    for n in ast.walk(tree):
-        if isinstance(n, ast.ImportFrom) and (n.module or "").endswith("assignments"):
-            if any(a.name == name for a in n.names):
-                return True
-    return False
 
 
 def main() -> int:
@@ -183,22 +166,13 @@ def main() -> int:
         print("PASS: none of the %d removed names/files appears in the "
               "shipped sources" % len(NEEDLES))
 
-    # Positive half — the live remnant must not have been deleted with them.
-    if not ASSIGNMENTS_FILE.exists():
-        failures.append("app/models/assignments.py is gone")
-        print("FAIL: app/models/assignments.py is gone — "
-              f"{LIVE_FUNC} has no home any more")
-    elif not _defines(ASSIGNMENTS_FILE, LIVE_FUNC):
-        failures.append(f"{LIVE_FUNC} no longer defined")
-        print(f"FAIL: {LIVE_FUNC} is not defined in app/models/assignments.py")
+    # The module itself went with its last function.
+    if ASSIGNMENTS_FILE.exists():
+        failures.append("app/models/assignments.py is back")
+        print("FAIL: app/models/assignments.py exists again — the assignment "
+              "marker feature was removed with the unified intents")
     else:
-        print(f"PASS: {LIVE_FUNC} is still defined in app/models/assignments.py")
-
-    if not _imports_from_assignments(CHAT_ENGINE_FILE, LIVE_FUNC):
-        failures.append(f"chat_engine no longer imports {LIVE_FUNC}")
-        print(f"FAIL: app/core/chat_engine.py no longer imports {LIVE_FUNC}")
-    else:
-        print(f"PASS: app/core/chat_engine.py still imports {LIVE_FUNC}")
+        print("PASS: app/models/assignments.py is gone")
 
     if failures:
         print("RESULT: FAIL — " + "; ".join(failures))

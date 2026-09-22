@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple, Union
 
 from app.core.log import get_logger
+from app.core.prompt_templates import render as render_template
 from app.utils.llm_logger import get_model_name
 
 logger = get_logger("agent_loop")
@@ -28,26 +29,51 @@ logger = get_logger("agent_loop")
 # Regex fuer LLM-Tokenizer-Artefakte (z.B. <SPECIAL_28> von Mistral-Modellen)
 _SPECIAL_TOKEN_RE = re.compile(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>')
 
-# Regex fuer Intent/Assignment/EventResolved Marker in Tool-LLM Antworten
-_INTENT_RE = re.compile(r'\[INTENT:[^\]]+\]')
-_ASSIGNMENT_RE = re.compile(r'\[NEW_ASSIGNMENT:[^\]]+\]')
+# Intent / EventResolved markers in tool-LLM answers. The intent pattern
+# covers all three unified markers ([INTENT:], [INTENT_DONE:],
+# [INTENT_PROGRESS:], app/models/intents.py) — the grammar itself is taught by
+# shared/templates/llm/chat/intent_markers.md.
+_INTENT_RE = re.compile(r'\[INTENT(?:_DONE|_PROGRESS)?:[^\]]+\]')
 _EVENT_RESOLVED_RE = re.compile(r'\[EVENT_RESOLVED:\s*([^\]]+)\]')
 _MOOD_MARKER_RE = re.compile(r'\*\*I\s+feel\s+(.+?)\*\*', re.IGNORECASE)
 _ACTIVITY_MARKER_RE = re.compile(r'\*\*I\s+do\s+(.+?)\*\*', re.IGNORECASE)
 _LOCATION_MARKER_RE = re.compile(r'\*\*I\s+am\s+at\s+(.+?)\*\*', re.IGNORECASE)
 
 
-def _extract_markers(tool_response: str, rp_response: str = "") -> str:
-    """Extrahiert Marker aus Tool-LLM Antwort.
+def intent_marker_help(indent: str = "") -> str:
+    """The [INTENT:] marker grammar, rendered from the shared fragment.
 
-    Nimmt [INTENT:...], [NEW_ASSIGNMENT:...] und [EVENT_RESOLVED:...] uebernehmen.
-    Zusaetzlich Fallback-Marker **I feel**, **I do**, **I am at** — aber nur
-    wenn sie NICHT bereits im rp_response vorhanden sind (Duplikat-Vermeidung).
+    ONE text for both prompts that teach it: the character's own chat prompt
+    includes ``chat/intent_markers.md`` directly, the rp_first tool-decision
+    prompt (built in Python) renders it here. Without this the two used to
+    drift — the tool prompt still asked for a marker syntax nothing parsed.
+    """
+    body = render_template("chat/intent_markers.md")
+    if not indent:
+        return body + "\n"
+    return "".join(f"{indent}{line}\n" for line in body.splitlines())
+
+
+def _intent_markers(text: str) -> str:
+    """The unified [INTENT*:] marker lines of a text, one per line.
+
+    The chat reply itself is cleaned before it is post-processed
+    (``chat_engine.clean_response`` strips every marker), so the character's
+    OWN markers have to be harvested from the raw answer before that — this is
+    the one place that does it.
+    """
+    return "\n".join(m.group(0) for m in _INTENT_RE.finditer(text or ""))
+
+
+def _extract_markers(tool_response: str, rp_response: str = "") -> str:
+    """Markers harvested from the tool-LLM answer.
+
+    Takes [INTENT*:...] and [EVENT_RESOLVED:...] as they are, plus the
+    fallback markers **I feel**, **I do**, **I am at** — but only when they are
+    NOT already in ``rp_response`` (duplicate avoidance).
     """
     markers = []
     for m in _INTENT_RE.finditer(tool_response):
-        markers.append(m.group(0))
-    for m in _ASSIGNMENT_RE.finditer(tool_response):
         markers.append(m.group(0))
     for m in _EVENT_RESOLVED_RE.finditer(tool_response):
         markers.append(m.group(0))
@@ -1118,6 +1144,7 @@ class StreamingAgent:
                 "someone, though, IS an action — use the party verb from the mapping instead "
                 "of moving there alone. Emotions and small gestures are carried by the "
                 "markers in step 3, never by tools.\n\n")
+        _intent_marker_block = intent_marker_help(indent="   ")
         return (
             f"The user said: {user_input}\n\n"
             f"The character responded:\n{rp_response}\n\n"
@@ -1140,14 +1167,13 @@ class StreamingAgent:
             f"{_guardrails}"
             f"{_pure_talk_rule}"
             f"2. EXTRACTION: Check the character's response for:\n"
-            f"   - Intent: If the character commits to a concrete action (posting something, "
-            f"sending a message, doing something at a specific time), output:\n"
-            f"   [INTENT: <type> | delay=<0/30m/2h/1d> | key=value]\n"
-            f"   Types: instagram_post, send_message, remind\n"
+            f"   - Plan or task: If the character takes on an ongoing plan, or the person "
+            f"they talk to gives them a task (an errand, a promise, something to do later), "
+            f"output a marker line. A task given by the person they talk to carries "
+            f"by=player, a plan of the character's own carries by=self:\n"
+            f"{_intent_marker_block}"
             f"   For anything the character can do NOW, use its <tool> tag from step 1 — "
-            f"NEVER write [INTENT: execute_tool ...] to run a tool.\n"
-            f"   - Assignment: If the user gave a task/mission, output:\n"
-            f"   [NEW_ASSIGNMENT: <title> | <role> | <description> | <priority 1-5> | <duration_minutes>]\n"
+            f"never write an [INTENT: ...] marker to run a tool.\n"
             f"   - Event resolved: If the character actively resolved/fixed a disruption or danger "
             f"event (repaired something, helped someone, fixed a problem), output:\n"
             f"   [EVENT_RESOLVED: <short description of what they did>]\n\n"

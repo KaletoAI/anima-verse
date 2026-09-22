@@ -161,12 +161,13 @@ Rules for editing them:
 appear in the system template or in its render call, and the block order is
 checked against the contract.
 
-### The other two `chat/` templates
+### The other `chat/` templates
 
 | Template | Rendered by | Purpose |
 |---|---|---|
 | `chat/agent_thought_in_chat.md` | `agent_loop` (instead of `agent_thought.md` when the character is in a running chat) | The same thought turn, but written for a character that is mid-conversation |
 | `chat/situational_memories.md` | `memory_situational` (`TEMPLATE`) | Pick the memories that fit the current message |
+| `chat/intent_markers.md` | `{% include %}` in `chat_stream.md` AND `streaming.intent_marker_help()` for both rp_first tool-decision prompts (`streaming.build_tool_decision_input`, `chat_engine._rp_tool_decision_input`) | The `[INTENT: …]` marker grammar (including the `by=player` / `by=self` token) — a fragment, not a prompt of its own, so the two places that teach it cannot drift apart |
 
 ### `chat/agent_thought.md`
 

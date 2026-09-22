@@ -191,10 +191,14 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
     is sent to the verb, a character with no other way keeps the place marker,
     and a party follower or an avatar is told nothing about moving, because
     neither way is open to it. Without a name the marker is left out: naming a
-    way that turns out to be closed is how a model writes one anyway.
+    way that turns out to be closed is how a model writes one anyway.  That
+    suppression is about the MOVEMENT marker only (``tool_decision_guardrails``
+    gates nothing else on it) — the plan/task marker is taught either way, from
+    the same fragment the character's own prompt includes.
     """
     from app.core.streaming import (action_mapping_lines, decision_tools,
-                                    speech_turn_note, tool_decision_guardrails)
+                                    intent_marker_help, speech_turn_note,
+                                    tool_decision_guardrails)
     tools_dict = decision_tools(tools_dict, suppress_in_person=in_person)
     try:
         from app.routes.chat import _marker_travel_refusal
@@ -234,6 +238,12 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
         f"'Anywhere here'), copied exactly; the part after the colon is the detail (what a "
         f"bystander would see), and may be left out. Use the character's language; match "
         f"exact names from the lists in your system prompt.\n"
+        f"Also emit the plan/task marker the character forgot (only if the RP text carries "
+        f"no [INTENT: ...] line): the person the character talks to gave them a task — an "
+        f"errand, a promise, something to do later — or the character took on an ongoing "
+        f"plan of its own. A task given by the other person carries by=player, an own plan "
+        f"by=self:\n"
+        f"{intent_marker_help(indent='  ')}"
         f"If nothing applies, respond with: NONE")
 
 
@@ -1011,6 +1021,17 @@ def run_chat_turn(
                         logger.debug("marker extraction failed: %s", _xe)
                 if not post_process:
                     return
+                # The character's OWN [INTENT…] markers: `clean` has them
+                # stripped (clean_response), so without this pass a task the
+                # player gave in chat never reached the intent parser — only
+                # the tool LLM's copy did. ONE merged marker text goes into
+                # post-processing, deduplicated so a marker both of them wrote
+                # still creates exactly one intent.
+                try:
+                    from app.core.streaming import _intent_markers
+                    _markers = _merge_marker_lines(_intent_markers(raw), _markers)
+                except Exception as _ie:  # noqa: BLE001
+                    logger.debug("intent marker harvest failed: %s", _ie)
                 try:
                     # Partner = the SPEAKER of the trigger utterance, not
                     # ctx["user_display_name"]: that one resolves the active
@@ -1039,6 +1060,25 @@ def run_chat_turn(
     return clean
 
 
+def _merge_marker_lines(*parts: str) -> str:
+    """Marker lines from several sources, order kept, each line only once.
+
+    The RP prose and the tool LLM can carry the SAME marker: the tool LLM reads
+    the RP text and is asked to emit what the character forgot, and a weak
+    model copies a marker that is already there. Fed to
+    ``parse_and_apply_intent_markers`` twice, one task would become two
+    intents — so the lines are deduplicated before they go anywhere.
+    """
+    seen, out = set(), []
+    for part in parts:
+        for line in (part or "").splitlines():
+            ln = line.strip()
+            if ln and ln not in seen:
+                seen.add(ln)
+                out.append(ln)
+    return "\n".join(out)
+
+
 def clean_response(full_response: str) -> str:
     """Strip meta-tags from response for saving to history."""
     clean = full_response
@@ -1051,8 +1091,6 @@ def clean_response(full_response: str) -> str:
     clean = re.sub(r'\n?\s*\*\*I\s+do\s+[^*]+\*\*\s*', '', clean, flags=re.IGNORECASE)
     from app.core.intent_engine import strip_intent_tags
     clean = strip_intent_tags(clean)
-    from app.models.assignments import strip_assignment_tags
-    clean = strip_assignment_tags(clean)
     # Vereinheitlichte [INTENT:]-Marker (plan-intents-unified.md) — im Room-/
     # C2C-Pfad laeuft die Bereinigung ueber clean_response, nicht ueber
     # _strip_tool_hallucinations; ohne dies leakten Marker in Utterance/History.
@@ -1074,6 +1112,42 @@ def clean_response(full_response: str) -> str:
     clean = re.sub(r'<\|[^|>]{0,60}\|>', '', clean)
     clean = re.sub(r'<SPECIAL_\d+>', '', clean)
     return clean.strip()
+
+
+def _announce_player_tasks(character_name: str, created: List[Dict[str, Any]],
+                           extraction_context: Optional[Dict[str, Any]]) -> None:
+    """Display-only narrator line for a task the player gave in this chat turn.
+
+    Only for intents with ``source == "human"`` (marker ``by=player``) that
+    were created by a CHAT turn — a plan the character made for itself gets no
+    line, and neither does a thought turn, which nobody watched happen.
+
+    The text is composed in English and stored as written: an utterance is
+    read by every viewer of the scene, so there is no single account language
+    to render it in, and the player side prints ``content`` verbatim. Same rule
+    as the relationship line below — only ``meta.speaker`` is localized, at
+    read time in ``routes/play.py``.
+    """
+    if (extraction_context or {}).get("source") != "user_chat":
+        return
+    tasks = [it for it in created if (it or {}).get("source") == "human"]
+    if not tasks:
+        return
+    try:
+        from app.core.perception import record_utterance, VOLUME_NORMAL
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room)
+        loc = get_character_current_location(character_name) or ""
+        room = get_character_current_room(character_name) or ""
+        for it in tasks:
+            record_utterance(
+                speaker=STORYTELLER_SPEAKER,
+                content=f"\U0001F4DD {character_name} takes on: {it.get('title', '')}",
+                volume=VOLUME_NORMAL, location_id=loc, room_id=room,
+                source="intent", anchor=character_name,
+                perception_meta={"display_only": True, "intent": True})
+    except Exception as e:  # noqa: BLE001 — feedback must never break the turn
+        logger.debug("player task display line failed: %s", e)
 
 
 def post_process_response(
@@ -1157,7 +1231,8 @@ def post_process_response(
             from app.models.intents import parse_and_apply_intent_markers
             _ni = parse_and_apply_intent_markers(character_name, full_response)
             if _ni:
-                result["intent_markers"] = _ni
+                result["intent_markers"] = len(_ni)
+                _announce_player_tasks(character_name, _ni, extraction_context)
     except Exception as e:
         logger.error("Intent marker extraction error: %s", e)
 
@@ -1349,9 +1424,7 @@ def post_process_response(
     # Instagram interaction extraction
     try:
         from app.models.instagram import extract_instagram_interactions, apply_interactions_to_latest_post
-        from app.models.assignments import strip_assignment_tags
-        cleaned_for_instagram = strip_assignment_tags(full_response)
-        interactions = extract_instagram_interactions(cleaned_for_instagram)
+        interactions = extract_instagram_interactions(full_response)
         if interactions:
             apply_interactions_to_latest_post(character_name, interactions)
     except Exception as e:

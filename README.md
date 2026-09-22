@@ -131,6 +131,14 @@ stops acting autonomously).
 - **Agent Loop:** idle characters take autonomous "thought" turns between user messages
   (importance-weighted round-robin; excludes sleeping characters and the user's avatar).
 - **Intent engine** decides which skills to surface for a given turn.
+- **Plans & tasks (intents):** one store for everything a character shall or wants to do. A task the
+  player gives in chat becomes the character's intent — the reply carries an
+  `[INTENT: <title> | <description> | when=… | prio=… | by=player]` marker, the intent is stored with
+  `source: human`, and the scene shows a narrator line (`📝 <name> takes on: <title>`). A plan the
+  character makes for itself is `source: character` and gets no line. The trigger says when it becomes
+  due: `standing` (shown in the prompt until done), `now`, at a game time (`in:2h`) or on arriving at a
+  place. Managed in the Game-Admin **Intents** tab; the marker grammar lives in one template fragment
+  (`shared/templates/llm/chat/intent_markers.md`) that both prompts that teach it share.
 
 ### Characters, avatars & world
 - Template-driven character editor (no hardcoded field lists) — appearance, the markdown "soul",

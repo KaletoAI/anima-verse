@@ -138,11 +138,11 @@ Grundlinie, der Loader setzt nie auf `False` zurück.
 | `cascade_brake` | reply_only_to-Gate für Messaging-Kaskaden greift auf dieses Verb |
 | `search_intent` | Der Search-Forcing-Hint (User fragt nach realen Infos) zielt auf dieses Tool |
 | `delivers_speech` | Über dieses Verb erreicht wörtliche Rede jemanden (TalkTo/SendMessage) — das B-lite-Sprachnetz prüft Thought-Turns dagegen |
-| `intents` | `[INTENT: <typ>]`-Marker, die dieses Verb ausführt (F6) — die Klasse implementiert `handle_intent()`; Default = Payload-Durchreichung an `execute()` |
-| `intent_payload_keys` | INTENT-Params mit dem vergleichbaren Inhalt (Redundanz-Skip: Marker vs. bereits ausgeführtes Tool im selben Turn) |
+| `intents` | Intent-Typen, die dieses Verb ausführt (F6) — die Klasse implementiert `handle_intent()`; Default = Payload-Durchreichung an `execute()` |
+| `intent_payload_keys` | Intent-Params mit dem vergleichbaren Inhalt (Redundanz-Skip: Intent vs. bereits ausgeführtes Tool im selben Turn) |
 | `user_notification` | Tool-Ergebnis wird User-Notification — generisch gelesen via `skill_manager.tool_names_with_flag` |
 | `remote_comm` | Verb erreicht NICHT anwesende Charaktere (World-Setup-Checkliste „Kommunikation") |
-| `progress_type` | Generischer Fortschritts-Typ (`image`, `search`, `talkto`, …) für zählbasierte Intents/Assignments |
+| `progress_type` | Generischer Fortschritts-Typ (`image`, `search`, `talkto`, …) für zählbasierte Intents |
 
 **Nicht über das Manifest setzbar** (nur als Klassenattribut, weil sie den
 Ausführungszeitpunkt ändern und nicht bloß Metadaten sind): `DEFERRED` (Tool läuft

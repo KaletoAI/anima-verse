@@ -288,7 +288,7 @@ Retrospect-Zeitstempel (zwei Konsumenten → Core, R5: das retrospect-Paket schr
 
 ## Intents — `app.core.intent_engine` ✅ (F6, deklarationsbasiert)
 
-Skills deklarieren ihre `[INTENT: <typ>]`-Marker selbst (`INTENT_TYPES` +
+Skills deklarieren ihre Intent-Typen selbst (`INTENT_TYPES` +
 `INTENT_PAYLOAD_KEYS` als Klassenattribute bzw. `intents`/`intent_payload_keys` im
 Manifest) und führen sie über `handle_intent(intent_type, payload)` aus (Default:
 JSON-Durchreichung an `execute()`). Die Methode `BaseSkill.tool_intent_payload(raw_input)`
@@ -296,8 +296,12 @@ liefert den Vergleichs-Inhalt eines Tool-Aufrufs für den Redundanz-Skip.
 
 Die Engine kennt nur die Core-Typen `remind` und `execute_tool`; alles andere kommt aus
 den geladenen Skills — ein nicht geladener Skill macht seinen Intent-Typ unbekannt
-(→ Commitment-Memory statt Fehler-Handler). `app.core.intent_engine.strip_intent_tags(text)`
-entfernt die Marker vor dem Speichern.
+(→ Commitment-Memory statt Fehler-Handler). Einen LLM-Marker-Dialekt für diese Typen
+gibt es nicht mehr — Intents dieses Pfades entstehen programmatisch (z.B.
+`memory_service._create_intent_from_commitment`). Die LLM-Marker-Grammatik ist die
+vereinheitlichte (`[INTENT: <titel> | … | by=player]`, `app.models.intents`, Prompt-Text in
+`shared/templates/llm/chat/intent_markers.md`);
+`app.core.intent_engine.strip_intent_tags(text)` entfernt `[INTENT: …]` vor dem Speichern.
 
 Vorhaben/Aufgaben als Datensatz: `app.models.intents.create_intent(*, owner, title, …)`,
 `app.models.intents.list_intents(owner, status, source)`,
