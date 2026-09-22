@@ -82,7 +82,9 @@ it is specific to the tiled layout.
 - **Strings are English at the source** and looked up with `useI18n().t('English source')`. A
   missing translation logs `[i18n] missing [<lang>]: <source>` once per (lang, source) pair at
   `console.debug`; translation maps live in `shared/languages/<lang>.json` (currently `de.json`) and
-  are reloaded by the server on restart.
+  are reloaded by the server on restart. React and server strings forwarded through `t(en, lang)`
+  are the only translatable surfaces — the Python-rendered admin pages and the config schema are
+  English-only, and `scripts/smoke_i18n_orphans.py` fails on a `de.json` key without a live source.
 - **Character settings render generically from templates** (`shared/templates/character/*.json` via
   `TemplateTab` / `TemplateField`) — never hardcode a field list or a per-feature form.
 - Theme variables come from `static/themes/base.css` and `dark.css`, loaded as `<link>` tags in both

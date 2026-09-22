@@ -151,9 +151,11 @@ function normalizePoolLanes(routing) {
 // <<< harness-extract:routingModel
 
 // ── User-facing strings ────────────────────────────────────────────────
-// Every string this page shows lives here, so a later i18n pass has one table
-// to pick up (this admin page has no t() layer yet). English, like the rest of
-// the admin UI.
+// Every string this page shows lives here, in ONE table instead of scattered
+// through the DOM code. It is NOT a staging area for a translation pass: the
+// Python-rendered admin pages are English-only by decision and get no t()
+// layer — never add keys for them to shared/languages/*.json
+// (guard: scripts/smoke_i18n_orphans.py).
 const RT_TEXT = {
     title: 'LLM Routing', pageTasks: 'Tasks', pageLlms: 'LLMs', pageOverview: 'Overview',
     search: 'Search tasks…', catAll: 'all', thinking: 'thinking 🧠', onlyProblems: 'only problems',

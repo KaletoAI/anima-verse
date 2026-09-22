@@ -97,12 +97,19 @@ messages are safe for work. Adult content is a user's own configuration and live
 packages installed through the marketplace; none of it belongs here. Never use a real person's or a
 private world's names in code, docstrings, CLI help or examples — `demo` is the only sample name.
 
-**Admin-UI strings are English, and translatable.** New or changed strings are written in English at
-the source and wrapped so the i18n layer can localise them: `t()` from `useI18n()` in React
-(`frontend/src/i18n/`), `t(en, lang)` in the Python-rendered pages (`app/core/i18n.py`). Localised
-*data* fields follow the `<field>_<lang>` convention resolved by `localized(obj, field, lang)`, and
-the translation maps live in `shared/languages/<lang>.json`. When you work on an admin page,
-translate the German strings you find there along the way — there is no project-wide sweep.
+**UI strings are English — and only some of them are translatable.** New or changed strings are
+written in English at the source. Two surfaces have a translation layer and only those may add keys
+to `shared/languages/<lang>.json`: React, via `t()` from `useI18n()` (`frontend/src/i18n/`), and
+server strings put through `t(en, lang)` (`app/core/i18n.py`) — including the English strings a
+route hands to the React clients for them to translate. The **Python-rendered admin pages**
+(`/admin/settings`, `/admin/users`, `/admin/llm-stats`, `/admin/models`, `/admin/agent-loop`,
+`/admin/templates`, `/logs/*`, `/dashboard`) and the **config schema**
+(`app/core/config_schema.py`, rendered raw by `static/admin/settings.js`) are **English-only by
+decision**: they have no `t()` layer, none is planned, and a translation key for one of their
+strings is dead weight. `scripts/smoke_i18n_orphans.py` guards that — it fails on any key in
+`de.json` without a live source. Localised *data* fields follow the `<field>_<lang>` convention
+resolved by `localized(obj, field, lang)`. When you work on an admin page, translate the German
+strings you find there along the way — there is no project-wide sweep.
 
 **Code comments and docstrings are English.** Translate the German ones in a file you touch.
 

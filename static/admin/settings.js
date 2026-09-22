@@ -868,8 +868,10 @@ function llmSimpleRebuild() {
 
 // ── LLM routing: requirement badges & model mismatch ────────────────────
 // All user-visible strings of this block are collected in ROUTING_TEXT /
-// MISMATCH_TEXT so a later i18n layer can pick them up in one pass — this page
-// has no t() yet, so they are plain English literals for now.
+// MISMATCH_TEXT so this file has one place to edit them — not as a staging
+// area for a translation pass. /admin/settings is English-only by decision and
+// gets no t() layer; its strings never belong in shared/languages/*.json
+// (guard: scripts/smoke_i18n_orphans.py).
 const ROUTING_TEXT = {
     profileTitle:     'Requirement profile of this task',
     requiredSuffix:   ' required',

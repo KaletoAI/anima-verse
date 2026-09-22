@@ -279,8 +279,11 @@ stops acting autonomously).
   signs the target out everywhere.
 - **Logging & monitoring:** LLM call log (`/logs/llm`), image-prompt log (`/logs/image-prompts`),
   LLM stats, dashboard, `GET /health`, and a task queue inspectable from the CLI.
-- **i18n:** all UI strings are English at the source and translated through `t()`; translation maps
-  live in `shared/languages/<lang>.json` (currently German).
+- **i18n:** all UI strings are English at the source; the player UI, the Game-Admin and the strings
+  the server hands them are translated through `t()`, with the maps in
+  `shared/languages/<lang>.json` (currently German). The Python-rendered admin pages
+  (`/admin/*`, `/logs/*`, `/dashboard`) and the config schema are **English-only** and have no
+  translation layer — `scripts/smoke_i18n_orphans.py` keeps keys for them out of the maps.
 
 ---
 

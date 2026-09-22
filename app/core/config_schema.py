@@ -852,7 +852,7 @@ SECTIONS = {
                 "fields": {
                     "url": {"type": "str", "label": "XTTS URL", "default": "http://localhost:8020"},
                     "speaker_wav": {"type": "str", "label": "Speaker WAV", "description": "Eigene WAV oder built-in: calm_female, female, male"},
-                    "language": {"type": "str", "label": "Sprache", "default": "de"},
+                    "language": {"type": "str", "label": "Language", "default": "de"},
                 },
             },
             "magpie": {
@@ -860,7 +860,7 @@ SECTIONS = {
                 "fields": {
                     "url": {"type": "str", "label": "Magpie URL", "default": "http://localhost:9000"},
                     "voice": {"type": "str", "label": "Stimme", "description": "Format: Magpie-Multilingual.{LANG}.{Name}[.{Emotion}]"},
-                    "language": {"type": "str", "label": "Sprache", "default": "de-DE"},
+                    "language": {"type": "str", "label": "Language", "default": "de-DE"},
                 },
             },
             "f5": {

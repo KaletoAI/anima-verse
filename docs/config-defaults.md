@@ -241,6 +241,16 @@ gelesen und gesetzt (Sprachcode + Übersetzungsmodus). Die Auswahlliste kommt au
 `language_name(code)`; die Übersetzungs-Maps liegen in
 `shared/languages/<lang>.json` und werden erst beim Neustart neu gelesen.
 
+**Die Schema-Texte selbst sind englisch und werden NICHT übersetzt.** `label` und
+`description` in `app/core/config_schema.py` rendert `static/admin/settings.js`
+roh; `/admin/settings` und die übrigen serverseitig gebauten Admin-Seiten
+(`/admin/users`, `/admin/llm-stats`, `/admin/models`, `/admin/agent-loop`,
+`/admin/templates`, `/logs/*`, `/dashboard`) haben bewusst keine `t()`-Schicht und
+bekommen auch keine. Ein Eintrag für einen dieser Strings in
+`shared/languages/<lang>.json` wird nie gelesen — `scripts/smoke_i18n_orphans.py`
+schlägt darauf an. Übersetzbar sind nur die React-Strings (`t()` aus `useI18n()`)
+und Server-Strings, die durch `t(en, lang)` laufen.
+
 ---
 
 ## Offene Punkte (Befunde, kein Ist-Zustand)
