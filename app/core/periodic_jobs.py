@@ -19,6 +19,8 @@ Sub-tasks that run per tick (each with its own sub-frequency):
     - event_expiry              — every 60s (the events' GAME-hour TTL)
     - relationship_decay        — hourly (the handler decides per pair on the
                                   GAME clock, at least one game day apart)
+    - chat_retention            — daily (SYSTEM-time storage hygiene: summarized
+                                  chat rows past memory.chat_retention_days)
 
 The tick interval is configurable in Game Admin → Settings → Server, range
 10s-3600s. Jobs cannot be disabled individually — if you do not want them,
@@ -336,6 +338,28 @@ def _sub_variant_prune():
         logger.debug("variant_prune sub error: %s", e)
 
 
+def _sub_chat_retention():
+    """Delete summarized chat rows older than ``memory.chat_retention_days``.
+
+    Storage hygiene on the SYSTEM clock, and the one sub-task for which a
+    frozen world makes no difference in principle — nothing it deletes depends
+    on the game clock moving. It is still gated by the freeze like everything
+    else, because the freeze gate of this tick is GLOBAL (``_is_paused()``
+    wraps the whole sub-task loop) and no hygiene job bypasses it today:
+    ``variant_prune``, ``reap_orphaned_avatars`` and ``lora_library_sync`` all
+    simply wait. A per-job exception would be a new gate, and deferring a
+    disk-space rule until the world runs again costs nothing.
+
+    Daily: the horizon is measured in days, so a finer interval would only
+    re-scan the same rows.
+    """
+    try:
+        from app.core.chat_retention import prune_chat_messages
+        prune_chat_messages()  # logs its own summary when something was deleted
+    except Exception as e:
+        logger.debug("chat_retention sub error: %s", e)
+
+
 def _sub_reap_orphaned_avatars():
     """Avatar-only Characters von Usern ohne gueltige Session offmap setzen
     (Session-Timeout ohne Logout). Siehe plan-avatar-only-presence.md."""
@@ -499,6 +523,9 @@ _SUB_TASKS: List[tuple] = [
     # so the hourly trigger only decides how fast a clock jump is noticed.
     (_sub_relationship_decay,        3600,                  "relationship_decay"),
     (_sub_variant_prune,             3600,                  "variant_prune"),
+    # 86400s — the horizon counts whole SYSTEM days; a finer interval would
+    # only re-scan the same rows for nothing.
+    (_sub_chat_retention,            86400,                 "chat_retention"),
     (_sub_day_consolidation,         600,                   "day_consolidation"),
     (_sub_reap_orphaned_avatars,     300,                   "reap_orphaned_avatars"),
     (_sub_lora_library_sync,         3600,                  "lora_library_sync"),

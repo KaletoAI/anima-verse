@@ -222,6 +222,7 @@ Diese liest der Code direkt aus `config.json` (`config.get("<pfad>")`), ohne den
 | `server.cors_origins` | `http://localhost:5173`, `http://127.0.0.1:5173`, `http://localhost:5183`, `http://127.0.0.1:5183` (eine Origin pro Zeile) | Welche fremden Origins die API aufrufen dürfen — für die beiden Vite-Dev-Server und einen 3D-Client auf einem anderen Rechner. `/play` und `/game-admin` liefert der Server selbst aus und brauchen keinen Eintrag. Leer = kein Cross-Origin-Zugriff. Kein Wildcard. Braucht Neustart. |
 | `game.travel_speed_m_s` | `1.4` | Reisegeschwindigkeit in Metern pro Spiel-Sekunde (0,1…20), siehe `docs/movement-model-and-skills.md`. |
 | `chat.chattiness`, `chat.pair_window_game_minutes`, `chat.avatar_floor_timeout_minutes` | `0.5` / `5` / `8` | Wer auf eine Zeile im Raum antwortet — `docs/room-conversation.md`. |
+| `memory.chat_retention_days` | `90` | Aufbewahrung der rohen Chat-Zeilen (`chat_messages`). Zeilen, die älter sind, werden gelöscht — aber nur, wenn ihr SPIELTAG bereits zusammengefasst wurde (Tages-Summary, oder die Wochen-/Saison-Summary, in die sie später eingeklappt wurde). Ein Tag ohne Zusammenfassung behält seine Zeilen unabhängig vom Alter. `0` = nie löschen. SYSTEM-Zeit (echte Tage), läuft täglich im World-Admin-Tick (`app/core/chat_retention.py`). |
 | `npc.*` (16 Felder) | — | Automatische NPCs: Slots, Fenster, Pool, Aktions- und Szenen-Takt — `docs/npc-slots.md`. |
 | `image_generation.blender_*` (15 Felder) | — | Blender-Nacharbeit an 3D-Modellen — `docs/llm-blender-models.md`. |
 

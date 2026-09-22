@@ -125,6 +125,9 @@ stops acting autonomously).
 - Tiered memory consolidation (scene → day → week → month), commitments, semantic facts, per-partner
   day summaries, relationship summaries and anti-repetition control (a repetition penalty that rises
   while a character loops).
+- Chat retention: raw chat lines older than `memory.chat_retention_days` (90 by default, `0` = keep
+  forever) are deleted once their game day has been summarized — a day that was never rolled up keeps
+  its lines regardless of age.
 - **Agent Loop:** idle characters take autonomous "thought" turns between user messages
   (importance-weighted round-robin; excludes sleeping characters and the user's avatar).
 - **Intent engine** decides which skills to surface for a given turn.

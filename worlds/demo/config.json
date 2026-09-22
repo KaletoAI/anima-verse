@@ -665,6 +665,7 @@
     "short_term_days": 3,
     "mid_term_days": 30,
     "long_term_days": 90,
+    "chat_retention_days": 90,
     "max_messages": 100,
     "session_gap_hours": 4,
     "max_semantic": 50,

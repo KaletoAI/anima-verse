@@ -3891,6 +3891,15 @@ def play_delete_layout(name: str, user=Depends(get_current_user)):
 # per send_message-Maschinerie antworten — DARF aber ignorieren. Das Panel
 # pollt Verlauf + Status; Lesestand pro Konversation in world_kv.
 
+# How many of a conversation's most recent messages the phone reads. The panel
+# renders the whole thread at once and does not page (packages/player-ui/src/
+# PhonePanel.tsx), so this is both the SQL cap and what a thread shows; the
+# unread badge counts inside the same window. 200 is well above what the panel
+# can usefully display and keeps a months-long conversation from being read,
+# parsed and object-ified on every poll (DATA-12).
+_PHONE_HISTORY_LIMIT = 200
+
+
 def _msg_portrait(name: str) -> str:
     from app.models.character import get_character_profile_image
     img = get_character_profile_image(name) or ""
@@ -3955,7 +3964,8 @@ def play_messages_list(user=Depends(get_current_user)):
         return {"avatar": "", "conversations": [], "available": []}
     convs = []
     for partner in _messaging_partners(avatar):
-        hist = [m for m in (get_chat_history(avatar, partner_name=partner) or [])
+        hist = [m for m in (get_chat_history(avatar, partner_name=partner,
+                                            limit=_PHONE_HISTORY_LIMIT) or [])
                 if (m.get("content") or "").strip()]
         if not hist:
             continue
@@ -3995,7 +4005,8 @@ def play_messages_read_all(user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Kein aktiver Avatar")
     count = 0
     for partner in _messaging_partners(avatar):
-        hist = [m for m in (get_chat_history(avatar, partner_name=partner) or [])
+        hist = [m for m in (get_chat_history(avatar, partner_name=partner,
+                                            limit=_PHONE_HISTORY_LIMIT) or [])
                 if (m.get("content") or "").strip()]
         if not hist:
             continue
@@ -4015,7 +4026,8 @@ def play_messages_thread(partner: str, user=Depends(get_current_user)):
     partner = (partner or "").strip()
     if not partner:
         raise HTTPException(status_code=400, detail="partner erforderlich")
-    hist = [m for m in (get_chat_history(avatar, partner_name=partner) or [])
+    hist = [m for m in (get_chat_history(avatar, partner_name=partner,
+                                        limit=_PHONE_HISTORY_LIMIT) or [])
             if (m.get("content") or "").strip()
             or (m.get("metadata") or {}).get("image")]
     msgs = [{"mine": m.get("role") == "assistant",
