@@ -430,6 +430,22 @@ Block-Beitrag (`admin_settings._prompt_filter_block_keys`).
 | `app.core.i18n.t(en, lang=None) -> str` | Übersetzbare Zeichenkette; die Quelle bleibt Englisch |
 | `PluginContext`: `ctx.get_config(path, default)`, `ctx.http`, `ctx.logger` | Welt-Config per Dot-Pfad (Beispiel `skills.markdown_writer.max_size_kb` seedet die Per-Character-`_defaults`), HTTP, Logging |
 
+## Decision models — `app.core.decision` ✅
+
+Optionale typisierte Entscheidungen (Ja/Nein, Auswahl, Skala) über das Jev-Protokoll
+(`docs/decision-models.md`). **Vertrag:** `None` heißt immer „nimm deinen bisherigen Weg" — ein
+Paket bringt für jede Entscheidungsstelle einen Weg ohne Entscheider mit. Pakete melden ihre Stellen
+im `on_load`-Modul an.
+
+| Funktion | Semantik |
+|---|---|
+| `register_point(point_id, *, label, description, default_min_confidence=0.7, default_timeout_s=2.0, origin='core')` | Stelle anmelden; ein Paket übergibt seinen Paketnamen als `origin`. Nicht angemeldet = entscheidet nie |
+| `is_active(point_id) -> bool` | Hauptschalter an und Modus shadow/on — Fragen nur dann bauen |
+| `decide(point_id, state, questions, *, key=None, then=None) -> Optional[Decision]` | Wirft nie. `questions`: `{name: Noul/Choice/Score}`; `Decision.answers` enthält nur sichere Antworten. `key` verknüpft mit `record_outcome`; `then` bekommt die sicheren Antworten eines Schritts und liefert Folgefragen oder `None`. Synchron — auf dem Event-Loop per `asyncio.to_thread` |
+| `record_outcome(point_id, key, actual)` | Was der bisherige Weg tatsächlich entschied — für den Schattenvergleich |
+| `mark_taken(point_id, key)` | Modus `on` hat gehandelt, kein Vergleich möglich |
+| `Noul(instructions)` / `Choice(instructions, options)` / `Score(instructions, anchors)` | Fragetypen; `Choice` 2–255 Optionen |
+
 ## Improvement types — `app.core.improvements` ✅
 
 The idle improvements queue runs generation work while nobody is playing: the engine
