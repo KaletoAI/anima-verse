@@ -41,12 +41,11 @@ logger = get_logger(__name__)
 #   mesher the most hand detail. Note the trade-off this reverses: the Mixamo
 #   bind pose has palms DOWN, and a mesh generated with turned palms can get
 #   its hand bones bound 90° off, twisting the hands in animation clips.
-# - Fingers HELD TOGETHER (user decision 2026-09-02): the 2D renders measure
-#   anatomically correct (hand length 9.2-9.7% of figure height against a
-#   10.5-11% norm), yet the meshes come out with oversized hands — a fanned
-#   hand is a thin splayed surface the img2mesh bake inflates into a paddle,
-#   while a closed hand is one compact block. "fingers overlapping" was
-#   dropped from the negative for this; it fought the closed hand.
+# - Fingers SLIGHTLY SPREAD (user decision 2026-09-24, reverses the closed
+#   hand of 2026-09-02), in every view. "slightly" is load-bearing — a
+#   widely fanned hand is a thin splayed surface the img2mesh bake inflates
+#   into an oversized paddle, so "splayed/fanned fingers" stay in the
+#   negative.
 # - Legs CLEARLY APART with open space between them (user decision
 #   2026-09-03): a clean separation, not a straddle. What the mesher needs is
 #   the GAP, not the width — with the legs touching it fuses both into one
@@ -62,7 +61,7 @@ logger = get_logger(__name__)
 TPOSE_PROMPT_DEFAULT = (
     "T-pose, standing upright facing the camera, arms straight out to the "
     "sides at shoulder height, forming the letter T, palms facing forward "
-    "toward the camera, fingers straight and held together, legs clearly "
+    "toward the camera, fingers straight and slightly spread apart, legs clearly "
     "apart with open space visible between them, hair behind the shoulders"
 )
 
@@ -99,7 +98,7 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
 TPOSE_BACK_PROMPT_DEFAULT = (
     "back view, seen directly from behind, face not visible, standing upright "
     "in T-pose, arms straight out to the sides at shoulder height, palms "
-    "facing away from the camera, fingers straight and held together, legs "
+    "facing away from the camera, fingers straight and slightly spread apart, legs "
     "clearly apart with open space visible between them, hair in front of "
     "the shoulders"
 )
@@ -116,7 +115,7 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "{side} edge of the frame, standing upright in T-pose, arms straight out "
     "to the sides at shoulder height so the near arm points at the camera and "
     "hides the far arm, strongly foreshortened, palms facing forward, fingers "
-    "straight and held together, legs clearly apart, hair behind the "
+    "straight and slightly spread apart, legs clearly apart, hair behind the "
     "shoulders"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
