@@ -7,6 +7,7 @@ render path; it survives only as sanitized "flavor" prompt text.
 import json
 import re
 import threading
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -546,13 +547,69 @@ def _alias_embeddings(axis: str, embed_fn) -> Dict[str, list]:
 
 def resolve_to_catalog(text: str, axis: str, _embed=None) -> Tuple[str, str]:
     """Maps free text onto a catalog key. Never raises, never returns an
-    unknown key. `_embed` overrides the embedding function (tests)."""
+    unknown key. `_embed` overrides the embedding function (tests).
+
+    Order: exact alias → decision model (plan-decision-models.md § 4.2,
+    only when its point is active) → embedding → default."""
     cleaned = (text or "").strip().lower()
     if not cleaned:
         return get_default_key(axis), "empty"
     index = _alias_index(axis)
     if cleaned in index:
         return index[cleaned], "exact"
+    picked, point, dkey = _decide_catalog_key(cleaned, axis)
+    if picked is not None:
+        return picked
+    key, how = _resolve_by_embedding(cleaned, axis, index, _embed)
+    if dkey:
+        _record_catalog_outcome(point, dkey, axis, key, how)
+    return key, how
+
+
+def _decide_catalog_key(cleaned: str, axis: str) -> Tuple[Optional[Tuple[str, str]], str, str]:
+    """Ask the decision point of this axis. Returns (result or None, point, key);
+    never raises — any failure means the usual path."""
+    try:
+        from app.core import decision, decision_points
+        point = decision_points.CATALOG_POINTS.get(axis, "")
+        if not point or not decision.is_active(point):
+            return None, "", ""
+        dkey = f"{axis}:{uuid.uuid4().hex[:8]}"
+        questions, then = decision_points.catalog_questions(axis)
+        d = decision.decide(point, {"text": cleaned}, questions, key=dkey, then=then)
+        entry = d.answers.get("entry") if d else None
+        if entry is None:
+            return None, point, dkey
+        if entry.value == decision_points.NONE_KEY:
+            decision.mark_taken(point, dkey)
+            record_candidate(axis, cleaned, "", None)
+            return (get_default_key(axis), "decision_none"), point, dkey
+        if entry.value in get_catalog(axis):
+            decision.mark_taken(point, dkey)
+            return (entry.value, "decision"), point, dkey
+        return None, point, dkey
+    except Exception as e:
+        logger.debug("decision catalog match failed (%s): %s", axis, e)
+        return None, "", ""
+
+
+def _record_catalog_outcome(point: str, dkey: str, axis: str, key: str, how: str) -> None:
+    """What the usual path chose — the shadow comparison (fallback counts as none)."""
+    try:
+        from app.core import decision, decision_points
+        actual = {"entry": key if how == "embedding" else decision_points.NONE_KEY}
+        if how == "embedding" and axis == "pose":
+            g = group_of(key)
+            if g:
+                actual["group"] = g
+        decision.record_outcome(point, dkey, actual)
+    except Exception as e:
+        logger.debug("decision catalog outcome failed (%s): %s", axis, e)
+
+
+def _resolve_by_embedding(cleaned: str, axis: str, index: Dict[str, str],
+                          _embed=None) -> Tuple[str, str]:
+    """The embedding match (unchanged behaviour since the pose catalog)."""
     if _embed is None:
         from app.core.embedding import embed as _embed
     query = _embed(cleaned)

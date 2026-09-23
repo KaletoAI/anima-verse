@@ -4,9 +4,9 @@ Imported once at boot (app/server.py); registration happens at import. Each
 point keeps its question and state builders here, so the call sites stay a
 few lines. Plugins register their own points from their ``on_load`` module.
 """
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional, Tuple
 
-from app.core.decision import Choice, register_point
+from app.core.decision import Answer, Choice, register_point
 
 THOUGHT_SKIP = "thought_skip"
 THOUGHT_STATE_MAX_CHARS = 2500
@@ -72,3 +72,75 @@ def thought_questions(name: str) -> Dict[str, Choice]:
             "act": f"yes: someone addressed {name}, something new happened, or a plan is due now",
             "idle": f"no: nothing new, {name} would not do anything meaningful right now",
         })}
+
+
+# ── Catalog matching (§ 4.2) ─────────────────────────────────────────────
+
+POSE_MATCH = "pose_match"
+EXPRESSION_MATCH = "expression_match"
+CATALOG_POINTS = {"pose": POSE_MATCH, "expression": EXPRESSION_MATCH}
+NONE_KEY = "none"
+_OPTION_DESC_MAX = 80
+_ENTRY_INSTRUCTIONS = {
+    "pose": "Which pose fits the text best?",
+    "expression": "Which facial expression fits the text best?",
+}
+
+register_point(
+    POSE_MATCH,
+    label="Pose text → catalog key",
+    description=("Maps a free pose text onto a pose catalog key (body position first, then "
+                 "the pose). In mode 'on' a confident key wins over the embedding match; "
+                 "'none' records the text as a catalog candidate."),
+    default_min_confidence=0.6,
+    default_timeout_s=6.0,
+)
+register_point(
+    EXPRESSION_MATCH,
+    label="Mood text → expression key",
+    description=("Maps a free mood text onto an expression catalog key. In mode 'on' a "
+                 "confident key wins over the embedding match."),
+    default_min_confidence=0.6,
+    default_timeout_s=6.0,
+)
+
+
+def _catalog_option(key: str, entry: Dict[str, Any]) -> str:
+    syn = ", ".join((entry.get("synonyms") or [])[:3])
+    return (f"{key}: {syn}" if syn else key)[:_OPTION_DESC_MAX]
+
+
+def catalog_questions(axis: str) -> Tuple[Dict[str, Choice], Optional[Callable]]:
+    """Questions for mapping a text onto the catalog of ``axis``. With place
+    groups (pose): step 1 asks the group, ``then`` asks the entries of THAT
+    group (openjev scores every option on its own, so fewer options = faster).
+    Without groups: one question over all entries. Every entry question offers
+    NONE_KEY ("none of these fits")."""
+    from app.core.pose_catalog import get_catalog, get_groups
+    entries = get_catalog(axis)
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for k, e in entries.items():
+        grouped.setdefault(e.get("group") or "", {})[k] = e
+
+    def entry_question(subset: Dict[str, Any]) -> Dict[str, Choice]:
+        opts = {k: _catalog_option(k, e) for k, e in subset.items()}
+        if NONE_KEY not in opts:
+            opts[NONE_KEY] = "none of these fits"
+        return {"entry": Choice(instructions=_ENTRY_INSTRUCTIONS.get(axis, "Which entry fits best?"),
+                                options=opts)}
+
+    groups = get_groups() if axis == "pose" else {}
+    usable = {g: spec for g, spec in groups.items() if g in grouped}
+    if len(usable) >= 2 and "" not in grouped:
+        first = {"group": Choice(
+            instructions="Which body position does the text describe?",
+            options={g: str(spec.get("label") or g) for g, spec in usable.items()})}
+
+        def then(answers: Dict[str, Answer]) -> Optional[Dict[str, Choice]]:
+            g = answers.get("group")
+            if g is None or g.value not in grouped:
+                return None
+            return entry_question(grouped[g.value])
+
+        return first, then
+    return entry_question(entries), None

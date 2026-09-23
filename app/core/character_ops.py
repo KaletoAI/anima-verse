@@ -2510,9 +2510,13 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
         if not ok_enter:
             raise HTTPException(status_code=403,
                 detail={"reason": "block_enter", "message": enter_msg})
-    save_character_current_location(character_name, location_to_save,
-        _skip_compliance=_is_avatar)
-    # Raum und Aktivitaet: bei Ortswechsel loeschen, es sei denn Raum wurde mitgegeben
+    # Off the event loop: the arrival triggers an expression variant, whose
+    # cache key resolves the mood through the catalog resolver — which may ask
+    # the expression_match decision point (blocking up to its timeout).
+    import asyncio as _asyncio
+    await _asyncio.to_thread(save_character_current_location, character_name,
+                             location_to_save, _skip_compliance=_is_avatar)
+    # Room and activity: cleared on a location change unless a room was given
     if location_to_save != old_loc:
         save_character_current_room(character_name, room or '')
         if not room:
@@ -2693,8 +2697,12 @@ async def apply_place_on_map(character_name: str, data: Dict[str, Any]) -> Dict[
     cancel_journey(character_name)
 
     add_known_location(character_name, location_to_save)
-    save_character_current_location(character_name, location_to_save,
-        _skip_compliance=_is_avatar)
+    # Off the event loop: the arrival triggers an expression variant, whose
+    # cache key resolves the mood through the catalog resolver — which may ask
+    # the expression_match decision point (blocking up to its timeout).
+    import asyncio as _asyncio
+    await _asyncio.to_thread(save_character_current_location, character_name,
+                             location_to_save, _skip_compliance=_is_avatar)
     if location_to_save != old_loc:
         save_character_current_room(character_name, room or '')
         if not room:

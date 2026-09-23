@@ -791,7 +791,11 @@ class ThoughtRunner:
         if full_response and full_response.strip().upper() != "SKIP":
             try:
                 from app.core.chat_engine import post_process_response
-                _pp_result = post_process_response(
+                # Off the event loop: the extraction makes blocking LLM calls
+                # and resolves pose/mood texts through the catalog resolver,
+                # which may ask a decision point (blocking up to its timeout).
+                _pp_result = await asyncio.to_thread(
+                    post_process_response,
                     owner_id="",
                     character_name=character_name,
                     user_input=user_input,
@@ -800,7 +804,7 @@ class ThoughtRunner:
                     llm=llm,
                     user_display_name=user_name,
                     full_chat_history=recent_history,
-                    old_history=[],  # Gedanken: kein Summary-Update noetig
+                    old_history=[],  # thoughts: no summary update needed
                     extraction_context={"source": "thought", "is_background": True},
                 )
                 if _pp_result.get("location"):
