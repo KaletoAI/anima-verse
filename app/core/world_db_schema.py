@@ -650,6 +650,28 @@ SCHEMA_STATEMENTS = [
         duration_s  REAL NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_llm_call_stats_lookup ON llm_call_stats (model, task, provider, ts DESC)",
+    # ── Decision models: shadow statistics (plan-decision-models.md § 3.3) ──
+    # One row per SYSTEM day × point × endpoint × question. Call-level counters
+    # (calls, errors, latency, no_outcome, taken) live in the row with
+    # question = ''; answer-level counters (answers, low_conf, agree, disagree)
+    # in the row of the question. agree/disagree count CONFIDENT predictions
+    # only — the ones that would act in mode 'on'.
+    """CREATE TABLE IF NOT EXISTS decision_stats (
+        day           TEXT NOT NULL,
+        point         TEXT NOT NULL,
+        endpoint      TEXT NOT NULL,
+        question      TEXT NOT NULL DEFAULT '',
+        calls         INTEGER NOT NULL DEFAULT 0,
+        answers       INTEGER NOT NULL DEFAULT 0,
+        low_conf      INTEGER NOT NULL DEFAULT 0,
+        agree         INTEGER NOT NULL DEFAULT 0,
+        disagree      INTEGER NOT NULL DEFAULT 0,
+        no_outcome    INTEGER NOT NULL DEFAULT 0,
+        taken         INTEGER NOT NULL DEFAULT 0,
+        errors_json   TEXT NOT NULL DEFAULT '{}',
+        lat_hist_json TEXT NOT NULL DEFAULT '{}',
+        PRIMARY KEY (day, point, endpoint, question)
+    )""",
 
     # ── Party-System (gemeinsam reisen) ───────────────────────────────────
     # Eine Party = ein Leader + N Follower (JSON-Liste). Nur der Leader bewegt

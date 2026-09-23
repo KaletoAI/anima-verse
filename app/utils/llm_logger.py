@@ -444,7 +444,7 @@ def prune_jsonl_log(path: Path, retention_days: int) -> int:
 def prune_logs_on_startup() -> Dict[str, int]:
     """Called by the server lifespan at startup. Reads the retention period
     from the config (server.log_retention_days, default 5) and trims
-    llm_calls.jsonl + image_prompts.jsonl to that window.
+    llm_calls.jsonl, image_prompts.jsonl and decisions.jsonl to that window.
 
     Entries falling out of the window are not dropped but appended to their
     monthly bucket under ``logs/archive/`` (see ``prune_jsonl_log``). The
@@ -461,10 +461,12 @@ def prune_logs_on_startup() -> Dict[str, int]:
         days = 5
     llm_calls = prune_jsonl_log(LOG_FILE, days)
     image_prompts = prune_jsonl_log(LOG_DIR / "image_prompts.jsonl", days)
+    decisions = prune_jsonl_log(LOG_DIR / "decisions.jsonl", days)
     out = {
         "llm_calls": llm_calls,
         "image_prompts": image_prompts,
-        "archived": llm_calls + image_prompts,
+        "decisions": decisions,
+        "archived": llm_calls + image_prompts + decisions,
         "retention_days": days,
     }
     return out
