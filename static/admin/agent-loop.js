@@ -103,15 +103,17 @@ function render() {
     let cls = 'outcome-ok';
     if (r.outcome && r.outcome.startsWith('error')) cls = 'outcome-err';
     else if (r.outcome === 'timeout' || r.outcome === 'no_llm') cls = 'outcome-timeout';
-    else if (r.outcome === 'in_chat_skip') cls = 'outcome-skip';
+    else if (r.outcome === 'in_chat_skip' || r.outcome === 'decision_skip'
+             || r.outcome === 'ok_skip') cls = 'outcome-skip';
     const tools = (r.tools || []).map(t => `<span class="tag tool">${escapeHtml(t)}</span>`).join('');
     const intents = (r.intents || []).map(i => `<span class="tag intent">${escapeHtml(i)}</span>`).join('');
     const tagsCell = (tools + intents) || '<span class="muted">—</span>';
     // Link to the LLM log: only for outcomes where an LLM call actually ran.
-    // Auto-sleep / in_chat_skip / no_llm have no entry in the LLM log.
+    // Auto-sleep / in_chat_skip / decision_skip / no_llm have no entry in the LLM log.
     const _llmRanOutcomes = !(
       (r.outcome || '').startsWith('auto_sleep') ||
       r.outcome === 'in_chat_skip' || r.outcome === 'no_llm'
+      || r.outcome === 'decision_skip'
     );
     let logLink = '';
     if (_llmRanOutcomes && r.agent && r.started_at) {

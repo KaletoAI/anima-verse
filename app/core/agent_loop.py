@@ -37,6 +37,7 @@ startup); this loop does not handle external triggers.
 import asyncio
 import logging
 import random
+import uuid
 from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now
@@ -957,7 +958,10 @@ class AgentLoop:
                         continue
                     bad_outcome = outcome_val in ("no_llm", "timeout") \
                         or str(outcome_val or "").startswith("error")
-                    too_fast = last.get("duration_s", 0) < 1.0
+                    # A decision_skip is fast BY DESIGN — it is a real turn,
+                    # not the no-LLM symptom this guard is for.
+                    too_fast = (last.get("duration_s", 0) < 1.0
+                                and outcome_val != "decision_skip")
                     if bad_outcome or too_fast:
                         await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                         continue
@@ -1811,6 +1815,28 @@ class AgentLoop:
                 hint = self.pop_hint(character_name)
                 _perception_whitelist = (perception or {}).get("tool_whitelist")
 
+                # Decision model (plan-decision-models.md § 4.1): only a PURE
+                # idle thought is asked — no perception stimulus, no bump
+                # hint, nothing unread. decide() is None unless the point runs
+                # 'on' and is sure; 'shadow' only records in the background.
+                _dkey = ""
+                if (not perception and not hint
+                        and not str(ctx.get("inbox_block") or "").strip()):
+                    from app.core import decision, decision_points
+                    _dkey = f"{character_name}:{uuid.uuid4().hex[:8]}"
+                    _dec = await asyncio.to_thread(
+                        decision.decide, decision_points.THOUGHT_SKIP,
+                        decision_points.thought_state(ctx),
+                        decision_points.thought_questions(character_name),
+                        key=_dkey)
+                    _turn_ans = _dec.answers.get("turn") if _dec else None
+                    if _turn_ans is not None and _turn_ans.value == "idle":
+                        decision.mark_taken(decision_points.THOUGHT_SKIP, _dkey)
+                        outcome = "decision_skip"
+                        turn_info = {"preview": f"decision skip ({_turn_ans.confidence:.2f})",
+                                     "tools": [], "intents": []}
+                        return
+
                 try:
                     result = await asyncio.wait_for(
                         thought_loop.run_thought_turn(
@@ -1823,6 +1849,13 @@ class AgentLoop:
                         turn_info = result
                         if turn_info.get("status") == "no_llm":
                             outcome = "no_llm"
+                        elif turn_info.get("skipped"):
+                            outcome = "ok_skip"
+                    if _dkey and outcome in ("ok", "ok_skip"):
+                        from app.core import decision, decision_points
+                        decision.record_outcome(
+                            decision_points.THOUGHT_SKIP, _dkey,
+                            {"turn": "idle" if outcome == "ok_skip" else "act"})
                 except asyncio.TimeoutError:
                     logger.error("AgentLoop turn TIMEOUT (%ds) for %s",
                                  _TURN_TIMEOUT_SECONDS, character_name)
@@ -1992,8 +2025,10 @@ class AgentLoop:
         # autonomous round-robin does not immediately pull the same char as a
         # Chime again. Cascade bumps bypass the cooldown anyway (the
         # conversation keeps flowing).
+        # decision_skip replaces a turn that would have ended as ok_skip, so
+        # it takes the same cooldown (plan-decision-models.md § 9).
         is_real = (outcome == "ok" or (outcome or "").startswith("ok")
-                   or outcome == "respond")
+                   or outcome in ("respond", "decision_skip"))
         if is_real:
             self._last_real_turn_at[name] = utc_now()
 

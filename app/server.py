@@ -59,6 +59,10 @@ try:
 except Exception as _coe:
     logger.warning("catalog overlay migration failed: %s", _coe)
 
+# Decision models (plan-decision-models.md): the core's decision points
+# register at import. Nothing is asked unless decision.enabled is on.
+import app.core.decision_points  # noqa: E402,F401
+
 # One-time consolidation: the per-world model_capabilities.json files are folded
 # into the shared shared/config/model_capabilities.json. Model abilities and
 # suitability scores describe the model plus its hardware, not a world.

@@ -833,9 +833,12 @@ class ThoughtRunner:
             logger.debug("Intent auto-progress error: %s", _ate)
 
         if "SKIP" in full_response and not had_notification_tool:
-            logger.info("%s: SKIP (nichts zu melden)", character_name)
+            logger.info("%s: SKIP (nothing to report)", character_name)
             if not _turn_info["preview"]:
                 _turn_info["preview"] = "SKIP"
+            # The ONE authoritative SKIP signal of a thought turn — the agent
+            # loop reports it as outcome ok_skip (plan-decision-models.md § 4.1).
+            _turn_info["skipped"] = True
             return _turn_info
 
         # Suppress-Notification: nur Tool-Effekte behalten, Narrativ-Text
