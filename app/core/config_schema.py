@@ -364,6 +364,48 @@ SECTIONS = {
             },
         },
     },
+    "decision": {
+        "label": "Decision models",
+        "icon": "⚖️",
+        "description": ("Optional typed decisions (yes/no, pick one, scale) from a fast "
+                        "decision model — Laya, openjev or Jev over the Jev protocol "
+                        "(POST <url>/v1/systemone). Off = nothing is ever asked; every "
+                        "decision point takes its usual path. See docs/decision-models.md."),
+        "fields": {
+            "enabled": {
+                "type": "bool",
+                "label": "Enabled",
+                "default": False,
+                "description": "Master switch. Off: no decision-model call anywhere, no log, no statistics. Takes effect on save, no restart.",
+            },
+        },
+        "sub_arrays": {
+            "endpoints": {
+                "label": "Endpoints",
+                "item_label_field": ["name", "url"],
+                "fields": {
+                    "name": {"type": "str", "label": "Name", "default": "",
+                             "description": "Unique name — the Points page refers to endpoints by it."},
+                    "url": {"type": "str", "label": "Base URL", "default": "",
+                            "description": "Without /v1/systemone. llama-swap: http://<host>:8080/upstream/<model> (e.g. …/upstream/laya, …/upstream/openjev-4b)."},
+                    "api_key": {"type": "password", "label": "API key", "sensitive": True, "default": "",
+                                "description": "Optional. Sent as 'Authorization: Bearer <key>'. Stored in secrets.json."},
+                    "model": {"type": "str", "label": "Model", "default": "",
+                              "description": "Leave EMPTY for jev-serve/laya-serve — the server then picks the checkpoint by language. 'laya' forces the ENGLISH checkpoint; explicit values: multilingual, typed-decisions, english. TypeSafe Jev needs its model id."},
+                    "enabled": {"type": "bool", "label": "Enabled", "default": True},
+                },
+            },
+        },
+        "pages": [
+            {"id": "endpoints", "label": "Endpoints", "icon": "🔌",
+             "fields": ["enabled"], "sub_arrays": ["endpoints"],
+             "description": "The master switch and the decision servers. Test sends one fixed probe question to a saved endpoint."},
+            {"id": "points", "label": "Points", "icon": "🎯", "custom": True,
+             "description": "Every decision point of the core and the loaded plugins: mode, endpoints, minimum confidence, timeout."},
+            {"id": "shadow", "label": "Shadow results", "icon": "📊", "custom": True,
+             "description": "How often each endpoint agreed with the usual path, how often it was unsure, its errors and latency."},
+        ],
+    },
     "chat": {
         "label": "Chat / Anti-Repetition",
         "icon": "💬",

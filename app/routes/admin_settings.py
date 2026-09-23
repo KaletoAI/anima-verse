@@ -980,6 +980,47 @@ def settings_llm_tasks(user=Depends(require_admin)):
     }
 
 
+@router.get("/settings/decision/points")
+def settings_decision_points(user=Depends(require_admin)):
+    """Decision points for the admin Points page: every registered point plus
+    every id that only exists in the saved config (a plugin not loaded now)."""
+    from app.core import decision
+    import app.core.decision_points  # noqa: F401 — registers the core points
+    configured = config.get("decision.points") or {}
+    rows = []
+    seen = set()
+    for s in decision.registered_points():
+        seen.add(s.point_id)
+        rows.append({"id": s.point_id, "label": s.label, "description": s.description,
+                     "origin": s.origin, "registered": True,
+                     "default_min_confidence": s.default_min_confidence,
+                     "default_timeout_s": s.default_timeout_s})
+    for pid in sorted(k for k in configured if k not in seen):
+        rows.append({"id": pid, "label": pid, "description": "", "origin": "",
+                     "registered": False, "default_min_confidence": 0.7,
+                     "default_timeout_s": 2.0})
+    endpoints = [str(e.get("name") or "") for e in (config.get("decision.endpoints") or [])
+                 if isinstance(e, dict) and e.get("name")]
+    return {"points": rows, "endpoints": endpoints, "status": decision.endpoint_status()}
+
+
+@router.post("/settings/decision/test")
+async def settings_decision_test(request: Request, user=Depends(require_admin)):
+    """One fixed probe question to a SAVED endpoint (30-s timeout: a cold
+    llama-swap slot loads in 10–20 s)."""
+    from app.core import decision
+    body = await request.json()
+    name = str((body or {}).get("name") or "")
+    return await asyncio.to_thread(decision.probe_endpoint, name)
+
+
+@router.get("/settings/decision/stats")
+def settings_decision_stats(days: int = 7, user=Depends(require_admin)):
+    from app.core import decision_log
+    days = max(1, min(int(days), 90))
+    return {"days": days, "rows": decision_log.query_stats(days)}
+
+
 @router.get("/settings/llm-routing/effective")
 def settings_llm_routing_effective(user=Depends(require_admin)):
     """What the server would route each task to RIGHT NOW (saved config,
@@ -1972,6 +2013,7 @@ def _build_settings_html() -> str:
 
 <script src="/static/admin/settings.js"></script>
 <script src="/static/admin/settings-routing.js"></script>
+<script src="/static/admin/settings-decision.js"></script>
 </body>
 </html>'''
 

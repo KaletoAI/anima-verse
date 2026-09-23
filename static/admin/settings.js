@@ -520,6 +520,14 @@ function renderSection(key, pageId) {
             : pageId);
         return;
     }
+    // Decision models — its own file (settings-decision.js) renders the
+    // Points and Shadow pages and adds the test panel to Endpoints.
+    if (key === 'decision') {
+        renderDecisionPage(pageId === undefined || pageId === null
+            ? (key === ACTIVE_SECTION ? ACTIVE_PAGE : null)
+            : pageId);
+        return;
+    }
     const sec = SCHEMA[key];
     // Paged section: the many renderSection(ACTIVE_SECTION) rerenders (field
     // edits, array add/remove) pass no page — stay on the current one.
