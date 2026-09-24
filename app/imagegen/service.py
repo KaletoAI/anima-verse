@@ -1365,7 +1365,7 @@ class ImageService:
             "user_input": ctx.get("user_input", ""),
             "profile_only": ctx.get("profile_only", False),
             # An explicit identity reference for the rendered character (the
-            # T-pose back view slots its own front render). Honoured only
+            # extra T-pose views slot their own front render). Honoured only
             # inside that character's model_refs directory — see the
             # reference loop in generate_from_input.
             "reference_image_override": ctx.get("reference_image_override", ""),

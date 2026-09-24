@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke run for the T-pose back view (user report 2026-09-24: the back
+"""Smoke run for the T-pose extra views (user report 2026-09-24: the back
 render showed the head, then the whole upper body, facing the camera).
 
 Three parts of the fix, each checked against values derived BY HAND:
@@ -13,6 +13,11 @@ Three parts of the fix, each checked against values derived BY HAND:
 [3] ``model_refs.checked_reference_override`` accepts only an existing file
     inside the character's own model_refs directory — the value arrives in a
     JSON tool input, so a path elsewhere must never reach a backend upload.
+[4] Measured at the consumer: ``generate_model_ref_images`` hands EVERY
+    extra view (back, left, right) the front render it just produced as
+    ``reference_image`` (user decision 2026-09-24 — the profiles too), while
+    the front render itself keeps the normal profile-image reference (None).
+    The render call is replaced by a recorder; no backend, no DB.
 
 Storage is a temp dir (``paths.init`` before any world-DB import).
 
@@ -90,6 +95,39 @@ check("[3] missing file refused",
       model_refs.checked_reference_override("Demo", str(refs / "nope.png")), "")
 check("[3] another character's model_refs refused",
       model_refs.checked_reference_override("Other", str(front)), "")
+
+# [4] ------------------------------------------------------------------------
+from app.core import expression_regen  # noqa: E402
+
+calls = []
+
+
+def _fake_render(character_name, **kw):
+    out = Path(str(kw["output_stem"]) + ".png")
+    out.write_bytes(b"x")
+    calls.append((out.stem.rsplit("_", 1)[0], kw.get("reference_image")))
+    return out
+
+
+expression_regen.generate_expression_image = _fake_render
+model_refs.is_humanoid = lambda name: True
+model_refs.enabled_tpose_views = lambda name: model_refs.TPOSE_VIEWS
+model_refs.find_ref_image = lambda *a, **k: None
+model_refs.get_model_refs_dir = lambda name: refs
+model_refs.generate_model_ref_images(
+    "Demo", kinds=("tpose",), force=True,
+    pieces={}, items=[], signature="sig0")
+front_render = refs / "tpose_sig0.png"
+check("[4] reference per render (kind, reference_image)",
+      calls,
+      [("tpose", None),
+       ("tpose_back", front_render),
+       ("tpose_left", front_render),
+       ("tpose_right", front_render)])
+check("[4] profile text speaks to the reference",
+      model_refs.TPOSE_LEFT_PROMPT_DEFAULT.startswith(
+          "the same figure turned sideways, strict left side profile view"),
+      True)
 
 print()
 if failures:

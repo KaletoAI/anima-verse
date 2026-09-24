@@ -882,7 +882,7 @@ def generate_expression_image(character_name: str,
       for slots the species package declares visible from behind — the
       others describe the front and drag the figure toward the camera.
     - ``reference_image`` replaces the profile image as the identity
-      reference (the back view slots its front T-pose render); it must lie
+      reference (the extra T-pose views slot the front render); it must lie
       in the character's model_refs directory (``checked_reference_override``).
 
     Returns the path to the generated image, or None on failure.

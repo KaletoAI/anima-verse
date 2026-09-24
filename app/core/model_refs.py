@@ -96,7 +96,7 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
 # upper body — back toward the camera. So the text says what the camera DOES
 # see (back of the head, upper back, shoulder blades) and where the head
 # points, instead of the old "face not visible", which named the face itself.
-# "the same figure turned around" speaks to the reference: the back view
+# "the same figure turned around" speaks to the reference: every extra view
 # slots the front T-pose render (not the frontal profile portrait), so an
 # edit-capable backend turns THAT figure around. Hair goes in FRONT of the
 # shoulders here for the same reason the front view puts it behind them — it
@@ -118,8 +118,11 @@ TPOSE_BACK_PROMPT_DEFAULT = (
 # camera" demonstrably was not enough). So the text says what the picture
 # actually SHOWS — a strongly foreshortened near arm that hides the far one —
 # and the forward/down failure modes are pushed away in _NEG_TPOSE_SIDE.
+# "the same figure turned sideways" speaks to the reference — like the back
+# view, a profile slots the front T-pose render.
 TPOSE_SIDE_PROMPT_TEMPLATE = (
-    "strict {side} side profile view, the whole body in profile facing the "
+    "the same figure turned sideways, strict {side} side profile view, the "
+    "whole body in profile facing the "
     "{side} edge of the frame, standing upright in T-pose, arms straight out "
     "to the sides at shoulder height so the near arm points at the camera and "
     "hides the far arm, strongly foreshortened, palms facing forward, fingers "
@@ -779,10 +782,13 @@ def generate_model_ref_images(character_name: str,
                             # LoRAs drag the figure around toward the
                             # camera, which is what this view must not do.
                             back_view=view == "back",
-                            # The front render of THIS outfit, not the frontal
-                            # profile portrait: a face in the reference drags
-                            # the upper body of a back view toward the camera.
-                            reference_image=path if view == "back" else None)
+                            # Every extra view slots the front render of THIS
+                            # outfit, not the frontal profile portrait: a face
+                            # in the reference drags the figure toward the
+                            # camera, and the front render carries exactly the
+                            # figure, outfit and proportions the views must
+                            # match for multi-view img2mesh.
+                            reference_image=path)
                     except Exception as e:
                         view_path = None
                         logger.warning(
