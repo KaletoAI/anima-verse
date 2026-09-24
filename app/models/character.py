@@ -2208,7 +2208,10 @@ def clear_pose_intent(character_name: str) -> None:
             changed = True
             old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
             old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
-            old_pose_key = profile.get("pose_key") or ""
+            # The EFFECTIVE key (a sleeper is `sleeping`) — what journeys, the
+            # payload and the client resolve the exit clip from. Read off the
+            # held profile: a pure dict lookup, no second read, no lock.
+            old_pose_key = get_effective_pose_key(character_name, profile=profile)
             profile["pose_key"] = ""
             profile["pose_flavor"] = ""
             profile["place"] = None          # the character stands up (§ 3.5)

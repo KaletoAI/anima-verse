@@ -137,6 +137,28 @@ and scales it by height_cm/100 / ref_height_m.
      figure walks off during the clip, the travel is not a separate leg. A
      clip in mode ``strip`` (no travel) gives None as well.
 
+FIX ROUND 1
+
+[14] STILL ON THE SEAT (SEAT_MATCH_M = 0.05). The seat (2, 3) facing 90 with
+     travel (0, 0.4) and no height: the current point (2, 3) is 0.00 m from
+     it <= 0.05 -> the stand point (2.4, 3.0) is used, and ``stand_up``
+     searches from it: ``free_stand_point`` is asked with near (2.4, 3.0)
+     and (stubbed to hand `near` back) the character is written there.
+[15] THE ROOM-CHANGE CASE. The same-id seat resolves in the room the
+     character is in NOW, but the character stands 1 m away at (3, 3):
+     dist((3, 3), (2, 3)) = 1.00 > 0.05 -> ``bridge_stand_point`` answers
+     None, and ``stand_up`` searches from the CURRENT point (3, 3) exactly as
+     without a seat — which is free and already where the character is, so
+     nothing is written.
+[16] THE EFFECTIVE POSE. A sleeping character (``is_sleeping`` true) whose
+     STORED pose_key is ``lying``: in the fixture ``lying`` plays ``lie``,
+     whose exit clip ``smoke-rise-strip`` has no travel, and ``sleeping``
+     plays ``sleep``, whose exit clip ``smoke-rise`` carries (0, 0.4).
+     ``clear_pose_intent`` and ``places.release`` must hand ``stand_up`` the
+     EFFECTIVE key ``sleeping`` (what journeys, the payload and the client
+     use), so the stand point comes from the sleeping clip: seat (2, 3)
+     facing 90 -> (2.4, 3.0); the stored key would give None.
+
 Usage:  ./.venv/bin/python scripts/smoke_room_stand.py
 """
 import contextlib
@@ -156,6 +178,8 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="room-stand-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(tempfile.mkdtemp(prefix="room-stand-storage-"))
+from app.core import db  # noqa: E402
+db.init_schema()
 
 from app.core import furnish_geometry as fg  # noqa: E402
 from app.core import room_stand  # noqa: E402
@@ -291,17 +315,22 @@ for _kind, _mode in (("smoke-rise", "foot_lock"), ("smoke-rise-strip", "strip"))
                                      "ref_height_m": 1.75}}}), encoding="utf-8")
 
 
+#: pose key -> the animation it plays, and animation -> its exit clip.
+_ANIM = {"sitting": "sit", "lying": "lie", "sleeping": "sleep"}
+
+
 @contextlib.contextmanager
 def _bridge_fixture(accel: float, kind: str = "smoke-rise"):
     import app.core.animation_clips as ac
     import app.core.expression_pose_maps as epm
     keep = (epm.resolve_pose_animation, ac.load_locomotion_clips, ac.resolve_transition)
+    exits = {"sit": kind, "lie": "smoke-rise-strip", "sleep": "smoke-rise"}
     try:
-        epm.resolve_pose_animation = lambda k: "sit"
+        epm.resolve_pose_animation = lambda k: _ANIM.get(k, "idle")
         ac.load_locomotion_clips = lambda *a, **k: {"walk": "walk"}
         ac.resolve_transition = lambda a, b, rules=None: (
-            {"from": a, "to": b, "kind": kind, "accel": accel}
-            if (a, b) == ("sit", "walk") else None)
+            {"from": a, "to": b, "kind": exits[a], "accel": accel}
+            if a in exits and b == "walk" else None)
         yield
     finally:
         epm.resolve_pose_animation, ac.load_locomotion_clips, ac.resolve_transition = keep
@@ -352,10 +381,11 @@ def test_bridge_scale() -> None:
     seat = {"x": 2.0, "z": 3.0, "facing": 90.0}
     with _bridge_fixture(accel=0.0):
         got = room_stand.bridge_stand_point("smoke", seat, "sitting",
-                                            profile={"height": 190})
+                                            profile={"height": 190}, at=(2.0, 3.0))
         check("190 cm from a seat at (2, 3) facing east lands at (2.434286, 3.0)",
               at(got, 2.0 + 0.4 * 1.9 / 1.75, 3.0), str(got))
-        got = room_stand.bridge_stand_point("smoke", seat, "sitting", profile={})
+        got = room_stand.bridge_stand_point("smoke", seat, "sitting", profile={},
+                                            at=(2.0, 3.0))
         check("no height lands at (2.4, 3.0)", at(got, 2.4, 3.0), str(got))
 
 
@@ -364,10 +394,98 @@ def test_ramping_rule() -> None:
     seat = {"x": 2.0, "z": 3.0, "facing": 90.0}
     with _bridge_fixture(accel=0.6):
         check("accel 0.6 -> None",
-              room_stand.bridge_stand_point("smoke", seat, "sitting", profile={}) is None)
+              room_stand.bridge_stand_point("smoke", seat, "sitting", profile={},
+                                            at=(2.0, 3.0)) is None)
     with _bridge_fixture(accel=0.0, kind="smoke-rise-strip"):
         check("a strip clip -> None",
-              room_stand.bridge_stand_point("smoke", seat, "sitting", profile={}) is None)
+              room_stand.bridge_stand_point("smoke", seat, "sitting", profile={},
+                                            at=(2.0, 3.0)) is None)
+
+
+@contextlib.contextmanager
+def _stand_up_stubs(pos, seat):
+    """``stand_up`` with the world stood in for: the room, the current point,
+    the resolved seat, the free-point search (hands `near` back, recording
+    it), the location check and the write (recorded)."""
+    from app.core import places
+    import app.models.character as ch
+    seen = {}
+    keep = (places.where, places.resolve_place, places.inside, ch.get_character_pos,
+            ch.set_character_pos, room_stand.free_stand_point)
+    try:
+        places.where = lambda n: ("L", "R")
+        places.resolve_place = lambda n, pl: dict(seat) if pl else None
+        places.inside = lambda *a: True
+        ch.get_character_pos = lambda n: {"x": pos[0], "z": pos[1]}
+        ch.set_character_pos = lambda n, x, z, **k: seen.setdefault("written", (x, z))
+        room_stand.free_stand_point = lambda loc, room, near, exclude="": (
+            seen.setdefault("near", tuple(near)) and tuple(near))
+        yield seen
+    finally:
+        (places.where, places.resolve_place, places.inside, ch.get_character_pos,
+         ch.set_character_pos, room_stand.free_stand_point) = keep
+
+
+def test_still_on_the_seat() -> None:
+    print("\n[14]-[15] the stand point only while the character is ON the seat")
+    seat = {"id": "s1", "slot": 0, "room_id": "r1", "x": 2.0, "z": 3.0, "facing": 90.0}
+    check("SEAT_MATCH_M is 0.05", room_stand.SEAT_MATCH_M == 0.05)
+    with _bridge_fixture(accel=0.0):
+        with _stand_up_stubs((2.0, 3.0), seat) as seen:
+            got = room_stand.stand_up("smoke", from_place={"id": "s1"},
+                                      from_pose_key="sitting")
+        check("[14] on the seat: the search starts at (2.4, 3.0)",
+              at(seen.get("near"), 2.4, 3.0), str(seen.get("near")))
+        check("[14] …and the character is written there",
+              at(got, 2.4, 3.0) and at(seen.get("written"), 2.4, 3.0), str(got))
+        check("[15] 1 m off a same-id seat: no stand point",
+              room_stand.bridge_stand_point("smoke", seat, "sitting", profile={},
+                                            at=(3.0, 3.0)) is None)
+        with _stand_up_stubs((3.0, 3.0), seat) as seen:
+            got = room_stand.stand_up("smoke", from_place={"id": "s1"},
+                                      from_pose_key="sitting")
+        check("[15] …stand_up searches from the current point (3, 3)",
+              at(seen.get("near"), 3.0, 3.0), str(seen.get("near")))
+        check("[15] …and, already standing there, writes nothing",
+              got is None and "written" not in seen, str(got))
+
+
+def test_effective_pose() -> None:
+    print("\n[16] a sleeper stands up with the SLEEPING pose's exit clip")
+    from app.core import places
+    from app.models.character import get_character_profile, save_character_profile
+    seat = {"id": "s1", "slot": 0, "room_id": "r1", "x": 2.0, "z": 3.0, "facing": 90.0}
+    held = {"id": "s1", "slot": 0, "room_id": "r1"}
+    keep = room_stand.stand_up
+    for label, clear in (("clear_pose_intent", None), ("places.release", places.release)):
+        name = "sleeper_" + label.split(".")[-1]
+        save_character_profile(name, {"current_location": "", "pose_key": "lying",
+                                      "is_sleeping": True, "place": dict(held)},
+                               create_new=True)
+        seen = {}
+        room_stand.stand_up = lambda n, **k: seen.update(k)
+        try:
+            if clear is None:
+                from app.models.character import clear_pose_intent
+                clear_pose_intent(name)
+            else:
+                clear(name)
+        finally:
+            room_stand.stand_up = keep
+        check(f"{label} hands stand_up the effective key 'sleeping'",
+              seen.get("from_pose_key") == "sleeping", str(seen))
+        check(f"{label} …and the seat it held", seen.get("from_place") == held,
+              str(seen.get("from_place")))
+        check(f"{label} …and the place is gone from the profile",
+              not (get_character_profile(name) or {}).get("place"))
+    with _bridge_fixture(accel=0.0):
+        got = room_stand.bridge_stand_point("smoke", seat, "sleeping", profile={},
+                                            at=(2.0, 3.0))
+        check("the sleeping clip carries the figure to (2.4, 3.0)",
+              at(got, 2.4, 3.0), str(got))
+        check("…the stored key 'lying' would have given None",
+              room_stand.bridge_stand_point("smoke", seat, "lying", profile={},
+                                            at=(2.0, 3.0)) is None)
 
 
 def main() -> int:
@@ -384,6 +502,8 @@ def main() -> int:
     test_stand_from_bridge_point()
     test_bridge_scale()
     test_ramping_rule()
+    test_still_on_the_seat()
+    test_effective_pose()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

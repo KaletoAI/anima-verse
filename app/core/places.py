@@ -454,7 +454,8 @@ def release(name: str) -> None:
     offers no free point leaves the position where it is.
     """
     from app.core.keyed_lock import keyed_lock
-    from app.models.character import get_character_profile, save_character_profile
+    from app.models.character import (get_character_profile, get_effective_pose_key,
+                                      save_character_profile)
     # Read AND write under the per-character profile lock (DATA-3): the whole
     # profile_json blob is written out, so a stale read here would revert a
     # concurrent equip. ``stand_up`` stays OUTSIDE — it writes the profile
@@ -462,7 +463,10 @@ def release(name: str) -> None:
     with keyed_lock("character_profile", name):
         profile = get_character_profile(name) or {}
         old = profile.get("place")
-        pose = profile.get("pose_key") or ""
+        # The EFFECTIVE key (a sleeper is `sleeping`), the one journeys, the
+        # payload and the client resolve the exit clip from — read off the
+        # held profile, so no second read and no lock.
+        pose = get_effective_pose_key(name, profile=profile)
         released = bool(old)
         if released:
             profile["place"] = None

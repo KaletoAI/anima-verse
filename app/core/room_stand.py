@@ -350,6 +350,14 @@ def free_stand_point(location_id: str, room_id: str, near: Sequence[float],
                       near)
 
 
+#: How close the character's current point must lie to the resolved seat
+#: (its slot, a pair's centre) for :func:`bridge_stand_point` to believe the
+#: character is still SITTING there, in metres. Seat and position are both
+#: written as centimetre-rounded numbers, so 5 cm is slack enough for the
+#: real case and far too tight for a foreign seat.
+SEAT_MATCH_M = 0.05
+
+
 def bridge_offset(travel_m: Sequence[float], facing_deg: float,
                   scale: float) -> Tuple[float, float]:
     """World XZ by which a bridge clip carries a figure that faces
@@ -371,13 +379,31 @@ def bridge_scale(height_cm: Optional[float], ref_height_m: Optional[float]) -> f
 
 
 def bridge_stand_point(name: str, place: Dict[str, Any], pose_key: str,
-                       profile: Optional[Dict[str, Any]] = None
+                       profile: Optional[Dict[str, Any]] = None,
+                       at: Optional[Sequence[float]] = None
                        ) -> Optional[Tuple[float, float]]:
     """Where ``name`` stands once the exit clip of ``pose_key`` has carried it
     off ``place`` (a place as ``places.place_of`` returns it: ``facing``,
     ``x``, ``z``) — None when that clip stays on the spot, ramps (it walks
     off by itself) or nothing is configured. ``profile`` is loaded when not
-    given."""
+    given.
+
+    ONLY WHILE THE CHARACTER IS STILL ON THAT SEAT: its current point
+    (``at``, else ``get_character_pos``) must lie within
+    :data:`SEAT_MATCH_M` of the place's ``x, z``, else the answer is None and
+    the caller behaves as if there were no bridge. The seat is resolved from
+    an OLD profile field against the room the character is in NOW, and
+    ``clear_pose_intent`` also runs after a room or location change — a
+    marker of the new room with the same room and marker ids would otherwise
+    become the origin, and the character would be put down beside a foreign
+    chair instead of at its arrival point. No known position is no match."""
+    if at is None:
+        from app.models.character import get_character_pos
+        pos = get_character_pos(name)
+        at = (float(pos["x"]), float(pos["z"])) if pos is not None else None
+    if at is None or math.dist((float(at[0]), float(at[1])),
+                               (float(place["x"]), float(place["z"]))) > SEAT_MATCH_M:
+        return None
     from app.core.animation_clips import clip_ref_height_m, clip_travel_m
     from app.core.height import height_cm
     from app.core.travel_engine import exit_bridge_for_pose
@@ -433,7 +459,8 @@ def stand_up(name: str, *, from_place: Optional[Dict[str, Any]] = None,
         # The seat is resolved from the field the caller just cleared — the
         # profile no longer holds it, so ``place_of`` would answer None.
         seat = places.resolve_place(name, from_place)
-        stand = bridge_stand_point(name, seat, from_pose_key) if seat else None
+        stand = (bridge_stand_point(name, seat, from_pose_key, at=here)
+                 if seat else None)
         if stand is not None:
             near = stand
     point = free_stand_point(loc, room, near, exclude=name)
