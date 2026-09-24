@@ -46,6 +46,24 @@ world slides BACKWARDS in these numbers by exactly the travel.
       ("strip", "keep", "foot_lock").
       (Importing animation_clips reads no storage: it only resolves clip
       directories when a function is called.)
+[10] DOMINANT CONTACT — a fully planted point outranks a half-planted one.
+      A planted: y=8 (rest 8), z=-2f → weight 1.
+      B hovers: y=11.5, rest 8 → ground = min(11.5, 8) = 8, height 3.5 →
+      ramp(3.5, 2, 5) = 0.5; vy = 0 → weight 0.5; it slides z=-6f.
+      Old rule (plain weighted mean): Δ = −(1·(−2) + 0.5·(−6)) / 1.5 = +10/3
+      per frame — the half-planted B drags the planted A by 4/3 cm a frame,
+      13.33 cm over the take, although A is the only VERIFIED contact.
+      New rule: while any point is in full contact (pair weight ≥ FULL), only
+      full-contact points steer → Δ = +2, path z = 2f, travel (0, 20), drift
+      of A = 0. (Real case: get-up-bed, a shuffling left foot at 2 cm height,
+      weight 0.83–0.97, dragged the planted right foot by 2.02 cm.)
+[11] NO full contact anywhere → the partial weights still steer, as before.
+      A: y=11.5 (rest 8) → height 3.5 → weight 0.5, z=-2f;
+      B: y=12.25 (rest 8) → height 4.25 → ramp = (5−4.25)/3 = 0.25, z=-5f.
+      Δ = −(0.5·(−2) + 0.25·(−5)) / 0.75 = 2.25/0.75 = +3 → path z = 3f,
+      travel (0, 30).
+      [6] stays as derived: both points there are FULL, so the mean of the
+      full points is the old mean (path z = 3f).
 """
 import math
 import sys
@@ -204,6 +222,28 @@ check("_root_motion.MODES == animation_clips.ROOT_MOTION_MODES",
       f"{rm.MODES!r} vs {getattr(animation_clips, 'ROOT_MOTION_MODES', None)!r}")
 check("and both are ('strip', 'keep', 'foot_lock')",
       tuple(rm.MODES) == ("strip", "keep", "foot_lock"), repr(rm.MODES))
+
+# ----------------------------------------------------- [10] dominant contact
+print("[10] a fully planted point outranks a half-planted one")
+tracks = {"LeftFoot": [(0.0, 8.0, -2.0 * f) for f in range(N)],
+          "RightFoot": [(0.0, 11.5, -6.0 * f) for f in range(N)]}
+ground, weights, path = solve(tracks, {"LeftFoot": 8.0, "RightFoot": 8.0})
+check("B weighs 0.5 in every frame",
+      all(abs(x - 0.5) <= EPS for x in weights["RightFoot"]), repr(weights["RightFoot"]))
+near_path("path z = 2f (A alone steers)", path, [(0.0, 2.0 * f) for f in range(N)])
+near("travel z = 20", path[-1][1], 20.0)
+near("drift of A = 0", rm.max_planted_drift({"LeftFoot": tracks["LeftFoot"]},
+                                             weights, path), 0.0)
+
+# ------------------------------------------------- [11] only partial contact
+print("[11] no full contact anywhere: the partial weights steer")
+tracks = {"LeftFoot": [(0.0, 11.5, -2.0 * f) for f in range(N)],
+          "RightFoot": [(0.0, 12.25, -5.0 * f) for f in range(N)]}
+ground, weights, path = solve(tracks, {"LeftFoot": 8.0, "RightFoot": 8.0})
+near("A weighs 0.5", weights["LeftFoot"][3], 0.5)
+near("B weighs 0.25", weights["RightFoot"][3], 0.25)
+near_path("path z = 3f", path, [(0.0, 3.0 * f) for f in range(N)])
+near("travel z = 30", path[-1][1], 30.0)
 
 print(f"\n{passed} ok, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -58,6 +58,24 @@ feet while standing up. Rig/actor leg ratio of this take: hips_scale 1.1914
                geometry.root_motion key, roles/anchor as before.
 [9] loop_s=1.5 together with root_motion=foot_lock: the run fails (ok False)
                with an error naming both parameters.
+[10] foot_lock, the SIDECAR number is the FILE's number: |sidecar − file|
+               <= 0.05 cm for the whole take AND for the take trimmed at
+               start_s 1.533 (the window rule's start, 1.733 − 0.2 s: it drops
+               the seated contact span). Both measurements run the same
+               contact rule on keys equal within 0.001 cm, so the only
+               tolerance needed is the sidecar's 0.01 rounding. Trimmed take:
+               max_drift_cm <= 1.5 in the file too. (Before the fix the
+               measuring job read the contact heights from the clip file's
+               own rest, which is not the rig's: 0.97 sidecar vs 2.83 file.)
+               The measuring job's ref_height_m equals the sidecar's 2.011
+               (same rig rest).
+[11] get-up-bed (Meshy biped, yaw 180, level_head, foot_lock — the source in
+               shared/models/clips-inbox/Meshy_AI_default_biped/, SKIP when
+               absent; it is local data, not tracked): the whole take passes
+               (max_drift_cm <= 1.5, sidecar == file within 0.05 cm). Before
+               the dominant-contact rule (_root_motion.foot_lock_path) it was
+               refused at 2.02 cm: a shuffling left foot at ~2 cm height
+               (weight 0.83–0.97) dragged the planted right foot.
 """
 import math
 import os
@@ -87,6 +105,11 @@ KEEP_REPORT_DRIFT_CM = 6.0
 HIPS_Y_TOL_CM = 0.01
 REF_HEIGHT_M = 2.011
 REF_HEIGHT_TOL_M = 0.01
+SAME_DRIFT_CM = 0.05
+TRIM_START_S = 1.533
+BED_INBOX = ROOT / "shared" / "models" / "clips-inbox"
+BED_NAME = ("Meshy_AI_default_biped/"
+            "Meshy_AI_Animation_01a08d2e-b5d6-7307-8fb8-cf575d7b7b5d_without_skin.fbx")
 
 failures = []
 
@@ -121,6 +144,22 @@ def convert_pair(out_dir: Path, kind: str, **params):
                       params=p, out_dir=out_dir, timeout_s=TIMEOUT_S)
 
 
+def convert_bed(out_dir: Path, kind: str, **params):
+    """The bed import through the app's own path (``fbx_import.import_fbx``),
+    answered in the runner's result shape."""
+    from app.core import fbx_import
+    try:
+        r = fbx_import.import_fbx(kind, [{"name": BED_NAME, "take": None}],
+                                  target="free", redistributable=True, yaw_deg=180,
+                                  level_head=True, overwrite=True, out_dir=out_dir,
+                                  **params)
+    except Exception as e:                    # noqa: BLE001 - reported as a result
+        return {"ok": False, "error": str(e), "data": {}, "outputs": {}}
+    fbx = sorted(out_dir.glob("*.fbx"))
+    return {"ok": True, "error": "", "data": r["sidecar"],
+            "outputs": {kind: str(fbx[0])} if fbx else {}}
+
+
 def measure(fbx: str):
     return runner.run("clip_root_motion", inputs={"rig": RIG, "src": Path(fbx)},
                       params={"fps": 30, "measure_only": True}, timeout_s=TIMEOUT_S)
@@ -139,12 +178,26 @@ def main() -> int:
         print(f"SKIP: CMU source {SOLO[1]} missing under {CMU}")
         return 0
     pair_ok = all(p.is_file() for s, t in PAIR for p in files(s, t))
+    bed_ok = (BED_INBOX / BED_NAME).is_file()
 
     with tempfile.TemporaryDirectory(prefix="smoke-clip-root-motion-") as tmp:
         tmp = Path(tmp)
         # Nothing here reads the library, but a stray reader must not see it.
         os.environ["ANIMATION_CLIPS_DIR"] = str(tmp / "clips")
         jobs = {m: (convert, tmp / m, f"gu-{m}", {"root_motion": m}) for m in MODES}
+        jobs["trim"] = (convert, tmp / "trim", "gu-trim",
+                        {"root_motion": "foot_lock", "start_s": TRIM_START_S})
+        if bed_ok:
+            # The bed goes through fbx_import, which reads storage paths:
+            # a throwaway world and inbox, the source copied in.
+            import shutil
+            from app.core import paths
+            paths.init(str(tmp / "storage"))
+            inbox = tmp / "inbox"
+            (inbox / BED_NAME).parent.mkdir(parents=True)
+            shutil.copy2(BED_INBOX / BED_NAME, inbox / BED_NAME)
+            os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(inbox)
+            jobs["bed"] = (convert_bed, tmp / "bed", "gu-bed", {"root_motion": "foot_lock"})
         jobs["loop"] = (convert, tmp / "loop", "gu-loop",
                         {"root_motion": "foot_lock", "loop_s": 1.5})
         if pair_ok:
@@ -162,8 +215,10 @@ def main() -> int:
         if failures:
             print(f"\nFAILED: {len(failures)} check(s): " + ", ".join(failures))
             return 1
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            futs = {m: pool.submit(measure, res[m]["outputs"][f"gu-{m}"]) for m in MODES}
+        extra = [k for k in ("trim", "bed") if k in res and res[k]["ok"]]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futs = {m: pool.submit(measure, res[m]["outputs"][f"gu-{m}"])
+                    for m in MODES + tuple(extra)}
             meas = {m: f.result() for m, f in futs.items()}
 
     side = {m: res[m]["data"] for m in MODES}
@@ -258,6 +313,37 @@ def main() -> int:
     check("the run fails", lr["ok"] is False, err)
     check("the error names loop_s and root_motion",
           "loop_s" in err and "root_motion" in err, err)
+
+    def same_drift(label, key):
+        r = res[key]
+        check(f"{label}: conversion ok", r["ok"], r["error"])
+        if not r["ok"]:
+            return
+        b = r["data"]["geometry"].get("root_motion") or {}
+        md = (meas[key].get("data") or {}) if meas[key]["ok"] else {}
+        d, fd = b.get("max_drift_cm"), md.get("max_drift_cm")
+        print(f"  · {label}: travel_m {b.get('travel_m')}  sidecar {d}  file {fd}"
+              f"  contact_s {b.get('contact_s')}  file ref_height_m {md.get('ref_height_m')}")
+        check(f"{label}: max_drift_cm <= {MAX_LOCK_DRIFT_CM} (sidecar)",
+              num(d) and d <= MAX_LOCK_DRIFT_CM, str(d))
+        check(f"{label}: max_drift_cm <= {MAX_LOCK_DRIFT_CM} (file)",
+              num(fd) and fd <= MAX_LOCK_DRIFT_CM, str(fd))
+        check(f"{label}: |sidecar − file| <= {SAME_DRIFT_CM} cm",
+              num(d) and num(fd) and abs(d - fd) <= SAME_DRIFT_CM, f"{d} vs {fd}")
+        check(f"{label}: file ref_height_m == sidecar's",
+              md.get("ref_height_m") == b.get("ref_height_m"),
+              f"{md.get('ref_height_m')} vs {b.get('ref_height_m')}")
+
+    print("\n[10] foot_lock: the sidecar's drift is the file's drift")
+    res["whole"], meas["whole"] = res["foot_lock"], meas["foot_lock"]
+    same_drift("whole take", "whole")
+    same_drift(f"trimmed at {TRIM_START_S} s", "trim")
+
+    print("\n[11] get-up-bed passes foot_lock")
+    if not bed_ok:
+        print(f"  SKIP: {BED_NAME} not in {BED_INBOX}")
+    else:
+        same_drift("bed, whole take", "bed")
 
     print()
     if failures:

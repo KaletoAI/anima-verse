@@ -13,6 +13,14 @@ pass before export (``cmu_clip.run_takes``) and a measuring job of its own.
 Invoked as a runner job (``measure_only``) on a finished FBX:
     inputs   rig, src     params  fps, measure_only=True
 Returns the measurement of the file as it is (see ``run``) and writes nothing.
+
+The contact heights come from the REST POSE OF THE REFERENCE RIG, in the pass
+and in the measuring job alike. A clip FBX carries no bind pose (``cmu_clip.
+_export``), so the rest Blender builds when it imports one is not the rig's —
+its RightFoot came back at 10.79 cm instead of 7.32 — and a measurement taken
+from it clamps the grounds differently, weights other frames as planted and
+reports another number for the very same keys (111_11 from 1.533 s: 0.97 cm in
+the pass, 2.83 cm "in the file", with the joint tracks equal within 0.001 cm).
 """
 import sys
 from pathlib import Path
@@ -58,11 +66,12 @@ def _rest_heights(arm):
     return rest, (top - floor) / 100.0
 
 
-def _contacts(arm, joints, frames, fps):
+def _contacts(arm, joints, frames, fps, rest=None):
     """Contact tracks and weights of the CURRENT action, plus the rig's
-    standing height (m)."""
+    standing height (m). ``rest`` = ``_rest_heights`` of the reference rig;
+    omitted, ``arm``'s own rest is used (the pass: ``arm`` IS the rig)."""
     tracks = _tracks(arm, joints, frames)
-    rest_h, ref_height_m = _rest_heights(arm)
+    rest_h, ref_height_m = rest or _rest_heights(arm)
     weights = rm.contact_weights(tracks, rm.ground_heights(tracks, rest_h), fps)
     return tracks, weights, ref_height_m
 
@@ -110,12 +119,19 @@ def run(job):
     finally:
         sys.path.remove(_SCRIPTS_DIR)
     p = job.get("params") or {}
+    inputs = job.get("inputs") or {}
+    if "rig" not in inputs:
+        raise ValueError("input 'rig' (the reference skeleton) is required: "
+                         "a clip file carries no rest pose of its own")
     fps = int(p.get("fps", 30) or 30)
     _common.reset_scene()
-    arm = clip_orient._import_armature(job["inputs"]["src"], fps)
+    rig = clip_orient._import_armature(inputs["rig"], fps, anim=False)
+    rest = _rest_heights(rig)
+    clip_orient._remove(rig)
+    arm = clip_orient._import_armature(inputs["src"], fps)
     _action, frames = _frames(arm)
     mats, joints = sample(arm, frames)
-    tracks, weights, ref_height_m = _contacts(arm, joints, frames, fps)
+    tracks, weights, ref_height_m = _contacts(arm, joints, frames, fps, rest)
     hips = PREFIX + "Hips"
     zero = [(0.0, 0.0)] * len(frames)
     return {"frames": len(frames),

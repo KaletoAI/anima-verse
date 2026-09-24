@@ -10,6 +10,14 @@ the opposite of that slide; where no foot is planted (the body rests on a
 seat or a bed, or is in the air) the root holds still. That is the rule
 "the planted foot is the fixed point".
 
+A point in FULL contact outranks a half-planted one: while any point is fully
+planted, only the fully planted points steer the root. A foot inside the fade
+band (hovering 2–5 cm, or moving vertically) is exactly the foot whose hold
+is NOT verified (``max_planted_drift`` judges full contact only), and letting
+it steer dragged the verified ones — a shuffling foot at 2 cm pulled the
+planted foot of get-up-bed 2.02 cm. Partial weights still steer when nothing
+is fully planted.
+
 Frame: clip frame, Y up, +Z forward, +X the figure's left, centimetres.
 """
 import math
@@ -95,13 +103,15 @@ def contact_weights(tracks: Dict[str, List[Vec3]], ground: Dict[str, float],
 def foot_lock_path(tracks: Dict[str, List[Vec3]],
                    weights: Dict[str, List[float]]) -> List[Tuple[float, float]]:
     """Root XZ offset per frame (frame 0 = origin): each step moves the root
-    by the weighted opposite of the planted points' horizontal slide."""
+    by the weighted opposite of the planted points' horizontal slide — of the
+    FULLY planted points only, whenever there is one (see the module
+    docstring)."""
     n = max((len(p) for p in tracks.values()), default=0)
     if n == 0:
         return []
     path = [(0.0, 0.0)]
     for f in range(n - 1):
-        sw = sx = sz = 0.0
+        steps = []          # (pair weight, dx, dz) per contributing point
         for name, pts in tracks.items():
             w = weights.get(name) or []
             if f + 1 >= len(pts) or f + 1 >= len(w):
@@ -109,12 +119,14 @@ def foot_lock_path(tracks: Dict[str, List[Vec3]],
             ws = min(w[f], w[f + 1])
             if ws <= 0 or not (_finite(pts[f]) and _finite(pts[f + 1])):
                 continue
-            sw += ws
-            sx += ws * (pts[f + 1][0] - pts[f][0])
-            sz += ws * (pts[f + 1][2] - pts[f][2])
+            steps.append((ws, pts[f + 1][0] - pts[f][0], pts[f + 1][2] - pts[f][2]))
+        full = [s for s in steps if s[0] >= FULL]
+        use = full or steps
+        sw = sum(s[0] for s in use)
         x, z = path[-1]
         if sw >= MIN_WEIGHT:
-            x, z = x - sx / sw, z - sz / sw
+            x -= sum(s[0] * s[1] for s in use) / sw
+            z -= sum(s[0] * s[2] for s in use) / sw
         path.append((x, z))
     return path
 
