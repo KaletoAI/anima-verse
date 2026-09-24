@@ -89,6 +89,7 @@ sys.path.insert(0, _SCRIPTS_DIR)
 import _common                                                # noqa: E402
 import _cmu                                                   # noqa: E402
 import cmu_clip                                               # noqa: E402
+from _clip_scene import sample as _sample, write_root as _write_root  # noqa: E402
 sys.path.remove(_SCRIPTS_DIR)
 
 import bpy                                                    # noqa: E402
@@ -185,64 +186,6 @@ def _frames_of(arm):
     if abs(f0 - round(f0)) > 1e-6 or abs(f1 - round(f1)) > 1e-6:
         raise ValueError(f"keys are not on whole frames: {f0}..{f1}")
     return act, list(range(int(round(f0)), int(round(f1)) + 1))
-
-
-def _sample(arm, frames):
-    """Per frame the pose matrices in armature space AND every bone's posed
-    head/tail — the first for the rigid check, the second for the floor."""
-    scene = bpy.context.scene
-    mats, joints = {}, {}
-    for f in frames:
-        scene.frame_set(f)
-        bpy.context.view_layer.update()
-        mats[f] = {pb.name: pb.matrix.copy() for pb in arm.pose.bones}
-        joints[f] = {pb.name: (pb.head.copy(), pb.tail.copy())
-                     for pb in arm.pose.bones}
-    return mats, joints
-
-
-def _write_track(action, path: str, values: dict, size: int) -> None:
-    """``values``: {frame: tuple of ``size`` floats} onto the curves of one
-    data path — created when the clip did not drive them so far."""
-    curves, points = [], []
-    order = sorted(values)
-    for i in range(size):
-        fc = action.fcurves.find(path, index=i)
-        if fc is None:
-            fc = action.fcurves.new(data_path=path, index=i)
-            fc.keyframe_points.add(len(order))
-            for k, f in enumerate(order):
-                fc.keyframe_points[k].co = (float(f), 0.0)
-        curves.append(fc)
-        points.append({int(round(kp.co[0])): kp for kp in fc.keyframe_points})
-    for f in order:
-        for i, v in enumerate(values[f]):
-            kp = points[i].get(int(f))
-            if kp is None:
-                kp = curves[i].keyframe_points.insert(float(f), v, options={"FAST"})
-                points[i][int(f)] = kp
-            kp.co[1] = v
-    for fc in curves:
-        fc.update()
-
-
-def _write_root(arm, action, bone: str, mats: dict, rest: Matrix) -> None:
-    """Puts the transformed root poses back as keys: the bone has no parent,
-    so its basis is ``rest⁻¹ · M`` (``cmu_clip._bake``'s formula)."""
-    quats, locs = {}, {}
-    prev = None
-    for f in sorted(mats):
-        basis = rest.inverted() @ mats[f]
-        q = basis.to_quaternion()
-        if prev is not None and q.dot(prev) < 0.0:
-            q.negate()          # same rotation, continuous sign between keys
-        prev = q
-        quats[f] = (q.w, q.x, q.y, q.z)
-        t = basis.to_translation()
-        locs[f] = (t.x, t.y, t.z)
-    arm.pose.bones[bone].rotation_mode = "QUATERNION"
-    _write_track(action, f'pose.bones["{bone}"].rotation_quaternion', quats, 4)
-    _write_track(action, f'pose.bones["{bone}"].location', locs, 3)
 
 
 # ---------------------------------------------------------------- run
