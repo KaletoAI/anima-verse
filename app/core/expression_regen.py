@@ -850,7 +850,8 @@ def generate_expression_image(character_name: str,
                               override_width: Optional[int] = None,
                               override_height: Optional[int] = None,
                               apply_state_modifiers: bool = True,
-                              back_view: bool = False) -> Optional[Path]:
+                              back_view: bool = False,
+                              reference_image: Optional[Path] = None) -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -880,6 +881,9 @@ def generate_expression_image(character_name: str,
       back view): exposed body-slot fragments and their LoRAs survive only
       for slots the species package declares visible from behind — the
       others describe the front and drag the figure toward the camera.
+    - ``reference_image`` replaces the profile image as the identity
+      reference (the back view slots its front T-pose render); it must lie
+      in the character's model_refs directory (``checked_reference_override``).
 
     Returns the path to the generated image, or None on failure.
     """
@@ -1019,7 +1023,7 @@ def generate_expression_image(character_name: str,
     # A variant render pins the character's profile image as identity reference,
     # so it prefers img2img — the SAME preference get_outfit_lora_options uses, so
     # the LoRA list and this render resolve to the same backend.
-    _has_ref = render_has_reference_image(character_name)
+    _has_ref = reference_image is not None or render_has_reference_image(character_name)
 
     # Read the per-character override early — allows render/model/LoRA
     # overrides per character (configurable in the character editor).
@@ -1113,6 +1117,8 @@ def generate_expression_image(character_name: str,
         "profile_only": True,
         "appearances": [{"name": character_name, "appearance": appearance or ""}],
     }
+    if reference_image is not None:
+        payload["reference_image_override"] = str(reference_image)
 
     if outfit_w:
         payload["override_width"] = outfit_w

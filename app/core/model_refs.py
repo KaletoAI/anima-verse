@@ -90,17 +90,25 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
 # background come from the use-case styles ("tpose_back" / "tpose_side").
 #
 # The back view deliberately carries NO face token (and gets an EMPTY
-# expression layer): every facial word pulls a face into the render, and the
-# model then turns the character back toward the camera or paints a face onto
-# the back of the head. Hair goes in FRONT of the shoulders here for the same
-# reason the front view puts it behind them — it must not cover the surface
-# the mesher is supposed to read.
+# expression layer, and its appearance loses every facial segment via
+# prompt_builder.strip_face_terms): every facial word pulls a face into the
+# render, and the model then turns the head — observed 2026-09-24: the whole
+# upper body — back toward the camera. So the text says what the camera DOES
+# see (back of the head, upper back, shoulder blades) and where the head
+# points, instead of the old "face not visible", which named the face itself.
+# "the same figure turned around" speaks to the reference: the back view
+# slots the front T-pose render (not the frontal profile portrait), so an
+# edit-capable backend turns THAT figure around. Hair goes in FRONT of the
+# shoulders here for the same reason the front view puts it behind them — it
+# must not cover the surface the mesher is supposed to read.
 TPOSE_BACK_PROMPT_DEFAULT = (
-    "back view, seen directly from behind, face not visible, standing upright "
-    "in T-pose, arms straight out to the sides at shoulder height, palms "
-    "facing away from the camera, fingers straight and slightly spread apart, legs "
-    "clearly apart with open space visible between them, hair in front of "
-    "the shoulders"
+    "the same figure turned around, back view, seen directly from behind, "
+    "the back of the head, the upper back and the shoulder blades facing the "
+    "camera, the head facing straight away from the camera in the same "
+    "direction as the body, standing upright in T-pose, arms straight out to "
+    "the sides at shoulder height, palms facing away from the camera, fingers "
+    "straight and slightly spread apart, legs clearly apart with open space "
+    "visible between them, hair in front of the shoulders"
 )
 
 # Both profiles share one text — the side is the only difference, so they
@@ -323,6 +331,25 @@ def get_model_refs_dir(character_name: str) -> Path:
     if base.exists():
         refs_dir.mkdir(parents=True, exist_ok=True)
     return refs_dir
+
+
+def checked_reference_override(character_name: str, raw: str) -> str:
+    """``raw`` as an absolute path when it names an existing file inside the
+    character's model_refs directory, else "" (logged). The image service
+    takes a reference override only through this gate — the value arrives in
+    a JSON tool input, and a path outside would upload any server file to a
+    backend."""
+    from app.models.character import get_character_dir
+    try:
+        refs_dir = (get_character_dir(character_name) / "model_refs").resolve()
+        path = Path(raw).resolve()
+        if path.is_file() and path.is_relative_to(refs_dir):
+            return str(path)
+    except (OSError, ValueError):
+        pass
+    logger.warning("Reference override for %s ignored (not in model_refs): %s",
+                   character_name, raw)
+    return ""
 
 
 #: Separator between the outfit part and the state part of a signature.
@@ -751,7 +778,11 @@ def generate_model_ref_images(character_name: str,
                             # `back: true`); front-only fragments and their
                             # LoRAs drag the figure around toward the
                             # camera, which is what this view must not do.
-                            back_view=view == "back")
+                            back_view=view == "back",
+                            # The front render of THIS outfit, not the frontal
+                            # profile portrait: a face in the reference drags
+                            # the upper body of a back view toward the camera.
+                            reference_image=path if view == "back" else None)
                     except Exception as e:
                         view_path = None
                         logger.warning(

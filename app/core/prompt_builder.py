@@ -1,14 +1,14 @@
-"""Zentrale Prompt-Builder Pipeline fuer die Bildgenerierung.
+"""Central prompt-builder pipeline for image generation.
 
-Konsolidiert die bisher ueber chat.py, image_generation_skill.py und
-image_regenerate.py verteilte Prompt-Logik in eine einzelne Pipeline.
+Consolidates the prompt logic that used to be spread over chat.py,
+image_generation_skill.py and image_regenerate.py into one pipeline.
 
-Ablauf:
-    1. detect_persons()        - Personen erkennen, neutrale Akteure zuweisen
-    2. collect_context()       - Kontext-Variablen pro Akteur sammeln
-    3. apply_exclusion_rules() - Workflow-abhaengige Ausschlussregeln
-    4. assemble_prompt()       - Finalen Prompt zusammenbauen
-    5. resolve_reference_slots() - Reference-Image Slots befuellen
+Flow:
+    1. detect_persons()        - detect persons, assign neutral actors
+    2. collect_context()       - collect context variables per actor
+    3. apply_exclusion_rules() - workflow-dependent exclusion rules
+    4. assemble_prompt()       - assemble the final prompt
+    5. resolve_reference_slots() - fill the reference-image slots
 """
 import re
 from dataclasses import dataclass, field
@@ -215,6 +215,27 @@ _PERSON_KEYWORDS = (
 # Person description — the ONE composition
 # ---------------------------------------------------------------------------
 
+# Words that describe a FACE. A render seen from behind (the T-pose back
+# view) drops every appearance segment that names one (user decision
+# 2026-09-24): each facial word pulls a face into the picture, and the model
+# answers by turning the head — or the whole upper body — toward the camera.
+# The appearance is free text, so this works per comma/sentence segment: a
+# segment like "long hair framing her face" goes as a whole.
+_FACE_TERMS_RE = re.compile(
+    r"\b(?:faces?|faced|facial|eyes?|eyebrows?|brows?|eyelash(?:es)?|"
+    r"lash(?:es)?|eyeliner|eyeshadow|make-?up|lipstick|lips?|mouth|nose|"
+    r"cheeks?|cheekbones?|chin|jaw(?:line)?|forehead|teeth|smile|dimples?|"
+    r"pupils?|iris(?:es)?|gaze)\b",
+    re.IGNORECASE)
+
+
+def strip_face_terms(text: str) -> str:
+    """Drops every comma/semicolon/sentence segment of ``text`` that names a
+    facial feature; the rest is re-joined with commas."""
+    kept = [seg.strip() for seg in re.split(r"[,;.]", text or "")
+            if seg.strip() and not _FACE_TERMS_RE.search(seg)]
+    return ", ".join(kept)
+
 def person_description(name: str, *,
                        include_outfit: bool = False,
                        apply_state_modifiers: bool = True,
@@ -232,7 +253,8 @@ def person_description(name: str, *,
     behind) → optionally the worn-outfit line → triggered
     image_modifier directives over the composed text (with the outfit
     included, a replacement may rewrite outfit text too — scene-render
-    semantics)."""
+    semantics) → in a ``back_view`` render, every segment naming a facial
+    feature dropped (``strip_face_terms``)."""
     from app.models.character import get_character_appearance, get_character_profile
     from app.models.character_template import get_template, resolve_profile_tokens
     appearance = get_character_appearance(name) or ""
@@ -274,6 +296,9 @@ def person_description(name: str, *,
             appearance = apply_image_modifiers(name, appearance)
         except Exception:
             pass
+    # Last, so a state modifier cannot bring a face back ("flushed cheeks").
+    if back_view:
+        appearance = strip_face_terms(appearance)
     return appearance or ""
 
 
@@ -731,13 +756,13 @@ class PromptBuilder:
                 variables.ref_images[idx] = ref_path
 
     def _resolve_person_ref_image(self, person: Person, profile_only: bool = False) -> str:
-        """Loest das beste Reference-Bild fuer eine Person auf (Fallback-Kette).
+        """Resolves the best reference image of a person (fallback chain).
 
         Args:
-            person: Person-Objekt.
-            profile_only: True = nur Profilbild (z.B. Outfit-Erstellung).
+            person: Person object.
+            profile_only: True = profile image only (e.g. outfit creation).
         """
-        # User: Profilbild
+        # User: profile image
         if person.is_user:
             profile_img = get_user_profile_image()
             if profile_img:
@@ -748,7 +773,7 @@ class PromptBuilder:
                     return str(candidate)
             return ""
 
-        # profile_only: direkt zum Profilbild springen (z.B. Outfit-Erstellung)
+        # profile_only: jump straight to the profile image (e.g. outfit creation)
         if profile_only:
             profile_img = get_character_profile_image(person.name)
             if profile_img:
@@ -778,7 +803,7 @@ class PromptBuilder:
         except (ImportError, Exception):
             pass
 
-        # Prio 2: Profilbild
+        # Prio 2: profile image
         profile_img = get_character_profile_image(person.name)
         if profile_img:
             images_dir = get_character_images_dir(person.name)

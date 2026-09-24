@@ -1364,6 +1364,11 @@ class ImageService:
             "rp_context": ctx.get("rp_context", ""),
             "user_input": ctx.get("user_input", ""),
             "profile_only": ctx.get("profile_only", False),
+            # An explicit identity reference for the rendered character (the
+            # T-pose back view slots its own front render). Honoured only
+            # inside that character's model_refs directory — see the
+            # reference loop in generate_from_input.
+            "reference_image_override": ctx.get("reference_image_override", ""),
             "to_avatar_gallery": ctx.get("to_avatar_gallery", False),
             "gallery_character": ctx.get("gallery_character", ""),
             "image_use_case": ctx.get("image_use_case", ""),
@@ -1794,19 +1799,28 @@ class ImageService:
                 # conditioning its own portrait.
                 pv.set_profile = set_profile
 
-                # Reference-Bilder aufloesen (fuer Style-Conditioning der Generierung).
-                # profile_only: Profilbild statt Outfit-Bild (z.B. Outfit-Erstellung).
-                # Bei set_profile=True (Profilbild-Erstellung) keine Refs —
-                # sonst Self-Reference-Loop.
+                # Resolve the reference images (style conditioning of the render).
+                # profile_only: profile image instead of the outfit image (e.g.
+                # outfit creation). set_profile=True (profile-image creation)
+                # gets no refs — otherwise a self-reference loop.
+                # reference_image_override replaces the rendered character's
+                # own reference, but only with a file from its model_refs
+                # directory — anything else is ignored with a warning.
                 _profile_only = bool(input_data.get("profile_only", False))
+                _ref_override = str(input_data.get("reference_image_override") or "").strip()
                 if not set_profile:
                     for idx, p in enumerate(persons, 1):
-                        ref = builder._resolve_person_ref_image(p, profile_only=_profile_only)
+                        ref = ""
+                        if _ref_override and p.name == character_name:
+                            from app.core.model_refs import checked_reference_override
+                            ref = checked_reference_override(p.name, _ref_override)
+                        if not ref:
+                            ref = builder._resolve_person_ref_image(p, profile_only=_profile_only)
                         if ref:
                             pv.ref_images[idx] = ref
-                # profile_only = Variant/Outfit-Portrait: keine Location (weder
-                # Location-Prompt noch ref_image_room). Sonst wuerde bei FLUX_BG
-                # das Location-Bild den Profilbild-Referenzslot verdraengen.
+                # profile_only = variant/outfit portrait: no location (neither
+                # location prompt nor ref_image_room). Otherwise, with FLUX_BG,
+                # the location image would push out the profile reference slot.
                 if not _profile_only:
                     builder._collect_location(pv)
 
