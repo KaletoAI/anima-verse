@@ -2188,7 +2188,8 @@ def clear_pose_intent(character_name: str) -> None:
 
     Giving up a PLACE means standing up, and where the character stands then is
     the server's word since T4: ``room_stand.stand_up`` puts it on the free
-    point nearest the seat it held. Without a place nothing moves — the pose it
+    point nearest the seat it held — or nearest where the pose's exit clip
+    sets it down, when that clip carries it off. Without a place nothing moves — the pose it
     struck there needed no marker and no space of its own.
     """
     if not character_name:
@@ -2200,20 +2201,25 @@ def clear_pose_intent(character_name: str) -> None:
     changed = False
     old_display = ""
     old_place = None
+    old_pose_key = ""
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         if profile.get("pose_key") or profile.get("pose_flavor") or profile.get("place"):
             changed = True
             old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
             old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
+            old_pose_key = profile.get("pose_key") or ""
             profile["pose_key"] = ""
             profile["pose_flavor"] = ""
             profile["place"] = None          # the character stands up (§ 3.5)
             save_character_profile(character_name, profile)
     if changed:
         if old_place:
+            # The seat and the pose it was held for: the pose's exit clip may
+            # carry the figure off the seat, and the stand point starts where
+            # it sets the figure down.
             from app.core.room_stand import stand_up
-            stand_up(character_name)
+            stand_up(character_name, from_place=old_place, from_pose_key=old_pose_key)
         _publish_activity_changed(character_name, "", old_display, "", None, old_place)
 
 

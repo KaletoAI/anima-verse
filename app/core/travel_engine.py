@@ -157,8 +157,9 @@ def journey_state(waypoints: Sequence[Sequence[float]], started_at_game: str,
         round to the same point);
       * a time beyond the end stays at the LAST waypoint — a journey never
         walks past its goal;
-      * a negative elapsed time (the game clock was set back) clamps to the
-        start instead of walking backwards.
+      * a negative elapsed time (the game clock was set back, or the start
+        is delayed by an exit clip) clamps to the FIRST waypoint instead of
+        walking backwards — before any zero-time leg at the start is walked.
     """
     pts: List[Tuple[float, float, float]] = []
     for wp in waypoints or []:
@@ -179,13 +180,24 @@ def journey_state(waypoints: Sequence[Sequence[float]], started_at_game: str,
     total_m = round(sum(lengths), 2)
     total_t = pts[-1][2]
     eta_game = (started + GameDuration.of(seconds=total_t)).canonical()
-    elapsed = max(0.0, (now_game - started).seconds)
+    raw_elapsed = (now_game - started).seconds
+    elapsed = max(0.0, raw_elapsed)
 
     if len(pts) == 1 or elapsed >= total_t:
         last = pts[-1]
         return {"pos": (round(last[0], 2), round(last[1], 2)),
                 "seg": max(len(pts) - 2, 0), "arrived": True,
                 "eta_game": eta_game, "progress_m": total_m,
+                "total_m": total_m}
+    if raw_elapsed < 0:
+        # Not started yet (the exit clip still plays, or the clock was set
+        # back): the FIRST point, before any zero-time leg is walked. A
+        # journey off a seat begins with one (seat -> stand point, which the
+        # exit clip covers), and the figure is on the seat until it has got
+        # up.
+        first = pts[0]
+        return {"pos": (round(first[0], 2), round(first[1], 2)), "seg": 0,
+                "arrived": False, "eta_game": eta_game, "progress_m": 0.0,
                 "total_m": total_m}
 
     walked = 0.0
@@ -488,13 +500,32 @@ def departure_bridge(character_name: str) -> Tuple[str, float]:
 
     Never raises: a missing catalog, an unknown pose or a clip without a
     sidecar all mean "no bridge", and the journey starts as it always did.
+    The work is :func:`exit_bridge_for_pose` on the character's effective
+    pose.
+    """
+    try:
+        from app.models.character import get_effective_pose_key
+        pose_key = get_effective_pose_key(character_name)
+    except Exception as e:                                   # pragma: no cover
+        logger.debug("departure bridge for %s: %s", character_name, e)
+        return "", 0.0
+    return exit_bridge_for_pose(pose_key)
+
+
+def exit_bridge_for_pose(pose_key: str) -> Tuple[str, float]:
+    """``(clip kind, game seconds)`` of the exit clip that takes a figure out
+    of ``pose_key`` into walking — :func:`departure_bridge` starting from a
+    POSE instead of a character, for a caller that knows the pose a
+    character HELD (it has just been cleared) rather than the one it holds.
+
+    Same rules: a ramping rule (``accel`` > 0) and a clip without a length
+    answer ``("", 0.0)``, and nothing here raises.
     """
     try:
         from app.core.animation_clips import (clip_meta, load_locomotion_clips,
                                               resolve_transition)
         from app.core.expression_pose_maps import resolve_pose_animation
-        from app.models.character import get_effective_pose_key
-        from_kind = resolve_pose_animation(get_effective_pose_key(character_name))
+        from_kind = resolve_pose_animation(pose_key)
         to_kind = load_locomotion_clips().get("walk") or "walk"
         rule = resolve_transition(from_kind, to_kind)
         if not rule or float(rule.get("accel") or 0) > 0:
@@ -504,8 +535,47 @@ def departure_bridge(character_name: str) -> Tuple[str, float]:
         seconds = float(meta.get("duration_s") or 0.0)
         return (via, seconds) if seconds > 0 else ("", 0.0)
     except Exception as e:                                   # pragma: no cover
-        logger.debug("departure bridge for %s: %s", character_name, e)
+        logger.debug("exit bridge for pose %r: %s", pose_key, e)
         return "", 0.0
+
+
+def _seat_leg(character_name: str, start: Point,
+              current_id: str) -> Tuple[Optional[Point], Point]:
+    """``(seat, start)`` for a journey that begins on a SEAT whose exit clip
+    carries the figure off it: the route then starts at the stand point
+    (``room_stand.bridge_stand_point``), and the seat comes back as the
+    first point of a ZERO-TIME leg — the clip walked it, not the route.
+    ``(None, start)`` unchanged when the character holds no place, the clip
+    stays on the spot, or the stand point lies outside the current location
+    (walking there would already leave it — the journey starts as today).
+    Never raises: a broken layout or clip table means the journey starts
+    as it always did."""
+    try:
+        from app.core import places
+        from app.core.room_stand import bridge_stand_point
+        from app.models.character import get_effective_pose_key
+        held = places.place_of(character_name)
+        if held is None:
+            return None, start
+        stand = bridge_stand_point(character_name, held,
+                                   get_effective_pose_key(character_name))
+        if stand is not None and (current_id == ""
+                                  or places.inside(current_id, *stand)):
+            return start, stand
+    except Exception as e:                                   # pragma: no cover
+        logger.debug("seat leg for %s: %s", character_name, e)
+    return None, start
+
+
+def _with_seat_leg(waypoints: List[List[float]],
+                   seat: Optional[Point]) -> List[List[float]]:
+    """The seat as a zero-time first waypoint in front of a route baked
+    from the stand point. ``journey_state`` walks a zero-time leg in no
+    time once the journey runs, and clamps to the seat — where the exit
+    clip begins — before the delayed start."""
+    if seat is None:
+        return waypoints
+    return [[seat[0], seat[1], 0.0]] + waypoints
 
 
 def _exit_delay(exit_s: float) -> int:
@@ -574,6 +644,9 @@ def start_journey(character_name: str,
         # placement problem of the TARGET — reported as no_route, the only
         # reason that describes "there is no walkable line".
         return None, "no_route"
+    # Getting up off a seat may already carry the figure a step: the route
+    # starts where the exit clip sets it down.
+    seat, start = _seat_leg(character_name, start, current_id)
 
     arrival = _arrival_point(target, start)
     if arrival is None:                     # placement was checked above
@@ -583,6 +656,7 @@ def start_journey(character_name: str,
     waypoints, speed = _bake_route(start, goal, current_loc)
     if waypoints is None:
         return None, "no_route"
+    waypoints = _with_seat_leg(waypoints, seat)
 
     # STANDING UP TAKES TIME. The journey starts that much LATER, so the
     # figure stays where it is while it gets up instead of gliding away
@@ -680,10 +754,12 @@ def start_journey_to_point(character_name: str, x: float,
     start = _start_point(character_name, current_loc, current_id)
     if start is None:
         return None, "no_route"
+    seat, start = _seat_leg(character_name, start, current_id)
 
     waypoints, speed = _bake_route(start, (gx, gz), current_loc)
     if waypoints is None:
         return None, "no_route"
+    waypoints = _with_seat_leg(waypoints, seat)
 
     # Same delay as a journey to a place: getting up takes as long either way.
     exit_clip, exit_s = departure_bridge(character_name)

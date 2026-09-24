@@ -80,8 +80,67 @@ THE FIXTURES AND THEIR HAND-DERIVED ANSWERS
     location write, the room write and the travel engine all call the same
     thing, and only the first of them can move anybody.
 
+THE STAND POINT AFTER A BRIDGE CLIP (plan-bruecken-root-motion Task 7)
+
+A bridge clip with root motion (``get-up-chair``) carries the figure off its
+seat; its sidecar says how far: ``travel_m`` in the CLIP frame (+Z forward,
++X the figure's LEFT), metres of the reference rig, ``ref_height_m`` tall.
+The server turns it by the seat's compass facing f (0 = south +z, 90 = east
++x) with the rotation of the client's ``toWorld``
+(``client3d/src/scene/bridgeTravel.ts``):
+
+    x' = x·cos f + z·sin f        z' = −x·sin f + z·cos f
+
+and scales it by height_cm/100 / ref_height_m.
+
+[8]  bridge_offset((0, 0.4), facing 0, scale 1) -> (0, 0.4): cos 0 = 1,
+     sin 0 = 0, so x' = 0, z' = 0.4 — facing 0 is south (+z) and the clip's
+     forward is +z.
+[9]  bridge_offset((0, 0.4), 90, 1): cos 90 = 0, sin 90 = 1 ->
+     x' = 0·0 + 0.4·1 = 0.4, z' = −0·1 + 0.4·0 = 0 -> (0.4, 0), east.
+     bridge_offset((0, 0.4), 180, 1): cos = −1, sin = 0 -> (0, −0.4).
+[10] bridge_offset((0.1, 0), 90, 1): x' = 0.1·0 + 0 = 0,
+     z' = −0.1·1 + 0 = −0.1 -> (0, −0.1): the figure's left at facing east
+     is −z (north) — a figure looking east has north on its left.
+     bridge_offset((0, 0.4), 0, 1.1) -> (0, 0.44): the scale multiplies.
+[11] pick_stand with near = the stand point. Room: the square (−3,−3)…(3,3),
+     seat (0, 0) facing 0, stand point (0, 0.4).
+     a) nobody else there: (0, 0.4) is 2.6 m from the nearest wall, in no
+        footprint and no zone -> FREE -> returned unchanged.
+     b) a mate stands exactly ON (0, 0.4). The raster is anchored at
+        floor(−3/0.25)·0.25 = −3, so candidates are multiples of 0.25. A
+        candidate is free when it is >= 0.70 from the mate (walls are 2+ m
+        away for everything near). Distance from near = distance from the
+        mate, so the answer is the grid point nearest (0, 0.4) that is
+        >= 0.70 from it. dz = z − 0.4 takes ... −0.65, −0.4, −0.15, 0.1,
+        0.35, 0.6, 0.85 ...
+          x = 0      : |dz| >= 0.70 first at dz 0.85 -> 0.8500
+          x = ±0.25  : needs dz² >= 0.49 − 0.0625 = 0.4275; dz −0.65 gives
+                       0.4225 (0.6964 m, blocked) -> dz 0.85 -> 0.8860
+          x = ±0.50  : needs dz² >= 0.24; dz 0.6 -> sqrt(0.61) = 0.7810
+          x = ±0.75  : 0.5625 >= 0.49, any dz; dz 0.1 (z 0.5)
+                       -> sqrt(0.5725) = 0.7566   <- the minimum
+          |x| >= 1.0 : >= 1.0
+        (−0.75, 0.5) and (0.75, 0.5) tie at 0.7566 m, both 2.25 m from the
+        nearest wall -> smallest x -> (−0.75, 0.50).
+        The same room searched from the SEAT (0, 0) instead answers
+        (0, −0.50): (0, −0.25) is 0.65 m from the mate (blocked), (0, −0.5)
+        is 0.90 m from it (free) at 0.50 m from the seat, and every nearer
+        grid point — (±0.25, 0), (0, ±0.25), (±0.25, ±0.25) — lies inside
+        0.70 of the mate. The two answers differ: the search starts at the
+        stand point.
+[12] scale: 190 cm over a 1.75 m rig -> 1.90 / 1.75 = 1.085714; height
+     unset or ref missing -> 1.0. Through ``bridge_stand_point`` (seat
+     (2, 3) facing 90, travel (0, 0.4)): 190 cm -> (2 + 0.4·1.085714, 3)
+     = (2.434286, 3.0); no height -> (2.4, 3.0).
+[13] a RAMPING exit rule (accel > 0) gives no stand point (None): the
+     figure walks off during the clip, the travel is not a separate leg. A
+     clip in mode ``strip`` (no travel) gives None as well.
+
 Usage:  ./.venv/bin/python scripts/smoke_room_stand.py
 """
+import contextlib
+import json
 import math
 import os
 import sys
@@ -222,6 +281,95 @@ def test_idempotent() -> None:
               and at(again, first[0], first[1]), f"{first} -> {again}")
 
 
+# ── the bridge fixture: two hand-made sidecars in the TEMP clip directory and
+# the three table lookups stood in for (the real tables live in shared/config).
+_CLIPS = Path(os.environ["ANIMATION_CLIPS_DIR"])
+for _kind, _mode in (("smoke-rise", "foot_lock"), ("smoke-rise-strip", "strip")):
+    (_CLIPS / f"{_kind}.json").write_text(json.dumps({
+        "kind": _kind, "duration_s": 2.0, "loop": False,
+        "geometry": {"root_motion": {"mode": _mode, "travel_m": [0.0, 0.4],
+                                     "ref_height_m": 1.75}}}), encoding="utf-8")
+
+
+@contextlib.contextmanager
+def _bridge_fixture(accel: float, kind: str = "smoke-rise"):
+    import app.core.animation_clips as ac
+    import app.core.expression_pose_maps as epm
+    keep = (epm.resolve_pose_animation, ac.load_locomotion_clips, ac.resolve_transition)
+    try:
+        epm.resolve_pose_animation = lambda k: "sit"
+        ac.load_locomotion_clips = lambda *a, **k: {"walk": "walk"}
+        ac.resolve_transition = lambda a, b, rules=None: (
+            {"from": a, "to": b, "kind": kind, "accel": accel}
+            if (a, b) == ("sit", "walk") else None)
+        yield
+    finally:
+        epm.resolve_pose_animation, ac.load_locomotion_clips, ac.resolve_transition = keep
+
+
+def near_xz(point, x: float, z: float, eps: float = 1e-6) -> bool:
+    return at(point, x, z, eps)
+
+
+def test_bridge_offset() -> None:
+    print("\n[8]-[10] the clip travel turned by the seat's facing")
+    bo = room_stand.bridge_offset
+    check("(0, 0.4) at facing 0 is (0, 0.4) — south", near_xz(bo((0, 0.4), 0, 1), 0.0, 0.4),
+          str(bo((0, 0.4), 0, 1)))
+    check("(0, 0.4) at facing 90 is (0.4, 0) — east", near_xz(bo((0, 0.4), 90, 1), 0.4, 0.0),
+          str(bo((0, 0.4), 90, 1)))
+    check("(0, 0.4) at facing 180 is (0, −0.4) — north",
+          near_xz(bo((0, 0.4), 180, 1), 0.0, -0.4), str(bo((0, 0.4), 180, 1)))
+    check("(0.1, 0) at facing 90 is (0, −0.1) — the left of an east-facer is north",
+          near_xz(bo((0.1, 0), 90, 1), 0.0, -0.1), str(bo((0.1, 0), 90, 1)))
+    check("(0, 0.4) at facing 0, scale 1.1 is (0, 0.44)",
+          near_xz(bo((0, 0.4), 0, 1.1), 0.0, 0.44), str(bo((0, 0.4), 0, 1.1)))
+
+
+def test_stand_from_bridge_point() -> None:
+    print("\n[11] the search starts at the STAND point, not at the seat")
+    room = [[-3, -3], [3, -3], [3, 3], [-3, 3]]
+    got = pick_stand(room, [], [], [], (0.0, 0.4))
+    check("a free stand point is returned unchanged", at(got, 0.0, 0.4), str(got))
+    mate = [(0.0, 0.4)]
+    got = pick_stand(room, [], [], mate, (0.0, 0.4))
+    check("a mate on it -> the nearest free raster point to it: (−0.75, 0.50)",
+          at(got, -0.75, 0.5), str(got))
+    check("…0.7566 m from the stand point",
+          got is not None and abs(math.dist(got, (0.0, 0.4)) - math.sqrt(0.5725)) < 1e-9)
+    seat = pick_stand(room, [], [], mate, (0.0, 0.0))
+    check("from the SEAT the same room answers (0, −0.50) — a different point",
+          at(seat, 0.0, -0.5), str(seat))
+
+
+def test_bridge_scale() -> None:
+    print("\n[12] the travel scales with the figure")
+    check("190 cm over a 1.75 m rig is 1.085714",
+          abs(room_stand.bridge_scale(190, 1.75) - 1.9 / 1.75) < 1e-12,
+          str(room_stand.bridge_scale(190, 1.75)))
+    check("no height is 1.0", room_stand.bridge_scale(None, 1.75) == 1.0)
+    check("no reference height is 1.0", room_stand.bridge_scale(190, None) == 1.0)
+    seat = {"x": 2.0, "z": 3.0, "facing": 90.0}
+    with _bridge_fixture(accel=0.0):
+        got = room_stand.bridge_stand_point("smoke", seat, "sitting",
+                                            profile={"height": 190})
+        check("190 cm from a seat at (2, 3) facing east lands at (2.434286, 3.0)",
+              at(got, 2.0 + 0.4 * 1.9 / 1.75, 3.0), str(got))
+        got = room_stand.bridge_stand_point("smoke", seat, "sitting", profile={})
+        check("no height lands at (2.4, 3.0)", at(got, 2.4, 3.0), str(got))
+
+
+def test_ramping_rule() -> None:
+    print("\n[13] a ramping exit rule and a clip without travel give no stand point")
+    seat = {"x": 2.0, "z": 3.0, "facing": 90.0}
+    with _bridge_fixture(accel=0.6):
+        check("accel 0.6 -> None",
+              room_stand.bridge_stand_point("smoke", seat, "sitting", profile={}) is None)
+    with _bridge_fixture(accel=0.0, kind="smoke-rise-strip"):
+        check("a strip clip -> None",
+              room_stand.bridge_stand_point("smoke", seat, "sitting", profile={}) is None)
+
+
 def main() -> int:
     print("Smoke: the free standing point in a room (T4)")
     test_constants()
@@ -232,6 +380,10 @@ def main() -> int:
     test_door_zone()
     test_no_room()
     test_idempotent()
+    test_bridge_offset()
+    test_stand_from_bridge_point()
+    test_bridge_scale()
+    test_ramping_rule()
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
 

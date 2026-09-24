@@ -448,9 +448,10 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
 def release(name: str) -> None:
     """Clear ``profile["place"]`` if set — the character STANDS UP, next to the
     seat it just left (``room_stand``, T4): the freed point is whatever the
-    room offers nearest to where it was sitting, so nobody stays standing in
-    the armchair and nobody walks across the room for it. A room that offers
-    no free point leaves the position where it is.
+    room offers nearest to where the exit clip of its pose sets it down (the
+    seat itself when that clip stays on the spot), so nobody stays standing
+    in the armchair and nobody walks across the room for it. A room that
+    offers no free point leaves the position where it is.
     """
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
@@ -460,13 +461,19 @@ def release(name: str) -> None:
     # itself and a keyed_lock is a plain, non-re-entrant Lock.
     with keyed_lock("character_profile", name):
         profile = get_character_profile(name) or {}
-        released = bool(profile.get("place"))
+        old = profile.get("place")
+        pose = profile.get("pose_key") or ""
+        released = bool(old)
         if released:
             profile["place"] = None
             save_character_profile(name, profile)
     if released:
+        # The seat just left and the pose it was held for: the exit clip of
+        # that pose may carry the figure off the seat, and the stand point
+        # starts where it sets the figure down (``room_stand.stand_up``).
         from app.core.room_stand import stand_up
-        stand_up(name)
+        stand_up(name, from_place=old if isinstance(old, dict) else None,
+                 from_pose_key=pose)
 
 
 def can_take(name: str, pose_key: str, place_id: str, ignore: Tuple[str, ...] = ()) -> bool:
@@ -561,7 +568,16 @@ def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:
     of the held slot — for a pair the place's centre, its anchor."""
     from app.models.character import get_character_profile
     prof = profile if profile is not None else (get_character_profile(name) or {})
-    pl = prof.get("place")
+    return resolve_place(name, prof.get("place"))
+
+
+def resolve_place(name: str, pl: Any) -> Optional[Place]:
+    """A profile ``place`` field (``{"id", "slot", "room_id"}``) resolved
+    against today's inventory of the room ``name`` is in — the body of
+    :func:`place_of`, for a caller that holds the field but no longer the
+    profile it came from (``clear_pose_intent`` / :func:`release` have just
+    cleared it when the character stands up). Same answer, same rules: None
+    for a vanished marker, another room's id or a slot beyond the capacity."""
     if not isinstance(pl, dict) or not pl.get("id"):
         return None
     loc, room = where(name)

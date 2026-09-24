@@ -530,6 +530,114 @@ finally:
     (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
      _ac.load_locomotion_clips, _ac.resolve_transition, _ac.clip_meta) = _keep
 
+# ── A journey from a SEAT starts where the exit clip set the figure down ──
+#
+# plan-bruecken-root-motion Task 7. Derived BY HAND.
+#
+# The exit clip `smoke-rise` (a hand-made sidecar in the TEMP clip directory)
+# carries its figure travel_m [0, 0.4] (clip frame: +Z forward) measured on a
+# 1.75 m reference rig; seat_npc is 175 cm, so the scale is 1.75 / 1.75 = 1.
+# The seat is at (2, 3) with compass facing 90 (east): the clip's forward
+# turns onto +x (x' = x·cos 90 + z·sin 90 = 0.4, z' = −x·sin 90 + z·cos 90 = 0),
+# so the stand point is (2.4, 3) — inside HOME (the square −5…5).
+#
+#   [J1] waypoints[0] = [2, 3, 0.0]    the seat, where the clip BEGINS
+#        waypoints[1] = [2.4, 3, 0.0]  the stand point — a ZERO-TIME leg,
+#                                      the clip walked it, not the route
+#        waypoints[2] = HOME's own opening (0, 5), t_cum measured from the
+#        stand point: sqrt(2.4² + 2²) = sqrt(9.76) = 3.1241 m / 1.4 m/s
+#        = 2.2315 s (grass, factor 1.0).
+#   [J2] the exit clip lasts 2.0 s -> the journey starts 2 game seconds after
+#        the order (`_exit_delay`). journey_state
+#          one second BEFORE started_at_game -> (2, 3), progress 0: the
+#            figure is still getting up, clamped to the SEAT (the zero-time
+#            leg must not be walked before the journey runs);
+#          AT started_at_game -> (2.4, 3), progress 0.4: the clip is over;
+#          one second AFTER -> progress 0.4 + 1.4 = 1.8 m (>= 0.4).
+#   [J3] the same seat with an exit clip in mode `strip` (no travel) ->
+#        no extra point: waypoints[0] = [2, 3, 0.0], waypoints[1] = (0, 5)
+#        at sqrt(2² + 2²) = 2.8284 m / 1.4 = 2.0203 s — the route as today.
+print("\n[seat leg: a journey starts at the stand point]")
+import json as _json                                           # noqa: E402
+from app.core import places as _places                         # noqa: E402
+
+_CLIPS = Path(os.environ["ANIMATION_CLIPS_DIR"])
+for _kind, _mode in (("smoke-rise", "foot_lock"), ("smoke-rise-strip", "strip")):
+    (_CLIPS / f"{_kind}.json").write_text(_json.dumps({
+        "kind": _kind, "duration_s": 2.0, "loop": False,
+        "geometry": {"root_motion": {"mode": _mode, "travel_m": [0.0, 0.4],
+                                     "ref_height_m": 1.75}}}), encoding="utf-8")
+
+PARK = add_location(name="Smoke Park", description="seat-leg smoke")["id"]
+update_location_position(PARK, -40.0, 0.0)
+set_map3d(PARK, plan_width_m=10.0,
+          boundary_openings=[{"edge": 1, "at": 0.5, "width_m": 4.0,
+                              "type": "passage"}])
+save_character_profile("seat_npc", {"current_location": "", "height": 175},
+                       create_new=True)
+save_character_current_location("seat_npc", HOME)
+set_known_locations("seat_npc", [HOME, PARK])
+_SEAT = {"id": "s1", "slot": 0, "x": 2.0, "z": 3.0, "facing": 90.0,
+         "room_id": "r1"}
+
+_keep_seat = (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
+              _ac.load_locomotion_clips, _ac.resolve_transition, _places.place_of)
+
+
+def _seat_journey(kind):
+    travel_engine.cancel_journey("seat_npc")
+    set_character_pos("seat_npc", 2.0, 3.0)
+    _ac.resolve_transition = lambda a, b, rules=None: (
+        {"from": a, "to": b, "kind": kind, "accel": 0.0}
+        if (a, b) == ("sit", "walk") else None)
+    return travel_engine.start_journey("seat_npc", PARK)
+
+
+try:
+    _ch.get_effective_pose_key = lambda n, *a, **k: "sitting"
+    _epm.resolve_pose_animation = lambda k: "sit"
+    _ac.load_locomotion_clips = lambda *a, **k: {"walk": "walk"}
+    _places.place_of = lambda n, *a, **k: dict(_SEAT) if n == "seat_npc" else None
+
+    _j, _why = _seat_journey("smoke-rise")
+    check("[J1] the journey starts", _why, "")
+    _w = (_j or {}).get("waypoints") or [[0, 0, 0]] * 3
+    check("[J1] waypoints[0] is the seat",
+          [round(_w[0][0], 2), round(_w[0][1], 2), _w[0][2]], [2.0, 3.0, 0.0])
+    check("[J1] waypoints[1] is seat + (0.4, 0), in no time",
+          [round(_w[1][0], 2), round(_w[1][1], 2), _w[1][2]], [2.4, 3.0, 0.0])
+    check("[J1] waypoints[2] is HOME's opening", rounded(_w[2]), (0.0, 5.0))
+    approx("[J1] … timed from the stand point: 3.1241 m / 1.4",
+           _w[2][2], math.sqrt(9.76) / 1.4, tol=0.01)
+    _s = (_j or {}).get("started_at_game") or START
+    _S = GameTime.parse(_s)
+    _st = travel_engine.journey_state(_w, _s, _S - GameDuration.of(seconds=1))
+    check("[J2] before the start the figure is on the seat",
+          rounded(_st["pos"]), (2.0, 3.0))
+    approx("[J2] … having walked nothing", _st["progress_m"], 0.0)
+    _st = travel_engine.journey_state(_w, _s, _S)
+    check("[J2] at the start it stands on the stand point",
+          rounded(_st["pos"]), (2.4, 3.0))
+    approx("[J2] … 0.4 m along", _st["progress_m"], 0.4)
+    _st = travel_engine.journey_state(_w, _s, _S + GameDuration.of(seconds=1))
+    check_true("[J2] one second later progress_m >= 0.4",
+               _st["progress_m"] >= 0.4, str(_st["progress_m"]))
+    approx("[J2] … exactly 0.4 + 1.4 = 1.8 m", _st["progress_m"], 1.8, tol=0.01)
+
+    _j, _why = _seat_journey("smoke-rise-strip")
+    check("[J3] the strip journey starts", _why, "")
+    _w = (_j or {}).get("waypoints") or [[0, 0, 0]] * 2
+    check("[J3] waypoints[0] is the seat",
+          [round(_w[0][0], 2), round(_w[0][1], 2), _w[0][2]], [2.0, 3.0, 0.0])
+    check("[J3] waypoints[1] is HOME's opening — no extra point",
+          rounded(_w[1]), (0.0, 5.0))
+    approx("[J3] … timed from the seat: 2.8284 m / 1.4",
+           _w[1][2], math.sqrt(8.0) / 1.4, tol=0.01)
+finally:
+    (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
+     _ac.load_locomotion_clips, _ac.resolve_transition, _places.place_of) = _keep_seat
+    travel_engine.cancel_journey("seat_npc")
+
 # ── The world WAITS: a journey that starts later ────────────────────────
 #
 # Derived BY HAND. A journey of 10 m over 10 game seconds, started 2.23 s

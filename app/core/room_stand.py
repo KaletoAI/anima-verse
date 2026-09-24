@@ -23,10 +23,15 @@ THE RULE, in four constants and one order:
   clearance, then to the smallest x, then to the smallest z;
 * ``near`` itself, when it is free, wins outright — nobody walks for nothing.
 
-``near`` is ALWAYS the character's current point: the arrival point when it
-enters a room, the seat it just left when a pose ends. One rule, and both
-"stands up and stays beside the chair" and "comes in and stops near the door"
-fall out of it.
+``near`` is the character's current point: the arrival point when it enters
+a room, the seat it just left when a pose ends. One rule, and both "stands up
+and stays beside the chair" and "comes in and stops near the door" fall out of
+it. The one refinement (plan-bruecken-root-motion Task 7): when the pose's
+EXIT clip carries the figure off the seat (a bridge with root motion,
+``get-up-chair``), ``near`` is where that clip sets it down —
+:func:`bridge_stand_point`, the seat plus the clip's travel turned by the
+seat's facing — because that is where the client's figure already stands
+when the clip ends.
 
 :func:`pick_stand` is PURE — polygon, blockers, door zones, mates, near in, a
 point out — so ``scripts/smoke_room_stand.py`` can check it without a world.
@@ -345,9 +350,59 @@ def free_stand_point(location_id: str, room_id: str, near: Sequence[float],
                       near)
 
 
-def stand_up(name: str) -> Optional[Point]:
+def bridge_offset(travel_m: Sequence[float], facing_deg: float,
+                  scale: float) -> Tuple[float, float]:
+    """World XZ by which a bridge clip carries a figure that faces
+    ``facing_deg`` (compass: 0 = south +z, 90 = east +x) — the clip's travel
+    (+Z forward, +X the figure's left) turned by the facing and scaled to
+    the figure. PURE; the client turns its own offset the same way
+    (``client3d/src/scene/bridgeTravel.ts`` ``toWorld``)."""
+    a = math.radians(float(facing_deg or 0.0))
+    tx, tz = float(travel_m[0]) * scale, float(travel_m[1]) * scale
+    return (tx * math.cos(a) + tz * math.sin(a), -tx * math.sin(a) + tz * math.cos(a))
+
+
+def bridge_scale(height_cm: Optional[float], ref_height_m: Optional[float]) -> float:
+    """Figure size over the reference rig the clip was measured on; 1.0 when
+    either number is unknown. PURE."""
+    if not height_cm or not ref_height_m or height_cm <= 0 or ref_height_m <= 0:
+        return 1.0
+    return (float(height_cm) / 100.0) / float(ref_height_m)
+
+
+def bridge_stand_point(name: str, place: Dict[str, Any], pose_key: str,
+                       profile: Optional[Dict[str, Any]] = None
+                       ) -> Optional[Tuple[float, float]]:
+    """Where ``name`` stands once the exit clip of ``pose_key`` has carried it
+    off ``place`` (a place as ``places.place_of`` returns it: ``facing``,
+    ``x``, ``z``) — None when that clip stays on the spot, ramps (it walks
+    off by itself) or nothing is configured. ``profile`` is loaded when not
+    given."""
+    from app.core.animation_clips import clip_ref_height_m, clip_travel_m
+    from app.core.height import height_cm
+    from app.core.travel_engine import exit_bridge_for_pose
+    kind, _s = exit_bridge_for_pose(pose_key)
+    if not kind:
+        return None
+    travel = clip_travel_m(kind)
+    if travel == (0.0, 0.0):
+        return None
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(name) or {}
+    scale = bridge_scale(height_cm(profile), clip_ref_height_m(kind))
+    dx, dz = bridge_offset(travel, float(place.get("facing") or 0.0), scale)
+    return (float(place["x"]) + dx, float(place["z"]) + dz)
+
+
+def stand_up(name: str, *, from_place: Optional[Dict[str, Any]] = None,
+             from_pose_key: str = "") -> Optional[Point]:
     """THE WRITE PATH: put ``name`` on a free standing point of the room it is
-    in, starting from where it stands right now. Returns the point written, or
+    in, starting from where it stands right now — or, when it has just left
+    a seat (``from_place``, the old profile field ``{"id", "slot",
+    "room_id"}``, and ``from_pose_key``, the pose it held there) and that
+    pose's exit clip carries the figure off the seat, from where the clip
+    sets it down (:func:`bridge_stand_point`). Returns the point written, or
     None when nothing was written.
 
     Called from the three places a character ends up standing with no marker —
@@ -372,10 +427,21 @@ def stand_up(name: str) -> Optional[Point]:
     pos = get_character_pos(name)
     if pos is None:
         return None
-    near = (float(pos["x"]), float(pos["z"]))
+    here = (float(pos["x"]), float(pos["z"]))
+    near = here
+    if from_place and from_pose_key:
+        # The seat is resolved from the field the caller just cleared — the
+        # profile no longer holds it, so ``place_of`` would answer None.
+        seat = places.resolve_place(name, from_place)
+        stand = bridge_stand_point(name, seat, from_pose_key) if seat else None
+        if stand is not None:
+            near = stand
     point = free_stand_point(loc, room, near, exclude=name)
+    # Nothing to write when the answer is where the character already stands
+    # — compared with the CURRENT position, not with `near`: from a stand
+    # point `near` is not where the character is.
     if point is None or (round(point[0], 2), round(point[1], 2)) == (
-            round(near[0], 2), round(near[1], 2)):
+            round(here[0], 2), round(here[1], 2)):
         return None
     if not places.inside(loc, point[0], point[1]):
         logger.warning("room_stand: %s's stand point (%.2f, %.2f) in %s/%s lies "
