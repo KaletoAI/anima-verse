@@ -35,6 +35,8 @@ import { Sparkline } from './Sparkline'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { RootMotionField } from './RootMotionField'
+import { rootMotionBlocksLoop, type RootMotionMode } from './rootMotion'
 
 const PAGE_SIZE = 50
 
@@ -183,7 +185,7 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
    *  offered as Start/End presets; a click adopts the window and the loop */
   const [loopSuggestions, setLoopSuggestions] = useState<Array<{ start_s: number; end_s: number; length_s: number; min_s: number; seam_distance: number }>>([])
   const [loopCut, setLoopCut] = useState<{ start: number; end: number; seam: number | null } | null>(null)
-  const [inPlace, setInPlace] = useState(true)
+  const [rootMotion, setRootMotion] = useState<RootMotionMode>('strip')
   /** THE ORIENTATION DIAL, degrees, baked by the import (`yaw_deg`).
    *  The converter normalises a solo take so the ROOT's forward axis points
    *  +Z at the first kept frame — the body's facing while the actor stands,
@@ -342,7 +344,7 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
     setEndS(String(Number((selected.duration_s || 0).toFixed(2))))
     setLoopOn(false)
     setLoopS('1.5')
-    setInPlace(!selected.pair)
+    setRootMotion('strip')
     setOverwrite(false)
     setLastImported('')
   }, [selected])
@@ -405,7 +407,7 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
         end_s: endS === '' ? null : Number(endS),
         loop_s: loopOn ? Number(loopS) || 1 : null,
         speed: Number(speed) || 1,
-        in_place: inPlace,
+        root_motion: selected.pair ? 'strip' : rootMotion,
         yaw_deg: yawDeg || 0,
         overwrite,
         target: 'free',
@@ -432,7 +434,7 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
     } finally {
       setImporting(false)
     }
-  }, [clipSet, endS, importing, inPlace, kind, loadClips, loopOn, loopS, speed,
+  }, [clipSet, endS, importing, kind, loadClips, loopOn, loopS, rootMotion, speed,
       overwrite, selected, startS, t, toast, yawDeg])
 
   // ── facet definitions (label + the values offered) ──
@@ -910,14 +912,8 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
                 <span>s</span>
               </label>
 
-              <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <input type="checkbox" checked={inPlace} disabled={selected.pair}
-                  onChange={(e) => setInPlace(e.target.checked)} />
-                <span>
-                  {t('In place (strip the horizontal root travel)')}
-                  {selected.pair ? ` — ${t('pairs keep their contact geometry')}` : ''}
-                </span>
-              </label>
+              <RootMotionField t={t} value={rootMotion} onChange={setRootMotion}
+                pair={selected.pair} loopOn={loopOn} />
 
               {kindExists ? (
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -932,7 +928,8 @@ export function ClipCatalog({ onCreatePose, rootDropOf }: {
                 <button
                   type="button"
                   className="ga-btn ga-btn-sm ga-btn-primary"
-                  disabled={importing || !kind.trim()}
+                  disabled={importing || !kind.trim()
+                    || (!selected.pair && rootMotionBlocksLoop(loopOn, rootMotion))}
                   onClick={runImport}
                 >
                   {importing ? t('Converting with Blender…') : t('Import')}

@@ -6,6 +6,8 @@
  * Lives beside the components rather than inside one so both the Library view
  * and the entry editor's coverage badge speak the same vocabulary.
  */
+import type { ClipRootMotion } from './rootMotion'
+
 /** One installed clip file as the listing reports it. Everything past the
  *  first four fields is sidecar detail — a clip written before the sidecar
  *  carried it simply has none. */
@@ -44,6 +46,11 @@ export interface ApiClipRow {
     roll_deg?: number | null
     floor_shift_cm?: number | null
   }
+  /** How the import treated the root's travel (`geometry.root_motion` of the
+   *  sidecar): the mode plus the travel it baked, `[x, z]` in metres of the
+   *  clip frame (+Z forward, +X the figure's left). Null for pairs and clips
+   *  without that block. */
+  root_motion?: ClipRootMotion | null
 }
 
 export interface ClipListing {

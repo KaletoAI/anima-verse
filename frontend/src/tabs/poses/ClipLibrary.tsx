@@ -54,6 +54,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import { orderSets } from './clipSets'
 import type { ApiClipRow, ClipListing } from './clipSets'
+import { rootMotionSummary } from './rootMotion'
 
 function libraryOf(c: ApiClipRow): string {
   return c.library || c.source || 'free'
@@ -510,6 +511,11 @@ export function ClipLibrary({
           <span>{t('Loop')}</span>
           <span className="ga-form-hint">{t('Repeat the clip; off = hold the last frame')}</span>
         </label>
+        {clip.root_motion ? (
+          <div className="ga-form-hint" style={{ marginTop: 2 }}>
+            {t('Root motion')}: {rootMotionSummary(clip.root_motion, t)}
+          </div>
+        ) : null}
         {clip.role ? (
           <label
             style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}

@@ -2304,6 +2304,20 @@
     "Media generation is disabled for this world (Admin → Settings → Media Generation)": "Medienerzeugung ist für diese Welt deaktiviert (Admin → Settings → Media Generation)",
     "Media generation off": "Medienerzeugung aus",
     "media off": "Medien aus",
-    "Character could not be saved.": "Der Charakter konnte nicht gespeichert werden."
+    "Character could not be saved.": "Der Charakter konnte nicht gespeichert werden.",
+    "Root motion": "Wurzelbewegung",
+    "pairs keep their contact geometry": "Paare behalten ihre Kontaktgeometrie",
+    "In place (strip the travel)": "Auf der Stelle (Weg entfernen)",
+    "Keep the recorded travel": "Aufgenommenen Weg behalten",
+    "Lock the planted feet (bridge clips)": "Aufgesetzte Füße fixieren (Übergangsclips)",
+    "Getting-up and sitting-down clips move the figure: ‘Lock the planted feet’ rebuilds the travel from the foot contacts so the feet do not slide. Loops stay in place.": "Aufsteh- und Hinsetz-Clips bewegen die Figur: „Aufgesetzte Füße fixieren“ baut den Weg aus den Fußkontakten neu auf, damit die Füße nicht rutschen. Loops bleiben auf der Stelle.",
+    "A loop cannot carry travel — switch the loop off or choose ‘In place’.": "Ein Loop kann keinen Weg tragen — den Loop ausschalten oder „Auf der Stelle“ wählen.",
+    "in place": "auf der Stelle",
+    "foot lock": "Füße fixiert",
+    "recorded travel": "aufgenommener Weg",
+    "m forward": "m vorwärts",
+    "m back": "m zurück",
+    "m left": "m links",
+    "m right": "m rechts"
   }
 }

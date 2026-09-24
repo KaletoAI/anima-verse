@@ -31,6 +31,8 @@ import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiUpload } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { RootMotionField } from './RootMotionField'
+import { rootMotionBlocksLoop, type RootMotionMode } from './rootMotion'
 
 interface Probe {
   skeleton_family: string
@@ -200,7 +202,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
   const [loopS, setLoopS] = useState('1.5')
   /** playback factor baked into the clip: 0.5 = half speed, twice as long */
   const [speed, setSpeed] = useState('1')
-  const [inPlace, setInPlace] = useState(true)
+  const [rootMotion, setRootMotion] = useState<RootMotionMode>('strip')
   /** Put the head upright on the neck (`_cmu.level_head`). Generated
    *  animations get the head wholesale wrong — the Meshy biped this was built
    *  for hangs its head 108° forward for the whole take, crown 17 cm BELOW
@@ -299,7 +301,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
       setStartS('0')
       setEndS('')
       setLoopOn(false)
-      setInPlace(!e?.pair)
+      setRootMotion('strip')
       setOverwrite(false)
       setImported(null)
     },
@@ -416,7 +418,8 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
       ? (only.pair == null ? '' : String(only.pair))
       : secondTake
     const mySecond = only ? (only.pair == null ? '' : entry.name) : second
-    const files = (only ? !!mySecond : isPair)
+    const pairBody = only ? !!mySecond : isPair
+    const files = pairBody
       ? [src(entry.name, myTake), src(mySecond, myPair)]
       : [src(entry.name, myTake)]
     return {
@@ -429,7 +432,8 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
       end_s: endS === '' ? null : Number(endS),
       loop_s: loopOn && !isPair ? Number(loopS) || 1 : null,
       speed: Number(speed) || 1,
-      in_place: inPlace && !isPair,
+      // a pair keeps its contact geometry — never any travel
+      root_motion: pairBody ? 'strip' : rootMotion,
       yaw_deg: yawDeg || 0,
       level_head: levelHead,
       offset_b_m: isPair ? [Number(offSide) || 0, Number(offUp) || 0, Number(offFwd) || 0] : null,
@@ -437,9 +441,12 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
       target,
       redistributable: target === 'free' ? redistributable : false,
     }
-  }, [clipSet, endS, entry, inPlace, isPair, kind, levelHead, loopOn, loopS, offFwd, offSide,
-      offUp, speed, overwrite, redistributable, restFile, restTake, second, secondTake, src,
+  }, [clipSet, endS, entry, isPair, kind, levelHead, loopOn, loopS, offFwd, offSide,
+      offUp, rootMotion, speed, overwrite, redistributable, restFile, restTake, second, secondTake, src,
       startS, take, target, yawDeg])
+
+  /** Loop + travel is refused by the route (400) — the buttons say so first. */
+  const loopBlocked = !isPair && rootMotionBlocksLoop(loopOn, rootMotion)
 
   const runProbe = useCallback(async () => {
     // The ONE exception to "the probe plays the very body the import sends":
@@ -742,7 +749,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
                     <button
                       className="ga-btn ga-btn-sm"
                       type="button"
-                      disabled={!batch.length || !!batchRun || unknownRig}
+                      disabled={!batch.length || !!batchRun || unknownRig || loopBlocked}
                       onClick={runBatch}
                     >
                       {batchRun
@@ -870,14 +877,8 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
               </div>
             ) : null}
 
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input type="checkbox" checked={inPlace && !isPair} disabled={isPair}
-                onChange={(e) => setInPlace(e.target.checked)} />
-              <span>
-                {t('In place (strip the horizontal root travel)')}
-                {isPair ? ` — ${t('pairs keep their contact geometry')}` : ''}
-              </span>
-            </label>
+            <RootMotionField t={t} value={rootMotion} onChange={setRootMotion}
+              pair={isPair} loopOn={loopOn} />
 
             {/* The head levelling BAKES, so — unlike the turn dial above — the
                 preview only shows it after the next probe. */}
@@ -924,7 +925,8 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
               <button
                 type="button"
                 className="ga-btn ga-btn-sm ga-btn-primary"
-                disabled={importing || unknownRig || !kind.trim() || (target === 'free' && !redistributable)}
+                disabled={importing || unknownRig || !kind.trim() || (target === 'free' && !redistributable)
+                  || loopBlocked}
                 onClick={runImport}
               >
                 {importing ? t('Converting with Blender…') : t('Import')}
@@ -957,7 +959,7 @@ export function ClipInbox({ onCreatePose, rootDropOf }: {
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button type="button" className="ga-btn" disabled={probing || !entry}
+              <button type="button" className="ga-btn" disabled={probing || !entry || loopBlocked}
                 onClick={() => void runProbe()}>
                 {probing ? t('Converting preview…') : t('Preview with these settings')}
               </button>
