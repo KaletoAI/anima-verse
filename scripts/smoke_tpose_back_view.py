@@ -18,6 +18,8 @@ Three parts of the fix, each checked against values derived BY HAND:
     ``reference_image`` (user decision 2026-09-24 — the profiles too), while
     the front render itself keeps the normal profile-image reference (None).
     The render call is replaced by a recorder; no backend, no DB.
+[5] Palms face DOWN toward the floor in all four pose texts (user decision
+    2026-09-24 — the Mixamo bind pose), none forward or away.
 
 Storage is a temp dir (``paths.init`` before any world-DB import).
 
@@ -124,6 +126,16 @@ check("[4] reference per render (kind, reference_image)",
        ("tpose_back", front_render),
        ("tpose_left", front_render),
        ("tpose_right", front_render)])
+# [5] Palms DOWN in every view (user decision 2026-09-24, the Mixamo bind
+#     pose) — the front, the back and both profiles, nothing facing forward.
+for _label, _text in (("front", model_refs.TPOSE_PROMPT_DEFAULT),
+                      ("back", model_refs.TPOSE_BACK_PROMPT_DEFAULT),
+                      ("left", model_refs.TPOSE_LEFT_PROMPT_DEFAULT),
+                      ("right", model_refs.TPOSE_RIGHT_PROMPT_DEFAULT)):
+    check(f"[5] {_label}: palms down, never forward/away",
+          ("palms facing down toward the floor" in _text,
+           "palms facing forward" in _text, "palms facing away" in _text),
+          (True, False, False))
 check("[4] profile text speaks to the reference",
       model_refs.TPOSE_LEFT_PROMPT_DEFAULT.startswith(
           "the same figure turned sideways, strict left side profile view"),

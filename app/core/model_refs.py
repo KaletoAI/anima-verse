@@ -37,10 +37,11 @@ logger = get_logger(__name__)
 # What stays is load-bearing:
 # - "arms straight out to the sides at shoulder height, forming the letter T":
 #   "T-pose" alone is weakly trained in photo models and drifts into an A-pose.
-# - Palms face FORWARD toward the camera (user decision 2026-08-31): shows the
-#   mesher the most hand detail. Note the trade-off this reverses: the Mixamo
-#   bind pose has palms DOWN, and a mesh generated with turned palms can get
-#   its hand bones bound 90° off, twisting the hands in animation clips.
+# - Palms face DOWN toward the floor, in every view (user decision
+#   2026-09-24, reverses "palms forward" of 2026-08-31): that is the Mixamo
+#   bind pose, and a mesh generated with turned palms can get its hand bones
+#   bound 90° off, twisting the hands in animation clips. "palms facing the
+#   camera / up" sit in the T-pose negative so the old pose cannot return.
 # - Fingers SLIGHTLY SPREAD (user decision 2026-09-24, reverses the closed
 #   hand of 2026-09-02), in every view. "slightly" is load-bearing — a
 #   widely fanned hand is a thin splayed surface the img2mesh bake inflates
@@ -60,8 +61,8 @@ logger = get_logger(__name__)
 # replaces this text takes the responsibility with it.
 TPOSE_PROMPT_DEFAULT = (
     "T-pose, standing upright facing the camera, arms straight out to the "
-    "sides at shoulder height, forming the letter T, palms facing forward "
-    "toward the camera, fingers straight and slightly spread apart, legs clearly "
+    "sides at shoulder height, forming the letter T, palms facing down "
+    "toward the floor, fingers straight and slightly spread apart, legs clearly "
     "apart with open space visible between them, hair behind the shoulders"
 )
 
@@ -106,7 +107,7 @@ TPOSE_BACK_PROMPT_DEFAULT = (
     "the back of the head, the upper back and the shoulder blades facing the "
     "camera, the head facing straight away from the camera in the same "
     "direction as the body, standing upright in T-pose, arms straight out to "
-    "the sides at shoulder height, palms facing away from the camera, fingers "
+    "the sides at shoulder height, palms facing down toward the floor, fingers "
     "straight and slightly spread apart, legs clearly apart with open space "
     "visible between them, hair in front of the shoulders"
 )
@@ -125,7 +126,8 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "whole body in profile facing the "
     "{side} edge of the frame, standing upright in T-pose, arms straight out "
     "to the sides at shoulder height so the near arm points at the camera and "
-    "hides the far arm, strongly foreshortened, palms facing forward, fingers "
+    "hides the far arm, strongly foreshortened, palms facing down toward the "
+    "floor, fingers "
     "straight and slightly spread apart, legs clearly apart, hair behind the "
     "shoulders"
 )
