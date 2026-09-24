@@ -66,8 +66,8 @@ EXPECTATIONS, DERIVED BY HAND
 
 [4] THE DIAL TOUCHES NOTHING ELSE. Heights are untouched (y identical in every
     run), the take stays rigid (the head-to-foot distance is the same in every
-    frame of every run), and `in_place` still pins the root's XZ at the origin
-    in EVERY frame, not just the first.
+    frame of every run), and root_motion `strip` still pins the root's XZ at
+    the origin in EVERY frame, not just the first.
 
 [5] A PAIR TURNS WITH IT. A pair is framed by its own rule — the A->B
     direction at the anchor frame falls on +X — and the dial turns that frame
@@ -147,9 +147,9 @@ def make_take(offset=(0.0, 0.0, 0.0), role="", yaw=YAW0):
     return Take(poses, role)
 
 
-def frame_solo(yaw_deg, in_place=True):
+def frame_solo(yaw_deg, root_motion="strip"):
     take = make_take()
-    geo = cmu_clip._frame_takes([take], {{"in_place": in_place, "yaw_deg": yaw_deg}})
+    geo = cmu_clip._frame_takes([take], {{"root_motion": root_motion, "yaw_deg": yaw_deg}})
     fx, fz = _cmu.forward_xz(take.poses[0])
     return {{
         "geometry": geo,
@@ -176,8 +176,8 @@ def frame_pair(yaw_deg):
 
 out = {{
     "solo": {{str(a): frame_solo(a) for a in (0.0, 90.0, 143.0, 180.0)}},
-    "solo_free": frame_solo(90.0, in_place=False),
-    "solo_free0": frame_solo(0.0, in_place=False),
+    "solo_free": frame_solo(90.0, root_motion="keep"),
+    "solo_free0": frame_solo(0.0, root_motion="keep"),
     "pair": {{str(a): frame_pair(a) for a in (0.0, 90.0)}},
 }}
 print("SMOKE_JSON " + json.dumps(out))
@@ -285,8 +285,8 @@ def main() -> int:
     for a in ("0.0", "90.0", "143.0", "180.0"):
         for f in solo[a]["frames"]:
             worst_pin = max(worst_pin, abs(f["root"][0]), abs(f["root"][2]))
-    check_le("in_place: root XZ off the origin, any frame (cm)", worst_pin, TOL_CM)
-    # …and without in_place the travel survives, turned by the dial.
+    check_le("strip: root XZ off the origin, any frame (cm)", worst_pin, TOL_CM)
+    # …and with keep the travel survives, turned by the dial.
     check_le("free root travel follows the dial (cm)",
              max_dev(d["solo_free0"]["frames"], d["solo_free"]["frames"], 90.0), TOL_CM)
     # …and there WAS travel to follow: the fixture moves the root (4, 1, 6) cm

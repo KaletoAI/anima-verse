@@ -14,8 +14,8 @@ Invoked through ``app.blender.runner.run("cmu_clip", inputs=…, params=…)``:
              end_s          last second (default: whole take)
              anchor_s       PAIR ONLY — the second whose geometry defines the
                             anchor frame (default: when the roots are closest)
-             in_place       SOLO ONLY — strip the horizontal root travel
-                            (Mixamo "In Place")
+             root_motion    SOLO ONLY — strip | keep | foot_lock (default
+                            strip), see clip_root_motion.py
              loop_s         SOLO ONLY — cut the take to its best-closing
                             window of at least this many seconds and ease
                             the tail into the head (a seamless cycle)
@@ -67,7 +67,8 @@ pose. The hips take the CMU root POSITION as well.
 Frames of reference the clips are written in
 --------------------------------------------
 * SOLO: root at the origin in XZ at the first kept frame, facing +Z; with
-  ``in_place`` the horizontal root travel is removed entirely.
+  ``root_motion`` strip (or foot_lock, which rebuilds it from the foot
+  contacts) the horizontal root travel is removed first; keep keeps it.
 * PAIR: a common ANCHOR frame for both files — origin at the XZ midpoint of
   the two roots at ``anchor_s``, +X pointing from A to B. Both clips keep their
   full root motion inside that frame, so A and B stay where they were
@@ -88,6 +89,8 @@ _SCRIPTS_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPTS_DIR)
 import _common                                                # noqa: E402
 import _cmu                                                   # noqa: E402
+import _root_motion                                           # noqa: E402
+import clip_root_motion                                       # noqa: E402
 sys.path.remove(_SCRIPTS_DIR)
 
 import bpy                                                    # noqa: E402
@@ -225,9 +228,9 @@ class _Take:
         return min(_cmu.lowest_point_cm(self.sk, p) for p in self.poses)
 
 
-def _apply_rigid(take: _Take, theta: float, shift, floor: float, in_place: bool):
+def _apply_rigid(take: _Take, theta: float, shift, floor: float, pin: bool):
     """Rotates every pose about Y by theta, then translates by ``shift``
-    (x, z) and lifts by ``-floor``; with in_place the root XZ is pinned."""
+    (x, z) and lifts by ``-floor``; with ``pin`` the root XZ is pinned."""
     r = _ry(theta)
     r3 = [[r[i][j] for j in range(3)] for i in range(3)]
     for pose in take.poses:
@@ -235,7 +238,7 @@ def _apply_rigid(take: _Take, theta: float, shift, floor: float, in_place: bool)
             pose.rot[name] = _cmu.mat_mul(r3, pose.rot[name])
             p = _cmu.mat_vec(r3, pose.pos[name])
             pose.pos[name] = (p[0] + shift[0], p[1] - floor, p[2] + shift[1])
-    if in_place:
+    if pin:
         for pose in take.poses:
             rx, _, rz = pose.pos["root"]
             for name in list(pose.pos):
@@ -254,6 +257,13 @@ def _cut_loop(take, fps, min_s):
     i, j, d = _cmu.best_loop_window(take.poses, fps, min_s)
     take.poses = take.poses[i:j]
     return i, j, d
+
+
+def _root_motion_mode(args) -> str:
+    mode = str(args.get("root_motion") or "strip")
+    if mode not in _root_motion.MODES:
+        raise ValueError(f"root_motion must be one of {_root_motion.MODES}, not {mode!r}")
+    return mode
 
 
 def _with_yaw(geometry, args):
@@ -285,9 +295,9 @@ def _frame_takes(takes, args):
         r = _ry(-theta)
         x0, z0 = take.root_xz(0)
         p = r @ Vector((x0, 0.0, z0))
-        _apply_rigid(take, -theta, (-p.x, -p.z), floor, bool(args.get("in_place")))
-        return _with_yaw({"floor_shift_cm": round(-floor, 2),
-                          "in_place": bool(args.get("in_place"))}, args)
+        mode = _root_motion_mode(args)
+        _apply_rigid(take, -theta, (-p.x, -p.z), floor, mode in ("strip", "foot_lock"))
+        return _with_yaw({"floor_shift_cm": round(-floor, 2)}, args)
 
     a = next(t for t in takes if t.role == "a")
     b = next(t for t in takes if t.role == "b")
@@ -428,7 +438,7 @@ def _hips_lift(hips_y: float, hips_scale: float, stand_cm: float) -> float:
 
 def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
           hips_scale: float = 1.0, offset=(0.0, 0.0), loop: bool = False,
-          stand_cm: float = 100.0):
+          stand_cm: float = 100.0, travel_scale: float = 1.0):
     """Writes the solved frames into a fresh action on ``arm``.
 
     Every frame is moved as a whole (rotations untouched): the hips height is
@@ -436,7 +446,8 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
     squat then takes the rig as deep as it took the actor, instead of leaving
     the rig's longer legs dangling in the air), the whole take is shifted by
     ``offset`` (x, z) cm (the pair's contact fit) and lifted by ``-floor_cm``
-    so the planted foot touches y = 0."""
+    so the planted foot touches y = 0. ``travel_scale`` multiplies the hips'
+    horizontal travel (root_motion keep)."""
     seen, rest, frames, _low = solved
     action = bpy.data.actions.new(name=f"Armature|{take.role or 'solo'}")
     arm.animation_data_create()
@@ -453,9 +464,14 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
     hips_name = PREFIX + "Hips"
     keys = {}   # (path, index) -> list of values
     for P in frames:
-        hips_y = P[hips_name].translation.y
-        lift = Matrix.Translation(Vector((offset[0], _hips_lift(hips_y, hips_scale, stand_cm) - floor_cm,
-                                          offset[1])))
+        hips_t = P[hips_name].translation
+        # keep: the actor's travel scaled by the leg ratio — a longer-legged
+        # rig takes longer steps, so its planted feet stay put. Pinned takes
+        # have hips x/z = 0, the term vanishes.
+        lift = Matrix.Translation(Vector((
+            offset[0] + (travel_scale - 1.0) * hips_t.x,
+            _hips_lift(hips_t.y, hips_scale, stand_cm) - floor_cm,
+            offset[1] + (travel_scale - 1.0) * hips_t.z)))
         for b in seen:
             R = rest[b.name]
             M = lift @ P[b.name]
@@ -617,6 +633,10 @@ def run_takes(takes, args, fps, source):
     (``_cmu.Pose``: world rotation from rest + position per bone)."""
     loop_min = args.get("loop_s")
     loop = loop_min is not None and len(takes) == 1
+    mode = _root_motion_mode(args) if len(takes) == 1 else "strip"
+    if loop and mode != "strip":
+        raise ValueError("loop_s and root_motion=%s cannot be combined: the loop "
+                         "blend pulls the travel back to the start" % mode)
     loop_info = None
     if loop:
         i, j, d = _cut_loop(takes[0], fps, float(loop_min))
@@ -727,7 +747,13 @@ def run_takes(takes, args, fps, source):
         # reset) — bones are carried by NAME and re-resolved here.
         seen, rest, frames, low, _ratio = sol
         seen = [arm.data.bones[n] for n in seen]
-        _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop, stand)
+        _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop, stand,
+              travel_scale=k if mode == "keep" else 1.0)
+        if len(takes) == 1:
+            # Last pass before export: measure (strip/keep) or rebuild
+            # (foot_lock) the horizontal travel — SOLO only, a pair's roots
+            # carry the contact geometry.
+            geometry["root_motion"] = clip_root_motion.apply(arm, mode, fps)
         stem = f"{kind}__{take.role}" if take.role else kind
         path = out_dir / f"{stem}.fbx"
         _export(arm, path)

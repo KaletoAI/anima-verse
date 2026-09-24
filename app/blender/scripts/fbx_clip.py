@@ -12,7 +12,7 @@ Invoked through ``app.blender.runner.run("fbx_clip", inputs=…, params=…)``:
                             their real node rotations relative to that pose
                             — twist included — instead of the positional
                             reconstruction below
-    params   kind, fps, start_s, end_s, anchor_s, in_place, loop_s, yaw_deg,
+    params   kind, fps, start_s, end_s, anchor_s, root_motion, loop_s, yaw_deg,
              level_head — as in cmu_clip (the orientation dial and the head
              levelling work here for the same reason: both formats share
              ``run_takes``); plus
