@@ -39,6 +39,13 @@ world slides BACKWARDS in these numbers by exactly the travel.
       yaw); (10, 0) at yaw 90 → (0, −10); (0, 40) at yaw 180 → (0, −40);
       (0, 40) at tilt 90: Rx(90) turns (0, 0, 40) into (0, −40, 0), so the
       horizontal part is (0, 0) within 1e-9.
+[9] ONE vocabulary: the Blender side keeps its own copy of the modes
+      (bpy scripts do not import the app package), so ``_root_motion.MODES``
+      must equal ``animation_clips.ROOT_MOTION_MODES`` — the tuple the routes
+      validate against — element for element, order included:
+      ("strip", "keep", "foot_lock").
+      (Importing animation_clips reads no storage: it only resolves clip
+      directories when a function is called.)
 """
 import math
 import sys
@@ -186,6 +193,17 @@ for args, want, eps in ((((0.0, 40.0), 90, 0, 0), (40.0, 0.0), EPS),
     got = rm.rotate_travel(*args)
     near(f"rotate_travel{args} x", got[0], want[0], eps)
     near(f"rotate_travel{args} z", got[1], want[1], eps)
+
+# ------------------------------------------------------- [9] mode parity
+print("[9] the Blender copy of the modes matches the app's")
+sys.path.insert(0, str(ROOT))
+from app.core import animation_clips  # noqa: E402
+
+check("_root_motion.MODES == animation_clips.ROOT_MOTION_MODES",
+      tuple(rm.MODES) == tuple(getattr(animation_clips, "ROOT_MOTION_MODES", ())),
+      f"{rm.MODES!r} vs {getattr(animation_clips, 'ROOT_MOTION_MODES', None)!r}")
+check("and both are ('strip', 'keep', 'foot_lock')",
+      tuple(rm.MODES) == ("strip", "keep", "foot_lock"), repr(rm.MODES))
 
 print(f"\n{passed} ok, {failed} failed")
 sys.exit(1 if failed else 0)

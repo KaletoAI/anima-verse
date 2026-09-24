@@ -92,6 +92,14 @@ cos 10 = 0.98481, sin 10 = 0.17365; cos 20 = 0.93969, sin 20 = 0.34202.
     `yaw_deg: 120` and `floor_shift_cm: 7.0`; a further -120 leaves 0, and a
     dial at 0 is DROPPED from the sidecar, exactly as the import omits an
     unturned one. Neither `tilt_deg` nor `roll_deg` appears while they are 0.
+    The clip's TRAVEL (`root_motion.travel_m`, clip frame, metres) turns with
+    it, by the same Ry of [2] on (x, z):
+        yaw +90:  (0, 0.4)  -> x' =  0 . 0 + 0.4 . 1 = 0.4
+                               z' = -0 . 1 + 0.4 . 0 = 0     -> [0.4, 0.0]
+        yaw -120: (0.4, 0)  -> x' =  0.4 . cos(-120) = 0.4 . -0.5     = -0.2
+                               z' = -0.4 . sin(-120) = -0.4 . -0.86603 = 0.34641
+                                                             -> [-0.2, 0.346]
+    (the sidecar keeps three decimals), and `mode` stays `foot_lock`.
 
 [8] A PAIR TURNS AS ONE AND IS RE-MEASURED. Both halves go into one run and
     get the same rotation; the sidecar's role geometry is then read off the
@@ -352,7 +360,8 @@ def main() -> int:
     (FREE / "turn.json").write_text(json.dumps({
         "kind": "turn", "pair": False, "roles": [], "fps": 30, "frames": 3,
         "duration_s": 0.1, "loop": False,
-        "geometry": {"floor_shift_cm": 2.0, "in_place": True, "yaw_deg": 30.0},
+        "geometry": {"floor_shift_cm": 2.0, "yaw_deg": 30.0,
+                     "root_motion": {"mode": "foot_lock", "travel_m": [0.0, 0.4]}},
     }, indent=1), encoding="utf-8")
     ac.orient_clip("free", "turn.fbx", yaw_deg=90.0, height_cm=5.0)
     geo = json.loads((FREE / "turn.json").read_text(encoding="utf-8"))["geometry"]
@@ -360,12 +369,21 @@ def main() -> int:
     check("floor_shift_cm shifted (2.0 + 5)", float(geo.get("floor_shift_cm", 0.0)), 7.0, 0.005)
     check_true("no tilt_deg / roll_deg while both are 0",
                "tilt_deg" not in geo and "roll_deg" not in geo, str(sorted(geo)))
+    travel = (geo.get("root_motion") or {}).get("travel_m") or [9.9, 9.9]
+    check("travel_m x turned by yaw 90 (0 -> 0.4)", float(travel[0]), 0.4, 0.001)
+    check("travel_m z turned by yaw 90 (0.4 -> 0)", float(travel[1]), 0.0, 0.001)
+    check_true("the mode stays foot_lock",
+               (geo.get("root_motion") or {}).get("mode") == "foot_lock",
+               str(geo.get("root_motion")))
     ac.orient_clip("free", "turn.fbx", yaw_deg=-120.0)
     geo = json.loads((FREE / "turn.json").read_text(encoding="utf-8"))["geometry"]
     check_true("a dial back at 0 is dropped from the sidecar",
                "yaw_deg" not in geo, str(sorted(geo)))
     check("floor_shift_cm untouched by a pure turn",
           float(geo.get("floor_shift_cm", 0.0)), 7.0, 0.005)
+    travel = (geo.get("root_motion") or {}).get("travel_m") or [9.9, 9.9]
+    check("travel_m x after yaw -120 (0.4 -> -0.2)", float(travel[0]), -0.2, 0.001)
+    check("travel_m z after yaw -120 (0 -> 0.346)", float(travel[1]), 0.346, 0.001)
 
     print("\n[8] a pair turns as one and is re-measured")
     for role in ("a", "b"):

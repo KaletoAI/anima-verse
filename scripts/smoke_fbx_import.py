@@ -82,6 +82,13 @@ RULE 4 — "a foreign file is licensed until its owner says otherwise". The
 default target is the LICENSED library; the free (tracked, redistributable)
 one needs redistributable=True — 400 without it.
 
+RULE 4b — "root_motion is one of strip/keep/foot_lock, default strip, and a
+looping clip cannot carry travel" (a loop restarts at its first frame, so a
+figure that moved would jump back every cycle). The route refuses an unknown
+mode and loop_s together with a mode other than strip — 400, and BEFORE
+Blender starts. A pair always hands "strip" to the converter (the two roots
+carry the contact geometry), and drops the loop cut the same way.
+
 RULE 6 — "a reference pose belongs to the rig it is read on". The rest file
 is measured on the SOURCE skeleton, so a file from another family puts a
 constant offset into every frame that nothing downstream can notice — measured
@@ -941,7 +948,7 @@ def test_import() -> None:
 
         print("\n[7] a solo import — licensed by default")
         res = imp({"kind": "resting", "files": [S("Female_Dance.fbx")],
-                   "start_s": 0.5, "end_s": 3.0, "loop_s": 1.5, "in_place": True})
+                   "start_s": 0.5, "end_s": 3.0, "loop_s": 1.5})
         check("the clip landed in the LICENSED library",
               (LICENSED / "resting.fbx").is_file() and (LICENSED / "resting.json").is_file())
         check("and NOT in the free one", not (FREE / "resting.fbx").exists())
@@ -950,9 +957,13 @@ def test_import() -> None:
               res["clip"]["url"] == "/assets/animation-clips/licensed/resting.fbx",
               str(res["clip"]))
         params = res["sidecar"]["params"]
-        check("the window, the loop and in_place reached the converter",
+        check("the window, the loop and the default root_motion 'strip' "
+              "reached the converter",
               params["start_s"] == 0.5 and params["end_s"] == 3.0
-              and params["loop_s"] == 1.5 and params["in_place"] is True, str(params))
+              and params["loop_s"] == 1.5 and params["root_motion"] == "strip",
+              str(params))
+        check("no in_place key reaches the converter any more",
+              "in_place" not in params, str(sorted(params)))
         check("the family is detected by the converter itself (bone_map auto)",
               params["bone_map"] == "auto", str(params["bone_map"]))
         check("30 fps out", params["fps"] == 30, str(params["fps"]))
@@ -962,6 +973,22 @@ def test_import() -> None:
               res["sidecar"]["slots"] == ["rig", "src"], str(res["sidecar"]["slots"]))
         check("and the library now offers the kind",
               "resting" in assets.list_animation_clips()["kinds"])
+
+        print("\n[7a] root_motion (RULE 4b)")
+        res = imp({"kind": "resting-fl", "files": [S("Female_Dance.fbx")],
+                   "root_motion": "foot_lock"})
+        check("foot_lock reached the converter",
+              res["sidecar"]["params"]["root_motion"] == "foot_lock",
+              str(res["sidecar"]["params"].get("root_motion")))
+        before = len(RUNS)
+        check("400 for an unknown mode",
+              status_of(lambda: imp({"kind": "drift", "files": [S("Female_Dance.fbx")],
+                                     "root_motion": "sideways"})) == 400)
+        check("400 for a loop cut on a clip that keeps its travel",
+              status_of(lambda: imp({"kind": "drift", "files": [S("Female_Dance.fbx")],
+                                     "loop_s": 1.5, "root_motion": "keep"})) == 400)
+        check("…and Blender was never started for either",
+              len(RUNS) == before, f"{len(RUNS) - before} run(s)")
 
         print("\n[8] the reference pose reaches inputs['rest']")
         res = imp({"kind": "resting2", "files": [S("Female_Dance.fbx")],
@@ -1001,7 +1028,7 @@ def test_import() -> None:
 
         print("\n[9] a pair import — both halves, one kind")
         res = imp({"kind": "resting-pair", "files": [S("Female_Dance.fbx"), S("Male_Dance.fbx")],
-                   "rest_file": S("Tpose.fbx"), "in_place": True, "loop_s": 2.0})
+                   "rest_file": S("Tpose.fbx"), "root_motion": "foot_lock"})
         check("both halves were written",
               (LICENSED / "resting-pair__a.fbx").is_file()
               and (LICENSED / "resting-pair__b.fbx").is_file())
@@ -1010,17 +1037,20 @@ def test_import() -> None:
               res["sidecar"]["params"]["source_name"]
               == ["Female_Dance.fbx", "Male_Dance.fbx"],
               str(res["sidecar"]["params"]["source_name"]))
-        check("in_place is ignored for a pair (the roots carry the contact)",
-              res["sidecar"]["params"]["in_place"] is False)
-        check("so is the loop cut",
-              res["sidecar"]["params"]["loop_s"] is None,
-              str(res["sidecar"]["params"]["loop_s"]))
+        check("root_motion is ignored for a pair (the roots carry the contact)",
+              res["sidecar"]["params"]["root_motion"] == "strip",
+              str(res["sidecar"]["params"].get("root_motion")))
         check("the two source slots are src_a/src_b",
               res["sidecar"]["slots"] == ["rest", "rig", "src_a", "src_b"],
               str(res["sidecar"]["slots"]))
         check("the library sees ONE pair kind",
               assets.list_animation_clips()["pair_kinds"] == ["resting-pair"],
               str(assets.list_animation_clips()["pair_kinds"]))
+        res = imp({"kind": "resting-pair", "files": [S("Female_Dance.fbx"), S("Male_Dance.fbx")],
+                   "rest_file": S("Tpose.fbx"), "loop_s": 2.0, "overwrite": True})
+        check("so is the loop cut",
+              res["sidecar"]["params"]["loop_s"] is None,
+              str(res["sidecar"]["params"]["loop_s"]))
         check("422 for a pair of the same file twice",
               status_of(lambda: imp({"kind": "twin",
                                      "files": [S("Female_Dance.fbx"), S("Female_Dance.fbx")]})) == 422)
@@ -1317,7 +1347,10 @@ def test_real_mob1() -> None:
     floor = geo.get("rig_floor_min_cm")
     check("the feet stand on the floor (|rig_floor_min_cm| < 3)",
           isinstance(floor, (int, float)) and abs(floor) < 3.0, str(floor))
-    check("in_place stayed off", geo.get("in_place") is False, str(geo.get("in_place")))
+    check("geometry carries no in_place key", "in_place" not in geo, str(sorted(geo)))
+    check("the default mode is strip",
+          (geo.get("root_motion") or {}).get("mode") == "strip",
+          str(geo.get("root_motion")))
     check_continuity("the relaxed idle", LICENSED / "mob1" / "smoketest-mob1.fbx")
     print(f"  · {res['seconds']:.1f} s, hips_scale {scale}, "
           f"rig_floor_shift_cm {geo.get('rig_floor_shift_cm')}, "

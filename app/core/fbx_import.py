@@ -800,7 +800,7 @@ def target_dir(target: str) -> Path:
 def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
                clip_set: str = "", start_s: float = 0.0,
                end_s: Optional[float] = None, loop_s: Optional[float] = None,
-               in_place: bool = False, overwrite: bool = False,
+               root_motion: str = "strip", overwrite: bool = False,
                offset_b_m: Optional[List[float]] = None,
                loops: Optional[bool] = None, speed: float = 1.0,
                yaw_deg: float = 0.0, level_head: bool = False,
@@ -814,9 +814,10 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
     ``files`` is one relative inbox path, or two — the A half first (see
     :func:`safe_inbox_name` for the form); ``rest_file`` is an
     optional reference-pose export of the SAME rig, which gives the bones their
-    real twist instead of a positional reconstruction. ``in_place`` is
-    meaningless for a pair (the two roots carry the contact geometry) and is
-    ignored there, exactly as in the CMU import.
+    real twist instead of a positional reconstruction. ``root_motion``
+    (``animation_clips.ROOT_MOTION_MODES``) is meaningless for a pair (the two
+    roots carry the contact geometry) — the converter gets ``strip`` there,
+    exactly as in the CMU import.
 
     Everything refusable raises ``ClipImportError``; "the kind is already
     there" raises ``ClipKindExists`` so a route can answer 409.
@@ -850,6 +851,8 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
     names = [n for n, _t in specs]
     if not 1 <= len(specs) <= 2:
         raise ClipImportError("an import takes one source, or two for a pair")
+    root_motion = cmu_import.validate_root_motion(
+        root_motion, loop_s if len(specs) == 1 else None)
     if len(specs) == 2 and (specs[0][0].lower(), specs[0][1]) == \
             (specs[1][0].lower(), specs[1][1]):
         raise ClipImportError(
@@ -954,7 +957,7 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
 
     params = {"kind": kind, "fps": int(fps), "start_s": float(start_s or 0.0),
               "end_s": end_s, "anchor_s": None,
-              "in_place": bool(in_place) and len(paths_in) == 1,
+              "root_motion": root_motion if len(paths_in) == 1 else "strip",
               "loop_s": loop_s if len(paths_in) == 1 else None,
               # declared cycle: the caller's word, else what the source
               # CALLS itself — the take name for a pack file, the file name

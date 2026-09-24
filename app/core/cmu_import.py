@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.blender import runner
 from app.core import paths
+from app.core.animation_clips import ROOT_MOTION_MODES
 from app.core.log import get_logger
 
 logger = get_logger(__name__)
@@ -155,10 +156,25 @@ def validate_kind(raw: Any) -> str:
     return kind
 
 
+def validate_root_motion(mode: Any, loop_s: Optional[float] = None) -> str:
+    """``mode`` as one of ``ROOT_MOTION_MODES`` (empty = ``strip``), else a
+    ``ClipImportError``. A clip with a loop cut cannot carry travel — a loop
+    restarts at its first frame, so a figure that moved would jump back every
+    cycle — hence ``loop_s`` together with any other mode is refused too."""
+    mode = str(mode or "strip")
+    if mode not in ROOT_MOTION_MODES:
+        raise ClipImportError(
+            f"root_motion must be one of {', '.join(ROOT_MOTION_MODES)}")
+    if loop_s is not None and mode != "strip":
+        raise ClipImportError("a looping clip cannot carry root travel — "
+                              "use root_motion 'strip' or no loop")
+    return mode
+
+
 def convert_take(kind: str, take_a: str, take_b: str = "", *,
                  out_dir: Optional[Path] = None, clip_set: str = "",
                  start_s: float = 0.0, end_s: Optional[float] = None,
-                 anchor_s: Optional[float] = None, in_place: bool = False,
+                 anchor_s: Optional[float] = None, root_motion: str = "strip",
                  loop_s: Optional[float] = None,
                  source_fps: Optional[float] = None, fps: int = 30,
                  speed: float = 1.0, yaw_deg: float = 0.0,
@@ -174,8 +190,14 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
     Returns ``{"kind", "set", "dir", "sidecar", "outputs", "seconds"}``;
     ``outputs`` maps the Blender slot (``<kind>``/``<kind>__a``/…/``sidecar``)
     to the written path. Every refusable problem raises ``ClipImportError``.
+
+    ``root_motion`` (``animation_clips.ROOT_MOTION_MODES``) is how the root's
+    horizontal travel is treated — a SOLO take only: a pair always hands
+    ``strip`` to the converter, because its two roots carry the contact
+    geometry.
     """
     kind = validate_kind(kind)
+    root_motion = validate_root_motion(root_motion, loop_s if not take_b else None)
     out = Path(out_dir) if out_dir else paths.get_animation_clips_dir()
     cset = str(clip_set or "").strip().lower()
     if cset:
@@ -202,7 +224,8 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
     params = {"kind": kind, "fps": int(fps), "start_s": float(start_s or 0.0),
               "end_s": end_s, "anchor_s": anchor_s,
               "source_fps": float(source_fps or catalog_framerate(take_a)),
-              "in_place": bool(in_place), "loop_s": loop_s,
+              "root_motion": root_motion if not take_b else "strip",
+              "loop_s": loop_s,
               "speed": float(speed or 1.0), "yaw_deg": float(yaw_deg or 0.0),
               "source_takes": takes}
 

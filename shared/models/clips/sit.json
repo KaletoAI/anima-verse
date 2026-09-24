@@ -10,7 +10,6 @@
  "speed": 1.0,
  "geometry": {
   "floor_shift_cm": -1.5,
-  "in_place": true,
   "loop": {
    "min_s": 1.5,
    "cut_frames": [
@@ -28,7 +27,14 @@
    1.1135
   ],
   "rig_floor_shift_cm": 8.19,
-  "rig_floor_min_cm": -0.56
+  "rig_floor_min_cm": -0.56,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ]
+  }
  },
  "source": {
   "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",

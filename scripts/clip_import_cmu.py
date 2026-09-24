@@ -25,8 +25,8 @@ Usage:
     # pair: salsa (subjects 60/61), only the dancing part of the take
     ./.venv/bin/python scripts/clip_import_cmu.py salsa 60_01 61_01 --start 2
 
-    # solo, horizontal root travel removed ("In Place")
-    ./.venv/bin/python scripts/clip_import_cmu.py dance 55_02 --in-place
+    # solo, the root travel rebuilt from the planted feet (no foot sliding)
+    ./.venv/bin/python scripts/clip_import_cmu.py dance 55_02 --root-motion foot_lock
 
 Options:
     --set <name>      write into the set subdirectory (female, male, …)
@@ -34,7 +34,10 @@ Options:
     --start/--end <s> keep only this window of the take (seconds)
     --anchor <s>      pair: second that defines the anchor frame
                       (default: when the two roots are closest)
-    --in-place        solo: strip the horizontal root travel
+    --root-motion <m> solo: the root's horizontal travel — strip (default,
+                      the figure stays on the spot), keep (the source's own
+                      travel), foot_lock (rebuilt from the planted feet);
+                      a pair always strips, and --loop needs strip
     --source-fps <n>  capture rate of the take (default: the catalog's value,
                       120 without one; 326 takes were captured at 60 Hz)
     --loop <s>        solo: cut to the best-closing window of at least <s>
@@ -62,6 +65,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.blender import runner  # noqa: E402
 from app.core import paths  # noqa: E402
+from app.core.animation_clips import ROOT_MOTION_MODES  # noqa: E402
 from app.core.cmu_import import (ClipImportError, convert_take,  # noqa: E402
                                  default_cache_dir, default_rig)
 
@@ -76,7 +80,10 @@ def main() -> int:
     ap.add_argument("--start", type=float, default=0.0)
     ap.add_argument("--end", type=float, default=None)
     ap.add_argument("--anchor", type=float, default=None)
-    ap.add_argument("--in-place", action="store_true")
+    ap.add_argument("--root-motion", choices=ROOT_MOTION_MODES, default="strip",
+                    help="the root's horizontal travel: strip (stay on the spot), "
+                         "keep (the source's own), foot_lock (from the planted "
+                         "feet); a pair always strips")
     ap.add_argument("--loop", type=float, default=None)
     ap.add_argument("--source-fps", type=float, default=None,
                     help="capture rate; default: from shared/models/cmu_catalog.json, else 120")
@@ -99,7 +106,7 @@ def main() -> int:
     try:
         res = convert_take(a.kind, a.take_a, a.take_b or "", out_dir=out_dir,
                            clip_set=a.set, start_s=a.start, end_s=a.end,
-                           anchor_s=a.anchor, in_place=a.in_place, loop_s=a.loop,
+                           anchor_s=a.anchor, root_motion=a.root_motion, loop_s=a.loop,
                            source_fps=a.source_fps, fps=a.fps, rig=rig,
                            cache=Path(a.cache))
     except ClipImportError as e:

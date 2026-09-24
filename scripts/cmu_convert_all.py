@@ -182,7 +182,7 @@ def convert(job: dict, rig: Path, args) -> dict:
     inputs = {"rig": rig}
     inputs.update({k: Path(v) for k, v in job["inputs"].items()})
     params = {"kind": take["id"], "fps": args.fps, "start_s": 0.0, "end_s": None,
-              "anchor_s": None, "in_place": not job["partner"], "loop_s": None,
+              "anchor_s": None, "root_motion": "strip", "loop_s": None,
               "source_fps": float(take.get("framerate") or 120),
               "source_takes": [take["id"]] + ([job["partner"]["id"]] if job["partner"] else [])}
     job["dir"].mkdir(parents=True, exist_ok=True)

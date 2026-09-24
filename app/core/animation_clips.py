@@ -77,6 +77,13 @@ ORIENT_ANGLES = ("yaw_deg", "tilt_deg", "roll_deg")
 #: DEFAULT kind of a role is the role's own name — an empty or missing entry
 #: in the mapping file means exactly that.
 LOCOMOTION_ROLES = ("walk", "run", "idle")
+#: How an import treats the root's horizontal travel — the ONE list the routes
+#: and the import core validate against. ``strip`` keeps the figure on the
+#: spot, ``keep`` bakes the source's travel into the file, ``foot_lock``
+#: rebuilds it from the planted feet. The Blender side keeps its own copy in
+#: ``app/blender/scripts/_root_motion.py`` (bpy scripts do not import the app
+#: package); ``scripts/smoke_root_motion_math.py`` checks the two are equal.
+ROOT_MOTION_MODES = ("strip", "keep", "foot_lock")
 
 # A kind is a file stem: lowercase, spaces allowed (they exist in the shipped
 # library), but never the pair-role separator and never a path separator.
@@ -552,6 +559,40 @@ def clip_role_gender(meta: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return {}
 
 
+def clip_root_motion(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The sidecar's ``geometry.root_motion`` block, or None (pairs, clips
+    without sidecar)."""
+    geo = (meta or {}).get("geometry")
+    rm = geo.get("root_motion") if isinstance(geo, dict) else None
+    return rm if isinstance(rm, dict) and rm.get("mode") in ROOT_MOTION_MODES else None
+
+
+def clip_travel_m(kind: str, cset: str = "") -> Tuple[float, float]:
+    """How far a clip carries its figure, clip frame (+Z forward, +X the
+    figure's left), metres of the REFERENCE rig — (0, 0) for a clip that
+    stays on the spot."""
+    rm = clip_root_motion(clip_meta(kind, cset))
+    if not rm or rm["mode"] == "strip":
+        return (0.0, 0.0)
+    try:
+        x, z = (float(v) for v in rm.get("travel_m") or (0, 0))
+    except (TypeError, ValueError):
+        return (0.0, 0.0)
+    return (x, z) if math.isfinite(x) and math.isfinite(z) else (0.0, 0.0)
+
+
+def clip_ref_height_m(kind: str, cset: str = "") -> Optional[float]:
+    """The standing height of the reference rig the travel was measured on,
+    in metres — what ``clip_travel_m`` is scaled by for a taller or shorter
+    figure. None when the sidecar does not say."""
+    rm = clip_root_motion(clip_meta(kind, cset))
+    try:
+        v = float((rm or {}).get("ref_height_m"))
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
 def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
     """One ``clip_entries()`` entry as the API delivers it — the file facts
     plus what its sidecar knows.
@@ -567,6 +608,7 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
     meta = clip_meta(entry["kind"], entry["set"], stem=path.stem)
     geometry = (meta or {}).get("geometry")
     geometry = geometry if isinstance(geometry, dict) else {}
+    rm = clip_root_motion(meta)
     return {
         "kind": entry["kind"],
         "role": entry["role"],
@@ -597,6 +639,10 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # dials so an angle is added to a known state, not to a guess.
         "orientation": {k: geometry.get(k) for k in
                         ORIENT_ANGLES + ("floor_shift_cm",)},
+        # How the import treated the root's travel, and where the clip ends
+        # up (clip frame, metres) — None for a pair or a clip without block.
+        "root_motion": ({"mode": rm["mode"], "travel_m": rm.get("travel_m")}
+                        if rm else None),
     }
 
 
@@ -971,6 +1017,25 @@ def _orient_sidecar(path: Path, kind: str, pair: bool) -> Path:
     return own if own is not None else path.parent / f"{kind}.json"
 
 
+_root_motion_module = None
+
+
+def _root_motion_mod():
+    """The bpy-free root-motion maths the Blender scripts use, loaded from the
+    scripts directory (not a package on purpose — Blender's Python imports it
+    by path too). ``rotate_travel`` lives there and only there."""
+    global _root_motion_module
+    if _root_motion_module is None:
+        import importlib.util
+        path = (Path(__file__).resolve().parents[1] / "blender" / "scripts"
+                / "_root_motion.py")
+        spec = importlib.util.spec_from_file_location("_root_motion", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _root_motion_module = mod
+    return _root_motion_module
+
+
 def _bump_angle(geometry: Dict[str, Any], field: str, delta: float) -> None:
     """Adds ``delta`` degrees to a cumulative dial, 0.1 deg resolution; a dial
     that comes out at 0 is dropped, the way the import omits an unturned one."""
@@ -995,7 +1060,8 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
 
     There is no second truth: the FBX is rewritten (temp file, then
     ``os.replace``) and the sidecar follows it — the three angles add up
-    cumulatively, ``floor_shift_cm`` moves by the lift, and a pair's
+    cumulatively, ``floor_shift_cm`` moves by the lift, a solo clip's
+    ``root_motion.travel_m`` turns by the same rotation, and a pair's
     ``roles.*.start_xz_m`` / ``anchor_xz_m`` and ``root_distance_m`` are
     RE-MEASURED on the written file instead of being predicted, because that
     root path is what the clients read.
@@ -1072,6 +1138,12 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
     if abs(height) > 1e-9:
         geometry["floor_shift_cm"] = round(
             float(geometry.get("floor_shift_cm") or 0.0) + height, 2)
+    # A solo clip's travel is a direction in the clip frame — it turns with
+    # the file (a lift moves nothing horizontal).
+    rm = geometry.get("root_motion")
+    if partner is None and isinstance(rm, dict) and rm.get("travel_m"):
+        tx, tz = _root_motion_mod().rotate_travel(tuple(rm["travel_m"]), yaw, tilt, roll)
+        rm["travel_m"] = [round(tx, 3), round(tz, 3)]
     if partner is not None:
         roles = geometry.get("roles")
         if not isinstance(roles, dict):

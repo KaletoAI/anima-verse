@@ -32,6 +32,17 @@ import refuses:
     kind "idle"     -> 409  when the library already has idle.fbx and
                             overwrite is not set; 200 with overwrite
 
+RULE 3 — "root_motion is one of strip/keep/foot_lock, default strip, and a
+looping clip cannot carry travel" (a loop repeats from its first frame, so a
+figure that moved would jump back every cycle). So:
+
+    root_motion "sideways"            -> 400 (unknown mode)
+    loop_s 1.5 + root_motion "keep"   -> 400 (loop with travel)
+    no root_motion                    -> the converter gets "strip"
+    root_motion "foot_lock" (solo)    -> the converter gets "foot_lock"
+    root_motion "foot_lock" (pair)    -> the converter gets "strip" (the two
+                                         roots carry the contact geometry)
+
 The Blender run itself is monkeypatched here: this smoke checks the ROUTE
 contract (validation, status file, listing entry), not the retargeter. With
 ``--real <take>`` it additionally runs one true conversion when Blender and
@@ -165,7 +176,7 @@ def fake_run(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
     side = {"kind": kind, "pair": pair, "fps": params.get("fps"),
             "frames": 90, "duration_s": 3.0,
             "source_takes": params.get("source_takes"),
-            "in_place": params.get("in_place"),
+            "root_motion": params.get("root_motion"),
             "loop_s": params.get("loop_s"),
             "start_s": params.get("start_s"), "end_s": params.get("end_s"),
             "source_fps": params.get("source_fps")}
@@ -293,10 +304,18 @@ def test_import() -> None:
               status_of(lambda: imp("07_01", {"kind": "walk", "target": "licensed"})) == 400)
         check("409 for a kind the library already has",
               status_of(lambda: imp("07_01", {"kind": "idle"})) == 409)
+        check("400 for an unknown root_motion mode",
+              status_of(lambda: imp("07_01", {"kind": "drift",
+                                              "root_motion": "sideways"})) == 400)
+        check("400 for a loop cut on a clip that keeps its travel",
+              status_of(lambda: imp("07_01", {"kind": "drift", "loop_s": 1.5,
+                                              "root_motion": "keep"})) == 400)
+        check("…and neither refusal wrote a file",
+              not (CLIPS / "drift.fbx").exists() and not (CLIPS / "drift.json").exists())
 
         print("\n[6] a solo import")
         res = imp("07_01", {"kind": "stroll", "start_s": 0.5, "end_s": 3.0,
-                            "loop_s": 1.5, "in_place": True})
+                            "loop_s": 1.5})
         check("the clip file landed in the library",
               (CLIPS / "stroll.fbx").is_file() and (CLIPS / "stroll.json").is_file())
         check("the answer names the new kind and its listing entry",
@@ -306,7 +325,8 @@ def test_import() -> None:
         check("the window and the loop reached the converter",
               side["start_s"] == 0.5 and side["end_s"] == 3.0 and side["loop_s"] == 1.5,
               str(side))
-        check("in_place reached it too", side["in_place"] is True)
+        check("without a word the mode is 'strip'", side["root_motion"] == "strip",
+              str(side["root_motion"]))
         check("the capture rate came from the CATALOG, not the 120 Hz default",
               side["source_fps"] == 120, str(side["source_fps"]))
         check("only this take was converted",
@@ -320,14 +340,18 @@ def test_import() -> None:
         print("\n[7] overwrite")
         check("409 without the flag",
               status_of(lambda: imp("07_01", {"kind": "stroll"})) == 409)
-        again = imp("07_01", {"kind": "stroll", "overwrite": True})
+        again = imp("07_01", {"kind": "stroll", "overwrite": True,
+                              "root_motion": "foot_lock"})
         check("200 with it", again["kind"] == "stroll")
+        check("root_motion reached the converter",
+              again["sidecar"]["root_motion"] == "foot_lock",
+              str(again["sidecar"]["root_motion"]))
         traces = again["status"]["imported"]
         check("re-importing the same kind REPLACES the trace, it does not stack",
               len(traces) == 1 and traces[0]["kind"] == "stroll", str(traces))
 
         print("\n[8] a pair import — both halves, one kind")
-        res = imp("18_01", {"kind": "handshake", "in_place": True})
+        res = imp("18_01", {"kind": "handshake", "root_motion": "foot_lock"})
         check("both halves were written",
               (CLIPS / "handshake__a.fbx").is_file()
               and (CLIPS / "handshake__b.fbx").is_file())
@@ -335,8 +359,8 @@ def test_import() -> None:
         check("the A role first, the partner second",
               res["sidecar"]["source_takes"] == ["18_01", "19_01"],
               str(res["sidecar"]["source_takes"]))
-        check("in_place is ignored for a pair (the roots carry the contact)",
-              res["sidecar"]["in_place"] is False, str(res["sidecar"]["in_place"]))
+        check("root_motion is ignored for a pair (the roots carry the contact)",
+              res["sidecar"]["root_motion"] == "strip", str(res["sidecar"]["root_motion"]))
         check("the 60 Hz capture rate came from the catalog",
               res["sidecar"]["source_fps"] == 60, str(res["sidecar"]["source_fps"]))
         check("the library sees ONE pair kind",
@@ -387,7 +411,7 @@ def test_real(take: str) -> None:
               f"original={src.is_file()}, rig={rig.is_file()})")
         return
     res = cmu_import.convert_take("smoketest", take, out_dir=CLIPS, rig=rig,
-                                  start_s=0.0, end_s=2.0, in_place=True)
+                                  start_s=0.0, end_s=2.0, root_motion="strip")
     side = res["sidecar"]
     check("a clip file was written", (CLIPS / "smoketest.fbx").is_file())
     check("its duration is the requested window (±0.2 s)",

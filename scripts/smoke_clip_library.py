@@ -66,6 +66,15 @@ Expected values, derived by hand from that fixture and the layout rules:
     while run.fbx keeps that shared sidecar,
   - a PAIR replaces a pair: both halves of hug are overwritten by kiss and
     hug.json is replaced by kiss.json (45 frames), since no hug file is left.
+* ROOT MOTION (``geometry.root_motion``): run.json says
+  ``{mode: foot_lock, travel_m: [0.01, 0.39], ref_height_m: 0.93}``, so run.fbx
+  lists ``{mode: foot_lock, travel_m: [0.01, 0.39]}`` (ref_height_m is not part
+  of the listing), ``clip_travel_m("run") == (0.01, 0.39)`` and
+  ``clip_ref_height_m("run") == 0.93``. walk.json says ``strip`` with
+  ``[0, 0]`` -> listing ``{mode: strip, travel_m: [0, 0]}``, travel (0.0, 0.0)
+  because a stripped clip stays on the spot, ref height None (no key).
+  dance.fbx has no sidecar and hug.json no block -> ``root_motion`` None,
+  travel (0.0, 0.0); a block with an unknown mode counts as none.
 * ``url`` is percent-encoded per segment: the kind "climbing a ladder" has two
   spaces, so its url is ``…/climbing%20a%20ladder.fbx`` while ``rel`` keeps the
   raw file path, and a set segment is encoded on its own (the ``/`` survives).
@@ -133,7 +142,7 @@ def build_tree() -> None:
     write_sidecar(FREE / "walk.json", {
         "kind": "walk", "pair": False, "fps": 30, "frames": 90,
         "duration_s": 3.0, "loop": True,
-        "geometry": {"in_place": True},
+        "geometry": {"root_motion": {"mode": "strip", "travel_m": [0, 0]}},
         "source": {"database": CMU_DB, "takes": ["07_01"]}})
 
     # Same kind, but the variant carries a sidecar of its OWN — the numbers
@@ -142,11 +151,13 @@ def build_tree() -> None:
     (FREE / "run_02.fbx").write_bytes(b"free-run-2")
     write_sidecar(FREE / "run.json", {
         "kind": "run", "pair": False, "fps": 30, "frames": 120,
-        "duration_s": 4.0, "loop": True, "geometry": {"in_place": True},
+        "duration_s": 4.0, "loop": True,
+        "geometry": {"root_motion": {"mode": "foot_lock", "travel_m": [0.01, 0.39],
+                                     "ref_height_m": 0.93}},
         "source": {"format": "fbx", "bone_map": "unity-humanoid"}})
     write_sidecar(FREE / "run_02.json", {
         "kind": "run", "pair": False, "fps": 60, "frames": 120,
-        "duration_s": 2.0, "loop": True, "geometry": {"in_place": True},
+        "duration_s": 2.0, "loop": True, "geometry": {"root_motion": {"mode": "strip", "travel_m": [0, 0]}},
         "source": {"format": "fbx", "bone_map": "unity-humanoid"}})
 
     (FREE / "hug__a.fbx").write_bytes(b"free-hug-a")
@@ -163,7 +174,7 @@ def build_tree() -> None:
     (FREE / "female" / "sit.fbx").write_bytes(b"free-female-sit")
     write_sidecar(FREE / "female" / "sit.json", {
         "kind": "sit", "pair": False, "fps": 24, "frames": 48,
-        "duration_s": 2.0, "loop": False, "geometry": {"in_place": True},
+        "duration_s": 2.0, "loop": False, "geometry": {"root_motion": {"mode": "strip", "travel_m": [0, 0]}},
         "source": {"format": "fbx", "bone_map": "unity-humanoid"}})
 
     (LICENSED / "wave.fbx").write_bytes(b"licensed-wave")
@@ -234,6 +245,32 @@ def test_listing() -> None:
           == ("female", "female/sit.fbx", False, 2.0), sit["rel"])
     check("female/sit url carries the set segment",
           sit["url"] == "/assets/animation-clips/female/sit.fbx", sit["url"])
+
+    print("\nRoot motion — the sidecar's travel as the listing and the server read it")
+    check("run.fbx reports foot_lock with the shared run.json's travel",
+          run["root_motion"] == {"mode": "foot_lock", "travel_m": [0.01, 0.39]},
+          str(run["root_motion"]))
+    check("walk reports strip with zero travel",
+          walk["root_motion"] == {"mode": "strip", "travel_m": [0, 0]},
+          str(walk["root_motion"]))
+    check("dance without sidecar: root_motion None", dance["root_motion"] is None,
+          str(dance["root_motion"]))
+    check("hug (pair, no block): root_motion None", hug["root_motion"] is None,
+          str(hug["root_motion"]))
+    check("clip_travel_m('run') == (0.01, 0.39)",
+          ac.clip_travel_m("run") == (0.01, 0.39), str(ac.clip_travel_m("run")))
+    check("clip_travel_m('walk') == (0.0, 0.0) — strip",
+          ac.clip_travel_m("walk") == (0.0, 0.0), str(ac.clip_travel_m("walk")))
+    check("clip_travel_m('dance') == (0.0, 0.0) — no sidecar",
+          ac.clip_travel_m("dance") == (0.0, 0.0), str(ac.clip_travel_m("dance")))
+    check("clip_travel_m of an unknown kind == (0.0, 0.0)",
+          ac.clip_travel_m("nope") == (0.0, 0.0), str(ac.clip_travel_m("nope")))
+    check("clip_ref_height_m('run') == 0.93",
+          ac.clip_ref_height_m("run") == 0.93, str(ac.clip_ref_height_m("run")))
+    check("clip_ref_height_m('walk') is None — the block has none",
+          ac.clip_ref_height_m("walk") is None, str(ac.clip_ref_height_m("walk")))
+    check("clip_root_motion ignores an unknown mode",
+          ac.clip_root_motion({"geometry": {"root_motion": {"mode": "sideways"}}}) is None)
 
 
 def test_delete() -> None:
