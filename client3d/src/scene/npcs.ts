@@ -516,6 +516,29 @@ export class NpcManager {
     npc?.figure?.faceTowards(new THREE.Vector3(dx, 0, dz), snap);
   }
 
+  /** Root and goal take the figure's held bridge travel over
+   *  (`Figure.takeTravel`); returns the offset, or null when none was held. */
+  private applyBridgeTravel(npc: Npc): { x: number; z: number } | null {
+    const t = npc.figure?.takeTravel() ?? null;
+    if (!t) return null;
+    npc.root.position.x += t.x;
+    npc.root.position.z += t.z;
+    npc.target.x += t.x;
+    npc.target.z += t.z;
+    return t;
+  }
+
+  /** Hand the held bridge travel of the PLAYER's figure over (rule 4 of
+   *  `Figure.travelBase`): once its bridge has ended, root and goal move by
+   *  it and the figure's new position is returned — the caller reports it.
+   *  `null` while a bridge still runs or nothing is held. */
+  takePlayerTravel(name: string): { x: number; z: number } | null {
+    const npc = this.npcs.get(name);
+    if (!npc?.figure || npc.figure.bridging || !npc.figure.holdsTravel) return null;
+    if (!this.applyBridgeTravel(npc)) return null;
+    return { x: npc.root.position.x, z: npc.root.position.z };
+  }
+
   /** Give a figure's running bridge up — see `Figure.cancelBridge`. */
   cancelBridge(name: string) {
     this.npcs.get(name)?.figure?.cancelBridge();
@@ -1121,6 +1144,10 @@ export class NpcManager {
     const root = this.figures.pairRootAt(it.clip, phase);
     if (!root) return false;
     if (!npc.figure.playPair(it.clip, phase, it.rate <= 0, it.loop)) return false;
+    // A bridge travel nobody took yet has no meaning here: the ANCHOR places
+    // the figure, absolutely, every frame — kept on the instance it would
+    // stand the body beside its anchor for the whole interaction.
+    if (npc.figure.holdsTravel) npc.figure.takeTravel();
     const c = Math.cos(it.anchor.yaw);
     const s = Math.sin(it.anchor.yaw);
     const x = it.anchor.x + root.x * c + root.z * s;
@@ -1160,6 +1187,27 @@ export class NpcManager {
       // it.
       if (npc.route && npc.route.points.length >= 2) {
         const r = npc.route;
+        // BRIDGE TRAVEL ON A JOURNEY (rule 4, `Figure.travelBase`): the figure
+        // stood up out of its seat carrying its body along the clip's travel
+        // while the root stayed on the seat — the journey had not started
+        // (`travel.starts_in_s`), so the route held it there. The moment the
+        // journey RUNS, the server's route already begins at the stand point
+        // (its zero-time first leg covers seat → stand point), so the root
+        // takes the travel over here and joins the route where the body
+        // already is. Nothing is counted twice: the route position is the
+        // catch-up GOAL below, not where the root is put — the route never
+        // places the root, it only pulls it.
+        // This ADDS the travel where plan task 6 first said to discard it
+        // (ruling of 2026-09-25, accepted): discarding left the root on the
+        // seat, so the body jumped 0.4–0.5 m back onto it for a frame and was
+        // then walked forward again by the catch-up.
+        if (npc.travelling && npc.figure?.holdsTravel) {
+          const t = npc.figure.takeTravel();
+          if (t) {
+            npc.root.position.x += t.x;
+            npc.root.position.z += t.z;
+          }
+        }
         r.progressM = advanceProgress(r.progressM, r.rateMS, dt, r.totalM);
         // The trim follows the walker from HERE, not from the 1 Hz update:
         // the progress that decides the bucket is the extrapolated one, and a
@@ -1257,6 +1305,17 @@ export class NpcManager {
       // radius is the ride's own arrival radius, so the landings of a chain
       // are the points the figure really walks onto and its legs change hands
       // exactly where the waypoints do.
+      // BRIDGE TRAVEL WITHOUT A ROUTE (rule 4, `Figure.travelBase`): the
+      // bridge has ended and its body stands where the clip carried it — the
+      // root moves there now, and the goal the step walks towards moves with
+      // it, or the figure would walk straight back onto its seat. The body on
+      // screen does not move: the instance goes back on its base in the same
+      // call. The player's own figure is taken over by `main.ts`, which has
+      // to report the new position as well.
+      if (npc.figure && npc.name !== this.playerDriven
+          && !npc.figure.bridging && npc.figure.holdsTravel) {
+        this.applyBridgeTravel(npc);
+      }
       const retireM = npc.ride ? RIDE_ARRIVE_M : WAYPOINT_ARRIVE_M;
       while (npc.waypoints.length
         && npc.root.position.distanceTo(npc.waypoints[0]) < retireM) {

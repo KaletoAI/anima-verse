@@ -16,6 +16,11 @@ import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
 import { bridgePace, clipTransition, locomotionClip, setClipTransitions,
   setLocomotionClips } from '../game/walk';
+import { rootPathAt, toWorld, travelAt } from './bridgeTravel';
+import type { RootPath } from './bridgeTravel';
+
+export { rootPathAt };
+export type { RootPath };
 
 /**
  * Animierte 3D-Figuren für NPCs (AV3D-5): Modelle kommen vom Server
@@ -71,6 +76,28 @@ function carryClipLoops(from: readonly THREE.AnimationClip[],
 function clipLoops(clip: THREE.AnimationClip | null | undefined): boolean {
   return clip ? clipLoopFlags.get(clip) ?? true : true;
 }
+
+/** Does THIS clip file carry a root TRAVEL in its hips track? The listing's
+ *  `root_motion.mode` per file (`keep` / `foot_lock` = yes, `strip` or no
+ *  block = no), kept on the clip object for the same reason the loop flag is:
+ *  it belongs to one file in one set. Only a clip with the flag gets a travel
+ *  path out of `adaptExternalClips`; every other clip keeps playing in place,
+ *  whatever horizontal drift its hips track happens to hold. */
+const clipRootMotionFlags = new WeakMap<THREE.AnimationClip, boolean>();
+
+/** Remembers the listing's root-motion flag for one loaded clip file.
+ *  Exported for `client3d/scripts/smoke_bridge_root.mjs`, which stands in for
+ *  the listing. */
+export function setClipRootMotion(clip: THREE.AnimationClip, rootMotion: boolean | undefined): void {
+  if (rootMotion !== undefined) clipRootMotionFlags.set(clip, rootMotion);
+}
+
+/** The horizontal travel of an ADAPTED clip, relative to its frame 0, in the
+ *  TARGET TEMPLATE's units (the figure's instance scale comes on top, see
+ *  `Figure.update`). Built by `adaptExternalClips` from the raw hips track
+ *  before its XZ is thrown away, carried onto retargeted clips by
+ *  `retargetClips`. A clip without an entry travels nowhere. */
+const clipRootPaths = new WeakMap<THREE.AnimationClip, RootPath>();
 
 interface ManifestModel {
   name: string;
@@ -420,7 +447,19 @@ function retargetClips(
     }
     action.stop();
     mixer.uncacheClip(clip);
-    if (tracks.length >= MIN_CLIP_TRACKS) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
+    if (tracks.length >= MIN_CLIP_TRACKS) {
+      const retargeted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+      // A donor clip's root travel (donor template units) rides along,
+      // rescaled by the SAME hips-height ratio its hips position track above
+      // was rescaled with — one length, one scale.
+      const donorPath = clipRootPaths.get(clip);
+      if (donorPath) {
+        clipRootPaths.set(retargeted, {
+          times: donorPath.times, xz: donorPath.xz.map((c) => c * hipScale),
+        });
+      }
+      out.push(retargeted);
+    }
   }
   return out;
 }
@@ -459,7 +498,8 @@ function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
  * real chain rather than a copy of it.
  */
 export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D,
-                                   corrections?: Map<string, RestCorrection>): THREE.AnimationClip[] {
+                                   corrections?: Map<string, RestCorrection>,
+                                   donorHipsY?: number): THREE.AnimationClip[] {
   const boneByKey = new Map<string, THREE.Bone>();
   target.traverse((o) => {
     if ((o as THREE.Bone).isBone) boneByKey.set(normBoneName(o.name), o as THREE.Bone);
@@ -540,6 +580,7 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
   const out: THREE.AnimationClip[] = [];
   for (const clip of clips) {
     const tracks: THREE.KeyframeTrack[] = [];
+    let rootPath: RootPath | null = null;
     for (const track of clip.tracks) {
       const dot = track.name.lastIndexOf('.');
       const node = track.name.slice(0, dot);
@@ -585,11 +626,75 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
           v.toArray(vals, i);
         }
         tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, [...track.times], [...vals]));
+        // …and the HORIZONTAL travel is kept aside rather than thrown away —
+        // for a clip whose file says it carries one (the listing's
+        // `root_motion`, `setClipRootMotion`). It is built from the RAW
+        // track, frame 0 as the origin, through the bounce's own chain
+        // (`scaleFix`, then a hips-height ratio, then the instance scale in
+        // `Figure.update`) with ONE difference, measured at the consumer: the
+        // ratio's denominator is the reference RIG's rest hips height
+        // (`donorHipsY`), not the idle clip's hips median. The bounce needs
+        // the idle median — it is the height at which a standing clip must
+        // put the hips at THIS rig's rest — but a travel is a LENGTH of the
+        // rig the clip was authored on, and the idle stance stands 2.6 %
+        // lower than that rig's rest (110.18 vs 113.03 units). Scaled by the
+        // median, a figure on the reference rig itself overshot its planted
+        // foot by that 2.6 % (get-up-bed 2.15 cm instead of the importer's
+        // 1.31); scaled by the rig, it reproduces the importer's numbers
+        // (smoke_bridge_root.mjs). WITHOUT a served rig there is no length to
+        // measure the travel against, and the median is proven wrong for it —
+        // so no path at all: the clip plays in place, exactly as before root
+        // motion existed, and one warning says why (`warnNoTravelRig`).
+        // The result is in the target TEMPLATE's units, in the clip's frame
+        // (+Z forward, +X the figure's left) — the frame of the figure root.
+        const rigKnown = donorHipsY !== undefined && Number.isFinite(donorHipsY) && donorHipsY > 1e-6;
+        if (clipRootMotionFlags.get(clip) && !rigKnown) warnNoTravelRig(clip.name);
+        if (clipRootMotionFlags.get(clip) && rigKnown) {
+          const kTravel = hipsPosScale / donorHipsY!;
+          const n = track.times.length;
+          const xz = new Float32Array(n * 2);
+          const x0 = track.values[0] * scaleFix;
+          const z0 = track.values[2] * scaleFix;
+          for (let i = 0; i < n; i++) {
+            xz[i * 2] = (track.values[i * 3] * scaleFix - x0) * kTravel;
+            xz[i * 2 + 1] = (track.values[i * 3 + 2] * scaleFix - z0) * kTravel;
+          }
+          rootPath = { times: Float32Array.from(track.times), xz };
+        }
       }
     }
-    if (tracks.length >= MIN_CLIP_TRACKS) out.push(new THREE.AnimationClip(clip.name, clip.duration, tracks));
+    if (tracks.length >= MIN_CLIP_TRACKS) {
+      const adapted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+      if (rootPath) clipRootPaths.set(adapted, rootPath);
+      out.push(adapted);
+    }
   }
   return out;
+}
+
+/** Once per session: a clip carries root motion, but the reference rig it
+ *  was measured on is not served (`/assets/animation-rig`), so its travel is
+ *  dropped and it plays in place. One line, not one per clip and figure. */
+let warnedNoTravelRig = false;
+function warnNoTravelRig(clipName: string): void {
+  if (warnedNoTravelRig) return;
+  warnedNoTravelRig = true;
+  console.warn(`[figures] ${clipName} carries root motion, but no reference rig is`
+    + ' served (/assets/animation-rig) to scale its travel — root-motion clips play'
+    + ' in place');
+}
+
+/** World height of a rig's hips bone in its rest pose, in the rig's own
+ *  units — `undefined` when it has no hips. Exported for
+ *  `client3d/scripts/smoke_bridge_root.mjs`, which hands the reference rig's
+ *  number to `adaptExternalClips` exactly as `FigureLibrary.load` does. */
+export function rigHipsHeight(rig: THREE.Object3D): number | undefined {
+  rig.updateMatrixWorld(true);
+  let hips: THREE.Object3D | undefined;
+  rig.traverse((o) => {
+    if (!hips && (o as THREE.Bone).isBone && /hips$/.test(normBoneName(o.name))) hips = o;
+  });
+  return hips ? hips.getWorldPosition(new THREE.Vector3()).y : undefined;
 }
 
 /** `<kind>__a` / `<kind>__b` — the half of a pair clip (contract § A8a). */
@@ -597,14 +702,9 @@ export function isPairClipName(name: string): boolean {
   return /__[ab]$/.test(name);
 }
 
-/** The horizontal root path of a clip: hips XZ per keyframe in METRES of the
- *  clip's own frame (Mixamo clips are authored in centimetres). */
-export interface RootPath {
-  times: Float32Array;
-  /** x0, z0, x1, z1, … */
-  xz: Float32Array;
-}
-
+/** The horizontal root path of a PAIR clip half: hips XZ per keyframe in
+ *  METRES of the clip's own frame (Mixamo clips are authored in centimetres).
+ *  The type and its interpolation live in `bridgeTravel.ts`. */
 export function extractRootPath(clip: THREE.AnimationClip): RootPath {
   const track = clip.tracks.find((t) => t.name.endsWith('.position')
     && /hips\./i.test(t.name.replace(/^mixamorig:?/i, '')));
@@ -616,27 +716,6 @@ export function extractRootPath(clip: THREE.AnimationClip): RootPath {
     xz[i * 2 + 1] = track.values[i * 3 + 2] / 100;
   }
   return { times: Float32Array.from(track.times), xz };
-}
-
-/** Root XZ at clip time `t` (linear between keys, clamped at both ends). */
-export function rootPathAt(path: RootPath, t: number): { x: number; z: number } {
-  const { times, xz } = path;
-  const n = times.length;
-  if (n === 0) return { x: 0, z: 0 };
-  if (t <= times[0]) return { x: xz[0], z: xz[1] };
-  if (t >= times[n - 1]) return { x: xz[(n - 1) * 2], z: xz[(n - 1) * 2 + 1] };
-  let lo = 0;
-  let hi = n - 1;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (times[mid] <= t) lo = mid; else hi = mid;
-  }
-  const span = times[hi] - times[lo] || 1;
-  const f = (t - times[lo]) / span;
-  return {
-    x: xz[lo * 2] + (xz[hi * 2] - xz[lo * 2]) * f,
-    z: xz[lo * 2 + 1] + (xz[hi * 2 + 1] - xz[lo * 2 + 1]) * f,
-  };
 }
 
 type ClipKind = string;   // open vocabulary — the server decides the kinds
@@ -683,6 +762,11 @@ export class FigureLibrary {
     parent: new Map<string, THREE.Quaternion>(),
     parentBone: new Map<string, string | null>(),
   };
+  /** Rest hips height of that same rig, in its own units — the length a
+   *  clip's root TRAVEL is measured against (`adaptExternalClips`).
+   *  `undefined` while the rig is not served — root-motion clips then play
+   *  in place. */
+  private donorHipsY: number | undefined = undefined;
   /** Set-Fallback-Kette pro Charakter (aus der Worldmap) */
   private charSets = new Map<string, string[]>();
   /** Körpergröße pro Charakter in Metern (aus height_cm der Worldmap) */
@@ -789,10 +873,15 @@ export class FigureLibrary {
     // A PAIR clip's half is indexed under `<kind>__<role>` (§ A8a) — the name
     // an interaction asks for; a solo clip keeps its plain kind. The listing's
     // loop flag rides along PER FILE: it belongs to the kind in ITS set.
-    const sources: Array<{ kind: string; set: string; url: string; loop?: boolean }> =
+    // So does the ROOT-MOTION flag: a file imported with `keep`/`foot_lock`
+    // carries a travel in its hips track that the figure is to follow
+    // (`Figure.update`); `strip` or no block plays in place as before.
+    const sources: Array<{ kind: string; set: string; url: string; loop?: boolean;
+                           rootMotion?: boolean }> =
       serverClips.map((c) => ({
         kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '',
         url: c.url, loop: c.loop,
+        rootMotion: !!c.root_motion && c.root_motion.mode !== 'strip',
       }));
     if (!sources.length) {
       // Dev/offline fallback: the local manifest clips (no sets)
@@ -808,7 +897,7 @@ export class FigureLibrary {
       console.info(`[figures] one-shot clips (hold the last frame): `
         + `${oneShots.length ? oneShots.join(', ') : 'none'}`);
     }
-    for (const { kind, set, url, loop } of sources) {
+    for (const { kind, set, url, loop, rootMotion } of sources) {
       try {
         const { animations } = await loadFile(url);
         if (!animations[0]) continue;
@@ -817,6 +906,7 @@ export class FigureLibrary {
         // The flag of THIS file — kept on the clip object, because the same
         // kind in another set may have the opposite one (E5).
         setClipLoop(clip, loop);
+        setClipRootMotion(clip, rootMotion);
         // The half of a pair clip carries ROOT MOTION inside the anchor frame
         // (the handshake's approach, the dance's travel). `adaptExternalClips`
         // strips the horizontal hips motion like for every clip, so the root
@@ -841,6 +931,7 @@ export class FigureLibrary {
     try {
       const rig = await loadFile('/assets/animation-rig', true);
       this.donorRest = restPoseOf(THREE, rig.scene);
+      this.donorHipsY = rigHipsHeight(rig.scene);
     } catch {
       console.warn('[figures] no reference rig at /assets/animation-rig —'
         + ' library clips are copied 1:1 and overwrite each rig\'s own stance');
@@ -1132,7 +1223,7 @@ export class FigureLibrary {
         return { extra: [], fits: false };
       }
     }
-    const adapted = adaptExternalClips(candidates, template, corrections);
+    const adapted = adaptExternalClips(candidates, template, corrections, this.donorHipsY);
     carryClipLoops(candidates, adapted);
     const have = new Set(own.map((c) => c.name.toLowerCase()));
     const missing = missingClipKinds(
@@ -1176,6 +1267,7 @@ export class FigureLibrary {
           // The set chain has just decided WHICH file this character plays
           // for this kind — its flag is the one that counts from here on.
           setClipLoop(c, clipLoopFlags.get(clip));
+          setClipRootMotion(c, clipRootMotionFlags.get(clip));
           out.push(c);
           break;
         }
@@ -1437,6 +1529,45 @@ export class Figure {
    *  and would hold whoever asked. */
   private bridgeUntil = 0;
   private targetYaw = Math.PI; // Default: Richtung Süden (Kamera-Grundstellung)
+  /**
+   * ROOT MOTION OF A BRIDGE (plan-bruecken-root-motion, task 6). A bridge clip
+   * whose file was imported with a travel (`get-up-chair`: the figure rises
+   * and steps ~0.4 m forward) carries the INSTANCE along that travel while it
+   * plays, so the planted feet stay where they are instead of sliding. The
+   * rules:
+   *
+   *  1. Only a bridge with `accel <= 0` (one that HOLDS the figure) and a clip
+   *     whose listing reports `root_motion.mode` `keep`/`foot_lock` travels.
+   *     A ramping bridge walks off by itself; its steps are the walk's.
+   *  2. While it plays, `inst.position.x/z = base + travelAt(path, t) · scale`
+   *     in the frame of the figure root (already turned by the yaw). The path
+   *     comes out of `adaptExternalClips` in template units (`k · scaleFix`,
+   *     the bounce's own factors) and `baseScale` makes it world metres — the
+   *     same chain the vertical hips motion goes through.
+   *  3. When the clip has ended the offset STAYS (`clampWhenFinished` holds the
+   *     pose): the figure does not snap back to the seat. It stays until the
+   *     figure's owner calls `takeTravel()` and moves its own root by it.
+   *  4. The owners: an NPC without a route takes it in the first frame with
+   *     `!bridging && holdsTravel` (root and goal); an NPC on a journey takes
+   *     it when the journey starts and ADDS it to its root (see the comment
+   *     there); the avatar like an NPC without a route, then reports its
+   *     position (`npcs.ts`, `main.ts`).
+   *  5. A new bridge that starts while a travel is still held is a caller bug
+   *     (the owner has to take it first). The figure throws nothing away: it
+   *     warns and folds the held offset into the new bridge's origin, so the
+   *     next `takeTravel()` hands over both.
+   *
+   * `travelBase` is where the constructor put the instance in XZ (centred on
+   * the bind box), `travelOrigin` the offset a folded bridge started from
+   * (rule 5, otherwise 0), `heldTravel` the offset in force, in world metres
+   * of the root frame.
+   */
+  private travelBase = { x: 0, z: 0 };
+  private travelPath: RootPath | null = null;
+  private travelAction: THREE.AnimationAction | null = null;
+  private travelOrigin = { x: 0, z: 0 };
+  private heldTravel = { x: 0, z: 0 };
+  private holding = false;
 
   private baseScale = 1;
   /** Y-Offset, der die Füße auf y=0 bringt (Mesh-Origin liegt nicht immer dort) */
@@ -1484,6 +1615,7 @@ export class Figure {
       inst.position.y -= box.min.y;
     }
     this.groundY = inst.position.y;
+    this.travelBase = { x: inst.position.x, z: inst.position.z };
     this.root.add(inst);
 
     this.mixer = new THREE.AnimationMixer(inst);
@@ -1596,6 +1728,18 @@ export class Figure {
       // rotated towards the key for the whole seven seconds of getting up.
       // A ramping bridge keeps its turn: it is about to walk off.
       if (rule.accel <= 0) this.targetYaw = this.root.rotation.y;
+      // Rule 5 of the root motion (see `travelBase`): a travel still held here
+      // means its owner never took it. Folded in, never dropped — dropping it
+      // would snap the figure back to the seat it left.
+      if (this.holding) {
+        console.warn(`[figures] bridge ${this.currentKind} -> ${kind} starts while`
+          + ` a bridge travel is still held — the owner did not take it; folding it in`);
+        this.travelOrigin = { ...this.heldTravel };
+      }
+      // Rule 1: only a HOLDING bridge carries the figure, and only along a
+      // clip that brought a travel path.
+      this.travelPath = rule.accel <= 0 ? clipRootPaths.get(bridge.getClip()) ?? null : null;
+      this.travelAction = this.travelPath ? bridge : null;
       // Loud on purpose: a bridge is rare (a state change), and when one fires
       // in a loop — the figure keeps starting over — this line is what says
       // WHICH origin keeps coming back. Without it the loop is only visible as
@@ -1732,6 +1876,38 @@ export class Figure {
     const via = rule?.kind ?? '';
     if (!rule || !via || via === kind || !this.actions.has(via)) return 1;
     return bridgePace(rule.accel, 0);
+  }
+
+  /** Does the figure hold a bridge's travel its owner has not taken yet —
+   *  during the bridge and after it, until `takeTravel()`? */
+  get holdsTravel(): boolean {
+    return this.holding;
+  }
+
+  /** Hand the travel of the last root-motion bridge over to the figure's
+   *  owner: the offset in WORLD metres (turned by the figure's yaw), and the
+   *  instance back on its base. The owner moves its root by exactly this, so
+   *  the body stays where it is on screen. `null` when nothing is held.
+   *
+   *  Called while the bridge still runs (a journey that started early), the
+   *  rest of the clip plays in place: the travel so far is handed over, the
+   *  remainder is the route's. */
+  takeTravel(): { x: number; z: number } | null {
+    if (!this.holding) return null;
+    // yaw only: a lean (`setLean`) tilts the root by a few degrees at most,
+    // and a figure getting up is not leaning.
+    const out = toWorld(this.heldTravel, this.root.rotation.y);
+    this.holding = false;
+    this.heldTravel = { x: 0, z: 0 };
+    this.travelOrigin = { x: 0, z: 0 };
+    this.travelPath = null;
+    this.travelAction = null;
+    const inst = this.root.children[0];
+    if (inst) {
+      inst.position.x = this.travelBase.x;
+      inst.position.z = this.travelBase.z;
+    }
+    return out;
   }
 
   /** Put the instance at `groundY − drop`. The anchor itself stays what the
@@ -1901,5 +2077,27 @@ export class Figure {
     while (d < -Math.PI) d += Math.PI * 2;
     this.root.rotation.y += d * Math.min(1, dt * 10);
     this.mixer.update(dt);
+    // Rules 2 and 3 of the root motion (see `travelBase`): the instance
+    // follows the running bridge's travel, read at the action's OWN time — on
+    // the frame the clip ends the mixer has already clamped it to the last
+    // frame and fired "finished", so the final offset is still taken here
+    // before the path is let go. After that the offset simply stays.
+    if (this.travelPath && this.travelAction) {
+      const t = travelAt(this.travelPath, this.travelAction.time);
+      this.heldTravel = {
+        x: this.travelOrigin.x + t.x * this.baseScale,
+        z: this.travelOrigin.z + t.z * this.baseScale,
+      };
+      this.holding = true;
+      const inst = this.root.children[0];
+      if (inst) {
+        inst.position.x = this.travelBase.x + this.heldTravel.x;
+        inst.position.z = this.travelBase.z + this.heldTravel.z;
+      }
+      if (this.transition !== this.travelAction) {
+        this.travelPath = null;
+        this.travelAction = null;
+      }
+    }
   }
 }

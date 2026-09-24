@@ -549,6 +549,11 @@ export interface ApiClip {
   /** repeat the clip, or hold its last frame? The admin's flag per kind and
    *  set (§ A8); missing = the listing predates it, which counts as a loop. */
   loop?: boolean;
+  /** How the import treated the root's travel (the sidecar's
+   *  `geometry.root_motion`): `strip` plays in place, `keep`/`foot_lock`
+   *  carry the figure along `travel_m` (clip frame: +Z forward, +X the
+   *  figure's left, metres of the reference rig). `null`/missing = in place. */
+  root_motion?: { mode: string; travel_m?: number[] | null } | null;
 }
 
 /** The server's global clip library plus the two mappings that say WHICH clip

@@ -3829,6 +3829,22 @@ async function startApp(username: string, role: string) {
       correction = null;     // …and for a correction of a figure nobody steers
       return;
     }
+    // THE STAND-UP'S TRAVEL (rule 4 of `Figure.travelBase`): a bridge clip
+    // with root motion carried the body out of the seat along its own travel
+    // while the root stayed put. Once it has ended, the root takes that
+    // travel over — the body does not move on screen — and the new point is
+    // REPORTED: the server's word about the avatar has to be where it now
+    // stands, not the seat. Through the ordinary report tick, so an answer in
+    // flight and the throttle are respected, and the dirty flag keeps the
+    // point until it went out. Taken BEFORE anything below may return: a held
+    // travel nobody takes would leave the body beside its root for good. Not
+    // reported for a party follower (the server refuses its reports) or
+    // inside a pair interaction (a position write would end it).
+    const handedOver = npcs.takePlayerTravel(avatarName);
+    if (handedOver && !state.movementLocked && !npcs.inInteraction(avatarName)) {
+      markMoved(handedOver);
+      tickPosReport(handedOver);
+    }
     // Party follower: the leader carries the avatar along; the server refuses
     // every report anyway (403 `party_follower`), so the keys stay dead
     // instead of collecting toasts.
