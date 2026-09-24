@@ -2240,6 +2240,40 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   dort gesetztes `loop` schlägt die `geometry.loop`-Messung des Imports. Es
   gilt für Solo- UND Paar-Clips. Ein Kind OHNE Eintrag in der Auflistung gilt
   im Client als Loop — Locomotion darf nie stehen bleiben.
+- **Übergangsclips mit Weg** (2026-09-25, plan-bruecken-root-motion): Der
+  Import legt je Solo-Clip fest, was mit dem waagerechten Weg der Wurzel
+  geschieht — `root_motion` = `strip` (Default, Hüfte bleibt am Ursprung),
+  `keep` (der Weg der Quelle bleibt) oder `foot_lock` (der Weg wird aus den
+  aufgesetzten Füßen neu aufgebaut; der Import verweigert Ergebnisse über
+  1,5 cm Fußdrift auf dem Referenz-Rig). Paar-Clips ignorieren den Parameter;
+  ein Loop-Schnitt zusammen mit `keep`/`foot_lock` wird abgelehnt — **ein Loop
+  trägt nie einen Weg**. Die Auflistung liefert pro Clip
+  `root_motion: {mode, travel_m} | null` (`travel_m` = `[x, z]` am Clip-Ende im
+  Clip-Rahmen, +Z vorwärts, +X links der Figur, Meter des Referenz-Rigs; das
+  Ausrichten per `…/orient` dreht ihn mit).
+  - **Nur haltende Brücken bewegen die Figur**: ein Übergang mit `accel` ≤ 0
+    und einem Clip mit `mode` `keep`/`foot_lock`. Eine anlaufende Brücke
+    (`accel` > 0) läuft selbst los, ihre Schritte sind die des Gehens.
+  - Der Weg steht in der **Hüftspur der FBX (XZ), Frame 0 ist der Ursprung**.
+    Der Client skaliert ihn wie die senkrechte Hüftbewegung (Ruhe-Hüfthöhe
+    der Figur ÷ Ruhe-Hüfthöhe des Referenz-Rigs aus `/assets/animation-rig`;
+    ohne Rig spielt der Clip am Platz, eine Warnung) und dreht ihn mit der
+    Gierung der Figur.
+  - **Nach Clip-Ende bleibt der Versatz stehen** (die Figur springt nicht
+    auf den Sitz zurück), bis der Besitzer der Position ihn übernimmt: ein
+    NPC ohne Route in Wurzel + Ziel, ein NPC auf Reise beim Losgehen, der
+    Avatar wie ein NPC ohne Route und meldet danach seine Position.
+  - **Der Server rechnet denselben Weg in den Aufstehpunkt um**
+    (`room_stand.bridge_stand_point`): Sitz-XZ + `travel_m`, gedreht mit der
+    Kompass-Blickrichtung `f` des Sitzes (`x' = x·cos f + z·sin f`,
+    `z' = −x·sin f + z·cos f`) und skaliert mit
+    `height_cm / 100 / ref_height_m`. Das gilt nur, solange der Charakter noch
+    auf dem aufgelösten Sitz steht (`SEAT_MATCH_M` = 0,05 m), und mit dem
+    EFFEKTIVEN Pose-Key; `stand_up` sucht den freien Punkt von dort aus.
+    Server und Client weichen um das Proportionsverhältnis der Figur ab
+    (Körpergröße gegen Hüfthöhe) — bei 0,4 m Weg etwa 1–2 cm.
+  - Gemessen: `get-up-chair` `travel_m` [0,052, 0,487], Drift 0,42 cm;
+    `get-up-bed` [−0,574, −0,086], 1,44 cm (Referenz-Rig).
 
 ## A8a. Paar-Interaktionen — zwei Figuren, ein Clip-Paar, ein Anker
 
@@ -2944,7 +2978,7 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 | `eta_game` | Kalenderzeit `\| null` | nominelle Ankunft auf der **Spieluhr**, als **kanonischer Weltkalender-Stempel** `"Y0002-D109T14:00:00"` (Jahr 4-stellig, Tag im Jahr 3-stellig). Kein ISO-Datum, **keine Weltzeitzone** — die gibt es nicht mehr. Der Client PARST das Feld nicht: es ist der Vergleichs-/Sortierwert, die Anzeige kommt aus den beiden Feldern darunter. **Gefoggt `null`** wie `progress_m` |
 | `eta_hhmm` | `str \| null` | Ankunftszeit als fertiges `"HH:MM"` — vom Server gerendert. **Gefoggt `null`** wie `progress_m` |
 | `eta_label` | `str \| null` | Ankunft als vollständiges, lokalisiertes Kalender-Label (z. B. `"Summer, day 17 · 14:23 · Year 3"`; Sprache = die des Avatars). Für Reisen, die über Mitternacht laufen, ist das die einzige vollständige Angabe. **Gefoggt `null`** wie `progress_m` |
-| `starts_in_s` | `float \| null` | **ECHTE** Sekunden, bis die Figur losläuft — `null`, sobald sie läuft. Eine Reise kann mit einem verzögerten `started_at_game` beginnen, weil die Figur erst aus ihrer Pose aufsteht (`travel_engine.departure_bridge`): solange spielt der Client den Übergangsclip aus `activity_animation` und bewegt **nichts** — `journey_state` klemmt die Position ohnehin auf den ersten Punkt. Dauer durch Zeitfaktor geteilt (es ist eine DAUER, kein Tempo). **Wird NICHT ausgedünnt**: ein Abfahrts-Countdown verrät keine Route, und eine gefoggte Figur, die noch steht, darf nicht extrapoliert werden |
+| `starts_in_s` | `float \| null` | **ECHTE** Sekunden, bis die Figur losläuft — `null`, sobald sie läuft. Eine Reise kann mit einem verzögerten `started_at_game` beginnen, weil die Figur erst aus ihrer Pose aufsteht (`travel_engine.departure_bridge`): solange spielt der Client den Übergangsclip aus `activity_animation` und bewegt **nichts** — `journey_state` klemmt die Position ohnehin auf den ersten Punkt. **Trägt der Ausstiegsclip einen Weg** (§ A8, Übergangsclips mit Weg), beginnt `waypoints` mit einem **zeitlosen Abschnitt Sitz → Aufstehpunkt**: Während `starts_in_s` steht die Figur am Sitz (erster Punkt), beim Start schon am Aufstehpunkt; den Weg dazwischen zeigt der Client mit dem Clip, nicht per Interpolation. Dauer durch Zeitfaktor geteilt (es ist eine DAUER, kein Tempo). **Wird NICHT ausgedünnt**: ein Abfahrts-Countdown verrät keine Route, und eine gefoggte Figur, die noch steht, darf nicht extrapoliert werden |
 | `speed_m_s_real` | `float \| null` | **Nominal**-Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null`, wenn nicht extrapoliert werden darf: eingefrorene Welt bzw. Zeitfaktor 0 — und ebenso, wenn die Reise kein brauchbares `speed_m_s` trägt (fehlend, 0 oder negativ). **Gefoggt `null`** wie `progress_m` |
 | `pace_m_s_real` | `float \| null` | **Echtes** Tempo des Segments, das die Figur GERADE läuft, in Metern pro ECHTER Sekunde: `\|w[seg+1] − w[seg]\| / (t[seg+1] − t[seg]) × Zeitfaktor` aus denselben gebackenen Zeitmarken (seit **E4**, 2026-08-09). Damit steckt der Gelände-`speed_factor` drin, den `speed_m_s_real` nicht kennt. `null`, wenn es kein aktuelles Segment gibt oder nichts extrapoliert werden darf: eingefrorene Welt / Zeitfaktor 0, angekommen (Zeit über dem Ende), entartetes Segment (Länge 0 oder Zeitspanne 0). **Gefoggt `null`** wie `progress_m` |
 

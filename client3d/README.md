@@ -105,7 +105,7 @@ gediffrt (ε = 0,01 m). Ergebnis je Location in der Konsole und in
 `window.__sceneVerify`. **0 Abweichungen ist die Aussage**; die absolute Zahl
 geprüfter Werte hängt an der Welt und sagt für sich nichts.
 
-Dazu kommen die **47 Smoke-Skripte** unter `scripts/`. Sie laufen ohne Browser
+Dazu kommen die **48 Smoke-Skripte** unter `scripts/`. Sie laufen ohne Browser
 und ohne Server auf reinem Node, weil sie die Module mit esbuild übersetzen und
 pure Rechnungen prüfen:
 

@@ -49,7 +49,7 @@ Written by the importer, edited by the Poses tab. What a renderer reads:
 | `kind`, `pair`, `roles` | the kind, whether it is a pair and which role letters exist |
 | `fps`, `source_fps`, `frames`, `duration_s` | timing; `speed` is `1.0` for everything converted since the capture rate reached Blender |
 | `loop` | `true` = repeat, `false` = hold the last frame (Three.js `LoopOnce` + `clampWhenFinished`). Measured on import, overridden by the admin's switch in the Poses tab; it holds for both halves of a pair and for every numbered take of that kind in that set. A kind with NO listing entry counts as looping — locomotion must never stand still |
-| `geometry` | what the conversion measured: `floor_shift_cm`, `in_place`, the pair anchor (`anchor_frame`, `anchor_s`, `root_distance_m`, per-role `start_xz_m`/`anchor_xz_m`), the hip scale and, after a `…/orient` run, the accumulated angles |
+| `geometry` | what the conversion measured: `floor_shift_cm`, the `root_motion` block of a solo clip (`mode` strip/keep/foot_lock, `travel_m` = `[x, z]` where the clip ends up in the clip frame — +Z forward, +X the figure's left, metres of the reference rig —, `ref_height_m` = the reference rig's standing height, `contact_s` = the full-contact spans `[[start, end], …]` in seconds, `max_drift_cm` = the worst planted-foot slide foot_lock left), the pair anchor (`anchor_frame`, `anchor_s`, `root_distance_m`, per-role `start_xz_m`/`anchor_xz_m`), the hip scale and, after a `…/orient` run, the accumulated angles |
 | `source` | where it came from: the CMU take plus its credit, or the file, take and `bone_map` of an inbox import |
 
 The sidecar of `<stem>.fbx` is `<stem>.json` when that file exists (so
@@ -120,7 +120,7 @@ from the CMU Graphics Lab mocap database — whose data, unlike a licensed pack'
 may be redistributed with the repository:
 
     ./.venv/bin/python scripts/clip_import_cmu.py handshake 18_01 19_01
-    ./.venv/bin/python scripts/clip_import_cmu.py dance 55_02 --in-place
+    ./.venv/bin/python scripts/clip_import_cmu.py dance 55_02 --root-motion strip
 
 It retargets onto the reference skeleton `../rig/reference.fbx`, so the result
 keeps the same skeleton — and the same standing hip height — as every other
@@ -141,7 +141,12 @@ characters that walk on their belly:
 3. **Movement clips must be IN PLACE.** The client moves the figure itself (the
    walk, the journey, the click route); a clip that also carries root motion
    drives the body away from the position the game holds it at.
-   `clip_import_cmu.py --in-place` strips it.
+   `clip_import_cmu.py --root-motion strip` (the default) strips it. The
+   exception are bridge clips imported with `foot_lock`/`keep` (standing up
+   out of a chair or a bed), which carry their travel on purpose: the client
+   moves the figure along it and the server puts the stand point where the
+   clip ends (`docs/schnittstellen-3d.md` § A8). A loop never does — the
+   import refuses a loop cut together with `keep`/`foot_lock`.
 4. **Author them on the FLOOR.** A movement clip is played against a figure
    whose soles stand on the ground, so a clip animated on a line of its own —
    a swimmer on a water line — holds the body over that ground. The client
