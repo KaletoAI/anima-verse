@@ -1,0 +1,45 @@
+{
+ "kind": "get-up-chair",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 120.0,
+ "frames": 143,
+ "duration_s": 4.767,
+ "loop": false,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": -0.07,
+  "hips_scale": [
+   1.1914
+  ],
+  "rig_floor_shift_cm": 4.21,
+  "rig_floor_min_cm": -1.09,
+  "root_motion": {
+   "mode": "foot_lock",
+   "travel_m": [
+    0.052,
+    0.487
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     0.933
+    ],
+    [
+     2.533,
+     4.733
+    ]
+   ],
+   "max_drift_cm": 0.42
+  }
+ },
+ "source": {
+  "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
+  "takes": [
+   "111_11"
+  ],
+  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+ }
+}

@@ -1,0 +1,56 @@
+{
+  "kind": "get-up-bed",
+  "pair": false,
+  "roles": [],
+  "fps": 30,
+  "source_fps": 30.0,
+  "frames": 122,
+  "duration_s": 4.067,
+  "loop": false,
+  "speed": 1.0,
+  "geometry": {
+    "floor_shift_cm": -46.38,
+    "yaw_deg": 180.0,
+    "head_pitch_deg": [
+      -108.71
+    ],
+    "hips_scale": [
+      1.316
+    ],
+    "rig_floor_shift_cm": -7.63,
+    "rig_floor_min_cm": -3.99,
+    "root_motion": {
+      "mode": "foot_lock",
+      "travel_m": [
+        -0.574,
+        -0.086
+      ],
+      "ref_height_m": 2.011,
+      "contact_s": [
+        [
+          2.1,
+          4.033
+        ]
+      ],
+      "max_drift_cm": 1.44
+    }
+  },
+  "source": {
+    "format": "fbx",
+    "bone_map": "meshy-biped",
+    "files": [
+      "Meshy_AI_default_biped/Meshy_AI_Animation_01a08d2e-b5d6-7307-8fb8-cf575d7b7b5d_without_skin.fbx"
+    ],
+    "takes": [
+      null
+    ],
+    "fingers": false,
+    "rotation_mode": "positional",
+    "offset_b_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rest_file": ""
+  }
+}
