@@ -76,7 +76,7 @@
  * [C7] NEVER WORSE THAN THE IMPORT (fix round 1): the preset path is already
  *      right, z = 2f. The rebuilt path is z = 2f too, so both drifts are 0
  *      (the imported one up to the Float32 rounding of its keys, ~6e-7) —
- *      the rebuild is not lower by more than RELOCK_MIN_GAIN_CM (0.01 cm),
+ *      the rebuild is not lower by more than RELOCK_MIN_GAIN_CM (0.1 cm),
  *      so the imported path is kept: used 'imported',
  *      reason 'imported holds better', the stored path is still the preset
  *      object, and the log line reads

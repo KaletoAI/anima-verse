@@ -66,79 +66,100 @@
  * [B] the whole chain on REAL rigs, measured at the CONSUMER
  * ---------------------------------------------------------------------------
  * `Test3_mia.glb` (server mesh pipeline), `Soldier.glb` (Mixamo fallback
- * rig) and the reference rig itself (see THE SCALE), the real neutral clips (`idle` gives the standing reference, the
- * seat/bed clip is the state the bridge leaves), the reference rig's rest pose
- * for the bind-relative transplant (`restCorrections`, exactly what
- * `FigureLibrary` does when `/assets/animation-rig` is served), the real
- * `adaptExternalClips` and a real `Figure` inside an owner group that plays
- * the NPC root. What is measured is the WORLD XZ of the bones
+ * rig) and the reference rig itself (life-size, its centimetres × 0.01), the
+ * real neutral clips (`idle` gives the standing reference, the seat/bed clip
+ * is the state the bridge leaves), the reference rig's rest pose for the
+ * bind-relative transplant (`restCorrections`, exactly what `FigureLibrary`
+ * does when `/assets/animation-rig` is served), the real
+ * `adaptExternalClips`, and then — as `FigureLibrary.fitLibrary` does right
+ * after it — `relockRootPaths(clips, template, 1 / (100 · scale))`, ONE call
+ * per model over its library at the model's nominal scale (1.70 m ÷ mesh
+ * height; 0.01 for the reference rig). A real `Figure` inside an owner group
+ * plays the NPC root. What is measured is the WORLD position of the bones
  * `LeftFoot`/`LeftToeBase`/`RightFoot`/`RightToeBase` of the rendered
- * instance, frame by frame at 30 fps (the clips' own rate).
+ * instance, frame by frame at 30 fps (the clips' own rate); figure frame i is
+ * clip time (i+1)/30. The first 0.30 s are left out everywhere: the bridge
+ * fades in over 0.25 s from the seat clip, those frames are a blend.
  *
- * WHICH POINT IS PLANTED, WHEN: the importer's OWN classification, not a
- * second opinion. `_root_motion.contact_weights` is re-run on the REFERENCE
- * rig with the RAW clip (travel included): height over the point's own
- * 5th-percentile ground (clamped to its rest height) within 2 cm and vertical
- * speed under 15 cm/s give full weight. Cross-check: the drift of those runs
- * on the reference rig must stay within the sidecar's `max_drift_cm`
- * (+0.05 cm) — measured 0.42 for the chair (sidecar 0.42) and 1.31 for the bed
- * (sidecar 1.44). A point the importer never verified (the chair's right foot
- * hovers 2–4.7 cm in every standing frame on the reference rig and slides
- * ~2.3 cm there) is therefore never counted; its wander over the window is
- * printed as info.
+ * WHICH POINT IS PLANTED, WHEN — the smoke's OWN contact detection on the
+ * RENDERED rig (its own code here, not `footLock.ts`): "planted" is a
+ * property of the rig the feet belong to. The importer's constants: a
+ * point's ground is the 5th percentile of its heights (over the frames
+ * after the fade), capped at its bind-pose rest height + 3 cm (the client's
+ * lift tolerance, `GROUND_LIFT_TOL_CM`, checked equal); rest heights come
+ * from THAT rig's bind pose, each point over the lowest of the four points
+ * and the toe ends. Weight = ramp(height − ground, 2, 5 cm) ×
+ * ramp(|vertical speed|, 15, 30 cm/s) (central difference); a frame at
+ * ≥ 0.999 is FULL. Drift = the largest horizontal distance a point moves
+ * from where its run of FULL frames began. The heights do not depend on the
+ * travel (XZ only), so the weights of the re-locked run serve every run of
+ * that rig — every path is judged on the same contacts.
  *
- * Contact windows: the sidecar's `root_motion.contact_s`; figure frame i was
- * sampled at clip time (i+1)/30 = reference frame i+1. The first 0.30 s of
- * the bridge are left out: the bridge fades in over 0.25 s from the seat clip,
- * and those frames show the blend of two poses, not the clip. Drift = the
- * largest horizontal distance a verified point moves from where its run of
- * full-contact frame pairs began.
+ * INFO only, the measurement [6] bounded before this plan: the importer's
+ * classification (`_root_motion.contact_weights` re-run on the REFERENCE rig
+ * with the RAW clip) inside the sidecar's `contact_s` windows. Cross-check:
+ * on the reference rig that classification gives the sidecar's
+ * `max_drift_cm` back (+0.05 cm). On another rig it transplants the
+ * reference rig's contacts onto feet that are not planted there (Test3_mia
+ * bed: 3.67 cm re-locked, although its own feet hold 2.27 cm).
  *
- * THE SCALE, proven on the reference rig itself as a third figure (life-size,
- * its centimetres × 0.01, no proportions to adapt): whatever the client chain
- * adds to the importer's drift there is the chain's own error. The travel is
- * scaled by target rest hips / REFERENCE-RIG rest hips (113.03 units). The
- * bounce's own denominator, the idle clip's hips median (110.18), is 2.6 %
- * short of the rig and makes every travel 2.6 % too long.
- *
- * [6] foot_lock clips: planted-foot drift per contact run, bound PER CLIP
- *       (ruling 2026-09-25):
- *         get-up-chair, real rigs   <= 2.5 cm (1.5 cm importer limit + the
- *                                   rig's own proportions)
- *         get-up-bed, real rigs     <= 5.0 cm — the bed turns ~90° while it
- *                                   rises, and what is left on a real rig is
- *                                   that rig's proportions: the chain is exact
- *                                   on the reference rig (below), and a sweep
- *                                   of one global travel factor finds none
- *                                   that brings the bed under 2.5 cm on both
- *                                   rigs (best ~2.6 / ~3.2 cm, each at another
- *                                   factor, the chair worse there). Option B,
- *                                   a per-rig foot lock in the client, is the
- *                                   follow-up that would take it out.
- *         reference rig, both       <= 1.5 cm — the importer's own guarantee
- *       Measured 2026-09-25 (verified contacts, cm): chair Test3_mia 2.20,
- *       Soldier 1.09, reference 0.30; bed Test3_mia 4.76, Soldier 2.95,
- *       reference 1.31.
- *       RED COUNTER-PROBE: the same measurement with the offset switched off
- *       (the library adapted WITHOUT the root-motion flag — the pre-plan
- *       behaviour): get-up-chair >= 15 cm (its travel is 0.49 m on the
- *       reference rig, ~0.4 m on a 1.70 m figure, and the standing phase
- *       alone walks ~0.2 m of it; measured 20.3 / 23.8 cm); get-up-bed
- *       >= 25 cm (measured 37.2 / 44.7 cm on Test3_mia / Soldier).
- *       Reference rig only: the chain adds nothing on its own rig — drift
- *       <= the importer's own number there + 0.10 cm. RED COUNTER-PROBE: the
- *       idle-median scale overshoots that (chair 0.73 vs 0.42, bed 2.15 vs
- *       1.31 when this was written).
- * [7] End of bridge + takeTravel + owner root moved by it: the rendered foot
- *       positions of the last bridge frame and of the frame after the
- *       hand-over (no time advanced, so the only change is the hand-over)
- *       differ by <= 1 cm. RED COUNTER-PROBE: takeTravel WITHOUT moving the
- *       owner jumps the feet by the whole travel (>= 30 cm for the chair).
- *       The next real frame (next clip asked for, dt = 1/30) is printed.
- *   info  The largest horizontal travel of the LOWEST foot point over the
- *       WHOLE bridge (runs of frames in which the same point is the lowest),
- *       offset on and off — the partially planted phase the converter does
- *       not verify.
+ * [6] foot_lock clips: planted-foot drift, own contacts, per clip, on ALL
+ *       THREE rigs:
+ *         get-up-chair   <= 1.5 cm — the importer's guarantee, now per rig
+ *         get-up-bed     <= 2.5 cm — the bed turns ~90° while both feet are
+ *                        planted; a translation-only path cannot hold two
+ *                        feet through a turn. The residual of the rule
+ *                        itself on Test3_mia is 2.27 cm (RightFoot 3.17–
+ *                        4.07 s, Task 2), and 2.5 leaves ~0.2 cm for the
+ *                        smoke's own classification.
+ *       BEFORE (imported path only, sidecar spans, 2026-09-25): chair
+ *       Test3_mia 2.20, Soldier 1.09, reference 0.30; bed 4.76, 2.95, 1.31 —
+ *       bounded then by 2.5 / 5.0 cm (the 5 cm bed bound is gone).
+ *       Measured now (own contacts, re-locked / imported, cm):
+ *         chair  Test3_mia 1.41 / 2.55   Soldier 1.00 / 2.71   reference 0.42 / 0.42
+ *         bed    Test3_mia 2.27 / 2.90   Soldier 2.09 / 3.45   reference 1.43 / 1.43
+ *       (the reference rig keeps its imported path: the re-lock gains less
+ *       than `RELOCK_MIN_GAIN_CM` = 0.1 cm there, 0.26 vs 0.29 and 1.39 vs
+ *       1.43 by its own measure). This is the old "the chain adds nothing on
+ *       its own rig" check, reframed: the reference rig, own contacts,
+ *       <= 1.5 cm for BOTH clips.
+ *       COUNTER-PROBE in the same run, the IMPORTED path (no re-lock)
+ *       measured the same way: never lower than the re-locked one (clip ×
+ *       rig), and on Test3_mia / get-up-chair the re-lock gains >= 0.5 cm —
+ *       Task 2 measured 2.20 → 1.23 cm (sidecar spans), a gain of 0.97; half
+ *       of it is the floor (own contacts now: 2.55 → 1.41, gain 1.14).
+ *       RED COUNTER-PROBE: offset switched off (the library adapted WITHOUT
+ *       the root-motion flag): chair >= 15 cm, bed >= 25 cm (measured 24.0 /
+ *       49.6 / 28.3 and 33.2 / 47.4 / 53.2 cm).
+ *       RED COUNTER-PROBE of the scale (reference rig, sidecar spans): the
+ *       idle-median scale overshoots the importer's own number by > 0.10 cm.
+ * [7] End of bridge + takeTravel + owner root moved by it (re-locked
+ *       library): the rendered foot positions of the last bridge frame and of
+ *       the frame after the hand-over (no time advanced) differ by <= 1 cm.
+ *       RED COUNTER-PROBE: takeTravel WITHOUT moving the owner jumps the feet
+ *       by the whole travel (>= 30 cm for the chair).
+ * [B9] LINEARITY PROOF, per clip × rig: the same figure drawn with
+ *       baseScale × 1.15 (a 1.955 m body) on the path re-locked at the
+ *       nominal scale; contacts judged at the nominal scale (heights ÷ 1.15 —
+ *       the thresholds are written for it), drift in WORLD cm. Expected:
+ *       drift(×1.15) = 1.15 × drift(×1) within 1 %. In the client the re-lock
+ *       scale IS the figure's baseScale (`fitLibrary(…, model.scale)` and
+ *       `Figure.baseScale = model.scale`), so no figure is ever drawn at
+ *       another scale than its path was built for — what this check proves
+ *       is that the path scales with the body (instance and travel both ×
+ *       baseScale), not an extra tolerance on the [6] bounds. Measured:
+ *       Test3_mia 1.62 / 2.61 cm (= 1.15 × 1.41 / 2.27), Soldier 1.15 /
+ *       2.41, reference 0.48 / 1.65.
+ * [B10] INFO: distance of the handed-over end point from the server's stand
+ *       point (`travel_m × height / ref_height_m`, turned by the same yaw;
+ *       height 1.70 m, the reference rig = ratio 1), per rig, cm. Measured
+ *       re-locked / imported: Test3_mia chair 7.7 / 4.6, bed 14.6 / 5.4;
+ *       Soldier 6.7 / 1.2, 3.7 / 1.5; reference 0.0 / 0.0.
+ * [B11] relockRootPaths per model (one call, both bridges) <= 100 ms,
+ *       printed (measured 4–5 ms).
+ *   info  The re-lock's own report per clip, the per-point numbers (FULL
+ *       frames, runs, worst run and its span, drift re-locked / imported /
+ *       off / × 1.15) and the final drift table.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -151,34 +172,40 @@ const RIG_FILE = join(ROOT, 'shared/models/rig/reference.fbx');
 const MODELS = join(ROOT, 'client3d/public/models');
 const RIGS = [join(MODELS, 'Test3_mia.glb'), join(MODELS, 'Soldier.glb')];
 const FPS = 30;
-/** The bridges part [B] walks: the clip, the state it leaves, the hard
- *  counter-probe floor (null = printed only). */
-/** Planted-foot drift bounds (see [6] in the docstring for the numbers).
- *  The chair: importer limit + rig proportions. The bed turns ~90° while it
- *  rises, and what it leaves on a real rig is that rig's proportions — a
- *  single travel scale cannot take it out (option B, a per-rig foot lock in
- *  the client, is the follow-up). The REFERENCE rig has no proportions to
- *  adapt: there the importer's own guarantee (1.5 cm) holds for both. */
-const CHAIR_DRIFT_MAX_M = 0.025;
-const BED_DRIFT_MAX_M = 0.05;
-const REF_DRIFT_MAX_M = 0.015;
+/** Planted-foot drift bounds, own contacts on every rig ([6], docstring):
+ *  the chair = the importer's 1.5 cm guarantee; the bed turns ~90° with both
+ *  feet planted, which a translation-only path cannot hold (2.27 cm residual
+ *  on Test3_mia). */
+const CHAIR_DRIFT_MAX_M = 0.015;
+const BED_DRIFT_MAX_M = 0.025;
+/** [6] counter-probe: the re-lock's least gain on Test3_mia / get-up-chair. */
+const RELOCK_GAIN_MIN_M = 0.005;
 /** RED counter-probes, offset off: chair from the brief; bed derived from the
  *  measured 37.2 (Test3_mia) / 44.7 (Soldier) cm with room to spare. */
 const CHAIR_RED_MIN_M = 0.15;
 const BED_RED_MIN_M = 0.25;
+/** [B9]: the figure drawn this much larger than the scale it was re-locked
+ *  at, and how closely its drift must follow the scale (relative). */
+const SCALE_UP = 1.15;
+const LINEAR_TOL = 0.01;
+/** [B11]: the re-lock of one model's library, ms. */
+const RELOCK_MAX_MS = 100;
+/** The bridges part [B] walks: the clip, the state it leaves, the bounds. */
 const BRIDGES = [
   { kind: 'get-up-chair', from: 'sitting-in-chair', driftMax: CHAIR_DRIFT_MAX_M, redMin: CHAIR_RED_MIN_M },
   { kind: 'get-up-bed', from: 'sleeping-side', driftMax: BED_DRIFT_MAX_M, redMin: BED_RED_MIN_M },
 ];
 const HANDOVER_MAX_M = 0.01;
 const FADE_SKIP_S = 0.30;
-/** `_root_motion.py` contact bands on the reference rig (cm, cm/s). */
+/** `_root_motion.py` contact bands (cm, cm/s) — the smoke's own copy. */
 const BAND_LO_CM = 2.0;
 const BAND_HI_CM = 5.0;
 const VY_LO_CM_S = 15.0;
 const VY_HI_CM_S = 30.0;
 const GROUND_PCT = 0.05;
 const FULL = 0.999;
+/** The client's lift tolerance on the ground rule (cm). */
+const LIFT_TOL_CM = 3;
 
 globalThis.self = globalThis;
 if (!globalThis.window) globalThis.window = globalThis;
@@ -214,6 +241,7 @@ async function loadClient() {
     const entry = [
       `export { travelAt, toWorld, rootPathAt } from '${src}/scene/bridgeTravel';`,
       `export { adaptExternalClips, Figure, rigHipsHeight, setClipRootMotion } from '${src}/scene/figures';`,
+      `export { relockRootPaths, GROUND_LIFT_TOL_CM } from '${src}/scene/footLockMeasure';`,
       `export { setClipTransitions } from '${src}/game/walk';`,
       `export { restCorrections, restPoseOf } from '@anima/scene-render';`,
     ].join('\n');
@@ -243,7 +271,8 @@ async function main() {
   const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
   const client = await loadClient();
   const { travelAt, toWorld, adaptExternalClips, Figure, rigHipsHeight, setClipRootMotion,
-          setClipTransitions, restCorrections, restPoseOf } = client;
+          setClipTransitions, restCorrections, restPoseOf, relockRootPaths,
+          GROUND_LIFT_TOL_CM } = client;
 
   const loadRig = async (file) => {
     const bytes = arrayBufferOf(await readFile(file));
@@ -261,10 +290,12 @@ async function main() {
   /** `scale` given = the instance scale as is (the reference rig has no mesh
    *  to measure, and its centimetres ARE the importer's); otherwise the
    *  figure is normalised to 1.70 m as `FigureLibrary` does. */
-  const makeFigure = (label, template, clips, fixedScale) => {
+  const nominalScale = (template) => {
     const bbox = new THREE.Box3().setFromObject(template);
-    const rawHeight = bbox.max.y - bbox.min.y;
-    const scale = fixedScale ?? 1.70 / rawHeight;
+    return 1.70 / (bbox.max.y - bbox.min.y);
+  };
+  const makeFigure = (label, template, clips, fixedScale) => {
+    const scale = fixedScale ?? nominalScale(template);
     const figure = new Figure({
       name: label, template, clips, scale, height: 1.70, assignOnly: true,
       noClips: false, tier: 'full', libraryFits: true,
@@ -551,20 +582,72 @@ async function main() {
   }
 
   const v = new THREE.Vector3();
+  check('the smoke\'s lift tolerance is the client\'s (footLockMeasure.GROUND_LIFT_TOL_CM)',
+    GROUND_LIFT_TOL_CM === LIFT_TOL_CM, `${GROUND_LIFT_TOL_CM} vs ${LIFT_TOL_CM}`);
+
+  /** The smoke's OWN contact detection on a RENDERED rig — its own code, the
+   *  importer's constants. `frames[i][j]` = world position (metres) of point
+   *  j at clip time (i+1)/FPS; `rest[j]` = the point's bind-pose height over
+   *  that rig's rest floor (cm); `floorY` = the rest floor's world height
+   *  (metres); `size` = rendered scale ÷ nominal scale (heights are judged
+   *  at the nominal scale the thresholds are written for). Frames inside the
+   *  bridge's fade-in are left out entirely. Returns per point the weight of
+   *  every frame (null = left out). */
+  const ownWeights = (frames, rest, floorY, size) => {
+    const ramp = (x, lo, hi) => (!Number.isFinite(x) ? 0 : x <= lo ? 1 : x >= hi ? 0 : (hi - x) / (hi - lo));
+    const first = Math.ceil(FADE_SKIP_S * FPS - 1 - 1e-9);   // (i+1)/FPS >= FADE_SKIP_S
+    return FOOT_KEYS.map((_, j) => {
+      const h = frames.map((f) => ((f[j].y - floorY) * 100) / size);
+      const used = h.slice(first).sort((a, c) => a - c);
+      const pct = used[Math.min(used.length - 1, Math.floor(GROUND_PCT * (used.length - 1)))];
+      const g = Math.min(pct, rest[j] + LIFT_TOL_CM);
+      return h.map((y, i) => {
+        if (i < first) return null;
+        const a = Math.max(i - 1, first);
+        const c = Math.min(i + 1, h.length - 1);
+        const vy = c > a ? (h[c] - h[a]) / ((c - a) / FPS) : 0;
+        return ramp(y - g, BAND_LO_CM, BAND_HI_CM) * ramp(Math.abs(vy), VY_LO_CM_S, VY_HI_CM_S);
+      });
+    });
+  };
+  /** Per point: the largest horizontal distance (world metres) a point moves
+   *  from where its run of FULL-weight frames began, the run's span, and how
+   *  many frames were full. */
+  const ownDrift = (frames, weights) => FOOT_KEYS.map((point, j) => {
+    let start = null;
+    let t0 = 0;
+    const worst = { drift: 0, from: 0, to: 0 };
+    let full = 0;
+    let runs = 0;
+    for (let i = 0; i < frames.length; i++) {
+      if ((weights[j][i] ?? 0) >= FULL) {
+        full += 1;
+        const p = frames[i][j];
+        if (!start) { start = p; t0 = (i + 1) / FPS; runs += 1; }
+        const d = Math.hypot(p.x - start.x, p.z - start.z);
+        if (d > worst.drift) Object.assign(worst, { drift: d, from: t0, to: (i + 1) / FPS });
+      } else {
+        start = null;
+      }
+    }
+    return { point, full, runs, ...worst };
+  });
+  const worstOf = (per) => Math.max(0, ...per.map((d) => d.drift));
+
   // The two real character rigs, and the REFERENCE rig itself as a third
-  // figure (a fresh parse, life-size: its centimetres × 0.01). On its own rig
-  // the chain has no proportions to adapt, so whatever it adds to the
-  // importer's drift is the chain's own error — the proof of the scale.
+  // figure (a fresh parse, life-size: its centimetres × 0.01).
   const targets = [
     ...RIGS.map((f) => ({ label: f.split('/').pop(), load: () => loadRig(f), scale: undefined })),
     { label: 'reference.fbx', ref: true, scale: 0.01,
       load: async () => fbxLoader.parse(arrayBufferOf(await readFile(RIG_FILE)), '') },
   ];
+  const table = [];   // the drift table printed at the end
   for (const target of targets) {
     const { label } = target;
     console.log(`  --- ${label}`);
     const template = await target.load();
     template.updateMatrixWorld(true);
+    const scale = target.scale ?? nominalScale(template);
     const corrections = restCorrections(THREE, donorRest, template);
     /** The library adapted WITH the listing's flag (on) or without (off);
      *  `useRig` false = the travel scaled by the idle median, the bounce's
@@ -578,23 +661,61 @@ async function main() {
       });
       return adaptExternalClips(lib, template, corrections, useRig ? donorHipsY : undefined);
     };
+    // Rest heights of this rig's contact points, from ITS bind pose, in cm
+    // at the nominal scale: over the lowest of the four points and the toe
+    // ends (the importer's `_rest_heights`). The template is never posed.
+    const restWorld = {};
+    template.traverse((o) => {
+      if (!o.isBone) return;
+      const k = keyOf(o.name);
+      if ((FOOT_KEYS.includes(k) || k === 'lefttoeend' || k === 'righttoeend') && !(k in restWorld)) {
+        restWorld[k] = o.getWorldPosition(new THREE.Vector3()).y;
+      }
+    });
+    const restFloor = Math.min(...Object.values(restWorld));
+    const rest = FOOT_KEYS.map((k) => (restWorld[k] - restFloor) * scale * 100);
+    console.log(`      rest heights (cm, own bind pose): ${FOOT_KEYS.map((k, j) => `${k} ${rest[j].toFixed(2)}`).join(', ')}`);
+
+    // [B11] the per-rig re-lock, timed — ONE call per model over its library,
+    // exactly as `FigureLibrary.fitLibrary` makes it.
+    const relockLib = adapt(true);
+    const t0 = performance.now();
+    const reports = relockRootPaths(relockLib, template, 1 / (100 * scale));
+    const relockMs = performance.now() - t0;
+    check(`[B11] ${label}: relockRootPaths per model <= ${RELOCK_MAX_MS} ms`,
+      relockMs <= RELOCK_MAX_MS, `${relockMs.toFixed(1)} ms`);
+    for (const r of reports) {
+      console.log(`      relock ${r.clip}: used ${r.used}${r.reason ? ` (${r.reason})` : ''},`
+        + ` its own drift ${r.driftCm.toFixed(2)} cm (imported ${r.importedDriftCm.toFixed(2)}),`
+        + ` travel (${r.travel[0].toFixed(1)}, ${r.travel[1].toFixed(1)}) cm`);
+    }
+    const libs = { relock: relockLib, imported: adapt(true), off: adapt(false) };
+    if (target.ref) libs.median = adapt(true, false);
 
     for (const b of BRIDGES) {
       const rm = sidecars[b.kind];
-      const results = {};
-      for (const mode of target.ref ? ['on', 'off', 'median'] : ['on', 'off']) {
-        const flagged = mode !== 'off';
-        const fig = makeFigure(label, template,
-          adapt(flagged, mode !== 'median'), target.scale);
+      /** One bridge on a fresh figure of `lib`; `size` = the scale factor
+       *  over the nominal one ([B9]). */
+      const runBridge = (lib, size = 1, handOver = false) => {
+        const fig = makeFigure(label, template, lib, scale * size);
         const feet = [];
         fig.inst.traverse((o) => { if (o.isBone && FOOT_KEYS.includes(keyOf(o.name))) feet.push(o); });
         feet.sort((a, c) => FOOT_KEYS.indexOf(keyOf(a.name)) - FOOT_KEYS.indexOf(keyOf(c.name)));
-        const hipsY = hipsOf(fig.inst).getWorldPosition(v).y;   // bind pose, world metres
         const sample = () => {
           fig.owner.updateMatrixWorld(true);
           return feet.map((f) => { f.getWorldPosition(v); return { x: v.x, y: v.y, z: v.z }; });
         };
         fig.owner.position.set(3, 0, -2);
+        // The rest floor in the world, read off the unposed instance.
+        fig.owner.updateMatrixWorld(true);
+        let floorY = Infinity;
+        fig.inst.traverse((o) => {
+          const k = o.isBone ? keyOf(o.name) : '';
+          if (FOOT_KEYS.includes(k) || k === 'lefttoeend' || k === 'righttoeend') {
+            floorY = Math.min(floorY, o.getWorldPosition(v).y);
+          }
+        });
+        const hipsY = hipsOf(fig.inst).getWorldPosition(v).y;   // bind pose, world metres
         fig.figure.faceTowards(new THREE.Vector3(Math.sin(YAW), 0, Math.cos(YAW)), true);
         fig.figure.play(b.from);
         for (let i = 0; i < 20; i++) fig.figure.update(0.05);
@@ -606,8 +727,8 @@ async function main() {
           frames.push(sample());
         }
         const last = frames[frames.length - 1];
-        const r = { frames, hipsY, feet: feet.map((f) => keyOf(f.name)), held: fig.figure.holdsTravel };
-        if (mode === 'on') {
+        const r = { frames, floorY, hipsY, held: fig.figure.holdsTravel };
+        if (handOver) {
           // [7] the hand-over: owner += takeTravel, no time advanced
           const took = fig.figure.takeTravel();
           if (took) fig.owner.position.add(new THREE.Vector3(took.x, 0, took.z));
@@ -619,153 +740,156 @@ async function main() {
           fig.figure.update(1 / FPS);
           const next = sample();
           r.nextJump = Math.max(...next.map((p, i) => Math.hypot(p.x - last[i].x, p.z - last[i].z)));
-          // RED counter-probe on a second run: take the travel, do not move the owner
-          const fig2 = makeFigure(label, template, adapt(true), target.scale);
-          fig2.owner.position.set(3, 0, -2);
-          const feet2 = [];
-          fig2.inst.traverse((o) => { if (o.isBone && FOOT_KEYS.includes(keyOf(o.name))) feet2.push(o); });
-          feet2.sort((a, c) => FOOT_KEYS.indexOf(keyOf(a.name)) - FOOT_KEYS.indexOf(keyOf(c.name)));
-          const sample2 = () => {
-            fig2.owner.updateMatrixWorld(true);
-            return feet2.map((f) => { f.getWorldPosition(v); return { x: v.x, z: v.z }; });
-          };
-          fig2.figure.faceTowards(new THREE.Vector3(Math.sin(YAW), 0, Math.cos(YAW)), true);
-          fig2.figure.play(b.from);
-          for (let i = 0; i < 20; i++) fig2.figure.update(0.05);
-          fig2.figure.play('idle');
-          guard = 0;
-          while (fig2.figure.bridging && guard++ < 1000) fig2.figure.update(1 / FPS);
-          const before2 = sample2();
-          fig2.figure.takeTravel();
-          fig2.figure.update(0);
-          const after2 = sample2();
-          r.redJump = Math.max(...after2.map((p, i) => Math.hypot(p.x - before2[i].x, p.z - before2[i].z)));
-          fig2.figure.dispose();
+        } else {
+          r.took = fig.figure.takeTravel();
         }
         fig.figure.dispose();
-        results[mode] = r;
-      }
-
-      // --- drift of the VERIFIED contacts on this rig ---------------------
-      // frames[i] was sampled at clip time (i+1)/FPS — reference frame i+1.
-      const on = results.on;
+        return r;
+      };
+      const runs = {};
+      for (const mode of Object.keys(libs)) runs[mode] = runBridge(libs[mode], 1, mode === 'relock');
+      runs.scaled = runBridge(libs.relock, SCALE_UP);
+      const on = runs.relock;
       const nF = on.frames.length;
+      console.log(`      ${b.kind}: ${nF} bridge frames, figure hips ${on.hipsY.toFixed(3)} m`);
+
+      // --- [6] drift with the smoke's OWN contacts on this rig -------------
+      // Planted is a property of the rig the feet belong to: the weights come
+      // from THIS rig's rendered frames (the re-locked run; the travel is XZ
+      // only, so every run of this rig has the same heights).
+      const w = ownWeights(on.frames, rest, on.floorY, 1);
+      const per = {};
+      for (const mode of ['relock', 'imported', 'off']) per[mode] = ownDrift(runs[mode].frames, w);
+      // [B9] the same figure 15 % larger: contacts judged at the nominal scale.
+      const wScaled = ownWeights(runs.scaled.frames, rest, runs.scaled.floorY, SCALE_UP);
+      per.scaled = ownDrift(runs.scaled.frames, wScaled);
+      for (let j = 0; j < FOOT_KEYS.length; j++) {
+        const a = per.relock[j];
+        const i0 = per.imported[j];
+        console.log(`        ${a.point.padEnd(12)} full ${String(a.full).padStart(3)}/${nF} in ${a.runs} run(s)`
+          + `  re-locked ${cm(a.drift)} (${a.from.toFixed(2)}–${a.to.toFixed(2)} s)`
+          + `  imported ${cm(i0.drift)}  off ${cm(per.off[j].drift)}  ×${SCALE_UP} ${cm(per.scaled[j].drift)}`);
+      }
+      const dRe = worstOf(per.relock);
+      const dIm = worstOf(per.imported);
+      const dOff = worstOf(per.off);
+      const dUp = worstOf(per.scaled);
+      table.push({ label, kind: b.kind, dRe, dIm, dUp });
+      check(`${label} ${b.kind}: some point is fully planted on this rig`,
+        per.relock.some((d) => d.full > 1), `${per.relock.map((d) => d.full).join('/')} full frames`);
+      check(`[6] ${label} ${b.kind}: planted-foot drift (own contacts) <= ${cm(b.driftMax)}`,
+        dRe <= b.driftMax, cm(dRe));
+      check(`[6] ${label} ${b.kind}: COUNTER-PROBE — the imported path is never lower`
+        + ' than the re-locked one', dIm >= dRe - 1e-6, `imported ${cm(dIm)} vs re-locked ${cm(dRe)}`);
+      if (b.kind === 'get-up-chair' && label === 'Test3_mia.glb') {
+        check(`[6] ${label} ${b.kind}: COUNTER-PROBE — the re-lock gains >= ${cm(RELOCK_GAIN_MIN_M)}`,
+          dIm - dRe >= RELOCK_GAIN_MIN_M, `${cm(dIm - dRe)} (imported ${cm(dIm)} − re-locked ${cm(dRe)})`);
+      }
+      check(`[6] ${label} ${b.kind}: RED COUNTER-PROBE — offset off slides >= ${cm(b.redMin)}`,
+        dOff >= b.redMin, cm(dOff));
+      const expectUp = SCALE_UP * dRe;
+      check(`[B9] ${label} ${b.kind}: baseScale × ${SCALE_UP} drifts ${SCALE_UP} × the nominal drift`
+        + ` (±${(LINEAR_TOL * 100).toFixed(0)} %)`,
+        Math.abs(dUp - expectUp) <= Math.max(LINEAR_TOL * expectUp, 1e-6),
+        `${cm(dUp)} vs ${SCALE_UP} × ${cm(dRe)} = ${cm(expectUp)}`
+        + ` (${expectUp > 0 ? (((dUp / expectUp) - 1) * 100).toFixed(2) : '0'} %)`);
+
+      // --- INFO: the old measurement, the sidecar's reference-rig spans -----
+      // The importer's classification (the reference rig, the RAW clip) in the
+      // sidecar's contact windows — what [6] bounded before the per-rig re-lock.
       const tOf = (i) => (i + 1) / FPS;
       const refW = verified[b.kind].weights;
       const wOf = (j, i) => refW[j][Math.min(i + 1, refW[j].length - 1)];
       const inWindow = (i) => rm.contact_s.findIndex(([s0, e0]) => tOf(i) >= s0 && tOf(i) <= e0
         && tOf(i) >= FADE_SKIP_S);
-      /** Per window × point: the largest drift of any verified full-contact
-       *  run (both frames of a pair in the window, both at full weight). */
-      const driftOf = (frames) => {
-        const out = [];
-        for (let w = 0; w < rm.contact_s.length; w++) {
+      const spanDrift = (frames) => {
+        let out = 0;
+        for (let wi = 0; wi < rm.contact_s.length; wi++) {
           for (let j = 0; j < FOOT_KEYS.length; j++) {
             let start = null;
-            let worst = 0;
-            let planted = 0;
             for (let i = 0; i + 1 < nF; i++) {
-              const full = inWindow(i) === w && inWindow(i + 1) === w
+              const full = inWindow(i) === wi && inWindow(i + 1) === wi
                 && Math.min(wOf(j, i), wOf(j, i + 1)) >= FULL;
-              if (full) {
-                planted += 1;
-                for (const k of [i, i + 1]) {
-                  const p = frames[k][j];
-                  if (!start) start = p;
-                  worst = Math.max(worst, Math.hypot(p.x - start.x, p.z - start.z));
-                }
-              } else {
-                start = null;
+              if (!full) { start = null; continue; }
+              for (const k of [i, i + 1]) {
+                const p = frames[k][j];
+                if (!start) start = p;
+                out = Math.max(out, Math.hypot(p.x - start.x, p.z - start.z));
               }
             }
-            out.push({ w, point: FOOT_KEYS[j], planted, drift: worst });
           }
         }
         return out;
       };
-      /** The same point's largest wander over the whole window, verified or
-       *  not — printed for the points the importer never verified. */
-      const wanderOf = (frames, w, j) => {
-        let start = null;
-        let worst = 0;
-        for (let i = 0; i < nF; i++) {
-          if (inWindow(i) !== w) continue;
-          const p = frames[i][j];
-          if (!start) start = p;
-          worst = Math.max(worst, Math.hypot(p.x - start.x, p.z - start.z));
-        }
-        return worst;
-      };
-      const dOn = driftOf(on.frames);
-      const dOff = driftOf(results.off.frames);
-      console.log(`      ${b.kind}: ${nF} bridge frames, figure hips ${on.hipsY.toFixed(3)} m,`
-        + ` windows ${JSON.stringify(rm.contact_s)}`);
-      let worstOn = 0;
-      let worstOff = 0;
-      for (let k = 0; k < dOn.length; k++) {
-        const a = dOn[k];
-        const o = dOff[k];
-        if (!a.planted) {
-          const j = FOOT_KEYS.indexOf(a.point);
-          console.log(`        window ${a.w} ${a.point.padEnd(12)} not a verified contact —`
-            + ` info: wanders ${cm(wanderOf(on.frames, a.w, j))} over the window`
-            + ` (off ${cm(wanderOf(results.off.frames, a.w, j))})`);
-          continue;
-        }
-        console.log(`        window ${a.w} ${a.point.padEnd(12)} ${String(a.planted).padStart(3)} frame pairs`
-          + `  drift on ${cm(a.drift)}   off ${cm(o.drift)}`);
-        worstOn = Math.max(worstOn, a.drift);
-        worstOff = Math.max(worstOff, o.drift);
-      }
-      const plantedCount = dOn.filter((d) => d.planted).length;
-      check(`${label} ${b.kind}: some point is a verified contact in the windows`, plantedCount > 0,
-        `${plantedCount} point×window runs`);
-      const bound = target.ref ? REF_DRIFT_MAX_M : b.driftMax;
-      check(`[6] ${label} ${b.kind}: planted-foot drift <= ${cm(bound)}`,
-        worstOn <= bound, cm(worstOn));
-      check(`[6] ${label} ${b.kind}: RED COUNTER-PROBE — offset off slides >= ${cm(b.redMin)}`,
-        worstOff >= b.redMin, cm(worstOff));
+      const sRe = spanDrift(on.frames);
+      const sIm = spanDrift(runs.imported.frames);
+      console.log(`      info ${label} ${b.kind}: sidecar spans (reference-rig contacts) —`
+        + ` re-locked ${cm(sRe)}, imported ${cm(sIm)}, off ${cm(spanDrift(runs.off.frames))}`);
       if (target.ref) {
-        // The chain on its own rig: nothing to add to the importer's drift.
+        // The scale of the imported travel: on its own rig the importer's
+        // number comes back; the idle-median scale overshoots it.
         const own = verified[b.kind].drift / 100;
-        check(`[6] ${label} ${b.kind}: the chain adds nothing on its own rig`
-          + ` (<= importer ${cm(own)} + 0.10 cm)`, worstOn <= own + 0.001, cm(worstOn));
-        const dMed = driftOf(results.median.frames).reduce((m, d) => (d.planted ? Math.max(m, d.drift) : m), 0);
+        const sMed = spanDrift(runs.median.frames);
         check(`[6] ${label} ${b.kind}: RED COUNTER-PROBE — the idle-median scale overshoots`
-          + ` (> importer + 0.10 cm)`, dMed > own + 0.001, cm(dMed));
+          + ` the importer (> ${cm(own)} + 0.10 cm; rig scale ${cm(sIm)})`, sMed > own + 0.001, cm(sMed));
       }
+
+      // --- [7] the hand-over ---------------------------------------------
       check(`[7] ${label} ${b.kind}: the travel was held at the end`, on.held && !!on.took);
       check(`[7] ${label} ${b.kind}: hand-over jump <= ${cm(HANDOVER_MAX_M)}`,
         on.jump <= HANDOVER_MAX_M, cm(on.jump));
       const tookLen = on.took ? Math.hypot(on.took.x, on.took.z) : 0;
-      check(`[7] ${label} ${b.kind}: RED COUNTER-PROBE — owner not moved jumps by the travel`,
-        Math.abs(on.redJump - tookLen) <= 0.05 && on.redJump >= (b.kind === 'get-up-chair' ? 0.30 : 0.1),
-        `${cm(on.redJump)} vs travel ${cm(tookLen)}`);
+      {
+        // RED counter-probe on a second run: take the travel, do not move the owner.
+        const fig2 = makeFigure(label, template, libs.relock, scale);
+        fig2.owner.position.set(3, 0, -2);
+        const feet2 = [];
+        fig2.inst.traverse((o) => { if (o.isBone && FOOT_KEYS.includes(keyOf(o.name))) feet2.push(o); });
+        const sample2 = () => {
+          fig2.owner.updateMatrixWorld(true);
+          return feet2.map((f) => { f.getWorldPosition(v); return { x: v.x, z: v.z }; });
+        };
+        fig2.figure.faceTowards(new THREE.Vector3(Math.sin(YAW), 0, Math.cos(YAW)), true);
+        fig2.figure.play(b.from);
+        for (let i = 0; i < 20; i++) fig2.figure.update(0.05);
+        fig2.figure.play('idle');
+        let guard = 0;
+        while (fig2.figure.bridging && guard++ < 1000) fig2.figure.update(1 / FPS);
+        const before2 = sample2();
+        fig2.figure.takeTravel();
+        fig2.figure.update(0);
+        const after2 = sample2();
+        const redJump = Math.max(...after2.map((p, i) => Math.hypot(p.x - before2[i].x, p.z - before2[i].z)));
+        fig2.figure.dispose();
+        check(`[7] ${label} ${b.kind}: RED COUNTER-PROBE — owner not moved jumps by the travel`,
+          Math.abs(redJump - tookLen) <= 0.05 && redJump >= (b.kind === 'get-up-chair' ? 0.30 : 0.1),
+          `${cm(redJump)} vs travel ${cm(tookLen)}`);
+      }
       console.log(`      [7] ${label} ${b.kind}: travel handed over ${cm(tookLen)}`
         + ` (${on.took ? `${on.took.x.toFixed(3)}, ${on.took.z.toFixed(3)}` : '-'});`
         + ` next real frame (idle crossfade, 1/30 s) moves the feet ${cm(on.nextJump)}`);
 
-      // info: the LOWEST foot point over the whole bridge
-      const lowestRuns = (frames) => {
-        let worst = { d: 0, point: '', t: 0 };
-        let cur = -1;
-        let start = null;
-        for (let i = 0; i < frames.length; i++) {
-          if (tOf(i) < FADE_SKIP_S) continue;
-          let j = 0;
-          for (let q = 1; q < frames[i].length; q++) if (frames[i][q].y < frames[i][j].y) j = q;
-          if (j !== cur) { cur = j; start = frames[i][j]; }
-          const d = Math.hypot(frames[i][j].x - start.x, frames[i][j].z - start.z);
-          if (d > worst.d) worst = { d, point: FOOT_KEYS[j], t: tOf(i) };
-        }
-        return worst;
+      // --- [B10] INFO: the end point against the server's stand point -------
+      // The server carries the figure by travel_m × height / ref_height_m
+      // (`room_stand.bridge_offset`), turned by the same facing. Height = the
+      // figure's (1.70 m; × SCALE_UP for the larger one); the reference rig
+      // IS the reference height (ratio 1).
+      const server = (size) => {
+        const k = target.ref ? size : (1.70 * size) / rm.ref_height_m;
+        return toWorld({ x: rm.travel_m[0] * k, z: rm.travel_m[1] * k }, YAW);
       };
-      const lo = lowestRuns(on.frames);
-      const loOff = lowestRuns(results.off.frames);
-      console.log(`      info ${label} ${b.kind}: lowest foot point, whole bridge —`
-        + ` on ${cm(lo.d)} (${lo.point} @ ${lo.t.toFixed(2)} s),`
-        + ` off ${cm(loOff.d)} (${loOff.point} @ ${loOff.t.toFixed(2)} s)`);
+      const off = (took, size) => (took ? Math.hypot(took.x - server(size).x, took.z - server(size).z) : NaN);
+      const b10 = { relock: off(on.took, 1), imported: off(runs.imported.took, 1), scaled: off(runs.scaled.took, SCALE_UP) };
+      table[table.length - 1].b10 = b10;
+      console.log(`      [B10] ${label} ${b.kind}: end point vs the server's stand point —`
+        + ` re-locked ${cm(b10.relock)}, imported ${cm(b10.imported)}, ×${SCALE_UP} re-locked ${cm(b10.scaled)}`);
     }
+  }
+
+  console.log('\n      drift table (own contacts, cm): clip × rig — re-locked / imported / ×1.15 re-locked; [B10] re-locked / imported');
+  for (const r of table) {
+    console.log(`        ${r.kind.padEnd(13)} ${r.label.padEnd(14)} ${(r.dRe * 100).toFixed(2)} / ${(r.dIm * 100).toFixed(2)}`
+      + ` / ${(r.dUp * 100).toFixed(2)};  B10 ${(r.b10.relock * 100).toFixed(1)} / ${(r.b10.imported * 100).toFixed(1)}`);
   }
 
   console.log(`\n${passed + failed} checks, ${failed} failures`);

@@ -78,10 +78,17 @@ export interface RelockReport {
 export const GROUND_LIFT_TOL_CM = 3;
 
 /** How much LESS the rebuilt path must drift than the imported one before it
- *  replaces it, cm. Anything below a tenth of a millimetre is Float32
- *  rounding of the stored keys (an exact imported path measures ~6e-7), not
- *  a better lock. */
-export const RELOCK_MIN_GAIN_CM = 0.01;
+ *  replaces it, cm — hysteresis against flips at the edge of the contact
+ *  band. A smaller gain is inside what the classification itself resolves,
+ *  not a better lock. The case behind the number: on the reference rig,
+ *  `get-up-chair` gains 0.03 cm here (0.26 against 0.29), yet the same rule
+ *  fed without the bridge's 0.3 s fade-in frames moves the 5th-percentile
+ *  ground of LeftFoot by ~0.8 cm (the standing feet sit ~2 cm over it, right
+ *  on the 2 cm band edge), turns the whole standing phase into one planted
+ *  run and ranks the two paths the other way round: imported 0.42 cm,
+ *  re-locked 0.76 cm (`smoke_bridge_root.mjs` [6]). The real rigs gain
+ *  0.6–1.4 cm; the rig the import was measured on keeps its own path. */
+export const RELOCK_MIN_GAIN_CM = 0.1;
 
 /** Sample rate for a clip without a hips position track, fps. */
 const FALLBACK_FPS = 30;

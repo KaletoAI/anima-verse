@@ -2271,9 +2271,33 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
     auf dem aufgelösten Sitz steht (`SEAT_MATCH_M` = 0,05 m), und mit dem
     EFFEKTIVEN Pose-Key; `stand_up` sucht den freien Punkt von dort aus.
     Server und Client weichen um das Proportionsverhältnis der Figur ab
-    (Körpergröße gegen Hüfthöhe) — bei 0,4 m Weg etwa 1–2 cm.
+    (Körpergröße gegen Hüfthöhe) und um die Neuberechnung pro Figur (nächster
+    Punkt).
   - Gemessen: `get-up-chair` `travel_m` [0,052, 0,487], Drift 0,42 cm;
     `get-up-bed` [−0,574, −0,086], 1,44 cm (Referenz-Rig).
+  - **Der Client rechnet den Weg pro Figurenmodell auf dem eigenen Skelett
+    neu** (`footLockMeasure.relockRootPaths`, einmal je Modell nach dem
+    Anpassen bzw. Retargeten der Clips): dieselbe Regel wie der Import,
+    Parität über `scripts/fixtures/root_motion_cases.json`. Weil die
+    Hüftkette angepasste Clips um ~1,8 cm anhebt, darf ein Punkt bis 3 cm
+    über seiner Ruhehöhe (Bind-Pose) noch als Boden gelten
+    (`GROUND_LIFT_TOL_CM`; der Import nutzt 0). Der neue Weg ersetzt den
+    importierten nur, wenn er an denselben Kontakten um mehr als 0,1 cm
+    weniger driftet (`RELOCK_MIN_GAIN_CM`) — **nie schlechter als der
+    Import**; auf dem Referenz-Rig bleibt so dessen eigener Weg. Fehlen
+    Fußknochen oder volle Kontakte, gilt ebenfalls der importierte Weg.
+    Gemessen am gerenderten Rig mit eigener Kontakterkennung
+    (`client3d/scripts/smoke_bridge_root.mjs` [6]): Stuhl ≤ 1,5 cm, Bett
+    ≤ 2,5 cm — das Bett dreht sich beim Aufstehen um ~90° mit beiden Füßen am
+    Boden, und ein reiner Verschiebe-Weg kann zwei Füße nicht durch eine
+    Drehung halten.
+  - **Der Server-Aufstehpunkt bleibt der Referenzweg**; der Server kennt die
+    Modelle nicht. Abstand des Client-Endpunkts zum Server-Punkt je Figur
+    (1,70 m, [B10]): Test3_mia Stuhl 7,7 cm / Bett 14,6 cm (importiert 4,6 /
+    5,4), Soldier 6,7 / 3,7 (importiert 1,2 / 1,5), Referenz-Rig 0. Der
+    Server-Aufstehpunkt kann also bis ~15 cm (Test3_mia/Bett) vom Endpunkt der
+    Figur abweichen; ein NPC auf Reise wird vom Client-Endpunkt auf seine
+    Route gezogen, und der Avatar meldet seinen eigenen Punkt.
 
 ## A8a. Paar-Interaktionen — zwei Figuren, ein Clip-Paar, ein Anker
 
