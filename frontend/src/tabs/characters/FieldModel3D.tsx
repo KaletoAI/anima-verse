@@ -6,6 +6,7 @@
  * Rendered template-driven via the section flag `special: "model3d_gen"`.
  *
  * Backend: GET /characters/{n}/model3d (status), POST .../model3d/generate,
+ * POST .../model3d/fetch-job (collect a finished gateway job by its id),
  * POST .../model3d/upload, POST .../model3d/rig, GET .../model3d/file (bytes),
  * DELETE .../model3d.
  */
@@ -72,6 +73,8 @@ interface Model3DInfo {
   texture_url?: string
   created_at?: string
   backend?: string
+  /** gateway job id when the model was collected afterwards by that id */
+  job_id?: string
   source?: string
   source_filename?: string
   /** what the rig stage was asked for when this model was generated; absent
@@ -148,6 +151,13 @@ export function FieldModel3D({ character }: { character: string }) {
   const [pendingFbx, setPendingFbx] = useState<File | null>(null)
   // Which resolution the viewer shows — a VIEW state, never sent anywhere.
   const [viewTier, setViewTier] = useState<'full' | 'low'>('full')
+  // "Fetch by job ID": a mesh run that outlived our own poll is collected from
+  // the gateway afterwards. jobErrors holds a failed model check, which the
+  // admin may override with "Store anyway".
+  const [jobOpen, setJobOpen] = useState(false)
+  const [jobId, setJobId] = useState('')
+  const [jobBackend, setJobBackend] = useState('')
+  const [jobErrors, setJobErrors] = useState<string[]>([])
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const texRef = useRef<HTMLInputElement>(null)
@@ -179,6 +189,9 @@ export function FieldModel3D({ character }: { character: string }) {
 
   useEffect(() => {
     setConfirmDelete(false)
+    setJobOpen(false)
+    setJobId('')
+    setJobErrors([])
     // A fresh character carries no in-flight click from the previous one — the
     // local busy flag must not bleed across the switch (it would otherwise pin
     // "Generating…" on every character). The authoritative state is st.pending.
@@ -238,6 +251,45 @@ export function FieldModel3D({ character }: { character: string }) {
       }
     },
     [busy, enc, startPoll, t, toast],
+  )
+
+  // Collects a finished gateway job as the current outfit's model. A job that
+  // is still queued/running changes nothing and only reports its progress.
+  const fetchJob = useCallback(
+    async (force: boolean) => {
+      const id = jobId.trim()
+      if (!id || busy) return
+      setBusy(true)
+      try {
+        const q = new URLSearchParams({ job: id })
+        if (jobBackend) q.set('backend', jobBackend)
+        if (force) q.set('force', '1')
+        const d = await apiPost<{ status?: string; progress?: number | null; warnings?: string[] }>(
+          `/characters/${enc}/model3d/fetch-job?${q.toString()}`, {})
+        if (d.status === 'stored') {
+          setJobErrors([])
+          setJobOpen(false)
+          setJobId('')
+          await load()
+          const warn = d.warnings || []
+          toast(warn.length ? `${t('Saved')} — ${warn.join(' · ')}` : t('Saved'))
+        } else {
+          const pct = typeof d.progress === 'number' ? ` — ${Math.round(d.progress * 100)} %` : ''
+          toast(`${d.status === 'queued' ? t('Job is still queued on the gateway') : t('Job is still running on the gateway')}${pct}`)
+        }
+      } catch (e) {
+        const detail = e instanceof ApiError ? (e.detail as { errors?: unknown } | null) : null
+        const errs = Array.isArray(detail?.errors) ? (detail.errors as string[]) : []
+        if (errs.length) {
+          setJobErrors(errs)
+        } else {
+          toast(t('Error') + ': ' + (e as Error).message, 'error')
+        }
+      } finally {
+        setBusy(false)
+      }
+    },
+    [busy, enc, jobBackend, jobId, load, t, toast],
   )
 
   // Per-character override of the alias param "no fingers".
@@ -594,6 +646,7 @@ export function FieldModel3D({ character }: { character: string }) {
             {sizeMb ? ` · ${sizeMb} MB` : ''}
             {model.texture_url ? ` · +${t('texture')}` : ''}
             {model.backend ? ` · ${model.backend}` : ''}
+            {model.job_id ? ` · ${t('job')} ${model.job_id}` : ''}
             {model.created_at ? ` · ${formatDateTime(model.created_at, clockSettings())}` : ''}
             {model.source_filename ? ` · ${model.source_filename}` : ''}
           </div>
@@ -726,6 +779,16 @@ export function FieldModel3D({ character }: { character: string }) {
         >
           {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
         </button>
+        <button
+          type="button"
+          className={`ga-btn ga-btn-sm${jobOpen ? ' ga-btn-primary' : ''}`}
+          disabled={pending}
+          aria-expanded={jobOpen}
+          onClick={() => setJobOpen((v) => !v)}
+          title={t('Collects a mesh job that finished on the gateway after the generation here gave up waiting — by the job id from the log.')}
+        >
+          {t('Fetch by job ID…')}
+        </button>
         {/* Pre-warm the whole wardrobe: one T-pose render + mesh per saved
             outfit, without dressing the character. */}
         <button
@@ -811,6 +874,67 @@ export function FieldModel3D({ character }: { character: string }) {
           </button>
         ) : null}
       </div>
+      {jobOpen ? (
+        <div className="ga-form" style={{ gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              className="ga-input"
+              style={{ flex: '1 1 12rem', minWidth: 0 }}
+              value={jobId}
+              placeholder={t('Job ID, e.g. 466a4e41b73d')}
+              aria-label={t('Job ID')}
+              disabled={pending}
+              onChange={(e) => {
+                setJobId(e.target.value)
+                setJobErrors([])
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') fetchJob(false)
+              }}
+            />
+            <select
+              className="ga-input"
+              style={{ flex: '0 1 auto' }}
+              value={jobBackend}
+              aria-label={t('Mesh backend')}
+              disabled={pending}
+              onChange={(e) => setJobBackend(e.target.value)}
+            >
+              <option value="">{t('— ask every gateway —')}</option>
+              {(st.backends || []).map((b) => (
+                <option key={b.name} value={b.name}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm ga-btn-primary"
+              disabled={pending || !jobId.trim()}
+              onClick={() => fetchJob(false)}
+            >
+              {t('Fetch')}
+            </button>
+          </div>
+          <div className="ga-hint">
+            {t('Stored as the model of the outfit worn right now, replacing the current one. A job that is still running changes nothing — try again once it is done.')}
+          </div>
+          {jobErrors.length ? (
+            <div className="ga-hint" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
+              {`${t('The delivered model fails the check')}: ${jobErrors.join(' · ')}`}
+              {' '}
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm"
+                disabled={pending}
+                onClick={() => fetchJob(true)}
+              >
+                {t('Store anyway')}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <input
         ref={fileRef}
         type="file"

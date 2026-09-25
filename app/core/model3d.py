@@ -14,6 +14,7 @@ model". Switching back to a known outfit reuses whatever is stored.
 """
 
 import json
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -1151,6 +1152,121 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                 get_task_queue().track_finish(task_id, error=error)
             except Exception:
                 pass
+
+
+# A gateway job id as the admin may paste it — "Job 466a4e41b73d" straight out
+# of the log works too. Only id characters reach the gateway URL.
+_JOB_PREFIX = re.compile(r"^\s*job[\s:#]*", re.IGNORECASE)
+_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{3,127}$")
+
+
+def normalize_job_id(raw: str) -> str:
+    """The bare job id out of what was typed/pasted, "" when it is none."""
+    job_id = _JOB_PREFIX.sub("", str(raw or "")).strip()
+    return job_id if _JOB_ID.match(job_id) else ""
+
+
+def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
+                                 backend_glob: str = "",
+                                 force: bool = False) -> Dict[str, Any]:
+    """Collects a finished gateway mesh job by its id and stores it as the
+    model of the currently worn combination — the way back to a mesh whose
+    generation outlived our own poll (timeout, server restart) but finished
+    on the gateway.
+
+    The result lands in a staging directory first and is checked against the
+    model contract of the character's rig (the same check an upload faces):
+    a mistyped id of a prop or another character's job must not replace this
+    model. ``force`` stores despite a failed check. Only then is the
+    combination replaced — model, texture, sidecar, tiers — and the new file
+    goes through the same retexture/normalise/measure/LOD steps as a fresh
+    generation.
+
+    Returns ``{"status": "stored", "meta"}``, ``{"status": "queued"|"running",
+    "progress", "elapsed_s"}`` while the job is not finished, ``{"status":
+    "invalid", "errors", "warnings"}``, ``{"status": "busy"}`` while a
+    generation runs for this character, or another status with ``error``.
+    Blocking (downloads + Blender); call from a worker thread.
+    """
+    import tempfile
+    from app.core.model_validate import validate_fbx
+    from app.imagegen.service import get_image_service
+
+    with _lock:
+        if character_name in _generating:
+            return {"status": "busy",
+                    "error": "a 3D model generation is running for this character"}
+        _generating.add(character_name)
+    staging: Optional[Path] = None
+    try:
+        with _char_lock(character_name):
+            _, _, signature = current_outfit_state(character_name)
+            rig = required_rig(character_name)
+            out_dir = get_model3d_dir(character_name)
+            staging = Path(tempfile.mkdtemp(prefix=".fetch-", dir=out_dir))
+            res = get_image_service().fetch_mesh_job(
+                job_id, str(staging / f"{signature}.fbx"),
+                backend_glob=backend_glob, rig=rig)
+            if res.get("status") != "stored":
+                return res
+
+            staged = Path(res["path"])
+            tex_staged = Path(res["texture_path"]) if res.get("texture_path") else None
+            data = staged.read_bytes()
+            if staged.suffix.lower() == ".glb":
+                check = _validator_for(rig)(data)
+            else:
+                check = validate_fbx(
+                    data, tex_staged.read_bytes() if tex_staged else None)
+            if not check["ok"] and not force:
+                logger.warning("Model3D %s: job %s fails the %s contract: %s",
+                               character_name, job_id, rig,
+                               "; ".join(check["errors"]))
+                return {"status": "invalid", "errors": check["errors"],
+                        "warnings": check["warnings"]}
+
+            _purge_combination(out_dir, signature)
+            path = out_dir / f"{signature}{staged.suffix.lower()}"
+            shutil.move(str(staged), path)
+            if tex_staged:
+                shutil.move(str(tex_staged),
+                            path.with_suffix(tex_staged.suffix.lower()))
+            meta: Dict[str, Any] = {
+                "created_at": utc_now_iso(),
+                "source": "generated",
+                "backend": res.get("backend", ""),
+                "format": res.get("format", path.suffix.lstrip(".").lower()),
+                "rig": res.get("rig", rig),
+                "has_texture": bool(tex_staged),
+                "source_filename": res.get("filename", ""),
+                "signature": signature,
+                "character": character_name,
+                # Collected afterwards, not awaited: the job id says which run
+                # it was, since the options it was made with are unknown here.
+                "job_id": job_id,
+            }
+            src = find_ref_image(character_name, "tpose", signature)
+            if src:
+                # Most likely what the job was made from — the manifest says
+                # which pieces this combination stands for either way.
+                meta["source_image"] = src.name
+                meta.update(_ref_manifest(src))
+            _auto_retexture(character_name, path, meta)
+            _auto_normalize(character_name, path, meta)
+            _attach_measurement(meta, path)
+            request_lod(character_name, path)
+            path.with_suffix(".json").write_text(
+                json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+            logger.info("Model3D %s: job %s fetched as %s (%d bytes, "
+                        "combination %s)", character_name, job_id, path.name,
+                        path.stat().st_size, signature)
+            return {"status": "stored", "meta": meta,
+                    "warnings": check["warnings"]}
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+        with _lock:
+            _generating.discard(character_name)
 
 
 def _run(character_name: str, force: bool, backend_glob: str = "",

@@ -1633,6 +1633,42 @@ def generate_character_model3d(character_name: str, force: bool = False,
     return {"status": "generating"}
 
 
+@router.post("/{character_name}/model3d/fetch-job")
+def fetch_character_model3d_job(character_name: str, job: str = "",
+                                backend: str = "", force: bool = False,
+                                _: Dict[str, Any] = Depends(require_admin)
+                                ) -> Dict[str, Any]:
+    """Collects a finished gateway mesh job by its id ("466a4e41b73d" or
+    "Job 466a4e41b73d" as the log prints it) and stores it as the model of
+    the current outfit — for a generation that outlived our own poll.
+    ``backend`` names the mesh backend whose gateway knows the job (empty =
+    ask each gateway in turn). A job that is not finished yet answers
+    ``{"status": "queued"|"running", "progress"}`` and changes nothing;
+    ``force=1`` stores a result that fails the model check."""
+    from app.core.model3d import fetch_job_for_current_outfit, normalize_job_id
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    job_id = normalize_job_id(job)
+    if not job_id:
+        raise HTTPException(status_code=400, detail="Not a job id")
+    res = fetch_job_for_current_outfit(character_name, job_id,
+                                       backend_glob=(backend or "").strip(),
+                                       force=force)
+    status = res.get("status")
+    if status in ("stored", "queued", "running"):
+        return res
+    if status == "invalid":
+        raise HTTPException(status_code=422, detail={
+            "reason": "invalid_model",
+            "errors": res.get("errors") or [],
+            "warnings": res.get("warnings") or [],
+        })
+    code = {"unknown": 404, "busy": 409, "failed": 409,
+            "rig_mismatch": 422}.get(status, 502)
+    raise HTTPException(status_code=code,
+                        detail=res.get("error") or f"job {job_id}: {status}")
+
+
 @router.post("/{character_name}/model3d/options")
 async def set_character_model3d_options(character_name: str, request: Request) -> Dict[str, Any]:
     """Per-character overrides for the mesh generation.

@@ -2318,6 +2318,18 @@
     "m forward": "m vorwärts",
     "m back": "m zurück",
     "m left": "m links",
-    "m right": "m rechts"
+    "m right": "m rechts",
+    "Collects a mesh job that finished on the gateway after the generation here gave up waiting — by the job id from the log.": "Holt einen Mesh-Job ab, der auf dem Gateway fertig wurde, nachdem die Generierung hier das Warten aufgegeben hat — über die Job-ID aus dem Log.",
+    "Fetch by job ID…": "Per Job-ID holen…",
+    "Job ID, e.g. 466a4e41b73d": "Job-ID, z. B. 466a4e41b73d",
+    "Mesh backend": "Mesh-Backend",
+    "— ask every gateway —": "— alle Gateways fragen —",
+    "Fetch": "Holen",
+    "Stored as the model of the outfit worn right now, replacing the current one. A job that is still running changes nothing — try again once it is done.": "Wird als Modell des gerade getragenen Outfits gespeichert und ersetzt das bisherige. Ein noch laufender Job ändert nichts — nochmal versuchen, sobald er fertig ist.",
+    "The delivered model fails the check": "Das gelieferte Modell besteht die Prüfung nicht",
+    "Store anyway": "Trotzdem speichern",
+    "Job is still queued on the gateway": "Job wartet noch in der Gateway-Queue",
+    "Job is still running on the gateway": "Job läuft noch auf dem Gateway",
+    "job": "Job"
   }
 }

@@ -629,61 +629,136 @@ class OpenAIMeshBackend(ImageBackend):
         if not job_id:
             return []
 
-        def _download(sd: Dict[str, Any], running_s: float) -> List[bytes]:
-            # A job delivers the model plus its *_basecolor* / *_metallic*
-            # maps, and with input_lod_faces one self-contained GLB per
-            # requested stage. Download them all and hand their gateway
-            # metadata (name/mime/kind) up — the caller decides by NAME which
-            # ones it must store. The response order is alphabetical by file
-            # name (§ 3.2), so position says nothing.
-            for warn in (sd.get("warnings") or []):
-                logger.warning("%s: Gateway-Warnung: %s", self.name, warn)
-            # Did the job run on OUR input? (No-op on a gateway that does not
-            # report its stored inputs.)
-            self._check_input_identity(sd, job_id)
-            _results = [r for r in (sd.get("results") or [])
-                        if isinstance(r, dict)]
-            if not _results:
-                logger.error("%s: Job %s ohne results", self.name, job_id)
-                return []
-            blobs: List[bytes] = []
-            files: List[Dict[str, str]] = []
-            for idx, res in enumerate(_results):
-                _r_url = res.get("url") or ""
-                if _r_url and not _r_url.startswith(("http://", "https://")):
-                    _r_url = f"{self.api_url}{_r_url}"
-                if not _r_url:
-                    _r_url = (f"{self.api_url}/v1/jobs/{job_id}/result/"
-                              f"{res.get('n', idx)}")
-                dl = requests.get(_r_url, headers=self._headers(), timeout=300)
-                if dl.status_code != 200 or len(dl.content) < 100:
-                    logger.error("%s: Result-Download %d HTTP %d (%d bytes)",
-                                 self.name, idx, dl.status_code, len(dl.content))
-                    return []
-                want = str(res.get("sha256") or "").strip().lower()
-                if want:
-                    got = hashlib.sha256(dl.content).hexdigest()
-                    if got != want:
-                        logger.error("%s: Result %d (%s) sha256 stimmt nicht "
-                                     "(%s != %s) — Job verworfen", self.name,
-                                     idx, res.get("name", "?"), got[:12],
-                                     want[:12])
-                        return []
-                blobs.append(dl.content)
-                files.append({
-                    "name": str(res.get("name") or "")
-                            or self._result_name_from(_r_url, dl),
-                    "mime": str(res.get("mime") or ""),
-                    "kind": str(res.get("kind") or ""),
-                })
-            self._tls.result_files = files
-            logger.info("%s: Mesh fertig (%.1fs, rig=%s, %d Datei(en): %s)",
-                        self.name, running_s, sd.get("rig") or self.mesh_rig,
-                        len(blobs),
-                        ", ".join(f"{f['name']} [{f['kind'] or '?'}, {len(b)}B]"
-                                  for f, b in zip(files, blobs)))
-            return blobs
-
         return poll_job(self, job_id, max_wait=self.max_wait,
                         max_queue_wait=self.max_queue_wait,
-                        poll_interval=self.poll_interval, on_done=_download)
+                        poll_interval=self.poll_interval,
+                        on_done=lambda sd, running_s: self._download_results(
+                            sd, job_id, running_s))
+
+    def _download_results(self, sd: Dict[str, Any], job_id: str,
+                          running_s: float) -> List[bytes]:
+        """Downloads every result file of a FINISHED job and exposes their
+        gateway metadata via ``last_result_files``. ``[]`` on a download or
+        checksum error."""
+        # A job delivers the model plus its *_basecolor* / *_metallic*
+        # maps, and with input_lod_faces one self-contained GLB per
+        # requested stage. Download them all and hand their gateway
+        # metadata (name/mime/kind) up — the caller decides by NAME which
+        # ones it must store. The response order is alphabetical by file
+        # name (§ 3.2), so position says nothing.
+        for warn in (sd.get("warnings") or []):
+            logger.warning("%s: Gateway-Warnung: %s", self.name, warn)
+        # Did the job run on OUR input? (No-op on a gateway that does not
+        # report its stored inputs.)
+        self._check_input_identity(sd, job_id)
+        _results = [r for r in (sd.get("results") or [])
+                    if isinstance(r, dict)]
+        if not _results:
+            logger.error("%s: Job %s ohne results", self.name, job_id)
+            return []
+        blobs: List[bytes] = []
+        files: List[Dict[str, str]] = []
+        for idx, res in enumerate(_results):
+            _r_url = res.get("url") or ""
+            if _r_url and not _r_url.startswith(("http://", "https://")):
+                _r_url = f"{self.api_url}{_r_url}"
+            if not _r_url:
+                _r_url = (f"{self.api_url}/v1/jobs/{job_id}/result/"
+                          f"{res.get('n', idx)}")
+            dl = requests.get(_r_url, headers=self._headers(), timeout=300)
+            if dl.status_code != 200 or len(dl.content) < 100:
+                logger.error("%s: Result-Download %d HTTP %d (%d bytes)",
+                             self.name, idx, dl.status_code, len(dl.content))
+                return []
+            want = str(res.get("sha256") or "").strip().lower()
+            if want:
+                got = hashlib.sha256(dl.content).hexdigest()
+                if got != want:
+                    logger.error("%s: Result %d (%s) sha256 stimmt nicht "
+                                 "(%s != %s) — Job verworfen", self.name,
+                                 idx, res.get("name", "?"), got[:12],
+                                 want[:12])
+                    return []
+            blobs.append(dl.content)
+            files.append({
+                "name": str(res.get("name") or "")
+                        or self._result_name_from(_r_url, dl),
+                "mime": str(res.get("mime") or ""),
+                "kind": str(res.get("kind") or ""),
+            })
+        self._tls.result_files = files
+        logger.info("%s: Mesh fertig (%.1fs, rig=%s, %d Datei(en): %s)",
+                    self.name, running_s, sd.get("rig") or self.mesh_rig,
+                    len(blobs),
+                    ", ".join(f"{f['name']} [{f['kind'] or '?'}, {len(b)}B]"
+                              for f, b in zip(files, blobs)))
+        return blobs
+
+
+    def fetch_job(self, job_id: str) -> Dict[str, Any]:
+        """Looks up an EXISTING gateway job once and, if it has finished,
+        downloads its result files — the way to collect a mesh whose run
+        outlived our own poll (timeout, server restart).
+
+        No polling and no GPU slot: the job was submitted long ago, this only
+        reads the job view and the result files. The inputs are not ours to
+        compare (we do not know what the job was fed), so the input-identity
+        check is skipped; the result checksums are still verified.
+
+        Returns ``{"status", "progress", "elapsed_s", "rig", "model",
+        "blobs", "files", "error"}``. ``status`` is the gateway's
+        (``queued``/``running``/``done``/``failed``), ``unknown`` when the
+        gateway does not know the job, ``error`` when it could not be read or
+        downloaded.
+        """
+        self._tls.result_files = []
+        self._tls.input_sha256s = []
+        out: Dict[str, Any] = {"status": "error", "job_id": job_id}
+        try:
+            r = requests.get(f"{self.api_url}/v1/jobs/{job_id}",
+                             headers=self._headers(), timeout=30)
+        except requests.RequestException as e:
+            out["error"] = f"gateway unreachable: {e}"
+            return out
+        if r.status_code == 404:
+            out["status"] = "unknown"
+            out["error"] = f"{self.name}: the gateway does not know job {job_id}"
+            return out
+        if r.status_code != 200:
+            out["error"] = f"{self.name}: job view HTTP {r.status_code}"
+            return out
+        try:
+            sd = r.json() if r.content else {}
+        except ValueError:
+            sd = {}
+        if not isinstance(sd, dict):
+            out["error"] = f"{self.name}: unreadable job view"
+            return out
+        status = str(sd.get("status") or "").lower()
+        out.update({"status": status, "progress": sd.get("progress"),
+                    "elapsed_s": sd.get("elapsed_s"),
+                    "rig": str(sd.get("rig") or "").strip().lower(),
+                    "model": str(sd.get("model") or "").strip()})
+        if status in ("failed", "error"):
+            out["status"] = "failed"
+            out["error"] = str(sd.get("error") or "job failed")[:300]
+            return out
+        if status not in ("done", "completed"):
+            return out
+        out["status"] = "done"
+        try:
+            blobs = self._download_results(
+                sd, job_id, float(sd.get("elapsed_s") or 0))
+        except (requests.RequestException, ValueError) as e:
+            blobs = []
+            logger.error("%s: Job %s download failed: %s", self.name, job_id, e)
+        if not blobs:
+            out["status"] = "error"
+            out["error"] = (f"{self.name}: job {job_id} finished, but its "
+                            f"results could not be downloaded")
+            return out
+        out["blobs"] = blobs
+        out["files"] = list(self._tls.result_files or [])
+        logger.info("%s: job %s fetched (%d file(s))", self.name, job_id,
+                    len(blobs))
+        return out

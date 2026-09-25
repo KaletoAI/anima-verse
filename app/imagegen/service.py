@@ -649,7 +649,6 @@ class ImageService:
         Returns {"ok", "path", "texture_path", "format", "rig", "filename",
         "backend", "stages"}.
         """
-        from pathlib import Path as _P
         # Keyed by VIEW, not by slot name: the backend does the slot mapping
         # from the alias schema.
         refs: Dict[str, str] = {"front": source_image_path}
@@ -742,10 +741,20 @@ class ImageService:
             return {"ok": False, "error": str(e)}
         if not result:
             return {"ok": False, "error": "generation failed"}
-        blobs: List[bytes] = result["blobs"]
         files: List[Dict[str, Any]] = [dict(f, blob=b) for f, b
-                                       in zip(result["files"], blobs)]
+                                       in zip(result["files"], result["blobs"])]
         used_rig = (getattr(used, "mesh_rig", "mixamo") or "mixamo")
+        return self._store_mesh_files(files, used_rig, output_path,
+                                      getattr(used, "name", ""))
+
+    @staticmethod
+    def _store_mesh_files(files: List[Dict[str, Any]], used_rig: str,
+                          output_path: str, backend_name: str) -> Dict[str, Any]:
+        """Stores a mesh job's delivered files (``blob``/``name``/``mime``/
+        ``kind`` each) the way ``generate_mesh`` documents it — shared with
+        ``fetch_mesh_job``, so a fetched job is stored exactly like a fresh
+        one."""
+        from pathlib import Path as _P
 
         # Which of the delivered files this rig must STORE — decided by the
         # artifact token in the gateway file name, never by position/extension.
@@ -797,8 +806,90 @@ class ImageService:
         return {"ok": True, "path": str(out), "texture_path": texture_path,
                 "format": fmt, "rig": used_rig,
                 "filename": model_name or out.name,
-                "backend": getattr(used, "name", ""),
+                "backend": backend_name,
                 "stages": stage_out}
+
+    def fetch_mesh_job(self, job_id: str, output_path: str,
+                       backend_glob: str = "", rig: str = "") -> Dict[str, Any]:
+        """Collects the result of an EXISTING gateway mesh job by its id — for
+        a mesh whose run outlived our own poll (timeout, server restart) but
+        finished on the gateway.
+
+        ``backend_glob`` names the mesh backend whose gateway knows the job;
+        empty = every available img2mesh backend is asked in turn (the
+        rig-matching ones first, each gateway once). ``rig`` is what the caller
+        needs: a job that reports another skeleton is refused, because a
+        wrong-rig mesh binds unusably.
+
+        Reads only — no GPU slot, no queue channel (nothing is generated), and
+        therefore not behind the media master switch. Stores exactly like
+        ``generate_mesh`` (``_store_mesh_files``).
+
+        Returns ``{"status", ...}``: ``stored`` (+ the ``generate_mesh`` result
+        keys), ``queued``/``running`` (+ ``progress``/``elapsed_s``) when the job
+        is not finished yet, else ``unknown``/``failed``/``rig_mismatch``/
+        ``error`` with an ``error`` text.
+        """
+        candidates: List[ImageBackend] = []
+        if backend_glob.strip():
+            b = self._wait_for_explicit_backend(backend_glob, media="mesh")
+            if not b:
+                return {"status": "error",
+                        "error": f"mesh backend '{backend_glob}' unavailable"}
+            candidates = [b]
+        else:
+            meshes = self.list_mesh_backends()
+            candidates = sorted(
+                meshes, key=lambda b: 0 if (getattr(b, "mesh_rig", "mixamo")
+                                            or "mixamo") == rig else 1)
+        # Each gateway is asked once — several aliases usually share one.
+        seen = set()
+        tried: List[ImageBackend] = []
+        for b in candidates:
+            key = (getattr(b, "api_url", ""), getattr(b, "api_key", ""))
+            if key in seen or not hasattr(b, "fetch_job"):
+                continue
+            seen.add(key)
+            tried.append(b)
+        if not tried:
+            return {"status": "error", "error": "no mesh backend available"}
+
+        res: Dict[str, Any] = {}
+        used: Optional[ImageBackend] = None
+        for b in tried:
+            res = b.fetch_job(job_id)
+            used = b
+            if res.get("status") not in ("unknown", "error"):
+                break
+        if res.get("status") != "done":
+            res.pop("blobs", None)
+            res.pop("files", None)
+            return res
+
+        # The job view names the alias it ran on — label and rig come from
+        # THAT backend when we have it configured, not from whichever
+        # sibling alias on the same gateway happened to answer.
+        alias = str(res.get("model") or "")
+        for b in self.list_available_backends(media="mesh"):
+            if alias and getattr(b, "model", "") == alias:
+                used = b
+                break
+        used_rig = res.get("rig") or ""
+        if used_rig not in ("mixamo", "generic", "none"):
+            used_rig = (getattr(used, "mesh_rig", "mixamo") or "mixamo")
+        if rig and used_rig != rig:
+            return {"status": "rig_mismatch",
+                    "error": (f"job {job_id} delivered a '{used_rig}' mesh, "
+                              f"'{rig}' is needed here")}
+        files: List[Dict[str, Any]] = [dict(f, blob=b) for f, b
+                                       in zip(res.get("files") or [],
+                                              res.get("blobs") or [])]
+        stored = self._store_mesh_files(files, used_rig, output_path,
+                                        getattr(used, "name", ""))
+        if not stored.get("ok"):
+            return {"status": "error",
+                    "error": str(stored.get("error") or "store failed")}
+        return {"status": "stored", **stored}
 
     def generate_mesh_variant(self, source_model_path: str, output_path: str,
                               backend_glob: str = "", mesh_name: str = "",
