@@ -16,10 +16,11 @@ import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
 import { bridgePace, clipTransition, locomotionClip, setClipTransitions,
   setLocomotionClips } from '../game/walk';
-import { rootPathAt, toWorld, travelAt } from './bridgeTravel';
+import { clipRootPath, rootPathAt, setClipRootPath, toWorld, travelAt } from './bridgeTravel';
 import type { RootPath } from './bridgeTravel';
+import { relockRootPaths } from './footLockMeasure';
 
-export { rootPathAt };
+export { clipRootPath, rootPathAt, setClipRootPath };
 export type { RootPath };
 
 /**
@@ -91,13 +92,6 @@ const clipRootMotionFlags = new WeakMap<THREE.AnimationClip, boolean>();
 export function setClipRootMotion(clip: THREE.AnimationClip, rootMotion: boolean | undefined): void {
   if (rootMotion !== undefined) clipRootMotionFlags.set(clip, rootMotion);
 }
-
-/** The horizontal travel of an ADAPTED clip, relative to its frame 0, in the
- *  TARGET TEMPLATE's units (the figure's instance scale comes on top, see
- *  `Figure.update`). Built by `adaptExternalClips` from the raw hips track
- *  before its XZ is thrown away, carried onto retargeted clips by
- *  `retargetClips`. A clip without an entry travels nowhere. */
-const clipRootPaths = new WeakMap<THREE.AnimationClip, RootPath>();
 
 interface ManifestModel {
   name: string;
@@ -452,9 +446,9 @@ function retargetClips(
       // A donor clip's root travel (donor template units) rides along,
       // rescaled by the SAME hips-height ratio its hips position track above
       // was rescaled with — one length, one scale.
-      const donorPath = clipRootPaths.get(clip);
+      const donorPath = clipRootPath(clip);
       if (donorPath) {
-        clipRootPaths.set(retargeted, {
+        setClipRootPath(retargeted, {
           times: donorPath.times, xz: donorPath.xz.map((c) => c * hipScale),
         });
       }
@@ -665,7 +659,7 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
     }
     if (tracks.length >= MIN_CLIP_TRACKS) {
       const adapted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
-      if (rootPath) clipRootPaths.set(adapted, rootPath);
+      if (rootPath) setClipRootPath(adapted, rootPath);
       out.push(adapted);
     }
   }
@@ -682,6 +676,20 @@ function warnNoTravelRig(clipName: string): void {
   console.warn(`[figures] ${clipName} carries root motion, but no reference rig is`
     + ' served (/assets/animation-rig) to scale its travel — root-motion clips play'
     + ' in place');
+}
+
+/** Re-lock the bridge travels of `clips` on `template`'s own skeleton
+ *  (`footLockMeasure.relockRootPaths`) and say so in ONE line per model —
+ *  only when a clip carried a travel. `scale` = world metres per template
+ *  unit (`LoadedModel.scale`). A fallback because the rig has no foot bones
+ *  is a warning: that model's feet will slide by the import's measure. */
+function relockOnRig(charName: string, clips: readonly THREE.AnimationClip[],
+                     template: THREE.Object3D, scale: number): void {
+  let line = '';
+  const reports = relockRootPaths(clips, template, 1 / (100 * scale), (msg) => { line = msg; });
+  if (!line) return;
+  if (reports.some((r) => r.reason === 'no foot bones')) console.warn(`[figures] ${charName}: ${line}`);
+  else console.info(`[figures] ${charName}: ${line}`);
 }
 
 /** World height of a rig's hips bone in its rest pose, in the rig's own
@@ -943,7 +951,7 @@ export class FigureLibrary {
       // PER KIND, not all-or-nothing: a fallback rig that ships walk/idle/run
       // (Soldier, Xbot, Robot) keeps those and takes swim, yoga and the rest
       // of the library on top. Its own clips win for their own kinds.
-      const fit = this.fitLibrary(m.name, m.template, m.clips);
+      const fit = this.fitLibrary(m.name, m.template, m.clips, m.scale);
       m.libraryFits = fit.fits;
       if (fit.extra.length) {
         const kinds = fit.extra.map((c) => c.name).sort().join(', ');
@@ -959,6 +967,9 @@ export class FigureLibrary {
       carryClipLoops(donor.clips, m.clips);
       if (!m.clips.length) console.warn(`[figures] ${m.name}: clip retargeting failed`);
       else console.info(`[figures] ${m.name}: ${m.clips.length} clips retargeted from ${donor.name}`);
+      // A borrowed bridge travel is the DONOR's, rescaled by the hips ratio —
+      // re-locked on this skeleton exactly like a library clip.
+      relockOnRig(m.name, m.clips, m.template, m.scale);
     }
     return true;   // server models may still arrive later (fetchCharacterModel)
   }
@@ -1200,7 +1211,7 @@ export class FigureLibrary {
    * for models without any clips of their own.
    */
   private fitLibrary(charName: string, template: THREE.Object3D,
-                     own: readonly THREE.AnimationClip[]
+                     own: readonly THREE.AnimationClip[], scale: number
   ): LibraryFit {
     const candidates = this.clipsFor(charName);
     if (!candidates.length) return { extra: [], fits: false };
@@ -1244,6 +1255,9 @@ export class FigureLibrary {
     // runs. Measured AFTER the filter — a clip this rig will never play costs
     // no skinning samples.
     measureGroundOffsets(extra, template);
+    // The bridge travels, rebuilt on THIS skeleton (`footLockMeasure`): the
+    // imported one holds the feet only on the reference rig's proportions.
+    relockOnRig(charName, extra, template, scale);
     const floats = extra.filter((c) => clipGroundOffset(c) > 0.05)
       .map((c) => `${c.name} +${clipGroundOffset(c).toFixed(2)} m`);
     if (floats.length) {
@@ -1386,7 +1400,7 @@ export class FigureLibrary {
     // 2026-08-13 — a single embedded clip used to lock the whole library out).
     // "generic" rigs (own skeletons) stay clip-less -> procedural idle.
     if (info.rig !== 'generic' && boneNames(template).size) {
-      const fit = this.fitLibrary(name, template, model.clips);
+      const fit = this.fitLibrary(name, template, model.clips, model.scale);
       model.libraryFits = fit.fits;
       if (fit.extra.length) model.clips = [...model.clips, ...fit.extra];
     }
@@ -1738,7 +1752,7 @@ export class Figure {
       }
       // Rule 1: only a HOLDING bridge carries the figure, and only along a
       // clip that brought a travel path.
-      this.travelPath = rule.accel <= 0 ? clipRootPaths.get(bridge.getClip()) ?? null : null;
+      this.travelPath = rule.accel <= 0 ? clipRootPath(bridge.getClip()) ?? null : null;
       this.travelAction = this.travelPath ? bridge : null;
       // Loud on purpose: a bridge is rare (a state change), and when one fires
       // in a loop — the figure keeps starting over — this line is what says

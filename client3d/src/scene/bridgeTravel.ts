@@ -15,6 +15,9 @@
  * Frame of every number here: the clip frame (+Z forward, +X the figure's
  * LEFT), in metres — which unit of metre (the clip's own, a rig's, the world's)
  * is the caller's business.
+ *
+ * It also holds the one per-clip store of bridge travels (`clipRootPath` /
+ * `setClipRootPath`).
  */
 
 /** The horizontal root path of a clip: hips XZ per keyframe. */
@@ -22,6 +25,29 @@ export interface RootPath {
   times: Float32Array;
   /** x0, z0, x1, z1, … */
   xz: Float32Array;
+}
+
+/** The horizontal travel of an ADAPTED clip, relative to its frame 0, in the
+ *  TARGET TEMPLATE's units (the figure's instance scale comes on top, see
+ *  `figures.Figure.update`). Built by `figures.adaptExternalClips` from the
+ *  raw hips track before its XZ is thrown away, carried onto retargeted clips
+ *  by `figures.retargetClips`, rebuilt on each model's own skeleton by
+ *  `footLockMeasure.relockRootPaths`. A clip without an entry travels nowhere.
+ *
+ *  It lives HERE rather than in `figures.ts` so that `footLockMeasure.ts`
+ *  reads and writes it without an import cycle through `figures.ts`, which
+ *  calls `relockRootPaths` and re-exports these two accessors. Keyed by the
+ *  clip object (a `THREE.AnimationClip`); no three import is needed for that. */
+const clipRootPaths = new WeakMap<object, RootPath>();
+
+/** The travel path of a clip, `undefined` when it carries none. */
+export function clipRootPath(clip: object): RootPath | undefined {
+  return clipRootPaths.get(clip);
+}
+
+/** Store (or replace) the travel path of a clip. */
+export function setClipRootPath(clip: object, path: RootPath): void {
+  clipRootPaths.set(clip, path);
 }
 
 /** Root XZ at clip time `t` (linear between keys, clamped at both ends). */
