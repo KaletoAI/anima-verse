@@ -64,6 +64,16 @@ world slides BACKWARDS in these numbers by exactly the travel.
       travel (0, 30).
       [6] stays as derived: both points there are FULL, so the mean of the
       full points is the old mean (path z = 3f).
+[F] SHARED FIXTURE — ``scripts/fixtures/root_motion_cases.json`` is the
+      parity contract with the TypeScript twin (``client3d/src/scene/footLock.ts``,
+      checked by ``client3d/scripts/smoke_foot_lock_math.mjs``). It holds the
+      cases [2], [4], [5], [6], [10] and [11] above — the same inputs, the
+      paths and drifts derived here by hand (each case names its origin in
+      ``"from"``) — plus the constants. This section checks the constants
+      equal ``_root_motion.*`` and runs every case through ground → weights →
+      path, path and drift within 1e-6. Case [10]'s drift runs over BOTH
+      points: B weighs 0.5 in every frame, never FULL, so it adds no run and
+      the drift is A's 0.
 """
 import math
 import sys
@@ -244,6 +254,33 @@ near("A weighs 0.5", weights["LeftFoot"][3], 0.5)
 near("B weighs 0.25", weights["RightFoot"][3], 0.25)
 near_path("path z = 3f", path, [(0.0, 3.0 * f) for f in range(N)])
 near("travel z = 30", path[-1][1], 30.0)
+
+# ------------------------------------------------------ [F] shared fixture
+print("[F] shared fixture (parity contract with client3d/src/scene/footLock.ts)")
+import json  # noqa: E402
+
+fixture = json.loads((ROOT / "scripts/fixtures/root_motion_cases.json").read_text("utf-8"))
+for key, want in fixture["constants"].items():
+    got = getattr(rm, key, None)
+    if isinstance(want, list):
+        check(f"constant {key}", list(got or ()) == want, f"{got!r} vs {want!r}")
+    else:
+        near(f"constant {key}", float(got) if got is not None else math.nan, want, 0.0)
+for case in fixture["cases"]:
+    label = case["from"]
+    tracks = {k: [tuple(p) for p in v] for k, v in case["tracks"].items()}
+    ground = rm.ground_heights(tracks, case["rest"])
+    weights = rm.contact_weights(tracks, ground, case["fps"])
+    path = rm.foot_lock_path(tracks, weights)
+    exp = case["expect"]
+    near_path(f"{label} path", path, [tuple(p) for p in exp["path"]])
+    if "drift_path" in exp:
+        near(f"{label} drift with its path", rm.max_planted_drift(tracks, weights, path),
+             exp["drift_path"])
+    if "drift_zero_path" in exp:
+        near(f"{label} drift with a zero path",
+             rm.max_planted_drift(tracks, weights, [(0.0, 0.0)] * len(path)),
+             exp["drift_zero_path"])
 
 print(f"\n{passed} ok, {failed} failed")
 sys.exit(1 if failed else 0)
