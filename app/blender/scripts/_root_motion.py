@@ -60,18 +60,24 @@ def _finite(p) -> bool:
 
 
 def ground_heights(tracks: Dict[str, List[Vec3]],
-                   rest_heights: Dict[str, float]) -> Dict[str, float]:
+                   rest_heights: Dict[str, float],
+                   lift_tol_cm: float = 0.0) -> Dict[str, float]:
     """Per point the height it rests at when planted: the low percentile of
-    its own heights, but never above its height in the rig's rest pose — a
-    point that never touches the floor must not declare its lowest airborne
-    height the ground."""
+    its own heights, but never above its height in the rig's rest pose plus
+    ``lift_tol_cm`` — a point that never touches the floor must not declare
+    its lowest airborne height the ground.
+
+    ``lift_tol_cm`` is 0 here (the importer measures the raw take on the
+    reference rig). The 3D client's twin passes a tolerance because it
+    measures ADAPTED clips, which its hips chain lifts as a whole by a
+    centimetre or two (``client3d/src/scene/footLockMeasure.ts``)."""
     out = {}
     for name, pts in tracks.items():
         ys = sorted(p[1] for p in pts if _finite(p))
         if not ys:
             continue
         pct = ys[min(len(ys) - 1, int(GROUND_PCT * (len(ys) - 1)))]
-        out[name] = min(pct, rest_heights.get(name, math.inf))
+        out[name] = min(pct, rest_heights.get(name, math.inf) + lift_tol_cm)
     return out
 
 

@@ -29,7 +29,9 @@ import type { Tracks, Vec3 } from './footLock';
  * The imported path stays the real fallback, never a silent zero: a rig
  * without the four contact bones, or one on which no point ever reaches full
  * contact (feet hovering because of its proportions), keeps it — a zero path
- * there would put the figure back into the chair after standing up.
+ * there would put the figure back into the chair after standing up. And it
+ * is kept wherever the rebuilt path would not drift LESS than it on the same
+ * contacts: the rebuild is never worse than the import.
  *
  * Units: the probe measures in TEMPLATE units; `unitsPerCm` (template units
  * per world centimetre at the model's nominal scale, `1 / (100 · scale)`)
@@ -47,16 +49,39 @@ export interface RelockReport {
   clip: string;
   /** Whose travel the clip carries now: rebuilt on this rig, or the import's. */
   used: 'rig' | 'imported';
-  /** Why the imported path was kept: 'no foot bones' | 'no full contact'. */
+  /** Why the imported path was kept: 'no foot bones' | 'no full contact' |
+   *  'imported holds better' (the rebuilt path would not drift less). */
   reason?: string;
-  /** Largest planted-point drift with the path in use, cm (0 when nothing
-   *  was measured or no full-contact run exists). */
+  /** Largest planted-point drift with the path rebuilt on this rig, cm (0
+   *  when nothing was measured or no full-contact run exists). */
   driftCm: number;
   /** The same measurement with the imported path, cm — the comparison. */
   importedDriftCm: number;
   /** End of the path in use, clip frame (x, z), cm at the nominal scale. */
   travel: [number, number];
 }
+
+/** How far over its bind-pose rest height a point may stand and still have
+ *  its planted height taken as its ground, cm (`groundHeights`' lift
+ *  tolerance; the importer uses 0).
+ *
+ *  The client measures ADAPTED clips, and `figures.adaptExternalClips` lifts
+ *  them as a whole: the vertical hips chain scales the bounce against the
+ *  idle clip's hips median (110.18 units) up to the rig's rest (113.03), so
+ *  on the reference rig itself the standing feet of `get-up-chair` sit
+ *  ~1.8 cm higher than in the raw take (LeftFoot 8.71 instead of 6.93 over a
+ *  rest of 7.32). Capped at the rest height, the ground then left those feet
+ *  1.4–3 cm "in the air", and the planted frames lost their full weight
+ *  (9 instead of 88 for LeftFoot). 3 cm covers that lift with room; a point
+ *  that never touches the floor (20 cm and more over its rest) still stays
+ *  out, because its ground is capped at rest + 3 and it stands far above. */
+export const GROUND_LIFT_TOL_CM = 3;
+
+/** How much LESS the rebuilt path must drift than the imported one before it
+ *  replaces it, cm. Anything below a tenth of a millimetre is Float32
+ *  rounding of the stored keys (an exact imported path measures ~6e-7), not
+ *  a better lock. */
+export const RELOCK_MIN_GAIN_CM = 0.01;
 
 /** Sample rate for a clip without a hips position track, fps. */
 const FALLBACK_FPS = 30;
@@ -78,6 +103,8 @@ function sampleTimes(clip: THREE.AnimationClip): number[] {
   return Array.from({ length: n }, (_, i) => (clip.duration * i) / (n - 1));
 }
 
+const IMPORTED_BETTER = 'imported holds better';
+
 /** End of a path relative to its frame 0, in cm. */
 function travelEndCm(path: RootPath, unitsPerCm: number): [number, number] {
   const n = path.times.length;
@@ -90,9 +117,15 @@ function travelEndCm(path: RootPath, unitsPerCm: number): [number, number] {
  *  "foot lock per rig — get-up-chair 0.4 cm (imported 2.2), get-up-bed
  *  imported (no foot bones)". */
 function summaryLine(reports: readonly RelockReport[]): string {
-  const parts = reports.map((r) => (r.used === 'rig'
-    ? `${r.clip} ${r.driftCm.toFixed(1)} cm (imported ${r.importedDriftCm.toFixed(1)})`
-    : `${r.clip} imported (${r.reason})`));
+  const parts = reports.map((r) => {
+    if (r.used === 'rig') {
+      return `${r.clip} ${r.driftCm.toFixed(1)} cm (imported ${r.importedDriftCm.toFixed(1)})`;
+    }
+    if (r.reason === IMPORTED_BETTER) {
+      return `${r.clip} imported ${r.importedDriftCm.toFixed(1)} cm (rig ${r.driftCm.toFixed(1)})`;
+    }
+    return `${r.clip} imported (${r.reason})`;
+  });
   return `foot lock per rig — ${parts.join(', ')}`;
 }
 
@@ -168,7 +201,7 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     action.stop();
     mixer.uncacheClip(clip);
 
-    const weights = contactWeights(tracks, groundHeights(tracks, rest), fps);
+    const weights = contactWeights(tracks, groundHeights(tracks, rest, GROUND_LIFT_TOL_CM), fps);
     const importedCm: Array<[number, number]> = times.map((t) => {
       const o = travelAt(imported, t);
       return [o.x / unitsPerCm, o.z / unitsPerCm];
@@ -183,6 +216,13 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     const path = footLockPath(tracks, weights);
     const driftCm = maxPlantedDrift(tracks, weights, path);
     const importedDriftCm = maxPlantedDrift(tracks, weights, importedCm);
+    // Never worse than the import: measured by the same contacts, a rebuilt
+    // path that does not hold the planted points better is not taken.
+    if (!(driftCm < importedDriftCm - RELOCK_MIN_GAIN_CM)) {
+      reports.push({ clip: clip.name, used: 'imported', reason: IMPORTED_BETTER,
+        driftCm, importedDriftCm, travel: travelEndCm(imported, unitsPerCm) });
+      continue;
+    }
     const xz = new Float32Array(path.length * 2);
     path.forEach(([x, z], i) => { xz[i * 2] = x * unitsPerCm; xz[i * 2 + 1] = z * unitsPerCm; });
     setClipRootPath(clip, { times: Float32Array.from(times), xz });

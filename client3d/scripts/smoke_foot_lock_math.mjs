@@ -27,6 +27,10 @@
  *       all-zero path (`drift_zero_path`, the strip file) where given.
  *       Example, case [2]: one foot at its rest height 8 sliding back 2 cm a
  *       frame → path z = 2f, drift 0 with that path, 20 with a zero path.
+ *       A case with `lift_tol_cm` passes it to groundHeights (the client's
+ *       lift tolerance); with `path_without_tol` it is also run at 0. Example,
+ *       the tolerance case: A at rest 8 + 2.5 sliding −2f, B at rest sliding
+ *       −4f → tol 3: both full, path 3f; tol 0: A weighs 0.833, path 4f.
  *
  *   [D] degenerate inputs, from the Python smoke's [1]/[7]:
  *       ramp(NaN, 2, 5) = 0; ramp(3.5, 2, 5) = (5 − 3.5)/3 = 0.5;
@@ -90,10 +94,15 @@ async function main() {
 
   console.log('[F] shared fixture cases');
   for (const c of fixture.cases) {
-    const ground = fl.groundHeights(c.tracks, c.rest);
+    const ground = fl.groundHeights(c.tracks, c.rest, c.lift_tol_cm ?? 0);
     const weights = fl.contactWeights(c.tracks, ground, c.fps);
     const path = fl.footLockPath(c.tracks, weights);
     nearPath(`${c.from} path`, path, c.expect.path);
+    if ('path_without_tol' in c.expect) {
+      const w0 = fl.contactWeights(c.tracks, fl.groundHeights(c.tracks, c.rest), c.fps);
+      nearPath(`${c.from} path without the tolerance`, fl.footLockPath(c.tracks, w0),
+        c.expect.path_without_tol);
+    }
     if ('drift_path' in c.expect) {
       near(`${c.from} drift with its path`, fl.maxPlantedDrift(c.tracks, weights, path),
         c.expect.drift_path);

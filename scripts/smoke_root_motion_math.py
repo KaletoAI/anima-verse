@@ -71,7 +71,11 @@ world slides BACKWARDS in these numbers by exactly the travel.
       paths and drifts derived here by hand (each case names its origin in
       ``"from"``) — plus the constants. This section checks the constants
       equal ``_root_motion.*`` and runs every case through ground → weights →
-      path, path and drift within 1e-6. Case [10]'s drift runs over BOTH
+      path, path and drift within 1e-6. A case with ``lift_tol_cm`` passes
+      it to ``ground_heights`` (the client's lift tolerance, fix round 1 of
+      the per-rig foot lock; the importer passes 0) and, with
+      ``path_without_tol``, is also checked at 0 — the derivation is in the
+      case's ``note``. Case [10]'s drift runs over BOTH
       points: B weighs 0.5 in every frame, never FULL, so it adds no run and
       the drift is A's 0.
 """
@@ -269,11 +273,16 @@ for key, want in fixture["constants"].items():
 for case in fixture["cases"]:
     label = case["from"]
     tracks = {k: [tuple(p) for p in v] for k, v in case["tracks"].items()}
-    ground = rm.ground_heights(tracks, case["rest"])
+    tol = case.get("lift_tol_cm", 0.0)
+    ground = rm.ground_heights(tracks, case["rest"], tol)
     weights = rm.contact_weights(tracks, ground, case["fps"])
     path = rm.foot_lock_path(tracks, weights)
     exp = case["expect"]
     near_path(f"{label} path", path, [tuple(p) for p in exp["path"]])
+    if "path_without_tol" in exp:
+        w0 = rm.contact_weights(tracks, rm.ground_heights(tracks, case["rest"]), case["fps"])
+        near_path(f"{label} path without the tolerance", rm.foot_lock_path(tracks, w0),
+                  [tuple(p) for p in exp["path_without_tol"]])
     if "drift_path" in exp:
         near(f"{label} drift with its path", rm.max_planted_drift(tracks, weights, path),
              exp["drift_path"])

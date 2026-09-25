@@ -73,6 +73,22 @@
  * [C6] A clip with no root path in the same call is not touched: one report
  *      only (for the [C1] clip), and it still has no path afterwards. A call
  *      with ONLY that clip returns [] and never calls the log sink.
+ * [C7] NEVER WORSE THAN THE IMPORT (fix round 1): the preset path is already
+ *      right, z = 2f. The rebuilt path is z = 2f too, so both drifts are 0
+ *      (the imported one up to the Float32 rounding of its keys, ~6e-7) —
+ *      the rebuild is not lower by more than RELOCK_MIN_GAIN_CM (0.01 cm),
+ *      so the imported path is kept: used 'imported',
+ *      reason 'imported holds better', the stored path is still the preset
+ *      object, and the log line reads
+ *        "foot lock per rig — bridge-g imported 0.0 cm (rig 0.0)".
+ * [C8] LIFT TOLERANCE (fix round 1, GROUND_LIFT_TOL_CM = 3): Legs.position =
+ *      (0, 2.5, −2f) — the whole leg lifted 2.5 cm, as the client's hips chain
+ *      lifts an adapted clip. Feet at 10.5 / toes at 5.5 over rests 8 / 3:
+ *      ground = min(own height, rest + 3) = own height → height 0 → weight 1
+ *      → used 'rig', path z = 2f, driftCm 0, importedDriftCm 10 (preset f).
+ *      Without the tolerance (a0ab6b93): ground = rest, height 2.5 →
+ *      ramp = (5 − 2.5)/3 = 0.833 < FULL → 'no full contact'.
+ *      GROUND_LIFT_TOL_CM itself is exported as 3.
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -98,7 +114,7 @@ async function loadClient() {
   try {
     const src = join(ROOT, 'client3d/src/scene');
     const entry = [
-      `export { relockRootPaths } from '${src}/footLockMeasure';`,
+      `export * from '${src}/footLockMeasure';`,
       `export { clipRootPath, setClipRootPath } from '${src}/bridgeTravel';`,
     ].join('\n');
     const built = await esbuild.build({
@@ -116,7 +132,7 @@ async function loadClient() {
 
 async function main() {
   const THREE = await import('three');
-  const { relockRootPaths, clipRootPath, setClipRootPath } = await loadClient();
+  const { relockRootPaths, clipRootPath, setClipRootPath, GROUND_LIFT_TOL_CM } = await loadClient();
 
   /** The synthetic rig of the docstring, every length × k. */
   const makeRig = (k, { leftToe = true } = {}) => {
@@ -270,6 +286,35 @@ async function main() {
     const none = relockRootPaths([makeClip('idle-only', 1)], rig, 1, (m) => lines.push(m));
     check('only plain clips → [] and no log line', none.length === 0 && lines.length === 0,
       `${none.length} reports, ${lines.length} lines`);
+  }
+
+  console.log('[C7] the imported path is kept when the rebuild does not drift less');
+  {
+    const clip = makeClip('bridge-g', 1);
+    preset(clip, 2);
+    const kept = clipRootPath(clip);
+    const lines = [];
+    const r = relockRootPaths([clip], rig, 1, (m) => lines.push(m))[0];
+    check("used 'imported'", r?.used === 'imported', `${r?.used}`);
+    check("reason 'imported holds better'", r?.reason === 'imported holds better', `${r?.reason}`);
+    check('the stored path is still the preset object', clipRootPath(clip) === kept);
+    near('driftCm 0', r?.driftCm, 0, 1e-3);
+    near('importedDriftCm 0', r?.importedDriftCm, 0, 1e-3);
+    near('travel z 20 cm (the preset end)', r?.travel?.[1], 20, 1e-4);
+    check('log line', lines.length === 1
+      && lines[0] === 'foot lock per rig — bridge-g imported 0.0 cm (rig 0.0)', JSON.stringify(lines));
+  }
+
+  console.log('[C8] feet lifted 2.5 cm as a whole still count as planted');
+  {
+    near('GROUND_LIFT_TOL_CM = 3', GROUND_LIFT_TOL_CM, 3, 0);
+    const clip = makeClip('bridge-h', 1, { lift: 2.5 });
+    preset(clip, 1);
+    const r = relockRootPaths([clip], rig, 1)[0];
+    check("used 'rig'", r?.used === 'rig', `${r?.used} ${r?.reason ?? ''}`);
+    allNear('stored path z = 2f', pathZ(clip), expect2f, 1e-4);
+    near('driftCm 0', r?.driftCm, 0, 1e-3);
+    near('importedDriftCm 10', r?.importedDriftCm, 10, 1e-3);
   }
 
   console.log('[C2] the template is untouched');

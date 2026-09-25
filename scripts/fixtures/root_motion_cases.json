@@ -1,5 +1,5 @@
 {
-  "_comment": "Parity contract of the foot-lock maths: app/blender/scripts/_root_motion.py and client3d/src/scene/footLock.ts must both reproduce every case. Inputs and hand-derived expectations are taken over from scripts/smoke_root_motion_math.py (docstring + code); checked by that smoke's section [F] and by client3d/scripts/smoke_foot_lock_math.mjs. Units: cm, clip frame (Y up, +Z forward). drift_path = max_planted_drift with the case's own path, drift_zero_path = with an all-zero path (the strip file).",
+  "_comment": "Parity contract of the foot-lock maths (lift_tol_cm, optional, default 0, is the ground rule's lift tolerance; path_without_tol is the same case with 0): app/blender/scripts/_root_motion.py and client3d/src/scene/footLock.ts must both reproduce every case. Inputs and hand-derived expectations are taken over from scripts/smoke_root_motion_math.py (docstring + code); checked by that smoke's section [F] and by client3d/scripts/smoke_foot_lock_math.mjs. Units: cm, clip frame (Y up, +Z forward). drift_path = max_planted_drift with the case's own path, drift_zero_path = with an all-zero path (the strip file).",
   "constants": {
     "BAND_LO_CM": 2.0,
     "BAND_HI_CM": 5.0,
@@ -109,6 +109,44 @@
       },
       "expect": {
         "path": [[0.0, 0.0], [0.0, 3.0], [0.0, 6.0], [0.0, 9.0], [0.0, 12.0], [0.0, 15.0], [0.0, 18.0], [0.0, 21.0], [0.0, 24.0], [0.0, 27.0], [0.0, 30.0]]
+      }
+    },
+    {
+      "name": "lift tolerance: a point planted 2.5 cm over its rest counts as full",
+      "from": "fix round 1 (client lift tolerance)",
+      "note": "A: y = 10.5 = rest 8 + 2.5, z = -2f. B: y = 8 = rest, z = -4f. With lift_tol_cm 3: ground A = min(p5 10.5, rest 8 + 3 = 11) = 10.5, height 0 -> weight 1; B ground 8, weight 1; vy 0 for both. Both FULL -> step = -((-2) + (-4))/2 = +3 -> path z = 3f. Without the tolerance (0): ground A = min(10.5, 8) = 8, height 2.5 -> ramp(2.5, 2, 5) = (5 - 2.5)/3 = 0.833 < FULL, so only the full point B steers -> step +4, path z = 4f (path_without_tol). Drift with its own path: A world z = -2f + 3f = f, B = -4f + 3f = -f, one run f = 0..10 -> 10.",
+      "fps": 30.0,
+      "lift_tol_cm": 3.0,
+      "rest": {
+        "LeftFoot": 8.0,
+        "RightFoot": 8.0
+      },
+      "tracks": {
+        "LeftFoot": [[0.0, 10.5, 0.0], [0.0, 10.5, -2.0], [0.0, 10.5, -4.0], [0.0, 10.5, -6.0], [0.0, 10.5, -8.0], [0.0, 10.5, -10.0], [0.0, 10.5, -12.0], [0.0, 10.5, -14.0], [0.0, 10.5, -16.0], [0.0, 10.5, -18.0], [0.0, 10.5, -20.0]],
+        "RightFoot": [[0.0, 8.0, 0.0], [0.0, 8.0, -4.0], [0.0, 8.0, -8.0], [0.0, 8.0, -12.0], [0.0, 8.0, -16.0], [0.0, 8.0, -20.0], [0.0, 8.0, -24.0], [0.0, 8.0, -28.0], [0.0, 8.0, -32.0], [0.0, 8.0, -36.0], [0.0, 8.0, -40.0]]
+      },
+      "expect": {
+        "path": [[0.0, 0.0], [0.0, 3.0], [0.0, 6.0], [0.0, 9.0], [0.0, 12.0], [0.0, 15.0], [0.0, 18.0], [0.0, 21.0], [0.0, 24.0], [0.0, 27.0], [0.0, 30.0]],
+        "path_without_tol": [[0.0, 0.0], [0.0, 4.0], [0.0, 8.0], [0.0, 12.0], [0.0, 16.0], [0.0, 20.0], [0.0, 24.0], [0.0, 28.0], [0.0, 32.0], [0.0, 36.0], [0.0, 40.0]],
+        "drift_path": 10.0
+      }
+    },
+    {
+      "name": "lift tolerance does not ground an airborne point",
+      "from": "smoke_root_motion_math [3] with lift_tol_cm 3",
+      "note": "y = 30 the whole take, rest 8, z = -2f. ground = min(p5 30, rest 8 + 3 = 11) = 11, height 19 >= 5 -> weight 0 -> path all zero, drift 0. Without the tolerance: ground 8, height 22 -> the same zero path.",
+      "fps": 30.0,
+      "lift_tol_cm": 3.0,
+      "rest": {
+        "LeftFoot": 8.0
+      },
+      "tracks": {
+        "LeftFoot": [[0.0, 30.0, 0.0], [0.0, 30.0, -2.0], [0.0, 30.0, -4.0], [0.0, 30.0, -6.0], [0.0, 30.0, -8.0], [0.0, 30.0, -10.0], [0.0, 30.0, -12.0], [0.0, 30.0, -14.0], [0.0, 30.0, -16.0], [0.0, 30.0, -18.0], [0.0, 30.0, -20.0]]
+      },
+      "expect": {
+        "path": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+        "path_without_tol": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+        "drift_path": 0.0
       }
     }
   ]
