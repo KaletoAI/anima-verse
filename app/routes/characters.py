@@ -1663,7 +1663,7 @@ def fetch_character_model3d_job(character_name: str, job: str = "",
             "errors": res.get("errors") or [],
             "warnings": res.get("warnings") or [],
         })
-    code = {"unknown": 404, "busy": 409, "failed": 409,
+    code = {"unknown": 404, "forbidden": 403, "busy": 409, "failed": 409,
             "rig_mismatch": 422}.get(status, 502)
     raise HTTPException(status_code=code,
                         detail=res.get("error") or f"job {job_id}: {status}")

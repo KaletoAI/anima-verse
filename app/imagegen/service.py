@@ -826,9 +826,11 @@ class ImageService:
         ``generate_mesh`` (``_store_mesh_files``).
 
         Returns ``{"status", ...}``: ``stored`` (+ the ``generate_mesh`` result
-        keys), ``queued``/``running`` (+ ``progress``/``elapsed_s``) when the job
-        is not finished yet, else ``unknown``/``failed``/``rig_mismatch``/
-        ``error`` with an ``error`` text.
+        keys and the full ``job_id``), ``queued``/``running`` (+ ``progress``/
+        ``elapsed_s``) when the job is not finished yet, else ``unknown``/
+        ``forbidden``/``failed``/``rig_mismatch``/``error`` with an ``error``
+        text. ``forbidden`` (another gateway user's job) ends the search like
+        a hit: the job exists on that gateway.
         """
         candidates: List[ImageBackend] = []
         if backend_glob.strip():
@@ -889,7 +891,8 @@ class ImageService:
         if not stored.get("ok"):
             return {"status": "error",
                     "error": str(stored.get("error") or "store failed")}
-        return {"status": "stored", **stored}
+        return {"status": "stored", "job_id": res.get("job_id") or job_id,
+                **stored}
 
     def generate_mesh_variant(self, source_model_path: str, output_path: str,
                               backend_glob: str = "", mesh_name: str = "",

@@ -24,6 +24,12 @@ feature's contract (``model3d.fetch_job_for_current_outfit``):
           ("rig_mismatch") — a wrong-rig mesh binds unusably.
   gate  — each gateway is asked once even when several aliases share it; a
           gateway that does not know the job hands over to the next one.
+  owner — the gateway checks the job's OWNER on every read (AI-Hub
+          ``_require_job_owner``): a job of another gateway user answers 403
+          "not your job". That is "forbidden", not "unknown" — the job exists,
+          our key may not read it — and it ends the search like a hit.
+  full  — the job view carries the full ``job_id``; when the gateway resolves
+          a shortened id, the full one is what gets reported and stored.
 
 Usage:  ./.venv/bin/python scripts/smoke_mesh_fetch_job.py
 """
@@ -157,6 +163,19 @@ r = b.fetch_job("bad12345")
 check("sha256 mismatch -> error, no blobs",
       r.get("status") == "error" and "blobs" not in r, str(r))
 
+ROUTES[f"{GW}/v1/jobs/foreign12"] = _Resp(403, {"detail": "not your job"})
+r = b.fetch_job("foreign12")
+check("403 -> forbidden, gateway reason kept",
+      r.get("status") == "forbidden" and "not your job" in r.get("error", ""),
+      str(r))
+
+# a gateway that resolves the short form answers with the FULL id
+FULL = "466a4e41b73d4e31a1ccb07c4ed31b12"
+ROUTES[f"{GW}/v1/jobs/466a4e41b73d"] = _Resp(200, {"job_id": FULL,
+                                                    "status": "running"})
+r = b.fetch_job("466a4e41b73d")
+check("short id asked -> full id reported", r.get("job_id") == FULL, str(r))
+
 
 # --- (c) service: gateway choice, rig gate, storing -------------------------
 print("\n(c) service.fetch_mesh_job")
@@ -213,6 +232,13 @@ res = ImageService.fetch_mesh_job(pool, "run12345",
 check("running job -> running, nothing stored",
       res.get("status") == "running" and not list(out_dir.glob("sig3.*")),
       str(res))
+
+CALLS.clear()
+res = ImageService.fetch_mesh_job(_Pool([b, b_other]), "foreign12",
+                                  str(out_dir / "sig5.fbx"), rig="mixamo")
+check("forbidden ends the search (gw2 not asked)",
+      res.get("status") == "forbidden"
+      and not any(c.startswith(GW2) for c in CALLS), str(CALLS))
 
 res = ImageService.fetch_mesh_job(_Pool([b_generic]), "zzzz9999",
                                   str(out_dir / "sig4.fbx"), rig="generic")

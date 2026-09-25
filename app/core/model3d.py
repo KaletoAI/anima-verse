@@ -1243,7 +1243,7 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
                 "character": character_name,
                 # Collected afterwards, not awaited: the job id says which run
                 # it was, since the options it was made with are unknown here.
-                "job_id": job_id,
+                "job_id": res.get("job_id") or job_id,
             }
             src = find_ref_image(character_name, "tpose", signature)
             if src:
@@ -1258,7 +1258,7 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
             path.with_suffix(".json").write_text(
                 json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
             logger.info("Model3D %s: job %s fetched as %s (%d bytes, "
-                        "combination %s)", character_name, job_id, path.name,
+                        "combination %s)", character_name, meta["job_id"], path.name,
                         path.stat().st_size, signature)
             return {"status": "stored", "meta": meta,
                     "warnings": check["warnings"]}

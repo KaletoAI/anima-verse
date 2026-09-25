@@ -705,11 +705,12 @@ class OpenAIMeshBackend(ImageBackend):
         compare (we do not know what the job was fed), so the input-identity
         check is skipped; the result checksums are still verified.
 
-        Returns ``{"status", "progress", "elapsed_s", "rig", "model",
-        "blobs", "files", "error"}``. ``status`` is the gateway's
-        (``queued``/``running``/``done``/``failed``), ``unknown`` when the
-        gateway does not know the job, ``error`` when it could not be read or
-        downloaded.
+        Returns ``{"status", "job_id", "progress", "elapsed_s", "rig", "model",
+        "blobs", "files", "error"}`` — ``job_id`` is the full id the job view
+        reports. ``status`` is the gateway's (``queued``/``running``/``done``/
+        ``failed``), ``unknown`` when the gateway does not know the job,
+        ``forbidden`` when it belongs to another gateway user, ``error`` when
+        it could not be read or downloaded.
         """
         self._tls.result_files = []
         self._tls.input_sha256s = []
@@ -724,6 +725,19 @@ class OpenAIMeshBackend(ImageBackend):
             out["status"] = "unknown"
             out["error"] = f"{self.name}: the gateway does not know job {job_id}"
             return out
+        if r.status_code in (401, 403):
+            # The job exists but belongs to another gateway user than our key
+            # (the gateway checks the owner on every job read) — asking the
+            # next gateway would not help, and "unknown" would be a lie.
+            try:
+                detail = str((r.json() or {}).get("detail") or "")
+            except ValueError:
+                detail = ""
+            out["status"] = "forbidden"
+            out["error"] = (f"{self.name}: job {job_id} belongs to another "
+                            f"gateway user than this backend's API key"
+                            + (f" (gateway: {detail})" if detail else ""))
+            return out
         if r.status_code != 200:
             out["error"] = f"{self.name}: job view HTTP {r.status_code}"
             return out
@@ -734,6 +748,10 @@ class OpenAIMeshBackend(ImageBackend):
         if not isinstance(sd, dict):
             out["error"] = f"{self.name}: unreadable job view"
             return out
+        # The view carries the FULL id — what was asked for may be the short
+        # form a gateway page shows, if the gateway resolves prefixes.
+        job_id = str(sd.get("job_id") or sd.get("id") or job_id)
+        out["job_id"] = job_id
         status = str(sd.get("status") or "").lower()
         out.update({"status": status, "progress": sd.get("progress"),
                     "elapsed_s": sd.get("elapsed_s"),
