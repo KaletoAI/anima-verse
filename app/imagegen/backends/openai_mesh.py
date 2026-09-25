@@ -96,6 +96,38 @@ _UPLOAD_MIME = {
 # alias that is comes from the SCHEMA, never from a name match in code.
 LOD_FACES_PARAM = "input_lod_faces"
 
+# An input image counts as already cut out when at least this share of its
+# pixels is (near) fully transparent — a real alpha cut-out, not a stray
+# transparent pixel or an RGBA file that is opaque everywhere.
+CUT_OUT_MIN_TRANSPARENT = 0.01
+_CUT_OUT_ALPHA_MAX = 8
+
+
+def image_is_cut_out(raw: bytes) -> bool:
+    """True when the image bytes already carry no background: an alpha
+    channel (or a palette transparency) with a real transparent area.
+
+    Such an input must go out with ``input_remove_background: false`` — a
+    second background removal on the gateway has nothing to remove and eats
+    into the subject instead. An unreadable image counts as NOT cut out, so
+    the configured removal still applies."""
+    import io
+
+    from PIL import Image, UnidentifiedImageError
+    try:
+        img = Image.open(io.BytesIO(raw))
+        img.load()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False
+    if "A" not in img.getbands() and "transparency" not in img.info:
+        return False
+    alpha = img.convert("RGBA").getchannel("A")
+    total = alpha.width * alpha.height
+    if not total:
+        return False
+    clear = sum(alpha.histogram()[:_CUT_OUT_ALPHA_MAX + 1])
+    return clear / total >= CUT_OUT_MIN_TRANSPARENT
+
 
 def normalize_lod_faces(value: Any) -> List[int]:
     """Requested LOD stages as a clean list of positive ints — accepts one
@@ -452,9 +484,14 @@ class OpenAIMeshBackend(ImageBackend):
             faces = self.face_num_max
         return max(0, faces)
 
-    def build_alias_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def build_alias_params(self, params: Dict[str, Any], *,
+                           inputs_cut_out: bool = False) -> Dict[str, Any]:
         """The ``params`` block of the generation request — every key a public
         ``input_*`` name of the alias schema (mesh-client-spec § 1/3).
+
+        ``inputs_cut_out`` = every input image already has no background
+        (``image_is_cut_out``): background removal is then switched OFF
+        regardless of the config.
 
         Public so the param mapping can be checked without a gateway
         (scripts/smoke_mesh_gateway.py)."""
@@ -467,10 +504,11 @@ class OpenAIMeshBackend(ImageBackend):
         }
         # Background removal is an IMAGE step — the shrink alias does not
         # declare it (and would ignore it), so it goes out only where the
-        # schema knows it.
+        # schema knows it. Inputs that are already cut out must NOT be cut
+        # again: there is no background left, only the subject to damage.
         if self._declares("input_remove_background"):
-            alias_params["input_remove_background"] = bool(params.get(
-                "remove_background", self.remove_background))
+            alias_params["input_remove_background"] = False if inputs_cut_out \
+                else bool(params.get("remove_background", self.remove_background))
         # Detail count: the mesh aliases call it input_face_num, the splat
         # pipeline (Triposplat) has no face param and takes input_num_gaussians
         # instead — SAME value under whichever the alias declares. 0 = send
@@ -524,6 +562,7 @@ class OpenAIMeshBackend(ImageBackend):
             "params": {},
             "mode": "async",
         }
+        inputs_cut_out = False
         if input_files:
             payload["files"] = input_files
         else:
@@ -532,10 +571,14 @@ class OpenAIMeshBackend(ImageBackend):
             views = self._input_images(params)
             slot_paths = self.select_slot_images(self._image_slots, views)
             images: Dict[str, str] = {}
+            # A URL is fetched by the gateway — we cannot look at it, so it
+            # never counts as cut out.
+            cut_out_flags: List[bool] = []
             for slot, src in slot_paths.items():
                 is_front = self._slot_view(slot) == "front"
                 if src.startswith(("http://", "https://")):
                     images[slot] = src
+                    cut_out_flags.append(False)
                     continue
                 p = Path(src)
                 if not p.exists():
@@ -548,14 +591,17 @@ class OpenAIMeshBackend(ImageBackend):
                     continue
                 raw = p.read_bytes()
                 self._remember_input(raw)
+                cut_out_flags.append(image_is_cut_out(raw))
                 images[slot] = base64.b64encode(raw).decode("utf-8")
             if not any(self._slot_view(s) == "front" for s in images):
                 logger.error("%s: kein Eingangsbild fuer die Mesh-Generierung",
                              self.name)
                 return []
             payload["images"] = images
+            inputs_cut_out = bool(cut_out_flags) and all(cut_out_flags)
 
-        alias_params = self.build_alias_params(params)
+        alias_params = self.build_alias_params(params,
+                                               inputs_cut_out=inputs_cut_out)
         payload["params"] = alias_params
 
         url = f"{self.api_url}{self.mesh_endpoint}"
@@ -571,10 +617,13 @@ class OpenAIMeshBackend(ImageBackend):
         shas = list(getattr(self._tls, "input_sha256s", None) or [])
         n_inputs = len(input_files) if input_files else len(payload.get("images") or {})
         lod = alias_params.get(LOD_FACES_PARAM) or "-"
-        logger.info("%s: starte Mesh-Job (Alias=%s, faces=%s, lod=%s, "
-                    "name='%s', Eingang=%s images=%d sha256=%s)", self.name,
+        logger.info("%s: starting mesh job (alias=%s, faces=%s, lod=%s, "
+                    "name='%s', input=%s images=%d cut_out=%s "
+                    "remove_background=%s sha256=%s)", self.name,
                     payload["model"], faces, lod, alias_params["input_name"],
                     "mesh" if input_files else "image", n_inputs,
+                    inputs_cut_out,
+                    alias_params.get("input_remove_background", "-"),
                     shas[0][:12] if shas else "-")
         job_id = submit_job(self, url, payload, "Mesh")
         if not job_id:

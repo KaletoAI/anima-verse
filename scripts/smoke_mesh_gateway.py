@@ -60,6 +60,13 @@ currently prints:
   gateway note (2026-08-03) — the job view gains ``input_images[]`` with
          ``sha256`` (like ``results[]``) after the input-mix-up fix: compare it
          against what we uploaded; absent field = old gateway = no check.
+  § 3.2 input_remove_background — an input that has NO background any more
+         (a real alpha cut-out) must go out with ``false``: a second removal
+         has nothing to take away but the subject. "Cut out" = at least 1 %
+         of the pixels have alpha <= 8; a stray transparent pixel or an RGBA
+         file opaque everywhere still has its background. A run is cut out
+         only when EVERY image it uploads is; a URL input cannot be looked
+         at and never counts as cut out.
 
 Usage:  ./.venv/bin/python scripts/smoke_mesh_gateway.py
 """
@@ -77,9 +84,10 @@ from app.core.model_validate import (glb_capabilities_at,  # noqa: E402
                                      shrink_capability)
 from app.imagegen.backends._gateway_job import (  # noqa: E402
     _TERMINAL_JOB_ERROR)
+import app.imagegen.backends.openai_mesh as openai_mesh  # noqa: E402
 from app.imagegen.backends.openai_mesh import (  # noqa: E402
     LOD_FACES_PARAM, MESH_UPLOAD_MAX_BYTES, OpenAIMeshBackend,
-    normalize_lod_faces)
+    image_is_cut_out, normalize_lod_faces)
 from app.imagegen.base import (BackendBusyError,  # noqa: E402
                                GatewayInputMismatchError, GatewayRejectedError)
 from app.imagegen.selection import BackendPool  # noqa: E402
@@ -630,6 +638,100 @@ check("the subject stays the prefix (attributable in the job view)",
 check("a subject id ending in digits still yields a non-stage job name",
       mesh_lod_stage_faces({"name": _unique_mesh_name("prop_2000") + ".glb"}) == 0,
       _unique_mesh_name("prop_2000"))
+
+# --- (l) no second background removal on cut-out inputs (§ 3.2) ------------
+print("\n(l) input_remove_background: false for inputs without a background")
+import io  # noqa: E402
+
+from PIL import Image  # noqa: E402
+
+
+def png(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def cut_out_png() -> bytes:
+    """64x64, opaque 32x32 subject in the middle: 3072/4096 = 75 % clear."""
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    img.paste(Image.new("RGBA", (32, 32), (200, 80, 40, 255)), (16, 16))
+    return png(img)
+
+
+def with_clear_pixels(n: int) -> bytes:
+    """100x100 opaque RGBA with the first ``n`` pixels fully transparent."""
+    img = Image.new("RGBA", (100, 100), (90, 90, 90, 255))
+    for i in range(n):
+        img.putpixel((i % 100, i // 100), (0, 0, 0, 0))
+    return png(img)
+
+
+OPAQUE_RGB = png(Image.new("RGB", (64, 64), (240, 240, 240)))
+check("plain RGB render -> has a background",
+      image_is_cut_out(OPAQUE_RGB) is False)
+check("RGBA that is opaque everywhere -> has a background",
+      image_is_cut_out(png(Image.new("RGBA", (64, 64), (9, 9, 9, 255)))) is False)
+check("RGBA with a transparent surround (75 %) -> cut out",
+      image_is_cut_out(cut_out_png()) is True)
+check("one stray transparent pixel (0.01 %) -> still a background",
+      image_is_cut_out(with_clear_pixels(1)) is False)
+check("exactly 1 % transparent (100 of 10000) -> cut out",
+      image_is_cut_out(with_clear_pixels(100)) is True)
+check("99 of 10000 transparent -> below the 1 % line",
+      image_is_cut_out(with_clear_pixels(99)) is False)
+_pal = Image.new("P", (64, 64), 0)
+_pal.putpalette([0, 0, 0, 200, 80, 40] + [0] * 762)
+_pal.paste(1, (16, 16, 48, 48))
+_pal.info["transparency"] = 0
+check("palette PNG with a transparent index -> cut out",
+      image_is_cut_out(png(_pal)) is True)
+check("unreadable bytes -> not cut out (configured removal applies)",
+      image_is_cut_out(b"not an image") is False)
+
+b = backend("img2mesh-mv", declared=FULL)
+check("config ON, inputs with background -> true",
+      b.build_alias_params({}).get("input_remove_background") is True)
+check("config ON, inputs cut out -> false",
+      b.build_alias_params({}, inputs_cut_out=True)
+      .get("input_remove_background") is False)
+b.remove_background = False
+check("config OFF stays off with a background",
+      b.build_alias_params({}).get("input_remove_background") is False)
+b.remove_background = True
+
+# Through the real request builder: capture the payload instead of submitting.
+_sent = []
+_orig_submit = openai_mesh.submit_job
+openai_mesh.submit_job = lambda _b, _u, payload, _k: _sent.append(payload) or ""
+try:
+    with tempfile.TemporaryDirectory() as tmp:
+        cut, bg = Path(tmp) / "cut.png", Path(tmp) / "bg.png"
+        cut.write_bytes(cut_out_png())
+        bg.write_bytes(OPAQUE_RGB)
+
+        def sent_flag(slots, refs):
+            _sent.clear()
+            b._image_slots = list(slots)
+            b._generate("", "", {"reference_images": refs, "mesh_name": "m"})
+            return _sent[0]["params"].get("input_remove_background") if _sent else "none"
+
+        MV = ["input_image_front", "input_image_back"]
+        got = sent_flag(MV, {"front": str(cut), "back": str(cut)})
+        check("all views cut out -> false in the request", got is False, str(got))
+        got = sent_flag(MV, {"front": str(cut), "back": str(bg)})
+        check("one view with a background -> true (it needs the removal)",
+              got is True, str(got))
+        got = sent_flag(MV, {"front": str(cut), "back": "http://img.invalid/b.png"})
+        check("a URL view cannot be inspected -> true", got is True, str(got))
+        got = sent_flag(["input_image"], {"front": str(cut), "back": str(bg)})
+        check("single-slot alias: only the (cut-out) front counts -> false",
+              got is False, str(got))
+        got = sent_flag(["input_image"], {"front": str(bg)})
+        check("single-slot alias, front with background -> true",
+              got is True, str(got))
+finally:
+    openai_mesh.submit_job = _orig_submit
 
 
 print()
