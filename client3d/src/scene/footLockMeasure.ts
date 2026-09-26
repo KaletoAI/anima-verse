@@ -709,10 +709,13 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     let driftCm = useRig ? rebuiltDriftCm : importedDriftCm;
     let pinnedCm = 0;
     let liftCm = 0;
+    /** the contacts of the clip as it PLAYS: the pin's, once it moved feet */
+    let playedWeights = weights;
     if (legs && pinLegs(clip, times, legs, legFrames, tracks, ground, rest, weights, inUse, fps)) {
       const after = emptyTracks();
       sampleOnProbe(mixer, probe, clip, times, () => readPoints(after));
       driftCm = maxPlantedDrift(after, weights, inUse);
+      playedWeights = contactWeights(after, ground, fps);
       for (const leg of LEGS) {
         after[leg.ankle].forEach((p, f) => {
           const o = tracks[leg.ankle][f];
@@ -721,8 +724,11 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
         });
       }
     }
-    // The bridge's height on the clip as it now plays (the pin moved feet).
-    storeLift(clip, times, firstFullContact(weights, times, clip.duration));
+    // The bridge's height on the clip as it now plays (the pin moved feet) —
+    // its end lift AND its first contact: a foot the pin put down on the
+    // floor touches earlier than the weights before the pin say, and the
+    // ramp that brings the body onto `endLift` has to be over by then.
+    storeLift(clip, times, firstFullContact(playedWeights, times, clip.duration));
     reports.push({
       clip: clip.name, used: useRig ? 'rig' : 'imported',
       ...(useRig ? {} : { reason: IMPORTED_BETTER }),

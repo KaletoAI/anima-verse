@@ -7,8 +7,9 @@
  *
  * Usage:  node client3d/scripts/smoke_bridge_lift.mjs
  *         (bundles the client modules itself; part [V] reads the clips
- *          idle, walk, get-up-bed, get-up-chair and the two clips they leave
- *          from shared/models/clips — READ ONLY)
+ *          idle, walk, get-up-bed, get-up-chair, the pair half handshake__a
+ *          and the two clips the bridges leave from shared/models/clips —
+ *          READ ONLY)
  *
  * WHICH CLIPS ARE LEFT (`bridgeSources.mjs`): the lying clip is the first
  * `from` the live transition table (`shared/config/clip_transitions.json`,
@@ -177,11 +178,48 @@
  *      clip but still the seat's point), so it opens with startLift 0; 0.5 s
  *      later the server's stand point arrives at the floor. The owner puts the
  *      root on it and hands the difference over (`shiftBridgeLift`); 0.5 s is
- *      before every rig's ramp (firstContactS − 0.6 >= 1.4 s, INFO), so the
+ *      before every rig's ramp (firstContactS − 0.6 >= 1.26 s, INFO; the
+ *      first contact is read off the clip AFTER the leg pin since the final
+ *      review — before that the earliest ramp was 1.4 s), so the
  *      carry is 0 and the run from there on is the normal one: [V2] holds
  *      (last bridge frame, lowest foot − floor within ±1.5 cm) and no frame
  *      moves the drawn root more than the [V5] bound of the normal bed run
  *      (the same Δ and D).
+ * [P] A PAIR CLIP TAKES THE FIGURE MID-BRIDGE (final review, finding 1), NPC,
+ *     bed 0.46, three rigs: PAIR_AT_S = 0.8 s into get-up-bed the server hands
+ *     the NPC the interaction `handshake`, role a (anchor on the ground, no
+ *     place → `tickInteraction` puts the root on the anchor's floor, y = 0).
+ *     `playPair` fades the bridge out over 0.25 s; three.js then disables the
+ *     action (weight 0), so its time stands still and "finished" never comes.
+ *     BEFORE: `playPair` left the bridge as the transition, so `bridging`,
+ *     `holdsHeight` and the frozen lift stayed until the wall-clock deadline
+ *     (clip length 4.067 + 0.5 s after the start): the clip time froze once
+ *     the fade was over, at 0.8 + 8 frames = 1.067 s, before every rig's ramp
+ *     (>= 1.26 s, [V6]), so the lift stayed startLift = S − 0.001·H − 0.01 =
+ *     0.46 − 0.0017 − 0.01 = 0.4483 m (reference: 0.46 − 0.0020 − 0.01 =
+ *     0.4480 m) and the handshaking figure floated 44.8 cm over the anchor.
+ *     NOW `playPair` releases the bridge before the takeover (`releaseBridge`,
+ *     the one end of every bridge):
+ *     [P1] on the takeover frame `bridging`, `holdsHeight`, `holdsFacing` are
+ *          false and `paceLimit` is 1 (before: bridging true, holdsHeight
+ *          true, pace 0). INFO: the lift on that frame is already startLift ×
+ *          the bridge's weight after one frame of the fade, (1 − (1/30)/0.25)
+ *          = 0.8667 → 0.4483 · 0.8667 = 38.85 cm (reference 38.83 cm).
+ *     [P2] PAIR_CHECK_S = 0.3 s after the takeover (the 0.25 s fade is over,
+ *          weight 0): the lift is exactly 0, so the body is the pair clip's
+ *          pose on the anchor's floor and nothing else — its lowest foot
+ *          equals that of a CONTROL figure that stood (idle, no bridge) and
+ *          got the same interaction, at the same phase, within 1 mm. The
+ *          brief asked for "feet within ±2 cm of the anchor floor"; that
+ *          absolute bound does not hold for the clip itself — the control's
+ *          lowest foot at phase 0.3 s is 4.30 / 4.69 / 3.80 cm over its root
+ *          (INFO; the handshake steps in) — so the floor is measured THROUGH
+ *          the control, which stands on it. Before (figures.ts of 819f1571): 49.13 / 49.52 / 48.60 cm
+ *          (= control + 44.8 cm).
+ *     [P4] the interaction ends PAIR_END_S = 0.5 s after the takeover (well
+ *          before the old deadline): two frames later the figure plays what
+ *          `tick` asks for (walk to its stand point, then idle), not the pair
+ *          half — `play` is not blocked. Before: handshake__a on every frame.
  * INFO: per rig the measured endLift (world cm) and firstContactS.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -212,6 +250,12 @@ const V4_AFTER_S = 1.0;
 const V4_ROOT_TOL = 0.01;
 const V4_FOOT_TOL = 0.02;
 const RED_MAX = -0.25;
+const PAIR_CLIP = 'handshake__a';  // tracked pair half (smoke_clip_pair)
+const PAIR_AT_S = 0.8;            // bridge clip time the pair takes the figure
+const PAIR_FADE_S = 0.25;         // playPair's crossfade
+const PAIR_CHECK_S = 0.3;         // when [P2]/[P3] measure, after the takeover
+const PAIR_END_S = 0.5;           // the interaction ends, [P4]
+const P_SAME_TOL = 0.001;
 
 globalThis.self = globalThis;
 if (!globalThis.window) globalThis.window = globalThis;
@@ -248,8 +292,8 @@ async function loadClient() {
     const entry = [
       `export { BRIDGE_FADE_IN_S, LIFT_RAMP_S, fadeCarry, liftAt, liftRamp, clipBridgeLift,`
         + ` setClipBridgeLift } from '${src}/scene/bridgeLift';`,
-      `export { toWorld } from '${src}/scene/bridgeTravel';`,
-      `export { adaptExternalClips, Figure, setClipRootMotion } from '${src}/scene/figures';`,
+      `export { rootPathAt, toWorld } from '${src}/scene/bridgeTravel';`,
+      `export { adaptExternalClips, extractRootPath, Figure, setClipRootMotion } from '${src}/scene/figures';`,
       `export { relockRootPaths } from '${src}/scene/footLockMeasure';`,
       `export { measureGroundOffsets } from '${src}/scene/clipGround';`,
       `export { NpcManager } from '${src}/scene/npcs';`,
@@ -324,7 +368,8 @@ async function main() {
   for (const [kind, src] of [['get-up-bed', bedFrom], ['get-up-chair', chairFrom]]) {
     console.log(src ? `\n[V] ${kind} leaves ${src.kind} — ${src.note}` : `\n[V] ${kind}: SKIPPED (see above)`);
   }
-  const KINDS = ['idle', 'walk', 'get-up-bed', 'get-up-chair', ...[bedFrom, chairFrom].filter(Boolean).map((x) => x.kind)];
+  const KINDS = ['idle', 'walk', 'get-up-bed', 'get-up-chair', PAIR_CLIP,
+    ...[bedFrom, chairFrom].filter(Boolean).map((x) => x.kind)];
   const side = {};
   const raw = {};
   for (const k of KINDS) {
@@ -335,6 +380,11 @@ async function main() {
     }
     raw[k] = await loadClip(k);
   }
+  // The pair clip's root path, kept aside BEFORE the adaptation strips the
+  // hips' XZ — exactly what `FigureLibrary` does (`pairRoots`). The stand-in
+  // library below answers the one question `tickInteraction` asks of it.
+  const pairPath = C.extractRootPath(raw[PAIR_CLIP]);
+  const pairLib = { pairRootAt: (clip, t) => (clip === PAIR_CLIP ? C.rootPathAt(pairPath, t) : null) };
   const refRig = fbx.parse(arrayBufferOf(await readFile(RIG_FILE)), '');
   const donorRest = C.restPoseOf(THREE, refRig);
   const donorHipsY = C.rigHipsHeight(THREE, refRig);
@@ -405,7 +455,7 @@ async function main() {
 
     /** One figure lying / sitting on its slot, the stand-up, and every frame
      *  measured until `afterS` past the bridge. */
-    const run = (scenario, bridgeKind, S, { liftOff = false, lateFloorS = 0 } = {}) => {
+    const run = (scenario, bridgeKind, S, { liftOff = false, lateFloorS = 0, pairAtS = 0 } = {}) => {
       const fromKind = FROM[bridgeKind];
       const drop = (bridgeKind === 'get-up-bed' ? LIE_ROOT_DROP : SEAT_ROOT_DROP) * H;
       const saved = clipOf(bridgeKind) && C.clipBridgeLift(clipOf(bridgeKind));
@@ -433,7 +483,7 @@ async function main() {
         interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0,
         settle: null,
       };
-      const mgr = new C.NpcManager(null);
+      const mgr = new C.NpcManager(pairLib);
       mgr.npcs.set(name, npc);
       const seat = new THREE.Vector3(0, S - drop, 0);
       const avatar = scenario !== 'npc';
@@ -455,8 +505,11 @@ async function main() {
       /** The poll that carries the stand point — the REAL `update()`, since
        *  Task C4 decides the goal there (the point, or the spot the bridge
        *  left the figure on). */
+      /** [P]: the pair interaction the server hands this NPC (null = none) —
+       *  every poll carries it while it runs, as the worldmap does. */
+      let pair = null;
       const poll = () => mgr.update([{ char: { name, activity: '', activity_animation: 'idle' },
-        pos: standPoint.clone() }]);
+        pos: standPoint.clone(), interaction: pair }]);
       const keyHeld = scenario === 'avatar_key';
       if (avatar) {
         mgr.setPlayerAnimation(name, keyHeld ? 'walk' : null);
@@ -484,7 +537,24 @@ async function main() {
       /** the NPC kept the spot its bridge left it on (Task C4): it goes into
        *  idle, not walk */
       let settled = false;
+      /** [P]: the frame index the pair took the figure, and the rows after it */
+      let pairFrame = -1;
+      const pairRows = [];
       for (let f = 0; f < FPS * 15; f++) {
+        if (pairAtS && pairFrame < 0 && bridgeFrame >= 0 && (bridgeFrame + 1) * DT >= pairAtS - 1e-9) {
+          pair = { id: 'p1', kind: PAIR_CLIP.split('__')[0], role: 'a', partner: 'nobody',
+            anchor: { x: standPoint.x, z: standPoint.z, yaw: YAW + Math.PI, place_id: null },
+            started_at_game: 'Y0001-D001T00:00:00', elapsed_s: 0, rate: 1,
+            clip_duration_s: raw[PAIR_CLIP].duration, loop: false };
+          poll();
+          sinceUpdate = 0;
+          pairFrame = f;
+        }
+        if (pairFrame >= 0 && pair && (f - pairFrame) * DT >= PAIR_END_S - 1e-9) {
+          pair = null;
+          poll();
+          sinceUpdate = 0;
+        }
         const late = lateFloorS && f * DT < lateFloorS - 1e-9;
         if (!avatar && !late && (sinceUpdate >= 1.0 || (lateFloorS && Math.abs(f * DT - lateFloorS) < DT / 2))) {
           poll();
@@ -502,6 +572,15 @@ async function main() {
         }
         mgr.tick(DT, 10);
         sinceUpdate += DT;
+        if (pairFrame >= 0) {
+          // read BEFORE `bridging` below, which could end a timed-out bridge
+          const m = measure();
+          pairRows.push({ ...m, s: (f - pairFrame + 1) * DT, lift: inst.position.y - groundY,
+            bridging: figure.bridging, holdsHeight: figure.holdsHeight, holdsFacing: figure.holdsFacing,
+            pace: figure.paceLimit, clipKind: figure.root.userData.clipKind });
+          if ((f - pairFrame + 1) * DT > PAIR_END_S + 0.2) break;
+          continue;
+        }
         const bridging = figure.bridging;
         if (bridging) { seen = true; bridgeFrame += 1; }
         const m = measure();
@@ -532,7 +611,7 @@ async function main() {
         prev = x.drawn;
       }
       return { before, rows, br, af, last: br[br.length - 1], startLift, lift: spec, ramp, stepBound, maxStep,
-        settled, handOverM: settled ? Math.hypot(npc.settle.offset.x, npc.settle.offset.z) : NaN };
+        settled, handOverM: settled ? Math.hypot(npc.settle.offset.x, npc.settle.offset.z) : NaN, pairRows };
     };
     const stepCheck = (label, r) => check(`${label}: no bridge frame moves the drawn root more than`
       + ` 1.5·|Δ|/D·dt = ${cm(r.stepBound)} (D ${(r.ramp.to - r.ramp.from).toFixed(3)} s)`,
@@ -612,6 +691,68 @@ async function main() {
         check(`[V6] ${tag}: last bridge frame, lowest foot − floor within ±1.5 cm`,
           Math.abs(footEnd) <= V2_TOL, cm(footEnd));
         stepCheck(`[V6] ${tag}`, r);
+      }
+    }
+
+    // [P] a pair clip takes the NPC over PAIR_AT_S into get-up-bed.
+    if (bedFrom) {
+      /** Control: the same pair half on a figure that stood (idle, no
+       *  bridge), measured the same PAIR_CHECK_S after the interaction came. */
+      const pairControl = () => {
+        const figure = new C.Figure({ name: rig.label, template, clips: lib, scale, height: H,
+          assignOnly: true, noClips: false, tier: 'full', libraryFits: true });
+        const owner = new THREE.Group();
+        owner.add(figure.root);
+        const feet = [];
+        figure.root.children[0].traverse((o) => { if (o.isBone && FOOT_KEYS.includes(keyOf(o.name))) feet.push(o); });
+        const name = `${rig.label}-pair-control`;
+        const npc = {
+          name, animation: 'idle', root: owner, figure, ring: null, sprite: null,
+          label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' },
+          labelBubble: null, bubbleUntil: 0, target: new THREE.Vector3(0, FLOOR, 0), pace: 1, face: null,
+          waypoints: [], ride: null, route: null, travelling: false, reckon: null,
+          interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0, settle: null,
+        };
+        const mgr = new C.NpcManager(pairLib);
+        mgr.npcs.set(name, npc);
+        owner.position.set(0, FLOOR, 0);
+        for (let i = 0; i < 2 * FPS; i++) mgr.tick(DT, 10);
+        mgr.update([{ char: { name, activity: '', activity_animation: 'idle' }, pos: new THREE.Vector3(0, FLOOR, 0),
+          interaction: { id: 'c1', kind: PAIR_CLIP.split('__')[0], role: 'a', partner: 'nobody',
+            anchor: { x: 0, z: 0, yaw: YAW + Math.PI, place_id: null }, started_at_game: 'Y0001-D001T00:00:00',
+            elapsed_s: 0, rate: 1, clip_duration_s: raw[PAIR_CLIP].duration, loop: false } }]);
+        let foot = Infinity;
+        for (let i = 0; i < Math.round(PAIR_CHECK_S / DT); i++) mgr.tick(DT, 10);
+        owner.updateMatrixWorld(true);
+        for (const b of feet) foot = Math.min(foot, b.getWorldPosition(v).y);
+        const out = { foot, root: owner.position.y };
+        figure.dispose();
+        return out;
+      };
+      const S = BEDS[0];
+      const tag = `${rig.label} bed ${S.toFixed(2)} npc, pair ${PAIR_CLIP} at ${PAIR_AT_S} s`;
+      const r = run('npc', 'get-up-bed', S, { pairAtS: PAIR_AT_S });
+      const rows = r.pairRows;
+      const ctl = pairControl();
+      if (!rows.length) check(`[P] ${tag}: the pair took the figure`, false);
+      else {
+        const first = rows[0];
+        const at = rows.find((x) => Math.abs(x.s - PAIR_CHECK_S) < DT / 2);
+        const endRows = rows.filter((x) => x.s >= PAIR_END_S + 2 * DT - 1e-9);
+        const floor = at.root;   // the anchor's floor: tickInteraction puts the root on it
+        console.log(`  info [P] ${tag}: lift at the takeover frame ${cm(first.lift)}, the anchor floor y ${cm(floor)},`
+          + ` control (stood, no bridge) lowest foot ${cm(ctl.foot - ctl.root)} over its root`);
+        check(`[P1] ${tag}: the takeover frame releases the bridge (bridging, holdsHeight, holdsFacing false; pace 1)`,
+          !first.bridging && !first.holdsHeight && !first.holdsFacing && first.pace === 1,
+          `bridging ${first.bridging}, holdsHeight ${first.holdsHeight}, holdsFacing ${first.holdsFacing}, pace ${first.pace}`);
+        check(`[P2] ${tag}: ${PAIR_CHECK_S} s after, the lift is 0 (the ${PAIR_FADE_S} s fade is over)`,
+          at && Math.abs(at.lift) <= 1e-6, at ? cm(at.lift) : 'no row');
+        check(`[P2] ${tag}: ${PAIR_CHECK_S} s after, lowest foot = the control's (±1 mm)`,
+          at && Math.abs((at.foot - floor) - (ctl.foot - ctl.root)) <= P_SAME_TOL,
+          at ? `${cm(at.foot - floor)} vs ${cm(ctl.foot - ctl.root)}` : 'no row');
+        check(`[P4] ${tag}: the interaction ends at ${PAIR_END_S} s → the next play() is not blocked`,
+          endRows.length > 0 && endRows.every((x) => x.clipKind !== PAIR_CLIP && !x.bridging),
+          endRows.map((x) => x.clipKind).join(',') || 'no row');
       }
     }
 

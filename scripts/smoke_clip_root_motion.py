@@ -212,7 +212,9 @@ def convert_baseline(out_dir: Path, kind: str, **params):
                            capture_output=True)
         if r.returncode != 0:
             return None
-        tarfile.open(fileobj=io.BytesIO(r.stdout)).extractall(root)
+        # "data": no absolute paths, no links out of `root`, no device files.
+        with tarfile.open(fileobj=io.BytesIO(r.stdout)) as tar:
+            tar.extractall(root, filter="data")
     old = runner.SCRIPTS_DIR
     runner.SCRIPTS_DIR = root / "app" / "blender" / "scripts"
     try:

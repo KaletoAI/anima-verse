@@ -6,7 +6,7 @@ import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   ghostCutY, groundWaterLevel, idleClip, locomotionClip, moveClip, sinkForState, standingClipFor,
   terrainPace, wadeGate,
-  type GroundScope, type GroundSink } from '../game/walk';
+  type GroundScope, type GroundSink, type GroundWater } from '../game/walk';
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import { eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
@@ -1238,6 +1238,8 @@ export class NpcManager {
     });
     const root = this.figures.pairRootAt(it.clip, phase);
     if (!root) return false;
+    // `playPair` also ends a bridge that was still running (getting up out of
+    // bed when the handshake came): its height, turn and travel let go with it.
     if (!npc.figure.playPair(it.clip, phase, it.rate <= 0, it.loop)) return false;
     // A bridge travel nobody took yet has no meaning here: the ANCHOR places
     // the figure, absolutely, every frame — kept on the instance it would
@@ -1257,14 +1259,25 @@ export class NpcManager {
     return true;
   }
 
+  /** What the ground at (x, z) says, through the depth gate: the raw word,
+   *  the bed height under the point and the gated word. The ONE chain behind
+   *  the clip decision of a figure without a route in `tick` (after the step)
+   *  and `moveKindAt` (before it) — two copies of it would be two answers. */
+  private groundWordAt(x: number, z: number): { raw: GroundMove; bedY: number; gm: GroundWater } {
+    const raw = this.groundMoveAt(x, z);
+    const bedY = this.groundY(x, z);
+    const gm = wadeGate({ anim: raw.anim, idle: raw.idle, sink: raw.sink,
+      water: groundWaterLevel(raw.water, raw.scope) }, bedY, raw.swimFrom);
+    return { raw, bedY, gm };
+  }
+
   /** The move clip a figure stepping from (x, z) asks for — the same words
    *  the clip decision in `tick` reads after the step (the ground's
-   *  `move_anim` through the depth gate, else walk/run). Asked BEFORE the
-   *  step, so the step can hear whether that clip opens a bridge. */
+   *  `move_anim` through the depth gate, else walk/run; `groundWordAt`).
+   *  Asked BEFORE the step, so the step can hear whether that clip opens a
+   *  bridge. */
   private moveKindAt(x: number, z: number, running: boolean): string {
-    const raw = this.groundMoveAt(x, z);
-    const gm = wadeGate({ anim: raw.anim, idle: raw.idle, sink: raw.sink,
-      water: groundWaterLevel(raw.water, raw.scope) }, this.groundY(x, z), raw.swimFrom);
+    const { raw, gm } = this.groundWordAt(x, z);
     return moveClip(gm.anim, running, raw.scope);
   }
 
@@ -1522,16 +1535,13 @@ export class NpcManager {
       // ROOT height need the same answer, and asking twice is how the two
       // start to disagree. Since E4 the height is part of it: over water the
       // root rides the MIRROR and not the carved bed (`walk.floatRootY`).
-      const standRaw = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
       // …and since W4c the DEPTH decides whether that word applies at all: the
       // bed is sampled UNDER THE FIGURE (never the waypoint's stored y, which
       // is a goal and may be a lake away), because "how deep does the water
-      // stand around me" is a question about where the figure IS.
-      const standBedY = this.groundY(npc.root.position.x, npc.root.position.z);
-      const standGm = wadeGate({ anim: standRaw.anim, idle: standRaw.idle,
-        sink: standRaw.sink,
-        water: groundWaterLevel(standRaw.water, standRaw.scope) },
-      standBedY, standRaw.swimFrom);
+      // stand around me" is a question about where the figure IS. The chain
+      // is `groundWordAt`, shared with `moveKindAt` before the step.
+      const { raw: standRaw, bedY: standBedY, gm: standGm } =
+        this.groundWordAt(npc.root.position.x, npc.root.position.z);
       // …and the UNDERWATER GHOST rides the same two numbers, but the UNGATED
       // water level (finding H3): `wadeGate` nulls the mirror below the kind's
       // swim depth because a wader keeps its own clips — and a wader is exactly

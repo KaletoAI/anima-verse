@@ -10,9 +10,10 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
  * pose the mesh was authored in. Every clip is played against that one anchor,
  * which is right for everything authored on the floor and wrong for everything
  * authored on a line of its own: `swim.fbx` is animated on a WATER LINE (hip
- * median 78.4 against the standing reference of 110.1 Mixamo units, the body
- * 74° prone), so the lowest body point of the posed figure sits +0.26 … +0.32 m
- * over the anchor and the swimmer floats over the lake it should be in.
+ * median 78.4 against the standing reference — the rig's rest hips height,
+ * 113.0 Mixamo units, `standingHipsRef` — the body 74° prone), so the lowest
+ * body point of the posed figure sits +0.26 … +0.32 m over the anchor and the
+ * swimmer floats over the lake it should be in.
  *
  * The rule here is generic and carries no clip name: MEASURE the lowest body
  * point of every adapted clip once, store it as the clip's `groundOffset`, and

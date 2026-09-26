@@ -389,7 +389,7 @@ function retargetClips(
       mixer.setTime(t);
       donorClone.updateMatrixWorld(true);
 
-      // Ziel-Welt-Rotationen dieses Frames, top-down aufgebaut
+      // This frame's target world rotations, built top-down
       const worldQ = new Map<THREE.Object3D, THREE.Quaternion>();
       for (const tb of targetBones) {
         const parent = tb.parent as THREE.Object3D;
@@ -842,7 +842,7 @@ export class FigureLibrary {
       wanted.map(async (m): Promise<LoadedModel> => {
         const gltf = await loadFile(m.url);
         const template = gltf.scene;
-        // Z-up-Exporte (Blender/FBX-Route) automatisch aufrichten
+        // Stand Z-up exports (the Blender/FBX route) upright automatically
         {
           const b = new THREE.Box3().setFromObject(template);
           const s = b.getSize(new THREE.Vector3());
@@ -1753,9 +1753,7 @@ export class Figure {
     // is one frame and the answer is always the current one.
     this.mixer.addEventListener('finished', (e) => {
       if ((e as unknown as { action?: THREE.AnimationAction }).action !== this.transition) return;
-      this.transition = null;
-      this.bridgeUntil = 0;
-      this.bridgeAccel = 0;
+      this.releaseBridge();
     });
     // Open clip vocabulary (contract § A8): EVERY loaded kind gets an action
     // under its OWN name. Only the seven hard-coded CLIP_SYNONYMS kinds used
@@ -1950,11 +1948,23 @@ export class Figure {
   get bridging(): boolean {
     if (!this.transition) return false;
     if (performance.now() > this.bridgeUntil) {
-      this.transition = null;
-      this.bridgeUntil = 0;
+      this.releaseBridge();
       return false;
     }
     return true;
+  }
+
+  /** THE one way a bridge ends — by itself ("finished"), at its deadline
+   *  (`bridging`), given up (`cancelBridge`) or taken over by a pair clip
+   *  (`playPair`). The gate opens (`bridging`, `paceLimit`, the early return
+   *  of `play`) and everything the bridge owned while it held the figure —
+   *  its travel, turn and height (`update`, `holdsFacing`, `holdsHeight`) —
+   *  lets go in the same frame: the lift then fades with the bridge's
+   *  effective weight, exactly as after a clip that ran to its end. */
+  private releaseBridge() {
+    this.transition = null;
+    this.bridgeUntil = 0;
+    this.bridgeAccel = 0;
   }
 
   /** Give the running bridge up. It stops being the gate at once; WHAT plays
@@ -1967,9 +1977,7 @@ export class Figure {
    *  tap produced. */
   cancelBridge() {
     if (!this.transition) return;
-    this.transition = null;
-    this.bridgeUntil = 0;
-    this.bridgeAccel = 0;
+    this.releaseBridge();
   }
 
   /** Does the running bridge own the figure's FACING? True while a bridge
@@ -1980,7 +1988,14 @@ export class Figure {
    *  ends. A ramping bridge keeps its turn — it is about to walk off — and a
    *  pair clip that took the body over (`playPair`) owns its yaw again. */
   get holdsFacing(): boolean {
-    return this.bridging && this.bridgeAccel <= 0 && this.current === this.transition;
+    return this.bridging && this.bridgeAccel <= 0 && this.ownsBody(this.transition);
+  }
+
+  /** Is `action` the running bridge AND the clip on screen? The one
+   *  ownership condition the travel, the turn, the facing and the height of
+   *  a holding bridge share, so the four always let go together. */
+  private ownsBody(action: THREE.AnimationAction | null): boolean {
+    return action !== null && this.transition === action && this.current === action;
   }
 
   /** HOW FAST the figure may move while the running bridge plays: a fraction
@@ -2036,9 +2051,9 @@ export class Figure {
    *  With a turn (rule 4 of `turn`) the offset is the instance's whole one:
    *  the travel turned by the BASE yaw plus the pivot's swing.
    *
-   *  Called while the bridge still runs (a pair interaction that takes the
-   *  body over, which discards it), the rest of the clip plays in place: the
-   *  travel so far is handed over, the remainder is nobody's. */
+   *  Called right after a pair clip took the body over mid-bridge (`playPair`
+   *  ends the bridge there, its clip fades out in place): the travel so far
+   *  is handed over, the remainder is nobody's. */
   takeTravel(): { x: number; z: number } | null {
     if (!this.holding) return null;
     // yaw only: a lean (`setLean`) tilts the root by a few degrees at most,
@@ -2124,7 +2139,7 @@ export class Figure {
    *  and `false` says the owner keeps the height as before. */
   beginBridgeLift(startLiftM: number): boolean {
     const bridge = this.transition;
-    if (!bridge || !this.bridging || this.bridgeAccel > 0 || this.current !== bridge) return false;
+    if (!bridge || !this.bridging || this.bridgeAccel > 0 || !this.ownsBody(bridge)) return false;
     const spec = clipBridgeLift(bridge.getClip());
     if (!spec || !Number.isFinite(startLiftM)) return false;
     this.liftAction = bridge;
@@ -2169,7 +2184,7 @@ export class Figure {
    *  height alone then (`npcs.tick`) — it is on the floor already, and the
    *  body's height is the lift's. */
   get holdsHeight(): boolean {
-    return this.liftAction !== null && this.bridging && this.transition === this.liftAction;
+    return this.bridging && this.ownsBody(this.liftAction);
   }
 
   /**
@@ -2252,6 +2267,13 @@ export class Figure {
   playPair(clipName: string, t: number, frozen: boolean, loop: boolean): boolean {
     const action = this.actions.get(clipName);
     if (!action) return false;
+    // The pair takes the body over: a running bridge ends HERE, not at its
+    // deadline. Its clip is faded out below and, once at weight 0, disabled by
+    // the mixer — its time stands still and "finished" never comes. Kept as
+    // the transition it would still hold the height (the whole frozen lift:
+    // the pair figure floated at bed height), the pace and `play` for up to
+    // the rest of the clip.
+    this.releaseBridge();
     this.setClipDrop(0);
     this.terrainClip = false;
     this.sink = 0;
@@ -2359,7 +2381,7 @@ export class Figure {
       this.root.rotation.y = this.turnBase + this.turnNow;
       this.targetYaw = this.root.rotation.y;
       this.holding = true;
-      if (this.transition !== this.turnAction || this.current !== this.turnAction) {
+      if (!this.ownsBody(this.turnAction)) {
         this.turn = null;
         this.turnAction = null;
       }
@@ -2372,7 +2394,7 @@ export class Figure {
         z: this.travelOrigin.z + t.z * this.baseScale,
       };
       this.holding = true;
-      if (this.transition !== this.travelAction) {
+      if (!this.ownsBody(this.travelAction)) {
         this.travelPath = null;
         this.travelAction = null;
       }
@@ -2386,13 +2408,14 @@ export class Figure {
       }
     }
     // The height of a holding bridge (see `liftAction`), read at the action's
-    // own time like the travel. Once the bridge is no longer the transition
-    // (ended, cancelled, timed out) it fades out, and the lift with it — by
-    // the bridge's weight; after a full run that is `endLift × weight`.
+    // own time like the travel. Once the bridge no longer owns the body
+    // (ended, cancelled, timed out, taken over by a pair clip) it fades out,
+    // and the lift with it — by the bridge's weight; after a full run that is
+    // `endLift × weight`.
     if (this.liftAction && this.liftSpec) {
       const action = this.liftAction;
       const lift = this.liftValue(action.time);
-      if (this.transition === action) {
+      if (this.ownsBody(action)) {
         this.lift = lift;
       } else {
         const weight = action.getEffectiveWeight();
