@@ -1162,6 +1162,17 @@ export class NpcManager {
     return true;
   }
 
+  /** The move clip a figure stepping from (x, z) asks for — the same words
+   *  the clip decision in `tick` reads after the step (the ground's
+   *  `move_anim` through the depth gate, else walk/run). Asked BEFORE the
+   *  step, so the step can hear whether that clip opens a bridge. */
+  private moveKindAt(x: number, z: number, running: boolean): string {
+    const raw = this.groundMoveAt(x, z);
+    const gm = wadeGate({ anim: raw.anim, idle: raw.idle, sink: raw.sink,
+      water: groundWaterLevel(raw.water, raw.scope) }, this.groundY(x, z), raw.swimFrom);
+    return moveClip(gm.anim, running, raw.scope);
+  }
+
   tick(dt: number, camDist: number) {
     const labelVisible = camDist < 55;
     const now = performance.now();
@@ -1265,7 +1276,9 @@ export class NpcManager {
           const step = catchUpStep(d, r.rateMS, dt, WALK_SPEED);
           const dir = delta.clone().normalize();
           npc.root.position.addScaledVector(dir, step);
-          npc.figure?.faceTowards(dir);
+          // A bridge that holds the figure owns its facing (`holdsFacing`);
+          // the next frame after it asks again.
+          if (!npc.figure?.holdsFacing) npc.figure?.faceTowards(dir);
         }
         npc.root.position.y += (goalPos.y - npc.root.position.y) * Math.min(1, dt * 4);
         if (npc.figure) {
@@ -1354,7 +1367,17 @@ export class NpcManager {
       // without a speed-up plays, and the ramp in between (`Figure.paceLimit`)
       // — so the ramp is applied exactly once, and no longer a second time by
       // the caller's `pace`.
-      const paceLimit = npc.figure?.paceLimit ?? 1;
+      // The question is asked for the clip this frame WILL ask for
+      // (`paceLimitFor`, the avatar's pattern): the clip is played after the
+      // step, so on the frame a bridge starts `paceLimit` still said "nothing
+      // holds you" and the NPC took one full step out of its bed (11 cm at
+      // 30 fps). Only a MOVING figure steps, so only its move clip is asked
+      // about — read at the point it steps from.
+      const paceLimit = !npc.figure ? 1
+        : moving && !npc.figure.bridging
+          ? npc.figure.paceLimitFor(this.moveKindAt(npc.root.position.x,
+            npc.root.position.z, !reckoning && dist > RUN_DISTANCE))
+          : npc.figure.paceLimit;
       if (moving && paceLimit > 0) {
         // ONE pace for every figure, the player's included: `WALK_SPEED` is
         // metres a second and a metre is a metre (E4). `npc.pace` is what the
@@ -1450,7 +1473,9 @@ export class NpcManager {
           : target
             ? target.clone().sub(npc.root.position).setY(0)
             : null;
-        if (dir) npc.figure.faceTowards(dir);
+        // Not while a bridge holds the facing: the body getting up is the
+        // clip's, and the frame after it ends asks again.
+        if (dir && !npc.figure.holdsFacing) npc.figure.faceTowards(dir);
       }
 
       if (npc.figure) {

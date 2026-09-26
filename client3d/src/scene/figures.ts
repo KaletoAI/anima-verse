@@ -1546,7 +1546,12 @@ export class Figure {
    *  (culled, tab in the background) would never see the mixer's "finished"
    *  and would hold whoever asked. */
   private bridgeUntil = 0;
-  private targetYaw = Math.PI; // Default: Richtung Süden (Kamera-Grundstellung)
+  private targetYaw = Math.PI; // default: facing south (the camera's home view)
+  /** The facing last asked for while a HOLDING bridge ran (`holdsFacing`),
+   *  or null. The bridge owns the body's yaw, so a turn asked for then is
+   *  only remembered; the first `update()` after the bridge makes it the
+   *  target and the figure eases into it like into any other turn. */
+  private pendingYaw: number | null = null;
   /**
    * ROOT MOTION OF A BRIDGE (plan-bruecken-root-motion, task 6). A bridge clip
    * whose file was imported with a travel (`get-up-chair`: the figure rises
@@ -1588,7 +1593,7 @@ export class Figure {
   private holding = false;
 
   private baseScale = 1;
-  /** Y-Offset, der die Füße auf y=0 bringt (Mesh-Origin liegt nicht immer dort) */
+  /** Y offset that puts the feet on y=0 (the mesh origin is not always there) */
   private groundY = 0;
   /** Extra drop currently applied on top of `groundY`, in WORLD metres — the
    *  ground offset of the clip playing right now (`clipGround`, finding 3).
@@ -1623,7 +1628,7 @@ export class Figure {
         o.frustumCulled = false; // Skinned-Mesh-Bounds stimmen sonst beim Laufen nicht
       }
     });
-    // Mesh-Origin liegt nicht immer bei den Füßen: XZ zentrieren, Füße auf y=0
+    // The mesh origin is not always at the feet: centre XZ, feet on y=0
     inst.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(inst);
     if (!box.isEmpty()) {
@@ -1653,13 +1658,12 @@ export class Figure {
       this.bridgeUntil = 0;
       this.bridgeAccel = 0;
     });
-    // Offenes Clip-Vokabular (Vertrag § A8): JEDES geladene Kind bekommt eine
-    // Action unter seinem EIGENEN Namen. Vorher wurden nur die sieben
-    // hartkodierten CLIP_SYNONYMS-Kinds gebunden — alle anderen Server-Kinds
-    // (bartending, harvesting, situps, treading, plant, send, taking …) lagen
-    // in model.clips, waren aber nie abspielbar und fielen still auf idle.
-    // Die Clip-Namen SIND die Server-Kinds (FigureLibrary.load setzt
-    // clip.name = kind, das Retargeting behält den Namen).
+    // Open clip vocabulary (contract § A8): EVERY loaded kind gets an action
+    // under its OWN name. Only the seven hard-coded CLIP_SYNONYMS kinds used
+    // to be bound — every other server kind (bartending, harvesting, situps,
+    // treading, plant, send, taking …) sat in model.clips, was never playable
+    // and silently fell back to idle. The clip names ARE the server kinds
+    // (FigureLibrary.load sets clip.name = kind, the retargeting keeps it).
     const byName = new Map(model.clips.map((c) => [c.name.toLowerCase(), c]));
     for (const [kind, clip] of byName) {
       if (kind) this.actions.set(kind, this.mixer.clipAction(clip));
@@ -1675,14 +1679,14 @@ export class Figure {
       const clip = name ? byName.get(name) : undefined;
       if (clip) this.actions.set(kind, this.mixer.clipAction(clip));
     }
-    // Einmal je Modell die gebundenen Kinds nennen — das ist der Nachweis,
-    // dass das Vokabular offen ist (Abnahme A4).
+    // Name the bound kinds once per model — the proof that the vocabulary is
+    // open (acceptance A4).
     if (!loggedActionKinds.has(model.name)) {
       loggedActionKinds.add(model.name);
       console.info(`[figures] ${model.name}: ${this.actions.size} Kinds gebunden — `
         + `${[...this.actions.keys()].sort().join(', ')}`);
     }
-    // Clip-lose Rigs (UniRig-Tiere): Beinketten für den prozeduralen Gang
+    // Rigs without clips (UniRig animals): leg chains for the procedural gait
     if (this.actions.size === 0 && !box.isEmpty()) {
       this.legs = findLegChains(inst, box);
       if (this.legs.length) console.info(`[figures] prozeduraler Gang: ${this.legs.length} Beinketten erkannt`);
@@ -1742,8 +1746,9 @@ export class Figure {
       // A bridge that HOLDS the figure holds ALL of it: the way it looks is
       // the clip's from here on, so a turn ordered in the very frame this
       // starts is taken back. Without this the yaw kept easing towards a
-      // target nobody may write any more — the figure lay in its bed and
-      // rotated towards the key for the whole seven seconds of getting up.
+      // target set just before — the figure lay in its bed and rotated
+      // towards the key for the whole seven seconds of getting up. From here
+      // on `faceTowards`/`setYaw` only remember a turn (`holdsFacing`).
       // A ramping bridge keeps its turn: it is about to walk off.
       if (rule.accel <= 0) this.targetYaw = this.root.rotation.y;
       // Rule 5 of the root motion (see `travelBase`): a travel still held here
@@ -1789,9 +1794,9 @@ export class Figure {
     // Did we get the motion that was asked for, or only a stand-in? By family,
     // so a `run-cmu` served from `run` counts as the real thing.
     const gotFamily = !!chosenKind && animFamily(chosenKind) === animFamily(kind);
-    // Beobachtbar machen, WELCHES Kind gewünscht war und ob es überhaupt
-    // gebunden ist — ohne das ist von außen nicht unterscheidbar, ob ein Kind
-    // gespielt oder still auf idle zurückgefallen ist (Abnahme A4).
+    // Make observable WHICH kind was asked for and whether it is bound at
+    // all — without this nobody outside can tell whether a kind played or
+    // silently fell back to idle (acceptance A4).
     this.root.userData.clipKind = kind;
     this.root.userData.clipBound = this.actions.has(kind);
     // The drop belongs to the clip that ACTUALLY plays, not to the kind that
@@ -1854,6 +1859,16 @@ export class Figure {
     this.transition = null;
     this.bridgeUntil = 0;
     this.bridgeAccel = 0;
+  }
+
+  /** Does the running bridge own the figure's FACING? True while a bridge
+   *  that HOLDS the figure (`accel` 0: getting up out of a chair or a bed)
+   *  is what plays: the body's yaw is the clip's then, exactly as its place
+   *  is. `faceTowards`/`setYaw` only remember what was asked for until it
+   *  ends. A ramping bridge keeps its turn — it is about to walk off — and a
+   *  pair clip that took the body over (`playPair`) owns its yaw again. */
+  get holdsFacing(): boolean {
+    return this.bridging && this.bridgeAccel <= 0 && this.current === this.transition;
   }
 
   /** HOW FAST the figure may move while the running bridge plays: a fraction
@@ -1980,18 +1995,31 @@ export class Figure {
     });
   }
 
+  /** Turn the figure towards `dir` (XZ). While a holding bridge runs
+   *  (`holdsFacing`) the turn is only remembered — `snap` included — and
+   *  eased into once the bridge has ended. */
   faceTowards(dir: THREE.Vector3, snap = false) {
     if (dir.lengthSq() < 1e-6) return;
-    this.targetYaw = Math.atan2(dir.x, dir.z);
+    const yaw = Math.atan2(dir.x, dir.z);
+    if (this.holdsFacing) {
+      this.pendingYaw = yaw;
+      return;
+    }
+    this.targetYaw = yaw;
     // `snap` turns the body AT ONCE instead of easing over ~0.3 s: a figure
     // that starts walking has to leave in the direction that was asked for,
     // not swing into it after the first metre.
-    if (snap) this.root.rotation.y = this.targetYaw;
+    if (snap) this.root.rotation.y = yaw;
   }
 
   /** Turn the ROOT to an absolute yaw (radians, three.js Y rotation) — for a
-   *  pair interaction the anchor decides, the clip carries the body's facing. */
+   *  pair interaction the anchor decides, the clip carries the body's facing.
+   *  Remembered only while a holding bridge runs, like `faceTowards`. */
   setYaw(yaw: number) {
+    if (this.holdsFacing) {
+      this.pendingYaw = yaw;
+      return;
+    }
     this.targetYaw = yaw;
   }
 
@@ -2039,18 +2067,18 @@ export class Figure {
     return true;
   }
 
-  /** Neigung aus einem Animations-Marker (Grad): `tilt` = Kopf hoch/tief,
-   *  `roll` = seitlich kippen. 'YXZ' hält den Gierwinkel vorne, damit die
-   *  Neigung im FIGUREN-System wirkt und nicht in der Welt — sonst hinge sie
-   *  von der Blickrichtung ab. 0/0 = aufrecht wie bisher. */
+  /** Lean from an animation marker (degrees): `tilt` = head up/down,
+   *  `roll` = tilt sideways. 'YXZ' keeps the yaw first, so the lean acts in
+   *  the FIGURE's frame and not in the world's — otherwise it would depend on
+   *  the facing. 0/0 = upright as before. */
   setLean(tilt: number, roll: number) {
     this.root.rotation.order = 'YXZ';
     this.root.rotation.x = THREE.MathUtils.degToRad(tilt);
     this.root.rotation.z = THREE.MathUtils.degToRad(roll);
   }
 
-  /** true, wenn keine Animationsclips vorhanden sind (z.B. Tier-Rig oder
-   *  statisches Mesh) — dann übernimmt ein prozedurales Idle. */
+  /** true when there are no animation clips (e.g. an animal rig or a static
+   *  mesh) — a procedural idle takes over then. */
   get isStatic(): boolean {
     return this.actions.size === 0;
   }
@@ -2060,9 +2088,9 @@ export class Figure {
   private walkPhase = Math.random() * Math.PI * 2;
 
   update(dt: number) {
-    // Ohne Clips: prozedurale Animation — beim Laufen schwingen die erkannten
-    // Beinketten (Trab), im Stand leichtes Atmen/Wippen, damit die Figur
-    // nicht wie eine Statue wirkt (Tier-Rigs von UniRig haben keine Clips).
+    // Without clips: procedural animation — walking swings the detected leg
+    // chains (a trot), standing breathes/bobs lightly, so the figure does not
+    // look like a statue (UniRig animal rigs have no clips).
     if (this.isStatic) {
       const inst = this.root.children[0];
       // WHICH gait, by family (`clipCoverage.proceduralGait`): `walk-cmu` is a
@@ -2081,7 +2109,7 @@ export class Figure {
           inst.scale.setScalar(this.baseScale);
         }
       } else {
-        for (const leg of this.legs) leg.bone.quaternion.copy(leg.bindQuat);   // Ruhelage
+        for (const leg of this.legs) leg.bone.quaternion.copy(leg.bindQuat);   // rest pose
         this.idlePhase += dt * 1.6;
         if (inst) {
           inst.position.y = this.groundY + Math.sin(this.idlePhase) * 0.012;
@@ -2089,7 +2117,13 @@ export class Figure {
         }
       }
     }
-    // kürzesten Drehweg nehmen
+    // A turn asked for while a holding bridge ran becomes the target the
+    // first frame the bridge no longer holds the facing.
+    if (this.pendingYaw !== null && !this.holdsFacing) {
+      this.targetYaw = this.pendingYaw;
+      this.pendingYaw = null;
+    }
+    // take the shortest way round
     let d = this.targetYaw - this.root.rotation.y;
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;

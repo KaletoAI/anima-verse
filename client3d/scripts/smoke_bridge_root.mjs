@@ -171,6 +171,48 @@
  *   info  The re-lock's own report per clip, the per-point numbers (FULL
  *       frames, runs, worst run and its span, drift re-locked / imported /
  *       off / × 1.15) and the final drift table.
+ *
+ * ---------------------------------------------------------------------------
+ * [Y] NOTHING TURNS OR STEPS A FIGURE A BRIDGE HOLDS
+ * ---------------------------------------------------------------------------
+ * A bridge with `accel` 0 (getting up out of bed) owns the whole body: its
+ * yaw as much as its place. [Y1]/[Y2] run in part [A] (the synthetic Soldier
+ * bridge, 1 s, accel 0 — no clip files needed), [Y3] after part [B] (the
+ * real clips).
+ * [Y1] The figure faces yaw 0.6, the bridge opens, and on EVERY bridge frame
+ *       `faceTowards(+x, snap)` (yaw atan2(1, 0) = π/2) and then
+ *       `setYaw(1.0)` are asked for. `root.rotation.y` stays 0.6 ± 1e-6 for
+ *       the whole bridge. (Task C2 will hand the bridge's OWN turn over at its
+ *       end; until then there is none.) Before this task the snap turned
+ *       the root to π/2 at once: |π/2 − 0.6| = 0.9708 rad.
+ *       [Y1r] COUNTER-PROBE, same asks on a RAMPING bridge (accel 1): it
+ *       keeps its turn — the figure is about to walk off — so rotation.y
+ *       leaves 0.6 by more than 0.1 rad.
+ * [Y2] After the bridge nobody asks again, the frames go on (the next clip
+ *       asked for as `npcs.tick` does): the figure eases towards the LAST
+ *       direction asked for, 1.0. After 2 s = 60 frames the rest is
+ *       0.4 · (2/3)^60 ≈ 1e-11 rad, so |rotation.y − 1.0| < 0.05.
+ * [Y3] The REAL `NpcManager.tick` (one injected NPC) over the real chain on
+ *       Test3_mia (`adaptExternalClips` → `measureGroundOffsets` →
+ *       `relockRootPaths` → `Figure`; clips idle, walk, sleeping-side,
+ *       get-up-bed; rule sleeping-side → * via get-up-bed, accel 0). The NPC
+ *       lies (`animation` sleeping-side, goal = its root), then the server
+ *       stands it up: `animation` idle, goal 0.5 m away (< RUN_DISTANCE 6 m:
+ *       walk). In the ONE tick that starts the bridge (checked: bridging
+ *       after it) the root moves <= 1 mm in X/Z. Before this task the step
+ *       read `paceLimit` before the clip was asked for: min(0.5, 3.4 m/s ·
+ *       1/30 s) = 11.33 cm (C0 § 5.1).
+ *       [Y3c] COUNTER-PROBE, same run: an NPC standing on idle (idle → walk
+ *       has no rule) with the same goal steps the full 3.4/30 = 0.11333 m ±
+ *       1e-4 in its first tick — the gate holds a bridge, nobody else.
+ *       [Y3b] The NPC lies again, stands up with its goal ON its root (not
+ *       moving — the standing branch) and a marker facing +x: rotation.y is
+ *       the same ± 1e-6 on every bridge frame. Before this task it eased to
+ *       the marker's π/2: 0.9708 rad off.
+ *       [Y3d] After the bridge the gate opens: the first tick after it hands
+ *       the bridge travel over (root and goal move by it, `applyBridgeTravel`),
+ *       and within the 1 s after THAT tick the root walks >= 5 cm (the goal
+ *       is still ~0.5 m away; 1 s of walking is up to 3.4 m).
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -251,6 +293,8 @@ async function loadClient() {
       `export { travelAt, toWorld, rootPathAt } from '${src}/scene/bridgeTravel';`,
       `export { adaptExternalClips, Figure, setClipRootMotion } from '${src}/scene/figures';`,
       `export { relockRootPaths } from '${src}/scene/footLockMeasure';`,
+      `export { measureGroundOffsets } from '${src}/scene/clipGround';`,
+      `export { NpcManager } from '${src}/scene/npcs';`,
       `export { setClipTransitions } from '${src}/game/walk';`,
       `export { restCorrections, restPoseOf, rigHipsHeight } from '@anima/scene-render';`,
     ].join('\n');
@@ -280,7 +324,8 @@ async function main() {
   const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
   const client = await loadClient();
   const { travelAt, toWorld, adaptExternalClips, Figure, rigHipsHeight, setClipRootMotion,
-          setClipTransitions, restCorrections, restPoseOf, relockRootPaths } = client;
+          setClipTransitions, restCorrections, restPoseOf, relockRootPaths,
+          measureGroundOffsets, NpcManager } = client;
 
   const loadRig = async (file) => {
     const bytes = arrayBufferOf(await readFile(file));
@@ -486,6 +531,54 @@ async function main() {
       run.seen.every((f) => Number.isFinite(f.x) && Number.isFinite(f.z)
         && Math.abs(f.x - base.x) < 1e-9 && Math.abs(f.z - base.z) < 1e-9));
     check('[8] no rig: takeTravel returns null', fig.figure.takeTravel() === null);
+    fig.figure.dispose();
+  }
+
+  // [Y1]/[Y2] a holding bridge owns the facing (docstring [Y]).
+  console.log('\n[Y1]/[Y2] nothing turns a figure a bridge holds (synthetic, Soldier)');
+  const PLUS_X = new THREE.Vector3(1, 0, 0);
+  /** Seat the figure at yaw YAW, open the bridge and ask for a turn on every
+   *  bridge frame; returns the largest |rotation.y − YAW| seen and the frame
+   *  count. */
+  const turnDuringBridge = (fig) => {
+    fig.figure.faceTowards(new THREE.Vector3(Math.sin(YAW), 0, Math.cos(YAW)), true);
+    fig.figure.play('sit-synth');
+    for (let i = 0; i < 10; i++) fig.figure.update(0.05);
+    fig.figure.play('idle');
+    const bridged = fig.figure.bridging;
+    let maxTurn = 0;
+    let frames = 0;
+    while (fig.figure.bridging && frames < 200) {
+      fig.figure.faceTowards(PLUS_X, true);
+      fig.figure.setYaw(1.0);
+      maxTurn = Math.max(maxTurn, Math.abs(fig.figure.root.rotation.y - YAW));
+      fig.figure.update(1 / FPS);
+      if (fig.figure.bridging) maxTurn = Math.max(maxTurn, Math.abs(fig.figure.root.rotation.y - YAW));
+      frames += 1;
+    }
+    return { bridged, maxTurn, frames };
+  };
+  setClipTransitions([{ from: 'sit-synth', to: '*', kind: 'bridge-synth', accel: 0 }]);
+  {
+    const fig = makeFigure('synth-yaw', synthRig, synthLibrary());
+    const run = turnDuringBridge(fig);
+    check('[Y1] the holding bridge opens', run.bridged, `${run.frames} frames`);
+    near('[Y1] faceTowards(+x, snap) + setYaw(1.0) on every bridge frame: rotation.y stays',
+      run.maxTurn, 0, 1e-6);
+    for (let i = 0; i < 2 * FPS; i++) {
+      fig.figure.play('idle');
+      fig.figure.update(1 / FPS);
+    }
+    near('[Y2] 2 s after the bridge: rotation.y reached the last ask (1.0)',
+      fig.figure.root.rotation.y, 1.0, 0.05);
+    fig.figure.dispose();
+  }
+  setClipTransitions([{ from: 'sit-synth', to: '*', kind: 'bridge-synth', accel: 1 }]);
+  {
+    const fig = makeFigure('synth-yaw-ramp', synthRig, synthLibrary());
+    const run = turnDuringBridge(fig);
+    check('[Y1r] COUNTER-PROBE — a ramping bridge keeps its turn (> 0.1 rad)',
+      run.bridged && run.maxTurn > 0.1, `${run.maxTurn.toFixed(4)} rad over ${run.frames} frames`);
     fig.figure.dispose();
   }
 
@@ -905,6 +998,94 @@ async function main() {
       console.log(`      [B10] ${label} ${b.kind}: end point vs the server's stand point —`
         + ` re-locked ${cm(b10.relock)}, imported ${cm(b10.imported)}, ×${SCALE_UP} re-locked ${cm(b10.scaled)}`);
     }
+  }
+
+  // ------------------------------------------------------------------ [Y3]
+  // The REAL NpcManager.tick over the real client chain (docstring [Y]).
+  console.log('\n[Y3] the NPC chain: no step, no turn in a bridge that holds (Test3_mia)');
+  {
+    const template = await loadRig(RIGS[0]);
+    const scale = nominalScale(template);
+    const corrections = restCorrections(THREE, donorRest, template);
+    const raw = { idle: rawClips.idle, walk: await loadClip('walk'),
+      'sleeping-side': rawClips['sleeping-side'], 'get-up-bed': rawClips['get-up-bed'] };
+    const lib = adaptExternalClips(Object.entries(raw).map(([name, c]) => {
+      const cc = c.clone();
+      cc.name = name;
+      if (sidecars[name]) setClipRootMotion(cc, true);
+      return cc;
+    }), template, corrections, donorHipsY);
+    measureGroundOffsets(lib, template);
+    relockRootPaths(lib, template, 1 / (100 * scale));
+    setClipTransitions([{ from: 'sleeping-side', to: '*', kind: 'get-up-bed', accel: 0 }]);
+    const DT = 1 / FPS;
+    const GOAL_M = 0.5;
+    /** One NPC as `NpcManager.update` would build it, injected into a manager
+     *  of its own — `tick` is the code under test, not the poll. */
+    const npcOn = (name, animation) => {
+      const fig = makeFigure(name, template, lib, scale);
+      const npc = {
+        name, animation, root: fig.owner, figure: fig.figure, ring: null, sprite: null,
+        label: { visible: false }, labelName: null, labelActivity: null, labelBubble: null,
+        bubbleUntil: 0, target: fig.owner.position.clone(), pace: 1, face: null,
+        waypoints: [], ride: null, route: null, travelling: false, reckon: null,
+        interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0,
+      };
+      const mgr = new NpcManager(null);
+      mgr.npcs.set(name, npc);
+      fig.figure.faceTowards(new THREE.Vector3(Math.sin(YAW), 0, Math.cos(YAW)), true);
+      for (let i = 0; i < 20; i++) mgr.tick(0.05, 10);
+      return { npc, mgr, fig };
+    };
+    const xz = (p) => ({ x: p.x, z: p.z });
+    const moved = (a, b) => Math.hypot(b.x - a.x, b.z - a.z);
+    const goalAhead = (npc) => npc.target.set(npc.root.position.x + Math.sin(YAW) * GOAL_M,
+      npc.root.position.y, npc.root.position.z + Math.cos(YAW) * GOAL_M);
+
+    const bed = npcOn('y3-bed', 'sleeping-side');
+    check('[Y3] the NPC lies (sleeping-side, no bridge)',
+      bed.fig.figure.root.userData.clipKind === 'sleeping-side' && !bed.fig.figure.bridging,
+      String(bed.fig.figure.root.userData.clipKind));
+    bed.npc.animation = 'idle';
+    goalAhead(bed.npc);
+    const before = xz(bed.npc.root.position);
+    bed.mgr.tick(DT, 10);
+    check('[Y3] the tick that stands it up opens the bridge', bed.fig.figure.bridging,
+      String(bed.fig.figure.root.userData.clipKind));
+    const firstStep = moved(before, bed.npc.root.position);
+    check('[Y3] the frame the bridge starts: root X/Z moves <= 1 mm', firstStep <= 0.001, cm(firstStep));
+    let guard = 0;
+    while (bed.fig.figure.bridging && guard++ < 1000) bed.mgr.tick(DT, 10);
+    bed.mgr.tick(DT, 10);   // the hand-over tick: root and goal move by the travel
+    const atEnd = xz(bed.npc.root.position);
+    for (let i = 0; i < FPS; i++) bed.mgr.tick(DT, 10);
+    const walkedOn = moved(atEnd, bed.npc.root.position);
+    check('[Y3d] after the bridge and its hand-over the NPC walks on (>= 5 cm within 1 s)', walkedOn >= 0.05, cm(walkedOn));
+    bed.fig.figure.dispose();
+
+    const stand = npcOn('y3-stand', 'idle');
+    goalAhead(stand.npc);
+    const before2 = xz(stand.npc.root.position);
+    stand.mgr.tick(DT, 10);
+    near('[Y3c] COUNTER-PROBE — without a rule the first tick steps 3.4/30 m',
+      moved(before2, stand.npc.root.position), 3.4 / 30, 1e-4);
+    stand.fig.figure.dispose();
+
+    const lie = npcOn('y3-face', 'sleeping-side');
+    lie.npc.animation = 'idle';
+    lie.npc.face = new THREE.Vector3(1, 0, 0);
+    const yaw0 = lie.fig.figure.root.rotation.y;
+    let maxTurn = 0;
+    let frames = 0;
+    lie.mgr.tick(DT, 10);
+    const opened = lie.fig.figure.bridging;
+    while (lie.fig.figure.bridging && frames++ < 1000) {
+      maxTurn = Math.max(maxTurn, Math.abs(lie.fig.figure.root.rotation.y - yaw0));
+      lie.mgr.tick(DT, 10);
+    }
+    check('[Y3b] standing up in place opens the bridge', opened, `${frames} frames`);
+    near('[Y3b] marker facing +x while the bridge holds: rotation.y stays', maxTurn, 0, 1e-6);
+    lie.fig.figure.dispose();
   }
 
   console.log('\n      drift table (own contacts, cm): clip × rig — re-locked / imported / ×1.15 re-locked; [B10] re-locked / imported');
