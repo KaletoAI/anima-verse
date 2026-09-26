@@ -40,6 +40,7 @@ import { hasRect, readMapWater } from './worldTypes'
 import { buildMeasureAids, disposeAids, useActiveMeasure,
   type MeasureKey } from './measureKit'
 import { previewEntry, usePoseCatalog } from './placeTypes'
+import { standHipsRef } from '../characters/Model3DViewer'
 
 // The reference square is the preview's stage — ground plate, ruler position
 // and camera framing. Its WORLD size is a per-location dial and arrives in
@@ -231,6 +232,12 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // `placeFigure` (`clipHipsDrop`).
   const clipCacheRef = useRef<Map<string, { clip: AnimationClip; restObj: Object3D
     hipsMedian: number | null } | 'loading' | 'missing'>>(new Map())
+  // The clip library's STANDING hips height (clip units) — `standHipsRef` of
+  // the model viewer, the one cached reference-rig loader of every admin
+  // preview. `resolved` once it answered; `value` null = neither rig nor idle
+  // clip, and then nothing is put back.
+  const standRefRef = useRef<{ status: 'idle' | 'loading' | 'resolved'
+    value: number | null }>({ status: 'idle', value: null })
   const mixersRef = useRef<AnimationMixer[]>([])
   const clockRef = useRef<Clock | null>(null)
 
@@ -399,6 +406,23 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       setBump((b) => b + 1)
     })()
     return null
+  }
+
+  /** The standing reference, once `standHipsRef` has answered; `undefined`
+   *  while it resolves (a rebuild is bumped when it is in). */
+  const ensureStandRef = (): number | null | undefined => {
+    const st = standRefRef.current
+    if (st.status === 'resolved') return st.value
+    if (st.status === 'idle') {
+      standRefRef.current = { status: 'loading', value: null }
+      standHipsRef()
+        .catch(() => null)
+        .then((value) => {
+          standRefRef.current = { status: 'resolved', value }
+          setBump((b) => b + 1)
+        })
+    }
+    return undefined
   }
 
   // Rebuild the plan content from the current layout (called on every rooms/
@@ -681,7 +705,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       const kind = opts.animation
         || (kinds.includes('idle') ? 'idle' : kinds.includes('stand') ? 'stand' : kinds[0])
       const anim = figSrc && kind ? ensureClip(kind, opts.role || '') : null
-      if (figSrc && anim) {
+      // A posed figure waits for the standing reference like it waits for its
+      // clip: drawn before it, it would stand at its bind hips height.
+      const standRef = anim ? ensureStandRef() : undefined
+      if (figSrc && anim && standRef !== undefined) {
         const inst = h.skclone(figSrc)
         const pivot = new THREE.Group()
         pivot.add(inst)
@@ -720,13 +747,13 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // and it went out with the position track above. Put it back: without
         // it sit, sleep and idle are all drawn at the same bind height and a
         // seated figure floats 0.43 m over its marker. `standRef` is the
-        // library's standing reference (the idle clip's hips median) through
-        // this file's own loader — `ensureClip` answers null on the first
-        // pass and bumps a rebuild when the clip is in, like every other clip
-        // here. Applied to the PIVOT, inside `fig`: the label stays on the
+        // library's standing reference (the reference rig's rest hips height,
+        // the idle clip's hips median only when no rig is served), resolved
+        // above through the model viewer's `standHipsRef` — the same rule and
+        // the same cached rig load as the other admin previews and the 3D
+        // client. Applied to the PIVOT, inside `fig`: the label stays on the
         // marker, and a tilt/roll turns the drop with the body, the way the
         // 3D client's retargeted hips track does.
-        const standRef = ensureClip('idle')?.hipsMedian ?? null
         const hipsBindY = modelHips
           ? modelHips.getWorldPosition(new THREE.Vector3()).y
           : null
@@ -738,7 +765,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         pivot.userData.__noDispose = true
         fig.add(pivot)
       } else {
-        // Mannequin fallback while figure/clip load (or are missing) — same
+        // Mannequin fallback while figure/clip/standing reference load (or
+        // figure/clip are missing) — same
         // height as the real figure would be.
         const tgt = figBase
         const figMat = new THREE.MeshStandardMaterial({

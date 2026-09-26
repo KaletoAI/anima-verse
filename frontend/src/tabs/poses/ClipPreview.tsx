@@ -102,8 +102,8 @@ export interface ClipUrls { a?: string; b?: string; solo?: string }
 /** Root path of a half: hips XZ per key, clip centimetres → metres.
  *
  *  `standRefM` is the STANDING hips height of the clip library in metres
- *  (`standHipsRef`, the idle clip's hips median) — a clip without a hips
- *  track carries no height of its own, so it is played at exactly that
+ *  (`standHipsRef`, the reference rig's rest hips height) — a clip without a
+ *  hips track carries no height of its own, so it is played at exactly that
  *  reference and the figure stays where it binds. */
 function rootPath(clip: AnimationClip, standRefM: number):
 { times: ArrayLike<number>; xyz: Float32Array } {
@@ -355,11 +355,12 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
           return found
         }
-        // The standing reference of the clip library (idle hips median, clip
-        // centimetres) — the SAME measurement the prop viewer and the 3D
-        // client take, so a sit clip drops the figure by the same amount in
-        // all three. `null` = no idle clip: then nothing is put back and the
-        // figures play at their bind height.
+        // The standing reference of the clip library (the reference rig's
+        // rest hips height, clip centimetres; the idle clip's hips median
+        // only when no rig is served) — the SAME rule the prop viewer and
+        // the 3D client apply, so a sit clip drops the figure by the same
+        // amount in all three. `null` = neither: then nothing is put back and
+        // the figures play at their bind height.
         const standRefM = ((await standHipsRef()) || 0) / 100
         if (disposed) return
         for (const { role, url } of parts) {

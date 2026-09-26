@@ -15,7 +15,8 @@ import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D,
 import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
-  restCorrections, restPoseOf } from '@anima/scene-render'
+  restCorrections, restPoseOf, rigHipsHeight,
+  standingHipsRef } from '@anima/scene-render'
 import type { RestPose } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
@@ -108,32 +109,38 @@ const clipIndex = () => {
   }
   return _clipIndexPromise
 }
-/** The REST POSE of the rig every library clip is authored on
- *  (`/assets/animation-rig`). One fetch per session; an empty map is the
+/** The reference RIG every library clip is authored on
+ *  (`/assets/animation-rig`), reduced to the two things the previews read off
+ *  it: its REST POSE (`rest`, for `restCorrections`) and its rest HIPS HEIGHT
+ *  (`hipsY`, the standing reference — see `standHipsRef`). One fetch per
+ *  session, shared by every admin preview (this viewer, the clip preview, the
+ *  floor-plan preview). An empty rest map and `hipsY: undefined` are the
  *  normal state while the rig is not served, and then a clip is bound as it
  *  comes — the behaviour of before.
  *
  *  Reading the rest off the CLIP file instead does not work: an FBX carrying
  *  an animation stores its nodes at the take's first frame, a mean 7.6° and
  *  up to 100° away from the rest. */
-let _donorRestPromise: Promise<RestPose> | null = null
-const donorRest = () => {
-  if (!_donorRestPromise) {
-    _donorRestPromise = (async () => {
+let _donorRigPromise: Promise<{ rest: RestPose; hipsY: number | undefined }> | null = null
+const donorRig = () => {
+  if (!_donorRigPromise) {
+    _donorRigPromise = (async () => {
       try {
         const THREE = await import('three')
         const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
         const rig = await new FBXLoader().loadAsync('/assets/animation-rig')
-        return restPoseOf(THREE, rig)
+        return { rest: restPoseOf(THREE, rig), hipsY: rigHipsHeight(THREE, rig) }
       } catch {
-        return { world: new Map<string, Quaternion>(),
-                 parent: new Map<string, Quaternion>(),
-                 parentBone: new Map<string, string | null>() }
+        return { rest: { world: new Map<string, Quaternion>(),
+                         parent: new Map<string, Quaternion>(),
+                         parentBone: new Map<string, string | null>() },
+                 hipsY: undefined }
       }
     })()
   }
-  return _donorRestPromise
+  return _donorRigPromise
 }
+const donorRest = async () => (await donorRig()).rest
 const _clipCache = new Map<string, Promise<{ clip: AnimationClip; restObj: Object3D
                                              hipsMedian: number | null } | null>>()
 /** One clip of `kind` — the `role` half of it when it is a pair clip. */
@@ -173,24 +180,34 @@ const loadClip = (kind: string, role = '') => {
   return cached
 }
 let _standRefPromise: Promise<number | null> | null = null
-/** The STANDING hips height of the clip library, in clip units — the hips
- *  median of the `idle` clip, the reference every other clip's height is read
- *  against. Today the same number `client3d` uses, but not the same
- *  derivation: the client takes the median of the confirmed STANDING CLUSTER
- *  over all clips it loads (`figures.adaptExternalClips`), which for the
- *  served library is the idle median (110.13). A viewer that loads ONE clip
- *  has no cluster to confirm, so it names the standing clip instead. One load
- *  per session; `null` when there is no idle clip, and then no figure is
- *  lowered at all rather than lowered against a guess. */
+/** The STANDING hips height of the clip library, in clip units — the
+ *  reference every clip's own hips height is read against (`clipHipsDrop`).
+ *  The SAME rule the 3D client applies (`standingHipsRef` of
+ *  @anima/scene-render, used by `figures.adaptExternalClips`): the reference
+ *  rig's REST hips height, the straight-legged stance every clip was
+ *  retargeted onto. Only when no rig is served does the idle clip's hips
+ *  median stand in (bent knees, 2.6 % lower — figures then float ~2.85 cm),
+ *  with one warning per session. One resolution per session; `null` when
+ *  there is neither, and then no figure is lowered at all rather than lowered
+ *  against a guess. */
 export const standHipsRef = (): Promise<number | null> => {
   if (!_standRefPromise) {
-    _standRefPromise = loadClip('idle').then((anim) => {
-      const m = anim?.hipsMedian
-      if (typeof m === 'number' && m > 0) return m
-      console.warn('[Model3DViewer] no idle clip with a hips track — posed'
-        + ' preview figures keep their bind hips height')
-      return null
-    })
+    _standRefPromise = (async () => {
+      const { hipsY } = await donorRig()
+      // The idle clip is only fetched when the rig does not answer.
+      const rigOnly = standingHipsRef(hipsY, null)
+      if (rigOnly.ref !== null) return rigOnly.ref
+      const idle = await loadClip('idle')
+      const { ref, source } = standingHipsRef(hipsY, idle?.hipsMedian)
+      if (source === 'idle') {
+        console.warn('[Model3DViewer] no reference rig at /assets/animation-rig —'
+          + ' posed preview figures stand on the idle clip\'s hips median')
+      } else {
+        console.warn('[Model3DViewer] neither a reference rig nor an idle clip'
+          + ' with a hips track — posed preview figures keep their bind hips height')
+      }
+      return ref
+    })()
   }
   return _standRefPromise
 }
