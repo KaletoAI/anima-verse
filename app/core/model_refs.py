@@ -73,8 +73,15 @@ logger = get_logger(__name__)
 #   (especially female) characters with touching ankles. That over-ask now
 #   sits in the NEGATIVE (touching legs/ankles, narrow stance) instead, so
 #   the positive text can say what the picture should actually show.
-# - Hair BEHIND the shoulders (length-neutral — the identity layer says how
-#   long it is): hair over the chest bakes into the torso geometry.
+# - Hair CLEAR of the chest (user decision 2026-09-27, reworded from "hair
+#   behind the shoulders"): hair over the chest bakes into the torso
+#   geometry. The old wording named a DIRECTION ("behind the shoulders"),
+#   which presupposes hair long enough to push somewhere — on a short-haired
+#   character there is nowhere to push it, and the instruction is either
+#   impossible to satisfy or tempts the model into growing the hair to make
+#   it satisfiable. Naming the OUTCOME instead (clear of the chest) states
+#   what actually matters for the mesh and is true of short hair for free —
+#   the identity layer still says how long the hair actually is.
 # The admin override image_generation.tpose_prompt stays untouched — whoever
 # replaces this text takes the responsibility with it.
 TPOSE_PROMPT_DEFAULT = (
@@ -82,7 +89,7 @@ TPOSE_PROMPT_DEFAULT = (
     "sides at shoulder height, forming the letter T, palms facing down "
     "toward the floor, hands in natural proportion to the body, fingers "
     "straight, slender and slightly spread apart, legs clearly apart with "
-    "open space visible between them, hair behind the shoulders"
+    "open space visible between them, hair clear of the chest"
 )
 
 # Non-humanoid characters (animals): a T-pose is meaningless on four legs.
@@ -118,9 +125,10 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
 # points, instead of the old "face not visible", which named the face itself.
 # "the same figure turned around" speaks to the reference: every extra view
 # slots the front T-pose render (not the frontal profile portrait), so an
-# edit-capable backend turns THAT figure around. Hair goes in FRONT of the
-# shoulders here for the same reason the front view puts it behind them — it
-# must not cover the surface the mesher is supposed to read.
+# edit-capable backend turns THAT figure around. Hair CLEAR of the back here
+# for the same reason the front view wants it clear of the chest (2026-09-27
+# reword, see there) — the surface the mesher is supposed to read from this
+# angle is the back, not the chest.
 TPOSE_BACK_PROMPT_DEFAULT = (
     "the same figure turned around, back view, seen directly from behind, "
     "the back of the head, the upper back and the shoulder blades facing the "
@@ -129,7 +137,7 @@ TPOSE_BACK_PROMPT_DEFAULT = (
     "the sides at shoulder height, palms facing down toward the floor, hands "
     "in natural proportion to the body, fingers straight, slender and slightly "
     "spread apart, legs clearly apart with open space visible between them, "
-    "hair in front of the shoulders"
+    "hair clear of the back"
 )
 
 # Both profiles share one text — the side is the only difference, so they
@@ -148,7 +156,7 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "to the sides at shoulder height so the near arm points at the camera and "
     "hides the far arm, strongly foreshortened, palms facing down toward the "
     "floor, hands in natural proportion to the body, fingers straight, slender "
-    "and slightly spread apart, legs clearly apart, hair behind the shoulders"
+    "and slightly spread apart, legs clearly apart, hair clear of the chest"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")

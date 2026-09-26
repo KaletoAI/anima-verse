@@ -148,6 +148,20 @@ for _label, _text in (("front", model_refs.TPOSE_PROMPT_DEFAULT),
           ("palms facing down toward the floor" in _text,
            "palms facing forward" in _text, "palms facing away" in _text),
           (True, False, False))
+# [8] Hair clause is length-neutral (user decision 2026-09-27): no view
+#     names a direction ("behind/in front of the shoulders") that presupposes
+#     hair long enough to push there — short hair could not satisfy that and
+#     either broke the instruction or tempted the model to grow the hair.
+for _label, _text, _side in (
+        ("front", model_refs.TPOSE_PROMPT_DEFAULT, "chest"),
+        ("back", model_refs.TPOSE_BACK_PROMPT_DEFAULT, "back"),
+        ("left", model_refs.TPOSE_LEFT_PROMPT_DEFAULT, "chest"),
+        ("right", model_refs.TPOSE_RIGHT_PROMPT_DEFAULT, "chest")):
+    check(f"[8] {_label}: hair clause names no direction, works for short hair",
+          (f"hair clear of the {_side}" in _text,
+           "behind the shoulders" in _text, "in front of the shoulders" in _text),
+          (True, False, False))
+
 check("[4] profile text speaks to the reference",
       model_refs.TPOSE_LEFT_PROMPT_DEFAULT.startswith(
           "the same figure turned sideways, strict left side profile view"),
