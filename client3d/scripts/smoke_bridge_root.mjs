@@ -57,7 +57,9 @@
  * [8] No reference rig served (`donorHipsY` undefined or NaN): the travel
  *       cannot be scaled, so there is none — the bridge plays in place, no
  *       hold, the instance never leaves its base and never turns NaN, and one
- *       console.warn covers the session (two adaptations, one line).
+ *       console.warn covers the session (two adaptations, one line) — plus,
+ *       separately, the one line saying the STANDING reference fell back to
+ *       the idle clip (`standingHipsRef`, smoke_rig_stand_ref.mjs).
  * [5] Bridge ended, nobody took the travel yet, three more update() frames
  *       (with the next clip asked for, as `npcs.tick` does): instance x/z
  *       unchanged (no snap back to the seat).
@@ -240,10 +242,10 @@ async function loadClient() {
     const src = join(ROOT, 'client3d/src');
     const entry = [
       `export { travelAt, toWorld, rootPathAt } from '${src}/scene/bridgeTravel';`,
-      `export { adaptExternalClips, Figure, rigHipsHeight, setClipRootMotion } from '${src}/scene/figures';`,
+      `export { adaptExternalClips, Figure, setClipRootMotion } from '${src}/scene/figures';`,
       `export { relockRootPaths, GROUND_LIFT_TOL_CM } from '${src}/scene/footLockMeasure';`,
       `export { setClipTransitions } from '${src}/game/walk';`,
-      `export { restCorrections, restPoseOf } from '@anima/scene-render';`,
+      `export { restCorrections, restPoseOf, rigHipsHeight } from '@anima/scene-render';`,
     ].join('\n');
     const built = await esbuild.build({
       stdin: { contents: entry, resolveDir: dir, loader: 'ts' },
@@ -465,9 +467,12 @@ async function main() {
     } finally {
       console.warn = warn;
     }
-    const rigWarnings = warned.filter((w) => /reference rig/.test(w));
-    check('[8] no rig: exactly one warning over two adaptations', rigWarnings.length === 1,
+    const rigWarnings = warned.filter((w) => /root motion/.test(w) && /reference rig/.test(w));
+    check('[8] no rig: exactly one travel warning over two adaptations', rigWarnings.length === 1,
       `${rigWarnings.length}: ${rigWarnings[0] ?? '-'}`);
+    const standWarnings = warned.filter((w) => /standing height falls back/.test(w));
+    check('[8] no rig: exactly one standing-reference warning over two adaptations',
+      standWarnings.length === 1, `${standWarnings.length}: ${standWarnings[0] ?? '-'}`);
     check('[8] no rig: the bridge still plays', run.bridged, `${run.frames} frames`);
     check('[8] no rig: no hold during or after it',
       run.seen.every((f) => !f.holds) && fig.figure.holdsTravel === false);
@@ -509,7 +514,7 @@ async function main() {
   for (const k of ['idle', ...BRIDGES.flatMap((b) => [b.kind, b.from])]) rawClips[k] = await loadClip(k);
   const refRig = fbxLoader.parse(arrayBufferOf(await readFile(RIG_FILE)), '');
   const donorRest = restPoseOf(THREE, refRig);
-  const donorHipsY = rigHipsHeight(refRig);
+  const donorHipsY = rigHipsHeight(THREE, refRig);
   console.log(`      reference rig rest hips height ${donorHipsY.toFixed(2)} units`);
   setClipTransitions(BRIDGES.map((b) => ({ from: b.from, to: '*', kind: b.kind, accel: 0 })));
 

@@ -9,6 +9,7 @@ import {
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
   bindRelativeValues, hipsTrackMedian, normBoneName, restCorrections, restPoseOf,
+  rigHipsHeight, standingHipsRef,
 } from '@anima/scene-render';
 import type { RestCorrection, RestPose } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
@@ -487,9 +488,14 @@ function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
  * into the parent space of the target hips (the armature's +90° X). Their
  * POSITION is a length that is rescaled, not rotated, either way.
  *
- * Exported for `client3d/scripts/smoke_clip_ground.mjs` alone: the clip ground
- * offset is measured on the clips THIS produces, so the check has to walk the
- * real chain rather than a copy of it.
+ * `donorHipsY` is the reference rig's REST hips height (`rigHipsHeight` of
+ * `@anima/scene-render`) — the standing reference of the whole library
+ * (`standingHipsRef`). Absent = no rig served: the idle clip's median stands
+ * in, and figures float ~3 cm.
+ *
+ * Exported for the client smokes (`smoke_clip_ground.mjs`,
+ * `smoke_bridge_root.mjs`, `smoke_rig_stand_ref.mjs`): what they measure is
+ * produced HERE, so the checks walk the real chain rather than a copy of it.
  */
 export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D,
                                    corrections?: Map<string, RestCorrection>,
@@ -529,18 +535,22 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
 
   const q = new THREE.Quaternion();
   const v = new THREE.Vector3();
-  // The source's STANDING reference: the hips median of the IDLE clip, read
-  // by `hipsTrackMedian` of @anima/scene-render — the ONE rule the admin
-  // previews use too (`clipHipsDrop` there, the rescaled track here come to
-  // the same height). The catalog's `root_drop` is calibrated against exactly
-  // that reference (`pose_catalog._load_groups`), so a seated or lying figure
-  // lands on its marker here as it does in the admin, whatever else this
-  // library holds: with the reference read off the whole library instead,
-  // importing three more standing clips moved every sitter by millimetres
-  // while the catalog and every check stayed put (review 2026-09-08).
+  // The source's STANDING reference: `standingHipsRef` of @anima/scene-render
+  // — the reference rig's REST hips height (`donorHipsY`), the ONE rule the
+  // admin previews use too (`clipHipsDrop` there, the rescaled track here come
+  // to the same height). A hips height equal to that rest is the
+  // straight-legged stance the take was retargeted onto, so the reference rig
+  // reproduces its own feet. The idle clip's hips median used to be the
+  // reference; its stance has bent knees and stands 2.6 % lower (110.18 vs
+  // 113.03 units), which lifted every figure ~2.85 cm. It is now only the
+  // fallback when no rig is served (one console.warn per session). Either way
+  // the reference is not read off the whole library: doing that, importing
+  // three more standing clips moved every sitter by millimetres while the
+  // catalog and every check stayed put (review 2026-09-08).
   //
-  // The CLUSTER below is the fallback for a library without an idle clip, and
-  // it still names the scale outliers. It used to be the reference itself:
+  // The CLUSTER below is the fallback for a library without a rig AND without
+  // an idle clip, and it still names the scale outliers. It used to be the
+  // reference itself:
   // first the MAXIMUM hips height over ALL clips — a SINGLE badly scaled
   // clip became the reference and pushed EVERY figure into the ground
   // (finding 2026-07-26: taking-fotos.fbx with hips ~211 instead of ~110 →
@@ -564,7 +574,10 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
     : (sorted[0] || 0);
   const idleClip = clips.find((c) => c.name === 'idle');
   const idleRest = idleClip ? hipsTrackMedian(idleClip) : null;
-  const sourceRest = idleRest !== null && idleRest > 1e-6 ? idleRest : clusterRest;
+  const { ref: standRef, source: standSource } = standingHipsRef(
+    donorHipsY, idleRest !== null && idleRest > 1e-6 ? idleRest : clusterRest);
+  if (standSource !== 'rig') warnNoStandRig();
+  const sourceRest = standRef ?? 0;
   // Scale healing per clip: normalise an outlier's |y| values onto the
   // reference before the bounce is computed.
   const scaleFixOf = (clip: THREE.AnimationClip): number => {
@@ -624,34 +637,27 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
         // for a clip whose file says it carries one (the listing's
         // `root_motion`, `setClipRootMotion`). It is built from the RAW
         // track, frame 0 as the origin, through the bounce's own chain
-        // (`scaleFix`, then a hips-height ratio, then the instance scale in
-        // `Figure.update`) with ONE difference, measured at the consumer: the
-        // ratio's denominator is the reference RIG's rest hips height
-        // (`donorHipsY`), not the idle clip's hips median. The bounce needs
-        // the idle median — it is the height at which a standing clip must
-        // put the hips at THIS rig's rest — but a travel is a LENGTH of the
-        // rig the clip was authored on, and the idle stance stands 2.6 %
-        // lower than that rig's rest (110.18 vs 113.03 units). Scaled by the
-        // median, a figure on the reference rig itself overshot its planted
-        // foot by that 2.6 % (get-up-bed 2.15 cm instead of the importer's
-        // 1.31); scaled by the rig, it reproduces the importer's numbers
-        // (smoke_bridge_root.mjs). WITHOUT a served rig there is no length to
-        // measure the travel against, and the median is proven wrong for it —
-        // so no path at all: the clip plays in place, exactly as before root
+        // (`scaleFix`, the same ratio `k`, then the instance scale in
+        // `Figure.update`): bounce and travel share the reference rig's rest
+        // hips height as their denominator, so a figure on the reference rig
+        // reproduces the importer's numbers (smoke_bridge_root.mjs). WITHOUT
+        // a served rig there is no length to measure the travel against — the
+        // idle median stands 2.6 % short of the rig's rest and overshot the
+        // planted foot by that much (get-up-bed 2.15 cm instead of 1.31) — so
+        // no path at all: the clip plays in place, exactly as before root
         // motion existed, and one warning says why (`warnNoTravelRig`).
         // The result is in the target TEMPLATE's units, in the clip's frame
         // (+Z forward, +X the figure's left) — the frame of the figure root.
-        const rigKnown = donorHipsY !== undefined && Number.isFinite(donorHipsY) && donorHipsY > 1e-6;
+        const rigKnown = standSource === 'rig';
         if (clipRootMotionFlags.get(clip) && !rigKnown) warnNoTravelRig(clip.name);
         if (clipRootMotionFlags.get(clip) && rigKnown) {
-          const kTravel = hipsPosScale / donorHipsY!;
           const n = track.times.length;
           const xz = new Float32Array(n * 2);
           const x0 = track.values[0] * scaleFix;
           const z0 = track.values[2] * scaleFix;
           for (let i = 0; i < n; i++) {
-            xz[i * 2] = (track.values[i * 3] * scaleFix - x0) * kTravel;
-            xz[i * 2 + 1] = (track.values[i * 3 + 2] * scaleFix - z0) * kTravel;
+            xz[i * 2] = (track.values[i * 3] * scaleFix - x0) * k;
+            xz[i * 2 + 1] = (track.values[i * 3 + 2] * scaleFix - z0) * k;
           }
           rootPath = { times: Float32Array.from(track.times), xz };
         }
@@ -664,6 +670,15 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
     }
   }
   return out;
+}
+
+/** Once per session: no reference rig is served, so the library's standing
+ *  reference falls back to the idle clip's hips median (`standingHipsRef`). */
+let warnedNoStandRig = false;
+function warnNoStandRig(): void {
+  if (warnedNoStandRig) return;
+  warnedNoStandRig = true;
+  console.warn('[figures] no reference rig served — standing height falls back to the idle clip (figures float ~3 cm)');
 }
 
 /** Once per session: a clip carries root motion, but the reference rig it
@@ -690,19 +705,6 @@ function relockOnRig(charName: string, clips: readonly THREE.AnimationClip[],
   if (!line) return;
   if (reports.some((r) => r.reason === 'no foot bones')) console.warn(`[figures] ${charName}: ${line}`);
   else console.info(`[figures] ${charName}: ${line}`);
-}
-
-/** World height of a rig's hips bone in its rest pose, in the rig's own
- *  units — `undefined` when it has no hips. Exported for
- *  `client3d/scripts/smoke_bridge_root.mjs`, which hands the reference rig's
- *  number to `adaptExternalClips` exactly as `FigureLibrary.load` does. */
-export function rigHipsHeight(rig: THREE.Object3D): number | undefined {
-  rig.updateMatrixWorld(true);
-  let hips: THREE.Object3D | undefined;
-  rig.traverse((o) => {
-    if (!hips && (o as THREE.Bone).isBone && /hips$/.test(normBoneName(o.name))) hips = o;
-  });
-  return hips ? hips.getWorldPosition(new THREE.Vector3()).y : undefined;
 }
 
 /** `<kind>__a` / `<kind>__b` — the half of a pair clip (contract § A8a). */
@@ -939,7 +941,7 @@ export class FigureLibrary {
     try {
       const rig = await loadFile('/assets/animation-rig', true);
       this.donorRest = restPoseOf(THREE, rig.scene);
-      this.donorHipsY = rigHipsHeight(rig.scene);
+      this.donorHipsY = rigHipsHeight(THREE, rig.scene);
     } catch {
       console.warn('[figures] no reference rig at /assets/animation-rig —'
         + ' library clips are copied 1:1 and overwrite each rig\'s own stance');
@@ -1181,9 +1183,11 @@ export class FigureLibrary {
    * rest.
    *
    * The whole library goes through `adaptExternalClips` and the filter runs
-   * AFTER it, deliberately: that function derives its standing reference from
-   * the hip heights ACROSS the clips it is given, so handing it a subset
-   * would rescale the survivors against a different yardstick.
+   * AFTER it, deliberately: the standing reference is the reference rig's rest
+   * hips, but without a rig it falls back to the library's idle clip (or the
+   * standing cluster ACROSS the clips), and the scale outliers are named
+   * against the whole library — a subset would rescale the survivors against
+   * a different yardstick.
    *
    * The KIND of a clip is its lowercased name — the same key `Figure` binds
    * its actions under, and the library sets `clip.name = kind` itself.

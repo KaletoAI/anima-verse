@@ -50,6 +50,7 @@
  * catalog's groups).
  */
 import type { AnimationClip, Object3D } from 'three'
+import { normBoneName } from './clipRetarget'
 
 /** The figure of this contract: 1.70 m, everywhere and always (§ A3). */
 export const FIGURE_HEIGHT_M = 1.7
@@ -97,6 +98,47 @@ export function hipsTrackMedian(clip: AnimationClip | null | undefined): number 
 }
 
 /**
+ * World height of a rig's hips bone in its REST pose, in the rig's own units
+ * — `undefined` when it has no hips bone. Read off the reference rig
+ * (`/assets/animation-rig`, `shared/models/rig/reference.fbx`) this is the
+ * `rigHips` input of `standingHipsRef`.
+ */
+export function rigHipsHeight(THREE: typeof import('three'),
+                              rig: Object3D): number | undefined {
+  rig.updateMatrixWorld(true)
+  let hips: Object3D | undefined
+  rig.traverse((o) => {
+    if (!hips && (o as { isBone?: boolean }).isBone && /hips$/.test(normBoneName(o.name))) hips = o
+  })
+  return hips ? hips.getWorldPosition(new THREE.Vector3()).y : undefined
+}
+
+/**
+ * The STANDING reference of a clip library: the hips height, in the clips'
+ * own units, at which a clip stands straight-legged on the floor.
+ *
+ * A clip's hips track is in the units of the rig it was retargeted onto
+ * (every import drives its take onto `shared/models/rig/reference.fbx`). A
+ * hips height equal to that rig's REST hips height is the straight-legged
+ * stance, so it is the standing reference: a clip then reproduces its own
+ * feet exactly. The idle clip's median stands 2.6 % lower (bent knees) and
+ * lifted every figure ~2.85 cm; it is only the fallback when no rig is served.
+ *
+ * `rig` when `rigHips` is finite and > 0; else `idle` when `idleMedian` is;
+ * else `{ ref: null, source: 'none' }` — `clipHipsDrop` reads a null
+ * reference as "nothing to put back".
+ */
+export function standingHipsRef(rigHips: number | null | undefined,
+                                idleMedian: number | null | undefined
+): { ref: number | null; source: 'rig' | 'idle' | 'none' } {
+  const usable = (v: number | null | undefined): v is number =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0
+  if (usable(rigHips)) return { ref: rigHips, source: 'rig' }
+  if (usable(idleMedian)) return { ref: idleMedian, source: 'idle' }
+  return { ref: null, source: 'none' }
+}
+
+/**
  * How far a figure playing this clip has to SINK so its hips end up where the
  * clip puts them — in the unit `hipsBindY` is given in (mesh units, metres).
  *
@@ -117,10 +159,11 @@ export function hipsTrackMedian(clip: AnimationClip | null | undefined): number 
  * standing reference (`figures.adaptExternalClips`); a renderer that plays in
  * place instead subtracts this drop once, which comes to the same height.
  *
- * `standRef` is what a STANDING actor's hips measure in that same clip
- * library — `hipsTrackMedian` of the idle clip. A clip at exactly that height
- * yields 0 (nothing to put back), a sleep clip animated ON a bed yields a
- * NEGATIVE drop and must: it is played above its own standing hips.
+ * `standRef` is `standingHipsRef(...).ref` — what a STANDING actor's hips
+ * measure in the clip library's units: the reference rig's REST hips height,
+ * the idle clip's median only when no rig is served. A clip at exactly that
+ * height yields 0 (nothing to put back), a sleep clip animated ON a bed yields
+ * a NEGATIVE drop and must: it is played above its own standing hips.
  *
  * Any missing or unusable input (no bind height, no track, no reference,
  * a zero reference) = 0, never a NaN into a position.

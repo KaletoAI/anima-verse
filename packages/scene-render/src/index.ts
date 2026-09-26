@@ -125,7 +125,7 @@ export {
 export { pickVariant, pickModelVariant } from './types'
 
 export { FIGURE_HEIGHT_M, anchorFigureBind, clipHipsDrop, figureRootY,
-  hipsTrackMedian } from './figure'
+  hipsTrackMedian, rigHipsHeight, standingHipsRef } from './figure'
 
 export { markerSlots, pairYaw, rotateXZ, pairPoints } from './placeGeometry'
 export type { XZ } from './placeGeometry'
