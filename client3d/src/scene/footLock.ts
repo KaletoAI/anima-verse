@@ -49,20 +49,18 @@ const finite = (p: Vec3 | undefined): p is Vec3 =>
 
 /**
  * Per point the height it rests at when planted: the low percentile of its
- * own heights, but never above its height in the rig's rest pose plus
- * `liftTolCm`. Both callers use the default 0 — the importer on the raw take,
- * `footLockMeasure` on adapted clips, which stand on the rig's rest hips
- * height and so are not lifted over the rest; the parameter is part of the
- * parity fixture (`scripts/fixtures/root_motion_cases.json`).
+ * own heights, but never above its height in the rig's rest pose — a point
+ * that never touches the floor must not declare its lowest airborne height
+ * the ground.
  */
-export function groundHeights(tracks: Tracks, restHeights: Record<string, number>,
-                              liftTolCm = 0): Record<string, number> {
+export function groundHeights(tracks: Tracks,
+                              restHeights: Record<string, number>): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [name, pts] of Object.entries(tracks)) {
     const ys = pts.filter(finite).map((p) => p[1]).sort((a, b) => a - b);
     if (!ys.length) continue;
     const pct = ys[Math.min(ys.length - 1, Math.floor(GROUND_PCT * (ys.length - 1)))];
-    out[name] = Math.min(pct, (restHeights[name] ?? Infinity) + liftTolCm);
+    out[name] = Math.min(pct, restHeights[name] ?? Infinity);
   }
   return out;
 }

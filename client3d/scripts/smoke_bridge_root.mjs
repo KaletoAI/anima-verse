@@ -136,8 +136,9 @@
  *       COUNTER-PROBE in the same run, the IMPORTED path (no re-lock)
  *       measured the same way: never lower than the re-locked one (clip ×
  *       rig), and on Test3_mia / get-up-chair the re-lock gains >= 0.5 cm —
- *       Task 2 measured 2.20 → 1.23 cm (sidecar spans), a gain of 0.97; half
- *       of it is the floor (own contacts now: 2.20 → 1.41, gain 0.79).
+ *       Task 2 measured 2.20 → 1.23 cm (sidecar spans), a gain of 0.97; own
+ *       contacts now give 2.20 → 1.41, a gain of 0.79 (≈ 80 % of Task 2's);
+ *       the checked floor of 0.5 cm stays well under it.
  *       RED COUNTER-PROBE: offset switched off (the library adapted WITHOUT
  *       the root-motion flag): chair >= 15 cm, bed >= 25 cm (measured 22.8 /
  *       46.6 / 30.0 and 32.2 / 45.5 / 53.2 cm).

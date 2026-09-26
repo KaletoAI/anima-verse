@@ -88,10 +88,12 @@
  *      clip no longer stands lifted over the rest, and the 3 cm tolerance
  *      that covered that lift is gone: `footLockMeasure` exports no
  *      GROUND_LIFT_TOL_CM any more.
- *      The rule on its own (`groundHeights`): the four points held 2 cm over
- *      their rests for 11 frames — feet at 10, toes at 5 over rests 8 / 3 —
- *      have ground = min(own height, rest) = rest: 8 / 3, not 10 / 5.
- *      Through relockRootPaths: Legs.position = (0, 2.5, −2f) — the whole leg
+ *      The rule on its own (`groundHeights`, a check of the RULE, not a
+ *      regression proof — the relockRootPaths part below is the one that
+ *      fails with the old tolerance): the four points held 2 cm over their
+ *      rests for 11 frames — feet at 10, toes at 5 over rests 8 / 3 — have
+ *      ground = min(own height, rest) = rest: 8 / 3, not 10 / 5.
+ *      Through relockRootPaths (the discriminating proof): Legs.position = (0, 2.5, −2f) — the whole leg
  *      lifted 2.5 cm. Feet at 10.5 / toes at 5.5 over rests 8 / 3: ground =
  *      rest, height 2.5 → band ramp (5 − 2.5)/3 = 0.833 < FULL in every frame
  *      → used 'imported', reason 'no full contact', the stored path is still
@@ -325,8 +327,8 @@ async function main() {
     const ground = groundHeights(
       { LeftFoot: lifted(8), LeftToeBase: lifted(3), RightFoot: lifted(8), RightToeBase: lifted(3) },
       { LeftFoot: 8, LeftToeBase: 3, RightFoot: 8, RightToeBase: 3 });
-    near('groundHeights: foot 2 cm over its rest 8 → ground 8', ground.LeftFoot, 8, 0);
-    near('groundHeights: toe 2 cm over its rest 3 → ground 3', ground.RightToeBase, 3, 0);
+    near('rule — groundHeights: foot 2 cm over its rest 8 → ground 8', ground.LeftFoot, 8, 0);
+    near('rule — groundHeights: toe 2 cm over its rest 3 → ground 3', ground.RightToeBase, 3, 0);
     const clip = makeClip('bridge-h', 1, { lift: 2.5 });
     preset(clip, 1);
     const kept = clipRootPath(clip);
