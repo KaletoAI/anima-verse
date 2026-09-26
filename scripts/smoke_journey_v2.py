@@ -520,12 +520,22 @@ try:
 
     # The delay is WHOLE game seconds, rounded UP: the calendar has second
     # resolution, so 2.23 s stored as a stamp comes back as 2 and the last
-    # 0.23 s of the standing-up would be cut off by the first step.
+    # 0.23 s of the standing-up would be cut off by the first step. At
+    # factor 1 a real second is a game second; the clip length times the
+    # factor is the rule (end to end in [the exit delay is the clip's REAL
+    # length] below): 2.23 * 10 = 22.3 -> 23, 2.23 * 0.5 = 1.115 -> 2, and a
+    # frozen clock (factor 0) converts nothing and keeps ceil(2.23) = 3.
     check("a clip length rounds UP to whole game seconds",
-          travel_engine._exit_delay(2.23), 3)
+          travel_engine._exit_delay(2.23, 1.0), 3)
     check("… an exact second stays that second",
-          travel_engine._exit_delay(1.0), 1)
-    check("… and no clip is no delay", travel_engine._exit_delay(0.0), 0)
+          travel_engine._exit_delay(1.0, 1.0), 1)
+    check("… and no clip is no delay", travel_engine._exit_delay(0.0, 1.0), 0)
+    check("… factor 10 scales the REAL clip: ceil(22.3)",
+          travel_engine._exit_delay(2.23, 10.0), 23)
+    check("… factor 0.5: ceil(1.115)",
+          travel_engine._exit_delay(2.23, 0.5), 2)
+    check("… a frozen clock keeps the clip's own seconds",
+          travel_engine._exit_delay(2.23, 0.0), 3)
 finally:
     (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
      _ac.load_locomotion_clips, _ac.resolve_transition, _ac.clip_meta) = _keep
@@ -548,7 +558,8 @@ finally:
 #        stand point: sqrt(2.4² + 2²) = sqrt(9.76) = 3.1241 m / 1.4 m/s
 #        = 2.2315 s (grass, factor 1.0).
 #   [J2] the exit clip lasts 2.0 s -> the journey starts 2 game seconds after
-#        the order (`_exit_delay`). journey_state
+#        the order (`_exit_delay`; the clock stands at factor 0 since [7], so
+#        the clip's own ceil(2.0) = 2). journey_state
 #          one second BEFORE started_at_game -> (2, 3), progress 0: the
 #            figure is still getting up, clamped to the SEAT (the zero-time
 #            leg must not be walked before the journey runs);
@@ -735,6 +746,56 @@ try:
                    str(_go["travel"]["pace_m_s_real"]))
 except Exception as _e:                                        # pragma: no cover
     check_true(f"the roster check ran ({_e})", False)
+
+# ── The wait is the clip's REAL length, whatever the clock's pace ───────
+#
+# The client plays the exit clip in REAL seconds; the journey start is a GAME
+# stamp, and the roster turns the gap back with `starts_in_s = pending /
+# factor` (factor = game seconds per real second, `game_speed_factor`). So the
+# delay has to be the clip length times the factor, rounded UP to whole game
+# seconds (the calendar has second resolution — see `_exit_delay`):
+#
+#   factor 1    2.23 s clip -> ceil(2.23)        =  3 game s -> 3 / 1   = 3.0 s
+#   factor 10   2.23 s clip -> ceil(2.23 * 10)   = 23 game s -> 23 / 10 = 2.3 s
+#   factor 0.5  2.23 s clip -> ceil(2.23 * 0.5)  =  2 game s -> 2 / 0.5 = 4.0 s
+#
+# Each `starts_in_s` is >= 2.23, the clip's own length: the route never starts
+# under the running clip. (The old delay `ceil(2.23)` = 3 game s at factor 10
+# was 3 / 10 = 0.3 real s — the figure walked off 1.93 s into its standing-up.)
+# The clock is PINNED (game_time patched to a fixed stamp) so a running clock
+# at factor 10 cannot eat into `pending` between the order and the payload.
+print("\n[the exit delay is the clip's REAL length]")
+import app.core.timeutils as _tu                               # noqa: E402
+
+_PIN = GameTime.parse("Y0001-D020T08:00:00")
+_keep_clock = (_tu.game_time, travel_engine.game_time,
+               travel_engine.departure_bridge)
+try:
+    _tu.game_time = travel_engine.game_time = lambda: _PIN
+    travel_engine.departure_bridge = lambda n: ("standup", 2.23)
+    set_known_locations(_ROSTER_NPC, [HOME, PARK])
+    for _factor, _delay, _real in ((1.0, 3, 3.0), (10.0, 23, 2.3),
+                                   (0.5, 2, 4.0)):
+        set_game_factor(_factor)
+        travel_engine.cancel_journey(_ROSTER_NPC)
+        _j, _why = travel_engine.start_journey(_ROSTER_NPC, PARK)
+        check(f"factor {_factor}: the journey starts", _why, "")
+        check(f"factor {_factor}: it starts {_delay} game s after the order",
+              (GameTime.parse((_j or {}).get("started_at_game") or _PIN.canonical())
+               - _PIN).seconds, float(_delay))
+        _row = next((c for c in _wo.build_worldmap_payload(show_all=True)
+                     ["characters"] if c["name"] == _ROSTER_NPC), None) or {}
+        _in = (_row.get("travel") or {}).get("starts_in_s")
+        approx(f"factor {_factor}: starts_in_s = {_delay} / {_factor} = {_real}",
+               _in, _real)
+        check_true(f"factor {_factor}: … never under the 2.23 s clip",
+                   _in is not None and _in >= 2.23, str(_in))
+except Exception as _e:                                        # pragma: no cover
+    check_true(f"the real-length check ran ({_e})", False)
+finally:
+    (_tu.game_time, travel_engine.game_time,
+     travel_engine.departure_bridge) = _keep_clock
+    travel_engine.cancel_journey(_ROSTER_NPC)
 
 print()
 if FAILURES:

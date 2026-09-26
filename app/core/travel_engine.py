@@ -485,8 +485,10 @@ def _bake_route(start: Point, goal: Point,
 
 
 def departure_bridge(character_name: str) -> Tuple[str, float]:
-    """``(clip kind, game seconds)`` a figure needs to LEAVE its current pose
-    before it can walk — ``("", 0.0)`` when nothing is configured.
+    """``(clip kind, clip seconds)`` a figure needs to LEAVE its current pose
+    before it can walk — ``("", 0.0)`` when nothing is configured. The
+    seconds are the clip's REAL playback length; :func:`_exit_delay` turns
+    them into the game seconds a journey waits.
 
     A character that walks away while still sitting is the jump this exists to
     remove. The rule comes from the transition table
@@ -513,7 +515,7 @@ def departure_bridge(character_name: str) -> Tuple[str, float]:
 
 
 def exit_bridge_for_pose(pose_key: str) -> Tuple[str, float]:
-    """``(clip kind, game seconds)`` of the exit clip that takes a figure out
+    """``(clip kind, clip seconds)`` of the exit clip that takes a figure out
     of ``pose_key`` into walking — :func:`departure_bridge` starting from a
     POSE instead of a character, for a caller that knows the pose a
     character HELD (it has just been cleared) rather than the one it holds.
@@ -578,8 +580,18 @@ def _with_seat_leg(waypoints: List[List[float]],
     return [[seat[0], seat[1], 0.0]] + waypoints
 
 
-def _exit_delay(exit_s: float) -> int:
-    """The exit clip's length as WHOLE game seconds, rounded UP.
+def _exit_delay(exit_s: float, factor: float) -> int:
+    """The exit clip's REAL length as WHOLE game seconds, rounded UP.
+
+    The client plays the clip in REAL seconds, while the journey start is a
+    GAME stamp that the roster turns back into real ones
+    (``starts_in_s = pending / factor``). So the clip length is scaled by
+    ``factor`` — the game clock's game seconds per real second,
+    ``game_speed_factor()``, the same number the roster divides by: at
+    factor 10 a 2.23 s clip is 22.3 game seconds, and a delay of only 3 would
+    start the route 0.3 real seconds into the standing-up. A frozen clock
+    (``factor`` <= 0) converts nothing — nothing moves anyway — and keeps
+    the clip's own seconds.
 
     The world calendar has second resolution, so a 2.23 s clip stored as a
     stamp comes back as 2 s and the last 0.23 s of the standing-up would be
@@ -587,7 +599,9 @@ def _exit_delay(exit_s: float) -> int:
     for the remainder instead (the client clamps it), which is a pause nobody
     sees — a cut mid-motion is.
     """
-    return math.ceil(exit_s) if exit_s > 0 else 0
+    if exit_s <= 0:
+        return 0
+    return math.ceil(exit_s * factor) if factor > 0 else math.ceil(exit_s)
 
 
 def start_journey(character_name: str,
@@ -664,14 +678,16 @@ def start_journey(character_name: str,
     # first point on its own, and the ETA moves with it because it is derived
     # from the same stamp.
     exit_clip, exit_s = departure_bridge(character_name)
-    starts = game_time() + GameDuration.of(seconds=_exit_delay(exit_s))
+    starts = game_time() + GameDuration.of(
+        seconds=_exit_delay(exit_s, game_speed_factor()))
     journey = {"target": target_id, "waypoints": waypoints,
                "started_at_game": starts.canonical(), "speed_m_s": speed,
                "entry_edge": entry_edge}
     if exit_clip:
-        # What to PLAY while the world waits, and how long the wait is — the
-        # roster reads both off the journey rather than resolving the rule a
-        # second time (and possibly differently) per poll.
+        # What to PLAY while the world waits, and the clip's REAL length (the
+        # wait itself is ``started_at_game``) — the roster reads them off the
+        # journey rather than resolving the rule a second time (and possibly
+        # differently) per poll.
         journey["exit_clip"] = exit_clip
         journey["exit_s"] = round(exit_s, 3)
     # Walking away ends a running pair interaction for BOTH participants.
@@ -763,7 +779,8 @@ def start_journey_to_point(character_name: str, x: float,
 
     # Same delay as a journey to a place: getting up takes as long either way.
     exit_clip, exit_s = departure_bridge(character_name)
-    starts = game_time() + GameDuration.of(seconds=_exit_delay(exit_s))
+    starts = game_time() + GameDuration.of(
+        seconds=_exit_delay(exit_s, game_speed_factor()))
     journey = {"target": "", "target_point": {"x": gx, "z": gz},
                "waypoints": waypoints,
                "started_at_game": starts.canonical(), "speed_m_s": speed,
