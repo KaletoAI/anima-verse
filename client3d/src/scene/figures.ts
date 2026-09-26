@@ -1254,16 +1254,17 @@ export class FigureLibrary {
         + ` a clip needs ${MIN_CLIP_TRACKS} usable tracks to survive)`);
     }
     const extra = adapted.filter((c) => !have.has(c.name.toLowerCase()));
+    // The bridge travels rebuilt and their planted feet pinned on THIS
+    // skeleton (`footLockMeasure`): the import holds the feet only on the
+    // reference rig's proportions. BEFORE the ground offsets: the pin
+    // rewrites the leg tracks the offsets are measured from.
+    relockOnRig(charName, extra, template, scale);
     // WHERE each of these clips puts the body over the ground, measured once
     // per rig (`clipGround`, finding 3 of 2026-08-13). Pure data: what it is
     // good for is decided in `Figure.play`, and only while a terrain move clip
     // runs. Measured AFTER the filter — a clip this rig will never play costs
     // no skinning samples.
     measureGroundOffsets(extra, template);
-    // The bridge travels rebuilt and their planted feet pinned on THIS
-    // skeleton (`footLockMeasure`): the import holds the feet only on the
-    // reference rig's proportions.
-    relockOnRig(charName, extra, template, scale);
     const floats = extra.filter((c) => clipGroundOffset(c) > 0.05)
       .map((c) => `${c.name} +${clipGroundOffset(c).toFixed(2)} m`);
     if (floats.length) {

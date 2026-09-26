@@ -7,7 +7,7 @@ import {
   CONTACT_POINTS, FULL, contactWeights, footLockPath, groundHeights, maxPlantedDrift,
 } from './footLock';
 import type { Tracks, Vec3 } from './footLock';
-import { pinRuns, twoBoneIk } from './legPin';
+import { pinRuns, soleDown, twoBoneIk } from './legPin';
 import type { Quat } from './legPin';
 
 /**
@@ -50,12 +50,16 @@ import type { Quat } from './legPin';
  * whole rise: 3.86 cm on Test3_mia, 1.59 cm on Soldier). The same two steps
  * therefore run here once per model, on its own skeleton, and are baked into
  * the adapted clip (no cost at run time). Per foot:
- *   DOWN — its contact weight (the larger of ankle and ball, as sampled) goes
- *     through the importer's run rule and fade (`legPin.pinRuns`); the foot
+ *   DOWN — its contact weight (the larger of ankle and ball, as sampled),
+ *     zero wherever the foot is not SOLE-DOWN (`legPin.soleDown`, the twin
+ *     of `_foot_plant.sole_down`: ankle over ball by at least half the rig's
+ *     rest rise), goes through the importer's run rule and fade
+ *     (`legPin.pinRuns`); the foot
  *     comes down by that weight × its LIFT, the least height of its two points
  *     over their own grounds (`groundHeights` — the importer's `foot_lift` with
  *     the rig's ground in place of its rest heights).
- *   HOLD — the contacts again, of the LOWERED foot, through the same rule: a
+ *   HOLD — the contacts again, of the LOWERED foot, through the same gate and
+ *     rule: a
  *     frame the lift puts on the ground is planted and is held in full (a foot
  *     hovering 3 cm up weighs 0.67 before and stands after; held at 0.67 it
  *     skated — Test3_mia get-up-chair, right ankle 1.78 cm). In each held run
@@ -100,9 +104,12 @@ export interface RelockReport {
   /** The same measurement with the imported path, before the pin, cm — the
    *  other side, and the comparison. */
   importedDriftCm: number;
-  /** Largest correction the leg pin applied to an ankle, cm (0 = nothing
-   *  pinned). */
+  /** Largest HORIZONTAL correction the leg pin applied to an ankle (the
+   *  hold), cm (0 = nothing held). */
   pinnedCm: number;
+  /** Largest VERTICAL correction the leg pin applied to an ankle (the
+   *  lift), cm (0 = nothing lowered or raised). */
+  liftCm: number;
   /** Why no foot was pinned although the clip was measured: 'no leg bones'
    *  (UpLeg/Leg/Foot of both sides are needed). */
   pinReason?: string;
@@ -159,9 +166,9 @@ function travelEndCm(path: RootPath, unitsPerCm: number): [number, number] {
 }
 
 /** One line for the whole model, e.g.
- *  "foot lock per rig — get-up-chair 0.4 cm (imported 2.2), pinned 2.1 cm
- *  → 0.1 cm, get-up-bed imported (no foot bones)". The pin part is left out
- *  when it moved nothing visible (< 0.05 cm). */
+ *  "foot lock per rig — get-up-chair 3.9 cm (imported 5.0), held 3.1 cm,
+ *  lifted 1.2 cm → 0.5 cm, get-up-bed imported (no foot bones)". The pin
+ *  part is left out when it moved nothing visible (both < 0.05 cm). */
 function summaryLine(reports: readonly RelockReport[]): string {
   const parts = reports.map((r) => {
     let head: string;
@@ -173,8 +180,9 @@ function summaryLine(reports: readonly RelockReport[]): string {
       return `${r.clip} imported (${r.reason})`;
     }
     if (r.pinReason) return `${head}, not pinned (${r.pinReason})`;
-    if (r.pinnedCm >= 0.05) return `${head}, pinned ${r.pinnedCm.toFixed(1)} cm → ${r.driftCm.toFixed(1)} cm`;
-    return head;
+    if (r.pinnedCm < 0.05 && r.liftCm < 0.05) return head;
+    return `${head}, held ${r.pinnedCm.toFixed(1)} cm, lifted ${r.liftCm.toFixed(1)} cm`
+      + ` → ${r.driftCm.toFixed(1)} cm`;
   });
   return `foot lock per rig — ${parts.join(', ')}`;
 }
@@ -277,20 +285,26 @@ function pivotAt(tracks: Tracks, leg: (typeof LEGS)[number], f: number, s: numbe
  * THE LEG PIN of one clip (module docstring): per leg the DOWN and HOLD
  * weights, per held run the held point and its anchor, per frame the IK —
  * written as new UpLeg/Leg/Foot tracks on `times`. `tracks` are the sampled
- * contact points (cm, in place), `path` the root path in use (cm per frame).
+ * contact points (cm, in place, heights over the rest floor), `rest` their
+ * rest heights, `path` the root path in use (cm per frame).
  * Returns whether any frame was moved.
  */
 function pinLegs(clip: THREE.AnimationClip, times: readonly number[], legs: LegBones[],
                  legFrames: LegFrame[][], tracks: Tracks, ground: Record<string, number>,
-                 weights: Record<string, number[]>, path: Array<[number, number]>,
+                 rest: Record<string, number>, weights: Record<string, number[]>, path: Array<[number, number]>,
                  fps: number): boolean {
   const n = times.length;
   const keyTimes = Float32Array.from(times);
   let pinned = false;
   LEGS.forEach((leg, s) => {
     const frames = legFrames[s];
+    // Only a SOLE-DOWN frame pins (`legPin.soleDown`): the lift compares
+    // with the upright stance and means nothing for a foot on its side, its
+    // instep or its heel.
+    const sole = soleDown(tracks[leg.ankle].map((p) => p[1]), tracks[leg.ball].map((p) => p[1]),
+      rest[leg.ankle] - rest[leg.ball]);
     const footWeight = (w: Record<string, number[]>): number[] => Array.from({ length: n },
-      (_, f) => Math.max(w[leg.ankle]?.[f] ?? 0, w[leg.ball]?.[f] ?? 0));
+      (_, f) => (sole[f] ? Math.max(w[leg.ankle]?.[f] ?? 0, w[leg.ball]?.[f] ?? 0) : 0));
     // DOWN: the foot comes down by w · its lift, w from the contacts as
     // sampled.
     const down = pinRuns(footWeight(weights), fps);
@@ -418,7 +432,7 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
   if (points.some((b) => !b)) {
     for (const clip of todo) {
       reports.push({ clip: clip.name, used: 'imported', reason: 'no foot bones',
-        driftCm: 0, rebuiltDriftCm: 0, importedDriftCm: 0, pinnedCm: 0,
+        driftCm: 0, rebuiltDriftCm: 0, importedDriftCm: 0, pinnedCm: 0, liftCm: 0,
         travel: travelEndCm(clipRootPath(clip)!, unitsPerCm) });
     }
     log?.(summaryLine(reports));
@@ -443,8 +457,16 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     return [v.x / unitsPerCm, v.y / unitsPerCm, v.z / unitsPerCm];
   };
   const worldQ = (o: THREE.Object3D): THREE.Quaternion => o.getWorldQuaternion(new THREE.Quaternion());
+  // The contact tracks' heights are measured from the SAME rest floor as
+  // `rest`: the probe's world origin is not at the feet on every rig
+  // (Test3_mia is centred on its hips), and `groundHeights` caps a point's
+  // ground at its rest height — both have to be in one frame.
+  const floorCm = floorY / unitsPerCm;
   const readPoints = (into: Tracks) => {
-    bones.forEach((b, i) => { into[CONTACT_POINTS[i]].push(cmOf(b)); });
+    bones.forEach((b, i) => {
+      const p = cmOf(b);
+      into[CONTACT_POINTS[i]].push([p[0], p[1] - floorCm, p[2]]);
+    });
   };
   const emptyTracks = (): Tracks => {
     const t: Tracks = {};
@@ -484,7 +506,7 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
       w.some((x, f) => f + 1 < w.length && Math.min(x, w[f + 1]) >= FULL));
     if (!anyFull) {
       reports.push({ clip: clip.name, used: 'imported', reason: 'no full contact',
-        driftCm: 0, rebuiltDriftCm: 0, importedDriftCm: 0, pinnedCm: 0,
+        driftCm: 0, rebuiltDriftCm: 0, importedDriftCm: 0, pinnedCm: 0, liftCm: 0,
         travel: travelEndCm(imported, unitsPerCm) });
       continue;
     }
@@ -510,14 +532,16 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     // plays: a fresh sampling of the baked tracks, judged on the same contacts.
     let driftCm = useRig ? rebuiltDriftCm : importedDriftCm;
     let pinnedCm = 0;
-    if (legs && pinLegs(clip, times, legs, legFrames, tracks, ground, weights, inUse, fps)) {
+    let liftCm = 0;
+    if (legs && pinLegs(clip, times, legs, legFrames, tracks, ground, rest, weights, inUse, fps)) {
       const after = emptyTracks();
       sampleOnProbe(mixer, probe, clip, times, () => readPoints(after));
       driftCm = maxPlantedDrift(after, weights, inUse);
       for (const leg of LEGS) {
         after[leg.ankle].forEach((p, f) => {
           const o = tracks[leg.ankle][f];
-          pinnedCm = Math.max(pinnedCm, Math.hypot(p[0] - o[0], p[1] - o[1], p[2] - o[2]));
+          pinnedCm = Math.max(pinnedCm, Math.hypot(p[0] - o[0], p[2] - o[2]));
+          liftCm = Math.max(liftCm, Math.abs(p[1] - o[1]));
         });
       }
     }
@@ -525,7 +549,7 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
       clip: clip.name, used: useRig ? 'rig' : 'imported',
       ...(useRig ? {} : { reason: IMPORTED_BETTER }),
       ...(legs ? {} : { pinReason: 'no leg bones' }),
-      driftCm, rebuiltDriftCm, importedDriftCm, pinnedCm, travel,
+      driftCm, rebuiltDriftCm, importedDriftCm, pinnedCm, liftCm, travel,
     });
   }
   log?.(summaryLine(reports));

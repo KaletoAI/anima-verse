@@ -38,6 +38,14 @@
  *      all 0. [P1d] the ramps do not count as full: [0.9]*20 → all 0.
  *      [P1e] a run touching the LAST frame keeps its end: [0]*4 + [1]*8 →
  *      [0]*4 + [0.25, 0.5, 0.75] + [1]*5.
+ * [P8] soleDown, the twin of `_foot_plant.sole_down`, verbatim: a foot pins
+ *      only while its ankle stands above its ball by at least
+ *      SOLE_MIN_FRACTION = 0.5 of the rest rise. Rest rise 4 → threshold 2:
+ *        upright            ankle 5.0, ball 0.0 → rise  5.0 ≥ 2 → true
+ *        lying on its side  ankle 1.0, ball 0.6 → rise  0.4 < 2 → false
+ *        kneeling, instep   ankle 4.5, ball 3.0 → rise  1.5 < 2 → false
+ *        on the back, heel  ankle 4.0, ball 12  → rise −8.0 < 2 → false
+ *      A rest rise ≤ 0 (−1) gives threshold 0: upright true, heel-down false.
  *
  * ===========================================================================
  * THE SYNTHETIC SKELETON (template units = cm, unitsPerCm 1)
@@ -111,8 +119,10 @@
  *        the LIFT: frame 5 (θ = 0) — ankle 8 over ground 8 → lift 0 → its
  *        height stays 8 (±1e-3); frame 0 (sin θ = −0.1, cos θ = 0.994987) —
  *        ankle 108 − 99.4987 = 8.5013, lift 0.5013, down 1 → 8 (±1e-3);
- *        the report says pinnedCm > 0 (finite), no pinReason, and driftCm
- *        (re-measured AFTER the pin) is below importedDriftCm.
+ *        the report says pinnedCm (horizontal) > 0 (finite), liftCm
+ *        (vertical) ≥ 0.5013 − 1e-3 (frame 0 came down by that), no
+ *        pinReason, and driftCm (re-measured AFTER the pin) is below
+ *        importedDriftCm.
  * [L5] THE PIVOTING RIGHT FOOT: its ball is v = (0, 12) off the ankle in XZ,
  *      turned by φ. Held at the middle point, ankle = M − v(φ)/2 and ball =
  *      M + v(φ)/2 with M fixed (≤ 1 mm), so each moves |v(φ_f) − v(φ_0)|/2 =
@@ -125,8 +135,8 @@
  * [L3] The same rig with the left KNEE bone renamed (`mixamorigLeftKnee` — no
  *      `LeftLeg`): the contact points are all there, so the path is still
  *      rebuilt, but there is no leg chain to bend: pinReason 'no leg bones',
- *      pinnedCm 0, and no quaternion track of the clip changed (the values
- *      identical, no track added).
+ *      pinnedCm 0, liftCm 0, and no quaternion track of the clip changed (the
+ *      values identical, no track added).
  * [L4] RED COUNTER-PROBE, same run: the left ankle's world XZ over f = 0 … 10
  *      WITHOUT the pin (u_f) moves ≥ 9.5 cm — the path alone cannot hold a
  *      foot that slides against the other one: each step moves the root by
@@ -134,6 +144,29 @@
  *      each, right ankle 0, right ball at most 12 · (10°/29 in rad) = 0.072 —
  *      so at most (2 + 2 + 0.072)/4 = 1.018 cm a frame, and the left ankle's
  *      world z still moves ≥ (2 − 1.018)·10 = 9.82 cm over f = 0 … 10.
+ * [L6] THE SOLE-DOWN GATE on the rig: a second clip on the same rig, the left
+ *      leg at rest, the right foot ROLLING ONTO ITS SIDE inside a planted
+ *      stretch — `mixamorigRightFoot.quaternion` about Z (the foot's long
+ *      axis) by α_f and its local position (0, −50 + r_f, −15):
+ *        f      ≤10  11    12    13…16  17    18    ≥19
+ *        α       0   45°   75°   90°    75°   45°    0
+ *        r       0   0.25  0.5   1      0.5   0.25   0
+ *      The ball (0, −5, 12) turned about Z stands 5 cos α under the ankle.
+ *      Contacts: the right ankle at 8 + r over its ground min(2nd lowest 8,
+ *      rest 8) = 8 → ≤ 1 cm → band 1; its vertical speed at most
+ *      (1 − 0.25)·15 = 11.25 cm/s (f 12, 17) → 1: planted on EVERY frame.
+ *      Sole-down: rest rise 8 − 3 = 5 → threshold 2.5; ankle − ball = 5 cos α
+ *      = 5, 3.54 (45°) pass; 1.29 (75°), 0 (90°) fail → false on f 12 … 17.
+ *      DOWN = pinRuns([1]*12 + [0]*6 + [1]*12): [0, 11] (fade-out 0.75, 0.5,
+ *      0.25 on f 9 … 11) and [18, 29] (fade-in 0.25, 0.5, 0.75 on f 18 … 20).
+ *      The LIFT = min(ankle − 8, ball − its ground 3) = r where the ankle is
+ *      the lower of the two over its ground (ball 4.71 at f 11, 7.21 at f 12,
+ *      9 on f 13 … 16): positive — without the gate the foot would come down
+ *      on the rolled frames, one run over the whole take at weight 1:
+ *      f 13 … 16 at 8. With it:
+ *        f 13 … 16: the ankle stays at 9 (±1e-4) — not moved at all;
+ *        f 11: lowered by down 0.25 × lift 0.25 = 0.0625 → 8.1875 (±1e-4);
+ *        f 5: 8 (lift 0, ±1e-4).
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -235,6 +268,17 @@ async function main() {
       const got = lp.pinRuns(w, FPS);
       check(label, close(got, want), fmt(got));
     }
+  }
+
+  console.log('\n[P8] soleDown: only a foot on its sole pins');
+  {
+    check('constant SOLE_MIN_FRACTION 0.5', lp.SOLE_MIN_FRACTION === 0.5);
+    const got = lp.soleDown([5, 1, 4.5, 4], [0, 0.6, 3, 12], 4);
+    check('upright / side / instep / heel (rest rise 4)',
+      JSON.stringify(got) === JSON.stringify([true, false, false, false]), JSON.stringify(got));
+    const flat = lp.soleDown([5, 4], [0, 12], -1);
+    check('rest rise ≤ 0 → threshold 0: upright true, heel false',
+      JSON.stringify(flat) === JSON.stringify([true, false]), JSON.stringify(flat));
   }
 
   // ------------------------------------------------------------ the rig
@@ -402,6 +446,8 @@ async function main() {
       `${pre.mixamorigLeftFoot[0].p[1].toFixed(5)} → ${y0.toFixed(5)}`);
     check('[L1] report: pinnedCm > 0 and finite, no pinReason',
       Number.isFinite(r?.pinnedCm) && r.pinnedCm > 0 && !r.pinReason, `${r?.pinnedCm} ${r?.pinReason ?? ''}`);
+    check('[L1] report: liftCm ≥ 0.5013 − 1e-3', Number.isFinite(r?.liftCm) && r.liftCm >= 0.5013 - 1e-3,
+      `${r?.liftCm}`);
     check('[L1] report: driftCm (after the pin) below importedDriftCm',
       Number.isFinite(r?.driftCm) && r.driftCm < r.importedDriftCm,
       `${r?.driftCm?.toFixed(3)} < ${r?.importedDriftCm?.toFixed(3)}`);
@@ -423,10 +469,37 @@ async function main() {
     const tracksBefore = clip.tracks.map((t) => [t.name, Array.from(t.values)]);
     const r = relockRootPaths([clip], rig, 1)[0];
     check("[L3] pinReason 'no leg bones'", r?.pinReason === 'no leg bones', `${r?.pinReason}`);
-    check('[L3] pinnedCm 0', r?.pinnedCm === 0, `${r?.pinnedCm}`);
+    check('[L3] pinnedCm 0, liftCm 0', r?.pinnedCm === 0 && r?.liftCm === 0, `${r?.pinnedCm} ${r?.liftCm}`);
     const tracksAfter = clip.tracks.map((t) => [t.name, Array.from(t.values)]);
     check('[L3] no track changed or added', JSON.stringify(tracksAfter) === JSON.stringify(tracksBefore),
       `${tracksBefore.length} → ${tracksAfter.length} tracks`);
+  }
+
+  console.log('\n[L6] a foot rolling onto its side inside a planted stretch is not moved');
+  {
+    const rig = buildRig();
+    const Z = new THREE.Vector3(0, 0, 1);
+    const alphaDeg = (f) => ({ 11: 45, 12: 75, 13: 90, 14: 90, 15: 90, 16: 90, 17: 75, 18: 45 })[f] ?? 0;
+    const raise = (f) => ({ 11: 0.25, 12: 0.5, 13: 1, 14: 1, 15: 1, 16: 1, 17: 0.5, 18: 0.25 })[f] ?? 0;
+    const clip = new THREE.AnimationClip('bridge-roll', times[FRAMES - 1], [
+      new THREE.VectorKeyframeTrack('mixamorigHips.position', times, times.flatMap(() => [0, 108, 0])),
+      new THREE.QuaternionKeyframeTrack('mixamorigRightFoot.quaternion', times,
+        quats(Z, (f) => (alphaDeg(f) * Math.PI) / 180)),
+      new THREE.VectorKeyframeTrack('mixamorigRightFoot.position', times,
+        times.flatMap((_, f) => [0, -50 + raise(f), -15])),
+    ]);
+    setClipRootPath(clip, { times: Float32Array.from(times), xz: new Float32Array(FRAMES * 2) });
+    const pre = sampleClip(rig, clip, ['mixamorigRightFoot']);
+    relockRootPaths([clip], rig, 1);
+    const post = sampleClip(rig, clip, ['mixamorigRightFoot']);
+    const y = (f) => post.mixamorigRightFoot[f].p[1];
+    const rolled = [13, 14, 15, 16].map(y);
+    check('[L6] rolled frames 13 … 16: the ankle stays at 9 (±1e-4)',
+      rolled.every((h, i) => Math.abs(h - 9) <= 1e-4 && Math.abs(h - pre.mixamorigRightFoot[13 + i].p[1]) <= 1e-4),
+      fmt(rolled));
+    check('[L6] frame 11 (sole-down, fade 0.25): lowered to 8.1875 (±1e-4)', Math.abs(y(11) - 8.1875) <= 1e-4,
+      y(11).toFixed(5));
+    check('[L6] frame 5: stays at 8 (±1e-4)', Math.abs(y(5) - 8) <= 1e-4, y(5).toFixed(5));
   }
 
   console.log(`\n${passed + failed} checks, ${failed} failures`);

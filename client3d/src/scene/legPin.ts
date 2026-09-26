@@ -12,6 +12,8 @@
  * - `twoBoneIk` is the twin of `_foot_plant.two_bone_ik` — same inputs, same
  *   rule, same cases ([P2]/[P3] of `scripts/smoke_foot_plant_math.py`, repeated
  *   verbatim in `client3d/scripts/smoke_leg_pin.mjs`).
+ * - `soleDown` is the twin of `_foot_plant.sole_down` ([P8] there, repeated
+ *   in the smoke): only a foot standing on its sole is pinned.
  * - `pinRuns` is the run rule of `_foot_plant.foot_planted_frames` (only a
  *   contact with PIN_MIN_S of full weight in one piece counts) with the same
  *   fade over PIN_FADE_S and the same exemption at the take's first and last
@@ -32,6 +34,10 @@ export type Quat = [number, number, number, number];
 export const PIN_MIN_S = 0.2;
 /** Fade-in/out of a pinned contact's weight, s (`_foot_plant.PLANT_FADE_S`). */
 export const PIN_FADE_S = 0.1;
+
+/** Share of the rest foot's ankle-over-ball rise a foot must keep to count
+ *  as standing on its sole (`_foot_plant.SOLE_MIN_FRACTION`). */
+export const SOLE_MIN_FRACTION = 0.5;
 
 const IDENTITY: Quat = [1, 0, 0, 0];
 
@@ -159,4 +165,22 @@ export function pinRuns(w: readonly number[], fps: number): number[] {
     }
   }
   return out;
+}
+
+/**
+ * Per frame: does the foot stand on its SOLE — its ankle above its ball by
+ * at least SOLE_MIN_FRACTION of `restRise` (the ankle's height over the ball
+ * in the rig's rest pose; a rise ≤ 0 gives threshold 0)? The twin of
+ * `_foot_plant.sole_down`: the lift compares a point with the upright stance,
+ * which means nothing for a foot on its side (ankle ≈ ball height — the lift
+ * could go negative and RAISE it), on its instep or on its heel. Non-finite
+ * heights answer false.
+ */
+export function soleDown(ankleHeights: readonly number[], ballHeights: readonly number[],
+                         restRise: number): boolean[] {
+  const need = SOLE_MIN_FRACTION * Math.max(restRise, 0);
+  return ankleHeights.map((a, f) => {
+    const b = ballHeights[f];
+    return Number.isFinite(a) && Number.isFinite(b) && a - b >= need;
+  });
 }
