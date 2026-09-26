@@ -360,10 +360,13 @@
  *       (route seat → stand point → 5 m ahead, progress at the stand point,
  *       1.4 m/s, `travelling`). For every remaining bridge frame the root
  *       X/Z moves <= 1 mm — the catch-up is gated by the bridge like the step
- *       without a route, and the travel waits for the bridge's end (still
- *       held then). Within 1 s after the bridge the travel is handed over and
- *       the route pulls the root >= 5 cm. BEFORE C4 the catch-up stepped
- *       WALK_SPEED/30 = 11.33 cm per frame while the body was getting up.
+ *       without a route. BEFORE C4 the catch-up stepped WALK_SPEED/30 =
+ *       11.33 cm per frame while the body was getting up: this per-frame
+ *       check is the PROOF. Two SUPPORTING checks follow (both pass on the
+ *       code before C4 as well, so they prove nothing about the gate; they
+ *       pin the hand-over around it): the travel waits for the bridge's end
+ *       (still held then), and within 1 s after the bridge it is handed over
+ *       and the route pulls the root >= 5 cm.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';

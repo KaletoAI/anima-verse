@@ -129,9 +129,14 @@
  *      crossfade into the next clip.
  *      [V3a] into IDLE (the avatar without input, and since Task C4 the NPC
  *      that keeps the spot its bridge left it on — within STAND_ADOPT_M
- *      = 0.25 m of the server's stand point, INFO line): lowest foot − floor
+ *      = 0.25 m of the server's stand point): lowest foot − floor
  *      within −2 … +3 cm — idle's own foot lift over the root is +1.5
  *      (Test3_mia) / +1.8 (Soldier) / +0.2 cm (reference; the A1 measure).
+ *      The NPC SETTLES on every rig, and that is checked, not only observed:
+ *      its hand-over lands 14.58 (Test3_mia) / 3.80 (Soldier) / 0.01 cm
+ *      (reference) off the stand point (measured), all under STAND_ADOPT_M
+ *      = 25 cm — a broken settle fails there instead of quietly moving the
+ *      NPC to the [V3b] bounds.
  *      [V3b] into WALK (the NPC walking on to its stand point from further
  *      off, the avatar with the key held): upper bound +3 cm as above; the lower bound is
  *      NOT −2 cm. A crossfade between two stances blends the leg joints'
@@ -248,6 +253,7 @@ async function loadClient() {
       `export { relockRootPaths } from '${src}/scene/footLockMeasure';`,
       `export { measureGroundOffsets } from '${src}/scene/clipGround';`,
       `export { NpcManager } from '${src}/scene/npcs';`,
+      `export { STAND_ADOPT_M } from '${src}/scene/standSettle';`,
       `export { setClipTransitions } from '${src}/game/walk';`,
       `export { restCorrections, restPoseOf, rigHipsHeight } from '@anima/scene-render';`,
     ].join('\n');
@@ -555,8 +561,12 @@ async function main() {
         const lo = Math.min(...span);
         const hi = Math.max(...span);
         if (scenario === 'npc') {
-          console.log(`  info [V3] ${tag}: ${r.settled
-            ? `keeps its spot, ${cm(r.handOverM)} off the stand point → into idle` : 'walks on to the stand point'}`);
+          // Which of [V3a]/[V3b] applies is picked by `r.settled` below, so a
+          // broken settle would only switch the NPC to the walk bounds. This
+          // check makes it fail instead: every rig settles (see [V3a]).
+          check(`[V3a] ${tag}: the NPC keeps its spot, within STAND_ADOPT_M ${cm(C.STAND_ADOPT_M)} of the stand point`,
+            r.settled && r.handOverM <= C.STAND_ADOPT_M,
+            r.settled ? `${cm(r.handOverM)} off → into idle` : 'no settle → walks on to the stand point');
         }
         if (scenario === 'avatar_idle' || r.settled) {
           check(`[V3a] ${tag}: into idle, lowest foot − floor in −2 … +3 cm through 0.5 s after`,

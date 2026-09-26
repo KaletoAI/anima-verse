@@ -1592,9 +1592,9 @@ export class Figure {
    *     `!bridging && holdsTravel` (its root; the goal stays the server's
    *     stand point, or the spot it now stands on, `standSettle.ts`); an NPC
    *     on a journey takes it in the same frame once its journey runs and
-   *     ADDS it to its root (see the comment there); the avatar like an NPC
-   *     without a route, root and goal, then reports its position
-   *     (`npcs.ts`, `main.ts`).
+   *     the bridge has ended (`!bridging`), and ADDS it to its root (see the
+   *     comment there); the avatar like an NPC without a route, root and
+   *     goal, then reports its position (`npcs.ts`, `main.ts`).
    *  5. A new bridge that starts while a travel is still held is a caller bug
    *     (the owner has to take it first). The figure throws nothing away: it
    *     warns and folds the held offset into the new bridge's origin, so the
