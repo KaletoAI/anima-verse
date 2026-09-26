@@ -61,33 +61,22 @@ export interface RelockReport {
   travel: [number, number];
 }
 
-/** How far over its bind-pose rest height a point may stand and still have
- *  its planted height taken as its ground, cm (`groundHeights`' lift
- *  tolerance; the importer uses 0).
- *
- *  The client measures ADAPTED clips, and `figures.adaptExternalClips` lifts
- *  them as a whole: the vertical hips chain scales the bounce against the
- *  idle clip's hips median (110.18 units) up to the rig's rest (113.03), so
- *  on the reference rig itself the standing feet of `get-up-chair` sit
- *  ~1.8 cm higher than in the raw take (LeftFoot 8.71 instead of 6.93 over a
- *  rest of 7.32). Capped at the rest height, the ground then left those feet
- *  1.4–3 cm "in the air", and the planted frames lost their full weight
- *  (9 instead of 88 for LeftFoot). 3 cm covers that lift with room; a point
- *  that never touches the floor (20 cm and more over its rest) still stays
- *  out, because its ground is capped at rest + 3 and it stands far above. */
-export const GROUND_LIFT_TOL_CM = 3;
-
 /** How much LESS the rebuilt path must drift than the imported one before it
  *  replaces it, cm — hysteresis against flips at the edge of the contact
  *  band. A smaller gain is inside what the classification itself resolves,
- *  not a better lock. The case behind the number: on the reference rig,
- *  `get-up-chair` gains 0.03 cm here (0.26 against 0.29), yet the same rule
- *  fed without the bridge's 0.3 s fade-in frames moves the 5th-percentile
- *  ground of LeftFoot by ~0.8 cm (the standing feet sit ~2 cm over it, right
- *  on the 2 cm band edge), turns the whole standing phase into one planted
- *  run and ranks the two paths the other way round: imported 0.42 cm,
- *  re-locked 0.76 cm (`smoke_bridge_root.mjs` [6]). The real rigs gain
- *  0.6–1.4 cm; the rig the import was measured on keeps its own path. */
+ *  not a better lock. The case behind the number (measured while adapted
+ *  clips, scaled against the idle clip's hips, stood ~1.8 cm higher than
+ *  the raw take and the ground followed them up to 3 cm over the rest): on
+ *  the reference rig, `get-up-chair` gained 0.03 cm here (0.26 against
+ *  0.29), yet the same rule fed without the bridge's 0.3 s fade-in frames
+ *  moved the 5th-percentile ground of LeftFoot by ~0.8 cm, turned the whole
+ *  standing phase into one planted run and ranked the two paths the other
+ *  way round: imported 0.42 cm, re-locked 0.76 cm.
+ *  With the rig's rest as the standing reference and the ground capped at
+ *  the rest, the reference rig's rebuild ties its import (chair 0.42 against
+ *  0.42, bed 1.44 against 1.43) and the real rigs gain 0.7–1.5 cm
+ *  (`smoke_bridge_root.mjs` [6]); the rig the import was measured on keeps
+ *  its own path. */
 export const RELOCK_MIN_GAIN_CM = 0.1;
 
 /** Sample rate for a clip without a hips position track, fps. */
@@ -208,7 +197,7 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     action.stop();
     mixer.uncacheClip(clip);
 
-    const weights = contactWeights(tracks, groundHeights(tracks, rest, GROUND_LIFT_TOL_CM), fps);
+    const weights = contactWeights(tracks, groundHeights(tracks, rest), fps);
     const importedCm: Array<[number, number]> = times.map((t) => {
       const o = travelAt(imported, t);
       return [o.x / unitsPerCm, o.z / unitsPerCm];

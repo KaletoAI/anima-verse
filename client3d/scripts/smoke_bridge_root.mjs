@@ -87,8 +87,10 @@
  * RENDERED rig (its own code here, not `footLock.ts`): "planted" is a
  * property of the rig the feet belong to. The importer's constants: a
  * point's ground is the 5th percentile of its heights (over the frames
- * after the fade), capped at its bind-pose rest height + 3 cm (the client's
- * lift tolerance, `GROUND_LIFT_TOL_CM`, checked equal); rest heights come
+ * after the fade), capped at its bind-pose rest height (the importer's rule
+ * and the client's: no lift tolerance — with the rig's rest hips height as
+ * the standing reference an adapted clip no longer stands lifted over the
+ * rest, `smoke_foot_lock_measure.mjs` [C8]); rest heights come
  * from THAT rig's bind pose, each point over the lowest of the four points
  * and the toe ends. Weight = ramp(height − ground, 2, 5 cm) ×
  * ramp(|vertical speed|, 15, 30 cm/s) (central difference); a frame at
@@ -103,7 +105,7 @@
  * on the reference rig that classification gives the sidecar's
  * `max_drift_cm` back (+0.05 cm). On another rig it transplants the
  * reference rig's contacts onto feet that are not planted there (Test3_mia
- * bed: 3.67 cm re-locked, although its own feet hold 2.27 cm).
+ * bed: 3.13 cm re-locked, although its own feet hold 2.27 cm).
  *
  * [6] foot_lock clips: planted-foot drift, own contacts, per clip, on ALL
  *       THREE rigs:
@@ -117,22 +119,28 @@
  *       BEFORE (imported path only, sidecar spans, 2026-09-25): chair
  *       Test3_mia 2.20, Soldier 1.09, reference 0.30; bed 4.76, 2.95, 1.31 —
  *       bounded then by 2.5 / 5.0 cm (the 5 cm bed bound is gone).
- *       Measured now (own contacts, re-locked / imported, cm):
- *         chair  Test3_mia 1.41 / 2.55   Soldier 1.00 / 2.71   reference 0.42 / 0.42
- *         bed    Test3_mia 2.27 / 2.90   Soldier 2.09 / 3.45   reference 1.43 / 1.43
- *       (the reference rig keeps its imported path: the re-lock gains less
- *       than `RELOCK_MIN_GAIN_CM` = 0.1 cm there, 0.26 vs 0.29 and 1.39 vs
- *       1.43 by its own measure). This is the old "the chain adds nothing on
- *       its own rig" check, reframed: the reference rig, own contacts,
- *       <= 1.5 cm for BOTH clips.
+ *       Measured now (own contacts, re-locked / imported, cm; the rig's
+ *       rest as standing reference, no lift tolerance):
+ *         chair  Test3_mia 1.41 / 2.20   Soldier 0.68 / 1.44   reference 0.42 / 0.42
+ *         bed    Test3_mia 2.27 / 2.83   Soldier 1.66 / 3.07   reference 1.43 / 1.43
+ *       The re-lock's own report (`relockRootPaths`, its contacts on the
+ *       probe clone, the bridge's fade-in included) reads, re-locked /
+ *       imported: Test3_mia chair 1.41 / 2.39, bed 2.27 / 3.00; Soldier
+ *       0.70 / 1.54, 1.66 / 3.14; the reference rig keeps its IMPORTED path
+ *       for BOTH clips — chair imported 0.42 (rebuilt 0.42), bed imported
+ *       1.43 (rebuilt 1.44): the rebuild gains less than
+ *       `RELOCK_MIN_GAIN_CM` = 0.1 cm there. CHECKED: every report on the
+ *       reference rig says used 'imported'. This is the old "the chain adds
+ *       nothing on its own rig" check, reframed: the reference rig keeps its
+ *       own path, and own contacts hold <= 1.5 cm for BOTH clips (checked).
  *       COUNTER-PROBE in the same run, the IMPORTED path (no re-lock)
  *       measured the same way: never lower than the re-locked one (clip ×
  *       rig), and on Test3_mia / get-up-chair the re-lock gains >= 0.5 cm —
  *       Task 2 measured 2.20 → 1.23 cm (sidecar spans), a gain of 0.97; half
- *       of it is the floor (own contacts now: 2.55 → 1.41, gain 1.14).
+ *       of it is the floor (own contacts now: 2.20 → 1.41, gain 0.79).
  *       RED COUNTER-PROBE: offset switched off (the library adapted WITHOUT
- *       the root-motion flag): chair >= 15 cm, bed >= 25 cm (measured 24.0 /
- *       49.6 / 28.3 and 33.2 / 47.4 / 53.2 cm).
+ *       the root-motion flag): chair >= 15 cm, bed >= 25 cm (measured 22.8 /
+ *       46.6 / 30.0 and 32.2 / 45.5 / 53.2 cm).
  *       RED COUNTER-PROBE of the scale (reference rig, sidecar spans): the
  *       idle-median scale overshoots the importer's own number by > 0.10 cm.
  * [7] End of bridge + takeTravel + owner root moved by it (re-locked
@@ -150,13 +158,13 @@
  *       another scale than its path was built for — what this check proves
  *       is that the path scales with the body (instance and travel both ×
  *       baseScale), not an extra tolerance on the [6] bounds. Measured:
- *       Test3_mia 1.62 / 2.61 cm (= 1.15 × 1.41 / 2.27), Soldier 1.15 /
- *       2.41, reference 0.48 / 1.65.
+ *       Test3_mia 1.62 / 2.61 cm (= 1.15 × 1.41 / 2.27), Soldier 0.78 /
+ *       1.91, reference 0.48 / 1.65.
  * [B10] INFO: distance of the handed-over end point from the server's stand
  *       point (`travel_m × height / ref_height_m`, turned by the same yaw;
  *       height 1.70 m, the reference rig = ratio 1), per rig, cm. Measured
- *       re-locked / imported: Test3_mia chair 7.7 / 4.6, bed 14.6 / 5.4;
- *       Soldier 6.7 / 1.2, 3.7 / 1.5; reference 0.0 / 0.0.
+ *       re-locked / imported: Test3_mia chair 11.2 / 4.6, bed 14.9 / 5.4;
+ *       Soldier 6.6 / 1.2, 3.5 / 1.5; reference 0.0 / 0.0.
  * [B11] relockRootPaths per model (one call, both bridges) <= 100 ms,
  *       printed (measured 4–5 ms).
  *   info  The re-lock's own report per clip, the per-point numbers (FULL
@@ -206,8 +214,6 @@ const VY_LO_CM_S = 15.0;
 const VY_HI_CM_S = 30.0;
 const GROUND_PCT = 0.05;
 const FULL = 0.999;
-/** The client's lift tolerance on the ground rule (cm). */
-const LIFT_TOL_CM = 3;
 
 globalThis.self = globalThis;
 if (!globalThis.window) globalThis.window = globalThis;
@@ -243,7 +249,7 @@ async function loadClient() {
     const entry = [
       `export { travelAt, toWorld, rootPathAt } from '${src}/scene/bridgeTravel';`,
       `export { adaptExternalClips, Figure, setClipRootMotion } from '${src}/scene/figures';`,
-      `export { relockRootPaths, GROUND_LIFT_TOL_CM } from '${src}/scene/footLockMeasure';`,
+      `export { relockRootPaths } from '${src}/scene/footLockMeasure';`,
       `export { setClipTransitions } from '${src}/game/walk';`,
       `export { restCorrections, restPoseOf, rigHipsHeight } from '@anima/scene-render';`,
     ].join('\n');
@@ -273,8 +279,7 @@ async function main() {
   const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
   const client = await loadClient();
   const { travelAt, toWorld, adaptExternalClips, Figure, rigHipsHeight, setClipRootMotion,
-          setClipTransitions, restCorrections, restPoseOf, relockRootPaths,
-          GROUND_LIFT_TOL_CM } = client;
+          setClipTransitions, restCorrections, restPoseOf, relockRootPaths } = client;
 
   const loadRig = async (file) => {
     const bytes = arrayBufferOf(await readFile(file));
@@ -587,8 +592,6 @@ async function main() {
   }
 
   const v = new THREE.Vector3();
-  check('the smoke\'s lift tolerance is the client\'s (footLockMeasure.GROUND_LIFT_TOL_CM)',
-    GROUND_LIFT_TOL_CM === LIFT_TOL_CM, `${GROUND_LIFT_TOL_CM} vs ${LIFT_TOL_CM}`);
 
   /** The smoke's OWN contact detection on a RENDERED rig — its own code, the
    *  importer's constants. `frames[i][j]` = world position (metres) of point
@@ -605,7 +608,7 @@ async function main() {
       const h = frames.map((f) => ((f[j].y - floorY) * 100) / size);
       const used = h.slice(first).sort((a, c) => a - c);
       const pct = used[Math.min(used.length - 1, Math.floor(GROUND_PCT * (used.length - 1)))];
-      const g = Math.min(pct, rest[j] + LIFT_TOL_CM);
+      const g = Math.min(pct, rest[j]);
       return h.map((y, i) => {
         if (i < first) return null;
         const a = Math.max(i - 1, first);
@@ -693,6 +696,14 @@ async function main() {
       console.log(`      relock ${r.clip}: used ${r.used}${r.reason ? ` (${r.reason})` : ''},`
         + ` its own drift ${r.driftCm.toFixed(2)} cm (imported ${r.importedDriftCm.toFixed(2)}),`
         + ` travel (${r.travel[0].toFixed(1)}, ${r.travel[1].toFixed(1)}) cm`);
+    }
+    if (target.ref) {
+      // The rig the import was measured on keeps the import's own path.
+      for (const b of BRIDGES) {
+        const r = reports.find((x) => x.clip === b.kind);
+        check(`[6] ${label} ${b.kind}: the reference rig keeps the imported path`,
+          r?.used === 'imported', r ? `${r.used}${r.reason ? ` (${r.reason})` : ''}` : 'no report');
+      }
     }
     const libs = { relock: relockLib, imported: adapt(true), off: adapt(false) };
     if (target.ref) libs.median = adapt(true, false);
@@ -784,6 +795,10 @@ async function main() {
         per.relock.some((d) => d.full > 1), `${per.relock.map((d) => d.full).join('/')} full frames`);
       check(`[6] ${label} ${b.kind}: planted-foot drift (own contacts) <= ${cm(b.driftMax)}`,
         dRe <= b.driftMax, cm(dRe));
+      if (target.ref) {
+        check(`[6] ${label} ${b.kind}: on its own rig the import's guarantee holds`
+          + ` (own contacts <= ${cm(CHAIR_DRIFT_MAX_M)})`, dRe <= CHAIR_DRIFT_MAX_M, cm(dRe));
+      }
       check(`[6] ${label} ${b.kind}: COUNTER-PROBE — the imported path is never lower`
         + ' than the re-locked one', dIm >= dRe - 1e-6, `imported ${cm(dIm)} vs re-locked ${cm(dRe)}`);
       if (b.kind === 'get-up-chair' && label === 'Test3_mia.glb') {

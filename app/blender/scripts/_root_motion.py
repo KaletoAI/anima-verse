@@ -68,9 +68,10 @@ def ground_heights(tracks: Dict[str, List[Vec3]],
     its lowest airborne height the ground.
 
     ``lift_tol_cm`` is 0 here (the importer measures the raw take on the
-    reference rig). The 3D client's twin passes a tolerance because it
-    measures ADAPTED clips, which its hips chain lifts as a whole by a
-    centimetre or two (``client3d/src/scene/footLockMeasure.ts``)."""
+    reference rig) and in the 3D client's twin as well: its ADAPTED clips
+    stand on the rig's rest hips height, so they are not lifted over the
+    rest (``client3d/src/scene/footLockMeasure.ts``). The parameter is part
+    of the parity fixture (``scripts/fixtures/root_motion_cases.json``)."""
     out = {}
     for name, pts in tracks.items():
         ys = sorted(p[1] for p in pts if _finite(p))

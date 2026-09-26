@@ -2258,7 +2258,9 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
     Der Client skaliert ihn wie die senkrechte Hüftbewegung (Ruhe-Hüfthöhe
     der Figur ÷ Ruhe-Hüfthöhe des Referenz-Rigs aus `/assets/animation-rig`;
     ohne Rig spielt der Clip am Platz, eine Warnung) und dreht ihn mit der
-    Gierung der Figur.
+    Gierung der Figur. Dieselbe Ruhe-Hüfthöhe des Rigs ist der Stehbezug der
+    senkrechten Hüftbewegung (`standingHipsRef`): auf dem Referenz-Rig steht
+    ein angepasster Clip so hoch wie die Rohaufnahme, nicht darüber.
   - **Nach Clip-Ende bleibt der Versatz stehen** (die Figur springt nicht
     auf den Sitz zurück), bis der Besitzer der Position ihn übernimmt: ein
     NPC ohne Route in Wurzel + Ziel, ein NPC auf Reise beim Losgehen, der
@@ -2278,23 +2280,24 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   - **Der Client rechnet den Weg pro Figurenmodell auf dem eigenen Skelett
     neu** (`footLockMeasure.relockRootPaths`, einmal je Modell nach dem
     Anpassen bzw. Retargeten der Clips): dieselbe Regel wie der Import,
-    Parität über `scripts/fixtures/root_motion_cases.json`. Weil die
-    Hüftkette angepasste Clips um ~1,8 cm anhebt, darf ein Punkt bis 3 cm
-    über seiner Ruhehöhe (Bind-Pose) noch als Boden gelten
-    (`GROUND_LIFT_TOL_CM`; der Import nutzt 0). Der neue Weg ersetzt den
-    importierten nur, wenn er an denselben Kontakten um mehr als 0,1 cm
-    weniger driftet (`RELOCK_MIN_GAIN_CM`) — **nie schlechter als der
-    Import**; auf dem Referenz-Rig bleibt so dessen eigener Weg. Fehlen
-    Fußknochen oder volle Kontakte, gilt ebenfalls der importierte Weg.
-    Gemessen am gerenderten Rig mit eigener Kontakterkennung
-    (`client3d/scripts/smoke_bridge_root.mjs` [6]): Stuhl ≤ 1,5 cm, Bett
-    ≤ 2,5 cm — das Bett dreht sich beim Aufstehen um ~90° mit beiden Füßen am
-    Boden, und ein reiner Verschiebe-Weg kann zwei Füße nicht durch eine
-    Drehung halten.
+    Parität über `scripts/fixtures/root_motion_cases.json`. Wie im Import
+    liegt der Boden eines Punkts nie über seiner Ruhehöhe (Bind-Pose) —
+    eine Hebetoleranz gibt es nicht, weil angepasste Clips auf der
+    Ruhe-Hüfthöhe des Rigs stehen und nicht angehoben sind. Der neue Weg
+    ersetzt den importierten nur, wenn er an denselben Kontakten um mehr als
+    0,1 cm weniger driftet (`RELOCK_MIN_GAIN_CM`) — **nie schlechter als der
+    Import**; auf dem Referenz-Rig bleibt so für beide Brücken dessen eigener
+    Weg. Fehlen Fußknochen oder volle Kontakte, gilt ebenfalls der
+    importierte Weg. Gemessen am gerenderten Rig mit eigener
+    Kontakterkennung (`client3d/scripts/smoke_bridge_root.mjs` [6]): Stuhl
+    ≤ 1,5 cm, Bett ≤ 2,5 cm (gemessen Stuhl / Bett: Test3_mia 1,41 / 2,27,
+    Soldier 0,68 / 1,66, Referenz-Rig 0,42 / 1,43) — das Bett dreht sich beim
+    Aufstehen um ~90° mit beiden Füßen am Boden, und ein reiner
+    Verschiebe-Weg kann zwei Füße nicht durch eine Drehung halten.
   - **Der Server-Aufstehpunkt bleibt der Referenzweg**; der Server kennt die
     Modelle nicht. Abstand des Client-Endpunkts zum Server-Punkt je Figur
-    (1,70 m, [B10]): Test3_mia Stuhl 7,7 cm / Bett 14,6 cm (importiert 4,6 /
-    5,4), Soldier 6,7 / 3,7 (importiert 1,2 / 1,5), Referenz-Rig 0. Der
+    (1,70 m, [B10]): Test3_mia Stuhl 11,2 cm / Bett 14,9 cm (importiert 4,6 /
+    5,4), Soldier 6,6 / 3,5 (importiert 1,2 / 1,5), Referenz-Rig 0. Der
     Server-Aufstehpunkt kann also bis ~15 cm (Test3_mia/Bett) vom Endpunkt der
     Figur abweichen; ein NPC auf Reise wird vom Client-Endpunkt auf seine
     Route gezogen, und der Avatar meldet seinen eigenen Punkt.

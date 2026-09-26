@@ -81,14 +81,24 @@
  *      reason 'imported holds better', the stored path is still the preset
  *      object, and the log line reads
  *        "foot lock per rig — bridge-g imported 0.0 cm (rig 0.0)".
- * [C8] LIFT TOLERANCE (fix round 1, GROUND_LIFT_TOL_CM = 3): Legs.position =
- *      (0, 2.5, −2f) — the whole leg lifted 2.5 cm, as the client's hips chain
- *      lifts an adapted clip. Feet at 10.5 / toes at 5.5 over rests 8 / 3:
- *      ground = min(own height, rest + 3) = own height → height 0 → weight 1
- *      → used 'rig', path z = 2f, driftCm 0, importedDriftCm 10 (preset f).
- *      Without the tolerance (a0ab6b93): ground = rest, height 2.5 →
- *      ramp = (5 − 2.5)/3 = 0.833 < FULL → 'no full contact'.
- *      GROUND_LIFT_TOL_CM itself is exported as 3.
+ * [C8] NO LIFT TOLERANCE: the ground rule is the importer's
+ *      (`_root_motion.ground_heights` with its default 0) — a point's ground
+ *      is never above its bind-pose rest height. Since the rig's rest hips
+ *      height is the standing reference of `adaptExternalClips`, an adapted
+ *      clip no longer stands lifted over the rest, and the 3 cm tolerance
+ *      that covered that lift is gone: `footLockMeasure` exports no
+ *      GROUND_LIFT_TOL_CM any more.
+ *      The rule on its own (`groundHeights`): the four points held 2 cm over
+ *      their rests for 11 frames — feet at 10, toes at 5 over rests 8 / 3 —
+ *      have ground = min(own height, rest) = rest: 8 / 3, not 10 / 5.
+ *      Through relockRootPaths: Legs.position = (0, 2.5, −2f) — the whole leg
+ *      lifted 2.5 cm. Feet at 10.5 / toes at 5.5 over rests 8 / 3: ground =
+ *      rest, height 2.5 → band ramp (5 − 2.5)/3 = 0.833 < FULL in every frame
+ *      → used 'imported', reason 'no full contact', the stored path is still
+ *      the preset object, driftCm = importedDriftCm = 0, travel (0, 10) cm
+ *      (the preset z = f ends at 10).
+ *      With the old tolerance (3 cm, 5cfc6c1f): ground = min(10.5, 8 + 3) =
+ *      10.5 → height 0 → weight 1 → used 'rig', path z = 2f.
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -116,6 +126,7 @@ async function loadClient() {
     const entry = [
       `export * from '${src}/footLockMeasure';`,
       `export { clipRootPath, setClipRootPath } from '${src}/bridgeTravel';`,
+      `export { groundHeights } from '${src}/footLock';`,
     ].join('\n');
     const built = await esbuild.build({
       stdin: { contents: entry, resolveDir: dir, loader: 'ts' },
@@ -132,7 +143,8 @@ async function loadClient() {
 
 async function main() {
   const THREE = await import('three');
-  const { relockRootPaths, clipRootPath, setClipRootPath, GROUND_LIFT_TOL_CM } = await loadClient();
+  const { relockRootPaths, clipRootPath, setClipRootPath, groundHeights, GROUND_LIFT_TOL_CM } =
+    await loadClient();
 
   /** The synthetic rig of the docstring, every length × k. */
   const makeRig = (k, { leftToe = true } = {}) => {
@@ -305,16 +317,26 @@ async function main() {
       && lines[0] === 'foot lock per rig — bridge-g imported 0.0 cm (rig 0.0)', JSON.stringify(lines));
   }
 
-  console.log('[C8] feet lifted 2.5 cm as a whole still count as planted');
+  console.log('[C8] no lift tolerance: a point\'s ground is capped at its rest height');
   {
-    near('GROUND_LIFT_TOL_CM = 3', GROUND_LIFT_TOL_CM, 3, 0);
+    check('footLockMeasure exports no GROUND_LIFT_TOL_CM', GROUND_LIFT_TOL_CM === undefined,
+      `${GROUND_LIFT_TOL_CM}`);
+    const lifted = (restY) => Array.from({ length: FRAMES }, (_, f) => [10, restY + 2, -2 * f]);
+    const ground = groundHeights(
+      { LeftFoot: lifted(8), LeftToeBase: lifted(3), RightFoot: lifted(8), RightToeBase: lifted(3) },
+      { LeftFoot: 8, LeftToeBase: 3, RightFoot: 8, RightToeBase: 3 });
+    near('groundHeights: foot 2 cm over its rest 8 → ground 8', ground.LeftFoot, 8, 0);
+    near('groundHeights: toe 2 cm over its rest 3 → ground 3', ground.RightToeBase, 3, 0);
     const clip = makeClip('bridge-h', 1, { lift: 2.5 });
     preset(clip, 1);
+    const kept = clipRootPath(clip);
     const r = relockRootPaths([clip], rig, 1)[0];
-    check("used 'rig'", r?.used === 'rig', `${r?.used} ${r?.reason ?? ''}`);
-    allNear('stored path z = 2f', pathZ(clip), expect2f, 1e-4);
-    near('driftCm 0', r?.driftCm, 0, 1e-3);
-    near('importedDriftCm 10', r?.importedDriftCm, 10, 1e-3);
+    check("lifted 2.5 cm: used 'imported'", r?.used === 'imported', `${r?.used} ${r?.reason ?? ''}`);
+    check("lifted 2.5 cm: reason 'no full contact'", r?.reason === 'no full contact', `${r?.reason}`);
+    check('lifted 2.5 cm: the stored path is still the preset object', clipRootPath(clip) === kept);
+    near('lifted 2.5 cm: driftCm 0', r?.driftCm, 0, 1e-3);
+    near('lifted 2.5 cm: importedDriftCm 0', r?.importedDriftCm, 0, 1e-3);
+    near('lifted 2.5 cm: travel z 10 cm (the preset end)', r?.travel?.[1], 10, 1e-4);
   }
 
   console.log('[C2] the template is untouched');
