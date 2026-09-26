@@ -64,6 +64,13 @@ forearm and hips keep their roll. Unmapped bones (fingers, eyes, end bones)
 get NO track at all, like in Mixamo clips, so a model keeps its own finger
 pose. The hips take the CMU root POSITION as well.
 
+Rotations only, on the rig's bone lengths: a foot the ACTOR planted can stand
+off the rig's floor. SOLO takes get a FOOT PLANT after the solve (``_foot_plant``,
+``_plant_feet``): where the source shows a foot planted, a two-bone IK on
+UpLeg/Leg lowers it onto the rig floor, the Foot keeping its world rotation;
+with ``root_motion`` foot_lock each planted run is then PINNED to one world
+spot (``_pin_feet``), so the rig's feet cannot glide against each other.
+
 Frames of reference the clips are written in
 --------------------------------------------
 * SOLO: root at the origin in XZ at the first kept frame, facing +Z; with
@@ -89,12 +96,13 @@ _SCRIPTS_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPTS_DIR)
 import _common                                                # noqa: E402
 import _cmu                                                   # noqa: E402
+import _foot_plant                                            # noqa: E402
 import _root_motion                                           # noqa: E402
 import clip_root_motion                                       # noqa: E402
 sys.path.remove(_SCRIPTS_DIR)
 
 import bpy                                                    # noqa: E402
-from mathutils import Matrix, Vector                          # noqa: E402
+from mathutils import Matrix, Quaternion, Vector              # noqa: E402
 
 # Mixamo bone → CMU bone. Spine2 takes the thorax so the shoulders sit on the
 # thorax frame like in the source; Head takes upperneck (CMU's "head" bone is
@@ -338,6 +346,16 @@ def _frame_takes(takes, args):
 FLOOR_BONES = tuple(BONE_MAP) + ("LeftToe_End", "RightToe_End")
 
 
+def _short(name: str) -> str:
+    return name[len(PREFIX):] if name.startswith(PREFIX) else name
+
+
+def _frame_lowest(P) -> float:
+    """Lowest FLOOR_BONES joint of one solved frame (armature space, cm)."""
+    return min((M.translation.y for name, M in P.items()
+                if _short(name) in FLOOR_BONES), default=math.inf)
+
+
 def _solve(arm, take: _Take):
     """Pose matrices (armature space, cm) of every bone for every frame, and
     per frame the lowest foot/toe joint of the RIG — the rig's legs are not
@@ -396,10 +414,8 @@ def _solve(arm, take: _Take):
     # lying partner 11 cm under the floor (2026-08-21, pair import).
     stand_cm = act_leg if act_leg > 1 else 100.0
     frames = []
-    lowest_per_frame = []
     for pose in take.poses:
         P = {}
-        frame_low = math.inf
         for b in seen:
             R = rest[b.name]
             if b.name in align:
@@ -420,11 +436,8 @@ def _solve(arm, take: _Take):
                 else:
                     M = P[b.parent.name] @ rest[b.parent.name].inverted() @ R
             P[b.name] = M
-            short = b.name[len(PREFIX):] if b.name.startswith(PREFIX) else b.name
-            if short in FLOOR_BONES:
-                frame_low = min(frame_low, M.translation.y)
         frames.append(P)
-        lowest_per_frame.append(frame_low)
+    lowest_per_frame = [_frame_lowest(P) for P in frames]
     return [b.name for b in seen], rest, frames, lowest_per_frame, (leg_ratio, stand_cm)
 
 
@@ -434,6 +447,185 @@ def _hips_lift(hips_y: float, hips_scale: float, stand_cm: float) -> float:
     the floor (see ``_solve``)."""
     upright = max(0.0, min(1.0, hips_y / (0.9 * stand_cm))) if stand_cm > 1 else 1.0
     return hips_y * (hips_scale - 1.0) * upright
+
+
+def _rig_floor(solved, scales, stands):
+    """The rig floor and the sorted per-frame lows it came from.
+
+    The floor is the MEDIAN of the per-frame lowest foot point (after the
+    hips scaling): while walking one foot is always planted, so that median
+    is the planted foot's height; the absolute minimum would be a single
+    toe-off dip and leave the standing foot hovering (8-9 cm, handshake).
+    Per take the MEDIAN of its frames; a pair takes the LOWER of the two
+    medians — the partner lying on the floor defines it, not the one
+    kneeling over them (a pooled median sank the lying one 13 cm)."""
+    hips_name = PREFIX + "Hips"
+    medians = []
+    all_lows = []
+    for (_n, _r, frames, lows_t, _k), k, stand in zip(solved, scales, stands):
+        lows = sorted(low + _hips_lift(P[hips_name].translation.y, k, stand)
+                      for P, low in zip(frames, lows_t) if math.isfinite(low))
+        if lows:
+            medians.append(lows[len(lows) // 2])
+            all_lows.extend(lows)
+    return (min(medians) if medians else 0.0), sorted(all_lows)
+
+
+# Per foot: the source joints that detect a contact (ankle, ball) and the rig
+# chain the plant bends. The rig's ankle, ball and toe tip measure the lift.
+PLANT_FEET = {
+    "LeftFoot": {"ankle": "lfoot", "ball": "ltoes", "foot": "LeftFoot", "upper": "LeftUpLeg",
+                 "lower": "LeftLeg", "points": ("LeftFoot", "LeftToeBase", "LeftToe_End")},
+    "RightFoot": {"ankle": "rfoot", "ball": "rtoes", "foot": "RightFoot", "upper": "RightUpLeg",
+                  "lower": "RightLeg", "points": ("RightFoot", "RightToeBase", "RightToe_End")},
+}
+
+
+def _leg_ik(bones, rest, P, spec, mapped, chain, target: Vector) -> None:
+    """Bends UpLeg/Leg of one frame so the ankle reaches ``target`` (the knee
+    staying in its bending plane); the Foot and the toes keep their world
+    rotation and follow the hierarchy, unmapped bones ride along like in
+    ``_solve``. Changes ``P`` in place."""
+    upper, lower = PREFIX + spec["upper"], PREFIX + spec["lower"]
+    ankle = PREFIX + spec["foot"]
+    d_up, d_low = _foot_plant.two_bone_ik(
+        tuple(P[upper].translation), tuple(P[lower].translation),
+        tuple(P[ankle].translation), tuple(target), tuple(P[lower].translation))
+    q_up = Quaternion(d_up).to_matrix()
+    q_low = Quaternion(d_low).to_matrix()
+    M = (q_up @ P[upper].to_3x3()).to_4x4()
+    M.translation = P[upper].translation
+    P[upper] = M
+    for n in chain:
+        parent = bones[n].parent.name
+        follow = P[parent] @ rest[parent].inverted() @ rest[n]
+        if n not in mapped:
+            P[n] = follow
+            continue
+        rot = P[n].to_3x3()
+        if n == lower:
+            rot = q_low @ q_up @ rot
+        M = rot.to_4x4()
+        M.translation = follow.translation
+        P[n] = M
+
+
+class _Plan:
+    """What the vertical plant decided, kept for the pin pass: per foot the
+    source weights, the leg chain below UpLeg and the mapped bones."""
+
+    def __init__(self, mapped):
+        self.mapped = mapped
+        self.weights = {}
+        self.chains = {}
+
+
+def _plant_feet(arm, take, sol, floor_cm: float, hips_scale: float,
+                stand_cm: float, fps: int):
+    """VERTICAL PLANT: puts every foot the SOURCE shows planted onto the rig
+    floor (``_foot_plant``: detection, lift, two-bone IK). SOLO takes, every
+    root_motion mode.
+
+    ``floor_cm`` is the rig floor as the unplanted solve puts it
+    (``_rig_floor``); a frame's height over it is what ``_bake`` will
+    write, hips lift included. Where the source's foot weight w > 0 the
+    foot moves by ``−w · lift``: the ankle's target is its own position
+    shifted vertically (``_leg_ik``). The frames of ``sol`` are changed in
+    place and its per-frame lows re-measured. Returns the sidecar block
+    ``{foot: {"frames", "max_cm", "shift_cm"}}`` for the feet that were
+    moved (``shift_cm``: the vertical correction per frame, 0 where the
+    foot is not planted), the updated ``sol`` and the ``_Plan`` for
+    ``_pin_feet``."""
+    seen, rest, frames, _lows, ratio = sol
+    bones = arm.data.bones
+    hips = PREFIX + "Hips"
+    heads = {b.name: b.head_local for b in bones}
+    feet = [n for f in PLANT_FEET.values() for n in f["points"] if PREFIX + n in heads]
+    rest_floor = min(heads[PREFIX + n].y for n in feet) if feet else 0.0
+    rest_h = {n: heads[PREFIX + n].y - rest_floor for n in feet}
+    src_floor = _foot_plant.median([_cmu.lowest_point_cm(take.sk, p) for p in take.poses])
+    plan = _Plan({PREFIX + m for m, c in BONE_MAP.items() if c in take.sk.bones})
+    block = {}
+    for foot, spec in PLANT_FEET.items():
+        upper, lower, ankle = PREFIX + spec["upper"], PREFIX + spec["lower"], PREFIX + foot
+        if src_floor is None or any(n not in rest for n in (upper, lower, ankle)) \
+                or any(spec[k] not in take.poses[0].pos for k in ("ankle", "ball")):
+            continue
+        ball_h = [p.pos[spec["ball"]][1] - src_floor for p in take.poses]
+        ankle_h = [p.pos[spec["ankle"]][1] - src_floor for p in take.poses]
+        a_floor = _foot_plant.ankle_floor(ankle_h, _foot_plant.planted_frames(ball_h, 0.0, fps))
+        points = [(ball_h, 0.0)] + ([(ankle_h, a_floor)] if a_floor is not None else [])
+        weights = _foot_plant.foot_planted_frames(points, fps)
+        below = {b.name for b in bones[upper].children_recursive}
+        chain = [n for n in seen if n in below]
+        shifts, max_cm = [], 0.0
+        for P, w in zip(frames, weights):
+            if w <= 0.0:
+                shifts.append(0.0)
+                continue
+            lift_y = _hips_lift(P[hips].translation.y, hips_scale, stand_cm) - floor_cm
+            h = {n: P[PREFIX + n].translation.y + lift_y
+                 for n in spec["points"] if n in rest_h and PREFIX + n in P}
+            old = P[ankle].translation.copy()
+            _leg_ik(bones, rest, P, spec, plan.mapped, chain,
+                    old + Vector((0.0, -w * _foot_plant.foot_lift(h, rest_h), 0.0)))
+            moved = P[ankle].translation - old
+            shifts.append(round(moved.y, 2))
+            max_cm = max(max_cm, moved.length)
+        if any(w > 0.0 for w in weights):
+            plan.weights[foot] = weights
+            plan.chains[foot] = chain
+            block[foot] = {"frames": sum(1 for w in weights if w > 0.0),
+                           "max_cm": round(max_cm, 2), "shift_cm": shifts}
+    lows = [_frame_lowest(P) for P in frames]
+    return block, (seen, rest, frames, lows, ratio), plan
+
+
+def _pin_feet(arm, sol, plan: _Plan, path) -> dict:
+    """PIN (foot_lock only, after the root path exists): within one planted
+    run a foot stands STILL in the world.
+
+    ``path`` is the root's XZ offset per frame (``clip_root_motion.
+    lock_path``); a point's world XZ is its in-place XZ plus that offset. Per
+    foot and planted run (the source runs of the vertical plant) the anchor
+    is the ankle's world XZ averaged over the run's full-weight frames; in
+    each frame of the run the ankle's target is the anchor back in that
+    frame's in-place coordinates (minus the frame's offset), its height the
+    planted one, blended with the frame's weight against the unpinned
+    position (``_leg_ik`` — the knees absorb the proportion mismatch, so
+    the rig's feet cannot glide against each other). Returns per foot the
+    largest horizontal correction, cm."""
+    _seen, rest, frames, _lows, _ratio = sol
+    bones = arm.data.bones
+    out = {}
+    for foot, weights in plan.weights.items():
+        spec = PLANT_FEET[foot]
+        ankle = PREFIX + foot
+        worst = 0.0
+        f, n = 0, min(len(frames), len(weights), len(path))
+        while f < n:
+            if weights[f] <= 0.0:
+                f += 1
+                continue
+            a = f
+            while f < n and weights[f] > 0.0:
+                f += 1
+            run = range(a, f)
+            full = [g for g in run if weights[g] >= _root_motion.FULL]
+            if not full:
+                continue
+            ax = sum(frames[g][ankle].translation.x + path[g][0] for g in full) / len(full)
+            az = sum(frames[g][ankle].translation.z + path[g][1] for g in full) / len(full)
+            for g in run:
+                P, w = frames[g], weights[g]
+                old = P[ankle].translation.copy()
+                target = Vector((old.x + w * (ax - path[g][0] - old.x), old.y,
+                                 old.z + w * (az - path[g][1] - old.z)))
+                _leg_ik(bones, rest, P, spec, plan.mapped, plan.chains[foot], target)
+                d = P[ankle].translation - old
+                worst = max(worst, math.hypot(d.x, d.z))
+        out[foot] = round(worst, 2)
+    return out
 
 
 def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
@@ -664,7 +856,6 @@ def run_takes(takes, args, fps, source):
     for take in takes:
         arm = _load_rig(args["rig"])
         solved.append(_solve(arm, take))
-    hips_name = PREFIX + "Hips"
     # LEG RATIO per take (from the rest geometry, see _solve): the rig's leg
     # over the actor's. The hips translation is multiplied by it, so a deep knee bend
     # lowers the rig as far as it lowered the actor (salsa finding: the rig,
@@ -720,23 +911,18 @@ def run_takes(takes, args, fps, source):
                                 round(r["anchor_xz_m"][1] + off[1] / 100, 3)]
         ga, gb = geometry["roles"]["a"]["anchor_xz_m"], geometry["roles"]["b"]["anchor_xz_m"]
         geometry["root_distance_m"] = round(math.dist(ga, gb), 3)
-    # The floor is the MEDIAN of the per-frame lowest foot point (after the
-    # hips scaling): while walking one foot is always planted, so that median
-    # is the planted foot's height; the absolute minimum would be a single
-    # toe-off dip and leave the standing foot hovering (8-9 cm, handshake).
-    # Per take the MEDIAN of its frames; a pair takes the LOWER of the two
-    # medians — the partner lying on the floor defines it, not the one
-    # kneeling over them (a pooled median sank the lying one 13 cm).
-    medians = []
-    all_lows = []
-    for (_n, _r, frames, lows_t, _k), k, stand in zip(solved, scales, stands):
-        lows = sorted(low + _hips_lift(P[hips_name].translation.y, k, stand)
-                      for P, low in zip(frames, lows_t) if math.isfinite(low))
-        if lows:
-            medians.append(lows[len(lows) // 2])
-            all_lows.extend(lows)
-    lows = sorted(all_lows)
-    floor_cm = min(medians) if medians else 0.0
+    # FOOT PLANT (solo, every mode): the actor's legs are not the rig's, and
+    # only the rotations came over — a foot the actor planted is put onto
+    # the rig floor, BEFORE the floor, the contacts and the travel are
+    # measured, so all three see the corrected feet (``_plant_feet``).
+    plan = None
+    if len(takes) == 1:
+        plant, solved[0], plan = _plant_feet(arm, takes[0], solved[0],
+                                             _rig_floor(solved, scales, stands)[0],
+                                             scales[0], stands[0], fps)
+        if plant:
+            geometry["foot_plant"] = plant
+    floor_cm, lows = _rig_floor(solved, scales, stands)
     geometry["rig_floor_shift_cm"] = round(-floor_cm, 2)
     geometry["rig_floor_min_cm"] = round(lows[0] - floor_cm, 2) if lows else 0.0
     for take, sol, k, off, stand in zip(takes, solved, scales, offsets, stands):
@@ -749,6 +935,18 @@ def run_takes(takes, args, fps, source):
         seen = [arm.data.bones[n] for n in seen]
         _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop, stand,
               travel_scale=k if mode == "keep" else 1.0)
+        if mode == "foot_lock" and plan is not None and plan.weights:
+            # PIN: the root path of the planted result pins every planted
+            # run of a foot to one world spot (``_pin_feet``), the frames are
+            # baked again, and apply below rebuilds the path from the pinned
+            # feet and verifies them. Not in strip/keep: there the feet slide
+            # by design, or the travel is the actor's.
+            pins = _pin_feet(arm, sol, plan, clip_root_motion.lock_path(arm, fps))
+            for foot, cm in pins.items():
+                geometry["foot_plant"][foot]["pin_max_cm"] = cm
+            arm = _load_rig(args["rig"])
+            seen = [arm.data.bones[n] for n in sol[0]]
+            _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop, stand)
         if len(takes) == 1:
             # Last pass before export: measure (strip/keep) or rebuild
             # (foot_lock) the horizontal travel — SOLO only, a pair's roots

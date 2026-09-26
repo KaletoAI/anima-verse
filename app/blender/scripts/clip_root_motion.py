@@ -76,6 +76,17 @@ def _contacts(arm, joints, frames, fps, rest=None):
     return tracks, weights, ref_height_m
 
 
+def lock_path(arm, fps: int):
+    """The foot_lock root path of the CURRENT action — XZ offset per frame,
+    frame 0 at the origin — without writing or verifying it. The importer's
+    pin pass (``cmu_clip._pin_feet``) anchors the planted feet with it
+    before ``apply`` rebuilds and verifies the path on the pinned result."""
+    _action, frames = _frames(arm)
+    _mats, joints = sample(arm, frames)
+    tracks, weights, _h = _contacts(arm, joints, frames, fps)
+    return rm.foot_lock_path(tracks, weights)
+
+
 def apply(arm, mode: str, fps: int) -> dict:
     """Runs ``mode`` on the armature's action in place and returns the sidecar
     block ``{mode, travel_m, ref_height_m, contact_s, max_drift_cm}``.
@@ -136,6 +147,10 @@ def run(job):
     zero = [(0.0, 0.0)] * len(frames)
     return {"frames": len(frames),
             "max_drift_cm": round(rm.max_planted_drift(tracks, weights, zero), 2),
+            # per contact point: height per frame, its weight, its rest height
+            "contact_y": {p: [round(v[1], 3) for v in pts] for p, pts in tracks.items()},
+            "contact_w": {p: [round(v, 3) for v in w] for p, w in weights.items()},
+            "rest_cm": {p: round(v, 3) for p, v in rest[0].items()},
             "hips_y": [round(mats[f][hips].translation.y, 3) for f in frames],
             "hips_xz": [[round(mats[f][hips].translation.x, 3),
                          round(mats[f][hips].translation.z, 3)] for f in frames],

@@ -55,7 +55,8 @@ feet while standing up. Rig/actor leg ratio of this take: hips_scale 1.1914
                keep/foot_lock equals strip within 0.01 cm (the pass writes
                XZ only).
 [8] pair (18_01 handshake, if present): root_motion param ignored, no
-               geometry.root_motion key, roles/anchor as before.
+               geometry.root_motion key, roles/anchor as before; no
+               geometry.foot_plant (the foot plant is solo-only).
 [9] loop_s=1.5 together with root_motion=foot_lock: the run fails (ok False)
                with an error naming both parameters.
 [10] foot_lock, the SIDECAR number is the FILE's number: |sidecar − file|
@@ -76,6 +77,54 @@ feet while standing up. Rig/actor leg ratio of this take: hips_scale 1.1914
                the dominant-contact rule (_root_motion.foot_lock_path) it was
                refused at 2.02 cm: a shuffling left foot at ~2 cm height
                (weight 0.83–0.97) dragged the planted right foot.
+
+FOOT PLANT (``_foot_plant``: the importer puts a foot the ACTOR planted onto
+the rig's floor, in every root_motion mode; foot_lock then PINS each planted
+run of a foot to one world spot, see [F5]). Subject 111's right leg (femur + tibia) is 77.52 cm, the
+left 74.83 — 2.69 cm longer; the importer copies rotations, the rig's legs are
+symmetric (46.75 + 46.82 cm per side), so on the rig the right foot of 111_11
+stands up while in the source both feet stand (ball L 0.67 / R 0.49 cm over
+the actor floor). Measured in the shipped get-up-chair.fbx before the plant,
+end phase t >= 3.5 s, height over the point's rest height (median):
+    LeftFoot 1.05, LeftToeBase 0.16, LeftToe_End −0.10
+    RightFoot 3.62, RightToeBase 2.42, RightToe_End 3.93
+The plant moves a planted foot by minus its LIFT — the least of its points
+over their rest heights: right 2.42 (the ball) → the ball lands at 0; left
+−0.10 (the tip) → the foot rises 0.10, its ball to 0.26. All read from the
+foot_lock run of [3]/[4] (whole take) and its measuring job (the WRITTEN FBX:
+``contact_y``/``contact_w``/``rest_cm`` per contact point).
+
+[F1] end phase (t >= 3.5 s): RightToeBase over its rest height, median
+     <= 0.5 cm (before: +2.42); LeftToeBase median within 0.16 ± 0.3.
+[F2] end phase (t >= 3.5 s): the RightFoot's vertical correction
+     (geometry.foot_plant.RightFoot.shift_cm, per frame), |median| within
+     1.5 … 3.5 — the leg-length asymmetry: its lift there is the ball's
+     2.42 → shift −2.42. The overall max_cm is printed as info only: the
+     plant also lowers the feet in the stand-up (1.0 … 2.6 s), where the
+     unplanted rig floated them 2–8 cm (``_hips_lift`` × bent knees; shipped
+     clip at 1.6 s: lift L 6.0 / R 8.2) — 8.35 cm measured, corrected too.
+[F3] max_drift_cm <= 1.5 (MAX_LOCK_DRIFT_CM, sidecar and file) and, in the
+     end phase, a span of at least 0.2 s (6 frames) in which BOTH feet are
+     in full contact (ankle or ball weight >= 0.999, the file's own contact
+     rule) — contact_s only says "some point"; the per-point weights say
+     which.
+[F5] PIN (foot_lock only): the largest horizontal correction the pin pass
+     applies to any foot frame (geometry.foot_plant.<foot>.pin_max_cm),
+     printed, and <= 6 cm. Derivation: the source says both feet stand the
+     WHOLE take (one run each). Unpinned, the rig's feet glide against each
+     other over it (measured after the root path: left ankle world z
+     51.3 → 47.3, right 45.7 → 49.9 — ±4 cm around the path the two average
+     to), because the rotations came over onto other segment lengths. The
+     anchor is the run's MEAN world spot, so each frame is pulled at most
+     about its distance from that mean, ~4 cm; 6 cm leaves the margin. A
+     larger value means the anchor is wrong (an anchor taken in the wrong
+     frame of reference pulls by the whole travel, ~50 cm), not the rig.
+     Unchanged by the pin: [F3]'s max_drift_cm <= 1.5 is now judged on the
+     pinned result, whole take in contact (before the pin 4.60 cm, refused).
+[F4] take 13_09 (drinking, whole take, strip, SKIP when absent): the actor
+     holds the right foot up (source ball median 3.46 cm, never below
+     1.34, never in full contact) → no geometry.foot_plant.RightFoot entry,
+     or its max_cm <= 0.3 — the raised foot stays raised.
 """
 import math
 import os
@@ -93,6 +142,7 @@ CMU = ROOT / "shared" / "models" / "mocap-src" / "cmu"
 RIG = ROOT / "shared" / "models" / "rig" / "reference.fbx"
 SOLO = ("111", "111_11")
 PAIR = (("18", "18_01"), ("19", "19_01"))
+DRINK = ("13", "13_09")
 MODES = ("strip", "keep", "foot_lock")
 TIMEOUT_S = 900
 
@@ -107,6 +157,15 @@ REF_HEIGHT_M = 2.011
 REF_HEIGHT_TOL_M = 0.01
 SAME_DRIFT_CM = 0.05
 TRIM_START_S = 1.533
+END_PHASE_S = 3.5
+RIGHT_BALL_MAX_CM = 0.5
+LEFT_BALL_BEFORE_CM = 0.16
+LEFT_BALL_TOL_CM = 0.3
+PLANT_SHIFT_CM = (1.5, 3.5)
+PIN_MAX_CM = 6.0
+BOTH_FEET_MIN_FRAMES = 6
+FULL = 0.999
+DRINK_MAX_CM = 0.3
 BED_INBOX = ROOT / "shared" / "models" / "clips-inbox"
 BED_NAME = ("Meshy_AI_default_biped/"
             "Meshy_AI_Animation_01a08d2e-b5d6-7307-8fb8-cf575d7b7b5d_without_skin.fbx")
@@ -127,6 +186,14 @@ def files(subject, take):
 def convert(out_dir: Path, kind: str, **params):
     asf, amc = files(*SOLO)
     p = {"kind": kind, "fps": 30, "source_fps": 120.0, "source_takes": [SOLO[1]]}
+    p.update(params)
+    return runner.run("cmu_clip", inputs={"rig": RIG, "asf": asf, "amc": amc},
+                      params=p, out_dir=out_dir, timeout_s=TIMEOUT_S)
+
+
+def convert_drink(out_dir: Path, kind: str, **params):
+    asf, amc = files(*DRINK)
+    p = {"kind": kind, "fps": 30, "source_fps": 120.0, "source_takes": [DRINK[1]]}
     p.update(params)
     return runner.run("cmu_clip", inputs={"rig": RIG, "asf": asf, "amc": amc},
                       params=p, out_dir=out_dir, timeout_s=TIMEOUT_S)
@@ -179,6 +246,7 @@ def main() -> int:
         return 0
     pair_ok = all(p.is_file() for s, t in PAIR for p in files(s, t))
     bed_ok = (BED_INBOX / BED_NAME).is_file()
+    drink_ok = all(p.is_file() for p in files(*DRINK))
 
     with tempfile.TemporaryDirectory(prefix="smoke-clip-root-motion-") as tmp:
         tmp = Path(tmp)
@@ -198,6 +266,8 @@ def main() -> int:
             shutil.copy2(BED_INBOX / BED_NAME, inbox / BED_NAME)
             os.environ["ANIMATION_CLIPS_INBOX_DIR"] = str(inbox)
             jobs["bed"] = (convert_bed, tmp / "bed", "gu-bed", {"root_motion": "foot_lock"})
+        if drink_ok:
+            jobs["drink"] = (convert_drink, tmp / "drink", "drink", {"root_motion": "strip"})
         jobs["loop"] = (convert, tmp / "loop", "gu-loop",
                         {"root_motion": "foot_lock", "loop_s": 1.5})
         if pair_ok:
@@ -303,6 +373,8 @@ def main() -> int:
             gl, gp = pl["data"]["geometry"], pp["data"]["geometry"]
             check("no geometry.root_motion", "root_motion" not in gl and "root_motion" not in gp)
             check("no geometry.in_place", "in_place" not in gl)
+            check("no geometry.foot_plant (solo takes only)",
+                  "foot_plant" not in gl and "foot_plant" not in gp)
             for k in ("anchor_frame", "anchor_s", "roles", "root_distance_m", "contact"):
                 check(f"{k} as without the parameter", gl.get(k) == gp.get(k) and k in gl,
                       f"{gl.get(k)} vs {gp.get(k)}")
@@ -324,6 +396,9 @@ def main() -> int:
         d, fd = b.get("max_drift_cm"), md.get("max_drift_cm")
         print(f"  · {label}: travel_m {b.get('travel_m')}  sidecar {d}  file {fd}"
               f"  contact_s {b.get('contact_s')}  file ref_height_m {md.get('ref_height_m')}")
+        fp_ = r["data"]["geometry"].get("foot_plant") or {}
+        print(f"  · {label}: foot_plant " + str({f: {k: v for k, v in x.items() if k != "shift_cm"}
+                                                   for f, x in fp_.items()} or None))
         check(f"{label}: max_drift_cm <= {MAX_LOCK_DRIFT_CM} (sidecar)",
               num(d) and d <= MAX_LOCK_DRIFT_CM, str(d))
         check(f"{label}: max_drift_cm <= {MAX_LOCK_DRIFT_CM} (file)",
@@ -344,6 +419,75 @@ def main() -> int:
         print(f"  SKIP: {BED_NAME} not in {BED_INBOX}")
     else:
         same_drift("bed, whole take", "bed")
+
+    print("\n[F1] foot plant: the right ball stands on the floor in the end phase (file)")
+    md = (meas["foot_lock"].get("data") or {}) if meas["foot_lock"]["ok"] else {}
+    ys, ws, rest = md.get("contact_y") or {}, md.get("contact_w") or {}, md.get("rest_cm") or {}
+    first = int(round(END_PHASE_S * 30))
+
+    def over_rest(point):
+        vals = sorted(y - rest[point] for y in (ys.get(point) or [])[first:]) \
+            if point in rest else []
+        return vals[len(vals) // 2] if vals else None
+
+    r, lft = over_rest("RightToeBase"), over_rest("LeftToeBase")
+    print(f"  · end-phase median over rest: RightToeBase {r}  LeftToeBase {lft}")
+    check(f"RightToeBase median <= {RIGHT_BALL_MAX_CM} cm", num(r) and r <= RIGHT_BALL_MAX_CM, str(r))
+    check(f"LeftToeBase median within {LEFT_BALL_BEFORE_CM} ± {LEFT_BALL_TOL_CM}",
+          num(lft) and abs(lft - LEFT_BALL_BEFORE_CM) <= LEFT_BALL_TOL_CM, str(lft))
+
+    print("\n[F2] foot plant: the right foot's correction in the end phase")
+    plant = geo["foot_lock"].get("foot_plant") or {}
+    for foot, b in plant.items():
+        print(f"  · {foot}: frames {b.get('frames')}  max_cm {b.get('max_cm')} (info)"
+              f"  pin_max_cm {b.get('pin_max_cm')}")
+    shifts = sorted(abs(v) for v in ((plant.get("RightFoot") or {}).get("shift_cm") or [])[first:])
+    med = shifts[len(shifts) // 2] if shifts else None
+    check(f"RightFoot end-phase |shift| median within {PLANT_SHIFT_CM[0]} … {PLANT_SHIFT_CM[1]}",
+          num(med) and PLANT_SHIFT_CM[0] <= med <= PLANT_SHIFT_CM[1], str(med))
+
+    print("\n[F3] foot plant: both feet in full contact in the end phase, the lock holds")
+    d = block["foot_lock"].get("max_drift_cm")
+    fd = md.get("max_drift_cm")
+    check(f"max_drift_cm <= {MAX_LOCK_DRIFT_CM} (sidecar and file)",
+          num(d) and num(fd) and max(d, fd) <= MAX_LOCK_DRIFT_CM, f"{d} / {fd}")
+
+    def foot_full(foot, f):
+        return any(f < len(ws.get(foot + p) or []) and ws[foot + p][f] >= FULL
+                   for p in ("Foot", "ToeBase"))
+
+    n = int(side["foot_lock"].get("frames") or 0)
+    best = cur = 0
+    for f in range(first, n):
+        cur = cur + 1 if foot_full("Left", f) and foot_full("Right", f) else 0
+        best = max(best, cur)
+    check(f"both feet in full contact for >= {BOTH_FEET_MIN_FRAMES} frames after {END_PHASE_S} s",
+          best >= BOTH_FEET_MIN_FRAMES, f"longest {best} frames")
+
+    print("\n[F5] pin: the horizontal correction stays within the feet's glide")
+    pins = {f: b.get("pin_max_cm") for f, b in plant.items()}
+    print(f"  · pin_max_cm {pins}")
+    check(f"every foot pinned, pin_max_cm <= {PIN_MAX_CM}",
+          bool(pins) and all(num(v) and v <= PIN_MAX_CM for v in pins.values()), str(pins))
+    for m in ("strip", "keep"):
+        fp_m = geo[m].get("foot_plant") or {}
+        check(f"{m}: planted, but not pinned",
+              bool(fp_m) and not any("pin_max_cm" in b for b in fp_m.values()), str(list(fp_m)))
+
+    print("\n[F4] foot plant: drinking's raised right foot stays raised")
+    if not drink_ok:
+        print(f"  SKIP: {DRINK[1]} not under shared/models/mocap-src/cmu")
+    else:
+        dr = res["drink"]
+        check("drinking conversion ok", dr["ok"], dr["error"])
+        if dr["ok"]:
+            dp = dr["data"]["geometry"].get("foot_plant") or {}
+            print("  · geometry.foot_plant "
+                  + str({f: {k: v for k, v in b.items() if k != "shift_cm"}
+                         for f, b in dp.items()} or None))
+            rf = dp.get("RightFoot")
+            check(f"no RightFoot entry, or max_cm <= {DRINK_MAX_CM}",
+                  rf is None or (num(rf.get("max_cm")) and rf["max_cm"] <= DRINK_MAX_CM), str(rf))
 
     print()
     if failures:
