@@ -105,7 +105,8 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 
 def backend(alias: str, *, rig: str = "mixamo", face_num: str = "",
-            face_num_max: str = "", declared=None) -> OpenAIMeshBackend:
+            face_num_max: str = "", mesh_steps: str = "",
+            declared=None) -> OpenAIMeshBackend:
     """A backend as the config bridge would build it, with a hand-written
     alias schema. ``declared=None`` = schema unreadable."""
     prefix = "SMOKE_MESH_"
@@ -115,6 +116,7 @@ def backend(alias: str, *, rig: str = "mixamo", face_num: str = "",
     os.environ[f"{prefix}MESH_RIG"] = rig
     os.environ[f"{prefix}FACE_NUM"] = face_num
     os.environ[f"{prefix}FACE_NUM_MAX"] = face_num_max
+    os.environ[f"{prefix}MESH_STEPS"] = mesh_steps
     os.environ[f"{prefix}NO_FINGERS"] = "true"
     b = OpenAIMeshBackend(name=alias, api_url="http://gateway.invalid",
                           cost=1, env_prefix=prefix, model=alias)
@@ -149,6 +151,36 @@ b_gen = backend("Trellis2-Generic-Low", rig="generic", face_num="20000",
 p3 = b_gen.build_alias_params({"mesh_name": "Wolf"})
 check("input_no_fingers also on a generic alias (§ 3.1)",
       p3.get("input_no_fingers") is True, str(p3))
+
+# --- (a2) input_steps: the multi-view workflow's one sampling primitive ---
+# Derived from ai-hub/sample_comfyui_workflows/img2mesh-trellis2_multiview_api
+# .json (2026-09-26): node 91 ``input_steps`` (default 35) feeds
+# sparse_structure_steps + shape_steps of the generator and texture_steps of
+# the texturing node; the single-view aliases (trellis2_low/high, hunyuan3d,
+# Pixal3D) declare no such primitive. So: sent only where declared, and only
+# when configured (0 = the alias default 35 stands).
+print("\n(a2) input_steps (multi-view alias)")
+MV = ["input_name", "input_remove_background", "input_face_num",
+      "input_steps", "input_no_fingers"]
+b = backend("Trellis2-Humanoid-Multiview", face_num="100000", mesh_steps="50",
+            declared=MV)
+p = b.build_alias_params({"mesh_name": "Held"})
+check("input_steps = 50 when configured and declared",
+      p.get("input_steps") == 50, str(p))
+check("no input_texture_resolution where undeclared (multi-view bakes 4096)",
+      "input_texture_resolution" not in
+      b.build_alias_params({"mesh_name": "Held", "texture_size": 2048}))
+b = backend("Trellis2-Humanoid-Multiview", face_num="100000", declared=MV)
+check("nothing configured -> no input_steps (alias default 35 stands)",
+      "input_steps" not in b.build_alias_params({"mesh_name": "Held"}))
+b = backend("Trellis2-Humanoid-Low", face_num="20000", mesh_steps="50",
+            declared=FULL)
+check("single-view alias declares no input_steps -> dropped",
+      "input_steps" not in b.build_alias_params({"mesh_name": "Held"}))
+b = backend("Trellis2-Humanoid-Multiview", face_num="100000", mesh_steps="50",
+            declared=None)
+check("unreadable schema -> sent blind (§ 1: unknown names are ignored)",
+      b.build_alias_params({"mesh_name": "Held"}).get("input_steps") == 50)
 
 # --- (b) Triposplat: input_num_gaussians only ----------------------------
 print("\n(b) Triposplat-style schema (input_num_gaussians, no face param)")

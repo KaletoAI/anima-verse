@@ -198,6 +198,13 @@ class OpenAIMeshBackend(ImageBackend):
         # family name in code: Hunyuan3D FREEZES above 40000 — the job never
         # errors, it hangs until the timeout.
         self.face_num_max = int(os.environ.get(f"{env_prefix}FACE_NUM_MAX", "") or 0)
+        # Diffusion steps of the generation (alias param input_steps — the
+        # multi-view Trellis2 workflow drives its sparse-structure, shape AND
+        # texture sampling from this ONE primitive, default 35). 0 = not
+        # configured -> nothing is sent and the alias default stands; sent
+        # only where the alias declares the param (the single-view aliases
+        # do not expose it).
+        self.mesh_steps = int(os.environ.get(f"{env_prefix}MESH_STEPS", "") or 0)
         # Alias self-discovery (image slot names, file slot name, declared
         # param names); safe fallback without schema. A multi-view alias
         # declares SEVERAL image slots (input_image_front/_back/_left/_right);
@@ -294,7 +301,7 @@ class OpenAIMeshBackend(ImageBackend):
                 self._mark_unavailable()
                 return False
         except Exception as e:
-            logger.debug("%s: nicht erreichbar: %s", self.name, e)
+            logger.debug("%s: not reachable: %s", self.name, e)
             self._mark_unavailable()
             return False
         self._mark_available()
@@ -354,7 +361,7 @@ class OpenAIMeshBackend(ImageBackend):
                         self._image_slots or ["input_image"],
                         self._file_slot or "-", sorted(names) or "?")
         except Exception as e:
-            logger.debug("%s: Alias-Schema nicht lesbar: %s", self.name, e)
+            logger.debug("%s: alias schema not readable: %s", self.name, e)
 
     @staticmethod
     def _slot_view(slot: str) -> str:
@@ -478,8 +485,8 @@ class OpenAIMeshBackend(ImageBackend):
         clamped to ``face_num_max``."""
         faces = int(params.get("face_num") or self.face_num or 0)
         if self.face_num_max and faces > self.face_num_max:
-            logger.warning("%s: face_num %d ueber dem Limit %d — gekappt "
-                           "(hoehere Werte frieren dieses Backend ein)",
+            logger.warning("%s: face_num %d above the limit %d — clamped "
+                           "(higher values freeze this backend)",
                            self.name, faces, self.face_num_max)
             faces = self.face_num_max
         return max(0, faces)
@@ -525,6 +532,16 @@ class OpenAIMeshBackend(ImageBackend):
         if self._declares("input_no_fingers"):
             alias_params["input_no_fingers"] = bool(
                 params.get("no_fingers", self.no_fingers))
+        # Diffusion steps: config per alias, sent only where declared. Unlike
+        # texture_size there is no per-run value — the step count is a
+        # property of how the alias is driven, not of one job.
+        if self.mesh_steps > 0:
+            if self._declares("input_steps"):
+                alias_params["input_steps"] = int(self.mesh_steps)
+            else:
+                logger.info("%s: mesh_steps=%s configured but the alias "
+                            "declares no input_steps — dropped",
+                            self.name, self.mesh_steps)
         # LOD stages (§ 3.2): reduced versions of the SAME bake, delivered by
         # the same job. Sent as a comma-separated STRING — the contract's type,
         # not a list — and only where the schema declares the param.
@@ -594,7 +611,7 @@ class OpenAIMeshBackend(ImageBackend):
                 cut_out_flags.append(image_is_cut_out(raw))
                 images[slot] = base64.b64encode(raw).decode("utf-8")
             if not any(self._slot_view(s) == "front" for s in images):
-                logger.error("%s: kein Eingangsbild fuer die Mesh-Generierung",
+                logger.error("%s: no input image for the mesh generation",
                              self.name)
                 return []
             payload["images"] = images
@@ -674,8 +691,8 @@ class OpenAIMeshBackend(ImageBackend):
             if want:
                 got = hashlib.sha256(dl.content).hexdigest()
                 if got != want:
-                    logger.error("%s: Result %d (%s) sha256 stimmt nicht "
-                                 "(%s != %s) — Job verworfen", self.name,
+                    logger.error("%s: result %d (%s) sha256 mismatch "
+                                 "(%s != %s) — job discarded", self.name,
                                  idx, res.get("name", "?"), got[:12],
                                  want[:12])
                     return []

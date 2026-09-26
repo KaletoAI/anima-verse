@@ -47,6 +47,24 @@ logger = get_logger(__name__)
 #   widely fanned hand is a thin splayed surface the img2mesh bake inflates
 #   into an oversized paddle, so "splayed/fanned fingers" stay in the
 #   negative.
+# - Hands "in natural proportion to the body", fingers "slender" (2026-09-26,
+#   user report: the meshes still came out with oversized hands and thick
+#   fingers with the fingers already only slightly spread). The bake adds
+#   thickness of its own: the Trellis2 multi-view workflow (ai-hub/
+#   sample_comfyui_workflows/img2mesh-trellis2_multiview_api.json, node 34)
+#   decides occupancy at sparse_structure_resolution 32 over the WHOLE
+#   bounding box — arm-span wide in a T-pose, ≈5.6 cm per cell at 1.8 m —
+#   before the 1024 cascade and the 1024 dual contouring refine the shape
+#   inside the occupied cells; a 1.5–2 cm finger sits far below that, so a
+#   thin hand blurs into a thicker one. An image model's habit of drawing
+#   hands a size too big lands on top of that, and nothing takes it back
+#   afterwards — the Blender pass scales the whole figure uniformly, never a
+#   body part. So the render has to deliver the hand size the mesh should
+#   END with, and the failure modes (large hands, thick/chunky/swollen/fused
+#   fingers) sit in the negative. Neither the render resolution nor face_num
+#   is a lever here: the img2mesh conditioner downsamples its input, and
+#   face_num only decimates the same structure (the world that reported
+#   this already rendered 1536 px into 50k–200k faces).
 # - Legs CLEARLY APART with open space between them (user decision
 #   2026-09-03): a clean separation, not a straddle. What the mesher needs is
 #   the GAP, not the width — with the legs touching it fuses both into one
@@ -62,8 +80,9 @@ logger = get_logger(__name__)
 TPOSE_PROMPT_DEFAULT = (
     "T-pose, standing upright facing the camera, arms straight out to the "
     "sides at shoulder height, forming the letter T, palms facing down "
-    "toward the floor, fingers straight and slightly spread apart, legs clearly "
-    "apart with open space visible between them, hair behind the shoulders"
+    "toward the floor, hands in natural proportion to the body, fingers "
+    "straight, slender and slightly spread apart, legs clearly apart with "
+    "open space visible between them, hair behind the shoulders"
 )
 
 # Non-humanoid characters (animals): a T-pose is meaningless on four legs.
@@ -107,9 +126,10 @@ TPOSE_BACK_PROMPT_DEFAULT = (
     "the back of the head, the upper back and the shoulder blades facing the "
     "camera, the head facing straight away from the camera in the same "
     "direction as the body, standing upright in T-pose, arms straight out to "
-    "the sides at shoulder height, palms facing down toward the floor, fingers "
-    "straight and slightly spread apart, legs clearly apart with open space "
-    "visible between them, hair in front of the shoulders"
+    "the sides at shoulder height, palms facing down toward the floor, hands "
+    "in natural proportion to the body, fingers straight, slender and slightly "
+    "spread apart, legs clearly apart with open space visible between them, "
+    "hair in front of the shoulders"
 )
 
 # Both profiles share one text — the side is the only difference, so they
@@ -127,9 +147,8 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "{side} edge of the frame, standing upright in T-pose, arms straight out "
     "to the sides at shoulder height so the near arm points at the camera and "
     "hides the far arm, strongly foreshortened, palms facing down toward the "
-    "floor, fingers "
-    "straight and slightly spread apart, legs clearly apart, hair behind the "
-    "shoulders"
+    "floor, hands in natural proportion to the body, fingers straight, slender "
+    "and slightly spread apart, legs clearly apart, hair behind the shoulders"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
@@ -703,7 +722,7 @@ def generate_model_ref_images(character_name: str,
                                                   f"tpose_{v}", signature)
                                    for v in views)))
         if cached:
-            logger.info("Model-Refs fuer %s: Kombination %s bereits gerendert (%s)",
+            logger.info("Model refs for %s: combination %s already rendered (%s)",
                         character_name, signature, ", ".join(cached))
         kinds = tuple(k for k in kinds if k not in cached)
     if not kinds:
@@ -750,7 +769,7 @@ def generate_model_ref_images(character_name: str,
                     apply_state_modifiers=not prewarm)
             results[kind] = str(path) if path else None
             if path is None:
-                logger.warning("Model-Ref %s fuer %s (%s): Render fehlgeschlagen",
+                logger.warning("Model ref %s for %s (%s): render failed",
                                kind, character_name, signature)
             else:
                 _cleanup_legacy(refs_dir, kind)
@@ -794,15 +813,15 @@ def generate_model_ref_images(character_name: str,
                     except Exception as e:
                         view_path = None
                         logger.warning(
-                            "Model-Ref %s fuer %s (%s) fehlgeschlagen: %s",
+                            "Model ref %s for %s (%s) failed: %s",
                             view_kind, character_name, signature, e)
                     results[view_kind] = str(view_path) if view_path else None
                     if view_path is None:
                         logger.warning(
-                            "Model-Ref %s fuer %s (%s): Render fehlgeschlagen",
+                            "Model ref %s for %s (%s): render failed",
                             view_kind, character_name, signature)
     finally:
-        logger.info("Model-Refs fuer %s (%s): %s", character_name, signature,
+        logger.info("Model refs for %s (%s): %s", character_name, signature,
                     {k: bool(v) for k, v in results.items()})
     return results
 
@@ -823,7 +842,7 @@ def _run_generation(character_name: str, kind: str, force: bool = False) -> None
         with _kind_lock(key):
             generate_model_ref_images(character_name, kinds=(kind,), force=force)
     except Exception as e:
-        logger.error("Model-Ref-Render fuer %s (%s) fehlgeschlagen: %s",
+        logger.error("Model ref render for %s (%s) failed: %s",
                      character_name, kind, e)
     finally:
         with _lock:
@@ -837,7 +856,7 @@ def _run_generation(character_name: str, kind: str, force: bool = False) -> None
             from app.core.model3d import maybe_auto_generate_for_outfit
             maybe_auto_generate_for_outfit(character_name)
         except Exception as e:
-            logger.debug("Model3D-Auto-Hook fuer %s fehlgeschlagen: %s",
+            logger.debug("Model3D auto hook for %s failed: %s",
                          character_name, e)
 
 

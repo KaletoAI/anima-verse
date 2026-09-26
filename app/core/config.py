@@ -33,10 +33,10 @@ MAX_IMAGE_BACKENDS = 200
 _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "storage" / "config.json"
 _SECRETS_PATH: Optional[Path] = None  # set in load() — sibling of _CONFIG_PATH
 
-# Snapshot der Werte aller `requires_restart: true`-Felder zum Boot-Zeitpunkt.
-# Wird in load() einmalig befuellt und nicht mehr ueberschrieben — so kann
-# die Admin-UI nach einem Save erkennen, ob ein restart-pflichtiges Feld
-# gegenueber dem laufenden Server-Prozess abweicht.
+# Snapshot of every `requires_restart: true` field's value at boot time.
+# Filled once in load() and never overwritten — so the admin UI can tell
+# after a save whether a restart-requiring field differs from what the
+# running server process uses.
 _BOOT_RESTART_SNAPSHOT: Optional[dict] = None
 
 # Fields that contain sensitive data (API keys, passwords, secrets)
@@ -50,19 +50,19 @@ def _is_sensitive(key: str) -> bool:
     return key in SENSITIVE_FIELDS
 
 
-# ── Use-Case-spezifische Prompt-Styles ──────────────────────────────────────
-# Style/Negative/Instruction gehoeren zum FALL der Generierung (Map-Tile vs
-# Character-Foto vs Item), nicht zum Workflow. Sie haengen an zwei Dimensionen:
-#   use_case (map/character/item/…)  ×  Style-FAMILIE (Formulierung).
-# Es gibt zwei generelle Familien (NICHT an Modellnamen gebunden, pro Use-Case
-# erweiterbar): 'natural' (Fliesstext) und 'keywords' (Komma-Tags). Das
-# "Target Prompt Stil"-Feld (image_model) eines Workflows wird ueber
-# _IMAGE_MODEL_FAMILY in eine Familie uebersetzt.
+# ── Use-case-specific prompt styles ────────────────────────────────────────
+# Style/negative/instruction belong to the CASE of a generation (map tile vs
+# character photo vs item), not to the workflow. They hang on two dimensions:
+#   use_case (map/character/item/…)  ×  style FAMILY (phrasing).
+# There are two general families (NOT bound to model names, extensible per
+# use case): 'natural' (flowing prose) and 'keywords' (comma tags). A
+# workflow's "target prompt style" field (image_model) is translated into a
+# family via _IMAGE_MODEL_FAMILY.
 _PROMPT_STYLE_FAMILIES = ["natural", "keywords"]
 
-# image_family / Render-Target -> Style-Familie. Akzeptiert die neuen Familien
-# (natural/keywords) direkt UND die Render-Targets (z_image/qwen/flux), die
-# get_target_model aus Datei-/Backend-Namen ableitet. Default: keywords.
+# image_family / render target -> style family. Accepts the family names
+# (natural/keywords) directly AND the render targets (z_image/qwen/flux) that
+# get_target_model derives from file/backend names. Default: keywords.
 _IMAGE_MODEL_FAMILY = {
     "": "keywords",
     "keywords": "keywords",
@@ -72,7 +72,7 @@ _IMAGE_MODEL_FAMILY = {
     "flux": "natural",
 }
 
-# Gemeinsamer Foto-Negativ-Prompt fuer die photoreal-orientierten Use-Cases.
+# Shared photo negative prompt of the photoreal-oriented use cases.
 _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
               "plastic skin, smooth flawless skin, overexposed, glossy, fantasy, "
               "studio lighting, posed, cartoon, drawing, sketch, watermark, "
@@ -85,10 +85,15 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 # for as a realistic 3D figure (user decision 2026-09-01) — the skin terms
 # (airbrushed/plastic/flawless) stay so the textures remain lifelike.
 # The finger terms bracket a SLIGHTLY spread hand (pose text: "fingers
-# straight and slightly spread apart", user decision 2026-09-24): "fingers
-# pressed together" keeps them from closing, "splayed/fanned fingers" from a
-# wide fan — a thin splayed surface the img2mesh bake inflates into an
-# oversized paddle — and "curled fingers"/"clenched fists" from a fist.
+# straight, slender and slightly spread apart", user decision 2026-09-24):
+# "fingers pressed together" keeps them from closing, "splayed/fanned
+# fingers" from a wide fan — a thin splayed surface the img2mesh bake
+# inflates into an oversized paddle — and "curled fingers"/"clenched fists"
+# from a fist. The hand-SIZE terms (oversized/large hands, thick/chunky/
+# swollen/fused fingers, mitten hands) name the mesh failure reported
+# 2026-09-26: the bake pads every hand by a structure cell and nothing after
+# it scales a body part back, so the render must already show the hand size
+# the mesh should end with (model_refs.TPOSE_PROMPT_DEFAULT has the why).
 # "palms facing the camera / up" guard the palms-DOWN pose text (the Mixamo
 # bind pose, user decision 2026-09-24) against the old palms-forward render.
 # The leg terms carry what the pose text no longer over-asks for: it wants a
@@ -96,7 +101,7 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 # failure it must not fall back into — legs touching, ankles together — is
 # named here. Deliberately NOT negated: a wide stance, which would fight the
 # separation the positive text asks for.
-_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance")
+_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance")
 _NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up")
 
 # Negatives of the OPTIONAL extra mesh views (back / left+right profile).
@@ -139,10 +144,10 @@ _NEG_VIEW_BACK = ", front view, front side, facade with the entrance facing the 
 _NEG_VIEW_SIDE = ", front view, back view, three-quarter view, facing the camera, mirrored"
 _NEG_PROP = "scene, environment, floor shadow, people, hands, text, watermark"
 
-# Eingebaute Defaults pro use_case × Familie. Diese Werte werden NICHT in die
-# config.json geseedet — sie sind Resolver-Default UND grauer Placeholder in der
-# Admin-UI (leeres Feld = dieser Default greift). Ohne Backend-Fallback braucht
-# JEDER Use-Case einen Default fuer beide Familien.
+# Built-in defaults per use_case × family. These values are NOT seeded into
+# config.json — they are the resolver default AND the grey placeholder in the
+# admin UI (empty field = this default applies). Without a backend fallback
+# EVERY use case needs a default for both families.
 _DEFAULT_IMAGE_USE_CASES = {
     "scene": {
         # Composed player scene (room background + present characters).
@@ -967,13 +972,13 @@ def _migrate_lora_triggers(config: dict) -> bool:
 
 
 def _seed_default_use_cases(config: dict) -> bool:
-    """Legt die Use-Case-Prompt-Struktur an (leere Felder, 2 Familien je Use-Case).
+    """Creates the use-case prompt structure (empty fields, 2 families per use case).
 
-    Die Felder bleiben LEER — die eingebauten Defaults (_DEFAULT_IMAGE_USE_CASES)
-    greifen als Resolver-Fallback und werden in der Admin-UI als grauer
-    Placeholder gezeigt. Geseedet wird nur die Struktur, damit der Admin die
-    Eintraege sieht/editieren/erweitern kann. Idempotent + Backfill fehlender
-    Use-Cases. Returns True wenn sich etwas geaendert hat.
+    The fields stay EMPTY — the built-in defaults (_DEFAULT_IMAGE_USE_CASES)
+    apply as the resolver fallback and show as a grey placeholder in the admin
+    UI. Only the structure is seeded, so the admin can see/edit/extend the
+    entries. Idempotent + backfill of missing use cases. Returns True when
+    something changed.
 
     In-memory only — see `migrate_file()` for the disk side.
     """
@@ -1388,8 +1393,8 @@ def load(config_path: Optional[Path] = None) -> dict:
     # Populate os.environ for backward compatibility
     _flatten_to_env(_CONFIG)
 
-    # Boot-Snapshot der restart-pflichtigen Felder einfrieren (nur einmal,
-    # der erste Load gewinnt — spaetere reload()-Aufrufe veraendern das nicht).
+    # Freeze the boot snapshot of the restart-requiring fields (once only,
+    # the first load wins — later reload() calls do not change it).
     global _BOOT_RESTART_SNAPSHOT
     if _BOOT_RESTART_SNAPSHOT is None:
         _BOOT_RESTART_SNAPSHOT = _collect_restart_values(_CONFIG)
@@ -1487,22 +1492,22 @@ def _expand_wildcards(cfg: dict, path: str) -> list:
 
 
 def restart_pending_fields() -> list:
-    """Vergleicht Boot-Snapshot mit aktueller Config.
+    """Compares the boot snapshot with the current config.
 
-    Liefert eine Liste der Pfade, deren Werte sich seit dem Server-Start
-    geaendert haben — d.h. die ohne Restart NICHT wirksam werden.
+    Returns the list of paths whose values changed since the server start —
+    i.e. the ones that do NOT take effect without a restart.
     """
     if _BOOT_RESTART_SNAPSHOT is None:
         return []
     pending = []
     current = _collect_restart_values(_CONFIG)
-    # Geänderte Werte
+    # Changed values
     for path, boot_val in _BOOT_RESTART_SNAPSHOT.items():
         if current.get(path) != boot_val:
             pending.append(path)
-    # Neu hinzugekommene Pfade (z.B. neuer Provider-Array-Eintrag mit
-    # restart-pflichtigem Feld) — wenn der Boot-Wert leer war und jetzt
-    # ein Wert da ist, faellt das auch unter "pending".
+    # Newly added paths (e.g. a new provider array entry with a
+    # restart-requiring field) — a boot value that was empty and now has a
+    # value counts as "pending" too.
     for path in current:
         if path not in _BOOT_RESTART_SNAPSHOT and current[path]:
             pending.append(path)
@@ -1733,7 +1738,7 @@ def _flatten_to_env(config: dict) -> None:
                      "seconds", "video_endpoint",
                      # Mesh backend (openai_mesh, img2mesh)
                      "mesh_endpoint", "mesh_rig", "remove_background",
-                     "face_num", "face_num_max", "no_fingers"]:
+                     "face_num", "face_num_max", "no_fingers", "mesh_steps"]:
             val = be.get(key, "")
             # extra_params can be a dict (JSON editor) — bridge as JSON string.
             if key == "extra_params" and isinstance(val, (dict, list)):
@@ -1801,9 +1806,9 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_KNOWLEDGE_SEARCH_MAX_RETURN", kn.get("search_max_return", 8))
 
     # Thoughts — AgentLoop pacing.
-    # AgentLoop liest die Werte direkt via config.get() (kein env-Bridge
-    # mehr noetig); Mapping bleibt nur fuer Backward-Compat falls Code
-    # die env-Variable noch erwartet.
+    # The AgentLoop reads these values directly via config.get() (no env
+    # bridge needed any more); the mapping stays only for code that still
+    # expects the env variable.
     pro = config.get("thoughts", config.get("proactive", {}))
     _set(env, "THOUGHT_MIN_TURN_GAP_SECONDS", pro.get("min_turn_gap_seconds", 30))
     _set(env, "THOUGHT_MIN_PER_CHAR_COOLDOWN_MINUTES", pro.get("min_per_char_cooldown_minutes", 5))

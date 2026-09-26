@@ -20,6 +20,15 @@ Three parts of the fix, each checked against values derived BY HAND:
     The render call is replaced by a recorder; no backend, no DB.
 [5] Palms face DOWN toward the floor in all four pose texts (user decision
     2026-09-24 — the Mixamo bind pose), none forward or away.
+[6] Hand size (user report 2026-09-26: oversized hands, thick fingers in the
+    mesh). Every pose text anchors the hand size ("hands in natural
+    proportion to the body") and asks for slender fingers WITHOUT giving up
+    the slightly spread hand of 2026-09-24; the T-pose negative names the
+    seven size/thickness failures as whole comma items, the back and side
+    negatives inherit them, and the six T-pose negatives of the tracked demo
+    world (a deliberate world override, not a copy) carry them too. Measured
+    at the consumer: the recorder of [4] also records the ``prompt_prefix``
+    each render got, which must be the built-in text of its view verbatim.
 
 Storage is a temp dir (``paths.init`` before any world-DB import).
 
@@ -102,12 +111,15 @@ check("[3] another character's model_refs refused",
 from app.core import expression_regen  # noqa: E402
 
 calls = []
+prefixes = {}
 
 
 def _fake_render(character_name, **kw):
     out = Path(str(kw["output_stem"]) + ".png")
     out.write_bytes(b"x")
-    calls.append((out.stem.rsplit("_", 1)[0], kw.get("reference_image")))
+    kind = out.stem.rsplit("_", 1)[0]
+    calls.append((kind, kw.get("reference_image")))
+    prefixes[kind] = kw.get("prompt_prefix")
     return out
 
 
@@ -140,6 +152,67 @@ check("[4] profile text speaks to the reference",
       model_refs.TPOSE_LEFT_PROMPT_DEFAULT.startswith(
           "the same figure turned sideways, strict left side profile view"),
       True)
+
+# [6] ------------------------------------------------------------------------
+from app.core.config import _NEG_TPOSE, _NEG_TPOSE_BACK, _NEG_TPOSE_SIDE  # noqa: E402
+
+_POSE_TEXTS = (("front", model_refs.TPOSE_PROMPT_DEFAULT),
+               ("back", model_refs.TPOSE_BACK_PROMPT_DEFAULT),
+               ("left", model_refs.TPOSE_LEFT_PROMPT_DEFAULT),
+               ("right", model_refs.TPOSE_RIGHT_PROMPT_DEFAULT))
+_HAND_CLAUSE = ("hands in natural proportion to the body, fingers straight, "
+                "slender and slightly spread apart")
+for _label, _text in _POSE_TEXTS:
+    # One clause, directly after the palms clause, in every view — and the
+    # slightly spread hand of 2026-09-24 survives inside it.
+    check(f"[6] {_label}: palms, then the hand clause",
+          f"palms facing down toward the floor, {_HAND_CLAUSE}" in _text, True)
+    check(f"[6] {_label}: no closed hand crept back in",
+          ("held together" in _text, "pressed together" in _text,
+           _text.count("slightly spread apart")),
+          (False, False, 1))
+
+# The seven failure names, each a WHOLE comma item (a substring hit like
+# "hands" inside "cropped hands" would prove nothing).
+_HAND_NEGATIVES = ("oversized hands", "large hands", "thick fingers",
+                   "chunky fingers", "swollen fingers", "fused fingers",
+                   "mitten hands")
+
+
+def _items(text):
+    return [t.strip() for t in text.split(",")]
+
+
+for _label, _neg in (("tpose", _NEG_TPOSE), ("back", _NEG_TPOSE_BACK),
+                     ("side", _NEG_TPOSE_SIDE)):
+    check(f"[6] {_label} negative names every hand failure once",
+          tuple(_items(_neg).count(t) for t in _HAND_NEGATIVES),
+          (1,) * len(_HAND_NEGATIVES))
+# Positive and negative must not contradict: nothing the pose text asks for
+# may be a negative item.
+check("[6] no pose clause is also a negative item",
+      sorted(set(_items(model_refs.TPOSE_PROMPT_DEFAULT)) & set(_items(_NEG_TPOSE))),
+      [])
+
+# The tracked demo world overrides the T-pose negatives (stylised look) and
+# has to carry the hand terms itself: 3 use cases x 2 style families = 6.
+import json  # noqa: E402
+_demo = json.loads((ROOT / "worlds" / "demo" / "config.json").read_text(encoding="utf-8"))
+_demo_negs = [
+    _demo["image_generation"]["use_cases"][uc]["styles"][fam]["prompt_negative"]
+    for uc in ("tpose", "tpose_back", "tpose_side") for fam in ("natural", "keywords")]
+check("[6] demo world: six T-pose negatives, each with every hand failure once",
+      [tuple(_items(n).count(t) for t in _HAND_NEGATIVES) for n in _demo_negs],
+      [(1,) * len(_HAND_NEGATIVES)] * 6)
+
+# Consumer: the prefix each render of [4] received is the built-in text of
+# its view, verbatim (no admin override in the temp storage).
+check("[6] prompt_prefix per render is the built-in view text",
+      prefixes,
+      {"tpose": model_refs.TPOSE_PROMPT_DEFAULT,
+       "tpose_back": model_refs.TPOSE_BACK_PROMPT_DEFAULT,
+       "tpose_left": model_refs.TPOSE_LEFT_PROMPT_DEFAULT,
+       "tpose_right": model_refs.TPOSE_RIGHT_PROMPT_DEFAULT})
 
 print()
 if failures:
