@@ -84,6 +84,28 @@ Every expected number below is derived by hand.
      planted — the median of those frames; ankle heights [6, 6, 7, 9, 9],
      ball weights [1, 1, 1, 0, 0.5] → median(6, 6, 7) = 6. Ball never
      fully planted → None (the ankle is then not a detection point).
+[P8] sole_down: a foot plants only while it is SOLE-DOWN in the source —
+     its ankle stands above its ball by at least SOLE_MIN_FRACTION = 0.5 of
+     the rise the source skeleton's REST foot has (ankle over ball in the
+     rest pose, where every foot stands flat). The lift compares each rig
+     point with its height in the UPRIGHT rest, so it only means anything
+     for a foot standing on its sole. Rest rise 4.0 → threshold 2.0 cm:
+       upright            ankle 5.0, ball 0.0 → rise  5.0 ≥ 2 → True
+       lying on its side  ankle 1.0, ball 0.6 → rise  0.4 < 2 → False
+       kneeling, instep   ankle 4.5, ball 3.0 → rise  1.5 < 2 → False
+       on the back, heel  ankle 4.0, ball 12  → rise −8.0 < 2 → False
+     A rest rise ≤ 0 (a skeleton whose rest foot is not pitched down)
+     gives threshold 0: upright True, heel-down False.
+[P9] the gate acts on the raw weights BEFORE the run rule: ball 0.5 cm for
+     30 frames (vy 0, raw 1), sole-down except frames 12..14 (the foot
+     rolls onto its side) → raw 0 there, two runs: [0, 11] (12 frames =
+     0.4 s ≥ 0.2, starts at the take's first frame → fade-out only,
+     (11 − f + 1)/4) and [15, 29] (15 frames, ends at the take's last
+     frame → fade-in only, (f − 15 + 1)/4) →
+     [1]*9 + [0.75, 0.5, 0.25] + [0, 0, 0] + [0.25, 0.5, 0.75] + [1]*12.
+[P10] runs(weights): the maximal stretches with weight > 0, inclusive:
+     [0, 0.3, 1, 0, 0, 1, 1, 0] → [(1, 2), (5, 6)]; [1, 1] → [(0, 1)];
+     [] → [].
 """
 import math
 import sys
@@ -204,6 +226,24 @@ def main() -> int:
     check("median of the planted frames = 6", v == 6, str(v))
     v = fp.ankle_floor([6, 6, 7], [0.5, 0, 0.9])
     check("ball never fully planted → None", v is None, str(v))
+
+    print("\n[P8] sole_down: only a foot standing on its sole plants")
+    v = fp.sole_down([5.0, 1.0, 4.5, 4.0], [0.0, 0.6, 3.0, 12.0], 4.0)
+    check("upright / side / instep / heel-down", v == [True, False, False, False], str(v))
+    v = fp.sole_down([5.0, 4.0], [0.0, 12.0], -1.0)
+    check("rest rise <= 0 → threshold 0", v == [True, False], str(v))
+    check("SOLE_MIN_FRACTION", fp.SOLE_MIN_FRACTION == 0.5)
+
+    print("\n[P9] the sole-down gate splits a contact before the run rule")
+    gate = [not 12 <= f <= 14 for f in range(30)]
+    w = fp.planted_frames([0.5] * 30, 0.0, 30.0, gate)
+    want = [1] * 9 + [0.75, 0.5, 0.25] + [0, 0, 0] + [0.25, 0.5, 0.75] + [1] * 12
+    check("two runs, faded at the gate", close(w, want), str([round(x, 3) for x in w]))
+
+    print("\n[P10] runs: the stretches with weight > 0")
+    check("[0, 0.3, 1, 0, 0, 1, 1, 0]", fp.runs([0, 0.3, 1, 0, 0, 1, 1, 0]) == [(1, 2), (5, 6)],
+          str(fp.runs([0, 0.3, 1, 0, 0, 1, 1, 0])))
+    check("[1, 1] and []", fp.runs([1, 1]) == [(0, 1)] and fp.runs([]) == [])
 
     print()
     if failures:

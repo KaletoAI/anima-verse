@@ -528,14 +528,15 @@ def _plant_feet(arm, take, sol, floor_cm: float, hips_scale: float,
 
     ``floor_cm`` is the rig floor as the unplanted solve puts it
     (``_rig_floor``); a frame's height over it is what ``_bake`` will
-    write, hips lift included. Where the source's foot weight w > 0 the
-    foot moves by ``−w · lift``: the ankle's target is its own position
-    shifted vertically (``_leg_ik``). The frames of ``sol`` are changed in
-    place and its per-frame lows re-measured. Returns the sidecar block
-    ``{foot: {"frames", "max_cm", "shift_cm"}}`` for the feet that were
-    moved (``shift_cm``: the vertical correction per frame, 0 where the
-    foot is not planted), the updated ``sol`` and the ``_Plan`` for
-    ``_pin_feet``."""
+    write, hips lift included. Only frames in which the source foot stands
+    on its SOLE count (``_foot_plant.sole_down`` against the rise of the
+    take skeleton's rest foot — the actor's for CMU, the Mixamo rest pitch
+    on the source's foot length for an FBX take). Where the source's foot
+    weight w > 0 the foot moves by ``−w · lift``: the ankle's target is its
+    own position shifted vertically (``_leg_ik``). The frames of ``sol`` are
+    changed in place and its per-frame lows re-measured. Returns the sidecar
+    block ``{foot: {"frames", "max_cm"}}`` for the feet that were moved,
+    the updated ``sol`` and the ``_Plan`` for ``_pin_feet``."""
     seen, rest, frames, _lows, ratio = sol
     bones = arm.data.bones
     hips = PREFIX + "Hips"
@@ -553,15 +554,18 @@ def _plant_feet(arm, take, sol, floor_cm: float, hips_scale: float,
             continue
         ball_h = [p.pos[spec["ball"]][1] - src_floor for p in take.poses]
         ankle_h = [p.pos[spec["ankle"]][1] - src_floor for p in take.poses]
-        a_floor = _foot_plant.ankle_floor(ankle_h, _foot_plant.planted_frames(ball_h, 0.0, fps))
+        bone = take.sk.bones.get(spec["ankle"])
+        rise = -bone.direction[1] * bone.length * take.sk.unit_cm if bone else 0.0
+        gate = _foot_plant.sole_down(ankle_h, ball_h, rise)
+        a_floor = _foot_plant.ankle_floor(
+            ankle_h, _foot_plant.planted_frames(ball_h, 0.0, fps, gate))
         points = [(ball_h, 0.0)] + ([(ankle_h, a_floor)] if a_floor is not None else [])
-        weights = _foot_plant.foot_planted_frames(points, fps)
+        weights = _foot_plant.foot_planted_frames(points, fps, gate)
         below = {b.name for b in bones[upper].children_recursive}
         chain = [n for n in seen if n in below]
-        shifts, max_cm = [], 0.0
+        moved, max_cm = 0, 0.0
         for P, w in zip(frames, weights):
             if w <= 0.0:
-                shifts.append(0.0)
                 continue
             lift_y = _hips_lift(P[hips].translation.y, hips_scale, stand_cm) - floor_cm
             h = {n: P[PREFIX + n].translation.y + lift_y
@@ -569,14 +573,13 @@ def _plant_feet(arm, take, sol, floor_cm: float, hips_scale: float,
             old = P[ankle].translation.copy()
             _leg_ik(bones, rest, P, spec, plan.mapped, chain,
                     old + Vector((0.0, -w * _foot_plant.foot_lift(h, rest_h), 0.0)))
-            moved = P[ankle].translation - old
-            shifts.append(round(moved.y, 2))
-            max_cm = max(max_cm, moved.length)
-        if any(w > 0.0 for w in weights):
+            moved += 1
+            max_cm = max(max_cm, (P[ankle].translation - old).length)
+        if moved:
             plan.weights[foot] = weights
             plan.chains[foot] = chain
-            block[foot] = {"frames": sum(1 for w in weights if w > 0.0),
-                           "max_cm": round(max_cm, 2), "shift_cm": shifts}
+            if round(max_cm, 2) > 0.0:
+                block[foot] = {"frames": moved, "max_cm": round(max_cm, 2)}
     lows = [_frame_lowest(P) for P in frames]
     return block, (seen, rest, frames, lows, ratio), plan
 
@@ -602,15 +605,9 @@ def _pin_feet(arm, sol, plan: _Plan, path) -> dict:
         spec = PLANT_FEET[foot]
         ankle = PREFIX + foot
         worst = 0.0
-        f, n = 0, min(len(frames), len(weights), len(path))
-        while f < n:
-            if weights[f] <= 0.0:
-                f += 1
-                continue
-            a = f
-            while f < n and weights[f] > 0.0:
-                f += 1
-            run = range(a, f)
+        n = min(len(frames), len(weights), len(path))
+        for a, b in _foot_plant.runs(weights[:n]):
+            run = range(a, b + 1)
             full = [g for g in run if weights[g] >= _root_motion.FULL]
             if not full:
                 continue
@@ -943,10 +940,12 @@ def run_takes(takes, args, fps, source):
             # by design, or the travel is the actor's.
             pins = _pin_feet(arm, sol, plan, clip_root_motion.lock_path(arm, fps))
             for foot, cm in pins.items():
-                geometry["foot_plant"][foot]["pin_max_cm"] = cm
+                if foot in geometry.get("foot_plant", {}):
+                    geometry["foot_plant"][foot]["pin_max_cm"] = cm
             arm = _load_rig(args["rig"])
             seen = [arm.data.bones[n] for n in sol[0]]
-            _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop, stand)
+            _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop, stand,
+                  travel_scale=k if mode == "keep" else 1.0)
         if len(takes) == 1:
             # Last pass before export: measure (strip/keep) or rebuild
             # (foot_lock) the horizontal travel — SOLO only, a pair's roots

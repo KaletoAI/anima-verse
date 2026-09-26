@@ -25,6 +25,13 @@ has to hold for ``PLANT_MIN_S`` in one piece (a shorter touch is a step, not
 a stand; a foot hovering inside the ramps never stands), and the weight
 fades in and out over ``PLANT_FADE_S``.
 
+Only a SOLE-DOWN foot plants (``sole_down``): the lift compares each rig
+point with its height in the UPRIGHT rest, which means nothing for a foot on
+its side (ankle ≈ ball height: the lift goes negative and the IK would RAISE
+it), on its instep (kneeling) or on its heel (lying on the back, toes up).
+A source frame counts only when its ankle stands above its ball by at least
+``SOLE_MIN_FRACTION`` of the rise the source skeleton's rest foot has.
+
 Frame: clip frame, Y up, centimetres. The module knows no clip names.
 """
 import math
@@ -47,6 +54,13 @@ PLANT_VY_HI_CM_S = 30.0
 PLANT_MIN_S = 0.2
 #: Fade-in/out of a contact's weight, s.
 PLANT_FADE_S = 0.1
+#: Share of the rest foot's ankle-over-ball rise a source foot must keep to
+#: count as standing on its sole. Standing feet keep about their rest rise or
+#: more (CMU, median over the planted frames: 13_09 L 3.06 of rest 3.08,
+#: 111_11 L 5.01 of 4.04 / R 4.59 of 3.50, 23_03 R 4.80 of 3.66); on the
+#: side, the instep or the heel it falls to ~0 or below (113_08 lying:
+#: −5 … −8 cm).
+SOLE_MIN_FRACTION = 0.5
 
 
 def median(values: Sequence[float]) -> Optional[float]:
@@ -75,8 +89,35 @@ def _raw(heights: Sequence[float], floor: float, fps: float) -> List[float]:
     return out
 
 
+def runs(weights: Sequence[float]) -> List[Tuple[int, int]]:
+    """The maximal stretches of frames with a weight > 0, as inclusive
+    (first, last) pairs."""
+    out = []
+    start = None
+    for f, w in enumerate(weights):
+        if w > 0.0 and start is None:
+            start = f
+        elif w <= 0.0 and start is not None:
+            out.append((start, f - 1))
+            start = None
+    if start is not None:
+        out.append((start, len(weights) - 1))
+    return out
+
+
+def sole_down(ankle_heights: Sequence[float], ball_heights: Sequence[float],
+              rest_rise: float) -> List[bool]:
+    """Per frame: does the source foot stand on its sole — its ankle above
+    its ball by at least SOLE_MIN_FRACTION of ``rest_rise`` (the ankle's
+    height over the ball in the source skeleton's rest pose; a rise ≤ 0
+    gives threshold 0)?"""
+    need = SOLE_MIN_FRACTION * max(rest_rise, 0.0)
+    return [math.isfinite(a) and math.isfinite(b) and a - b >= need
+            for a, b in zip(ankle_heights, ball_heights)]
+
+
 def foot_planted_frames(points: Sequence[Tuple[Sequence[float], float]],
-                        fps: float) -> List[float]:
+                        fps: float, gate: Optional[Sequence[bool]] = None) -> List[float]:
     """Weight 0..1 per frame in which a FOOT is planted in the source.
 
     ``points``: per detection point its source heights per frame and the
@@ -92,21 +133,19 @@ def foot_planted_frames(points: Sequence[Tuple[Sequence[float], float]],
     — except on a side where the run touches the take's first or last frame:
     the take's start is no touchdown, and its last frame is the pose a bridge
     clip holds, so it keeps the full correction.
+
+    ``gate`` (per frame, e.g. ``sole_down``) zeroes the raw weight of the
+    frames it rejects BEFORE the run rule, so a rejected stretch splits a
+    contact and the parts fade like any other contact edge.
     """
     n = max((len(h) for h, _ in points), default=0)
     raws = [_raw(h, floor, fps) for h, floor in points]
     raw = [max((r[f] for r in raws if f < len(r)), default=0.0) for f in range(n)]
+    if gate is not None:
+        raw = [v if f < len(gate) and gate[f] else 0.0 for f, v in enumerate(raw)]
     fade = int(round(PLANT_FADE_S * fps))
     out = [0.0] * n
-    f = 0
-    while f < n:
-        if raw[f] <= 0.0:
-            f += 1
-            continue
-        a = f
-        while f < n and raw[f] > 0.0:
-            f += 1
-        b = f - 1
+    for a, b in runs(raw):
         if _longest_full(raw, a, b) / fps < PLANT_MIN_S - 1e-9:
             continue
         for g in range(a, b + 1):
@@ -126,10 +165,10 @@ def _longest_full(raw: Sequence[float], a: int, b: int) -> int:
 
 
 def planted_frames(src_heights: Sequence[float], src_floor: float,
-                   fps: float) -> List[float]:
+                   fps: float, gate: Optional[Sequence[bool]] = None) -> List[float]:
     """Weight 0..1 per frame in which ONE point stands on ``src_floor`` in
     the source (``foot_planted_frames`` with a single point)."""
-    return foot_planted_frames([(src_heights, src_floor)], fps)
+    return foot_planted_frames([(src_heights, src_floor)], fps, gate)
 
 
 def ankle_floor(ankle_heights: Sequence[float],

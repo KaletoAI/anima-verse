@@ -96,13 +96,18 @@ foot_lock run of [3]/[4] (whole take) and its measuring job (the WRITTEN FBX:
 
 [F1] end phase (t >= 3.5 s): RightToeBase over its rest height, median
      <= 0.5 cm (before: +2.42); LeftToeBase median within 0.16 ± 0.3.
-[F2] end phase (t >= 3.5 s): the RightFoot's vertical correction
-     (geometry.foot_plant.RightFoot.shift_cm, per frame), |median| within
-     1.5 … 3.5 — the leg-length asymmetry: its lift there is the ball's
-     2.42 → shift −2.42. The overall max_cm is printed as info only: the
-     plant also lowers the feet in the stand-up (1.0 … 2.6 s), where the
-     unplanted rig floated them 2–8 cm (``_hips_lift`` × bent knees; shipped
-     clip at 1.6 s: lift L 6.0 / R 8.2) — 8.35 cm measured, corrected too.
+[F2] end phase (t >= 3.5 s): the right foot's vertical correction, measured
+     in WRITTEN FBX files — the RightToeBase height per frame of a foot_lock
+     import by the importer WITHOUT the plant (commit cc6f2111, the parent of
+     the plant commit, run from a ``git archive`` of its
+     app/blender/scripts) minus the same height of this tree's import;
+     median within 1.5 … 3.5 cm — the leg-length asymmetry: before, the
+     right ball stood 2.42 over its rest ([F1] "before"), after at ~0 →
+     2.42. SKIP when git cannot export that commit. The foot_plant block's
+     max_cm is printed as info only: the plant also lowers the feet in the
+     stand-up (1.0 … 2.6 s), where the unplanted rig floated them 2–8 cm
+     (``_hips_lift`` × bent knees; shipped clip at 1.6 s: lift L 6.0 /
+     R 8.2) — 8.35 cm measured, corrected too.
 [F3] max_drift_cm <= 1.5 (MAX_LOCK_DRIFT_CM, sidecar and file) and, in the
      end phase, a span of at least 0.2 s (6 frames) in which BOTH feet are
      in full contact (ankle or ball weight >= 0.999, the file's own contact
@@ -162,6 +167,8 @@ RIGHT_BALL_MAX_CM = 0.5
 LEFT_BALL_BEFORE_CM = 0.16
 LEFT_BALL_TOL_CM = 0.3
 PLANT_SHIFT_CM = (1.5, 3.5)
+# the importer before the foot plant (the plant commit's parent)
+BASELINE = "cc6f2111"
 PIN_MAX_CM = 6.0
 BOTH_FEET_MIN_FRAMES = 6
 FULL = 0.999
@@ -189,6 +196,29 @@ def convert(out_dir: Path, kind: str, **params):
     p.update(params)
     return runner.run("cmu_clip", inputs={"rig": RIG, "asf": asf, "amc": amc},
                       params=p, out_dir=out_dir, timeout_s=TIMEOUT_S)
+
+
+def convert_baseline(out_dir: Path, kind: str, **params):
+    """``convert`` with the importer of BASELINE (no foot plant): its
+    app/blender/scripts exported next to ``out_dir`` and handed to the runner
+    for this one call. Not thread-safe (the runner's scripts dir is module
+    state) — call it outside the pool. None when git cannot export."""
+    import io
+    import subprocess
+    import tarfile
+    root = out_dir.parent / "baseline-scripts"
+    if not root.is_dir():
+        r = subprocess.run(["git", "-C", str(ROOT), "archive", BASELINE, "app/blender/scripts"],
+                           capture_output=True)
+        if r.returncode != 0:
+            return None
+        tarfile.open(fileobj=io.BytesIO(r.stdout)).extractall(root)
+    old = runner.SCRIPTS_DIR
+    runner.SCRIPTS_DIR = root / "app" / "blender" / "scripts"
+    try:
+        return convert(out_dir, kind, **params)
+    finally:
+        runner.SCRIPTS_DIR = old
 
 
 def convert_drink(out_dir: Path, kind: str, **params):
@@ -285,7 +315,10 @@ def main() -> int:
         if failures:
             print(f"\nFAILED: {len(failures)} check(s): " + ", ".join(failures))
             return 1
-        extra = [k for k in ("trim", "bed") if k in res and res[k]["ok"]]
+        base = convert_baseline(tmp / "baseline", "gu-base", root_motion="foot_lock")
+        if base is not None and base["ok"]:
+            res["base"] = base
+        extra = [k for k in ("trim", "bed", "base") if k in res and res[k]["ok"]]
         with ThreadPoolExecutor(max_workers=4) as pool:
             futs = {m: pool.submit(measure, res[m]["outputs"][f"gu-{m}"])
                     for m in MODES + tuple(extra)}
@@ -397,8 +430,7 @@ def main() -> int:
         print(f"  · {label}: travel_m {b.get('travel_m')}  sidecar {d}  file {fd}"
               f"  contact_s {b.get('contact_s')}  file ref_height_m {md.get('ref_height_m')}")
         fp_ = r["data"]["geometry"].get("foot_plant") or {}
-        print(f"  · {label}: foot_plant " + str({f: {k: v for k, v in x.items() if k != "shift_cm"}
-                                                   for f, x in fp_.items()} or None))
+        print(f"  · {label}: foot_plant {fp_ or None}")
         check(f"{label}: max_drift_cm <= {MAX_LOCK_DRIFT_CM} (sidecar)",
               num(d) and d <= MAX_LOCK_DRIFT_CM, str(d))
         check(f"{label}: max_drift_cm <= {MAX_LOCK_DRIFT_CM} (file)",
@@ -441,10 +473,16 @@ def main() -> int:
     for foot, b in plant.items():
         print(f"  · {foot}: frames {b.get('frames')}  max_cm {b.get('max_cm')} (info)"
               f"  pin_max_cm {b.get('pin_max_cm')}")
-    shifts = sorted(abs(v) for v in ((plant.get("RightFoot") or {}).get("shift_cm") or [])[first:])
-    med = shifts[len(shifts) // 2] if shifts else None
-    check(f"RightFoot end-phase |shift| median within {PLANT_SHIFT_CM[0]} … {PLANT_SHIFT_CM[1]}",
-          num(med) and PLANT_SHIFT_CM[0] <= med <= PLANT_SHIFT_CM[1], str(med))
+    if "base" not in meas:
+        print(f"  SKIP: no import by {BASELINE} (git archive failed or the run did)")
+    else:
+        before = ((meas["base"].get("data") or {}).get("contact_y") or {}).get("RightToeBase") or []
+        after = ys.get("RightToeBase") or []
+        diffs = sorted(b - a for b, a in zip(before[first:], after[first:]))
+        med = diffs[len(diffs) // 2] if diffs else None
+        print(f"  · RightToeBase end phase, {BASELINE} minus this tree: median {med}")
+        check(f"right-foot correction median within {PLANT_SHIFT_CM[0]} … {PLANT_SHIFT_CM[1]} cm",
+              num(med) and PLANT_SHIFT_CM[0] <= med <= PLANT_SHIFT_CM[1], str(med))
 
     print("\n[F3] foot plant: both feet in full contact in the end phase, the lock holds")
     d = block["foot_lock"].get("max_drift_cm")
@@ -482,9 +520,7 @@ def main() -> int:
         check("drinking conversion ok", dr["ok"], dr["error"])
         if dr["ok"]:
             dp = dr["data"]["geometry"].get("foot_plant") or {}
-            print("  · geometry.foot_plant "
-                  + str({f: {k: v for k, v in b.items() if k != "shift_cm"}
-                         for f, b in dp.items()} or None))
+            print(f"  · geometry.foot_plant {dp or None}")
             rf = dp.get("RightFoot")
             check(f"no RightFoot entry, or max_cm <= {DRINK_MAX_CM}",
                   rf is None or (num(rf.get("max_cm")) and rf["max_cm"] <= DRINK_MAX_CM), str(rf))
