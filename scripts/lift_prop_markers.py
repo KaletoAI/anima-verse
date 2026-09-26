@@ -97,8 +97,8 @@ Those two drops are the ones the PREVIEW APPLIED WHILE THE MARKERS WERE BEING
 AUTHORED (the pre-2026-09-08 catalog: `seat` 0.314, the since-retired `bed`
 0.631), not today's. Deliberately so: the delta is the authoring error, and a
 marker belongs on the seat surface no matter what a figure's root later
-subtracts from it. Re-deriving these with the current `seat` 0.243 x 1.70 =
-0.413 would repair a mistake nobody made. A world whose markers were authored
+subtracts from it. Re-deriving these with the current `seat` 0.234 x 1.70 =
+0.398 would repair a mistake nobody made. A world whose markers were authored
 under a different drop needs its own pair of deltas — that is what --delta-m
 is for.
 

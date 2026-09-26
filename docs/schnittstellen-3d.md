@@ -8434,33 +8434,46 @@ Liegenden — landet AUF der markierten Fläche, nicht das Hüftgelenk
 |---|---|---|
 | `stand` | 0 | 0 |
 | `ground` | 0 | 0 |
-| `seat` | 0,243 | 0,413 |
-| `lie` | 0,003 | 0,005 |
+| `seat` | 0,234 | 0,398 |
+| `lie` | 0,001 | 0,002 |
 
-`seat`: Hüftgelenk 0,98013 − Clip-Absenkung 0,39335 − Gesäß 0,1741 unter der
-Hüfte = 0,41268, ÷ 1,70 = 0,243. `lie`: 0,98013 − 0,79894 − 0,1754 (tiefster
-Körperpunkt) = 0,00579, ÷ 1,70 = 0,003 — ein Liege-Clip ist am Boden
-animiert, seine eigene Hüfthöhe legt den Körper schon auf die Fläche. Damit
-sitzt das Gesäß bei S − 0,0003 (Hüfte S + 0,174) und liegt der Körper bei
-S + 0,0008 (Hüfte S + 0,176). Die Hüftgelenk-Werte desselben Vormittags
-(0,320 / 0,075) steckten den Sitzenden 0,131 m ins Polster und den Liegenden
-0,122 m in die Matratze; die Erst-Werte dieses Nachtrags (0,314 / 0,051)
+Die Clip-Absenkung ist `clipHipsDrop = 0,98013 × (1 − Median / standRef)`,
+und `standRef` ist seit 2026-09-26 die **Ruhe-Hüfthöhe des Referenz-Rigs**
+(`shared/models/rig/reference.fbx`, 113,032 — die Regel `standingHipsRef` in
+`@anima/scene-render`, die der 3D-Client und jede Admin-Vorschau anwenden; der
+Idle-Median 110,179 ist nur noch Rückfall ohne Rig): `sit` (Median 65,961)
+0,98013 × (1 − 65,961 / 113,032) = 0,40816, `laying` (Median 20,368)
+0,98013 × (1 − 20,368 / 113,032) = 0,80351.
+`seat`: Hüftgelenk 0,98013 − Clip-Absenkung 0,40816 − Gesäß 0,1741 unter der
+Hüfte = 0,39787, ÷ 1,70 = 0,23404 → 0,234. `lie`: 0,98013 − 0,80351 − 0,1754
+(tiefster Körperpunkt) = 0,00122, ÷ 1,70 = 0,00072 → 0,001 — ein Liege-Clip
+ist am Boden animiert, seine eigene Hüfthöhe legt den Körper schon auf die
+Fläche. Damit sitzt das Gesäß bei S − 0,0001 (Hüfte S + 0,174) und liegt der
+Körper bei S − 0,0008 (Hüfte S + 0,175). Bis 2026-09-26 war `standRef` der
+Idle-Median (Absenkungen 0,39335 / 0,79894, Werte 0,243 / 0,003,
+`root_offset` 0,413 / 0,005); der Idle-Clip steht aber mit gebeugten Knien
+2,6 % unter der gestreckten Ruhehaltung und hob jede Figur um ~2,85 cm. Der
+Szenen-Fingerprint hasht `pose_catalog.get_groups()`, eine gecachte Szene
+holt die neuen `root_offset` deshalb ohne Versionssprung. Die
+Hüftgelenk-Werte vom Vormittag des 2026-09-08 (0,320 / 0,075) steckten den
+Sitzenden 0,131 m ins Polster und den Liegenden 0,122 m in die Matratze; die Erst-Werte dieses Nachtrags (0,314 / 0,051)
 waren gegen die Clip-Bibliothek vor `a605c5a7` gelesen.
 
 `bed`s 0,631 war am 2026-08-27 gegen den Mixamo-Clip `sleep` kalibriert, der
 drei Tage später (`c2eb166d`) gelöscht wurde. `sleeping`, `lying` und
 `recovering` spielen heute denselben CMU-Clip `laying`; mit 0,631 steckte jede
-schlafende Figur mit der Hüfte 0,93 m unter der Matratze (0,89 m gegen die
-heutigen Clips gelesen), mit `lie` 0,003 liegt sie darauf. Nachgerechnet aus
-der E5-Kette (`posed hips = S − rootOffset − clipHipsDrop + hipsBindY`) in
+schlafende Figur mit der Hüfte 0,93 m unter der Matratze (0,90 m gegen die
+heutigen Clips und den Rig-Bezug gelesen), mit `lie` 0,001 liegt sie darauf.
+Nachgerechnet aus der E5-Kette
+(`posed hips = S − rootOffset − clipHipsDrop + hipsBindY`) in
 `scripts/smoke_platztypen.py` **[4]**, am echten Skelett gemessen in
 `scripts/smoke_prop_marker_place.mjs` **E5** (Hüft-Mediane, Kontakt-Tiefen,
 Kontaktpunkt auf S ± 2 mm).
 
 **Offener Punkt, ausdrücklich benannt:** auf Dauer gehört die Zahl an den CLIP,
 nicht an den Platz-Typ — der eigene `sit`-Clip des Sets `male` (Median 60,011)
-will 0,211 statt 0,243, eine Figur, die ihn spielt, sitzt unter dem
-Katalogwert 5,4 cm im Polster (`pose_catalog._load_groups`). Das ist ein
+will 0,203 statt 0,234, eine Figur, die ihn spielt, sitzt unter dem
+Katalogwert 5,3 cm im Polster (`pose_catalog._load_groups`). Das ist ein
 geparkter eigener Strang; er braucht die
 Hüft-Median-Messung als Sidecar-Feld und die Klärung des Verhältnisses zu
 `clipHipsDrop`, das zur Laufzeit bereits dasselbe aus anderer Richtung misst.

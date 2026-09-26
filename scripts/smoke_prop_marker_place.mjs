@@ -104,17 +104,20 @@
  * renderer drops the Mixamo hips POSITION track (it is in centimetres and
  * would fling the body across the room), and the 3D client puts that height
  * BACK, rescaled: `client3d/src/scene/figures.adaptExternalClips` keeps the
- * track relative to the standing reference (the hips median of the idle
- * clip). The admin prop viewer dropped the track and never put anything back,
+ * track relative to the standing reference (`standingHipsRef` of
+ * @anima/scene-render: the reference rig's REST hips height since 2026-09-26,
+ * the idle clip's hips median before). The admin prop viewer dropped the
+ * track and never put anything back,
  * so the posed hips sat at the BIND height for every clip alike — measured
  * headless on the reference figure: 0.9801 m at H = 1.70 m, for idle, sit and laying
  * alike (this file's E5 is what measures it).
  *
- * Sitting is therefore drawn `hipsBind × (1 − median(sit)/median(idle))`
+ * Sitting is therefore drawn `hipsBind × (1 − median(sit)/standRef)`
  * higher than it is played — 0.4267 m with the Mixamo clips served at the
- * time, 0.3934 m with today's CMU `sit` — and every seat marker aligned in
- * that preview was set that far too low. `clipHipsDrop()` is that missing
- * term, shared by both admin previews.
+ * time (against their idle median), 0.4082 m with today's CMU `sit` against
+ * the rig rest — and every seat marker aligned in that preview was set that
+ * far too low. `clipHipsDrop()` is that missing term, shared by both admin
+ * previews.
  *
  * E5 also measures the CONTACT: since 2026-09-08 (decision of 2026-08-29)
  * the catalog's `root_drop` puts the body point that meets the surface ON
@@ -186,7 +189,7 @@ function near(label, actual, expected, eps = 1e-3) {
 const THREE = await import('three');
 const { placeModelSpec } = await loadBundled(SRC, 'smoke-place-');
 const { anchorFigureBind, clipHipsDrop, figureRootY, hipsTrackMedian,
-        FIGURE_HEIGHT_M } =
+        rigHipsHeight, standingHipsRef, FIGURE_HEIGHT_M } =
   await loadBundled(join(ROOT, 'packages/scene-render/src/figure.ts'),
                     'smoke-figure-');
 
@@ -331,10 +334,11 @@ console.log('\nE  the figure meets the marker — ONE law for all three renderer
   // `figureRootY` sees it — and the SERVER rounds that metre value to
   // millimetres before it ships (`scene_recipe._root_drop`), so the offsets
   // below are the payload's numbers, not the raw products. Derived 2026-09-08
-  // for the CONTACT point (`pose_catalog._load_groups`); E5 below measures
-  // where buttocks, body and hips actually land with them.
-  //   seat   0.243 × 1.70 = 0.4131 -> 0.413  ->  0.587 − 0.413 = 0.174
-  //   lie    0.003 × 1.70 = 0.0051 -> 0.005  ->  0.587 − 0.005 = 0.582
+  // for the CONTACT point and re-derived 2026-09-26 against the reference
+  // rig's rest hips as the standing reference (`pose_catalog._load_groups`);
+  // E5 below measures where buttocks, body and hips actually land with them.
+  //   seat   0.234 × 1.70 = 0.3978 -> 0.398  ->  0.587 − 0.398 = 0.189
+  //   lie    0.001 × 1.70 = 0.0017 -> 0.002  ->  0.587 − 0.002 = 0.585
   //   ground 0                              ->  0.587
   // ONE lying group since plan-platztypen.md. The old `bed` type carried
   // 0.631 × 1.70 = 1.0727 and put the same figure at 0.587 − 1.0727 = −0.4857,
@@ -343,18 +347,30 @@ console.log('\nE  the figure meets the marker — ONE law for all three renderer
   // PROBE of this block: no lying place may produce it any more.
   const SURFACE = 0.587;
   const ROOT_OFFSET = {           // the payload's `root_offset`, metres
-    seat: 0.413,
-    lie: 0.005,
+    seat: 0.398,
+    lie: 0.002,
     ground: 0,
     stand: 0,
   };
-  near('seat root', figureRootY(SURFACE, ROOT_OFFSET.seat), 0.174);
-  near('lie root', figureRootY(SURFACE, ROOT_OFFSET.lie), 0.582);
+  // The table above is the SHIPPED catalog's, not a second truth: read the
+  // `groups` of `shared/templates/pose/pose_catalog.json` and round the
+  // product the way the server does.
+  {
+    const groups = JSON.parse(readFileSync(
+      join(ROOT, 'shared/templates/pose/pose_catalog.json'), 'utf8')).groups;
+    for (const [g, off] of Object.entries(ROOT_OFFSET)) {
+      near(`catalog ${g}: round(root_drop × 1.70, 3)`,
+           Math.round(groups[g].root_drop * FIGURE_HEIGHT_M * 1000) / 1000,
+           off, 1e-9);
+    }
+  }
+  near('seat root', figureRootY(SURFACE, ROOT_OFFSET.seat), 0.189);
+  near('lie root', figureRootY(SURFACE, ROOT_OFFSET.lie), 0.585);
   near('ground root', figureRootY(SURFACE, ROOT_OFFSET.ground), SURFACE, 1e-9);
-  // The merge's correction, in one number: 1.0727 − 0.005 = 1.0677 m. That
+  // The merge's correction, in one number: 1.0727 − 0.002 = 1.0707 m. That
   // is how far a lying figure used to be dragged under its own surface.
-  near('the retired bed drop lies 1.068 m lower',
-       figureRootY(SURFACE, ROOT_OFFSET.lie) - (-0.4857), 1.0677);
+  near('the retired bed drop lies 1.071 m lower',
+       figureRootY(SURFACE, ROOT_OFFSET.lie) - (-0.4857), 1.0707);
   // A place type with no drop touches at its own root — a stander stands ON
   // the mark, and so does a marker whose group the caller does not know yet.
   near('a standing spot keeps the surface',
@@ -398,29 +414,64 @@ console.log('\nE  the figure meets the marker — ONE law for all three renderer
   }
   // The drop itself, hand-derived from the medians E5 measures on the clips
   // in `shared/models/clips` (the free CMU library — the one served for
-  // these kinds; headless FBXLoader.parse, centimetres) and the bind hips of
-  // the reference figure at H = 1.70 m. ONE table for E4 and E5: the formula
-  // check here and the file check below read the same medians.
+  // these kinds; headless FBXLoader.parse, centimetres), the bind hips of
+  // the reference figure at H = 1.70 m and the STANDING REFERENCE. ONE table
+  // for E4 and E5: the formula check here and the file check below read the
+  // same numbers.
   //
-  //   hipsBind 0.98013   idle 110.179   sit 65.961   laying 20.368
+  // The standing reference is what `standingHipsRef` answers with a rig
+  // served — the rule the 3D client and every admin preview apply: the REST
+  // hips height of the reference rig every clip is retargeted onto
+  // (`rigHipsHeight` on `shared/models/rig/reference.fbx`, 113.032 — E5 reads
+  // it off the file). The idle clip's median (110.179, bent knees) is only
+  // the fallback when no rig is served; it was the reference until
+  // 2026-09-26.
   //
-  //   drop = 0.98013 × (1 − median/110.179)
-  //     sit       0.98013 × (1 − 0.598671) = 0.98013 × 0.401329 = 0.39335
-  //     laying    0.98013 × (1 − 0.184863) = 0.98013 × 0.815137 = 0.79894
+  //   hipsBind 0.98013   rig rest 113.032
+  //   idle 110.179   sit 65.961   laying 20.368
+  //
+  //   drop = 0.98013 × (1 − median/113.032)
+  //     idle      0.98013 × (1 − 0.974759) = 0.98013 × 0.025241 = 0.02474
+  //     sit       0.98013 × (1 − 0.583560) = 0.98013 × 0.416440 = 0.40816
+  //     laying    0.98013 × (1 − 0.180197) = 0.98013 × 0.819803 = 0.80351
+  //
+  // Idle is NOT zero any more: a standing clip bends its knees and so plays
+  // its hips 2.47 cm below the straight-legged rest — and that is where its
+  // feet meet the floor.
   //
   // The retired Mixamo `sleep` (median 119.48, deleted in c2eb166d) is kept
   // as the one SYNTHETIC input: a clip animated on a bed plays ABOVE its own
   // standing hips, the term is NEGATIVE and must stay so — clamping it at 0
   // would bury such a sleeper in the mattress by exactly this much.
-  //     sleep     0.98013 × (1 − 1.084417) = 0.98013 × −0.084417 = −0.08274
+  //     sleep     0.98013 × (1 − 1.057046) = 0.98013 × −0.057046 = −0.05591
+  //
+  // Without a rig the same rule falls back to the idle median, and the
+  // numbers are those of before 2026-09-26: sit 0.98013 × (1 − 65.961 /
+  // 110.179) = 0.98013 × 0.401329 = 0.39335.
   const HIPS_BIND = 0.98013;
-  const STAND_REF = 110.179;
-  near('idle IS the reference — nothing to put back',
-       clipHipsDrop(HIPS_BIND, 110.179, STAND_REF), 0, 1e-9);
-  near('sit sinks by', clipHipsDrop(HIPS_BIND, 65.961, STAND_REF), 0.39335, 1e-5);
-  near('laying sinks by', clipHipsDrop(HIPS_BIND, 20.368, STAND_REF), 0.79894, 1e-5);
+  const RIG_REST_HIPS = 113.032;
+  const IDLE_MEDIAN = 110.179;
+  const std = standingHipsRef(RIG_REST_HIPS, IDLE_MEDIAN);
+  const STAND_REF = std.ref;
+  near('a served rig is the standing reference', STAND_REF, 113.032, 1e-9);
+  if (std.source === 'rig') {
+    passed += 1;
+    console.log('  ok   … and the rule names it: source rig');
+  } else {
+    failed += 1;
+    console.log(`  FAIL the standing reference must come from the rig, not ${std.source}`);
+  }
+  near('the rig rest IS the reference — nothing to put back',
+       clipHipsDrop(HIPS_BIND, 113.032, STAND_REF), 0, 1e-9);
+  near('idle sinks by its bent knees',
+       clipHipsDrop(HIPS_BIND, IDLE_MEDIAN, STAND_REF), 0.02474, 1e-5);
+  near('sit sinks by', clipHipsDrop(HIPS_BIND, 65.961, STAND_REF), 0.40816, 1e-5);
+  near('laying sinks by', clipHipsDrop(HIPS_BIND, 20.368, STAND_REF), 0.80351, 1e-5);
   near('a clip animated above its standing hips rises',
-       clipHipsDrop(HIPS_BIND, 119.48, STAND_REF), -0.08274, 1e-5);
+       clipHipsDrop(HIPS_BIND, 119.48, STAND_REF), -0.05591, 1e-5);
+  near('no rig: sit against the idle fallback',
+       clipHipsDrop(HIPS_BIND, 65.961, standingHipsRef(undefined, IDLE_MEDIAN).ref),
+       0.39335, 1e-5);
   // Missing inputs = no correction, never a NaN into a position.
   for (const [label, args] of [
     ['no bind height', [null, 65.961, STAND_REF]],
@@ -444,21 +495,28 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
   //   hipsBind = (104.275 + 0.035) / 180.923 × 1.70 = 0.98013   (the figure
   //     shipped with this check, raw: hips y 104.275, box min.y −0.035,
   //     box height 180.923)
+  //   standRef = the reference rig's rest hips, read off
+  //     `shared/models/rig/reference.fbx` with `rigHipsHeight` and resolved
+  //     through `standingHipsRef` exactly as `Model3DViewer.standHipsRef`
+  //     does = 113.032 (source 'rig'); the drops are E4's table
   //   posed hips y = S − rootOffset − drop + hipsBind
-  //   sit    S − 0.413 − 0.39335 + 0.98013 = S + 0.17378
-  //   laying S − 0.005 − 0.79894 + 0.98013 = S + 0.17619
-  //   idle (a standing spot, offset 0 and drop 0) = S + 0.98013
+  //   sit    S − 0.398 − 0.40816 + 0.98013 = S + 0.17397
+  //   laying S − 0.002 − 0.80351 + 0.98013 = S + 0.17462
+  //   idle (a standing spot, offset 0)
+  //          S − 0     − 0.02474 + 0.98013 = S + 0.95539
   //   contact = hips − depth, with the depth measured here as the median
   //   over 17 frames of the clip (the same sampling the catalog's numbers
-  //   come from):
-  //   sit    buttocks 0.1741 below the hips  ->  S + 0.17378 − 0.1741 = S − 0.0003
-  //   laying lowest   0.1754 below the hips  ->  S + 0.17619 − 0.1754 = S + 0.0008
+  //   come from; the drop moves the whole figure, so the depth does not
+  //   depend on the standing reference):
+  //   sit    buttocks 0.1741 below the hips  ->  S + 0.17397 − 0.1741 = S − 0.0001
+  //   laying lowest   0.1754 below the hips  ->  S + 0.17462 − 0.1754 = S − 0.0008
   //
-  // BOTH inputs are optional files: the reference figure is user-provided per
-  // installation (gitignored) and the clip library may be emptied, replaced or
-  // deleted — nothing outside "no animations play" depends on it. So a missing
-  // figure or a missing clip is a SKIP with a named reason, not a failure; the
-  // law itself is pinned above and needs no file at all.
+  // The inputs are optional files: the reference figure is user-provided per
+  // installation (gitignored), the clip library may be emptied, replaced or
+  // deleted — nothing outside "no animations play" depends on it — and the
+  // reference rig is rebuilt by `scripts/make_reference_rig.py`. So a missing
+  // figure, rig or clip is a SKIP with a named reason, not a failure; the law
+  // itself is pinned above and needs no file at all.
   //
   // WHICH library is served: `paths.get_animation_clips_licensed_dir` shadows
   // a free clip by the same name. The medians and contact depths here are
@@ -474,27 +532,35 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
   // import repairs real defects, so it is the one to calibrate against.
   // Re-recording a median is only honest once the import behind it has been
   // judged — that is what happened here, and the reason is above.
+  // RE-DERIVED 2026-09-26 with the medians unchanged: only the standing
+  // reference moved, from the idle median to the rig rest (drops 0 / 0.39335
+  // / 0.79894 before, hips S + 0.98013 / 0.17378 / 0.17619).
+  const RIG = join(ROOT, 'shared/models/rig/reference.fbx');
   const SET = {
     name: 'free (CMU)', dir: join(ROOT, 'shared/models/clips'),
     files: { idle: 'idle.fbx', sit: 'sit.fbx', laying: 'laying.fbx' },
+    rigRest: 113.032,
     medians: { idle: 110.179, sit: 65.961, laying: 20.368 },
-    drops: { idle: 0, sit: 0.39335, laying: 0.79894 },
-    hips: { idle: 0.98013, sit: 0.17378, laying: 0.17619 },
+    drops: { idle: 0.02474, sit: 0.40816, laying: 0.80351 },
+    hips: { idle: 0.95539, sit: 0.17397, laying: 0.17462 },
     // depth of the contact point below the hips, and where it lands
     depth: { sit: 0.1741, laying: 0.1754 },
-    contact: { sit: -0.0003, laying: 0.0008 },
+    contact: { sit: -0.0001, laying: -0.0008 },
   };
   const LICENSED = join(ROOT, 'shared/models/clips-licensed');
   const GROUP_OF = { idle: 'stand', sit: 'seat', laying: 'lie' };
   // The payload's `root_offset` (millimetres — the server rounds
   // `root_drop × 1.70`, and a client never sees the raw product).
-  const OFFSET = { stand: 0, seat: 0.413, lie: 0.005 };
+  const OFFSET = { stand: 0, seat: 0.398, lie: 0.002 };
   const SURFACE = 0.587;          // the bench of E2, once more
 
   const shadowed = Object.values(SET.files)
     .filter((f) => existsSync(join(LICENSED, f)));
   if (!existsSync(FIG)) {
     console.log(`  SKIP no test figure at ${FIG} — the law is pinned in E4`);
+  } else if (!existsSync(RIG)) {
+    console.log(`  SKIP no reference rig at ${RIG} — the runtime would stand `
+      + 'on the idle median, which this calibration no longer reads');
   } else if (shadowed.length) {
     console.log(`  SKIP ${LICENSED} shadows ${shadowed.join(', ')} — the `
       + 'runtime plays a clip this calibration never measured');
@@ -554,10 +620,19 @@ console.log('\nE5  the real skeleton — the reference figure + the served clips
       console.log(`  SKIP ${set.name}: ${set.dir} has no `
         + `${missing.join(', ')} — the law is pinned in E4`);
     } else {
-      const standRef = hipsTrackMedian(parse(join(set.dir, set.files.idle))
-        .animations[0]);
-      near(`${set.name}: standing reference (idle hips median)`,
-           standRef, set.medians.idle, 0.02);
+      // The admin's resolution (`Model3DViewer.standHipsRef`): the rig's
+      // rest hips through `standingHipsRef`; the idle median only as the
+      // fallback, which a served rig never reaches.
+      const rigHips = rigHipsHeight(THREE, parse(RIG));
+      near('reference rig: rest hips height', rigHips, set.rigRest, 0.01);
+      const { ref: standRef, source } = standingHipsRef(rigHips, null);
+      if (source === 'rig') {
+        passed += 1;
+        console.log('  ok   standing reference = the rig rest (source rig)');
+      } else {
+        failed += 1;
+        console.log(`  FAIL standing reference source ${source}, expected rig`);
+      }
       for (const kind of ['idle', 'sit', 'laying']) {
         const clipObj = parse(join(set.dir, set.files[kind]));
         const clip = clipObj.animations[0];

@@ -288,7 +288,13 @@ def _load_groups() -> Dict[str, dict]:
     chain (``scripts/smoke_prop_marker_place.mjs`` E5)::
 
         posed hips   = S - rootOffset - clipHipsDrop + hipsBindY
-        clipHipsDrop = hipsBindY x (1 - median / median(idle))
+        clipHipsDrop = hipsBindY x (1 - median / standRef)
+        standRef     = 113.032, the REST hips height of the reference rig
+                       every clip is retargeted onto
+                       (``shared/models/rig/reference.fbx``) — what
+                       ``standingHipsRef`` of @anima/scene-render answers
+                       with a rig served, in the 3D client and in every
+                       admin preview alike
         hipsBindY    = 0.98013
         contact      = how far the body point that meets the surface lies
                        BELOW the hip joint in the posed clip (median over 17
@@ -297,22 +303,34 @@ def _load_groups() -> Dict[str, dict]:
                        vertex of the whole body
         root_drop    = (hipsBindY - clipHipsDrop - contact) / 1.70
 
-        idle    median 110.179  drop 0        contact   —      stand 0
-        sit     median  65.961  drop 0.39335  buttocks 0.1741  seat  0.243
-        laying  median  20.368  drop 0.79894  lowest   0.1754  lie   0.003
+        rig rest        113.032  drop 0        contact   —      —
+        idle    median 110.179  drop 0.02474  contact   —      stand 0
+        sit     median  65.961  drop 0.40816  buttocks 0.1741  seat  0.234
+        laying  median  20.368  drop 0.80351  lowest   0.1754  lie   0.001
 
-        seat: (0.98013 - 0.39335 - 0.1741) / 1.70 = 0.41268 / 1.70 = 0.24275
-        lie:  (0.98013 - 0.79894 - 0.1754) / 1.70 = 0.00579 / 1.70 = 0.00341
+        sit:    0.98013 x (1 - 65.961 / 113.032) = 0.98013 x 0.416440 = 0.40816
+        laying: 0.98013 x (1 - 20.368 / 113.032) = 0.98013 x 0.819803 = 0.80351
+        seat: (0.98013 - 0.40816 - 0.1741) / 1.70 = 0.39787 / 1.70 = 0.23404
+        lie:  (0.98013 - 0.80351 - 0.1754) / 1.70 = 0.00122 / 1.70 = 0.00072
 
-    The payload rounds ``root_drop x 1.70`` to millimetres: seat 0.4131 ->
-    0.413, lie 0.0051 -> 0.005. What a client then draws on the bench
-    S = 0.587: a seated body's buttocks at S - 0.0003 (hips S + 0.1738), a
-    lying body's lowest point at S + 0.0008 (hips S + 0.1762). A lying clip
+    ``stand`` stays 0: a standing spot's figure keeps its feet on the mark,
+    and the idle clip's own drop (bent knees, 2.47 cm below the rig rest) is
+    the clip term, not the place's.
+
+    The payload rounds ``root_drop x 1.70`` to millimetres: seat 0.3978 ->
+    0.398, lie 0.0017 -> 0.002. What a client then draws on the bench
+    S = 0.587: a seated body's buttocks at S - 0.0001 (hips S + 0.1740), a
+    lying body's lowest point at S - 0.0008 (hips S + 0.1746). A lying clip
     is authored on the floor, which is why ``lie`` is all but zero: the
     clip's own hips height already puts the body on its surface.
 
-    History, so nobody re-derives an old number as the new one. Until the
-    morning of 2026-09-08 the target was the HIP JOINT (seat 0.320 / lie
+    History, so nobody re-derives an old number as the new one. Until
+    2026-09-26 ``standRef`` was the idle clip's hips median (110.179, drops
+    sit 0.39335 / laying 0.79894), which gave seat 0.243 / lie 0.003 — but
+    the idle clip stands on bent knees, 2.6 % below the straight-legged rest,
+    and lifted every figure ~2.85 cm; since then the rig rest is the
+    reference everywhere and these values were re-derived against it. Until
+    the morning of 2026-09-08 the target was the HIP JOINT (seat 0.320 / lie
     0.075, hips at S + 0.043 / S + 0.054): a seated body sat 0.131 m in the
     cushion and a lying one 0.122 m in the mattress. Before that (0.314 /
     0.051) the same values were read against the clip library ``a605c5a7``
@@ -320,14 +338,15 @@ def _load_groups() -> Dict[str, dict]:
     shapes — calibrated for the Mixamo ``sleep`` clip, gone since
     ``c2eb166d``; against the clips it shipped with (laying median 15.81,
     drop 0.84033) that put every sleeper's hips 0.93 m under the mattress,
-    re-read against today's clips it is 0.89 m — two readings of one
-    retired value. ``sleeping`` and ``lying`` name the same ``laying`` clip
-    today, so one value serves both.
+    re-read against today's clips and reference it is 0.90 m — two readings
+    of one retired value. ``sleeping`` and ``lying`` name the same
+    ``laying`` clip today, so one value serves both.
 
     Still open, its own strand: the number belongs to the CLIP, not to the
     place type. A set's own clip measures differently — ``male/sit.fbx``
-    (median 60.011, drop 0.44635, buttocks 0.1751) wants 0.211, so a figure
-    playing it sits 0.054 m into the cushion under this catalog value.
+    (median 60.011, drop 0.45976 against the rig rest, buttocks 0.1751)
+    wants 0.203, so a figure playing it sits 0.053 m into the cushion under
+    this catalog value.
     """
     raw: Dict[str, dict] = {}
     origin: Dict[str, str] = {}

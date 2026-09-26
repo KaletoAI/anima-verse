@@ -22,8 +22,8 @@ worked through BY HAND for a bench like the Wooden Sauna Bench:
     dims          = 1.73 x 0.56 x 0.51 m
     scale s       = max(dims) / max(bbox) = 1.73 / 1.0        = 1.73
     per fraction  = bbox.y x s = 0.29406 x 1.73               = 0.50872 m
-    drop (real)   = 0.243 x 1.70 m                            = 0.4131 m
-                    (shipped as 0.413: the payload is millimetres)
+    drop (real)   = 0.234 x 1.70 m                            = 0.3978 m
+                    (shipped as 0.398: the payload is millimetres)
 
     height_m(-0.63)   = -0.63    x 0.50872                    = -0.32048 m
     height_m(0.41933) =  0.41933 x 0.50872                    =  0.21332 m
@@ -67,9 +67,9 @@ no ground offset and no placement trim.
              + _plate_top(level 0) 0.00                     (E5a: no plate)
              + PROP_CLEARANCE 0.01                          = 0.01
     y_world  = 0.00 + 0.00 + 0.01 + 0.577                   = 0.587
-    root_off = groups["seat"].root_drop 0.243 x 1.70 m      = 0.4131
-               (the payload rounds it to millimetres: 0.413)
-    root y   = 0.587 - 0.413                                = 0.174
+    root_off = groups["seat"].root_drop 0.234 x 1.70 m      = 0.3978
+               (the payload rounds it to millimetres: 0.398)
+    root y   = 0.587 - 0.398                                = 0.189
 
     The drop comes from the PLACE TYPE the marker names (Task 4 of
     plan-posen-plaetze.md): the pose catalog's ``groups``, not a table in the
@@ -80,7 +80,7 @@ no ground offset and no placement trim.
 
 Part 2 pins the place types themselves. Since plan-platztypen.md there are
 four, and they name a BODY SHAPE, not a piece of furniture: ``stand`` (0),
-``ground`` (0), ``seat`` (0.243) and ``lie`` (0.003). ``bed`` and ``floor``
+``ground`` (0), ``seat`` (0.234) and ``lie`` (0.001). ``bed`` and ``floor``
 merged into ``lie``; the old ``bed`` drop of 0.631 was calibrated in 2026-08
 against a Mixamo ``sleep`` clip that was deleted three days later (c2eb166d),
 so it had been describing a clip nobody plays. Everything lying plays
@@ -91,7 +91,9 @@ Both drops are derived for the CONTACT point since 2026-09-08 (decision of
 2026-08-29): the body part that meets the surface — a sitter's buttocks, a
 lying body's lowest point — lands ON the marked surface, not the hip joint.
 A lying clip is authored on the floor, which is why ``lie`` is all but zero:
-0.003 x H = 0.0051 m, shipped as 0.005. The derivation lives in
+0.001 x H = 0.0017 m, shipped as 0.002. Both were re-derived on 2026-09-26
+against the reference rig's rest hips as the standing reference (0.243 /
+0.003 against the idle clip's hips median before). The derivation lives in
 ``pose_catalog._load_groups`` and is re-run by hand in
 ``scripts/smoke_platztypen.py`` part 4 and measured on the real skeleton in
 ``scripts/smoke_prop_marker_place.mjs`` E5. The hip-joint values of the same
@@ -110,7 +112,7 @@ field migration moved both onto the variants.
 
 Red probes, all three of them numbers that must NOT come out:
 
-    0.11 / 0.687 / 0.1532   the same chain on the PRE-E5 datum (room plate top
+    0.11 / 0.687 / 0.289    the same chain on the PRE-E5 datum (room plate top
                             0.10), which is what a leftover plate term would
                             produce;
     -0.3418                 the root the admin prop viewer produced until this
@@ -121,8 +123,8 @@ Red probes, all three of them numbers that must NOT come out:
                             is ONE constant for every clip alike: 0.9288 m at
                             H = 1.70 m, measured on the reference figure
                             (shared/models/figure). Against the four-group
-                            table it puts a sitter 0.9288 - 0.413 = 0.5158 m
-                            too low, a lying figure 0.9288 - 0.005 = 0.9238 m
+                            table it puts a sitter 0.9288 - 0.398 = 0.5308 m
+                            too low, a lying figure 0.9288 - 0.002 = 0.9268 m
                             too low and a stander the full 0.9288 m too low.
                             The renderer half is pinned in
                             `scripts/smoke_prop_marker_place.mjs` part E.
@@ -176,24 +178,24 @@ def main() -> int:
     print("\n2. the drop the renderers subtract — the catalog's place types")
     groups = get_groups()
     drop_real = groups["seat"]["root_drop"] * FIGURE_HEIGHT_M
-    check("seat drop in real metres", drop_real, 0.4131)
+    check("seat drop in real metres", drop_real, 0.3978)
     # What a client receives: the server rounds the metre value to millimetres
     # (scene_recipe._root_drop). Checked on the ROUNDED number, because that
     # is the one every renderer subtracts.
-    check("…shipped as millimetres", round(drop_real, 3), 0.413)
+    check("…shipped as millimetres", round(drop_real, 3), 0.398)
     check("a standing spot drops by nothing", groups["stand"]["root_drop"], 0.0)
     # ONE lying group since plan-platztypen.md: bed (0.631) and floor (0.051)
     # were never two body shapes, only two clips, and the bed one was
     # calibrated against a Mixamo ``sleep`` clip that was deleted in c2eb166d.
     # Everything lying plays ``laying.fbx`` today, a clip authored on the
     # floor: its own hips height already puts the body on its surface, so the
-    # contact-derived drop is all but zero — 0.003 x H = 0.0051 m, shipped as
-    # 0.005 (2026-09-08, pose_catalog._load_groups).
-    check("lie drops by the serving clip's contact", groups["lie"]["root_drop"], 0.003)
+    # contact-derived drop is all but zero — 0.001 x H = 0.0017 m, shipped as
+    # 0.002 (2026-09-26 against the rig rest, pose_catalog._load_groups).
+    check("lie drops by the serving clip's contact", groups["lie"]["root_drop"], 0.001)
     check("lie drop in real metres", groups["lie"]["root_drop"] * FIGURE_HEIGHT_M,
-          0.0051)
+          0.0017)
     check("…shipped as millimetres",
-          round(groups["lie"]["root_drop"] * FIGURE_HEIGHT_M, 3), 0.005)
+          round(groups["lie"]["root_drop"] * FIGURE_HEIGHT_M, 3), 0.002)
     check("a ground spot drops by nothing", groups["ground"]["root_drop"], 0.0)
     check("the furniture-named groups are gone",
           sorted(g for g in ("bed", "floor", "counter") if g in groups), [])
@@ -317,7 +319,7 @@ def main() -> int:
     marker = _markers(recipe, room, STOREY, False)[0]
     check("prop bottom_y = the clearance alone", spec["bottom_y"], 0.01)
     check("the marker names the SURFACE", marker["y_world"], 0.587)
-    check("root drop rides with the marker", marker["root_offset"], 0.413)
+    check("root drop rides with the marker", marker["root_offset"], 0.398)
     check("the place is placement/marker", marker["id"], "p1/s1")
     check("its label is the prop's name", marker["label"], "Bench")
     check("group and capacity", (marker["group"], marker["capacity"]), ("seat", 1))
@@ -329,7 +331,7 @@ def main() -> int:
     check("y_world - bottom_y is the composed height",
           marker["y_world"] - spec["bottom_y"], 0.577)
     root_y = marker["y_world"] - marker["root_offset"]
-    check("the figure's root lands here", root_y, 0.174)
+    check("the figure's root lands here", root_y, 0.189)
 
     # Red probes — the numbers of the abandoned laws.
     check("the pre-E5 room plate is not in bottom_y",
@@ -338,9 +340,9 @@ def main() -> int:
     check("the pre-E5 room plate is not in y_world",
           abs(marker["y_world"] - 0.687) > 1e-6, True)
     # 0.9288 m is what the prop viewer's deleted hips rule answered for EVERY
-    # clip; against the table it sank a sitter by 0.9288 - 0.413 = 0.5158 m.
-    check("the deleted hips-anchor root is 0.5158 m lower",
-          root_y - (marker["y_world"] - 0.9288), 0.5158, 1e-3)
+    # clip; against the table it sinks a sitter by 0.9288 - 0.398 = 0.5308 m.
+    check("the deleted hips-anchor root is 0.5308 m lower",
+          root_y - (marker["y_world"] - 0.9288), 0.5308, 1e-3)
 
     shutil.rmtree(tmp, ignore_errors=True)
     print()

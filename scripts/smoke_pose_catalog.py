@@ -703,11 +703,15 @@ try:
     pc.reload_catalogs()
     groups = pc.get_groups()
     check("four place types", sorted(groups) == ["ground", "lie", "seat", "stand"], str(sorted(groups)))
-    check("seat root_drop 0.243", groups["seat"]["root_drop"] == 0.243)
+    # Both drops are contact-derived against the reference rig's rest hips
+    # (pose_catalog._load_groups: seat (0.98013 - 0.40816 - 0.1741) / 1.70 =
+    # 0.23404 -> 0.234, lie (0.98013 - 0.80351 - 0.1754) / 1.70 = 0.00072 ->
+    # 0.001; 0.243 / 0.003 against the idle median until 2026-09-26).
+    check("seat root_drop 0.234", groups["seat"]["root_drop"] == 0.234)
     # One lying group, one drop: the merged `lie` keeps the value measured on
     # the clip that actually serves it. 0.631 (the old `bed`) described a
     # Mixamo clip that no longer exists and put the sleeper under the mattress.
-    check("lie root_drop 0.003", groups["lie"]["root_drop"] == 0.003)
+    check("lie root_drop 0.001", groups["lie"]["root_drop"] == 0.001)
     check("stand/ground drop 0", groups["stand"]["root_drop"] == 0 and groups["ground"]["root_drop"] == 0)
     check("seat and lie want a marker",
           groups["seat"]["needs_place"] is True and groups["lie"]["needs_place"] is True)

@@ -25,7 +25,7 @@ shape.
 
 Hand-derived expectations:
   [1] room_places("lounge") has 3 places, s2.slots == [[0.7,-3],[1.3,-3]],
-      s1.root_offset == 0.413 (0.243 × 1.70 = 0.4131, millimetres).
+      s1.root_offset == 0.398 (0.234 × 1.70 = 0.3978, millimetres).
       where("Ann") == (house, "lounge").
   [0] The five start on a ROW of their own, 0.8 m apart at z = −3.5:
       Ann (−3.5), Bob (−2.7), Cid (−1.9), Dan (−1.1), Eve (−0.3). Writing
@@ -310,16 +310,17 @@ _orig_catalog_path = pose_catalog.catalog_path
 pose_catalog.catalog_path = (
     lambda axis: CAT / "pose_catalog.json" if axis == "pose" else _orig_catalog_path(axis))
 (CAT / "pose_catalog.json").write_text(json.dumps({
-    # The drops are the real catalog's (0.243 / 0.003, derived 2026-09-08 for
-    # the contact point that meets the surface) — a fixture that invents its
-    # own numbers here would show a second truth next to the shipped one.
-    "groups": {"seat": {"label": "Seat", "root_drop": 0.243, "default": "sitting",
+    # The drops are the real catalog's (0.234 / 0.001, derived for the contact
+    # point that meets the surface, against the reference rig's rest hips
+    # since 2026-09-26) — a fixture that invents its own numbers here would
+    # show a second truth next to the shipped one.
+    "groups": {"seat": {"label": "Seat", "root_drop": 0.234, "default": "sitting",
                         "needs_place": True},
                # The lying group of plan-platztypen.md. Its label is what the
                # prompts call the place, and this fixture's one lying marker is
-               # a bed, so "Bed" it is. Drop 0.003 — the merged group's single
+               # a bed, so "Bed" it is. Drop 0.001 — the merged group's single
                # value, measured on the clip that serves every lying pose.
-               "lie": {"label": "Bed", "root_drop": 0.003, "default": "sleeping",
+               "lie": {"label": "Bed", "root_drop": 0.001, "default": "sleeping",
                        "needs_place": True},
                "stand": {"label": "Standing spot", "root_drop": 0, "default": "standing",
                          "needs_place": False}},
@@ -406,7 +407,7 @@ check("s2 slots", pl.get("s2", {}).get("slots") == [[0.7, -3.0], [1.3, -3.0]],
       str(pl.get("s2", {}).get("slots")))
 check("b1 slot is (−2, 0)", pl.get("b1", {}).get("slots") == [[-2.0, 0.0]],
       str(pl.get("b1", {}).get("slots")))
-check("s1 root_offset 0.413", pl.get("s1", {}).get("root_offset") == 0.413,
+check("s1 root_offset 0.398", pl.get("s1", {}).get("root_offset") == 0.398,
       str(pl.get("s1", {}).get("root_offset")))
 check("s2 capacity 2, group seat, room lounge",
       pl.get("s2", {}).get("capacity") == 2 and pl.get("s2", {}).get("group") == "seat"
@@ -693,7 +694,7 @@ print("\n[6b] the pair gate counts free slots per place")
 def prop_place(pid: str, label: str, cap: int) -> dict:
     return {"id": pid, "group": "seat", "label": label, "capacity": cap,
             "slots": [[float(i), 0.0] for i in range(cap)], "facing": 0.0, "y_world": 0.0,
-            "root_offset": 0.413, "source": "prop", "room_id": "den"}
+            "root_offset": 0.398, "source": "prop", "room_id": "den"}
 
 
 _orig_room_places = places.room_places

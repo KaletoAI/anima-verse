@@ -7,13 +7,15 @@ A place type used to name a piece of FURNITURE; since this rebuild it names a
 BODY SHAPE::
 
     old:  seat(0.314)  bed(0.631)  floor(0.051)  counter(0)  stand(0)
-    new:  seat(0.243, needs_place)  lie(0.003, needs_place)  ground(0)  stand(0)
+    new:  seat(0.234, needs_place)  lie(0.001, needs_place)  ground(0)  stand(0)
 
 (The two drops of the new table read 0.314 / 0.051 when this rebuild landed.
 On 2026-09-08 they were re-derived twice: first against the re-imported clip
 library, still for the HIP JOINT (0.320 / 0.075), then for the CONTACT point —
-the body part that meets the surface — which is the decision of 2026-08-29.
-See "the medians moved" and "the contact" below.)
+the body part that meets the surface — which is the decision of 2026-08-29
+(0.243 / 0.003). On 2026-09-26 the standing reference moved from the idle
+clip's hips median to the reference rig's rest hips (0.234 / 0.001). See "the
+medians moved", "the standing reference moved" and "the contact" below.)
 
 Two bugs are the reason, and both are pinned below as numbers.
 
@@ -35,39 +37,43 @@ packages/scene-render/src/figure.ts) is::
 
 with, at the figure height H = 1.70 m, `hipsBindY` = 0.9801 (the reference
 figure's hips in its anchored bind pose) and
-`clipHipsDrop(kind) = hipsBindY × (1 − median(kind) / median(idle))`, the term
-the renderer puts back for the dropped hips POSITION track. The medians are
-measured headless by the .mjs check named above, on the clips that are
-actually served::
+`clipHipsDrop(kind) = hipsBindY × (1 − median(kind) / standRef)`, the term
+the renderer puts back for the dropped hips POSITION track. `standRef` is the
+standing reference of `standingHipsRef` (packages/scene-render/src/figure.ts):
+the REST hips height of the reference rig every clip is retargeted onto,
+113.032 (`shared/models/rig/reference.fbx`). The medians are measured
+headless by the .mjs check named above, on the clips that are actually
+served::
 
-    idle    median 110.179   ->  clipHipsDrop 0
-    laying  median  20.368   ->  0.9801 × (1 − 20.368 / 110.179) = 0.7989
+    rig rest       113.032   ->  clipHipsDrop 0
+    laying  median  20.368   ->  0.9801 × (1 − 20.368 / 113.032)
+                               = 0.9801 × 0.819803 = 0.8035
 
 The server rounds `root_drop × 1.70` to millimetres before it ships (that is
 the `root_offset` a client subtracts), so the hand-derivation uses the payload
 value. For both drops:
 
-    lie    0.003 × 1.70 = 0.0051 -> 0.005  ->  S − 0.005 − 0.7989 + 0.9801 = S + 0.1762
-    bed    0.631 × 1.70 = 1.0727           ->  S − 1.0727 − 0.7989 + 0.9801 = S − 0.8915
+    lie    0.001 × 1.70 = 0.0017 -> 0.002  ->  S − 0.002 − 0.8035 + 0.9801 = S + 0.1746
+    bed    0.631 × 1.70 = 1.0727           ->  S − 1.0727 − 0.8035 + 0.9801 = S − 0.8961
 
-    difference = 1.0727 − 0.005 = 1.0677 m
+    difference = 1.0727 − 0.002 = 1.0707 m
 
 **The contact.** The hips are not what touches the mattress. The lowest point
 of the lying body sits 0.1754 m below the hip joint (measured headless over 17
 frames of `laying.fbx`, `smoke_prop_marker_place.mjs` E5), so with the
-catalog's drop it lands at S + 0.1762 − 0.1754 = S + 0.0008 — ON the surface.
+catalog's drop it lands at S + 0.1746 − 0.1754 = S − 0.0008 — ON the surface.
 That is what `lie.root_drop` is derived FOR since 2026-09-08 (decision of
 2026-08-29, `pose_catalog._load_groups`):
 
     (hipsBindY − clipHipsDrop − contact) / 1.70
-    = (0.98013 − 0.79894 − 0.1754) / 1.70 = 0.00579 / 1.70 = 0.0034 -> 0.003
+    = (0.98013 − 0.80351 − 0.1754) / 1.70 = 0.00122 / 1.70 = 0.0007 -> 0.001
 
 **Every sleeper in the field lay under the mattress**: 0.93 m at the hips
 against the clips the retired value shipped with (laying median 15.81, drop
-0.84033), 0.89 m re-read against today's clips — one retired value, two
-readings; the difference of the root drops, 1.0677 m, holds for any clip. The
-merge is what lifts them out. § 4 checks the new number and keeps the old one
-beside it as the red probe.
+0.84033), 0.90 m re-read against today's clips and standing reference — one
+retired value, two readings; the difference of the root drops, 1.0707 m,
+holds for any clip. The merge is what lifts them out. § 4 checks the new
+number and keeps the old one beside it as the red probe.
 
     The medians moved. Until 2026-09-08 this file derived the same chain from
     idle 110.86 / laying 15.81 and `hipsBindY` 0.98013, i.e.
@@ -78,10 +84,23 @@ beside it as the red probe.
     `seat` 0.314 -> 0.320) — for the hip joint, at S + 0.0537. Read against
     the new clips the OLD drop put a lying figure's hips at S + 0.0945; the
     HIP-JOINT drop 0.075 put the hips 5 cm over the mattress and the body
-    0.1217 m in it. The 1.0677 m between the two ROOT DROPS is independent of
-    any clip: the `clipHipsDrop` term cancels out of the difference, so
-    whatever the library measures, the retired group put the figure 1.0677 m
-    lower than this one.
+    0.1217 m in it (the hip-joint drop re-read against today's reference
+    below: hips S + 0.0486, body 0.1268 m in). The distance between the two
+    ROOT DROPS (1.0707 m today) is independent of any clip and of the
+    standing reference: the `clipHipsDrop` term cancels out of the
+    difference, so whatever the library measures, the retired group put the
+    figure that much lower than this one.
+
+    The standing reference moved. Until 2026-09-26 `standRef` was the idle
+    clip's hips median (110.179): `clipHipsDrop(laying)` = 0.9801 × (1 −
+    20.368 / 110.179) = 0.7989, contact-derived `lie` 0.003 (0.00579 / 1.70)
+    and `seat` 0.243, the sleeper's hips at S + 0.1762. The idle clip stands
+    on bent knees, 2.6 % below the straight-legged rest of the rig the clips
+    are retargeted onto, which lifted every figure ~2.85 cm; the rig rest is
+    the reference of the 3D client and every admin preview since then, so the
+    catalog was re-derived against it (`lie` 0.003 -> 0.001, `seat` 0.243 ->
+    0.234). Read against the rig rest, the old 0.003 (shipped 0.005) would
+    put the body 0.0038 m into the mattress.
 
 **`counter` is gone** without an heir. Its only entry, `working` ("sitting at
 desk, hands on keyboard", clip `sit`), is a sitting pose and moved to `seat`;
@@ -128,14 +147,15 @@ Hand-derived expectations
       lying pose are still two different body shapes.
 
   [4] Bug 2, the height (chain above). With the catalog's own `lie.root_drop`
-      the hips of a `sleeping` figure land at S + 0.1762 for the bench surface
-      S = 0.587 of smoke_prop_marker_surface.py: 0.7632, and the body's
-      lowest point 0.1754 lower, at S + 0.0008 = 0.5878 — on the mattress.
-      With the retired `bed` drop the hips landed at S − 0.8915 = −0.3045,
-      i.e. 0.30 m below the floor the bed stands on. The difference is
-      1.0677 m and does not depend on the clip. The hip-joint drop 0.075 of
-      the same morning is kept as a second red probe: it puts the hips at
-      S + 0.0537 and the body 0.1217 m INTO the mattress.
+      the hips of a `sleeping` figure land at S + 0.1746 for the bench surface
+      S = 0.587 of smoke_prop_marker_surface.py: 0.7616, and the body's
+      lowest point 0.1754 lower, at S − 0.0008 = 0.5862 — on the mattress.
+      With the retired `bed` drop the hips land at S − 0.8961 = −0.3091,
+      i.e. 0.31 m below the floor the bed stands on. The difference is
+      1.0707 m and does not depend on the clip. The hip-joint drop 0.075 of
+      2026-09-08 morning is kept as a second red probe: it puts the hips at
+      S + 0.0486 and the body 0.1268 m INTO the mattress; the idle-reference
+      drop 0.003 (until 2026-09-26) as a third: 0.0038 m in.
 
   [5] `needs_place`. `kneeling` is a `ground` pose: `assign` returns None and
       writes no place even though the room has markers, `_named_place` is None
@@ -231,6 +251,8 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 # the default True — which is exactly the bug this file guards against.
 CAT = Path(tempfile.mkdtemp(prefix="platztypen-cat-"))
 _orig_catalog_path = pose_catalog.catalog_path
+_SHIPPED_GROUPS = json.loads(
+    _orig_catalog_path("pose").read_text(encoding="utf-8"))["groups"]
 pose_catalog.catalog_path = (
     lambda axis: CAT / "pose_catalog.json" if axis == "pose" else _orig_catalog_path(axis))
 (CAT / "pose_catalog.json").write_text(json.dumps({
@@ -239,12 +261,13 @@ pose_catalog.catalog_path = (
                   "needs_place": False},
         "ground": {"label": "Ground", "root_drop": 0, "default": "kneeling",
                    "needs_place": False},
-        # The shipped catalog's own drops — a fixture that invents different
-        # ones would show a second truth beside the values § 4 derives.
-        "seat": {"label": "Seat", "root_drop": 0.243, "default": "sitting",
-                 "needs_place": True},
-        "lie": {"label": "Lying place", "root_drop": 0.003, "default": "lying",
-                "needs_place": True},
+        # The shipped catalog's own drops, READ from it — a fixture that
+        # invents different ones would show a second truth beside the values
+        # § 4 derives.
+        "seat": {"label": "Seat", "root_drop": _SHIPPED_GROUPS["seat"]["root_drop"],
+                 "default": "sitting", "needs_place": True},
+        "lie": {"label": "Lying place", "root_drop": _SHIPPED_GROUPS["lie"]["root_drop"],
+                "default": "lying", "needs_place": True},
     },
     "entries": {
         "standing": {"prompt": "p", "animation": "idle", "group": "stand",
@@ -430,18 +453,21 @@ from app.core.scene_recipe import FIGURE_HEIGHT_M  # noqa: E402
 #     posed hips = S − rootOffset − clipHipsDrop + hipsBindY
 HIPS_BIND_Y = 0.9801           # the reference figure at H = 1.70 m
 # The clip's own hips height, put back by the renderer after the Mixamo hips
-# POSITION track was dropped: hipsBindY × (1 − median / median(idle)). The
+# POSITION track was dropped: hipsBindY × (1 − median / standRef). The
 # medians are measured headless by smoke_prop_marker_place.mjs § E5 on the
-# clips that are served — re-measured after the a605c5a7 re-import.
-MEDIAN_IDLE = 110.179
+# clips that are served — re-measured after the a605c5a7 re-import. The
+# standing reference is the reference rig's REST hips height (standingHipsRef
+# with a rig served, since 2026-09-26; the idle median 110.179 before).
+RIG_REST_HIPS = 113.032
 MEDIAN_LAYING = 20.368
-CLIP_HIPS_DROP_LAYING = HIPS_BIND_Y * (1 - MEDIAN_LAYING / MEDIAN_IDLE)
+CLIP_HIPS_DROP_LAYING = HIPS_BIND_Y * (1 - MEDIAN_LAYING / RIG_REST_HIPS)
 # How far the lying body's lowest point sits below the hip joint — the
 # contact the catalog's drop is derived for (median over 17 frames, E5).
 CONTACT_BELOW_HIPS_LAYING = 0.1754
 SURFACE = 0.587                # the bench of smoke_prop_marker_surface.py § 5
 RETIRED_BED_DROP = 0.631       # calibrated on the deleted Mixamo `sleep` clip
 HIP_JOINT_LIE_DROP = 0.075     # the hip-joint calibration of 2026-09-08 morning
+IDLE_REF_LIE_DROP = 0.003      # the contact drop against the idle median, to 2026-09-26
 
 
 def root_offset(root_drop: float) -> float:
@@ -455,42 +481,56 @@ def posed_hips(surface: float, root_drop: float) -> float:
             - CLIP_HIPS_DROP_LAYING + HIPS_BIND_Y)
 
 
-check("clipHipsDrop(laying) = 0.9801 × (1 − 20.368 / 110.179) = 0.7989",
-      abs(CLIP_HIPS_DROP_LAYING - 0.7989) < 5e-5,
+check("clipHipsDrop(laying) = 0.9801 × (1 − 20.368 / 113.032) = 0.8035",
+      abs(CLIP_HIPS_DROP_LAYING - 0.8035) < 5e-5,
       str(round(CLIP_HIPS_DROP_LAYING, 5)))
 _lie_drop = pose_catalog.get_groups()["lie"]["root_drop"]
-check("the catalog's lying drop is the contact-derived 0.003",
-      _lie_drop == 0.003, str(_lie_drop))
-check("root offset in metres: 0.003 × 1.70 = 0.0051, shipped as 0.005",
-      root_offset(_lie_drop) == 0.005, str(root_offset(_lie_drop)))
+check("the catalog's lying drop is the contact-derived 0.001",
+      _lie_drop == 0.001, str(_lie_drop))
+check("root offset in metres: 0.001 × 1.70 = 0.0017, shipped as 0.002",
+      root_offset(_lie_drop) == 0.002, str(root_offset(_lie_drop)))
 _now = posed_hips(SURFACE, _lie_drop)
-check("the sleeper's hips land at S + 0.1762 = 0.7632",
-      abs(_now - 0.7632) < 1e-3, str(round(_now, 5)))
-check("…and the body's lowest point at S + 0.0008 = 0.5878, on the mattress",
-      abs((_now - CONTACT_BELOW_HIPS_LAYING) - 0.5878) < 1e-3,
+# 0.587 − 0.002 − 0.8035 + 0.9801 = 0.7616
+check("the sleeper's hips land at S + 0.1746 = 0.7616",
+      abs(_now - 0.7616) < 1e-3, str(round(_now, 5)))
+# 0.7616 − 0.1754 = 0.5862 = S − 0.0008
+check("…and the body's lowest point at S − 0.0008 = 0.5862, on the mattress",
+      abs((_now - CONTACT_BELOW_HIPS_LAYING) - 0.5862) < 1e-3,
       str(round(_now - CONTACT_BELOW_HIPS_LAYING, 5)))
-# RED PROBE: the number the retired group produced. 0.587 − 1.0727 − 0.7989
-# + 0.9801 = −0.3045 — a sleeping figure 0.30 m under the floor the bed
-# stands on, and 0.89 m under the mattress it was marked on (0.93 m against
+# RED PROBE: the number the retired group produced. 0.587 − 1.0727 − 0.8035
+# + 0.9801 = −0.3091 — a sleeping figure 0.31 m under the floor the bed
+# stands on, and 0.90 m under the mattress it was marked on (0.93 m against
 # the clips it shipped with).
 _then = posed_hips(SURFACE, RETIRED_BED_DROP)
-check("the retired bed drop put it at −0.3045", abs(_then + 0.3045) < 1e-3,
+check("the retired bed drop put it at −0.3091", abs(_then + 0.3091) < 1e-3,
       str(round(_then, 5)))
-# 1.0727 − 0.005 = 1.0677. The clip cancels out of the difference, so this
+# 1.0727 − 0.002 = 1.0707. The clip cancels out of the difference, so this
 # number holds whatever the clip library currently measures.
-check("the merge lifts every sleeper by 1.0677 m",
-      abs((_now - _then) - 1.0677) < 1e-3, str(round(_now - _then, 5)))
-# SECOND RED PROBE: the hip-joint calibration of the same morning. Hips at
-# S + 0.0537 reads like "on the mattress" until the body is measured: its
-# lowest point is 0.1217 m INSIDE it.
+check("the merge lifts every sleeper by 1.0707 m",
+      abs((_now - _then) - 1.0707) < 1e-3, str(round(_now - _then, 5)))
+# SECOND RED PROBE: the hip-joint calibration of 2026-09-08 morning, re-read
+# against today's reference: 0.075 × 1.70 = 0.1275 -> 0.128, hips at
+# 0.587 − 0.128 − 0.8035 + 0.9801 = 0.6356 = S + 0.0486 reads like "on the
+# mattress" until the body is measured: its lowest point is
+# 0.6356 − 0.1754 = 0.4602, 0.1268 m INSIDE it.
 _joint = posed_hips(SURFACE, HIP_JOINT_LIE_DROP)
-check("the hip-joint drop put the hips at S + 0.0537 = 0.6407",
-      abs(_joint - 0.6407) < 1e-3, str(round(_joint, 5)))
-check("…and the body 0.1217 m into the mattress",
-      abs((_joint - CONTACT_BELOW_HIPS_LAYING) - (SURFACE - 0.1217)) < 1e-3,
+check("the hip-joint drop put the hips at S + 0.0486 = 0.6356",
+      abs(_joint - 0.6356) < 1e-3, str(round(_joint, 5)))
+check("…and the body 0.1268 m into the mattress",
+      abs((_joint - CONTACT_BELOW_HIPS_LAYING) - (SURFACE - 0.1268)) < 1e-3,
       str(round(_joint - CONTACT_BELOW_HIPS_LAYING - SURFACE, 5)))
+# THIRD RED PROBE: the contact drop derived against the idle median (0.003,
+# shipped 0.005 until 2026-09-26). Against the rig rest it puts the hips at
+# 0.587 − 0.005 − 0.8035 + 0.9801 = 0.7586 and the body at
+# 0.7586 − 0.1754 = 0.5832, 0.0038 m in the mattress — and it lifted every
+# figure by the idle clip's bent knees instead.
+_idle_ref = posed_hips(SURFACE, IDLE_REF_LIE_DROP)
+check("the idle-reference drop 0.003 puts the body 0.0038 m in",
+      abs((_idle_ref - CONTACT_BELOW_HIPS_LAYING) - (SURFACE - 0.0038)) < 1e-3,
+      str(round(_idle_ref - CONTACT_BELOW_HIPS_LAYING - SURFACE, 5)))
 check("no place type carries a retired drop any more",
-      all(g["root_drop"] not in (RETIRED_BED_DROP, HIP_JOINT_LIE_DROP)
+      all(g["root_drop"] not in (RETIRED_BED_DROP, HIP_JOINT_LIE_DROP,
+                                 IDLE_REF_LIE_DROP)
           for g in pose_catalog.get_groups().values()))
 
 

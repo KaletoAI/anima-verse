@@ -265,10 +265,11 @@ pose_catalog.catalog_path = _smoke_catalog_path
     # would make every standing pair raise PlaceUnavailable.
     "stand": {"label": "Standing spot", "root_drop": 0, "default": "standing",
               "needs_place": False},
-    # 0.243 is the shipped catalog's seat drop (contact-derived 2026-09-08);
+    # 0.234 is the shipped catalog's seat drop (contact-derived, against the
+    # reference rig's rest hips since 2026-09-26);
     # no check here reads it, but a fixture number that disagrees with the
     # real one just puts a second truth in front of the next reader.
-    "seat": {"label": "Seat", "root_drop": 0.243, "default": "cuddling",
+    "seat": {"label": "Seat", "root_drop": 0.234, "default": "cuddling",
              "needs_place": True},
 }, "entries": {
     "standing": {"prompt": "standing", "synonyms": [], "animation": "idle", "_default": True,

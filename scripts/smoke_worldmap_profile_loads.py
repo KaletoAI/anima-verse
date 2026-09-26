@@ -197,9 +197,9 @@ pose_catalog.catalog_path = (
     # contact point that meets the surface; a fixture inventing its own would
     # show a second truth next to the shipped one.
     "groups": {
-        "seat": {"label": "Seat", "root_drop": 0.243, "default": "sitting",
+        "seat": {"label": "Seat", "root_drop": 0.234, "default": "sitting",
                  "needs_place": True},
-        "lie": {"label": "Bed", "root_drop": 0.003, "default": "sleeping",
+        "lie": {"label": "Bed", "root_drop": 0.001, "default": "sleeping",
                 "needs_place": True},
         "stand": {"label": "Standing spot", "root_drop": 0,
                   "default": "standing", "needs_place": False}},
