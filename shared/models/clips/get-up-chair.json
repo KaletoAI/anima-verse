@@ -13,26 +13,34 @@
   "hips_scale": [
    1.1914
   ],
+  "foot_plant": {
+   "LeftFoot": {
+    "frames": 143,
+    "max_cm": 6.08,
+    "pin_max_cm": 2.52
+   },
+   "RightFoot": {
+    "frames": 143,
+    "max_cm": 8.35,
+    "pin_max_cm": 2.68
+   }
+  },
   "rig_floor_shift_cm": 4.21,
-  "rig_floor_min_cm": -1.09,
+  "rig_floor_min_cm": -0.0,
   "root_motion": {
    "mode": "foot_lock",
    "travel_m": [
-    0.052,
-    0.487
+    0.035,
+    0.553
    ],
    "ref_height_m": 2.011,
    "contact_s": [
     [
      0.0,
-     0.933
-    ],
-    [
-     2.533,
      4.733
     ]
    ],
-   "max_drift_cm": 0.42
+   "max_drift_cm": 1.05
   }
  },
  "source": {

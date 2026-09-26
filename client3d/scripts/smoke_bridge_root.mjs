@@ -76,7 +76,8 @@
  * `adaptExternalClips`, and then — as `FigureLibrary.fitLibrary` does right
  * after it — `relockRootPaths(clips, template, 1 / (100 · scale))`, ONE call
  * per model over its library at the model's nominal scale (1.70 m ÷ mesh
- * height; 0.01 for the reference rig). A real `Figure` inside an owner group
+ * height; 0.01 for the reference rig), which rebuilds the travel AND pins the
+ * planted feet by leg IK (`legPin.ts`, `smoke_leg_pin.mjs`). A real `Figure` inside an owner group
  * plays the NPC root. What is measured is the WORLD position of the bones
  * `LeftFoot`/`LeftToeBase`/`RightFoot`/`RightToeBase` of the rendered
  * instance, frame by frame at 30 fps (the clips' own rate); figure frame i is
@@ -95,9 +96,10 @@
  * and the toe ends. Weight = ramp(height − ground, 2, 5 cm) ×
  * ramp(|vertical speed|, 15, 30 cm/s) (central difference); a frame at
  * ≥ 0.999 is FULL. Drift = the largest horizontal distance a point moves
- * from where its run of FULL frames began. The heights do not depend on the
- * travel (XZ only), so the weights of the re-locked run serve every run of
- * that rig — every path is judged on the same contacts.
+ * from where its run of FULL frames began. Each run is judged on its OWN
+ * contacts: the leg pin lowers planted feet in the re-locked library, so its
+ * heights are not those of the imported / offset-off runs (which share
+ * theirs — the travel is XZ only).
  *
  * INFO only, the measurement [6] bounded before this plan: the importer's
  * classification (`_root_motion.contact_weights` re-run on the REFERENCE rig
@@ -108,40 +110,49 @@
  * bed: 3.13 cm re-locked, although its own feet hold 2.27 cm).
  *
  * [6] foot_lock clips: planted-foot drift, own contacts, per clip, on ALL
- *       THREE rigs:
- *         get-up-chair   <= 1.5 cm — the importer's guarantee, now per rig
- *         get-up-bed     <= 2.5 cm — the bed turns ~90° while both feet are
- *                        planted; a translation-only path cannot hold two
- *                        feet through a turn. The residual of the rule
- *                        itself on Test3_mia is 2.27 cm (RightFoot 3.17–
- *                        4.07 s, Task 2), and 2.5 leaves ~0.2 cm for the
- *                        smoke's own classification.
- *       BEFORE (imported path only, sidecar spans, 2026-09-25): chair
+ *       THREE rigs: <= 1.5 cm for get-up-chair AND get-up-bed — the
+ *       importer's guarantee, now per rig. The bed turns ~90° while both
+ *       feet are planted, which a translation-only path could not hold (it
+ *       had 2.5 cm, the rule's residual 2.27 cm on Test3_mia); the leg pin
+ *       holds each foot in place of the path, so the bed takes the chair's
+ *       bound (Task C6).
+ *       HISTORY (imported path only, sidecar spans, 2026-09-25): chair
  *       Test3_mia 2.20, Soldier 1.09, reference 0.30; bed 4.76, 2.95, 1.31 —
- *       bounded then by 2.5 / 5.0 cm (the 5 cm bed bound is gone).
- *       Measured now (own contacts, re-locked / imported, cm; the rig's
- *       rest as standing reference, no lift tolerance):
- *         chair  Test3_mia 1.41 / 2.20   Soldier 0.68 / 1.44   reference 0.42 / 0.42
+ *       bounded then by 2.5 / 5.0 cm.
+ *       BEFORE Task C6 (path re-locked, NO leg pin; own contacts, re-locked /
+ *       imported, cm) — the old get-up-chair (63e48659) and, in brackets, the
+ *       re-import with both feet planted through the rise (B1/B2), which the
+ *       path alone could no longer hold:
+ *         chair  Test3_mia 1.41 / 2.20 [3.86 / 5.03]   Soldier 0.68 / 1.44 [1.59 / 4.89]
+ *                reference 0.42 / 0.42 [1.04 / 1.04]
  *         bed    Test3_mia 2.27 / 2.83   Soldier 1.66 / 3.07   reference 1.43 / 1.43
+ *       AFTER (the re-imported chair, leg pin on; re-locked + pinned /
+ *       imported, cm):
+ *         chair  Test3_mia 0.58 / 5.03   Soldier 0.95 / 4.89   reference 0.64 / 1.04
+ *         bed    Test3_mia 0.70 / 2.83   Soldier 1.30 / 3.07   reference 1.11 / 1.43
  *       The re-lock's own report (`relockRootPaths`, its contacts on the
- *       probe clone, the bridge's fade-in included) reads, re-locked /
- *       imported: Test3_mia chair 1.41 / 2.39, bed 2.27 / 3.00; Soldier
- *       0.70 / 1.54, 1.66 / 3.14; the reference rig keeps its IMPORTED path
- *       for BOTH clips — chair imported 0.42 (rebuilt 0.42), bed imported
- *       1.43 (rebuilt 1.44): the rebuild gains less than
- *       `RELOCK_MIN_GAIN_CM` = 0.1 cm there. CHECKED: every report on the
- *       reference rig says used 'imported'. This is the old "the chain adds
- *       nothing on its own rig" check, reframed: the reference rig keeps its
- *       own path, and own contacts hold <= 1.5 cm for BOTH clips (checked).
- *       COUNTER-PROBE in the same run, the IMPORTED path (no re-lock)
+ *       probe clone, the bridge's fade-in included; drift rebuilt / imported
+ *       before the pin, the largest ankle correction, the drift after it):
+ *       Test3_mia chair 3.86 / 5.03, pinned 3.37 → 0.45; bed 2.27 / 3.00,
+ *       2.99 → 0.55; Soldier chair 1.61 / 4.91, 1.82 → 0.90; bed 1.66 / 3.14,
+ *       2.48 → 1.00; the reference rig keeps its IMPORTED path for BOTH clips
+ *       — chair imported 1.05 (rebuilt 1.05), bed imported 1.43 (rebuilt
+ *       1.44): the rebuild gains less than `RELOCK_MIN_GAIN_CM` = 0.1 cm
+ *       there — and is pinned on it: chair 0.67 → 0.64, bed 2.75 → 0.44 (the
+ *       bed is an import from before the importer's foot plant). CHECKED:
+ *       every report on the reference rig says used 'imported'; own contacts
+ *       hold <= 1.5 cm for BOTH clips there (checked).
+ *       COUNTER-PROBE in the same run, the IMPORTED path (no re-lock, no pin)
  *       measured the same way: never lower than the re-locked one (clip ×
  *       rig), and on Test3_mia / get-up-chair the re-lock gains >= 0.5 cm —
- *       Task 2 measured 2.20 → 1.23 cm (sidecar spans), a gain of 0.97; own
- *       contacts now give 2.20 → 1.41, a gain of 0.79 (≈ 80 % of Task 2's);
- *       the checked floor of 0.5 cm stays well under it.
+ *       Task 2 measured 2.20 → 1.23 cm (sidecar spans), a gain of 0.97; the
+ *       path alone on the re-imported chair gains 5.03 → 3.86 = 1.17, with
+ *       the pin 5.03 → 0.58 = 4.45; the checked floor of 0.5 cm stays well
+ *       under all of them.
  *       RED COUNTER-PROBE: offset switched off (the library adapted WITHOUT
- *       the root-motion flag): chair >= 15 cm, bed >= 25 cm (measured 22.8 /
- *       46.6 / 30.0 and 32.2 / 45.5 / 53.2 cm).
+ *       the root-motion flag): chair >= 15 cm, bed >= 25 cm (measured, chair
+ *       / bed: Test3_mia 35.9 / 32.2, Soldier 58.2 / 45.5, reference 70.0 /
+ *       53.2 cm).
  *       RED COUNTER-PROBE of the scale (reference rig, sidecar spans): the
  *       idle-median scale overshoots the importer's own number by > 0.10 cm.
  * [7] End of bridge + takeTravel + owner root moved by it (re-locked
@@ -158,16 +169,31 @@
  *       `Figure.baseScale = model.scale`), so no figure is ever drawn at
  *       another scale than its path was built for — what this check proves
  *       is that the path scales with the body (instance and travel both ×
- *       baseScale), not an extra tolerance on the [6] bounds. Measured:
- *       Test3_mia 1.62 / 2.61 cm (= 1.15 × 1.41 / 2.27), Soldier 0.78 /
- *       1.91, reference 0.48 / 1.65.
+ *       baseScale), not an extra tolerance on the [6] bounds. The leg pin
+ *       bakes ROTATIONS, which do not care for the scale. Measured (chair /
+ *       bed): Test3_mia 0.67 / 0.80 cm (= 1.15 × 0.58 / 0.70), Soldier
+ *       1.10 / 1.49, reference 0.73 / 1.28.
  * [B10] INFO: distance of the handed-over end point from the server's stand
  *       point (`travel_m × height / ref_height_m`, turned by the same yaw;
  *       height 1.70 m, the reference rig = ratio 1), per rig, cm. Measured
- *       re-locked / imported: Test3_mia chair 11.2 / 4.6, bed 14.9 / 5.4;
- *       Soldier 6.6 / 1.2, 3.5 / 1.5; reference 0.0 / 0.0.
- * [B11] relockRootPaths per model (one call, both bridges) <= 100 ms,
- *       printed (measured 4–5 ms).
+ *       re-locked / imported: Test3_mia chair 9.7 / 5.2, bed 14.9 / 5.4;
+ *       Soldier 2.0 / 1.4, 3.5 / 1.5; reference 0.0 / 0.0 (the pin moves
+ *       feet, not the travel: the chair's numbers changed with its
+ *       re-import, B2).
+ * [B11] relockRootPaths per model (one call, both bridges, the leg pin
+ *       included) <= 100 ms, printed (measured 4–5 ms before the pin,
+ *       9.5–15 ms with it).
+ * [B17] THE CHAIR'S END, BOTH FEET ON THE FLOOR: from t >= 3.5 s (40
+ *       frames), per side the lowest of the foot's bones (Foot, ToeBase,
+ *       Toe_End) over the rig's rest floor, median over those frames, within
+ *       ±1.0 cm on every rig. Task B2 measured it on the re-imported chair
+ *       without the pin (right / left, cm): Test3_mia −0.53 / 0.82, Soldier
+ *       1.30 / 1.15, reference 0.01 / 0.00 — Soldier's feet stood 1.2–1.3 cm
+ *       up (old chair: right foot 3.84 there). With the pin: Test3_mia
+ *       −0.93 / 0.33, Soldier −0.22 / −0.54, reference 0.02 / −0.15 (the
+ *       pin brings a foot to the ground of its points, `groundHeights`,
+ *       which on Test3_mia lies ~1 cm under the rest floor for the right
+ *       ball — the tightest case).
  *   info  The re-lock's own report per clip, the per-point numbers (FULL
  *       frames, runs, worst run and its span, drift re-locked / imported /
  *       off / × 1.15) and the final drift table.
@@ -226,11 +252,10 @@ const MODELS = join(ROOT, 'client3d/public/models');
 const RIGS = [join(MODELS, 'Test3_mia.glb'), join(MODELS, 'Soldier.glb')];
 const FPS = 30;
 /** Planted-foot drift bounds, own contacts on every rig ([6], docstring):
- *  the chair = the importer's 1.5 cm guarantee; the bed turns ~90° with both
- *  feet planted, which a translation-only path cannot hold (2.27 cm residual
- *  on Test3_mia). */
+ *  the importer's 1.5 cm guarantee for both bridges — the bed's ~90° turn
+ *  with both feet planted is held by the leg pin, not by the path. */
 const CHAIR_DRIFT_MAX_M = 0.015;
-const BED_DRIFT_MAX_M = 0.025;
+const BED_DRIFT_MAX_M = 0.015;
 /** [6] counter-probe: the re-lock's least gain on Test3_mia / get-up-chair. */
 const RELOCK_GAIN_MIN_M = 0.005;
 /** RED counter-probes, offset off: chair from the brief; bed derived from the
@@ -249,6 +274,9 @@ const BRIDGES = [
   { kind: 'get-up-bed', from: 'sleeping-side', driftMax: BED_DRIFT_MAX_M, redMin: BED_RED_MIN_M },
 ];
 const HANDOVER_MAX_M = 0.01;
+/** [B17]: the chair's end part, and how far its feet may stand off the floor. */
+const B17_FROM_S = 3.5;
+const B17_MAX_CM = 1.0;
 const FADE_SKIP_S = 0.30;
 /** `_root_motion.py` contact bands (cm, cm/s) — the smoke's own copy. */
 const BAND_LO_CM = 2.0;
@@ -788,7 +816,8 @@ async function main() {
       relockMs <= RELOCK_MAX_MS, `${relockMs.toFixed(1)} ms`);
     for (const r of reports) {
       console.log(`      relock ${r.clip}: used ${r.used}${r.reason ? ` (${r.reason})` : ''},`
-        + ` its own drift ${r.driftCm.toFixed(2)} cm (imported ${r.importedDriftCm.toFixed(2)}),`
+        + ` its own drift rebuilt ${r.rebuiltDriftCm.toFixed(2)} / imported ${r.importedDriftCm.toFixed(2)} cm,`
+        + ` pinned ${r.pinnedCm.toFixed(2)} cm${r.pinReason ? ` (${r.pinReason})` : ''} → ${r.driftCm.toFixed(2)} cm,`
         + ` travel (${r.travel[0].toFixed(1)}, ${r.travel[1].toFixed(1)}) cm`);
     }
     if (target.ref) {
@@ -811,8 +840,17 @@ async function main() {
         const feet = [];
         fig.inst.traverse((o) => { if (o.isBone && FOOT_KEYS.includes(keyOf(o.name))) feet.push(o); });
         feet.sort((a, c) => FOOT_KEYS.indexOf(keyOf(a.name)) - FOOT_KEYS.indexOf(keyOf(c.name)));
+        // [B17] per side the foot's bones: Foot, ToeBase, Toe_End.
+        const sideBones = { left: [], right: [] };
+        fig.inst.traverse((o) => {
+          const k = o.isBone ? keyOf(o.name) : '';
+          if (/^(left|right)(foot|toebase|toeend)$/.test(k)) sideBones[k.startsWith('left') ? 'left' : 'right'].push(o);
+        });
+        const lows = [];   // lows[i] = [left, right] lowest foot bone y at clip time (i+1)/FPS
         const sample = () => {
           fig.owner.updateMatrixWorld(true);
+          lows.push(['left', 'right'].map((side) =>
+            Math.min(...sideBones[side].map((b) => b.getWorldPosition(v).y))));
           return feet.map((f) => { f.getWorldPosition(v); return { x: v.x, y: v.y, z: v.z }; });
         };
         fig.owner.position.set(3, 0, -2);
@@ -837,7 +875,7 @@ async function main() {
           frames.push(sample());
         }
         const last = frames[frames.length - 1];
-        const r = { frames, floorY, hipsY, held: fig.figure.holdsTravel };
+        const r = { frames, floorY, hipsY, held: fig.figure.holdsTravel, lows: lows.slice(0, frames.length) };
         if (handOver) {
           // [7] the hand-over: owner += takeTravel, no time advanced
           const took = fig.figure.takeTravel();
@@ -864,12 +902,13 @@ async function main() {
       console.log(`      ${b.kind}: ${nF} bridge frames, figure hips ${on.hipsY.toFixed(3)} m`);
 
       // --- [6] drift with the smoke's OWN contacts on this rig -------------
-      // Planted is a property of the rig the feet belong to: the weights come
-      // from THIS rig's rendered frames (the re-locked run; the travel is XZ
-      // only, so every run of this rig has the same heights).
-      const w = ownWeights(on.frames, rest, on.floorY, 1);
+      // Planted is a property of the feet as they are drawn: the weights come
+      // from THIS rig's rendered frames, per run — the leg pin lowers planted
+      // feet in the re-locked library, so its heights are not the others'.
       const per = {};
-      for (const mode of ['relock', 'imported', 'off']) per[mode] = ownDrift(runs[mode].frames, w);
+      for (const mode of ['relock', 'imported', 'off']) {
+        per[mode] = ownDrift(runs[mode].frames, ownWeights(runs[mode].frames, rest, runs[mode].floorY, 1));
+      }
       // [B9] the same figure 15 % larger: contacts judged at the nominal scale.
       const wScaled = ownWeights(runs.scaled.frames, rest, runs.scaled.floorY, SCALE_UP);
       per.scaled = ownDrift(runs.scaled.frames, wScaled);
@@ -946,6 +985,21 @@ async function main() {
         const sMed = spanDrift(runs.median.frames);
         check(`[6] ${label} ${b.kind}: RED COUNTER-PROBE — the idle-median scale overshoots`
           + ` the importer (> ${cm(own)} + 0.10 cm; rig scale ${cm(sIm)})`, sMed > own + 0.001, cm(sMed));
+      }
+
+      // --- [B17] the chair's end: both feet ON the floor ------------------
+      if (b.kind === 'get-up-chair') {
+        const end = on.lows.filter((_, i) => (i + 1) / FPS >= B17_FROM_S);
+        const median = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
+        ['left', 'right'].forEach((side, k) => {
+          const hs = end.map((l) => (l[k] - on.floorY) * 100);
+          const med = median(hs);
+          table[table.length - 1][`b17${side}`] = med;
+          check(`[B17] ${label} ${b.kind}: ${side} foot's lowest bone over the floor from`
+            + ` ${B17_FROM_S} s (median of ${hs.length}) within ±${B17_MAX_CM} cm`,
+            Math.abs(med) <= B17_MAX_CM,
+            `${med.toFixed(2)} cm (range ${Math.min(...hs).toFixed(2)} … ${Math.max(...hs).toFixed(2)})`);
+        });
       }
 
       // --- [7] the hand-over ---------------------------------------------

@@ -693,8 +693,9 @@ function warnNoTravelRig(clipName: string): void {
     + ' in place');
 }
 
-/** Re-lock the bridge travels of `clips` on `template`'s own skeleton
- *  (`footLockMeasure.relockRootPaths`) and say so in ONE line per model —
+/** Re-lock the bridge travels of `clips` on `template`'s own skeleton and pin
+ *  their planted feet there by leg IK (`footLockMeasure.relockRootPaths`),
+ *  and say so in ONE line per model —
  *  only when a clip carried a travel. `scale` = world metres per template
  *  unit (`LoadedModel.scale`). A fallback because the rig has no foot bones
  *  is a warning: that model's feet will slide by the import's measure. */
@@ -1259,8 +1260,9 @@ export class FigureLibrary {
     // runs. Measured AFTER the filter — a clip this rig will never play costs
     // no skinning samples.
     measureGroundOffsets(extra, template);
-    // The bridge travels, rebuilt on THIS skeleton (`footLockMeasure`): the
-    // imported one holds the feet only on the reference rig's proportions.
+    // The bridge travels rebuilt and their planted feet pinned on THIS
+    // skeleton (`footLockMeasure`): the import holds the feet only on the
+    // reference rig's proportions.
     relockOnRig(charName, extra, template, scale);
     const floats = extra.filter((c) => clipGroundOffset(c) > 0.05)
       .map((c) => `${c.name} +${clipGroundOffset(c).toFixed(2)} m`);
