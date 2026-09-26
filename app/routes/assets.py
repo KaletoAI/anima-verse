@@ -51,7 +51,7 @@ from fastapi.responses import Response
 
 from app.blender import runner as blender_runner
 from app.core import clip_catalog, fbx_import
-from app.core.animation_clips import (CLIP_EXTS, ROOT_MOTION_MODES, ClipExists,
+from app.core.animation_clips import (CLIP_EXTS, ClipExists,
                                       ClipLibraryError, ClipNotFound,
                                       clip_entries, clip_meta,
                                       clip_role_gender, clip_view, delete_clip,
@@ -60,7 +60,7 @@ from app.core.animation_clips import (CLIP_EXTS, ROOT_MOTION_MODES, ClipExists,
                                       save_locomotion_clips, save_transitions,
                                       set_clip_loop, set_clip_role_gender)
 from app.core.auth_dependency import require_admin
-from app.core.cmu_import import ClipImportError
+from app.core.cmu_import import ClipImportError, validate_root_motion
 from app.core.http_files import etag_file_response
 from app.core.log import get_logger
 from app.core.paths import (get_animation_clips_dir, get_licensed_clips_dir,
@@ -416,10 +416,12 @@ async def post_clip_catalog_import(take_id: str, request: Request,
     """Imports one take into the FREE clip library — synchronously.
 
     Body: ``{kind, set?, start_s?, end_s?, loop_s?, root_motion?, overwrite?,
-    target?, yaw_deg?}``. ``root_motion`` is one of ``ROOT_MOTION_MODES``
-    (default ``strip``, 400 otherwise, and 400 together with ``loop_s``
-    unless it is ``strip``). ``yaw_deg`` turns the finished clip about the
-    vertical — the orientation the import preview was dialled to. The conversion is a Blender run of a few seconds, so it answers
+    target?, yaw_deg?}``. ``root_motion`` is checked by
+    ``cmu_import.validate_root_motion`` — one of ``ROOT_MOTION_MODES``
+    (default ``strip``, 400 otherwise), and 400 together with ``loop_s``
+    unless it is ``strip``, for a SOLO take only: a pair's converter gets
+    ``strip`` anyway and keeps its loop cut. ``yaw_deg`` turns the finished
+    clip about the vertical — the orientation the import preview was dialled to. The conversion is a Blender run of a few seconds, so it answers
     directly instead of going through the queue; the caller sees either the new
     clip or the converter's own message.
 
@@ -443,13 +445,6 @@ def _post_clip_catalog_import_sync(take_id: str, _: Dict[str, Any],
     if target != "free":
         raise HTTPException(status_code=400,
                             detail="CMU clips are redistributable — target must be 'free'")
-    mode = str(body.get("root_motion") or "strip")
-    if mode not in ROOT_MOTION_MODES:
-        raise HTTPException(status_code=400,
-                            detail=f"root_motion must be one of {', '.join(ROOT_MOTION_MODES)}")
-    if body.get("loop_s") is not None and mode != "strip":
-        raise HTTPException(status_code=400,
-                            detail="a looping clip cannot carry root travel — use root_motion 'strip' or no loop")
 
     def _num(key: str) -> Optional[float]:
         raw = body.get(key)
@@ -459,6 +454,16 @@ def _post_clip_catalog_import_sync(take_id: str, _: Dict[str, Any],
             return float(raw)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail=f"{key} must be a number")
+
+    # A pair take hands "strip" to the converter whatever was asked, so its
+    # loop cut is checked against no mode — the pair test import_take uses.
+    take = clip_catalog.find_take(take_id.strip())
+    pair = bool(take and clip_catalog.pair_takes(take)[1])
+    try:
+        mode = validate_root_motion(body.get("root_motion"),
+                                    None if pair else _num("loop_s"))
+    except ClipImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     try:
         return clip_catalog.import_take(
@@ -627,7 +632,8 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
     Body: ``{kind, files: [src] | [src_a, src_b], rest_file?, set?, start_s?,
     end_s?, loop_s?, root_motion?, overwrite?, target?, redistributable?,
     yaw_deg?, level_head?}``. ``root_motion`` is validated exactly as in the
-    CMU import (``ROOT_MOTION_MODES``, default ``strip``, never with a loop).
+    CMU import (``cmu_import.validate_root_motion``: default ``strip``, never
+    with a loop on a single source; a pair converts with ``strip`` anyway).
     ``yaw_deg`` is the orientation dial — the angle
     the preview was turned to before the import was accepted; ``level_head``
     puts a source's mis-placed head upright on the neck.
@@ -663,13 +669,13 @@ async def _clips_inbox_convert(request: Request, preview: bool) -> Dict[str, Any
     if not isinstance(files, list):
         raise HTTPException(status_code=400,
                             detail="files must be a list of {name, take}")
-    mode = str(body.get("root_motion") or "strip")
-    if mode not in ROOT_MOTION_MODES:
-        raise HTTPException(status_code=400,
-                            detail=f"root_motion must be one of {', '.join(ROOT_MOTION_MODES)}")
-    if body.get("loop_s") is not None and mode != "strip":
-        raise HTTPException(status_code=400,
-                            detail="a looping clip cannot carry root travel — use root_motion 'strip' or no loop")
+    # A pair's converter gets "strip" whatever was asked — only a solo
+    # source's loop cut can clash with the mode (fbx_import.import_fbx).
+    try:
+        mode = validate_root_motion(body.get("root_motion"),
+                                    _num("loop_s") if len(files) == 1 else None)
+    except ClipImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     target = str(body.get("target") or "licensed").strip().lower()
     redistributable = bool(body.get("redistributable"))
     if preview:

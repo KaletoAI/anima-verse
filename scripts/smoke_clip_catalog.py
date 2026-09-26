@@ -42,6 +42,10 @@ figure that moved would jump back every cycle). So:
     root_motion "foot_lock" (solo)    -> the converter gets "foot_lock"
     root_motion "foot_lock" (pair)    -> the converter gets "strip" (the two
                                          roots carry the contact geometry)
+    loop_s 1.5 + "foot_lock" (pair)   -> NOT refused: the mode never reaches a
+                                         pair's converter ("strip"), and
+                                         convert_take hands the loop on
+                                         unchanged, so loop_s stays 1.5
 
 The Blender run itself is monkeypatched here: this smoke checks the ROUTE
 contract (validation, status file, listing entry), not the retargeter. With
@@ -366,6 +370,16 @@ def test_import() -> None:
         check("the library sees ONE pair kind",
               assets.list_animation_clips()["pair_kinds"] == ["handshake"],
               str(assets.list_animation_clips()["pair_kinds"]))
+        code = status_of(lambda: imp("18_01", {"kind": "handshake", "overwrite": True,
+                                               "loop_s": 1.5,
+                                               "root_motion": "foot_lock"}))
+        check("a PAIR with a loop cut and foot_lock is not refused",
+              code == 200, str(code))
+        side = json.loads((CLIPS / "handshake.json").read_text(encoding="utf-8"))
+        check("…the converter got 'strip' and kept the loop cut",
+              side["root_motion"] == "strip" and side["loop_s"] == 1.5
+              and side["source_takes"] == ["18_01", "19_01"],
+              str({k: side.get(k) for k in ("root_motion", "loop_s", "source_takes")}))
 
         print("\n[9] a set import")
         res = imp("07_01", {"kind": "stroll", "set": "female"})

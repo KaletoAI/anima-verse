@@ -85,9 +85,13 @@ one needs redistributable=True — 400 without it.
 RULE 4b — "root_motion is one of strip/keep/foot_lock, default strip, and a
 looping clip cannot carry travel" (a loop restarts at its first frame, so a
 figure that moved would jump back every cycle). The route refuses an unknown
-mode and loop_s together with a mode other than strip — 400, and BEFORE
-Blender starts. A pair always hands "strip" to the converter (the two roots
-carry the contact geometry), and drops the loop cut the same way.
+mode and, on a SOLO import, loop_s together with a mode other than strip —
+400, and BEFORE Blender starts. A pair always hands "strip" to the converter
+(the two roots carry the contact geometry), and drops the loop cut the same
+way — so a pair request with loop_s 1.5 + "foot_lock" is NOT refused: the
+mode never reaches the converter, so there is no travel to clash with the
+loop (the route asks the core, cmu_import.validate_root_motion, with the loop
+only for one source — the same rule fbx_import.import_fbx applies).
 
 RULE 6 — "a reference pose belongs to the rig it is read on". The rest file
 is measured on the SOURCE skeleton, so a file from another family puts a
@@ -989,6 +993,19 @@ def test_import() -> None:
                                      "loop_s": 1.5, "root_motion": "keep"})) == 400)
         check("…and Blender was never started for either",
               len(RUNS) == before, f"{len(RUNS) - before} run(s)")
+        code = status_of(lambda: imp({"kind": "pair-loop",
+                                      "files": [S("Female_Dance.fbx"), S("Male_Dance.fbx")],
+                                      "loop_s": 1.5, "root_motion": "foot_lock"}))
+        check("a PAIR with a loop cut and foot_lock is not refused — the mode "
+              "never reaches a pair's converter", code == 200, str(code))
+        side = json.loads((LICENSED / "pair-loop.json").read_text(encoding="utf-8")) \
+            if code == 200 else {}
+        check("…the converter got 'strip' for it",
+              (side.get("params") or {}).get("root_motion") == "strip",
+              str((side.get("params") or {}).get("root_motion")))
+        # [9] counts the library's pair kinds — this probe leaves none behind.
+        for name in ("pair-loop__a.fbx", "pair-loop__b.fbx", "pair-loop.json"):
+            (LICENSED / name).unlink(missing_ok=True)
 
         print("\n[8] the reference pose reaches inputs['rest']")
         res = imp({"kind": "resting2", "files": [S("Female_Dance.fbx")],
