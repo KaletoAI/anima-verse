@@ -221,34 +221,56 @@
  *       pin, which bends the legs below the UpLegs and so does not change ψ):
  *       bed Test3_mia −105.83°, Soldier −105.55°, reference −104.75°; chair
  *       −4.78°, −4.46°, −4.52°. The counter-probe stores no turn.
- * [B14] NO SNAP INTO THE NEXT CLIP: the HORIZONTAL move of each foot bone
- *       between the last bridge frame and the first idle frame after the
- *       hand-over (1/30 s, idle faded in to (1/30)/0.25 = 0.1333 — the height
- *       is the owner's lift, `smoke_bridge_lift.mjs`, not part of this chain).
- *       What is left once the turn is handed over is the difference of the
- *       two POSES, × 0.1333: fitting the bridge's last-frame feet onto the
- *       idle's first-frame feet by the best rotation (the analysis of this
- *       task) leaves a stance residual of 13.6–16.3 cm on the bed → 1.8–2.2 cm,
- *       and on the chair a 6.1–6.4 cm shift of the feet centroid (the travel's
- *       stand point, not the turn) and a 2.6–3.1 cm residual → up to
- *       0.85 + 0.4 cm. No hand-over angle removes those; the brief's
- *       "≤ 2 cm / chair ≤ 1 cm" assumed the turn was the whole difference.
- *       Bounds: bed <= 3.0 cm, chair <= 1.5 cm. Measured with / without the
- *       hand-over: bed Test3_mia 2.32 / 7.51, Soldier 2.75 / 9.10, reference
- *       2.83 / 8.49 cm; chair 0.72 / 0.76, 1.18 / 0.98, 1.19 / 0.96 cm (the
- *       chair's pelvis ends 4.5° twisted against its stance, so handing its
- *       heading over turns the idle's feet by that: +0.2 cm).
- *       RED COUNTER-PROBE (bed): without the hand-over >= 6 cm (the brief's
- *       8.1–8.7 cm; the idle swings the body back by ~105°).
- * [B15] THE TURN STAYS: after 1 s of idle the pelvis heading in the WORLD
- *       equals base + ψ_end + h_idle within 0.1°, h_idle = the idle's OWN
- *       pelvis heading against its root at that clip time, measured in the
- *       same run on a fresh figure of the same rig playing idle alone (at 1 s
- *       the bridge has faded out, so the two poses are the same idle frame).
- *       The root yaw itself is base + ψ_end (1e-6). The brief bounded this by
- *       ±6° as "the idle's own wobble"; the idle's pelvis at 1 s stands
- *       +6.01° (Test3_mia), +5.85° (Soldier), +6.43° (reference) off its
- *       root — the derivation now takes it in instead of a tolerance.
+ * [B12c] get-up-bed played DIRECTLY (no holding bridge, so no root turn,
+ *       its pose turned back by −ψ) warns once — played twice, one line —
+ *       and none of the holding-bridge runs before it warned (Test3_mia).
+ * [B14] NO SNAP INTO THE NEXT CLIP, predicted in the same run. The first
+ *       idle frame after the hand-over (1/30 s) blends the bridge's last pose
+ *       (clamped, weight 1 − W) with the idle's pose at clip time 1/30 s
+ *       (weight W = (1/30)/0.25 = 0.1333, its fade-in), both in the root
+ *       frame the hand-over left — the rotation ACTUALLY handed over, ψ_end.
+ *       R_ψ = the largest horizontal distance of a foot point between those
+ *       two poses in the root frame (the idle's pose read off a fresh figure of
+ *       the rig by a mixer of its own; the instance on its base, as after
+ *       `takeTravel`). To first order each foot moves W · its own distance.
+ *       The second-order part is the arc: a joint that makes the difference
+ *       turns by W of its angle, and a point at lever ℓ from it moves
+ *       2ℓ·sin(W·asin(R/2ℓ)) instead of W·R (more than the chord for W < 1).
+ *       ℓ = the rig's shortest leg lever (knee→ankle, ankle→ball), at least
+ *       R/2. Asserted on the STANCE: max jump ≤ 2ℓ·sin(W·asin(R_ψ/2ℓ)) + 0.1 mm.
+ *       Measured: max jump / W·R_ψ / bound (cm):
+ *         bed    Test3_mia 2.32 / 2.40 / 2.67  Soldier 2.75 / 2.93 / 3.14  reference 2.83 / 3.08 / 3.74
+ *         chair  Test3_mia 0.72 / 1.02 / 1.04  Soldier 1.18 / 1.96 / 2.03  reference 1.19 / 1.88 / 1.99
+ *       Why on the stance and not per foot: a foot whose two poses lie close
+ *       can still swing mid-blend when two of its joints turn against each
+ *       other (Test3_mia chair, right ankle: 4.38 cm apart, moves 0.72 cm
+ *       against W·4.38 = 0.58 and a single-arc 0.64). The rigorous per-foot
+ *       bound, W × (hips move + Σ joint angle × reach), holds but is 5.8–18 cm
+ *       — too loose to say anything. Info per rig: R_ψ per foot, and the best
+ *       rigid fit of the four points (−9.5° … −13° on the bed, residual
+ *       14–18 cm: the two poses stand differently, which no hand-over angle
+ *       removes).
+ *       RED COUNTER-PROBE (bed): without the hand-over >= 6 cm (measured
+ *       7.51 / 9.10 / 8.49 — R there is 33–41 cm, the idle swings back ~105°).
+ *       EXPERIMENT, not kept (fix round 1): matching the pelvis at the seam —
+ *       the root turned by h_bridgeEnd − h_idle(0) more at the hand-over
+ *       (−3.6° / −4.1° / −4.9° on the bed, −0.7° … −0.9° on the chair) — made
+ *       every case worse: bed 2.34 / 3.26 / 3.94 cm, chair 0.86 / 1.44 / 1.48
+ *       cm. The turn at the seam also turns the bridge's last pose, which
+ *       still weighs 1 − W = 0.87 in that frame, and the pelvis step at the
+ *       seam is already small without it (below).
+ * [B15] THE ROOT KEEPS ψ_END: after 1 s of idle (the bridge long faded out)
+ *       the pelvis heading in the WORLD equals base + ψ_end + h_idle within
+ *       0.1°, h_idle = the idle's own pelvis heading against its root at that
+ *       clip time, from a fresh figure playing idle alone. At 1 s both are the
+ *       same idle frame, so this checks that the root still holds
+ *       base + ψ_end — nothing eased it away — and the root yaw itself is
+ *       base + ψ_end (1e-6). Measured h_idle: +6.01° (Test3_mia), +5.85°
+ *       (Soldier), +6.43° (reference).
+ *       INFO, the meaningful number: the pelvis heading's step at the SEAM
+ *       (last bridge frame → first idle frame): 0.41° / 0.47° / 0.58° on the
+ *       bed, 0.15° / 0.16° / 0.16° on the chair; without the hand-over 14.5°
+ *       on the bed.
  *       RED COUNTER-PROBE (bed): without the hand-over the pelvis is >= 90°
  *       off (it swings back to base + h_idle: |ψ_end| ≈ 105°).
  * [B17] THE CHAIR'S END, BOTH FEET ON THE FLOOR: from t >= 3.5 s (40
@@ -362,8 +384,11 @@ const HANDOVER_MAX_M = 0.01;
 const TURN_INVARIANCE_MM = 1;
 const BED_TURN_DEG = [-115, -98];
 const CHAIR_TURN_MAX_DEG = 8;
-const B14_BED_MAX_M = 0.03;
-const B14_CHAIR_MAX_M = 0.015;
+/** [B14]: the idle's weight in the first frame after the hand-over — its
+ *  fade-in (0.25 s, `Figure.play`) after one 1/30 s frame. */
+const B14_W = (1 / FPS) / 0.25;
+/** [B14]: float noise on top of the derived bound, m. */
+const B14_FLOAT_M = 0.0001;
 const B14_RED_MIN_M = 0.06;
 const B15_TOL_DEG = 0.1;
 /** [B12b]: when the early journey takes the travel, mid-turn (bed: ψ ≈ −54°). */
@@ -868,12 +893,18 @@ async function main() {
     return Math.atan2(l.x - r.x, l.z - r.z) - Math.PI / 2;
   };
   const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  /** Root-frame XZ of a world point: the owner's offset taken off, turned
+   *  back by the root's yaw (`toWorld` inverted). */
+  const rootXZ = (fig, p) => toWorld({ x: p.x - fig.owner.position.x, z: p.z - fig.owner.position.z },
+    -fig.figure.root.rotation.y);
   /** [B12]–[B15]: one bridge on a fresh figure of `lib`, the owner taking the
-   *  travel over at its end as `npcs` does, then 1 s of idle. Returns every
-   *  bone's world position per bridge frame, ψ_end of the clip's turn (null =
-   *  none), the largest HORIZONTAL foot move between the last bridge frame and
-   *  the first idle frame after the hand-over, the pelvis heading in the world
-   *  after 1 s of idle, and the root yaw then. */
+   *  travel over at its end as `npcs` does, then 1 s of idle. Returns every bone's world position
+   *  per bridge frame, ψ_end of the clip's turn (null = none), the
+   *  HORIZONTAL foot moves between the last bridge frame and the first idle
+   *  frame after the hand-over, the last bridge frame's feet in the root
+   *  frame after the hand-over, the step of the world pelvis heading from the
+   *  last bridge frame to the first idle frame (the seam), the world pelvis
+   *  heading after 1 s of idle and the root yaw then. */
   const runTurnChain = (label, template, lib, scale, b) => {
     const fig = makeFigure(label, template, lib, scale);
     const all = [];
@@ -896,12 +927,17 @@ async function main() {
     }
     fig.owner.updateMatrixWorld(true);
     const last = feet.map(pos);
+    const seamFrom = worldHeading(upL, upR);
+
     const took = fig.figure.takeTravel();
     if (took) fig.owner.position.add(new THREE.Vector3(took.x, 0, took.z));
+    const endRoot = last.map((p) => rootXZ(fig, p));
+
     fig.figure.play('idle');
     fig.figure.update(1 / FPS);
     fig.owner.updateMatrixWorld(true);
     const perFoot = feet.map(pos).map((p, i) => Math.hypot(p.x - last[i].x, p.z - last[i].z));
+    const seamTo = worldHeading(upL, upR);
     for (let i = 1; i < FPS; i++) {
       fig.figure.play('idle');
       fig.figure.update(1 / FPS);
@@ -910,9 +946,56 @@ async function main() {
     const heading = worldHeading(upL, upR);
     const turn = clipRootTurn(lib.find((c) => c.name === b.kind));
     const out = { bones, psiEnd: turn ? turn.yaw[turn.yaw.length - 1] : null, jump: Math.max(...perFoot),
-      perFoot, heading, rootYaw: fig.figure.root.rotation.y };
+      perFoot, endRoot, seam: wrapPi(seamTo - seamFrom), heading, rootYaw: fig.figure.root.rotation.y };
     fig.figure.dispose();
     return out;
+  };
+
+  /** [B14]: the IDLE clip's own pose at clip time `t`, weight 1, on a fresh
+   *  figure of the rig (root at the origin, yaw 0, so world = root frame; the
+   *  instance on its base, as after a hand-over): the feet's root-frame XZ
+   *  and the rig's shortest leg lever (knee → ankle, ankle → ball), world
+   *  metres. A mixer of its own drives
+   *  the instance; the figure's is never advanced. */
+  const idlePose = (label, template, lib, scale, t) => {
+    const fig = makeFigure(label, template, lib, scale);
+    const all = [];
+    fig.inst.traverse((o) => { if (o.isBone) all.push(o); });
+    const bone = (k) => all.find((o) => keyOf(o.name) === k);
+    const mixer = new THREE.AnimationMixer(fig.inst);
+    const action = mixer.clipAction(lib.find((c) => c.name === 'idle'));
+    action.play();
+    mixer.setTime(t);
+    fig.owner.updateMatrixWorld(true);
+    const feet = FOOT_KEYS.map((k) => bone(k).getWorldPosition(new THREE.Vector3()));
+    const at = (k) => bone(k).getWorldPosition(new THREE.Vector3());
+    const levers = ['left', 'right'].flatMap((side) => [
+      at(`${side}leg`).distanceTo(at(`${side}foot`)), at(`${side}foot`).distanceTo(at(`${side}toebase`))]);
+    const out = { feet: feet.map((p) => ({ x: p.x, z: p.z })), lever: Math.min(...levers) };
+    action.stop();
+    mixer.uncacheRoot(fig.inst);
+    fig.figure.dispose();
+    return out;
+  };
+
+  /** Best rotation (about the vertical) + shift fitting points `a` onto `b`
+   *  (XZ): its angle and the largest residual — info for [B14]. */
+  const bestFit = (a, b) => {
+    const ca = [a.reduce((s, p) => s + p.x, 0) / a.length, a.reduce((s, p) => s + p.z, 0) / a.length];
+    const cb = [b.reduce((s, p) => s + p.x, 0) / b.length, b.reduce((s, p) => s + p.z, 0) / b.length];
+    let sc = 0;
+    let ss = 0;
+    a.forEach((p, i) => {
+      const ax = p.x - ca[0]; const az = p.z - ca[1]; const bx = b[i].x - cb[0]; const bz = b[i].z - cb[1];
+      sc += ax * bx + az * bz;
+      ss += bx * az - bz * ax;
+    });
+    const phi = Math.atan2(ss, sc);
+    const res = Math.max(...a.map((p, i) => {
+      const r = toWorld({ x: p.x - ca[0], z: p.z - ca[1] }, phi);
+      return Math.hypot(r.x + cb[0] - b[i].x, r.z + cb[1] - b[i].z);
+    }));
+    return { phi, res };
   };
 
   /** [B12b]: the bridge with a takeTravel at MID_TAKE_S (the owner moves by
@@ -1290,17 +1373,58 @@ async function main() {
           `mid ${(mid.midJump * 1000).toFixed(4)} mm, end ${(mid.endJump * 1000).toFixed(4)} mm,`
           + ` held again ${mid.heldAtEnd}, root yaw ${deg(mid.rootYaw).toFixed(3)}°`);
       }
+      // [B12c] a turned clip played OUTSIDE a holding bridge warns, once.
+      if (b.kind === 'get-up-bed' && label === 'Test3_mia.glb') {
+        const warned = [];
+        const warn = console.warn;
+        console.warn = (...m) => warned.push(m.join(' '));
+        try {
+          const fig = makeFigure(label, template, libs.relock, scale);
+          for (const k of ['get-up-bed', 'idle', 'get-up-bed']) {
+            fig.figure.play(k);
+            fig.figure.update(1 / FPS);
+          }
+          fig.figure.dispose();
+        } finally {
+          console.warn = warn;
+        }
+        const lines = warned.filter((w) => /carries a bridge turn/.test(w));
+        check(`[B12c] ${label} ${b.kind}: played directly (no holding bridge) it warns exactly once`
+          + ' — and no holding-bridge run before warned', lines.length === 1, `${lines.length}: ${lines[0] ?? '-'}`);
+      }
       // [B13] the net turn.
       const [lo, hi] = b.kind === 'get-up-bed' ? BED_TURN_DEG : [-CHAIR_TURN_MAX_DEG, CHAIR_TURN_MAX_DEG];
       check(`[B13] ${label} ${b.kind}: ψ_end within ${lo}° … ${hi}°`,
         psiEnd !== null && deg(psiEnd) >= lo && deg(psiEnd) <= hi,
         psiEnd === null ? 'no turn stored' : `${deg(psiEnd).toFixed(2)}°`);
       check(`[B13] ${label} ${b.kind}: COUNTER-PROBE — { turn: false } stores no turn`, turnOff.psiEnd === null);
-      // [B14] no snap into the next clip.
-      const b14Max = b.kind === 'get-up-bed' ? B14_BED_MAX_M : B14_CHAIR_MAX_M;
-      check(`[B14] ${label} ${b.kind}: first idle frame after the hand-over moves the feet <= ${cm(b14Max)}`,
-        turnOn.jump <= b14Max, `${cm(turnOn.jump)} (per foot ${turnOn.perFoot.map((d) => (d * 100).toFixed(2)).join(' / ')} cm);`
-        + ` without the hand-over ${cm(turnOff.jump)}`);
+      // [B14] no snap into the next clip, PREDICTED in this run: the first
+      // idle frame is the bridge's last pose blended W of the way towards the
+      // idle's own pose at clip time 1/30 s, both in the root frame the
+      // hand-over left.
+      const idle1 = idlePose(label, template, libs.relock, scale, 1 / FPS);
+      // The bound: the largest foot difference R = max R_ψ, blended W of the
+      // way along the ARC of a single joint of the rig's shortest leg lever ℓ
+      // that makes it (the chord W·R plus the arc's second-order excess):
+      // 2ℓ·sin(W·asin(R/2ℓ)), ℓ ≥ R/2.
+      const predict = (run) => {
+        const d = run.endRoot.map((p, i) => Math.hypot(p.x - idle1.feet[i].x, p.z - idle1.feet[i].z));
+        const r = Math.max(...d);
+        const l = Math.max(idle1.lever, r / 2);
+        const bound = 2 * l * Math.sin(B14_W * Math.asin(Math.min(1, r / (2 * l)))) + B14_FLOAT_M;
+        return { d, r, bound, ok: run.jump <= bound, fit: bestFit(run.endRoot, idle1.feet) };
+      };
+      const pOn = predict(turnOn);
+      const pOff = predict(turnOff);
+      const fmtFeet = (a) => a.map((x) => (x * 100).toFixed(2)).join(' / ');
+      console.log(`      [B14] ${label} ${b.kind}: R_ψ (bridge end vs idle at 1/30 s, root frame, per foot) ${fmtFeet(pOn.d)} cm`
+        + ` → W·R_ψ ${fmtFeet(pOn.d.map((x) => B14_W * x))} cm; measured ${fmtFeet(turnOn.perFoot)} cm;`
+        + ` shortest lever ${(idle1.lever * 100).toFixed(1)} cm; info best fit`
+        + ` ${deg(pOn.fit.phi).toFixed(1)}°, residual R_fit ${(pOn.fit.res * 100).toFixed(2)} cm;`
+        + ` without the hand-over R ${fmtFeet(pOff.d)}, measured ${fmtFeet(turnOff.perFoot)} cm`);
+      check(`[B14] ${label} ${b.kind}: first idle frame after the hand-over moves the feet no further than`
+        + ` the blend of the largest foot difference R_ψ the hand-over leaves (W = ${B14_W.toFixed(4)}, arc bound)`,
+        pOn.ok, `max ${cm(turnOn.jump)} <= ${cm(pOn.bound)} (W·R_ψ ${cm(B14_W * pOn.r)}, R_ψ ${cm(pOn.r)})`);
       if (b.kind === 'get-up-bed') {
         check(`[B14] ${label} ${b.kind}: RED COUNTER-PROBE — without the hand-over the feet move >= ${cm(B14_RED_MIN_M)}`,
           turnOff.jump >= B14_RED_MIN_M, cm(turnOff.jump));
@@ -1315,7 +1439,9 @@ async function main() {
         deg(offOn) <= B15_TOL_DEG && Math.abs(wrapPi(turnOn.rootYaw - YAW - (psiEnd ?? 0))) <= 1e-6,
         `world ${deg(turnOn.heading).toFixed(2)}° vs ${deg(wantOn).toFixed(2)}° (off by ${deg(offOn).toFixed(3)}°),`
         + ` root yaw ${deg(turnOn.rootYaw).toFixed(3)}° = base ${deg(YAW).toFixed(2)}° + ψ_end;`
-        + ` against base + ψ_end alone ${deg(wrapPi(turnOn.heading - YAW - (psiEnd ?? 0))).toFixed(2)}°`);
+        + ` against base + ψ_end alone ${deg(wrapPi(turnOn.heading - YAW - (psiEnd ?? 0))).toFixed(2)}°;`
+        + ` info: the pelvis heading's step at the seam (last bridge frame → first idle frame)`
+        + ` ${deg(turnOn.seam).toFixed(2)}°, without the hand-over ${deg(turnOff.seam).toFixed(2)}°`);
       if (b.kind === 'get-up-bed') {
         const back = Math.abs(wrapPi(turnOff.heading - wantOn));
         check(`[B15] ${label} ${b.kind}: RED COUNTER-PROBE — without the hand-over the pelvis swings back`

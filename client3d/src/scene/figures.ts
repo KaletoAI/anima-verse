@@ -688,6 +688,19 @@ function warnNoStandRig(): void {
  *  was measured on is not served (`/assets/animation-rig`), so its travel is
  *  dropped and it plays in place. One line, not one per clip and figure. */
 let warnedNoTravelRig = false;
+
+/** Once per clip name: a clip whose turn was taken out of its hips
+ *  (`clipRootTurn`, Task C2) plays OUTSIDE a holding bridge with a path — as
+ *  a ramping bridge or asked for directly. Only such a bridge turns the root
+ *  by it (`Figure.turn`, rule 1), so here the body shows the clip turned back
+ *  by −ψ and nothing turns it forward again. */
+const warnedTurnWithoutRoot = new Set<string>();
+function warnTurnWithoutRoot(clip: THREE.AnimationClip): void {
+  if (!clipRootTurn(clip) || warnedTurnWithoutRoot.has(clip.name)) return;
+  warnedTurnWithoutRoot.add(clip.name);
+  console.warn(`[figures] ${clip.name} carries a bridge turn but plays outside a holding`
+    + ' bridge with a travel — its body stays turned back by that turn (no root turn)');
+}
 function warnNoTravelRig(clipName: string): void {
   if (warnedNoTravelRig) return;
   warnedNoTravelRig = true;
@@ -1857,6 +1870,7 @@ export class Figure {
       this.travelAction = this.travelPath ? bridge : null;
       // …and turns it, where the clip brought a turn (see `turn`).
       this.startTurn(this.travelPath ? clipRootTurn(bridge.getClip()) ?? null : null, bridge);
+      if (!this.travelPath) warnTurnWithoutRoot(bridge.getClip());
       // Loud on purpose: a bridge is rare (a state change), and when one fires
       // in a loop — the figure keeps starting over — this line is what says
       // WHICH origin keeps coming back. Without it the loop is only visible as
@@ -1919,6 +1933,7 @@ export class Figure {
     const loop = clipLoops(resolved.getClip());
     resolved.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
     resolved.clampWhenFinished = !loop;
+    warnTurnWithoutRoot(resolved.getClip());
     resolved.reset().fadeIn(0.25).play();
     this.current?.fadeOut(0.25);
     this.current = resolved;
@@ -2337,8 +2352,8 @@ export class Figure {
     // The turn (see `turn`) the same way, at the same time: the root takes ψ,
     // the instance is turned back by it.
     const turning = !!(this.turn && this.turnAction);
-    if (this.turn && this.turnAction) {
-      this.turnNow = turnAt(this.turn, this.turnAction.time);
+    if (turning) {
+      this.turnNow = turnAt(this.turn!, this.turnAction!.time);
       this.root.rotation.y = this.turnBase + this.turnNow;
       this.targetYaw = this.root.rotation.y;
       this.holding = true;
