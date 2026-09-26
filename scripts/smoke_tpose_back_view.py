@@ -162,6 +162,24 @@ for _label, _text, _side in (
            "behind the shoulders" in _text, "in front of the shoulders" in _text),
           (True, False, False))
 
+# [9] Feet get the same protection as hands (user report 2026-09-27,
+#     barefoot characters): "both feet ... inside the frame" positive in all
+#     six tpose*/natural+keywords styles, "cropped feet, feet cut off" in
+#     every tpose negative (front/back/side).
+from app.core.config import (  # noqa: E402
+    _DEFAULT_IMAGE_USE_CASES as _UC9, _NEG_TPOSE as _NEG9,
+    _NEG_TPOSE_BACK as _NEG9_BACK, _NEG_TPOSE_SIDE as _NEG9_SIDE)
+
+for _uc_key in ("tpose", "tpose_back", "tpose_side"):
+    for _fam in ("natural", "keywords"):
+        _style = _UC9[_uc_key][_fam]["prompt_style"]
+        check(f"[9] {_uc_key}/{_fam}: feet named inside the frame",
+              "feet" in _style and "inside the frame" in _style, True)
+for _label, _neg in (("front", _NEG9), ("back", _NEG9_BACK),
+                     ("side", _NEG9_SIDE)):
+    check(f"[9] {_label} negative: cropped feet guarded like hands",
+          "cropped feet, feet cut off" in _neg, True)
+
 check("[4] profile text speaks to the reference",
       model_refs.TPOSE_LEFT_PROMPT_DEFAULT.startswith(
           "the same figure turned sideways, strict left side profile view"),
