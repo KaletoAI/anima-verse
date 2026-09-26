@@ -3,6 +3,7 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { normBoneName } from '@anima/scene-render';
 import { clipRootPath, setClipRootPath, travelAt } from './bridgeTravel';
 import type { RootPath } from './bridgeTravel';
+import { setClipBridgeLift } from './bridgeLift';
 import {
   CONTACT_POINTS, FULL, contactWeights, footLockPath, groundHeights, maxPlantedDrift,
 } from './footLock';
@@ -81,6 +82,20 @@ import type { Quat } from './legPin';
  * pinned (`pinReason` 'no leg bones'). The drift in the report is measured
  * AFTER the pin, on a fresh sampling of the baked clip, on the contacts as
  * sampled before it.
+ *
+ * THE BRIDGE'S HEIGHT, measured in the same probe run (Task C5,
+ * `bridgeLift.ts`), for every clip measured here — the fallback 'no foot
+ * bones' has nothing to measure and stores nothing:
+ *   endLift — how far the clip's LAST frame, as it now plays (after the pin),
+ *     has to be lifted so that its lowest foot point (the four contact points
+ *     and the toe ends) stands on the rig's REST floor, the floor of
+ *     `rest`: `restFloor − lowest`, template units. On the figure the rest
+ *     floor is where the soles of the bind pose are drawn, so the feet land
+ *     the way the rig stands in its bind pose.
+ *   firstContactS — the clip time of the first frame in which any contact
+ *     point is in FULL contact (`contactWeights`, the contacts the path was
+ *     judged on); the clip's duration when there is none.
+ * Stored on the clip (`setClipBridgeLift`); `Figure.beginBridgeLift` reads it.
  *
  * Side-effect free on the template: the clone is posed, never the template
  * (the `clipGround.measureGroundOffsets` pattern), and every clip is uncached
@@ -404,10 +419,22 @@ function pinLegs(clip: THREE.AnimationClip, times: readonly number[], legs: LegB
   return pinned;
 }
 
+/** Clip time of the first sample in which any contact point is in FULL
+ *  contact, or `duration` when none is (module docstring, the bridge's
+ *  height). */
+function firstFullContact(weights: Record<string, number[]>, times: readonly number[],
+                          duration: number): number {
+  for (let f = 0; f < times.length; f++) {
+    if (Object.values(weights).some((w) => w[f] >= FULL)) return times[f];
+  }
+  return duration;
+}
+
 /**
  * Rebuild the travel of every clip that carries one (`clipRootPath`) on
  * `template`'s own skeleton and store it in place of the imported path, then
- * pin the planted feet of that clip on this skeleton (module docstring).
+ * pin the planted feet of that clip on this skeleton, and measure the height
+ * the bridge needs (`setClipBridgeLift`) — module docstring.
  * Clips without a path are not touched and get no report. `log` receives ONE
  * summary line when at least one clip was measured or fell back.
  */
@@ -446,11 +473,24 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
   // `_rest_heights` does).
   const v = new THREE.Vector3();
   const restY = bones.map((b) => b.getWorldPosition(v).y);
+  const mixer = new THREE.AnimationMixer(probe);
   const floorY = Math.min(...restY,
     ...TOE_ENDS.map((k) => byKey.get(k)).filter((b): b is THREE.Object3D => !!b)
       .map((b) => b.getWorldPosition(v).y));
   const rest: Record<string, number> = {};
   CONTACT_POINTS.forEach((p, i) => { rest[p] = (restY[i] - floorY) / unitsPerCm; });
+
+  // The lowest foot point of a posed probe, template units — the points of
+  // the rest floor above.
+  const footPoints = [...bones,
+    ...TOE_ENDS.map((k) => byKey.get(k)).filter((b): b is THREE.Object3D => !!b)];
+  const storeLift = (clip: THREE.AnimationClip, times: readonly number[], firstContactS: number) => {
+    let lowest = Infinity;
+    sampleOnProbe(mixer, probe, clip, [times[times.length - 1]], () => {
+      for (const b of footPoints) lowest = Math.min(lowest, b.getWorldPosition(v).y);
+    });
+    if (Number.isFinite(lowest)) setClipBridgeLift(clip, { endLift: floorY - lowest, firstContactS });
+  };
 
   const cmOf = (b: THREE.Object3D): Vec3 => {
     b.getWorldPosition(v);
@@ -474,7 +514,6 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     return t;
   };
 
-  const mixer = new THREE.AnimationMixer(probe);
   for (const clip of todo) {
     const imported = clipRootPath(clip)!;
     const times = sampleTimes(clip);
@@ -508,6 +547,7 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
       reports.push({ clip: clip.name, used: 'imported', reason: 'no full contact',
         driftCm: 0, rebuiltDriftCm: 0, importedDriftCm: 0, pinnedCm: 0, liftCm: 0,
         travel: travelEndCm(imported, unitsPerCm) });
+      storeLift(clip, times, clip.duration);
       continue;
     }
     const path = footLockPath(tracks, weights);
@@ -545,6 +585,8 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
         });
       }
     }
+    // The bridge's height on the clip as it now plays (the pin moved feet).
+    storeLift(clip, times, firstFullContact(weights, times, clip.duration));
     reports.push({
       clip: clip.name, used: useRig ? 'rig' : 'imported',
       ...(useRig ? {} : { reason: IMPORTED_BETTER }),

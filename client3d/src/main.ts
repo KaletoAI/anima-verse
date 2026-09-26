@@ -3944,6 +3944,7 @@ async function startApp(username: string, role: string) {
       ownSeatChangeAt = Infinity;
       npcs.setPlayerPose(avatarName, null, null);
       npcs.setPlayerAnimation(avatarName, null);
+      groundAvatarGoal();
       void api.postActivity({ activity: '' })
         .then(() => {
           // …and a poll is asked right away, exactly as the sit-down does it:
@@ -4194,6 +4195,24 @@ async function startApp(username: string, role: string) {
   // The three state variables live with the report state above
   // (`avatarSeated`, `seatedKey`, `ownSeatChangeAt`).
 
+  /** STANDING UP puts the steered figure's GOAL onto the floor under its
+   *  seat (Task C5) — the room floor where there is one, the ground
+   *  otherwise, the height every walking goal of the avatar gets. The root
+   *  itself stays on the seat: when the stand-up bridge starts, `npcs.tick`
+   *  puts it onto this floor at once and hands the difference to the figure,
+   *  which keeps the body on its bed or chair and lands the feet on this
+   *  floor (`Figure.beginBridgeLift`). Before, nothing wrote the avatar's goal
+   *  height after a seat: without input after getting up the root stayed on
+   *  the seat for good, and the idle feet hung 49 cm (bed 0.46 m) beside the
+   *  bed. X/Z stay the seat's — the bridge's own travel carries the body
+   *  out, and the steering writes the next goal once it lets go. */
+  function groundAvatarGoal(): void {
+    const pos = npcs.positionOf(avatarName);
+    if (!pos) return;
+    pos.y = roomFloorY(tileAt(pos.x, pos.z), pos.x, pos.z) ?? groundY(pos.x, pos.z);
+    npcs.setPlayerTarget(avatarName, pos);
+  }
+
   /** Put the steered figure on the seat the server says it holds, once per
    *  seat — with the place's facing and lean, the way an NPC gets them from
    *  `computeNpcStates`. Nothing is chosen here: the id and the slot are the
@@ -4225,7 +4244,20 @@ async function startApp(username: string, role: string) {
       // gap would have found an empty key and left the sit pose on a figure
       // that is standing. Both say "this figure was seated"; the pose comes
       // off if either does.
-      if (avatarSeated || seatedKey) npcs.setPlayerPose(avatarName, null, null);
+      if (avatarSeated || seatedKey) {
+        npcs.setPlayerPose(avatarName, null, null);
+        // Steered, the avatar gets its floor here as it does from its own
+        // stand-up (`groundAvatarGoal`) — and its seat clip comes off in the
+        // SAME frame: `npcs.update` writes the new clip only on its 1 Hz tick,
+        // and a goal on the floor under a figure that still lies would ease
+        // the root down through the bed until then. Cleared, the stand-up
+        // bridge opens in the next tick together with the goal; the payload's
+        // own clip follows with the next update.
+        if (getGameState().mode === 'embodied') {
+          npcs.setPlayerAnimation(avatarName, null);
+          groundAvatarGoal();
+        }
+      }
       avatarSeated = false;
       seatedKey = '';
       return;

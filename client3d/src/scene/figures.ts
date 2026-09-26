@@ -19,16 +19,18 @@ import { bridgePace, clipTransition, locomotionClip, setClipTransitions,
   setLocomotionClips } from '../game/walk';
 import { clipRootPath, rootPathAt, setClipRootPath, toWorld, travelAt } from './bridgeTravel';
 import type { RootPath } from './bridgeTravel';
+import { clipBridgeLift, liftAt } from './bridgeLift';
+import type { BridgeLift } from './bridgeLift';
 import { relockRootPaths } from './footLockMeasure';
 
 export { clipRootPath, rootPathAt, setClipRootPath };
 export type { RootPath };
 
 /**
- * Animierte 3D-Figuren für NPCs (AV3D-5): Modelle kommen vom Server
- * (GET /characters/{name}/model3d), /models/manifest.json ist nur noch
- * Dev-/Offline-Fallback. Die Fallback-Kette (Figur -> Portrait-Sprite)
- * bleibt dieselbe.
+ * Animated 3D figures for NPCs (AV3D-5): models come from the server
+ * (GET /characters/{name}/model3d), /models/manifest.json is only the
+ * dev/offline fallback. The fallback chain (figure -> portrait sprite) stays
+ * the same.
  */
 
 /** Base height of a figure without `height_cm`, in REAL metres — and since E4
@@ -96,15 +98,15 @@ export function setClipRootMotion(clip: THREE.AnimationClip, rootMotion: boolean
 
 interface ManifestModel {
   name: string;
-  url: string;   // .glb oder .fbx
+  url: string;   // .glb or .fbx
   height?: number;
-  /** true = nur über assignments nutzbar, nicht im Zufalls-Pool (Charakter-Modelle) */
+  /** true = usable through assignments only, never in the random pool (character models) */
   assignOnly?: boolean;
-  /** Textur separat anwenden (z.B. FBX mit externer Referenz + Bake aus GLB) */
+  /** Apply the texture separately (e.g. an FBX with an external reference + a bake from a GLB) */
   texture?: string;
-  /** V-Flip der separaten Textur (FBX/GLB-UV-Konventionen), Default false */
+  /** V-flip of the separate texture (FBX/GLB UV conventions), default false */
   textureFlipY?: boolean;
-  /** true = keine Spender-Clips retargeten (Figur bleibt in Rest-Pose) */
+  /** true = retarget no donor clips (the figure stays in its rest pose) */
   noClips?: boolean;
 }
 
@@ -112,12 +114,12 @@ interface Manifest {
   defaultHeight?: number;
   models: ManifestModel[];
   assignments?: Record<string, string>;
-  /** Mixamo-Animations-Dateien (FBX/GLB), direkt auf Mixamo-Rigs anwendbar:
-   *  {"run": "/models/StandardRun.fbx", ...} — Key = Clip-Kategorie */
+  /** Mixamo animation files (FBX/GLB), directly usable on Mixamo rigs:
+   *  {"run": "/models/StandardRun.fbx", ...} — key = clip category */
   clipFiles?: Record<string, string>;
 }
 
-/** Auflösungs-Stufe eines Server-Modells (Vertragswerte von ?tier=). */
+/** Resolution tier of a server model (the contract values of ?tier=). */
 export type FigureTier = 'full' | 'low';
 
 interface LoadedModel {
@@ -125,10 +127,10 @@ interface LoadedModel {
   template: THREE.Group;
   clips: THREE.AnimationClip[];
   scale: number;
-  height: number; // Welthöhe nach Skalierung
+  height: number; // world height after scaling
   assignOnly: boolean;
   noClips: boolean;
-  /** Stufe, mit der das Modell geladen wurde (Manifest-Modelle: full). */
+  /** Tier the model was loaded at (manifest models: full). */
   tier: FigureTier;
   /** true = the shared clip library reached this skeleton (at least one
    *  library clip survived `adaptExternalClips`). false also when no library
@@ -748,14 +750,14 @@ const loggedActionKinds = new Set<string>();
 export class FigureLibrary {
   private models: LoadedModel[] = [];
   private assignments: Record<string, string> = {};
-  /** Vom Server geladene Charakter-Modelle (null = Server hat keins). */
+  /** Character models loaded from the server (null = the server has none). */
   private apiModels = new Map<string, LoadedModel | null>();
-  /** Signatur des geladenen Modells je Charakter (Outfit-Wechsel erkennen) */
+  /** Signature of the loaded model per character (detects an outfit change) */
   private apiSignature = new Map<string, string>();
   private pending = new Set<string>();
-  /** Gewünschte Auflösungs-Stufe je Charakter (view state, Default full). */
+  /** Wanted resolution tier per character (view state, default full). */
   private tierWanted = new Map<string, FigureTier>();
-  /** Bereits geladene Stufen je Charakter — Rückwechsel ist damit sofort. */
+  /** Tiers already loaded per character — switching back is instant. */
   private tierCache = new Map<string, Map<FigureTier, LoadedModel>>();
   /** Models of a character that is loading a REPLACEMENT (outfit change):
    *  already out of the caches, still drawn by the figure on screen. Freed in
@@ -778,27 +780,27 @@ export class FigureLibrary {
    *  `undefined` while the rig is not served — root-motion clips then play
    *  in place. */
   private donorHipsY: number | undefined = undefined;
-  /** Set-Fallback-Kette pro Charakter (aus der Worldmap) */
+  /** Set fallback chain per character (from the worldmap) */
   private charSets = new Map<string, string[]>();
-  /** Körpergröße pro Charakter in Metern (aus height_cm der Worldmap) */
+  /** Body height per character in metres (from the worldmap's height_cm) */
   private charHeight = new Map<string, number>();
-  /** Figuren-Basishöhe in REALEN Metern (Vertrag § A3: 1,70; Welthöhe = x k) */
+  /** Base figure height in REAL metres (contract § A3: 1.70; world height = × k) */
   private defaultHeight = BASE_FIGURE_HEIGHT_M;
-  /** wird gerufen, sobald ein nachgeladenes Charakter-Modell bereit ist */
+  /** called as soon as a character model loaded later is ready */
   onModelReady: ((charName: string) => void) | null = null;
 
-  /** true, wenn mindestens ein Modell nutzbar ist; sonst Portrait-Fallback.
-   *  opts.only: nur dieses Modell laden (Name oder Charaktername) —
-   *  sonst alle Standard-Modelle + zugewiesene (assignOnly ohne Zuweisung
-   *  wird übersprungen; Test-Modelle blähen sonst jeden Seitenaufruf auf). */
+  /** true when at least one model is usable; otherwise the portrait fallback.
+   *  opts.only: load only this model (model name or character name) —
+   *  otherwise all standard models + the assigned ones (assignOnly without an
+   *  assignment is skipped; test models would bloat every page load). */
   async load(opts: { only?: string } = {}): Promise<boolean> {
-    // Manifest ist optional (Dev-/Offline-Fallback) — fehlt es, arbeiten wir
-    // rein mit den Server-Assets weiter.
+    // The manifest is optional (dev/offline fallback) — without it we carry
+    // on with the server assets alone.
     let manifest: Manifest = { models: [] };
     try {
       const res = await fetch('/models/manifest.json');
       if (res.ok) manifest = await res.json();
-    } catch { /* kein Manifest -> nur Server-Assets */ }
+    } catch { /* no manifest -> server assets only */ }
     this.assignments = manifest.assignments ?? {};
     const loader = new GLTFLoader();
     const defaultHeight = manifest.defaultHeight ?? BASE_FIGURE_HEIGHT_M;
@@ -986,13 +988,13 @@ export class FigureLibrary {
     return path ? rootPathAt(path, t) : null;
   }
 
-  /** Set-Fallback-Kette eines Charakters merken (aus /play/worldmap). */
+  /** Remember a character's set fallback chain (from /play/worldmap). */
   setCharacterSets(charName: string, sets: string[] | undefined) {
     if (sets?.length) this.charSets.set(charName, sets);
   }
 
-  /** Modellwechsel prüfen (z.B. neues Outfit): bei Abweichung das Modell
-   *  verwerfen -> wird neu geladen.
+  /** Check for a model change (e.g. a new outfit): on a mismatch the model
+   *  is dropped -> it loads again.
    *
    *  `serverSig` is the signature the WORLDMAP poll already carries for this
    *  character (`MapCharacter.model_sig`, § A11a) — the same string the model
@@ -1009,12 +1011,12 @@ export class FigureLibrary {
       try {
         info = await getCharacterModel(charName);
       } catch {
-        return false;   // Server gerade nicht erreichbar -> nächster Poll
+        return false;   // server not reachable right now -> next poll
       }
       signature = info?.signature ?? '';
     }
     if (!signature || signature === known) return false;
-    console.info(`[figures] ${charName}: Modell geändert (${known} -> ${signature}) — lade neu`);
+    console.info(`[figures] ${charName}: model changed (${known} -> ${signature}) — reloading`);
     // The old mesh leaves the caches here, but NOT the GPU: a Figure built
     // from it is still on screen until the replacement arrives (see
     // `retireModels`). Freeing it now would only make three.js upload it
@@ -1022,7 +1024,7 @@ export class FigureLibrary {
     this.retireModels(charName);
     this.apiModels.delete(charName);
     this.apiSignature.delete(charName);
-    this.tierCache.delete(charName);   // beide Stufen gehören zum alten Mesh
+    this.tierCache.delete(charName);   // both tiers belong to the old mesh
     this.fetchCharacterModel(charName);
     return true;
   }
@@ -1072,7 +1074,7 @@ export class FigureLibrary {
       this.disposeModel(m);
       freed += 1;
     }
-    if (freed) console.info(`[figures] ${charName}: ${freed} altes Modell/Modelle freigegeben`);
+    if (freed) console.info(`[figures] ${charName}: ${freed} old model(s) freed`);
   }
 
   /**
@@ -1113,20 +1115,19 @@ export class FigureLibrary {
     for (const m of materials) m.dispose();
   }
 
-  /** Gewünschte Distanz-Stufe einer Figur setzen (view state — WANN full/low
-   *  gilt, entscheidet der Aufrufer; die Hysterese steckt in dessen Bändern).
-   *  Aktiviert sofort aus dem Stufen-Cache oder lädt die fehlende Stufe nach;
-   *  bis dahin bleibt die stehende Figur unverändert sichtbar. */
+  /** Set the wanted distance tier of a figure (view state — WHEN full/low
+   *  applies is the caller's decision; the hysteresis lives in its bands).
+   *  Activates at once from the tier cache or loads the missing tier; until
+   *  then the figure on screen stays as it is. */
   setFigureTier(charName: string, tier: FigureTier) {
     if ((this.tierWanted.get(charName) ?? 'full') === tier) return;
     this.tierWanted.set(charName, tier);
     this.syncTier(charName);
   }
 
-  /** Aktives Modell auf die gewünschte Stufe bringen: Cache-Treffer sofort,
-   *  sonst EIN Nachladelauf; danach erneut prüfen (der Wunsch kann sich
-   *  während des Ladens geändert haben). Ein Ladefehler gibt auf — der
-   *  nächste Stufen-Wechsel versucht es wieder. */
+  /** Bring the active model to the wanted tier: a cache hit at once,
+   *  otherwise ONE load; then check again (the wish may have changed while
+   *  loading). A load error gives up — the next tier change tries again. */
   private syncTier(charName: string) {
     const want = this.tierWanted.get(charName) ?? 'full';
     const active = this.apiModels.get(charName);
@@ -1148,7 +1149,7 @@ export class FigureLibrary {
           built = true;
         }
       } catch (e) {
-        console.warn(`[figures] ${charName}: ${want}-Stufe nicht ladbar`, e);
+        console.warn(`[figures] ${charName}: ${want} tier could not be loaded`, e);
       } finally {
         this.pending.delete(charName);
       }
@@ -1165,7 +1166,7 @@ export class FigureLibrary {
     byTier.set(model.tier, model);
   }
 
-  /** Körpergröße eines Charakters merken (cm -> m); wirkt beim nächsten Bau. */
+  /** Remember a character's body height (cm -> m); takes effect at the next build. */
   setCharacterHeight(charName: string, heightCm: number | undefined) {
     if (heightCm && heightCm > 30 && heightCm < 400) this.charHeight.set(charName, heightCm / 100);
   }
@@ -1297,8 +1298,8 @@ export class FigureLibrary {
     return out;
   }
 
-  /** Modell eines Charakters vom Server nachladen (einmal pro Name).
-   *  Ergebnis landet im Cache; onModelReady meldet die Fertigstellung. */
+  /** Load a character's model from the server (once per name). The result
+   *  lands in the cache; onModelReady reports that it is done. */
   private fetchCharacterModel(charName: string) {
     if (this.apiModels.has(charName) || this.pending.has(charName)) return;
     this.pending.add(charName);
@@ -1306,7 +1307,7 @@ export class FigureLibrary {
       try {
         const info = await getCharacterModel(charName);
         if (!info) {
-          this.apiModels.set(charName, null);   // Server hat keins -> Portrait
+          this.apiModels.set(charName, null);   // the server has none -> portrait
           return;
         }
         const tier = this.tierWanted.get(charName) ?? 'full';
@@ -1314,7 +1315,7 @@ export class FigureLibrary {
         this.cacheTier(charName, model);
         this.apiModels.set(charName, model);
         if (info.signature) this.apiSignature.set(charName, info.signature);
-        console.info(`[figures] ${charName}: Modell vom Server (${info.format}/${info.rig}/${tier}, ${model.clips.length} Clips, ${(model.height * 100).toFixed(0)} cm)`);
+        console.info(`[figures] ${charName}: model from the server (${info.format}/${info.rig}/${tier}, ${model.clips.length} clips, ${(model.height * 100).toFixed(0)} cm)`);
         this.onModelReady?.(charName);
         // The replacement is live now — whoever holds figures rebuilds them in
         // `onModelReady` (`npcs.rebuild`), so the clone of the PREVIOUS model
@@ -1322,13 +1323,13 @@ export class FigureLibrary {
         // buffers and textures go.
         this.freeRetired(charName);
       } catch (e) {
-        // Transienter Fehler (Netzwerk, 5xx, Textur): nicht als "hat keins"
-        // cachen, sondern später erneut versuchen.
-        console.warn(`[figures] ${charName}: Modell nicht ladbar — neuer Versuch in 30 s`, e);
+        // A transient error (network, 5xx, texture): not cached as "has
+        // none" — try again later.
+        console.warn(`[figures] ${charName}: model could not be loaded — retrying in 30 s`, e);
         window.setTimeout(() => this.fetchCharacterModel(charName), 30_000);
       } finally {
         this.pending.delete(charName);
-        this.syncTier(charName);   // Wunsch kann sich beim Laden geändert haben
+        this.syncTier(charName);   // the wish may have changed while loading
       }
     })();
   }
@@ -1344,24 +1345,24 @@ export class FigureLibrary {
     if (info.textureUrl) {
       const tex = await new THREE.TextureLoader().loadAsync(info.textureUrl);
       tex.colorSpace = THREE.SRGBColorSpace;
-      tex.flipY = false;   // FBX-UVs entsprechen der glTF-Konvention
+      tex.flipY = false;   // FBX UVs follow the glTF convention
       template.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) {
           (o as THREE.Mesh).material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0 });
         }
       });
     }
-    // Charaktere sind DIELEKTRIKA: Metalness hart auf 0 (AV3D-14).
-    // Das Gateway bettet seit Rosi auch bei Humanoiden eine
-    // Metal-Roughness-Textur ein, deren B-Kanal ~0,5 Metalness über den
-    // ganzen Körper behauptet — auf Haut und Stoff physikalisch Unsinn; dazu
-    // ist `metallicFactor` oft unbelegt, und der glTF-Default ist 1,0. Ohne
-    // Korrektur rendert der Körper ohne Env-Map falsch (Rosi grünstichig).
-    // Bewusst KEINE Env-Map-Lösung wie bei Gebäuden/Props: ein halb-
-    // metallischer Körper ist auch mit Env-Map falsch. metalness = 0 macht
-    // die metalnessMap multiplikativ tot; die ROUGHNESS aus dem G-Kanal
-    // derselben Textur bleibt aktiv und ist erwünscht — deshalb wird
-    // `roughness` NICHT angetastet.
+    // Characters are DIELECTRICS: metalness forced to 0 (AV3D-14).
+    // Since Rosi the gateway embeds a metal-roughness texture for humanoids
+    // too, whose B channel claims ~0.5 metalness over the whole body —
+    // physically nonsense on skin and cloth; on top of that `metallicFactor`
+    // is often unset, and the glTF default is 1.0. Uncorrected, the body
+    // renders wrong without an env map (Rosi turned greenish).
+    // Deliberately NO env-map solution as for buildings/props: a half-metallic
+    // body is wrong with an env map as well. metalness = 0 zeroes the
+    // metalnessMap multiplicatively; the ROUGHNESS from the G channel of the
+    // same texture stays active and is wanted — which is why `roughness` is
+    // NOT touched.
     const matLog: string[] = [];
     template.traverse((o) => {
       const mesh = o as THREE.Mesh;
@@ -1370,20 +1371,20 @@ export class FigureLibrary {
         const std = m as THREE.MeshStandardMaterial;
         if (!std.isMeshStandardMaterial) continue;
         const before = std.metalness;
-        const mr = std.metalnessMap ? 'MR-Map' : 'ohne MR-Map';
+        const mr = std.metalnessMap ? 'MR map' : 'no MR map';
         if (before !== 0) {
           std.metalness = 0;
           std.needsUpdate = true;
         }
         matLog.push(`metalness ${before}->${std.metalness} (${mr}, roughness ${std.roughness}`
-          + `${std.roughnessMap ? ' + Map' : ''})`);
+          + `${std.roughnessMap ? ' + map' : ''})`);
       }
     });
     if (matLog.length) console.info(`[figures] ${name}: ${matLog.join(' | ')}`);
 
     const b = new THREE.Box3().setFromObject(template);
     const s = b.getSize(new THREE.Vector3());
-    if (s.z > s.y * 1.5) {                       // Z-up-Export aufrichten
+    if (s.z > s.y * 1.5) {                       // stand a Z-up export upright
       template.rotation.x = -Math.PI / 2;
       template.updateMatrixWorld(true);
     }
@@ -1439,27 +1440,27 @@ export class FigureLibrary {
   }
 }
 
-/** Eine erkannte Beinkette eines clip-losen Rigs (prozeduraler Gang). */
+/** One detected leg chain of a clip-less rig (procedural gait). */
 interface LegChain {
-  /** oberstes Gelenk der Kette (Hüfte/Schulter) */
+  /** top joint of the chain (hip/shoulder) */
   bone: THREE.Bone;
-  /** Bind-Rotation des Gelenks (lokal) — Ruhelage */
+  /** bind rotation of the joint (local) — the rest pose */
   bindQuat: THREE.Quaternion;
-  /** Schwungachse im Eltern-Raum des Gelenks */
+  /** swing axis in the joint's parent space */
   axis: THREE.Vector3;
-  /** Gangphase beim Gehen: 4-Takt-Schritt, jedes Bein 90° versetzt */
+  /** gait phase when walking: a four-beat step, each leg 90° apart */
   phaseWalk: number;
-  /** Gangphase beim Rennen: Trab, diagonale Paare gemeinsam */
+  /** gait phase when running: a trot, diagonal pairs together */
   phaseRun: number;
 }
 
 /**
- * Beinketten an einem beliebigen Skelett heuristisch erkennen (UniRig-Tiere):
- * Blatt-Knochen, die nahe dem Boden enden, und von dort aufwärts die
- * unverzweigte Kette bis unter die Wirbelsäule — das oberste Glied ist das
- * Hüft-/Schultergelenk, das beim Laufen schwingt.
- * Erwartet, dass die matrixWorld-Werte zum übergebenen Bounding-Box-Raum
- * passen (kein updateMatrixWorld dazwischen).
+ * Detect the leg chains of an arbitrary skeleton heuristically (UniRig
+ * animals): leaf bones that end near the ground, and from there upwards the
+ * unbranched chain up to below the spine — its top link is the hip/shoulder
+ * joint that swings while walking.
+ * Expects the matrixWorld values to match the space of the given bounding box
+ * (no updateMatrixWorld in between).
  */
 function findLegChains(inst: THREE.Object3D, box: THREE.Box3): LegChain[] {
   const bones: THREE.Bone[] = [];
@@ -1473,24 +1474,24 @@ function findLegChains(inst: THREE.Object3D, box: THREE.Box3): LegChain[] {
 
   const found: { bone: THREE.Bone; foot: THREE.Vector3 }[] = [];
   for (const leaf of bones) {
-    if (boneKids(leaf).length) continue;                       // nur Ketten-Enden
+    if (boneKids(leaf).length) continue;                       // chain ends only
     const foot = new THREE.Vector3().setFromMatrixPosition(leaf.matrixWorld);
-    if (foot.y > box.min.y + height * 0.25) continue;          // endet nicht am Boden
-    // aufwärts bis zur ersten Verzweigung (dort beginnt Wirbelsäule/Becken)
+    if (foot.y > box.min.y + height * 0.25) continue;          // does not end at the ground
+    // upwards to the first branching (where spine/pelvis begin)
     let top: THREE.Bone = leaf;
     while ((top.parent as THREE.Bone)?.isBone && boneKids(top.parent!).length === 1) {
       top = top.parent as THREE.Bone;
     }
-    if (top === leaf) continue;                                // Einzelknochen ist kein Bein
+    if (top === leaf) continue;                                // a single bone is no leg
     const hip = new THREE.Vector3().setFromMatrixPosition(top.matrixWorld);
-    if (hip.y - foot.y < height * 0.12) continue;              // Kette führt nicht aufwärts (z.B. Schwanz)
+    if (hip.y - foot.y < height * 0.12) continue;              // the chain does not lead upwards (e.g. a tail)
     if (!found.some((f) => f.bone === top)) found.push({ bone: top, foot });
   }
-  // mehr als 4 Kandidaten: die bodennächsten sind die Beine
+  // more than 4 candidates: the ones nearest the ground are the legs
   found.sort((a, b) => a.foot.y - b.foot.y);
   const legs = found.slice(0, 4);
 
-  // Körper-Längsachse = längere Grundflächen-Seite; Schwungachse quer dazu
+  // body's long axis = the longer side of the footprint; swing axis across it
   const long: 'x' | 'z' = size.x > size.z ? 'x' : 'z';
   const cross: 'x' | 'z' = long === 'x' ? 'z' : 'x';
   const axisWorld = long === 'x' ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
@@ -1506,21 +1507,21 @@ function findLegChains(inst: THREE.Object3D, box: THREE.Box3): LegChain[] {
     };
   });
 
-  // Gangphasen: Beinpaare über Sortierung zuordnen (vorn/hinten x links/rechts) —
-  // Vorzeichen relativ zum Box-Zentrum sind unzuverlässig (Schwanz verschiebt es).
+  // Gait phases: assign the leg pairs by sorting (front/back × left/right) —
+  // signs relative to the box centre are unreliable (a tail shifts it).
   if (chains.length === 4) {
     const byLong = [...chains].sort((a, b) => a.foot[long] - b.foot[long]);
     const [aL, aR] = byLong.slice(0, 2).sort((a, b) => a.foot[cross] - b.foot[cross]);
     const [bL, bR] = byLong.slice(2).sort((a, b) => a.foot[cross] - b.foot[cross]);
-    // Gehen: 4-Takt-Schritt in seitlicher Folge (wie Katze/Hund:
-    // hinten-links -> vorn-links -> hinten-rechts -> vorn-rechts)
+    // Walking: a four-beat step in lateral sequence (like a cat/dog:
+    // back-left -> front-left -> back-right -> front-right)
     aL.phaseWalk = 0; bL.phaseWalk = Math.PI / 2;
     aR.phaseWalk = Math.PI; bR.phaseWalk = Math.PI * 1.5;
-    // Rennen: Trab — diagonale Paare gemeinsam
+    // Running: a trot — diagonal pairs together
     aL.phaseRun = 0; bR.phaseRun = 0;
     aR.phaseRun = Math.PI; bL.phaseRun = Math.PI;
   } else {
-    // 1-3 Beine erkannt: links/rechts gegenphasig als bester Rest-Fall
+    // 1-3 legs detected: left/right in antiphase as the best remaining case
     for (const c of chains) {
       const p = c.foot[cross] >= center[cross] ? 0 : Math.PI;
       c.phaseWalk = p; c.phaseRun = p;
@@ -1594,13 +1595,40 @@ export class Figure {
   private travelOrigin = { x: 0, z: 0 };
   private heldTravel = { x: 0, z: 0 };
   private holding = false;
+  /**
+   * THE HEIGHT OF A HOLDING BRIDGE (Task C5, `bridgeLift.ts`). While a bridge
+   * clip holds the figure, its root belongs to the owner in X/Z only. The
+   * owner sets the root's HEIGHT once, when the bridge starts: straight onto
+   * the new floor, and it hands the difference to the figure
+   * (`beginBridgeLift`). The figure then lifts the instance by `lift` over its
+   * anchor: `startLift` keeps the lying / sitting body on its surface, and
+   * by the feet's first ground contact the lift is the clip's measured
+   * `endLift` (`footLockMeasure`), which puts the feet of the clip's last
+   * frame onto the floor. Where the bed is not as high as the one the clip
+   * was authored on, the body moves by the difference over the last
+   * `LIFT_RAMP_S` before the feet touch down: one root cannot hold the seat
+   * AND the feet, and the feet come first.
+   *
+   * While the bridge fades out (the next clip fades in, standing on the
+   * floor), the lift is the bridge's lift × the bridge's own weight, so the
+   * hips stay continuous through the crossfade; at weight 0 it is gone.
+   *
+   * `liftAction` is the bridge the lift belongs to (null = none in force),
+   * `liftSpec` its measurement, `liftStart` the start lift in world metres of
+   * the root frame, `lift` the value applied right now.
+   */
+  private liftAction: THREE.AnimationAction | null = null;
+  private liftSpec: BridgeLift | null = null;
+  private liftStart = 0;
+  private lift = 0;
 
   private baseScale = 1;
   /** Y offset that puts the feet on y=0 (the mesh origin is not always there) */
   private groundY = 0;
   /** Extra drop currently applied on top of `groundY`, in WORLD metres — the
    *  ground offset of the clip playing right now (`clipGround`, finding 3).
-   *  0 for everything but a clip the GROUND named (move or idle). */
+   *  0 for everything but a clip the GROUND named (move or idle). The
+   *  instance stands at `groundY − clipDrop + lift` (`applyHeight`). */
   private clipDrop = 0;
   /** Whether the clip playing right now was named by the GROUND
    *  (`walk.moveClip` / `walk.idleClip`) — part of the play state, because the
@@ -1628,7 +1656,7 @@ export class Figure {
       if ((o as THREE.Mesh).isMesh) {
         o.castShadow = true;
         o.receiveShadow = false;
-        o.frustumCulled = false; // Skinned-Mesh-Bounds stimmen sonst beim Laufen nicht
+        o.frustumCulled = false; // skinned-mesh bounds are wrong while walking otherwise
       }
     });
     // The mesh origin is not always at the feet: centre XZ, feet on y=0
@@ -1686,13 +1714,13 @@ export class Figure {
     // open (acceptance A4).
     if (!loggedActionKinds.has(model.name)) {
       loggedActionKinds.add(model.name);
-      console.info(`[figures] ${model.name}: ${this.actions.size} Kinds gebunden — `
+      console.info(`[figures] ${model.name}: ${this.actions.size} kinds bound — `
         + `${[...this.actions.keys()].sort().join(', ')}`);
     }
     // Rigs without clips (UniRig animals): leg chains for the procedural gait
     if (this.actions.size === 0 && !box.isEmpty()) {
       this.legs = findLegChains(inst, box);
-      if (this.legs.length) console.info(`[figures] prozeduraler Gang: ${this.legs.length} Beinketten erkannt`);
+      if (this.legs.length) console.info(`[figures] procedural gait: ${this.legs.length} leg chains detected`);
     }
     // A fresh figure stands: the `idle` ROLE's clip (the admin's choice,
     // `game/walk.locomotionClip`), not the literal kind.
@@ -1753,7 +1781,12 @@ export class Figure {
       // towards the key for the whole seven seconds of getting up. From here
       // on `faceTowards`/`setYaw` only remember a turn (`holdsFacing`).
       // A ramping bridge keeps its turn: it is about to walk off.
-      if (rule.accel <= 0) this.targetYaw = this.root.rotation.y;
+      if (rule.accel <= 0) {
+        this.targetYaw = this.root.rotation.y;
+        // …and so is a turn an earlier bridge remembered and has not handed
+        // over yet: this bridge owns the facing from here on.
+        this.pendingYaw = null;
+      }
       // Rule 5 of the root motion (see `travelBase`): a travel still held here
       // means its owner never took it. Folded in, never dropped — dropping it
       // would snap the figure back to the seat it left.
@@ -1816,7 +1849,7 @@ export class Figure {
       : wantFamily === 'run' && !gotFamily ? 1.5 : 1);
     if (!resolved || resolved === this.current) {
       this.currentKind = kind;
-      // Fallback-Fall: gleicher Clip, aber ggf. Tempo anpassen (siehe unten)
+      // Stand-in case: the same clip, but the pace may need adjusting (see below)
       if (this.current) this.current.timeScale = paceOf();
       return;
     }
@@ -1946,16 +1979,54 @@ export class Figure {
     return out;
   }
 
-  /** Put the instance at `groundY − drop`. The anchor itself stays what the
-   *  bind pose made it; only this ONE extra term moves, and it goes back to 0
-   *  the moment the terrain move ends. Static rigs never get here — they have
-   *  no actions, so `play` always resolves a drop of 0, and their procedural
-   *  bob in `update` owns `inst.position.y` alone. */
+  /** Put the instance at `groundY − drop` (plus a bridge's lift, see
+   *  `applyHeight`). The anchor itself stays what the bind pose made it; only
+   *  this ONE extra term moves, and it goes back to 0 the moment the terrain
+   *  move ends. Static rigs never get here — they have no actions, so `play`
+   *  always resolves a drop of 0, and their procedural bob in `update` owns
+   *  `inst.position.y` alone. */
   private setClipDrop(drop: number) {
     if (Math.abs(drop - this.clipDrop) < 1e-4) return;
     this.clipDrop = drop;
+    this.applyHeight();
+  }
+
+  /** The instance's height over the figure root: the bind anchor, minus the
+   *  ground offset of the clip playing, plus the running bridge's lift. */
+  private applyHeight() {
     const inst = this.root.children[0];
-    if (inst) inst.position.y = this.groundY - drop;
+    if (inst) inst.position.y = this.groundY - this.clipDrop + this.lift;
+  }
+
+  /** The owner has just put the root of a figure whose HOLDING bridge started
+   *  this frame onto the new floor, `startLiftM` metres below where it was
+   *  (see `liftAction`). The figure takes that height over — the body does
+   *  not move on screen — and brings it down to the feet's height by the
+   *  first ground contact. The start lift comes on top of a lift still in
+   *  force (the fade-out of an earlier bridge), for the same reason.
+   *
+   *  Only for a bridge that holds the figure (`accel` <= 0) and whose clip
+   *  was measured on this rig (`clipBridgeLift`); otherwise nothing happens
+   *  and `false` says the owner keeps the height as before. */
+  beginBridgeLift(startLiftM: number): boolean {
+    const bridge = this.transition;
+    if (!bridge || !this.bridging || this.bridgeAccel > 0 || this.current !== bridge) return false;
+    const spec = clipBridgeLift(bridge.getClip());
+    if (!spec || !Number.isFinite(startLiftM)) return false;
+    this.liftAction = bridge;
+    this.liftSpec = spec;
+    this.liftStart = startLiftM + this.lift;
+    this.lift = this.liftStart;
+    this.applyHeight();
+    return true;
+  }
+
+  /** Does the running bridge own the figure's HEIGHT? True from
+   *  `beginBridgeLift` until that bridge ends: the owner leaves the root's
+   *  height alone then (`npcs.tick`) — it is on the floor already, and the
+   *  body's height is the lift's. */
+  get holdsHeight(): boolean {
+    return this.liftAction !== null && this.bridging && this.transition === this.liftAction;
   }
 
   /**
@@ -2153,6 +2224,28 @@ export class Figure {
         this.travelPath = null;
         this.travelAction = null;
       }
+    }
+    // The height of a holding bridge (see `liftAction`), read at the action's
+    // own time like the travel. Once the bridge is no longer the transition
+    // (ended, cancelled, timed out) it fades out, and the lift with it — by
+    // the bridge's weight; after a full run that is `endLift × weight`.
+    if (this.liftAction && this.liftSpec) {
+      const action = this.liftAction;
+      const lift = liftAt(action.time, this.liftStart, this.liftSpec.endLift * this.baseScale,
+        this.liftSpec.firstContactS);
+      if (this.transition === action) {
+        this.lift = lift;
+      } else {
+        const weight = action.getEffectiveWeight();
+        if (weight > 1e-4) {
+          this.lift = lift * weight;
+        } else {
+          this.lift = 0;
+          this.liftAction = null;
+          this.liftSpec = null;
+        }
+      }
+      this.applyHeight();
     }
   }
 }

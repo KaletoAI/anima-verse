@@ -516,6 +516,39 @@ export class NpcManager {
     npc?.figure?.faceTowards(new THREE.Vector3(dx, 0, dz), snap);
   }
 
+  /** Blend the root's height towards `goalY` (the 4·dt ease of every walking
+   *  figure) — unless a bridge owns the height (`Figure.holdsHeight`): then
+   *  the root already stands on the floor the bridge started over, and the
+   *  body's height is the figure's lift. */
+  private easeRootY(npc: Npc, goalY: number, dt: number) {
+    if (npc.figure?.holdsHeight) return;
+    npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
+  }
+
+  /** Ask the figure for its clip — and when that opens a bridge the figure
+   *  LIFTS (Task C5, `Figure.beginBridgeLift`), put the root onto its goal
+   *  height at once and hand the difference over. `rootYBefore` is the root's
+   *  height as the frame began: the body lay or sat there, and the ease above
+   *  may already have moved the root a step towards the floor this frame.
+   *
+   *  THE RULE: while a bridge holds a figure, its root belongs to the owner in
+   *  X/Z only. The height is set ONCE, when the bridge starts, onto the new
+   *  floor (the server's stand point for an NPC, the floor under the seat for
+   *  the avatar, `main.ts`), and the difference is the figure's `startLift`:
+   *  the body stays on its bed or chair and the feet land on that floor at
+   *  their first contact. A bridge the figure cannot lift (no rule that holds
+   *  it, no measurement on this rig) leaves the height to the ease as before. */
+  private playLifting(npc: Npc, kind: string, terrainClip: boolean, sink: number,
+                      rootYBefore: number, goalY: number) {
+    const figure = npc.figure;
+    if (!figure) return;
+    const wasBridging = figure.bridging;
+    figure.play(kind, terrainClip, sink);
+    if (!wasBridging && figure.bridging && figure.beginBridgeLift(rootYBefore - goalY)) {
+      npc.root.position.y = goalY;
+    }
+  }
+
   /** Root and goal take the figure's held bridge travel over
    *  (`Figure.takeTravel`); returns the offset, or null when none was held. */
   private applyBridgeTravel(npc: Npc): { x: number; z: number } | null {
@@ -1235,6 +1268,7 @@ export class NpcManager {
         // several metres of open country, and holding the poll's height would
         // have it walk into the hill and out of it again every three seconds.
         const goalPos = new THREE.Vector3(at[0], this.groundY(at[0], at[1]), at[1]);
+        const rootYBefore = npc.root.position.y;
         const delta = goalPos.clone().sub(npc.root.position);
         delta.y = 0;
         const d = delta.length();
@@ -1280,7 +1314,7 @@ export class NpcManager {
           // the next frame after it asks again.
           if (!npc.figure?.holdsFacing) npc.figure?.faceTowards(dir);
         }
-        npc.root.position.y += (goalPos.y - npc.root.position.y) * Math.min(1, dt * 4);
+        this.easeRootY(npc, goalPos.y, dt);
         if (npc.figure) {
           // no 'run' on journeys: the pace comes from the server — walk while
           // the journey is moving, idle on freeze. WHAT walking looks like is
@@ -1298,8 +1332,9 @@ export class NpcManager {
           // rule's reach (`groundSink`). It is the VERY number the root was
           // placed with above, which is what makes the pair meet: root − sink
           // is the surface the body rests on.
-          npc.figure.play(travelling ? moveClip(gm.anim, false, raw.scope)
-            : (groundIdle || locomotionClip('idle')), travelling || !!groundIdle, sinkM);
+          this.playLifting(npc, travelling ? moveClip(gm.anim, false, raw.scope)
+            : (groundIdle || locomotionClip('idle')), travelling || !!groundIdle, sinkM,
+          rootYBefore, goalPos.y);
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
@@ -1338,6 +1373,9 @@ export class NpcManager {
       const delta = goal.clone().sub(npc.root.position);
       delta.y = 0;
       const distToGoal = delta.length();
+      // The height the root had when this frame began — what a bridge that
+      // starts further down lifts the body by (`playLifting`).
+      const rootYBefore = npc.root.position.y;
       const dist = npc.waypoints.length ? distToGoal + 10 : distToGoal;  // on the way = running
       const moving = distToGoal > MOVE_EPS_M;
       // A TRAVELLER WITHOUT A ROUTE WALKS BY ITS OWN RECKONING, and never in
@@ -1442,6 +1480,7 @@ export class NpcManager {
       // match the height to the CURRENT waypoint and blend, which is what
       // makes the vertical ride between two lift stops (AV3D-12).
       let rideY: number | null = null;
+      let goalY: number;
       if (npc.ride) {
         const step = rideStep(npc.ride, npc.root.position.x,
           npc.root.position.y, npc.root.position.z);
@@ -1454,10 +1493,11 @@ export class NpcManager {
       }
       if (rideY !== null) {
         npc.root.position.y = rideY;
+        goalY = rideY;
       } else {
-        const goalY = floatRootY(npc.waypoints[0]?.y ?? npc.target.y,
+        goalY = floatRootY(npc.waypoints[0]?.y ?? npc.target.y,
           standGm.water, standSink);
-        npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
+        this.easeRootY(npc, goalY, dt);
       }
       if (!moving && npc.figure) {
         // Standing: the marker's facing beats looking at the neighbours, and
@@ -1501,9 +1541,9 @@ export class NpcManager {
         // inside a built place like the clips are (`groundSink`). It is the
         // very number the root was raised with above, which is what makes the
         // pair meet: root − sink is the surface the body rests on.
-        npc.figure.play(
+        this.playLifting(npc,
           moving ? moveClip(standGm.anim, !reckoning && dist > RUN_DISTANCE, standRaw.scope)
-            : standingClip, moving || !!standIdle, standSink);
+            : standingClip, moving || !!standIdle, standSink, rootYBefore, goalY);
         npc.figure.update(dt);
         // The ring grows with the camera distance so NPCs stay findable from afar
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
