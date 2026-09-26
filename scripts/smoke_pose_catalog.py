@@ -113,7 +113,7 @@ plan-platztypen.md), derived BY HAND from the catalog file:
 - get_groups() has exactly the four place types stand/ground/seat/lie — a
   place type names a BODY SHAPE, not a piece of furniture, so `bed` and
   `floor` merged into `lie` and `counter` (one sitting pose) dissolved into
-  `stand`. Drops: seat 0.243, lie 0.003, stand 0, ground 0 (the ONE source of
+  `stand`. Drops: seat 0.234, lie 0.001, stand 0, ground 0 (the ONE source of
   every root_offset in the scene payload; the old
   scene_recipe.FIGURE_ROOT_DROP table is gone). Both are derived for the
   CONTACT point — a sitter's buttocks, a lying body's lowest point — from the

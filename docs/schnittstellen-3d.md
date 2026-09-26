@@ -8440,27 +8440,30 @@ Liegenden — landet AUF der markierten Fläche, nicht das Hüftgelenk
 | `seat` | 0,234 | 0,398 |
 | `lie` | 0,001 | 0,002 |
 
-Die Clip-Absenkung ist `clipHipsDrop = 0,98013 × (1 − Median / standRef)`,
-und `standRef` ist seit 2026-09-26 die **Ruhe-Hüfthöhe des Referenz-Rigs**
+Die Clip-Absenkung ist `clipHipsDrop = 0,98013 × (1 − Median / standRef)`, und
+`standRef` ist seit 2026-09-26 die **Ruhe-Hüfthöhe des Referenz-Rigs**
 (`shared/models/rig/reference.fbx`, 113,032 — die Regel `standingHipsRef` in
 `@anima/scene-render`, die der 3D-Client und jede Admin-Vorschau anwenden; der
 Idle-Median 110,179 ist nur noch Rückfall ohne Rig): `sit` (Median 65,961)
-0,98013 × (1 − 65,961 / 113,032) = 0,40816, `laying` (Median 20,368)
-0,98013 × (1 − 20,368 / 113,032) = 0,80351.
-`seat`: Hüftgelenk 0,98013 − Clip-Absenkung 0,40816 − Gesäß 0,1741 unter der
-Hüfte = 0,39787, ÷ 1,70 = 0,23404 → 0,234. `lie`: 0,98013 − 0,80351 − 0,1754
-(tiefster Körperpunkt) = 0,00122, ÷ 1,70 = 0,00072 → 0,001 — ein Liege-Clip
-ist am Boden animiert, seine eigene Hüfthöhe legt den Körper schon auf die
-Fläche. Damit sitzt das Gesäß bei S − 0,0001 (Hüfte S + 0,174) und liegt der
-Körper bei S − 0,0008 (Hüfte S + 0,175). Bis 2026-09-26 war `standRef` der
-Idle-Median (Absenkungen 0,39335 / 0,79894, Werte 0,243 / 0,003,
-`root_offset` 0,413 / 0,005); der Idle-Clip steht aber mit gebeugten Knien
-2,6 % unter der gestreckten Ruhehaltung und hob jede Figur um ~2,85 cm. Der
-Szenen-Fingerprint hasht `pose_catalog.get_groups()`, eine gecachte Szene
-holt die neuen `root_offset` deshalb ohne Versionssprung. Die
-Hüftgelenk-Werte vom Vormittag des 2026-09-08 (0,320 / 0,075) steckten den
-Sitzenden 0,131 m ins Polster und den Liegenden 0,122 m in die Matratze; die Erst-Werte dieses Nachtrags (0,314 / 0,051)
-waren gegen die Clip-Bibliothek vor `a605c5a7` gelesen.
+0,98013 × (1 − 65,961 / 113,032) = 0,40816, `laying` (Median 20,368) 0,98013 ×
+(1 − 20,368 / 113,032) = 0,80351. `seat`: Hüftgelenk 0,98013 − Clip-Absenkung
+0,40816 − Gesäß 0,1741 unter der Hüfte = 0,39787, ÷ 1,70 = 0,23404 → 0,234.
+`lie`: 0,98013 − 0,80351 − 0,1754 (tiefster Körperpunkt) = 0,00122, ÷ 1,70 =
+0,00072 → 0,001 — ein Liege-Clip ist am Boden animiert, seine eigene Hüfthöhe
+legt den Körper schon auf die Fläche. Damit sitzt das Gesäß bei S − 0,0001
+(Hüfte S + 0,174) und liegt der Körper bei S − 0,0008 (Hüfte S + 0,175). Bis
+2026-09-26 war `standRef` der Idle-Median (Absenkungen 0,39335 / 0,79894, Werte
+0,243 / 0,003, `root_offset` 0,413 / 0,005); der Idle-Clip steht aber mit
+gebeugten Knien, sein Median liegt 2,853 Rig-Einheiten (2,5 % der Ruhehöhe: 1 −
+110,179 / 113,032 = 0,0252) unter der gestreckten Ruhehaltung, und dieser
+Nenner hob jede Figur um hipsBindY × (m / 110,179 − m / 113,032) — je Clip
+verschieden: idle 2,47 cm, sit 1,48 cm, laying 0,46 cm an der
+1,70-m-Referenzfigur. Der Szenen-Fingerprint hasht `pose_catalog.get_groups()`,
+eine gecachte Szene holt die neuen `root_offset` deshalb ohne Versionssprung.
+Die Hüftgelenk-Werte vom Vormittag des 2026-09-08 (0,320 / 0,075) steckten den
+Sitzenden 0,131 m ins Polster und den Liegenden 0,122 m in die Matratze; die
+Erst-Werte dieses Nachtrags (0,314 / 0,051) waren gegen die Clip-Bibliothek vor
+`a605c5a7` gelesen.
 
 `bed`s 0,631 war am 2026-08-27 gegen den Mixamo-Clip `sleep` kalibriert, der
 drei Tage später (`c2eb166d`) gelöscht wurde. `sleeping`, `lying` und

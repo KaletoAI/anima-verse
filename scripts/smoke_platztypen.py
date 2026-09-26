@@ -95,8 +95,11 @@ number and keeps the old one beside it as the red probe.
     clip's hips median (110.179): `clipHipsDrop(laying)` = 0.9801 × (1 −
     20.368 / 110.179) = 0.7989, contact-derived `lie` 0.003 (0.00579 / 1.70)
     and `seat` 0.243, the sleeper's hips at S + 0.1762. The idle clip stands
-    on bent knees, 2.6 % below the straight-legged rest of the rig the clips
-    are retargeted onto, which lifted every figure ~2.85 cm; the rig rest is
+    on bent knees, its median 2.853 rig units (2.5 % of the rest: 1 − 110.179
+    / 113.032 = 0.0252) below the straight-legged rest of the rig the clips
+    are retargeted onto, and that denominator lifted every figure by
+    hipsBindY × (m / 110.179 − m / 113.032), clip by clip: idle 2.47 cm, sit
+    1.48 cm, laying 0.46 cm on the 1.70 m reference figure. The rig rest is
     the reference of the 3D client and every admin preview since then, so the
     catalog was re-derived against it (`lie` 0.003 -> 0.001, `seat` 0.243 ->
     0.234). Read against the rig rest, the old 0.003 (shipped 0.005) would

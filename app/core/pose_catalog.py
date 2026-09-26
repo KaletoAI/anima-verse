@@ -327,9 +327,12 @@ def _load_groups() -> Dict[str, dict]:
     History, so nobody re-derives an old number as the new one. Until
     2026-09-26 ``standRef`` was the idle clip's hips median (110.179, drops
     sit 0.39335 / laying 0.79894), which gave seat 0.243 / lie 0.003 — but
-    the idle clip stands on bent knees, 2.6 % below the straight-legged rest,
-    and lifted every figure ~2.85 cm; since then the rig rest is the
-    reference everywhere and these values were re-derived against it. Until
+    the idle clip stands on bent knees, its median 2.853 rig units (2.5 % of
+    the rest: 1 - 110.179 / 113.032 = 0.0252) below the straight-legged
+    rest, and that denominator lifted every figure by hipsBindY x (m / 110.179
+    - m / 113.032), clip by clip: idle 2.47 cm, sit 1.48 cm, laying 0.46 cm
+    on the 1.70 m reference figure. Since then the rig rest is the reference
+    everywhere and these values were re-derived against it. Until
     the morning of 2026-09-08 the target was the HIP JOINT (seat 0.320 / lie
     0.075, hips at S + 0.043 / S + 0.054): a seated body sat 0.131 m in the
     cushion and a lying one 0.122 m in the mattress. Before that (0.314 /
