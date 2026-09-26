@@ -334,9 +334,36 @@
  *       bridge's own turn (get-up-bed, ~105°), which both share; the marker
  *       adds nothing. Before C1 it eased to the marker's π/2: 0.9708 rad off.
  *       [Y3d] After the bridge the gate opens: the first tick after it hands
- *       the bridge travel over (root and goal move by it, `applyBridgeTravel`),
- *       and within the 1 s after THAT tick the root walks >= 5 cm (the goal
- *       is still ~0.5 m away; 1 s of walking is up to 3.4 m).
+ *       the bridge travel over (the ROOT moves by it, `applyBridgeTravel`;
+ *       the goal stays, Task C4), and within the 1 s after THAT tick the root
+ *       walks >= 5 cm. The goal does not become a kept spot
+ *       (`settleAfterBridge`): in the figure's frame it lies 0.5 m ahead
+ *       (0, 0.5), the travel sets the body down near (−0.485, −0.073) (the
+ *       server's point of [Y3e]) — sqrt(0.485² + 0.573²) = 0.75 m apart, so
+ *       even 0.25 m off that point the body is >= 0.50 m > STAND_ADOPT_M from
+ *       the goal and walks (1 s of walking is up to 3.4 m).
+ *       [Y3e] THE SERVER'S STAND POINT IS THE GOAL (Task C4): the NPC lies,
+ *       stands up with its goal on `room_stand.bridge_stand_point` = seat +
+ *       toWorld(travel_m · k, YAW), k = 1.70 / ref_height_m — get-up-bed:
+ *       travel_m (−0.574, −0.086), ref 2.011 m → k = 0.84535, travel·k =
+ *       (−0.48523, −0.07270), |.| = 0.49065 m from the seat. After the bridge
+ *       and its hand-over: the root lands within STAND_ADOPT_M = 0.25 m (the
+ *       `pick_stand` raster, app/core/room_stand.py STAND_GRID_M) of that
+ *       point — client and server measure the same clip's travel, the client
+ *       per rig with the turn in the root —, the goal IS the root (<= 1e-6)
+ *       and the root does not move in the 1 s after (<= 1e-6). BEFORE C4 the
+ *       hand-over moved the goal by the travel as well (≈ 0.36 m past the
+ *       root, C0 § 5.2) and the NPC walked towards it: 34 cm in that second.
+ *       [Y3f] A JOURNEY THAT STARTS WHILE THE NPC GETS UP (carried from the C1
+ *       review): the NPC lies, stands up (goal = the stand point of [Y3e]),
+ *       and JOURNEY_AT_F = 30 frames into the bridge a journey starts
+ *       (route seat → stand point → 5 m ahead, progress at the stand point,
+ *       1.4 m/s, `travelling`). For every remaining bridge frame the root
+ *       X/Z moves <= 1 mm — the catch-up is gated by the bridge like the step
+ *       without a route, and the travel waits for the bridge's end (still
+ *       held then). Within 1 s after the bridge the travel is handed over and
+ *       the route pulls the root >= 5 cm. BEFORE C4 the catch-up stepped
+ *       WALK_SPEED/30 = 11.33 cm per frame while the body was getting up.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -1472,6 +1499,7 @@ async function main() {
     setClipTransitions([{ from: LIE, to: '*', kind: 'get-up-bed', accel: 0 }]);
     const DT = 1 / FPS;
     const GOAL_M = 0.5;
+    const JOURNEY_AT_F = 30;
     /** One NPC as `NpcManager.update` would build it, injected into a manager
      *  of its own — `tick` is the code under test, not the poll. */
     const npcOn = (name, animation) => {
@@ -1482,6 +1510,7 @@ async function main() {
         bubbleUntil: 0, target: fig.owner.position.clone(), pace: 1, face: null,
         waypoints: [], ride: null, route: null, travelling: false, reckon: null,
         interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0,
+        settle: null,
       };
       const mgr = new NpcManager(null);
       mgr.npcs.set(name, npc);
@@ -1548,6 +1577,69 @@ async function main() {
     console.log(`      [Y3b] info: the bridge's own turn moved both roots by up to ${(bridgeTurn * 180 / Math.PI).toFixed(1)}°`);
     lie.fig.figure.dispose();
     twin.fig.figure.dispose();
+
+    // [Y3e] the server's stand point is the goal: the NPC keeps its spot.
+    const rmBed = sidecars['get-up-bed'];
+    const kBed = 1.70 / rmBed.ref_height_m;
+    const spOff = toWorld({ x: rmBed.travel_m[0] * kBed, z: rmBed.travel_m[1] * kBed }, YAW);
+    const standOf = (npc) => new THREE.Vector3(npc.root.position.x + spOff.x,
+      npc.root.position.y, npc.root.position.z + spOff.z);
+    const keep = npcOn('y3-keep', LIE);
+    const seatKeep = xz(keep.npc.root.position);
+    const standKeep = standOf(keep.npc);
+    keep.npc.animation = 'idle';
+    keep.npc.target.copy(standKeep);
+    guard = 0;
+    keep.mgr.tick(DT, 10);
+    while (keep.fig.figure.bridging && guard++ < 1000) keep.mgr.tick(DT, 10);
+    keep.mgr.tick(DT, 10);   // the hand-over tick
+    const handed = xz(keep.npc.root.position);
+    const off = moved(standKeep, handed);
+    console.log(`      [Y3e] info: server stand point ${cm(moved(seatKeep, standKeep))} from the seat,`
+      + ` the root after the hand-over ${cm(moved(seatKeep, handed))} from the seat and ${cm(off)} from the stand point`);
+    check('[Y3e] the hand-over lands within STAND_ADOPT_M (0.25 m) of the server\'s stand point', off <= 0.25, cm(off));
+    check('[Y3e] the goal is the root (settled), not the stand point + the travel',
+      moved(keep.npc.target, handed) <= 1e-6, cm(moved(keep.npc.target, handed)));
+    for (let i = 0; i < FPS; i++) keep.mgr.tick(DT, 10);
+    check('[Y3e] 1 s after the hand-over the root has not moved (<= 1e-6 m)',
+      moved(handed, keep.npc.root.position) <= 1e-6, cm(moved(handed, keep.npc.root.position)));
+    keep.fig.figure.dispose();
+
+    // [Y3f] a journey that starts while the NPC is still getting up.
+    const trip = npcOn('y3-trip', LIE);
+    const seatTrip = xz(trip.npc.root.position);
+    const standTrip = standOf(trip.npc);
+    trip.npc.animation = 'idle';
+    trip.npc.target.copy(standTrip);
+    trip.mgr.tick(DT, 10);
+    let bridgeFrames = 0;
+    while (trip.fig.figure.bridging && bridgeFrames < JOURNEY_AT_F) { trip.mgr.tick(DT, 10); bridgeFrames += 1; }
+    const tripOpened = trip.fig.figure.bridging;
+    const far = { x: standTrip.x + Math.sin(YAW) * 5, z: standTrip.z + Math.cos(YAW) * 5 };
+    const seatLeg = moved(seatTrip, standTrip);
+    trip.npc.route = {
+      key: 'y3f', points: [[seatTrip.x, seatTrip.z], [standTrip.x, standTrip.z], [far.x, far.z]],
+      totalM: seatLeg + 5, progressM: seatLeg, rateMS: 1.4, stamp: 1,
+    };
+    trip.npc.travelling = true;
+    let worstStep = 0;
+    let prev = xz(trip.npc.root.position);
+    guard = 0;
+    while (trip.fig.figure.bridging && guard++ < 1000) {
+      trip.mgr.tick(DT, 10);
+      worstStep = Math.max(worstStep, moved(prev, trip.npc.root.position));
+      prev = xz(trip.npc.root.position);
+    }
+    check(`[Y3f] the journey starts ${JOURNEY_AT_F} frames into the bridge`, tripOpened && guard > 1, `${guard} bridge frames left`);
+    check('[Y3f] while the bridge still runs the root X/Z moves <= 1 mm per frame', worstStep <= 0.001, cm(worstStep));
+    check('[Y3f] the bridge travel is still held when the bridge ends', trip.fig.figure.holdsTravel,
+      String(trip.fig.figure.holdsTravel));
+    const endTrip = xz(trip.npc.root.position);
+    for (let i = 0; i < FPS; i++) trip.mgr.tick(DT, 10);
+    check('[Y3f] after the bridge the travel is handed over and the route pulls (>= 5 cm within 1 s)',
+      !trip.fig.figure.holdsTravel && moved(endTrip, trip.npc.root.position) >= 0.05,
+      cm(moved(endTrip, trip.npc.root.position)));
+    trip.fig.figure.dispose();
   }
 
   console.log('\n      drift table (own contacts, cm): clip × rig — re-locked / imported / ×1.15 re-locked; [B10] re-locked / imported');

@@ -1589,10 +1589,12 @@ export class Figure {
    *     pose): the figure does not snap back to the seat. It stays until the
    *     figure's owner calls `takeTravel()` and moves its own root by it.
    *  4. The owners: an NPC without a route takes it in the first frame with
-   *     `!bridging && holdsTravel` (root and goal); an NPC on a journey takes
-   *     it when the journey starts and ADDS it to its root (see the comment
-   *     there); the avatar like an NPC without a route, then reports its
-   *     position (`npcs.ts`, `main.ts`).
+   *     `!bridging && holdsTravel` (its root; the goal stays the server's
+   *     stand point, or the spot it now stands on, `standSettle.ts`); an NPC
+   *     on a journey takes it in the same frame once its journey runs and
+   *     ADDS it to its root (see the comment there); the avatar like an NPC
+   *     without a route, root and goal, then reports its position
+   *     (`npcs.ts`, `main.ts`).
    *  5. A new bridge that starts while a travel is still held is a caller bug
    *     (the owner has to take it first). The figure throws nothing away: it
    *     warns and folds the held offset into the new bridge's origin, so the
@@ -2034,9 +2036,9 @@ export class Figure {
    *  With a turn (rule 4 of `turn`) the offset is the instance's whole one:
    *  the travel turned by the BASE yaw plus the pivot's swing.
    *
-   *  Called while the bridge still runs (a journey that started early), the
-   *  rest of the clip plays in place: the travel so far is handed over, the
-   *  remainder is the route's. */
+   *  Called while the bridge still runs (a pair interaction that takes the
+   *  body over, which discards it), the rest of the clip plays in place: the
+   *  travel so far is handed over, the remainder is nobody's. */
   takeTravel(): { x: number; z: number } | null {
     if (!this.holding) return null;
     // yaw only: a lean (`setLean`) tilts the root by a few degrees at most,

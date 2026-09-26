@@ -12,6 +12,7 @@ import { eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import type { PlaceEntry } from './placeSlot';
+import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
 import { advanceProgress, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, shouldSnap, trimBucket, type MetrePoint } from './travelPath';
 
@@ -144,6 +145,12 @@ interface Npc {
   /** `performance.now()` at which the bubble is taken down again (0 = down) */
   bubbleUntil: number;
   target: THREE.Vector3;
+  /** THE SPOT A BRIDGE LEFT THIS NPC ON (Task C4, `standSettle.ts`): after a
+   *  bridge with travel the figure stands a few centimetres off the server's
+   *  stand point, and within `STAND_ADOPT_M` it keeps that spot — `target` is
+   *  then `server + offset` — for as long as the polls send the same
+   *  position. `null` = the goal is the server's point as sent. */
+  settle: StandSettle | null;
   /** Pace of the NEXT step, as the ground under this figure sets it
    *  (`walk.terrainPace`, 1 = the plain `WALK_SPEED`). Only the player-driven
    *  figure ever carries something else: `setPlayerTarget` hands it in with
@@ -225,6 +232,9 @@ export interface PairPlay {
   rate: number;
   stamp: number;
 }
+
+/** Scratch for the goal `update()` writes (one figure at a time). */
+const _goal = new THREE.Vector3();
 
 /** Identity of a polyline — same points, same journey. */
 function routeKey(points: MetrePoint[]): string {
@@ -415,6 +425,7 @@ export class NpcManager {
     npc.waypoints = [];      // ditto for a planned A* path
     npc.ride = null;         // …and for a climb the server had it on
     npc.target.copy(npc.root.position);
+    npc.settle = null;       // the player's goal is the player's, never a kept spot
     npc.pace = 1;            // the walking hook reads the ground on its first frame
     // The placement fields update() stops writing keep their last value, and
     // two of them are wrong for a steered figure:
@@ -557,26 +568,51 @@ export class NpcManager {
     }
   }
 
-  /** Root and goal take the figure's held bridge travel over
-   *  (`Figure.takeTravel`); returns the offset, or null when none was held. */
+  /** The ROOT takes the figure's held bridge travel over
+   *  (`Figure.takeTravel`) — the body stays where it is on screen. Returns
+   *  the offset, or null when none was held. The goal is the caller's: the
+   *  player's figure moves it along (`takePlayerTravel`), an NPC keeps the
+   *  server's stand point or its own spot (`settleAfterBridge`). */
   private applyBridgeTravel(npc: Npc): { x: number; z: number } | null {
     const t = npc.figure?.takeTravel() ?? null;
     if (!t) return null;
     npc.root.position.x += t.x;
     npc.root.position.z += t.z;
-    npc.target.x += t.x;
-    npc.target.z += t.z;
     return t;
+  }
+
+  /** After an NPC's bridge travel was handed over (Task C4): its goal is the
+   *  server's stand point, which already IS seat + the clip's travel
+   *  (`room_stand.bridge_stand_point`) — moving the goal by the travel as
+   *  well sent the figure one travel past it (C0 § 5.2). Where the root now
+   *  stands within `STAND_ADOPT_M` of that point, the NPC keeps its spot
+   *  (`settleOffset`); further off it walks to the point.
+   *
+   *  The server's point is read off the goal: for a server-driven figure
+   *  `update()` writes nothing else there — the point as sent, or the point
+   *  plus a spot kept from an earlier hand-over (`settle.server`). */
+  private settleAfterBridge(npc: Npc) {
+    const server = npc.settle
+      ? npc.settle.server : { x: npc.target.x, z: npc.target.z };
+    const offset = settleOffset(npc.root.position, server, server);
+    npc.settle = offset ? { server, offset } : null;
+    npc.target.x = server.x + (offset?.x ?? 0);
+    npc.target.z = server.z + (offset?.z ?? 0);
   }
 
   /** Hand the held bridge travel of the PLAYER's figure over (rule 4 of
    *  `Figure.travelBase`): once its bridge has ended, root and goal move by
    *  it and the figure's new position is returned — the caller reports it.
-   *  `null` while a bridge still runs or nothing is held. */
+   *  The goal moves too because nobody else writes it: the steering hook only
+   *  does while a key is held, and without one the figure would walk back
+   *  onto its seat. `null` while a bridge still runs or nothing is held. */
   takePlayerTravel(name: string): { x: number; z: number } | null {
     const npc = this.npcs.get(name);
     if (!npc?.figure || npc.figure.bridging || !npc.figure.holdsTravel) return null;
-    if (!this.applyBridgeTravel(npc)) return null;
+    const t = this.applyBridgeTravel(npc);
+    if (!t) return null;
+    npc.target.x += t.x;
+    npc.target.z += t.z;
     return { x: npc.root.position.x, z: npc.root.position.z };
   }
 
@@ -838,6 +874,8 @@ export class NpcManager {
           }
         }
         npc.waypoints = [];
+        // A journey is a new order: a spot kept from a stand-up is void.
+        npc.settle = null;
       } else if (npc.route) {
         // The journey ENDED (§ A11: arrival is the travel block being gone) —
         // or its route went behind the fog. Either way the server has placed
@@ -863,20 +901,36 @@ export class NpcManager {
       // and the door routing of this very update (the traveller had no shown
       // room, the arrival gives it one) would walk it back out to the door
       // and in again — the residual walk in another costume.
-      if (!npc.route && !arrived && !npc.target.equals(st.pos)) {
+      // THE GOAL: the server's point — or, after a stand-up, the spot the
+      // bridge left the figure on (Task C4, `settleAfterBridge`), for as long
+      // as the server sends the SAME point. A different one (a new order) or
+      // an arrival voids the spot and the figure walks from where it stands.
+      if (npc.settle) {
+        const kept = npc.settle;
+        const offset = arrived ? null : settleOffset(
+          { x: kept.server.x + kept.offset.x, z: kept.server.z + kept.offset.z },
+          st.pos, kept.server);
+        npc.settle = offset ? { server: kept.server, offset } : null;
+      }
+      const goal = _goal.copy(st.pos);
+      if (npc.settle) {
+        goal.x += npc.settle.offset.x;
+        goal.z += npc.settle.offset.z;
+      }
+      if (!npc.route && !arrived && !npc.target.equals(goal)) {
         npc.waypoints = st.via?.length ? st.via.map((v) => v.clone()) : [];
       }
       // A SNAP is not a move (finding B5): the placement changed because the
       // view did, so the figure belongs at the new point immediately — walking
       // it there would send it from the outdoor huddle spot in through the
       // front door of a room it never left. Handled like the arrival above:
-      // waypoints dropped, position set.
+      // waypoints dropped, position set — on the kept spot, if it has one.
       if (st.snap && !arrived) {
         npc.waypoints = [];
         npc.ride = null;      // a placement, not a climb
-        npc.root.position.copy(st.pos);
+        npc.root.position.copy(goal);
       }
-      npc.target.copy(st.pos);
+      npc.target.copy(goal);
       // …and at the SERVER's pace, which is the plain one. Only the walking
       // hook of main.ts hands a ground pace in, and only for the figure it
       // steers; a figure the player has just given back (leaving embodied
@@ -1017,7 +1071,7 @@ export class NpcManager {
       name: st.char.name, root, figure, ring, sprite, label,
       labelName: nameEl, labelActivity: actEl,
       labelBubble: bubbleEl, bubbleUntil: 0,
-      target: st.pos.clone(), pace: 1, face: st.face ?? null, waypoints: [], route: null,
+      target: st.pos.clone(), settle: null, pace: 1, face: st.face ?? null, waypoints: [], route: null,
       travelling: false, reckon: null, interaction: null, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       travelLine: null, travelKey: '',
@@ -1242,18 +1296,23 @@ export class NpcManager {
         // BRIDGE TRAVEL ON A JOURNEY (rule 4, `Figure.travelBase`): the figure
         // stood up out of its seat carrying its body along the clip's travel
         // while the root stayed on the seat — the journey had not started
-        // (`travel.starts_in_s`), so the route held it there. The moment the
-        // journey RUNS, the server's route already begins at the stand point
-        // (its zero-time first leg covers seat → stand point), so the root
-        // takes the travel over here and joins the route where the body
-        // already is. Nothing is counted twice: the route position is the
-        // catch-up GOAL below, not where the root is put — the route never
-        // places the root, it only pulls it.
+        // (`travel.starts_in_s`), so the route held it there. Once the
+        // journey RUNS and the bridge has ENDED, the server's route already
+        // begins at the stand point (its zero-time first leg covers seat →
+        // stand point), so the root takes the travel over here and joins the
+        // route where the body already is. Nothing is counted twice: the
+        // route position is the catch-up GOAL below, not where the root is
+        // put — the route never places the root, it only pulls it.
         // This ADDS the travel where plan task 6 first said to discard it
         // (ruling of 2026-09-25, accepted): discarding left the root on the
         // seat, so the body jumped 0.4–0.5 m back onto it for a frame and was
         // then walked forward again by the catch-up.
-        if (npc.travelling && npc.figure?.holdsTravel) {
+        // Not while the bridge still runs (Task C4): a journey that starts
+        // early would take the travel so far and let the rest of the clip
+        // play in place — the clip's steps would slide. The step below is
+        // held for as long as the bridge holds the figure, so the travel waits
+        // with it and the whole clip carries the body.
+        if (npc.travelling && npc.figure && !npc.figure.bridging && npc.figure.holdsTravel) {
           const t = npc.figure.takeTravel();
           if (t) {
             npc.root.position.x += t.x;
@@ -1308,7 +1367,18 @@ export class NpcManager {
         const sinkM = groundSink(sinkForState(travelling, groundIdle, gm.sink),
                                  raw.scope);
         goalPos.y = floatRootY(goalPos.y, gm.water, sinkM);
-        if (d > 0.05) {
+        // The clip this frame asks for below — and the pace the bridge it
+        // may open, or the one running, allows (the gate of the step without
+        // a route further down, and for the same reason): a journey that
+        // starts while the figure is still getting up must not pull the
+        // root out from under the body (Task C4). 0 holds it, the ramp of a
+        // bridge that walks off scales the catch-up; the route runs on and
+        // the catch-up takes the distance up once the bridge lets go.
+        const clip = travelling ? moveClip(gm.anim, false, raw.scope)
+          : (groundIdle || locomotionClip('idle'));
+        const paceLimit = !npc.figure ? 1
+          : npc.figure.bridging ? npc.figure.paceLimit : npc.figure.paceLimitFor(clip);
+        if (d > 0.05 && paceLimit > 0) {
           // Catch-up speed: WALK_SPEED, or the JOURNEY's own pace when that is
           // faster. A fixed WALK_SPEED was a brake, not a smoother — the game
           // time factor multiplies `pace_m_s_real` (§ A11), so past a factor of
@@ -1317,7 +1387,7 @@ export class NpcManager {
           // arrival.
           const step = catchUpStep(d, r.rateMS, dt, WALK_SPEED);
           const dir = delta.clone().normalize();
-          npc.root.position.addScaledVector(dir, step);
+          npc.root.position.addScaledVector(dir, step * paceLimit);
           // A bridge that holds the figure owns its facing (`holdsFacing`);
           // the next frame after it asks again.
           if (!npc.figure?.holdsFacing) npc.figure?.faceTowards(dir);
@@ -1340,9 +1410,8 @@ export class NpcManager {
           // rule's reach (`groundSink`). It is the VERY number the root was
           // placed with above, which is what makes the pair meet: root − sink
           // is the surface the body rests on.
-          this.playLifting(npc, travelling ? moveClip(gm.anim, false, raw.scope)
-            : (groundIdle || locomotionClip('idle')), travelling || !!groundIdle, sinkM,
-          rootYBefore, goalPos.y);
+          this.playLifting(npc, clip, travelling || !!groundIdle, sinkM,
+            rootYBefore, goalPos.y);
           npc.figure.update(dt);
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
@@ -1363,14 +1432,16 @@ export class NpcManager {
       // exactly where the waypoints do.
       // BRIDGE TRAVEL WITHOUT A ROUTE (rule 4, `Figure.travelBase`): the
       // bridge has ended and its body stands where the clip carried it — the
-      // root moves there now, and the goal the step walks towards moves with
-      // it, or the figure would walk straight back onto its seat. The body on
-      // screen does not move: the instance goes back on its base in the same
-      // call. The player's own figure is taken over by `main.ts`, which has
+      // root moves there now. The body on screen does not move: the instance
+      // goes back on its base in the same call. The GOAL does not move with
+      // it: it is the server's stand point, already seat + travel, and near
+      // it the NPC keeps the spot it stands on (`settleAfterBridge`, Task
+      // C4). The player's own figure is taken over by `main.ts`, which has
       // to report the new position as well.
       if (npc.figure && npc.name !== this.playerDriven
-          && !npc.figure.bridging && npc.figure.holdsTravel) {
-        this.applyBridgeTravel(npc);
+          && !npc.figure.bridging && npc.figure.holdsTravel
+          && this.applyBridgeTravel(npc)) {
+        this.settleAfterBridge(npc);
       }
       const retireM = npc.ride ? RIDE_ARRIVE_M : WAYPOINT_ARRIVE_M;
       while (npc.waypoints.length

@@ -95,7 +95,9 @@
  * smoke_bridge_root [Y3]): it lies/sits on its slot (goal = its root), then
  * the server stands it up — `animation` idle and goal = the server's stand
  * point (slot + the clip's travel_m × H / ref_height_m turned by the yaw,
- * y = 0.01), re-written once a second as `update()` does.
+ * y = 0.01), delivered once a second through the real `update()` (which
+ * since Task C4 keeps the spot the bridge left the figure on when it is
+ * within 0.25 m of that point).
  * AVATAR = the same manager with the figure player-driven: seated by
  * `snapPlayerTo`, then the release `main.ts` does now — clip cleared (key:
  * walk while held) and `groundAvatarGoal` (goal = seat X/Z at the floor
@@ -125,11 +127,13 @@
  * [V3] from the last bridge frame through 0.5 s after it, no 36 cm hop: the
  *      fade-out lift (lift × the bridge's weight) carries the body across the
  *      crossfade into the next clip.
- *      [V3a] into IDLE (the avatar without input): lowest foot − floor within
- *      −2 … +3 cm — idle's own foot lift over the root is +1.5 (Test3_mia) /
- *      +1.8 (Soldier) / +0.2 cm (reference; the A1 measure).
- *      [V3b] into WALK (the NPC walking on to its stand point, the avatar
- *      with the key held): upper bound +3 cm as above; the lower bound is
+ *      [V3a] into IDLE (the avatar without input, and since Task C4 the NPC
+ *      that keeps the spot its bridge left it on — within STAND_ADOPT_M
+ *      = 0.25 m of the server's stand point, INFO line): lowest foot − floor
+ *      within −2 … +3 cm — idle's own foot lift over the root is +1.5
+ *      (Test3_mia) / +1.8 (Soldier) / +0.2 cm (reference; the A1 measure).
+ *      [V3b] into WALK (the NPC walking on to its stand point from further
+ *      off, the avatar with the key held): upper bound +3 cm as above; the lower bound is
  *      NOT −2 cm. A crossfade between two stances blends the leg joints'
  *      rotations, and a blended leg reaches further down than the average of
  *      the two (the vertical reach goes with the cosine of the joint angles,
@@ -417,10 +421,11 @@ async function main() {
       const name = `${rig.label}-${scenario}`;
       const npc = {
         name, animation: fromKind, root: owner, figure, ring: null, sprite: null,
-        label: { visible: false }, labelName: null, labelActivity: null, labelBubble: null,
-        bubbleUntil: 0, target: new THREE.Vector3(), pace: 1, face: null,
+        label: { visible: false }, labelName: { textContent: '' }, labelActivity: { textContent: '' },
+        labelBubble: null, bubbleUntil: 0, target: new THREE.Vector3(), pace: 1, face: null,
         waypoints: [], ride: null, route: null, travelling: false, reckon: null,
         interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0,
+        settle: null,
       };
       const mgr = new C.NpcManager(null);
       mgr.npcs.set(name, npc);
@@ -441,6 +446,11 @@ async function main() {
       const k = H / rm.ref_height_m;
       const sp = C.toWorld({ x: rm.travel_m[0] * k, z: rm.travel_m[1] * k }, YAW);
       const standPoint = new THREE.Vector3(sp.x, FLOOR, sp.z);
+      /** The poll that carries the stand point — the REAL `update()`, since
+       *  Task C4 decides the goal there (the point, or the spot the bridge
+       *  left the figure on). */
+      const poll = () => mgr.update([{ char: { name, activity: '', activity_animation: 'idle' },
+        pos: standPoint.clone() }]);
       const keyHeld = scenario === 'avatar_key';
       if (avatar) {
         mgr.setPlayerAnimation(name, keyHeld ? 'walk' : null);
@@ -449,7 +459,7 @@ async function main() {
       } else {
         npc.animation = 'idle';
         // [V6]: the poll that brought the standing clip still carried the seat.
-        if (!lateFloorS) npc.target.copy(standPoint);
+        if (!lateFloorS) poll();
       }
       const measure = () => {
         owner.updateMatrixWorld(true);
@@ -465,10 +475,13 @@ async function main() {
       let seen = false;
       let after = -1;
       let bridgeFrame = -1;
+      /** the NPC kept the spot its bridge left it on (Task C4): it goes into
+       *  idle, not walk */
+      let settled = false;
       for (let f = 0; f < FPS * 15; f++) {
         const late = lateFloorS && f * DT < lateFloorS - 1e-9;
         if (!avatar && !late && (sinceUpdate >= 1.0 || (lateFloorS && Math.abs(f * DT - lateFloorS) < DT / 2))) {
-          npc.target.copy(standPoint);
+          poll();
           sinceUpdate = 0;
         }
         if (avatar) {
@@ -489,6 +502,9 @@ async function main() {
         rows.push({ ...m, phase: bridging ? 'bridge' : seen ? 'after' : 'pre',
           clipT: bridging ? (bridgeFrame + 1) * DT : NaN });
         if (seen && !bridging) {
+          // The hand-over runs in the first tick AFTER the one the bridge
+          // ended in, so the spot is asked for on every frame after it.
+          if (!avatar && npc.settle) settled = true;
           if (after < 0) after = 0;
           after += DT;
           if (after > V4_AFTER_S + 1e-9) break;
@@ -509,7 +525,8 @@ async function main() {
         maxStep = Math.max(maxStep, Math.abs(x.drawn - prev));
         prev = x.drawn;
       }
-      return { before, rows, br, af, last: br[br.length - 1], startLift, lift: spec, ramp, stepBound, maxStep };
+      return { before, rows, br, af, last: br[br.length - 1], startLift, lift: spec, ramp, stepBound, maxStep,
+        settled, handOverM: settled ? Math.hypot(npc.settle.offset.x, npc.settle.offset.z) : NaN };
     };
     const stepCheck = (label, r) => check(`${label}: no bridge frame moves the drawn root more than`
       + ` 1.5·|Δ|/D·dt = ${cm(r.stepBound)} (D ${(r.ramp.to - r.ramp.from).toFixed(3)} s)`,
@@ -537,7 +554,11 @@ async function main() {
           .map((x) => x.foot - FLOOR);
         const lo = Math.min(...span);
         const hi = Math.max(...span);
-        if (scenario === 'avatar_idle') {
+        if (scenario === 'npc') {
+          console.log(`  info [V3] ${tag}: ${r.settled
+            ? `keeps its spot, ${cm(r.handOverM)} off the stand point → into idle` : 'walks on to the stand point'}`);
+        }
+        if (scenario === 'avatar_idle' || r.settled) {
           check(`[V3a] ${tag}: into idle, lowest foot − floor in −2 … +3 cm through 0.5 s after`,
             lo >= V3_LO && hi <= V3_HI, `${cm(lo)} … ${cm(hi)}`);
         } else {
