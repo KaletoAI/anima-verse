@@ -518,10 +518,18 @@ export class NpcManager {
 
   /** Blend the root's height towards `goalY` (the 4·dt ease of every walking
    *  figure) — unless a bridge owns the height (`Figure.holdsHeight`): then
-   *  the root already stands on the floor the bridge started over, and the
-   *  body's height is the figure's lift. */
+   *  the root stands on the floor the bridge started over, and the body's
+   *  height is the figure's lift. A goal that differs from that floor (the
+   *  floor arrived only after the bridge opened on the seat's height, C0
+   *  § 6) is handed over by the same rule as at the start: the root goes
+   *  onto it at once and the figure takes the difference. */
   private easeRootY(npc: Npc, goalY: number, dt: number) {
-    if (npc.figure?.holdsHeight) return;
+    const figure = npc.figure;
+    if (figure?.holdsHeight) {
+      const drop = npc.root.position.y - goalY;
+      if (Math.abs(drop) > 1e-6 && figure.shiftBridgeLift(drop)) npc.root.position.y = goalY;
+      return;
+    }
     npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
   }
 

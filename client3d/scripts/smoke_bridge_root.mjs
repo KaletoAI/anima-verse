@@ -227,9 +227,12 @@
  *       0.4 · (2/3)^60 ≈ 1e-11 rad, so |rotation.y − 1.0| < 0.05.
  * [Y3] The REAL `NpcManager.tick` (one injected NPC) over the real chain on
  *       Test3_mia (`adaptExternalClips` → `relockRootPaths` →
- *       `measureGroundOffsets` → `Figure`, the order of `fitLibrary`; clips idle, walk, sleeping-side,
- *       get-up-bed; rule sleeping-side → * via get-up-bed, accel 0). The NPC
- *       lies (`animation` sleeping-side, goal = its root), then the server
+ *       `measureGroundOffsets` → `Figure`, the order of `fitLibrary`; clips idle, walk,
+ *       the lying clip, get-up-bed; rule <lying clip> → * via get-up-bed,
+ *       accel 0 — the lying clip is the one the live transition table names
+ *       for get-up-bed if tracked, else the tracked `laying`, else [Y3] is
+ *       skipped, `bridgeSources.mjs`). The NPC
+ *       lies (`animation` = the lying clip, goal = its root), then the server
  *       stands it up: `animation` idle, goal 0.5 m away (< RUN_DISTANCE 6 m:
  *       walk). In the ONE tick that starts the bridge (checked: bridging
  *       after it) the root moves <= 1 mm in X/Z. Before this task the step
@@ -251,6 +254,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bridgeSourceClip } from './bridgeSources.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const CLIP_DIR = join(ROOT, 'shared/models/clips');
@@ -275,11 +279,18 @@ const SCALE_UP = 1.15;
 const LINEAR_TOL = 0.01;
 /** [B11]: the re-lock of one model's library, ms. */
 const RELOCK_MAX_MS = 100;
-/** The bridges part [B] walks: the clip, the state it leaves, the bounds. */
+/** The bridges part [B] walks: the clip, the state it leaves, the bounds.
+ *  The state left is the clip the live transition table names for the
+ *  bridge, if its file exists and is tracked by git, else the tracked
+ *  fallback (`bridgeSources.mjs`); a bridge with neither is skipped. */
+const CHAIR_FROM = bridgeSourceClip(ROOT, 'get-up-chair', 'sitting-in-chair');
+const BED_FROM = bridgeSourceClip(ROOT, 'get-up-bed', 'laying');
 const BRIDGES = [
-  { kind: 'get-up-chair', from: 'sitting-in-chair', driftMax: CHAIR_DRIFT_MAX_M, redMin: CHAIR_RED_MIN_M },
-  { kind: 'get-up-bed', from: 'sleeping-side', driftMax: BED_DRIFT_MAX_M, redMin: BED_RED_MIN_M },
-];
+  CHAIR_FROM && { kind: 'get-up-chair', from: CHAIR_FROM.kind, note: CHAIR_FROM.note,
+    driftMax: CHAIR_DRIFT_MAX_M, redMin: CHAIR_RED_MIN_M },
+  BED_FROM && { kind: 'get-up-bed', from: BED_FROM.kind, note: BED_FROM.note,
+    driftMax: BED_DRIFT_MAX_M, redMin: BED_RED_MIN_M },
+].filter(Boolean);
 const HANDOVER_MAX_M = 0.01;
 /** [B17]: the chair's end part, and how far its feet may stand off the floor. */
 const B17_FROM_S = 3.5;
@@ -619,6 +630,7 @@ async function main() {
 
   // ------------------------------------------------------------------ [B]
   console.log('\n[B] foot_lock bridges on real rigs (consumer measurement)');
+  for (const b of BRIDGES) console.log(`      ${b.kind} leaves ${b.from} — ${b.note}`);
   const sidecars = {};
   const missing = [];
   for (const b of BRIDGES) {
@@ -1065,12 +1077,14 @@ async function main() {
   // ------------------------------------------------------------------ [Y3]
   // The REAL NpcManager.tick over the real client chain (docstring [Y]).
   console.log('\n[Y3] the NPC chain: no step, no turn in a bridge that holds (Test3_mia)');
-  {
+  const LIE = BED_FROM?.kind;
+  if (!LIE) console.log('  skip — [Y3] needs a tracked lying clip (see above)');
+  else {
     const template = await loadRig(RIGS[0]);
     const scale = nominalScale(template);
     const corrections = restCorrections(THREE, donorRest, template);
     const raw = { idle: rawClips.idle, walk: await loadClip('walk'),
-      'sleeping-side': rawClips['sleeping-side'], 'get-up-bed': rawClips['get-up-bed'] };
+      [LIE]: rawClips[LIE], 'get-up-bed': rawClips['get-up-bed'] };
     const lib = adaptExternalClips(Object.entries(raw).map(([name, c]) => {
       const cc = c.clone();
       cc.name = name;
@@ -1079,7 +1093,7 @@ async function main() {
     }), template, corrections, donorHipsY);
     relockRootPaths(lib, template, 1 / (100 * scale));
     measureGroundOffsets(lib, template);
-    setClipTransitions([{ from: 'sleeping-side', to: '*', kind: 'get-up-bed', accel: 0 }]);
+    setClipTransitions([{ from: LIE, to: '*', kind: 'get-up-bed', accel: 0 }]);
     const DT = 1 / FPS;
     const GOAL_M = 0.5;
     /** One NPC as `NpcManager.update` would build it, injected into a manager
@@ -1104,9 +1118,9 @@ async function main() {
     const goalAhead = (npc) => npc.target.set(npc.root.position.x + Math.sin(YAW) * GOAL_M,
       npc.root.position.y, npc.root.position.z + Math.cos(YAW) * GOAL_M);
 
-    const bed = npcOn('y3-bed', 'sleeping-side');
-    check('[Y3] the NPC lies (sleeping-side, no bridge)',
-      bed.fig.figure.root.userData.clipKind === 'sleeping-side' && !bed.fig.figure.bridging,
+    const bed = npcOn('y3-bed', LIE);
+    check(`[Y3] the NPC lies (${LIE}, no bridge)`,
+      bed.fig.figure.root.userData.clipKind === LIE && !bed.fig.figure.bridging,
       String(bed.fig.figure.root.userData.clipKind));
     bed.npc.animation = 'idle';
     goalAhead(bed.npc);
@@ -1133,7 +1147,7 @@ async function main() {
       moved(before2, stand.npc.root.position), 3.4 / 30, 1e-4);
     stand.fig.figure.dispose();
 
-    const lie = npcOn('y3-face', 'sleeping-side');
+    const lie = npcOn('y3-face', LIE);
     lie.npc.animation = 'idle';
     lie.npc.face = new THREE.Vector3(1, 0, 0);
     const yaw0 = lie.fig.figure.root.rotation.y;

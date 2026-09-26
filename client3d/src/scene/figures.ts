@@ -19,7 +19,7 @@ import { bridgePace, clipTransition, locomotionClip, setClipTransitions,
   setLocomotionClips } from '../game/walk';
 import { clipRootPath, rootPathAt, setClipRootPath, toWorld, travelAt } from './bridgeTravel';
 import type { RootPath } from './bridgeTravel';
-import { clipBridgeLift, liftAt } from './bridgeLift';
+import { BRIDGE_FADE_IN_S, clipBridgeLift, fadeCarry, liftAt } from './bridgeLift';
 import type { BridgeLift } from './bridgeLift';
 import { relockRootPaths } from './footLockMeasure';
 
@@ -1615,12 +1615,17 @@ export class Figure {
    *
    * `liftAction` is the bridge the lift belongs to (null = none in force),
    * `liftSpec` its measurement, `liftStart` the start lift in world metres of
-   * the root frame, `lift` the value applied right now.
+   * the root frame, `lift` the value applied right now. `liftCarry` is the
+   * part of a later hand-over (`shiftBridgeLift`) the ramp formula does not
+   * carry, handed over at clip time `liftCarryAt` and faded out from there
+   * (`bridgeLift.fadeCarry`).
    */
   private liftAction: THREE.AnimationAction | null = null;
   private liftSpec: BridgeLift | null = null;
   private liftStart = 0;
   private lift = 0;
+  private liftCarry = 0;
+  private liftCarryAt = 0;
 
   private baseScale = 1;
   /** Y offset that puts the feet on y=0 (the mesh origin is not always there) */
@@ -1804,8 +1809,8 @@ export class Figure {
       // WHICH origin keeps coming back. Without it the loop is only visible as
       // a stutter and every diagnosis is a guess.
       console.info(`[figures] bridge ${this.currentKind} -> ${kind} via ${via}`);
-      bridge.fadeIn(0.25).play();
-      this.current?.fadeOut(0.25);
+      bridge.fadeIn(BRIDGE_FADE_IN_S).play();
+      this.current?.fadeOut(BRIDGE_FADE_IN_S);
       this.current = bridge;
       this.currentKind = via;
       this.root.userData.clipKind = via;
@@ -2016,9 +2021,38 @@ export class Figure {
     this.liftAction = bridge;
     this.liftSpec = spec;
     this.liftStart = startLiftM + this.lift;
+    this.liftCarry = 0;
     this.lift = this.liftStart;
     this.applyHeight();
     return true;
+  }
+
+  /** The owner's floor changed WHILE this figure holds the height
+   *  (`holdsHeight`): it has put the root `dropM` metres lower (higher when
+   *  negative) and hands the difference over again, exactly as at the start
+   *  — the body does not move on screen. The start lift grows by it; the part
+   *  the ramp would not carry any more (the ramp has begun, or is over) is
+   *  kept as a carry that fades out over `LIFT_RAMP_S`, so the body comes
+   *  onto the new floor smoothly instead of jumping. Returns false (and does
+   *  nothing) when no lift is held — the owner then keeps the height. */
+  shiftBridgeLift(dropM: number): boolean {
+    const action = this.liftAction;
+    if (!action || !this.liftSpec || !this.holdsHeight || !Number.isFinite(dropM)) return false;
+    const want = this.lift + dropM;
+    this.liftStart += dropM;
+    this.liftCarryAt = action.time;
+    this.liftCarry = 0;
+    this.liftCarry = want - this.liftValue(action.time);
+    this.lift = want;
+    this.applyHeight();
+    return true;
+  }
+
+  /** The lift of the held bridge at its clip time `t`, carry included. */
+  private liftValue(t: number): number {
+    const spec = this.liftSpec!;
+    return liftAt(t, this.liftStart, spec.endLift * this.baseScale, spec.firstContactS)
+      + fadeCarry(this.liftCarry, t - this.liftCarryAt);
   }
 
   /** Does the running bridge own the figure's HEIGHT? True from
@@ -2231,8 +2265,7 @@ export class Figure {
     // the bridge's weight; after a full run that is `endLift × weight`.
     if (this.liftAction && this.liftSpec) {
       const action = this.liftAction;
-      const lift = liftAt(action.time, this.liftStart, this.liftSpec.endLift * this.baseScale,
-        this.liftSpec.firstContactS);
+      const lift = this.liftValue(action.time);
       if (this.transition === action) {
         this.lift = lift;
       } else {
@@ -2241,6 +2274,7 @@ export class Figure {
           this.lift = lift * weight;
         } else {
           this.lift = 0;
+          this.liftCarry = 0;
           this.liftAction = null;
           this.liftSpec = null;
         }

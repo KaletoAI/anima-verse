@@ -7,8 +7,15 @@
  *
  * Usage:  node client3d/scripts/smoke_bridge_lift.mjs
  *         (bundles the client modules itself; part [V] reads the clips
- *          idle, walk, sleeping-side, get-up-bed, sitting-in-chair,
- *          get-up-chair from shared/models/clips — READ ONLY)
+ *          idle, walk, get-up-bed, get-up-chair and the two clips they leave
+ *          from shared/models/clips — READ ONLY)
+ *
+ * WHICH CLIPS ARE LEFT (`bridgeSources.mjs`): the lying clip is the first
+ * `from` the live transition table (`shared/config/clip_transitions.json`,
+ * read at run time) names for get-up-bed whose .fbx exists AND is tracked by
+ * git; otherwise the tracked `laying`. The sitting clip likewise for
+ * get-up-chair, fallback `sitting-in-chair`. No tracked clip → the bed or
+ * chair part is SKIPPED with a message. The run prints which it used.
  *
  * ===========================================================================
  * WHY THIS FILE EXISTS
@@ -51,12 +58,21 @@
  *      2.4 − 0.6 = 1.8 s: t=0 → 0.46; t=1.8 → 0.46; t=2.1 (x = 0.5,
  *      s = 0.25·2 = 0.5) → 0.46 − 0.102·0.5 = 0.409; t=2.4 → 0.358;
  *      t=4 → 0.358.
- * [L2] firstContactS 0.03 (a chair whose feet stand from the start) →
- *      ramp window [max(0, −0.57) = 0, 0.03]: t=0 → startLift (0.042),
- *      t=0.03 → endLift (0.0); t=0.015 (x = 0.5) → 0.021.
+ * [L2] firstContactS 0.03 (a chair whose feet stand from the start): the ramp
+ *      never ends before the bridge's start crossfade BRIDGE_FADE_IN_S = 0.25
+ *      → window [max(0, 0.25 − 0.6) = 0, max(0.03, 0.25) = 0.25]:
+ *      t=0 → startLift (0.042); t=0.125 (x = 0.5, s = 0.5) → 0.021;
+ *      t=0.0625 (x = 0.25, s = 0.0625·2.5 = 0.15625) → 0.042 − 0.042·0.15625
+ *      = 0.0354375; t=0.25 → endLift (0.0); t=0.03 (x = 0.12, s = 0.0144·2.76
+ *      = 0.039744) → 0.042·(1 − 0.039744) = 0.040330752 — NOT endLift any
+ *      more (before: a drop of the whole 4.2 cm within 0.03 s).
+ *      liftRamp(0.03) = {0, 0.25}; liftRamp(2.4) = {1.8, 2.4};
+ *      liftRamp(0.4) = {0, 0.4}.
  * [L3] startLift == endLift (0.2) → 0.2 for t = 0, 1.9, 2.1, 2.4, 9.
  * [L4] non-finite t / endLift / firstContactS → startLift (0.46); a NaN
  *      startLift counts as 0 — never NaN.
+ * [L5] fadeCarry(0.1, e): e=0 → 0.1; e=0.3 (x = 0.5) → 0.05; e=0.15
+ *      (x = 0.25, s = 0.15625) → 0.084375; e=0.6 → 0; e=2 → 0; NaN → 0.
  *
  * ---------------------------------------------------------------------------
  * [V] the whole chain on REAL rigs, measured at the CONSUMER
@@ -65,7 +81,7 @@
  * reference rig (its centimetres × 0.01, 2.011 m); the real clips through
  * `adaptExternalClips` → `relockRootPaths` (which now also measures the
  * lift) → `measureGroundOffsets` → `Figure`, the order of `fitLibrary`.
- * Rules: sleeping-side → * via get-up-bed, sitting-in-chair → * via
+ * Rules: <lying clip> → * via get-up-bed, <sitting clip> → * via
  * get-up-chair, both accel 0 (they hold). 30 fps (the clips' own rate).
  *
  * The bed: lying place at S = 0.46 and 0.60 m, `lie` root_drop 0.001 · H
@@ -88,12 +104,16 @@
  * go, a walking goal 0.3 m ahead at y = 0.01.
  *
  * [V1] NPC, bed: from the first bridge frame while the clip time is before
- *      `firstContactS − LIFT_RAMP_S`, the lowest trunk bone (hips, spines,
- *      neck, head, shoulders) − S >= −5 cm. The body is drawn where it lay
- *      (root + startLift = the old root); what is left is the 0.25 s crossfade
- *      sleeping-side → the first pose of get-up-bed, −4.3 cm on Test3_mia
- *      (C0, avatar column, where the root never left the bed). Before: −35.8 /
- *      −46.9 cm (Test3_mia, S = 0.46 / 0.60).
+ *      the ramp (`liftRamp(firstContactS).from`), the lowest trunk bone (hips,
+ *      spines, neck, head, shoulders) − S >= min(0, the same measure while it
+ *      still LAY) − 5 cm. The body is drawn where it lay (root + startLift =
+ *      the old root), so the lift adds nothing; what is left is the 0.25 s
+ *      crossfade from the lying clip into the first pose of get-up-bed
+ *      (sleeping-side: −4.3 cm on Test3_mia, C0's avatar column, where the
+ *      root never left the bed). A lying clip whose own pose already reaches
+ *      under S (the tracked `laying` on Test3_mia: −10.3 cm, the clip and the
+ *      `lie` root_drop, not the bridge — INFO line) is judged from there.
+ *      Before: −35.8 / −46.9 cm (Test3_mia, sleeping-side, S = 0.46 / 0.60).
  * [V2] last bridge frame: lowest foot − floor within ±1.5 cm, both S, three
  *      rigs, NPC and avatar (key held / no input). By construction the lift is
  *      `endLift` there, which puts the lowest foot point of the clip's last
@@ -118,9 +138,14 @@
  *      plane — measured in this run per rig as the reference (INFO; at the
  *      time of writing Test3_mia −3.67, Soldier −2.45, reference −3.38 cm).
  *      The hand-over into walk may dip no deeper than that plain crossfade
- *      + 0.5 cm (the bridge's last pose is not idle's, so its blend differs
- *      by a few millimetres). Before: the feet rose from −32 to +2.6 cm in
- *      eight frames (NPC) — the hop.
+ *      minus the [V2] tolerance, 1.5 cm — DERIVED, not measured: the blended
+ *      foot height is the weighted mix of the two poses' foot heights plus
+ *      the blend's own concave term. The plain crossfade starts from idle's
+ *      feet; the hand-over starts from the bridge's last frame, whose feet
+ *      [V2] puts within ±1.5 cm of the floor. The concave term is the same
+ *      kind of dip, so the hand-over's mix differs from the control's by at
+ *      most the weight × that start offset, i.e. at most 1.5 cm. Before: the
+ *      feet rose from −32 to +2.6 cm in eight frames (NPC) — the hop.
  * [V4] avatar, no input after the bridge: 1 s after its end the root stands
  *      on the floor plane (±1 cm; it was put there at the bridge start and
  *      nothing lifts it — before: 45.5 / 59.5 cm) and the lowest idle foot is
@@ -128,20 +153,32 @@
  * [V5] get-up-chair, seat 0.45, NPC and avatar without input: last bridge
  *      frame lowest foot − floor within ±1.5 cm (same construction as [V2]);
  *      and no frame of the bridge moves the drawn root (owner y + lift) by
- *      more than the chair's whole height change (+0.1 mm): the drawn root
- *      goes from the seat root (startLift over the floor) to the floor +
- *      endLift, once, along the ramp — so no single frame moves it more than
- *      |startLift − endLift|. (The brief bounded it by |startLift| alone,
- *      which assumes endLift = 0; the chair's measured endLift is a few
- *      millimetres to a centimetre BELOW 0 — its last frame stands that much
- *      over the rest floor, INFO line.) Where the feet stand from the start
- *      (firstContactS one frame) that change happens within the first frame,
- *      inside the 0.25 s fade-in from the sitting clip.
+ *      more than the smoothstep's steepest frame (+0.1 mm): the drawn root is
+ *      continuous at the bridge start (root + startLift = the old root) and
+ *      then follows start + Δ·s(x), Δ = endLift − startLift, x over the ramp
+ *      of length D = liftRamp(fc).to − liftRamp(fc).from. s'(x) = 6x(1 − x)
+ *      peaks at 1.5, so no frame of dt = 1/30 s moves it more than
+ *      1.5 · |Δ| / D · dt (mean value theorem). For a chair whose feet stand
+ *      from the first frame D = 0.25 s (the fade-in floor): Soldier |Δ| =
+ *      4.22 + 0.34 = 4.56 cm → 1.5·4.56/0.25/30 = 0.912 cm (before this
+ *      floor: the whole 4.56 cm in one frame). The same bound is checked on
+ *      every bed run ([V5b], D = 0.6 s).
+ * [V6] THE FLOOR ARRIVES LATE (C0 § 6), NPC, bed 0.46, three rigs: the bridge
+ *      opens while the goal is still the SEAT (the poll carried the standing
+ *      clip but still the seat's point), so it opens with startLift 0; 0.5 s
+ *      later the server's stand point arrives at the floor. The owner puts the
+ *      root on it and hands the difference over (`shiftBridgeLift`); 0.5 s is
+ *      before every rig's ramp (firstContactS − 0.6 >= 1.4 s, INFO), so the
+ *      carry is 0 and the run from there on is the normal one: [V2] holds
+ *      (last bridge frame, lowest foot − floor within ±1.5 cm) and no frame
+ *      moves the drawn root more than the [V5] bound of the normal bed run
+ *      (the same Δ and D).
  * INFO: per rig the measured endLift (world cm) and firstContactS.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bridgeSourceClip } from './bridgeSources.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const CLIP_DIR = join(ROOT, 'shared/models/clips');
@@ -162,7 +199,6 @@ const V2_TOL = 0.015;
 const V3_LO = -0.02;
 const V3_HI = 0.03;
 const V3_SPAN_S = 0.5;
-const V3B_MARGIN = 0.005;
 const V4_AFTER_S = 1.0;
 const V4_ROOT_TOL = 0.01;
 const V4_FOOT_TOL = 0.02;
@@ -201,7 +237,8 @@ async function loadClient() {
   try {
     const src = join(ROOT, 'client3d/src');
     const entry = [
-      `export { LIFT_RAMP_S, liftAt, clipBridgeLift, setClipBridgeLift } from '${src}/scene/bridgeLift';`,
+      `export { BRIDGE_FADE_IN_S, LIFT_RAMP_S, fadeCarry, liftAt, liftRamp, clipBridgeLift,`
+        + ` setClipBridgeLift } from '${src}/scene/bridgeLift';`,
       `export { toWorld } from '${src}/scene/bridgeTravel';`,
       `export { adaptExternalClips, Figure, setClipRootMotion } from '${src}/scene/figures';`,
       `export { relockRootPaths } from '${src}/scene/footLockMeasure';`,
@@ -241,8 +278,14 @@ async function main() {
     near(`[L1] t=${t} → ${ex}`, L(t, 0.46, 0.358, 2.4), ex, 1e-9);
   }
   near('[L1] LIFT_RAMP_S = 0.6', C.LIFT_RAMP_S, 0.6, 0);
-  for (const [t, ex] of [[0, 0.042], [0.015, 0.021], [0.03, 0]]) {
+  near('[L2] BRIDGE_FADE_IN_S = 0.25', C.BRIDGE_FADE_IN_S, 0.25, 0);
+  for (const [t, ex] of [[0, 0.042], [0.0625, 0.0354375], [0.125, 0.021], [0.03, 0.040330752], [0.25, 0], [1, 0]]) {
     near(`[L2] chair, firstContactS 0.03: t=${t} → ${ex}`, L(t, 0.042, 0, 0.03), ex, 1e-9);
+  }
+  for (const [fc, from, to] of [[0.03, 0, 0.25], [2.4, 1.8, 2.4], [0.4, 0, 0.4]]) {
+    const r = C.liftRamp(fc);
+    check(`[L2] liftRamp(${fc}) = {${from}, ${to}}`, Math.abs(r.from - from) < 1e-9 && Math.abs(r.to - to) < 1e-9,
+      `{${r.from}, ${r.to}}`);
   }
   for (const t of [0, 1.9, 2.1, 2.4, 9]) near(`[L3] start == end: t=${t} → 0.2`, L(t, 0.2, 0.2, 2.4), 0.2, 1e-12);
   near('[L4] t NaN → startLift', L(NaN, 0.46, 0.358, 2.4), 0.46, 0);
@@ -251,6 +294,9 @@ async function main() {
   near('[L4] startLift NaN → counts as 0 (before the ramp)', L(0, NaN, 0.358, 2.4), 0, 0);
   check('[L4] startLift NaN → never NaN inside the ramp', Number.isFinite(L(2.1, NaN, 0.358, 2.4)),
     String(L(2.1, NaN, 0.358, 2.4)));
+  for (const [e, ex] of [[0, 0.1], [0.15, 0.084375], [0.3, 0.05], [0.6, 0], [2, 0], [NaN, 0]]) {
+    near(`[L5] fadeCarry(0.1, ${e}) → ${ex}`, C.fadeCarry(0.1, e), ex, 1e-12);
+  }
 
   // ------------------------------------------------------------------ [V]
   const fbx = new FBXLoader();
@@ -260,20 +306,30 @@ async function main() {
     c.name = kind;
     return c;
   };
-  const KINDS = ['idle', 'walk', 'sleeping-side', 'get-up-bed', 'sitting-in-chair', 'get-up-chair'];
+  // The clips the bridges leave: named by the live table, tracked, or the
+  // tracked fallback (`bridgeSources.mjs`); null = that part is skipped.
+  const bedFrom = bridgeSourceClip(ROOT, 'get-up-bed', 'laying');
+  const chairFrom = bridgeSourceClip(ROOT, 'get-up-chair', 'sitting-in-chair');
+  const FROM = { 'get-up-bed': bedFrom?.kind, 'get-up-chair': chairFrom?.kind };
+  for (const [kind, src] of [['get-up-bed', bedFrom], ['get-up-chair', chairFrom]]) {
+    console.log(src ? `\n[V] ${kind} leaves ${src.kind} — ${src.note}` : `\n[V] ${kind}: SKIPPED (see above)`);
+  }
+  const KINDS = ['idle', 'walk', 'get-up-bed', 'get-up-chair', ...[bedFrom, chairFrom].filter(Boolean).map((x) => x.kind)];
   const side = {};
   const raw = {};
   for (const k of KINDS) {
-    side[k] = JSON.parse(await readFile(join(CLIP_DIR, `${k}.json`), 'utf8'));
+    try {
+      side[k] = JSON.parse(await readFile(join(CLIP_DIR, `${k}.json`), 'utf8'));
+    } catch {
+      side[k] = {};   // a clip without a sidecar carries no root motion
+    }
     raw[k] = await loadClip(k);
   }
   const refRig = fbx.parse(arrayBufferOf(await readFile(RIG_FILE)), '');
   const donorRest = C.restPoseOf(THREE, refRig);
   const donorHipsY = C.rigHipsHeight(THREE, refRig);
-  C.setClipTransitions([
-    { from: 'sleeping-side', to: '*', kind: 'get-up-bed', accel: 0 },
-    { from: 'sitting-in-chair', to: '*', kind: 'get-up-chair', accel: 0 },
-  ]);
+  C.setClipTransitions([bedFrom, chairFrom].map((src, i) => src && {
+    from: src.kind, to: '*', kind: i === 0 ? 'get-up-bed' : 'get-up-chair', accel: 0 }).filter(Boolean));
   const loadGlb = async (file) => {
     const bytes = arrayBufferOf(await readFile(file));
     const gltf = await new Promise((res, rej) => new GLTFLoader().parse(bytes, '', res, rej));
@@ -339,8 +395,8 @@ async function main() {
 
     /** One figure lying / sitting on its slot, the stand-up, and every frame
      *  measured until `afterS` past the bridge. */
-    const run = (scenario, bridgeKind, S, { liftOff = false } = {}) => {
-      const fromKind = bridgeKind === 'get-up-bed' ? 'sleeping-side' : 'sitting-in-chair';
+    const run = (scenario, bridgeKind, S, { liftOff = false, lateFloorS = 0 } = {}) => {
+      const fromKind = FROM[bridgeKind];
       const drop = (bridgeKind === 'get-up-bed' ? LIE_ROOT_DROP : SEAT_ROOT_DROP) * H;
       const saved = clipOf(bridgeKind) && C.clipBridgeLift(clipOf(bridgeKind));
       if (liftOff) C.setClipBridgeLift(clipOf(bridgeKind), null);
@@ -392,7 +448,8 @@ async function main() {
         if (!liftOff) mgr.setPlayerTarget(name, new THREE.Vector3(owner.position.x, FLOOR, owner.position.z));
       } else {
         npc.animation = 'idle';
-        npc.target.copy(standPoint);
+        // [V6]: the poll that brought the standing clip still carried the seat.
+        if (!lateFloorS) npc.target.copy(standPoint);
       }
       const measure = () => {
         owner.updateMatrixWorld(true);
@@ -409,7 +466,11 @@ async function main() {
       let after = -1;
       let bridgeFrame = -1;
       for (let f = 0; f < FPS * 15; f++) {
-        if (!avatar && sinceUpdate >= 1.0) { npc.target.copy(standPoint); sinceUpdate = 0; }
+        const late = lateFloorS && f * DT < lateFloorS - 1e-9;
+        if (!avatar && !late && (sinceUpdate >= 1.0 || (lateFloorS && Math.abs(f * DT - lateFloorS) < DT / 2))) {
+          npc.target.copy(standPoint);
+          sinceUpdate = 0;
+        }
         if (avatar) {
           mgr.takePlayerTravel(name);
           if (keyHeld) {
@@ -437,25 +498,41 @@ async function main() {
       if (liftOff) C.setClipBridgeLift(clipOf(bridgeKind), saved);
       const br = rows.filter((r) => r.phase === 'bridge');
       const af = rows.filter((r) => r.phase === 'after');
-      return { before, rows, br, af, last: br[br.length - 1],
-        startLift: (S - drop) - FLOOR, lift: lifts[bridgeKind] };
+      const startLift = (S - drop) - FLOOR;
+      const spec = lifts[bridgeKind];
+      // [V5]: the smoothstep's steepest frame, 1.5 · |Δ| / D · dt.
+      const ramp = C.liftRamp(spec.firstContactS);
+      const stepBound = 1.5 * Math.abs(spec.endLift * scale - startLift) / (ramp.to - ramp.from) * DT;
+      let maxStep = 0;
+      let prev = before.drawn;
+      for (const x of rows.filter((x) => x.phase === 'bridge')) {
+        maxStep = Math.max(maxStep, Math.abs(x.drawn - prev));
+        prev = x.drawn;
+      }
+      return { before, rows, br, af, last: br[br.length - 1], startLift, lift: spec, ramp, stepBound, maxStep };
     };
+    const stepCheck = (label, r) => check(`${label}: no bridge frame moves the drawn root more than`
+      + ` 1.5·|Δ|/D·dt = ${cm(r.stepBound)} (D ${(r.ramp.to - r.ramp.from).toFixed(3)} s)`,
+    r.maxStep <= r.stepBound + 1e-4, cm(r.maxStep));
 
-    for (const S of BEDS) {
+    for (const S of bedFrom ? BEDS : []) {
       for (const scenario of ['npc', 'avatar_key', 'avatar_idle']) {
         const r = run(scenario, 'get-up-bed', S);
         const tag = `${rig.label} bed ${S.toFixed(2)} ${scenario}`;
         if (!r.last) { check(`[V] ${tag}: the bridge ran`, false); continue; }
-        const rampFrom = r.lift.firstContactS - C.LIFT_RAMP_S;
-        const onBed = r.br.filter((x) => x.clipT < rampFrom);
+        const onBed = r.br.filter((x) => x.clipT < r.ramp.from);
         const trunkMin = Math.min(...onBed.map((x) => x.trunk - S));
         if (scenario === 'npc') {
-          check(`[V1] ${tag}: trunk − S >= −5 cm until the ramp (${onBed.length} frames)`,
-            trunkMin >= V1_MIN, cm(trunkMin));
+          const lay = r.before.trunk - S;
+          const bound = Math.min(0, lay) + V1_MIN;
+          console.log(`  info [V1] ${tag}: lying (before the bridge) trunk − S ${cm(lay)}`);
+          check(`[V1] ${tag}: trunk − S >= ${cm(bound)} until the ramp (${onBed.length} frames)`,
+            trunkMin >= bound, cm(trunkMin));
         }
         const footEnd = r.last.foot - FLOOR;
         check(`[V2] ${tag}: last bridge frame, lowest foot − floor within ±1.5 cm`,
           Math.abs(footEnd) <= V2_TOL, cm(footEnd));
+        stepCheck(`[V5b] ${tag}`, r);
         const span = [r.last, ...r.af.filter((_, i) => (i + 1) * DT <= V3_SPAN_S + 1e-9)]
           .map((x) => x.foot - FLOOR);
         const lo = Math.min(...span);
@@ -464,7 +541,7 @@ async function main() {
           check(`[V3a] ${tag}: into idle, lowest foot − floor in −2 … +3 cm through 0.5 s after`,
             lo >= V3_LO && hi <= V3_HI, `${cm(lo)} … ${cm(hi)}`);
         } else {
-          const floorBound = walkDip - V3B_MARGIN;
+          const floorBound = walkDip - V2_TOL;
           check(`[V3b] ${tag}: into walk, lowest foot − floor in ${cm(floorBound)} … +3 cm through 0.5 s after`,
             lo >= floorBound && hi <= V3_HI, `${cm(lo)} … ${cm(hi)}`);
         }
@@ -492,19 +569,29 @@ async function main() {
       }
     }
 
-    for (const scenario of ['npc', 'avatar_idle']) {
+    // [V6] the floor arrives 0.5 s after the bridge opened on the seat.
+    if (bedFrom) {
+      const S = BEDS[0];
+      const r = run('npc', 'get-up-bed', S, { lateFloorS: 0.5 });
+      const tag = `${rig.label} bed ${S.toFixed(2)} npc, floor 0.5 s late`;
+      if (!r.last) check(`[V6] ${tag}: the bridge ran`, false);
+      else {
+        console.log(`  info [V6] ${tag}: ramp from ${r.ramp.from.toFixed(3)} s (after the late floor)`);
+        const footEnd = r.last.foot - FLOOR;
+        check(`[V6] ${tag}: last bridge frame, lowest foot − floor within ±1.5 cm`,
+          Math.abs(footEnd) <= V2_TOL, cm(footEnd));
+        stepCheck(`[V6] ${tag}`, r);
+      }
+    }
+
+    for (const scenario of chairFrom ? ['npc', 'avatar_idle'] : []) {
       const r = run(scenario, 'get-up-chair', SEAT);
       const tag = `${rig.label} chair ${SEAT.toFixed(2)} ${scenario}`;
       if (!r.last) { check(`[V5] ${tag}: the bridge ran`, false); continue; }
       const footEnd = r.last.foot - FLOOR;
       check(`[V5] ${tag}: last bridge frame, lowest foot − floor within ±1.5 cm`,
         Math.abs(footEnd) <= V2_TOL, cm(footEnd));
-      let maxStep = 0;
-      let prev = r.before.drawn;
-      for (const x of r.br) { maxStep = Math.max(maxStep, Math.abs(x.drawn - prev)); prev = x.drawn; }
-      const change = Math.abs(r.startLift - r.lift.endLift * scale);
-      check(`[V5] ${tag}: no bridge frame moves the drawn root more than |startLift − endLift| ${cm(change)}`,
-        maxStep <= change + 1e-4, cm(maxStep));
+      stepCheck(`[V5] ${tag}`, r);
       const span = [r.last, ...r.af.filter((_, i) => (i + 1) * DT <= V3_SPAN_S + 1e-9)]
         .map((x) => x.foot - FLOOR);
       console.log(`  info [V5] ${tag}: 0.5 s after the bridge lowest foot − floor ${cm(Math.min(...span))} … ${cm(Math.max(...span))}`);

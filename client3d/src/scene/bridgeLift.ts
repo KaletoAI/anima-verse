@@ -18,6 +18,16 @@
  *    leaves a difference between the two. The body moves by it over the last
  *    `LIFT_RAMP_S` before the feet touch down. A root alone cannot hold the
  *    seat AND the feet at once; the feet come first — that is the choice.
+ *  - The move never ends before the bridge's own start crossfade
+ *    (`BRIDGE_FADE_IN_S`): a chair whose feet stand from the first frame
+ *    would otherwise drop the body by the whole difference within one frame
+ *    (4.6 cm in 33 ms on Soldier). It is spread over the fade-in instead.
+ *  - A floor that arrives only while the bridge already runs (the poll that
+ *    brought the standing clip still carried the seat) is handed over the
+ *    same way: the owner puts the root on it and the figure takes the
+ *    difference (`Figure.shiftBridgeLift`). Once the ramp has begun, the part
+ *    of it the formula would not carry fades out over `LIFT_RAMP_S`
+ *    (`fadeCarry`) instead of jumping.
  *
  * Unit of every lift: metres in the frame of the figure root (the caller
  * scales `endLift` from template units, `× baseScale`, the same chain as the
@@ -32,6 +42,11 @@
 /** How long before the feet's first ground contact the body starts to move
  *  from its surface onto the height that lands the feet, s. */
 export const LIFT_RAMP_S = 0.6;
+
+/** The crossfade a bridge clip starts with, s — `Figure.play` fades the
+ *  bridge in (and the clip it leaves out) by exactly this, and the lift's
+ *  ramp never ends before it. The one constant for both. */
+export const BRIDGE_FADE_IN_S = 0.25;
 
 /** What a bridge clip needs for its height, measured once per rig. */
 export interface BridgeLift {
@@ -58,11 +73,21 @@ export function setClipBridgeLift(clip: object, lift: BridgeLift | null): void {
   else clipBridgeLifts.delete(clip);
 }
 
+/** The ramp of a bridge's lift, clip seconds: it ends at the feet's first
+ *  contact but never before the start crossfade, and begins `LIFT_RAMP_S`
+ *  earlier (not before 0). */
+export function liftRamp(firstContactS: number): { from: number; to: number } {
+  const to = Math.max(firstContactS, BRIDGE_FADE_IN_S);
+  return { from: Math.max(0, to - LIFT_RAMP_S), to };
+}
+
 /**
- * The lift at clip time `t`: `startLift` up to `max(0, firstContactS −
- * LIFT_RAMP_S)`, then a smoothstep onto `endLift` that arrives AT
- * `firstContactS`, and `endLift` from there on. A clip without contact passes
- * its duration as `firstContactS`, so the ramp ends with the clip.
+ * The lift at clip time `t`: `startLift` up to the ramp's start, then a
+ * smoothstep onto `endLift` that arrives at the ramp's end (`liftRamp`: the
+ * feet's first contact, but not before `BRIDGE_FADE_IN_S`), and `endLift`
+ * from there on. A clip without contact passes its duration as
+ * `firstContactS`, so the ramp ends with the clip. The steepest step of the
+ * smoothstep is 1.5 × |endLift − startLift| / (ramp length) per second.
  *
  * Never NaN: a non-finite `t`, `endLift` or `firstContactS` answers
  * `startLift`, and a non-finite `startLift` counts as 0 — one NaN in the
@@ -73,10 +98,23 @@ export function liftAt(t: number, startLift: number, endLift: number, firstConta
   if (!Number.isFinite(t) || !Number.isFinite(endLift) || !Number.isFinite(firstContactS)) {
     return start;
   }
-  const from = Math.max(0, firstContactS - LIFT_RAMP_S);
-  if (t >= firstContactS) return endLift;
+  const { from, to } = liftRamp(firstContactS);
+  if (t >= to) return endLift;
   if (t <= from) return start;
-  const x = (t - from) / (firstContactS - from);
+  const x = (t - from) / (to - from);
   const s = x * x * (3 - 2 * x);
   return start + (endLift - start) * s;
+}
+
+/**
+ * What is left, `elapsedS` after a hand-over, of a lift difference `amount`
+ * the ramp formula does not carry (`Figure.shiftBridgeLift`): `amount` at 0,
+ * a smoothstep down to 0 at `LIFT_RAMP_S`, 0 after. Non-finite input → 0.
+ */
+export function fadeCarry(amount: number, elapsedS: number): number {
+  if (!Number.isFinite(amount) || !Number.isFinite(elapsedS)) return 0;
+  if (elapsedS <= 0) return amount;
+  if (elapsedS >= LIFT_RAMP_S) return 0;
+  const x = elapsedS / LIFT_RAMP_S;
+  return amount * (1 - x * x * (3 - 2 * x));
 }
