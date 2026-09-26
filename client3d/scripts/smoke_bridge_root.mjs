@@ -188,6 +188,69 @@
  * [B11] relockRootPaths per model (one call, both bridges, the leg pin
  *       included) <= 100 ms, printed (measured 4–5 ms before the pin,
  *       9.6–14.3 ms with it).
+ * [B12]–[B15] THE TURN HANDED FROM THE HIPS TO THE ROOT (Task C2,
+ *       `bridgeHeading.ts`, `Figure.turn`). `relockRootPaths` measures the
+ *       pelvis heading ψ(t) of each bridge on each rig (LeftUpLeg→RightUpLeg),
+ *       turns the hips tracks back by −ψ(t) about the hips' rest vertical and
+ *       stores the turn; the Figure turns its root by +ψ(t) and keeps ψ_end.
+ *       COUNTER-PROBE library in the same run: the same re-lock with
+ *       `{ turn: false }` (the state before C2). Each run: owner at (3, 0, −2),
+ *       facing YAW, the source clip for 1 s, the bridge, then the owner takes
+ *       the travel over (`takeTravel`, as `npcs` does) and idle plays.
+ * [B12] INVARIANCE: every bone's world position on every bridge frame from
+ *       0.30 s on, WITH the hand-over, equals the counter-probe's within
+ *       1 mm (max over bones × frames). The turn is only moved from the hips
+ *       into the root, about the same vertical, so the two differ by float
+ *       noise (measured ≤ 0.001 mm). The fade-in frames are left out, as
+ *       everywhere in [B]: the clip being LEFT fades out under a root that
+ *       already turns by ψ and is not turned back — the difference is ψ over
+ *       the fade (chair 2.3–2.9 mm, printed as info). On the bed the working
+ *       tree's lying clip on 2026-09-26 (a foreign modification of
+ *       `laying.fbx`) stands with its hips 180° against get-up-bed's first
+ *       frame (quaternion dot 0.0000; the committed file 0.95): that fade is a
+ *       near-antipodal slerp whose direction a 1e-5 rad difference flips —
+ *       up to 1.7 m in single fade frames, which says nothing about the turn.
+ * [B12b] get-up-bed: a journey that starts early takes the travel at 1.6 s,
+ *       mid-turn, the owner moves by it: no foot moves (<= 1 mm); the turn
+ *       goes on, the end holds the pivot's swing again, and the second
+ *       `takeTravel` moves no foot either (<= 1 mm); the root ends on
+ *       base + ψ_end (1e-6).
+ * [B13] NET TURN: get-up-bed ψ_end within −115° … −98° on all three rigs,
+ *       get-up-chair |ψ_end| <= 8° (brief, measured by the analysis harness
+ *       −104.8 / −108.9 / −109.3 and −4.5). Measured here (after the per-rig
+ *       pin, which bends the legs below the UpLegs and so does not change ψ):
+ *       bed Test3_mia −105.83°, Soldier −105.55°, reference −104.75°; chair
+ *       −4.78°, −4.46°, −4.52°. The counter-probe stores no turn.
+ * [B14] NO SNAP INTO THE NEXT CLIP: the HORIZONTAL move of each foot bone
+ *       between the last bridge frame and the first idle frame after the
+ *       hand-over (1/30 s, idle faded in to (1/30)/0.25 = 0.1333 — the height
+ *       is the owner's lift, `smoke_bridge_lift.mjs`, not part of this chain).
+ *       What is left once the turn is handed over is the difference of the
+ *       two POSES, × 0.1333: fitting the bridge's last-frame feet onto the
+ *       idle's first-frame feet by the best rotation (the analysis of this
+ *       task) leaves a stance residual of 13.6–16.3 cm on the bed → 1.8–2.2 cm,
+ *       and on the chair a 6.1–6.4 cm shift of the feet centroid (the travel's
+ *       stand point, not the turn) and a 2.6–3.1 cm residual → up to
+ *       0.85 + 0.4 cm. No hand-over angle removes those; the brief's
+ *       "≤ 2 cm / chair ≤ 1 cm" assumed the turn was the whole difference.
+ *       Bounds: bed <= 3.0 cm, chair <= 1.5 cm. Measured with / without the
+ *       hand-over: bed Test3_mia 2.32 / 7.51, Soldier 2.75 / 9.10, reference
+ *       2.83 / 8.49 cm; chair 0.72 / 0.76, 1.18 / 0.98, 1.19 / 0.96 cm (the
+ *       chair's pelvis ends 4.5° twisted against its stance, so handing its
+ *       heading over turns the idle's feet by that: +0.2 cm).
+ *       RED COUNTER-PROBE (bed): without the hand-over >= 6 cm (the brief's
+ *       8.1–8.7 cm; the idle swings the body back by ~105°).
+ * [B15] THE TURN STAYS: after 1 s of idle the pelvis heading in the WORLD
+ *       equals base + ψ_end + h_idle within 0.1°, h_idle = the idle's OWN
+ *       pelvis heading against its root at that clip time, measured in the
+ *       same run on a fresh figure of the same rig playing idle alone (at 1 s
+ *       the bridge has faded out, so the two poses are the same idle frame).
+ *       The root yaw itself is base + ψ_end (1e-6). The brief bounded this by
+ *       ±6° as "the idle's own wobble"; the idle's pelvis at 1 s stands
+ *       +6.01° (Test3_mia), +5.85° (Soldier), +6.43° (reference) off its
+ *       root — the derivation now takes it in instead of a tolerance.
+ *       RED COUNTER-PROBE (bed): without the hand-over the pelvis is >= 90°
+ *       off (it swings back to base + h_idle: |ψ_end| ≈ 105°).
  * [B17] THE CHAIR'S END, BOTH FEET ON THE FLOOR: from t >= 3.5 s (40
  *       frames), per side the lowest of the foot's bones (Foot, ToeBase,
  *       Toe_End) over the rig's rest floor, MEDIAN over those frames — the
@@ -215,9 +278,10 @@
  * [Y1] The figure faces yaw 0.6, the bridge opens, and on EVERY bridge frame
  *       `faceTowards(+x, snap)` (yaw atan2(1, 0) = π/2) and then
  *       `setYaw(1.0)` are asked for. `root.rotation.y` stays 0.6 ± 1e-6 for
- *       the whole bridge. (Task C2 will hand the bridge's OWN turn over at its
- *       end; until then there is none.) Before this task the snap turned
- *       the root to π/2 at once: |π/2 − 0.6| = 0.9708 rad.
+ *       the whole bridge — the synthetic bridge holds every bone at rest, so
+ *       its own turn (Task C2, `clipRootTurn`) is exactly 0 and the root has
+ *       nothing to follow. Before C1 the snap turned the root to π/2 at
+ *       once: |π/2 − 0.6| = 0.9708 rad.
  *       [Y1r] COUNTER-PROBE, same asks on a RAMPING bridge (accel 1): it
  *       keeps its turn — the figure is about to walk off — so rotation.y
  *       leaves 0.6 by more than 0.1 rad.
@@ -243,8 +307,10 @@
  *       1e-4 in its first tick — the gate holds a bridge, nobody else.
  *       [Y3b] The NPC lies again, stands up with its goal ON its root (not
  *       moving — the standing branch) and a marker facing +x: rotation.y is
- *       the same ± 1e-6 on every bridge frame. Before this task it eased to
- *       the marker's π/2: 0.9708 rad off.
+ *       the same ± 1e-6 on every bridge frame as that of a TWIN standing up
+ *       the same way without a marker — since Task C2 the root turns by the
+ *       bridge's own turn (get-up-bed, ~105°), which both share; the marker
+ *       adds nothing. Before C1 it eased to the marker's π/2: 0.9708 rad off.
  *       [Y3d] After the bridge the gate opens: the first tick after it hands
  *       the bridge travel over (root and goal move by it, `applyBridgeTravel`),
  *       and within the 1 s after THAT tick the root walks >= 5 cm (the goal
@@ -292,6 +358,16 @@ const BRIDGES = [
     driftMax: BED_DRIFT_MAX_M, redMin: BED_RED_MIN_M },
 ].filter(Boolean);
 const HANDOVER_MAX_M = 0.01;
+/** [B12]–[B15], Task C2 — the turn handed from the hips to the root (docstring). */
+const TURN_INVARIANCE_MM = 1;
+const BED_TURN_DEG = [-115, -98];
+const CHAIR_TURN_MAX_DEG = 8;
+const B14_BED_MAX_M = 0.03;
+const B14_CHAIR_MAX_M = 0.015;
+const B14_RED_MIN_M = 0.06;
+const B15_TOL_DEG = 0.1;
+/** [B12b]: when the early journey takes the travel, mid-turn (bed: ψ ≈ −54°). */
+const MID_TAKE_S = 1.6;
 /** [B17]: the chair's end part, and how far its feet may stand off the floor. */
 const B17_FROM_S = 3.5;
 const B17_MAX_CM = 1.0;
@@ -337,7 +413,8 @@ async function loadClient() {
     const src = join(ROOT, 'client3d/src');
     const entry = [
       `export { travelAt, toWorld, rootPathAt } from '${src}/scene/bridgeTravel';`,
-      `export { adaptExternalClips, Figure, setClipRootMotion } from '${src}/scene/figures';`,
+      `export { adaptExternalClips, clipRootTurn, Figure, setClipRootMotion } from '${src}/scene/figures';`,
+      `export { turnAt } from '${src}/scene/bridgeTravel';`,
       `export { relockRootPaths } from '${src}/scene/footLockMeasure';`,
       `export { measureGroundOffsets } from '${src}/scene/clipGround';`,
       `export { NpcManager } from '${src}/scene/npcs';`,
@@ -371,7 +448,7 @@ async function main() {
   const client = await loadClient();
   const { travelAt, toWorld, adaptExternalClips, Figure, rigHipsHeight, setClipRootMotion,
           setClipTransitions, restCorrections, restPoseOf, relockRootPaths,
-          measureGroundOffsets, NpcManager } = client;
+          measureGroundOffsets, NpcManager, clipRootTurn } = client;
 
   const loadRig = async (file) => {
     const bytes = arrayBufferOf(await readFile(file));
@@ -783,6 +860,112 @@ async function main() {
   });
   const worstOf = (per) => Math.max(0, ...per.map((d) => d.drift));
 
+  /** Pelvis heading in the WORLD from the UpLeg cross vector (docstring
+   *  [B15], the convention of `bridgeHeading.headingTrack`). */
+  const worldHeading = (upL, upR) => {
+    const l = upL.getWorldPosition(new THREE.Vector3());
+    const r = upR.getWorldPosition(new THREE.Vector3());
+    return Math.atan2(l.x - r.x, l.z - r.z) - Math.PI / 2;
+  };
+  const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  /** [B12]–[B15]: one bridge on a fresh figure of `lib`, the owner taking the
+   *  travel over at its end as `npcs` does, then 1 s of idle. Returns every
+   *  bone's world position per bridge frame, ψ_end of the clip's turn (null =
+   *  none), the largest HORIZONTAL foot move between the last bridge frame and
+   *  the first idle frame after the hand-over, the pelvis heading in the world
+   *  after 1 s of idle, and the root yaw then. */
+  const runTurnChain = (label, template, lib, scale, b) => {
+    const fig = makeFigure(label, template, lib, scale);
+    const all = [];
+    fig.inst.traverse((o) => { if (o.isBone) all.push(o); });
+    const feet = FOOT_KEYS.map((k) => all.find((o) => keyOf(o.name) === k));
+    const upL = all.find((o) => keyOf(o.name) === 'leftupleg');
+    const upR = all.find((o) => keyOf(o.name) === 'rightupleg');
+    const pos = (o) => { o.getWorldPosition(v); return { x: v.x, y: v.y, z: v.z }; };
+    fig.owner.position.set(3, 0, -2);
+    fig.figure.faceTowards(new THREE.Vector3(Math.sin(YAW), 0, Math.cos(YAW)), true);
+    fig.figure.play(b.from);
+    for (let i = 0; i < 20; i++) fig.figure.update(0.05);
+    fig.figure.play('idle');
+    const bones = [];
+    let guard = 0;
+    while (fig.figure.bridging && guard++ < 1000) {
+      fig.figure.update(1 / FPS);
+      fig.owner.updateMatrixWorld(true);
+      bones.push(all.map(pos));
+    }
+    fig.owner.updateMatrixWorld(true);
+    const last = feet.map(pos);
+    const took = fig.figure.takeTravel();
+    if (took) fig.owner.position.add(new THREE.Vector3(took.x, 0, took.z));
+    fig.figure.play('idle');
+    fig.figure.update(1 / FPS);
+    fig.owner.updateMatrixWorld(true);
+    const perFoot = feet.map(pos).map((p, i) => Math.hypot(p.x - last[i].x, p.z - last[i].z));
+    for (let i = 1; i < FPS; i++) {
+      fig.figure.play('idle');
+      fig.figure.update(1 / FPS);
+    }
+    fig.owner.updateMatrixWorld(true);
+    const heading = worldHeading(upL, upR);
+    const turn = clipRootTurn(lib.find((c) => c.name === b.kind));
+    const out = { bones, psiEnd: turn ? turn.yaw[turn.yaw.length - 1] : null, jump: Math.max(...perFoot),
+      perFoot, heading, rootYaw: fig.figure.root.rotation.y };
+    fig.figure.dispose();
+    return out;
+  };
+
+  /** [B12b]: the bridge with a takeTravel at MID_TAKE_S (the owner moves by
+   *  it) and one at the end — the largest foot move each hand-over causes,
+   *  whether the end still holds an offset, the root yaw after it. */
+  const runMidTake = (label, template, lib, scale, b) => {
+    const fig = makeFigure(label, template, lib, scale);
+    const feet = [];
+    fig.inst.traverse((o) => { if (o.isBone && FOOT_KEYS.includes(keyOf(o.name))) feet.push(o); });
+    const at = () => { fig.owner.updateMatrixWorld(true); return feet.map((f) => f.getWorldPosition(new THREE.Vector3())); };
+    const handOver = () => {
+      const before = at();
+      const took = fig.figure.takeTravel();
+      if (took) fig.owner.position.add(new THREE.Vector3(took.x, 0, took.z));
+      const after = at();
+      return Math.max(...after.map((p, i) => p.distanceTo(before[i])));
+    };
+    fig.owner.position.set(3, 0, -2);
+    fig.figure.faceTowards(new THREE.Vector3(Math.sin(YAW), 0, Math.cos(YAW)), true);
+    fig.figure.play(b.from);
+    for (let i = 0; i < 20; i++) fig.figure.update(0.05);
+    fig.figure.play('idle');
+    let frames = 0;
+    let midJump = NaN;
+    while (fig.figure.bridging && frames++ < 1000) {
+      fig.figure.update(1 / FPS);
+      if (frames === Math.round(MID_TAKE_S * FPS)) midJump = handOver();
+    }
+    const heldAtEnd = fig.figure.holdsTravel;
+    const endJump = handOver();
+    const out = { midJump, endJump, heldAtEnd, rootYaw: fig.figure.root.rotation.y };
+    fig.figure.dispose();
+    return out;
+  };
+
+  /** [B15]: the idle ALONE on a fresh figure facing YAW, 1 s in — its own
+   *  pelvis heading against its root, the idle's wobble at that clip time. */
+  const idleHeadingAt1s = (label, template, lib, scale) => {
+    const fig = makeFigure(label, template, lib, scale);
+    const all = [];
+    fig.inst.traverse((o) => { if (o.isBone) all.push(o); });
+    fig.figure.faceTowards(new THREE.Vector3(Math.sin(YAW), 0, Math.cos(YAW)), true);
+    for (let i = 0; i < FPS; i++) {
+      fig.figure.play('idle');
+      fig.figure.update(1 / FPS);
+    }
+    fig.owner.updateMatrixWorld(true);
+    const h = worldHeading(all.find((o) => keyOf(o.name) === 'leftupleg'),
+      all.find((o) => keyOf(o.name) === 'rightupleg')) - fig.figure.root.rotation.y;
+    fig.figure.dispose();
+    return wrapPi(h);
+  };
+
   // The two real character rigs, and the REFERENCE rig itself as a third
   // figure (a fresh parse, life-size: its centimetres × 0.01).
   const targets = [
@@ -849,6 +1032,9 @@ async function main() {
       }
     }
     const libs = { relock: relockLib, imported: adapt(true), off: adapt(false) };
+    // [B12]–[B15] the counter-probe: the same re-lock, the turn left in the hips.
+    const noTurnLib = adapt(true);
+    relockRootPaths(noTurnLib, template, 1 / (100 * scale), undefined, { turn: false });
     if (target.ref) libs.median = adapt(true, false);
 
     for (const b of BRIDGES) {
@@ -1071,6 +1257,70 @@ async function main() {
       table[table.length - 1].b10 = b10;
       console.log(`      [B10] ${label} ${b.kind}: end point vs the server's stand point —`
         + ` re-locked ${cm(b10.relock)}, imported ${cm(b10.imported)}, ×${SCALE_UP} re-locked ${cm(b10.scaled)}`);
+
+      // --- [B12]–[B15] the turn handed from the hips to the root ----------
+      const turnOn = runTurnChain(label, template, libs.relock, scale, b);
+      const turnOff = runTurnChain(label, template, noTurnLib, scale, b);
+      const psiEnd = turnOn.psiEnd;
+      const deg = (r) => (r * 180) / Math.PI;
+      // [B12] after the fade-in, every bone, every frame.
+      const firstInv = Math.ceil(FADE_SKIP_S * FPS - 1 - 1e-9);   // (i+1)/FPS >= FADE_SKIP_S
+      let inv = 0;
+      let invFade = 0;
+      const nInv = Math.min(turnOn.bones.length, turnOff.bones.length);
+      for (let i = 0; i < nInv; i++) {
+        turnOn.bones[i].forEach((p, j) => {
+          const q = turnOff.bones[i][j];
+          const d = Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z);
+          if (i >= firstInv) inv = Math.max(inv, d); else invFade = Math.max(invFade, d);
+        });
+      }
+      check(`[B12] ${label} ${b.kind}: every bone during the bridge (from ${FADE_SKIP_S} s) is where it`
+        + ` is without the hand-over (<= ${TURN_INVARIANCE_MM} mm)`,
+        nInv === turnOff.bones.length && nInv === turnOn.bones.length && inv * 1000 <= TURN_INVARIANCE_MM,
+        `${(inv * 1000).toFixed(4)} mm over ${nInv - firstInv} frames × ${turnOn.bones[0]?.length ?? 0} bones;`
+        + ` info: the fade-in frames ${(invFade * 1000).toFixed(1)} mm`);
+      // [B12b] a journey that starts while the turn still runs.
+      if (b.kind === 'get-up-bed') {
+        const mid = runMidTake(label, template, libs.relock, scale, b);
+        check(`[B12b] ${label} ${b.kind}: takeTravel at ${MID_TAKE_S} s while the turn runs, owner moved by it:`
+          + ` no foot moves (<= 1 mm), the turn goes on, and the end hands over again without a jump (<= 1 mm)`,
+          mid.midJump <= 0.001 && mid.endJump <= 0.001 && mid.heldAtEnd
+          && Math.abs(wrapPi(mid.rootYaw - YAW - (psiEnd ?? 0))) <= 1e-6,
+          `mid ${(mid.midJump * 1000).toFixed(4)} mm, end ${(mid.endJump * 1000).toFixed(4)} mm,`
+          + ` held again ${mid.heldAtEnd}, root yaw ${deg(mid.rootYaw).toFixed(3)}°`);
+      }
+      // [B13] the net turn.
+      const [lo, hi] = b.kind === 'get-up-bed' ? BED_TURN_DEG : [-CHAIR_TURN_MAX_DEG, CHAIR_TURN_MAX_DEG];
+      check(`[B13] ${label} ${b.kind}: ψ_end within ${lo}° … ${hi}°`,
+        psiEnd !== null && deg(psiEnd) >= lo && deg(psiEnd) <= hi,
+        psiEnd === null ? 'no turn stored' : `${deg(psiEnd).toFixed(2)}°`);
+      check(`[B13] ${label} ${b.kind}: COUNTER-PROBE — { turn: false } stores no turn`, turnOff.psiEnd === null);
+      // [B14] no snap into the next clip.
+      const b14Max = b.kind === 'get-up-bed' ? B14_BED_MAX_M : B14_CHAIR_MAX_M;
+      check(`[B14] ${label} ${b.kind}: first idle frame after the hand-over moves the feet <= ${cm(b14Max)}`,
+        turnOn.jump <= b14Max, `${cm(turnOn.jump)} (per foot ${turnOn.perFoot.map((d) => (d * 100).toFixed(2)).join(' / ')} cm);`
+        + ` without the hand-over ${cm(turnOff.jump)}`);
+      if (b.kind === 'get-up-bed') {
+        check(`[B14] ${label} ${b.kind}: RED COUNTER-PROBE — without the hand-over the feet move >= ${cm(B14_RED_MIN_M)}`,
+          turnOff.jump >= B14_RED_MIN_M, cm(turnOff.jump));
+      }
+      // [B15] the turn stays on the root: 1 s on, the pelvis faces base + ψ_end
+      // plus exactly the idle's own heading at that clip time.
+      const hIdle = idleHeadingAt1s(label, template, libs.relock, scale);
+      const wantOn = YAW + (psiEnd ?? 0) + hIdle;
+      const offOn = Math.abs(wrapPi(turnOn.heading - wantOn));
+      check(`[B15] ${label} ${b.kind}: after 1 s of idle the pelvis faces base + ψ_end + the idle's own`
+        + ` ${deg(hIdle).toFixed(2)}° (<= ${B15_TOL_DEG}°)`,
+        deg(offOn) <= B15_TOL_DEG && Math.abs(wrapPi(turnOn.rootYaw - YAW - (psiEnd ?? 0))) <= 1e-6,
+        `world ${deg(turnOn.heading).toFixed(2)}° vs ${deg(wantOn).toFixed(2)}° (off by ${deg(offOn).toFixed(3)}°),`
+        + ` root yaw ${deg(turnOn.rootYaw).toFixed(3)}° = base ${deg(YAW).toFixed(2)}° + ψ_end;`
+        + ` against base + ψ_end alone ${deg(wrapPi(turnOn.heading - YAW - (psiEnd ?? 0))).toFixed(2)}°`);
+      if (b.kind === 'get-up-bed') {
+        const back = Math.abs(wrapPi(turnOff.heading - wantOn));
+        check(`[B15] ${label} ${b.kind}: RED COUNTER-PROBE — without the hand-over the pelvis swings back`
+          + ` (>= 90° off base + ψ_end + idle)`, deg(back) >= 90, `${deg(back).toFixed(1)}°`);
+      }
     }
   }
 
@@ -1147,21 +1397,31 @@ async function main() {
       moved(before2, stand.npc.root.position), 3.4 / 30, 1e-4);
     stand.fig.figure.dispose();
 
+    // The twin stands up the same way WITHOUT a marker: its root turns only by
+    // the bridge's own turn (Task C2), which both share.
     const lie = npcOn('y3-face', LIE);
-    lie.npc.animation = 'idle';
+    const twin = npcOn('y3-face-twin', LIE);
+    for (const n of [lie, twin]) n.npc.animation = 'idle';
     lie.npc.face = new THREE.Vector3(1, 0, 0);
-    const yaw0 = lie.fig.figure.root.rotation.y;
     let maxTurn = 0;
+    let bridgeTurn = 0;
     let frames = 0;
+    const yaw0 = twin.fig.figure.root.rotation.y;
     lie.mgr.tick(DT, 10);
-    const opened = lie.fig.figure.bridging;
+    twin.mgr.tick(DT, 10);
+    const opened = lie.fig.figure.bridging && twin.fig.figure.bridging;
     while (lie.fig.figure.bridging && frames++ < 1000) {
-      maxTurn = Math.max(maxTurn, Math.abs(lie.fig.figure.root.rotation.y - yaw0));
+      maxTurn = Math.max(maxTurn, Math.abs(lie.fig.figure.root.rotation.y - twin.fig.figure.root.rotation.y));
+      bridgeTurn = Math.max(bridgeTurn, Math.abs(twin.fig.figure.root.rotation.y - yaw0));
       lie.mgr.tick(DT, 10);
+      twin.mgr.tick(DT, 10);
     }
     check('[Y3b] standing up in place opens the bridge', opened, `${frames} frames`);
-    near('[Y3b] marker facing +x while the bridge holds: rotation.y stays', maxTurn, 0, 1e-6);
+    near('[Y3b] marker facing +x while the bridge holds: rotation.y = the twin\'s without a marker',
+      maxTurn, 0, 1e-6);
+    console.log(`      [Y3b] info: the bridge's own turn moved both roots by up to ${(bridgeTurn * 180 / Math.PI).toFixed(1)}°`);
     lie.fig.figure.dispose();
+    twin.fig.figure.dispose();
   }
 
   console.log('\n      drift table (own contacts, cm): clip × rig — re-locked / imported / ×1.15 re-locked; [B10] re-locked / imported');

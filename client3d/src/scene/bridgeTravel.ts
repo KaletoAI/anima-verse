@@ -17,7 +17,9 @@
  * is the caller's business.
  *
  * It also holds the one per-clip store of bridge travels (`clipRootPath` /
- * `setClipRootPath`).
+ * `setClipRootPath`), and next to it the store of bridge TURNS
+ * (`RootTurn`, `clipRootTurn` / `setClipRootTurn`, `turnAt`) — the yaw a
+ * holding bridge hands from the hips to the figure root (Task C2).
  */
 
 /** The horizontal root path of a clip: hips XZ per keyframe. */
@@ -80,6 +82,57 @@ export function travelAt(path: RootPath, t: number): { x: number; z: number } {
   if (path.times.length === 0) return { x: 0, z: 0 };
   const p = rootPathAt(path, t);
   return { x: p.x - path.xz[0], z: p.z - path.xz[1] };
+}
+
+/** The TURN of a bridge clip (Task C2): how far the clip turns the whole body
+ *  about the vertical, per key, RELATIVE to frame 0 (`bridgeHeading.
+ *  headingTrack`), in radians of yaw (three.js `rotation.y`, the `toWorld`
+ *  convention). `footLockMeasure.relockRootPaths` measures it on each rig and
+ *  takes it OUT of the clip's hips track, turning the pose back about the
+ *  vertical through `pivot`; `figures.Figure` turns its root by it instead
+ *  while the bridge holds the figure, and keeps the end turn afterwards.
+ *
+ *  `pivot` is the hips' rest point in TEMPLATE-LOCAL coordinates (the frame
+ *  of the template's root object, before its own position/rotation/scale): the
+ *  point both the probe clone and every figure instance of the template agree
+ *  on without measuring anything — the figure turns it into its own frame with
+ *  the instance's rotation and scale. Only its vertical line matters. */
+export interface RootTurn {
+  times: Float32Array;
+  yaw: Float32Array;
+  pivot: [number, number, number];
+}
+
+/** The per-clip store of turns, the `clipRootPaths` pattern and for the same
+ *  reason (no import cycle through `figures.ts`, which re-exports these). */
+const clipRootTurns = new WeakMap<object, RootTurn>();
+
+/** The turn of a clip, `undefined` when it carries none. */
+export function clipRootTurn(clip: object): RootTurn | undefined {
+  return clipRootTurns.get(clip);
+}
+
+/** Store (or replace) the turn of a clip. */
+export function setClipRootTurn(clip: object, turn: RootTurn): void {
+  clipRootTurns.set(clip, turn);
+}
+
+/** The turn at clip time `t` (linear between keys, clamped at both ends like
+ *  `travelAt`; NaN and an empty turn answer the first key / 0). */
+export function turnAt(turn: RootTurn, t: number): number {
+  const { times, yaw } = turn;
+  const n = times.length;
+  if (n === 0) return 0;
+  if (!(t > times[0])) return yaw[0];
+  if (t >= times[n - 1]) return yaw[n - 1];
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] <= t) lo = mid; else hi = mid;
+  }
+  const span = times[hi] - times[lo] || 1;
+  return yaw[lo] + (yaw[hi] - yaw[lo]) * ((t - times[lo]) / span);
 }
 
 /** A clip-frame offset turned into the WORLD by the figure's yaw (three.js

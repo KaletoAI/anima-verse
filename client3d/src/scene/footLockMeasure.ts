@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { normBoneName } from '@anima/scene-render';
-import { clipRootPath, setClipRootPath, travelAt } from './bridgeTravel';
+import { clipRootPath, setClipRootPath, setClipRootTurn, travelAt } from './bridgeTravel';
 import type { RootPath } from './bridgeTravel';
 import { setClipBridgeLift } from './bridgeLift';
+import { headingTrack } from './bridgeHeading';
 import {
   CONTACT_POINTS, FULL, contactWeights, footLockPath, groundHeights, maxPlantedDrift,
 } from './footLock';
@@ -97,6 +98,32 @@ import type { Quat } from './legPin';
  *     judged on); the clip's duration when there is none.
  * Stored on the clip (`setClipBridgeLift`); `Figure.beginBridgeLift` reads it.
  *
+ * THE BRIDGE'S TURN, last (Task C2, `bridgeHeading.ts`): a holding bridge may
+ * turn the whole body (`get-up-bed` ~105° while the figure sits up on the
+ * bed's edge). Measured in the SAME probe run and on the same times as the
+ * path, but applied only after it: the path, the pin and the lift all see
+ * the clip as authored (the feet un-turned), and only then is the turn taken
+ * out of it.
+ *   ψ(t) — the pelvis heading from the LeftUpLeg→RightUpLeg cross vector per
+ *     sample, relative to frame 0 (`headingTrack`). The pin bends the legs
+ *     BELOW the UpLegs, so the joints read before it are the joints after it.
+ *   The hips' position AND rotation tracks are rewritten on the sample times
+ *     with the pose turned by −ψ(t) about the vertical through the hips' REST
+ *     point (the adapted hips move only vertically, so their own position
+ *     stays where it was): every bone ends up where it was, turned by −ψ
+ *     about that line.
+ *   Stored on the clip as `RootTurn` (`setClipRootTurn`, the pivot in
+ *     template-local coordinates); `Figure` turns its root by +ψ(t) about the
+ *     same line while the bridge holds it, so on screen nothing moves — and
+ *     keeps ψ_end on the root after it, so the next clip starts facing where
+ *     the bridge ended instead of swinging back.
+ * A pelvis that never turns (|ψ| < `TURN_NONE_RAD` on every sample) has
+ * nothing to hand over: the clip stays untouched and no turn is stored.
+ * A rig without `LeftUpLeg`/`RightUpLeg` (or hips) gets no turn: reported as
+ * `turn: none (no hip bones)`, the clip keeps its hips track and the figure
+ * its yaw, as before. The fallback 'no foot bones' measures nothing, so it has
+ * no turn either.
+ *
  * Side-effect free on the template: the clone is posed, never the template
  * (the `clipGround.measureGroundOffsets` pattern), and every clip is uncached
  * from the probe's mixer again.
@@ -130,6 +157,21 @@ export interface RelockReport {
   pinReason?: string;
   /** End of the path in use, clip frame (x, z), cm at the nominal scale. */
   travel: [number, number];
+  /** The turn taken out of the hips and handed to the figure root, ψ at the
+   *  clip's end in degrees (0 = the pelvis never turns, nothing stored);
+   *  null when none was measured (`turnReason`). */
+  turnDeg: number | null;
+  /** Why no turn was stored: 'no hip bones' | 'switched off' (the caller's
+   *  `{ turn: false }`); absent for the fallback 'no foot bones'. */
+  turnReason?: string;
+}
+
+/** Options of `relockRootPaths`. */
+export interface RelockOptions {
+  /** false: measure path, pin and lift as always, but leave the turn in the
+   *  hips track and store none — the state before Task C2, the counter-probe
+   *  of `smoke_bridge_root.mjs` [B12]/[B14]. Default true. */
+  turn?: boolean;
 }
 
 /** How much LESS the rebuilt path must drift than the imported one before it
@@ -182,9 +224,15 @@ function travelEndCm(path: RootPath, unitsPerCm: number): [number, number] {
 
 /** One line for the whole model, e.g.
  *  "foot lock per rig — get-up-chair 3.9 cm (imported 5.0), held 3.1 cm,
- *  lifted 1.2 cm → 0.5 cm, get-up-bed imported (no foot bones)". The pin
- *  part is left out when it moved nothing visible (both < 0.05 cm). */
+ *  lifted 1.2 cm → 0.5 cm, turn -4.5°, get-up-bed imported (no foot bones)".
+ *  The pin part is left out when it moved nothing visible (both < 0.05 cm),
+ *  the turn part likewise (|ψ_end| < 0.05°) — otherwise it says the end turn
+ *  or why there is none. */
 function summaryLine(reports: readonly RelockReport[]): string {
+  const turnPart = (r: RelockReport): string => {
+    if (r.turnDeg !== null) return Math.abs(r.turnDeg) < 0.05 ? '' : `, turn ${r.turnDeg.toFixed(1)}°`;
+    return r.turnReason ? `, turn: none (${r.turnReason})` : '';
+  };
   const parts = reports.map((r) => {
     let head: string;
     if (r.used === 'rig') {
@@ -192,12 +240,12 @@ function summaryLine(reports: readonly RelockReport[]): string {
     } else if (r.reason === IMPORTED_BETTER) {
       head = `${r.clip} imported ${r.importedDriftCm.toFixed(1)} cm (rig ${r.rebuiltDriftCm.toFixed(1)})`;
     } else {
-      return `${r.clip} imported (${r.reason})`;
+      return `${r.clip} imported (${r.reason})${turnPart(r)}`;
     }
-    if (r.pinReason) return `${head}, not pinned (${r.pinReason})`;
-    if (r.pinnedCm < 0.05 && r.liftCm < 0.05) return head;
+    if (r.pinReason) return `${head}, not pinned (${r.pinReason})${turnPart(r)}`;
+    if (r.pinnedCm < 0.05 && r.liftCm < 0.05) return `${head}${turnPart(r)}`;
     return `${head}, held ${r.pinnedCm.toFixed(1)} cm, lifted ${r.liftCm.toFixed(1)} cm`
-      + ` → ${r.driftCm.toFixed(1)} cm`;
+      + ` → ${r.driftCm.toFixed(1)} cm${turnPart(r)}`;
   });
   return `foot lock per rig — ${parts.join(', ')}`;
 }
@@ -266,27 +314,84 @@ function sampleOnProbe(mixer: THREE.AnimationMixer, probe: THREE.Object3D,
 
 const toThree = (q: Quat): THREE.Quaternion => new THREE.Quaternion(q[1], q[2], q[3], q[0]);
 
-/** Replace the quaternion track of `bone` in `clip` (whatever spelling of the
- *  bone name it used) by one on `times`, in place of the old one. */
-function replaceQuatTrack(clip: THREE.AnimationClip, bone: THREE.Object3D,
-                          times: Float32Array, values: Float32Array): void {
+/** Replace the `prop` track (`quaternion` / `position`) of `bone` in `clip`
+ *  (whatever spelling of the bone name it used) by one on `times`, in place
+ *  of the old one. */
+function replaceTrack(clip: THREE.AnimationClip, bone: THREE.Object3D, prop: 'quaternion' | 'position',
+                      times: Float32Array, values: Float32Array): void {
   const key = normBoneName(bone.name);
-  const track = new THREE.QuaternionKeyframeTrack(`${bone.name}.quaternion`, times, values);
-  const at = clip.tracks.findIndex((t) => {
+  const track = prop === 'quaternion'
+    ? new THREE.QuaternionKeyframeTrack(`${bone.name}.quaternion`, times, values)
+    : new THREE.VectorKeyframeTrack(`${bone.name}.position`, times, values);
+  const matches = (t: THREE.KeyframeTrack): boolean => {
     const dot = t.name.lastIndexOf('.');
-    return dot > 0 && t.name.slice(dot + 1) === 'quaternion' && normBoneName(t.name.slice(0, dot)) === key;
-  });
+    return dot > 0 && t.name.slice(dot + 1) === prop && normBoneName(t.name.slice(0, dot)) === key;
+  };
+  const at = clip.tracks.findIndex(matches);
   if (at < 0) clip.tracks.push(track);
   else {
     clip.tracks[at] = track;
     for (let i = clip.tracks.length - 1; i > at; i--) {
-      const t = clip.tracks[i];
-      const dot = t.name.lastIndexOf('.');
-      if (dot > 0 && t.name.slice(dot + 1) === 'quaternion' && normBoneName(t.name.slice(0, dot)) === key) {
-        clip.tracks.splice(i, 1);
-      }
+      if (matches(clip.tracks[i])) clip.tracks.splice(i, 1);
     }
   }
+}
+
+/** What the turn needs of one UNTURNED frame: both UpLeg joints (any unit,
+ *  the probe's world) and the hips' world matrix and its parent's. */
+interface TurnFrame {
+  left: Vec3; right: Vec3;
+  hips: THREE.Matrix4; parent: THREE.Matrix4;
+}
+
+/** The bones the turn reads and rewrites, found on the probe. */
+interface TurnBones { hips: THREE.Object3D; left: THREE.Object3D; right: THREE.Object3D }
+
+/** Below this |ψ| on every sample a clip has no turn to hand over, rad: its
+ *  tracks stay untouched and no turn is stored (float noise of a pelvis that
+ *  never turns, not a turn). */
+const TURN_NONE_RAD = 1e-6;
+
+/**
+ * THE TURN of one clip (module docstring): ψ per sample from the UpLegs, the
+ * hips tracks rewritten on `times` with the pose turned by −ψ about the
+ * vertical through `pivotWorld` (the hips' rest point in the probe's world),
+ * the turn stored with `pivotLocal`. Returns ψ at the end in degrees (0, and
+ * the clip untouched, when it never turns — `TURN_NONE_RAD`).
+ */
+function bakeTurn(clip: THREE.AnimationClip, times: readonly number[], frames: readonly TurnFrame[],
+                  hips: THREE.Object3D, pivotWorld: THREE.Vector3, pivotLocal: THREE.Vector3): number {
+  const n = times.length;
+  const yaw = headingTrack(frames.map((f) => f.left), frames.map((f) => f.right));
+  if (!yaw.some((y) => Math.abs(y) > TURN_NONE_RAD)) return 0;
+  const pos = new Float32Array(n * 3);
+  const quat = new Float32Array(n * 4);
+  const toPivot = new THREE.Matrix4().makeTranslation(-pivotWorld.x, 0, -pivotWorld.z);
+  const fromPivot = new THREE.Matrix4().makeTranslation(pivotWorld.x, 0, pivotWorld.z);
+  const turn = new THREE.Matrix4();
+  const local = new THREE.Matrix4();
+  const p = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const s = new THREE.Vector3();
+  let prev: THREE.Quaternion | null = null;
+  for (let f = 0; f < n; f++) {
+    // local' = parent⁻¹ · G · hipsWorld, G = the turn by −ψ about the pivot's
+    // vertical (the parent itself is not animated, so it stays as sampled).
+    turn.makeRotationY(-yaw[f]).premultiply(fromPivot).multiply(toPivot);
+    local.copy(frames[f].parent).invert().multiply(turn).multiply(frames[f].hips);
+    local.decompose(p, q, s);
+    // One hemisphere, as the pin keeps its keys: the track interpolates
+    // component-wise between neighbours.
+    if (prev && q.dot(prev) < 0) q.set(-q.x, -q.y, -q.z, -q.w);
+    prev = q.clone();
+    p.toArray(pos, f * 3);
+    q.toArray(quat, f * 4);
+  }
+  const keyTimes = Float32Array.from(times);
+  replaceTrack(clip, hips, 'position', keyTimes, pos);
+  replaceTrack(clip, hips, 'quaternion', keyTimes, quat);
+  setClipRootTurn(clip, { times: keyTimes, yaw, pivot: [pivotLocal.x, pivotLocal.y, pivotLocal.z] });
+  return (yaw[n - 1] * 180) / Math.PI;
 }
 
 /** In-place XZ of the point a share `s` of the way from ankle to ball. */
@@ -412,9 +517,9 @@ function pinLegs(clip: THREE.AnimationClip, times: readonly number[], legs: LegB
     if (!changed) return;
     pinned = true;
     const bones = legs[s];
-    replaceQuatTrack(clip, bones.upper, keyTimes, values[0]);
-    replaceQuatTrack(clip, bones.lower, keyTimes, values[1]);
-    replaceQuatTrack(clip, bones.foot, keyTimes, values[2]);
+    replaceTrack(clip, bones.upper, 'quaternion', keyTimes, values[0]);
+    replaceTrack(clip, bones.lower, 'quaternion', keyTimes, values[1]);
+    replaceTrack(clip, bones.foot, 'quaternion', keyTimes, values[2]);
   });
   return pinned;
 }
@@ -433,14 +538,16 @@ function firstFullContact(weights: Record<string, number[]>, times: readonly num
 /**
  * Rebuild the travel of every clip that carries one (`clipRootPath`) on
  * `template`'s own skeleton and store it in place of the imported path, then
- * pin the planted feet of that clip on this skeleton, and measure the height
- * the bridge needs (`setClipBridgeLift`) — module docstring.
+ * pin the planted feet of that clip on this skeleton, measure the height
+ * the bridge needs (`setClipBridgeLift`), and last hand its turn from the
+ * hips to the figure root (`setClipRootTurn`) — module docstring.
  * Clips without a path are not touched and get no report. `log` receives ONE
  * summary line when at least one clip was measured or fell back.
  */
 export function relockRootPaths(clips: readonly THREE.AnimationClip[],
                                 template: THREE.Object3D, unitsPerCm: number,
-                                log?: (msg: string) => void): RelockReport[] {
+                                log?: (msg: string) => void,
+                                options: RelockOptions = {}): RelockReport[] {
   const todo = clips.filter((c) => clipRootPath(c));
   if (!todo.length || !(unitsPerCm > 0)) return [];
 
@@ -460,13 +567,23 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     for (const clip of todo) {
       reports.push({ clip: clip.name, used: 'imported', reason: 'no foot bones',
         driftCm: 0, rebuiltDriftCm: 0, importedDriftCm: 0, pinnedCm: 0, liftCm: 0,
-        travel: travelEndCm(clipRootPath(clip)!, unitsPerCm) });
+        travel: travelEndCm(clipRootPath(clip)!, unitsPerCm), turnDeg: null });
     }
     log?.(summaryLine(reports));
     return reports;
   }
   const bones = points as THREE.Object3D[];
   const legs = legBonesOf(byKey);
+  // The turn's bones and its pivot, the hips' REST point — read before the
+  // probe is posed by any clip.
+  const hipsBone = byKey.get('hips') ?? [...byKey.entries()].find(([k]) => /hips$/.test(k))?.[1];
+  const leftUp = byKey.get('leftupleg');
+  const rightUp = byKey.get('rightupleg');
+  const turnBones: TurnBones | null = hipsBone?.parent && leftUp && rightUp
+    ? { hips: hipsBone, left: leftUp, right: rightUp } : null;
+  const pivotWorld = turnBones ? turnBones.hips.getWorldPosition(new THREE.Vector3()) : null;
+  const pivotLocal = pivotWorld ? probe.worldToLocal(pivotWorld.clone()) : null;
+  const turnWanted = options.turn !== false;
 
   // Rest heights, cm: each point's bind-pose height over the lowest foot
   // point of the rest (the four points and the toe ends, as the importer's
@@ -514,6 +631,11 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     return t;
   };
 
+  const vec3 = (o: THREE.Object3D): Vec3 => {
+    o.getWorldPosition(v);
+    return [v.x, v.y, v.z];
+  };
+
   for (const clip of todo) {
     const imported = clipRootPath(clip)!;
     const times = sampleTimes(clip);
@@ -522,8 +644,22 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
 
     const tracks = emptyTracks();
     const legFrames: LegFrame[][] = LEGS.map(() => []);
+    const turnFrames: TurnFrame[] = [];
+    // The turn last, on the frames sampled here (module docstring): the pin
+    // does not move the UpLeg joints or the hips.
+    const handTurnOver = (): Pick<RelockReport, 'turnDeg' | 'turnReason'> => {
+      if (!turnBones || !pivotWorld || !pivotLocal) return { turnDeg: null, turnReason: 'no hip bones' };
+      if (!turnWanted) return { turnDeg: null, turnReason: 'switched off' };
+      return { turnDeg: bakeTurn(clip, times, turnFrames, turnBones.hips, pivotWorld, pivotLocal) };
+    };
     sampleOnProbe(mixer, probe, clip, times, () => {
       readPoints(tracks);
+      if (turnBones) {
+        turnFrames.push({
+          left: vec3(turnBones.left), right: vec3(turnBones.right),
+          hips: turnBones.hips.matrixWorld.clone(), parent: turnBones.hips.parent!.matrixWorld.clone(),
+        });
+      }
       legs?.forEach((leg, s) => {
         legFrames[s].push({
           hip: cmOf(leg.upper), knee: cmOf(leg.lower), ankle: cmOf(leg.foot),
@@ -544,10 +680,10 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     const anyFull = Object.values(weights).some((w) =>
       w.some((x, f) => f + 1 < w.length && Math.min(x, w[f + 1]) >= FULL));
     if (!anyFull) {
+      storeLift(clip, times, clip.duration);
       reports.push({ clip: clip.name, used: 'imported', reason: 'no full contact',
         driftCm: 0, rebuiltDriftCm: 0, importedDriftCm: 0, pinnedCm: 0, liftCm: 0,
-        travel: travelEndCm(imported, unitsPerCm) });
-      storeLift(clip, times, clip.duration);
+        travel: travelEndCm(imported, unitsPerCm), ...handTurnOver() });
       continue;
     }
     const path = footLockPath(tracks, weights);
@@ -592,6 +728,7 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
       ...(useRig ? {} : { reason: IMPORTED_BETTER }),
       ...(legs ? {} : { pinReason: 'no leg bones' }),
       driftCm, rebuiltDriftCm, importedDriftCm, pinnedCm, liftCm, travel,
+      ...handTurnOver(),
     });
   }
   log?.(summaryLine(reports));

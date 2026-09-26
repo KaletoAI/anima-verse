@@ -17,14 +17,15 @@ import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
 import { bridgePace, clipTransition, locomotionClip, setClipTransitions,
   setLocomotionClips } from '../game/walk';
-import { clipRootPath, rootPathAt, setClipRootPath, toWorld, travelAt } from './bridgeTravel';
-import type { RootPath } from './bridgeTravel';
+import { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTurn, toWorld, travelAt,
+  turnAt } from './bridgeTravel';
+import type { RootPath, RootTurn } from './bridgeTravel';
 import { BRIDGE_FADE_IN_S, clipBridgeLift, fadeCarry, liftAt } from './bridgeLift';
 import type { BridgeLift } from './bridgeLift';
 import { relockRootPaths } from './footLockMeasure';
 
-export { clipRootPath, rootPathAt, setClipRootPath };
-export type { RootPath };
+export { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTurn };
+export type { RootPath, RootTurn };
 
 /**
  * Animated 3D figures for NPCs (AV3D-5): models come from the server
@@ -1587,7 +1588,8 @@ export class Figure {
    * `travelBase` is where the constructor put the instance in XZ (centred on
    * the bind box), `travelOrigin` the offset a folded bridge started from
    * (rule 5, otherwise 0), `heldTravel` the offset in force, in world metres
-   * of the root frame.
+   * of the root frame AT THE BRIDGE'S START (the base yaw, see the turn
+   * below).
    */
   private travelBase = { x: 0, z: 0 };
   private travelPath: RootPath | null = null;
@@ -1595,6 +1597,52 @@ export class Figure {
   private travelOrigin = { x: 0, z: 0 };
   private heldTravel = { x: 0, z: 0 };
   private holding = false;
+  /**
+   * THE TURN OF A HOLDING BRIDGE (Task C2, `bridgeHeading.ts`). A bridge that
+   * travels may also turn the whole body (`get-up-bed`: ~105° while the
+   * figure sits up on the bed's edge). `footLockMeasure` has taken that turn
+   * ψ(t) out of the clip's hips track on this rig — the pose is turned back by
+   * −ψ(t) about the vertical through the hips' rest point, the `pivot` — and
+   * the figure turns its ROOT by +ψ(t) instead:
+   *
+   *  1. The same bridges as the travel (rule 1 above: holding, with a path)
+   *     and only a clip that carries a turn (`clipRootTurn`); a rig without
+   *     UpLeg bones has none and keeps its yaw, as before.
+   *  2. While it plays, `root.rotation.y = turnBase + ψ(t)` (`turnBase` = the
+   *     yaw the bridge started with; `targetYaw` follows, so nothing eases
+   *     against it). The travel stays in the BASE frame and the instance is
+   *     turned back about the same pivot:
+   *       inst.xz = R(−ψ)·(travelBase + heldTravel + P) − P,
+   *     R(a) the `toWorld` rotation, P the pivot in the root frame (the
+   *     template-local pivot × the instance's scale and rotation).
+   *     INVARIANT: every bone's world position during the bridge is exactly
+   *     what it was with the turn left in the hips (the turn is only moved
+   *     from the hips into the root; `smoke_bridge_root.mjs` [B12]).
+   *  3. When the bridge ends the root KEEPS base + ψ_end — the clip after it
+   *     starts facing where the bridge ended instead of swinging back. A turn
+   *     asked for during the bridge (`pendingYaw`) comes after that: the end
+   *     turn is applied on the bridge's last frame, the remembered direction
+   *     becomes the target on the next frame and is eased into from there.
+   *  4. `takeTravel()` hands over the instance's WHOLE offset from its base,
+   *     turned into the world by the root's yaw — with nothing turned since
+   *     the bridge ended that is the travel turned by the BASE yaw, plus the
+   *     pivot's own swing, so the body stays where it is on screen. Taken
+   *     while the turn still runs (a journey that starts early), the rest of
+   *     the turn goes on about the pivot and is held again for the next
+   *     `takeTravel()`.
+   *  5. The turn ends with the bridge (ended, cancelled, timed out) or when
+   *     another clip takes the body over (`playPair`) — the root keeps the ψ
+   *     it had then.
+   *
+   * `turnAction` is the bridge whose turn runs (null = none), `turnBase` its
+   * start yaw, `turnPivot` P, `turnNow` the ψ the instance offset is turned
+   * back by right now (0 = none; it stays at ψ_end until `takeTravel()`).
+   */
+  private turn: RootTurn | null = null;
+  private turnAction: THREE.AnimationAction | null = null;
+  private turnBase = 0;
+  private turnPivot = { x: 0, z: 0 };
+  private turnNow = 0;
   /**
    * THE HEIGHT OF A HOLDING BRIDGE (Task C5, `bridgeLift.ts`). While a bridge
    * clip holds the figure, its root belongs to the owner in X/Z only. The
@@ -1795,15 +1843,20 @@ export class Figure {
       // Rule 5 of the root motion (see `travelBase`): a travel still held here
       // means its owner never took it. Folded in, never dropped — dropping it
       // would snap the figure back to the seat it left.
+      // The offset is the instance's own, in the root frame as it is now —
+      // the new bridge's base frame (an earlier turn may have turned it).
       if (this.holding) {
         console.warn(`[figures] bridge ${this.currentKind} -> ${kind} starts while`
           + ` a bridge travel is still held — the owner did not take it; folding it in`);
-        this.travelOrigin = { ...this.heldTravel };
+        this.travelOrigin = this.instanceOffset();
+        this.heldTravel = { ...this.travelOrigin };
       }
       // Rule 1: only a HOLDING bridge carries the figure, and only along a
       // clip that brought a travel path.
       this.travelPath = rule.accel <= 0 ? clipRootPath(bridge.getClip()) ?? null : null;
       this.travelAction = this.travelPath ? bridge : null;
+      // …and turns it, where the clip brought a turn (see `turn`).
+      this.startTurn(this.travelPath ? clipRootTurn(bridge.getClip()) ?? null : null, bridge);
       // Loud on purpose: a bridge is rare (a state change), and when one fires
       // in a loop — the figure keeps starting over — this line is what says
       // WHICH origin keeps coming back. Without it the loop is only visible as
@@ -1905,7 +1958,8 @@ export class Figure {
   /** Does the running bridge own the figure's FACING? True while a bridge
    *  that HOLDS the figure (`accel` 0: getting up out of a chair or a bed)
    *  is what plays: the body's yaw is the clip's then, exactly as its place
-   *  is. `faceTowards`/`setYaw` only remember what was asked for until it
+   *  is — and where the clip carries a turn, the root follows it (`turn`).
+   *  `faceTowards`/`setYaw` only remember what was asked for until it
    *  ends. A ramping bridge keeps its turn — it is about to walk off — and a
    *  pair clip that took the body over (`playPair`) owns its yaw again. */
   get holdsFacing(): boolean {
@@ -1962,6 +2016,8 @@ export class Figure {
    *  owner: the offset in WORLD metres (turned by the figure's yaw), and the
    *  instance back on its base. The owner moves its root by exactly this, so
    *  the body stays where it is on screen. `null` when nothing is held.
+   *  With a turn (rule 4 of `turn`) the offset is the instance's whole one:
+   *  the travel turned by the BASE yaw plus the pivot's swing.
    *
    *  Called while the bridge still runs (a journey that started early), the
    *  rest of the clip plays in place: the travel so far is handed over, the
@@ -1970,18 +2026,54 @@ export class Figure {
     if (!this.holding) return null;
     // yaw only: a lean (`setLean`) tilts the root by a few degrees at most,
     // and a figure getting up is not leaning.
-    const out = toWorld(this.heldTravel, this.root.rotation.y);
+    const out = toWorld(this.instanceOffset(), this.root.rotation.y);
     this.holding = false;
     this.heldTravel = { x: 0, z: 0 };
     this.travelOrigin = { x: 0, z: 0 };
     this.travelPath = null;
     this.travelAction = null;
+    if (this.turnAction) {
+      // The turn still runs: from here on it turns the instance about the
+      // pivot starting from its base — the origin that puts it there at the
+      // current ψ (R(ψ)·(base + P) − P − base, `instanceOffset` inverted).
+      const p = this.turnPivot;
+      const back = toWorld({ x: this.travelBase.x + p.x, z: this.travelBase.z + p.z }, this.turnNow);
+      this.travelOrigin = { x: back.x - p.x - this.travelBase.x, z: back.z - p.z - this.travelBase.z };
+      this.heldTravel = { ...this.travelOrigin };
+    } else {
+      this.turnNow = 0;
+      this.turnPivot = { x: 0, z: 0 };
+    }
     const inst = this.root.children[0];
     if (inst) {
       inst.position.x = this.travelBase.x;
       inst.position.z = this.travelBase.z;
     }
     return out;
+  }
+
+  /** Begin the turn of the bridge that opens now (see `turn`), or none. */
+  private startTurn(turn: RootTurn | null, bridge: THREE.AnimationAction) {
+    this.turn = turn;
+    this.turnAction = turn ? bridge : null;
+    this.turnBase = this.root.rotation.y;
+    this.turnNow = 0;
+    this.turnPivot = { x: 0, z: 0 };
+    const inst = this.root.children[0];
+    if (turn && inst) {
+      const p = new THREE.Vector3(...turn.pivot).multiply(inst.scale).applyQuaternion(inst.quaternion);
+      this.turnPivot = { x: p.x, z: p.z };
+    }
+  }
+
+  /** The instance's XZ offset from its base in the root frame as it stands
+   *  now: `heldTravel` in the base frame, turned back by ψ about the pivot
+   *  (rule 2 of `turn`; with no turn simply `heldTravel`). */
+  private instanceOffset(): { x: number; z: number } {
+    const p = this.turnPivot;
+    const o = toWorld({ x: this.travelBase.x + this.heldTravel.x + p.x,
+      z: this.travelBase.z + this.heldTravel.z + p.z }, -this.turnNow);
+    return { x: o.x - p.x - this.travelBase.x, z: o.z - p.z - this.travelBase.z };
   }
 
   /** Put the instance at `groundY − drop` (plus a bridge's lift, see
@@ -2242,6 +2334,20 @@ export class Figure {
     // the frame the clip ends the mixer has already clamped it to the last
     // frame and fired "finished", so the final offset is still taken here
     // before the path is let go. After that the offset simply stays.
+    // The turn (see `turn`) the same way, at the same time: the root takes ψ,
+    // the instance is turned back by it.
+    const turning = !!(this.turn && this.turnAction);
+    if (this.turn && this.turnAction) {
+      this.turnNow = turnAt(this.turn, this.turnAction.time);
+      this.root.rotation.y = this.turnBase + this.turnNow;
+      this.targetYaw = this.root.rotation.y;
+      this.holding = true;
+      if (this.transition !== this.turnAction || this.current !== this.turnAction) {
+        this.turn = null;
+        this.turnAction = null;
+      }
+    }
+    const travelling = !!(this.travelPath && this.travelAction);
     if (this.travelPath && this.travelAction) {
       const t = travelAt(this.travelPath, this.travelAction.time);
       this.heldTravel = {
@@ -2249,14 +2355,17 @@ export class Figure {
         z: this.travelOrigin.z + t.z * this.baseScale,
       };
       this.holding = true;
-      const inst = this.root.children[0];
-      if (inst) {
-        inst.position.x = this.travelBase.x + this.heldTravel.x;
-        inst.position.z = this.travelBase.z + this.heldTravel.z;
-      }
       if (this.transition !== this.travelAction) {
         this.travelPath = null;
         this.travelAction = null;
+      }
+    }
+    if (turning || travelling) {
+      const inst = this.root.children[0];
+      if (inst) {
+        const o = this.instanceOffset();
+        inst.position.x = this.travelBase.x + o.x;
+        inst.position.z = this.travelBase.z + o.z;
       }
     }
     // The height of a holding bridge (see `liftAction`), read at the action's
