@@ -49,7 +49,7 @@ Written by the importer, edited by the Poses tab. What a renderer reads:
 | `kind`, `pair`, `roles` | the kind, whether it is a pair and which role letters exist |
 | `fps`, `source_fps`, `frames`, `duration_s` | timing; `speed` is `1.0` for everything converted since the capture rate reached Blender |
 | `loop` | `true` = repeat, `false` = hold the last frame (Three.js `LoopOnce` + `clampWhenFinished`). Measured on import, overridden by the admin's switch in the Poses tab; it holds for both halves of a pair and for every numbered take of that kind in that set. A kind with NO listing entry counts as looping — locomotion must never stand still |
-| `geometry` | what the conversion measured: `floor_shift_cm`, the `root_motion` block of a solo clip (`mode` strip/keep/foot_lock, `travel_m` = `[x, z]` where the clip ends up in the clip frame — +Z forward, +X the figure's left, metres of the reference rig —, `ref_height_m` = the reference rig's standing height, `contact_s` = the full-contact spans `[[start, end], …]` in seconds, `max_drift_cm` = the worst planted-foot slide foot_lock left), the pair anchor (`anchor_frame`, `anchor_s`, `root_distance_m`, per-role `start_xz_m`/`anchor_xz_m`), the hip scale and, after a `…/orient` run, the accumulated angles |
+| `geometry` | what the conversion measured: `floor_shift_cm`, the `root_motion` block of a solo clip (`mode` strip/keep/foot_lock, `travel_m` = `[x, z]` where the clip ends up in the clip frame — +Z forward, +X the figure's left, metres of the reference rig —, `ref_height_m` = the reference rig's standing height, `contact_s` = the full-contact spans `[[start, end], …]` in seconds, `max_drift_cm` = the worst planted-foot slide foot_lock left), `foot_plant` of a solo clip = the feet the import put onto the rig's floor, `{"<Foot>": {"frames", "max_cm", "pin_max_cm"}}` (`LeftFoot`/`RightFoot`, only a foot it actually moved; `frames` = frames with a correction, `max_cm` = the largest vertical one, `pin_max_cm` = the largest horizontal pin, foot_lock only), the pair anchor (`anchor_frame`, `anchor_s`, `root_distance_m`, per-role `start_xz_m`/`anchor_xz_m`), the hip scale and, after a `…/orient` run, the accumulated angles |
 | `source` | where it came from: the CMU take plus its credit, or the file, take and `bone_map` of an inbox import |
 
 The sidecar of `<stem>.fbx` is `<stem>.json` when that file exists (so
@@ -155,6 +155,22 @@ characters that walk on their belly:
    intent: the swimmer then wades at the height the clip was authored at.
    Clips that are MEANT to sit above the floor (a sleeper on a bed) are the
    deliberate exception.
+
+## Planted feet — what the import corrects
+
+The importers copy ROTATIONS, and an actor's legs are not the rig's (CMU
+subject 111: right leg 2.69 cm longer, so the right foot hung ~2.4 cm up on
+the rig). Where the SOURCE shows a foot planted and standing on its sole, the
+import pulls the rig's foot onto the rig floor with a two-bone IK on
+UpLeg/Leg, the foot keeping its world rotation
+(`app/blender/scripts/_foot_plant.py`) — in every `root_motion` mode, for solo
+clips, CMU and FBX alike (FBX only when the source has toe bones). With
+`foot_lock` each planted run is also pinned horizontally before the travel is
+rebuilt. A foot the actor really lifts (`drinking`) stays up. The client
+repeats the pin per figure model (`client3d/src/scene/legPin.ts`), because a
+figure with other leg lengths than the reference rig would slide again. Clips
+imported before 2026-09-26 carry no `foot_plant` and get the correction only
+on a re-import.
 
 ## Tests must not touch this directory
 

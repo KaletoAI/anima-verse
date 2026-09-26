@@ -2258,13 +2258,46 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
     Der Client skaliert ihn wie die senkrechte Hüftbewegung (Ruhe-Hüfthöhe
     der Figur ÷ Ruhe-Hüfthöhe des Referenz-Rigs aus `/assets/animation-rig`;
     ohne Rig spielt der Clip am Platz, eine Warnung) und dreht ihn mit der
-    Gierung der Figur. Dieselbe Ruhe-Hüfthöhe des Rigs ist der Stehbezug der
-    senkrechten Hüftbewegung (`standingHipsRef`): auf dem Referenz-Rig steht
-    ein angepasster Clip so hoch wie die Rohaufnahme, nicht darüber.
+    Gierung der Figur.
+  - **Der Stehbezug ist die Ruhe-Hüfthöhe des Referenz-Rigs** (113,032
+    Einheiten; `standingHipsRef` / `rigHipsHeight` in `packages/scene-render`,
+    EINE Regel für Client und Admin-Vorschauen): auf dem Referenz-Rig steht
+    ein angepasster Clip so hoch wie die Rohaufnahme, nicht darüber. Der
+    Idle-Median (110,179) ist nur der Rückfall, wenn kein Rig geliefert wird
+    (eine Warnung je Sitzung) — mit ihm schwebten alle Figuren 2,7–3 cm.
+    Die `root_drop`-Werte der Platztypen sind gegen denselben Bezug
+    hergeleitet (Abschnitt Platztypen). Die Fuß-Fixierung hat deshalb keine
+    Hebetoleranz mehr.
+  - **Der Import setzt aufgesetzte Füße auf den Rig-Boden** (2026-09-26,
+    `app/blender/scripts/_foot_plant.py`, `cmu_clip._plant_feet`): Der
+    Import überträgt nur Drehungen, und die Beine des Schauspielers sind
+    anders lang als die des Rigs (CMU 111: rechts 2,69 cm länger → rechter
+    Fuß auf dem Rig ~2,4 cm in der Luft). Wo die QUELLE einen Fuß aufgesetzt
+    hat und er auf der Sohle steht (Knöchel mindestens halb so hoch über dem
+    Ballen wie in der Ruhepose), zieht eine Zwei-Knochen-IK auf UpLeg/Leg
+    ihn auf den Rig-Boden; der Fuß behält seine Weltdrehung. Das gilt für
+    JEDEN Modus eines Solo-Clips, beim CMU- wie beim FBX-Import (dort nur,
+    wenn die Quelle Zehenknochen trägt). Mit `foot_lock` wird zusätzlich jeder
+    aufgesetzte Lauf waagerecht gepinnt (Knöchel auf dem Mittel seiner
+    Welt-XZ), erst danach wird der Weg gebaut und gegen die 1,5 cm geprüft.
+    Ein Fuß, den der Schauspieler wirklich hebt (`drinking`), bleibt oben.
+    Sidecar: `geometry.foot_plant` (nur korrigierte Füße, Aufbau in
+    `shared/models/clips/README.md`). Bestehende Clips profitieren erst
+    beim Neuimport.
   - **Nach Clip-Ende bleibt der Versatz stehen** (die Figur springt nicht
-    auf den Sitz zurück), bis der Besitzer der Position ihn übernimmt: ein
-    NPC ohne Route in Wurzel + Ziel, ein NPC auf Reise beim Losgehen, der
-    Avatar wie ein NPC ohne Route und meldet danach seine Position.
+    auf den Sitz zurück), bis der Besitzer der Position ihn übernimmt:
+    - Ein **NPC ohne Route** übernimmt ihn nur in die Wurzel — sein Ziel ist
+      schon der Server-Aufstehpunkt. Steht die Figur danach höchstens
+      `STAND_ADOPT_M` = 0,25 m davon entfernt (die Rasterweite
+      `STAND_GRID_M` der Server-Stehsuche), **behält sie ihren Platz**,
+      solange der Server dieselbe Position schickt
+      (`client3d/src/scene/standSettle.ts`); weiter weg läuft sie hin.
+    - Ein **NPC auf Reise** übernimmt ihn, sobald die Reise läuft UND die
+      Brücke vorbei ist. Während der Brücke ruht die Routen-Nachführung (kein
+      Schritt, keine Drehung). Der Server startet die Route ohnehin erst
+      nach der echten Cliplänge (§ A11, `starts_in_s`).
+    - Der **Avatar** übernimmt ihn in Wurzel und Ziel und meldet danach
+      seine Position.
   - **Der Server rechnet denselben Weg in den Aufstehpunkt um**
     (`room_stand.bridge_stand_point`): Sitz-XZ + `travel_m`, gedreht mit der
     Kompass-Blickrichtung `f` des Sitzes (`x' = x·cos f + z·sin f`,
@@ -2275,31 +2308,87 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
     Server und Client weichen um das Proportionsverhältnis der Figur ab
     (Körpergröße gegen Hüfthöhe) und um die Neuberechnung pro Figur (nächster
     Punkt).
-  - Gemessen: `get-up-chair` `travel_m` [0,052, 0,487], Drift 0,42 cm;
-    `get-up-bed` [−0,574, −0,086], 1,44 cm (Referenz-Rig).
+  - Gemessen (Referenz-Rig): `get-up-chair` `travel_m` [0,035, 0,553],
+    Drift 1,05 cm (2026-09-26 neu importiert mit Aufsetzen und Pinnen:
+    beide Füße stehen den ganzen Take, `foot_plant` rechts bis 8,35 cm
+    gesenkt, bis 2,68 cm gepinnt); `get-up-bed` [−0,574, −0,086], 1,44 cm
+    (nicht neu importiert).
   - **Der Client rechnet den Weg pro Figurenmodell auf dem eigenen Skelett
     neu** (`footLockMeasure.relockRootPaths`, einmal je Modell nach dem
     Anpassen bzw. Retargeten der Clips): dieselbe Regel wie der Import,
     Parität über `scripts/fixtures/root_motion_cases.json`. Wie im Import
-    liegt der Boden eines Punkts nie über seiner Ruhehöhe (Bind-Pose) —
-    eine Hebetoleranz gibt es nicht, weil angepasste Clips auf der
-    Ruhe-Hüfthöhe des Rigs stehen und nicht angehoben sind. Der neue Weg
-    ersetzt den importierten nur, wenn er an denselben Kontakten um mehr als
-    0,1 cm weniger driftet (`RELOCK_MIN_GAIN_CM`) — **nie schlechter als der
-    Import**; auf dem Referenz-Rig bleibt so für beide Brücken dessen eigener
-    Weg. Fehlen Fußknochen oder volle Kontakte, gilt ebenfalls der
-    importierte Weg. Gemessen am gerenderten Rig mit eigener
-    Kontakterkennung (`client3d/scripts/smoke_bridge_root.mjs` [6]): Stuhl
-    ≤ 1,5 cm, Bett ≤ 2,5 cm (gemessen Stuhl / Bett: Test3_mia 1,41 / 2,27,
-    Soldier 0,68 / 1,66, Referenz-Rig 0,42 / 1,43) — das Bett dreht sich beim
-    Aufstehen um ~90° mit beiden Füßen am Boden, und ein reiner
-    Verschiebe-Weg kann zwei Füße nicht durch eine Drehung halten.
+    liegt der Boden eines Punkts nie über seiner Ruhehöhe (Bind-Pose). Der
+    neue Weg ersetzt den importierten nur, wenn er an denselben Kontakten um
+    mehr als 0,1 cm weniger driftet (`RELOCK_MIN_GAIN_CM`) — **nie
+    schlechter als der Import**; auf dem Referenz-Rig bleibt so für beide
+    Brücken dessen eigener Weg. Fehlen Fußknochen oder volle Kontakte, gilt
+    ebenfalls der importierte Weg.
+  - **Danach pinnt der Client die aufgesetzten Füße pro Rig**
+    (`client3d/src/scene/legPin.ts`, im selben Lauf, in den angepassten Clip
+    gebacken): Der Import biegt die Beine für die Proportionen des
+    Referenz-Rigs; eine Figur übernimmt nur die Drehungen, also gleiten ihre
+    Füße wieder (neuer `get-up-chair` ohne Pin: Test3_mia 3,86 cm, Soldier
+    1,59 cm). Pro Fuß und Frame senkt die IK auf UpLeg/Leg den Fuß um seinen
+    Abstand zum eigenen Boden, solange er Kontakt hat, und hält im
+    aufgesetzten Lauf einen Punkt zwischen Knöchel und Ballen
+    (kontaktgewichtet) auf dem Mittel seiner Welt-XZ fest; der Fuß behält
+    seine Weltdrehung. Lauf-Regel (≥ 0,2 s voll, 0,1 s Blende), IK und
+    Sohlen-Gate sind Zwillinge von `_foot_plant` (`smoke_leg_pin.mjs`
+    wiederholt dessen Fälle). Einziger Unterschied: der Import hält den
+    Knöchel, der Client den kontaktgewichteten Punkt — die Füße der
+    Aufnahmen drehen sich im Stand um 4–9° um die Hochachse, ein gehaltener
+    Knöchel schwenkt dann den Ballen. Gemessen am gerenderten Rig mit eigener
+    Kontakterkennung (`client3d/scripts/smoke_bridge_root.mjs` [6], Grenze
+    1,5 cm für beide Brücken; Stuhl / Bett): Test3_mia 0,58 / 0,70,
+    Soldier 1,02 / 1,30, Referenz-Rig 0,64 / 1,11 cm. Ein starrer
+    2D-Ausgleich (Kabsch) ist damit nicht nötig.
+  - **Die Höhe gehört während einer haltenden Brücke der Figur**
+    (`client3d/src/scene/bridgeLift.ts`): Beim Start setzt der Besitzer die
+    Wurzel sofort auf den neuen Boden und gibt die Differenz als Hebung an
+    die Figur (`Figure.beginBridgeLift`); sie hält den liegenden oder
+    sitzenden Körper damit auf seiner Fläche. Zum ersten vollen Fußkontakt
+    wechselt die Hebung auf die, die den tiefsten Fußpunkt des letzten
+    Frames auf den Ruheboden des Rigs stellt (pro Rig gemessen), in einer
+    Rampe von `LIFT_RAMP_S` = 0,6 s, die nie vor der Einblendung der Brücke
+    (`BRIDGE_FADE_IN_S` = 0,25 s) endet. Kommt der Boden erst während der
+    Brücke (der Poll trug noch den Sitz), wird die Differenz genauso
+    übergeben (`shiftBridgeLift`). Weicht die Liegehöhe von der Höhe ab, auf
+    der der Clip aufgenommen ist, bewegt sich der Körper in der Rampe um den
+    Unterschied — die Füße gehen vor. Der Avatar setzt beim Aufstehen sein
+    Ziel auf den Boden unter dem Sitz. Gemessen, tiefster Fuß am letzten
+    Frame des Bett-Aufstehens (NPC und Avatar, Liegehöhe 0,46 und 0,60 m):
+    Test3_mia +0,32, Soldier +1,34, Referenz-Rig −0,02 cm
+    (`smoke_bridge_lift.mjs`; vorher NPC −32 … −45 cm im Boden, Avatar
+    bis +27 cm in der Luft).
+  - **Die Drehung einer Brücke gehört der Wurzel**
+    (`client3d/src/scene/bridgeHeading.ts`): `get-up-bed` dreht den Körper
+    beim Aufsetzen auf der Bettkante um ~105°, und diese Drehung steht in der
+    Hüftspur — der Clip danach drehte den Körper sofort zurück. Der Client
+    misst pro Rig die Beckenrichtung ψ(t) aus dem Quervektor
+    LeftUpLeg ↔ RightUpLeg (nicht aus der Hüftdrehung, die mitten in der
+    Drehung bis 15° danebenliegt), nimmt sie aus der Hüftspur (Drehung um
+    die Senkrechte durch den Ruhepunkt der Hüfte, `RootTurn.pivot`) und
+    dreht während der Brücke die Figurwurzel um ψ(t); am Ende behält die
+    Wurzel Basis + ψ_end. Gemessen ψ_end: `get-up-bed` −105,8 / −105,6 /
+    −104,8°, `get-up-chair` −4,8 / −4,5 / −4,5° (Test3_mia / Soldier /
+    Referenz-Rig); der erste Idle-Frame danach bewegt die Füße um 2,3–2,8 cm
+    (Bett; ohne Übergabe 7,5–9,1 cm). Die Übergabe ist reine Darstellung —
+    der Server kennt keine Blickrichtung für Stehende. Ein Clip mit Drehung,
+    der außerhalb einer haltenden Brücke mit Weg spielt, zeigt den Körper
+    zurückgedreht (eine Warnung je Clip).
+  - **Während einer haltenden Brücke dreht nichts sonst die Figur**
+    (`Figure.holdsFacing`): `faceTowards` und `setYaw` merken sich nur die
+    letzte verlangte Richtung, die Figur schwenkt nach der Brücke dorthin
+    ein. Eine anlaufende Brücke dreht weiter (der Avatar muss sich zur Taste
+    drehen). Auch der Startframe macht keinen Schritt mehr: der NPC fragt
+    die Schrittsperre des Clips, den der Frame spielen wird.
   - **Der Server-Aufstehpunkt bleibt der Referenzweg**; der Server kennt die
     Modelle nicht. Abstand des Client-Endpunkts zum Server-Punkt je Figur
-    (1,70 m, [B10]): Test3_mia Stuhl 11,2 cm / Bett 14,9 cm (importiert 4,6 /
-    5,4), Soldier 6,6 / 3,5 (importiert 1,2 / 1,5), Referenz-Rig 0. Der
+    (1,70 m, [B10]): Test3_mia Stuhl 9,6 cm / Bett 14,6 cm (importiert 5,2 /
+    5,4), Soldier 1,9 / 3,8 (importiert 1,4 / 1,5), Referenz-Rig 0. Der
     Server-Aufstehpunkt kann also bis ~15 cm (Test3_mia/Bett) vom Endpunkt der
-    Figur abweichen; ein NPC auf Reise wird vom Client-Endpunkt auf seine
+    Figur abweichen — innerhalb von `STAND_ADOPT_M`, also bleibt ein NPC
+    ohne Route stehen, ein NPC auf Reise wird vom Client-Endpunkt auf seine
     Route gezogen, und der Avatar meldet seinen eigenen Punkt.
 
 ## A8a. Paar-Interaktionen — zwei Figuren, ein Clip-Paar, ein Anker
