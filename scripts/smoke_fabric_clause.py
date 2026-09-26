@@ -190,9 +190,9 @@ for uc in ("tpose", "tpose_back", "tpose_side"):
         yes = config.get_use_case_prompts(uc, family, clothed=True)["prompt_style"]
         no = config.get_use_case_prompts(uc, family, clothed=False)["prompt_style"]
         check(f"{uc}/{family}: dressed keeps the fabric",
-              "skin and fabric textures" in yes, True)
+              "lifelike skin and fabric textures" in yes, True)
         check(f"{uc}/{family}: undressed drops it",
-              "skin textures" in no and "fabric" not in no, True)
+              "lifelike skin textures" in no and "fabric" not in no, True)
         check(f"{uc}/{family}: no raw placeholder",
               "{fabric}" in yes or "{fabric}" in no, False)
 

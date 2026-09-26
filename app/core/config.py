@@ -81,18 +81,9 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 # Negatives of the mesh-input renders — ONE text per use case, shared by both
 # style families (deliberately NOT _NEG_PHOTO: "posed"/"studio lighting" would
 # fight the T-pose / flat-light goal). Unlike _NEG_PHOTO they do NOT negate
-# "cgi"/"3d render" either: the render IS the image-to-3D input.
-# The style flipped from "realistic figure, lifelike skin" (2026-09-01) to a
-# MATTE, SIMPLIFIED 3D-asset look (user decision 2026-09-26): fine surface
-# detail — skin pores, fabric weave, hair strands — is exactly the kind of
-# high-frequency signal a mesher has no budget for at its coarse occupancy
-# stage and either discards or misreads as geometry. A clean matte render
-# gives it a cleaner silhouette to read instead. That reverses the old
-# reasoning — "airbrushed/plastic/flawless skin" is now what the positive
-# prompt asks for (model_refs.TPOSE_PROMPT_DEFAULT / the "tpose*" use-case
-# styles), so those terms are OUT of this negative; "illustration/cartoon/
-# anime/painting/drawing/sketch" stay IN — a matte 3D-asset look is not a
-# flat 2D one.
+# "cgi"/"3d render" either: the render IS the image-to-3D input and is asked
+# for as a realistic 3D figure (user decision 2026-09-01) — the skin terms
+# (airbrushed/plastic/flawless) stay so the textures remain lifelike.
 # The finger terms bracket a SLIGHTLY spread hand (pose text: "fingers
 # straight, slender and slightly spread apart", user decision 2026-09-24):
 # "fingers pressed together" keeps them from closing, "splayed/fanned
@@ -110,7 +101,7 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 # failure it must not fall back into — legs touching, ankles together — is
 # named here. Deliberately NOT negated: a wide stance, which would fight the
 # separation the positive text asks for.
-_NEG_TPOSE = ("illustration, anime, painting, overexposed, glossy, skin pores, wrinkles, fine skin texture, freckles, blemishes, fabric weave, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance")
+_NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance")
 _NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up")
 
 # Negatives of the OPTIONAL extra mesh views (back / left+right profile).
@@ -499,20 +490,17 @@ _DEFAULT_IMAGE_USE_CASES = {
     # input): flat shadowless light — shadows would bake into the 3D
     # texture. Deliberately NOT _NEG_PHOTO ("posed", "studio lighting"
     # would fight the T-pose / flat-light goal). Pose-free like all styles.
-    # The medium is a MATTE, SIMPLIFIED 3D-ASSET FIGURE (user decision
-    # 2026-09-26, reverses the "lifelike" call of 2026-09-01): the render
-    # feeds a mesher whose coarse occupancy stage has no budget for fine
-    # surface detail — skin pores, fabric weave, hair strands — and either
-    # drops it or misreads it as geometry. A clean matte "3D character
-    # model" render gives it a cleaner silhouette to reconstruct instead.
+    # The medium is a REALISTIC 3D FIGURE, not a photo (user decision
+    # 2026-09-01): the render feeds a mesher, and a clean 3D-character look
+    # with lifelike textures reconstructs better than photographic depth.
     "tpose": {
         "keywords": {
-            "prompt_style": "render of a matte 3D character model, smooth simplified matte skin{fabric} textures, no skin pores or fine surface detail, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a smooth matte 3D figure, clean simplified skin{fabric} textures with no pores or fine surface detail, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -541,12 +529,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # automatically — no migration needed.
     "tpose_back": {
         "keywords": {
-            "prompt_style": "render of a matte 3D character model, smooth simplified matte skin{fabric} textures, no skin pores or fine surface detail, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_BACK,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a smooth matte 3D figure, clean simplified skin{fabric} textures with no pores or fine surface detail, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_BACK,
             "prompt_instruction": "Describe the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -556,12 +544,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # visible span would only fight the view.
     "tpose_side": {
         "keywords": {
-            "prompt_style": "render of a matte 3D character model, smooth simplified matte skin{fabric} textures, no skin pores or fine surface detail, full body view, head to toe, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a smooth matte 3D figure, clean simplified skin{fabric} textures with no pores or fine surface detail, shown from head to toe against a plain neutral background, margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },

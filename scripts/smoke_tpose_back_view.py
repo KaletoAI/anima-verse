@@ -20,9 +20,6 @@ Three parts of the fix, each checked against values derived BY HAND:
     The render call is replaced by a recorder; no backend, no DB.
 [5] Palms face DOWN toward the floor in all four pose texts (user decision
     2026-09-24 — the Mixamo bind pose), none forward or away.
-[7] The tpose*/natural+keywords style texts (code default + the demo world's
-    override) ask for a matte, simplified 3D-asset look and no longer fight
-    that in the negative prompt (user decision 2026-09-26).
 [6] Hand size (user report 2026-09-26: oversized hands, thick fingers in the
     mesh). Every pose text anchors the hand size ("hands in natural
     proportion to the body") and asks for slender fingers WITHOUT giving up
@@ -151,43 +148,6 @@ for _label, _text in (("front", model_refs.TPOSE_PROMPT_DEFAULT),
           ("palms facing down toward the floor" in _text,
            "palms facing forward" in _text, "palms facing away" in _text),
           (True, False, False))
-# [7] Matte 3D-asset style (user decision 2026-09-26, reverses the "lifelike"
-#     style of 2026-09-01): all six tpose*/natural+keywords style texts ask
-#     for a matte look and no longer contradict it in the negative — the old
-#     "airbrushed/plastic/flawless skin" clause is gone from _NEG_TPOSE, its
-#     replacement (skin pores/wrinkles/fine texture/fabric weave) pushes the
-#     same direction as the positive prompt instead of fighting it.
-from app.core.config import (  # noqa: E402
-    _DEFAULT_IMAGE_USE_CASES as _UC, _NEG_TPOSE, _NEG_TPOSE_BACK, _NEG_TPOSE_SIDE)
-
-for _uc_key in ("tpose", "tpose_back", "tpose_side"):
-    for _fam in ("natural", "keywords"):
-        _style = _UC[_uc_key][_fam]["prompt_style"]
-        check(f"[7] {_uc_key}/{_fam}: matte, no fine surface detail",
-              ("matte" in _style, "no" in _style and "pores" in _style,
-               "lifelike" in _style, "realistic 3D" in _style),
-              (True, True, False, False))
-for _label, _neg in (("front", _NEG_TPOSE), ("back", _NEG_TPOSE_BACK),
-                     ("side", _NEG_TPOSE_SIDE)):
-    check(f"[7] {_label} negative: matte allowed, still not flat 2D",
-          ("airbrushed skin" in _neg, "plastic skin" in _neg,
-           "smooth flawless skin" in _neg, "skin pores" in _neg,
-           "illustration" in _neg, "cartoon" in _neg),
-          (False, False, False, True, True, True))
-
-# Same fix in the demo world's own override (worlds/demo/config.json) — its
-# positive text already said "matte", its negative used to contradict it.
-import json as _json  # noqa: E402
-_demo = _json.load(open(ROOT / "worlds" / "demo" / "config.json"))
-_demo_uc = (_demo.get("image_generation") or {}).get("use_cases", {})
-for _uc_key in ("tpose", "tpose_back", "tpose_side"):
-    _styles = (_demo_uc.get(_uc_key) or {}).get("styles", {})
-    for _fam in ("natural", "keywords"):
-        _neg = (_styles.get(_fam) or {}).get("prompt_negative", "")
-        check(f"[7] demo world {_uc_key}/{_fam} negative: no longer contradicts its own matte text",
-              ("plastic skin" in _neg, "skin pores" in _neg),
-              (False, True))
-
 check("[4] profile text speaks to the reference",
       model_refs.TPOSE_LEFT_PROMPT_DEFAULT.startswith(
           "the same figure turned sideways, strict left side profile view"),
