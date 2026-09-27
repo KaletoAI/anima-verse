@@ -60,6 +60,15 @@ background pool (8 at most, further calls are skipped) and never add latency.
 | `pose_match` | `pose_catalog.resolve_to_catalog(axis="pose")` after the exact alias | `group`, then `entry` of that group (+ `none`) | confident key wins over the embedding; `none` → candidate list |
 | `expression_match` | same, `axis="expression"` | `entry` (+ `none`) | same |
 
+## Decision points of packages
+
+Registered by the package in its `on_load` module (`origin` = the package); without the package
+the point does not exist.
+
+| Point | Package | Where | Question | `on` does | Outcome |
+|---|---|---|---|---|---|
+| `pair_invite` | `interact` | `interaction.invited` hook, ordinary NPC invitee (not a player, not a temporary NPC), before the bump | `answer`: `accept` / `decline` (`decision_points.invite_questions`; state `invite_state`) | `accept` → `resolve_invite(True)`; a `cannot` that leaves the invitation `pending` falls back to waking the NPC, a closed one (`stale`) counts as settled. `decline` → `resolve_invite(False)`. The inviter reads the answer from its own tool result / the `/play` response | the invitee's counter-call of `InteractWith` (accept, or `answer=no`) |
+
 ## Adding a point (core or plugin)
 
 1. `register_point("my_point", label=..., description=..., origin="<package>")` — a plugin in its

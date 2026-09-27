@@ -445,6 +445,8 @@ im `on_load`-Modul an.
 | `record_outcome(point_id, key, actual)` | Was der bisherige Weg tatsächlich entschied — für den Schattenvergleich |
 | `mark_taken(point_id, key)` | Modus `on` hat gehandelt, kein Vergleich möglich |
 | `Noul(instructions)` / `Choice(instructions, options)` / `Score(instructions, anchors)` | Fragetypen; `Choice` 2–255 Optionen |
+| `app.core.decision_points.invite_state(invitee, inviter, offer) -> Dict[str, str]` | Zustand für eine Einladungs-Entscheidung (annehmen/ablehnen) eines eingeladenen NPC: seine eigene Lage (`thought_state`), das Angebot (`"<inviter> invites <invitee> <offer>"`) und wie er zum Einladenden steht (Typ, Stärke als Wort, Gefühl in SEINER Richtung). Wirft beim Beziehungsteil nie |
+| `app.core.decision_points.invite_questions(invitee, inviter) -> Dict[str, Choice]` | Eine `Choice` `answer` mit den neutralen Schlüsseln `accept` / `decline` — dieselbe Frage für jede Einladungs-Stelle eines Pakets |
 
 ## Improvement types — `app.core.improvements` ✅
 

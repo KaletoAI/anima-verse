@@ -144,3 +144,56 @@ def catalog_questions(axis: str) -> Tuple[Dict[str, Choice], Optional[Callable]]
 
         return first, then
     return entry_question(entries), None
+
+
+# ── Invitations (helpers for the packages' accept/decline points) ─────
+
+def _strength_band(strength: int) -> str:
+    """Decision models are weak with numbers — the strength also as a word."""
+    if strength >= 60:
+        return "strong"
+    if strength >= 30:
+        return "moderate"
+    return "weak"
+
+
+def _relationship_line(invitee: str, inviter: str) -> str:
+    """How the INVITEE stands with the INVITER, in one sentence. Never raises."""
+    neutral = f"{invitee} and {inviter} do not know each other well yet."
+    try:
+        from app.models.relationship import (TYPE_LABELS, get_relationship,
+                                             sentiment_label)
+        rel = get_relationship(invitee, inviter)
+        if not rel:
+            return neutral
+        # The row keeps the pair in stored order: a_to_b is character_a's
+        # feeling toward character_b. Pick the invitee's own direction.
+        if str(rel.get("character_a") or "").lower() == invitee.lower():
+            sentiment = rel.get("sentiment_a_to_b", 0.0)
+        else:
+            sentiment = rel.get("sentiment_b_to_a", 0.0)
+        rtype = str(rel.get("type") or "neutral")
+        label = TYPE_LABELS.get(rtype, rtype).lower()
+        strength = int(rel.get("strength") or 0)
+        return (f"{invitee} toward {inviter}: {label}, {_strength_band(strength)} bond "
+                f"({strength}/100), feels {sentiment_label(sentiment)} about {inviter}.")
+    except Exception:
+        return neutral
+
+
+def invite_state(invitee: str, inviter: str, offer: str) -> Dict[str, str]:
+    """State for an accept/decline decision of an invited NPC: its own
+    situation (thought_state), the offer, and how it stands with the inviter."""
+    from app.core.thought_context import build_thought_context
+    state = thought_state(build_thought_context(invitee))
+    state["offer"] = f"{inviter} invites {invitee} {offer}"
+    state["relationship"] = _relationship_line(invitee, inviter)
+    return state
+
+
+def invite_questions(invitee: str, inviter: str) -> Dict[str, Choice]:
+    """One Choice 'answer' with the neutral keys accept / decline."""
+    return {"answer": Choice(
+        instructions=f"Does {invitee} accept {inviter}'s invitation?",
+        options={"accept": f"yes: {invitee} wants to and agrees",
+                 "decline": f"no: {invitee} would rather not and refuses"})}

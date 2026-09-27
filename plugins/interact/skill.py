@@ -23,6 +23,10 @@ from app.plugins.context import PluginContext
 from app.skills.base import ToolSpec
 
 
+#: The decision point of this package: an NPC invited to a pair activity
+#: accepts or declines (registered in ``register.py``, docs/decision-models.md).
+PAIR_INVITE = "pair_invite"
+
 #: An answer of "no" — the ONE piece of prose this verb reads, and only from
 #: its own ``answer`` argument, never from the character's reply text.
 _NO_ANSWERS = frozenset({"no", "nein", "decline", "refuse", "reject", "false"})
@@ -40,6 +44,18 @@ def _is_refusal(data: Dict[str, Any]) -> bool:
     if isinstance(ans, bool):
         return not ans
     return str(ans or "").strip().lower() in _NO_ANSWERS
+
+
+def _record_answer(invite_id: str, accepted: bool) -> None:
+    """The invitee's own answer is the usual path the decision model of
+    PAIR_INVITE is compared with. A no-op for an invitation the model was
+    never asked about; never lets the verb fail."""
+    try:
+        from app.core import decision
+        decision.record_outcome(PAIR_INVITE, invite_id,
+                                {"answer": "accept" if accepted else "decline"})
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class InteractSkill(PluginSkill):
@@ -99,6 +115,7 @@ class InteractSkill(PluginSkill):
             # questions and start nothing (the party has the same brake).
             open_ask = IE.find_pending_invite(partner, actor, key)
             if open_ask:
+                _record_answer(open_ask["invite_id"], not _is_refusal(data))
                 if _is_refusal(data):
                     IE.resolve_invite(open_ask["invite_id"], False)
                     return (f"{actor} turns {partner} down — no {key}. "
@@ -137,11 +154,12 @@ class InteractSkill(PluginSkill):
         """Hand the recorded question to whoever has to answer it: the player
         sees it in the UI, an NPC is nudged to answer in its own turn.
 
-        A TEMPORARY NPC has already answered by the time we get here: the
+        An invitee may already have answered by the time we get here: the
         hook in ``register.py`` resolves the invitation synchronously inside
-        ``create_invite``. Telling the actor "X was asked" would be a lie the
-        very next line contradicts, so the row is read back and the sentence
-        says what actually happened.
+        ``create_invite`` for a TEMPORARY NPC, and for an ordinary NPC when
+        the decision model of PAIR_INVITE settles it (mode 'on'). Telling the
+        actor "X was asked" would be a lie the very next line contradicts, so
+        the row is read back and the sentence says what actually happened.
         """
         try:
             from app.models.account import is_player_controlled
@@ -164,13 +182,12 @@ class InteractSkill(PluginSkill):
     def _answered_at_once(self, partner: str, invite_id: str,
                           key: str) -> str:
         """The sentence for an invitation that is ALREADY answered, or ``""``
-        when it is still open (or the invitee is not a temporary NPC)."""
+        when it is still open. Read back for ANY invitee: a temporary NPC
+        answers inside ``create_invite``, and so does an ordinary NPC whose
+        decision model settled the invitation."""
         if not invite_id:
             return ""
         try:
-            from app.models.character import is_temporary_npc
-            if not is_temporary_npc(partner):
-                return ""
             from app.core import interaction_engine as IE
             status = str((IE.get_invite(invite_id) or {}).get("status") or "")
         except Exception as e:  # noqa: BLE001 — never lose the verb over this
@@ -180,6 +197,8 @@ class InteractSkill(PluginSkill):
             return f"{partner} agrees; the {key} begins."
         if status == "approaching":
             return f"{partner} agrees and comes over for the {key}."
-        if status in ("declined", "stale", "cancelled"):
+        if status == "declined":
+            return f"{partner} does not want to {key} right now."
+        if status in ("stale", "cancelled"):
             return f"{partner} cannot right now."
         return ""
