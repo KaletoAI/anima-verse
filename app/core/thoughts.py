@@ -21,6 +21,25 @@ from typing import Any, Dict, List, Optional
 from app.core.log import get_logger
 logger = get_logger("thought")
 
+#: The synthetic user turn of every thought turn. English on purpose — the
+#: answer language is set by lang_instruction in the system prompt.
+THOUGHT_TRIGGER_DEFAULT = (
+    "Think about your task and decide what you want to do now. "
+    "Use the appropriate tools to accomplish your task."
+)
+
+
+def thought_user_input(context_hint: str = "") -> str:
+    """The user turn of a thought turn. A bump hint (an invitation, a
+    scheduled message) goes HERE, behind the history — never into the system
+    prompt, which must stay byte-stable for the prompt cache
+    (CHAT_PROMPTS.md § 1)."""
+    hint = (context_hint or "").strip()
+    if not hint:
+        return THOUGHT_TRIGGER_DEFAULT
+    return f"# Triggered thought\n{hint}\n\n{THOUGHT_TRIGGER_DEFAULT}"
+
+
 _thought_runner: Optional["ThoughtRunner"] = None
 
 
@@ -404,10 +423,11 @@ class ThoughtRunner:
                     is_roleplay=False)
             )
 
-        # System-Prompt: AgentLoop passes a fully-rendered slim prompt via
+        # System prompt: AgentLoop passes a fully-rendered slim prompt via
         # ``system_prompt_override``. Other callers (e.g. world-dev debug
-        # endpoint) get the slim prompt built fresh here, with optional
-        # context_hint prepended as a "Trigger" block.
+        # endpoint) get the slim prompt built fresh here. Neither branch
+        # touches it for a context_hint — the hint goes into the user turn
+        # (``thought_user_input``) so the system prompt stays byte-stable.
         ctx = None          # thought context, only built when we render ourselves
         if system_prompt_override:
             system_prompt = system_prompt_override
@@ -416,10 +436,6 @@ class ThoughtRunner:
             from app.core.prompt_templates import render
             ctx = build_thought_context(character_name, tools_hint=tools_hint)
             system_prompt = render("chat/agent_thought.md", **ctx)
-            if context_hint:
-                # Manual trigger (admin debug, scripted): prepend the hint
-                # so the agent sees what's expected before the situation.
-                system_prompt = f"# Triggered thought\n{context_hint}\n\n{system_prompt}"
         if context_hint:
             logger.info("Thought fuer %s mit context_hint: %s",
                         character_name, context_hint[:100])
@@ -612,13 +628,7 @@ class ThoughtRunner:
         extracted_markers = ""
         had_notification_tool = False
         notification_tool_content = ""
-        # Synthetischer Trigger fuer den Thought-Turn. Englisch — die Antwort-
-        # sprache steuert ausschliesslich die Sprachanweisung (lang_instruction)
-        # im System-Prompt (agent_thought.md), nicht dieser Text.
-        user_input = (
-            "Think about your task and decide what you want to do now. "
-            "Use the appropriate tools to accomplish your task."
-        )
+        user_input = thought_user_input(context_hint)
 
         logger.info("Starte Agent-Loop fuer %s (tools: %d, tool_llm: %s, history: %d)",
                     character_name, len(tools_dict), 'JA' if tool_llm else 'NEIN', len(recent_history))
