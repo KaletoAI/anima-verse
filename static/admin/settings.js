@@ -679,10 +679,10 @@ async function populateImagePreviewMetas() {
     }
 }
 
-// ── Einfache, kategorie-basierte LLM-Seite ──────────────────────────────
-// Eine Provider+Model-Auswahl pro Job-Typ; befuellt CONFIG.llm_routing
-// (order=1) automatisch. Embedding kann "Internal (built-in)" sein → schreibt
-// stattdessen CONFIG.embedding.
+// ── Simple, category-based LLM page ─────────────────────────────────────
+// One provider+model pick per job type; sets the primary (order 1) of that
+// group's tasks in CONFIG.llm_routing — see llmSimpleAssign(). Embedding can
+// be "Internal (built-in)", which writes CONFIG.embedding instead.
 const LLM_SIMPLE_CATS = [
     {key:'chat',      label:'Chat & Roleplay',           desc:'The main model your characters chat and roleplay with. Pick your biggest / best writing model.'},
     {key:'tool',      label:'Tools & Decisions',         desc:'Structured decisions and tool-calling (intent, events, outfit generation). Needs a model that reliably follows instructions / returns clean JSON.'},
@@ -702,9 +702,11 @@ async function renderLlmSimpleEditor() {
 
     let html = '<div class="section active">';
     html += '<h1 class="section-title">🧭 LLM Models (Simple)</h1>';
-    html += '<div class="desc" style="margin-bottom:14px;">Pick one provider + model per job type. This fills the '
-         + '<a href="#llm_routing" onclick="event.preventDefault(); activateSection(\'llm_routing\')" style="color:#58a6ff;">Advanced LLM Routing</a> '
-         + 'automatically (as primary / order 1). Use the advanced page only for fallbacks and per-task tuning. Press <b>Save</b> when done.</div>';
+    html += '<div class="desc" style="margin-bottom:14px;">Pick one provider + model per job type. A pick makes it the primary LLM (order 1) '
+         + 'of every task in that group in the '
+         + '<a href="#llm_routing" onclick="event.preventDefault(); activateSection(\'llm_routing\')" style="color:#58a6ff;">Advanced LLM Routing</a>. '
+         + 'Only the group you change is touched — fallbacks, entry names, lanes and sampling stay, and no entry is ever deleted. '
+         + 'Opening this page changes nothing. Press <b>Save</b> when done.</div>';
 
     const providers = CONFIG.providers || [];
     for (const cat of LLM_SIMPLE_CATS) {
@@ -729,12 +731,16 @@ async function renderLlmSimpleEditor() {
         html += '</select>';
         html += '<button class="btn btn-sm" onclick="llmSimpleLoadModels(\'' + cat.key + '\')">Load Models</button>';
         html += '</div>';
+        html += '<div id="llmsimple-split-' + cat.key + '" class="desc" style="display:none; margin-top:6px; color:#d29922;"></div>';
         html += '</div>';
     }
     html += '</div>';
     content.innerHTML = html;
     // Fill the model dropdowns initially (from cache / internal choices)
-    for (const cat of LLM_SIMPLE_CATS) llmSimplePopulateModels(cat.key, false);
+    for (const cat of LLM_SIMPLE_CATS) {
+        llmSimplePopulateModels(cat.key, false);
+        llmSimpleRenderSplitNote(cat.key);
+    }
 }
 
 function llmSimpleDetect(tasks) {
@@ -760,7 +766,7 @@ function llmSimpleDetect(tasks) {
             LLM_SIMPLE_SEL[cat.key] = { provider: parts[0], model: parts[1] };
         }
     }
-    // Embedding: interne Config gewinnt ueber Routing-Detection
+    // Embedding: the internal backend setting wins over routing detection
     const emb = CONFIG.embedding || {};
     if (emb.backend === 'internal') {
         LLM_SIMPLE_SEL.embedding = { provider: LLM_SIMPLE_INTERNAL, model: emb.internal_model || '' };
@@ -768,17 +774,26 @@ function llmSimpleDetect(tasks) {
 }
 
 function llmSimpleSetProvider(cat, val) {
+    const prev = Object.assign({}, LLM_SIMPLE_SEL[cat] || {});
+    if (!val) { llmSimpleCommit(cat, { provider: '', model: '' }, prev); return; }
+    if (val === LLM_SIMPLE_INTERNAL) {
+        const f = ((SCHEMA.embedding || {}).fields || {}).internal_model || {};
+        const model = (CONFIG.embedding || {}).internal_model || (f.choices || [])[0] || '';
+        llmSimpleCommit(cat, { provider: val, model: model }, prev);
+        return;
+    }
+    // A provider alone changes nothing yet — the routing is only touched once
+    // a model is picked, so switching the provider never clears a category.
     LLM_SIMPLE_SEL[cat] = { provider: val, model: '' };
     const m = document.getElementById('llmsimple-model-' + cat);
     if (m) m.innerHTML = '<option value="" selected>— select —</option>';
     llmSimplePopulateModels(cat, true);
-    llmSimpleRebuild();
 }
 
 function llmSimpleSetModel(cat, val) {
-    if (!LLM_SIMPLE_SEL[cat]) LLM_SIMPLE_SEL[cat] = {};
-    LLM_SIMPLE_SEL[cat].model = val;
-    llmSimpleRebuild();
+    if (!val) return;
+    const prev = Object.assign({}, LLM_SIMPLE_SEL[cat] || {});
+    llmSimpleCommit(cat, { provider: (LLM_SIMPLE_SEL[cat] || {}).provider || '', model: val }, prev);
 }
 
 function llmSimplePopulateModels(cat, autoload) {
@@ -786,18 +801,16 @@ function llmSimplePopulateModels(cat, autoload) {
     const el = document.getElementById('llmsimple-model-' + cat);
     if (!el) return;
     const cur = sel.model || '';
-    // Interne Embedding-Modelle: Choices aus dem Schema
+    // Internal embedding models: choices from the schema
     if (sel.provider === LLM_SIMPLE_INTERNAL) {
         const f = ((SCHEMA.embedding || {}).fields || {}).internal_model || {};
         const choices = f.choices || [];
         let opts = '<option value="">— select —</option>';
         for (const c of choices) opts += '<option value="' + esc(c) + '"' + (c === cur ? ' selected' : '') + '>' + esc(c) + '</option>';
         el.innerHTML = opts;
-        if (!cur && choices.length) {
-            LLM_SIMPLE_SEL[cat].model = choices[0];
-            el.value = choices[0];
-            llmSimpleRebuild();
-        }
+        // Display only — rendering never writes CONFIG. An unset internal
+        // model means the server's default, which is the first choice.
+        if (!cur && choices.length) el.value = choices[0];
         return;
     }
     if (!sel.provider) { el.innerHTML = '<option value="">— select provider —</option>'; return; }
@@ -836,41 +849,154 @@ async function llmSimpleLoadModels(cat) {
     llmSimplePopulateModels(cat, false);
 }
 
-// Writes CONFIG.llm_routing (order=1) + CONFIG.embedding from LLM_SIMPLE_SEL.
-function llmSimpleRebuild() {
+// Task ids of one Simple-page category, from the task catalog.
+function llmSimpleCatTasks(cat) {
     const tasks = (LLM_CATALOG_CACHE || EMPTY_LLM_CATALOG).tasks || [];
-    const byCat = {};
-    for (const t of tasks) (byCat[t.category] = byCat[t.category] || []).push(t.id);
-    // Take a copy, then drop every order==1 assignment (fallbacks stay)
-    let routing = (CONFIG.llm_routing || []).map(e => Object.assign({}, e, { tasks: (e.tasks || []).slice() }));
-    for (const e of routing) e.tasks = (e.tasks || []).filter(t => (t.order || 1) !== 1);
-    for (const cat of LLM_SIMPLE_CATS) {
-        const sel = LLM_SIMPLE_SEL[cat.key] || {};
-        if (cat.key === 'embedding' && sel.provider === LLM_SIMPLE_INTERNAL) continue;
-        if (!sel.provider || !sel.model) continue;
-        const ids = byCat[cat.key] || [];
-        if (!ids.length) continue;
-        let entry = routing.find(e => e.provider === sel.provider && e.model === sel.model);
-        if (!entry) {
-            entry = { provider: sel.provider, model: sel.model, enabled: true, temperature: LLM_SIMPLE_TEMP[cat.key], tasks: [] };
-            routing.push(entry);
+    return tasks.filter(t => t.category === cat).map(t => t.id);
+}
+
+// The entries that hold a PRIMARY (order 1) assignment for one of `ids`:
+// [{idx, tasks: [id, …]}], idx = position in `routing`.
+function llmSimpleHolders(routing, ids) {
+    const want = new Set(ids);
+    const out = [];
+    (routing || []).forEach((e, idx) => {
+        const hit = (e.tasks || [])
+            .filter(t => want.has(t.task) && (t.order || 1) === 1)
+            .map(t => t.task);
+        if (hit.length) out.push({ idx, tasks: hit });
+    });
+    return out;
+}
+
+// Pure: returns a NEW routing list in which every task of `ids` has its
+// primary (order 1) on the provider+model entry — or no primary at all when
+// provider/model are empty. Nothing else changes: other tasks, fallbacks,
+// names, lanes, sampling and every entry stay; no entry is ever deleted.
+// The Advanced page is the full editor, this page must never cost it data.
+// Target entry: the provider+model entry that already held most of the
+// category's primaries, else the first enabled one with that provider+model,
+// else the first one at all (re-enabled), else `newEntry` appended.
+// When the target already served a task as a fallback (order k), the entry
+// that loses the primary takes that order k — the chain keeps its length.
+function llmSimpleAssign(routing, ids, provider, model, newEntry) {
+    const want = new Set(ids);
+    const out = (routing || []).map(e => Object.assign({}, e,
+        { tasks: (e.tasks || []).map(t => Object.assign({}, t)) }));
+    let target = -1;
+    if (provider && model) {
+        const same = e => e.provider === provider && e.model === model;
+        let best = 0;
+        for (const h of llmSimpleHolders(out, ids)) {
+            if (same(out[h.idx]) && h.tasks.length > best) { best = h.tasks.length; target = h.idx; }
         }
-        if (!entry.tasks) entry.tasks = [];
-        for (const id of ids) entry.tasks.push({ task: id, order: 1 });
+        if (target < 0) target = out.findIndex(e => same(e) && e.enabled !== false);
+        if (target < 0) {
+            target = out.findIndex(same);
+            if (target >= 0) out[target].enabled = true;
+        }
+        if (target < 0) {
+            out.push(Object.assign({}, newEntry || {}, { provider, model, enabled: true, tasks: [] }));
+            target = out.length - 1;
+        }
     }
-    // Remove entries that ran empty (unless they only exist for preloading)
-    routing = routing.filter(e => (e.tasks && e.tasks.length) || e.preload_on_startup);
-    CONFIG.llm_routing = routing;
-    // Embedding config
-    if (!CONFIG.embedding) CONFIG.embedding = {};
-    const e = LLM_SIMPLE_SEL.embedding || {};
-    if (e.provider === LLM_SIMPLE_INTERNAL) {
-        CONFIG.embedding.backend = 'internal';
-        if (e.model) CONFIG.embedding.internal_model = e.model;
-    } else if (e.provider && e.model) {
-        CONFIG.embedding.backend = 'external';
+    for (const id of want) {
+        let freedOrder = 0;
+        if (target >= 0) {
+            const own = out[target].tasks.find(t => t.task === id);
+            if (own && (own.order || 1) !== 1) freedOrder = own.order;
+        }
+        out.forEach((e, idx) => {
+            if (idx === target) return;
+            for (const t of e.tasks) {
+                if (t.task === id && (t.order || 1) === 1) t.order = freedOrder;
+            }
+            e.tasks = e.tasks.filter(t => !(t.task === id && t.order === 0));
+        });
+        if (target >= 0) {
+            const tt = out[target].tasks.filter(t => t.task !== id);
+            tt.push({ task: id, order: 1 });
+            out[target].tasks = tt;
+        }
+    }
+    return out;
+}
+
+function llmSimpleEntryLabel(e) {
+    return e.name ? e.name + ' (' + (e.model || '?') + ')' : (e.provider || '?') + ' / ' + (e.model || '?');
+}
+
+// Applies one category change to CONFIG. Asks first whenever the change
+// overrides something this page cannot show: a category whose tasks are split
+// over several entries (per-task setup from the Advanced page), or "none"
+// dropping existing primaries. Cancel restores the previous selection.
+async function llmSimpleCommit(cat, next, prev) {
+    const meta = LLM_SIMPLE_CATS.find(c => c.key === cat) || { label: cat };
+    const ids = llmSimpleCatTasks(cat);
+    const routing = CONFIG.llm_routing || [];
+    const internal = cat === 'embedding' && next.provider === LLM_SIMPLE_INTERNAL;
+    if (!internal && !ids.length) {
+        // Task catalog failed to load (loadLlmCatalog already toasted) — without
+        // task ids a pick would only add an empty entry.
+        toast('LLM task list not loaded — nothing changed.', 'error');
+        LLM_SIMPLE_SEL[cat] = prev;
+        const p = document.getElementById('llmsimple-prov-' + cat);
+        if (p) p.value = prev.provider || '';
+        llmSimplePopulateModels(cat, false);
+        return;
+    }
+    if (!internal) {
+        const holders = llmSimpleHolders(routing, ids);
+        let question = '';
+        if (!next.provider && holders.length) {
+            const n = holders.reduce((s, h) => s + h.tasks.length, 0);
+            question = 'Remove the primary LLM from ' + n + ' task(s) of "' + meta.label + '"? '
+                + 'They then follow their fallback chain or parent task. No entry is deleted.';
+        } else if (next.provider && holders.length > 1) {
+            question = '"' + meta.label + '" is currently split over ' + holders.length + ' LLM entries: '
+                + holders.map(h => llmSimpleEntryLabel(routing[h.idx]) + ' — ' + h.tasks.length + ' task(s)').join('; ')
+                + '. Setting ' + next.model + ' makes it the primary LLM for all ' + ids.length
+                + ' tasks of this group. Fallbacks and every entry\'s settings stay; no entry is deleted.';
+        }
+        if (question && !(await askConfirm(question, 'Apply'))) {
+            LLM_SIMPLE_SEL[cat] = prev;
+            const p = document.getElementById('llmsimple-prov-' + cat);
+            if (p) p.value = prev.provider || '';
+            llmSimplePopulateModels(cat, false);
+            return;
+        }
+        CONFIG.llm_routing = llmSimpleAssign(routing, ids, next.provider, next.model,
+            { name: meta.label, temperature: LLM_SIMPLE_TEMP[cat] });
+    }
+    LLM_SIMPLE_SEL[cat] = next;
+    if (cat === 'embedding') {
+        if (!CONFIG.embedding) CONFIG.embedding = {};
+        if (internal) {
+            CONFIG.embedding.backend = 'internal';
+            if (next.model) CONFIG.embedding.internal_model = next.model;
+        } else {
+            CONFIG.embedding.backend = next.provider ? 'external' : 'auto';
+        }
+    }
+    llmSimplePopulateModels(cat, false);
+    llmSimpleRenderSplitNote(cat);
+}
+
+// Shows, per category, when its tasks use more than one LLM entry — the case
+// in which a pick on this page overrides per-task setup.
+function llmSimpleRenderSplitNote(cat) {
+    const el = document.getElementById('llmsimple-split-' + cat);
+    if (!el) return;
+    const routing = CONFIG.llm_routing || [];
+    const holders = llmSimpleHolders(routing, llmSimpleCatTasks(cat));
+    if (holders.length > 1) {
+        el.textContent = '⚠ Split over ' + holders.length + ' LLM entries: '
+            + holders.map(h => llmSimpleEntryLabel(routing[h.idx]) + ' (' + h.tasks.length + ')').join(', ')
+            + '. Picking a model here makes it the primary for the whole group (you will be asked first).';
+        el.style.display = '';
     } else {
-        CONFIG.embedding.backend = 'auto';
+        el.textContent = '';
+        el.style.display = 'none';
     }
 }
 

@@ -185,9 +185,9 @@ SECTIONS = {
         },
     },
     "llm_simple": {
-        # Virtuelle Section (kein eigenes Config-Feld) — eine einfache,
-        # kategorie-basierte Oberflaeche, die CONFIG.llm_routing automatisch
-        # befuellt. Gerendert durch renderLlmSimpleEditor() in admin_settings.py.
+        # Virtual section (no config field of its own) — a simple,
+        # category-based page that sets the primary LLM of each task group in
+        # llm_routing. Rendered by renderLlmSimpleEditor() in static/admin/settings.js.
         "label": "LLM Models (Simple)",
         "icon": "🧭",
         "virtual": True,
