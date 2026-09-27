@@ -2062,6 +2062,7 @@
     "No two-person actions available.": "Keine Zwei-Personen-Aktionen verfügbar.",
     "{actor} and {partner} are {pose} together.": "{actor} und {partner} sind zusammen {pose}.",
     "{invitee} does not want to {pose} with {inviter} right now.": "{invitee} möchte gerade nicht mit {inviter} {pose}.",
+    "{invitee} does not want to come along with {inviter}.": "{invitee} möchte nicht mit {inviter} mitkommen.",
     "That takes two — ask them with “Together…” on their card.": "Dazu gehören zwei — frag sie mit „Gemeinsam…\" auf ihrer Karte.",
     "{actor} takes a selfie.": "{actor} macht ein Selfie.",
     "{actor} holds up the camera and takes a photo of themselves with {others}.": "{actor} hält die Kamera hoch und macht ein Foto von sich mit {others}.",

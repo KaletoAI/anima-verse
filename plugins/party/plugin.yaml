@@ -4,6 +4,10 @@ capability_description: "The character can travel as a group: invite others, joi
 version: "1.0.0"
 description: Party verbs — travel together as a group (invite / join / leave); the leader moves, followers are dragged along
 
+# Registers the decision point `party_join` (an invited NPC joins or declines
+# at once when a decision model is configured) — the core never names it (R1).
+on_load: register.py
+
 skills:
   - skill_id: invite_to_party
     class: PartySkill

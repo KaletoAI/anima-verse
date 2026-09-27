@@ -4,13 +4,17 @@ enter/leave): PartySkill with verb='invite'|'join'|'leave'.
   invite_to_party (verb='invite'): the character invites someone present.
     - Target = avatar -> pending invite (question in the chat window, UI decides).
     - Target = NPC    -> the invitee is bumped and decides on its own via
-      JoinParty in its own turn (no keyword matching).
+      JoinParty in its own turn (no keyword matching). With the decision
+      point ``party_join`` active, a confident decision model settles the
+      invitation at once instead (register.py, docs/decision-models.md).
     Every invitation is recorded in ``party_invites`` — it is the direction
     record of the party: an invitation answered with a counter-invitation is
     turned into a JOIN, so whoever asked first stays the leader.
-  join_party (verb='join'): the character JOINS a present character's party —
-    the robust path for "X invites me, I say yes": the tool LLM calls this in
-    the normal reply turn (no keyword detection, no separate consent round).
+  join_party (verb='join'): the character ACCEPTS or REFUSES — it joins a
+    present character's party (the robust path for "X invites me, I say
+    yes": the tool LLM calls this in the normal reply turn, no keyword
+    detection, no separate consent round), or, called with
+    ``{"answer": "no"}``, turns an open invitation down explicitly.
   leave_party (verb='leave'): leaves its own party (a follower steps out, a
     leader dissolves it). Offered to followers in the agent loop.
 
@@ -27,6 +31,35 @@ from app.plugins.base import PluginSkill
 from app.plugins.context import PluginContext
 
 _VERB_TO_ID = {"invite": "invite_to_party", "join": "join_party", "leave": "leave_party"}
+
+#: The decision point of this package: an NPC invited to come along joins or
+#: declines (registered in ``register.py``, docs/decision-models.md).
+PARTY_JOIN = "party_join"
+
+#: An answer of "no" — read only from the verb's own ``answer`` argument,
+#: never from the character's reply text (same set as the interact package;
+#: kept here so this package stands on its own).
+_NO_ANSWERS = frozenset({"no", "nein", "decline", "refuse", "reject", "false"})
+
+
+def _is_refusal(data: Dict[str, Any]) -> bool:
+    """True when the call is a refusal: ``{"answer": "no"}``."""
+    ans = data.get("answer")
+    if isinstance(ans, bool):
+        return not ans
+    return str(ans or "").strip().lower() in _NO_ANSWERS
+
+
+def _record_answer(invite_id: str, accepted: bool) -> None:
+    """The invitee's own answer is the usual path the decision model of
+    PARTY_JOIN is compared with. A no-op for an invitation the model was
+    never asked about (or one it already settled); never lets the verb fail."""
+    try:
+        from app.core import decision
+        decision.record_outcome(PARTY_JOIN, invite_id,
+                                {"answer": "accept" if accepted else "decline"})
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _resolve_target(data: Dict[str, Any]) -> str:
@@ -128,7 +161,7 @@ class PartySkill(PluginSkill):
         # The invitation is recorded for EVERY target, avatar or NPC: it is
         # what the brake above reads when the invitee answers with an invite
         # of its own.
-        P.create_pending_invite(character_name, target)
+        invite_id = P.create_pending_invite(character_name, target)
         try:
             from app.models.account import is_player_controlled
             _is_avatar = is_player_controlled(target)
@@ -139,25 +172,128 @@ class PartySkill(PluginSkill):
             # question.
             return (f"{character_name} invited {target} to the party "
                     f"— waiting for their answer.")
-        # NPC target: NO keyword classification. The invitee decides on its
-        # own via the JoinParty tool in its own turn — we only bump it (with a
-        # hint) so it reacts soon.
+        # NPC target: a configured decision model may settle it at once.
+        settled = self._decide_join(invite_id, character_name, target)
+        if settled:
+            return settled
+        # NO keyword classification. The invitee decides on its own via the
+        # JoinParty tool in its own turn — we only bump it (with a hint) so it
+        # reacts soon.
         try:
             from app.core.agent_loop import get_agent_loop
             get_agent_loop().bump(
                 target,
                 hint=(f"{character_name} invites you to come along with the "
                       f"group. Decide in character whether to accept — if yes, "
-                      f"call JoinParty with leader={character_name}."))
+                      f"call JoinParty with leader={character_name}; to "
+                      f"refuse, call it with leader={character_name}, "
+                      f"answer=no."))
         except Exception as _be:
             self.ctx.logger.debug("invite bump failed: %s", _be)
         return f"{character_name} invites {target} to come along."
+
+    def _decide_join(self, invite_id: str, inviter: str, invitee: str) -> str:
+        """Ask the decision model of PARTY_JOIN whether the NPC joins.
+
+        Returns the verb's result sentence when the invitation is settled
+        (the NPC must NOT be woken), ``""`` for the usual path (the bump):
+        point inactive, no confident answer, or an accept whose join failed.
+        A decline does not bump the inviter — it is the one running this
+        verb, the sentence is its tool result — and the room hears it as
+        one narrator line. Never raises.
+        """
+        try:
+            from app.core import decision, decision_points
+            from app.core import party_engine as P
+            if not invite_id or not decision.is_active(PARTY_JOIN):
+                return ""
+            offer = "to come along with the group"
+            party = P.get_party_of(inviter)
+            members = list((party or {}).get("members") or [])
+            if members:
+                offer += f" (the group: {', '.join(members)})"
+            d = decision.decide(PARTY_JOIN,
+                                decision_points.invite_state(invitee, inviter, offer),
+                                decision_points.invite_questions(invitee, inviter),
+                                key=invite_id)
+            ans = d.answers.get("answer") if d else None
+            if ans is None:
+                return ""
+            if ans.value == "accept":
+                # mark_taken FIRST: _join records an outcome for the open
+                # invitation, and while the prediction is still open that
+                # would count the decider's OWN action as agreement with the
+                # usual path. Once taken, the entry counts as "taken" only
+                # (decision_log._count checks taken first), so _join's
+                # record_outcome no longer counts. A join that then fails
+                # stays "taken" — the NPC is woken and answers itself.
+                decision.mark_taken(PARTY_JOIN, invite_id)
+                self._join(invitee, {"leader": inviter})
+                if P.is_in_party(invitee):
+                    self.ctx.logger.info(
+                        "party invite %s: decision model — %s joins %s",
+                        invite_id, invitee, inviter)
+                    return (f"{inviter} invites {invitee} to come along — "
+                            f"{invitee} agrees and joins.")
+                self.ctx.logger.info(
+                    "party invite %s: decision model said accept, but %s could "
+                    "not join %s — waking the NPC instead", invite_id, invitee,
+                    inviter)
+                return ""
+            if ans.value == "decline":
+                P.resolve_pending_invite(invite_id, False)
+                decision.mark_taken(PARTY_JOIN, invite_id)
+                self._narrate_decline(inviter, invitee)
+                self.ctx.logger.info(
+                    "party invite %s: decision model — %s declines %s",
+                    invite_id, invitee, inviter)
+                return (f"{inviter} invites {invitee} to come along — "
+                        f"{invitee} declines.")
+        except Exception as e:
+            self.ctx.logger.debug("party_join decision failed for %s: %s",
+                                  invitee, e)
+        return ""
+
+    def _narrate_decline(self, inviter: str, invitee: str) -> None:
+        """One narrator line in the invitee's room for a decline the decision
+        model settled — the counterpart of the join's own narrator line.
+        Without it the refusal happens in no one's perception stream. Never
+        raises."""
+        try:
+            from app.core.i18n import t
+            from app.core.perception import (STORYTELLER_SPEAKER, VOLUME_NORMAL,
+                                             record_utterance)
+            from app.models.character import (get_character_current_location,
+                                              get_character_current_room,
+                                              get_character_language)
+            lang = get_character_language(invitee) or "de"
+            record_utterance(
+                speaker=STORYTELLER_SPEAKER,
+                content=t("{invitee} does not want to come along with {inviter}.",
+                          lang).format(invitee=invitee, inviter=inviter),
+                volume=VOLUME_NORMAL,
+                location_id=get_character_current_location(invitee) or "",
+                room_id=get_character_current_room(invitee) or "",
+                source="party", anchor=invitee)
+        except Exception as e:
+            self.ctx.logger.debug("party decline narration failed for %s: %s",
+                                  invitee, e)
 
     def _join(self, character_name: str, data: Dict[str, Any]) -> str:
         from app.core import party_engine as P
         leader = _resolve_target(data)
         if not leader or leader == character_name:
             return "Whose party to join? (no valid target)"
+        if _is_refusal(data):
+            # The explicit "no": a character that does not want to must be
+            # able to SAY so, or the invitation stands open until it ages out.
+            inv = P.find_pending_invite(leader, character_name)
+            if not inv:
+                return f"{leader} has not invited {character_name}."
+            _record_answer(inv["invite_id"], False)
+            P.resolve_pending_invite(inv["invite_id"], False)
+            return (f"{character_name} turns down {leader}'s invitation. "
+                    f"Say why in character.")
         if P.is_in_party(character_name):
             return f"{character_name} is already in a party."
         if not P.same_location(character_name, leader):
@@ -167,6 +303,12 @@ class PartySkill(PluginSkill):
         if not pid:
             return (f"{character_name} cannot join {leader}'s party "
                     f"(already in a party / invalid).")
+        try:
+            inv = P.find_pending_invite(leader, character_name)
+            if inv:
+                _record_answer(inv["invite_id"], True)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             P.clear_invites_for(character_name)
         except Exception:

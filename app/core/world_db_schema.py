@@ -683,8 +683,11 @@ SCHEMA_STATEMENTS = [
         members    TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL
     )""",
-    # Offene Party-Einladungen an den Avatar (NPC laedt Avatar ein -> Frage im
-    # Chat-Fenster). NPC->NPC braucht keine Row (Entscheidung laeuft synchron).
+    # Open party invitations — one row for EVERY invitation, avatar or NPC
+    # target. For an avatar it is the question in the chat window; for any
+    # target it is the DIRECTION record of the party (whoever asked first
+    # leads; a counter-invitation is read as a join) and the key an NPC's
+    # JoinParty accept / answer=no resolves.
     """CREATE TABLE IF NOT EXISTS party_invites (
         invite_id  TEXT PRIMARY KEY,
         inviter    TEXT NOT NULL,
