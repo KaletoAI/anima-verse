@@ -99,6 +99,10 @@ B7  JoinParty(answer=no) with NO invitation -> reply
 B8  JoinParty(leader=Halvard) accept with an open invitation ->
     record_outcome("party_join", id, {"answer": "accept"}); Kira follows
     Halvard.
+B9  Kira a TEMPORARY NPC, point active, answer accept ready -> decide never
+    called (a temporary NPC is never made a follower); the usual path is
+    unchanged: one bump attempt at Kira, result
+    "Halvard invites Kira to come along.", Kira in no party.
 """
 import json
 import sys
@@ -501,6 +505,16 @@ iid = P.create_pending_invite(INVITER, INVITEE)
 r = prun(P_JOIN, INVITEE, leader=INVITER)
 check("B8 accept outcome", _events("outcome"), [(PPOINT, iid, {"answer": "accept"})])
 check("B8 Kira follows Halvard", ((P.get_party_of(INVITEE) or {}).get("leader")), INVITER)
+
+print("B9 invitee a temporary NPC")
+preset()
+TEMPS.add(INVITEE)
+r = pinvite(active=True, decision_=answer("accept"))
+TEMPS.clear()
+check("B9 decide not called", _events("decide"), [])
+check("B9 usual bump attempt", [b[0] for b in _events("bump")], [INVITEE])
+check("B9 result", r, "Halvard invites Kira to come along.")
+check("B9 Kira in no party", P.get_party_of(INVITEE), None)
 
 print()
 if FAILS:

@@ -197,7 +197,8 @@ class PartySkill(PluginSkill):
 
         Returns the verb's result sentence when the invitation is settled
         (the NPC must NOT be woken), ``""`` for the usual path (the bump):
-        point inactive, no confident answer, or an accept whose join failed.
+        point inactive, a temporary-NPC invitee, no confident answer, or an
+        accept whose join failed.
         A decline does not bump the inviter — it is the one running this
         verb, the sentence is its tool result — and the room hears it as
         one narrator line. Never raises.
@@ -205,7 +206,13 @@ class PartySkill(PluginSkill):
         try:
             from app.core import decision, decision_points
             from app.core import party_engine as P
+            from app.models.character import is_temporary_npc
             if not invite_id or not decision.is_active(PARTY_JOIN):
+                return ""
+            # A temporary NPC is never a follower: it has no thought turns to
+            # answer or to leave a party with, and a party would drag it off
+            # its slot and suppress its roaming. It keeps the usual path.
+            if is_temporary_npc(invitee):
                 return ""
             offer = "to come along with the group"
             party = P.get_party_of(inviter)
@@ -229,7 +236,7 @@ class PartySkill(PluginSkill):
                 # stays "taken" — the NPC is woken and answers itself.
                 decision.mark_taken(PARTY_JOIN, invite_id)
                 self._join(invitee, {"leader": inviter})
-                if P.is_in_party(invitee):
+                if (P.get_party_of(invitee) or {}).get("leader") == inviter:
                     self.ctx.logger.info(
                         "party invite %s: decision model — %s joins %s",
                         invite_id, invitee, inviter)
