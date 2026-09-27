@@ -105,9 +105,10 @@ class InteractSkill(PluginSkill):
                             f"Say why in character.")
                 res = IE.resolve_invite(open_ask["invite_id"], True)
                 if res.get("status") == "started":
-                    return (f"{actor} accepts: {actor} and {partner} now "
-                            f"{key} (for about "
-                            f"{res['interaction']['duration_s']:.0f} seconds).")
+                    inter = res.get("interaction") or {}
+                    how_long = ("until one of them stops" if inter.get("loop") else
+                                f"for about {float(inter.get('clip_duration_s') or 0):.0f} seconds")
+                    return f"{actor} accepts: {actor} and {partner} now {key} ({how_long})."
                 if res.get("status") == "approaching":
                     # Agreed, but not close enough yet — the walk over is
                     # already running and the pair starts on arrival.
