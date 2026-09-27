@@ -103,6 +103,31 @@ def _offer(pose_key: str) -> str:
     return offer
 
 
+def _narrate_decline(inviter: str, invitee: str, pose_key: str) -> None:
+    """One narrator line in the invitee's room for a decline the decision
+    model settled — the counterpart of start_interaction's line for a pair
+    that starts. Without it the refusal happens in no one's perception
+    stream. Never raises."""
+    try:
+        from app.core.i18n import t
+        from app.core.perception import (STORYTELLER_SPEAKER, VOLUME_NORMAL,
+                                         record_utterance)
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room,
+                                          get_character_language)
+        lang = get_character_language(invitee) or "de"
+        record_utterance(
+            speaker=STORYTELLER_SPEAKER,
+            content=t("{invitee} does not want to {pose} with {inviter} right now.",
+                      lang).format(invitee=invitee, inviter=inviter, pose=pose_key),
+            volume=VOLUME_NORMAL,
+            location_id=get_character_current_location(invitee) or "",
+            room_id=get_character_current_room(invitee) or "",
+            source="interaction", anchor=invitee)
+    except Exception as e:
+        logger.debug("pair decline narration failed for %s: %s", invitee, e)
+
+
 def _decide_invite(invite_id: str, inviter: str, invitee: str,
                    pose_key: str) -> bool:
     """Ask the decision model of PAIR_INVITE whether the NPC accepts.
@@ -115,7 +140,9 @@ def _decide_invite(invite_id: str, inviter: str, invitee: str,
     decider's own action cannot be counted as agreement with the usual path
     — the outcome comes only from the NPC's own counter-call (skill.py).
     A decline does not bump the inviter: it learns the answer from its own
-    tool result or the /play response, both of which read the row back.
+    tool result or the /play response, both of which read the row back —
+    and the room hears it as one narrator line (_narrate_decline), which is
+    also how a temporary-NPC inviter that never reads the row learns it.
     """
     try:
         if not decision.is_active(PAIR_INVITE):
@@ -133,9 +160,10 @@ def _decide_invite(invite_id: str, inviter: str, invitee: str,
             if res.get("status") == "cannot":
                 # A "cannot" with the row back on `pending` is the engine's
                 # "ask again in a minute": the NPC answers in its own turn
-                # and the outcome is recorded then. A closed row (stale:
-                # asleep, travelling) has nobody left to answer — waking the
-                # NPC would only turn its call-back into a counter-invitation.
+                # and the outcome is recorded then. Any closed state (stale,
+                # or a row that moved on meanwhile) has nobody left to
+                # answer — waking the NPC would only turn its call-back into
+                # a counter-invitation.
                 row = IE.get_invite(invite_id) or {}
                 if row.get("status") == "pending":
                     return False
@@ -145,6 +173,8 @@ def _decide_invite(invite_id: str, inviter: str, invitee: str,
             return True
         if ans.value == "decline":
             res = IE.resolve_invite(invite_id, accept=False)
+            if res.get("status") == "declined":
+                _narrate_decline(inviter, invitee, pose_key)
             decision.mark_taken(PAIR_INVITE, invite_id)
             logger.info("interaction invite %s: decision model — %s declines -> %s",
                         invite_id, invitee, res.get("status"))

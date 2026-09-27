@@ -69,6 +69,11 @@ the point does not exist.
 |---|---|---|---|---|---|
 | `pair_invite` | `interact` | `interaction.invited` hook, ordinary NPC invitee (not a player, not a temporary NPC), before the bump | `answer`: `accept` / `decline` (`decision_points.invite_questions`; state `invite_state`) | `accept` → `resolve_invite(True)`; a `cannot` that leaves the invitation `pending` falls back to waking the NPC, a closed one (`stale`) counts as settled. `decline` → `resolve_invite(False)`. The inviter reads the answer from its own tool result / the `/play` response | the invitee's counter-call of `InteractWith` (accept, or `answer=no`) |
 
+`npc_scenes` may create several pair invitations in one tick, so in mode `on` each of them can wait up
+to `timeout_s` in the periodic-jobs thread, one after the other. A decline the model settled writes
+one narrator line into the invitee's room (the counterpart of `start_interaction`'s line for a pair
+that starts), so the room — and a temporary-NPC inviter that never reads the row back — hears it.
+
 ## Adding a point (core or plugin)
 
 1. `register_point("my_point", label=..., description=..., origin="<package>")` — a plugin in its
