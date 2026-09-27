@@ -51,8 +51,8 @@ async function init() {
             const first = Object.keys(SCHEMA)[0];
             if (first) activateSection(first);
         }
-        // Restart-Banner: nach Init pruefen, ob etwas pending ist (z.B. wenn
-        // ein anderer Tab kuerzlich gespeichert hat).
+        // Restart banner: after init, check whether anything is pending (e.g.
+        // when another tab saved recently).
         loadRestartPending();
     } catch (e) {
         document.getElementById('content').innerHTML = '<div class="loading" style="color:#f85149;">Error loading config: ' + esc(e.message) + '</div>';
@@ -60,7 +60,7 @@ async function init() {
 }
 
 function authHeaders() {
-    // Cookie-basiert: Browser sendet Session-Cookie automatisch. Nur Content-Type explizit setzen.
+    // Cookie-based: the browser sends the session cookie itself. Only set Content-Type explicitly.
     return { 'Content-Type': 'application/json' };
 }
 
@@ -125,8 +125,8 @@ function buildNav() {
     for (const [key, sec] of Object.entries(SCHEMA)) {
         const a = document.createElement('a');
         a.href = '#' + key;
-        // nav_sub: als eingerueckter Unterpunkt rendern (z.B. LLM Routing unter
-        // der einfachen LLM-Models-Seite).
+        // nav_sub: render as an indented sub-item (e.g. LLM Routing under the
+        // simple LLM Models page).
         if (sec.nav_sub) {
             a.className = 'nav-sub';
             a.innerHTML = '<span class="nav-icon">›</span> ' + esc(sec.label);
@@ -208,7 +208,7 @@ function activateIframe(key, url, title) {
     content.innerHTML = '<iframe src="' + esc(safeUrl(url)) + '" title="' + esc(title) + '"></iframe>';
 }
 
-// World-Badge im Sidebar — auf jeder Seite + iframe-Children einsehbar.
+// World badge in the sidebar — visible on every page + iframe children.
 fetch('/admin/world-name', { credentials: 'same-origin', cache: 'no-store' })
   .then(r => r.ok ? r.json() : null)
   .then(d => {
@@ -218,9 +218,9 @@ fetch('/admin/world-name', { credentials: 'same-origin', cache: 'no-store' })
   .catch(() => {});
 
 // ── Render Section ──
-// Master-Detail-Editor fuer image_generation.use_cases (links Use-Case-Liste,
-// rechts Familien × Style/Negative/Instruction). Leeres Feld zeigt den
-// eingebauten Default als grauen Placeholder.
+// Master-detail editor for image_generation.use_cases (use-case list on the
+// left, families × style/negative/instruction on the right). An empty field
+// shows the built-in default as a grey placeholder.
 function renderUseCasesMasterDetail(path) {
     const D = USE_CASE_DEFAULTS || { use_cases: [], families: [], defaults: {} };
     const ucs = D.use_cases || [];
@@ -270,10 +270,10 @@ function renderUseCaseDetail(uc) {
             const p = 'image_generation.use_cases.' + uc + '.styles.' + fam + '.' + fld;
             const val = getVal(p) || '';
             const def = (((D.defaults || {})[uc] || {})[fam] || {})[fld] || '';
-            // „Copy default": fuellt das leere Feld mit dem eingebauten Default,
-            // damit man ihn als Ausgangspunkt bearbeiten kann (sonst nur grauer
-            // Placeholder). Nur anbieten, wenn ein Default existiert und das Feld
-            // leer ist (kein versehentliches Ueberschreiben eigener Eingaben).
+            // "Copy default": fills the empty field with the built-in default so
+            // it can be edited as a starting point (otherwise only a grey
+            // placeholder). Offered only when a default exists and the field is
+            // empty (never overwrites the user's own input by accident).
             const copyBtn = (def && !val)
                 ? ' <button type="button" class="btn btn-sm" '
                   + 'style="margin-left:8px;font-size:.72em;padding:1px 6px;vertical-align:middle" '
@@ -298,8 +298,8 @@ function renderUseCaseDetail(uc) {
     return html;
 }
 
-// „Copy default": schreibt den eingebauten Use-Case-Default in das Feld, damit
-// man ihn bearbeiten kann. uc/fam/fld bestimmen den Default, p ist der Setz-Pfad.
+// "Copy default": writes the built-in use-case default into the field so it
+// can be edited. uc/fam/fld select the default, p is the path to set.
 async function loadComposeCacheSize() {
     const el = document.getElementById('compose-cache-size');
     if (!el) return;
@@ -538,8 +538,8 @@ function renderSection(key, pageId) {
         renderPagedSection(key, want);
         return;
     }
-    // null und undefined beide auf Default fallen lassen — sonst wirft
-    // renderFields(null, ...) bei data[fKey] einen TypeError.
+    // Let both null and undefined fall back to the default — otherwise
+    // renderFields(null, ...) throws a TypeError at data[fKey].
     const cfgVal = CONFIG[key];
     const data = (cfgVal !== undefined && cfgVal !== null) ? cfgVal : (sec.is_array ? [] : {});
     const content = document.getElementById('content');
@@ -580,11 +580,11 @@ function renderSection(key, pageId) {
 
     html += '</div>';
     content.innerHTML = html;
-    // image_preview-Felder Meta nachladen (kein <script> via innerHTML moeglich)
+    // Load the meta of image_preview fields (no <script> possible via innerHTML)
     populateImagePreviewMetas();
 }
 
-// Eigene Seite fuer ein einzelnes Sub-Array (z.B. image_generation::backends).
+// Own page for a single sub-array (e.g. image_generation::backends).
 function renderSubArrayPage(key) {
     const sep = key.indexOf('::');
     const parentKey = key.slice(0, sep);
@@ -671,9 +671,9 @@ async function populateImagePreviewMetas() {
                 el.textContent = 'Frame ' + d.frame_size[0] + '×' + d.frame_size[1]
                     + ' — Window ' + d.bbox.w + '×' + d.bbox.h
                     + ' @ (' + d.bbox.x + ',' + d.bbox.y + ')'
-                    + (d.generated_at ? ' — generiert ' + d.generated_at : '');
+                    + (d.generated_at ? ' — generated ' + d.generated_at : '');
             } else {
-                el.textContent = 'Noch nicht generiert.';
+                el.textContent = 'Not generated yet.';
             }
         } catch (e) { /* ignore */ }
     }
@@ -1258,8 +1258,8 @@ function renderFields(fields, data, path) {
             continue;
         }
         if (f.type === 'button') {
-            // Action-Button — kein Daten-Binding, ruft Endpoint mit
-            // body aus angegebenen Geschwister-Feldern auf.
+            // Action button — no data binding, calls an endpoint with a body
+            // built from the named sibling fields.
             const btnId = 'btn-' + (path + '.' + fKey).replace(/\W+/g, '-');
             const bodyFrom = JSON.stringify(f.body_from || []);
             const confirmMsg = f.confirm ? sJs(f.confirm) : '';
@@ -1276,7 +1276,7 @@ function renderFields(fields, data, path) {
             continue;
         }
         if (f.type === 'image_preview') {
-            // Live-Preview eines Bild-Endpoints (z.B. generiertes Frame)
+            // Live preview of an image endpoint (e.g. a generated frame)
             const imgId = 'img-' + (path + '.' + fKey).replace(/\W+/g, '-');
             const url = esc(f.url);
             const metaUrl = f.meta_url ? esc(f.meta_url) : '';
@@ -1289,11 +1289,11 @@ function renderFields(fields, data, path) {
             html += '<img id="' + imgId + '" src="' + url + '?_=' + Date.now() + '" '
                 + 'style="max-width:280px; max-height:380px; display:block;" '
                 + 'onerror="this.style.display=\'none\'; this.nextElementSibling.style.display=\'block\';">';
-            html += '<div style="display:none; color:#888; font-size:12px; padding:20px;">noch nicht generiert</div>';
+            html += '<div style="display:none; color:#888; font-size:12px; padding:20px;">not generated yet</div>';
             html += '</div>';
             if (metaUrl) {
-                // Meta-URL als data-attribute hinterlegen — populateImagePreviewMetas()
-                // wird nach renderSection aufgerufen und befuellt alle solche Elemente.
+                // Store the meta URL as a data attribute — populateImagePreviewMetas()
+                // runs after renderSection and fills every such element.
                 html += '<div id="' + imgId + '-meta" class="desc image-preview-meta" '
                     + 'data-meta-url="' + metaUrl + '" '
                     + 'style="margin-top:6px; font-family:monospace; font-size:11px;"></div>';
@@ -1448,11 +1448,11 @@ function renderImagegenBackendSelect(val, path) {
         const lbl = be.name + (be.api_type ? ' (' + be.api_type + ')' : '');
         opts += '<option value="' + esc(be.name) + '"' + (be.name === val ? ' selected' : '') + '>' + esc(lbl) + '</option>';
     }
-    // onchange: setVal + Geschwister-Modell-Select neu fuellen falls vorhanden
+    // onchange: setVal + refill the sibling model select if there is one
     return '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value); refreshImagegenModelSelect(\'' + sJs(path) + '\')">' + opts + '</select>';
 }
 
-// Geschwister-Modell-Select neu laden wenn Backend gewechselt wird
+// Reload the sibling model select when the backend changes
 function refreshImagegenModelSelect(backendPath) {
     const parts = backendPath.split('.');
     parts[parts.length - 1] = 'model';
@@ -1514,17 +1514,17 @@ async function loadImagegenTargets() {
 }
 
 function renderImagegenTargetSelect(val, path) {
-    // Initial mit aktuellem Wert rendern; Liste wird async nachgeladen
+    // Render with the current value first; the list loads asynchronously
     let html = '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value)">';
     if (val) html += '<option value="' + esc(val) + '" selected>' + esc(val) + '</option>';
-    html += '<option value="">— Auto (Cloud bevorzugt) —</option>';
+    html += '<option value="">— Auto (cloud preferred) —</option>';
     html += '</select>';
     // Async populate
     setTimeout(async () => {
         const targets = await loadImagegenTargets();
         const sel = document.getElementById('f-' + path);
         if (!sel) return;
-        let opts = '<option value="">— Auto (Cloud bevorzugt) —</option>';
+        let opts = '<option value="">— Auto (cloud preferred) —</option>';
         for (const t of targets) {
             const dis = t.available ? '' : ' disabled';
             const tag = t.available ? '' : ' (offline)';
@@ -1537,7 +1537,7 @@ function renderImagegenTargetSelect(val, path) {
 }
 
 function renderImagegenModelSelect(val, path) {
-    // Backend aus Geschwister-Feld lesen
+    // Read the backend from the sibling field
     const parts = path.split('.');
     parts[parts.length - 1] = 'backend';
     const backendPath = parts.join('.');
@@ -1553,12 +1553,12 @@ function renderImagegenModelSelect(val, path) {
     return html;
 }
 
-// Editierbares Modell-Combo fuer Image-Backends: Freitext (CivitAI-URN, manuelles
-// Tippen) + Datalist-Vorschlaege ueber "Load Models" (holt /v1/models vom Backend).
+// Editable model combo for image backends: free text (CivitAI URN, manual
+// typing) + datalist suggestions via "Load Models" (fetches /v1/models from the backend).
 function renderImagegenModelCombo(val, path) {
-    // base = das Backend-Item (z.B. image_generation.backends.2); name/api_* werden
-    // zur Klick-Zeit aus den Geschwister-Feldern gelesen, damit "URL eintragen ->
-    // Load Models" auch OHNE vorheriges Speichern funktioniert.
+    // base = the backend item (e.g. image_generation.backends.2); name/api_* are
+    // read from the sibling fields at click time, so "enter URL ->
+    // Load Models" works WITHOUT saving first.
     const parts = path.split('.');
     const base = parts.slice(0, -1).join('.');
     const dlId = 'dl-' + path.replace(/[^a-zA-Z0-9]/g, '-');
@@ -1591,9 +1591,9 @@ async function loadImagegenModelCombo(path, base) {
 }
 
 // ── Array/Dict Items ──
-// _itemLabel: gleiche Logik wie in renderArrayItem — fuer Sortierung.
-// labelField darf ein String ODER ein Array sein. Bei Array gewinnt der erste
-// nicht-leere Wert (z.B. ["name", "model"] -> name wenn gesetzt, sonst model).
+// _itemLabel: same logic as renderArrayItem — used for sorting.
+// labelField may be a string OR an array. For an array the first non-empty
+// value wins (e.g. ["name", "model"] -> name if set, else model).
 function _itemLabel(item, labelField, fallback) {
     if (!item) return String(fallback || '');
     const fields = Array.isArray(labelField) ? labelField : [labelField];
@@ -1606,8 +1606,8 @@ function _itemLabel(item, labelField, fallback) {
 
 function renderArrayItems(def, items, path) {
     let html = '<div id="arr-' + esc(path) + '">';
-    // Index erhalten (Pfade referenzieren echten Array-Index), Reihenfolge
-    // alphabetisch wenn def.sort_alphabetically gesetzt ist.
+    // Keep the index (paths reference the real array index); order is
+    // alphabetical when def.sort_alphabetically is set.
     const order = items.map((it, i) => ({ idx: i, label: _itemLabel(it, def.item_label_field, 'Item ' + i) }));
     if (def.sort_alphabetically) {
         order.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
@@ -1728,7 +1728,7 @@ async function mediaBackendOnline(name, btn) {
 
 function renderMasterDetail(def, items, path) {
     const order = _mdOrder(def, items, path);
-    // Aktuelle Auswahl validieren — sonst ersten Eintrag waehlen.
+    // Validate the current selection — otherwise pick the first entry.
     let sel = SELECTED_ITEM[path];
     if (!order.some(o => o.itemPath === sel)) sel = order.length ? order[0].itemPath : null;
     SELECTED_ITEM[path] = sel;
@@ -2036,8 +2036,8 @@ async function removeItem(path) {
     } else {
         delete obj[last];
     }
-    // Auswahl im Master-Detail zuruecksetzen — renderMasterDetail faellt dann
-    // auf den ersten verbliebenen Eintrag zurueck.
+    // Reset the master-detail selection — renderMasterDetail then falls back
+    // to the first remaining entry.
     const arrPath = (typeof last === 'number')
         ? path.replace(/\[\d+\]$/, '')
         : path.replace(/\.[^.\[\]]+$/, '');
@@ -2095,8 +2095,8 @@ async function loadModels(path, provName) {
     if (!sel) return;
     const currentVal = sel.value;
 
-    // Cache: leere Listen NICHT cachen (sonst blockt eine fehlgeschlagene
-    // Abfrage alle Retry-Versuche bis zum Page-Reload).
+    // Cache: do NOT cache empty lists (otherwise one failed request blocks
+    // every retry until the page is reloaded).
     if (!PROVIDERS_CACHE[provName] || PROVIDERS_CACHE[provName].length === 0) {
         sel.innerHTML = '<option>Loading...</option>';
         try {
@@ -2182,18 +2182,18 @@ async function validateConfig() {
     btn.textContent = 'Validate';
 }
 
-// Generischer Action-Button-Handler — schickt POST/DELETE/etc an einen Endpoint
-// mit Body aus angegebenen Geschwister-Feldern. Genutzt von schema-Type "button".
+// Generic action-button handler — sends POST/DELETE/etc. to an endpoint with a
+// body built from the named sibling fields. Used by schema type "button".
 async function runActionButton(endpoint, method, path, bodyFrom, confirmMsg, btn, previewUrl) {
     if (confirmMsg && !await askConfirm(confirmMsg)) return;
     const body = {};
-    // Werte aus DOM lesen (frischste Quelle — auch wenn User getippt aber
-    // noch nicht gespeichert hat). Fallback auf CONFIG, dann auf
-    // f-input-element.value als letzten Strohhalm fuer Defaults.
+    // Read values from the DOM (freshest source — also when the user typed but
+    // has not saved yet). Fallback to CONFIG, then to the f-input element's
+    // value as a last resort for defaults.
     for (const fld of (bodyFrom || [])) {
         const sibling = path + '.' + fld;
         let v = undefined;
-        // 1. Versuche das DOM-Input direkt
+        // 1. Try the DOM input directly
         const el = document.getElementById('f-' + sibling);
         if (el && 'value' in el) {
             v = el.value;
@@ -2218,7 +2218,7 @@ async function runActionButton(endpoint, method, path, bodyFrom, confirmMsg, btn
         if (resp.ok) {
             const detail = data.bbox ? ` (bbox ${data.bbox.w}×${data.bbox.h})` : '';
             toast((data.status || 'OK') + detail, 'success');
-            // Preview-Bild neu laden (Cache-Bust via Timestamp) und Meta refreshen
+            // Reload the preview image (cache bust via timestamp) and refresh its meta
             if (previewUrl) {
                 document.querySelectorAll('img[src^="' + previewUrl + '"]').forEach(img => {
                     img.src = previewUrl + '?_=' + Date.now();
@@ -2256,7 +2256,7 @@ async function saveConfig() {
             for (const k of Object.keys(PROVIDERS_CACHE)) delete PROVIDERS_CACHE[k];
             for (const k of Object.keys(IMAGEGEN_MODELS_CACHE)) delete IMAGEGEN_MODELS_CACHE[k];
             toast(result.message || 'Saved!', 'success');
-            // Nach Save pruefen, ob restart-pflichtige Felder veraendert wurden.
+            // After saving, check whether fields that need a restart changed.
             loadRestartPending();
         } else {
             toast('Error: ' + (result.detail || result.message), 'error');
@@ -2275,7 +2275,7 @@ async function loadRestartPending() {
         const data = await resp.json();
         renderRestartBanner(data.pending || []);
     } catch (e) {
-        // Banner-Anzeige ist nicht kritisch — bei Fehler nicht stoeren.
+        // The banner is not critical — stay quiet on failure.
     }
 }
 
