@@ -163,7 +163,7 @@ Position schreiben, um jemanden woanders hin zu bringen.
 
 | Funktion | Semantik |
 |---|---|
-| `start_journey(character_name, target_id) -> (journey \| None, reason)` | Startet die getaktete Reise zu einem benannten Ort. `reason`: `''` = läuft · `unknown_target` (Ort existiert nicht ODER der Charakter kennt ihn nicht) · `unplaced_target` (nicht auf der Karte) · `no_route` |
+| `start_journey(character_name, target_id, target_room="", target_pose="") -> (journey \| None, reason)` | Startet die getaktete Reise zu einem benannten Ort. `target_room` (Raum-Id) / `target_pose` reisen mit und gelten bei der Ankunft — der Raum nur, wenn `check_access` ihn dann erlaubt, sonst die Ankunftsregel. `reason`: `''` = läuft · `unknown_target` (Ort existiert nicht ODER der Charakter kennt ihn nicht) · `unplaced_target` (nicht auf der Karte) · `no_route` |
 | `start_journey_to_point(character_name, x, z) -> (journey \| None, reason)` | Reise zu einem freien Punkt. Setzt **kein** `movement_target`, nur die `journey` — Ankunfts-/Abbruchlogik muss beides abfragen |
 | `get_journey(character_name, profile=None)` | Die laufende Reise vom Profil (oder `None`) |
 | `journey_state(waypoints, started_at_game, now_game) -> Dict` | Reine Funktion: Position aus Polylinie + Startzeit + **Spieluhr**. Kein Zustand, kein Tick — deshalb sehen alle Clients dieselbe Position |

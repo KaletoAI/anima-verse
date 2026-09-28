@@ -3537,6 +3537,13 @@ kann ihn nicht löschen, nur benennen.
   Funktion für jeden Ankunftsweg (`world.get_arrival_room_id`: Avatar-
   Schritt, Reise, Scheduler, Bewegungs-Skills, Admin-Versetzung). Eine
   Boundary-Öffnung mit Raumverweis schlägt beides (§ B1 Nr. 13).
+  **Seit 2026-09-28** schlägt der ANGEFRAGTE Raum einer Reise alle drei:
+  `start_journey(…, target_room=, target_pose=)` legt ihn auf die Reise
+  (SetLocation „Cafe, Hauptraum", Auto-Schlaf mit `home_room`), und die
+  Ankunft (`travel_engine._requested_room`) nimmt ihn, wenn er noch ein Raum
+  des Ziels ist und `check_access` ihn erlaubt — sonst gilt die Regel oben,
+  ein verweigerter Raum mit `access_denied`-Tagebucheintrag. Vorher lief jede
+  NPC-Reise auf die Grundfläche, auch wenn ein Raum genannt war.
 - **Hörweite gewöhnlich.** Wer auf der Grundfläche steht, ist in einem Raum
   wie jeder andere und hört nicht mehr in geschlossene Räume hinein — die
   sichtbarste Verhaltensänderung dieses Umbaus.

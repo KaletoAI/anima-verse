@@ -604,8 +604,9 @@ def _exit_delay(exit_s: float, factor: float) -> int:
     return math.ceil(exit_s * factor) if factor > 0 else math.ceil(exit_s)
 
 
-def start_journey(character_name: str,
-                  target_id: str) -> Tuple[Dict[str, Any] | None, str]:
+def start_journey(character_name: str, target_id: str,
+                  target_room: str = "", target_pose: str = ""
+                  ) -> Tuple[Dict[str, Any] | None, str]:
     """Begin a timed journey to ``target_id``.
 
     Returns ``(journey, reason)`` — exactly one of the two is filled:
@@ -624,6 +625,12 @@ def start_journey(character_name: str,
     placed location leaves through ITS opening, exactly like every other way
     out. Where the journey ARRIVES (which room) is decided at arrival time by
     the ticker, not here.
+
+    ``target_room`` / ``target_pose``: what the character ASKED for at the
+    destination ("Cafe, Hauptraum, sitting"). They ride on the journey and the
+    arrival honours them (``_settle_arrival``) — without them a journey only
+    knows the place, and every arrival fell back to the ground. Access to the
+    room is re-checked at arrival, because rules may flip on the road.
     """
     from app.core.world_geometry import effective_boundary
     from app.models.character import (get_character_current_location,
@@ -683,6 +690,10 @@ def start_journey(character_name: str,
     journey = {"target": target_id, "waypoints": waypoints,
                "started_at_game": starts.canonical(), "speed_m_s": speed,
                "entry_edge": entry_edge}
+    if (target_room or "").strip():
+        journey["target_room"] = target_room.strip()
+    if (target_pose or "").strip():
+        journey["target_pose"] = target_pose.strip()
     if exit_clip:
         # What to PLAY while the world waits, and the clip's REAL length (the
         # wait itself is ``started_at_game``) — the roster reads them off the
@@ -1216,6 +1227,39 @@ def _settle_point_arrival(name: str, journey: Dict[str, Any],
     logger.info("Journey arrived: %s @ (%.2f, %.2f)", name, gx, gz)
 
 
+def _requested_room(name: str, journey: Dict[str, Any], target_id: str,
+                    target: Dict[str, Any], fallback: str) -> str:
+    """The room a journey was ASKED to end in, or ``fallback``.
+
+    ``journey['target_room']`` wins when it is still a room of the target and
+    the character may enter it. A stale id falls back silently; a refused room
+    falls back with an ``access_denied`` diary entry naming the room — the
+    location itself is not refused by this (``_arrival_gate`` decides that).
+    """
+    wanted = (journey.get("target_room") or "").strip()
+    if not wanted or wanted == fallback:
+        return fallback
+    room = next((r for r in (target.get("rooms") or [])
+                 if isinstance(r, dict) and r.get("id") == wanted), None)
+    if room is None:
+        return fallback
+    from app.models.rules import check_access
+    ok, reason = check_access(name, target_id, room_id=wanted)
+    if ok:
+        return wanted
+    from app.models.character import record_access_denied
+    label = " / ".join(p for p in (target.get("name") or target_id,
+                                   room.get("name") or "") if p)
+    try:
+        record_access_denied(name, target_id, label, reason)
+    except Exception:
+        logger.debug("record_access_denied(arrival room) failed",
+                     exc_info=True)
+    logger.info("Journey arrival: %s may not enter %s (%s) — arrival room "
+                "%s instead", name, label, reason, fallback or "-")
+    return fallback
+
+
 def _settle_arrival(name: str, journey: Dict[str, Any],
                     st: Dict[str, Any]) -> None:
     """The journey reaches its target: entry gate, then the crossing.
@@ -1261,6 +1305,13 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
                   and at_goal else "")
     if not entry_room:
         entry_room = get_arrival_room_id(target)
+    # The room the character ASKED for outranks both — the door only says
+    # where one comes in, not where one was going. It still has to pass its
+    # own access check (a rule may have flipped on the road); refused, the
+    # arrival lands where the rule above says and the refusal goes into the
+    # diary, exactly like a refused room change on the spot.
+    entry_room = _requested_room(name, journey, target_id, target,
+                                 entry_room)
 
     ok, reason = _arrival_gate(name, target_id, target, entry_room)
     if not ok:
@@ -1369,6 +1420,20 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
         clear_pose_intent(name)   # D6: arrival = location change
     except Exception:
         logger.debug("clear pose on arrival failed for %s", name, exc_info=True)
+    # …and the pose the character set off to strike there, if any. A
+    # two-person pose has no partner at the door and is simply dropped (same
+    # rule as SetLocation's own arrival pose).
+    target_pose = (journey.get("target_pose") or "").strip()
+    if target_pose:
+        from app.core.pose_catalog import PairPoseWithoutPartner
+        from app.models.character import set_pose_intent
+        try:
+            set_pose_intent(name, target_pose)
+        except PairPoseWithoutPartner:
+            logger.info("Journey arrival [%s]: pose '%s' needs a partner — "
+                        "not set", name, target_pose)
+        except Exception:
+            logger.debug("arrival pose failed for %s", name, exc_info=True)
     # Roll-on-entry, exactly like the avatar step: arriving somewhere is what
     # rolls for an event ("wolves block the path"). The v1 asymmetry (the step
     # rolled, the journey did not) is resolved in favour of the step.

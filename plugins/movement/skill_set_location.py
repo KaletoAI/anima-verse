@@ -287,6 +287,46 @@ class SetLocationSkill(PluginSkill):
                                            cond_reason)
             return cond_reason
 
+        rooms = get_location_rooms(matched_location)
+
+        # Determine room and (free) pose. There is no activity library any
+        # more — an optional pose part is free text, and the room only points
+        # a direction through activity_hint (the LLM decides). Resolved BEFORE
+        # the journey branch: a room the character may not enter refuses the
+        # move up front (no journey to a door it will be turned away from),
+        # and an accepted room rides on the journey to its arrival.
+        matched_room = None
+        pose = ""
+
+        if requested_second:
+            # 1. Try the second part as a room name
+            matched_room = get_room_by_name(matched_location, requested_second)
+
+            if matched_room:
+                # Rules check for the room
+                room_rules_ok, room_rules_reason = check_access(character_name, location_id, room_id=matched_room.get("id", ""))
+                if not room_rules_ok:
+                    room_label = matched_room.get("name", "")
+                    logger.info("Rule blocks the room: %s -> %s: %s",
+                               character_name, room_label, room_rules_reason)
+                    try:
+                        from app.models.character import record_access_denied
+                        record_access_denied(character_name, location_id,
+                            f"{location_name} / {room_label}" if room_label else location_name,
+                            room_rules_reason)
+                    except Exception:
+                        logger.debug("record_access_denied failed", exc_info=True)
+                    _trigger_access_denied_thought(character_name,
+                        f"{location_name} / {room_label}" if room_label else location_name,
+                        room_rules_reason)
+                    return room_rules_reason
+                # Third part = the free pose in that room
+                if requested_third:
+                    pose = requested_third
+            else:
+                # 2. The second part is no room → read it as a free pose
+                pose = requested_second
+
         # Journey mode: a cross-location move starts a timed journey
         # (start_journey; the travel ticker advances it as game time
         # passes). Same-location moves (room change only) stay instant.
@@ -300,7 +340,10 @@ class SetLocationSkill(PluginSkill):
             from app.core.travel_engine import start_journey, journey_state
             from app.core.game_time import GameTime
             from app.core.timeutils import game_time
-            j, reason = start_journey(character_name, location_id)
+            j, reason = start_journey(
+                character_name, location_id,
+                target_room=(matched_room or {}).get("id", ""),
+                target_pose=pose)
             if j is None:
                 logger.info("No journey %s -> %s for %s: %s",
                             current_loc_id_now, location_id, character_name,
@@ -334,46 +377,11 @@ class SetLocationSkill(PluginSkill):
             # calendar label once the road runs past midnight.
             eta_text = (eta.time_hhmm() if eta.day_index == now.day_index
                         else eta.label())
-            return (f"You set off for {location_name} "
+            room_part = (f", room: {matched_room.get('name')}"
+                         if matched_room and matched_room.get("name") else "")
+            return (f"You set off for {location_name}{room_part} "
                     f"({st['total_m']:.0f} m of road). Estimated arrival: "
                     f"{eta_text}. The journey continues automatically.")
-
-        rooms = get_location_rooms(matched_location)
-
-        # Determine room and (free) pose. There is no activity library any
-        # more — an optional pose part is free text, and the room only points
-        # a direction through activity_hint (the LLM decides).
-        matched_room = None
-        pose = ""
-
-        if requested_second:
-            # 1. Try the second part as a room name
-            matched_room = get_room_by_name(matched_location, requested_second)
-
-            if matched_room:
-                # Rules check for the room
-                room_rules_ok, room_rules_reason = check_access(character_name, location_id, room_id=matched_room.get("id", ""))
-                if not room_rules_ok:
-                    room_label = matched_room.get("name", "")
-                    logger.info("Rule blocks the room: %s -> %s: %s",
-                               character_name, room_label, room_rules_reason)
-                    try:
-                        from app.models.character import record_access_denied
-                        record_access_denied(character_name, location_id,
-                            f"{location_name} / {room_label}" if room_label else location_name,
-                            room_rules_reason)
-                    except Exception:
-                        logger.debug("record_access_denied failed", exc_info=True)
-                    _trigger_access_denied_thought(character_name,
-                        f"{location_name} / {room_label}" if room_label else location_name,
-                        room_rules_reason)
-                    return room_rules_reason
-                # Third part = the free pose in that room
-                if requested_third:
-                    pose = requested_third
-            else:
-                # 2. The second part is no room → read it as a free pose
-                pose = requested_second
 
         # No room named: land where every arrival lands — the declared entry
         # room, or the location's ground (plan-grundflaeche.md § 6). Never a

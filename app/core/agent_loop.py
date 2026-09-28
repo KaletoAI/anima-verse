@@ -1970,7 +1970,11 @@ class AgentLoop:
                 return {"outcome": "auto_sleep_walking",
                         "preview": f"exhausted (stamina={stamina}) → journey home in progress",
                         "tools": []}
-            j, reason = start_journey(character_name, home_loc)
+            # The home ROOM rides along: without it the arrival lands on
+            # the ground, and the character falls asleep outside its door.
+            j, reason = start_journey(
+                character_name, home_loc,
+                target_room=(cfg.get("home_room") or "").strip())
             if j is None:
                 # No way home at all — unknown, unplaced or unwalkable target
                 # (the reason is logged, the outcome is the same): sleep in
