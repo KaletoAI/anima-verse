@@ -28,11 +28,21 @@ T option texts (budget rule _option_budget(n) = max(80, min(220, 1400 // n))):
 T1 _option_budget: 4 -> 220 (1400//4 = 350, capped), 9 -> 155, 38 -> 80 (1400//38 = 36,
    floored), 0 -> 220 (n treated as 1).
 T2 group question instructions = "Which body position does the text describe? Each option
-   lists poses of that position."; group "stand" (label "Standing spot", default "standing",
-   37 keys, the first six after the default: bathing, celebrating, changing_clothes,
-   cleaning, cleaning surface) -> starts with "Standing spot: standing, " and lists 6 poses
-   (90 chars, well inside 220); group "lie" (label "Lying place", keys lying + sleeping) ->
-   exactly "Lying place: lying, sleeping"; no group option longer than _option_budget(4)=220.
+   lists poses of that position."; examples = the default, then k <= 9 (10 in all) keys
+   spread evenly over the rest: rest index round_half_up(i * (len(rest)-1) / (k-1)).
+   Group "stand" (label "Standing spot", default "standing"; rest = the 36 other keys
+   alphabetical, rest[0] bathing .. rest[35] washing_dishes), k = 9, step 35/8 = 4.375:
+   i=0 -> 0 bathing, 1 -> 4.375 -> 4 cleaning surface, 2 -> 8.75 -> 9 dancing together,
+   3 -> 13.125 -> 13 flirting, 4 -> 17.5 -> 18 making_coffee, 5 -> 21.875 -> 22 presenting,
+   6 -> 26.25 -> 26 shooting, 7 -> 30.625 -> 31 thinking, 8 -> 35 washing_dishes.
+   Length: "Standing spot: " 15 + standing 23 + bathing 32 + cleaning surface 50 +
+   dancing together 68 + flirting 78 + making_coffee 93 + presenting 105 + shooting 115 +
+   thinking 125 + washing_dishes 141 <= 220, so all 10 fit ->
+   "Standing spot: standing, bathing, cleaning surface, dancing together, flirting,
+   making_coffee, presenting, shooting, thinking, washing_dishes".
+   Group "lie" (label "Lying place", rest = [sleeping], k = 1 -> rest[0]) ->
+   exactly "Lying place: lying, sleeping"; "ground" (rest meditating, yoga; k = 2 -> 0, 1)
+   -> "Ground: kneeling, meditating, yoga"; no group option longer than _option_budget(4)=220.
 T3 expression entry question has 9 options (8 + none) -> budget 155. neutral: prefix
    "neutral: calm neutral face, relaxed brow, soft mouth, attentive eyes; e.g. " = 75 chars,
    then synonyms while <= 155: focused 82, thoughtful 94, curious 103, determined 115,
@@ -42,6 +52,8 @@ T3 expression entry question has 9 options (8 + none) -> budget 155. neutral: pr
    contains its prompt; the none option reads "none of these fits the text".
 T4 pose group "stand" entry question: 37 + none = 38 options -> budget 80; no option longer
    than 80, none contains its pose prompt, each starts with "<key>: " or is just the key.
+T5 pose group "lie" entry question: 2 + none = 3 options (<= 12) -> the pose prompt IS
+   offered: the options of lying and sleeping each contain their pose prompt.
 """
 import sys
 import tempfile
@@ -88,10 +100,11 @@ check("T1 budget 0", DP._option_budget(0), 220)
 gq = first["group"]
 check("T2 group instructions", gq.instructions,
       "Which body position does the text describe? Each option lists poses of that position.")
-stand_opt = gq.options["stand"]
-check("T2 stand starts with label + default", stand_opt.startswith("Standing spot: standing, "), True)
-check("T2 stand lists 6 poses", len(stand_opt.partition(": ")[2].split(", ")), 6)
+check("T2 stand option spread", gq.options["stand"],
+      "Standing spot: standing, bathing, cleaning surface, dancing together, flirting, "
+      "making_coffee, presenting, shooting, thinking, washing_dishes")
 check("T2 lie option", gq.options["lie"], "Lying place: lying, sleeping")
+check("T2 ground option", gq.options["ground"], "Ground: kneeling, meditating, yoga")
 check("T2 no group option over budget(4)",
       [g for g, o in gq.options.items() if len(o) > DP._option_budget(4)], [])
 eq = first_e["entry"]
@@ -101,7 +114,8 @@ check("T3 neutral option", eq.options["neutral"],
 expr = PC.get_catalog("expression")
 check("T3 every expression option = key + prompt",
       [k for k, e in expr.items()
-       if not (eq.options[k].startswith(f"{k}: ") and e["prompt"] in eq.options[k])], [])
+       if not (eq.options[k].startswith(f"{k}: ") and e.get("prompt")
+               and e.get("prompt") in eq.options[k])], [])
 check("T3 expression options within budget",
       [k for k, o in eq.options.items() if len(o) > DP._option_budget(len(eq.options))], [])
 check("T3 none text", eq.options[DP.NONE_KEY], "none of these fits the text")
@@ -111,9 +125,16 @@ pose = PC.get_catalog("pose")
 check("T4 stand entries within budget",
       [k for k, o in stand_q.options.items() if len(o) > DP._option_budget(len(stand_q.options))], [])
 check("T4 stand entries without prompt",
-      [k for k, o in stand_q.options.items() if k in pose and pose[k]["prompt"] in o], [])
+      [k for k, o in stand_q.options.items()
+       if (pose.get(k) or {}).get("prompt") and pose[k].get("prompt") in o], [])
 check("T4 stand entries start with key",
       [k for k, o in stand_q.options.items() if k != DP.NONE_KEY and not (o == k or o.startswith(f"{k}: "))], [])
+lie_q = then({"group": decision.Answer("lie", None, 0.9, {})})["entry"]
+check("T5 lie options", sorted(lie_q.options), ["lying", DP.NONE_KEY, "sleeping"])
+check("T5 lie entries carry their prompt",
+      [k for k, o in lie_q.options.items()
+       if k != DP.NONE_KEY and not ((pose.get(k) or {}).get("prompt")
+                                    and pose[k].get("prompt") in o)], [])
 
 CALLS, OUTCOMES, TAKEN = [], [], []
 ACTIVE = [False]

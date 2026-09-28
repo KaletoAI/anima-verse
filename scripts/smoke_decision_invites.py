@@ -54,7 +54,8 @@ A8  the real invite_state (build_thought_context and get_relationship stubbed):
     (b) no row -> "Kira and Tom do not know each other well yet."
     offer "to dance together" -> state["offer"] = "Tom invites Kira to dance together",
     so it starts with "Tom invites Kira to "; the situation comes from
-    thought_state and contains "Character: Kira".
+    thought_state and contains "Character: Kira" — but no "Mode:" line (an invited
+    NPC is neither in a chat turn nor on their own; thought_state(in_chat=None)).
 A9  InteractWith called back by Kira (open invitation i9):
     accept -> record_outcome("pair_invite", "i9", {"answer": "accept"}),
     recorded BEFORE resolve_invite runs; "answer": "no" -> {"answer": "decline"}.
@@ -322,6 +323,7 @@ if callable(_REAL_INVITE_STATE):
     check("A8a offer prefix", str(st.get("offer", "")).startswith("Tom invites Kira to "), True)
     check("A8a offer text", st.get("offer"), "Tom invites Kira to dance together")
     check("A8a situation from thought_state", "Character: Kira" in str(st.get("situation")), True)
+    check("A8a no mode line", "Mode:" in str(st.get("situation")), False)
     REL_ROW[0] = None
     st = _REAL_INVITE_STATE("Kira", "Tom", "to dance together")
     check("A8b no row", st.get("relationship"), "Kira and Tom do not know each other well yet.")

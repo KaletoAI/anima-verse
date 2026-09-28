@@ -44,19 +44,23 @@ _MODE_OWN = ("Mode: on their own — the character acts only if something releva
              "to do or say.")
 
 
-def thought_state(ctx: Dict[str, Any], *, in_chat: bool = False) -> Dict[str, str]:
+def thought_state(ctx: Dict[str, Any], *, in_chat: Optional[bool] = False) -> Dict[str, str]:
     """The situation of an idle thought turn as ONE text, at most
     THOUGHT_STATE_MAX_CHARS — built from the thought context the turn already has.
-    ``in_chat``: the turn runs on the in-chat template, whose default is SKIP —
-    the mode line tells the model so (a header line, never cut)."""
-    header = "\n".join([
+    ``in_chat``: True = the turn runs on the in-chat template, whose default is
+    SKIP; False = the character is on their own — the mode line tells the model
+    (a header line, never cut). None = no mode line (a state that is not an idle
+    thought turn, e.g. an invitation)."""
+    lines = [
         f"Character: {ctx.get('character_name') or ''}",
         f"Place: {ctx.get('location_name') or ''}",
         f"Doing: {ctx.get('activity') or ''}",
         f"Mood: {ctx.get('feeling') or ''}",
         f"Time: {ctx.get('time_of_day') or ''}, {ctx.get('game_date') or ''}",
-        _MODE_IN_CHAT if in_chat else _MODE_OWN,
-    ])
+    ]
+    if in_chat is not None:
+        lines.append(_MODE_IN_CHAT if in_chat else _MODE_OWN)
+    header = "\n".join(lines)
     blocks = {k: str(ctx.get(k) or "").strip() for k in _THOUGHT_BLOCKS}
 
     def compose() -> str:
@@ -97,7 +101,7 @@ _NONE_TEXT = "none of these fits the text"
 # An entry's description (``prompt``) is offered only in questions this small —
 # a big question (the pose groups) keeps its options short.
 _PROMPT_MAX_OPTIONS = 12
-_GROUP_EXAMPLES_MAX = 6
+_GROUP_EXAMPLES_MAX = 10  # the default included
 _GROUP_INSTRUCTIONS = ("Which body position does the text describe? "
                        "Each option lists poses of that position.")
 _ENTRY_INSTRUCTIONS = {
@@ -139,13 +143,11 @@ def _cut_words(text: str, budget: int) -> str:
     return (cut[:space] if space > 0 else cut).rstrip(" ,;:")
 
 
-def _fit_list(prefix: str, items, budget: int, max_items: Optional[int] = None) -> str:
+def _fit_list(prefix: str, items, budget: int) -> str:
     """``prefix`` + as many of ``items`` (", "-joined, in order) as fit ``budget``;
     stops at the first one that does not fit."""
     text, used = prefix, 0
     for item in items:
-        if max_items is not None and used >= max_items:
-            break
         nxt = text + (", " if used else "") + str(item)
         if len(nxt) > budget:
             break
@@ -166,11 +168,30 @@ def _catalog_option(key: str, entry: Dict[str, Any], budget: int, with_prompt: b
     return key if text == f"{key}: " else text
 
 
+def _spread(keys, k: int) -> list:
+    """``k`` of ``keys`` spread evenly from the first to the last (index
+    i * (n-1) / (k-1), rounded half up) — a sample of the whole list, not its head."""
+    n = len(keys)
+    if k <= 0 or n == 0:
+        return []
+    if k == 1:
+        return [keys[0]]
+    return [keys[(2 * i * (n - 1) + (k - 1)) // (2 * (k - 1))] for i in range(k)]
+
+
 def _group_option(label: str, examples, budget: int) -> str:
-    """``<label>: <pose>, <pose>, …`` — the group named by its poses."""
+    """``<label>: <default>, <pose>, …`` — the group named by its poses: the
+    default (first of ``examples``) and up to _GROUP_EXAMPLES_MAX - 1 of the
+    rest spread evenly over it, as many as fit ``budget``."""
     keys = [k for k in examples if k != NONE_KEY]
-    text = _fit_list(f"{label}: ", keys, budget, max_items=_GROUP_EXAMPLES_MAX)
-    return label if text == f"{label}: " else text
+    if not keys:
+        return label
+    head, rest = keys[0], keys[1:]
+    for k in range(min(_GROUP_EXAMPLES_MAX - 1, len(rest)), -1, -1):
+        text = f"{label}: " + ", ".join([head] + _spread(rest, k))
+        if len(text) <= budget:
+            return text
+    return label
 
 
 def catalog_questions(axis: str) -> Tuple[Dict[str, Choice], Optional[Callable]]:
@@ -254,7 +275,7 @@ def invite_state(invitee: str, inviter: str, offer: str) -> Dict[str, str]:
     """State for an accept/decline decision of an invited NPC: its own
     situation (thought_state), the offer, and how it stands with the inviter."""
     from app.core.thought_context import build_thought_context
-    state = thought_state(build_thought_context(invitee))
+    state = thought_state(build_thought_context(invitee), in_chat=None)
     state["offer"] = f"{inviter} invites {invitee} {offer}"
     state["relationship"] = _relationship_line(invitee, inviter)
     return state
