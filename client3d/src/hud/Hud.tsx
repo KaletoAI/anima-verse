@@ -564,7 +564,10 @@ export function Hud({ avatar, username, role }: {
     } catch { /* stale invite/party — the next poll corrects the view */ }
   }, [refreshScene]);
 
-  const present = data?.present || [];
+  // The header names who stands IN the room (`present_detail`, the figures),
+  // not the earshot roster `present` — a passer-by outside the walls stays
+  // addressable but is not "here".
+  const inRoom = (data?.present_detail || []).map((p) => p.name);
   const avatarName = data?.avatar || avatar;
 
   // Party follower (E3-T3): SAME derivation as /play (PlayerApp hands
@@ -914,7 +917,7 @@ export function Hud({ avatar, username, role }: {
       <span className="hud-panel-title">{title}</span>
       {id === 'chat' && (
         <span className="hud-panel-sub">
-          {present.length ? `· ${present.join(', ')}` : `· ${t('You are alone here.')}`}
+          {inRoom.length ? `· ${inRoom.join(', ')}` : `· ${t('You are alone here.')}`}
         </span>
       )}
       {/* How many faces stand next to the transcript (2e). A SWITCH and not a

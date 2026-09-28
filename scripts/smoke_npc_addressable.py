@@ -47,11 +47,13 @@ Hand-derived expectations:
       the player UI builds the ADDRESSEE CHIPS from that field and clips the
       selection to it, so a room-only answer there made this whole mixed case
       unreachable through the UI — the gate would have taken Tove, the fan-out
-      reached her (b2), and no chip ever offered her. ``present_detail`` is the
-      same names with a portrait each; a location-less NPC needs no location in
-      it. Out in the open (a) the field always did answer the circle, and it
-      still does — that arm is checked too, so the collapse into one rule
-      cannot quietly cost the wilderness roster.
+      reached her (b2), and no chip ever offered her. ``present_detail`` is
+      the FIGURES of the environment window — who stands IN the room — so
+      inside a location it is the room half only: ["Mira"]. Tove stays
+      addressable (chip) but is not drawn into the taproom; drawn there, every
+      stranger passing a house "appeared" in a locked bedroom (2026-09-28).
+      Out in the open (a) there is no room and the circle IS the scene, so
+      there the field still answers the circle — that arm is checked too.
       ``character_ops.build_characters_at_location(INN)`` — which is asked for
       a LOCATION, not for an avatar — measures its circle from the LOCATION's
       anchor (0, 0) instead: Tove at 12.0 m comes along with
@@ -387,8 +389,11 @@ check("the avatar stands nowhere in particular",
 check("only the neighbour 10 m away", addressable_for(AVATAR), ["Roon"])
 check("and the panel roster says the same", _present_characters(AVATAR),
       ["Roon"])
+_open_scene = play_scene()
 check("/play/scene agrees out here as it always did",
-      play_scene()["present"], ["Roon"])
+      _open_scene["present"], ["Roon"])
+check("out here the circle IS the scene — Roon is a figure",
+      [p["name"] for p in _open_scene["present_detail"]], ["Roon"])
 
 # ── (b) inside a location: room list PLUS earshot ───────────────────────────
 print("(b) avatar in the taproom: the room and whoever stands outside the gate")
@@ -418,8 +423,8 @@ check("the room mate is in the room",
 _scene = play_scene()
 check("/play/scene — the roster the addressee chips are built from",
       sorted(_scene["present"]), ["Mira", "Tove"])
-check("and every chip has its portrait row",
-      sorted(p["name"] for p in _scene["present_detail"]), ["Mira", "Tove"])
+check("the figures are the room only — Tove outside the gate is none",
+      sorted(p["name"] for p in _scene["present_detail"]), ["Mira"])
 check("the scene still knows where the avatar itself stands",
       (_scene["location_id"], _scene["room_id"]), (INN, "taproom"))
 

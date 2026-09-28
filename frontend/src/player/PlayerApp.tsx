@@ -539,6 +539,10 @@ export function PlayerApp() {
   // here. Deliberately INDEPENDENT of the open/saved layout (an old saved
   // layout would otherwise hide it) — auto on/off, no manual toggle.
   const hasOthers = present.length > 0
+  // Who stands IN the room (the figures of the environment window) — the
+  // header names them, not the earshot roster: a passer-by outside the walls
+  // stays addressable (chips) but is not "here".
+  const inRoom = (data?.present_detail || []).map((p) => p.name)
   // Bring it to the front when it appears so it never vanishes behind an
   // (overlapping, self-arranged) panel. Z-order only, no touch of `open`.
   useEffect(() => {
@@ -567,7 +571,7 @@ export function PlayerApp() {
             {headIcon('scene')}
             {data?.avatar || '—'}
             <span className="sub">
-              {present.length ? `· ${present.join(', ')}` : `· ${t('You are alone here.')}`}
+              {inRoom.length ? `· ${inRoom.join(', ')}` : `· ${t('You are alone here.')}`}
             </span>
             {headerControls('scene', true)}
           </div>

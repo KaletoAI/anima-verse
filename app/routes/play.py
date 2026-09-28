@@ -258,8 +258,21 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
             version = _expr_seen[name] = _expr_version(name)
         return version
 
+    # The FIGURES of the environment window — who stands IN this room, not
+    # who is within earshot. Inside a location the earshot half of
+    # ``present`` (somebody passing outside the walls) stays addressable but
+    # is no figure in the room: drawn there, a stranger walking by the house
+    # "appeared" in a locked bedroom. Out in the open there is no room and
+    # the circle IS the scene, so the whole list stays. Same room rule as the
+    # scene render and the figure placements (``characters_in_room``).
+    if loc:
+        from app.core.room_entry import characters_in_room
+        _in_room = set(characters_in_room(loc, room))
+        figures = [c for c in present if c in _in_room]
+    else:
+        figures = list(present)
     present_detail = [{"name": c, "avatar_url": _portrait(c),
-                       "expr_version": _expr_v(c)} for c in present]
+                       "expr_version": _expr_v(c)} for c in figures]
     # Every speaker of the returned history, not just the present (see the
     # docstring). Computed BEFORE the storyteller label is localised below —
     # the selection reads the canonical speaker value.
