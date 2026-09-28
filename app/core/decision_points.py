@@ -38,15 +38,24 @@ def _cut_front(block: str, over: int) -> str:
     return "\n".join(lines)
 
 
-def thought_state(ctx: Dict[str, Any]) -> Dict[str, str]:
+_MODE_IN_CHAT = ("Mode: in the middle of a conversation with the player — by default the "
+                 "character stays quiet (SKIP) unless a clear step in the conversation is needed.")
+_MODE_OWN = ("Mode: on their own — the character acts only if something relevant is there "
+             "to do or say.")
+
+
+def thought_state(ctx: Dict[str, Any], *, in_chat: bool = False) -> Dict[str, str]:
     """The situation of an idle thought turn as ONE text, at most
-    THOUGHT_STATE_MAX_CHARS — built from the thought context the turn already has."""
+    THOUGHT_STATE_MAX_CHARS — built from the thought context the turn already has.
+    ``in_chat``: the turn runs on the in-chat template, whose default is SKIP —
+    the mode line tells the model so (a header line, never cut)."""
     header = "\n".join([
         f"Character: {ctx.get('character_name') or ''}",
         f"Place: {ctx.get('location_name') or ''}",
         f"Doing: {ctx.get('activity') or ''}",
         f"Mood: {ctx.get('feeling') or ''}",
         f"Time: {ctx.get('time_of_day') or ''}, {ctx.get('game_date') or ''}",
+        _MODE_IN_CHAT if in_chat else _MODE_OWN,
     ])
     blocks = {k: str(ctx.get(k) or "").strip() for k in _THOUGHT_BLOCKS}
 
@@ -65,12 +74,16 @@ def thought_state(ctx: Dict[str, Any]) -> Dict[str, str]:
 
 def thought_questions(name: str) -> Dict[str, Choice]:
     """Neutral keys instead of a yes/no question: Laya's noul can follow its
-    own true/false labels rather than the state (model card, issue #156)."""
+    own true/false labels rather than the state (model card, issue #156). The
+    texts ask the thought template's own question — act, or reply SKIP."""
     return {"turn": Choice(
-        instructions=f"Does {name} have a reason to act or speak right now?",
+        instructions=f"Would {name} do or say something now, or reply SKIP?",
         options={
-            "act": f"yes: someone addressed {name}, something new happened, or a plan is due now",
-            "idle": f"no: nothing new, {name} would not do anything meaningful right now",
+            "act": (f"act: something relevant is there for {name} to do or say right now "
+                    f"(a message to answer, a due plan, someone addressing {name}, "
+                    f"something new)"),
+            "idle": (f"SKIP: nothing relevant right now — {name} would stay quiet and "
+                     f"let the moment pass"),
         })}
 
 
@@ -80,7 +93,13 @@ POSE_MATCH = "pose_match"
 EXPRESSION_MATCH = "expression_match"
 CATALOG_POINTS = {"pose": POSE_MATCH, "expression": EXPRESSION_MATCH}
 NONE_KEY = "none"
-_OPTION_DESC_MAX = 80
+_NONE_TEXT = "none of these fits the text"
+# An entry's description (``prompt``) is offered only in questions this small —
+# a big question (the pose groups) keeps its options short.
+_PROMPT_MAX_OPTIONS = 12
+_GROUP_EXAMPLES_MAX = 6
+_GROUP_INSTRUCTIONS = ("Which body position does the text describe? "
+                       "Each option lists poses of that position.")
 _ENTRY_INSTRUCTIONS = {
     "pose": "Which pose fits the text best?",
     "expression": "Which facial expression fits the text best?",
@@ -105,9 +124,53 @@ register_point(
 )
 
 
-def _catalog_option(key: str, entry: Dict[str, Any]) -> str:
-    syn = ", ".join((entry.get("synonyms") or [])[:3])
-    return (f"{key}: {syn}" if syn else key)[:_OPTION_DESC_MAX]
+def _option_budget(n: int) -> int:
+    """Characters one option text may use in a question of ``n`` options:
+    few options get room for a real description, many stay short."""
+    return max(80, min(220, 1400 // max(1, n)))
+
+
+def _cut_words(text: str, budget: int) -> str:
+    """``text`` within ``budget`` chars, cut at a word boundary when possible."""
+    if len(text) <= budget:
+        return text
+    cut = text[:budget]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > 0 else cut).rstrip(" ,;:")
+
+
+def _fit_list(prefix: str, items, budget: int, max_items: Optional[int] = None) -> str:
+    """``prefix`` + as many of ``items`` (", "-joined, in order) as fit ``budget``;
+    stops at the first one that does not fit."""
+    text, used = prefix, 0
+    for item in items:
+        if max_items is not None and used >= max_items:
+            break
+        nxt = text + (", " if used else "") + str(item)
+        if len(nxt) > budget:
+            break
+        text, used = nxt, used + 1
+    return text
+
+
+def _catalog_option(key: str, entry: Dict[str, Any], budget: int, with_prompt: bool) -> str:
+    """``<key>: <prompt>; e.g. <synonyms>`` when ``with_prompt`` and the entry has
+    a prompt, else ``<key>: <synonyms>`` — as many synonyms as fit ``budget``."""
+    synonyms = entry.get("synonyms") or []
+    prompt = str(entry.get("prompt") or "").strip() if with_prompt else ""
+    if prompt:
+        head = _cut_words(f"{key}: {prompt}", budget)
+        text = _fit_list(f"{head}; e.g. ", synonyms, budget)
+        return head if text.endswith("; e.g. ") else text
+    text = _fit_list(f"{key}: ", synonyms, budget)
+    return key if text == f"{key}: " else text
+
+
+def _group_option(label: str, examples, budget: int) -> str:
+    """``<label>: <pose>, <pose>, …`` — the group named by its poses."""
+    keys = [k for k in examples if k != NONE_KEY]
+    text = _fit_list(f"{label}: ", keys, budget, max_items=_GROUP_EXAMPLES_MAX)
+    return label if text == f"{label}: " else text
 
 
 def catalog_questions(axis: str) -> Tuple[Dict[str, Choice], Optional[Callable]]:
@@ -115,26 +178,32 @@ def catalog_questions(axis: str) -> Tuple[Dict[str, Choice], Optional[Callable]]
     groups (pose): step 1 asks the group, ``then`` asks the entries of THAT
     group (openjev scores every option on its own, so fewer options = faster).
     Without groups: one question over all entries. Every entry question offers
-    NONE_KEY ("none of these fits")."""
-    from app.core.pose_catalog import get_catalog, get_groups
+    NONE_KEY. Option texts share the budget of ``_option_budget(n)``: a group is
+    described by its poses, an entry by its ``prompt`` + synonyms in a small
+    question (≤ _PROMPT_MAX_OPTIONS options), by its synonyms alone otherwise."""
+    from app.core.pose_catalog import get_catalog, get_groups, poses_in_group
     entries = get_catalog(axis)
     grouped: Dict[str, Dict[str, Any]] = {}
     for k, e in entries.items():
         grouped.setdefault(e.get("group") or "", {})[k] = e
 
     def entry_question(subset: Dict[str, Any]) -> Dict[str, Choice]:
-        opts = {k: _catalog_option(k, e) for k, e in subset.items()}
+        n = len(subset) + (0 if NONE_KEY in subset else 1)
+        budget, with_prompt = _option_budget(n), n <= _PROMPT_MAX_OPTIONS
+        opts = {k: _catalog_option(k, e, budget, with_prompt) for k, e in subset.items()}
         if NONE_KEY not in opts:
-            opts[NONE_KEY] = "none of these fits"
+            opts[NONE_KEY] = _NONE_TEXT
         return {"entry": Choice(instructions=_ENTRY_INSTRUCTIONS.get(axis, "Which entry fits best?"),
                                 options=opts)}
 
     groups = get_groups() if axis == "pose" else {}
     usable = {g: spec for g, spec in groups.items() if g in grouped}
     if len(usable) >= 2 and "" not in grouped:
+        budget = _option_budget(len(usable))
         first = {"group": Choice(
-            instructions="Which body position does the text describe?",
-            options={g: str(spec.get("label") or g) for g, spec in usable.items()})}
+            instructions=_GROUP_INSTRUCTIONS,
+            options={g: _group_option(str(spec.get("label") or g), poses_in_group(g), budget)
+                     for g, spec in usable.items()})}
 
         def then(answers: Dict[str, Answer]) -> Optional[Dict[str, Choice]]:
             g = answers.get("group")

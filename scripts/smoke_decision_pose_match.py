@@ -23,6 +23,25 @@ R3 active, decide -> entry "none" -> (default key, "decision_none") and the
 R4 active, decide -> None -> usual path (stubbed embedding returns nothing ->
    "fallback"), record_outcome with {"entry": "none"} (fallback = none), no group.
 R5 decide raises -> resolve_to_catalog still returns ("<default>", "fallback").
+
+T option texts (budget rule _option_budget(n) = max(80, min(220, 1400 // n))):
+T1 _option_budget: 4 -> 220 (1400//4 = 350, capped), 9 -> 155, 38 -> 80 (1400//38 = 36,
+   floored), 0 -> 220 (n treated as 1).
+T2 group question instructions = "Which body position does the text describe? Each option
+   lists poses of that position."; group "stand" (label "Standing spot", default "standing",
+   37 keys, the first six after the default: bathing, celebrating, changing_clothes,
+   cleaning, cleaning surface) -> starts with "Standing spot: standing, " and lists 6 poses
+   (90 chars, well inside 220); group "lie" (label "Lying place", keys lying + sleeping) ->
+   exactly "Lying place: lying, sleeping"; no group option longer than _option_budget(4)=220.
+T3 expression entry question has 9 options (8 + none) -> budget 155. neutral: prefix
+   "neutral: calm neutral face, relaxed brow, soft mouth, attentive eyes; e.g. " = 75 chars,
+   then synonyms while <= 155: focused 82, thoughtful 94, curious 103, determined 115,
+   calm 121, relaxed 130, creative 140, in control 152, chatting would be 162 -> stop.
+   So the option is the prefix + "focused, thoughtful, curious, determined, calm, relaxed,
+   creative, in control" (152 chars). Every expression option starts with "<key>: " and
+   contains its prompt; the none option reads "none of these fits the text".
+T4 pose group "stand" entry question: 37 + none = 38 options -> budget 80; no option longer
+   than 80, none contains its pose prompt, each starts with "<key>: " or is just the key.
 """
 import sys
 import tempfile
@@ -60,6 +79,41 @@ first_e, then_e = DP.catalog_questions("expression")
 check("Q2 expression entry only", list(first_e), ["entry"])
 check("Q2 expression options", len(first_e["entry"].options), 9)
 check("Q2 no then", then_e, None)
+
+print("=== T option texts ===")
+check("T1 budget 4", DP._option_budget(4), 220)
+check("T1 budget 9", DP._option_budget(9), 155)
+check("T1 budget 38", DP._option_budget(38), 80)
+check("T1 budget 0", DP._option_budget(0), 220)
+gq = first["group"]
+check("T2 group instructions", gq.instructions,
+      "Which body position does the text describe? Each option lists poses of that position.")
+stand_opt = gq.options["stand"]
+check("T2 stand starts with label + default", stand_opt.startswith("Standing spot: standing, "), True)
+check("T2 stand lists 6 poses", len(stand_opt.partition(": ")[2].split(", ")), 6)
+check("T2 lie option", gq.options["lie"], "Lying place: lying, sleeping")
+check("T2 no group option over budget(4)",
+      [g for g, o in gq.options.items() if len(o) > DP._option_budget(4)], [])
+eq = first_e["entry"]
+check("T3 neutral option", eq.options["neutral"],
+      "neutral: calm neutral face, relaxed brow, soft mouth, attentive eyes; e.g. focused, "
+      "thoughtful, curious, determined, calm, relaxed, creative, in control")
+expr = PC.get_catalog("expression")
+check("T3 every expression option = key + prompt",
+      [k for k, e in expr.items()
+       if not (eq.options[k].startswith(f"{k}: ") and e["prompt"] in eq.options[k])], [])
+check("T3 expression options within budget",
+      [k for k, o in eq.options.items() if len(o) > DP._option_budget(len(eq.options))], [])
+check("T3 none text", eq.options[DP.NONE_KEY], "none of these fits the text")
+stand_q = then({"group": decision.Answer("stand", None, 0.9, {})})["entry"]
+check("T4 stand entry options", len(stand_q.options), 38)
+pose = PC.get_catalog("pose")
+check("T4 stand entries within budget",
+      [k for k, o in stand_q.options.items() if len(o) > DP._option_budget(len(stand_q.options))], [])
+check("T4 stand entries without prompt",
+      [k for k, o in stand_q.options.items() if k in pose and pose[k]["prompt"] in o], [])
+check("T4 stand entries start with key",
+      [k for k, o in stand_q.options.items() if k != DP.NONE_KEY and not (o == k or o.startswith(f"{k}: "))], [])
 
 CALLS, OUTCOMES, TAKEN = [], [], []
 ACTIVE = [False]

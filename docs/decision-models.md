@@ -70,9 +70,9 @@ answers (below the row's `min_confidence`) are listed only on request; rows writ
 
 | Point | Where | Question | `on` does |
 |---|---|---|---|
-| `thought_skip` | `AgentLoop._run_turn`, idle thought without perception, hint or unread inbox | `turn`: `act` / `idle` | `idle` → no LLM turn, outcome `decision_skip` |
-| `pose_match` | `pose_catalog.resolve_to_catalog(axis="pose")` after the exact alias | `group`, then `entry` of that group (+ `none`) | confident key wins over the embedding; `none` → candidate list |
-| `expression_match` | same, `axis="expression"` | `entry` (+ `none`) | same |
+| `thought_skip` | `AgentLoop._run_turn`, idle thought without perception, hint or unread inbox | `turn`: `act` / `idle` — asks the template's own question ("do or say something now, or reply SKIP?"); the state carries a mode line (in the middle of a conversation with the player → quiet by default, or on their own) taken from the template the turn uses | `idle` → no LLM turn, outcome `decision_skip` |
+| `pose_match` | `pose_catalog.resolve_to_catalog(axis="pose")` after the exact alias | `group`, then `entry` of that group (+ `none`) — a group is described by its poses (label + up to 6 pose keys, default first), an entry by its synonyms — in an entry question of at most 12 options by its `prompt` first, as for expressions; option texts share the budget `_option_budget(n) = max(80, min(220, 1400 // n))` | confident key wins over the embedding; `none` → candidate list |
+| `expression_match` | same, `axis="expression"` | `entry` (+ `none`) — an entry is described by its face description (`prompt`) followed by as many synonyms as the budget allows (an entry question of at most 12 options offers the `prompt`, a bigger one synonyms only) | same |
 
 ## Decision points of packages
 

@@ -1826,7 +1826,8 @@ class AgentLoop:
                     _dkey = f"{character_name}:{uuid.uuid4().hex[:8]}"
                     _dec = await asyncio.to_thread(
                         decision.decide, decision_points.THOUGHT_SKIP,
-                        decision_points.thought_state(ctx),
+                        decision_points.thought_state(
+                            ctx, in_chat=(template_name == "chat/agent_thought_in_chat.md")),
                         decision_points.thought_questions(character_name),
                         key=_dkey)
                     _turn_ans = _dec.answers.get("turn") if _dec else None

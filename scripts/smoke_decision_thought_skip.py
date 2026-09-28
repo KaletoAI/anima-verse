@@ -13,7 +13,10 @@ S  thought_state: header lines always kept; with recent_thoughts (20 lines)
    and recent_chat_block (200 numbered lines, ~6 kB) the budget 2500 is hit ->
    recent_thoughts is cut first (whole block gone), then the chat block from
    the FRONT -> "chat 199" (newest) present, "chat 000" gone, len <= 2500,
-   "Character: Kira" present.
+   "Character: Kira" present. Mode line: thought_state(ctx, in_chat=True) carries
+   "Mode: in the middle of a conversation", the default "Mode: on their own" — and
+   both survive the cut (it is a header line; the chat block is ~6 kB here).
+   thought_questions("Kira") keeps the key "turn" and the option keys act / idle.
 1  decide -> Decision(turn = idle, conf .93): runner NOT called, outcome
    "decision_skip", mark_taken called once, char counts as a real turn
    (_last_real_turn_at set).
@@ -25,6 +28,10 @@ S  thought_state: header lines always kept; with recent_thoughts (20 lines)
 5  a bump hint pending: decide NOT called.
 6  decide -> Decision(turn = act): runner called, outcome "ok",
    record_outcome(turn="act").
+7  _minutes_since_last_chat_with_avatar stubbed to the middle of the WARM window
+   (al._IN_CHAT_HOT_MIN .. al._IN_CHAT_WARM_MIN, read from agent_loop) -> the turn uses
+   the in-chat template, and the state handed to decide carries the in-chat mode line;
+   with the stub back at None (no chat) the state carries "Mode: on their own".
 """
 import asyncio
 import sys
@@ -70,6 +77,14 @@ check("S newest chat kept", "chat 199" in s, True)
 check("S oldest chat cut", "chat 000" in s, False)
 check("S thoughts cut first", "thought 19" in s, False)
 check("S header kept", "Character: Kira" in s, True)
+s_chat = decision_points.thought_state(ctx, in_chat=True)["situation"]
+check("S in_chat mode line kept", "Mode: in the middle of a conversation" in s_chat, True)
+check("S in_chat len <= 2500", len(s_chat) <= decision_points.THOUGHT_STATE_MAX_CHARS, True)
+check("S default mode line kept", "Mode: on their own" in s, True)
+check("S default has no in-chat line", "Mode: in the middle of a conversation" in s, False)
+q = decision_points.thought_questions("Kira")
+check("S question key", list(q), ["turn"])
+check("S option keys", sorted(q["turn"].options), ["act", "idle"])
 
 # ── stubs ────────────────────────────────────────────────────────────────
 CTX = {}
@@ -82,7 +97,6 @@ pt.render = lambda name, **kw: "system"
 ib.mark_thought_processed = lambda name: None
 se.maybe_activity_tick = lambda name: None
 rules.check_discover_rules = lambda name: None
-al._minutes_since_last_chat_with_avatar = lambda name: None
 
 
 class Runner:
@@ -94,8 +108,14 @@ class Runner:
 th.get_thought_runner = lambda: Runner()
 
 
+STATES = []
+CHAT_AGE = [None]
+al._minutes_since_last_chat_with_avatar = lambda name: CHAT_AGE[0]
+
+
 def fake_decide(point, state, questions, *, key=None, then=None):
     DECIDE_CALLS.append((point, key))
+    STATES.append(state)
     return DECIDE_RESULT[0]
 
 
@@ -114,7 +134,7 @@ def run(inbox="", hint="", decided=None, result=None):
     DECIDE_RESULT[0] = decided
     RUNNER_RESULT.clear()
     RUNNER_RESULT.update(result or {"preview": "x", "tools": ["t"], "intents": []})
-    for lst in (RUNNER_CALLS, DECIDE_CALLS, OUTCOMES, TAKEN):
+    for lst in (RUNNER_CALLS, DECIDE_CALLS, OUTCOMES, TAKEN, STATES):
         lst.clear()
     loop = al.AgentLoop()
     loop._maybe_active_conversation_chime = lambda name: None
@@ -157,6 +177,20 @@ _, out = run(decided=answer("act", 0.95))
 check("6 runner called", RUNNER_CALLS, ["Kira"])
 check("6 outcome", out, "ok")
 check("6 recorded act", OUTCOMES, [{"turn": "act"}])
+
+print("=== 7 mode line from the loop ===")
+RENDERED = []
+pt.render = lambda name, **kw: RENDERED.append(name) or "system"
+CHAT_AGE[0] = (al._IN_CHAT_HOT_MIN + al._IN_CHAT_WARM_MIN) / 2
+run()
+check("7 in-chat template", RENDERED[-1], "chat/agent_thought_in_chat.md")
+check("7 decide called", len(STATES), 1)
+check("7 state carries in-chat mode",
+      "Mode: in the middle of a conversation" in (STATES or [{}])[0].get("situation", ""), True)
+CHAT_AGE[0] = None
+run()
+check("7 regular template", RENDERED[-1], "chat/agent_thought.md")
+check("7 state carries own mode", "Mode: on their own" in (STATES or [{}])[0].get("situation", ""), True)
 
 print(f"\n{'ALL CHECKS PASSED' if not FAILS else f'{len(FAILS)} CHECK(S) FAILED'}")
 sys.exit(1 if FAILS else 0)
