@@ -1021,6 +1021,15 @@ def settings_decision_stats(days: int = 7, user=Depends(require_admin)):
     return {"days": days, "rows": decision_log.query_stats(days)}
 
 
+@router.get("/settings/decision/disagreements")
+def settings_decision_disagreements(point: str = "", limit: int = 50, include_unsure: bool = False,
+                                    user=Depends(require_admin)):
+    """Recent predictions that differ from the usual path, read from the log tail."""
+    from app.core import decision_log
+    limit = max(1, min(200, int(limit)))
+    return {"rows": decision_log.recent_disagreements(point, limit, include_unsure)}
+
+
 @router.get("/settings/llm-routing/effective")
 def settings_llm_routing_effective(user=Depends(require_admin)):
     """What the server would route each task to RIGHT NOW (saved config,

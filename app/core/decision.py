@@ -203,6 +203,17 @@ def _question_json(q: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _question_options(q: Any) -> List[str]:
+    """The answer keys of one question, for the log."""
+    if isinstance(q, Noul):
+        return ["yes", "no"]
+    if isinstance(q, Choice):
+        return list(q.options)
+    if isinstance(q, Score):
+        return [str(i) for i in range(len(q.anchors))]
+    return []
+
+
 def _is_prob(v: Any) -> bool:
     return (not isinstance(v, bool) and isinstance(v, (int, float))
             and math.isfinite(v) and 0.0 <= v <= 1.0)
@@ -362,7 +373,8 @@ def _run_endpoint(point: str, st: _Settings, ep: Dict[str, Any], state: Dict[str
             duration_ms=reply.duration_ms, error=reply.error, answers=preds,
             min_confidence=st.min_confidence,
             questions={q: type(x).__name__.lower() for q, x in step_qs.items()},
-            server_confidence=reply.server_confidence, state_chars=state_chars, trace=trace)
+            server_confidence=reply.server_confidence, state_chars=state_chars, trace=trace,
+            state=state, options={q: _question_options(x) for q, x in step_qs.items()})
         if reply.answers is None:
             if key:
                 decision_log.deliver(point, key, reply.endpoint, None, done=True)

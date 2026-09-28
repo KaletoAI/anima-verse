@@ -189,8 +189,9 @@ async function renderDecisionShadowPage(days) {
              + '<b>taken</b> = mode on acted, nothing to compare.</div>';
     const rows = data.rows || [];
     if (!rows.length) {
-        html += '<div class="desc">No decisions recorded in this period.</div></div>';
+        html += '<div class="desc">No decisions recorded in this period.</div>' + dcDisSection(rows) + '</div>';
         content.innerHTML = html;
+        dcLoadDisagreements();
         return;
     }
     html += '<table class="data-table" style="width:100%;"><thead><tr><th>Point</th><th>Endpoint</th><th>Question</th>'
@@ -209,6 +210,74 @@ async function renderDecisionShadowPage(days) {
               + '<td>' + (call ? '' : pct(r.low_conf || 0, r.answers || 0)) + '</td>'
               + '<td>' + (call ? '' : pct(r.agree || 0, judged) + ' <span class="desc">(' + esc(judged) + ')</span>') + '</td></tr>';
     }
-    html += '</tbody></table></div>';
+    html += '</tbody></table>' + dcDisSection(rows) + '</div>';
     content.innerHTML = html;
+    dcLoadDisagreements();
+}
+
+// ── Shadow results: recent disagreements ────────────────────────────────
+// Filter state survives a re-render of the page (period change).
+const DC_DIS = { point: '', unsure: false, seq: 0 };
+
+function dcDisSection(statRows) {
+    const points = Array.from(new Set((statRows || []).map(r => r.point).filter(Boolean))).sort();
+    if (DC_DIS.point && points.indexOf(DC_DIS.point) === -1) DC_DIS.point = '';
+    return '<div class="subsection" style="margin-top:18px;"><div class="subsection-title">Recent disagreements</div>'
+         + '<div class="desc" style="margin-bottom:8px;">Answers that differ from what the usual path did, newest first, '
+         + 'read from the end of <code>logs/decisions.jsonl</code>. The state is what the model was shown '
+         + '(shadow mode only, each field cut to its last 3000 characters).</div>'
+         + '<div style="display:flex;gap:14px;align-items:center;margin-bottom:8px;">'
+         + '<label>Point <select onchange="dcDisSet(\'point\', this.value)">'
+         + '<option value=""' + (DC_DIS.point ? '' : ' selected') + '>all</option>'
+         + points.map(p => '<option value="' + esc(p) + '"' + (p === DC_DIS.point ? ' selected' : '') + '>' + esc(p) + '</option>').join('')
+         + '</select></label>'
+         + '<label><input type="checkbox"' + (DC_DIS.unsure ? ' checked' : '') + ' onchange="dcDisSet(\'unsure\', this.checked)"> include unsure</label>'
+         + '</div><div id="dc-dis-body"><div class="desc">Loading…</div></div></div>';
+}
+
+function dcDisSet(field, value) {
+    DC_DIS[field] = value;
+    dcLoadDisagreements();
+}
+
+async function dcLoadDisagreements() {
+    const seq = ++DC_DIS.seq;
+    const body = document.getElementById('dc-dis-body');
+    if (!body) return;
+    let data;
+    try {
+        data = await dcFetch('/admin/settings/decision/disagreements?point=' + encodeURIComponent(DC_DIS.point)
+                             + '&limit=50&include_unsure=' + (DC_DIS.unsure ? 'true' : 'false'));
+    } catch (e) {
+        if (seq === DC_DIS.seq) body.innerHTML = '<div class="desc">Could not load the disagreements: ' + esc(e.message) + '</div>';
+        return;
+    }
+    if (seq !== DC_DIS.seq) return;  // a newer request is on its way
+    const rows = data.rows || [];
+    if (!rows.length) {
+        body.innerHTML = '<div class="desc">No disagreements recorded in the scanned log.</div>';
+        return;
+    }
+    let html = '<table class="data-table" style="width:100%;"><thead><tr><th>Time (system)</th><th>Point</th><th>Endpoint</th>'
+             + '<th>Question</th><th>Predicted</th><th>Actual</th><th>Shown to the model</th></tr></thead><tbody>';
+    for (const r of rows) {
+        const state = r.state || {};
+        const keys = Object.keys(state);
+        let details = '<details><summary>state</summary>';
+        if (!keys.length) details += '<div class="desc">not recorded</div>';
+        for (const k of keys) {
+            details += '<div style="white-space:pre-wrap;word-break:break-word;margin:4px 0;"><b>' + esc(k) + ':</b> ' + esc(state[k]) + '</div>';
+        }
+        if ((r.options || []).length) {
+            details += '<div style="white-space:pre-wrap;margin:4px 0;"><b>options:</b> ' + esc(r.options.join(', ')) + '</div>';
+        }
+        details += '</details>';
+        html += '<tr><td>' + esc(r.starttime) + '</td><td><code>' + esc(r.point) + '</code></td><td><code>' + esc(r.endpoint) + '</code></td>'
+              + '<td><code>' + esc(r.question) + '</code></td>'
+              + '<td><code>' + esc(r.predicted) + '</code> <span class="desc">(' + esc(Number(r.confidence).toFixed(2))
+              + (r.confident ? '' : ', unsure') + ')</span></td>'
+              + '<td><code>' + esc(r.actual) + '</code></td><td>' + details + '</td></tr>';
+    }
+    html += '</tbody></table>';
+    body.innerHTML = html;
 }

@@ -52,6 +52,20 @@ background pool (8 at most, further calls are skipped) and never add latency.
 `logs/decisions.jsonl` (archived monthly like `llm_calls.jsonl`, joins on `trace_id`) and the
 `decision_stats` table in `world.db`.
 
+Every call row carries `min_confidence` and, per question, its option keys as `options` (Choice: the
+option keys; Score: `"0"` … `"n-1"`; Noul: `yes` / `no`). A call row in mode `shadow` also carries
+`state` — what the model was shown, each field as text cut to `STATE_EXCERPT_MAX` = 3000 characters
+with the END kept (prefix `…`), since the newest context sits at the end. Rows in mode `on` never
+carry the state.
+
+The Shadow results page lists **recent disagreements** below the statistics
+(`GET /admin/settings/decision/disagreements?point=&limit=50&include_unsure=false`, limit 1..200,
+`decision_log.recent_disagreements`): it reads the last 8 MB of the log, pairs call rows with the
+outcome of the same `(point, key)`, skips keys that were `taken`, and lists each question whose
+prediction differs from the outcome, newest first, with the state and options of that call. Unsure
+answers (below the row's `min_confidence`) are listed only on request; rows written before
+`min_confidence` was logged count as confident.
+
 ## Decision points of the core
 
 | Point | Where | Question | `on` does |

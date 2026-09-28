@@ -35,6 +35,11 @@ PENDING_TTL_S = 600.0
 PENDING_MAX = 2000
 # Latency histogram: a sample falls into the first edge it does not exceed.
 LAT_EDGES_MS = (25, 50, 100, 200, 400, 800, 1600, 3200, 6400)
+# A shadow call row keeps what the model was shown, cut per field to this many
+# characters — the END is kept, the newest context sits there.
+STATE_EXCERPT_MAX = 3000
+# recent_disagreements reads at most this many bytes from the end of LOG_FILE.
+DISAGREE_SCAN_BYTES = 8_000_000
 
 _COUNTERS = ("calls", "answers", "low_conf", "agree", "disagree", "no_outcome", "taken")
 
@@ -107,21 +112,40 @@ def _bump(point: str, endpoint: str, question: str, counts: Dict[str, int],
             logger.debug("decision stats write failed: %s", e)
 
 
+def _excerpt(value: Any) -> str:
+    """One state field as text, at most STATE_EXCERPT_MAX chars, END kept."""
+    text = str(value)
+    if len(text) <= STATE_EXCERPT_MAX:
+        return text
+    return "…" + text[len(text) - (STATE_EXCERPT_MAX - 1):]
+
+
 def record_call(*, point: str, mode: str, endpoint: str, key: str, step: int,
                 duration_ms: float, error: str,
                 answers: Optional[Dict[str, Tuple[Any, float]]],
                 min_confidence: float, questions: Dict[str, str],
                 server_confidence: Dict[str, Any], state_chars: int,
-                trace: Optional[Dict[str, str]]) -> None:
-    """One endpoint answer (or failure): JSONL line + counters."""
+                trace: Optional[Dict[str, str]],
+                state: Optional[Dict[str, Any]] = None,
+                options: Optional[Dict[str, List[str]]] = None) -> None:
+    """One endpoint answer (or failure): JSONL line + counters.
+
+    ``state`` (what the model was shown) is written in mode ``shadow`` only,
+    each field cut by ``_excerpt``; ``options`` are the option keys per
+    question."""
     row: Dict[str, Any] = {
         "kind": "call", "point": point, "mode": mode, "endpoint": endpoint,
         "key": key, "step": step, "duration_ms": round(duration_ms, 1),
         "state_chars": state_chars, "questions": questions,
+        "min_confidence": round(float(min_confidence), 3),
         "trace_id": (trace or {}).get("id", ""),
         "trace_kind": (trace or {}).get("kind", ""),
         "who": (trace or {}).get("who", ""),
     }
+    if options:
+        row["options"] = {q: [str(k) for k in keys] for q, keys in options.items()}
+    if state and mode == "shadow":
+        row["state"] = {str(k): _excerpt(v) for k, v in state.items()}
     if error:
         row["error"] = error
     if answers is not None:
@@ -283,3 +307,89 @@ def query_stats(days: int = 7) -> List[Dict[str, Any]]:
         a["p95"] = percentile_label(hist, 0.95)
         out.append(a)
     return out
+
+
+def _tail_rows() -> List[Dict[str, Any]]:
+    """The JSON rows of the last DISAGREE_SCAN_BYTES of LOG_FILE, in file
+    order. A partial first line and malformed lines are dropped."""
+    out: List[Dict[str, Any]] = []
+    try:
+        with open(LOG_FILE, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            start = max(0, size - int(DISAGREE_SCAN_BYTES))
+            f.seek(start)
+            if start > 0:
+                f.readline()  # the cut line
+            data = f.read()
+    except Exception:
+        return out
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
+def recent_disagreements(point: str = "", limit: int = 50,
+                         include_unsure: bool = False) -> List[Dict[str, Any]]:
+    """Predictions that differ from what the usual path did, newest first,
+    read back from the tail of the JSONL log. A key that has a ``taken`` row
+    is skipped (the decider acted). Unsure ones (below the row's
+    ``min_confidence``) only with ``include_unsure``. Never raises."""
+    try:
+        rows = _tail_rows()
+        taken = set()
+        actual: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for r in rows:
+            pk = (str(r.get("point", "")), str(r.get("key", "")))
+            if r.get("kind") == "taken":
+                taken.add(pk)
+            elif r.get("kind") == "outcome" and isinstance(r.get("actual"), dict):
+                actual[pk] = r["actual"]
+        found: List[Tuple[str, int, Dict[str, Any]]] = []
+        for idx, r in enumerate(rows):
+            if r.get("kind") != "call" or not isinstance(r.get("answers"), dict):
+                continue
+            pk = (str(r.get("point", "")), str(r.get("key", "")))
+            if point and pk[0] != point:
+                continue
+            if pk in taken or pk not in actual:
+                continue
+            real = actual[pk]
+            min_conf = r.get("min_confidence")
+            state = r.get("state") if isinstance(r.get("state"), dict) else {}
+            opts = r.get("options") if isinstance(r.get("options"), dict) else {}
+            for q, ans in r["answers"].items():
+                if q not in real or not isinstance(ans, dict):
+                    continue
+                pred = ans.get("value")
+                if _same(pred, real[q]):
+                    continue
+                try:
+                    conf = float(ans.get("confidence", 0.0))
+                except (TypeError, ValueError):
+                    conf = 0.0
+                try:
+                    confident = min_conf is None or conf >= float(min_conf)
+                except (TypeError, ValueError):
+                    confident = True
+                if not confident and not include_unsure:
+                    continue
+                q_opts = opts.get(q)
+                found.append((str(r.get("starttime", "")), idx, {
+                    "starttime": r.get("starttime", ""), "point": pk[0],
+                    "endpoint": r.get("endpoint", ""), "key": pk[1], "question": q,
+                    "predicted": pred, "confidence": conf, "confident": confident,
+                    "actual": real[q], "state": state,
+                    "options": list(q_opts) if isinstance(q_opts, list) else [],
+                }))
+        # Newest first; a tie within one second keeps the file order reversed.
+        found.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        return [item for _st, _i, item in found[:max(0, int(limit))]]
+    except Exception as e:
+        logger.debug("decision disagreements read failed: %s", e)
+        return []

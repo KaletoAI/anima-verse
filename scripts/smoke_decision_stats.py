@@ -47,6 +47,32 @@ S  _same: True==True agree; 1.4 vs 1 -> round 1 == 1 agree; 1.6 vs 1 -> 2 != 1
 
 L  percentile_label: {} -> ""; {"25":3,"100":1}: p50 need 2 -> "<=25 ms";
    p95 need ceil(3.8)=4 -> "<=100 ms"; {"inf":1} p50 -> ">6400 ms".
+
+D  state, options, disagreements.
+   D1 a shadow record_call (point "p_state", min 0.7) with
+      state={"situation": "x"*3100, "who": "Kira"} and options
+      {"turn": ["turn", "act", "idle"]}: 3100 > 3000 -> keep the END, the last
+      2999 chars plus the "…" prefix = 3000 chars, first "…", last "x";
+      "who" (4 chars) stays "Kira"; min_confidence 0.7; options as given.
+      The same call in mode "on" has NO "state" key (options + min stay).
+   D2 point "p_dis", endpoint A, min 0.7, question "turn", one key each:
+      k1 call idle 0.9, outcome act           -> 0.9 >= 0.7 confident, idle != act
+      k2 call idle 0.5, outcome act           -> 0.5 <  0.7 unsure, idle != act
+      k3 call act 0.9, outcome act            -> agrees, never listed
+      k4 outcome act, taken, call idle 0.9    -> a taken row -> never listed
+      default               -> [k1]            (unsure left out)
+      include_unsure=True   -> [k2, k1]        (k2 written later = newer)
+      include_unsure, limit=1 -> [k2]
+      k1 item: predicted "idle", confidence 0.9, confident True, actual "act",
+      state {"who": "k1"}, options ["turn", "act", "idle"].
+      Point "p_dis2", key k5, call idle 0.9 vs outcome act (no state/options
+      passed): the point filter "p_dis" leaves it out, "" lists it FIRST
+      (newest) with state {} and options [].
+   D3 a malformed line appended to the log is skipped -> "p_dis" still [k1].
+      A call row written the OLD way (no "min_confidence"), point "p_old",
+      confidence 0.1, idle vs act -> treated as confident -> listed without
+      include_unsure. DISAGREE_SCAN_BYTES = 1 -> only a partial line is read,
+      it is dropped -> []. A missing log file -> [].
 """
 import os
 import sys
@@ -169,6 +195,99 @@ check("L empty", DL.percentile_label({}, 0.5), "")
 check("L p50", DL.percentile_label({"25": 3, "100": 1}, 0.5), "<=25 ms")
 check("L p95", DL.percentile_label({"25": 3, "100": 1}, 0.95), "<=100 ms")
 check("L inf", DL.percentile_label({"inf": 1}, 0.5), ">6400 ms")
+
+print("=== D state + disagreements ===")
+import json  # noqa: E402
+
+STATE = {"situation": "x" * 3100, "who": "Kira"}
+OPTS = {"turn": ["turn", "act", "idle"]}
+
+
+def last_row():
+    return json.loads(DL.LOG_FILE.read_text(encoding="utf-8").splitlines()[-1])
+
+
+for mode in ("shadow", "on"):
+    DL.record_call(point="p_state", mode=mode, endpoint="A", key="", step=1, duration_ms=5,
+                   error="", answers={"turn": ("idle", 0.9)}, min_confidence=0.7,
+                   questions={"turn": "choice"}, server_confidence={}, state_chars=10,
+                   trace=None, state=STATE, options=OPTS)
+    r = last_row()
+    if mode == "shadow":
+        sit = (r.get("state") or {}).get("situation", "")
+        check("D1 situation length", len(sit), 3000)
+        check("D1 situation starts with …", sit[:1], "…")
+        check("D1 situation ends with x", sit[-1:], "x")
+        check("D1 who", (r.get("state") or {}).get("who"), "Kira")
+    else:
+        check("D1 on row has no state", "state" in r, False)
+    check(f"D1 {mode} min_confidence", r.get("min_confidence"), 0.7)
+    check(f"D1 {mode} options", r.get("options"), OPTS)
+
+
+def dis_call(point, key, pred, conf, with_state=True):
+    DL.record_call(point=point, mode="shadow", endpoint="A", key=key, step=1, duration_ms=10,
+                   error="", answers={"turn": (pred, conf)}, min_confidence=0.7,
+                   questions={"turn": "choice"}, server_confidence={}, state_chars=5,
+                   trace=None, state={"who": key} if with_state else None,
+                   options=OPTS if with_state else None)
+    DL.deliver(point, key, "A", {"turn": (pred, conf)}, done=True)
+
+
+for key, pred, conf in (("k1", "idle", 0.9), ("k2", "idle", 0.5), ("k3", "act", 0.9)):
+    DL.open_pending("p_dis", key, ["A"], 0.7)
+    dis_call("p_dis", key, pred, conf)
+    DL.set_outcome("p_dis", key, {"turn": "act"})
+DL.open_pending("p_dis", "k4", ["A"], 0.7)
+DL.set_outcome("p_dis", "k4", {"turn": "act"})
+DL.set_taken("p_dis", "k4")
+dis_call("p_dis", "k4", "idle", 0.9)
+
+keys = lambda rows: [x["key"] for x in rows]  # noqa: E731
+got = DL.recent_disagreements("p_dis")
+check("D2 default", keys(got), ["k1"])
+check("D2 include_unsure", keys(DL.recent_disagreements("p_dis", include_unsure=True)), ["k2", "k1"])
+check("D2 limit 1", keys(DL.recent_disagreements("p_dis", limit=1, include_unsure=True)), ["k2"])
+it = got[0] if got else {}
+check("D2 k1 fields",
+      {k: it.get(k) for k in ("point", "endpoint", "question", "predicted", "confidence",
+                              "confident", "actual", "state", "options")},
+      {"point": "p_dis", "endpoint": "A", "question": "turn", "predicted": "idle",
+       "confidence": 0.9, "confident": True, "actual": "act", "state": {"who": "k1"},
+       "options": ["turn", "act", "idle"]})
+check("D2 k1 starttime", bool(it.get("starttime")), True)
+check("D2 k2 unsure", [x["confident"] for x in DL.recent_disagreements("p_dis", include_unsure=True)],
+      [False, True])
+
+DL.open_pending("p_dis2", "k5", ["A"], 0.7)
+dis_call("p_dis2", "k5", "idle", 0.9, with_state=False)
+DL.set_outcome("p_dis2", "k5", {"turn": "act"})
+check("D2 point filter", keys(DL.recent_disagreements("p_dis")), ["k1"])
+allr = DL.recent_disagreements("")
+check("D2 all points newest first", [(x["point"], x["key"]) for x in allr][:2],
+      [("p_dis2", "k5"), ("p_dis", "k1")])
+check("D2 no state/options", (allr[0].get("state"), allr[0].get("options")) if allr else None, ({}, []))
+
+with open(DL.LOG_FILE, "a", encoding="utf-8") as f:
+    f.write("{not json\n")
+check("D3 malformed line skipped", keys(DL.recent_disagreements("p_dis")), ["k1"])
+with open(DL.LOG_FILE, "a", encoding="utf-8") as f:
+    f.write(json.dumps({"starttime": "2026-01-01T00:00:00+00:00", "kind": "call", "point": "p_old",
+                        "endpoint": "A", "key": "k6",
+                        "answers": {"turn": {"value": "idle", "confidence": 0.1}}}) + "\n")
+    f.write(json.dumps({"starttime": "2026-01-01T00:00:01+00:00", "kind": "outcome", "point": "p_old",
+                        "key": "k6", "actual": {"turn": "act"}}) + "\n")
+old = DL.recent_disagreements("p_old")
+check("D3 old row without min_confidence = confident",
+      [(x["key"], x["confident"]) for x in old], [("k6", True)])
+_scan = DL.DISAGREE_SCAN_BYTES
+DL.DISAGREE_SCAN_BYTES = 1
+check("D3 tail of one byte -> partial line dropped", DL.recent_disagreements(""), [])
+DL.DISAGREE_SCAN_BYTES = _scan
+_log = DL.LOG_FILE
+DL.LOG_FILE = _TMP / "missing.jsonl"
+check("D3 missing file", DL.recent_disagreements(""), [])
+DL.LOG_FILE = _log
 
 print(f"\n{'ALL CHECKS PASSED' if not FAILS else f'{len(FAILS)} CHECK(S) FAILED'}")
 sys.exit(1 if FAILS else 0)

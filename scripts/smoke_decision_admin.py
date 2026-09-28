@@ -18,6 +18,9 @@ B  points route: the three core points are listed, registered, origin "core";
 C  stats route: days 0 -> 1, days 500 -> 90; after one record_call for point
    "p", endpoint "e1" the row (p, e1, '') has calls 1.
 D  test route: unknown name -> ok False, error "unknown endpoint".
+E  disagreements route: limit 0 -> the reader gets 1, limit 500 -> 200, the
+   point and include_unsure pass through unchanged; the answer is
+   {"rows": <the reader's list>}.
 """
 import asyncio
 import sys
@@ -92,6 +95,25 @@ class Req:
 
 out = asyncio.run(AS.settings_decision_test(Req(), user=None))
 check("D unknown", (out["ok"], out["error"]), (False, "unknown endpoint"))
+
+print("=== E disagreements ===")
+_seen = []
+_real = decision_log.recent_disagreements
+
+
+def _fake(point="", limit=50, include_unsure=False):
+    _seen.append((point, limit, include_unsure))
+    return [{"key": "x"}]
+
+
+decision_log.recent_disagreements = _fake
+out0 = AS.settings_decision_disagreements(point="p", limit=0, include_unsure=True, user=None)
+AS.settings_decision_disagreements(point="", limit=500, include_unsure=False, user=None)
+decision_log.recent_disagreements = _real
+check("E clamp", _seen, [("p", 1, True), ("", 200, False)])
+check("E shape", out0, {"rows": [{"key": "x"}]})
+check("E real reader, empty log", AS.settings_decision_disagreements(point="", limit=50,
+      include_unsure=False, user=None), {"rows": []})
 
 print(f"\n{'ALL CHECKS PASSED' if not FAILS else f'{len(FAILS)} CHECK(S) FAILED'}")
 sys.exit(1 if FAILS else 0)
