@@ -232,40 +232,6 @@ class BackendPool:
             return None
         return self.pick_lowest_cost(matches, rotation_key=f"backend_match:{pat}")
 
-    def matches_configured(self, pattern: str, media: str = "image",
-                           character_name: str = "") -> bool:
-        """Whether a backend glob names at least one CONFIGURED backend,
-        available right now or not.
-
-        Configured = ``instance_enabled`` and not switched off for
-        ``character_name`` (the per-character flag only restricts). A backend
-        that is merely offline or cooling down still counts — that is the
-        point: a character pattern whose only targets are cooling down must
-        not silently slide onto every other (possibly paid) backend
-        (``service.generate_from_input``). A pattern that names only disabled
-        backends, or none at all, does not count and keeps the old fallback.
-        """
-        import fnmatch
-        pat = (pattern or "").strip()
-        if not pat:
-            return False
-        pl = pat.lower()
-        agent_instances: Dict[str, Any] = {}
-        if character_name:
-            try:
-                agent_instances = self._agent_instances_provider(character_name) or {}
-            except Exception:
-                agent_instances = {}
-        for b in self.backends:
-            if not (fnmatch.fnmatch(b.name.lower(), pl) and b.instance_enabled
-                    and self._media_of(b) == media):
-                continue
-            agent_inst = agent_instances.get(b.name) or {}
-            if not bool(agent_inst.get("enabled", True)):
-                continue
-            return True
-        return False
-
     def list_available_backends(
         self,
         character_name: str = "",

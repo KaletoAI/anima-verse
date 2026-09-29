@@ -5,20 +5,19 @@ import os
 import re
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional
 
 
-import requests
-
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
 from app.imagegen.backends.openai_mesh import (MESH2MESH_CATEGORY,
                                                MESH_UPLOAD_MAX_BYTES)
 from app.imagegen.base import (BackendBusyError, MediaGenerationDisabled,
                                media_generation_enabled)
-from app.imagegen.selection import BackendPool, _BACKEND_COOLDOWN_SECONDS
+from app.imagegen.selection import BackendPool
 
 from app.core.config import MAX_IMAGE_BACKENDS
 from app.core.log import get_logger
@@ -236,6 +235,25 @@ def _unique_mesh_name(base: str) -> str:
     would read as a LOD stage of itself (see ``mesh_lod_stage_faces``)."""
     stem = re.sub(r"[^A-Za-z0-9_-]", "", (base or "").strip()) or "mesh"
     return f"{stem}-r{uuid.uuid4().hex[:6]}"
+
+
+@dataclass
+class GenerationResult:
+    """One finished string-path generation (``ImageService.generate_on_backend``).
+
+    ``text`` is the tool/service answer every string caller parses (image
+    links + caption); ``meta`` is THE dict stored as ``last_image_meta`` — the
+    routing fields the façade adds land in it, so a caller that copies the
+    meta after the call (expression variants) sees them."""
+    text: str
+    meta: Dict[str, Any]
+    gallery_character: str
+    files: List[str] = field(default_factory=list)
+    skip_gallery: bool = False
+
+
+class ImageSaveError(RuntimeError):
+    """The images came back but could not be written to the gallery."""
 
 
 def render_has_reference_image(character_name: str, *,
@@ -469,11 +487,6 @@ class ImageService:
                       has_input_image: bool = False) -> Optional[ImageBackend]:
         return self._pool.match_backend(pattern, media=media,
                                         has_input_image=has_input_image)
-
-    def matches_configured(self, pattern: str, media: str = "image",
-                           character_name: str = "") -> bool:
-        return self._pool.matches_configured(pattern, media=media,
-                                             character_name=character_name)
 
     def list_available_backends(self, character_name: str = "",
                                 media: str = "image") -> List[ImageBackend]:
@@ -1456,7 +1469,12 @@ class ImageService:
             "skip_gallery": ctx.get("skip_gallery", False),
             "appearances": ctx.get("appearances", None),
             "auto_enhance": ctx.get("auto_enhance", True),
-            "workflow": ctx.get("workflow", ""),
+            # The render OCCASION (app/imagegen/occasions.py) — routed through
+            # its chain unless `backend` names an explicit backend.
+            "occasion": ctx.get("occasion", ""),
+            # A dialog's LoRA pick (asserted on an explicit backend, filtered
+            # otherwise). Was read by the LoRA gate but never whitelisted.
+            "loras_explicit": bool(ctx.get("loras_explicit", False)),
             "backend": ctx.get("backend", ""),
             "override_width": ctx.get("override_width"),
             "override_height": ctx.get("override_height"),
@@ -1565,139 +1583,24 @@ class ImageService:
             logger.debug("Gallery target resolve failed: %s", _gt_err)
         return character_name
 
-    def generate_from_input(self, prompt: str) -> str:
-        """Generates an image via the cheapest available instance.
+    def generate_on_backend(self, backend: ImageBackend, input_data: Dict[str, Any],
+                            *, explicit: bool) -> "GenerationResult":
+        """Render ONE string-path request on exactly ``backend`` — no backend
+        selection here (``generate_from_input`` resolves it, explicit or via
+        the image routing). Everything backend-dependent is built for THIS
+        backend: use-case style x image family, negative (folded by the
+        backend's own generate()), reference-slot budget, model, LoRAs.
 
-        Args:
-            prompt: text description of the desired image (or JSON with context)
-
-        Returns:
-            string with image links or an error message
-
-        Raises:
-            LoraNotAllowedError: an EXPLICITLY picked LoRA (payload flag
-                ``loras_explicit``, set by the dialogs) the library does not
-                associate with the resolved backend
-                (``app/core/lora_library.py``); a route maps it to 400.
-                LoRAs from stored configuration are filtered out instead, so
-                an automatic render never fails over a stale config value.
-        """
-        # The world's master switch, checked BEFORE anything is parsed or
-        # selected. The central gate in run_on_backend_channel would catch this
-        # path too, but only after a backend was picked — and this function's
-        # contract is a STRING, not an exception (the LLM tool surface, the
-        # instagram post and npc_assets all read its prefix).
-        if not media_generation_enabled():
-            logger.info("Image generation refused: media generation is "
-                        "disabled for this world")
-            return "Error: Media generation is disabled for this world"
-
-        if not self.enabled:
-            return "Error: Image generation is not available. No instance configured or reachable."
-
-        # Parse the input (before backend selection, which honours the per-agent enabled flags)
-        input_data = self._parse_input(prompt)
+        LoRAs: a dialog pick (``loras_explicit``) on an EXPLICIT backend is
+        asserted (``LoraNotAllowedError``); every other list is filtered for
+        this backend. Errors are RAISED, never returned as text:
+        BackendBusyError, BackendFailedError (cooled down — the routing re-runs
+        on it), 4xx/GatewayRejectedError, MediaGenerationDisabled,
+        GpuTaskCancelled, TooManyJobsError, ImageSaveError."""
         prompt_text = input_data.get("prompt", "")
-        character_name = input_data.get("agent_name", "").strip()
+        character_name = (input_data.get("agent_name") or "").strip()
         set_profile = bool(input_data.get("set_profile"))
         skip_gallery = bool(input_data.get("skip_gallery"))
-
-        if not prompt_text or len(prompt_text.strip()) == 0:
-            return "Error: No image description given."
-
-        if not character_name:
-            return "Error: Character name missing for storing the image."
-
-        # Pick backend (explicit selection wins)
-        explicit_backend = input_data.get("backend", "").strip() if isinstance(input_data, dict) else ""
-        backend = None
-
-        # Normalize the render-target spec: the "workflow" field (legacy name)
-        # is a backend glob, e.g. from the per-character render match. A leading
-        # "backend:" is a tolerated legacy prefix.
-        _target_spec = input_data.get("workflow", "").strip() if isinstance(input_data, dict) else ""
-        _soft_backend = ""
-        if _target_spec.lower().startswith("backend:"):
-            if not explicit_backend:
-                explicit_backend = _target_spec.split(":", 1)[1].strip()
-        elif _target_spec:
-            # Bare glob: try as a backend glob, fall back to default selection.
-            _soft_backend = _target_spec
-
-        # No target from the caller: fall back to the per-character render match
-        # (Characters -> Image, "Backend match"). This is what makes an
-        # unwired path — a chat photo, a TakePhoto turn — follow the character's
-        # chosen backend instead of the cost/round-robin default. It stays a
-        # SOFT glob: a pattern that matches nothing still renders via the
-        # ordinary selection.
-        _soft_from_character = False
-        if not explicit_backend and not _soft_backend and character_name:
-            try:
-                _char_render = (get_character_profile(character_name)
-                                or {}).get("outfit_imagegen") or {}
-                if isinstance(_char_render, dict):
-                    _soft_backend = (_char_render.get("workflow") or "").strip()
-                    _soft_from_character = bool(_soft_backend)
-            except Exception:
-                _soft_backend = ""
-
-        # Will this render carry an input/reference image? Reference slots are
-        # only resolved AFTER the backend is known (the slot budget is the
-        # backend's), so decide it here from the request. A set_profile render
-        # slots no reference; every other render of a character with a profile
-        # image pins it as the identity reference. With an image in play,
-        # matching prefers img2img backends (see _prefer_img2img).
-        _has_input_image = render_has_reference_image(
-            character_name, set_profile=set_profile)
-
-        if explicit_backend:
-            # Explicit backend — no fallback
-            backend = self._wait_for_explicit_backend(
-                explicit_backend, has_input_image=_has_input_image)
-            if not backend:
-                # Fail-fast, not a timeout: the pool probes the matching
-                # candidates once and gives up (recovery is picked up by the
-                # 30s channel_health poller).
-                return (f"Error: backend '{explicit_backend}' is not available "
-                        f"(disabled, offline, or cooling down).")
-            logger.info("Explicit backend: %s", explicit_backend)
-        elif _soft_backend:
-            # A soft match MAY miss — the default selection takes over below
-            # and the fallback is logged right here. Nothing to warn about in
-            # the pool.
-            backend = self._wait_for_explicit_backend(
-                _soft_backend, has_input_image=_has_input_image,
-                log_missing=False)
-            _match_source = ("character match" if _soft_from_character
-                             else "render match")
-            if backend:
-                logger.info("Backend (%s '%s'): %s",
-                            _match_source, _soft_backend, backend.name)
-            elif self.matches_configured(_soft_backend, media="image",
-                                         character_name=character_name):
-                # The pattern names configured backends that are only offline
-                # or cooling down right now. Falling back here would walk every
-                # other backend in turn — the other gateway aliases first and
-                # then the paid cloud ones — so the render fails instead.
-                # (Known limit: a character WITHOUT a pattern still takes the
-                # cheapest available backend after a gateway cooldown; the
-                # central image routing replaces this with chains.)
-                logger.warning(
-                    "%s '%s' matches only unavailable backends — no fallback",
-                    _match_source, _soft_backend)
-                return (f"Error: {_soft_backend} matches only unavailable "
-                        f"backends (offline or cooling down).")
-            else:
-                # The pattern names no configured backend at all (or only
-                # disabled ones) — the default selection takes over.
-                logger.warning(
-                    "%s '%s' matches no configured backend — falling back to "
-                    "the default selection", _match_source, _soft_backend)
-
-        if not backend:
-            backend = self._wait_for_backend(character_name, _has_input_image)
-        if not backend:
-            return "Error: No image generation backend is available right now."
 
         # The LoRA gate, for the backend this render actually resolved to
         # (app/core/lora_library.py holds the rule). TWO halves, because the
@@ -1705,7 +1608,9 @@ class ImageService:
         # - an EXPLICIT pick of the current request (a dialog selection; the
         #   caller sets "loras_explicit") is rejected hard — the dialogs are
         #   backend-scoped, so a mismatch is a direct API call or a stale
-        #   client, and a 400 says exactly what was chosen wrongly;
+        #   client, and a 400 says exactly what was chosen wrongly. Only on an
+        #   EXPLICIT backend: a routed render may land on another chain entry
+        #   than the one the dialog showed, so there the pick is filtered;
         # - STORED configuration (per-character image settings, slot LoRAs of
         #   a body-slot package, use-case defaults) is filtered: an admin who
         #   re-points a character at another backend would otherwise break
@@ -1717,7 +1622,7 @@ class ImageService:
             from app.core.lora_library import (assert_loras_allowed,
                                                filter_allowed_loras,
                                                warn_dropped_loras)
-            if input_data.get("loras_explicit"):
+            if explicit and input_data.get("loras_explicit"):
                 assert_loras_allowed(backend, input_data.get("loras"))
             else:
                 _kept, _dropped = filter_allowed_loras(
@@ -1726,7 +1631,7 @@ class ImageService:
                     input_data["loras"] = _kept
                     warn_dropped_loras(backend.name, _dropped, character_name)
 
-        # Lade per-Agent per-Instanz Config
+        # Per-agent, per-instance config
         cfg = self._get_instance_config(character_name, backend)
 
         # Style/negative/instruction come EXCLUSIVELY from the use case (admin
@@ -1759,10 +1664,10 @@ class ImageService:
 
         try:
             logger.info("=" * 80)
-            logger.info("BILDGENERIERUNG GESTARTET")
+            logger.info("IMAGE GENERATION STARTED")
             logger.info("=" * 80)
-            logger.info("Instanz: %s (Typ=%s, Cost=%s)", backend.name, backend.api_type, backend.cost)
-            logger.debug("User-ID: %s, Agent: %s, Set as Profile: %s", character_name, set_profile)
+            logger.info("Instance: %s (type=%s, cost=%s)", backend.name, backend.api_type, backend.cost)
+            logger.debug("Agent: %s, set as profile: %s", character_name, set_profile)
             logger.info("Original Prompt: %s", prompt_text)
 
             # Profile-image detection
@@ -1787,7 +1692,7 @@ class ImageService:
             photographer_mode = is_photographer_mode(character_name)
             is_selfie = detect_selfie(prompt_text)
             if photographer_mode:
-                logger.info("PHOTOGRAPHER MODE aktiv fuer %s", character_name)
+                logger.info("PHOTOGRAPHER MODE active for %s", character_name)
 
             builder = PromptBuilder(character_name)
 
@@ -1828,7 +1733,7 @@ class ImageService:
                 if isinstance(_item_ids, str):
                     _item_ids = [x.strip() for x in _item_ids.split(",") if x.strip()]
 
-                # Kontext sammeln
+                # Collect the context
                 pv = builder.collect_context(
                     persons, config,
                     prompt_text=prompt_text,
@@ -1845,7 +1750,7 @@ class ImageService:
                 pv.scene_prompt = prompt_text
                 if rp_scene_context:
                     pv.scene_prompt += f", {rp_scene_context}"
-                    logger.info("RP-Scene-Context angehaengt: %s", rp_scene_context[:120])
+                    logger.info("RP scene context appended: %s", rp_scene_context[:120])
 
                 # Items (props) as a scene addition. The slot position is
                 # assigned in the resolve_reference_slots step; here only the
@@ -1861,7 +1766,7 @@ class ImageService:
                             _item_bits.append(_n)
                     if _item_bits:
                         pv.scene_prompt += f", scene includes props: {', '.join(_item_bits)}"
-                        logger.info("Item-Props angehaengt: %s", ", ".join(_item_bits))
+                        logger.info("Item props appended: %s", ", ".join(_item_bits))
 
                 # Clean scene_prompt (defense in depth, plan 4.2.1b)
                 pv.scene_prompt = builder.sanitize_scene_prompt(pv.scene_prompt, pv)
@@ -1871,7 +1776,7 @@ class ImageService:
                 pv.negative_prompt = negative_prompt
 
                 if set_profile:
-                    logger.info("PROFILBILD-MODUS AKTIVIERT")
+                    logger.info("PROFILE IMAGE MODE ACTIVE")
 
                 # Assemble the prompt via the target-model adapter
                 from app.core.prompt_adapters import (
@@ -1899,7 +1804,7 @@ class ImageService:
                 agent_mentioned = any(p.is_agent for p in pv.persons)
                 no_person_detected = pv.no_person_detected
             else:
-                # auto_enhance=False: Prompt bereits vom Caller angereichert
+                # auto_enhance=False: the caller already enriched the prompt
                 input_appearances = input_data.get("appearances")
                 if input_appearances is not None:
                     persons = builder.detect_persons(
@@ -1951,7 +1856,7 @@ class ImageService:
                 prompt_without_style = prompt_text
                 if prompt_style:
                     enhanced_prompt = f"{prompt_style} {enhanced_prompt}"
-                logger.info("Auto-Enhance deaktiviert (Prompt vom Caller angereichert)")
+                logger.info("Auto-enhance disabled (prompt enriched by the caller)")
 
                 # Canonical metadata for re-creation also on the auto_enhance=False
                 # path (e.g. Instagram). The original prompt goes to the backend
@@ -2051,7 +1956,7 @@ class ImageService:
                     pv, max_slots=backend.ref_slot_count)
                 params["reference_images"] = face_refs["reference_images"]
             else:
-                logger.info("Keine Person erkannt -> keine Referenzbilder")
+                logger.info("No person detected -> no reference images")
                 face_refs = {"reference_images": {}, "has_reference_slots": False}
 
             # Post-processing happens externally (pull model, see
@@ -2059,29 +1964,9 @@ class ImageService:
             # (incl. reference_images for conditioning above) is unaffected.
 
             _display_model = params.get("model") or getattr(backend, 'model', 'N/A')
-            logger.info("Starte Bildgenerierung mit %s (%s)", backend.name, backend.api_url)
+            logger.info("Starting image generation on %s (%s)", backend.name, backend.api_url)
             logger.info("Model: %s", _display_model)
             logger.debug("Params: %s", params)
-
-            _primary_backend = backend
-
-            def _prepare_for_backend(b):
-                """Adjusts model/LoRA params when falling back to another backend."""
-                if b is not _primary_backend:
-                    # Model names from the primary backend are not portable —
-                    # the fallback backend uses its own configured default.
-                    _local = [k for k in ("model", "unet", "checkpoint", "gguf")
-                              if params.get(k)]
-                    if _local:
-                        logger.info(
-                            "Fallback: Modell-Keys %s nicht portabel zu %s, "
-                            "nutze Backend-Default '%s'",
-                            _local, b.name, getattr(b, "model", "?"))
-                        for _k in ("model", "unet", "checkpoint", "gguf",
-                                   "lora_inputs", "loras"):
-                            params.pop(_k, None)
-                # Negative comes from the use case (resolved above).
-                return enhanced_prompt, negative_prompt
 
             # Context for the CENTRAL logging in backend.generate() (final_prompt,
             # backend, model, LoRAs, refs, duration and seed are set by generate() itself).
@@ -2100,8 +1985,6 @@ class ImageService:
                 "expression_prompt": params.get("expression_prompt", ""),
             }
             def _op(b):
-                _p, _n = _prepare_for_backend(b)
-
                 def _gen():
                     # Activate the tracker only here: this runs in the channel
                     # worker, i.e. exactly when the GPU work starts — queue time
@@ -2114,7 +1997,8 @@ class ImageService:
                             provider=b.name)
                     except Exception:
                         pass
-                    return b.generate(_p, _n, params, log_meta=_log_meta)
+                    return b.generate(enhanced_prompt, negative_prompt, params,
+                                      log_meta=_log_meta)
 
                 # EVERY backend runs over the channel-limited GPU queue: the
                 # channel matches backend:<name> with its own max_concurrent,
@@ -2126,36 +2010,11 @@ class ImageService:
                     b, _gen, task_type="image_generation",
                     agent_name=character_name)
 
-            try:
-                images, backend = self.run_on_backend(
-                    backend, op=_op, character_name=character_name)
-            except BackendBusyError as _busy:
-                logger.warning("Image generation: %s busy (%s)",
-                               backend.name, _busy)
-                _tq.track_finish(_track_id, error=f"{backend.name} busy")
-                return (f"Error: {backend.name} is busy right now — "
-                        "please try again later.")
-            except RuntimeError as _err:
-                # Carry the backend's OWN words out of here. The generic
-                # "the API answered without images" line hid every reason —
-                # a 403 on the alias, a rejected payload, a dead gateway all
-                # read the same, and the warning a caller like model_refs
-                # showed was "render failed" and nothing more. The "Error: "
-                # prefix is what the consumers recognise (npc_assets
-                # `startswith(("error", "fehler"))`, instagram `"Error" in
-                # result[:20]`); every other caller extracts an image path by
-                # regex and treats "no match" as the failure it is.
-                logger.error("Image generation failed (%s): %s",
-                             backend.name, _err)
-                _tq.track_finish(_track_id, error=str(_err)[:200])
-                return f"Error: {backend.name}: {str(_err)[:300]}"
-
-            if not images:
-                _tq.track_finish(_track_id, error="no images generated")
-                return f"Error: {backend.name} returned no image."
+            images, backend = self.run_on_backend(
+                backend, op=_op, character_name=character_name)
 
             _gen_duration = time.time() - _gen_start
-            logger.info("ERFOLG - %d Bild(er) generiert via %s (%.1fs)", len(images), backend.name, _gen_duration)
+            logger.info("SUCCESS - %d image(s) generated via %s (%.1fs)", len(images), backend.name, _gen_duration)
 
             # Image prompt logging now happens CENTRALLY in backend.generate()
             # (with the final, trigger-injected prompt) — via log_meta above.
@@ -2183,9 +2042,9 @@ class ImageService:
 
             if not saved_files:
                 _tq.track_finish(_track_id, error="images not saved")
-                return "Error: The images could not be saved."
+                raise ImageSaveError("the images could not be saved")
 
-            logger.info("Gespeicherte Bilder: %s", ", ".join(saved_files))
+            logger.info("Saved images: %s", ", ".join(saved_files))
 
             if not set_profile:
                 lowered = prompt_text.lower()
@@ -2193,7 +2052,7 @@ class ImageService:
 
             if set_profile:
                 set_character_profile_image(character_name, saved_files[0])
-                logger.info("Als Profilbild gesetzt: %s", saved_files[0])
+                logger.info("Set as profile image: %s", saved_files[0])
 
             # Post-processing happens externally (pull model): after saving, a
             # trigger is sent to the external service (see postprocess_trigger),
@@ -2281,9 +2140,9 @@ class ImageService:
             comment = None
             if not skip_gallery:
                 _tq.track_update_label(_track_id, "Bildanalyse")
-                logger.info("Starte Bildanalyse + Situations-Kommentar...")
+                logger.info("Starting image analysis + situation comment...")
                 first_image_path = images_dir / saved_files[0]
-                logger.debug("Bild-Datei: %s, Existiert: %s", first_image_path, first_image_path.exists())
+                logger.debug("Image file: %s, exists: %s", first_image_path, first_image_path.exists())
                 _subjects = [p["name"] for p in appearances] if photographer_mode and appearances else None
                 # The comment is generated from the AGENT's point of view (it
                 # took the picture) but attached to the gallery_character's image.
@@ -2291,10 +2150,10 @@ class ImageService:
                     character_name, rp_context=rp_context,
                     photographer_subjects=_subjects)
                 if comment:
-                    logger.info("Situations-Kommentar gespeichert")
+                    logger.info("Situation comment saved")
                     add_character_image_comment(gallery_character, saved_files[0], comment)
                 else:
-                    logger.debug("Kein Situations-Kommentar generiert (kein RP-Kontext)")
+                    logger.debug("No situation comment generated (no RP context)")
                 # Objective image analysis: the vision-LLM call uses the agent
                 # profile (language/personality); the result is attached to the
                 # image in the gallery character.
@@ -2302,9 +2161,9 @@ class ImageService:
                 if analysis:
                     from app.models.character import add_character_image_metadata
                     add_character_image_metadata(gallery_character, saved_files[0], {"image_analysis": analysis})
-                    logger.info("Objektive Bildanalyse gespeichert")
+                    logger.info("Objective image analysis saved")
             else:
-                logger.debug("Bildanalyse uebersprungen (skip_gallery=True)")
+                logger.debug("Image analysis skipped (skip_gallery=True)")
 
             # Return value: image(s) + comment
             output_lines = []
@@ -2318,37 +2177,134 @@ class ImageService:
                 output_lines.append(f"CAPTION (nur zur Anzeige, NICHT als Fakt behandeln): {comment}")
 
             logger.info("=" * 80)
-            logger.info("BILDGENERIERUNG ABGESCHLOSSEN (via %s)", backend.name)
+            logger.info("IMAGE GENERATION FINISHED (via %s)", backend.name)
             logger.info("=" * 80)
 
             _tq.track_finish(_track_id)
-            return "\n\n".join(output_lines)
+            return GenerationResult(text="\n\n".join(output_lines), meta=_meta,
+                                    gallery_character=gallery_character,
+                                    files=list(saved_files),
+                                    skip_gallery=skip_gallery)
 
-        except requests.exceptions.Timeout:
-            error_msg = f"Image generation took too long ({backend.name})"
-            # A timeout means the GPU is busy (both sides queue) — the backend
-            # is not broken, so it must NOT go into cooldown: that would only
-            # push the load onto another alias of the same GPU. (The generate
-            # paths signal this via BackendBusyError; here we just don't mark
-            # anything unhealthy.)
-            logger.error("Timeout: %s — backend stays available (busy)",
-                         error_msg)
-            _tq.track_finish(_track_id, error=error_msg)
-            _log_image_failure(locals(), error_msg)
-            return f"Error: {error_msg}"
-        except requests.exceptions.ConnectionError:
-            error_msg = f"Connection to {backend.name} ({backend.api_url}) failed"
-            logger.error("ConnectionError: %s", error_msg)
-            backend.mark_unhealthy("connection error", _BACKEND_COOLDOWN_SECONDS)
-            _tq.track_finish(_track_id, error=error_msg)
-            _log_image_failure(locals(), error_msg)
-            return f"Error: {error_msg}"
         except Exception as e:
-            error_msg = f"Image generation ({backend.name}): {e}"
-            logger.error("Error in %s", error_msg)
-            _tq.track_finish(_track_id, error=error_msg)
-            _log_image_failure(locals(), error_msg)
-            return f"Error: {error_msg}"
+            _tq.track_finish(_track_id, error=str(e)[:200])
+            _log_image_failure(locals(), f"{backend.name}: {e}")
+            raise
+
+    def generate_from_input(self, prompt: str) -> str:
+        """String façade of the image pipeline — the TakePhoto tool, Instagram,
+        story images, frames, portraits and variants call it with a JSON
+        payload (keys: ``_parse_input``).
+
+        ``backend`` = an EXPLICIT backend: exactly that one renders, no
+        routing, no fallback ("switching behind a chosen backend is worse than
+        failing"). Otherwise the payload's ``occasion`` (default ``"photo"``)
+        is routed (``app.imagegen.routing.run_routed``): the character's own
+        match first, then the occasion chain; a backend FAILURE re-runs the
+        whole render on the next entry, and the image meta records
+        ``routing`` (+ ``fallback_from`` when it was not the first position).
+
+        Returns the success text or an ``Error: …`` string (the prefix every
+        string caller recognises). A failure names its backend exactly once:
+        ``BackendFailedError`` already reads "<name>: <cause>", any other
+        error of a render gets that prefix here unless its text starts with
+        it. Raises ``LoraNotAllowedError`` for an explicitly picked LoRA that
+        the library does not associate with the EXPLICIT backend (a route
+        maps it to 400)."""
+        if not media_generation_enabled():
+            logger.info("Image generation refused: media generation is "
+                        "disabled for this world")
+            return "Error: Media generation is disabled for this world"
+        if not self.enabled:
+            return "Error: Image generation is not available. No instance configured or reachable."
+
+        input_data = self._parse_input(prompt)
+        prompt_text = input_data.get("prompt", "")
+        character_name = (input_data.get("agent_name") or "").strip()
+        if not prompt_text or not prompt_text.strip():
+            return "Error: No image description given."
+        if not character_name:
+            return "Error: Character name missing for storing the image."
+
+        from app.core.lora_library import LoraNotAllowedError
+        from app.imagegen.base import BackendFailedError
+        from app.imagegen.occasions import UnknownOccasionError
+        from app.imagegen.routing import (NoRouteError, is_character_match,
+                                          route_meta, run_routed)
+        # Will the render slot an identity reference? Decided from the request
+        # (the slot budget is the backend's, known only after resolution): an
+        # explicit reference override, or a character with a profile image.
+        has_ref = (bool(input_data.get("reference_image_override"))
+                   or render_has_reference_image(
+                       character_name, set_profile=bool(input_data.get("set_profile"))))
+        explicit = (input_data.get("backend") or "").strip()
+        # The backend the render currently runs on — names the backend in the
+        # error text of a failure that does not carry it itself.
+        rendering = {"name": ""}
+        try:
+            if explicit:
+                backend = self._wait_for_explicit_backend(explicit, has_input_image=has_ref)
+                if not backend:
+                    return (f"Error: backend '{explicit}' is not available "
+                            f"(disabled, offline, or cooling down).")
+                logger.info("Explicit backend: %s", explicit)
+                rendering["name"] = backend.name
+                return self.generate_on_backend(backend, input_data, explicit=True).text
+
+            occasion = (input_data.get("occasion") or "photo").strip()
+
+            def _render(b: ImageBackend) -> GenerationResult:
+                rendering["name"] = b.name
+                data = dict(input_data)
+                # A stored model name belongs to the character's OWN backend
+                # match; on any other chain entry it would name a model that
+                # backend does not have.
+                if (data.get("model_override")
+                        and not is_character_match(occasion, character_name, b.name)):
+                    logger.info("Model override %r dropped: %s is not the "
+                                "character's own match", data["model_override"], b.name)
+                    data["model_override"] = ""
+                return self.generate_on_backend(b, data, explicit=False)
+
+            result, route = run_routed(occasion, _render, character=character_name,
+                                       has_ref=has_ref, pool=self.pool)
+            self._store_route_meta(result, route_meta(route))
+            return result.text
+        except LoraNotAllowedError:
+            raise
+        except MediaGenerationDisabled:
+            return "Error: Media generation is disabled for this world"
+        except (UnknownOccasionError, NoRouteError) as e:
+            logger.warning("Image generation refused: %s", e)
+            return f"Error: {e}"
+        except BackendBusyError as e:
+            logger.warning("Image generation: backend busy (%s)", e)
+            return ("Error: the image backend is busy right now — please try "
+                    f"again later ({e}).")
+        except Exception as e:  # noqa: BLE001 — the contract is a string
+            logger.error("Image generation failed: %s", e)
+            text = str(e) or type(e).__name__
+            name = rendering["name"]
+            # BackendFailedError already starts with "<name>: " (exactly once);
+            # a save failure is not the backend's.
+            if (name and not isinstance(e, (BackendFailedError, ImageSaveError))
+                    and not text.startswith(f"{name}:")):
+                text = f"{name}: {text}"
+            return f"Error: {text[:300]}"
+
+    def _store_route_meta(self, result: "GenerationResult", rmeta: Dict[str, Any]) -> None:
+        """Add the routing fields to a finished generation: into the returned
+        meta (the very dict ``last_image_meta`` holds) and into the stored
+        meta of every gallery image of this run."""
+        if not rmeta:
+            return
+        result.meta.update(rmeta)
+        if result.skip_gallery:
+            return
+        from app.models.character import add_character_image_metadata
+        for fn in result.files:
+            add_character_image_metadata(result.gallery_character, fn, rmeta)
+
 
 # ---------------------------------------------------------------------------
 # Singleton access — consumers use this instead of fetching a skill

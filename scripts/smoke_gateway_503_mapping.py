@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Smoke run for the gateway 503/502 mapping and the soft-glob transition
-(plan-befundrunde-2026-09-29 B2, incl. the binding review notes).
+"""Smoke run for the gateway 503/502 mapping (plan-befundrunde-2026-09-29 B2,
+incl. the binding review notes). The soft-glob transition of that round is
+gone (see [F]/[G] below).
 
 Usage:  ./.venv/bin/python scripts/smoke_gateway_503_mapping.py
 
 No server, no network, no world DB: ``paths.init`` points at a throwaway
 directory BEFORE any app import, ``requests.post`` / ``time.sleep`` of each
-backend module are replaced by recorders, and the soft-glob part runs a bare
-``ImageService`` over stub backends whose ``_generate`` only counts calls.
+backend module are replaced by recorders.
 
 THE GATEWAY SEMANTICS (ai-hub/main.py, as the design quotes it)
 ---------------------------------------------------------------------------
@@ -59,28 +59,11 @@ Hand-derived expectations
     E1 503 (no header), always   → 4 POSTs, waits [2, 8, 20], RuntimeError
     E2 503 Retry-After: 3        → 1 POST, BackendBusyError
     E3 502 "park timeout"        → BackendBusyError
-[F] ``BackendPool.matches_configured`` over GW-A, GW-B (both cooling down),
-    OFF-1 (instance disabled), Cloud (available); character "Alice" has GW-B
-    switched off:
-    F1 "GW-*"                    → True  (configured, merely unavailable)
-    F2 "GW-B" for Alice          → False (character-disabled does not count)
-    F3 "GW-B" for nobody         → True
-    F4 "OFF-*"                   → False (instance-disabled does not count)
-    F5 "Nope*"                   → False
-    F6 "gw-a" (case)             → True  (the glob matches lowercased, like
-                                          match_backend)
-[G] ``ImageService.generate_from_input`` soft globs:
-    G1 render match "GW-*" (both cooling)  → returns
-       "Error: GW-* matches only unavailable backends (offline or cooling
-       down)."; the default selection is NOT asked; no backend's _generate ran
-    G2 the same through the CHARACTER match (profile outfit_imagegen.workflow)
-    G3 "OFF-*" (only disabled)             → default selection asked (today's
-       fallback)
-    G4 "GW-B" for Alice (character-disabled) → default selection asked
-    G5 "Nope*" (no backend)                 → default selection asked
-   (The recorder for the default selection returns None, so G3–G5 end in
-    "Error: No image generation backend is available right now." — the
-    fallback being ASKED is the assertion.)
+[F]/[G] (the soft-glob transition of the bug round, B2.3 —
+    ``BackendPool.matches_configured`` and the "matches only unavailable
+    backends" answer of ``generate_from_input``) are gone: replaced by the
+    image routing chains, plan-image-routing.md R2a
+    (``scripts/smoke_image_service_facade.py`` F5 covers the dead chain).
 """
 import json
 import os
@@ -102,8 +85,7 @@ import app.imagegen.backends._gateway_job as gj  # noqa: E402
 import app.imagegen.backends.localai_video as lv_mod  # noqa: E402
 import app.imagegen.backends.openai_chat as chat_mod  # noqa: E402
 import app.imagegen.backends.openai_diffusion as od  # noqa: E402
-from app.imagegen import service as svc_mod  # noqa: E402
-from app.imagegen.base import BackendBusyError, ImageBackend  # noqa: E402
+from app.imagegen.base import BackendBusyError  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
 
 FAILURES = []
@@ -335,109 +317,6 @@ check("E2 503 Retry-After: 1 POST, BackendBusyError",
 posts, waits, res = drive(chat_mod, [FakeResponse(502, "park timeout")], gen_chat)
 check("E3 502 park timeout: BackendBusyError", isinstance(res, BackendBusyError), repr(res))
 
-
-# ── [F] matches_configured ──────────────────────────────────────────────
-class StubBackend(ImageBackend):
-    def __init__(self, name, *, enabled=True, available=True, cost=0.0):
-        super().__init__(name, "http://stub.invalid", cost, "stub",
-                         f"P1SMOKE_{name.replace('-', '_')}_")
-        self.instance_enabled = enabled
-        self.available = available
-        self.generate_calls = 0
-
-    def check_availability(self):
-        return self.available
-
-    def _generate(self, prompt, negative_prompt, params):
-        self.generate_calls += 1
-        return [b"img"]
-
-
-def build_pool():
-    gw_a, gw_b = StubBackend("GW-A"), StubBackend("GW-B")
-    gw_a.mark_unhealthy("smoke", 300.0)
-    gw_b.mark_unhealthy("smoke", 300.0)
-    off = StubBackend("OFF-1", enabled=False)
-    cloud = StubBackend("Cloud", cost=5.0)
-    agent_flags = {"Alice": {"GW-B": {"enabled": False}}}
-    pool = BackendPool([gw_a, gw_b, off, cloud],
-                       agent_instances_provider=lambda n: agent_flags.get(n, {}))
-    return pool, [gw_a, gw_b, off, cloud]
-
-
-print("\n[F] BackendPool.matches_configured")
-pool, _all = build_pool()
-check("F1 'GW-*' → True", pool.matches_configured("GW-*") is True)
-check("F2 'GW-B' for Alice → False",
-      pool.matches_configured("GW-B", character_name="Alice") is False)
-check("F3 'GW-B' → True", pool.matches_configured("GW-B") is True)
-check("F4 'OFF-*' → False", pool.matches_configured("OFF-*") is False)
-check("F5 'Nope*' → False", pool.matches_configured("Nope*") is False)
-check("F6 'gw-a' → True", pool.matches_configured("gw-a") is True)
-
-
-# ── [G] generate_from_input soft globs ──────────────────────────────────
-def build_service():
-    import threading
-    svc = svc_mod.ImageService.__new__(svc_mod.ImageService)
-    svc.config = {}
-    svc.enabled = True
-    svc.last_enhanced_prompt = ""
-    svc._meta_tls = threading.local()
-    pool, backends = build_pool()
-    svc._pool = pool
-    fallback_calls = []
-
-    def _fallback(character_name, has_input_image=False):
-        fallback_calls.append(character_name)
-        return None
-    svc._wait_for_backend = _fallback
-    return svc, backends, fallback_calls
-
-
-PROFILES = {}
-_real_profile = svc_mod.get_character_profile
-_real_has_ref = svc_mod.render_has_reference_image
-svc_mod.get_character_profile = lambda name: PROFILES.get(name, {})
-svc_mod.render_has_reference_image = lambda *_a, **_k: False
-try:
-    print("\n[G] generate_from_input soft globs")
-    svc, backends, fb = build_service()
-    out = svc.generate_from_input(json.dumps(
-        {"prompt": "a harbour", "agent_name": "Bob", "workflow": "GW-*"}))
-    check("G1 render match on cooling backends → the error string",
-          out == "Error: GW-* matches only unavailable backends "
-                 "(offline or cooling down).", out)
-    check("G1 default selection not asked", fb == [], str(fb))
-    check("G1 no backend generated", sum(x.generate_calls for x in backends) == 0)
-
-    svc, backends, fb = build_service()
-    PROFILES["Bob"] = {"outfit_imagegen": {"workflow": "GW-*"}}
-    out = svc.generate_from_input(json.dumps({"prompt": "a harbour", "agent_name": "Bob"}))
-    check("G2 character match on cooling backends → the error string",
-          out.startswith("Error: GW-* matches only unavailable backends"), out)
-    check("G2 default selection not asked", fb == [], str(fb))
-    PROFILES.clear()
-
-    svc, backends, fb = build_service()
-    out = svc.generate_from_input(json.dumps(
-        {"prompt": "a harbour", "agent_name": "Bob", "workflow": "OFF-*"}))
-    check("G3 only-disabled glob falls back", fb == ["Bob"], f"{fb} {out}")
-    check("G3 ends in the no-backend error (fallback stub returned None)",
-          out == "Error: No image generation backend is available right now.", out)
-
-    svc, backends, fb = build_service()
-    out = svc.generate_from_input(json.dumps(
-        {"prompt": "a harbour", "agent_name": "Alice", "workflow": "GW-B"}))
-    check("G4 character-disabled glob falls back", fb == ["Alice"], f"{fb} {out}")
-
-    svc, backends, fb = build_service()
-    out = svc.generate_from_input(json.dumps(
-        {"prompt": "a harbour", "agent_name": "Bob", "workflow": "Nope*"}))
-    check("G5 glob without any backend falls back", fb == ["Bob"], f"{fb} {out}")
-finally:
-    svc_mod.get_character_profile = _real_profile
-    svc_mod.render_has_reference_image = _real_has_ref
 
 print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")
 if FAILURES:

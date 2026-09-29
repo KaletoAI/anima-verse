@@ -3719,7 +3719,7 @@ def add_character_image_metadata(character_name: str, image_filename: str, metad
 
 
 def get_character_image_metadata(character_name: str) -> Dict[str, Any]:
-    """Gibt alle Bild-Metadaten zurueck als {filename: {backend, workflow, ...}}."""
+    """Return all image metadata as {filename: {backend, workflow, ...}}."""
     from app.models.world import get_location_name as _get_loc_name
     all_meta = _load_all_image_meta(character_name)
     result = {}
@@ -3728,22 +3728,26 @@ def get_character_image_metadata(character_name: str) -> Dict[str, Any]:
         "created_at", "model", "loras", "seed", "image_analysis", "location",
         "animate_prompt", "prompt", "character_names", "room_id",
         "reference_images", "negative_prompt",
-        # Adapter-Pipeline (fuer Re-Creation Dialog Spalte 3 + Rebuild-Button)
+        # Adapter pipeline (re-creation dialog column 3 + rebuild button)
         "canonical", "canonical_source", "target_model",
         "template_prompt", "prompt_method",
-        # Items (Props) die beim Erzeugen mitgegeben wurden — Regenerate nutzt dies
+        # Items (props) passed in at generation time — regenerate uses them
         "items_used",
-        # Herkunft: wer hat das Bild erzeugt wenn es in einer fremden Galerie
-        # liegt (z.B. NPC schickt Foto an Avatar -> from_character=NPC)
+        # Origin: who created the image when it lies in a foreign gallery
+        # (e.g. an NPC sends a photo to the avatar -> from_character=NPC)
         "from_character",
-        # Generation-Parameter fuer Bild-Info-Panel
+        # Generation parameters for the image info panel
         "guidance_scale", "num_inference_steps",
-        # Regen-Zeitstempel: nutzt das Frontend als Cache-Bust-Key (?v=...)
-        # damit ein regeneriertes Bild ohne Browser-Refresh sichtbar wird.
+        # Regeneration timestamp: the frontend uses it as a cache-bust key
+        # (?v=...) so a regenerated image shows without a browser refresh.
         "regenerated_at",
-        # Post-Processing: extern nachbearbeitet (vom PP-Service zurueckgeschrieben).
-        # UI zeigt "extern bearbeitet".
+        # Post-processing: edited externally (written back by the PP service).
+        # The UI shows "edited externally".
         "postprocessed", "postprocessed_at",
+        # Image routing (plan-image-routing.md): the occasion/position a render
+        # came from, the intended backend spec of a fallback render, and — for
+        # a re-render — the image it replaces.
+        "routing", "fallback_from", "source_file",
     }
     images_dir = get_character_images_dir(character_name)
     for fn, m in all_meta.items():
@@ -3759,7 +3763,7 @@ def get_character_image_metadata(character_name: str) -> Dict[str, Any]:
                     entry["created_at"] = datetime.fromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%S")
                 except (ValueError, OSError):
                     pass
-        # Location-ID zu Name aufloesen
+        # Resolve the location id to its name
         if "location" in entry and entry["location"]:
             loc_name = _get_loc_name(entry["location"])
             entry["location_name"] = loc_name if loc_name else entry["location"]
