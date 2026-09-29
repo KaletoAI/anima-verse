@@ -46,7 +46,7 @@ def main(argv=None) -> int:
                     print(f"  {k:<28} {src}")
             print("poses:")
             for key, e in sorted(get_catalog("pose").items()):
-                hay = " ".join([key, e.get("animation", "")] + e.get("synonyms", []))
+                hay = " ".join([key, e.get("animation", "")] + e.get("synonyms", [])).lower()
                 if q in hay:
                     syn = ", ".join(e.get("synonyms", [])[:4])
                     print(f"  {key:<24} -> {e.get('animation', ''):<22} [{e.get('group', '')}] {syn}")

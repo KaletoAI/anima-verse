@@ -10,7 +10,40 @@ PARENT's moved frame: D_b = D_parent · Rot_b, Rot_b the product of the bone's
 axis rotations in ``ORDER`` (leftmost applied last). That is Blender's
 ``P_b = P_p · Rest_p⁻¹ · Rest_b · Basis_b`` with ``Basis_b = Rest_bᵀ · Rot_b ·
 Rest_b`` — the compiler needs no bone rolls. The sign of every DOF is
-derived in the table of plan-animation-werkstatt-umsetzung.md, Task 2.
+derived in the table of plan-animation-werkstatt-umsetzung.md, Task 2;
+the result, per DOF: bone(s) · axis · factor -> what a POSITIVE value does.
+``s`` = l/r, ``S`` = Left/Right, ``m`` = +1 left / -1 right (the right side
+is the mirror image, so + means the same movement on both sides):
+
+  body_pitch        Hips·x·+1           torso forward (-90 = on the back, head to -Z)
+  body_roll         Hips·z·-1           tip over to the figure's left
+  body_yaw          Hips·y·+1           turn to the left
+  spine_flex/_tilt/_rot  Spine·Spine1·Spine2 x/z/y, 0.4/0.3/0.3 × (+1/-1/+1)
+                                        bend forward / lean left / chest turns left
+  neck_flex/_tilt/_rot   Neck·Head x/z/y, 0.5/0.5 × (+1/-1/+1)
+                                        head down / tilt left / look left
+  s_clav_raise      SShoulder·z·m       shrug the shoulder up
+  s_clav_forward    SShoulder·y·-m      shoulder forward
+  s_arm_elev        SArm·z·m            raise the arm (0 = T-pose, -90 = hanging)
+  s_arm_azim        SArm·y·-m           swing the arm forward (90 = pointing front)
+  s_arm_twist       SArm·x·-1           turn the palm forward
+  s_elbow_flex      SForeArm·y·-m       bend the elbow (hand towards the front)
+  s_wrist_flex      SHand·z·-m          bend the hand towards the palm
+  s_wrist_dev       SHand·y·-m          bend the hand towards the front
+  s_wrist_twist     SHand·x·-1          turn the palm forward (like arm_twist)
+  s_fingers_curl    SHand{Index,Middle,Ring,Pinky}{1,2,3}·z·-m × (1, 1, 0.7)
+                                        make a fist (90)
+  s_thumb_curl      SHandThumb{1,2,3}·z·-m × (0.3, 0.6, 0.6)   curl the thumb (rough)
+  s_hip_flex        SUpLeg·x·-1         thigh forward (90 = seated)
+  s_hip_abduct      SUpLeg·z·m          leg outwards
+  s_hip_rot         SUpLeg·y·m          toes turn outwards
+  s_knee_flex       SLeg·x·+1           bend the knee (shin backwards; 90 = seated)
+  s_ankle_flex      SFoot·x·-1          toes up
+  s_toes_flex       SToeBase·x·-1       toes up (toe joint)
+  hips_drop_cm      —                   the hips sink by that many cm
+
+Rotation order per bone (``ORDER``): Arm "yzx", UpLeg "xzy", Hand "zyx",
+Shoulder "yz", every other bone "yxz". Limits: ``LIMITS`` below.
 
 Lying convention: on the back is ``body_pitch = -90`` — head towards -Z,
 face up (``LIE_HEAD``).
