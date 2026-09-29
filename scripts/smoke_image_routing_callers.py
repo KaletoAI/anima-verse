@@ -16,10 +16,12 @@ A1 generate_frame("a phone") with no target -> ONE payload with
 A2 generate_frame("a phone", "Flux2*") -> payload backend "Flux2*" and no
    "occasion" key (an explicit pick: exactly that backend, no fallback).
 
-PART B — location family (occasion "location"), end to end through the
-REAL routing on a fake pool: "Gw" (family natural, cost 0) fails with
-HTTP 500, "Cloud" (family keywords, cost 5) renders; both have one
-reference slot. `run_on_backend_channel` runs the job inline.
+PART B — location family (occasions "location", "timevariant"), end to end
+through the REAL routing on a fake pool: "Gw" (family natural, cost 0)
+fails with HTTP 500, "Cloud" (family keywords, cost 5) renders; both have one
+reference slot. `run_on_backend_channel` runs the job inline. Gallery file
+names are `int(time.time()).png`, so the smoke sleeps 1.1 s before every
+render that saves an image — two renders in one second would share a name.
 B1 gallery, no backend, rules location ["Gw","Cloud"]: the image is saved;
    its gallery meta has backend "Cloud", routing {"occasion":"location",
    "position":2,"spec":"Cloud"}, fallback_from {"occasion":"location",
@@ -34,6 +36,35 @@ B3 settings_applied + prompt "VERBATIM": the first try (Gw) receives
 B4 explicit backend "Gw" while Gw cools down -> HTTPException 503, Cloud is
    never asked (an explicit pick is never routed elsewhere).
 B5 explicit backend "Cloud" -> rendered on Cloud, meta without "routing".
+B6 time variant of a gallery image, no backend, rules timevariant ["Cloud"]
+   -> new image, meta routing {"occasion":"timevariant","position":1,
+   "spec":"Cloud"}, the reference slot carries the source image.
+B7 location background, rules location ["Cloud"] -> exactly one new
+   gallery image; its meta has backend "Cloud" and routing
+   {"occasion":"location","position":1,"spec":"Cloud"} (checked on the NEW
+   file — B1's meta alone would satisfy an "any image" check).
+B8 room image of describe_room, rules location ["Cloud"], a room with a
+   description -> one image assigned to that room, meta backend "Cloud" and
+   routing {"occasion":"location","position":1,"spec":"Cloud"} (the old
+   lookup went through the skill manager, found the TakePhoto verb without
+   a pool and the room image never rendered).
+B9 explicit backend "Gw" that is available but fails at runtime (a fresh Gw,
+   not cooled yet) -> HTTPException 500; Gw was asked once, Cloud never (an
+   explicit pick is not re-run elsewhere, not even after a failure).
+B10 no backend, model_override "m-dialog", rules location ["Gw","Cloud"]:
+   the first try (Gw) carries params model "m-dialog"; the re-run on Cloud
+   carries no "model" (a dialog's model name belongs to the backend the
+   dialog showed). An explicit "Cloud" pick with the same override carries
+   it (explicit = the dialog's own backend).
+B11 explicit "Cloud" with LoRA "foreign.safetensors" (the library is empty,
+   so nothing is associated with Cloud) -> HTTPException 400 whose detail
+   says the library "does not associate" it; Cloud is never asked; the
+   tracked task finishes with that detail as its error, not a bare
+   "refused".
+B12 no backend, rules location ["Cloud"], a third backend "Spare" outside
+   the chain -> Spare is never probed (check_availability count 0): the
+   routing probes only its intended entry, and the gallery core's own
+   probe of every backend runs only for an explicit pick.
 """
 import asyncio
 import io
@@ -41,6 +72,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -110,8 +143,10 @@ class FakeBackend(ImageBackend):
         self._available = True
         self.dead = dead
         self.calls = []
+        self.probes = 0
 
     def check_availability(self):
+        self.probes += 1
         return self.available
 
     def _generate(self, prompt, negative_prompt, params):
@@ -137,6 +172,9 @@ def install_pool(*backends):
 
 service_mod.ImageService.run_on_backend_channel = staticmethod(
     lambda backend, gen_fn, **kw: gen_fn())
+# No configured instances: the constructor would otherwise probe the default
+# backends of the throwaway config over the network.
+service_mod.ImageService._load_instances = lambda self: []
 
 
 def set_routing(rules):
@@ -165,10 +203,21 @@ def part_b():
     print("B) location family")
     from fastapi import HTTPException
     from app.core import world_ops
+    from app.core.task_queue import get_task_queue
     from app.models import world
     loc = world.add_location("Mill", "A mill by the river.")["id"]
 
+    track_errors = []
+    _tq = get_task_queue()
+    _orig_finish = _tq.track_finish
+
+    def _record_finish(task_id, error=""):
+        track_errors.append(error)
+        return _orig_finish(task_id, error=error)
+    _tq.track_finish = _record_finish
+
     def gallery(data):
+        time.sleep(1.1)          # a fresh int(time.time()) file name per render
         return asyncio.run(world_ops.generate_gallery_image_core(loc, dict(data)))
 
     def meta_of(name):
@@ -202,6 +251,86 @@ def part_b():
     res = gallery({"prompt": "x", "backend": "Cloud"})
     check("B5 explicit renders", meta_of(res["image"]).get("backend"), "Cloud")
     check("B5 no routing meta", "routing" in meta_of(res["image"]), False)
+
+    cloud = FakeBackend("Cloud", 5, "keywords")
+    install_pool(cloud)
+    set_routing({"timevariant": ["Cloud"]})
+    src = world.get_gallery_dir(loc) / "src.png"
+    src.write_bytes(png_bytes())
+    time.sleep(1.1)
+    res = asyncio.run(world_ops.generate_time_variant_core(
+        loc, "src.png", "night", "", ""))
+    check("B6 routing", meta_of(res["image"]).get("routing"),
+          {"occasion": "timevariant", "position": 1, "spec": "Cloud"})
+    check("B6 source in the reference slot",
+          cloud.calls[0]["params"].get("reference_images"),
+          {"input_reference_image_1": str(src)})
+
+    set_routing({"location": ["Cloud"]})
+    before = {p.name for p in world.get_gallery_dir(loc).glob("*.png")}
+    time.sleep(1.1)
+    asyncio.run(world_ops.generate_location_background(loc, "a mill"))
+    new = sorted({p.name for p in world.get_gallery_dir(loc).glob("*.png")} - before)
+    check("B7 one background image", len(new), 1)
+    bm = meta_of(new[0]) if new else {}
+    check("B7 background routed", (bm.get("backend"), bm.get("routing")),
+          ("Cloud", {"occasion": "location", "position": 1, "spec": "Cloud"}))
+
+    from app.skills.describe_room_skill import DescribeRoomSkill
+    room = world.add_room(loc, "Millroom", "Grinding stones under a timber roof.")
+    cloud = FakeBackend("Cloud", 5, "keywords")
+    install_pool(cloud)
+    before = set(threading.enumerate())
+    time.sleep(1.1)
+    DescribeRoomSkill._trigger_room_image(loc, room["id"])
+    for t in set(threading.enumerate()) - before:
+        t.join(timeout=30)
+    rooms = world.get_gallery_image_rooms(loc) or {}
+    room_images = [n for n, r in rooms.items() if r == room["id"]]
+    check("B8 one room image", len(room_images), 1)
+    rm = meta_of(room_images[0]) if room_images else {}
+    check("B8 room image backend", rm.get("backend"), "Cloud")
+    check("B8 room image routing", rm.get("routing"),
+          {"occasion": "location", "position": 1, "spec": "Cloud"})
+
+    gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    set_routing({"location": ["Gw", "Cloud"]})
+    try:
+        gallery({"prompt": "x", "backend": "Gw"})       # fresh Gw: available, then fails
+        check("B9 explicit fails at runtime", "no exception", "HTTPException 500")
+    except HTTPException as e:
+        check("B9 explicit fails at runtime", e.status_code, 500)
+    check("B9 asked Gw once, Cloud never", (len(gw.calls), len(cloud.calls)), (1, 0))
+
+    gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    gallery({"prompt": "x", "model_override": "m-dialog"})
+    check("B10 first try carries the dialog model", gw.calls[0]["params"].get("model"), "m-dialog")
+    check("B10 re-run without it", "model" in cloud.calls[0]["params"], False)
+    gallery({"prompt": "x", "backend": "Cloud", "model_override": "m-dialog"})
+    check("B10 explicit carries it", cloud.calls[1]["params"].get("model"), "m-dialog")
+
+    cloud = FakeBackend("Cloud", 5, "keywords")
+    install_pool(cloud)
+    track_errors.clear()
+    try:
+        gallery({"prompt": "x", "backend": "Cloud",
+                 "loras": [{"name": "foreign.safetensors", "strength": 1.0}]})
+        check("B11 explicit foreign LoRA", "no exception", "HTTPException 400")
+    except HTTPException as e:
+        check("B11 explicit foreign LoRA", (e.status_code, "does not associate" in str(e.detail)),
+              (400, True))
+    check("B11 Cloud never asked", len(cloud.calls), 0)
+    check("B11 track error is the real reason",
+          [("does not associate" in (e or "")) for e in track_errors], [True])
+
+    cloud, spare = FakeBackend("Cloud", 5, "keywords"), FakeBackend("Spare", 1, "natural")
+    install_pool(cloud, spare)
+    set_routing({"location": ["Cloud"]})
+    res = gallery({"prompt": "x"})
+    check("B12 rendered on the chain", meta_of(res["image"]).get("backend"), "Cloud")
+    check("B12 Spare never probed", spare.probes, 0)
 
 
 if __name__ == "__main__":

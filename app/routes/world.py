@@ -30,6 +30,7 @@ from app.models.world import (
     get_room_by_id,
     clear_room_prompt_changed, clear_location_prompt_changed)
 from app.core import world_ops
+from app.imagegen.base import MediaGenerationDisabled
 
 router = APIRouter(prefix="/world", tags=["world"])
 
@@ -2880,16 +2881,17 @@ async def upload_location_background(location_name: str, request: Request) -> Di
 
 @router.post("/locations/{location_name}/background")
 async def generate_location_background(location_name: str, request: Request) -> Dict[str, Any]:
-    """Generiert ein Hintergrundbild fuer einen Ort per Image-Backend (per ID oder Name)."""
+    """Generates a background image for a location (by id or name) on the
+    "location" chain of the image routing."""
     try:
         data = await request.json()
-        user_id = data.get("user_id", "").strip()
         custom_prompt = data.get("prompt", "").strip()
         return await world_ops.generate_location_background(location_name, custom_prompt)
-    except HTTPException:
+    except (HTTPException, MediaGenerationDisabled):
+        # The media master switch reaches the server's 409 handler untouched.
         raise
     except Exception as e:
-        logger.error("Background Fehler: %s", e)
+        logger.error("Background error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3224,29 +3226,29 @@ async def generate_time_variant(
     request: Request) -> Dict[str, Any]:
     """Creates a day or night variant from an existing image via img2img (reference image).
 
-    Uses a reference-capable image backend with the original image as reference.
-    Body parameter 'target_type': 'night' (default) or 'day'.
+    Uses a reference-capable image backend with the original image as reference:
+    the body's 'backend' (explicit, no fallback) or else the "timevariant"
+    chain of the image routing. Body parameter 'target_type': 'night'
+    (default) or 'day'.
     """
     try:
         body = await request.json()
-        user_id = body.get("user_id", "").strip()
         target_type = body.get("target_type", "night").strip()
-        workflow_name = body.get("workflow", "").strip()
         backend_name = body.get("backend", "").strip()
         custom_prompt = body.get("prompt", "").strip()
         if target_type not in ("day", "night"):
-            raise HTTPException(status_code=400, detail="target_type muss 'day' oder 'night' sein")
+            raise HTTPException(status_code=400, detail="target_type must be 'day' or 'night'")
         if ".." in image_name or "/" in image_name:
-            raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
+            raise HTTPException(status_code=400, detail="Invalid file name")
 
         return await world_ops.generate_time_variant_core(
             location_name, image_name, target_type=target_type,
-            workflow_name=workflow_name, backend_name=backend_name,
-            custom_prompt=custom_prompt)
-    except HTTPException:
+            backend_name=backend_name, custom_prompt=custom_prompt)
+    except (HTTPException, MediaGenerationDisabled):
+        # The media master switch reaches the server's 409 handler untouched.
         raise
     except Exception as e:
-        logger.error("Time-Variant Fehler: %s", e)
+        logger.error("Time variant error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

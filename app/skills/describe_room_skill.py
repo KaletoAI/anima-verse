@@ -285,17 +285,17 @@ class DescribeRoomSkill(BaseSkill):
 
     @staticmethod
     def _trigger_room_image(location_id: str, room_id: str):
-        """Startet die Bildgenerierung fuer einen Raum (fire-and-forget).
+        """Starts the image generation for a room (fire-and-forget) on the
+        "location" chain of the image routing.
 
-        Funktioniert sowohl aus async-Kontexten (Chat-Route) als auch aus
-        synchronen Worker-Threads (Proaktiv/Intent via TaskQueue).
+        Works from async contexts (chat route) as well as from synchronous
+        worker threads (proactive/intent via the TaskQueue).
         """
         import threading
 
         def _generate():
             import time
             try:
-                from app.core.dependencies import get_skill_manager
                 from app.models.world import get_location_by_id, get_room_by_id
                 from app.models.world import get_gallery_dir, save_gallery_prompt, \
                     toggle_background_image, set_gallery_image_room
@@ -316,32 +316,18 @@ class DescribeRoomSkill(BaseSkill):
                 # tail are the location style's job (legacy tail, N7).
                 prompt = description
 
-                skill_manager = get_skill_manager()
-                img_skill = None
-                for skill in skill_manager.skills:
-                    if getattr(skill, 'SKILL_ID', '') == "image_generation":
-                        img_skill = skill
-                        break
-                if not img_skill:
-                    logger.warning("ImageGeneration Skill nicht verfuegbar fuer Raum-Bild")
+                # The image SERVICE, not the skill-manager lookup: that one
+                # found the TakePhoto VERB (SKILL_ID "image_generation", no
+                # pool) and the room image never rendered.
+                from app.imagegen.routing import route_meta, run_routed
+                from app.imagegen.service import get_image_service
+                svc = get_image_service()
+                if not svc.enabled:
+                    logger.warning("Image service not available for the room image")
                     return
-
-                # Resolve the backend from LOCATION_IMAGEGEN_DEFAULT
-                # (match concept: glob + availability instead of an exact name).
-                loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
-                backend = img_skill.resolve_imagegen_target(loc_default)
-                if not backend:
-                    backend = img_skill._select_backend()
-                if not backend:
-                    logger.warning("Kein Image-Backend verfuegbar fuer Raum-Bild")
-                    return
-
                 from app.core.prompt_compose import compose as _compose
-                _composed = _compose(use_case="location", subject=prompt,
-                                     backend=backend)
-                full_prompt = _composed.prompt
-                negative = _composed.negative
-                # Raum-Szenenbild ist ein Hintergrund — voll, kein Downscale.
+                # The room scene image is a background — full size, no
+                # downscale.
                 try:
                     _bg_w = int(os.environ.get("LOCATION_IMAGE_WIDTH", "1280"))
                 except (TypeError, ValueError):
@@ -350,30 +336,37 @@ class DescribeRoomSkill(BaseSkill):
                     _bg_h = int(os.environ.get("LOCATION_IMAGE_HEIGHT", "720"))
                 except (TypeError, ValueError):
                     _bg_h = 720
-                params = {"width": _bg_w, "height": _bg_h}
-                # Random seed for a fresh render each time.
-                import random as _rnd
-                params["seed"] = _rnd.randint(1, 2**31 - 1)
+                _agent = location.get("name", location_id)
 
-                logger.info("Raum-Bild Generierung gestartet fuer %s/%s", location_id, room_id)
-                # Through the service's ONE handoff: the per-backend channel
-                # (two renders never run in parallel on one backend) and the
-                # world's media master switch both live there. This runs on
-                # its own daemon thread, never in a queue worker, so the
-                # submission cannot nest into its own channel.
-                from app.imagegen.service import get_image_service
-                _log_meta = {"agent_name": location.get("name", location_id),
-                             "original_prompt": prompt, "auto_enhance": False,
-                             "compose": _composed.meta}
-                images = get_image_service().run_on_backend_channel(
-                    backend,
-                    lambda: backend.generate(full_prompt, negative, params,
-                                             log_meta=_log_meta),
-                    task_type="image_generation",
-                    label=f"Room image: {location_id}/{room_id}")
-                if not images:
-                    logger.warning("Raum-Bild Generierung fehlgeschlagen fuer %s/%s", location_id, room_id)
-                    return
+                def _render(b):
+                    """Style/negative for ``b`` — a re-run after a failure
+                    composes for the next backend of the chain."""
+                    composed = _compose(use_case="location", subject=prompt, backend=b)
+                    # Random seed for a fresh render each time.
+                    import random as _rnd
+                    params = {"width": _bg_w, "height": _bg_h,
+                              "seed": _rnd.randint(1, 2**31 - 1)}
+                    _log_meta = {"agent_name": _agent, "original_prompt": prompt,
+                                 "auto_enhance": False, "compose": composed.meta}
+
+                    # Through the service's ONE handoff: the per-backend
+                    # channel (two renders never run in parallel on one
+                    # backend) and the world's media master switch both live
+                    # there. This runs on its own daemon thread, never in a
+                    # queue worker, so the submission cannot nest into its own
+                    # channel.
+                    def _op(bb):
+                        return svc.run_on_backend_channel(
+                            bb, lambda: bb.generate(composed.prompt, composed.negative,
+                                                    params, log_meta=_log_meta),
+                            task_type="image_generation",
+                            label=f"Room image: {location_id}/{room_id}")
+                    images, used = svc.run_on_backend(b, op=_op)
+                    return images, used, composed.prompt
+
+                logger.info("Room image generation started for %s/%s", location_id, room_id)
+                (images, backend, full_prompt), route = run_routed(
+                    "location", _render, pool=svc.pool)
 
                 loc_id = location.get("id", location_id)
                 gallery_dir = get_gallery_dir(loc_id)
@@ -386,7 +379,7 @@ class DescribeRoomSkill(BaseSkill):
                 toggle_background_image(loc_id, image_name)
                 set_gallery_image_room(loc_id, image_name, room_id)
 
-                # prompt_changed Flag entfernen — Bild wurde aus dem Prompt erzeugt
+                # Clear the prompt_changed flag — the image was made from the prompt
                 from app.models.world import clear_room_prompt_changed
                 clear_room_prompt_changed(location_id, room_id)
                 _model_used = (getattr(backend, 'last_used_checkpoint', '')
@@ -394,14 +387,18 @@ class DescribeRoomSkill(BaseSkill):
                                or getattr(backend, 'checkpoint', '') or '')
                 set_gallery_image_meta(loc_id, image_name, {
                     "backend": backend.name,
+                    "backend_type": backend.api_type,
                     "model": _model_used,
+                    "loras": [],
+                    **route_meta(route),
                 })
 
                 logger.info(
-                    "Raum-Bild generiert: %s/%s -> %s",
+                    "Room image generated: %s/%s -> %s",
                     location.get("name", "?"), room.get("name", "?"), image_name)
             except Exception as e:
-                logger.error("Fehler bei Raum-Bild Generierung: %s", e, exc_info=True)
+                logger.error("Room image generation failed for %s/%s: %s",
+                             location_id, room_id, e, exc_info=True)
 
         thread = threading.Thread(target=_generate, daemon=True)
         thread.start()

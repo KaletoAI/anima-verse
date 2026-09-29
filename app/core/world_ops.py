@@ -2850,11 +2850,12 @@ def save_uploaded_background(location_name: str, filename: str, content: bytes,
 
 async def generate_location_background(location_name: str,
                                        custom_prompt: str) -> Dict[str, Any]:
-    """Generate a background image for a location via an image backend (by id or name)."""
+    """Generate a background image for a location (by id or name) on the
+    "location" chain of the image routing."""
     # Resolve the location by id or name
     location = resolve_location(location_name)
     if not location:
-        raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Location '{location_name}' not found")
 
     description = location.get("description", location_name)
 
@@ -2863,64 +2864,63 @@ async def generate_location_background(location_name: str,
     # as a second copy it fought the real canvas size (legacy tail, N7).
     prompt = custom_prompt or description
 
-    # Get the image backend (cheapest available one)
-
     # Core image SERVICE (wave-6 split) — NOT the skill-manager lookup: the
     # TakePhoto VERB kept SKILL_ID "image_generation" for its per-character
     # config, but has no backends/pool (crashed with AttributeError and left
-    # the "Ort-Bild" track pending forever).
+    # the location-image track pending forever).
     from app.imagegen.service import get_image_service
     img_skill = get_image_service()
     if not img_skill or not img_skill.enabled:
-        raise HTTPException(status_code=503, detail="Image service nicht verfuegbar")
+        raise HTTPException(status_code=503, detail="Image service not available")
 
-    backend = img_skill._select_backend()
-    if not backend:
-        raise HTTPException(status_code=503, detail="Kein Image-Backend verfuegbar")
-
-    # Generate image (blocking, in a thread) — style/negative from the use case.
+    # New locations render on the "location" chain of the image routing
+    # (this path read no default before — a deliberate change, see the spec).
     from app.core.prompt_compose import compose as _compose
     from app.core.prompt_compose import outdoor_conditions as _conditions
-    # An open-air location is painted in TODAY's weather; an interior is not
-    # (its light comes from the use-case style, and there is no snow indoors).
-    _composed = _compose(use_case="location", subject=prompt, backend=backend,
-                         conditions=_conditions(is_outdoor_room(location, "")))
-    full_prompt = _composed.prompt
-    negative = _composed.negative
-    for _w in _composed.warnings:
-        logger.info("Prompt composer (location/background): %s", _w)
-    # Location background: full resolution — used as a background scene
-    # image, no downscale.
-    params = {"width": _location_image_width(), "height": _location_image_height()}
+    from app.imagegen.routing import NoRouteError, route_meta, run_routed
+    _agent = location.get("name", location_name)
 
-    # Fresh seed per call — avoids backend-side cache hits
-    # (memory: feedback_no_new_image_sentinel).
-    import random as _rnd
-    params["seed"] = _rnd.randint(1, 2**31 - 1)
+    def _render(b):
+        """Style/negative for ``b`` — a re-run after a failure composes for
+        the next backend of the chain."""
+        # An open-air location is painted in TODAY's weather; an interior is
+        # not (its light comes from the use-case style, and there is no snow
+        # indoors).
+        composed = _compose(use_case="location", subject=prompt, backend=b,
+                            conditions=_conditions(is_outdoor_room(location, "")))
+        for _w in composed.warnings:
+            logger.info("Prompt composer (location/background): %s", _w)
+        # Location background: full resolution — used as a background scene
+        # image, no downscale. Fresh seed per call — avoids backend-side cache
+        # hits (memory: feedback_no_new_image_sentinel).
+        import random as _rnd
+        params = {"width": _location_image_width(), "height": _location_image_height(),
+                  "seed": _rnd.randint(1, 2**31 - 1)}
+        _log_meta = {"agent_name": _agent, "original_prompt": prompt,
+                     "auto_enhance": False, "compose": composed.meta}
 
-    # Backend fallback engine: tries primary, falls back to the next
-    # available backend on failure. EVERY backend goes through its
-    # per-backend GPU queue channel → never two in parallel per backend.
-    _log_meta = {"agent_name": location.get("name", location_name),
-                 "original_prompt": prompt, "auto_enhance": False,
-                 "compose": _composed.meta}
-    def _op(b):
-        return img_skill.run_on_backend_channel(
-            b,
-            lambda: b.generate(full_prompt, negative, params, log_meta=_log_meta),
-            task_type="image_gen",
-            agent_name=location.get("name", location_name))
+        # EVERY backend goes through its per-backend GPU queue channel —
+        # never two renders in parallel on one backend.
+        def _op(bb):
+            return img_skill.run_on_backend_channel(
+                bb, lambda: bb.generate(composed.prompt, composed.negative, params,
+                                        log_meta=_log_meta),
+                task_type="image_gen", agent_name=_agent)
+        images, used = img_skill.run_on_backend(b, op=_op)
+        return images, used
+
     try:
-        images, backend = await asyncio.to_thread(
-            lambda: img_skill.run_on_backend(backend, op=_op))
+        (images, backend), route = await asyncio.to_thread(
+            run_routed, "location", _render, pool=img_skill.pool)
+    except MediaGenerationDisabled:
+        raise
     except BackendBusyError as _busy:
         raise HTTPException(status_code=503,
-                            detail=f"{backend.name} ist ausgelastet — bitte später erneut versuchen ({_busy})")
+                            detail=f"The image backend is busy — please try again later ({_busy})")
+    except NoRouteError as _nr:
+        raise HTTPException(status_code=503, detail=str(_nr))
     except RuntimeError as _err:
         raise HTTPException(status_code=500, detail=str(_err))
-
-    if not images:
-        raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
 
     # Save into the gallery + reference as background
     import time
@@ -2933,8 +2933,13 @@ async def generate_location_background(location_name: str,
 
     # Automatically mark as background
     toggle_background_image(loc_id, image_name)
+    set_gallery_image_meta(loc_id, image_name, {
+        "backend": backend.name, "backend_type": backend.api_type,
+        "model": getattr(backend, "model", "") or "", "loras": [],
+        **route_meta(route)})
 
-    logger.info("Bild generiert + als Hintergrund markiert: %s (%s) -> gallery/%s/%s", location['name'], loc_id, loc_id, image_name)
+    logger.info("Image generated + marked as background: %s (%s) -> gallery/%s/%s",
+                location['name'], loc_id, loc_id, image_name)
     return {"status": "success", "location": location["name"], "location_id": loc_id}
 
 
@@ -3217,17 +3222,18 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         if not img_skill or not img_skill.enabled:
             raise HTTPException(status_code=503, detail="Image service not available")
 
-        # Freshly check the availability of all backends — network calls go into
-        # a thread, otherwise they block the event loop (the watchdog trips).
-        await asyncio.to_thread(
-            lambda: [b.check_availability()
-                     for b in img_skill.backends if b.instance_enabled])
-
         # An explicit dialog pick renders on exactly that backend — no
         # routing, no fallback. No pick = the "location" occasion of the image
-        # routing (chain + re-run on the next entry after a failure).
+        # routing (chain + re-run on the next entry after a failure); the
+        # routing probes its intended entry itself, so only the explicit path
+        # checks availability here.
         backend = None
         if backend_name:
+            # Fresh availability — network calls go into a thread, otherwise
+            # they block the event loop (the watchdog trips).
+            await asyncio.to_thread(
+                lambda: [b.check_availability()
+                         for b in img_skill.backends if b.instance_enabled])
             backend = (img_skill._wait_for_explicit_backend(backend_name)
                        or img_skill.match_backend(backend_name))
             if not backend:
@@ -3317,31 +3323,46 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             params: Dict[str, Any] = {"width": _location_image_width(),
                                       "height": _location_image_height()}
             if _view:
+                # Square so the whole subject fits with a margin — every
+                # building view feeds the image-to-3D pass (like the T-pose
+                # reference), which needs the full silhouette in frame, not a
+                # 16:9 crop.
                 params["image_use_case"] = _uc_name
                 params["width"] = 1024
                 params["height"] = 1024
+            # Caller-picked resolution beats every use-case default
+            # (2026-07-25): a 2 x 5 room needs a 2 x 5 image, not the square
+            # building format. Rounded/clamped by _clamp_image_dim; unset keeps
+            # the default. Backends without a free size ignore the values —
+            # best effort, never an error.
             _req_w = _clamp_image_dim(data.get("width"))
             _req_h = _clamp_image_dim(data.get("height"))
             if _req_w:
                 params["width"] = _req_w
             if _req_h:
                 params["height"] = _req_h
-            # A dialog's model name belongs to the backend it was picked for.
+            if _req_w or _req_h:
+                logger.info("Caller-picked image size: %sx%s",
+                            params["width"], params["height"])
+            # A dialog's model name belongs to the backend it was picked for
+            # (backends read params["model"]).
             if model_override and (explicit or first):
                 params["model"] = model_override
+            # LoRA selection from the dialog. The dialog is backend-scoped
+            # (LoRA library entries of the chosen backend only); the hard gate
+            # is the server-side safety net for direct API calls on an explicit
+            # pick. Library entries flagged missing pass — the flag can be
+            # stale, a wrong pick fails visibly in the render result. A routed
+            # render may land on a backend the dialog did not scope for, so
+            # there the foreign entries are dropped (with one warning) instead.
             if loras_override is not None:
                 if explicit:
-                    from app.core.config import get_lora_options
-                    _allowed = {o["name"] for o in get_lora_options(
-                        b.name, lora_filter=getattr(b, "lora_filter", "") or "")}
-                    _wanted = [str(l.get("name") or "").strip() for l in loras_override
-                               if isinstance(l, dict)]
-                    _absent = [n for n in _wanted if n and n != "None" and n not in _allowed]
-                    if _absent:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"The LoRA library does not associate backend "
-                                   f"'{b.name}' with: {', '.join(_absent)}")
+                    from app.core.lora_library import (LoraNotAllowedError,
+                                                       assert_loras_allowed)
+                    try:
+                        assert_loras_allowed(b, loras_override)
+                    except LoraNotAllowedError as _lora_err:
+                        raise HTTPException(status_code=400, detail=str(_lora_err))
                     params["lora_inputs"] = loras_override
                 else:
                     from app.core.lora_library import (filter_allowed_loras,
@@ -3350,15 +3371,31 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                     if _dropped:
                         warn_dropped_loras(b.name, _dropped, "")
                     params["lora_inputs"] = _kept
+            # Fresh seed per call so a regenerate produces a new image.
             import random as _rnd
             params["seed"] = _rnd.randint(1, 2**31 - 1)
             _slots = int(getattr(b, "ref_slot_count", 0) or 0)
+            # Self-reference: the existing image as reference in slot 1 — for
+            # "regenerate with current image". Only if the backend has
+            # reference slots.
             if _is_regen and data.get("reference_image") and _slots >= 1:
                 _ref_name = (data.get("reference_image") or "").strip()
                 if _ref_name and "/" not in _ref_name and ".." not in _ref_name:
+                    # get_gallery_dir is imported module-wide (top). NO local
+                    # import here — it would turn get_gallery_dir into a
+                    # function-wide local variable and blow up the save path
+                    # with an UnboundLocalError as soon as this block does not
+                    # run.
                     _ref_path = get_gallery_dir(location_name) / _ref_name
                     if _ref_path.exists():
                         params["reference_images"] = {"input_reference_image_1": str(_ref_path)}
+                        logger.info("Gallery self reference in slot 1: %s", _ref_name)
+            # A back/side view may take the FRONT render as its appearance
+            # reference (design 2026-09-02) — style stays, unlike the
+            # regenerate self-reference above. Only where the backend has a
+            # slot and the file exists; otherwise the view renders from text
+            # alone. A regenerate keeps ITS slot: the self-reference wins, so
+            # the two can never overwrite each other's slot 1.
             if _view and _view != "front" and _front_ref and not _is_regen:
                 if "/" in _front_ref or ".." in _front_ref:
                     logger.warning("front_reference rejected (path): %s", _front_ref)
@@ -3370,11 +3407,18 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                     if _front_path.exists():
                         params["reference_images"] = {
                             "input_reference_image_1": str(_front_path)}
+                        logger.info("Front reference in slot 1 for %s view: %s",
+                                    _view, _front_ref)
                     else:
                         logger.warning("front_reference missing: %s", _front_ref)
+            # Context for the CENTRAL logging in backend.generate() (final
+            # prompt, backend, model, LoRAs, refs and duration are set there).
             _log_meta = {"agent_name": _agent, "original_prompt": prompt,
                          "auto_enhance": False}
             if compose_meta:
+                # Numeric verification runs over logs/image_prompts.jsonl —
+                # the composer states which family, slot and hint produced
+                # the final prompt.
                 _log_meta["compose"] = compose_meta
 
             def _op(bb):
@@ -3402,8 +3446,9 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                     out, route = await asyncio.to_thread(
                         run_routed, "location", _render, has_ref=_has_ref,
                         pool=img_skill.pool)
-            except (HTTPException, MediaGenerationDisabled):
-                _tq.track_finish(_track_id, error="refused")
+            except (HTTPException, MediaGenerationDisabled) as _refused:
+                _tq.track_finish(_track_id, error=str(
+                    getattr(_refused, "detail", "") or _refused)[:200])
                 raise
             except BackendBusyError as _busy:
                 _tq.track_finish(_track_id, error="backend busy")
@@ -3417,6 +3462,9 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 raise HTTPException(status_code=500, detail=str(_err))
             images, backend = out["images"], out["backend"]
             full_prompt, params, _warnings = out["full_prompt"], out["params"], out["warnings"]
+            logger.info("Gallery render on backend %s%s", backend.name,
+                        "" if route is None else
+                        f" (routing {route.occasion}, position {route.position})")
 
             loc_id = location.get("id", location_name)
             gallery_dir = get_gallery_dir(loc_id)
@@ -3514,24 +3562,28 @@ _TIME_VARIANT_CLAUSES = {
 
 
 async def generate_time_variant_core(location_name: str, image_name: str,
-                                     target_type: str, workflow_name: str,
-                                     backend_name: str,
+                                     target_type: str, backend_name: str,
                                      custom_prompt: str) -> Dict[str, Any]:
     """Logic core of the day/night time variant (img2img with the source
     image as the reference). The route keeps parsing/traversal/HTTP mapping;
     the 404 guards for location/source image sit mid-logic here.
+
+    No ``backend_name`` = the "timevariant" occasion of the image routing
+    (backends with at least one reference slot; a failure re-runs on the
+    next chain entry). An explicit pick renders on exactly that backend —
+    no routing, no fallback.
     """
     import time
 
     location = resolve_location(location_name)
     if not location:
-        raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Location '{location_name}' not found")
 
     loc_id = location.get("id", location_name)
     gallery_dir = get_gallery_dir(loc_id)
     source_path = gallery_dir / image_name
     if not source_path.exists():
-        raise HTTPException(status_code=404, detail="Quellbild nicht gefunden")
+        raise HTTPException(status_code=404, detail="Source image not found")
 
     # Prompt: custom or automatically from the day/night prompt / description
     prompt_field = f"image_prompt_{target_type}"
@@ -3571,119 +3623,106 @@ async def generate_time_variant_core(location_name: str, image_name: str,
     # Core image SERVICE (wave-6 split) — NOT the skill-manager lookup: the
     # TakePhoto VERB kept SKILL_ID "image_generation" for its per-character
     # config, but has no backends/pool (crashed with AttributeError and left
-    # the "Ort-Bild" track pending forever).
+    # the track pending forever).
     from app.imagegen.service import get_image_service
     img_skill = get_image_service()
     if not img_skill or not img_skill.enabled:
-        raise HTTPException(status_code=503, detail="Image service nicht verfuegbar")
+        raise HTTPException(status_code=503, detail="Image service not available")
 
-    # Check availability — network calls go into a thread, otherwise
-    # they block the event loop (the watchdog trips).
-    await asyncio.to_thread(
-        lambda: [b.check_availability()
-                 for b in img_skill.backends if b.instance_enabled])
+    # The time variant needs an edit backend with a reference-image slot (the
+    # source image is the image being edited). An inpaint backend does NOT
+    # fit — it expects a mask, which the day/night convert does not provide.
+    def _suits(b) -> bool:
+        return ((getattr(b, "category", "") or "") != "inpaint"
+                and int(getattr(b, "ref_slot_count", 0) or 0) >= 1)
 
-    # Backend selection: explicit spec > explicit backend > configured
-    # time-variant default (image_generation.timevariant_imagegen_default)
-    # > reference-capable auto (cheapest).
     backend = None
-    if workflow_name:
-        # Match concept: glob + availability instead of an exact name.
-        backend = img_skill.resolve_imagegen_target(workflow_name)
-    elif backend_name:
-        backend = img_skill.match_backend(backend_name)  # backend glob via match concept
-
-    if not backend:
-        from app.core import config as _cfg
-        _tv_default = (_cfg.get("image_generation.timevariant_imagegen_default") or "").strip()
-        if _tv_default:
-            backend = img_skill.resolve_imagegen_target(_tv_default)
-
-    if not backend:
-        # Prefer an edit-capable backend with at least one reference-image
-        # slot. NO inpaint backends: they expect a mask, which the
-        # day/night convert does not provide.
-        candidates = [b for b in img_skill.list_available_backends()
-                      if int(getattr(b, "ref_slot_count", 0) or 0) >= 1
-                      and (getattr(b, "category", "") or "") != "inpaint"]
-        backend = img_skill.pick_lowest_cost(candidates, rotation_key="time_variant")
-
-    # No fallback to backends without reference-image support — the
-    # time-variant convert strictly needs img2img with a local reference image.
-    if not backend:
-        raise HTTPException(
-            status_code=503,
-            detail="Kein Image-Backend mit Referenzbild-Support verfuegbar. "
-                   "Bitte ein Backend mit Referenz-Slots konfigurieren/starten.")
-
-    # The time variant needs an edit backend with a reference-image slot.
-    # An inpaint backend does NOT fit — it expects mask inputs.
-    if ((getattr(backend, "category", "") or "") == "inpaint"
-            or int(getattr(backend, "ref_slot_count", 0) or 0) < 1):
-        raise HTTPException(
-            status_code=400,
-            detail=(f"Backend '{backend.name}' ist fuer Tag/Nacht-Varianten "
-                    "ungeeignet (Inpaint bzw. ohne Referenzbild-Slot)."))
+    if backend_name:
+        # Fresh availability — network calls go into a thread, otherwise
+        # they block the event loop (the watchdog trips). The routed path
+        # needs none: the routing probes its intended entry itself.
+        await asyncio.to_thread(
+            lambda: [b.check_availability()
+                     for b in img_skill.backends if b.instance_enabled])
+        backend = img_skill._wait_for_explicit_backend(backend_name, has_input_image=True)
+        if not backend:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Selected backend '{backend_name}' is not available — no automatic fallback.")
+        if not _suits(backend):
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Backend '{backend.name}' cannot render day/night variants "
+                        "(inpaint, or no reference-image slot)."))
 
     from app.core.prompt_compose import compose as _compose
-    _composed = _compose(use_case="location", subject=prompt, backend=backend)
-    full_prompt = _composed.prompt
-    negative = _composed.negative
-    for _w in _composed.warnings:
-        logger.info("Prompt composer (location/time-variant): %s", _w)
-    # Day/night variants are background images — full size, no downscale.
-    params = {"width": _location_image_width(), "height": _location_image_height()}
-
-    # Fresh seed per call — the time variant should always produce a new
-    # image instead of hitting a backend-side prompt+seed cache.
-    import random as _rnd
-    params["seed"] = _rnd.randint(1, 2**31 - 1)
-
-    # The source image is the image being edited (primary edit reference)
-    # in reference slot 1.
-    params["reference_images"] = {
-        "input_reference_image_1": str(source_path),
-    }
-
+    from app.imagegen.routing import NoRouteError, route_meta, run_routed
     from app.core.task_queue import get_task_queue
     _tq = get_task_queue()
-    _variant_label = "Nachtansicht" if target_type == "night" else "Tagansicht"
-    _track_id = _tq.track_start(
-        "image_gen", _variant_label, agent_name=location.get("name", location_name),
-        provider=backend.name, start_running=False)
+    _variant_label = "Night view" if target_type == "night" else "Day view"
+    _agent = location.get("name", location_name)
+    _track_id = _tq.track_start("image_gen", _variant_label, agent_name=_agent,
+                                provider=(backend.name if backend else ""),
+                                start_running=False)
 
-    _gen_start = time.time()
-    try:
-        # GPU provider queue: serialized per backend + track only active
-        # once the channel picks up the work (waiting ones stay "pending").
-        _log_meta = {"agent_name": location.get("name", location_name),
-                     "original_prompt": prompt, "auto_enhance": False,
-                     "compose": _composed.meta}
-        def _op(b):
+    def _render(b):
+        """Style/negative for ``b`` — a re-run after a failure composes for
+        the next backend of the chain."""
+        composed = _compose(use_case="location", subject=prompt, backend=b)
+        for _w in composed.warnings:
+            logger.info("Prompt composer (location/time-variant): %s", _w)
+        # Day/night variants are background images — full size, no
+        # downscale. Fresh seed per call: the variant should always produce a
+        # new image instead of hitting a backend-side prompt+seed cache. The
+        # source image is the primary edit reference in slot 1.
+        import random as _rnd
+        params = {"width": _location_image_width(), "height": _location_image_height(),
+                  "seed": _rnd.randint(1, 2**31 - 1),
+                  "reference_images": {"input_reference_image_1": str(source_path)}}
+        _log_meta = {"agent_name": _agent, "original_prompt": prompt,
+                     "auto_enhance": False, "compose": composed.meta}
+
+        # GPU provider queue: serialized per backend; the track turns active
+        # only once the channel picks up the work (waiting ones stay pending).
+        def _op(bb):
             def _gen():
                 try:
                     from app.core.task_router import match_queue_name
-                    _tq.track_activate(_track_id, queue_name=match_queue_name(b.name) or "", provider=b.name)
+                    _tq.track_activate(_track_id, queue_name=match_queue_name(bb.name) or "",
+                                       provider=bb.name)
                 except Exception:
                     pass
-                return b.generate(full_prompt, negative, params, log_meta=_log_meta)
-            return img_skill.run_on_backend_channel(
-                b, _gen, task_type="image_gen",
-                agent_name=location.get("name", location_name))
+                return bb.generate(composed.prompt, composed.negative, params,
+                                   log_meta=_log_meta)
+            return img_skill.run_on_backend_channel(bb, _gen, task_type="image_gen",
+                                                    agent_name=_agent)
+        images, used = img_skill.run_on_backend(b, op=_op)
+        return {"images": images, "backend": used, "full_prompt": composed.prompt,
+                "params": params}
+
+    _gen_start = time.time()
+    try:
         try:
-            images, backend = await asyncio.to_thread(
-                lambda: img_skill.run_on_backend(backend, op=_op))
+            if backend is not None:
+                out, route = await asyncio.to_thread(_render, backend), None
+            else:
+                out, route = await asyncio.to_thread(
+                    run_routed, "timevariant", _render, has_ref=True, pool=img_skill.pool)
+        except MediaGenerationDisabled:
+            _tq.track_finish(_track_id, error="media generation disabled")
+            raise
         except BackendBusyError as _busy:
-            _tq.track_finish(_track_id, error=f"{backend.name} ausgelastet")
+            _tq.track_finish(_track_id, error="backend busy")
             raise HTTPException(status_code=503,
-                                detail=f"{backend.name} ist ausgelastet — bitte später erneut versuchen ({_busy})")
+                                detail=f"The image backend is busy — please try again later ({_busy})")
+        except NoRouteError as _nr:
+            _tq.track_finish(_track_id, error=str(_nr)[:200])
+            raise HTTPException(status_code=503, detail=str(_nr))
         except RuntimeError as _err:
             _tq.track_finish(_track_id, error=str(_err)[:200])
             raise HTTPException(status_code=500, detail=str(_err))
-
-        if not images:
-            _tq.track_finish(_track_id, error="Bildgenerierung fehlgeschlagen")
-            raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
+        images, backend = out["images"], out["backend"]
+        full_prompt, params = out["full_prompt"], out["params"]
 
         gallery_dir.mkdir(parents=True, exist_ok=True)
         new_image_name = f"{int(time.time())}.png"
@@ -3719,16 +3758,19 @@ async def generate_time_variant_core(location_name: str, image_name: str,
             "model": _model_used,
             "loras": _loras_used,
             "source": image_name,
+            **route_meta(route),
         })
 
         _tq.track_finish(_track_id)
         _gen_duration = time.time() - _gen_start
-        logger.info("%s generiert: %s (%s)/%s -> %s", _variant_label, location['name'], loc_id, image_name, new_image_name)
+        logger.info("%s generated: %s (%s)/%s -> %s", _variant_label, location['name'],
+                    loc_id, image_name, new_image_name)
 
         # Image-prompt logging now happens CENTRALLY in backend.generate()
         # (final, trigger-injected) — via log_meta on the generate call.
         return {"status": "success", "location_id": loc_id, "image": new_image_name, "source": image_name}
-    except HTTPException:
+    except (HTTPException, MediaGenerationDisabled):
+        # Already finished above — never a second track_finish.
         raise
     except Exception as e:
         _tq.track_finish(_track_id, error=str(e))
