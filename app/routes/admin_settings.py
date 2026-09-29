@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import HTMLResponse
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 import httpx
 
 from app.core.log import get_logger
@@ -882,11 +882,15 @@ async def settings_save(request: Request, user=Depends(require_admin)):
     # Protect fields in sub_array/is_dict items (e.g. image backends) that the
     # frontend omits on save when the CONFIG value is undefined.
     _preserve_unsent_subarray_fields(merged, current)
+    _preserve_unsent_image_routing(merged, current)
 
     # Structural validation (e.g. llm_routing order uniqueness)
     err = _validate_llm_routing(merged.get("llm_routing"))
     if err:
         raise HTTPException(status_code=400, detail=err)
+    img_err, img_warnings = _validate_image_routing(merged.get("image_generation"))
+    if img_err:
+        raise HTTPException(status_code=400, detail=img_err)
 
     # Diagnose: was kommt im llm_routing wirklich an?
     try:
@@ -931,9 +935,12 @@ async def settings_save(request: Request, user=Depends(require_admin)):
     msg = "Configuration saved (env updated)."
     if reloaded:
         msg += " Reloaded: " + ", ".join(reloaded) + "."
+    if img_warnings:
+        msg += " Warnings: " + " ".join(img_warnings)
     return {
         "status": "success",
         "message": msg,
+        "warnings": img_warnings,
         "changed_sections": changed_sections,
         "reloaded": reloaded,
     }
@@ -1053,6 +1060,35 @@ def settings_llm_routing_effective(user=Depends(require_admin)):
     runtime = set(runtime_disabled_tasks())
     return explain_routing(config.get_all(), provider_lookup=pm.get_provider, cooled_down=_cooled,
                            disabled=set(disabled_tasks()) - runtime, runtime_disabled=runtime)
+
+
+@router.get("/settings/image-routing/occasions")
+def settings_image_routing_occasions(user=Depends(require_admin)):
+    """The image routing occasion catalog (Rules + Overview pages)."""
+    from app.imagegen.occasions import catalog_payload
+    return {"occasions": catalog_payload()}
+
+
+@router.get("/settings/image-routing/backends")
+def settings_image_routing_backends(user=Depends(require_admin)):
+    """Datalist source of the Rules page: every INSTANTIATED media backend
+    with its kind and runtime state (a backend added since the last restart
+    is not instantiated yet and therefore not listed)."""
+    try:
+        from app.imagegen.service import get_image_service
+        svc = get_image_service()
+    except Exception:
+        return []
+    from app.imagegen.routing import describe_backend
+    return [describe_backend(b) for b in svc.backends]
+
+
+@router.get("/settings/image-routing/effective")
+def settings_image_routing_effective(character: str = "", user=Depends(require_admin)):
+    """What each occasion would render on RIGHT NOW (saved config, cached
+    availability, cooldowns; optionally for one character). Never probes."""
+    from app.imagegen import routing as _routing
+    return _routing.explain_image_routing(character=(character or "").strip())
 
 
 @router.post("/settings/model-capabilities/lookup")
@@ -1193,6 +1229,55 @@ def _validate_llm_routing(routing) -> str:
                         f"ist doppelt (Eintrag #{seen[key]+1} und #{idx+1}).")
             seen[key] = idx
     return ""
+
+
+def _validate_image_routing(img_cfg: Any) -> Tuple[str, List[str]]:
+    """``image_generation.routing`` on save (plan-image-routing.md § 6).
+
+    Hard errors (HTTP 400): not an object, an unknown occasion, a chain that
+    is not a list of strings, a pattern listed twice in one chain, a pattern
+    whose every matching backend is of the wrong kind for the occasion
+    (media, inpaint, rig, reference slot). A pattern that matches no backend
+    at all is only a WARNING — it may name a backend that is added later.
+    Returns ``(error, warnings)``; ``error`` is "" when the routing is fine."""
+    import fnmatch
+    from app.imagegen.occasions import OCCASIONS, backend_fits
+    from app.imagegen.routing import describe_config_backend, normalize_spec
+    if not isinstance(img_cfg, dict) or img_cfg.get("routing") is None:
+        return "", []
+    routing = img_cfg.get("routing")
+    if not isinstance(routing, dict):
+        return ("Image routing: 'routing' must be an object "
+                "{occasion: [pattern, ...]}.", [])
+    kinds = [describe_config_backend(b) for b in (img_cfg.get("backends") or [])
+             if isinstance(b, dict) and b.get("name")]
+    warnings: List[str] = []
+    for occasion, chain in routing.items():
+        if occasion not in OCCASIONS:
+            return f"Image routing: unknown occasion '{occasion}'.", []
+        if not isinstance(chain, list) or not all(isinstance(s, str) for s in chain):
+            return (f"Image routing: the chain of '{occasion}' must be a list "
+                    f"of patterns.", [])
+        seen = set()
+        for raw in chain:
+            spec = normalize_spec(raw)
+            if not spec:
+                continue
+            key = spec.lower()
+            if key in seen:
+                return (f"Image routing: '{spec}' is listed twice for "
+                        f"'{occasion}'.", [])
+            seen.add(key)
+            hits = [k for k in kinds if fnmatch.fnmatch(k["name"].lower(), key)]
+            if not hits:
+                warnings.append(f"Image routing: '{spec}' for '{occasion}' "
+                                f"matches no backend.")
+                continue
+            if not any(backend_fits(occasion, k) for k in hits):
+                names = ", ".join(k["name"] for k in hits[:5])
+                return (f"Image routing: '{spec}' for '{occasion}' matches only "
+                        f"backends of the wrong kind ({names}).", [])
+    return "", warnings
 
 
 @router.get("/settings/schema")
@@ -1944,6 +2029,24 @@ def _preserve_unsent_subarray_fields(merged: dict, current: dict) -> None:
                     for f in field_keys:
                         if f not in new_item and f in cur_item:
                             new_item[f] = cur_item[f]
+
+
+def _preserve_unsent_image_routing(merged: dict, current: dict) -> None:
+    """Keep the stored ``image_generation.routing`` when the payload's
+    image_generation section carries no routing (key missing or null).
+
+    The settings page posts ``JSON.stringify(CONFIG)``; a tab loaded before
+    the chains existed has no ``routing`` key, and ``_merge_sensitive`` reads
+    a missing key as deleted. A dropped routing would make the next config
+    load re-seed the chains from the old default fields, silently discarding
+    every edited chain — so absence never deletes. An explicit ``{}`` is a
+    real clear and is saved as such."""
+    cur_ig = current.get("image_generation")
+    new_ig = merged.get("image_generation")
+    if not isinstance(cur_ig, dict) or not isinstance(new_ig, dict):
+        return
+    if new_ig.get("routing") is None and cur_ig.get("routing") is not None:
+        new_ig["routing"] = cur_ig["routing"]
 
 
 def _merge_sensitive(new: Any, current: Any) -> Any:
