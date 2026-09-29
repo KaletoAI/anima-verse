@@ -30,7 +30,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core import cmu_import
-from app.core.animation_clips import CLIP_EXTS, clip_entries
+from app.core.animation_clips import (CLIP_EXTS, clip_entries,
+                                      reload_clip_caches)
 from app.core.log import get_logger
 from app.core.paths import get_trial_clips_dir
 from app.core.timeutils import utc_now
@@ -320,14 +321,10 @@ def import_take(take_id: str, kind: str, *, clip_set: str = "",
         yaw_deg=float(yaw_deg or 0.0))
     status = record_import(take_id, kind, cset, "free")
 
-    # The pose dropdown and the animation-set fallback both read from the
-    # preset caches — a fresh kind has to be selectable at once, not after a
-    # restart (same reload the poses editor does after a write).
-    try:
-        from app.core import expression_pose_maps as epm
-        epm.reload_presets()
-    except Exception as e:                                   # pragma: no cover
-        logger.warning("preset reload after clip import failed: %s", e)
+    # The clip entry cache, the pose dropdown and the animation-set fallback
+    # all have to see a fresh kind at once, not after a restart — the ONE
+    # reload every clip-library change goes through.
+    reload_clip_caches()
 
     entry = next((e for e in clip_entries()
                   if e["kind"] == kind and e["set"] == cset and e["source"] == "free"),

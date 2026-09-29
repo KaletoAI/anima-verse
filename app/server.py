@@ -617,6 +617,19 @@ async def lifespan(app: FastAPI):
     set_thought_runner(_thought_runner)
     logger.info("ThoughtRunner initialisiert")
 
+    # Warm the pose/expression alias embeddings in the background: a cold
+    # cache costs one embedding call per alias on the first match, which ran
+    # on the event loop inside a chat turn (5 s measured). After the provider
+    # manager (an external embedding route must resolve), before the
+    # AgentLoop (its first thought turns match poses).
+    try:
+        import threading as _threading
+        from app.core.pose_catalog import prewarm_alias_embeddings
+        _threading.Thread(target=prewarm_alias_embeddings,
+                          name="alias-embedding-warmup", daemon=True).start()
+    except Exception as _we:
+        logger.warning("Alias embedding warm-up not started: %s", _we)
+
     # AgentLoop starten — kontinuierliche Gedanken-Schleife mit
     # importance-gewichtetem Round-Robin. Ersetzt den alten periodischen
     # Tick. Pause haengt am world-pause-Toggle (task_queue 'default').

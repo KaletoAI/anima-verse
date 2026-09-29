@@ -55,6 +55,8 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -142,20 +144,80 @@ def parse_clip_role(filename: str) -> Tuple[str, str]:
     return stem, ""
 
 
-def clip_entries() -> List[Dict[str, Any]]:
-    """Every clip of both libraries as ``{kind, role, set, source, rel, path}``.
+# ── The entry cache ──────────────────────────────────────────────────────
+#
+# ``clip_entries()`` is read on hot paths (every tool decision asks for the
+# pair kinds, every partner pose for its clip), and a full scan of both
+# libraries stats every file — 4 s on the event loop under GIL contention was
+# measured. The scan result is therefore cached behind a FINGERPRINT that is
+# cheap to take: the resolved library roots (so ``ANIMATION_CLIPS_DIR`` in a
+# test is a different key) plus ``st_mtime_ns`` of each root and each set
+# subdirectory. Adding, removing or renaming a file changes the mtime of the
+# directory it lives in; that is the whole invalidation rule, plus
+# ``reload_clip_caches()`` for everything an edit of this module does.
+#
+# The fingerprint is taken BEFORE the scan, so a file that appears during the
+# scan makes the next fingerprint differ instead of being lost. A directory
+# mtime younger than one second is not trusted (filesystem timestamp
+# granularity: a second change inside the same tick would not move it) — such
+# a result is returned but not cached, and the next call scans again.
 
-    Per library: the root (set "") plus exactly ONE level of subdirectories
-    (the directory name, lowercased, is the set). Hidden files and
-    directories (``.`` prefix) are skipped, as is anything without a clip
-    extension. ``rel`` is ``[<set>/]<file>``; the same ``rel`` in both
-    libraries yields ONE entry, the licensed one.
-    """
-    def _files_of(directory: Path, cset: str, source: str) -> List[Dict[str, Any]]:
+_ENTRIES_LOCK = threading.Lock()
+_ENTRIES_CACHE: Optional[Tuple[Any, List[Dict[str, Any]]]] = None
+_MTIME_SETTLE_NS = 1_000_000_000
+
+
+def _library_fingerprint(root: Path) -> Tuple[Any, ...]:
+    """``(root mtime, ((set dir, mtime), …))`` of one library, ``("absent",)``
+    when the root does not exist."""
+    try:
+        root_mtime = os.stat(root).st_mtime_ns
+    except FileNotFoundError:
+        return ("absent",)
+    subdirs = []
+    try:
+        with os.scandir(root) as it:
+            for de in it:
+                if de.name.startswith("."):
+                    continue
+                try:
+                    if de.is_dir():
+                        subdirs.append((de.name, de.stat().st_mtime_ns))
+                except OSError:
+                    continue
+    except OSError:
+        return ("absent",)
+    return (root_mtime, tuple(sorted(subdirs)))
+
+
+def _fingerprint_is_settled(fingerprint: Tuple[Any, ...]) -> bool:
+    """False when any directory mtime in it is younger than one second."""
+    horizon = time.time_ns() - _MTIME_SETTLE_NS
+    for _key, lib in fingerprint:
+        if lib == ("absent",):
+            continue
+        root_mtime, subdirs = lib
+        if root_mtime > horizon or any(m > horizon for _n, m in subdirs):
+            return False
+    return True
+
+
+def _scan_library(root: Path, source: str) -> List[Dict[str, Any]]:
+    """Every clip file of one library root: the root (set "") plus exactly ONE
+    level of set subdirectories."""
+    def _files_of(directory: Path, cset: str) -> List[Dict[str, Any]]:
         out = []
-        for p in sorted(directory.iterdir()):
-            if p.name.startswith(".") or not p.is_file():
+        with os.scandir(directory) as it:
+            dir_entries = sorted(it, key=lambda de: de.name)
+        for de in dir_entries:
+            if de.name.startswith("."):
                 continue
+            try:
+                if not de.is_file():
+                    continue
+            except OSError:
+                continue
+            p = Path(de.path)
             if p.suffix.lower() not in CLIP_EXTS:
                 continue
             kind, role = parse_clip_role(p.name)
@@ -164,19 +226,62 @@ def clip_entries() -> List[Dict[str, Any]]:
                         "source": source, "rel": rel, "path": p})
         return out
 
+    found = _files_of(root, "")
+    with os.scandir(root) as it:
+        set_dirs = sorted((de for de in it
+                           if not de.name.startswith(".") and de.is_dir()),
+                          key=lambda de: de.name)
+    for de in set_dirs:
+        found.extend(_files_of(Path(de.path), de.name.strip().lower()))
+    return found
+
+
+def _scan_entries(libraries: List[Tuple[Path, str]]) -> List[Dict[str, Any]]:
+    """The uncached scan behind ``clip_entries()``."""
     by_rel: Dict[str, Dict[str, Any]] = {}
-    for root, source in get_animation_clips_dirs():
+    for root, source in libraries:
         if not root.exists():
             continue
-        found = _files_of(root, "", source)
-        for d in sorted(root.iterdir()):
-            if d.name.startswith(".") or not d.is_dir():
-                continue
-            found.extend(_files_of(d, d.name.strip().lower(), source))
-        for e in found:
+        for e in _scan_library(root, source):
             # free is scanned first; a licensed twin replaces it
             by_rel[e["rel"]] = e
     return sorted(by_rel.values(), key=lambda e: (e["set"], e["rel"]))
+
+
+def clip_entries() -> List[Dict[str, Any]]:
+    """Every clip of both libraries as ``{kind, role, set, source, rel, path}``.
+
+    Per library: the root (set "") plus exactly ONE level of subdirectories
+    (the directory name, lowercased, is the set). Hidden files and
+    directories (``.`` prefix) are skipped, as is anything without a clip
+    extension. ``rel`` is ``[<set>/]<file>``; the same ``rel`` in both
+    libraries yields ONE entry, the licensed one.
+
+    Cached behind a directory-mtime fingerprint (see above); every call gets
+    its own copies, so a caller may modify what it receives.
+    """
+    global _ENTRIES_CACHE
+    libraries = [(Path(root), source) for root, source in get_animation_clips_dirs()]
+    # Taken BEFORE the scan: a change during the scan shows up next time.
+    fingerprint = tuple(
+        ((str(root.resolve()), source), _library_fingerprint(root))
+        for root, source in libraries)
+    cached = _ENTRIES_CACHE
+    if cached is not None and cached[0] == fingerprint:
+        return [dict(e) for e in cached[1]]
+    entries = _scan_entries(libraries)
+    if _fingerprint_is_settled(fingerprint):
+        with _ENTRIES_LOCK:
+            # One atomic assignment of the (fingerprint, entries) pair — a
+            # reader never sees a fingerprint with another scan's entries.
+            _ENTRIES_CACHE = (fingerprint, entries)
+    return [dict(e) for e in entries]
+
+
+def _clear_entries_cache() -> None:
+    global _ENTRIES_CACHE
+    with _ENTRIES_LOCK:
+        _ENTRIES_CACHE = None
 
 
 def clip_files() -> List[Path]:
@@ -753,20 +858,17 @@ def _validate_set(raw: Any) -> str:
 
 
 def reload_clip_caches() -> None:
-    """Re-read what caches the clip vocabulary. The pose dropdown and the
-    animation-set fallback read from the preset caches — an edited library has
-    to be visible at once, not after a restart (same reload the clip import
-    does)."""
+    """Re-read what caches the clip vocabulary: the clip entry cache and the
+    preset caches the pose dropdown and the animation-set fallback read from —
+    an edited library has to be visible at once, not after a restart (the
+    clip imports call this too). ``reload_presets`` already reloads the pose
+    catalogs, so they are not cleared a second time here."""
+    _clear_entries_cache()
     try:
         from app.core import expression_pose_maps as epm
         epm.reload_presets()
     except Exception as e:                                   # pragma: no cover
         logger.warning("preset reload after clip library change failed: %s", e)
-    try:
-        from app.core import pose_catalog
-        pose_catalog.reload_catalogs()
-    except Exception as e:                                   # pragma: no cover
-        logger.warning("pose catalog reload after clip library change failed: %s", e)
 
 
 def delete_clip(library: str, rel: str) -> Dict[str, Any]:

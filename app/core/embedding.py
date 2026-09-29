@@ -22,6 +22,7 @@ played in, and an English-only model cannot rank that. That combination is
 reported by ``english_model_language_mismatch`` (admin validation) and logged
 once per process the first time the internal model is used.
 """
+import threading
 from typing import List, Optional
 
 from app.core import config
@@ -63,6 +64,7 @@ RECOMMENDED_MULTILINGUAL_MODEL = (
 
 # model_id -> fastembed.TextEmbedding | None (None = loading failed)
 _MODEL_CACHE: dict = {}
+_MODEL_LOCK = threading.Lock()
 _FASTEMBED_MISSING_LOGGED = False
 _LANGUAGE_MISMATCH_CHECKED = False
 
@@ -231,33 +233,41 @@ def _maybe_log_language_mismatch() -> None:
 # ── intern (fastembed/ONNX) ──────────────────────────────────────────────
 
 def _get_internal_model(model_id: str, cache_dir: str):
-    """Lazy-laedt + cached eine fastembed-TextEmbedding-Instanz pro model_id."""
+    """Lazily loads and caches one fastembed ``TextEmbedding`` per model_id.
+
+    Under ``_MODEL_LOCK``: the start-up warm-up thread and a first request can
+    ask at the same moment, and loading the model twice costs seconds and
+    hundreds of MB. Once cached, the lookup does not take the lock.
+    """
     global _FASTEMBED_MISSING_LOGGED
     if model_id in _MODEL_CACHE:
         return _MODEL_CACHE[model_id]
-    try:
-        from fastembed import TextEmbedding
-    except ImportError:
-        if not _FASTEMBED_MISSING_LOGGED:
-            logger.warning(
-                "fastembed not installed — internal embedding disabled "
-                "(pose matching falls back to string comparison). "
-                "Install: pip install fastembed"
-            )
-            _FASTEMBED_MISSING_LOGGED = True
-        _MODEL_CACHE[model_id] = None
-        return None
-    try:
-        logger.info("Loading internal embedding model %r (cache: %s) …",
-                    model_id, cache_dir)
-        model = TextEmbedding(model_name=model_id, cache_dir=cache_dir or None)
-        _MODEL_CACHE[model_id] = model
-        return model
-    except Exception as e:
-        logger.warning("Internal embedding model %r could not be loaded: %s",
-                       model_id, e)
-        _MODEL_CACHE[model_id] = None
-        return None
+    with _MODEL_LOCK:
+        if model_id in _MODEL_CACHE:
+            return _MODEL_CACHE[model_id]
+        try:
+            from fastembed import TextEmbedding
+        except ImportError:
+            if not _FASTEMBED_MISSING_LOGGED:
+                logger.warning(
+                    "fastembed not installed — internal embedding disabled "
+                    "(pose matching falls back to string comparison). "
+                    "Install: pip install fastembed"
+                )
+                _FASTEMBED_MISSING_LOGGED = True
+            _MODEL_CACHE[model_id] = None
+            return None
+        try:
+            logger.info("Loading internal embedding model %r (cache: %s) …",
+                        model_id, cache_dir)
+            model = TextEmbedding(model_name=model_id, cache_dir=cache_dir or None)
+            _MODEL_CACHE[model_id] = model
+            return model
+        except Exception as e:
+            logger.warning("Internal embedding model %r could not be loaded: %s",
+                           model_id, e)
+            _MODEL_CACHE[model_id] = None
+            return None
 
 
 def _embed_internal(text: str) -> Optional[List[float]]:

@@ -49,7 +49,7 @@ pair without a reachable seat is refused.
 import math
 import uuid
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.core.game_time import GameDuration, GameTime
 from app.core.log import get_logger
@@ -158,24 +158,30 @@ def payload_for(character_name: str, profile: Dict[str, Any],
 
 # ------------------------------------------------------------------ kinds
 
-def pair_kind_for_pose(pose_key: str) -> str:
+def pair_kind_for_pose(pose_key: str,
+                       complete_pairs: Optional[Iterable[str]] = None) -> str:
     """The pair clip kind a catalog pose names — "" when the pose is a solo
-    one or its clip is not a complete pair."""
+    one or its clip is not a complete pair. ``complete_pairs`` lets a caller
+    that asks for many poses pass ``pair_kinds()`` once instead of having it
+    recomputed per pose."""
     from app.core.animation_clips import pair_kinds
     from app.core.expression_pose_maps import is_partner_activity, resolve_pose_animation
     if not pose_key or not is_partner_activity(pose_key):
         return ""
     kind = resolve_pose_animation(pose_key)
-    return kind if kind in pair_kinds() else ""
+    pairs = pair_kinds() if complete_pairs is None else complete_pairs
+    return kind if kind in pairs else ""
 
 
 def partner_poses() -> List[Tuple[str, str]]:
     """``(pose_key, pair_kind)`` for every catalog pose that has a complete
     pair clip — what the interact verb offers."""
+    from app.core.animation_clips import pair_kinds
     from app.core.pose_catalog import get_catalog
+    complete = set(pair_kinds())
     out = []
     for key in get_catalog("pose"):
-        kind = pair_kind_for_pose(key)
+        kind = pair_kind_for_pose(key, complete)
         if kind:
             out.append((key, kind))
     return out

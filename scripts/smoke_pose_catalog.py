@@ -634,7 +634,8 @@ try:
     # The ghost wins the loop (cosine 1.0 against an identical query vector),
     # `index[best_alias]` would raise -> the guard must fall through instead.
     with _pc._lock:
-        _pc._embed_cache["pose"] = {"ghost alias": [0.0, 1.0, 0.0]}
+        _pc._embed_cache[("pose", _pc._embed_model_key(fake_embed))] = {
+            "ghost alias": [0.0, 1.0, 0.0]}
     try:
         # fake_embed("phantom drift") -> [0,1,0] (the "everything else" axis)
         k, how = resolve_to_catalog("phantom drift", "pose", _embed=fake_embed)

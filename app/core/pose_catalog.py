@@ -544,15 +544,29 @@ def _alias_index(axis: str) -> Dict[str, str]:
     return index
 
 
-_embed_cache: Dict[str, Dict[str, list]] = {}   # axis -> {alias: vector}
+# (axis, model id) -> {alias: vector}. Keyed by the MODEL too: vectors of two
+# embedding models are not comparable, and the admin can switch the model
+# (or the external route) while the server runs.
+_embed_cache: Dict[Tuple[str, str], Dict[str, list]] = {}
+
+
+def _embed_model_key(embed_fn) -> str:
+    """Which model's vectors ``embed_fn`` produces. The real ``embed`` answers
+    with ``embedding.current_model_id()``; any other function (a test double)
+    is its own model."""
+    from app.core import embedding
+    if embed_fn is embedding.embed:
+        return embedding.current_model_id()
+    return f"fn:{id(embed_fn)}"
 
 
 def _alias_embeddings(axis: str, embed_fn) -> Dict[str, list]:
     # Resolve the aliases BEFORE taking _lock: _alias_index() -> get_catalog()
     # takes the same (non-reentrant) lock and would deadlock on itself.
     aliases = _alias_index(axis)
+    key = (axis, _embed_model_key(embed_fn))
     with _lock:
-        cached = _embed_cache.get(axis)
+        cached = _embed_cache.get(key)
     if cached is not None:
         return cached
     # The warm-up runs OUTSIDE the lock: with an external embedding backend it
@@ -563,8 +577,27 @@ def _alias_embeddings(axis: str, embed_fn) -> Dict[str, list]:
         v = embed_fn(alias)
         if v:
             vecs[alias] = v
+    if not vecs:
+        # Nothing came back (no model, endpoint down): do NOT cache the empty
+        # map — that would pin "no embeddings" until the next catalog reload.
+        return vecs
     with _lock:
-        return _embed_cache.setdefault(axis, vecs)
+        return _embed_cache.setdefault(key, vecs)
+
+
+def prewarm_alias_embeddings() -> None:
+    """Embed every alias of both catalogs once, so the first pose/expression
+    match of a chat turn does not pay one embedding call per alias on the
+    event loop. Meant for a background thread at server start (the lifespan
+    runs it after the provider manager is up, so an external route resolves).
+    Never raises."""
+    try:
+        from app.core.embedding import embed
+        for axis in ("expression", "pose"):
+            vecs = _alias_embeddings(axis, embed)
+            logger.info("Alias embeddings warmed: %s (%d aliases)", axis, len(vecs))
+    except Exception as e:
+        logger.warning("Alias embedding warm-up failed: %s", e)
 
 
 def resolve_to_catalog(text: str, axis: str, _embed=None) -> Tuple[str, str]:
@@ -766,10 +799,28 @@ def dismiss_all_candidates(axis: str) -> int:
 _FLAVOR_MAX_CHARS = 120
 
 
+# First-person words in a flavor: the flavor is what a BYSTANDER sees, third
+# person, and an RP line copied over verbatim ("ich greife nach meiner Tasche")
+# reads as "<name> is ich greife …" in every prompt. "I" is case-sensitive
+# (the lowercase letter is no pronoun); the rest is matched in any case.
+_FIRST_PERSON_UPPER_I = re.compile(r"\bI\b")
+_FIRST_PERSON_WORDS = re.compile(
+    r"\b(ich|mich|mir|mein(e[mnrs]?)?|wir|uns|unser(e[mnrs]?)?"
+    r"|my|me|we|us|our)\b", re.IGNORECASE)
+
+
+def is_first_person(text: str) -> bool:
+    """Whether ``text`` speaks in the first person (I/my/ich/mein/wir/…)."""
+    t = text or ""
+    return bool(_FIRST_PERSON_UPPER_I.search(t) or _FIRST_PERSON_WORDS.search(t))
+
+
 def sanitize_flavor(text: str) -> str:
     """Sanitized 'flavor' prompt text: quoted speech removed, character names
     removed (exact stored names only - NO first/last-name resolution, standing
-    directive), first sentence, hard cap 120 chars."""
+    directive), first sentence, hard cap 120 chars. A first-person sentence
+    (``is_first_person``) yields ``""`` — the caller keeps the key and drops
+    the detail."""
     raw = (text or "").strip()
     if not raw:
         return ""
@@ -785,4 +836,6 @@ def sanitize_flavor(text: str) -> str:
             raw = re.sub(rf"\b{re.escape(name)}\b", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"\s{2,}", " ", raw).strip(" ,;:-")
     first = re.split(r"(?<=[.!?])\s", raw, maxsplit=1)[0].strip()
+    if is_first_person(first):
+        return ""
     return first[:_FLAVOR_MAX_CHARS].strip()

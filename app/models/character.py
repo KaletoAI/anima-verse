@@ -2145,7 +2145,10 @@ def set_pose_key_detail(character_name: str, key: str, detail: str, *,
         return canonical
     if unknown == "keep":
         current = get_character_pose_key(character_name) or ""
-        if current and text_detail:
+        # A detail the sanitizer drops (first person, speech only) must not
+        # wipe the flavor already there — "keep" means keep.
+        from app.core.pose_catalog import sanitize_flavor
+        if current and text_detail and sanitize_flavor(text_detail):
             set_pose_intent(character_name, current, flavor=text_detail)
             return current
         return ""
