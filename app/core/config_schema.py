@@ -468,7 +468,7 @@ SECTIONS = {
                 "id": "general",
                 "label": "General & defaults",
                 "icon": "⚙️",
-                "description": "Master switch, post-processing hand-off and the default backend match per render occasion.",
+                "description": "Master switch and post-processing hand-off.",
                 "fields": [
                     "enabled",
                     "postprocess_enabled",
@@ -483,6 +483,21 @@ SECTIONS = {
                     "timevariant_imagegen_default",
                     "prop_variant_max",
                 ],
+            },
+            # Hand-built by static/admin/settings-image-routing.js (no fields).
+            {
+                "id": "routing",
+                "label": "Routing",
+                "icon": "🧭",
+                "custom": True,
+                "description": "One ordered backend chain per render occasion — the first usable entry renders, the next ones are fallbacks.",
+            },
+            {
+                "id": "routing_overview",
+                "label": "Routing overview",
+                "icon": "📋",
+                "custom": True,
+                "description": "What each occasion would render on right now (saved config, read-only).",
             },
             {
                 "id": "backends",
@@ -585,13 +600,13 @@ SECTIONS = {
             "postprocess_trigger_url": {"type": "str", "label": "Post-Processing Trigger URL", "default": "", "description": "Basis-URL, die nach der Erzeugung benachrichtigt wird. Das Programm haengt Parameter an (welt-relativer Bildpfad). Es werden KEINE Bild-Bytes gesendet. Beispiel: http://127.0.0.1:8005/trigger"},
 
             # --- Default backends ---
-            "profile_imagegen_default": {"type": "imagegen_select", "label": "Profile Image Default (Match)", "default": "", "description": "Backend-name glob for the character PORTRAIT — the profile-image button in the character editor and the portrait a temporary NPC gets on creation. Empty = cheapest available backend, which among several cost-0 backends is an arbitrary pick per render (one portrait photoreal, the next one comic)."},
-            "outfit_imagegen_default": {"type": "imagegen_select", "label": "Outfit/Preview Default (Match)", "description": "Backend-name glob (e.g. 'Flux*' or an exact name) — resolved by availability + cost, no fixed backend."},
-            "expression_imagegen_default": {"type": "imagegen_select", "label": "Expression Default (Match)", "description": "Backend-name glob for mood/activity variants — resolved by availability + cost."},
-            "location_imagegen_default": {"type": "imagegen_select", "label": "Location Default (Match)", "description": "Backend-name glob (e.g. 'Flux*') — resolved by availability + cost."},
-            "prop_imagegen_default": {"type": "imagegen_select", "label": "Prop Default (Match)", "description": "Backend-name glob for prop SOURCE renders (props library + ✨ Furnish product shots) — resolved by availability + cost. Empty = pool default."},
+            "profile_imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "Profile Image Default (Match)", "default": "", "description": "Backend-name glob for the character PORTRAIT — the profile-image button in the character editor and the portrait a temporary NPC gets on creation. Empty = cheapest available backend, which among several cost-0 backends is an arbitrary pick per render (one portrait photoreal, the next one comic)."},
+            "outfit_imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "Outfit/Preview Default (Match)", "description": "Backend-name glob (e.g. 'Flux*' or an exact name) — resolved by availability + cost, no fixed backend."},
+            "expression_imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "Expression Default (Match)", "description": "Backend-name glob for mood/activity variants — resolved by availability + cost."},
+            "location_imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "Location Default (Match)", "description": "Backend-name glob (e.g. 'Flux*') — resolved by availability + cost."},
+            "prop_imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "Prop Default (Match)", "description": "Backend-name glob for prop SOURCE renders (props library + ✨ Furnish product shots) — resolved by availability + cost. Empty = pool default."},
             "prop_variant_max": {"type": "int", "label": "Prop Model Variants (max)", "default": 4, "min": 1, "max": 16, "description": "How many ACTIVE 3D model variants one prop may carry. Scatter and repeated placements spread over the variants, so a wood is not the same tree twenty times. Every active variant is another mesh a client downloads for the same object — raise it only for props that are placed in large numbers. Generating a model appends a variant until this cap is reached."},
-            "scene_imagegen_default": {"type": "imagegen_select", "label": "Scene Render Default (Match)", "description": "Backend-name glob (e.g. 'Krea2') for the player's 'Rendered' environment view — composes the room background + present characters (expression images as references) into one image. Empty = location default."},
+            "scene_imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "Scene Render Default (Match)", "description": "Backend-name glob (e.g. 'Krea2') for the player's 'Rendered' environment view — composes the room background + present characters (expression images as references) into one image. Empty = location default."},
             "scene_render_mode": {"type": "select", "label": "Scene Render Mode", "choices": ["multi_ref", "only_background"], "default": "multi_ref", "description": "How the 'Rendered' view builds its request. 'multi_ref': background + the present characters' expression images as reference images, pose from text. 'only_background': only the background as reference — every person is described in text (appearance + pose). Both work with any generate backend (Qwen, Flux, Krea2, …)."},
             "scene_render_cooldown_s": {"type": "int", "label": "Scene Render Cooldown (s)", "default": 120, "min": 0, "description": "Minimum seconds between fresh scene generations (cache misses) — panel remounts and signature churn (variant updates, presence changes) must not burn renders back to back. While cooling down, the newest existing scene image is served. 0 = off; the ⟳ button always bypasses. SYSTEM time."},
             # KEEP the two defaults IN SYNC with PROMPT_*_DEFAULT in app/core/scene_render.py.
@@ -601,8 +616,8 @@ SECTIONS = {
             # (placeholder text kept IN SYNC with PROMPT_*_DEFAULT there).
             "scene_prompt_multi_ref": {"type": "text", "label": "Scene Prompt (multi_ref)", "placeholder": "The exact {setting} from the first reference image, keeping its layout, lighting and perspective. Compose {count} into the scene and NO ONE else — each person appears exactly once, no additional people, no duplicates. A person's reference image pins their FACE/IDENTITY ONLY — their appearance, outfit and pose follow the text; IGNORE the pose, outfit and background it shows. People: {people}", "legacy_defaults": list(SCENE_PROMPT_LEGACY_DEFAULTS), "description": "Prompt template for the multi_ref render mode. EMPTY = built-in default (shown greyed). Placeholders: {setting} = 'room'/'outdoor location'/'place' (from the location's indoor flag), {count} = e.g. 'exactly two people', {people} = person list — EVERY person is described in text (appearance + worn outfit + pose); slotted persons additionally bind their face to a reference image, {label} = room name (optional)."},
             "scene_prompt_only_background": {"type": "text", "label": "Scene Prompt (only_background)", "placeholder": "The exact {setting} from the reference image, keeping its layout, lighting and perspective. Compose {count} into the scene and NO ONE else — each person appears exactly once, no additional people, no duplicates. People: {people}", "legacy_defaults": list(SCENE_PROMPT_LEGACY_DEFAULTS), "description": "Prompt template for the only_background render mode. EMPTY = built-in default (shown greyed). Placeholders: {setting} = 'room'/'outdoor location'/'place' (from the location's indoor flag), {count} = e.g. 'exactly two people', {people} = person list with appearance descriptions and poses, {label} = room name (optional)."},
-            "mesh_imagegen_default": {"type": "imagegen_select", "label": "3D Mesh Default (Match)", "default": "", "description": "Backend-name glob for the 3D model generation (character 3D tab, img2mesh — e.g. 'Trellis2-Low'). Must resolve to an api_type=openai_mesh backend. Empty = cheapest AVAILABLE mesh backend (with Trellis2-Low and -High both at cost 0 that pick is arbitrary — name the one you want here)."},
-            "timevariant_imagegen_default": {"type": "imagegen_select", "label": "Day/Night Variant Default (Match)", "default": "", "description": "Backend-name glob for the day/night variant convert (the 🌙/☀️ buttons in the location gallery). Needs a reference-capable backend (ref slots ≥ 1, not inpaint). Empty = cheapest available reference-capable backend."},
+            "mesh_imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "3D Mesh Default (Match)", "default": "", "description": "Backend-name glob for the 3D model generation (character 3D tab, img2mesh — e.g. 'Trellis2-Low'). Must resolve to an api_type=openai_mesh backend. Empty = cheapest AVAILABLE mesh backend (with Trellis2-Low and -High both at cost 0 that pick is arbitrary — name the one you want here)."},
+            "timevariant_imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "Day/Night Variant Default (Match)", "default": "", "description": "Backend-name glob for the day/night variant convert (the 🌙/☀️ buttons in the location gallery). Needs a reference-capable backend (ref slots ≥ 1, not inpaint). Empty = cheapest available reference-capable backend."},
 
             # --- Blender refinement (local subprocess, no gateway/GPU) ---
             "_grp_blender": {"type": "group_header", "label": "Blender Refinement (local)"},
@@ -990,7 +1005,7 @@ SECTIONS = {
             "entry_roll_jitter_seconds": {"type": "int", "label": "Entry Jitter (s)", "default": 3, "min": 0, "max": 30, "description": "Random delay of 0–N seconds before the event pops up after entry. 0 = immediately; otherwise it feels like something 'happens' after arrival. SYSTEM time."},
             "resolution_proactive": {"type": "bool", "label": "Proaktive Event-Aufloesung", "default": True, "description": "Characters an betroffener Location versuchen offene disruption/danger Events automatisch zu loesen (alle 5 Min)."},
             "resolution_cooldown_minutes": {"type": "int", "label": "Resolution Cooldown (min)", "default": 15, "min": 1, "max": 240, "description": "Minimum distance between two resolution attempts on the same event. SYSTEM time (real minutes)."},
-            "event_imagegen_default": {"type": "imagegen_select", "label": "Event Illustration Default Backend", "description": "Backend-name glob used to render disruption/danger event illustrations that swap the location background while the event is active. Empty = the Scene Render Default (image_generation.scene_imagegen_default), then the location default."},
+            "event_imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "Event Illustration Default Backend", "description": "Backend-name glob used to render disruption/danger event illustrations that swap the location background while the event is active. Empty = the Scene Render Default (image_generation.scene_imagegen_default), then the location default."},
             "resolved_image_linger_minutes": {"type": "int", "label": "Resolved-Image Linger (min)", "default": 30, "min": 0, "max": 240, "description": "How long the 'after' illustration of a resolved disruption/danger event keeps overriding the normal location background before reverting. SYSTEM time (real minutes)."},
         },
     },
@@ -1098,7 +1113,7 @@ SECTIONS = {
             "cooldown_hours": {"type": "int", "label": "Cooldown (hours)", "default": 6, "min": 1, "description": "Minimum cooldown between arc advances per user. SYSTEM time (real hours)."},
             "max_beats": {"type": "int", "label": "Max Beats", "default": 5, "min": 1, "description": "Maximale Beats pro Arc bevor Aufloesung"},
             "beat_images": {"type": "bool", "label": "Beat Bilder", "default": True, "description": "Bilder pro Story-Beat generieren"},
-            "imagegen_default": {"type": "imagegen_select", "label": "Default ImageGen"},
+            "imagegen_default": {"type": "imagegen_select", "hidden": True, "label": "Default ImageGen"},
         },
     },
     "game": {
@@ -1351,6 +1366,7 @@ SECTIONS = {
             },
             "target": {
                 "type": "imagegen_target_select",
+                "hidden": True,
                 "label": "Backend",
                 "description": "Which image backend renders the frame. Each backend uses its configured model name. Offline options are greyed out.",
             },

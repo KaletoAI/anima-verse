@@ -23,10 +23,30 @@ of an LLM entry (plan-cache-lanes.md § 5, phase 4 item 11) — has to be in tha
 page's field list, or the only place the lane count can be set disappears from
 the UI while the backend keeps reading it.
 
+`image_generation` carries the two hand-built image routing pages
+(static/admin/settings-image-routing.js): `routing` and `routing_overview`,
+both `custom: true`, placed directly after `general`. A field marked
+`hidden: true` is kept in the config and saved with it, but never rendered
+(settings.js `renderFields` skips it) — so on a paged section it must still
+sit on a (non-custom) page, or nothing would carry it. During phase R1 of the
+image routing the hidden fields are exactly the twelve old per-occasion
+defaults the routing seeded its chains from (config.py
+`_migrate_image_routing`): an edit there after the seed would be lost when
+phase R2b removes them, so none of them may stay editable. Derived from that
+list, by schema path:
+  image_generation.{profile,outfit,expression,location,prop,scene,mesh,
+                    timevariant}_imagegen_default          (8, page `general`)
+  random_events.event_imagegen_default                     (1)
+  story_engine.imagegen_default                            (1)
+  messaging_frame.target                                   (1)
+  skills.instagram.imagegen_default   (1, plugins/instagram/plugin.yaml)
+= 12, and no other field anywhere in the schema or a repo plugin manifest.
+
 Hand-derived expectations, all of them structural: the numbers below are the
 schema's own (10 fields on llm_routing today), never a recorded output.
 
-No config, no world, no DB — it only imports the schema module.
+No config, no world, no DB — it only imports the schema module and reads the
+repo plugin manifests.
 
 Usage:  ./.venv/bin/python scripts/smoke_admin_pages.py
 """
@@ -132,6 +152,66 @@ def check_llm_routing_lanes(sec: dict) -> None:
               "Lanes sits directly below Model")
 
 
+OLD_IMAGEGEN_DEFAULTS = sorted(
+    [f"image_generation.{k}_imagegen_default" for k in (
+        "profile", "outfit", "expression", "location", "prop", "scene",
+        "mesh", "timevariant")]
+    + ["random_events.event_imagegen_default",
+       "story_engine.imagegen_default",
+       "messaging_frame.target",
+       "skills.instagram.imagegen_default"])
+
+
+def _hidden_paths() -> list:
+    """Every `hidden: true` field as a dotted schema path: section fields,
+    subsection fields, and the `config_schema` of every repo plugin manifest
+    (rendered as subsections of `skills`)."""
+    found = []
+
+    def walk(fields, prefix):
+        for k, f in (fields or {}).items():
+            if isinstance(f, dict) and f.get("hidden"):
+                found.append(f"{prefix}.{k}")
+
+    for skey, sec in SECTIONS.items():
+        if not isinstance(sec, dict):
+            continue
+        walk(sec.get("fields"), skey)
+        for sub_key, sub in (sec.get("subsections") or {}).items():
+            walk((sub or {}).get("fields"), f"{skey}.{sub_key}")
+    import glob
+    import yaml
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for mf in sorted(glob.glob(os.path.join(root, "plugins", "*", "plugin.yaml"))):
+        try:
+            with open(mf, encoding="utf-8") as fh:
+                meta = yaml.safe_load(fh) or {}
+        except OSError:
+            continue  # a dangling symlink to an absent private pack
+        for sub_key, sub in (meta.get("config_schema") or {}).items():
+            walk((sub or {}).get("fields"), f"skills.{sub_key}")
+    return sorted(found)
+
+
+def check_image_routing_pages(sec: dict) -> None:
+    print("\n[image_generation] image routing pages")
+    ids = [p.get("id") for p in (sec.get("pages") or [])]
+    check(ids[:3] == ["general", "routing", "routing_overview"],
+          f"routing pages follow general (got {ids[:3]})")
+    pages = {p.get("id"): p for p in (sec.get("pages") or [])}
+    for pid in ("routing", "routing_overview"):
+        check(bool((pages.get(pid) or {}).get("custom")), f"{pid} is custom")
+    print("\n[schema] hidden fields")
+    hidden = _hidden_paths()
+    check(hidden == OLD_IMAGEGEN_DEFAULTS,
+          f"hidden fields are exactly the 12 old defaults (got {hidden})")
+    general = set((pages.get("general") or {}).get("fields") or [])
+    for path in hidden:
+        if path.startswith("image_generation."):
+            name = path.split(".", 1)[1]
+            check(name in general, f"hidden {name} still sits on page general")
+
+
 def main() -> int:
     paged = {k: s for k, s in SECTIONS.items()
              if isinstance(s, dict) and isinstance(s.get("pages"), list)}
@@ -142,6 +222,7 @@ def main() -> int:
     for key, sec in paged.items():
         check_section(key, sec)
     check_llm_routing_lanes(paged.get("llm_routing") or {})
+    check_image_routing_pages(paged.get("image_generation") or {})
 
     print()
     if FAILS:

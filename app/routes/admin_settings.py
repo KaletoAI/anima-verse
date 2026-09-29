@@ -2170,6 +2170,7 @@ def _build_settings_html() -> str:
 
 <script src="/static/admin/settings.js"></script>
 <script src="/static/admin/settings-routing.js"></script>
+<script src="/static/admin/settings-image-routing.js"></script>
 <script src="/static/admin/settings-decision.js"></script>
 </body>
 </html>'''

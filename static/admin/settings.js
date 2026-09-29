@@ -528,6 +528,16 @@ function renderSection(key, pageId) {
             : pageId);
         return;
     }
+    // Image routing — its own file (settings-image-routing.js) renders the
+    // two custom pages of the Media Generation section.
+    if (key === 'image_generation') {
+        const want = (pageId === undefined || pageId === null)
+            ? (key === ACTIVE_SECTION ? ACTIVE_PAGE : null) : pageId;
+        if (want === 'routing' || want === 'routing_overview') {
+            renderImageRoutingPage(want);
+            return;
+        }
+    }
     const sec = SCHEMA[key];
     // Paged section: the many renderSection(ACTIVE_SECTION) rerenders (field
     // edits, array add/remove) pass no page — stay on the current one.
@@ -1209,6 +1219,9 @@ async function applyTaskPreset(preset) {
 function renderFields(fields, data, path) {
     let html = '';
     for (const [fKey, f] of Object.entries(fields)) {
+        // `hidden: true` — kept in the config and saved, never shown (the old
+        // per-occasion defaults while the image routing seeds from them).
+        if (f && f.hidden) continue;
         // Schema-level visibility: a field with `applicable_for` is only shown
         // when `data.api_type` is in the list. While no api_type is set, the
         // type-specific fields stay hidden — the user picks the type first,
@@ -2250,6 +2263,9 @@ async function saveConfig() {
             body: JSON.stringify(CONFIG)
         });
         const result = await resp.json();
+        // The image routing Rules page keeps the outcome (a refused chain,
+        // save warnings) on screen — a toast is gone after three seconds.
+        if (typeof imageRoutingSaveResult === 'function') imageRoutingSaveResult(resp.ok, result);
         if (resp.ok) {
             // URL/key changes should apply immediately, without a page reload:
             // invalidate the provider and imagegen backend model caches.
