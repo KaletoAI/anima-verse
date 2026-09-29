@@ -315,8 +315,9 @@ def resolve_image_route(occasion: str, *, character: str = "",
 
     ``exclude``: backend names that already failed in this routed call.
     ``probe``: run ``check_availability`` once on the INTENDED entry's
-    candidates — the first entry that passes the configuration filters (a
-    real render does; the overview never does)."""
+    candidates — the first entry that passes the configuration filters —
+    except the ones in ``exclude`` or in a cooldown (a real render does; the
+    overview never does)."""
     get_occasion(occasion)                       # UnknownOccasionError
     p = _pool(pool)
     backends = list(p.backends)
@@ -328,7 +329,13 @@ def resolve_image_route(occasion: str, *, character: str = "",
         for spec, _source, _pos in entries:
             skip, allowed, _names = _config_filter(occasion, spec, backends, switches)
             if skip is None:
+                # ``allowed`` already drops character-disabled backends; a
+                # backend that failed in this call or is cooling down is not
+                # probed — after a failure the intended entry IS that backend,
+                # and every re-entry would wait on a dead endpoint.
                 for b in allowed:
+                    if b.name in excl or b.in_cooldown():
+                        continue
                     b.check_availability()
                 break
 
@@ -365,8 +372,9 @@ def resolve_spec(occasion: str, spec: str, *, character: str = "",
     """Resolve ONE spec with the occasion's filters (no chain, no fallback) —
     the fallback re-render (R3) runs the INTENDED spec explicitly."""
     get_occasion(occasion)
+    spec = normalize_spec(spec)                  # one round-robin key per canonical spec
     p = _pool(pool)
-    status, live, _names = _evaluate(occasion, normalize_spec(spec), list(p.backends),
+    status, live, _names = _evaluate(occasion, spec, list(p.backends),
                                      _character_switches(character), set(), has_ref)
     if status != STATUS_OK:
         return status, None

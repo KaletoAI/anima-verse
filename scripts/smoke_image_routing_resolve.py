@@ -82,16 +82,31 @@ EXPECTATIONS, DERIVED BY HAND
     For event (no rules): via "cheapest", resolved "Qwen B".
     For location with ["Inpaint X"]: via "none", resolved None,
     intended_spec "" (the only row is a configuration skip).
-14. resolve_image_route(..., probe=True) with case-1 rules probes the
-    INTENDED entry's candidates only: Qwen A gets 1 check_availability call,
-    Flux Big / Flux Cheap get 0. With ["Nope*", "Flux Cheap"] the intended
-    entry is "Flux Cheap" (Nope* is no_match) -> Flux Cheap gets 1 call,
-    Flux Big 0.
+14. resolve_image_route(..., probe=True) probes the INTENDED entry's
+    candidates only (the first entry passing the configuration filters), and
+    of those only the ones that are neither in `exclude` nor cooling down
+    (character-disabled ones are already out of the allowed set) — after a
+    failure the intended entry IS the dead backend, a re-entry must not wait
+    on it. Probe counters reset before each sub-case:
+    a. case-1 rules ["Qwen A", "Flux*"]: intended = Qwen A (cooldown), its
+       only candidate cools -> Qwen A 0 calls; Flux Big / Flux Cheap belong
+       to a later entry -> 0, 0.
+    b. ["Nope*", "Flux Cheap"]: intended "Flux Cheap" (Nope* is no_match)
+       -> Flux Cheap 1 call, Flux Big 0.
+    c. ["Qwen*"]: matched {Qwen A, Qwen B}, both fit photo -> Qwen A cools
+       -> 0, Qwen B 1.
+    d. ["Flux*"], exclude=("Flux Cheap",) -> Flux Big 1, Flux Cheap 0.
+    e. ["Flux*"], character "someone" (no @0 spec), switch Flux Big OFF ->
+       allowed {Flux Cheap} -> Flux Cheap 1, Flux Big 0.
 15. normalize_spec: "backend:Flux*" -> "Flux*"; "workflow:Z-Image" -> "Z-Image"
     (the legacy rewrite, workflow_spec_migration); "workflow:" -> "";
     "  " -> "".
 16. resolve_spec("photo", "Flux Big") -> ("ok", Flux Big);
     resolve_spec("photo", "Inpaint X") -> ("wrong_kind", None).
+    The round-robin key is built from the NORMALISED spec, so
+    resolve_spec("photo", "backend:Flux*") and resolve_spec("photo", "Flux*")
+    both call pick_lowest_cost with rotation_key "route:photo:Flux*" (one
+    counter, not two).
 17. resolve_image_route("mesh_low") raises UnknownOccasionError.
 18. empty chain honours the character switches: profile (character-scoped)
     with no character spec and no rules, switches turn Qwen B OFF ->
@@ -317,16 +332,40 @@ check("13 location", (ex["location"]["via"], ex["location"]["resolved"],
 check("13 explain_occasion is the same row",
       routing.explain_occasion("photo", pool=POOL), ex["photo"])
 
+
+
+def reset_probes():
+    for b in B.values():
+        b.probes = 0
+
+
+reset_probes()
 RULES = {"photo": ["Qwen A", "Flux*"]}
 route("photo", probe=True)
-check("14 probe intended entry only",
-      (B["Qwen A"].probes, B["Flux Big"].probes, B["Flux Cheap"].probes), (1, 0, 0))
-for b in B.values():
-    b.probes = 0
+check("14a intended entry cools -> nothing probed",
+      (B["Qwen A"].probes, B["Flux Big"].probes, B["Flux Cheap"].probes), (0, 0, 0))
+reset_probes()
 RULES = {"photo": ["Nope*", "Flux Cheap"]}
 route("photo", probe=True)
-check("14 probe skips a no_match entry",
+check("14b probe skips a no_match entry",
       (B["Flux Cheap"].probes, B["Flux Big"].probes), (1, 0))
+reset_probes()
+RULES = {"photo": ["Qwen*"]}
+route("photo", probe=True)
+check("14c cooling candidate not probed, sibling is",
+      (B["Qwen A"].probes, B["Qwen B"].probes), (0, 1))
+reset_probes()
+RULES = {"photo": ["Flux*"]}
+route("photo", probe=True, exclude=("Flux Cheap",))
+check("14d excluded candidate not probed",
+      (B["Flux Big"].probes, B["Flux Cheap"].probes), (1, 0))
+reset_probes()
+SWITCHES["value"] = {"Flux Big": {"enabled": False}}
+route("photo", probe=True, character="someone")
+check("14e character-disabled candidate not probed",
+      (B["Flux Cheap"].probes, B["Flux Big"].probes), (1, 0))
+SWITCHES["value"] = {}
+reset_probes()
 
 check("15 backend prefix", routing.normalize_spec("backend:Flux*"), "Flux*")
 check("15 workflow prefix", routing.normalize_spec("workflow:Z-Image"), "Z-Image")
@@ -337,6 +376,23 @@ st, be = routing.resolve_spec("photo", "Flux Big", pool=POOL)
 check("16 resolve_spec ok", (st, be.name if be else None), ("ok", "Flux Big"))
 check("16 resolve_spec wrong kind", routing.resolve_spec("photo", "Inpaint X", pool=POOL),
       ("wrong_kind", None))
+_keys = []
+_orig_pick16 = POOL.pick_lowest_cost
+
+
+def _recording_pick(candidates, rotation_key="default"):
+    _keys.append(rotation_key)
+    return _orig_pick16(candidates, rotation_key)
+
+
+POOL.pick_lowest_cost = _recording_pick
+try:
+    routing.resolve_spec("photo", "backend:Flux*", pool=POOL)
+    routing.resolve_spec("photo", "Flux*", pool=POOL)
+finally:
+    POOL.pick_lowest_cost = _orig_pick16
+check("16 one rotation key per normalised spec", _keys,
+      ["route:photo:Flux*", "route:photo:Flux*"])
 
 try:
     route("mesh_low")
