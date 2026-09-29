@@ -6,7 +6,11 @@ them along. So the commit is built in a TEMPORARY index: HEAD's tree, the
 catalog blob = HEAD's catalog + exactly the new entry (the same JSON layout
 the server writes), the new files from the working tree. Neither the shared
 index nor the working tree is touched; the shared index is re-synced to the
-new HEAD for exactly these paths afterwards.
+new HEAD for exactly these paths afterwards. That re-sync failing (e.g. a
+foreign ``index.lock``) never hides the landed commit: the sha comes back
+with a warning that carries the ``git reset`` command to run by hand. A tree
+equal to HEAD's makes no commit at all (a ``publish --replace`` rerun after a
+landed commit is harmless).
 
 Plumbing only (``commit-tree`` + ``update-ref``), so no commit hooks run.
 ``update-ref HEAD <new> <old>`` is a compare-and-swap: when another session
@@ -14,10 +18,12 @@ committed in between, the whole commit is rebuilt on the new HEAD.
 """
 import json
 import os
+import shlex
 import subprocess
 import tempfile
+import time
 from pathlib import Path
-from typing import List
+from typing import List, NamedTuple
 
 from animstudio import StudioError
 
@@ -36,11 +42,43 @@ def _git(repo: Path, *args: str, env=None, input_text=None) -> str:
     return res.stdout
 
 
+class CommitResult(NamedTuple):
+    """``sha`` is HEAD after the call; ``created`` is false when HEAD already
+    had exactly this tree (no commit made); ``warning`` is non-empty when the
+    commit is on HEAD but the shared index could not be synced — the caller
+    must show it (it carries the ``git reset`` command to run)."""
+    sha: str
+    created: bool
+    warning: str = ""
+
+
+def _sync_index(repo: Path, sha: str, paths: List[str]) -> str:
+    """Re-syncs the shared index to HEAD for ``paths``. A failure here must
+    not hide the commit that already landed: it becomes a warning."""
+    try:
+        res = _run(repo, ["reset", "-q", "--", *paths])
+        err = "" if res.returncode == 0 else (res.stderr.strip().splitlines() or ["?"])[0]
+    except OSError as e:
+        err = str(e)
+    if not err:
+        return ""
+    return (f"commit {sha} landed; shared index not synced ({err}) - run "
+            f"`git reset -q -- {' '.join(shlex.quote(p) for p in paths)}`")
+
+
 def commit_with_entry(repo: Path, catalog_rel: str, key: str, entry: dict,
-                      add_paths: List[str], message: str) -> str:
+                      add_paths: List[str], message: str) -> CommitResult:
     """One commit on HEAD: HEAD's catalog + ``entries[key] = entry`` and the
-    working-tree state of ``add_paths`` (repo-relative). Returns the hash."""
-    for _attempt in range(3):
+    working-tree state of ``add_paths`` (repo-relative).
+
+    When the resulting tree equals HEAD's, no commit is made (a rerun after a
+    landed commit is harmless). Raises StudioError when no commit landed;
+    once one is on HEAD it never raises — see ``CommitResult.warning``."""
+    paths = [catalog_rel, *add_paths]
+    last_err = ""
+    for attempt in range(1, 4):
+        if attempt > 1:
+            time.sleep(0.2 * attempt)
         head = _git(repo, "rev-parse", "HEAD").strip()
         fd, idx = tempfile.mkstemp(prefix="animstudio-index-")
         os.close(fd)
@@ -57,12 +95,15 @@ def commit_with_entry(repo: Path, catalog_rel: str, key: str, entry: dict,
             for p in add_paths:
                 _git(repo, "update-index", "--add", "--", p, env=env)
             tree = _git(repo, "write-tree", env=env).strip()
-            commit = _git(repo, "commit-tree", tree, "-p", head, "-m", message).strip()
-            res = _run(repo, ["update-ref", "-m", "animstudio publish", "HEAD", commit, head])
-            if res.returncode == 0:
-                _git(repo, "reset", "-q", "--", catalog_rel, *add_paths)
-                return commit
         finally:
             if os.path.exists(idx):
                 os.unlink(idx)
-    raise StudioError("HEAD kept moving while committing - try again")
+        if tree == _git(repo, "rev-parse", f"{head}^{{tree}}").strip():
+            return CommitResult(head, False, _sync_index(repo, head, paths))
+        commit = _git(repo, "commit-tree", tree, "-p", head, "-m", message).strip()
+        res = _run(repo, ["update-ref", "-m", "animstudio publish", "HEAD", commit, head])
+        if res.returncode == 0:
+            return CommitResult(commit, True, _sync_index(repo, commit, paths))
+        last_err = res.stderr.strip()
+    raise StudioError(f"HEAD kept moving while committing - try again "
+                      f"(git update-ref: {last_err or '?'})")

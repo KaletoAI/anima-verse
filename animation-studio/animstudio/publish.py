@@ -18,6 +18,11 @@ import animstudio
 from animstudio import StudioError
 from animstudio.build import load_anim, spec_sha
 
+#: Spec § 6.5: publish sees only the shared catalog (its world layer is a
+#: throwaway one), so a world's own override of the key stays possible.
+WORLD_NOTE = ("a world can override pose {key!r} through its world layer - "
+              "publish checks only the shared catalog")
+
 
 def catalog_entry(anim) -> Dict:
     c = anim.catalog
@@ -113,7 +118,11 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
         built = json.loads((out / "build.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise StudioError(f"no build of {kind} - run build first")
-    if not built.get("ok"):
+    checks = built.get("checks") or []
+    if not checks:
+        # all([]) is True: a build.json from before the checks existed.
+        raise StudioError(f"the last build of {kind} recorded no checks - build again")
+    if not built.get("ok") or not all(c.get("ok") for c in checks):
         raise StudioError("the last build did not pass its checks")
     if built.get("spec_sha") != spec_sha(kind):
         raise StudioError("the source changed after the last build - build again")
@@ -122,12 +131,24 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
     _check_kind(anim, replace)    # early, before anything is written
     _check_catalog(anim, replace)
     lib = paths.get_animation_clips_dir()
+    cat_path = pc.catalog_path("pose")
+    commit_paths: List[str] = []
+    if commit:
+        # Before anything is written: every path the commit names must lie
+        # inside the repository.
+        def rel(p) -> str:
+            try:
+                return str(Path(p).resolve().relative_to(repo.resolve()))
+            except ValueError:
+                raise StudioError(f"{p} lies outside the repository {repo} - "
+                                  "cannot commit it (publish with --no-commit?)")
+        commit_paths = [rel(cat_path), rel(lib / f"{kind}.fbx"), rel(lib / f"{kind}.json"),
+                        rel(animstudio.ANIMS / f"{kind}.py")]
     lib.mkdir(parents=True, exist_ok=True)
     written: List[Path] = []
     backups: Dict[Path, bytes] = {}
     key = anim.catalog.key.strip().lower()
     entry = catalog_entry(anim)
-    cat_path = pc.catalog_path("pose")
     cat_undo = None               # (before, written, old entry) once we wrote
     try:
         for suffix in (".fbx", ".json"):
@@ -171,16 +192,13 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
         pc.reload_catalogs()
         raise
     files = [str(p) for p in written]
-    sha = ""
+    result = {"kind": kind, "key": key, "files": files, "commit": "", "commit_created": False,
+              "warning": "", "note": WORLD_NOTE.format(key=key)}
     if commit:
         from animstudio.gitops import commit_with_entry
-
-        def rel(p) -> str:
-            return str(Path(p).resolve().relative_to(repo.resolve()))
         msg = f"feat(clips): {kind} — procedural clip + pose '{key}' (animation-studio)"
         if trailer:
             msg += "\n\n" + trailer
-        sha = commit_with_entry(repo, rel(cat_path), key, entry,
-                                [rel(p) for p in written] + [rel(animstudio.ANIMS / f"{kind}.py")],
-                                msg)
-    return {"kind": kind, "key": key, "files": files, "commit": sha}
+        res = commit_with_entry(repo, commit_paths[0], key, entry, commit_paths[1:], msg)
+        result.update(commit=res.sha, commit_created=res.created, warning=res.warning)
+    return result

@@ -35,6 +35,22 @@ By hand:
     `git diff HEAD -- <catalog>` shows only the "local-only" lines. The
     commit touches exactly: the catalog, the clip, its sidecar, the source.
     The shared index shows no staged change for those paths afterwards.
+[9] the shared-index sync fails AFTER the commit landed (gitops._run is
+    wrapped so .git/index.lock appears right after a successful update-ref;
+    `git reset` then cannot take the lock): publish("demo-studio", key
+    "studio-key", a studio sidecar) returns normally with commit = the new
+    HEAD (!= HEAD before), commit_created true, and a warning that names the
+    sha, "git reset -q --" and all four paths (catalog, clip, sidecar,
+    source); `git diff --cached` is NOT empty then (the shared index still
+    holds the pre-commit state). Lock removed, a rerun with replace=True and
+    identical content: tree == HEAD^{tree} -> no commit (HEAD unchanged,
+    commit = that HEAD, commit_created false, no warning), and its reset
+    syncs the shared index (`git diff --cached` empty).
+[10] a build.json with ok true but an EMPTY checks list (a build from before
+    the checks existed; all([]) is True) -> StudioError "build again",
+    nothing written.
+[11] repo = a directory the library does not lie in (commit=True) ->
+    StudioError before anything is written (not a ValueError traceback).
 """
 import json
 import os
@@ -84,8 +100,10 @@ def fake_build(kind, key, synonyms, group="stand"):
     (out / f"{kind}.fbx").write_bytes(b"FBX-" + kind.encode())
     (out / f"{kind}.json").write_text(json.dumps({"kind": kind, "fps": 30}))
     from animstudio.build import spec_sha
-    (out / "build.json").write_text(json.dumps({"kind": kind, "spec_sha": spec_sha(kind),
-                                                "ok": True, "checks": []}))
+    (out / "build.json").write_text(json.dumps(
+        {"kind": kind, "spec_sha": spec_sha(kind), "ok": True,
+         "checks": [{"name": "floor", "ok": True, "value": 0.0, "limit": ">= -1.0 cm",
+                     "detail": ""}]}))
 
 
 try:
@@ -233,6 +251,72 @@ try:
         FAIL.append("[5] diff HEAD still changes the published entry")
     if not any('"local-only"' in ln for ln in changed_lines):
         FAIL.append("[5] the foreign local entry vanished from the diff")
+    # [9]
+    from animstudio import gitops as G
+    fake_build("demo-studio", "studio-key", [])
+    (animstudio.OUT / "demo-studio/demo-studio.json").write_text(json.dumps(
+        {"kind": "demo-studio", "fps": 30, "source": {"format": "procedural",
+                                                      "author": "animation-studio"}}))
+    real_run = G._run
+    lock = REPO / ".git/index.lock"
+
+    def locking_run(repo, args, **kw):
+        res = real_run(repo, args, **kw)
+        if args[0] == "update-ref" and res.returncode == 0:
+            lock.write_text("")
+        return res
+    G._run = locking_run
+    head_before = git("rev-parse", "HEAD").strip()
+    try:
+        r = P.publish("demo-studio", repo=REPO, commit=True)
+    finally:
+        G._run = real_run
+    head_now = git("rev-parse", "HEAD").strip()
+    if r["commit"] != head_now or head_now == head_before or not r["commit_created"]:
+        FAIL.append(f"[9] commit {r['commit']} HEAD {head_now} before {head_before}")
+    paths9 = [CAT_REL, "shared/models/clips/demo-studio.fbx",
+              "shared/models/clips/demo-studio.json", "animation-studio/anims/demo-studio.py"]
+    w = r.get("warning") or ""
+    if head_now not in w or "git reset -q --" not in w or not all(p in w for p in paths9):
+        FAIL.append(f"[9] warning incomplete: {w!r}")
+    if not git("diff", "--cached", "--name-only").strip():
+        FAIL.append("[9] shared index unexpectedly in sync (the injected failure did not bite)")
+    lock.unlink()
+    r = P.publish("demo-studio", repo=REPO, commit=True, replace=True)
+    if git("rev-parse", "HEAD").strip() != head_now or r["commit"] != head_now \
+            or r["commit_created"] or r.get("warning"):
+        FAIL.append(f"[9] rerun: HEAD {git('rev-parse', 'HEAD').strip()} result {r}")
+    if git("diff", "--cached", "--name-only").strip():
+        FAIL.append("[9] rerun left the shared index out of sync")
+    # [10]
+    fake_build("demo-old", "old-key", [])
+    bj = animstudio.OUT / "demo-old/build.json"
+    bj.write_text(json.dumps({**json.loads(bj.read_text()), "checks": []}))
+    cat_before, lib_before = (REPO / CAT_REL).read_bytes(), sorted(p.name for p in lib.iterdir())
+    try:
+        P.publish("demo-old", repo=REPO, commit=False)
+        FAIL.append("[10] build without checks accepted")
+    except StudioError as e:
+        if "build again" not in str(e):
+            FAIL.append(f"[10] message: {e}")
+    if (REPO / CAT_REL).read_bytes() != cat_before or \
+            sorted(p.name for p in lib.iterdir()) != lib_before:
+        FAIL.append("[10] something was written")
+    # [11]
+    fake_build("demo-out", "out-key", [])
+    elsewhere = Path(tempfile.mkdtemp(prefix="animstudio-elsewhere-"))
+    try:
+        P.publish("demo-out", repo=elsewhere, commit=True)
+        FAIL.append("[11] library outside the repo accepted")
+    except StudioError:
+        pass
+    except ValueError as e:
+        FAIL.append(f"[11] bare ValueError: {e}")
+    finally:
+        shutil.rmtree(elsewhere, ignore_errors=True)
+    if (REPO / CAT_REL).read_bytes() != cat_before or \
+            sorted(p.name for p in lib.iterdir()) != lib_before:
+        FAIL.append("[11] something was written")
 except Exception as e:                                                # noqa: BLE001
     import traceback
     traceback.print_exc()

@@ -1,5 +1,12 @@
 """``python -m animstudio <command>`` — run from animation-studio/ with the
-repository's venv: ``../.venv/bin/python -m animstudio build wave``."""
+repository's venv: ``../.venv/bin/python -m animstudio build wave``.
+
+Exit codes: 0 done; 1 the checks failed (``build``/``check``, also a
+build.json that recorded no checks); 2 an error (printed, nothing
+committed); 3 ``publish`` committed, but the shared git index could not be
+re-synced — the commit IS on HEAD, run the printed ``git reset`` command
+(rerunning publish is not needed).
+"""
 import argparse
 import json
 import sys
@@ -62,6 +69,9 @@ def main(argv=None) -> int:
             if not path.is_file():
                 raise StudioError(f"{path} missing - build first")
             r = json.loads(path.read_text(encoding="utf-8"))
+            if not r.get("checks"):
+                print("no checks recorded — build again")
+                return 1
             _print_report(r)
             return 0 if r["ok"] else 1
         if args.cmd == "sheet":
@@ -72,8 +82,17 @@ def main(argv=None) -> int:
             from animstudio.publish import publish
             r = publish(args.kind, replace=args.replace, commit=not args.no_commit,
                         trailer=args.trailer)
-            print(f"published {r['kind']} as pose '{r['key']}'"
-                  + (f", commit {r['commit'][:10]}" if r["commit"] else ""))
+            if not r["commit"]:
+                tail = " (not committed)"
+            elif r["commit_created"]:
+                tail = f", commit {r['commit']}"
+            else:
+                tail = f", nothing new to commit - HEAD {r['commit']} already has it"
+            print(f"published {r['kind']} as pose '{r['key']}'{tail}")
+            print(f"note: {r['note']}")
+            if r["warning"]:
+                print(f"warning: {r['warning']}", file=sys.stderr)
+                return 3
             return 0
     except StudioError as e:
         print(f"error: {e}", file=sys.stderr)
