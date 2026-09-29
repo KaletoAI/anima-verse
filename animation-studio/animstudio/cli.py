@@ -26,6 +26,11 @@ def main(argv=None) -> int:
     p.add_argument("--columns", type=int, default=6)
     p = sub.add_parser("check", help="print the report of the last build")
     p.add_argument("kind")
+    p = sub.add_parser("publish", help="publish out/<kind> into shared/ + pose catalog + commit")
+    p.add_argument("kind")
+    p.add_argument("--replace", action="store_true", help="overwrite an OWN earlier studio clip")
+    p.add_argument("--no-commit", action="store_true")
+    p.add_argument("--trailer", default="", help="commit trailer lines (see the repo CLAUDE.md, Git)")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "build":
@@ -44,6 +49,13 @@ def main(argv=None) -> int:
         if args.cmd == "sheet":
             from animstudio.sheet import sheet
             print(f"sheet: {sheet(args.kind, args.columns)}")
+            return 0
+        if args.cmd == "publish":
+            from animstudio.publish import publish
+            r = publish(args.kind, replace=args.replace, commit=not args.no_commit,
+                        trailer=args.trailer)
+            print(f"published {r['kind']} as pose '{r['key']}'"
+                  + (f", commit {r['commit'][:10]}" if r["commit"] else ""))
             return 0
     except StudioError as e:
         print(f"error: {e}", file=sys.stderr)

@@ -395,7 +395,7 @@ def save_locomotion_clips(changes: Dict[str, Any],
     the resolved mapping.
 
     Only the roles named in ``changes`` are touched. A kind is normalised like
-    a rename target (lowercase, the ``_validate_kind`` alphabet) and must exist
+    a rename target (lowercase, the ``validate_kind`` alphabet) and must exist
     as a SOLO clip somewhere in the two libraries — a role pointing at a file
     nobody has would leave every figure standing. ``""`` (or ``None``) resets
     the role to its default and is NOT validated against the library: the
@@ -418,7 +418,7 @@ def save_locomotion_clips(changes: Dict[str, Any],
             continue
         if not isinstance(raw, str):
             raise ClipLibraryError(f"{role}: a clip kind (string) is expected")
-        kind = _validate_kind(raw)
+        kind = validate_kind(raw)
         if solo is None:
             solo = _solo_kinds()
         if kind not in solo:
@@ -587,8 +587,8 @@ def save_transitions(entries: Any,
                 "every clip change — name at least one side")
         for side, value in (("from", src), ("to", dst)):
             if value != TRANSITION_ANY:
-                _validate_kind(value)
-        kind = _validate_kind(raw.get("kind"))
+                validate_kind(value)
+        kind = validate_kind(raw.get("kind"))
         if solo is None:
             solo = _solo_kinds()
         if kind not in solo:
@@ -829,7 +829,10 @@ def _own_sidecar(path: Path) -> Optional[Path]:
     return sidecar if sidecar.is_file() else None
 
 
-def _validate_kind(raw: Any) -> str:
+def validate_kind(raw: Any) -> str:
+    """The normalised kind (stripped, lowercased) or ClipLibraryError — the
+    ONE rule every name that becomes a clip file stem goes through (library
+    renames/imports and the animation studio's publish)."""
     kind = str(raw or "").strip().lower()
     if ROLE_SEPARATOR in kind:
         raise ClipLibraryError(
@@ -946,7 +949,7 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     old_set = src.parent.name if src.parent.resolve() != src_root else ""
     old_kind, _role, _num = _split_stem(src.stem)
 
-    new_kind = _validate_kind(kind) if kind is not None else old_kind
+    new_kind = validate_kind(kind) if kind is not None else old_kind
     new_set = _validate_set(cset) if cset is not None else old_set
     new_library = str(to_library or library).strip().lower()
     if new_library not in LIBRARIES:

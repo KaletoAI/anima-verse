@@ -121,7 +121,10 @@ def catalog_file_lock(axis: str) -> Iterator[None]:
     """Exclusive advisory lock on the shared file of an axis, across
     PROCESSES: the Poses tab (server) and the animation studio's publish
     both read-modify-write the same file. A separate ``.lock`` file,
-    because the catalog itself is replaced atomically (``os.replace``)."""
+    because the catalog itself is replaced atomically (``os.replace``).
+    NOT re-entrant: a second acquisition in the same process, even on the
+    same thread, blocks forever — take it once per critical section, never
+    nested."""
     import fcntl
     path = catalog_path(axis)
     lock = path.with_name(path.name + ".lock")
