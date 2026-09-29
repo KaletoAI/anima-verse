@@ -59,8 +59,47 @@ def run(job):
             "fps": fps, "source_fps": float(fps), "root_motion": "strip",
             "loops": bool(doc["loop"]), "yaw_deg": math.degrees(math.atan2(fx, fz))}
     sidecar, outputs = cmu_clip.run_takes([take], args, fps, params["source"])
-    return _finish(sidecar, outputs, params["kind"], fps,
-                   float(doc.get("lift_cm") or 0.0))
+    sidecar, outputs = _finish(sidecar, outputs, params["kind"], fps,
+                               float(doc.get("lift_cm") or 0.0))
+    # Measured AFTER _finish: the checks read the clip as it is published.
+    outputs["measure"] = _measure(outputs[params["kind"]], Path(job["out_dir"]), fps)
+    return sidecar, outputs
+
+
+MEASURED = ["Hips", "Spine2", "Head", "HeadTop_End",
+            "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase", "LeftToe_End",
+            "RightUpLeg", "RightLeg", "RightFoot", "RightToeBase", "RightToe_End",
+            "LeftArm", "LeftForeArm", "LeftHand", "RightArm", "RightForeArm", "RightHand"]
+
+
+def _measure(fbx: str, out_dir: Path, fps: int) -> str:
+    """Joint heads per frame of the EXPORTED clip (armature space, cm) and
+    the number of rotation tracks — what the studio's checks read.
+
+    Imported like ``_finish`` does (scene fps first, ``anim_offset=0``), so
+    row i is frame i of the clip."""
+    import bpy
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.context.scene.render.fps = fps
+    bpy.ops.import_scene.fbx(filepath=fbx, global_scale=1.0,
+                             use_anim=True, anim_offset=0.0)
+    arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+    act = arm.animation_data.action
+    tracks = {fc.data_path.split('"')[1] for fc in act.fcurves
+              if fc.data_path.endswith("rotation_quaternion")}
+    f0, f1 = (int(round(v)) for v in act.frame_range)
+    rows = []
+    for f in range(f0, f1 + 1):
+        bpy.context.scene.frame_set(f)
+        row = {}
+        for short in MEASURED:
+            pb = arm.pose.bones.get(cmu_clip.PREFIX + short)
+            if pb is not None:
+                row[short] = [float(v) for v in pb.head]
+        rows.append(row)
+    path = out_dir / "measure.json"
+    path.write_text(json.dumps({"tracks": len(tracks), "frames": rows}), encoding="utf-8")
+    return str(path)
 
 
 def _finish(sidecar, outputs, kind, fps, lift_cm):

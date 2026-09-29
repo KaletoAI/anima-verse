@@ -58,6 +58,29 @@ Stage 6 - out of reach: T = S + 1.5*(L1+L2) ahead -> the arm stretches along
 Stage 7 - feet planted: hips_drop_cm = 20 with FeetPlanted -> both ankle
   heads keep their REST position within 0.01 cm, both knees bend (> 10 deg),
   and each foot keeps its world rotation (identity here, 1e-9).
+Stage 8 - HandTarget spans (validate), FADE_S = 0.15 s, duration 2 s: each
+  of these raises StudioError -
+    (-0.1, 1.0) a < 0; (1.0, 2.5) b > duration; (1.0, 1.0) a == b;
+    loop (0.0, 1.0) touches only the START of a loop (snaps at the seam);
+    loop (1.0, 2.0) touches only the END;
+    (1.0, 1.2) two inner edges, 0.2 < 2 * 0.15 (never full weight);
+  and these pass: loop (0.0, 2.0) both ends; loop (0.5, 0.8) = exactly
+    2 * 0.15; non-loop (0.0, 1.0) (a one-ended span is fine without a seam).
+Stage 9 - feet residual (ik_error_cm["<s>_foot"] = the largest ankle-to-
+  anchor distance over all frames):
+  stage 7's clip (hips_drop 20, anchors in reach): l_foot and r_foot < 0.01.
+  hips_drop 0: < 0.01 (the anchor IS the rest ankle).
+  body_pitch keyed 0 -> 60 over 1 s, ease linear (frame i: 2*i deg): the
+    anchor A is the REST ankle head (frame 0 is upright). The pelvis turns
+    about the Hips head, so the hip joint moves to
+    H'(th) = h[Hips] + Rx(th) (h[UpLeg] - h[Hips]) - the UpLeg head lies
+    12.3 cm BELOW the Hips head, so pitching forward lifts it. The leg
+    (L = |Leg-UpLeg| + |Foot-Leg|, 93.57 cm; the rest leg is slightly bent,
+    |Foot-UpLeg| = 93.44) reaches at most L, so the residual per frame is
+    max(0, |A - H'(th)| - L) (a stretched chain ends L along H'->A, as
+    stage 6 shows for the arm). Expected = the max of that over the 31
+    frames (6.54 cm at 60 deg), +- 0.01 cm, per side - above the 3 cm the
+    ik check allows.
 """
 import ast
 import math
@@ -233,6 +256,49 @@ for S_ in ("Left", "Right"):
     check(knee > 10.0, f"stage 7 {S_} knee {knee:.1f}")
     check(near(c.frames[0].D[f"{S_}Foot"], np.eye(3), 1e-9), f"stage 7 {S_} foot rotation")
 print("OK stage 7" if not FAIL else "FAIL stage 7")
+
+# Stage 8 - HandTarget spans
+def span_anim(span, loop):
+    return Animation(kind="s", duration_s=2.0, loop=loop, catalog=CAT,
+                     ik=[HandTarget("l", at=(0.3, 1.2, 0.3), span=span)])
+
+
+for span, loop in (((-0.1, 1.0), False), ((1.0, 2.5), False), ((1.0, 1.0), False),
+                   ((0.0, 1.0), True), ((1.0, 2.0), True), ((1.0, 1.2), False)):
+    try:
+        validate(span_anim(span, loop))
+        FAIL.append(f"stage 8 validate accepted span {span} loop={loop}")
+    except StudioError:
+        pass
+for span, loop in (((0.0, 2.0), True), ((0.5, 0.8), True), ((0.0, 1.0), False)):
+    try:
+        validate(span_anim(span, loop))
+    except StudioError as e:
+        FAIL.append(f"stage 8 validate refused span {span} loop={loop}: {e}")
+print("OK stage 8" if not FAIL else "FAIL stage 8")
+
+# Stage 9 - feet residual
+for drop in (20.0, 0.0):
+    c = compile_anim(Animation(kind="s", duration_s=0.5, loop=False, catalog=CAT,
+                               base=Pose(hips_drop_cm=drop), ik=[FeetPlanted()]), rest)
+    for k in ("l_foot", "r_foot"):
+        check(k in c.ik_error_cm and c.ik_error_cm[k] < 0.01,
+              f"stage 9 drop {drop} {k} = {c.ik_error_cm.get(k)}")
+c = compile_anim(Animation(kind="s", duration_s=1.0, loop=False, catalog=CAT,
+                           keys=[Key(0.0, Pose(body_pitch=0)),
+                                 Key(1.0, Pose(body_pitch=60), ease="linear")],
+                           ik=[FeetPlanted()]), rest)
+h = rest.head
+for s_, S_ in (("l", "Left"), ("r", "Right")):
+    A = h[f"{S_}Foot"]
+    L = (float(np.linalg.norm(h[f"{S_}Leg"] - h[f"{S_}UpLeg"]))
+         + float(np.linalg.norm(h[f"{S_}Foot"] - h[f"{S_}Leg"])))
+    want = max(max(0.0, float(np.linalg.norm(
+        A - (h["Hips"] + rig.axis_rot("x", 2.0 * i) @ (h[f"{S_}UpLeg"] - h["Hips"])))) - L)
+        for i in range(31))
+    got = c.ik_error_cm.get(f"{s_}_foot", 0.0)
+    check(want > 3.0 and abs(got - want) < 0.01, f"stage 9 pitch {s_}_foot {got:.3f} vs {want:.3f}")
+print("OK stage 9" if not FAIL else "FAIL stage 9")
 
 print("FAIL:\n" + "\n".join(FAIL) if FAIL else "OK smoke_animstudio_compile")
 sys.exit(1 if FAIL else 0)

@@ -12,15 +12,13 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 from animstudio import rig
-from animstudio.dsl import Animation, _layers, validate, values_at
+from animstudio.dsl import FADE_S, Animation, _layers, validate, values_at
 import sys as _sys
 from animstudio import REPO
 
 _sys.path.insert(0, str(REPO / "app" / "blender" / "scripts"))
 from _foot_plant import two_bone_ik   # noqa: E402  (stdlib-only by contract)
 _sys.path.pop(0)
-
-FADE_S = 0.15
 
 
 def _qmat(q) -> np.ndarray:
@@ -178,6 +176,11 @@ def compile_anim(anim: Animation, rest: rig.Rest) -> Compiled:
                     pole = pos[f"{S}Leg"] + D[f"{S}UpLeg"] @ np.array([0.0, 0.0, 30.0])
                     _chain_ik(rest, D, pos, f"{S}UpLeg", f"{S}Leg", f"{S}Foot",
                               anchors[S], pole, 1.0, keep_end=True)
+                    # An anchor out of the leg's reach leaves the ankle short
+                    # of it: that residual is what the ik check reads.
+                    err = float(np.linalg.norm(pos[f"{S}Foot"] - anchors[S]))
+                    key = f"{s}_foot"
+                    ik_err[key] = max(ik_err.get(key, 0.0), err)
             elif type(goal).__name__ == "HandTarget":
                 S = "Left" if goal.side == "l" else "Right"
                 w = _weight(goal.span, t, anim.duration_s)

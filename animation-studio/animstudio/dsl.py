@@ -13,6 +13,8 @@ from animstudio import StudioError
 from animstudio import rig
 
 GROUPS = ("stand", "seat", "ground", "lie")
+#: Seconds a HandTarget fades in/out at each INNER edge of its span.
+FADE_S = 0.15
 EASES: Dict[str, Callable[[float], float]] = {
     "linear": lambda u: u,
     "in": lambda u: u * u,
@@ -59,8 +61,10 @@ class HandTarget:
     """The hand's head (wrist) reaches ``at`` — metres in clip space (X the
     figure's left, Y up, Z front, origin on the floor at the armature
     origin) — during ``span`` (seconds, None = the whole clip), with a
-    0.15 s fade at each inner edge of the span. ``pole`` is the direction
-    the elbow points (default down and back)."""
+    FADE_S (0.15 s) fade at each inner edge of the span. ``pole`` is the
+    direction the elbow points (default down and back). ``validate`` keeps
+    the span inside [0, duration], long enough for its fades and, on a
+    loop, touching both ends or neither."""
     side: str
     at: Tuple[float, float, float]
     span: Optional[Tuple[float, float]] = None
@@ -149,11 +153,32 @@ def validate(anim: Animation) -> None:
         sides = getattr(goal, "sides", None) or (getattr(goal, "side", None),)
         if any(s not in ("l", "r") for s in sides):
             raise StudioError(f"ik {type(goal).__name__}: side must be 'l' or 'r'")
+        span = getattr(goal, "span", None)
+        if span is not None:
+            _validate_span(anim, goal.side, span)
     for o in _layers(anim):
         if not _known(o.dof):
             raise StudioError(f"layer: unknown DOF {o.dof!r}")
         if o.period_s <= 0:
             raise StudioError(f"layer {o.dof}: period_s must be > 0")
+
+
+def _validate_span(anim: Animation, side: str, span) -> None:
+    """A HandTarget span must lie inside the clip, must not snap at a loop's
+    seam and must be long enough to reach full weight past its fades."""
+    a, b = (float(v) for v in span)
+    dur = anim.duration_s
+    if not 0.0 <= a < b <= dur:
+        raise StudioError(f"ik HandTarget {side}: span ({a:g}, {b:g}) must satisfy "
+                          f"0 <= a < b <= duration ({dur:g})")
+    at_start, at_end = abs(a) < 1e-9, abs(b - dur) < 1e-9
+    if anim.loop and at_start != at_end:
+        raise StudioError(f"ik HandTarget {side}: span ({a:g}, {b:g}) touches only one end "
+                          "of a loop - the hand snaps at the seam (cover both ends or neither)")
+    inner = (not at_start) + (not at_end)
+    if b - a < inner * FADE_S - 1e-9:
+        raise StudioError(f"ik HandTarget {side}: span ({a:g}, {b:g}) is shorter than its "
+                          f"{inner} fade(s) of {FADE_S}s - it never reaches full weight")
 
 
 def _resolved_keys(anim: Animation) -> List[Tuple[float, Dict[str, float], str]]:

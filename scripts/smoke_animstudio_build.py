@@ -29,7 +29,14 @@ studio's out/ is redirected into a temp dir. Expectations by hand:
     the sidecar says geometry.lift_cm 16.0 and carries NO geometry.yaw_deg
     (proc_clip strips the pass-through value - it is not a dial setting).
     The re-exported clip keeps its length: 31 keyed frames like [1] (1 s at
-    30 fps), not the 250 of an empty Blender scene's default frame range.
+    30 fps), not the 250 of an empty Blender scene's default frame range,
+    and its action frame range equals [4]'s (the probe imports both the
+    same way): _finish re-imports with anim_offset=0, the importer's default
+    offset of 1 would re-export every key one frame late.
+[6] MEASURE: proc_clip writes measure.json next to the clip - for [1] 31
+    rows (one per frame) whose Hips head equals the probe's (+- 0.01 cm),
+    and build.json carries the checks (names include floor and tracks)
+    with ok == all(check ok).
 """
 import json
 import os
@@ -81,7 +88,8 @@ f0, f1 = (int(v) for v in act.frame_range)
 for f in range(f0, f1 + 1):
     bpy.context.scene.frame_set(f)
     rows.append({pb.name.split(":")[-1]: list(pb.head) for pb in arm.pose.bones})
-json.dump({"quats": quats, "rows": rows}, open(sys.argv[-1], "w"))
+json.dump({"quats": quats, "rows": rows, "range": [float(v) for v in act.frame_range]},
+          open(sys.argv[-1], "w"))
 '''
 
 
@@ -110,6 +118,16 @@ try:
     hy = [row["Hips"][1] for row in p["rows"]]
     if max(abs(y - hips_exp) for y in hy) > 0.01:
         FAIL.append(f"[1] hips y {min(hy):.4f}..{max(hy):.4f}, expected {hips_exp:.4f}")
+    # [6] measure
+    meas = json.loads((animstudio.OUT / "smoke-rest" / "measure.json").read_text())
+    if len(meas["frames"]) != 31:
+        FAIL.append(f"[6] measure has {len(meas['frames'])} rows, expected 31")
+    elif max(abs(a - b) for m_, q_ in zip(meas["frames"], p["rows"])
+             for a, b in zip(m_["Hips"], q_["Hips"])) > 0.01:
+        FAIL.append("[6] measured Hips differ from the probe")
+    names = {c["name"] for c in r["checks"]}
+    if not {"floor", "tracks"} <= names or r["ok"] != all(c["ok"] for c in r["checks"]):
+        FAIL.append(f"[6] report checks {sorted(names)} ok={r['ok']}")
     side = json.loads(Path(r["sidecar"]).read_text())
     if abs(side["geometry"]["floor_shift_cm"] - round(-low, 2)) > 0.005:
         FAIL.append(f"[1] floor_shift_cm {side['geometry']['floor_shift_cm']} vs {round(-low, 2)}")
@@ -134,7 +152,8 @@ try:
     r = B.build("smoke-lie", anim=Animation(kind="smoke-lie", duration_s=1.0, loop=False,
                                             catalog=Catalog(key="l", group="lie", prompt="lying"),
                                             base=Pose(body_pitch=-90, hips_drop_cm=93)))
-    row = probe(Path(r["fbx"]))["rows"][0]
+    p4 = probe(Path(r["fbx"]))
+    row = p4["rows"][0]
     if not row["Head"][2] < row["Hips"][2] - 30:
         FAIL.append(f"[4] head z {row['Head'][2]:.1f} not behind hips z {row['Hips'][2]:.1f}")
     # [5] lift
@@ -142,6 +161,8 @@ try:
                                               catalog=Catalog(key="l", group="lie", prompt="lying"),
                                               base=Pose(body_pitch=-90, hips_drop_cm=93), lift_cm=16.0))
     p5 = probe(Path(r5["fbx"]))
+    if p5["range"] != p4["range"]:
+        FAIL.append(f"[5] lifted clip frame range {p5['range']} vs unlifted {p4['range']}")
     if len(p5["rows"]) != 31:
         FAIL.append(f"[5] lifted clip has {len(p5['rows'])} frames, expected 31")
     row5 = p5["rows"][0]

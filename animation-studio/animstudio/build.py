@@ -1,12 +1,18 @@
-"""Source file -> compiled take -> proc_clip -> out/<kind>/ + build.json."""
+"""Source file -> compiled take -> proc_clip -> out/<kind>/ + build.json.
+
+build.json carries the numeric checks (animstudio.checks) of the compiled
+source and of the baked clip's measurement; ``ok`` is true only when every
+check passed."""
 import hashlib
 import importlib.util
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
 import animstudio
 from animstudio import StudioError
+from animstudio.checks import run_checks
 from animstudio.compile import compile_anim, take_document
 from animstudio.dsl import Animation
 from animstudio.rig import load_rest
@@ -56,7 +62,10 @@ def build(kind: str, *, anim: Optional[Animation] = None) -> dict:
                      params={"kind": kind, "source": source}, out_dir=out, timeout_s=900)
     if not res["ok"]:
         raise StudioError(f"proc_clip failed: {res['error']}")
-    report = {"kind": kind, "spec_sha": sha, "ok": True, "checks": [],
+    measure = json.loads(Path(res["outputs"]["measure"]).read_text(encoding="utf-8"))
+    checks = run_checks(anim, compiled, measure)
+    report = {"kind": kind, "spec_sha": sha, "ok": all(c.ok for c in checks),
+              "checks": [asdict(c) for c in checks],
               "fbx": res["outputs"][kind], "sidecar": res["outputs"]["sidecar"]}
     (out / "build.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     return report
