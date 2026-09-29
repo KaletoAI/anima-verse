@@ -330,6 +330,11 @@ class ImageService:
         external readers (``img.backends``) and internal skill helpers."""
         return self._pool.backends
 
+    @property
+    def pool(self) -> BackendPool:
+        """The backend pool — the image routing resolves chains on it."""
+        return self._pool
+
     def _agent_instances(self, name: str) -> Dict[str, Any]:
         """Provider injected into ``BackendPool``: returns the per-agent
         instances dict, auto-creating the per-agent config on first access."""

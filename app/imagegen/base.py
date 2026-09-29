@@ -327,6 +327,11 @@ class ImageBackend(ABC):
             "media": self.MEDIA_TYPE,
         }
 
+    def in_cooldown(self) -> bool:
+        """Whether a failure cooldown (``mark_unhealthy``) is running right
+        now — the routing tells "cooling down" apart from "offline"."""
+        return self._cooldown_active()
+
     def clear_cooldown(self) -> bool:
         """Admin action: lift an active cooldown and probe the backend again
         immediately. Returns the fresh availability — a backend that is truly
