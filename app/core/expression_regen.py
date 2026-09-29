@@ -174,7 +174,21 @@ def _cache_key(mood: str, pose_key: str,
     if state_fp is None and character_name:
         from app.core.model_refs import state_fingerprint
         state_fp = state_fingerprint(character_name)
-    raw = f"{expression_key}:{pose}:{eq}"
+    return variant_stem(character_name, expression_key, pose, eq, state_fp)
+
+
+def variant_stem(character_name: str, expression_key: str, pose: str,
+                 outfit_raw: str, state_fp: Optional[str]) -> str:
+    """The file stem of one expression variant — the ONE hash rule behind
+    :func:`_cache_key`.
+
+    Takes the pose key VERBATIM: the catalog canonicalisation happens in
+    ``_cache_key`` before it gets here. The pose-key rename
+    (``pose_rename``) needs exactly that — it re-derives the stem of a key
+    that is no longer in the catalog, which ``_canonical_pose_key`` would
+    collapse onto the default. ``state_fp`` "" and ``None`` hash alike.
+    """
+    raw = f"{expression_key}:{pose}:{outfit_raw}"
     if state_fp:
         raw += f":state={state_fp}"
     h = hashlib.md5(raw.encode()).hexdigest()[:12]

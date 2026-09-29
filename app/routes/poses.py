@@ -356,6 +356,7 @@ def list_entries(axis: str = Query("pose"),
                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """All catalog entries of an axis + the animation kinds that have clips
     (pose only) + the integrity problems of the catalog."""
+    from app.core.pose_rename import CODE_NAMED_POSE_KEYS
     axis = _axis(axis)
     out: List[Dict[str, Any]] = []
     for key, entry in pose_catalog.get_catalog(axis).items():
@@ -379,6 +380,9 @@ def list_entries(axis: str = Query("pose"),
             row["group"] = entry.get("group", "")
             row["places"] = pose_catalog.pose_places(key)
             row["yaw_offset"] = pose_catalog.pose_yaw_offset(key)
+            # Whether POST /poses/{key}/rename accepts this key — the editor
+            # hides the button for the keys the server code names literally.
+            row["renamable"] = key not in CODE_NAMED_POSE_KEYS
         out.append(row)
     out.sort(key=lambda p: p["key"])
     from app.core.animation_clips import clip_meta, pair_kinds
@@ -534,6 +538,92 @@ def delete_entry(key: str, axis: str = Query("pose"),
         data["entries"].pop(key, None)
         _write(axis, data, store)
     return {"status": "success", "key": key, "axis": axis, "store": store}
+
+
+@router.post("/{key}/rename")
+async def rename_entry(key: str, request: Request, axis: str = Query("pose"),
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Renames the KEY of a pose entry; every stored reference follows."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_rename_entry_sync, key, axis, body)
+
+
+def _renamed(entries: Dict[str, Any], old: str, new: str) -> Dict[str, Any]:
+    """``entries`` with ``old`` renamed to ``new`` IN PLACE of the order (the
+    tracked file keeps its layout), and ``new`` dropped from the entry's own
+    synonyms — a key is never its own synonym."""
+    out: Dict[str, Any] = {}
+    for k, entry in entries.items():
+        if k == old:
+            entry = dict(entry)
+            if new in (entry.get("synonyms") or []):
+                entry["synonyms"] = [s for s in entry["synonyms"] if s != new]
+            k = new
+        out[k] = entry
+    return out
+
+
+def _rename_entry_sync(key: str, axis: str, body: Any) -> Dict[str, Any]:
+    """The blocking body of ``rename_entry`` — runs in the threadpool.
+
+    Pose axis only. The catalog is rewritten first, inside the catalog lock:
+    the entry in EVERY layer that holds it (a world row may override a shared
+    entry of the same key) and every place-type default naming it, in the raw
+    layer documents. The world's references follow afterwards
+    (``pose_rename.rewrite_references``) — pointing them at the new key before
+    it exists would be the worse order. The ``_default`` flag travels with
+    the entry. The old key is NOT kept as a synonym.
+    """
+    from app.core import pose_rename
+    axis = _axis(axis)
+    if axis != "pose":
+        raise HTTPException(status_code=400, detail="only pose keys can be renamed")
+    old = key.strip().lower()
+    new = _key((body or {}).get("new_key"))
+    if new == old:
+        raise HTTPException(status_code=400, detail="the new key is the old key")
+    if old in pose_rename.CODE_NAMED_POSE_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{old}' is named by the server code and cannot be renamed")
+    with _catalog_txn(axis):
+        catalog = pose_catalog.get_catalog(axis)
+        if old not in catalog:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        if new in catalog:
+            raise HTTPException(status_code=409, detail="Entry already exists")
+        # The entry's OWN synonyms are free for it — renaming onto one of them
+        # is how a synonym becomes the key.
+        _require_free_aliases(axis, [new], exclude_key=old)
+        stores: List[str] = []
+        shared = _read(axis, "shared")
+        groups = shared.get("groups") if isinstance(shared.get("groups"), dict) else {}
+        shared_changed = old in shared["entries"]
+        if shared_changed:
+            shared["entries"] = _renamed(shared["entries"], old, new)
+            stores.append("shared")
+        for spec in groups.values():
+            if isinstance(spec, dict) and spec.get("default") == old:
+                spec["default"] = new
+                shared_changed = True
+        world = pose_catalog.world_entries(axis)
+        if old in world:
+            pose_catalog.replace_world_entries(axis, _renamed(world, old, new))
+            stores.append("world")
+        world_groups = pose_catalog.world_groups()
+        if any(g.get("default") == old for g in world_groups.values()):
+            for g in world_groups.values():
+                if g.get("default") == old:
+                    g["default"] = new
+            pose_catalog.replace_world_groups(world_groups)
+        if shared_changed:
+            _write(axis, shared, "shared")
+        else:
+            _after_write()
+    references = pose_rename.rewrite_references(old, new)
+    return {"status": "success", "old_key": old, "key": new, "axis": axis,
+            "stores": stores, "references": references}
 
 
 # ── Candidates: free text the catalog could not absorb ───────────────────

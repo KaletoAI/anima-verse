@@ -11,6 +11,7 @@
  * filled from the clips that actually exist (/assets/animation-clips).
  *
  * Catalog:    GET/POST /poses · PUT/DELETE /poses/{key}   (?axis=…)
+ *             POST /poses/{key}/rename   (pose axis — every stored reference follows)
  * Candidates: GET /poses/candidates · POST /poses/candidates/approve|dismiss|dismiss_all
  * Images:     POST /poses/expression-images/clear
  *
@@ -34,6 +35,7 @@ import { DetailToolbar } from '../../components/DetailToolbar'
 import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { CommaListInput } from '../../components/CommaListInput'
+import { PromptDialog } from '../../components/PromptDialog'
 
 type Axis = 'pose' | 'expression'
 /** The tab has five surfaces: the catalog entries, the installed clip library
@@ -86,6 +88,8 @@ interface Entry {
    *  world's own layer in its world.db for entries that must never be
    *  committed */
   store?: Store
+  /** false for the keys the server code names literally (pose axis) */
+  renamable?: boolean
 }
 
 type Store = 'shared' | 'world'
@@ -163,6 +167,7 @@ export function PosesTab() {
   const [confirmDismissAll, setConfirmDismissAll] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
 
   const isPose = axis === 'pose'
 
@@ -365,6 +370,36 @@ export function PosesTab() {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [axis, draft, isNew, load, t, toast])
+
+  /** Renames the selected pose's KEY. The server rewrites every stored
+   *  reference of this world (character poses, pair interactions, invites,
+   *  candidates, rendered variants); the draft keeps any unsaved edit. */
+  const renameKey = useCallback(
+    async (value: string) => {
+      if (!draft || isNew) return
+      const oldKey = draft.key
+      const newKey = value.trim().toLowerCase()
+      setRenameOpen(false)
+      if (!newKey || newKey === oldKey) return
+      try {
+        const r = await apiPost<{ key: string; references: { failed: string[] } }>(
+          `/poses/${encodeURIComponent(oldKey)}/rename?axis=${axis}`,
+          { new_key: newKey },
+        )
+        toast(t('Key renamed') + `: ${oldKey} → ${r.key}`)
+        if (r.references?.failed?.length) {
+          toast(t('Not updated for') + ': ' + r.references.failed.join(', '), 'error')
+        }
+        setDraft((d) => (d ? { ...d, key: r.key,
+          synonyms: d.synonyms.filter((s) => s !== r.key) } : d))
+        setSelected(r.key)
+        await load()
+      } catch (e) {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
+    },
+    [axis, draft, isNew, load, t, toast],
+  )
 
   const asSynonym = useCallback(
     async (c: Candidate, target: string) => {
@@ -1015,12 +1050,20 @@ export function PosesTab() {
                     label={t('Key')}
                     hint={t('Canonical name, lowercase (e.g. sitting). This is the render and cache key.')}
                   >
-                    <input
-                      className="ga-input"
-                      value={draft.key}
-                      disabled={!isNew}
-                      onChange={(e) => upd('key', e.target.value)}
-                    />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        className="ga-input"
+                        value={draft.key}
+                        disabled={!isNew}
+                        onChange={(e) => upd('key', e.target.value)}
+                      />
+                      {isPose && !isNew && draft.renamable !== false ? (
+                        <button className="ga-btn ga-btn-sm" style={{ whiteSpace: 'nowrap' }}
+                          onClick={() => setRenameOpen(true)}>
+                          {t('Rename key')}
+                        </button>
+                      ) : null}
+                    </div>
                   </Field>
 
                 <Field
@@ -1252,6 +1295,16 @@ export function PosesTab() {
           )}
         </section>
       </div>
+      <PromptDialog
+        open={renameOpen}
+        title={t('Rename pose key')}
+        label={t('New key')}
+        message={t('Every stored reference in this world follows the new key. Other worlds keep the old key and fall back to the default pose there.')}
+        initialValue={draft?.key || ''}
+        confirmLabel={t('Rename')}
+        onSubmit={(v) => { void renameKey(v) }}
+        onClose={() => setRenameOpen(false)}
+      />
     </div>
   )
 }

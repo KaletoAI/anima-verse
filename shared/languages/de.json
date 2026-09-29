@@ -2332,6 +2332,12 @@
     "Store anyway": "Trotzdem speichern",
     "Job is still queued on the gateway": "Job wartet noch in der Gateway-Queue",
     "Job is still running on the gateway": "Job läuft noch auf dem Gateway",
-    "job": "Job"
+    "job": "Job",
+    "Rename key": "Key umbenennen",
+    "Rename pose key": "Pose-Key umbenennen",
+    "New key": "Neuer Key",
+    "Key renamed": "Key umbenannt",
+    "Not updated for": "Nicht aktualisiert für",
+    "Every stored reference in this world follows the new key. Other worlds keep the old key and fall back to the default pose there.": "Alle gespeicherten Verweise dieser Welt folgen dem neuen Key. Andere Welten behalten den alten Key und fallen dort auf die Standard-Pose zurück."
   }
 }
