@@ -48,6 +48,16 @@ from app.utils.image_prompt_logger import log_image_prompt
 logger = get_logger("image_gen")
 
 
+def _name_once(name: str, text: str) -> str:
+    """``"<name>: <text>"`` — unless ``text`` already starts with
+    ``"<name>:"`` (a ``BackendFailedError`` and most backend messages carry
+    their backend's name already). The same rule as
+    ``base.BackendFailedError``, so a failure names its backend exactly once."""
+    if not name or text.startswith(f"{name}:"):
+        return text
+    return f"{name}: {text}"
+
+
 def _log_image_failure(lv: dict, error_msg: str) -> None:
     """Schreibt eine fehlgeschlagene Bildgenerierung ins Image-Log (Errors-only
     im Viewer sichtbar). ``lv`` = locals() der Aufrufstelle — Variablen werden
@@ -2187,7 +2197,7 @@ class ImageService:
 
         except Exception as e:
             _tq.track_finish(_track_id, error=str(e)[:200])
-            _log_image_failure(locals(), f"{backend.name}: {e}")
+            _log_image_failure(locals(), _name_once(backend.name, str(e)))
             raise
 
     def generate_from_input(self, prompt: str) -> str:
@@ -2286,9 +2296,8 @@ class ImageService:
             name = rendering["name"]
             # BackendFailedError already starts with "<name>: " (exactly once);
             # a save failure is not the backend's.
-            if (name and not isinstance(e, (BackendFailedError, ImageSaveError))
-                    and not text.startswith(f"{name}:")):
-                text = f"{name}: {text}"
+            if not isinstance(e, (BackendFailedError, ImageSaveError)):
+                text = _name_once(name, text)
             return f"Error: {text[:300]}"
 
     def _store_route_meta(self, result: "GenerationResult", rmeta: Dict[str, Any]) -> None:

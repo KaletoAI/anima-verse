@@ -43,6 +43,10 @@ EXPECTED (by hand):
     character spec "B" -> the render on B sees model_override "m1"; character
     spec "X*" (B is a rule entry) -> model_override "".
  F0 no socket connect was attempted during the whole run -> [].
+ F13 a failure names its backend once (rule of base.BackendFailedError):
+    _name_once("B", "x") -> "B: x"; _name_once("B", "B: x") -> "B: x";
+    the failure log of generate_on_backend goes through it (no bare
+    f"{backend.name}: {e}" left in its source).
 """
 import inspect
 import json
@@ -224,6 +228,12 @@ gen(model_override="m1")
 check("F12 rule entry drops it", CALLS[-1], ("B", False, ""))
 CHAR["spec"] = ""
 
+check("F13 prefix added", service_mod._name_once("B", "x"), "B: x")
+check("F13 prefix not doubled", service_mod._name_once("B", "B: x"), "B: x")
+_gob_src = inspect.getsource(service_mod.ImageService.generate_on_backend)
+check("F13 failure log names once",
+      ("_name_once(backend.name" in _gob_src,
+       'f"{backend.name}: {e}"' in _gob_src), (True, False))
 check("F0 no socket connect", CONNECTS, [])
 
 print()
