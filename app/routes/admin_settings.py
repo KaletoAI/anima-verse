@@ -888,7 +888,9 @@ async def settings_save(request: Request, user=Depends(require_admin)):
     err = _validate_llm_routing(merged.get("llm_routing"))
     if err:
         raise HTTPException(status_code=400, detail=err)
-    img_err, img_warnings = _validate_image_routing(merged.get("image_generation"))
+    img_err, img_warnings = _validate_image_routing(
+        merged.get("image_generation"),
+        stored_routing=(current.get("image_generation") or {}).get("routing"))
     if img_err:
         raise HTTPException(status_code=400, detail=img_err)
 
@@ -1077,7 +1079,8 @@ def settings_image_routing_backends(user=Depends(require_admin)):
     try:
         from app.imagegen.service import get_image_service
         svc = get_image_service()
-    except Exception:
+    except Exception as e:
+        logger.warning("image-routing/backends: image service unavailable: %s", e)
         return []
     from app.imagegen.routing import describe_backend
     return [describe_backend(b) for b in svc.backends]
@@ -1231,7 +1234,52 @@ def _validate_llm_routing(routing) -> str:
     return ""
 
 
-def _validate_image_routing(img_cfg: Any) -> Tuple[str, List[str]]:
+def _image_chain_key(chain: Any) -> Any:
+    """A chain in comparable form: normalised, non-empty, case-folded specs
+    (matching is case-insensitive); a malformed chain compares as itself."""
+    from app.imagegen.routing import normalize_spec
+    if not isinstance(chain, list) or not all(isinstance(s, str) for s in chain):
+        return ("raw", repr(chain))
+    return tuple(n.lower() for n in (normalize_spec(s) for s in chain) if n)
+
+
+def _check_image_chain(occasion: Any, chain: Any,
+                       kinds: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
+    """One occasion's chain -> ``(error, warnings)``; see
+    ``_validate_image_routing`` for the rules."""
+    import fnmatch
+    from app.imagegen.occasions import OCCASIONS, backend_fits
+    from app.imagegen.routing import normalize_spec
+    if occasion not in OCCASIONS:
+        return f"Image routing: unknown occasion '{occasion}'.", []
+    if not isinstance(chain, list) or not all(isinstance(s, str) for s in chain):
+        return (f"Image routing: the chain of '{occasion}' must be a list "
+                f"of patterns.", [])
+    warnings: List[str] = []
+    seen = set()
+    for raw in chain:
+        spec = normalize_spec(raw)
+        if not spec:
+            continue
+        key = spec.lower()
+        if key in seen:
+            return (f"Image routing: '{spec}' is listed twice for "
+                    f"'{occasion}'.", [])
+        seen.add(key)
+        hits = [k for k in kinds if fnmatch.fnmatch(k["name"].lower(), key)]
+        if not hits:
+            warnings.append(f"Image routing: '{spec}' for '{occasion}' "
+                            f"matches no backend.")
+            continue
+        if not any(backend_fits(occasion, k) for k in hits):
+            names = ", ".join(k["name"] for k in hits[:5])
+            return (f"Image routing: '{spec}' for '{occasion}' matches only "
+                    f"backends of the wrong kind ({names}).", [])
+    return "", warnings
+
+
+def _validate_image_routing(img_cfg: Any,
+                            stored_routing: Any = None) -> Tuple[str, List[str]]:
     """``image_generation.routing`` on save (plan-image-routing.md § 6).
 
     Hard errors (HTTP 400): not an object, an unknown occasion, a chain that
@@ -1239,44 +1287,41 @@ def _validate_image_routing(img_cfg: Any) -> Tuple[str, List[str]]:
     whose every matching backend is of the wrong kind for the occasion
     (media, inpaint, rig, reference slot). A pattern that matches no backend
     at all is only a WARNING — it may name a backend that is added later.
-    Returns ``(error, warnings)``; ``error`` is "" when the routing is fine."""
-    import fnmatch
-    from app.imagegen.occasions import OCCASIONS, backend_fits
-    from app.imagegen.routing import describe_config_backend, normalize_spec
+
+    ``stored_routing`` is the routing currently saved. Only an EDITED chain
+    (a new occasion key, or a chain whose normalised specs differ from the
+    stored one) can fail the save: a stored chain that turned invalid later
+    (an occasion id removed from the catalog, a backend that changed kind)
+    comes back unchanged with every save of any section, and blocking those
+    saves would lock the admin out — the runtime skips such entries anyway.
+    Its error is reported as a warning, prefixed with the occasion.
+    Returns ``(error, warnings)``; ``error`` is "" when the save may go on."""
+    from app.imagegen.routing import describe_config_backend
     if not isinstance(img_cfg, dict) or img_cfg.get("routing") is None:
         return "", []
     routing = img_cfg.get("routing")
+    stored = stored_routing if isinstance(stored_routing, dict) else {}
     if not isinstance(routing, dict):
+        if routing == stored_routing:
+            return "", ["Image routing: the stored routing is not an object "
+                        "and was kept unchanged."]
         return ("Image routing: 'routing' must be an object "
                 "{occasion: [pattern, ...]}.", [])
     kinds = [describe_config_backend(b) for b in (img_cfg.get("backends") or [])
              if isinstance(b, dict) and b.get("name")]
     warnings: List[str] = []
     for occasion, chain in routing.items():
-        if occasion not in OCCASIONS:
-            return f"Image routing: unknown occasion '{occasion}'.", []
-        if not isinstance(chain, list) or not all(isinstance(s, str) for s in chain):
-            return (f"Image routing: the chain of '{occasion}' must be a list "
-                    f"of patterns.", [])
-        seen = set()
-        for raw in chain:
-            spec = normalize_spec(raw)
-            if not spec:
-                continue
-            key = spec.lower()
-            if key in seen:
-                return (f"Image routing: '{spec}' is listed twice for "
-                        f"'{occasion}'.", [])
-            seen.add(key)
-            hits = [k for k in kinds if fnmatch.fnmatch(k["name"].lower(), key)]
-            if not hits:
-                warnings.append(f"Image routing: '{spec}' for '{occasion}' "
-                                f"matches no backend.")
-                continue
-            if not any(backend_fits(occasion, k) for k in hits):
-                names = ", ".join(k["name"] for k in hits[:5])
-                return (f"Image routing: '{spec}' for '{occasion}' matches only "
-                        f"backends of the wrong kind ({names}).", [])
+        err, chain_warnings = _check_image_chain(occasion, chain, kinds)
+        warnings.extend(chain_warnings)
+        if not err:
+            continue
+        unchanged = (occasion in stored
+                     and _image_chain_key(stored[occasion]) == _image_chain_key(chain))
+        if not unchanged:
+            return err, []
+        detail = err[len("Image routing: "):] if err.startswith("Image routing: ") else err
+        warnings.append(f"Image routing: stored chain '{occasion}' is invalid "
+                        f"and was kept unchanged — {detail}")
     return "", warnings
 
 

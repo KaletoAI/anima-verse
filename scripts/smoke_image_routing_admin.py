@@ -53,6 +53,35 @@ patched; the stored config is
     ["Image routing: 'Nope*' for 'photo' matches no backend."]; the message
     is "Configuration saved (env updated)." (no reloads, patched) +
     " Warnings: " + that warning
+
+A stored chain that turned invalid must not lock the admin out (fix round
+1): only an EDITED chain (new occasion key, or normalised specs that differ
+from the stored chain) can fail the save; an unchanged invalid stored chain
+is a warning "Image routing: stored chain '<occasion>' is invalid and was
+kept unchanged — <error without the 'Image routing: ' prefix>".
+Fixture: backends = the five above + Mesh-O1 (openai_mesh img2mesh rig none);
+stored routing {"mesh_low": ["x"], "mesh_object": ["Mesh-H*"],
+"photo": ["Flux2*"]} — mesh_low is not in the catalog, Mesh-H* matches only
+Mesh-H1 (rig mixamo, mesh_object needs none). In dict order:
+  W_low = "Image routing: stored chain 'mesh_low' is invalid and was kept
+           unchanged — unknown occasion 'mesh_low'."
+  W_obj = "Image routing: stored chain 'mesh_object' is invalid and was kept
+           unchanged — 'Mesh-H*' for 'mesh_object' matches only backends of
+           the wrong kind (Mesh-H1)."
+ F1 the same routing + an unrelated section change {"tts": {"enabled": true}}
+    -> 200, warnings [W_low, W_obj], message "Configuration saved (env
+    updated). Warnings: " + W_low + " " + W_obj, tts saved
+ F1b the same without a routing key (stale tab) -> 200, [W_low, W_obj],
+    saved routing == stored routing
+ F2 mesh_object -> ["Qwen Inpaint"] (edited, still invalid) -> 400
+    "Image routing: 'Qwen Inpaint' for 'mesh_object' matches only backends
+    of the wrong kind (Qwen Inpaint).", nothing saved
+ F3 mesh_object -> ["Mesh-O*"] (edited, valid) -> 200, warnings [W_low],
+    saved mesh_object ["Mesh-O*"]
+ F4 a NEW unknown key "mesh_tiny": ["x"] next to the stored ones -> 400
+    "Image routing: unknown occasion 'mesh_tiny'."
+ F5 mesh_object -> [" mesh-h* "] (only case/whitespace differ; normalised it
+    is the stored chain) -> 200 with 2 warnings, no 400
 """
 import asyncio
 import copy
@@ -154,16 +183,19 @@ class _Req:
         return copy.deepcopy(self._payload)
 
 
-def save(ig_extra, with_routing_key=True):
+def save(ig_extra, with_routing_key=True, backends=None, extra=None):
     """Run settings_save with a payload image_generation of the fixture
-    backends plus ``routing`` (or without the key). Returns (response or the
-    HTTPException, saved routing or the string "<not saved>")."""
+    backends plus ``routing`` (or without the key) and optional further
+    top-level sections. Returns (response or the HTTPException, saved routing
+    or the string "<not saved>")."""
     SAVED.clear()
-    ig = {"backends": copy.deepcopy(BACKENDS)}
+    ig = {"backends": copy.deepcopy(backends or BACKENDS)}
     if with_routing_key:
         ig["routing"] = ig_extra
+    payload = {"image_generation": ig}
+    payload.update(copy.deepcopy(extra or {}))
     try:
-        resp = asyncio.run(adm.settings_save(_Req({"image_generation": ig}), user=None))
+        resp = asyncio.run(adm.settings_save(_Req(payload), user=None))
     except HTTPException as e:
         resp = e
     saved = SAVED[-1]["image_generation"].get("routing", "<key missing>") if SAVED else "<not saved>"
@@ -185,6 +217,59 @@ check("S4 warning saved", saved, {"photo": ["Nope*"]})
 check("S4 warnings field", resp.get("warnings") if isinstance(resp, dict) else resp, [_w])
 check("S4 message", resp.get("message") if isinstance(resp, dict) else resp,
       "Configuration saved (env updated). Warnings: " + _w)
+
+# ── fix round 1: an invalid STORED chain never locks the save ──────────
+F_BACKENDS = copy.deepcopy(BACKENDS) + [
+    {"name": "Mesh-O1", "api_type": "openai_mesh", "category": "img2mesh", "mesh_rig": "none"}]
+F_ROUTING = {"mesh_low": ["x"], "mesh_object": ["Mesh-H*"], "photo": ["Flux2*"]}
+STORED = {"image_generation": {"backends": copy.deepcopy(F_BACKENDS),
+                               "routing": copy.deepcopy(F_ROUTING)}}
+W_LOW = ("Image routing: stored chain 'mesh_low' is invalid and was kept "
+         "unchanged — unknown occasion 'mesh_low'.")
+W_OBJ = ("Image routing: stored chain 'mesh_object' is invalid and was kept "
+         "unchanged — 'Mesh-H*' for 'mesh_object' matches only backends of "
+         "the wrong kind (Mesh-H1).")
+
+
+def fsave(routing_value, with_routing_key=True, extra=None):
+    return save(routing_value, with_routing_key, backends=F_BACKENDS, extra=extra)
+
+
+def _resp(r):
+    """(status, warnings, message) of a dict response, (status, detail) of a 400."""
+    if isinstance(r, HTTPException):
+        return (r.status_code, r.detail)
+    return (200, r.get("warnings"), r.get("message"))
+
+
+resp, saved = fsave(copy.deepcopy(F_ROUTING), extra={"tts": {"enabled": True}})
+check("F1 unrelated save passes with warnings", _resp(resp),
+      (200, [W_LOW, W_OBJ], "Configuration saved (env updated). Warnings: " + W_LOW + " " + W_OBJ))
+check("F1 unrelated section saved", SAVED[-1].get("tts") if SAVED else None, {"enabled": True})
+resp, saved = fsave(None, with_routing_key=False, extra={"tts": {"enabled": True}})
+check("F1b stale tab passes, routing kept", (_resp(resp)[:2], saved),
+      ((200, [W_LOW, W_OBJ]), F_ROUTING))
+r = copy.deepcopy(F_ROUTING)
+r["mesh_object"] = ["Qwen Inpaint"]
+resp, saved = fsave(r)
+check("F2 edited to another invalid chain -> 400", (_resp(resp), saved),
+      ((400, "Image routing: 'Qwen Inpaint' for 'mesh_object' matches only "
+             "backends of the wrong kind (Qwen Inpaint)."), "<not saved>"))
+r["mesh_object"] = ["Mesh-O*"]
+resp, saved = fsave(r)
+check("F3 edited to a valid chain -> 200", (_resp(resp)[:2], saved.get("mesh_object")
+                                            if isinstance(saved, dict) else saved),
+      ((200, [W_LOW]), ["Mesh-O*"]))
+r = copy.deepcopy(F_ROUTING)
+r["mesh_tiny"] = ["x"]
+resp, saved = fsave(r)
+check("F4 new unknown key -> 400", (_resp(resp), saved),
+      ((400, "Image routing: unknown occasion 'mesh_tiny'."), "<not saved>"))
+r = copy.deepcopy(F_ROUTING)
+r["mesh_object"] = [" mesh-h* "]
+resp, saved = fsave(r)
+_f5 = _resp(resp)
+check("F5 case/whitespace-only edit stays a warning", (_f5[0], len(_f5[1] or [])), (200, 2))
 
 print()
 if FAILS:
