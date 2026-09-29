@@ -40,9 +40,12 @@ By hand:
     `git reset` then cannot take the lock): publish("demo-studio", key
     "studio-key", a studio sidecar) returns normally with commit = the new
     HEAD (!= HEAD before), commit_created true, and a warning that names the
-    sha, "git reset -q --" and all four paths (catalog, clip, sidecar,
-    source); `git diff --cached` is NOT empty then (the shared index still
-    holds the pre-commit state). Lock removed, a rerun with replace=True and
+    sha, "reset -q --" and all four paths (catalog, clip, sidecar, source);
+    `git diff --cached` is NOT empty then (the shared index still holds the
+    pre-commit state). Lock removed, the printed command (between the
+    backticks, shlex.split) run with cwd = animation-studio/ of the temp repo
+    (a SUBDIRECTORY: a plain repo-relative `git reset -q -- <paths>` would be
+    a silent no-op there) -> `git diff --cached` empty. Then a rerun with replace=True and
     identical content: tree == HEAD^{tree} -> no commit (HEAD unchanged,
     commit = that HEAD, commit_created false, no warning), and its reset
     syncs the shared index (`git diff --cached` empty).
@@ -54,6 +57,7 @@ By hand:
 """
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -277,11 +281,18 @@ try:
     paths9 = [CAT_REL, "shared/models/clips/demo-studio.fbx",
               "shared/models/clips/demo-studio.json", "animation-studio/anims/demo-studio.py"]
     w = r.get("warning") or ""
-    if head_now not in w or "git reset -q --" not in w or not all(p in w for p in paths9):
+    if head_now not in w or "reset -q --" not in w or not all(p in w for p in paths9):
         FAIL.append(f"[9] warning incomplete: {w!r}")
     if not git("diff", "--cached", "--name-only").strip():
         FAIL.append("[9] shared index unexpectedly in sync (the injected failure did not bite)")
     lock.unlink()
+    cmd = shlex.split(w.split("`")[1]) if w.count("`") >= 2 else []
+    sub = REPO / "animation-studio"
+    ran = subprocess.run(cmd, cwd=sub, capture_output=True, text=True) if cmd else None
+    if ran is None or ran.returncode != 0:
+        FAIL.append(f"[9] printed command failed: {cmd} {ran and ran.stderr}")
+    if git("diff", "--cached", "--name-only").strip():
+        FAIL.append("[9] the printed command, run from a subdirectory, left the index unsynced")
     r = P.publish("demo-studio", repo=REPO, commit=True, replace=True)
     if git("rev-parse", "HEAD").strip() != head_now or r["commit"] != head_now \
             or r["commit_created"] or r.get("warning"):

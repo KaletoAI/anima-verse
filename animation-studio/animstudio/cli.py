@@ -3,9 +3,10 @@ repository's venv: ``../.venv/bin/python -m animstudio build wave``.
 
 Exit codes: 0 done; 1 the checks failed (``build``/``check``, also a
 build.json that recorded no checks); 2 an error (printed, nothing
-committed); 3 ``publish`` committed, but the shared git index could not be
-re-synced — the commit IS on HEAD, run the printed ``git reset`` command
-(rerunning publish is not needed).
+committed); 3 ``publish``'s commit is on HEAD, but the shared git index
+could not be re-synced — run the printed ``git -C <repo> reset -q -- <paths>``
+command exactly as printed (it works from any cwd; rerunning publish is not
+needed).
 """
 import argparse
 import json
