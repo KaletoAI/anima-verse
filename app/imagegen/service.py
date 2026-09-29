@@ -29,7 +29,6 @@ from app.models.character import (
     add_character_image_prompt,
     set_character_profile_image,
     get_character_profile_image,
-    get_character_profile,
     get_character_config,
     get_character_skill_config,
     save_character_skill_config,
@@ -2041,7 +2040,7 @@ class ImageService:
                 saved_files.append(file_name)
 
             if not saved_files:
-                _tq.track_finish(_track_id, error="images not saved")
+                # track_finish happens in the handler below.
                 raise ImageSaveError("the images could not be saved")
 
             logger.info("Saved images: %s", ", ".join(saved_files))

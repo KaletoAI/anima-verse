@@ -8,7 +8,10 @@ Usage:  ./.venv/bin/python scripts/smoke_image_service_facade.py
 by a fake that goes through the REAL `run_on_backend` — so a failing backend
 cools down and raises BackendFailedError exactly like in production — and
 returns a GenerationResult. Chain rules / character spec / switches come in
-through the routing test seams. Throwaway storage, no server.
+through the routing test seams. Throwaway storage, no server, no network:
+the service is built without its backend probe (`_load_instances` stubbed
+to an empty list — the tmp world seeds default mesh backends on a LAN URL)
+and `socket.socket.connect` raises, so any connect attempt fails F0.
 
 Fakes: A (cost 1) fails with HTTP 500, B (cost 2) renders, Busy (cost 1)
 raises BackendBusyError, Cool (cost 0) is in cooldown.
@@ -39,15 +42,27 @@ EXPECTED (by hand):
  F12 a stored model_override survives only on the character's own match:
     character spec "B" -> the render on B sees model_override "m1"; character
     spec "X*" (B is a rule entry) -> model_override "".
+ F0 no socket connect was attempted during the whole run -> [].
 """
 import inspect
 import json
 import os
+import socket
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+CONNECTS = []
+
+
+def _no_connect(self, address, *a, **k):
+    CONNECTS.append(address)
+    raise OSError(f"smoke: network access refused ({address!r})")
+
+
+socket.socket.connect = _no_connect
+socket.socket.connect_ex = _no_connect
 _TMP = tempfile.mkdtemp(prefix="facade-")
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="facade-clips-")
 from app.core import paths  # noqa: E402
@@ -99,6 +114,8 @@ META_WRITES = []
 character_mod.add_character_image_metadata = (
     lambda ch, fn, meta: META_WRITES.append((ch, fn, dict(meta))))
 
+# No backend probe: the pool is replaced per case (fresh_pool) anyway.
+service_mod.ImageService._load_instances = lambda self: []
 svc = service_mod.ImageService()
 svc.enabled = True
 service_mod._service = svc          # get_image_service() answers with this one
@@ -206,6 +223,8 @@ CHAR["spec"] = "X*"
 gen(model_override="m1")
 check("F12 rule entry drops it", CALLS[-1], ("B", False, ""))
 CHAR["spec"] = ""
+
+check("F0 no socket connect", CONNECTS, [])
 
 print()
 if FAILS:
