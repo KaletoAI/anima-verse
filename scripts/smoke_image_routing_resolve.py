@@ -119,6 +119,23 @@ EXPECTATIONS, DERIVED BY HAND
 22. intended_entry on rows [no_match, wrong_kind, disabled,
     disabled_for_character] -> None; on [wrong_kind, unavailable, ok] -> the
     unavailable row.
+23. (review focus 4 at a RULE position — case 3 cannot show it, Flux Cheap
+    is the cheaper glob match there anyway) photo, character "someone" with
+    NO character spec (so no @0 entry):
+    a. rules ["Flux*"], switches turn Flux Cheap OFF: matched {Flux Big,
+       Flux Cheap}, both fit + enabled, allowed = {Flux Big} -> Flux Big
+       (cost 3, the cheaper Flux Cheap must NOT be taken), position 1,
+       statuses ["ok"].
+    b. rules ["Flux Big"], switches turn Flux Big OFF: matched {Flux Big},
+       allowed {} -> disabled_for_character; nothing ok -> NoRouteError,
+       chain statuses ["disabled_for_character"].
+24. (review focus 2 for a RUNTIME failure) photo rules ["Qwen A"], no
+    character, Qwen A cooling (mark_unhealthy at setup) while Qwen B,
+    Flux Cheap and Flux Big are live: the only entry is cooldown, the chain
+    is configured -> NoRouteError with chain statuses ["cooldown"], the row's
+    backend "" and ZERO pick_lowest_cost calls on the pool — no other backend
+    was chosen (no slide onto the cheapest / a paid one). Message
+    "no backend available for photo: Qwen A (cooling down)".
 """
 import atexit
 import os
@@ -372,6 +389,47 @@ check("22 intended_entry first runtime row",
                               {"status": "unavailable", "spec": "b"},
                               {"status": "ok", "spec": "c"}]),
       {"status": "unavailable", "spec": "b"})
+
+print("switches at rule positions / dead configured chain (review focus 4 + 2)")
+CHAR_SPEC["value"] = ""
+RULES = {"photo": ["Flux*"]}
+SWITCHES["value"] = {"Flux Cheap": {"enabled": False}}
+r23 = route("photo", character="someone")
+check("23a switch filters a rule glob", (r23.backend.name, r23.position, statuses(r23)),
+      ("Flux Big", 1, ["ok"]))
+RULES = {"photo": ["Flux Big"]}
+SWITCHES["value"] = {"Flux Big": {"enabled": False}}
+try:
+    r = route("photo", character="someone")
+    check("23b switched-off rule entry", f"routed to {r.backend.name}", "NoRouteError")
+except routing.NoRouteError as e:
+    check("23b switched-off rule entry", [row["status"] for row in e.chain],
+          ["disabled_for_character"])
+SWITCHES["value"] = {}
+
+RULES = {"photo": ["Qwen A"]}
+_picks = {"n": 0}
+_orig_pick = POOL.pick_lowest_cost
+
+
+def _counting_pick(*a, **kw):
+    _picks["n"] += 1
+    return _orig_pick(*a, **kw)
+
+
+POOL.pick_lowest_cost = _counting_pick
+try:
+    r = route("photo")
+    check("24 dead configured chain", f"routed to {r.backend.name}", "NoRouteError")
+except routing.NoRouteError as e:
+    check("24 statuses", [row["status"] for row in e.chain], ["cooldown"])
+    check("24 no backend in the row", [row["backend"] for row in e.chain], [""])
+    check("24 message", str(e), "no backend available for photo: Qwen A (cooling down)")
+finally:
+    POOL.pick_lowest_cost = _orig_pick
+check("24 no other backend was picked", _picks["n"], 0)
+check("24 live alternatives existed", all(B[n].available for n in ("Qwen B", "Flux Cheap", "Flux Big")),
+      True)
 
 # Last: puts Flux Big into a cooldown, restored afterwards.
 B["Flux Big"].mark_unhealthy("smoke", 300)
