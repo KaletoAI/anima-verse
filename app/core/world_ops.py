@@ -15,7 +15,7 @@ from app.core.log import get_logger
 from app.core import scene_recipe
 from app.core.scatter_curves import curve_map, tessellate
 from app.core.world_geometry import polygon_plan_width_m, polygon_signed_area
-from app.imagegen.base import BackendBusyError
+from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
 
 if TYPE_CHECKING:  # type-only — the composer is imported where it is used
     from app.core.prompt_compose import ShapeHint
@@ -3190,7 +3190,6 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             room_id = get_gallery_image_rooms(location_name).get(
                 (data.get("reference_image") or "").strip(), "")
         prompt_type = data.get("prompt_type", "").strip()  # day/night/building-<view>
-        workflow_name = data.get("workflow", "").strip()
         backend_name = data.get("backend", "").strip()
         loras_override = data.get("loras")
         model_override = data.get("model_override", "").strip()
@@ -3198,7 +3197,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
 
         location = resolve_location(location_name)
         if not location:
-            raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+            raise HTTPException(status_code=404, detail=f"Location '{location_name}' not found")
 
         # Prompt source: custom_prompt > room+type > room > prompt type > location description.
         # Subject only — framing/style come from the use case.
@@ -3216,7 +3215,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         from app.imagegen.service import get_image_service
         img_skill = get_image_service()
         if not img_skill or not img_skill.enabled:
-            raise HTTPException(status_code=503, detail="Image service nicht verfuegbar")
+            raise HTTPException(status_code=503, detail="Image service not available")
 
         # Freshly check the availability of all backends — network calls go into
         # a thread, otherwise they block the event loop (the watchdog trips).
@@ -3224,198 +3223,35 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             lambda: [b.check_availability()
                      for b in img_skill.backends if b.instance_enabled])
 
-        # Backend selection: match spec > explicit > auto (cheapest)
+        # An explicit dialog pick renders on exactly that backend — no
+        # routing, no fallback. No pick = the "location" occasion of the image
+        # routing (chain + re-run on the next entry after a failure).
         backend = None
-        if workflow_name:
-            # Match concept: glob + availability instead of an exact name.
-            # An additionally pinned endpoint (backend_name) forces that instance.
-            backend = img_skill.resolve_imagegen_target(
-                workflow_name, preferred_backend=backend_name)
-            if not backend and backend_name:
-                # Explicitly pinned endpoint not available -> CLEAR error
-                # instead of a silent fallback to another instance.
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Gewaehltes Backend '{backend_name}' ist nicht verfuegbar")
-            if not backend:
-                logger.warning(
-                    "Imagegen-Spec '%s' ergab kein verfuegbares Backend", workflow_name)
-            else:
-                logger.info("Imagegen-Spec (match): %s -> Backend: %s",
-                            workflow_name, backend.name)
-        elif backend_name:
-            # Backend glob via the match concept. _wait_for_explicit_backend probes
-            # the matching backends FRESH (instead of trusting stale b.available) —
-            # needed for freshly configured cloud backends (CivitAI/Together).
+        if backend_name:
             backend = (img_skill._wait_for_explicit_backend(backend_name)
                        or img_skill.match_backend(backend_name))
-            logger.debug("Explizites Backend: %s -> %s", backend_name, backend.name if backend else 'nicht verfuegbar')
-            # Explicit choice + not available -> CLEAR error instead of a silent
-            # ComfyUI fallback (otherwise the user thinks CivitAI was used).
             if not backend:
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Gewaehltes Backend '{backend_name}' ist nicht verfuegbar "
-                           f"(z.B. ungueltiger API-Key / offline). Kein automatischer Fallback.")
-
-        if not backend:
-            backend = img_skill._select_backend()
-        if not backend:
-            raise HTTPException(status_code=503, detail="Kein Image-Backend verfuegbar")
+                    detail=f"Selected backend '{backend_name}' is not available "
+                           f"(e.g. invalid API key / offline). No automatic fallback.")
+        explicit = backend is not None
+        _attempt = {"n": 0}
 
         # Regenerate (self-reference): the prompt is a literal adjustment
-        # instruction for the reference workflow (e.g. "road turns right") — NO
-        # use-case prefix, NO use-case negative, no other manipulation.
+        # instruction — no use-case prefix, no use-case negative.
         _is_regen = bool(data.get("use_source_as_reference"))
-        # Optional "what do you want to change" request: the same LLM function
-        # as in the character/Instagram regenerate builds the final prompt from
-        # it. Left empty -> the prompt stays literal.
         _improve = (data.get("improvement_request") or "").strip()
         if _is_regen and _improve:
             from app.skills.image_regenerate import enhance_prompt
             prompt = await asyncio.to_thread(enhance_prompt, prompt, _improve, None)
-            logger.info("Regenerate-Prompt via enhance_prompt umgeschrieben: %s", prompt[:120])
-        # Use-case style/negative for this render occasion.
+            logger.info("Regenerate prompt rewritten via enhance_prompt: %s", prompt[:120])
         from app.core import config as _cfg
         _uc_name = gallery_use_case(location, room_id, prompt_type)
-        _ucp = _cfg.resolve_use_case_style(
-            _uc_name, getattr(backend, "image_family", "") or "",
-            backend_model=getattr(backend, "model", "") or "")
-        _compose_meta: Dict[str, Any] = {}
-        _warnings: List[str] = []
-        if _is_regen:
-            full_prompt = prompt
-            negative = ""
-        elif bool(data.get("settings_applied")):
-            # The dialog already composed the FULL prompt (use-case style +
-            # shape hint woven in by /world/compose-preview — the rule: the
-            # dialog always shows the final prompt). Composing again would
-            # double both. A negative from the dialog wins: it carries the
-            # items the composer's negation guard moved out of the subject.
-            full_prompt = prompt
-            negative = ((data.get("negative_prompt") or "").strip()
-                        or _ucp.get("prompt_negative", ""))
-            # Dialog renders were unmarked in the JSONL — a minimal metablock
-            # says where the prompt came from. The dialog reports whether its
-            # prefill went through the LLM stage.
-            _compose_meta = {"use_case": _uc_name, "settings_applied": True,
-                             "llm_composed": bool(data.get("llm_composed")),
-                             "cache_hit": bool(data.get("cache_hit"))}
-        else:
-            # ONE composer for the dialog prefill and this (batch/auto) path:
-            # style + subject slot + shape hints + negation guard, in
-            # app/core/prompt_compose.py. The hint is PREPENDED there — early
-            # tokens steer diffusion (finding 2026-07-26, café kitchen).
-            from app.core.prompt_compose import compose as _compose
-            _hints = []
-            if room_id:
-                _sh = room_shape_hint(location, get_room_by_id(location, room_id),
-                                      outdoor=is_outdoor_room(location, room_id))
-                if _sh:
-                    _hints.append(_sh)
-            _composed = _compose(use_case=_uc_name, subject=prompt,
-                                 backend=backend, hints=_hints,
-                                 conditions=gallery_conditions(
-                                     location, room_id, _uc_name))
-            # Opt-in LLM stage on top of the mechanical result. Blocking call
-            # -> thread. The cache makes a batch/regenerate series ONE call.
-            if _cfg.use_case_llm_compose(_uc_name):
-                from app.core.prompt_compose_llm import llm_compose
-                _composed = await asyncio.to_thread(
-                    llm_compose, _composed, use_case=_uc_name, subject=prompt,
-                    family=_composed.meta.get("family", "keywords"))
-            full_prompt = _composed.prompt
-            negative = _composed.negative
-            _compose_meta = _composed.meta
-            _warnings = _composed.warnings
-            for _w in _warnings:
-                logger.info("Prompt composer (%s): %s", _uc_name, _w)
-        params: Dict[str, Any] = {"width": _location_image_width(), "height": _location_image_height()}
-        if _view:
-            # Square so the whole subject fits with a margin — every building
-            # view feeds the image-to-3D pass (like the T-pose reference), which
-            # needs the full silhouette in frame, not a 16:9 crop.
-            params["image_use_case"] = _uc_name
-            params["width"] = 1024
-            params["height"] = 1024
-        # Caller-picked resolution beats every use-case default (2026-07-25):
-        # a 2 x 5 room needs a 2 x 5 image, not the square building format.
-        # Rounded/clamped above; unset keeps the default. Backends without a
-        # free size ignore the values — best effort, never an error.
-        _req_w = _clamp_image_dim(data.get("width"))
-        _req_h = _clamp_image_dim(data.get("height"))
-        if _req_w:
-            params["width"] = _req_w
-        if _req_h:
-            params["height"] = _req_h
-        if _req_w or _req_h:
-            logger.info("Caller-picked image size: %sx%s",
-                        params["width"], params["height"])
-        # Model override from the dialog — backends read params["model"].
-        if model_override:
-            params["model"] = model_override
-        # LoRA selection from the dialog. The dialog is backend-scoped (LoRA
-        # library entries of the chosen backend only); this is the server-side
-        # safety net for direct API calls. Library entries flagged missing
-        # pass — the flag can be stale, a wrong pick fails visibly in the
-        # render result.
-        if loras_override is not None:
-            params["lora_inputs"] = loras_override
-            from app.core.config import get_lora_options
-            _allowed = {o["name"] for o in get_lora_options(
-                backend.name,
-                lora_filter=getattr(backend, "lora_filter", "") or "")}
-            _wanted = [str(l.get("name") or "").strip() for l in loras_override
-                       if isinstance(l, dict)]
-            _absent = [n for n in _wanted if n and n != "None" and n not in _allowed]
-            if _absent:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"The LoRA library does not associate backend "
-                           f"'{backend.name}' with: {', '.join(_absent)}")
-
-        # Fresh seed per call so a regenerate produces a new image.
-        import random as _rnd
-        params["seed"] = _rnd.randint(1, 2**31 - 1)
-
-        # Self-reference: the existing image as reference in slot 1 — for
-        # "regenerate with current image". Only if the backend has reference
-        # slots.
-        if (data.get("use_source_as_reference") and data.get("reference_image")
-                and int(getattr(backend, "ref_slot_count", 0) or 0) >= 1):
-            _ref_name = (data.get("reference_image") or "").strip()
-            if _ref_name and "/" not in _ref_name and ".." not in _ref_name:
-                # get_gallery_dir is imported module-wide (top). NO local import
-                # here — it would turn get_gallery_dir into a function-wide local
-                # variable and blow up the save path (below) with an
-                # UnboundLocalError as soon as this block does not run.
-                _ref_path = get_gallery_dir(location_name) / _ref_name
-                if _ref_path.exists():
-                    params["reference_images"] = {"input_reference_image_1": str(_ref_path)}
-                    logger.info("Map-Selbst-Referenz in Slot 1: %s", _ref_name)
-
-        # A back/side view may take the FRONT render as its appearance
-        # reference (design 2026-09-02) — style stays, unlike the regenerate
-        # self-reference above. Only where the backend has a slot and the
-        # file exists; otherwise the view renders from text alone. A
-        # regenerate keeps ITS slot: the self-reference above wins, so the
-        # two can never overwrite each other's slot 1.
         _front_ref = (data.get("front_reference") or "").strip()
-        if _view and _view != "front" and _front_ref and not _is_regen:
-            if "/" in _front_ref or ".." in _front_ref:
-                logger.warning("front_reference rejected (path): %s", _front_ref)
-            elif int(getattr(backend, "ref_slot_count", 0) or 0) < 1:
-                logger.info("front_reference ignored: backend %s has no "
-                            "reference slot", backend.name)
-            else:
-                _front_path = get_gallery_dir(location_name) / _front_ref
-                if _front_path.exists():
-                    params["reference_images"] = {
-                        "input_reference_image_1": str(_front_path)}
-                    logger.info("Front reference in slot 1 for %s view: %s",
-                                _view, _front_ref)
-                else:
-                    logger.warning("front_reference missing: %s", _front_ref)
+        _has_ref = ((_is_regen and bool((data.get("reference_image") or "").strip()))
+                    or bool(_view and _view != "front" and _front_ref))
+        _agent = location.get("name", location_name)
 
         from app.core.task_queue import get_task_queue
         _tq = get_task_queue()
@@ -3423,48 +3259,164 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             _track_id = batch_track_id
         else:
             _track_id = _tq.track_start(
-                "image_gen", "Ort-Bild", agent_name=location.get("name", location_name),
-                provider=backend.name, start_running=False)
+                "image_gen", "Location image", agent_name=_agent,
+                provider=(backend.name if explicit else ""), start_running=False)
 
-        _gen_start = time.time()
-        try:
-            # Generate via the GPU provider queue — serialized per backend
-            # (never two in parallel); activates the track only once the channel
-            # picks up the work; waiting world gens thus stay correctly "pending".
-            # Context for the CENTRAL logging in backend.generate() (final_prompt,
-            # backend, model, LoRAs, refs, duration are set by generate() itself).
-            _log_meta = {"agent_name": location.get("name", location_name),
-                         "original_prompt": prompt, "auto_enhance": False}
-            if _compose_meta:
-                # Numeric verification runs over logs/image_prompts.jsonl —
-                # the composer states which family, slot and hint produced
-                # the final prompt.
-                _log_meta["compose"] = _compose_meta
-            def _op(b):
+        def _render(b) -> Dict[str, Any]:
+            """Everything backend-dependent, built FOR ``b`` — the routing
+            calls it again with the next backend after a failure."""
+            first = _attempt["n"] == 0
+            _attempt["n"] += 1
+            _ucp = _cfg.resolve_use_case_style(
+                _uc_name, getattr(b, "image_family", "") or "",
+                backend_model=getattr(b, "model", "") or "")
+            compose_meta: Dict[str, Any] = {}
+            warnings: List[str] = []
+            # A dialog-final prompt belongs to the backend it was composed
+            # for: the explicit pick, or under "Auto (routing)" the backend
+            # the chain resolves FIRST (the one the dialog showed). A re-run
+            # on another backend composes for that backend instead.
+            verbatim = bool(data.get("settings_applied")) and (explicit or first)
+            if _is_regen:
+                full_prompt, negative = prompt, ""
+            elif verbatim:
+                full_prompt = prompt
+                negative = ((data.get("negative_prompt") or "").strip()
+                            or _ucp.get("prompt_negative", ""))
+                compose_meta = {"use_case": _uc_name, "settings_applied": True,
+                                "llm_composed": bool(data.get("llm_composed")),
+                                "cache_hit": bool(data.get("cache_hit"))}
+            else:
+                subject = prompt
+                if data.get("settings_applied"):
+                    # The dialog's final prompt was built for another backend:
+                    # render the gallery's own subject for THIS one.
+                    subject = resolve_gallery_subject(location, room_id, prompt_type,
+                                                      location_name)
+                    if _view:
+                        subject = view_subject(_view, subject)
+                from app.core.prompt_compose import compose as _compose
+                _hints = []
+                if room_id:
+                    _sh = room_shape_hint(location, get_room_by_id(location, room_id),
+                                          outdoor=is_outdoor_room(location, room_id))
+                    if _sh:
+                        _hints.append(_sh)
+                _composed = _compose(use_case=_uc_name, subject=subject, backend=b,
+                                     hints=_hints,
+                                     conditions=gallery_conditions(location, room_id, _uc_name))
+                if _cfg.use_case_llm_compose(_uc_name):
+                    from app.core.prompt_compose_llm import llm_compose
+                    _composed = llm_compose(_composed, use_case=_uc_name, subject=subject,
+                                            family=_composed.meta.get("family", "keywords"))
+                full_prompt, negative = _composed.prompt, _composed.negative
+                compose_meta, warnings = _composed.meta, list(_composed.warnings)
+                for _w in warnings:
+                    logger.info("Prompt composer (%s): %s", _uc_name, _w)
+
+            params: Dict[str, Any] = {"width": _location_image_width(),
+                                      "height": _location_image_height()}
+            if _view:
+                params["image_use_case"] = _uc_name
+                params["width"] = 1024
+                params["height"] = 1024
+            _req_w = _clamp_image_dim(data.get("width"))
+            _req_h = _clamp_image_dim(data.get("height"))
+            if _req_w:
+                params["width"] = _req_w
+            if _req_h:
+                params["height"] = _req_h
+            # A dialog's model name belongs to the backend it was picked for.
+            if model_override and (explicit or first):
+                params["model"] = model_override
+            if loras_override is not None:
+                if explicit:
+                    from app.core.config import get_lora_options
+                    _allowed = {o["name"] for o in get_lora_options(
+                        b.name, lora_filter=getattr(b, "lora_filter", "") or "")}
+                    _wanted = [str(l.get("name") or "").strip() for l in loras_override
+                               if isinstance(l, dict)]
+                    _absent = [n for n in _wanted if n and n != "None" and n not in _allowed]
+                    if _absent:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"The LoRA library does not associate backend "
+                                   f"'{b.name}' with: {', '.join(_absent)}")
+                    params["lora_inputs"] = loras_override
+                else:
+                    from app.core.lora_library import (filter_allowed_loras,
+                                                       warn_dropped_loras)
+                    _kept, _dropped = filter_allowed_loras(b, loras_override)
+                    if _dropped:
+                        warn_dropped_loras(b.name, _dropped, "")
+                    params["lora_inputs"] = _kept
+            import random as _rnd
+            params["seed"] = _rnd.randint(1, 2**31 - 1)
+            _slots = int(getattr(b, "ref_slot_count", 0) or 0)
+            if _is_regen and data.get("reference_image") and _slots >= 1:
+                _ref_name = (data.get("reference_image") or "").strip()
+                if _ref_name and "/" not in _ref_name and ".." not in _ref_name:
+                    _ref_path = get_gallery_dir(location_name) / _ref_name
+                    if _ref_path.exists():
+                        params["reference_images"] = {"input_reference_image_1": str(_ref_path)}
+            if _view and _view != "front" and _front_ref and not _is_regen:
+                if "/" in _front_ref or ".." in _front_ref:
+                    logger.warning("front_reference rejected (path): %s", _front_ref)
+                elif _slots < 1:
+                    logger.info("front_reference ignored: backend %s has no "
+                                "reference slot", b.name)
+                else:
+                    _front_path = get_gallery_dir(location_name) / _front_ref
+                    if _front_path.exists():
+                        params["reference_images"] = {
+                            "input_reference_image_1": str(_front_path)}
+                    else:
+                        logger.warning("front_reference missing: %s", _front_ref)
+            _log_meta = {"agent_name": _agent, "original_prompt": prompt,
+                         "auto_enhance": False}
+            if compose_meta:
+                _log_meta["compose"] = compose_meta
+
+            def _op(bb):
                 def _gen():
                     try:
                         from app.core.task_router import match_queue_name
-                        _tq.track_activate(_track_id, queue_name=match_queue_name(b.name) or "", provider=b.name)
+                        _tq.track_activate(_track_id, queue_name=match_queue_name(bb.name) or "",
+                                           provider=bb.name)
                     except Exception:
                         pass
-                    return b.generate(full_prompt, negative, params, log_meta=_log_meta)
-                return img_skill.run_on_backend_channel(
-                    b, _gen, task_type="image_gen",
-                    agent_name=location.get("name", location_name))
+                    return bb.generate(full_prompt, negative, params, log_meta=_log_meta)
+                return img_skill.run_on_backend_channel(bb, _gen, task_type="image_gen",
+                                                        agent_name=_agent)
+            images, used = img_skill.run_on_backend(b, op=_op)
+            return {"images": images, "backend": used, "full_prompt": full_prompt,
+                    "params": params, "warnings": warnings}
+
+        from app.imagegen.routing import NoRouteError, route_meta, run_routed
+        _gen_start = time.time()
+        try:
             try:
-                images, backend = await asyncio.to_thread(
-                    lambda: img_skill.run_on_backend(backend, op=_op))
+                if explicit:
+                    out, route = await asyncio.to_thread(_render, backend), None
+                else:
+                    out, route = await asyncio.to_thread(
+                        run_routed, "location", _render, has_ref=_has_ref,
+                        pool=img_skill.pool)
+            except (HTTPException, MediaGenerationDisabled):
+                _tq.track_finish(_track_id, error="refused")
+                raise
             except BackendBusyError as _busy:
-                _tq.track_finish(_track_id, error=f"{backend.name} ausgelastet")
+                _tq.track_finish(_track_id, error="backend busy")
                 raise HTTPException(status_code=503,
-                                    detail=f"{backend.name} ist ausgelastet — bitte später erneut versuchen ({_busy})")
+                                    detail=f"The image backend is busy — please try again later ({_busy})")
+            except NoRouteError as _nr:
+                _tq.track_finish(_track_id, error=str(_nr)[:200])
+                raise HTTPException(status_code=503, detail=str(_nr))
             except RuntimeError as _err:
                 _tq.track_finish(_track_id, error=str(_err)[:200])
                 raise HTTPException(status_code=500, detail=str(_err))
-
-            if not images:
-                _tq.track_finish(_track_id, error="Bildgenerierung fehlgeschlagen")
-                raise HTTPException(status_code=500, detail="Bildgenerierung fehlgeschlagen")
+            images, backend = out["images"], out["backend"]
+            full_prompt, params, _warnings = out["full_prompt"], out["params"], out["warnings"]
 
             loc_id = location.get("id", location_name)
             gallery_dir = get_gallery_dir(loc_id)
@@ -3514,6 +3466,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                 "backend_type": backend.api_type,
                 "model": _model_used,
                 "loras": _loras_used,
+                **route_meta(route),
             })
 
             # Set the image type when prompt_type is given
@@ -3523,7 +3476,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
 
             _tq.track_finish(_track_id)
             _gen_duration = time.time() - _gen_start
-            logger.info("Bild generiert: %s (%s)/%s%s", location['name'], loc_id, image_name,
+            logger.info("Image generated: %s (%s)/%s%s", location['name'], loc_id, image_name,
                         f" room={room_id}" if room_id else "")
 
             # Image-prompt logging now happens CENTRALLY in backend.generate()
@@ -3531,16 +3484,18 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             return {"status": "success", "location": location["name"],
                     "location_id": loc_id, "image": image_name,
                     "warnings": _warnings}
-        except HTTPException:
+        except (HTTPException, MediaGenerationDisabled):
+            # Already finished (refused) above — never a second track_finish.
             raise
         except Exception as e:
             _tq.track_finish(_track_id, error=str(e))
             raise
 
-    except HTTPException:
+    except (HTTPException, MediaGenerationDisabled):
+        # The media master switch reaches the server's 409 handler untouched.
         raise
     except Exception as e:
-        logger.error("Gallery Fehler: %s", e)
+        logger.error("Gallery error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -3004,30 +3004,32 @@ async def compose_preview(request: Request) -> Dict[str, Any]:
 
 @router.post("/locations/{location_name}/gallery/batch")
 async def generate_gallery_batch(location_name: str, request: Request) -> Dict[str, Any]:
-    """Startet Batch-Generierung aller Bilder fuer einen Ort (Background-Task)."""
+    """Starts a batch generation of several images for a location (background task).
+
+    Each job goes through ``generate_gallery_image`` in batch mode; without
+    ``backend`` the job renders on the "location" chain of the image routing."""
     data = await request.json()
     user_id = data.get("user_id", "").strip()
     jobs = data.get("jobs", [])
-    workflow = data.get("workflow", "").strip()
     backend_name = data.get("backend", "").strip()
     loras = data.get("loras")
     model_override = data.get("model_override", "").strip()
     if not jobs:
-        raise HTTPException(status_code=400, detail="Keine Jobs angegeben")
+        raise HTTPException(status_code=400, detail="No jobs given")
 
     location = resolve_location(location_name)
     if not location:
-        raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Location '{location_name}' not found")
 
-    # Alle Jobs vorab als pending Tracked-Tasks registrieren,
-    # damit sie im Queue-Panel sichtbar sind
+    # Register every job up front as a pending tracked task so they show up
+    # in the queue panel
     from app.core.task_queue import get_task_queue
     _tq = get_task_queue()
     _batch_track_ids = []
     for job in jobs:
         _tid = _tq.track_start(
             "image_gen",
-            job.get("label", "Ort-Bild"),
+            job.get("label", "Location image"),
             agent_name=location.get("name", location_name),
             start_running=False)
         _batch_track_ids.append(_tid)
@@ -3041,8 +3043,6 @@ async def generate_gallery_batch(location_name: str, request: Request) -> Dict[s
                     body["room_id"] = job["room_id"]
                 if job.get("prompt_type"):
                     body["prompt_type"] = job["prompt_type"]
-                if workflow:
-                    body["workflow"] = workflow
                 if backend_name:
                     body["backend"] = backend_name
                 if loras:
@@ -3055,13 +3055,13 @@ async def generate_gallery_batch(location_name: str, request: Request) -> Dict[s
                         return body
 
                 await generate_gallery_image(location_name, _MockRequest())
-                logger.info("Batch-Job fertig: %s / %s", location.get("name"), job.get("label", ""))
+                logger.info("Batch job done: %s / %s", location.get("name"), job.get("label", ""))
             except Exception as e:
                 _tq.track_finish(_track_id, error=str(e))
-                logger.warning("Batch-Job fehlgeschlagen: %s / %s: %s",
+                logger.warning("Batch job failed: %s / %s: %s",
                                location.get("name"), job.get("label", ""), e)
 
-    # Background-Task starten
+    # Start the background task
     asyncio.ensure_future(_run_batch())
 
     return {
