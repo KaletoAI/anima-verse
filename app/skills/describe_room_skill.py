@@ -623,7 +623,7 @@ class DescribeRoomSkill(BaseSkill):
         return ToolSpec(
             name=self.name,
             description=(
-                f"{self.description}. "
+                f"{self.description.rstrip('.')}. "
                 "Input JSON: {\"location_id\": \"<id>\", \"room\": \"<room name>\", "
                 "\"description\": \"<plain text description>\", "
                 "\"image_prompt\": \"<english image prompt>\"}. "

@@ -53,11 +53,11 @@ class N8nPlugin(PluginSkill):
     def _build_description(self, workflows: List[Dict[str, Any]]) -> str:
         if not workflows:
             return (
-                f"{self.description}. No workflows configured for this character — "
+                f"{self.description.rstrip('.')}. No workflows configured for this character — "
                 f"add workflows in the skill config."
             )
         lines = [
-            f"{self.description}.",
+            f"{self.description.rstrip('.')}.",
             'Input MUST be JSON: {"workflow": "<id>", "params": {...}}',
             "Available workflows:",
         ]

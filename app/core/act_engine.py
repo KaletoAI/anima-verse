@@ -352,7 +352,7 @@ async def _run_storyteller_agent(
         tool_instr_block = build_tool_instruction(
             tool_format, tool_specs,
             model_name=tool_model_name,
-            is_roleplay=False)
+            is_roleplay=False, for_tool_decision=True)
 
         # Outfit context: IMPORTANT — supply the real item NAMES from the DB,
         # not the prompt fragments from build_equipped_outfit_prompt. The

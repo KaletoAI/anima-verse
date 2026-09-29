@@ -43,6 +43,11 @@ Stage 3 — the extraction template, derived BY HAND from the template text:
   scene example "standing at window"
 - rendered with is_avatar=True the system prompt names neither "pose" nor
   "detail" (only the outfit is extracted from user input)
+- (B7, 2026-09-29) rendered with current_pose "sitting: reads a letter" the
+  system prompt carries "demo's current pose: sitting: reads a letter" and
+  the keep rule ("a glance, a gesture" … "is NOT a new pose"); with an empty
+  current_pose no "current pose:" line appears; the detail rule says
+  "third person"
 
 Stage 4 — the marker parser _extract_activity, derived BY HAND (the chat
 route module imports offline; 'demo' row from stage 2 is reused):
@@ -178,7 +183,7 @@ def stage3():
     from app.core.prompt_templates import render_task
     common = dict(target_name="demo", piece_list="", source_label="Character reply",
                   source_text="x", context_text="", outfit_locked=False,
-                  stats_enabled=False, stat_list="")
+                  stats_enabled=False, stat_list="", current_pose="")
     sys_p, _ = render_task("extraction_chat_state", is_avatar=False,
                            pose_keys=["standing", "sitting"], **common)
     check("standing, sitting" in sys_p, "stage3 key list missing")
@@ -186,6 +191,17 @@ def stage3():
     check("no facial expression" in sys_p, "stage3 no-expression rule missing")
     check("same language" in sys_p, "stage3 language rule missing")
     check("standing at window" not in sys_p, "stage3 old scene example still present")
+    # B7 (2026-09-29): the current pose is shown with the rule that keeps
+    # it — a glance or a gesture is no new pose.
+    _cp = dict(common, current_pose="sitting: reads a letter")
+    sys_c, _ = render_task("extraction_chat_state", is_avatar=False,
+                           pose_keys=["standing", "sitting"], **_cp)
+    check("demo's current pose: sitting: reads a letter" in sys_c,
+          "stage3 current pose missing")
+    check("a glance, a gesture" in sys_c and "is NOT a new pose" in sys_c,
+          "stage3 keep rule missing")
+    check("current pose:" not in sys_p, "stage3 empty current pose rendered a line")
+    check("third person" in sys_p, "stage3 third-person detail rule missing")
     sys_a, _ = render_task("extraction_chat_state", is_avatar=True,
                            pose_keys=["standing", "sitting"], **common)
     check('"pose"' not in sys_a and '"detail"' not in sys_a, "stage3 avatar prompt extracts pose")

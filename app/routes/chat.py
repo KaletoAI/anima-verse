@@ -664,16 +664,21 @@ def _apply_removed_pieces(character_name: str,
 
 def _extract_context_from_last_chat(agent_name: str,
     chat_history: List[Dict[str, str]],
-    agent_config: Optional[Dict[str, Any]] = None) -> None:
-    """Extrahiert Activity und Outfit-Aenderungen aus den letzten Chat-Nachrichten.
+    agent_config: Optional[Dict[str, Any]] = None,
+    detach: bool = False) -> None:
+    """Extract pose/activity and outfit changes from the latest chat messages.
 
-    Ueberschreibt die gespeicherte Activity und legt Pieces ab, deren Name im
-    Narrativ nicht mehr erwaehnt wird (unequip-only, kein Auto-Equip).
+    Overwrites the stored pose and takes off pieces the narrative removes
+    (unequip-only, never an auto-equip). The SOURCE is the newest reply only
+    — the replies before it were judged on their own turns, and read again
+    they re-applied an older pose over a newer one; they ride along as
+    context. ``detach``: see ``chat_engine.run_follow_up``.
     """
     if not chat_history:
         return
 
-    # Letzte Assistant-Nachrichten sammeln (max. 3 fuer Kontext)
+    # Collect the latest assistant messages (at most 3: the newest is the
+    # source, the others are context)
     last_assistant_msgs = []
     for msg in reversed(chat_history):
         if msg.get("role") == "assistant":
@@ -685,24 +690,24 @@ def _extract_context_from_last_chat(agent_name: str,
     if not last_assistant_msgs:
         return
 
-    # Auch letzte User-Nachricht fuer Kontext
+    # The latest user message too, for context
     last_user_msg = ""
     for msg in reversed(chat_history):
         if msg.get("role") == "user":
             last_user_msg = msg.get("content", "").strip()
             break
 
-    # Tool-Marker aus dem Quelltext rausziehen, BEVOR das Extraktions-LLM
-    # ihn sieht. Sonst interpretiert es Outfit-Tool-Aufrufe als Aktions-
-    # Beschreibung ("Kahiro emittiert *OutfitChange: Graue Jeans...*" =>
-    # LLM denkt die alten Pieces sind ausgezogen) und der Agent landet nackt
-    # weil das Tool selbst die alten Pieces ueber den Tool-Skill verdraengen
-    # wuerde — nicht ueber die Extraktion.
+    # Pull tool markers out of the source text BEFORE the extraction LLM
+    # sees it. Otherwise it reads outfit tool calls as a description of an
+    # action ("X emits *OutfitChange: grey jeans...*" => the LLM thinks the
+    # old pieces came off) and the character ends up undressed, although the
+    # tool itself replaces the old pieces through the skill — not through
+    # the extraction.
     #
-    # Erkennt drei Formate:
-    #   <tool name="X">...</tool>     — kanonischer Tool-Tag
-    #   *ToolName: ...*               — degenerierter Marker (Sterne)
-    #   [Tool-Aufruf: X(...)]         — narrative Bracket-Notation
+    # Recognises three formats:
+    #   <tool name="X">...</tool>     — the canonical tool tag
+    #   *ToolName: ...*               — a degenerate marker (asterisks)
+    #   [Tool-Aufruf: X(...)]         — narrative bracket notation
     _TOOL_MARKER_PATTERNS = [
         re.compile(r'<tool\s+name="[^"]+">[\s\S]*?</tool>', re.IGNORECASE),
         re.compile(r'\*\s*(?:OutfitChange|ChangeOutfit|SetActivity|TalkTo|SendMessage|SetLocation)\s*[:\(][^\*\n]*\*', re.IGNORECASE),
@@ -712,20 +717,24 @@ def _extract_context_from_last_chat(agent_name: str,
     def _strip_tool_markers(text: str) -> str:
         for pat in _TOOL_MARKER_PATTERNS:
             text = pat.sub("", text)
-        # Zusammengeschrumpfte Leerzeilen aufraeumen
+        # Tidy up the blank lines left behind
         return re.sub(r'\n\s*\n\s*\n+', '\n\n', text).strip()
 
-    # Quellen strikt getrennt:
-    # - Avatar-Aenderungen kommen aus der User-Eingabe ("Ich ziehe die Jacke aus")
-    # - Character-Aenderungen kommen aus der Character-Antwort
-    # Jeder Call sieht nur seine eigene Quelle → keine Fehlzuordnung moeglich.
-    character_source = "\n".join(
-        f"Character: {_strip_tool_markers(m)}" for m in reversed(last_assistant_msgs)
-    )
+    # Sources strictly apart:
+    # - avatar changes come from the user input ("Ich ziehe die Jacke aus")
+    # - character changes come from the character's reply
+    # Each call sees only its own source → no misattribution possible.
+    # Only the NEWEST reply is extracted from (pose, outfit, stats of THIS
+    # beat); the earlier ones were extracted on their own turns and only help
+    # to read it, so they go into the character call's context block.
+    character_source = f"Character: {_strip_tool_markers(last_assistant_msgs[0])}"
+    earlier_replies = "\n".join(
+        f"Character (earlier): {_strip_tool_markers(m)}"
+        for m in reversed(last_assistant_msgs[1:]))
     avatar_source = f"User: {_strip_tool_markers(last_user_msg)}" if last_user_msg else ""
 
-    # Avatar-Name fuer User-Zuordnung (Full-Extraction: Outfit-Aenderungen
-    # des Spielers landen auf seinem Avatar-Character, nicht auf dem Login-Konto).
+    # Avatar name for the user side (the player's outfit changes land on
+    # their avatar character, not on the login account).
     from app.models.account import get_active_character
     avatar_name = get_active_character() or ""
 
@@ -747,19 +756,19 @@ def _extract_context_from_last_chat(agent_name: str,
         from app.models.character import is_outfit_locked
         from app.core.llm_queue import get_llm_queue, Priority
 
-        # Outfit-Lock: spart LLM-Call wenn der User Auto-Aenderungen fuer
-        # diesen Character gesperrt hat. Beim Avatar gibt es nur Outfit-
-        # Extraktion → kompletter Skip. Beim Agent laeuft Activity-Extraktion
-        # weiter (anderer Zweck), nur das Outfit-Feld wird aus dem Prompt
-        # entfernt und spaeter ignoriert.
+        # Outfit lock: saves the LLM call when the user locked automatic
+        # changes for this character. The avatar call extracts only the
+        # outfit → skipped entirely. The agent call still extracts the pose
+        # (a different purpose); only the outfit part leaves the prompt and
+        # is ignored afterwards.
         outfit_locked = is_outfit_locked(target_name)
         if outfit_locked and is_avatar:
             logger.debug("Chat-Kontext [%s]: Outfit-Lock aktiv, Avatar-Extraktion uebersprungen",
                          target_name)
             return
 
-        # Piece-Liste fuer den Prompt — die einzigen Namen, die der LLM
-        # zurueckgeben darf. Nicht-equipped Items kann er nicht "ausziehen".
+        # Piece list for the prompt — the only names the LLM may return. An
+        # item that is not equipped cannot be "taken off".
         piece_list = ""
         if not outfit_locked:
             from app.models.inventory import get_equipped_pieces, get_item
@@ -775,24 +784,24 @@ def _extract_context_from_last_chat(agent_name: str,
                 if _n:
                     _names.append(_n)
             if not _names:
-                # Keine equipped Pieces → Outfit-Extraktion entfaellt; nur
-                # Activity ist relevant (und auch nur fuer Agent-Calls).
+                # No equipped pieces → no outfit extraction; only the pose
+                # matters (and only for agent calls).
                 if is_avatar:
                     return
             piece_list = "\n".join(f"- {n}" for n in _names)
 
         source_label = "User input" if is_avatar else "Character reply"
-        # Kontext-Text: die jeweils ANDERE Quelle als Disambiguierungs-Hilfe.
-        # Bei Character-Extraktion bekommt der LLM den User-Input zu sehen
-        # (damit "Natuerlich, Lirien" als Reaktion auf "zieh dich aus"
-        # interpretierbar ist), bei Avatar-Extraktion umgekehrt. Extraktion
-        # bleibt aber strikt auf source_text begrenzt — der Template-Prompt
-        # macht das explizit klar.
-        context_text = avatar_source if not is_avatar else character_source
+        # Context text: the OTHER source, to disambiguate. The character call
+        # sees the user input (so that "of course" can be read as the answer
+        # to a request) plus the character's earlier replies; the avatar call
+        # sees the character's reply. Extraction stays strictly limited to
+        # source_text — the template says so explicitly.
+        context_text = (("\n".join(p for p in (earlier_replies, avatar_source) if p))
+                        if not is_avatar else character_source)
 
-        # Stat-Bewertung (C): nur fuer Character-Calls, nur wenn das Feature
-        # aktiv ist. Die verfuegbaren Stats werden dynamisch aus dem Character-
-        # Template gelesen (store=status_effects) — nichts hardcoden.
+        # Stat evaluation (C): character calls only, and only with the
+        # feature on. The available stats are read from the character
+        # template (store=status_effects) — nothing hardcoded.
         stats_enabled = False
         stat_list = ""
         if not is_avatar:
@@ -805,13 +814,18 @@ def _extract_context_from_last_chat(agent_name: str,
                 logger.debug("Stat-Liste fuer Extraktor [%s] fehlgeschlagen: %s", target_name, _se)
 
         from app.core.npc_actions import _solo_pose_keys
+        from app.core.streaming import current_pose_text
         pose_keys = _solo_pose_keys() if not is_avatar else []
+        # The pose this call would overwrite — the prompt keeps it unless
+        # the body clearly changes shape.
+        current_pose = current_pose_text(target_name) if not is_avatar else ""
 
         from app.core.prompt_templates import render_task
         sys_prompt, user_prompt = render_task(
             "extraction_chat_state",
             target_name=target_name,
             pose_keys=pose_keys,
+            current_pose=current_pose,
             piece_list=piece_list,
             source_label=source_label,
             source_text=source_text,
@@ -896,18 +910,17 @@ def _extract_context_from_last_chat(agent_name: str,
                 except Exception as _ste:
                     logger.debug("Stat-Apply [%s] fehlgeschlagen: %s", target_name, _ste)
 
-        # Pieces ablegen, deren Name in der removed-Liste steht.
-        # Neue Pieces koennen nicht aus dem Freitext erzeugt werden —
-        # dafuer muss das LLM den OutfitCreation-Skill rufen.
+        # Take off the pieces named in the removed list. New pieces cannot
+        # come out of free text — that takes the outfit-creation skill.
         if removed_names:
             _apply_removed_pieces(target_name, removed_names)
 
     def _do_extraction():
-        # Call 1: Character-Antwort → Agent-Outfit + Activity (unter Agent-Config)
+        # Call 1: character reply → agent outfit + pose (under the agent config)
         _extract_for_character(
             agent_name, agent_config,
             source_text=character_source, is_avatar=False)
-        # Call 2: User-Eingabe → Avatar-Outfit (unter Avatar-Config)
+        # Call 2: user input → avatar outfit (under the avatar config)
         if avatar_name and avatar_source:
             from app.models.character import get_character_config
             avatar_config = get_character_config(avatar_name)
@@ -915,18 +928,11 @@ def _extract_context_from_last_chat(agent_name: str,
                 avatar_name, avatar_config,
                 source_text=avatar_source, is_avatar=True)
 
-    import asyncio
-    from app.core.turn_trace import bind_trace
-    try:
-        # bind_trace carries the turn's trace id into the pool thread:
-        # run_in_executor does not propagate the context, so the
-        # extraction_chat_state calls above would otherwise be orphaned in
-        # the LLM log. The synchronous fallback keeps the context anyway.
-        asyncio.get_event_loop().run_in_executor(None, bind_trace(_do_extraction))
-    except RuntimeError:
-        # No event loop (daemon/worker thread, e.g. run_chat_turn's follow-up
-        # thread) — run synchronously instead of losing the extraction.
-        _do_extraction()
+    # The loop's executor, inline on run_chat_turn's follow-up thread, or a
+    # daemon thread for a detached caller — the turn trace rides along in
+    # every case (chat_engine.run_follow_up).
+    from app.core.chat_engine import run_follow_up
+    run_follow_up(_do_extraction, detach=detach)
 
 
 class ChatPrompt(NamedTuple):

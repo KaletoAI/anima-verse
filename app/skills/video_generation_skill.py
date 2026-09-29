@@ -314,7 +314,7 @@ class VideoGenerationSkill(BaseSkill):
         return ToolSpec(
             name=self.name,
             description=(
-                f"{self.description}. "
+                f"{self.description.rstrip('.')}. "
                 "Input: JSON with 'prompt' (image description) and "
                 "'action_prompt' (motion/action description for animation)."
             ),

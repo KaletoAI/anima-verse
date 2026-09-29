@@ -722,29 +722,9 @@ class AgentLoop:
         # Player priority (option A): avatar in the room? Then effective
         # Backstop = 1 (one reaction round, then the stage is free) — unless
         # the avatar has been idle past the timeout, then the world may talk on.
-        from app.core.timeutils import utc_now as _un
-        _now_ts = _un().timestamp()
-        avatar_present = False
-        try:
-            from app.models.account import is_player_controlled
-            avatar_present = any(is_player_controlled(c) for c in in_earshot)
-        except Exception:
-            avatar_present = False
-        effective_backstop = self._chime_backstop
-        floor_mode = False
-        if avatar_present and not is_avatar:
-            idle_since = self._room_avatar_idle.get(key)
-            if idle_since is None:
-                idle_since = _now_ts
-                self._room_avatar_idle[key] = idle_since
-            try:
-                from app.core import config as _cfg
-                timeout_min = float(_cfg.get("chat.avatar_floor_timeout_minutes", 8) or 8)
-            except Exception:
-                timeout_min = 8.0
-            if (_now_ts - idle_since) < timeout_min * 60:
-                effective_backstop = 1
-                floor_mode = True
+        floor_mode = (not is_avatar) and self._avatar_holds_floor(
+            key, in_earshot, start_clock=True)
+        effective_backstop = 1 if floor_mode else self._chime_backstop
 
         if is_avatar:
             self._room_ai_turns[key] = 0  # avatar sets the beat: energy reset
@@ -1628,6 +1608,41 @@ class AgentLoop:
                 # inside run_chat_turn and is not surfaced here.
                 "rp_response": reply or ""}
 
+    def _avatar_holds_floor(self, key: str, in_earshot: Sequence[str], *,
+                            start_clock: bool) -> bool:
+        """Player priority: a non-idle avatar in earshot holds the floor.
+
+        While it does, the effective backstop of the room bucket ``key`` is 1
+        — one AI reaction round, then the stage belongs to the player — until
+        the avatar has been idle past ``chat.avatar_floor_timeout_minutes``;
+        then the world may talk on. ONE rule for both readers: the dispatch
+        of room reactions and the thought loop's conversation chime.
+
+        ``start_clock``: the dispatch starts the idle clock of a bucket that
+        has none yet (it is the one that sees the avatar speak and resets
+        it); the chime only reads it, and a bucket without a clock counts as
+        "not idle yet".
+        """
+        try:
+            from app.models.account import is_player_controlled
+            if not any(is_player_controlled(c) for c in in_earshot):
+                return False
+        except Exception:
+            return False
+        from app.core.timeutils import utc_now as _un
+        now_ts = _un().timestamp()
+        idle_since = self._room_avatar_idle.get(key)
+        if idle_since is None:
+            idle_since = now_ts
+            if start_clock:
+                self._room_avatar_idle[key] = idle_since
+        try:
+            from app.core import config as _cfg
+            timeout_min = float(_cfg.get("chat.avatar_floor_timeout_minutes", 8) or 8)
+        except Exception:
+            timeout_min = 8.0
+        return (now_ts - idle_since) < timeout_min * 60
+
     def _maybe_active_conversation_chime(self, character_name: str) -> Optional[Dict[str, Any]]:
         """Phase 3b: if the character is in an ACTIVE room conversation, returns
         a respond dict for a Chime opportunity (real utterance or SKIP) — instead
@@ -1642,6 +1657,13 @@ class AgentLoop:
         character heard in the open, so a conversation on the road keeps the
         same speech-instead-of-thought turn a room conversation gets — with
         the character's open-world cell as the backstop bucket (``_room_key``).
+
+        Also None when the newest line of the conversation is the character's
+        OWN: it has answered already. Skipping its own rows used to reach past
+        them to the line it had just replied to and answer that once more —
+        word for word (B6, 2026-09-29). And the backstop is the dispatch's:
+        effectively 1 while a non-idle avatar is in earshot
+        (``_avatar_holds_floor``) — the player is up after one AI round.
         """
         try:
             from app.models.character import (get_character_current_location,
@@ -1650,8 +1672,21 @@ class AgentLoop:
             from app.core.timeutils import utc_now as _now, parse_iso
             loc = get_character_current_location(character_name) or ""
             room = get_character_current_room(character_name) or ""
-            if self._room_ai_turns.get(
-                    self._room_key(loc, room, character_name), 0) >= self._chime_backstop:
+            key = self._room_key(loc, room, character_name)
+            backstop = self._chime_backstop
+            if self._room_ai_turns.get(key, 0) >= 1:
+                # Only worth the roster read once there was an AI round.
+                from app.core.perception import nearby_in_the_open
+                from app.core.room_entry import characters_in_room
+                if loc:
+                    earshot = list(characters_in_room(loc, room))
+                    earshot += [c for c in nearby_in_the_open(character_name)
+                                if c not in earshot]
+                else:
+                    earshot = list(nearby_in_the_open(character_name))
+                if self._avatar_holds_floor(key, earshot, start_clock=False):
+                    backstop = 1
+            if self._room_ai_turns.get(key, 0) >= backstop:
                 return None  # scene ebbing away → no more autonomous follow-ups
             stream = perception_store.get_character_room_stream(character_name, loc, room, limit=6)
             for row in reversed(stream):  # newest first (stream is oldest→newest)
@@ -1660,8 +1695,10 @@ class AgentLoop:
                 content = (row.get("content") or "").strip()
                 if not content or (row.get("kind") or "") == "whisper_meta":
                     continue
-                if not sp or sp == character_name or sp == STORYTELLER_SPEAKER:
+                if not sp or sp == STORYTELLER_SPEAKER:
                     continue  # narrator events are perception, not a conversation partner
+                if sp == character_name:
+                    return None  # the newest line is its own: already answered
                 # check freshness
                 try:
                     age = (_now() - parse_iso(row.get("ts") or "")).total_seconds()

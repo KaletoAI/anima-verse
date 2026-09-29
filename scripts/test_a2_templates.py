@@ -155,7 +155,7 @@ for is_avatar in (False, True):
                 system, user = render_task(
                     "extraction_chat_state",
                     target_name="Beta", piece_list=pieces,
-                    pose_keys=["standing", "sitting"],
+                    pose_keys=["standing", "sitting"], current_pose="",
                     source_label="reply", source_text="t", context_text="",
                     outfit_locked=locked, is_avatar=is_avatar,
                     stats_enabled=stats_enabled,

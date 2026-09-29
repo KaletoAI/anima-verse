@@ -12,6 +12,7 @@ placeholders:
   stats_enabled: bool — when true, status-value deltas are extracted
   stat_list: Bullet list of the available status values with description + range (one per line) — dynamic per character template
   pose_keys: The catalog's solo pose keys — the ONLY values "pose" may take (list of strings)
+  current_pose: The target's pose right now as "<key>" or "<key>: <detail>" — empty when none is set or for the avatar call
 ---
 ## system
 You are a strict information extractor. Reply ONLY with valid JSON, no commentary.
@@ -31,8 +32,10 @@ Rules for "removed":
 Determine "pose": the BODY SHAPE {{ target_name }} is in right now, as ONE of these keys copied exactly:
 {{ pose_keys | join(", ") }}
 Leave "pose" empty ("") when the text does not show a body shape or none of the keys fits — never invent a key, never write a phrase here.
+{% if current_pose %}{{ target_name }}'s current pose: {{ current_pose }}
+{% endif %}Return "pose" "" (keep the current one) unless the text shows the body clearly changing shape; a glance, a gesture, looking at or holding something, or thinking is NOT a new pose.
 
-Determine "detail": what {{ target_name }} is doing in that shape, in 2-6 words (what a bystander would see: the object handled, the direction faced) — no facial expression, no mood, no clothing, no speech, no other character's name. Write "detail" in the same language as the {{ source_label }} below. Empty ("") when nothing is shown.
+Determine "detail": what {{ target_name }} is doing in that shape, in 2-6 words (what a bystander would see: the object handled, the direction faced), third person — never I/my/ich/mein — no facial expression, no mood, no clothing, no speech, no other character's name. Write "detail" in the same language as the {{ source_label }} below. Empty ("") when nothing is shown.
 {% if stats_enabled %}
 Evaluate "stats": how this single scene beat affects {{ target_name }}'s status values. The available values are:
 {{ stat_list }}

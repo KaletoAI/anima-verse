@@ -177,14 +177,21 @@ def format_example(format_name: str, tool_name: str, example_input: str) -> str:
 # contradicts it as soon as a tool is renamed or unavailable (A3.2b — the old
 # text still advertised "ImageGenerator", a name that has not existed since the
 # rename to TakePhoto).
-_DEFAULT_TOOL_INSTRUCTION = (
-    "WHEN TO USE TOOLS:\n"
-    "- Only the tools listed under AVAILABLE TOOLS above exist. Never call a tool that is "
-    "not on that list and never invent a tool name.\n"
+# The "user asks → MUST call" bullet is for a CHAT model that writes its own
+# tool calls (single mode). A tool-decision LLM (rp_first, thought, act) must
+# not see it: there a tool follows what the CHARACTER did, never what the user
+# asked for — the bullet fired TakePhoto on a mere request (B4, 2026-09-29).
+_USER_ASKS_BULLET = (
     "- Whenever the user asks for something one of those tools does — up-to-date information "
     "about current events, news or real-world facts; an image or a picture; looking something "
     "up; going somewhere or changing location — you MUST call that tool. Do NOT answer from "
     "memory, do NOT make up information.\n"
+)
+_DEFAULT_TOOL_INSTRUCTION = (
+    "WHEN TO USE TOOLS:\n"
+    "- Only the tools listed under AVAILABLE TOOLS above exist. Never call a tool that is "
+    "not on that list and never invent a tool name.\n"
+    + _USER_ASKS_BULLET +
     "HOW: Write your in-character response, then add the tool call at the end. "
     "The system will execute the tool automatically.\n"
     "TOOL INPUT RULES: When a tool expects JSON input, field values must be plain text — "
@@ -213,13 +220,18 @@ def _image_tool_names() -> frozenset:
         return frozenset()
 
 
-def _get_tool_instruction_for_model(model_name: str) -> str:
+def _get_tool_instruction_for_model(model_name: str,
+                                    for_tool_decision: bool = False) -> str:
     """Loads the tool_instruction for a model from model_capabilities.json.
 
-    Falls back to _DEFAULT_TOOL_INSTRUCTION when not configured.
+    Falls back to _DEFAULT_TOOL_INSTRUCTION when not configured — without the
+    "user asks → MUST call" bullet for a tool-decision LLM. A model's own
+    configured instruction is returned as written.
     """
+    default = (_DEFAULT_TOOL_INSTRUCTION.replace(_USER_ASKS_BULLET, "")
+               if for_tool_decision else _DEFAULT_TOOL_INSTRUCTION)
     if not model_name:
-        return _DEFAULT_TOOL_INSTRUCTION
+        return default
     try:
         from app.core.model_capabilities import get_model_capabilities
         caps = get_model_capabilities(model_name)
@@ -228,7 +240,7 @@ def _get_tool_instruction_for_model(model_name: str) -> str:
             return custom
     except Exception:
         pass
-    return _DEFAULT_TOOL_INSTRUCTION
+    return default
 
 
 def build_tool_instruction(format_name: str, tools: List[Any],
@@ -236,7 +248,8 @@ def build_tool_instruction(format_name: str, tools: List[Any],
                            model_name: str = "",
                            photographer_mode: bool = False,
                            user_appearance: str = "",
-                           is_roleplay: bool = True) -> str:
+                           is_roleplay: bool = True,
+                           for_tool_decision: bool = False) -> str:
     """Builds the complete tool-instruction block for the system prompt.
 
     Args:
@@ -250,6 +263,11 @@ def build_tool_instruction(format_name: str, tools: List[Any],
         is_roleplay: True for RP characters (adds the "WHEN NOT TO USE TOOLS"
             clause that keeps chatting/feelings/fiction out of tool calls).
             Chatbots = False.
+        for_tool_decision: True for the system prompt of a TOOL-DECISION LLM
+            (rp_first, thought, act). Leaves out the "whenever the user asks
+            … you MUST call that tool" bullet, which is meant for a chat model
+            writing its own calls: a decision LLM follows what the character
+            did, never the user's request.
     """
     fmt = get_format(format_name)
 
@@ -301,19 +319,24 @@ def build_tool_instruction(format_name: str, tools: List[Any],
     if any(n in _image_tool_names() for n in tool_names):
         if photographer_mode:
             # Photographer mode: the agent takes the picture and is not in it
+            # Names, never role words: only a named person is drawn as
+            # themselves (the image prompt builder recognises people by name).
             photographer_hint = (
-                "\nYou are a PHOTOGRAPHER. When generating images, describe ONLY the subjects "
-                "you are photographing. Do NOT include yourself or your own appearance in the "
-                "image description. When the user says 'Foto von mir' or 'photo of me', "
-                "they mean themselves — describe THEM, not yourself."
+                "\nYou are a PHOTOGRAPHER. When generating images, name every person you "
+                "photograph by their NAME and describe ONLY those subjects. Do NOT include "
+                "yourself or your own appearance in the image description. When the user "
+                "says 'Foto von mir' or 'photo of me', they mean themselves — name THEM, "
+                "not yourself."
             )
             if user_appearance:
                 photographer_hint += f"\nThe user's appearance: {user_appearance}"
             parts.append(photographer_hint)
         elif appearance:
-            # Normal mode: agent appearance for self-portraits
+            # Normal mode: names first — a role word ("her partner") draws a
+            # stranger; the appearance is reference, not a substitute.
             parts.append(
-                f"\nWhen generating images of yourself, always include your appearance: {appearance}"
+                f"\nWhen generating an image, name yourself and every other person in it "
+                f"by name; your appearance for reference: {appearance}"
             )
 
     # Skill-specific examples (one line per skill)
@@ -323,7 +346,7 @@ def build_tool_instruction(format_name: str, tools: List[Any],
                 parts.append(f"- {line.strip()}")
 
     # Model-specific tool instruction (from model_capabilities.json)
-    instruction = _get_tool_instruction_for_model(model_name)
+    instruction = _get_tool_instruction_for_model(model_name, for_tool_decision)
     parts.append(f"\n{instruction}")
 
     # RP only: chatting/feelings/fiction trigger no tools

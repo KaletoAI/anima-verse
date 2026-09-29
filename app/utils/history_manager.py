@@ -356,32 +356,33 @@ def resolve_speaker(msg: Dict[str, str],
 
 
 def _clean_message_for_summary(content: str) -> str:
-    """Entfernt Tool-Calls, Bild-URLs und technische Artefakte aus einer Nachricht.
+    """Strip tool calls, image URLs and technical artefacts from a message.
 
-    Verhindert, dass alte Tool-Call-Patterns in die Summary gelangen und
-    vom LLM als neue Tool-Calls halluziniert werden.
+    Keeps old tool-call patterns out of the summary, where the LLM would
+    otherwise hallucinate them as new tool calls.
     """
-    # Tool-Call-Patterns entfernen (alle Formate)
-    # Tag-Format: <tool name="...">...</tool>
+    # Tool-call patterns (every format)
+    # Tag format: <tool name="...">...</tool>
     content = re.sub(r'<tool\s+name="[^"]*">[\s\S]*?</tool>', '', content)
     # Natural EN: Use ToolName for: ...
     content = re.sub(r'(?:I\s+)?[Uu]se\s+\w+\s+for:\s*.*?(?:\n|$)', '', content)
     # Natural DE: Ich nutze ToolName für: ...
     content = re.sub(r'(?:Ich\s+)?[Nn]utze\s+\w+\s+f(?:ü|ue)r:\s*.*?(?:\n|$)', '', content)
 
-    # Markdown-Bilder entfernen: ![...](...)
+    # Markdown images: ![...](...)
     content = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', content)
-    # Rohe Bild-URLs entfernen
+    # Raw image URLs
     content = re.sub(r'/(?:characters|instagram)/\S+\.png\S*', '', content)
 
-    # Technische Artefakte entfernen
+    # Technical artefacts — a tool's failure answer included, in either
+    # spelling ("Error: …" today, the older German "Fehler: …")
     content = re.sub(r'Post-ID:\s*\S+', '', content)
-    content = re.sub(r'Fehler:.*?(?:\n|$)', '', content)
+    content = re.sub(r'(?:Fehler|Error):.*?(?:\n|$)', '', content)
 
-    # LLM-Tokenizer-Artefakte entfernen (z.B. <SPECIAL_28>, <|END_OF_TURN_TOKEN|>)
+    # LLM tokenizer artefacts (e.g. <SPECIAL_28>, <|END_OF_TURN_TOKEN|>)
     content = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', content)
 
-    # Mehrfache Leerzeilen zusammenfassen
+    # Collapse runs of blank lines
     content = re.sub(r'\n{3,}', '\n\n', content)
 
     return content.strip()

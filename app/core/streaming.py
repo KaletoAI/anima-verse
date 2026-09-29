@@ -171,6 +171,116 @@ def _inject_rp_context(tool_input: str, rp_response: str, user_input: str = "") 
     return _json.dumps(wrapper, ensure_ascii=False)
 
 
+def is_error_result(text: Any) -> bool:
+    """Whether a tool's answer reports a failure.
+
+    The convention every producer follows: tools and the image service do not
+    raise, they answer with prose — and a failure starts with "Error" (or the
+    older German "Fehler"). ONE predicate for every reader of that
+    convention (the deferred runners here and in chat_engine, npc_assets).
+    """
+    if not isinstance(text, str):
+        return False
+    return text.strip().lower().startswith(("error", "fehler"))
+
+
+def report_deferred_failure(character: str, tool_name: str, result: Any, *,
+                            speaker: str = "", notify: bool = True) -> bool:
+    """Make a failed DEFERRED tool visible — to the character and the player.
+
+    A deferred tool (a photo, a video, a post) runs after the reply, so its
+    answer never reaches the chat model: without this a failed render passed
+    in silence and the character went on claiming the picture it never took.
+    On an error answer (``is_error_result``) three things happen:
+
+    * a WARNING with the tool's answer in it;
+    * a narrator line in the room — generic on purpose, the core never names
+      a skill (R1) — and NOT display_only, so the character reads in its own
+      transcript that nothing came of it. ``react=False``: a failure is no
+      cue for the room to chime in;
+    * a notification to the avatar involved (``speaker`` unless that is the
+      "user" sentinel, else the active character — and only when that one is
+      player-controlled; without an avatar none). ``notify=False`` for
+      runs no player took part in (autonomous thought/act/story streams):
+      the narrator line is enough there, a banner would be noise.
+      The wrapper is translated, the technical reason stays raw.
+
+    The line is written in the avatar's language (``"de"`` when it has none
+    set), without an avatar in the character's own. Returns True when the
+    result was a failure and was reported. Never raises.
+    """
+    if not is_error_result(result):
+        return False
+    reason = str(result).strip()
+    logger.warning("Deferred tool %s of %s failed: %s", tool_name, character,
+                   reason[:300])
+    try:
+        from app.core.i18n import t
+        from app.core.perception import announce_action
+        from app.models.account import get_active_character, is_player_controlled
+        from app.models.character import get_character_language
+        who = (speaker or "").strip()
+        avatar = "" if not notify else (
+            who if who and who.lower() != "user"
+            else (get_active_character() or "").strip())
+        # Only a REAL avatar gets the notification: a speaking NPC (a
+        # character-to-character turn) has no player to tell.
+        if avatar == character or (avatar and not is_player_controlled(avatar)):
+            avatar = ""
+        lang = ((get_character_language(avatar) or "de") if avatar
+                else (get_character_language(character) or "de"))
+        announce_action(
+            character,
+            t("{actor} tries, but it does not work out — nothing came of it.",
+              lang).format(actor=character),
+            source="tool_failed", react=False)
+        if avatar:
+            from app.models.notifications import create_notification
+            create_notification(
+                character,
+                t("{actor} could not complete {tool}: {reason}", lang).format(
+                    actor=character, tool=tool_name, reason=reason),
+                notification_type="tool_failed",
+                metadata={"to": avatar, "tool": tool_name})
+    except Exception as e:  # noqa: BLE001 — feedback must never break a turn
+        logger.debug("report_deferred_failure(%s, %s) failed: %s",
+                     character, tool_name, e)
+    return True
+
+
+def current_pose_text(character_name: str) -> str:
+    """The character's current pose as ``<key>`` or ``<key>: <detail>``.
+
+    The same shape the **I do** marker and the extraction write, so a prompt
+    can show a writer what it would overwrite. "" when no pose is set.
+    """
+    if not character_name:
+        return ""
+    try:
+        from app.models.character import (get_character_pose_flavor,
+                                          get_effective_pose_key)
+        key = (get_effective_pose_key(character_name) or "").strip()
+        if not key:
+            return ""
+        detail = (get_character_pose_flavor(character_name) or "").strip()
+        return f"{key}: {detail}" if detail and detail != key else key
+    except Exception as e:  # noqa: BLE001 — a prompt line, never a failure
+        logger.debug("current_pose_text(%s) failed: %s", character_name, e)
+        return ""
+
+
+def pose_keep_rule(character_name: str) -> str:
+    """The per-turn pose note for the **I do** marker: the current pose plus
+    the rule that keeps it. Per turn only (it changes) — never part of a
+    cached system prompt."""
+    cur = current_pose_text(character_name)
+    head = f"Current pose: {cur}. " if cur else ""
+    return (f"{head}Emit **I do** only when the text shows the body clearly "
+            f"changing shape; a glance, a gesture, looking at or holding "
+            f"something, or thinking is NOT a new pose — then emit no **I do** "
+            f"marker and the current pose stays.")
+
+
 def _defers_for_attachment(tool_name: str, tool_input: str) -> bool:
     """True when a tool call must run AFTER the deferred image tools of the
     same turn — its input references an attachment (this turn's generated
@@ -1145,6 +1255,9 @@ class StreamingAgent:
                 "of moving there alone. Emotions and small gestures are carried by the "
                 "markers in step 3, never by tools.\n\n")
         _intent_marker_block = intent_marker_help(indent="   ")
+        # The pose the **I do** marker would overwrite + the rule that keeps
+        # it. Per turn — this is the user message, never the system prompt.
+        _pose_note = pose_keep_rule(self.agent_name)
         return (
             f"The user said: {user_input}\n\n"
             f"The character responded:\n{rp_response}\n\n"
@@ -1184,7 +1297,9 @@ class StreamingAgent:
             f"   Decision rule:\n"
             f"     - Emotion clearly shown in RP AND no '**I feel <X>**' in RP → EMIT **I feel <emotion>**\n"
             f"     - New activity clearly started AND no '**I do ...**' marker in RP → "
-            f"EMIT **I do <pose key>: <what you do, 2-6 words>**\n"
+            f"EMIT **I do <pose key>: <what a bystander sees, 2-6 words, third person — "
+            f"never I/my/ich/mein>**\n"
+            f"       {_pose_note}\n"
             f"{_location_marker_rule}"
             f"   Examples (study carefully):\n"
             f"     RP ends with 'Ich fuehle mich... gluecklich.' (no asterisks) → EMIT **I feel gluecklich**\n"
@@ -1241,8 +1356,11 @@ class StreamingAgent:
         # Phase 2: the tool LLM decides + extracts (intent, assignment,
         # fallback markers).
         _is_thought = (self.log_task or "").startswith("thought")
-        tool_decision_input = self.build_tool_decision_input(
-            user_input, rp_response)
+        # Off the event loop: the builder reads the world (movement rule,
+        # current pose, the skills' flags). asyncio.to_thread copies the
+        # context, so the turn trace stays attached to anything it logs.
+        tool_decision_input = await asyncio.to_thread(
+            self.build_tool_decision_input, user_input, rp_response)
 
         tool_system = self.tool_system_content or system_content
 
@@ -2055,11 +2173,24 @@ class StreamingAgent:
                     tool_result = await asyncio.to_thread(tool_func, enriched_input)
                 yield ToolEndEvent(tool_name=tool_name)
                 yield ToolResultEvent(tool_name=tool_name, result=tool_result)
-                logger.info("Deferred tool result: %s -> %s", tool_name, tool_result[:100])
+                if is_error_result(tool_result):
+                    # The failure is reported (warning + narrator line +
+                    # notification) — off the event loop, it writes the DB.
+                    # notify=False: a streaming run (thought/act/story) has
+                    # no player in it; the narrator line is enough.
+                    await asyncio.to_thread(
+                        report_deferred_failure, self.agent_name, tool_name,
+                        tool_result, notify=False)
+                else:
+                    logger.info("Deferred tool result: %s -> %s", tool_name,
+                                str(tool_result)[:100])
             except Exception as def_err:
                 logger.error("Deferred tool error: %s: %s", tool_name, def_err)
                 yield ToolEndEvent(tool_name=tool_name)
                 yield ToolErrorEvent(tool_name=tool_name, error=str(def_err))
+                await asyncio.to_thread(
+                    report_deferred_failure, self.agent_name, tool_name,
+                    f"Error: {def_err}", notify=False)
 
     # ------------------------------------------------------------------
     # Tool result formatting (system prompt context)

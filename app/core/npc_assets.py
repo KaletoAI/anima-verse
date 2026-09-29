@@ -312,10 +312,9 @@ def _delivered_image(result: str) -> bool:
     is the only "yes", and everything else is worth a WARNING with the text
     in it.
     """
+    from app.core.streaming import is_error_result
     text = (result or "").strip()
-    if not text:
-        return False
-    if text.lower().startswith(("error", "fehler")):
+    if not text or is_error_result(text):
         return False
     return "/" in text
 

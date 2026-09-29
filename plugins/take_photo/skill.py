@@ -70,11 +70,11 @@ class TakePhotoSkill(PluginSkill):
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
-            return "TakePhoto is disabled."
+            return "Error: TakePhoto is disabled."
         from app.imagegen.service import get_image_service
         svc = get_image_service()
         if not svc.enabled:
-            return ("Image generation is not available. No instance "
+            return ("Error: Image generation is not available. No instance "
                     "configured or reachable.")
 
         data = self._parse_base_input(raw_input)
@@ -107,12 +107,19 @@ class TakePhotoSkill(PluginSkill):
         if "usage_instructions" in self.config:
             return self.config["usage_instructions"]
         from app.core.tool_formats import format_example
+        # Named people, never role words: only a NAME is drawn as the
+        # person it belongs to (the prompt builder recognises people by name).
         return format_example(format_name or "tag", self.name,
-                              "young woman with blonde hair at the beach, sunset")
+                              "Luna and Pixel under the café awning at sunset, "
+                              "Luna laughing, Pixel holding two cups")
 
     def as_tool(self, **kwargs) -> ToolSpec:
         return ToolSpec(
             name=self.name,
-            description=f"{self.description}. Input should be a detailed "
+            description=f"{self.description.rstrip('.')}. Name every person in "
+                        f"the picture by their NAME (e.g. 'Luna and Pixel under "
+                        f"the café awning') — only named people are drawn as "
+                        f"themselves; a role word like 'a man' or 'her partner' "
+                        f"draws a stranger. Input should be a detailed "
                         f"description of the desired image.",
             func=self.execute)

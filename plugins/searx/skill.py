@@ -187,5 +187,5 @@ class SearXPlugin(PluginSkill):
     def as_tool(self, **kwargs) -> ToolSpec:
         return ToolSpec(
             name=self.name,
-            description=f"{self.description}. Input should be a search query.",
+            description=f"{self.description.rstrip('.')}. Input should be a search query.",
             func=self.execute)

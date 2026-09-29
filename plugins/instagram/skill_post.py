@@ -413,7 +413,7 @@ class InstagramSkill(PluginSkill):
         # Per-Agent enabled Check
         cfg = self._get_effective_config(character_name)
         if not cfg.get("enabled", True):
-            return f"Instagram ist fuer {character_name} deaktiviert."
+            return f"Error: Instagram is disabled for {character_name}."
 
         # Cooldown pruefen
         cooldown_hours = int(cfg.get("post_cooldown_hours", 12))
@@ -431,7 +431,8 @@ class InstagramSkill(PluginSkill):
                         remaining = cooldown_end - now
                         hours_left = remaining.total_seconds() / 3600
                         logger.info("Cooldown aktiv: %s hat noch %.1fh Cooldown", character_name, hours_left)
-                        return f"{character_name} hat noch {hours_left:.1f}h Cooldown bis zum naechsten Post (Cooldown: {cooldown_hours}h)."
+                        return (f"Error: {character_name} is still on post cooldown "
+                                f"({hours_left:.1f} h of {cooldown_hours} h left).")
                 except (ValueError, TypeError):
                     pass
 
@@ -736,7 +737,7 @@ class InstagramSkill(PluginSkill):
         return ToolSpec(
             name=self.name,
             description=(
-                f"{self.description}. "
+                f"{self.description.rstrip('.')}. "
                 f"Input options: "
                 f"(a) JSON {{\"image_prompt\": \"...\", \"caption\": \"your caption text\"}} — "
                 f"recommended, write the caption in your own voice. "

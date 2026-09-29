@@ -130,7 +130,7 @@ happened. Do not reuse a sentence, a phrase or an image from these lines.
 
 === Places and activities here ===
 {{ activity_hint_block }}
-Use SetActivity to set what you are doing right now — pose: one of the pose keys above, detail: what you do in 2-6 words (for example pose sitting, detail sketching in a notebook). The tool description states the JSON input.
+Use SetActivity to set what you are doing right now — pose: one of the pose keys above, detail: <what a bystander sees, 2-6 words, third person — never I/my/ich/mein> (for example pose sitting, detail sketching in a notebook). The tool description states the JSON input.
 {% endif %}
 {% if skill_context_blocks %}
 

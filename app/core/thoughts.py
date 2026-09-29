@@ -476,7 +476,7 @@ class ThoughtRunner:
             from app.models.character_template import is_roleplay_character as _is_rp_pa
             tool_instr_block = build_tool_instruction(
                 _tool_fmt, agent_tools, appearance, usage, model_name=tool_model_name,
-                is_roleplay=_is_rp_pa(character_name))
+                is_roleplay=_is_rp_pa(character_name), for_tool_decision=True)
 
             # Build the context sections within budget (priority order)
             _ctx_parts = []
@@ -812,7 +812,15 @@ class ThoughtRunner:
         if full_response and full_response.strip().upper() != "SKIP":
             try:
                 from app.core.chat_engine import post_process_response
-                _pp_result = post_process_response(
+                # Off the event loop (it reads and writes the world: mood,
+                # place, pose, intents). asyncio.to_thread copies the context,
+                # so the turn trace stays on its follow-up LLM calls.
+                # detach_background: the LLM extractions it starts keep
+                # running in the background instead of holding this turn —
+                # on the loop they went to its executor, in the worker
+                # thread they would otherwise run inline.
+                _pp_result = await asyncio.to_thread(
+                    post_process_response,
                     owner_id="",
                     character_name=character_name,
                     user_input=user_input,
@@ -823,15 +831,16 @@ class ThoughtRunner:
                     full_chat_history=recent_history,
                     old_history=[],  # thoughts: no summary update needed
                     extraction_context={"source": "thought", "is_background": True},
+                    detach_background=True,
                 )
                 if _pp_result.get("location"):
-                    logger.info("%s gedanke: Location -> %s", character_name, _pp_result["location"])
+                    logger.info("%s thought: location -> %s", character_name, _pp_result["location"])
                 if _pp_result.get("activity"):
-                    logger.info("%s gedanke: Activity -> %s", character_name, _pp_result["activity"])
+                    logger.info("%s thought: activity -> %s", character_name, _pp_result["activity"])
                 if _pp_result.get("mood"):
-                    logger.info("%s gedanke: Mood -> %s", character_name, _pp_result["mood"])
+                    logger.info("%s thought: mood -> %s", character_name, _pp_result["mood"])
             except Exception as pp_err:
-                logger.error("%s: post_process_response Fehler: %s", character_name, pp_err)
+                logger.error("%s: post_process_response failed: %s", character_name, pp_err)
 
         # Auto-Progress: Tool-Ausfuehrungen als Intent-Fortschritt zaehlen
         # (vereinheitlichte Intents, plan-intents-unified.md)

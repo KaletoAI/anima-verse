@@ -213,9 +213,17 @@ class SkillManager:
 
     def get_agent_usage_instructions(self, character_name: str,
                                      format_name: str = "",
-                                     check_limits: bool = True) -> str:
-        """Usage-Instruktionen nur fuer die beim Agent aktiven Skills."""
+                                     check_limits: bool = True,
+                                     exclude: frozenset = frozenset()) -> str:
+        """Usage instructions for the skills active for this character.
+
+        ``exclude``: tool names whose usage lines stay out — a verb the
+        caller does not offer this turn (in-person movement) must not come
+        back through its usage example either.
+        """
         agent_skills = self._get_agent_skills(character_name, check_limits=check_limits)
         if not agent_skills:
             return ""
-        return "\n".join(skill.get_usage_instructions(format_name, character_name=character_name) for skill in agent_skills)
+        return "\n".join(skill.get_usage_instructions(format_name, character_name=character_name)
+                         for skill in agent_skills
+                         if getattr(skill, "name", "") not in exclude)

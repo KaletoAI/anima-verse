@@ -545,7 +545,7 @@ class SetLocationSkill(PluginSkill):
         return ToolSpec(
             name=self.name,
             description=(
-                f"{self.description}. "
+                f"{self.description.rstrip('.')}. "
                 f"Input: location name, optionally with room and/or activity "
                 f"(e.g. 'Office, Kitchen' or 'home, bedroom, sleeping'). "
                 f"Cross-location moves start a timed journey along locations "

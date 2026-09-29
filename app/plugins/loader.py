@@ -411,6 +411,10 @@ def _apply_skill_meta(skill: PluginSkill, entry: SkillEntry) -> None:
                 skill, "action_hint", "")
     except Exception as e:
         logger.debug("Skill meta for %s not applied: %s", entry.skill_id, e)
+    # One normal form: the description carries no closing period. Verbs that
+    # extend it in as_tool append ". <more>" — a template sentence ending in
+    # "." used to come out as "..".
+    skill.description = (skill.description or "").rstrip(".")
 
 
 def load_plugin(pkg: Package) -> List[Tuple[str, PluginSkill]]:

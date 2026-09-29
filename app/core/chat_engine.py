@@ -110,14 +110,23 @@ def _messages_from_room_stream(responder: str,
 
 def _build_rp_tool_system(character_name: str, agent_tools: list,
                           tool_format: str, tool_model_name: str,
-                          partner_name: str) -> str:
-    """Baut den System-Prompt für die rp_first-Tool-Phase (non-streaming Variante
-    des Blocks aus routes/chat.py). Der Tool-LLM erkennt damit narrative Aktionen
-    (ChangeOutfit, SetLocation, SetActivity, …) und ruft die passenden Tools.
+                          partner_name: str, in_person: bool = False) -> str:
+    """Builds the system prompt of the rp_first tool phase (the non-streaming
+    variant of the block in routes/chat.py). With it the tool LLM spots
+    narrative actions (ChangeOutfit, SetActivity, …) and calls the tools.
+
+    ``in_person``: the turn answers inside an in-person conversation. The
+    SUPPRESS_IN_PERSON verbs (movement) are discarded on execution there
+    (``execute_tool_matches``), so they leave this prompt too — tool list,
+    usage examples and the "Available tools" line — exactly like the mapping
+    of the decision prompt (``streaming.decision_tools``). Offered anyway,
+    the tool block told the model "you MUST call" a verb that was thrown
+    away.
     """
     from app.core.tool_formats import build_tool_instruction
     from app.core.dependencies import get_skill_manager
     from app.core.outfit_renderer import render_outfit
+    from app.core.streaming import _suppress_in_person_tool_names
     from app.models.character import (get_character_appearance,
                                        get_character_current_location,
                                        get_character_language_instruction)
@@ -126,11 +135,16 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
     from app.models.account import get_active_character
 
     sm = get_skill_manager()
+    suppressed = _suppress_in_person_tool_names() if in_person else frozenset()
+    if suppressed:
+        agent_tools = [t for t in agent_tools if t.name not in suppressed]
     appearance = get_character_appearance(character_name) or ""
-    usage = sm.get_agent_usage_instructions(character_name, tool_format, check_limits=False)
+    usage = sm.get_agent_usage_instructions(character_name, tool_format,
+                                            check_limits=False, exclude=suppressed)
     instr = build_tool_instruction(tool_format, agent_tools, appearance, usage,
                                    model_name=tool_model_name,
-                                   is_roleplay=is_roleplay_character(character_name))
+                                   is_roleplay=is_roleplay_character(character_name),
+                                   for_tool_decision=True)
     names = [t.name for t in agent_tools]
 
     loc_id = get_character_current_location(character_name) or ""
@@ -197,8 +211,8 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
     the same fragment the character's own prompt includes.
     """
     from app.core.streaming import (action_mapping_lines, decision_tools,
-                                    intent_marker_help, speech_turn_note,
-                                    tool_decision_guardrails)
+                                    intent_marker_help, pose_keep_rule,
+                                    speech_turn_note, tool_decision_guardrails)
     tools_dict = decision_tools(tools_dict, suppress_in_person=in_person)
     try:
         from app.routes.chat import _marker_travel_refusal
@@ -229,9 +243,18 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
                 _open_plans = f"Open plans of this character (id | title):\n{_brief}\n"
         except Exception as _ie:  # noqa: BLE001 — the prompt works without it
             logger.debug("open intents brief failed for %s: %s", agent_name, _ie)
+    # The pose the **I do** marker would overwrite, and the rule that keeps
+    # it — per turn, so it lives in this user part, never in the system one.
+    _pose_note = pose_keep_rule(agent_name) + " "
     return (
         f"The user said: {user_input}\n\n"
         f"The character responded:\n{rp_response}\n\n"
+        # The same guard the streaming twin carries — scoped to TOOLS: the
+        # plan/task marker below may still come from the user's words.
+        f"Base every TOOL call ONLY on what the CHARACTER actually did in 'The "
+        f"character responded' text above. NEVER call a tool because of what the "
+        f"user said or asked for, and NEVER invent an action (an outfit, location, "
+        f"or activity) that is not literally in the character's text.\n\n"
         f"Analyze the response and call any tool the character's narrative action "
         f"triggers. The character NEVER writes tool calls themselves; you do that. "
         f"Fire the tool whenever the narrative shows the action, even if phrased "
@@ -245,11 +268,12 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
         f"{tool_decision_guardrails(tools_dict, with_markers=not _move_refusal)}"
         f"Also emit fallback markers the character forgot (only if NOT already wrapped "
         f"in **...** in the RP): **I feel <emotion>**, "
-        f"**I do <pose key>: <what you do, 2-6 words>**"
+        f"**I do <pose key>: <what a bystander sees, 2-6 words, third person — never "
+        f"I/my/ich/mein>**"
         f"{_place_rule}. The pose key is one of the keys listed after a place (or under "
         f"'Anywhere here'), copied exactly; the part after the colon is the detail (what a "
-        f"bystander would see), and may be left out. Use the character's language; match "
-        f"exact names from the lists in your system prompt.\n"
+        f"bystander would see), and may be left out. {_pose_note}Use the character's "
+        f"language; match exact names from the lists in your system prompt.\n"
         f"Also emit the plan/task marker the character forgot (only if the RP text carries "
         f"no [INTENT: ...] line): the person the character talks to gave them a task — an "
         f"errand, a promise, something to do later — or the character took on an ongoing "
@@ -570,7 +594,8 @@ def build_chat_context(
         try:
             tool_system_content = _build_rp_tool_system(
                 character_name, agent_tools, tool_format, tool_model_name,
-                partner_name=(speaker if speaker != "user" else ""))
+                partner_name=(speaker if speaker != "user" else ""),
+                in_person=(medium == "in_person"))
         except Exception as _e:
             logger.debug("tool_system_content build failed: %s", _e)
         for _t in agent_tools:
@@ -668,17 +693,24 @@ def execute_tool_matches(ctx: Dict[str, Any], responder: str,
         # answer (a skill's execute may contain LLM calls for the prompt
         # build); the skills enqueue into the task queue themselves.
         _tools_dict = ctx["tools_dict"]
+        _speaker = ctx.get("speaker") or ""
 
         def _run_deferred(matches=_deferred_matches, rp=rp_text,
-                          ui=incoming_message, who=responder):
+                          ui=incoming_message, who=responder, spk=_speaker):
+            from app.core.streaming import report_deferred_failure
             for _dname, _dinp in matches:
                 try:
-                    _tools_dict[_dname](_inject_rp_context(_dinp, rp, ui))
-                    logger.info("run_chat_turn[%s]: Deferred Tool ausgeführt → %s",
-                                who, _dname)
+                    _res = _tools_dict[_dname](_inject_rp_context(_dinp, rp, ui))
                 except Exception as _de:
-                    logger.error("run_chat_turn[%s]: Deferred Tool %s fehlgeschlagen: %s",
+                    logger.error("run_chat_turn[%s]: deferred tool %s raised: %s",
                                  who, _dname, _de)
+                    _res = f"Error: {_de}"
+                # A failure is an ANSWER here (the tools do not raise), so the
+                # result is read instead of discarded: warning + narrator line
+                # + notification to the avatar, see report_deferred_failure.
+                if not report_deferred_failure(who, _dname, _res, speaker=spk):
+                    logger.info("run_chat_turn[%s]: deferred tool ran → %s: %s",
+                                who, _dname, str(_res)[:100])
 
         import threading
         # bind_trace instead of copying the whole context: the
@@ -687,6 +719,45 @@ def execute_tool_matches(ctx: Dict[str, Any], responder: str,
         from app.core.turn_trace import bind_trace
         threading.Thread(target=bind_trace(_run_deferred),
                          daemon=True).start()
+
+
+# A signature shorter than this is a stock line ("Ja.", "Okay, gern.") that
+# may honestly come twice in a row — only a real sentence counts as a repeat.
+_REPEAT_MIN_SIGNATURE = 20
+
+
+def _repeats_own_last_line(responder: str, reply: str) -> bool:
+    """Whether ``reply`` repeats the responder's own last line in its room.
+
+    Compared by ``history_manager.fuzzy_signature`` (markers, whitespace and
+    punctuation do not count), and only for a signature of at least
+    ``_REPEAT_MIN_SIGNATURE`` characters. The own last line is read from the
+    responder's room stream (``perception_store.get_character_room_stream``,
+    display-only lines excluded by its default). Never raises: an unreadable
+    stream is "no repeat".
+    """
+    try:
+        from app.utils.history_manager import fuzzy_signature
+        sig = fuzzy_signature(reply)
+        if len(sig) < _REPEAT_MIN_SIGNATURE:
+            return False
+        from app.models import perception_store
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room)
+        loc = get_character_current_location(responder) or ""
+        room = get_character_current_room(responder) or ""
+        stream = perception_store.get_character_room_stream(responder, loc, room,
+                                                            limit=20)
+        for row in reversed(stream):
+            meta = row.get("meta") or {}
+            sp = (row.get("speaker") or meta.get("speaker") or "").strip()
+            content = (row.get("content") or "").strip()
+            if sp == responder and content:
+                return fuzzy_signature(content) == sig
+        return False
+    except Exception as e:  # noqa: BLE001 — a guard, never a failure
+        logger.debug("repeat check for %s failed: %s", responder, e)
+        return False
 
 
 def run_chat_turn(
@@ -897,6 +968,15 @@ def run_chat_turn(
         _probe = clean.strip().strip('"\'`*().!').strip().upper()
         if _probe == "SKIP" or (_probe.startswith("SKIP") and len(_probe) <= 12):
             logger.info("run_chat_turn: %s klinkt sich nicht ein (SKIP)", responder)
+            return ""
+        # Safety net (B6): an optional turn that comes back with what this
+        # character said last, word for word, is a repeat — not stored, no
+        # tool phase, no post-processing. The chime used to re-answer a line
+        # it had already answered; the history dedupe only guards the NEXT
+        # prompt, this guards the transcript itself.
+        if _repeats_own_last_line(responder, clean):
+            logger.info("run_chat_turn: %s repeats its own last line — dropped",
+                        responder)
             return ""
 
     # rp_first tool phase (feature parity): a second tool-LLM call spots the
@@ -1163,6 +1243,32 @@ def _announce_player_tasks(character_name: str, created: List[Dict[str, Any]],
         logger.debug("player task display line failed: %s", e)
 
 
+def run_follow_up(fn, *args, detach: bool = False) -> None:
+    """Start a post-processing follow-up (an LLM extraction) off the caller.
+
+    * On a thread with an event loop: the loop's executor, as always.
+      ``bind_trace`` carries the turn's trace id into the pool thread
+      (run_in_executor does not propagate the context, and a pooled thread
+      would otherwise keep whatever a previous job left there).
+    * Without one (a daemon or worker thread): inline — the respond lane's
+      follow-up thread relies on that order — unless ``detach``: then a
+      daemon thread, so a caller that runs the post-processing through
+      asyncio.to_thread (the thought turn) is not held by the LLM calls.
+    """
+    from app.core.turn_trace import bind_trace
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        loop.run_in_executor(None, bind_trace(fn), *args)
+    elif detach:
+        import threading
+        threading.Thread(target=bind_trace(fn), args=args, daemon=True).start()
+    else:
+        fn(*args)
+
+
 def post_process_response(
     owner_id: str,
     character_name: str,
@@ -1175,7 +1281,8 @@ def post_process_response(
     history_window: int = 0,
     old_history: list = None,
     extraction_context: Dict[str, Any] = None,
-    executed_tools: list = None) -> Dict[str, Any]:
+    executed_tools: list = None,
+    detach_background: bool = False) -> Dict[str, Any]:
     """
     Run all post-processing after a chat response: mood, location, activity,
     memory extraction, relationship updates, intent extraction.
@@ -1193,6 +1300,10 @@ def post_process_response(
         full_chat_history: Full chat history (before this exchange)
         history_window: DEPRECATED — ignored, kept for backward compat
         old_history: Messages older than short-term window (for summary)
+        detach_background: the caller runs this in a worker thread that must
+            not wait for the LLM extractions started here (a thought turn via
+            asyncio.to_thread) — they go to a daemon thread instead of running
+            inline. See ``run_follow_up``.
 
     Returns:
         Dict with extracted data: mood, location, activity (may be None)
@@ -1418,17 +1529,9 @@ def post_process_response(
             except Exception as rel_err:
                 logger.error("[%s] Relationship update error: %s", character_name, rel_err)
 
-    # Run background extraction in thread pool. bind_trace carries the turn's
-    # trace id into the pool thread (run_in_executor does not propagate the
-    # context, and a pooled thread would otherwise keep whatever a previous
-    # job left there) — this is where relationship_summary is called.
-    from app.core.turn_trace import bind_trace
-    try:
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, bind_trace(_background_extraction))
-    except RuntimeError:
-        # No event loop — run synchronously
-        _background_extraction()
+    # Background extraction (this is where relationship_summary is called),
+    # started the way the caller's thread allows — see run_follow_up.
+    run_follow_up(_background_extraction, detach=detach_background)
 
     # (Old intent_engine path removed — intents now run through the unified
     # [INTENT:] markers above, plan-intents-unified.md. That also removes the
@@ -1454,8 +1557,12 @@ def post_process_response(
         updated_history = list(full_chat_history)
         if not is_thought:
             updated_history.append({"role": "user", "content": user_input})
-        updated_history.append({"role": "assistant", "content": full_response})
-        _extract_context_from_last_chat(character_name, updated_history, agent_config)
+        # The CLEANED reply: the pose/outfit extraction judges the prose,
+        # never the character's own **I do …** / **I feel …** markers or
+        # tool lines (those are applied above, from full_response).
+        updated_history.append({"role": "assistant", "content": cleaned})
+        _extract_context_from_last_chat(character_name, updated_history, agent_config,
+                                        detach=detach_background)
     except Exception as e:
         logger.error("[%s] Context extraction error: %s", character_name, e)
 
@@ -1467,16 +1574,8 @@ def post_process_response(
         if old_messages is None and history_window and len(full_chat_history) > history_window:
             old_messages = full_chat_history[:-history_window]
         if old_messages:
-            try:
-                loop = asyncio.get_event_loop()
-                loop.run_in_executor(
-                    None, bind_trace(update_summary_background),
-                    character_name, old_messages, _extract_partner
-                )
-            except RuntimeError:
-                # No event loop (daemon/worker thread) — run synchronously
-                update_summary_background(character_name, old_messages,
-                                          _extract_partner)
+            run_follow_up(update_summary_background, character_name,
+                          old_messages, _extract_partner, detach=detach_background)
     except Exception as e:
         logger.error("[%s] History summary error: %s", character_name, e)
 

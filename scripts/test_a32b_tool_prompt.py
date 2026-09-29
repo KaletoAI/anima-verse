@@ -35,11 +35,34 @@ Expectations, derived by hand:
   8. In-person suppression: with suppress_move_in_conversation / medium
      "in_person" the SUPPRESS_IN_PERSON verb (SetLocation) leaves the mapping
      of BOTH paths — it would be discarded on execution anyway.
+     B3 (2026-09-29): the SAME holds for the SYSTEM part of the room path
+     (chat_engine._build_rp_tool_system, in_person=True): neither SetLocation
+     nor GoToCharacter (both SUPPRESS_IN_PERSON in the fixture) appears — not
+     in the tool list, not in "Available tools", not in a usage example line
+     (the real SkillManager.get_agent_usage_instructions with ``exclude``);
+     without in_person both are there.
+     B4 (2026-09-29): the respond decision prompt carries the streaming twin's
+     guard ("NEVER call a tool because of what the user said"), scoped to
+     TOOLS; the tool-decision system part (build_tool_instruction with
+     for_tool_decision=True) has no "Whenever the user asks" bullet, the
+     chat-model default still has it. The **I do** placeholder is third
+     person, and the current pose (stubbed "sitting: reads a letter") is
+     shown with the keep rule in BOTH decision prompts.
+  7b. Names instead of role words (B4): the image hint asks to name every
+     person ("name yourself and every other person in it by name") and keeps
+     the appearance as reference; the photographer hint names the subjects
+     ("by their NAME").
 """
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Throwaway storage BEFORE any app import: every world read below is stubbed,
+# but a stub that is missed must hit an empty temp world, never a real one.
+from app.core import paths  # noqa: E402
+paths.init(tempfile.mkdtemp(prefix="a32b_"))
 
 FAILS = []
 RESULTS = []
@@ -66,6 +89,10 @@ class _Skill:
         self.REMOTE_COMM = remote
         self.SUPPRESS_IN_PERSON = suppress_in_person
         self.PROGRESS_TYPE = progress_type
+        self.description = f"{name} does something"
+
+    def get_usage_instructions(self, format_name="", **kwargs):
+        return f"USAGE {self.name}: <tool name=\"{self.name}\">x</tool>"
 
 
 _SKILLS = [
@@ -79,6 +106,8 @@ _SKILLS = [
     _Skill("TalkTo", "Character speaks to someone present in the room", speech=True),
     _Skill("SendMessage", "Character writes a remote text message to another character",
            speech=True, remote=True),
+    _Skill("GoToCharacter", "Character walks over to another character",
+           suppress_in_person=True),
 ]
 
 
@@ -95,9 +124,30 @@ class _StubManager:
     def tool_names_with_flag(self, flag):
         return frozenset(s.name for s in _SKILLS if getattr(s, flag, False))
 
+    # The REAL filter of the skill manager, run over the fixture skills. The
+    # fixture list is handed to it through a separate holder: a
+    # _get_agent_skills on THIS stub would change what
+    # routes/chat._marker_travel_refusal answers in section 4.
+    def get_agent_usage_instructions(self, character_name, format_name="",
+                                     check_limits=True, exclude=frozenset()):
+        from app.skills.skill_manager import SkillManager
+
+        class _Holder:
+            def _get_agent_skills(self, name, check_limits=True):
+                return list(_SKILLS)
+
+        return SkillManager.get_agent_usage_instructions(
+            _Holder(), character_name, format_name, check_limits=check_limits,
+            exclude=exclude)
+
 
 import app.core.dependencies as deps  # noqa: E402
 deps.get_skill_manager = lambda: _StubManager()
+
+# The current pose is a world read — stubbed to a fixed value so both
+# decision prompts can be checked for it (B7).
+import app.core.streaming as _streaming_mod  # noqa: E402
+_streaming_mod.current_pose_text = lambda name: "sitting: reads a letter"
 
 from app.core.streaming import (StreamingAgent, action_mapping_lines)  # noqa: E402
 from app.core.chat_engine import _rp_tool_decision_input  # noqa: E402
@@ -228,13 +278,18 @@ _with_photo = build_tool_instruction("tag", [_T("TakePhoto"), _T("TalkTo")],
                                      appearance="red hair, green eyes")
 _without = build_tool_instruction("tag", [_T("TalkTo")], appearance="red hair, green eyes")
 check("appearance hint fires for the declared image tool (PROGRESS_TYPE 'image')",
-      "always include your appearance: red hair, green eyes" in _with_photo)
+      "your appearance for reference: red hair, green eyes" in _with_photo)
 check("appearance hint stays away without an image tool",
-      "always include your appearance" not in _without)
+      "your appearance for reference" not in _without)
 _photog = build_tool_instruction("tag", [_T("TakePhoto")], photographer_mode=True,
                                  user_appearance="tall, blond")
 check("photographer hint fires for the declared image tool",
       "You are a PHOTOGRAPHER" in _photog and "tall, blond" in _photog)
+
+print("\n7b) Image hints ask for NAMES, never role words")
+check("image hint: name yourself and every other person",
+      "name yourself and every other person in it by name" in _with_photo)
+check("photographer hint: subjects named", "by their NAME" in _photog)
 
 print("\n8) In-person turn drops the suppressed movement verb from the mapping")
 _ip_stream = streaming_prompt(LEADER, in_person=True)
@@ -252,6 +307,65 @@ check("streaming/in-person keeps the other 5 tools",
       all(f"→ {n}" in _ip_stream for n in
           ["ChangeOutfit", "TakePhoto", "JoinParty", "TalkTo", "SendMessage"]))
 check("not-in-person is unchanged", "→ SetLocation" in streaming_prompt(LEADER))
+
+# B3: the SYSTEM part of the room path, with every world read stubbed.
+import app.models.character as _mchar  # noqa: E402
+import app.models.character_template as _mtpl  # noqa: E402
+import app.models.world as _mworld  # noqa: E402
+import app.models.account as _macc  # noqa: E402
+import app.core.outfit_renderer as _outfit  # noqa: E402
+_mchar.get_character_appearance = lambda name: "red hair"
+_mchar.get_character_current_location = lambda name, **kw: ""
+_mchar.get_character_current_room = lambda name, **kw: ""
+_mchar.get_character_language_instruction = lambda name: ""
+_mtpl.is_roleplay_character = lambda name: True
+_mworld.list_locations_for_character = lambda name: []
+_macc.get_active_character = lambda: ""
+_outfit.render_outfit = lambda **kw: {"full": "a coat"}
+from app.core.chat_engine import _build_rp_tool_system  # noqa: E402
+
+_ALL_SPECS = [_T(sk.name) for sk in _SKILLS]
+_sys_ip = _build_rp_tool_system("demo_one", _ALL_SPECS, "tag", "", "",
+                                in_person=True)
+_sys_away = _build_rp_tool_system("demo_one", _ALL_SPECS, "tag", "", "",
+                                  in_person=False)
+for _mv in ("SetLocation", "GoToCharacter"):
+    check(f"system part in-person: no '{_mv}' anywhere", _mv not in _sys_ip)
+    check(f"system part in-person: no usage line of {_mv}",
+          f"USAGE {_mv}:" not in _sys_ip)
+    check(f"system part not in person: '{_mv}' listed with its usage line",
+          f"- {_mv}:" in _sys_away and f"USAGE {_mv}:" in _sys_away)
+check("system part in-person keeps the other tools + their usage lines",
+      all(f"- {n}:" in _sys_ip and f"USAGE {n}:" in _sys_ip for n in
+          ["ChangeOutfit", "TakePhoto", "JoinParty", "TalkTo", "SendMessage"]))
+
+# B4: the guard and the missing "user asks" bullet.
+_GUARD = "NEVER call a tool because of what the user said or asked for"
+check("respond decision carries the guard", _GUARD in _ip_chat_engine)
+check("respond decision scopes the guard to TOOLS",
+      "Base every TOOL call ONLY on what the CHARACTER actually did" in _ip_chat_engine)
+check("streaming decision keeps its guard", _GUARD in _ip_stream)
+_USER_ASKS = "Whenever the user asks for something"
+check("tool-decision system part has no 'user asks' bullet",
+      _USER_ASKS not in _sys_ip and _USER_ASKS not in _sys_away)
+check("build_tool_instruction(for_tool_decision=True) drops the bullet",
+      _USER_ASKS not in build_tool_instruction("tag", [_T("TakePhoto")],
+                                               for_tool_decision=True))
+check("the chat-model default keeps the bullet",
+      _USER_ASKS in build_tool_instruction("tag", [_T("TakePhoto")]))
+check("tool-decision instruction keeps the rest of the default",
+      "Only the tools listed under AVAILABLE TOOLS above exist" in
+      build_tool_instruction("tag", [_T("TakePhoto")], for_tool_decision=True))
+
+# B7: third-person placeholder + current pose with the keep rule.
+_PH = "<what a bystander sees, 2-6 words, third person — never I/my/ich/mein>"
+for _nm, _txt in (("chat_engine", _ip_chat_engine), ("streaming", _ip_stream)):
+    check(f"{_nm}: third-person **I do** placeholder", _PH in _txt)
+    check(f"{_nm}: old first-person placeholder gone",
+          "<what you do, 2-6 words>" not in _txt)
+    check(f"{_nm}: current pose shown", "Current pose: sitting: reads a letter." in _txt)
+    check(f"{_nm}: keep rule", "a glance, a gesture, looking at or holding "
+          "something, or thinking is NOT a new pose" in _txt)
 
 # ---------------------------------------------------------------------------
 # 9) The place rule follows the SERVER's rule, not the tool list alone

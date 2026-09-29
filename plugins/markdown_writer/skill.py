@@ -487,7 +487,7 @@ class MarkdownWriterSkill(PluginSkill):
         return ToolSpec(
             name=self.name,
             description=(
-                f"{self.description}. "
+                f"{self.description.rstrip('.')}. "
                 "Input JSON: {\"action\": \"write|append|list|read\", "
                 "\"folder\": \"<folder name>\", "
                 "\"filename\": \"<optional filename.md>\", "

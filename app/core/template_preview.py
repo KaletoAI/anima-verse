@@ -673,9 +673,11 @@ def _drive_extraction_chat_state(agent: str, avatar: str) -> PreviewResult:
     except Exception:
         pass
     from app.core.npc_actions import _solo_pose_keys
+    from app.core.streaming import current_pose_text
     sys, user = render_task("extraction_chat_state",
         target_name=agent,
         pose_keys=_solo_pose_keys(),
+        current_pose=current_pose_text(agent),
         piece_list=piece_list,
         source_label="Character reply",
         source_text=asst_msg,

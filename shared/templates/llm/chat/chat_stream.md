@@ -112,7 +112,7 @@ Only these. A place that is not listed is one you have never been told about, so
 {% endif %}
 {% if activity_marker_enabled %}
 
-Activity change: If the roleplay clearly changes your activity, add this line at the very end (BEFORE any location line): **I do <pose key>: <what you do, 2-6 words>**
+Activity change: If the roleplay clearly changes your activity, add this line at the very end (BEFORE any location line): **I do <pose key>: <what a bystander sees, 2-6 words, third person — never I/my/ich/mein>**
 The pose key is one of the keys listed after a place (or under "Anywhere here") in the scene state, copied exactly; the part after the colon is the detail (what a bystander would see), and may be left out. Never name a key marked *(with partner)* here — those are two-person actions and are started together via InteractWith, not by this marker.
 {% endif %}
 {% if intent_tracking_enabled %}
