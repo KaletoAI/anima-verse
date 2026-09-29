@@ -76,6 +76,44 @@ class GatewayRejectedError(RuntimeError):
     """
 
 
+class BackendFailedError(RuntimeError):
+    """A backend FAILED — a defect, not load and not a rejected input.
+
+    Raised by ``selection.BackendPool.run_on_backend`` in exactly the two
+    branches that put the backend into cooldown (an exception outside the
+    busy/4xx/config classes, and an empty result). It is the ONE signal the
+    image routing re-runs an occasion on (``routing.run_routed``) — the
+    backend's ``available`` flag is never read as a signal. ``str()`` keeps
+    the backend's own words: "<name>: <cause>"."""
+
+    def __init__(self, backend: Any, cause: BaseException):
+        self.backend = backend
+        self.backend_name = str(getattr(backend, "name", "") or backend)
+        self.cause = cause
+        super().__init__(f"{self.backend_name}: {cause}" if str(cause)
+                         else f"{self.backend_name}: {type(cause).__name__}")
+
+
+class GpuTaskTimeout(BackendBusyError):
+    """The GPU queue's watchdog outran the job budget. LOAD, not a defect
+    (the budget is the backend's own), so a ``BackendBusyError``: no
+    cooldown, and no re-run on another backend — the abandoned callable may
+    still hold its GPU slot.
+
+    Retrying it on the SAME backend without a cooldown is existing and
+    intended behaviour: whoever retries a ``BackendBusyError`` (the
+    persistent task queue re-running a failed task within its
+    ``max_retries``, the improvements engine keeping its step pending) never
+    cools the backend down first, so the retry lands on the same healthy
+    backend. Do not "fix" a watchdog timeout into a defect — a
+    cooldown here walks a busy GPU's whole pool into cooldown."""
+
+
+class GpuTaskCancelled(Exception):
+    """A user cancelled the GPU task (queue panel). Neither load nor defect:
+    no cooldown, no retry, no re-run on another backend."""
+
+
 # --- Gateway status semantics (shared by every gateway-facing backend) -------
 #
 # The LLM gateway answers 503 in TWO meanings, told apart by one header:

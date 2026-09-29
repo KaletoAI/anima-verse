@@ -583,13 +583,16 @@ class ProviderQueue:
                 self._pending_tasks.remove(task)
 
         if task.status == "cancelled":
-            raise Exception(f"GPU task cancelled: {task.task_id}")
+            # Typed at the queue boundary: a user's cancel must neither cool
+            # the backend down nor re-run the render elsewhere (image routing).
+            from app.imagegen.base import GpuTaskCancelled
+            raise GpuTaskCancelled(f"GPU task cancelled: {task.task_id}")
         if task.status == "failed":
             # Re-raise the worker's original exception when we have it — the
             # type matters to callers (imagegen's fallback engine distinguishes
-            # BackendBusyError = load from real defects). Queue-level failures
-            # (watchdog timeout) have no original exception and stay generic:
-            # a task that blows past the watchdog is treated as broken.
+            # BackendBusyError = load from real defects). The watchdog timeout
+            # stores its own typed exception (GpuTaskTimeout, i.e. load); only
+            # a failure without any exception object stays generic.
             _orig = task._exception
             if _orig is not None:
                 raise _orig
@@ -1515,11 +1518,12 @@ class ProviderQueue:
                         # it measures is the backend's own (HTTP timeout, or
                         # max_queue_wait + max_wait for a polling backend), so
                         # overrunning it means the GPU is still working. Typed
-                        # as BackendBusyError it survives the queue boundary
-                        # and the runner retries WITHOUT a cooldown, instead
-                        # of taking a healthy backend out for 5 minutes.
-                        from app.imagegen.base import BackendBusyError
-                        task._exception = BackendBusyError(
+                        # as GpuTaskTimeout (a BackendBusyError) it survives
+                        # the queue boundary and the runner retries WITHOUT a
+                        # cooldown, instead of taking a healthy backend out
+                        # for 5 minutes.
+                        from app.imagegen.base import GpuTaskTimeout
+                        task._exception = GpuTaskTimeout(
                             f"{self._queue_name}: no result within {task_timeout}s")
                         logger.error("[%s] GPU-Task Timeout: %s nach %ds",
                                      self._queue_name, task.task_id, task_timeout)

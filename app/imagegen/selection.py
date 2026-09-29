@@ -12,7 +12,8 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
 from app.core.provider_queue import TooManyJobsError
-from app.imagegen.base import (BackendBusyError, GatewayRejectedError,
+from app.imagegen.base import (BackendBusyError, BackendFailedError,
+                               GatewayRejectedError, GpuTaskCancelled,
                                ImageBackend, MediaGenerationDisabled)
 
 logger = get_logger("image_gen")
@@ -338,7 +339,12 @@ class BackendPool:
           backend instead of retrying the same one.
         - MediaGenerationDisabled = the world's media master switch is off:
           the backend was never asked. No cooldown, re-raised typed.
-        - Other exceptions / empty result: cooldown + raise.
+        - GpuTaskCancelled = the user cancelled the job in the queue panel:
+          no cooldown, re-raised. (The queue watchdog's GpuTaskTimeout is a
+          BackendBusyError and takes the busy branch.)
+        - Other exceptions / empty result: cooldown +
+          ``BackendFailedError(backend, cause)`` — the signal
+          ``routing.run_routed`` re-runs on.
 
         op(backend) -> List[bytes] | [] | None
         Returns (result, backend) on success; ``character_name`` is kept
@@ -355,8 +361,8 @@ class BackendPool:
             # Busy is not broken: a timeout / 429 / 503 / gateway queue wait
             # says the GPU is working. No cooldown, no other backend — the
             # typed exception survives to the retry layer.
-            logger.warning("Backend-Runner: %s ausgelastet — kein Cooldown, "
-                           "kein Backend-Wechsel", backend.name)
+            logger.warning("Backend-Runner: %s busy — no cooldown, "
+                           "no backend switch", backend.name)
             raise
         except TooManyJobsError:
             # The user asked for more parallel jobs than he may have. Nothing
@@ -364,6 +370,13 @@ class BackendPool:
             # and stays in the pool. Typed re-raise: it IS the 429 answer.
             logger.warning("Backend-Runner: %s — per-user job limit reached, "
                            "no cooldown", backend.name)
+            raise
+        except GpuTaskCancelled:
+            # The user cancelled this job in the queue panel — not the
+            # backend's fault and not load either: no cooldown, re-raised typed
+            # so neither a retry nor the image routing starts it elsewhere.
+            logger.info("Backend-Runner: %s — task cancelled by the user, "
+                        "no cooldown", backend.name)
             raise
         except _no_channel_error() as e:
             # A backend without a queue channel is a backend the config
@@ -390,17 +403,19 @@ class BackendPool:
                 # the mesh we uploaded: service reachable, request broken — the
                 # backend must stay in the pool.
                 logger.warning(
-                    "Backend-Runner: %s warf Payload-Fehler (%s: %s) — "
-                    "Backend bleibt verfuegbar", backend.name,
+                    "Backend-Runner: %s raised a payload error (%s: %s) — "
+                    "backend stays available", backend.name,
                     type(e).__name__, _err_str[:200])
-            else:
-                logger.warning(
-                    "Backend-Runner: %s warf Exception (%s: %s) — Cooldown",
-                    backend.name, type(e).__name__, _err_str[:200])
-                backend.mark_unhealthy(
-                    f"generate failed: {type(e).__name__}: {_err_str[:120]}",
-                    _BACKEND_COOLDOWN_SECONDS)
-            raise
+                raise
+            logger.warning(
+                "Backend-Runner: %s raised an exception (%s: %s) — cooldown",
+                backend.name, type(e).__name__, _err_str[:200])
+            backend.mark_unhealthy(
+                f"generate failed: {type(e).__name__}: {_err_str[:120]}",
+                _BACKEND_COOLDOWN_SECONDS)
+            # A defect: typed, carrying the backend — the ONE signal the image
+            # routing re-runs an occasion on (routing.run_routed).
+            raise BackendFailedError(backend, e) from e
 
         if result:
             return result, backend
@@ -408,8 +423,8 @@ class BackendPool:
         # Empty result = failure (busy raises BackendBusyError instead).
         backend.mark_unhealthy("generate returned empty result",
                                _BACKEND_COOLDOWN_SECONDS)
-        raise RuntimeError(
-            f"Backend {backend.name} lieferte keine Bilder (leeres Ergebnis)")
+        raise BackendFailedError(backend, RuntimeError(
+            "returned no images (empty result)"))
 
     def _wait_for_backend(self, character_name, has_input_image: bool = False):
         """Picks an available backend for this agent.

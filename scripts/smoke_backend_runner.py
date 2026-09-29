@@ -10,7 +10,7 @@ Usage:  ./.venv/bin/python scripts/smoke_backend_runner.py
 
 THE RULE, and where it was dead code
 ---------------------------------------------------------------------------
-``run_on_backend`` (app/imagegen/selection.py) documents six outcomes:
+``run_on_backend`` (app/imagegen/selection.py) documents eight outcomes:
 
   - ``BackendBusyError``  = load, not a defect -> NO cooldown, re-raised
     typed so the queue boundary retries it.
@@ -23,8 +23,17 @@ THE RULE, and where it was dead code
     without a URL) -> no cooldown, re-raised typed so it is skipped.
   - ``TooManyJobsError`` = the submitter's own per-user job quota -> no
     cooldown, re-raised typed (429).
-  - every other exception -> ``mark_unhealthy(..., 300s)``, re-raised.
-  - empty result -> ``mark_unhealthy(..., 300s)`` + ``RuntimeError``.
+  - ``GpuTaskCancelled`` = a user cancelled the GPU task in the queue panel
+    -> no cooldown, re-raised typed (neither load nor defect).
+  - ``GpuTaskTimeout`` = the queue watchdog outran the job budget; it IS a
+    ``BackendBusyError`` (load) and takes the busy branch.
+  - every other exception -> ``mark_unhealthy(..., 300s)`` +
+    ``BackendFailedError(backend, cause)``.
+  - empty result -> ``mark_unhealthy(..., 300s)`` + ``BackendFailedError``.
+
+``BackendFailedError`` is a RuntimeError subclass since the image routing;
+the backend travels with it, and it is the ONE signal the image routing
+re-runs an occasion on (``routing.run_routed``).
 
 Until 2026-09-11 the 4xx branch could never fire for the gateway backend:
 ``openai_diffusion._generate`` caught ``RuntimeError`` — exactly the type
@@ -38,14 +47,20 @@ Hand-derived expectations
 ---------------------------------------------------------------------------
   [1] op raises ``RuntimeError("... (HTTP 400): bad")``  -> RuntimeError out,
       mark_unhealthy called 0x, ``available`` still True.
-  [2] op raises ``RuntimeError("... HTTP 500: boom")``   -> RuntimeError out,
+  [2] op raises ``RuntimeError("... HTTP 500: boom")``   -> BackendFailedError out
+      (a RuntimeError subclass carrying the backend — the ONE signal the
+      image routing re-runs an occasion on),
       mark_unhealthy called 1x  (500 is no 4xx match).
   [3] op raises ``BackendBusyError("busy")``             -> BackendBusyError
       out (same type, not wrapped), mark_unhealthy 0x.
-  [4] op returns ``[]``                                  -> RuntimeError out,
+  [4] op returns ``[]``                                  -> BackendFailedError out
+      (a RuntimeError subclass carrying the backend — the ONE signal the
+      image routing re-runs an occasion on),
       mark_unhealthy 1x.
   [4b] op raises ``RuntimeError("... (HTTP 402): no credit")`` -> cooldown,
-      mark_unhealthy 1x — the deliberate exception to [1].
+      mark_unhealthy 1x, BackendFailedError out (a RuntimeError subclass
+      carrying the backend — the ONE signal the image routing re-runs an
+      occasion on) — the deliberate exception to [1].
   [4d] op raises ``TooManyJobsError`` (the SUBMITTER is already at
       ``server.max_inflight_jobs_per_user``, so ``submit_gpu_task`` refused
       before the job was queued): mark_unhealthy 0x, ``available`` still
@@ -60,6 +75,15 @@ Hand-derived expectations
       backend. Before 2026-09-21 it fell into the generic branch and a merely
       DISABLED backend was put on a 300 s cooldown — which then outlived
       re-enabling it in the admin UI.
+  [4e] op raises GpuTaskCancelled (the user cancelled the GPU task in the queue
+       panel) -> GpuTaskCancelled out, mark_unhealthy 0x, still available.
+       Before: a plain Exception into the generic branch -> 300 s cooldown.
+  [4f] op raises GpuTaskTimeout (the queue watchdog) -> GpuTaskTimeout out
+       (a BackendBusyError: load), mark_unhealthy 0x.
+  [4g] the [2] case once more on a backend named "fake": the
+       ``BackendFailedError`` carries ``backend_name == "fake"``, keeps the
+       original exception as ``cause`` (text "HTTP 500: boom"), and its
+       ``str()`` is "<name>: <cause>" = "fake: HTTP 500: boom".
   [5] ``OpenAIDiffusionBackend._generate`` with a ``_post_gateway`` that
       raises the 400 RuntimeError must RAISE it. Before the fix: ``[]``.
       Checked for the generations path AND the edits/inpaint path, because
@@ -106,7 +130,8 @@ paths.init(_scratch("backend-runner-storage-"))
 
 from app.core.provider_manager import NoBackendChannelError  # noqa: E402
 from app.core.provider_queue import TooManyJobsError  # noqa: E402
-from app.imagegen.base import BackendBusyError, ImageBackend  # noqa: E402
+from app.imagegen.base import (BackendBusyError, BackendFailedError,  # noqa: E402
+                               GpuTaskCancelled, GpuTaskTimeout, ImageBackend)
 from app.imagegen import selection as selection_mod  # noqa: E402
 from app.imagegen.selection import BackendPool  # noqa: E402
 from app.imagegen.backends.openai_diffusion import OpenAIDiffusionBackend  # noqa: E402
@@ -167,17 +192,17 @@ run_case("400", _raiser(RuntimeError("fake: Request error (HTTP 400): bad")),
 
 print("[2] 5xx — a real outage cools the backend down")
 run_case("500", _raiser(RuntimeError("fake: HTTP 500: boom")),
-         "RuntimeError", 1, False)
+         "BackendFailedError", 1, False)
 
 print("[3] busy is not broken")
 run_case("busy", _raiser(BackendBusyError("busy")), "BackendBusyError", 0, True)
 
 print("[4] empty result counts as a failure")
-run_case("empty", lambda b: [], "RuntimeError", 1, False)
+run_case("empty", lambda b: [], "BackendFailedError", 1, False)
 
 print("[4b] 402 quota stays a cooldown (decision E3)")
 run_case("402", _raiser(RuntimeError("fake: Quota/credit limit reached (HTTP 402): x")),
-         "RuntimeError", 1, False)
+         "BackendFailedError", 1, False)
 
 print("[4c] a backend without a queue channel is disabled, not broken")
 run_case("no-channel",
@@ -190,6 +215,29 @@ run_case("too-many-jobs", _raiser(TooManyJobsError(4, 4, "generation job")),
          "TooManyJobsError", 0, True)
 check("too-many-jobs: the 429 reaches the caller",
       TooManyJobsError(4, 4, "generation job").status_code, 429)
+
+print("[4e] a user cancel is neither load nor defect")
+run_case("cancelled", _raiser(GpuTaskCancelled("GPU task cancelled: t1")),
+         "GpuTaskCancelled", 0, True)
+
+print("[4f] a watchdog timeout is load")
+run_case("watchdog", _raiser(GpuTaskTimeout("S: no result within 1s")),
+         "GpuTaskTimeout", 0, True)
+
+print("[4g] the failure carries its backend")
+_fk = _Fake()
+_failed = None
+try:
+    BackendPool([_fk], lambda n: {}).run_on_backend(
+        _fk, op=_raiser(RuntimeError("HTTP 500: boom")))
+except BackendFailedError as e:
+    _failed = e
+check("raised BackendFailedError", _failed is not None, True)
+if _failed is not None:
+    check("backend_name", _failed.backend_name, "fake")
+    check("backend object", _failed.backend is _fk, True)
+    check("cause kept", str(_failed.cause), "HTTP 500: boom")
+    check("text", str(_failed), "fake: HTTP 500: boom")
 
 print("[5] openai_diffusion hands the HTTP error on instead of swallowing it")
 for label, method, kwargs in (

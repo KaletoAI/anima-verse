@@ -82,8 +82,12 @@ The expectations, derived by hand
        not sit in the executor's shutdown waiting for the very callable it
        just declared dead (measured: < 1.6 s; the reviewer measured the old
        code returning only when the callable ended).
-    b) What it raises is ``BackendBusyError`` — busy is not broken: the
+    b) What it raises is ``GpuTaskTimeout`` — a ``BackendBusyError``
+       subclass, because busy is not broken: the
        watchdog measures the backend's own budget, so overrunning it is load.
+       Its own name keeps it apart from a backend's busy answer, so the
+       image routing can tell "watchdog" from "defect" and never re-runs
+       the render elsewhere (the abandoned callable still holds the slot).
        Typed, it survives the queue boundary and ``run_on_backend`` retries
        without a cooldown (that classification is checked in
        scripts/smoke_backend_runner.py [3]). Before: a bare ``Exception``,
@@ -101,7 +105,7 @@ The expectations, derived by hand
     ends; a daemon reaper gives the slot back, bounded by one more watchdog
     budget. Two runs on a one-slot channel with the watchdog at 0.5 s:
     a) callable A needs 0.8 s. It is abandoned at ~0.5 s (the submitter hears
-       BackendBusyError then, measured < 0.7 s), and task B, submitted
+       GpuTaskTimeout then, measured < 0.7 s), and task B, submitted
        immediately, must NOT start before A's callable has RETURNED: recorded
        enter/exit stamps, B.enter >= A.exit. The remaining 0.3 s of A are
        inside the reaper's 0.5-s bound, so nothing is written off.
@@ -130,6 +134,14 @@ The expectations, derived by hand
     c) The legitimate fallback stays: a caller that passes no provider_name
        and only a gpu_type still lands on the enabled backend's channel and
        its callable runs.
+
+[6] a cancelled GPU task reaches the submitter typed as GpuTaskCancelled —
+    neither load nor a defect, so no cooldown and no re-run on another
+    backend. On a one-slot channel X1 (0.6 s) occupies the slot, X2 waits
+    as "pending" (found by its label, which ``_submit_gpu_task`` stores as
+    ``LLMTask.model``); ``cancel_task(X2)`` wakes its submitter, which must
+    hear ``GpuTaskCancelled``. Before: a bare ``Exception("GPU task
+    cancelled: …")``, which ``run_on_backend`` answered with a 300-s cooldown.
 
 Exit code 0 = all checks passed, 1 = at least one failed.
 """
@@ -171,7 +183,7 @@ from app.core.provider_manager import (  # noqa: E402
     NoBackendChannelError, ProviderManager,
 )
 from app.core.provider_queue import ProviderQueue  # noqa: E402
-from app.imagegen.base import BackendBusyError  # noqa: E402
+from app.imagegen.base import BackendBusyError, GpuTaskCancelled, GpuTaskTimeout  # noqa: E402
 from app.utils import llm_logger, llm_stats  # noqa: E402
 
 # Keep the JSONL log out of the repo's logs/ directory and both DB users out
@@ -328,7 +340,8 @@ elapsed = time.monotonic() - t0
 check("a) the caller hears about it at the watchdog, not at the callable's end",
       elapsed < 1.6, True)
 check("b) and hears it as load, not as a defect",
-      type(raised).__name__, BackendBusyError.__name__)
+      type(raised).__name__, GpuTaskTimeout.__name__)
+check("b) and it is still a BackendBusyError (load)", isinstance(raised, BackendBusyError), True)
 
 # The race, made deterministic: the future IS done when the timeout is raised.
 _real_wait = pq_mod._wait_for_future
@@ -406,7 +419,7 @@ t_a, box_a = run_in_thread(ABANDON, stamped("A", 0.8), "A")
 t_a.join(timeout=5)
 a_elapsed = time.monotonic() - t_a0
 check("a) the submitter is freed at the watchdog",
-      (box_a.get("error"), a_elapsed < 0.7), (BackendBusyError.__name__, True))
+      (box_a.get("error"), a_elapsed < 0.7), (GpuTaskTimeout.__name__, True))
 
 t_b, box_b = run_in_thread(ABANDON, stamped("B", 0.05), "B")
 t_b.join(timeout=10)
@@ -419,7 +432,7 @@ check("a) and it did NOT start before the abandoned callable returned",
 t_c, box_c = run_in_thread(ABANDON, stamped("C", 3.0), "C")
 t_c.join(timeout=5)
 check("b) the submitter is freed at the watchdog again",
-      box_c.get("error"), BackendBusyError.__name__)
+      box_c.get("error"), GpuTaskTimeout.__name__)
 
 t_d, box_d = run_in_thread(ABANDON, stamped("D", 0.05), "D")
 t_d.join(timeout=10)
@@ -448,7 +461,7 @@ TWO = ProviderQueue(TWO_PROVIDER, queue_name="T", max_concurrent=2,
 t_e0, box_e0 = run_in_thread(TWO, stamped("E0", 1.6), "E0")
 t_e0.join(timeout=5)
 check("the long callable was abandoned", box_e0.get("error"),
-      BackendBusyError.__name__)
+      GpuTaskTimeout.__name__)
 
 t_e, box_e = run_in_thread(TWO, stamped("E", 0.2), "E")
 t_f, box_f = run_in_thread(TWO, stamped("F", 0.05), "F")
@@ -507,6 +520,27 @@ result = BACKENDS.submit_gpu_task("", "image_gen", Priority.IMAGE_GEN,
                                   gpu_type="a1111")
 check("c) a gpu_type-only caller still routes by type", ran, ["Alpha"])
 check("c) and gets its result", result, [b"img"])
+
+# ── [6] a user's cancel is typed at the queue boundary ─────────────────────
+print("\n[6] a cancelled GPU task is typed")
+CANCEL_PROVIDER = stub_provider("X", timeout=30)
+CANCEL = ProviderQueue(CANCEL_PROVIDER, queue_name="X", max_concurrent=1,
+                       chat_pause_enabled=False, serialize_group="")
+t_block, _box_block = run_in_thread(CANCEL, stamped("X1", 0.6), "X1")
+t_wait, box_wait = run_in_thread(CANCEL, stamped("X2", 0.05), "X2")
+_deadline = time.monotonic() + 3
+_pending_id = None
+while time.monotonic() < _deadline and _pending_id is None:
+    with CANCEL._lock:
+        _pending_id = next((t.task_id for t in CANCEL._pending_tasks
+                            if t.model == "X2" and t.status == "pending"), None)
+    time.sleep(0.02)
+check("a) the second task is pending", _pending_id is not None, True)
+CANCEL.cancel_task(_pending_id)
+t_wait.join(timeout=5)
+t_block.join(timeout=5)
+check("b) its submitter hears GpuTaskCancelled", box_wait.get("error"),
+      GpuTaskCancelled.__name__)
 
 print(f"\n{'FAILED: ' + str(len(FAILED)) if FAILED else 'all checks passed'}")
 sys.exit(1 if FAILED else 0)
