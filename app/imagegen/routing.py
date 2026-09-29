@@ -478,7 +478,15 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
     the media master switch, a per-user quota or a missing channel — those
     propagate unchanged. An EMPTY chain (position None) is never re-run: the
     cheapest pick has no fallback by design. A chain with nothing usable left
-    raises ``NoRouteError`` (chained to the last failure).
+    raises ``NoRouteError`` (chained to the last failure). Only a failure
+    of the ROUTED backend re-runs (``e.backend_name`` compared by name); a
+    ``BackendFailedError`` of any other backend raised inside ``render``
+    propagates unchanged and excludes nothing.
+
+    A re-run that lands on another backend of the SAME glob entry is not a
+    fallback (``route_meta`` writes no ``fallback_from``): no earlier chain
+    entry was skipped (coordinator decision 2). Only a re-run that moves
+    past the intended entry is marked.
 
     Returns ``(render result, the Route that produced it)``."""
     from app.imagegen.base import BackendFailedError
@@ -489,9 +497,14 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
         try:
             result = render(route.backend)
         except BackendFailedError as e:
-            if route.position is None or len(failed) >= MAX_REENTRIES:
+            # Only a failure of the ROUTED backend re-runs: a helper step
+            # inside ``render`` that fails on another backend says nothing
+            # about this one — re-running would render the healthy routed
+            # backend again and exclude a backend that is not in the chain.
+            if (route.position is None or len(failed) >= MAX_REENTRIES
+                    or (e.backend_name or "") != route.backend.name):
                 raise
-            failed.append(e.backend_name or route.backend.name)
+            failed.append(route.backend.name)
             logger.warning("Image routing %s: %s failed (%s) — re-running the "
                            "occasion on the next chain entry (%d/%d)",
                            occasion, failed[-1], e.cause, len(failed), MAX_REENTRIES)

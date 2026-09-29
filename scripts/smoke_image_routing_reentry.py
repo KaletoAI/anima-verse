@@ -42,8 +42,14 @@ EXPECTED (by hand):
 12. no rules at all (empty chain) and the only live backends are dead1
     (cost 1) and cloud (9): cheapest = dead1 -> BackendFailedError out, NO
     re-run (position None), calls [dead1].
-13. rules ["dead1", "ok1"]: render receives the backend OBJECT of each try
-    (it builds the prompt for exactly that one): names [dead1, ok1].
+13. a NESTED failure: rules ["ok1", "ok2"]; render on ok1 runs a helper step
+    that fails with BackendFailedError for backend "helper" (not in the
+    chain). The failure is not the routed backend's (e.backend_name "helper"
+    != route.backend.name "ok1") -> no re-run: calls ["ok1"], the
+    BackendFailedError (backend_name "helper") propagates, ok1 and ok2 are
+    not cooled down (nothing ran through run_on_backend's failure branch)
+    and ok2 is never asked. (The code at 58672d18 trusted e.backend: it
+    excluded "helper" and re-rendered ok1 -> calls ["ok1", "ok1", "ok1"].)
 14. is_character_match("photo", "someone", "Flux Big") with the character's
     own spec "Flux*" -> True; "Qwen A" -> False; no character spec -> False.
 """
@@ -133,10 +139,16 @@ routing._character_spec = lambda occ_def, character: (
     CHAR_SPEC["value"] if character and occ_def.get("character_scoped") else "")
 
 
-def run(rules, names=None):
+POOLS = []
+
+
+def run(rules, names=None, nested_failure=None):
+    """``nested_failure``: a backend name — render raises a BackendFailedError
+    for THAT backend (a failing helper step) instead of rendering."""
     names = names or sorted({n for n in rules} | {"cloud"})
     backends = [Fake(n, cost=9 if n == "cloud" else 1) for n in names]
     pool = BackendPool(backends, agent_instances_provider=lambda n: {})
+    POOLS.append(pool)
     RULES.clear()
     if rules:
         RULES["photo"] = list(rules)
@@ -144,6 +156,9 @@ def run(rules, names=None):
 
     def render(backend):
         calls.append(backend.name)
+        if nested_failure:
+            raise BackendFailedError(Fake(nested_failure),
+                                     RuntimeError("HTTP 500: helper gone"))
         result, _used = pool.run_on_backend(backend, op=lambda b: behaviour(b.name))
         return result
 
@@ -184,8 +199,10 @@ _o, _r, err, calls = run([], names=["dead1", "cloud"])
 check("12 empty chain: no re-run", (type(err).__name__, calls),
       ("BackendFailedError", ["dead1"]))
 
-_o, _r, err, calls = run(["dead1", "ok1"])
-check("13 render gets each backend", calls, ["dead1", "ok1"])
+_o, _r, err, calls = run(["ok1", "ok2"], nested_failure="helper")
+check("13 nested failure: no re-run", (type(err).__name__, getattr(err, "backend_name", None), calls),
+      ("BackendFailedError", "helper", ["ok1"]))
+check("13 nothing cooled", sorted(b.name for b in POOLS[-1].backends if b.in_cooldown()), [])
 
 CHAR_SPEC["value"] = "Flux*"
 check("14 character match", routing.is_character_match("photo", "someone", "Flux Big"), True)
