@@ -39,9 +39,15 @@
  *     timevariant} -> {root_ok:true, unknown:['mesh_low'],
  *     malformed:['video','timevariant']} ('Vid' is a string, not a list;
  *     [.., 3] has a non-string member; [] is a well-formed empty list), and S
- *     is deep-equal to its copy afterwards. irSurvey(undefined) -> root_ok
- *     true, nothing listed (no routing yet); irSurvey(['Flux*']) and
- *     irSurvey('x') -> root_ok false (not an object).
+ *     is deep-equal to its copy afterwards. irSurvey(undefined) and
+ *     irSurvey(null) -> loaded false, root_ok true, nothing listed: every
+ *     config load seeds `routing` (even as {}), so an absent one was not
+ *     loaded in this tab; irSurvey(['Flux*']) and irSurvey('x') -> loaded
+ *     true, root_ok false (present, not an object).
+ * 7b. irEditable (A-2): only a plain object takes an edit — {} and
+ *     {photo:[]} true; undefined, null, ['Flux*'], 'x' false. An absent
+ *     routing must NOT become a fresh object: its first Save would replace
+ *     every stored chain with the one just edited.
  *     irEntryNotes(['Flux*',' ','flux*','Qwen*','workflow:flux*']) ->
  *     {1:'empty', 2:'duplicate', 4:'duplicate'}: index 1 is blank after the
  *     trim, 2 equals 0 case-insensitively, 4 equals 0 after the prefix strip.
@@ -78,7 +84,7 @@ if (a < 0 || b < 0 || b < a) { console.error('FAIL: markers not found'); process
 const sb = {}; vm.createContext(sb);
 vm.runInContext(src.slice(a + BEGIN.length, b) + '\n;' +
   ['irChain','irAdd','irRemove','irMove','irSet','irNormSpec','irGlobToRegex','irMatches',
-   'irFits','irVerdict','irWellFormed','irSurvey','irEntryNotes'].map(n => `this.${n} = ${n};`).join(''), sb);
+   'irFits','irVerdict','irWellFormed','irSurvey','irEntryNotes','irEditable'].map(n => `this.${n} = ${n};`).join(''), sb);
 let fails = 0;
 const eq = (x, y) => JSON.stringify(x) === JSON.stringify(y);
 const check = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fails++; };
@@ -128,11 +134,16 @@ check(sb.irVerdict(O.photo, 'Nope', B) === 'no_match', '6. no match');
 const S = { photo: ['Flux*', ' ', 'flux*', 'Qwen*'], mesh_low: ['x'], item: [], video: 'Vid', timevariant: ['Flux*', 3] };
 const S0 = JSON.parse(JSON.stringify(S));
 const sv = sb.irSurvey(S, new Set(['photo', 'item', 'video', 'timevariant']));
-check(eq(sv, { root_ok: true, unknown: ['mesh_low'], malformed: ['video', 'timevariant'] }), '7. survey lists unknown + malformed');
+check(eq(sv, { loaded: true, root_ok: true, unknown: ['mesh_low'], malformed: ['video', 'timevariant'] }), '7. survey lists unknown + malformed');
 check(eq(S, S0), '7. survey does not mutate the stored routing');
-check(eq(sb.irSurvey(undefined, new Set()), { root_ok: true, unknown: [], malformed: [] }), '7. no routing yet');
-check(sb.irSurvey(['Flux*'], new Set()).root_ok === false && sb.irSurvey('x', new Set()).root_ok === false,
-      '7. a non-object routing is flagged');
+check(eq(sb.irSurvey(undefined, new Set()), { loaded: false, root_ok: true, unknown: [], malformed: [] })
+      && eq(sb.irSurvey(null, new Set()), { loaded: false, root_ok: true, unknown: [], malformed: [] }),
+      '7. an absent routing is "not loaded"');
+check(['x', ['Flux*']].every(r => { const o = sb.irSurvey(r, new Set()); return o.loaded === true && o.root_ok === false; }),
+      '7. a present non-object routing is flagged');
+check(sb.irEditable({}) && sb.irEditable({ photo: [] })
+      && ![undefined, null, ['Flux*'], 'x'].some(r => sb.irEditable(r)),
+      '7b. only a plain object takes an edit');
 check(eq(sb.irEntryNotes(['Flux*', ' ', 'flux*', 'Qwen*', 'workflow:flux*']), { 1: 'empty', 2: 'duplicate', 4: 'duplicate' }),
       '7. entry notes: empty + duplicates, shown not removed');
 check(sb.irWellFormed(['a']) && sb.irWellFormed([]) && !sb.irWellFormed('a') && !sb.irWellFormed(['a', null]),

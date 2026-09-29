@@ -1089,9 +1089,16 @@ def settings_image_routing_backends(user=Depends(require_admin)):
 @router.get("/settings/image-routing/effective")
 def settings_image_routing_effective(character: str = "", user=Depends(require_admin)):
     """What each occasion would render on RIGHT NOW (saved config, cached
-    availability, cooldowns; optionally for one character). Never probes."""
+    availability, cooldowns; optionally for one character). Never probes.
+
+    ``media_generation_enabled`` rides along: with the world's master switch
+    off every render is refused at the one hand-off, whatever a chain
+    resolves to — the Overview says so instead of looking healthy."""
     from app.imagegen import routing as _routing
-    return _routing.explain_image_routing(character=(character or "").strip())
+    from app.imagegen import base as _base
+    out = _routing.explain_image_routing(character=(character or "").strip())
+    out["media_generation_enabled"] = bool(_base.media_generation_enabled())
+    return out
 
 
 @router.post("/settings/model-capabilities/lookup")

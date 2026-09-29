@@ -32,7 +32,10 @@ Expected, by hand:
      (OpenAIVideoBackend.DEFAULT_REF_SLOT_COUNT)
  R1 settings_image_routing_occasions() -> 19 rows
  R2 settings_image_routing_effective(character="x") hands the character to
-    explain_image_routing (patched) and returns its result unchanged
+    explain_image_routing (patched) and returns its result plus
+    "media_generation_enabled" = base.media_generation_enabled() (patched to
+    True -> True; to False -> False: with the world's master switch off the
+    Overview shows a banner that nothing renders)
  R3 settings_save calls _validate_image_routing (source check)
 
 settings_save end to end (config.get_all / save / env flatten / reloads
@@ -156,12 +159,20 @@ def fake_explain(character="", pool=None):
     return {"character": character, "occasions": []}
 
 
+from app.imagegen import base as _img_base  # noqa: E402
 _real_explain = routing.explain_image_routing
+_real_media_on = _img_base.media_generation_enabled
 routing.explain_image_routing = fake_explain
+_img_base.media_generation_enabled = lambda: True
 check("R2 effective", adm.settings_image_routing_effective(character=" x ", user=None),
-      {"character": "x", "occasions": []})
+      {"character": "x", "occasions": [], "media_generation_enabled": True})
 check("R2 character passed", SEEN.get("character"), "x")
+_img_base.media_generation_enabled = lambda: False
+check("R2 media switch off",
+      adm.settings_image_routing_effective(character="", user=None).get("media_generation_enabled"),
+      False)
 routing.explain_image_routing = _real_explain
+_img_base.media_generation_enabled = _real_media_on
 check("R3 save wiring", "_validate_image_routing(" in inspect.getsource(adm.settings_save), True)
 
 

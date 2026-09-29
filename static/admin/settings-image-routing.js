@@ -139,15 +139,25 @@ function irWellFormed(chain) {
     return Array.isArray(chain) && chain.every(s => typeof s === 'string');
 }
 
+// The routing can take an edit only when it is a plain object that came with
+// the loaded config. Every config load seeds `routing` (config.py
+// _migrate_image_routing, even as {}), so an ABSENT routing means this tab
+// did not load it — a fresh object there would, on the first Save, replace
+// every stored chain with the one just edited.
+function irEditable(routing) {
+    return !!routing && typeof routing === 'object' && !Array.isArray(routing);
+}
+
 // Read-only survey of the STORED routing. It never mutates: loading the page
 // must not turn an untouched chain into an edited one — the save refuses an
 // EDITED invalid chain (HTTP 400) but only warns about an unchanged one.
-//   root_ok    false when the routing is not a plain object (absent = {})
+//   loaded     false when the routing is absent (undefined/null) — see irEditable
+//   root_ok    false when it is present but not a plain object
 //   unknown    keys that are not catalog occasions, in key order
 //   malformed  catalog occasions whose chain is not a list of strings
 function irSurvey(routing, knownIds) {
-    const out = { root_ok: true, unknown: [], malformed: [] };
-    if (routing === undefined || routing === null) return out;
+    const out = { loaded: true, root_ok: true, unknown: [], malformed: [] };
+    if (routing === undefined || routing === null) { out.loaded = false; return out; }
     if (typeof routing !== 'object' || Array.isArray(routing)) { out.root_ok = false; return out; }
     for (const occ of Object.keys(routing)) {
         if (!knownIds.has(occ)) out.unknown.push(occ);
@@ -187,6 +197,7 @@ const IR_TEXT = {
     entryEmpty: 'empty entry — ignored', entryDuplicate: 'listed twice — ignored, remove one',
     malformed: 'The stored chain is not a list of patterns and is ignored: {raw}. Remove it to edit this occasion.',
     removeChain: 'Remove chain',
+    notLoaded: 'Routing is not loaded — reload the page.',
     rootMalformed: 'The stored routing is not an object {occasion: [pattern, …]} and is ignored: {raw}.',
     rootReset: 'Replace with an empty routing',
     unknownTitle: 'Chains for unknown occasions',
@@ -195,6 +206,7 @@ const IR_TEXT = {
     saveRefused: 'The last Save was refused — nothing was saved. Fix the chain below and save again:',
     saveWarnings: 'The last Save succeeded with warnings:',
     catalogFailed: 'Could not load the occasion catalog.',
+    ovMediaOff: 'Media generation is switched off for this world — nothing renders, whatever the chain resolves to.',
     ovBanner: 'Shows the SAVED configuration as the server resolves it right now — unsaved changes are not included. Nothing is probed.',
     ovTie: 'When several usable backends of a chain entry cost the same, a render rotates between them and may use another one than shown here.',
     ovCharacter: 'For character:', ovNoCharacter: '— no character —', refresh: 'Refresh', loading: 'Loading…',
@@ -233,12 +245,19 @@ function irStored() {
     return (ig && typeof ig === 'object') ? ig.routing : undefined;
 }
 
-// The routing object for an EDIT — created on the first edit only.
+// The routing object for an EDIT, or null when it cannot take one (absent
+// or malformed — irEditable). Never creates or replaces the object.
 function irRouting() {
-    if (!CONFIG.image_generation || typeof CONFIG.image_generation !== 'object') CONFIG.image_generation = {};
-    const ig = CONFIG.image_generation;
-    if (!ig.routing || typeof ig.routing !== 'object' || Array.isArray(ig.routing)) ig.routing = {};
-    return ig.routing;
+    const r = irStored();
+    return irEditable(r) ? r : null;
+}
+
+// Edit handlers call this first: null means "refused" (toast + re-render,
+// which shows why).
+function irRoutingForEdit() {
+    const r = irRouting();
+    if (!r) { toast(IR_TEXT.notLoaded, 'error'); irRerender(); }
+    return r;
 }
 
 async function irLoadCatalog() {
@@ -321,6 +340,13 @@ function renderImageRoutingRules(content) {
     html += irSaveNoticeHtml();
     if (IR_OCCASIONS === null) {
         html += '<div class="rt-err">' + esc(IR_TEXT.catalogFailed) + '</div></div>';
+        content.innerHTML = html;
+        return;
+    }
+
+    if (!survey.loaded) {
+        html += '<div class="rt-card problem" style="margin-bottom:12px;"><div class="rt-err">'
+             + esc(IR_TEXT.notLoaded) + '</div></div></div>';
         content.innerHTML = html;
         return;
     }
@@ -415,7 +441,9 @@ function irChainHtml(o, chain) {
 function irAddFromInput(occ) {
     const el = document.getElementById('ir-new-' + occ);
     if (!el) return;
-    if (!irAdd(irRouting(), occ, el.value)) {
+    const r = irRoutingForEdit();
+    if (!r) return;
+    if (!irAdd(r, occ, el.value)) {
         if (irNormSpec(el.value)) toast(IR_TEXT.duplicate, 'error');
         return;
     }
@@ -423,25 +451,38 @@ function irAddFromInput(occ) {
 }
 
 function irSetEntry(occ, idx, value) {
-    if (!irSet(irRouting(), occ, idx, value)) toast(IR_TEXT.duplicate, 'error');
+    const r = irRoutingForEdit();
+    if (!r) return;
+    if (!irSet(r, occ, idx, value)) toast(IR_TEXT.duplicate, 'error');
     irRerender();
 }
 
 function irMoveEntry(occ, idx, delta) {
-    if (irMove(irRouting(), occ, idx, delta)) irRerender();
+    const r = irRoutingForEdit();
+    if (r && irMove(r, occ, idx, delta)) irRerender();
 }
 
 function irRemoveEntry(occ, idx) {
-    if (irRemove(irRouting(), occ, idx)) irRerender();
+    const r = irRoutingForEdit();
+    if (r && irRemove(r, occ, idx)) irRerender();
 }
 
 function irDropOccasion(occ) {
-    delete irRouting()[occ];
+    const r = irRoutingForEdit();
+    if (!r) return;
+    delete r[occ];
     irRerender();
 }
 
+// Only offered for a PRESENT but malformed routing (loaded, not an object).
 function irResetRouting() {
-    CONFIG.image_generation.routing = {};
+    const ig = CONFIG.image_generation;
+    if (!ig || typeof ig !== 'object' || ig.routing === undefined || ig.routing === null) {
+        toast(IR_TEXT.notLoaded, 'error');
+        irRerender();
+        return;
+    }
+    ig.routing = {};
     irRerender();
 }
 
@@ -486,6 +527,12 @@ function irOverviewRefresh() {
 
 function irOverviewBody(data) {
     let html = '';
+    // The world's master switch (image_generation.enabled) gates every render
+    // at the one hand-off — the chains below still resolve, nothing runs.
+    if (data.media_generation_enabled === false) {
+        html += '<div class="rt-card problem" style="margin-bottom:8px;"><div class="rt-err">'
+              + esc(IR_TEXT.ovMediaOff) + '</div></div>';
+    }
     for (const o of (data.occasions || [])) {
         html += '<div class="rt-card" style="margin-bottom:4px;">';
         html += '<div style="font-size:12px; color:#58a6ff; font-weight:600;">' + esc(o.label) + ' ' + irMediaBadge(o)
