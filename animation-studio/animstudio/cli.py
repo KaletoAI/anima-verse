@@ -31,8 +31,26 @@ def main(argv=None) -> int:
     p.add_argument("--replace", action="store_true", help="overwrite an OWN earlier studio clip")
     p.add_argument("--no-commit", action="store_true")
     p.add_argument("--trailer", default="", help="commit trailer lines (see the repo CLAUDE.md, Git)")
+    p = sub.add_parser("list", help="existing clip kinds and pose keys (optional filter)")
+    p.add_argument("text", nargs="?", default="")
     args = ap.parse_args(argv)
     try:
+        if args.cmd == "list":
+            from app.core.animation_clips import clip_entries
+            from app.core.pose_catalog import get_catalog
+            q = args.text.strip().lower()
+            kinds = sorted({(e["kind"], e["source"]) for e in clip_entries()})
+            print("clips:")
+            for k, src in kinds:
+                if q in k:
+                    print(f"  {k:<28} {src}")
+            print("poses:")
+            for key, e in sorted(get_catalog("pose").items()):
+                hay = " ".join([key, e.get("animation", "")] + e.get("synonyms", []))
+                if q in hay:
+                    syn = ", ".join(e.get("synonyms", [])[:4])
+                    print(f"  {key:<24} -> {e.get('animation', ''):<22} [{e.get('group', '')}] {syn}")
+            return 0
         if args.cmd == "build":
             from animstudio.build import build
             r = build(args.kind)

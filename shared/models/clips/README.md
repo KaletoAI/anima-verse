@@ -187,3 +187,12 @@ lines; copy the pattern from `scripts/smoke_scene_recipe.py`.
 A clip is not character data: the same `walk.fbx` drives every figure that
 carries the project's rig. Keeping it world-independent means one upload, every
 world, every client.
+
+## Procedural clips (animation studio)
+
+Clips whose sidecar says `"source": {"format": "procedural", "author":
+"animation-studio", …}` were written as code in `animation-studio/anims/<kind>.py`
+and built by `animation-studio` (`python -m animstudio build|publish`). They are
+original work of this project — no mocap, no bought pack — and as redistributable
+as the rest of this folder. The source file is the clip's real master: change the
+source and publish again with `--replace`, never edit the FBX.
