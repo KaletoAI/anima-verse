@@ -21,8 +21,6 @@ approval flow here. The animation vocabulary is NOT hardcoded either: it is
 whatever clips the world currently ships.
 """
 import json
-import os
-import tempfile
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List
 
@@ -60,15 +58,18 @@ def _catalog_txn(axis: str) -> Iterator[None]:
     cache, and without the lock two new entries can each pass the check for an
     alias only one of them may own.
 
-    Keyed by the catalog FILE PATH, so the ``pose`` and the ``expression``
-    axis do not wait for each other. Blocking — these are rare admin clicks,
-    and a dropped edit would have to be retyped.
+    Keyed by the AXIS, so the ``pose`` and the ``expression`` axis do not
+    wait for each other. Blocking — these are rare admin clicks, and a
+    dropped edit would have to be retyped.
     """
     from app.core.keyed_lock import keyed_lock
     # Keyed on the AXIS, not on one store: an entry can move between the
-    # tracked catalog and the world layer, and that touches both.
+    # tracked catalog and the world layer, and that touches both. The file
+    # lock serializes against writers OUTSIDE this process (the animation
+    # studio's publish) — same read -> alias check -> write section.
     with keyed_lock("pose_catalog", axis):
-        yield
+        with pose_catalog.catalog_file_lock(axis):
+            yield
 
 
 def _read(axis: str, store: str = "shared") -> Dict[str, Any]:
@@ -119,37 +120,13 @@ def _after_write() -> None:
 
 def _write(axis: str, data: Dict[str, Any], store: str = "shared") -> None:
     """Write ONE store back as a whole: the world layer's entries in one
-    transaction, or the shared file ATOMICALLY — temp file in the same
-    directory, then rename.
-
-    The old in-place ``open(path, "w")`` truncated the catalog before writing
-    it: a crash, a full disk or a reader arriving mid-write saw a truncated or
-    empty document — and this file is the render key of every pose and
-    expression, so an empty one takes the whole world's poses with it.
-    ``os.replace`` is atomic within one filesystem, which is why the temp file
-    is created in the catalog's OWN directory. Its permissions are carried
-    over from the file being replaced — ``mkstemp`` creates 0600, and the
-    catalog is a tracked repo file whose mode must not change under an edit.
-    """
+    transaction, or the shared file atomically
+    (``pose_catalog.write_shared_document``)."""
     if store == "world":
         pose_catalog.replace_world_entries(axis, data.get("entries") or {})
         _after_write()
         return
-    path = pose_catalog.catalog_path(axis)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".json.tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.chmod(tmp, mode)
-        os.replace(tmp, str(path))
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    pose_catalog.write_shared_document(axis, data)
     _after_write()
 
 

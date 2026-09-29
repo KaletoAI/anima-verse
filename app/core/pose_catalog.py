@@ -5,11 +5,13 @@ cached and 3D animation clips are resolved. Free text never reaches a
 render path; it survives only as sanitized "flavor" prompt text.
 """
 import json
+import os
 import re
 import threading
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -38,6 +40,15 @@ _FALLBACK_DEFAULT = {"pose": "standing", "expression": "neutral"}
 _lock = threading.Lock()
 _cache: Dict[str, Dict[str, dict]] = {}
 _groups_cache: Dict[str, dict] = {}
+#: (st_mtime_ns, st_size) of each axis' shared file when its cache was
+#: filled — an edit from OUTSIDE the server (the animation studio's publish,
+#: a hand edit) is noticed on the next read instead of after a restart.
+_stamps: Dict[str, Optional[tuple]] = {}
+#: Bumped whenever a cache is dropped (file change or reload). The alias
+#: embedding warm-up runs outside ``_lock``; it only parks its vectors when
+#: the generation it started on is still current, so a map embedded from the
+#: OLD catalog never outlives the drop.
+_generation = 0
 
 
 #: Where an entry or a place type lives — the two layers of the catalog,
@@ -71,6 +82,86 @@ def catalog_path(axis: str) -> Path:
     from app.core.paths import get_shared_dir
     sub, name = _FILES[axis]
     return get_shared_dir() / "templates" / sub / name
+
+
+def _file_stamp(axis: str) -> Optional[tuple]:
+    try:
+        st = catalog_path(axis).stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _drop_if_changed(axis: str) -> None:
+    """Call with ``_lock`` held. One ``os.stat`` per read — microseconds.
+
+    Drops the merged catalog of the axis, every alias-embedding map of it
+    (``_embed_cache`` is keyed ``(axis, model id)``) and, for ``pose``, the
+    place types that live in the same file."""
+    global _generation
+    stamp = _file_stamp(axis)
+    previous = _stamps.get(axis, "unset")
+    if previous != stamp:
+        _cache.pop(axis, None)
+        for key in [k for k in _embed_cache if k[0] == axis]:
+            del _embed_cache[key]
+        if axis == "pose":
+            _groups_cache.clear()
+        _stamps[axis] = stamp
+        # Only a REAL change invalidates a warm-up in flight. The first read
+        # after start or after reload_catalogs() (no stamp yet) just records
+        # one — reload_catalogs() bumped the generation itself, and bumping
+        # here too would keep the warm-up right after it from caching.
+        if previous != "unset":
+            _generation += 1
+
+
+@contextmanager
+def catalog_file_lock(axis: str) -> Iterator[None]:
+    """Exclusive advisory lock on the shared file of an axis, across
+    PROCESSES: the Poses tab (server) and the animation studio's publish
+    both read-modify-write the same file. A separate ``.lock`` file,
+    because the catalog itself is replaced atomically (``os.replace``)."""
+    import fcntl
+    path = catalog_path(axis)
+    lock = path.with_name(path.name + ".lock")
+    fd = os.open(str(lock), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def write_shared_document(axis: str, data: dict) -> None:
+    """Writes the shared catalog file ATOMICALLY: a temp file in the same
+    directory, then ``os.replace``.
+
+    An in-place ``open(path, "w")`` truncates the catalog before writing it:
+    a crash, a full disk or a reader arriving mid-write would see a truncated
+    or empty document — and this file is the render key of every pose and
+    expression. ``os.replace`` is atomic within one filesystem, which is why
+    the temp file is created in the catalog's OWN directory. The mode is
+    carried over from the file being replaced (``mkstemp`` creates 0600, the
+    catalog is a tracked file). Format: ``json.dump(..., ensure_ascii=False,
+    indent=2)``, no trailing newline. The caller drops the caches."""
+    import tempfile
+    path = catalog_path(axis)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".json.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, mode)
+        os.replace(tmp, str(path))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def legacy_overlay_path(axis: str) -> Path:
@@ -384,6 +475,7 @@ def _load_groups() -> Dict[str, dict]:
 def get_groups() -> Dict[str, dict]:
     """All place types, keyed by group id."""
     with _lock:
+        _drop_if_changed("pose")
         if not _groups_cache:
             _groups_cache.update(_load_groups())
         return dict(_groups_cache)
@@ -391,16 +483,20 @@ def get_groups() -> Dict[str, dict]:
 
 def get_catalog(axis: str) -> Dict[str, dict]:
     with _lock:
+        _drop_if_changed(axis)
         if axis not in _cache:
             _cache[axis] = _load(axis)
         return _cache[axis]
 
 
 def reload_catalogs() -> None:
+    global _generation
     with _lock:
         _cache.clear()
         _groups_cache.clear()
         _embed_cache.clear()
+        _stamps.clear()
+        _generation += 1
 
 
 def get_default_key(axis: str) -> str:
@@ -563,6 +659,10 @@ def _embed_model_key(embed_fn) -> str:
 def _alias_embeddings(axis: str, embed_fn) -> Dict[str, list]:
     # Resolve the aliases BEFORE taking _lock: _alias_index() -> get_catalog()
     # takes the same (non-reentrant) lock and would deadlock on itself.
+    # The generation is read BEFORE the aliases: a drop between the two reads
+    # then only costs one uncached lookup, never a stale cached map.
+    with _lock:
+        generation = _generation
     aliases = _alias_index(axis)
     key = (axis, _embed_model_key(embed_fn))
     with _lock:
@@ -582,6 +682,11 @@ def _alias_embeddings(axis: str, embed_fn) -> Dict[str, list]:
         # map — that would pin "no embeddings" until the next catalog reload.
         return vecs
     with _lock:
+        if generation != _generation:
+            # The catalog was dropped while this map was embedded (external
+            # file edit, reload): these aliases may be stale — hand them out
+            # once, cache nothing, the next lookup embeds the new catalog.
+            return vecs
         return _embed_cache.setdefault(key, vecs)
 
 
