@@ -81,6 +81,29 @@ Stage 9 - feet residual (ik_error_cm["<s>_foot"] = the largest ankle-to-
     stage 6 shows for the arm). Expected = the max of that over the 31
     frames (6.54 cm at 60 deg), +- 0.01 cm, per side - above the 3 cm the
     ik check allows.
+Stage 10 - keyed hand targets: with the left shoulder S at rest, the reach
+  R = L1 + L2, P0 = S + 0.8 R (0, 0, 1) and P1 = S + 0.8 R (0, -0.6, 0.8)
+  (both 80 % of the reach), keys (0, P0), (1, P1), duration 1 s: the target
+  is eased per component with smoothstep, u(0.5) = 0.5*0.5*(3 - 1) = 0.5, so
+  at frame 15 (t = 0.5) the hand head sits on (P0 + P1) / 2 within 0.01 cm;
+  that midpoint is 0.8 R |(0, -0.3, 0.9)| = 0.759 R from S, in reach, and
+  ik_error_cm["l_hand"] < 0.01 (the error is measured against the target of
+  each frame, not against a fixed point). Frames 0 and 30 sit on P0 and P1.
+  Loop variant, duration 2 s, same keys: the closing key repeats P0 at
+  t = 2, so frame 60 is on P0 and frame 45 (t = 1.5, u = 0.5 between P1 at
+  1 s and P0 at 2 s) on the midpoint again. validate rejects an empty key
+  list, non-increasing times, a time < 0 or > duration, a loop key at
+  t >= duration and a key whose point is not three numbers.
+Stage 11 - planted feet keep FRAME-0 world rotation: hips_drop 3 cm,
+  body_yaw keyed 0 -> 20 over 1 s, FeetPlanted. The yaw turns the pelvis
+  about the Hips head, so the hip joints (10 cm to the side) move ~3.4 cm
+  horizontally; with 3 cm of drop the leg (93.57 cm reach) still reaches the
+  anchor, so the ankle head is fixed (ik l_foot/r_foot < 0.01). The foot's
+  world rotation D[Foot] (and D[ToeBase]) stays the frame-0 one (1e-9); an
+  ankle that does not move and a foot that does not turn put the ToeBase
+  head on its frame-0 position in every frame (0.01 cm). Before the fix the
+  foot turned with the yaw: the ball, ~11 cm ahead of the ankle, orbited it
+  by 2 * 11 * sin(10 deg) ~ 3.8 cm.
 """
 import ast
 import math
@@ -299,6 +322,58 @@ for s_, S_ in (("l", "Left"), ("r", "Right")):
     got = c.ik_error_cm.get(f"{s_}_foot", 0.0)
     check(want > 3.0 and abs(got - want) < 0.01, f"stage 9 pitch {s_}_foot {got:.3f} vs {want:.3f}")
 print("OK stage 9" if not FAIL else "FAIL stage 9")
+
+# Stage 10 - keyed hand targets
+S = rest.head["LeftArm"]
+R = L1 + L2
+P0 = S + 0.8 * R * np.array([0.0, 0.0, 1.0])
+P1 = S + 0.8 * R * np.array([0.0, -0.6, 0.8])
+MID = (P0 + P1) / 2.0
+
+
+def keyed(dur, loop, keys=None):
+    keys = keys if keys is not None else ((0.0, tuple((P0 / 100).tolist())),
+                                           (1.0, tuple((P1 / 100).tolist())))
+    return Animation(kind="s", duration_s=dur, loop=loop, catalog=CAT,
+                     ik=[HandTarget("l", at=keys)])
+
+
+try:
+    c = compile_anim(keyed(1.0, False), rest)
+    check(near(c.frames[15].pos["LeftHand"], MID, 0.01), "stage 10 keyed midpoint")
+    check(near(c.frames[0].pos["LeftHand"], P0, 0.01), "stage 10 keyed P0")
+    check(near(c.frames[30].pos["LeftHand"], P1, 0.01), "stage 10 keyed P1")
+    check(c.ik_error_cm.get("l_hand", 99.0) < 0.01, f"stage 10 ik {c.ik_error_cm}")
+    c = compile_anim(keyed(2.0, True), rest)
+    check(near(c.frames[60].pos["LeftHand"], P0, 0.01), "stage 10 loop closes on P0")
+    check(near(c.frames[45].pos["LeftHand"], MID, 0.01), "stage 10 loop midpoint 1.5 s")
+except Exception as e:                                          # noqa: BLE001
+    FAIL.append(f"stage 10 keyed target crashed: {e!r}")
+P = (0.3, 1.2, 0.3)
+for keys, loop in (((), False), (((0.5, P), (0.5, P)), False), (((-0.1, P),), False),
+                   (((0.0, P), (2.5, P)), False), (((0.0, P), (2.0, P)), True),
+                   (((0.0, (0.3, 1.2)),), False)):
+    try:
+        validate(keyed(2.0, loop, keys))
+        FAIL.append(f"stage 10 validate accepted keys {keys} loop={loop}")
+    except StudioError:
+        pass
+print("OK stage 10" if not FAIL else "FAIL stage 10")
+
+# Stage 11 - planted feet keep the frame-0 world rotation
+c = compile_anim(Animation(kind="s", duration_s=1.0, loop=False, catalog=CAT,
+                           base=Pose(hips_drop_cm=3),
+                           keys=[Key(0.0, Pose(body_yaw=0)), Key(1.0, Pose(body_yaw=20))],
+                           ik=[FeetPlanted()]), rest)
+for s_, S_ in (("l", "Left"), ("r", "Right")):
+    check(c.ik_error_cm.get(f"{s_}_foot", 99.0) < 0.01, f"stage 11 {s_}_foot ik")
+    f0 = c.frames[0]
+    worst = max(float(np.linalg.norm(f.pos[f"{S_}ToeBase"] - f0.pos[f"{S_}ToeBase"]))
+                for f in c.frames)
+    check(worst < 0.01, f"stage 11 {S_}ToeBase moves {worst:.3f} cm")
+    for b in (f"{S_}Foot", f"{S_}ToeBase"):
+        check(all(near(f.D[b], f0.D[b], 1e-9) for f in c.frames), f"stage 11 {b} turns")
+print("OK stage 11" if not FAIL else "FAIL stage 11")
 
 print("FAIL:\n" + "\n".join(FAIL) if FAIL else "OK smoke_animstudio_compile")
 sys.exit(1 if FAIL else 0)

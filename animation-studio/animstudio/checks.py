@@ -10,7 +10,7 @@ import statistics
 from dataclasses import dataclass
 from typing import Dict, List
 
-from animstudio import rig
+from animstudio import StudioError, rig
 from animstudio.compile import Compiled
 from animstudio.dsl import Animation
 
@@ -41,8 +41,26 @@ def _dist(a, b) -> float:
     return math.dist(a, b)
 
 
+#: The joints the checks read in every frame (the loop seam reads all of
+#: frame 0's joints in the last frame as well).
+REQUIRED = ("Hips", "LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg",
+            "LeftFoot", "RightFoot", "LeftToeBase", "RightToeBase")
+
+
+def _require(frames: List[Dict]) -> None:
+    """A measurement without a joint the checks read is a named error."""
+    if not frames:
+        raise StudioError("measure: no frames")
+    need = set(REQUIRED) | set(frames[0])
+    for i, f in enumerate(frames):
+        missing = sorted(need - set(f))
+        if missing:
+            raise StudioError(f"measure: frame {i} lacks {', '.join(missing)}")
+
+
 def run_checks(anim: Animation, compiled: Compiled, measure: Dict) -> List[Check]:
     frames = measure["frames"]
+    _require(frames)
     out: List[Check] = []
     bad = [f"{d} {lo:.0f}..{hi:.0f}" for d, (lo, hi) in compiled.extrema.items()
            if d in rig.LIMITS and (lo < rig.LIMITS[d][0] - 1e-6 or hi > rig.LIMITS[d][1] + 1e-6)]

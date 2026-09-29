@@ -33,10 +33,14 @@ studio's out/ is redirected into a temp dir. Expectations by hand:
     and its action frame range equals [4]'s (the probe imports both the
     same way): _finish re-imports with anim_offset=0, the importer's default
     offset of 1 would re-export every key one frame late.
-[6] MEASURE: proc_clip writes measure.json next to the clip - for [1] 31
-    rows (one per frame) whose Hips head equals the probe's (+- 0.01 cm),
-    and build.json carries the checks (names include floor and tracks)
-    with ok == all(check ok).
+[6] MEASURE: proc_clip writes measure.json next to the clip, one row per
+    frame. The probe imports like _measure (scene fps 30, anim_offset 0),
+    so row i of both is clip frame i. A MOVING clip (l_arm_elev keyed
+    0 -> 90 linearly over 1 s: the hand swings ~ 55 cm * (pi/2) / 30 ~ 2.9
+    cm per frame, asserted > 1 cm so a one-frame shift cannot hide): its 31
+    measured rows equal the probe's row by row (LeftHand, LeftForeArm, Hips
+    within 0.01 cm). build.json carries the checks (names include floor and
+    tracks) with ok == all(check ok).
 """
 import json
 import os
@@ -65,7 +69,7 @@ if not runner.is_available():
 import numpy as np                                            # noqa: E402
 
 from animstudio import build as B                             # noqa: E402
-from animstudio.dsl import Animation, Catalog, Pose           # noqa: E402
+from animstudio.dsl import Animation, Catalog, Key, Pose      # noqa: E402
 from animstudio.rig import CORE_BONES, load_rest              # noqa: E402
 
 FAIL = []
@@ -76,7 +80,8 @@ PROBE = r'''
 import json, sys
 import bpy
 bpy.ops.wm.read_factory_settings(use_empty=True)
-bpy.ops.import_scene.fbx(filepath=sys.argv[-2], global_scale=1.0)
+bpy.context.scene.render.fps = 30
+bpy.ops.import_scene.fbx(filepath=sys.argv[-2], global_scale=1.0, use_anim=True, anim_offset=0.0)
 arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
 act = arm.animation_data.action
 quats = []
@@ -118,16 +123,27 @@ try:
     hy = [row["Hips"][1] for row in p["rows"]]
     if max(abs(y - hips_exp) for y in hy) > 0.01:
         FAIL.append(f"[1] hips y {min(hy):.4f}..{max(hy):.4f}, expected {hips_exp:.4f}")
-    # [6] measure
-    meas = json.loads((animstudio.OUT / "smoke-rest" / "measure.json").read_text())
-    if len(meas["frames"]) != 31:
-        FAIL.append(f"[6] measure has {len(meas['frames'])} rows, expected 31")
-    elif max(abs(a - b) for m_, q_ in zip(meas["frames"], p["rows"])
-             for a, b in zip(m_["Hips"], q_["Hips"])) > 0.01:
-        FAIL.append("[6] measured Hips differ from the probe")
     names = {c["name"] for c in r["checks"]}
     if not {"floor", "tracks"} <= names or r["ok"] != all(c["ok"] for c in r["checks"]):
         FAIL.append(f"[6] report checks {sorted(names)} ok={r['ok']}")
+    # [6] measure, row by row on a moving clip
+    rm = B.build("smoke-move", anim=Animation(
+        kind="smoke-move", duration_s=1.0, loop=False, catalog=CAT,
+        keys=[Key(0.0, Pose(l_arm_elev=0)), Key(1.0, Pose(l_arm_elev=90), ease="linear")]))
+    pm = probe(Path(rm["fbx"]))["rows"]
+    meas = json.loads((animstudio.OUT / "smoke-move" / "measure.json").read_text())["frames"]
+    step = min(float(np.linalg.norm(np.array(a["LeftHand"]) - np.array(b["LeftHand"])))
+               for a, b in zip(pm, pm[1:]))
+    if step <= 1.0:
+        FAIL.append(f"[6] moving clip: smallest hand step {step:.2f} cm, not > 1")
+    if len(meas) != 31 or len(pm) != 31:
+        FAIL.append(f"[6] measure {len(meas)} rows, probe {len(pm)}, expected 31")
+    else:
+        worst = max(abs(a - b) for m_, q_ in zip(meas, pm)
+                    for j in ("LeftHand", "LeftForeArm", "Hips")
+                    for a, b in zip(m_[j], q_[j]))
+        if worst > 0.01:
+            FAIL.append(f"[6] measure vs probe row by row: {worst:.3f} cm")
     side = json.loads(Path(r["sidecar"]).read_text())
     if abs(side["geometry"]["floor_shift_cm"] - round(-low, 2)) > 0.005:
         FAIL.append(f"[1] floor_shift_cm {side['geometry']['floor_shift_cm']} vs {round(-low, 2)}")

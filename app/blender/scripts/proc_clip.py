@@ -87,15 +87,16 @@ def _measure(fbx: str, out_dir: Path, fps: int) -> str:
     act = arm.animation_data.action
     tracks = {fc.data_path.split('"')[1] for fc in act.fcurves
               if fc.data_path.endswith("rotation_quaternion")}
+    missing = [s for s in MEASURED if arm.pose.bones.get(cmu_clip.PREFIX + s) is None]
+    if missing:
+        raise RuntimeError(f"measure: {Path(fbx).name} lacks the joints {', '.join(missing)}")
     f0, f1 = (int(round(v)) for v in act.frame_range)
     rows = []
     for f in range(f0, f1 + 1):
         bpy.context.scene.frame_set(f)
         row = {}
         for short in MEASURED:
-            pb = arm.pose.bones.get(cmu_clip.PREFIX + short)
-            if pb is not None:
-                row[short] = [float(v) for v in pb.head]
+            row[short] = [float(v) for v in arm.pose.bones[cmu_clip.PREFIX + short].head]
         rows.append(row)
     path = out_dir / "measure.json"
     path.write_text(json.dumps({"tracks": len(tracks), "frames": rows}), encoding="utf-8")

@@ -15,6 +15,8 @@ one check trips; the expectation is written next to it:
 - compiled ik error 5 cm                              -> ik fails
 - compiled loop_problems ["..."]                      -> loop_layers fails
 - compiled extrema l_elbow_flex (0, 170)              -> limits fails (170 > 150)
+- a measure whose frame 3 lacks LeftToeBase           -> StudioError naming
+  LeftToeBase and the frame (not a bare KeyError)
 """
 import sys
 from pathlib import Path
@@ -78,6 +80,19 @@ expect("lie", run_checks(anim("lie"), comp(), {"tracks": 22, "frames": lie}), []
 expect("ik", run_checks(anim(), comp(ik_error_cm={"l_hand": 5.0}), still), ["ik"])
 expect("loop_layers", run_checks(anim(), comp(loop_problems=["x"]), still), ["loop_layers"])
 expect("limits", run_checks(anim(), comp(extrema={"l_elbow_flex": (0.0, 170.0)}), still), ["limits"])
+
+from animstudio import StudioError                                    # noqa: E402
+
+gap = [frame() for _ in range(10)]
+del gap[3]["LeftToeBase"]
+try:
+    run_checks(anim(), comp(), {"tracks": 22, "frames": gap})
+    FAIL.append("missing joint: run_checks accepted it")
+except StudioError as e:
+    if "LeftToeBase" not in str(e) or "3" not in str(e):
+        FAIL.append(f"missing joint: message does not name it: {e}")
+except Exception as e:                                                # noqa: BLE001
+    FAIL.append(f"missing joint: {e!r} instead of StudioError")
 
 print("FAIL:\n" + "\n".join(FAIL) if FAIL else "OK smoke_animstudio_checks")
 sys.exit(1 if FAIL else 0)

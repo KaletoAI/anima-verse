@@ -7,7 +7,7 @@ is repeated at t = duration, so keys must lie in [0, duration).
 """
 import math
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from animstudio import StudioError
 from animstudio import rig
@@ -56,6 +56,9 @@ def Breath(amp: float = 1.0, period_s: float = 4.0) -> List[Oscillator]:
             Oscillator("r_clav_raise", amp * 0.5, period_s)]
 
 
+Point = Tuple[float, float, float]
+
+
 @dataclass(frozen=True)
 class HandTarget:
     """The hand's head (wrist) reaches ``at`` — metres in clip space (X the
@@ -64,9 +67,15 @@ class HandTarget:
     FADE_S (0.15 s) fade at each inner edge of the span. ``pole`` is the
     direction the elbow points (default down and back). ``validate`` keeps
     the span inside [0, duration], long enough for its fades and, on a
-    loop, touching both ends or neither."""
+    loop, touching both ends or neither.
+
+    ``at`` is either one point (x, y, z) or KEYS ``((t, (x, y, z)), ...)``:
+    times in seconds, strictly increasing, within [0, duration]; the point
+    is eased between keys per component with smoothstep (like DOF keys),
+    held before the first and after the last key. On a loop the first key
+    is repeated at t = duration (so keys must lie before it)."""
     side: str
-    at: Tuple[float, float, float]
+    at: Union[Point, Sequence[Tuple[float, Point]]]
     span: Optional[Tuple[float, float]] = None
     pole: Tuple[float, float, float] = (0.0, -1.0, -1.0)
 
@@ -75,7 +84,9 @@ class HandTarget:
 class FeetPlanted:
     """The ankles stay where frame 0 puts them in XZ, at the rest ankle
     height; the knees bend (forward) to make up for ``hips_drop_cm`` and
-    body motion. The foot keeps its world rotation."""
+    body motion. The foot (with its toes) keeps its FRAME-0 world rotation
+    for the whole clip — a planted foot does not turn with the body, and
+    ankle/toe DOFs keyed later have no effect on a planted side."""
     sides: Tuple[str, ...] = ("l", "r")
 
 
@@ -156,6 +167,8 @@ def validate(anim: Animation) -> None:
         span = getattr(goal, "span", None)
         if span is not None:
             _validate_span(anim, goal.side, span)
+        if hasattr(goal, "at"):
+            _validate_target(anim, goal.side, goal.at)
     for o in _layers(anim):
         if not _known(o.dof):
             raise StudioError(f"layer: unknown DOF {o.dof!r}")
@@ -179,6 +192,51 @@ def _validate_span(anim: Animation, side: str, span) -> None:
     if b - a < inner * FADE_S - 1e-9:
         raise StudioError(f"ik HandTarget {side}: span ({a:g}, {b:g}) is shorter than its "
                           f"{inner} fade(s) of {FADE_S}s - it never reaches full weight")
+
+
+def _is_point(v) -> bool:
+    return (isinstance(v, (tuple, list)) and len(v) == 3
+            and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in v))
+
+
+def _validate_target(anim: Animation, side: str, at) -> None:
+    """A point, or keys ``(t, point)`` with increasing times inside the clip."""
+    if _is_point(at):
+        return
+    where = f"ik HandTarget {side}"
+    if not isinstance(at, (tuple, list)) or not at:
+        raise StudioError(f"{where}: at must be a point (x, y, z) or a non-empty "
+                          "list of (t, (x, y, z)) keys")
+    last = None
+    for k in at:
+        if not (isinstance(k, (tuple, list)) and len(k) == 2
+                and isinstance(k[0], (int, float)) and _is_point(k[1])):
+            raise StudioError(f"{where}: key {k!r} is not (t, (x, y, z))")
+        t = float(k[0])
+        if last is not None and t <= last:
+            raise StudioError(f"{where}: key times must increase (at {t:g})")
+        if t < 0 or t > anim.duration_s or (anim.loop and t >= anim.duration_s):
+            raise StudioError(f"{where}: key at {t:g} outside [0, duration"
+                              f"{')' if anim.loop else ']'}")
+        last = t
+
+
+def target_at(anim: Animation, goal: "HandTarget", t: float) -> Point:
+    """The target point (metres) of ``goal`` at time ``t``."""
+    if _is_point(goal.at):
+        return tuple(float(c) for c in goal.at)
+    keys = [(float(kt), tuple(float(c) for c in kp)) for kt, kp in goal.at]
+    if anim.loop:
+        keys.append((anim.duration_s, keys[0][1]))
+    if t <= keys[0][0]:
+        return keys[0][1]
+    if t >= keys[-1][0]:
+        return keys[-1][1]
+    for (t0, p0), (t1, p1) in zip(keys, keys[1:]):
+        if t0 <= t <= t1:
+            u = EASES["in_out"]((t - t0) / (t1 - t0))
+            return tuple(a + (b - a) * u for a, b in zip(p0, p1))
+    return keys[-1][1]
 
 
 def _resolved_keys(anim: Animation) -> List[Tuple[float, Dict[str, float], str]]:

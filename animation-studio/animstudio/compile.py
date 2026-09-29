@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 from animstudio import rig
-from animstudio.dsl import FADE_S, Animation, _layers, validate, values_at
+from animstudio.dsl import FADE_S, Animation, _layers, target_at, validate, values_at
 import sys as _sys
 from animstudio import REPO
 
@@ -154,6 +154,7 @@ def compile_anim(anim: Animation, rest: rig.Rest) -> Compiled:
     extrema: Dict[str, Tuple[float, float]] = {}
     used = set()
     anchors: Dict[str, np.ndarray] = {}
+    foot_rot: Dict[str, Dict[str, np.ndarray]] = {}
     ik_err: Dict[str, float] = {}
     max_bend = 0.0
     for i in range(n + 1):
@@ -176,6 +177,14 @@ def compile_anim(anim: Animation, rest: rig.Rest) -> Compiled:
                     pole = pos[f"{S}Leg"] + D[f"{S}UpLeg"] @ np.array([0.0, 0.0, 30.0])
                     _chain_ik(rest, D, pos, f"{S}UpLeg", f"{S}Leg", f"{S}Foot",
                               anchors[S], pole, 1.0, keep_end=True)
+                    # The planted foot keeps its frame-0 world rotation: a
+                    # foot turning with the body swings the ball around the
+                    # fixed ankle.
+                    if i == 0:
+                        foot_rot[S] = {b: D[b].copy() for b in _subtree(rest, f"{S}Foot")}
+                    else:
+                        D.update({b: R.copy() for b, R in foot_rot[S].items()})
+                        _repose(rest, D, pos, f"{S}Foot")
                     # An anchor out of the leg's reach leaves the ankle short
                     # of it: that residual is what the ik check reads.
                     err = float(np.linalg.norm(pos[f"{S}Foot"] - anchors[S]))
@@ -186,7 +195,7 @@ def compile_anim(anim: Animation, rest: rig.Rest) -> Compiled:
                 w = _weight(goal.span, t, anim.duration_s)
                 if w <= 0.0:
                     continue
-                target = np.array(goal.at, float) * 100.0
+                target = np.array(target_at(anim, goal, t), float) * 100.0
                 pole_dir = np.array(goal.pole, float)
                 pole = pos[f"{S}Arm"] + 50.0 * pole_dir / (np.linalg.norm(pole_dir) or 1.0)
                 _chain_ik(rest, D, pos, f"{S}Arm", f"{S}ForeArm", f"{S}Hand",
