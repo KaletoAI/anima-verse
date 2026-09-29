@@ -17,10 +17,15 @@ What is checked here, all hand-derived, no snapshots:
      and everything else — bare glob, ``backend:`` spec, empty, non-string —
      comes back untouched, including surrounding whitespace.
   3. RED COUNTER-CHECK: the FIELD NAME ``workflow`` is alive and must survive.
-     It holds a backend glob (app/core/expression_regen.py reads
-     ``outfit_imagegen["workflow"]``) — only a ``workflow:`` prefix in the
-     VALUE is legacy. Checked against the consumer's source line AND on the
-     migrated profile, whose key must still be ``workflow``.
+     It holds a backend glob — only a ``workflow:`` prefix in the VALUE is
+     legacy. Its consumer is the image routing since R2a
+     (development_instructions/plan-image-routing.md, Task 11 moved it out
+     of app/core/expression_regen.py): ``routing._character_spec`` reads
+     ``outfit_imagegen[<char_spec_field>]`` of the occasion catalog, and the
+     catalog names ``workflow`` for the character occasions (``expression``,
+     ``profile``) and as the fallback of ``tpose``. Checked against the
+     catalog, the reader's source line AND the migrated profile, whose key
+     must still be ``workflow``.
   4. The config half of the migration (``config._rewrite_legacy_workflow_specs``)
      against a hand-built config dict: messaging_frame.target and the imagegen
      defaults are rewritten, living neighbours stay, the second run is a no-op.
@@ -144,9 +149,15 @@ def main():
     print("3) red counter-check: the FIELD NAME 'workflow' stays alive")
     eq("the bare field name is not a legacy spec",
        strip_legacy_workflow_prefix("workflow"), "workflow")
-    consumer = (REPO / "app/core/expression_regen.py").read_text(encoding="utf-8")
-    check('_char_override.get("workflow")' in consumer,
-          "expression_regen still reads outfit_imagegen['workflow'] (field name kept)")
+    from app.imagegen.occasions import get_occasion
+    for occ in ("expression", "profile"):
+        eq(f"the {occ} occasion reads outfit_imagegen['workflow'] (field name kept)",
+           get_occasion(occ).get("char_spec_field"), "workflow")
+    eq("the tpose occasion falls back to outfit_imagegen['workflow']",
+       get_occasion("tpose").get("char_spec_fallback"), "workflow")
+    consumer = (REPO / "app/imagegen/routing.py").read_text(encoding="utf-8")
+    check('.get("outfit_imagegen")' in consumer,
+          "the image routing reads the outfit_imagegen override")
     eq("the migration targets exactly that field",
        PROFILE_SPEC_FIELDS, (("outfit_imagegen", "workflow"),))
 

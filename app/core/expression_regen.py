@@ -865,7 +865,8 @@ def generate_expression_image(character_name: str,
                               override_height: Optional[int] = None,
                               apply_state_modifiers: bool = True,
                               back_view: bool = False,
-                              reference_image: Optional[Path] = None) -> Optional[Path]:
+                              reference_image: Optional[Path] = None,
+                              occasion: str = "") -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -898,6 +899,8 @@ def generate_expression_image(character_name: str,
     - ``reference_image`` replaces the profile image as the identity
       reference (the extra T-pose views slot the front render); it must lie
       in the character's model_refs directory (``checked_reference_override``).
+    - ``occasion``: the image routing occasion — empty = "tpose" for the
+      T-pose use cases, else "expression".
 
     Returns the path to the generated image, or None on failure.
     """
@@ -1029,35 +1032,22 @@ def generate_expression_image(character_name: str,
             outfit_prompt = f"{actor_label} {items_desc}"
 
     # Core image service (wave-6 split)
-    from app.imagegen.service import get_image_service, render_has_reference_image
+    from app.imagegen.service import get_image_service
     image_skill = get_image_service()
     if not image_skill.enabled:
         logger.warning("image service not available")
         return None
-    # A variant render pins the character's profile image as identity reference,
-    # so it prefers img2img — the SAME preference get_outfit_lora_options uses, so
-    # the LoRA list and this render resolve to the same backend.
-    _has_ref = reference_image is not None or render_has_reference_image(character_name)
 
-    # Read the per-character override early — allows render/model/LoRA
-    # overrides per character (configurable in the character editor).
+    # Read the per-character override early — allows model/LoRA overrides
+    # per character (configurable in the character editor). The render match
+    # itself (workflow / tpose_workflow) is read by the image routing.
     model_override = ""
     loras_override = None
-    char_render_override = ""
     try:
         from app.models.character import get_character_profile as _gcp
         _prof = _gcp(character_name) or {}
         _char_override = _prof.get("outfit_imagegen") or {}
         if isinstance(_char_override, dict):
-            # Legacy field name "workflow" — now a backend glob.
-            char_render_override = (_char_override.get("workflow") or "").strip()
-            # why: the T-pose reference renders feed the image->3D chain, so a
-            # character may route them to a pose-controlled alias of its own
-            # while every other render stays on the normal match. Empty = the
-            # normal render match.
-            _tpose_override = (_char_override.get("tpose_workflow") or "").strip()
-            if _tpose_override and image_use_case in TPOSE_USE_CASES:
-                char_render_override = _tpose_override
             m = (_char_override.get("model") or "").strip()
             l = _char_override.get("loras")
             if m:
@@ -1073,33 +1063,13 @@ def generate_expression_image(character_name: str,
                     and image_use_case in TPOSE_USE_CASES):
                 loras_override = _tpose_loras
     except Exception as _err:
-        logger.debug("Outfit-ImageGen-Override lesen fehlgeschlagen: %s", _err)
+        logger.debug("Reading the outfit imagegen override failed: %s", _err)
 
-    # Backend selection (backend-only; ComfyUI workflows removed):
-    # char override (backend glob) -> env default spec -> agent default.
-    backend = None
-    if char_render_override:
-        backend = image_skill.match_backend(char_render_override,
-                                            has_input_image=_has_ref)
-        if not backend:
-            logger.warning(
-                "Character render override '%s' matches no available backend",
-                char_render_override)
-    if not backend:
-        _expr_default = os.environ.get("EXPRESSION_IMAGEGEN_DEFAULT", "").strip()
-        if not _expr_default:
-            _expr_default = os.environ.get("OUTFIT_IMAGEGEN_DEFAULT", "").strip()
-        if _expr_default:
-            backend = image_skill.resolve_imagegen_target(_expr_default)
-    if not backend:
-        backend = image_skill._wait_for_backend(character_name,
-                                                has_input_image=_has_ref)
-    if not backend:
-        logger.warning("No backend available for the expression regen")
-        return None
-    backend_name = backend.name
-    logger.info("Expression regen: backend=%s (char override=%s)",
-                backend_name, "yes" if char_render_override else "no")
+    # The backend is resolved inside the image service by the image routing:
+    # the character's own match (tpose_workflow, else workflow, for the
+    # T-pose occasion) is position 0, then the occasion chain; a failed
+    # backend re-runs the render on the next entry.
+    _occasion = occasion or ("tpose" if image_use_case in TPOSE_USE_CASES else "expression")
 
     # Resolution from admin config (image_generation.outfit_image_width/height)
     # — expression variants use the same resolution as wardrobe outfit images.
@@ -1123,7 +1093,7 @@ def generate_expression_image(character_name: str,
         "set_profile": False,
         "skip_gallery": True,
         "auto_enhance": False,
-        "backend": backend_name,
+        "occasion": _occasion,
         "equipped_pieces_override": equipped_pieces or {},
         # Profile image as input_reference_image_1 (identity consistency).
         # profile_only prevents the self-reference loop via an already
@@ -1161,22 +1131,6 @@ def generate_expression_image(character_name: str,
 
     try:
         img_result = image_skill.generate_from_input(json.dumps(payload))
-
-        # Backend fallback on timeout: when the pinned backend is not
-        # available, drop the backend binding and re-run execute() with
-        # auto selection — the match/availability logic IS the fallback.
-        # model_override + loras are reset because a local model name /
-        # LoRAs are not valid on another backend.
-        if (isinstance(img_result, str)
-                and "No image generation backend is available" in img_result):
-            payload_fb = dict(payload)
-            payload_fb.pop("backend", None)
-            payload_fb.pop("model_override", None)
-            payload_fb.pop("loras", None)
-            logger.warning(
-                "Expression regen: backend '%s' offline — using auto backend",
-                backend_name)
-            img_result = image_skill.generate_from_input(json.dumps(payload_fb))
 
         # Extract filename from result
         match = re.search(r'/images/([^?)\n]+)', img_result)
@@ -1249,7 +1203,6 @@ def generate_expression_image(character_name: str,
             "seed": _gen_meta.get("seed", 0),
             "created_at": _gen_meta.get("created_at", ""),
             "duration_s": _gen_meta.get("duration_s", 0),
-            "workflow": _gen_meta.get("workflow", ""),
             # Free-text mood for the admin listing, the KEYS for every
             # machine-side comparison (find_nearest_expression).
             "mood": mood,
@@ -1261,6 +1214,11 @@ def generate_expression_image(character_name: str,
             "equipped_items": equipped_items or [],
             "state_fingerprint": _state_fp,
         }
+        # The routing record of the render — a fallback variant stays
+        # recognisable (plan-image-routing.md, meta at every writer).
+        for _rk in ("routing", "fallback_from"):
+            if _gen_meta.get(_rk):
+                _expr_meta[_rk] = _gen_meta[_rk]
         try:
             _meta_path = final_path.with_suffix(".json")
             _meta_path.write_text(json.dumps(_expr_meta, ensure_ascii=False, indent=2), encoding="utf-8")

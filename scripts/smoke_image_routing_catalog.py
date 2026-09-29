@@ -69,8 +69,9 @@ B3. The caller files are exactly EXPECTED_STRING_CALLERS (a new caller must
       app/core/story_engine.py            photo      (story beat image)
       app/routes/story.py                 photo      (visualised scene)
       app/skills/video_generation_skill.py photo     (the video's still)
-    Until Task 11 the three character-image callers (PENDING_TASK_11) are
-    left out of the scan; Task 11 moves them into the expected set.
+      app/core/character_ops.py           profile    (portrait, editor route)
+      app/core/npc_assets.py              profile    (temporary-NPC portrait)
+      app/core/expression_regen.py        expression / tpose (variants, model refs)
 """
 import os
 import subprocess
@@ -178,10 +179,10 @@ EXPECTED_STRING_CALLERS = {
     "app/core/story_engine.py",
     "app/routes/story.py",
     "app/skills/video_generation_skill.py",
+    "app/core/character_ops.py",
+    "app/core/npc_assets.py",
+    "app/core/expression_regen.py",
 }
-# Task 11 converts these and deletes this set (plus its filter in part_b).
-PENDING_TASK_11 = {"app/core/character_ops.py", "app/core/npc_assets.py",
-                   "app/core/expression_regen.py"}
 
 ROOT = Path(__file__).resolve().parent.parent
 FACADE = "generate_from_input"
@@ -241,7 +242,7 @@ def part_b():
         tree = ast.parse((ROOT / f).read_text(encoding="utf-8"), filename=f)
         if _references_facade(ast.walk(tree)):
             trees[f] = tree
-    files = {f for f in trees if f not in PENDING_TASK_11}
+    files = set(trees)
     check("B3 the caller files", files, EXPECTED_STRING_CALLERS)
     for f in sorted(files):
         for fn in ast.walk(trees[f]):

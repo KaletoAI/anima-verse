@@ -774,7 +774,11 @@ def generate_model_ref_images(character_name: str,
                     # outstretched hands off at the edges.
                     override_width=_w, override_height=_h,
                     output_stem=refs_dir / f"{kind}_{signature}",
-                    apply_state_modifiers=not prewarm)
+                    apply_state_modifiers=not prewarm,
+                    # Every model reference — the default-pose ref on the
+                    # "outfit" style included — is the "tpose" occasion of
+                    # the image routing (plan-image-routing.md § 1).
+                    occasion="tpose")
             results[kind] = str(path) if path else None
             if path is None:
                 logger.warning("Model ref %s for %s (%s): render failed",
@@ -805,6 +809,7 @@ def generate_model_ref_images(character_name: str,
                             override_width=_w, override_height=_h,
                             output_stem=refs_dir / f"{view_kind}_{signature}",
                             apply_state_modifiers=not prewarm,
+                            occasion="tpose",
                             # Seen from behind, the species package decides
                             # which exposed anatomy still shows (body slot
                             # `back: true`); front-only fragments and their
