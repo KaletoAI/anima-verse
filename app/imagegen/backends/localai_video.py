@@ -27,7 +27,9 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import BackendBusyError, ImageBackend
+from app.imagegen.base import (GATEWAY_503_FLAP_WAITS_S, BackendBusyError,
+                               ImageBackend, is_gateway_busy_502,
+                               retry_after_seconds)
 
 logger = get_logger("image_backends")
 
@@ -150,22 +152,46 @@ class LocalAIVideoBackend(ImageBackend):
             payload["negative_prompt"] = negative_prompt
 
         url = f"{self.api_url}{self.video_endpoint}"
-        logger.info("%s: starte Video (Modell=%s, %dx%d, %s)", self.name, model,
+        logger.info("%s: starting video (model=%s, %dx%d, %s)", self.name, model,
                     width, height, self.video_endpoint)
-        try:
-            resp = requests.post(url, json=payload, headers=self._headers(),
-                                 timeout=self.timeout)
-        except Exception as e:
-            logger.error("%s: Verbindungsfehler: %s", self.name, e)
-            return []
+        flaps = 0
+        while True:
+            try:
+                resp = requests.post(url, json=payload, headers=self._headers(),
+                                     timeout=self.timeout)
+            except Exception as e:
+                logger.error("%s: connection error: %s", self.name, e)
+                return []
+            if (resp.status_code == 503 and retry_after_seconds(resp) is None
+                    and flaps < len(GATEWAY_503_FLAP_WAITS_S)):
+                # 503 WITHOUT Retry-After = no healthy backend; the retries
+                # span the gateway's health flap.
+                wait_s = GATEWAY_503_FLAP_WAITS_S[flaps]
+                flaps += 1
+                logger.warning("%s: HTTP 503 without Retry-After — retry in "
+                               "%.0fs (%d/%d)", self.name, wait_s, flaps,
+                               len(GATEWAY_503_FLAP_WAITS_S))
+                time.sleep(wait_s)
+                continue
+            break
+        if resp.status_code == 503 and retry_after_seconds(resp) is None:
+            # Still no healthy backend — a defect, not load: RuntimeError puts
+            # the backend into cooldown in the backend runner.
+            raise RuntimeError(
+                f"{self.name}: HTTP 503 — alias has no healthy backend: "
+                f"{(resp.text or '').strip()[:300]}")
         if resp.status_code in (429, 503):
-            # Rate limit / gateway busy — load, not a defect (no cooldown).
-            logger.warning("%s: Video-Request HTTP %d (ausgelastet)",
+            # Rate limit / queue full (503 WITH Retry-After) — load, not a
+            # defect (no cooldown).
+            logger.warning("%s: video request HTTP %d (busy)",
                            self.name, resp.status_code)
             raise BackendBusyError(
-                f"{self.name}: HTTP {resp.status_code} (ausgelastet)")
+                f"{self.name}: HTTP {resp.status_code} (busy)")
+        if resp.status_code == 502 and is_gateway_busy_502(resp.text or ""):
+            raise BackendBusyError(
+                f"{self.name}: HTTP 502 (gateway park timeout)")
         if resp.status_code not in (200, 201, 202):
-            logger.error("%s: Video-Request HTTP %d - %s", self.name,
+            logger.error("%s: video request HTTP %d - %s", self.name,
                          resp.status_code, resp.text[:300])
             return []
 

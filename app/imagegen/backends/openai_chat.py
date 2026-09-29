@@ -10,7 +10,9 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import BackendBusyError, ImageBackend
+from app.imagegen.base import (GATEWAY_503_FLAP_WAITS_S, BackendBusyError,
+                               ImageBackend, is_gateway_busy_502,
+                               retry_after_seconds)
 
 logger = get_logger("image_backends")
 
@@ -97,34 +99,56 @@ class OpenAIChatImageBackend(ImageBackend):
         logger.info(f"Model: {self.model}, Prompt ({len(full_prompt)} chars): {full_prompt}")
         logger.debug(f"Bearer Token {'gesetzt' if self.api_key else 'FEHLT'}, Timeout: 120s")
 
-        try:
-            resp = requests.post(
-                f"{self.api_url}/chat/completions",
-                headers=self._headers(),
-                json=payload,
-                timeout=self.timeout
-            )
-        except requests.exceptions.Timeout:
-            logger.error(f"{self.name} Timeout nach {self.timeout}s")
-            # BUSY IS NOT BROKEN: the endpoint is reachable, the request just
-            # outran its budget -> retry elsewhere without a cooldown.
-            raise BackendBusyError(
-                f"{self.name}: request timeout after {self.timeout}s")
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"{self.name} Verbindungsfehler: {self.api_url}: {str(e)[:200]}")
-            raise
-        except Exception as e:
-            logger.error(f"{self.name} Unerwarteter Fehler: {type(e).__name__}: {str(e)[:200]}")
-            raise
+        flaps = 0
+        while True:
+            try:
+                resp = requests.post(
+                    f"{self.api_url}/chat/completions",
+                    headers=self._headers(),
+                    json=payload,
+                    timeout=self.timeout
+                )
+            except requests.exceptions.Timeout:
+                logger.error(f"{self.name} timeout after {self.timeout}s")
+                # BUSY IS NOT BROKEN: the endpoint is reachable, the request just
+                # outran its budget -> retry elsewhere without a cooldown.
+                raise BackendBusyError(
+                    f"{self.name}: request timeout after {self.timeout}s")
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"{self.name} connection error: {self.api_url}: {str(e)[:200]}")
+                raise
+            except Exception as e:
+                logger.error(f"{self.name} unexpected error: {type(e).__name__}: {str(e)[:200]}")
+                raise
+            if (resp.status_code == 503 and retry_after_seconds(resp) is None
+                    and flaps < len(GATEWAY_503_FLAP_WAITS_S)):
+                # 503 WITHOUT Retry-After = no healthy backend behind the
+                # gateway alias; the retries span the gateway's health flap.
+                wait_s = GATEWAY_503_FLAP_WAITS_S[flaps]
+                flaps += 1
+                logger.warning(f"{self.name}: HTTP 503 without Retry-After — "
+                               f"retry in {wait_s:.0f}s "
+                               f"({flaps}/{len(GATEWAY_503_FLAP_WAITS_S)})")
+                time.sleep(wait_s)
+                continue
+            break
 
         # Check the response status
         logger.info(f"{self.name} Response: HTTP {resp.status_code}, {len(resp.content)} bytes")
         logger.debug(f"Content-Type: {resp.headers.get('content-type', 'N/A')}")
 
+        if resp.status_code == 503 and retry_after_seconds(resp) is None:
+            # Still no healthy backend — a defect, not load: RuntimeError puts
+            # the backend into cooldown in the backend runner.
+            raise RuntimeError(f"{self.name}: HTTP 503 — alias has no healthy "
+                               f"backend: {(resp.text or '').strip()[:300]}")
         if resp.status_code in (429, 503):
-            # Rate limit / service busy — load, not a defect.
+            # Rate limit / queue full (503 WITH Retry-After) — load, not a defect.
             logger.warning(f"{self.name}: HTTP {resp.status_code} (busy)")
             raise BackendBusyError(f"{self.name}: HTTP {resp.status_code} (busy)")
+        if resp.status_code == 502 and is_gateway_busy_502(resp.text or ""):
+            logger.warning(f"{self.name}: HTTP 502 (gateway park timeout)")
+            raise BackendBusyError(f"{self.name}: HTTP 502 (gateway park timeout)")
 
         # On error: log the response body for debugging
         if resp.status_code != 200:

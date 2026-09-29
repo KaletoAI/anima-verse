@@ -10,7 +10,8 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.base import BackendBusyError
+from app.imagegen.base import (GATEWAY_503_FLAP_WAITS_S, BackendBusyError,
+                               is_gateway_busy_502, retry_after_seconds)
 from app.imagegen.backends.localai import LocalAIBackend
 
 logger = get_logger("image_backends")
@@ -31,7 +32,9 @@ class OpenAIDiffusionBackend(LocalAIBackend):
       - **Bearer header also on the result-URL fetch** (gateway result URLs are not
         public, they require the same job-owner token).
       - Error mapping per OpenAI/gateway semantics: 400=request error (no retry),
-        401/403=config, 402=quota, 502=1x retry, 503=backoff retry, 429=backoff.
+        401/403=config, 402=quota, 502=1x retry (park timeout = busy),
+        503 with Retry-After = busy, 503 without = no healthy backend (cooldown),
+        429=backoff.
 
     ``model`` here is a **generation alias** of the gateway, not a ComfyUI checkpoint.
     ``ref_images`` (raw base64) stays inherited — the gateway accepts it as a bonus.
@@ -102,7 +105,7 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             headers = self._headers()
         else:
             headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        _429 = _502 = _503 = 0
+        _429 = _502 = _503 = _503_flap = 0
         max_429, max_502, max_503 = 4, 1, 4
         while True:
             resp = requests.post(url, json=json, files=files, data=data,
@@ -114,42 +117,67 @@ class OpenAIDiffusionBackend(LocalAIBackend):
             if code == 429:
                 if _429 >= max_429:
                     # Rate limit = load, not a defect -> no cooldown.
-                    raise BackendBusyError(f"{self.name}: HTTP 429 (Rate-Limit) nach {max_429} Versuchen")
+                    raise BackendBusyError(f"{self.name}: HTTP 429 (rate limit) after {max_429} attempts")
                 _429 += 1
                 wait = self._rate_limit_wait(resp, _429)
-                logger.warning(f"{self.name}: 429, warte {wait:.1f}s ({_429}/{max_429})")
+                logger.warning(f"{self.name}: 429, waiting {wait:.1f}s ({_429}/{max_429})")
                 time.sleep(wait)
                 continue
-            if code == 503:  # no healthy backend for the alias — retry with backoff
-                if _503 >= max_503:
-                    # 503 = the gateway has no free GPU for the alias right now.
-                    raise BackendBusyError(f"{self.name}: HTTP 503 (kein Backend) nach {max_503} Versuchen: {body}")
-                _503 += 1
-                wait = min(2.0 * (2 ** (_503 - 1)), 30.0)
-                logger.warning(f"{self.name}: 503 (kein gesundes Backend), warte {wait:.1f}s ({_503}/{max_503})")
+            if code == 503:
+                retry_after = retry_after_seconds(resp)
+                if retry_after is not None:
+                    # WITH Retry-After = the gateway queue is full: load, no
+                    # cooldown. Wait as the header says, then give up busy.
+                    if _503 >= max_503:
+                        raise BackendBusyError(
+                            f"{self.name}: HTTP 503 (gateway queue full) after "
+                            f"{max_503} attempts: {body}")
+                    _503 += 1
+                    wait = min(retry_after, 30.0)
+                    logger.warning(f"{self.name}: 503 (gateway busy, Retry-After), "
+                                   f"waiting {wait:.1f}s ({_503}/{max_503})")
+                    time.sleep(wait)
+                    continue
+                # WITHOUT Retry-After = the alias has no healthy backend. The
+                # retries span the gateway's health flap; a 503 that outlasts
+                # it is a defect (RuntimeError -> cooldown in the backend
+                # runner), not load.
+                if _503_flap >= len(GATEWAY_503_FLAP_WAITS_S):
+                    raise RuntimeError(
+                        f"{self.name}: HTTP 503 — alias has no healthy backend: {body}")
+                wait = GATEWAY_503_FLAP_WAITS_S[_503_flap]
+                _503_flap += 1
+                logger.warning(f"{self.name}: 503 (no healthy backend), retry in "
+                               f"{wait:.0f}s ({_503_flap}/{len(GATEWAY_503_FLAP_WAITS_S)})")
                 time.sleep(wait)
                 continue
-            if code == 502:  # generation failed / park timeout — retry once
+            if code == 502:
+                if is_gateway_busy_502(body):
+                    # The gateway parked the request until its budget ran out:
+                    # the GPU is working, not broken -> no cooldown, no retry
+                    # (a second POST would only park again).
+                    raise BackendBusyError(f"{self.name}: HTTP 502 (gateway park timeout): {body}")
+                # Generation failed — retry once.
                 if _502 >= max_502:
-                    raise RuntimeError(f"{self.name}: HTTP 502 (Generierung fehlgeschlagen): {body}")
+                    raise RuntimeError(f"{self.name}: HTTP 502 (generation failed): {body}")
                 _502 += 1
                 # Wait like every other retrying branch of this loop: an
                 # immediate second POST hits the gateway in exactly the state
-                # that just failed. Same first step as the 503 backoff.
+                # that just failed.
                 wait = 2.0
-                logger.warning(f"{self.name}: 502, warte {wait:.1f}s, "
-                               f"einmaliger Retry ({_502}/{max_502})")
+                logger.warning(f"{self.name}: 502, waiting {wait:.1f}s, "
+                               f"single retry ({_502}/{max_502})")
                 time.sleep(wait)
                 continue
             if code == 402:
-                logger.error(f"{self.name}: HTTP 402 — Credit-/Quota-Limit erreicht: {body}")
-                raise RuntimeError(f"{self.name}: Quota/Credit-Limit erreicht (HTTP 402): {body[:160]}")
+                logger.error(f"{self.name}: HTTP 402 — credit/quota limit reached: {body}")
+                raise RuntimeError(f"{self.name}: quota/credit limit reached (HTTP 402): {body[:160]}")
             if code in (401, 403):
-                logger.error(f"{self.name}: HTTP {code} — API-Key/Alias nicht erlaubt: {body}")
-                raise RuntimeError(f"{self.name}: Auth/Alias-Fehler (HTTP {code}): {body[:160]}")
+                logger.error(f"{self.name}: HTTP {code} — API key/alias not allowed: {body}")
+                raise RuntimeError(f"{self.name}: auth/alias error (HTTP {code}): {body[:160]}")
             if code == 400:
-                logger.error(f"{self.name}: HTTP 400 — Request-Fehler (prompt/image fehlt?): {body}")
-                raise RuntimeError(f"{self.name}: Request-Fehler (HTTP 400): {body[:160]}")
+                logger.error(f"{self.name}: HTTP 400 — request error (prompt/image missing?): {body}")
+                raise RuntimeError(f"{self.name}: request error (HTTP 400): {body[:160]}")
             logger.error(f"{self.name}: HTTP {code}: {body}")
             raise RuntimeError(f"{self.name}: HTTP {code}: {body[:160]}")
 

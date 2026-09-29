@@ -20,8 +20,9 @@ class BackendBusyError(Exception):
 
     BUSY IS NOT BROKEN. Both sides of this pipeline queue: anima-verse
     serializes per backend channel, the gateway queues per GPU. So a
-    generation that times out, gets a 429/503, or waits in the gateway's
-    queue says nothing about the backend's health — it says the GPU is
+    generation that times out, gets a 429, a 503 WITH ``Retry-After`` (queue
+    full), a 502 "park timeout", or waits in the gateway's queue says nothing
+    about the backend's health — it says the GPU is
     working. Taking it offline for 5 minutes for that is exactly wrong: it
     pushes the load onto another alias of the SAME GPU and, in a busy phase,
     walks the whole pool into cooldown.
@@ -75,6 +76,54 @@ class GatewayRejectedError(RuntimeError):
     """
 
 
+# --- Gateway status semantics (shared by every gateway-facing backend) -------
+#
+# The LLM gateway answers 503 in TWO meanings, told apart by one header:
+#   * 503 WITH ``Retry-After``  = its queue is full (async path: video/mesh) —
+#     LOAD, so ``BackendBusyError`` after waiting as the header says;
+#   * 503 WITHOUT ``Retry-After`` = the alias has no healthy backend at all
+#     (``_gen_pick`` found no candidate) — a DEFECT once it outlasts the
+#     gateway's own health flap (~30 s, ai-hub/main.py): retried over that
+#     window (``GATEWAY_503_FLAP_WAITS_S``), then a plain ``RuntimeError`` so
+#     the backend runner puts the backend into cooldown instead of picking it
+#     on every render. A shorter window let a saturated GPU walk its sibling
+#     aliases into cooldown one after the other.
+# A 502 whose body says "park timeout" / "backend busy" means the gateway
+# parked the request until its budget ran out — load again, not a defect.
+
+# The waits between the retries of a header-less 503 — together (30 s) they
+# cover the gateway's documented health flap. One retry follows each wait;
+# a 503 still without Retry-After after the last one is the defect.
+GATEWAY_503_FLAP_WAITS_S = (2.0, 8.0, 20.0)
+
+_GATEWAY_BUSY_502 = re.compile(r"park\s*timeout|backend\s+busy", re.IGNORECASE)
+
+
+def retry_after_seconds(resp: Any) -> Optional[float]:
+    """The ``Retry-After`` header of an HTTP answer in seconds, or ``None``
+    when the answer carries none (which is what makes a 503 a defect, see
+    above). A present but non-numeric value (the HTTP-date form) still means
+    "busy" and yields a 10 s default."""
+    headers = getattr(resp, "headers", None) or {}
+    try:
+        raw = headers.get("Retry-After")
+        if raw is None:
+            raw = headers.get("retry-after")
+    except Exception:
+        return None
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return max(0.0, float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 10.0
+
+
+def is_gateway_busy_502(body: str) -> bool:
+    """Whether a 502 body is the gateway's "parked too long" answer (load)."""
+    return bool(_GATEWAY_BUSY_502.search(body or ""))
+
+
 class GatewayInputMismatchError(RuntimeError):
     """The job did not run on the input we uploaded.
 
@@ -122,9 +171,11 @@ class ImageBackend(ABC):
         # Cooldown after an error: keeps `available` hard False temporarily, even
         # when check_availability sees the (reachable) endpoint respond 200 again.
         # This way a gateway that is online but currently cannot serve the model
-        # (e.g. 503 "No healthy backend") is not retried on every generation — the
-        # match selection skips it until the cooldown expires (mirrors
-        # provider.mark_unhealthy on the LLM side).
+        # (a 503 WITHOUT ``Retry-After`` = "No healthy backend" for the alias —
+        # the backends raise a plain RuntimeError for it, not BackendBusyError)
+        # is not retried on every generation — the match selection skips it
+        # until the cooldown expires (mirrors provider.mark_unhealthy on the
+        # LLM side).
         self._cooldown_until: float = 0.0
         self._cooldown_reason: str = ""
         self._active_jobs = 0
@@ -290,8 +341,10 @@ class ImageBackend(ABC):
     # -- backpressure ------------------------------------------------------
     #
     # BUSY IS NOT BROKEN — see BackendBusyError at module level. Backends
-    # raise it for timeouts / 429 / 503 / gateway-queue waits; the fallback
-    # engine catches it and skips the cooldown.
+    # raise it for timeouts / 429 / 503 with Retry-After / 502 park timeout /
+    # gateway-queue waits; the fallback engine catches it and skips the
+    # cooldown. A 503 WITHOUT Retry-After ("no healthy backend") is a defect
+    # and takes the cooldown path.
 
     def mark_unhealthy(self, reason: str = "", cooldown_seconds: float = 300.0) -> None:
         """Puts the backend into cooldown after an error.

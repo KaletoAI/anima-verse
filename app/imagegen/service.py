@@ -465,6 +465,11 @@ class ImageService:
         return self._pool.match_backend(pattern, media=media,
                                         has_input_image=has_input_image)
 
+    def matches_configured(self, pattern: str, media: str = "image",
+                           character_name: str = "") -> bool:
+        return self._pool.matches_configured(pattern, media=media,
+                                             character_name=character_name)
+
     def list_available_backends(self, character_name: str = "",
                                 media: str = "image") -> List[ImageBackend]:
         return self._pool.list_available_backends(character_name, media=media)
@@ -1583,9 +1588,9 @@ class ImageService:
             return "Error: Media generation is disabled for this world"
 
         if not self.enabled:
-            return "Image generation is not available. No instance configured or reachable."
+            return "Error: Image generation is not available. No instance configured or reachable."
 
-        # Input parsen (vor Backend-Auswahl, da per-Agent enabled beruecksichtigt wird)
+        # Parse the input (before backend selection, which honours the per-agent enabled flags)
         input_data = self._parse_input(prompt)
         prompt_text = input_data.get("prompt", "")
         character_name = input_data.get("agent_name", "").strip()
@@ -1593,10 +1598,10 @@ class ImageService:
         skip_gallery = bool(input_data.get("skip_gallery"))
 
         if not prompt_text or len(prompt_text.strip()) == 0:
-            return "Fehler: Bitte gib eine Bildbeschreibung ein."
+            return "Error: No image description given."
 
         if not character_name:
-            return "Fehler: Agent-Name fehlt fuer Bildspeicherung."
+            return "Error: Character name missing for storing the image."
 
         # Pick backend (explicit selection wins)
         explicit_backend = input_data.get("backend", "").strip() if isinstance(input_data, dict) else ""
@@ -1663,15 +1668,31 @@ class ImageService:
             if backend:
                 logger.info("Backend (%s '%s'): %s",
                             _match_source, _soft_backend, backend.name)
-            else:
+            elif self.matches_configured(_soft_backend, media="image",
+                                         character_name=character_name):
+                # The pattern names configured backends that are only offline
+                # or cooling down right now. Falling back here would walk every
+                # other backend in turn — the other gateway aliases first and
+                # then the paid cloud ones — so the render fails instead.
+                # (Known limit: a character WITHOUT a pattern still takes the
+                # cheapest available backend after a gateway cooldown; the
+                # central image routing replaces this with chains.)
                 logger.warning(
-                    "%s '%s' matches no available backend — falling back to "
+                    "%s '%s' matches only unavailable backends — no fallback",
+                    _match_source, _soft_backend)
+                return (f"Error: {_soft_backend} matches only unavailable "
+                        f"backends (offline or cooling down).")
+            else:
+                # The pattern names no configured backend at all (or only
+                # disabled ones) — the default selection takes over.
+                logger.warning(
+                    "%s '%s' matches no configured backend — falling back to "
                     "the default selection", _match_source, _soft_backend)
 
         if not backend:
             backend = self._wait_for_backend(character_name, _has_input_image)
         if not backend:
-            return "Fehler: Keine Image-Generation Instanz ist aktuell verfuegbar (Timeout)."
+            return "Error: No image generation backend is available right now."
 
         # The LoRA gate, for the backend this render actually resolved to
         # (app/core/lora_library.py holds the rule). TWO halves, because the
@@ -1739,12 +1760,12 @@ class ImageService:
             logger.debug("User-ID: %s, Agent: %s, Set as Profile: %s", character_name, set_profile)
             logger.info("Original Prompt: %s", prompt_text)
 
-            # Profilbild-Erkennung
+            # Profile-image detection
             if not set_profile:
                 lowered = prompt_text.lower()
                 set_profile = "profilbild" in lowered or "profile image" in lowered or "avatar" in lowered
 
-            # --- RP-Kontext verarbeiten (Deferred Execution) ---
+            # --- Process the RP context (deferred execution) ---
             rp_context = input_data.get("rp_context", "").strip()
             user_text = input_data.get("user_input", "").strip()
             rp_scene_context = ""
@@ -1752,7 +1773,7 @@ class ImageService:
                 rp_scene_context = self._extract_rp_scene_context(
                     rp_context, character_name)
 
-            # --- Kontext-Daten via PromptBuilder sammeln ---
+            # --- Collect context data via PromptBuilder ---
             from app.core.prompt_builder import (
                 PromptBuilder, EntryPointConfig,
                 is_photographer_mode, detect_selfie)
@@ -1768,37 +1789,36 @@ class ImageService:
             if auto_enhance:
                 config = EntryPointConfig.chat()
 
-                # Personen-Detection: NUR aus dem expliziten image_prompt, nicht
-                # aus dem RP-Scene-Context. Sonst wird jeder Character, der zufaellig
-                # im RP-Kontext eines Tasks erwaehnt ist (z.B. "Logs zu Kai's
-                # Aktivitaet"), als Person samt Reference-Bild ins Bild gepushed —
-                # auch wenn der Character gar nicht im Bild sein soll.
-                # Der User-Avatar wird bei rp_context separat ergaenzt (Block unten),
-                # also nichts geht verloren.
+                # Person detection: ONLY from the explicit image_prompt, not
+                # from the RP scene context. Otherwise every character that is
+                # merely mentioned in a task's RP context (e.g. "logs about
+                # someone's activity") is pushed into the picture as a person
+                # with its reference image — even when it should not be in it.
+                # The user avatar is added separately for rp_context (block
+                # below), so nothing is lost.
                 input_appearances = input_data.get("appearances")
                 persons = builder.detect_persons(
                     prompt_text,
                     explicit_appearances=input_appearances)
 
-                # Photographer-Filter idempotent anwenden (chat.py:visualize hat
-                # ihn bereits aufgerufen, andere Entry Points wie Tool-Call/
-                # Instagram noch nicht).
+                # Apply the photographer filter idempotently (chat.py:visualize
+                # already called it, other entry points like the tool call /
+                # Instagram have not).
                 persons = builder.apply_photographer_filter(
                     persons,
                     photographer_mode=photographer_mode,
                     is_selfie=is_selfie,
                     set_profile=set_profile)
 
-                # Avatar-Augmentation entfernt: Wenn der User-Avatar im Bild
-                # sein soll, muss ihn der Tool-LLM namentlich oder via
-                # Du-Pronomen erwaehnen. detect_persons() faengt das bereits
-                # ab. Automatisches Anhaengen war eine falsche Annahme aus
-                # 1:1-Chat-Zeiten und brachte Avatare in Szenen wo sie gar
-                # nicht waren (z.B. Bianca macht Selfie waehrend Avatar
-                # schlaefft).
+                # Avatar augmentation removed: if the user avatar should be in
+                # the picture, the tool LLM has to mention it by name or via a
+                # second-person pronoun. detect_persons() already catches that.
+                # Appending it automatically was a wrong assumption from the
+                # 1:1-chat days and put avatars into scenes they were not in
+                # (e.g. a character taking a selfie while the avatar sleeps).
 
-                # Item-IDs aus Input (vom Room-Items Panel) — werden in freie
-                # Ref-Slots als Props gelegt und im Scene-Prompt beschrieben.
+                # Item IDs from the input (from the room-items panel) — placed
+                # into free reference slots as props and described in the scene prompt.
                 _item_ids = input_data.get("item_ids") or []
                 if isinstance(_item_ids, str):
                     _item_ids = [x.strip() for x in _item_ids.split(",") if x.strip()]
@@ -1816,15 +1836,15 @@ class ImageService:
                 # max_slots). Outfit + activity always stay in the text.
                 builder.apply_exclusion_rules(pv, max_slots=backend.ref_slot_count)
 
-                # RP-Szene-Kontext als Scene-Prompt anhaengen
+                # Append the RP scene context to the scene prompt
                 pv.scene_prompt = prompt_text
                 if rp_scene_context:
                     pv.scene_prompt += f", {rp_scene_context}"
                     logger.info("RP-Scene-Context angehaengt: %s", rp_scene_context[:120])
 
-                # Items (Props) als Scene-Zusatz. Slot-Position wird im
-                # resolve_reference_slots-Schritt zugeordnet; hier nur
-                # Text-Beschreibung anhaengen.
+                # Items (props) as a scene addition. The slot position is
+                # assigned in the resolve_reference_slots step; here only the
+                # text description is appended.
                 if pv.items:
                     _item_bits = []
                     for _it in pv.items:
@@ -1838,17 +1858,17 @@ class ImageService:
                         pv.scene_prompt += f", scene includes props: {', '.join(_item_bits)}"
                         logger.info("Item-Props angehaengt: %s", ", ".join(_item_bits))
 
-                # scene_prompt bereinigen (Defense-in-Depth, Plan 4.2.1b)
+                # Clean scene_prompt (defense in depth, plan 4.2.1b)
                 pv.scene_prompt = builder.sanitize_scene_prompt(pv.scene_prompt, pv)
 
-                # Style und Negative-Prompt setzen
+                # Set style and negative prompt
                 pv.prompt_style = prompt_style
                 pv.negative_prompt = negative_prompt
 
                 if set_profile:
                     logger.info("PROFILBILD-MODUS AKTIVIERT")
 
-                # Prompt zusammenbauen via Target-Model-Adapter
+                # Assemble the prompt via the target-model adapter
                 from app.core.prompt_adapters import (
                     get_target_model, render as adapter_render,
                     canonical_to_dict, maybe_enhance_via_llm)
@@ -1860,8 +1880,8 @@ class ImageService:
                 template_prompt = assembled["input_prompt_positiv"]
                 prompt_without_style = assembled["prompt_without_style"]
 
-                # Optional LLM-Enhancement: Use-Case-Instruction hat Vorrang vor
-                # (zentral, nicht per-Character) — kommt aus dem Use-Case.
+                # Optional LLM enhancement: the use-case instruction takes
+                # precedence (central, not per character) — it comes from the use case.
                 _wf_instruction = _ucp.get("prompt_instruction", "")
                 enhanced_prompt, _prompt_method = maybe_enhance_via_llm(
                     template_prompt, pv,
@@ -1869,7 +1889,7 @@ class ImageService:
                     prompt_instruction=_wf_instruction)
                 _canonical_dict = canonical_to_dict(pv)
 
-                # Abwaertskompatible Variablen fuer restlichen Code
+                # Variables the rest of this function still reads
                 appearances = [{"name": p.name, "appearance": p.appearance} for p in pv.persons]
                 agent_mentioned = any(p.is_agent for p in pv.persons)
                 no_person_detected = pv.no_person_detected
@@ -1928,10 +1948,10 @@ class ImageService:
                     enhanced_prompt = f"{prompt_style} {enhanced_prompt}"
                 logger.info("Auto-Enhance deaktiviert (Prompt vom Caller angereichert)")
 
-                # Canonical-Metadaten fuer Re-Creation auch im auto_enhance=False Pfad
-                # (z.B. Instagram). Der Original-Prompt geht 1:1 an ComfyUI, aber
-                # canonical wird gespeichert damit "Prompt neu aufbauen" spaeter
-                # mit Adapter rendern kann.
+                # Canonical metadata for re-creation also on the auto_enhance=False
+                # path (e.g. Instagram). The original prompt goes to the backend
+                # 1:1, but the canonical form is stored so "rebuild prompt" can
+                # later render it through the adapter.
                 from app.core.prompt_adapters import (
                     get_target_model, canonical_to_dict)
                 _backend_model = getattr(backend, "model", "") if backend else ""
@@ -1941,7 +1961,7 @@ class ImageService:
                 appearances = [{"name": p.name, "appearance": p.appearance} for p in pv.persons]
                 pv.prompt_style = prompt_style or "photorealistic"
                 pv.scene_prompt = prompt_text
-                # Mood/Activity/Outfit aus aktuellem Character-State fuer Rebuild-Kontext
+                # Mood/activity/outfit from the current character state for the rebuild context
                 try:
                     from app.models.character import (
                         get_character_current_feeling,
@@ -1962,15 +1982,14 @@ class ImageService:
                 _prompt_method = "caller_provided"
                 _canonical_dict = canonical_to_dict(pv)
 
-            # Enhanced Prompt fuer Caller verfuegbar machen — thread-local
-            # zuerst, damit parallele Generationen sich nicht gegenseitig
-            # ueberschreiben (Race-Condition zwischen Instagram-Post und
-            # Expression-Regen). self.last_enhanced_prompt bleibt als
-            # Backward-Compat fuer non-threaded Caller.
+            # Make the enhanced prompt available to the caller — thread-local
+            # first, so parallel generations do not overwrite each other (race
+            # between an Instagram post and expression regen).
+            # self.last_enhanced_prompt stays for non-threaded callers.
             self._meta_tls.last_enhanced_prompt = enhanced_prompt
             self.last_enhanced_prompt = enhanced_prompt
 
-            # Start-Zeit fuer Logging merken
+            # Remember the start time for logging
             _gen_start = time.time()
 
             # Generation via backend — the model comes from the backend attribute.
@@ -2019,9 +2038,9 @@ class ImageService:
                         if isinstance(l, dict) and (l.get("name") or "None") != "None"
                     ]
 
-            # Referenz-Slots fuer die Generierung (Conditioning) aufloesen.
-            # Workflows mit Referenz-Slots (z.B. QWEN_STYLE) bekommen die
-            # aufgeloesten Referenzbilder direkt in die Generierung injiziert.
+            # Resolve the reference slots for the generation (conditioning).
+            # Workflows with reference slots (e.g. QWEN_STYLE) get the resolved
+            # reference images injected directly into the generation.
             if not no_person_detected and pv:
                 face_refs = builder.resolve_reference_slots(
                     pv, max_slots=backend.ref_slot_count)
@@ -2059,8 +2078,8 @@ class ImageService:
                 # Negative comes from the use case (resolved above).
                 return enhanced_prompt, negative_prompt
 
-            # Kontext fuers ZENTRALE Logging in backend.generate() (final_prompt,
-            # Backend, Model, LoRAs, Refs, Dauer, Seed setzt generate() selbst).
+            # Context for the CENTRAL logging in backend.generate() (final_prompt,
+            # backend, model, LoRAs, refs, duration and seed are set by generate() itself).
             _log_meta = {
                 "agent_name": character_name,
                 "original_prompt": prompt_text,
@@ -2079,9 +2098,9 @@ class ImageService:
                 _p, _n = _prepare_for_backend(b)
 
                 def _gen():
-                    # Tracker erst hier aktivieren: laeuft im Channel-Worker,
-                    # d.h. exakt wenn die GPU-Arbeit beginnt — Warteschlangen-
-                    # Zeit erscheint im Panel als pending, nicht als running.
+                    # Activate the tracker only here: this runs in the channel
+                    # worker, i.e. exactly when the GPU work starts — queue time
+                    # shows up in the panel as pending, not as running.
                     try:
                         from app.core.task_router import match_queue_name
                         _tq.track_activate(
@@ -2106,11 +2125,11 @@ class ImageService:
                 images, backend = self.run_on_backend(
                     backend, op=_op, character_name=character_name)
             except BackendBusyError as _busy:
-                logger.warning("Bildgenerierung: %s ausgelastet (%s)",
+                logger.warning("Image generation: %s busy (%s)",
                                backend.name, _busy)
-                _tq.track_finish(_track_id, error=f"{backend.name} ausgelastet")
-                return (f"Fehler: {backend.name} ist gerade ausgelastet — "
-                        "bitte später erneut versuchen.")
+                _tq.track_finish(_track_id, error=f"{backend.name} busy")
+                return (f"Error: {backend.name} is busy right now — "
+                        "please try again later.")
             except RuntimeError as _err:
                 # Carry the backend's OWN words out of here. The generic
                 # "the API answered without images" line hid every reason —
@@ -2133,10 +2152,10 @@ class ImageService:
             _gen_duration = time.time() - _gen_start
             logger.info("ERFOLG - %d Bild(er) generiert via %s (%.1fs)", len(images), backend.name, _gen_duration)
 
-            # Image-Prompt-Logging passiert jetzt ZENTRAL in backend.generate()
-            # (mit dem finalen, trigger-injizierten Prompt) — via log_meta oben.
+            # Image prompt logging now happens CENTRALLY in backend.generate()
+            # (with the final, trigger-injected prompt) — via log_meta above.
 
-            # 1. Zuerst Bilder/Videos auf die Platte speichern.
+            # 1. Save the images/videos to disk first.
             gallery_character = self._resolve_gallery_character(
                 character_name, prompt_text, rp_context, input_data,
                 skip_gallery=skip_gallery, set_profile=set_profile)
@@ -2147,8 +2166,8 @@ class ImageService:
 
             for i, image_bytes in enumerate(images, 1):
                 ext = self._detect_media_extension(image_bytes)
-                # Filename behaelt Agent-Namen (Herkunfts-Hinweis), liegt aber
-                # unter gallery_character/images/.
+                # The file name keeps the agent's name (origin hint) but lives
+                # under gallery_character/images/.
                 file_name = f"{character_name}_{timestamp}_{uuid.uuid4().hex[:8]}_{i}{ext}"
                 image_path = images_dir / file_name
                 image_path.write_bytes(image_bytes)
@@ -2158,8 +2177,8 @@ class ImageService:
                 saved_files.append(file_name)
 
             if not saved_files:
-                _tq.track_finish(_track_id, error="Bilder nicht gespeichert")
-                return "Fehler: Bilder konnten nicht gespeichert werden."
+                _tq.track_finish(_track_id, error="images not saved")
+                return "Error: The images could not be saved."
 
             logger.info("Gespeicherte Bilder: %s", ", ".join(saved_files))
 
@@ -2171,10 +2190,10 @@ class ImageService:
                 set_character_profile_image(character_name, saved_files[0])
                 logger.info("Als Profilbild gesetzt: %s", saved_files[0])
 
-            # Post-Processing geschieht extern (Pull-Modell): nach dem Speichern
-            # wird ein Trigger an den externen Dienst gesendet (s.u.
-            # postprocess_trigger), der das fertige Bild zieht, bearbeitet und
-            # ueber /api/images zurueckschreibt.
+            # Post-processing happens externally (pull model): after saving, a
+            # trigger is sent to the external service (see postprocess_trigger),
+            # which pulls the finished image, edits it and writes it back via
+            # /api/images.
 
             # Save image metadata (skill, backend, duration)
             _location = get_character_current_location(character_name) or ""
@@ -2184,16 +2203,16 @@ class ImageService:
                 for l in params.get("lora_inputs", [])
                 if l.get("name") and l["name"] != "None"
             ]
-            # Referenzbilder-Namen fuer Metadaten
-            # Referenzen liegen je nach Workflow in face_refs statt params
+            # Reference image names for the metadata
+            # Depending on the workflow the references live in face_refs instead of params
             _ref_source = params.get("reference_images") or face_refs.get("reference_images") or {}
             _ref_meta = {}
             for _rk, _rv in _ref_source.items():
                 _ref_meta[_rk] = os.path.basename(_rv) if _rv else ""
-            # Herkunft: wenn das Bild in einer FREMDEN Galerie landet (anderer
-            # Character als der Erzeuger), wird der Erzeuger in `from_character`
-            # vermerkt. Das Frontend zeigt dann einen Marker am Bild und die
-            # Bild-Info nennt explizit von wem das Bild stammt.
+            # Origin: when the image lands in a FOREIGN gallery (a character
+            # other than the creator), the creator is noted in `from_character`.
+            # The frontend then shows a marker on the image and the image info
+            # names explicitly who it came from.
             _from_character = character_name if gallery_character != character_name else ""
             _meta = {
                 "backend": backend.name,
@@ -2208,10 +2227,10 @@ class ImageService:
                 "room_id": _room_id,
                 "seed": params.get("seed", 0),
                 "loras": _lora_meta,
-                # Model: Prio params (Dialog-Override / Workflow-Default) > backend.model
-                # > backend.last_used_checkpoint > backend.checkpoint. Damit auch
-                # bei Cloud-Backends ohne Workflow (Together/CivitAI) ein Modellname
-                # in der Bild-Info erscheint.
+                # Model: priority params (dialog override / workflow default) >
+                # backend.model > backend.last_used_checkpoint > backend.checkpoint,
+                # so that cloud backends without a workflow (Together/CivitAI)
+                # also show a model name in the image info.
                 "model": (
                     params.get("model")
                     or params.get("unet")
@@ -2253,7 +2272,7 @@ class ImageService:
                 except Exception as _pp_err:  # noqa: BLE001
                     logger.debug("postprocess trigger skipped: %s", _pp_err)
 
-            # Situations-Kommentar + Bildanalyse generieren
+            # Generate the situation comment + image analysis
             comment = None
             if not skip_gallery:
                 _tq.track_update_label(_track_id, "Bildanalyse")
@@ -2261,8 +2280,8 @@ class ImageService:
                 first_image_path = images_dir / saved_files[0]
                 logger.debug("Bild-Datei: %s, Existiert: %s", first_image_path, first_image_path.exists())
                 _subjects = [p["name"] for p in appearances] if photographer_mode and appearances else None
-                # Comment wird aus Sicht des AGENTS generiert (er hat das Bild
-                # gemacht), aber an das Bild des gallery_character geheftet.
+                # The comment is generated from the AGENT's point of view (it
+                # took the picture) but attached to the gallery_character's image.
                 comment = self._generate_comment(
                     character_name, rp_context=rp_context,
                     photographer_subjects=_subjects)
@@ -2271,8 +2290,9 @@ class ImageService:
                     add_character_image_comment(gallery_character, saved_files[0], comment)
                 else:
                     logger.debug("Kein Situations-Kommentar generiert (kein RP-Kontext)")
-                # Objektive Bildanalyse: Vision-LLM-Aufruf nutzt Agent-Profil
-                # (Sprache/Persoenlichkeit), Ergebnis landet am Bild im Gallery-Char.
+                # Objective image analysis: the vision-LLM call uses the agent
+                # profile (language/personality); the result is attached to the
+                # image in the gallery character.
                 analysis = self._generate_image_analysis(str(first_image_path), character_name)
                 if analysis:
                     from app.models.character import add_character_image_metadata
@@ -2281,7 +2301,7 @@ class ImageService:
             else:
                 logger.debug("Bildanalyse uebersprungen (skip_gallery=True)")
 
-            # Rueckgabe: Bild(er) + Kommentar
+            # Return value: image(s) + comment
             output_lines = []
             output_lines.append(f"AKTION: Bild wurde GENERIERT und in der Galerie von {gallery_character} gespeichert. "
                                 f"Das Bild wurde NICHT gesendet oder verschickt — es liegt in der Galerie.")
@@ -2300,30 +2320,30 @@ class ImageService:
             return "\n\n".join(output_lines)
 
         except requests.exceptions.Timeout:
-            error_msg = f"Bildgenerierung hat zu lange gedauert ({backend.name})"
+            error_msg = f"Image generation took too long ({backend.name})"
             # A timeout means the GPU is busy (both sides queue) — the backend
             # is not broken, so it must NOT go into cooldown: that would only
             # push the load onto another alias of the same GPU. (The generate
             # paths signal this via BackendBusyError; here we just don't mark
             # anything unhealthy.)
-            logger.error("Timeout: %s — Backend bleibt verfuegbar (ausgelastet)",
+            logger.error("Timeout: %s — backend stays available (busy)",
                          error_msg)
             _tq.track_finish(_track_id, error=error_msg)
             _log_image_failure(locals(), error_msg)
-            return f"Fehler: {error_msg}"
+            return f"Error: {error_msg}"
         except requests.exceptions.ConnectionError:
-            error_msg = f"Verbindung zu {backend.name} ({backend.api_url}) fehlgeschlagen"
+            error_msg = f"Connection to {backend.name} ({backend.api_url}) failed"
             logger.error("ConnectionError: %s", error_msg)
             backend.mark_unhealthy("connection error", _BACKEND_COOLDOWN_SECONDS)
             _tq.track_finish(_track_id, error=error_msg)
             _log_image_failure(locals(), error_msg)
-            return f"Fehler: {error_msg}"
+            return f"Error: {error_msg}"
         except Exception as e:
-            error_msg = f"Bildgenerierung ({backend.name}): {e}"
-            logger.error("Fehler bei %s", error_msg)
+            error_msg = f"Image generation ({backend.name}): {e}"
+            logger.error("Error in %s", error_msg)
             _tq.track_finish(_track_id, error=error_msg)
             _log_image_failure(locals(), error_msg)
-            return f"Fehler bei {error_msg}"
+            return f"Error: {error_msg}"
 
 # ---------------------------------------------------------------------------
 # Singleton access — consumers use this instead of fetching a skill

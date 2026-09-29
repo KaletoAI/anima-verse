@@ -12,9 +12,11 @@ Expected values, derived by hand from the loop in ``_post_gateway``
   2.0 s first — the first step of the 503 backoff. Without the wait the
   second POST hits the gateway in the state that just failed. Two POSTs,
   then ``RuntimeError`` (a real defect, so the backend goes on cooldown).
-* 503 ("no healthy backend") waits 2, 4, 8, 16 s and raises
-  ``BackendBusyError`` on the fifth answer — load, not a defect, so no
-  cooldown (round-one typing).
+* 503 WITHOUT ``Retry-After`` ("no healthy backend" for the alias) retries
+  after 2, 8 and 20 s (the gateway's ~30 s health flap) and then raises a
+  plain ``RuntimeError`` — a defect, so the backend goes on cooldown (plan-befundrunde-2026-09-29 B2;
+  the full 503/502 mapping of every gateway backend is
+  ``scripts/smoke_gateway_503_mapping.py``).
 * 429 (rate limit) waits 2, 4, 8, 16 s as well (no Retry-After header) and
   also raises ``BackendBusyError``.
 * 200 returns immediately, without a single wait.
@@ -98,12 +100,13 @@ def main() -> int:
     check("the 200 response is returned",
           isinstance(res, FakeResponse) and res.status_code == 200)
 
-    print("\n[3] 503 — the backoff the 502 branch is modelled on")
+    print("\n[3] 503 without Retry-After — the flap window, then a defect")
     posts, waits, res = run([503])
-    check("five POSTs", len(posts) == 5, str(len(posts)))
-    check("waits 2, 4, 8, 16", waits == [2.0, 4.0, 8.0, 16.0], str(waits))
-    check("BackendBusyError (load, not a defect → no cooldown)",
-          isinstance(res, BackendBusyError), type(res).__name__)
+    check("four POSTs", len(posts) == 4, str(len(posts)))
+    check("waits 2, 8, 20", waits == [2.0, 8.0, 20.0], str(waits))
+    check("RuntimeError (no healthy backend → cooldown)",
+          isinstance(res, RuntimeError) and not isinstance(res, BackendBusyError),
+          type(res).__name__)
 
     print("\n[4] 429 — rate limit")
     posts, waits, res = run([429])

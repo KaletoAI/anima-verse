@@ -1167,7 +1167,8 @@ def generate_expression_image(character_name: str,
         # auto selection — the match/availability logic IS the fallback.
         # model_override + loras are reset because a local model name /
         # LoRAs are not valid on another backend.
-        if isinstance(img_result, str) and "Timeout" in img_result and "verfuegbar" in img_result:
+        if (isinstance(img_result, str)
+                and "No image generation backend is available" in img_result):
             payload_fb = dict(payload)
             payload_fb.pop("backend", None)
             payload_fb.pop("model_override", None)
