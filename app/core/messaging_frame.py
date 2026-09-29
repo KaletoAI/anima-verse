@@ -218,7 +218,9 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
     Args:
         prompt: image prompt (e.g. "modern smartphone, pure green screen, isolated").
         target: render target as served by /admin/settings/imagegen-targets —
-            a backend-name glob, the legacy "backend:<glob>", or empty = auto.
+            a backend-name glob, the legacy "backend:<glob>" (an EXPLICIT pick:
+            exactly that backend, no fallback), or empty = routed through the
+            image routing's "frame" occasion.
 
     Returns:
         dict with status, path, bbox, frame_size, or error.
@@ -251,7 +253,8 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
             return {"status": "error", "error": unknown}
 
     # 4. Generate — everything goes through the image service (its pipeline
-    # owns model resolution, seeds, reference slots and the cloud fallback).
+    # owns model resolution, seeds and reference slots; the routing owns the
+    # backend choice and the fallback along the "frame" chain).
     try:
         import json as _json
         # Materialize the _messaging_frame pseudo-character base dir so the
@@ -274,6 +277,9 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
             # Explicit pick: the user chose this backend in the admin select —
             # match it or fail, never render on a different one silently.
             payload["backend"] = backend_glob
+        else:
+            # No pick: the "frame" chain of the image routing decides.
+            payload["occasion"] = "frame"
         logger.info("Frame generation: target=%s prompt=%.80s", backend_glob or "auto", prompt)
         img_result = image_skill.generate_from_input(_json.dumps(payload))
 

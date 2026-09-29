@@ -26,6 +26,18 @@ The options do not travel in the declaration — the server resolves the source
 name once per request (``character_ops.skill_option_source``) and ships the
 lists beside the skills as ``option_sources``.
 
+Since the image routing (plan-image-routing, Task 10) the video skill declares
+ONE field — ``animate_service``. Its still frame is the "photo" occasion of the
+routing; the per-character still-frame fields ``imagegen_backend`` (a choice on
+``image_backends``) and ``imagegen_model`` (free text) are gone. The generic
+machinery is still exercised in full through a PROBE skill that exists only in
+this smoke (SKILL_ID ``smoke_choice_probe``, not a real feature):
+
+    still_backend  choice on image_backends   (the image source)
+    alt_video      choice on video_backends   (the SAME source as the video
+                                              skill's field -> computed once)
+    note           str                        (a plain field: never flagged)
+
 Hand-derived expectations
 ===========================================================================
 The fake pool (name / media / enabled / available / cost):
@@ -49,50 +61,52 @@ The fake pool (name / media / enabled / available / cost):
       1d  no image service -> [] for both (nothing to offer, no exception)
 
 [2] THE SKILL'S DECLARATION — read off ``VideoGenerationSkill``:
-      2a  ``get_config_fields()`` has exactly the keys
-          {imagegen_backend, imagegen_model, animate_service},
-      2b  imagegen_backend is ``choice`` on ``image_backends``,
-          animate_service is ``choice`` on ``video_backends``,
-          imagegen_model is ``str`` (a free-text ``model_override``: the
-          backend abstraction has no model list),
-      2c  every field's default is "" — the empty option is "world default",
-      2d  the two removed keys are gone from ``_defaults`` AND from the
-          declared fields: ``imagegen_workflow`` (ComfyUI relic — no backend
-          reads a workflow input; the service treats the field as a soft
-          backend glob, which merely duplicates ``imagegen_backend``) and
+      2a  ``get_config_fields()`` has exactly the key {animate_service},
+      2b  animate_service is ``choice`` on ``video_backends``,
+      2c  its default is "" — the empty option is "world default",
+      2d  the removed keys are gone from ``_defaults`` AND from the declared
+          fields: ``imagegen_workflow`` (ComfyUI relic, a soft backend glob),
           ``imagegen_loras`` (LoRAs come from the character's image
-          settings),
-      2e  the skill's ``execute`` no longer builds those two keys into the
-          image payload — checked on the source, since running it would
-          render an image.
+          settings), and since the image routing ``imagegen_backend`` and
+          ``imagegen_model`` (the still is routed as occasion "photo"; the
+          model override is a named feature loss of the routing spec),
+      2e  the skill's ``execute`` no longer reads any of the four and builds
+          none of ``workflow``/``loras``/``backend``/``model_override`` into
+          the image payload, but names ``"occasion": "photo"`` — checked on
+          the source, since running it would render an image.
 
-[3] THE PAYLOAD of ``build_available_skills`` for a character:
-      3a  the video skill appears with its three fields,
+[3] THE PAYLOAD of ``build_available_skills`` for a character (skills: the
+    video skill + the probe):
+      3a  the video skill appears with its one field, the probe with its
+          three,
       3b  ``option_sources`` carries BOTH sources with the lists of [1] —
           one entry per source, not per field,
       3c  a field with no stored value comes back with value "" and
-          ``value_unavailable`` False,
-      3d  a source is computed at most ONCE per call even though two fields
-          use two different sources and the same source could be declared
-          twice (counted through a wrapper around ``skill_option_source``).
+          ``value_unavailable`` False; the str field carries no flag,
+      3d  a source is computed at most ONCE per call: three choice fields
+          over two sources, ``video_backends`` declared twice (animate_service
+          + alt_video) -> exactly one call per source (counted through a
+          wrapper around ``skill_option_source``).
 
 [4] ROUND TRIP through the ordinary field-wise save path
     (``_update_character_skill_config_route_sync``, the body of
     ``POST /characters/{c}/skills/{skill}``):
-      4a  saving ``imagegen_backend = "ImgPricey"`` comes back as the field's
+      4a  saving ``animate_service = "VidA"`` comes back as the field's
           ``value`` with ``value_unavailable`` False,
-      4b  the skill's own effective config says "ImgPricey" too — the value
-          the render would use,
+      4b  the skill's own effective config says "VidA" too — the value the
+          animation would use,
       4c  saving a SECOND field merges instead of replacing (the route reads
-          the stored config first): both values survive.
+          the stored config first): the probe's ``still_backend =
+          "ImgPricey"`` then ``note = "qwen-image"`` — both values survive.
 
 [5] A STORED VALUE THE SOURCE NO LONGER OFFERS (backend deleted or offline):
       5a  ``animate_service = "GoneVid"`` is still the field's ``value``
           (never silently dropped) and is flagged ``value_unavailable``
           True — the UI keeps it selectable, marked "(unavailable)", the
           same spirit as the LoRA library's "(missing)",
-      5b  ``imagegen_backend = "ImgOffline"`` (exists, but down right now) is
-          flagged the same way — the list only holds what can render now,
+      5b  the probe's ``still_backend = "ImgOffline"`` (exists, but down
+          right now) is flagged the same way — the list only holds what can
+          render now,
       5c  the empty value is NEVER flagged (it is the world default, not a
           dangling pick).
 
@@ -108,6 +122,8 @@ The fake pool (name / media / enabled / available / cost):
           ``build_videogen_options``, ``apply_videogen_config``.
 
 FAILS BEFORE THE CHANGE
+    (The image-routing rewrite of [2] fails on commit 08424378, whose video
+    skill still declares imagegen_backend/imagegen_model: 2a and 2d.)
     Verified against commit 2b445fbbd238082035d4dff8b85afc224a134abf: this
     file was run over a source tree whose ``app/`` carries the OLD
     ``skills/video_generation_skill.py``, ``core/character_ops.py`` and
@@ -199,9 +215,36 @@ class _StubManager:
         self.skills = skills
 
 
+from app.skills.base import BaseSkill  # noqa: E402
+
+
+class _ProbeSkill(BaseSkill):
+    """Exists only in this smoke: declares the field shapes the video skill
+    no longer has (an image choice, a second video choice, a str)."""
+
+    SKILL_ID = "smoke_choice_probe"
+
+    def __init__(self):
+        super().__init__({})
+        self._defaults = {"still_backend": "", "alt_video": "", "note": ""}
+
+    def get_config_fields(self):
+        return {
+            "still_backend": {"type": "choice", "options_source": "image_backends",
+                              "default": "", "label": "Still", "description": "d"},
+            "alt_video": {"type": "choice", "options_source": "video_backends",
+                          "default": "", "label": "Alt video", "description": "d"},
+            "note": {"type": "str", "default": "", "label": "Note", "description": "d"},
+        }
+
+    def execute(self, *args, **kwargs) -> str:
+        return ""
+
+
 VIDEO_SKILL = VideoGenerationSkill({})
+PROBE = _ProbeSkill()
 import app.core.dependencies as _deps  # noqa: E402
-_deps.get_skill_manager = lambda: _StubManager([VIDEO_SKILL])  # type: ignore[assignment]
+_deps.get_skill_manager = lambda: _StubManager([VIDEO_SKILL, PROBE])  # type: ignore[assignment]
 
 CHAR = "Demo"
 save_character_profile(CHAR, {"name": CHAR, "description": "smoke character"},
@@ -230,32 +273,27 @@ check("1  labels mirror the names",
 # ---------------------------------------------------------------------------
 print("[2] what the skill declares")
 fields = VIDEO_SKILL.get_config_fields()
-eq("2a field keys", sorted(fields), ["animate_service", "imagegen_backend", "imagegen_model"])
-eq("2b backend field", (fields["imagegen_backend"]["type"],
-                        fields["imagegen_backend"]["options_source"]),
-   ("choice", "image_backends"))
+eq("2a field keys", sorted(fields), ["animate_service"])
 eq("2b video field", (fields["animate_service"]["type"],
                       fields["animate_service"]["options_source"]),
    ("choice", "video_backends"))
-eq("2b model field is free text", fields["imagegen_model"]["type"], "str")
-check("2b model field names no source", "options_source" not in fields["imagegen_model"])
 check("2c every default is empty",
       all(f["default"] == "" for f in fields.values()))
 check("2c every field has a label and a description",
       all(f.get("label") and f.get("description") for f in fields.values()))
-for gone in ("imagegen_workflow", "imagegen_loras"):
+for gone in ("imagegen_workflow", "imagegen_loras", "imagegen_backend",
+             "imagegen_model"):
     check(f"2d {gone} not in _defaults", gone not in VIDEO_SKILL._defaults)
     check(f"2d {gone} not offered as a field", gone not in fields)
 _src = Path(__file__).resolve().parents[1] / "app" / "skills" / "video_generation_skill.py"
 _text = _src.read_text(encoding="utf-8")
-check("2e execute() no longer reads imagegen_workflow",
-      'cfg.get("imagegen_workflow"' not in _text)
-check("2e execute() no longer reads imagegen_loras",
-      'cfg.get("imagegen_loras"' not in _text)
-check("2e no workflow key in the image payload",
-      'imagegen_input["workflow"]' not in _text)
-check("2e no loras key in the image payload",
-      'imagegen_input["loras"]' not in _text)
+for gone in ("imagegen_workflow", "imagegen_loras", "imagegen_backend",
+             "imagegen_model"):
+    check(f"2e execute() no longer reads {gone}", f'cfg.get("{gone}"' not in _text)
+for key in ("workflow", "loras", "backend", "model_override"):
+    check(f"2e no {key} key in the image payload",
+          f'imagegen_input["{key}"]' not in _text)
+check("2e the still names its occasion", '"occasion": "photo"' in _text)
 
 # ---------------------------------------------------------------------------
 print("[3] the skills/available payload")
@@ -273,20 +311,25 @@ payload = character_ops.build_available_skills(CHAR)
 character_ops.skill_option_source = _real_source
 
 entry = next((s for s in payload["skills"] if s["skill_id"] == "video_generation"), None)
+probe = next((s for s in payload["skills"] if s["skill_id"] == PROBE.SKILL_ID), None)
 check("3a the video skill is listed", entry is not None)
-eq("3a with its three fields", sorted(entry["config_fields"]),
-   ["animate_service", "imagegen_backend", "imagegen_model"])
+eq("3a with its one field", sorted(entry["config_fields"]), ["animate_service"])
+check("3a the probe is listed", probe is not None)
+eq("3a with its three fields", sorted(probe["config_fields"]),
+   ["alt_video", "note", "still_backend"])
 eq("3b option_sources keys", sorted(payload["option_sources"]),
    ["image_backends", "video_backends"])
 eq("3b image list", names(payload["option_sources"]["image_backends"]),
    ["ImgCheap", "ImgPricey"])
 eq("3b video list", names(payload["option_sources"]["video_backends"]),
    ["VidB", "VidA"])
-eq("3c unset value", entry["config_fields"]["imagegen_backend"]["value"], "")
+eq("3c unset value", probe["config_fields"]["still_backend"]["value"], "")
 eq("3c unset value not flagged",
-   entry["config_fields"]["imagegen_backend"]["value_unavailable"], False)
+   probe["config_fields"]["still_backend"]["value_unavailable"], False)
+eq("3c unset video value not flagged",
+   entry["config_fields"]["animate_service"]["value_unavailable"], False)
 check("3c the str field carries no flag",
-      "value_unavailable" not in entry["config_fields"]["imagegen_model"])
+      "value_unavailable" not in probe["config_fields"]["note"])
 eq("3d each source resolved once", sorted(_calls), ["image_backends", "video_backends"])
 
 # ---------------------------------------------------------------------------
@@ -294,27 +337,29 @@ print("[4] round trip through the field-wise save route")
 from app.routes.characters import (  # noqa: E402
     _update_character_skill_config_route_sync as save_field)
 
-save_field(CHAR, "video_generation", {"config": {"imagegen_backend": "ImgPricey"}})
+save_field(CHAR, "video_generation", {"config": {"animate_service": "VidA"}})
 payload = character_ops.build_available_skills(CHAR)
 entry = next(s for s in payload["skills"] if s["skill_id"] == "video_generation")
 eq("4a stored value returned",
-   entry["config_fields"]["imagegen_backend"]["value"], "ImgPricey")
+   entry["config_fields"]["animate_service"]["value"], "VidA")
 eq("4a offered -> not flagged",
-   entry["config_fields"]["imagegen_backend"]["value_unavailable"], False)
+   entry["config_fields"]["animate_service"]["value_unavailable"], False)
 eq("4b the skill's effective config",
-   VIDEO_SKILL._get_effective_config(CHAR).get("imagegen_backend"), "ImgPricey")
+   VIDEO_SKILL._get_effective_config(CHAR).get("animate_service"), "VidA")
 
-save_field(CHAR, "video_generation", {"config": {"imagegen_model": "qwen-image"}})
-cfg = VIDEO_SKILL._get_effective_config(CHAR)
-eq("4c the first field survived the second save", cfg.get("imagegen_backend"), "ImgPricey")
-eq("4c the second field is stored", cfg.get("imagegen_model"), "qwen-image")
+save_field(CHAR, PROBE.SKILL_ID, {"config": {"still_backend": "ImgPricey"}})
+save_field(CHAR, PROBE.SKILL_ID, {"config": {"note": "qwen-image"}})
+cfg = PROBE._get_effective_config(CHAR)
+eq("4c the first field survived the second save", cfg.get("still_backend"), "ImgPricey")
+eq("4c the second field is stored", cfg.get("note"), "qwen-image")
 
 # ---------------------------------------------------------------------------
 print("[5] a stored value the source no longer offers")
-save_field(CHAR, "video_generation", {"config": {"animate_service": "GoneVid",
-                                                 "imagegen_backend": "ImgOffline"}})
+save_field(CHAR, "video_generation", {"config": {"animate_service": "GoneVid"}})
+save_field(CHAR, PROBE.SKILL_ID, {"config": {"still_backend": "ImgOffline"}})
 payload = character_ops.build_available_skills(CHAR)
 entry = next(s for s in payload["skills"] if s["skill_id"] == "video_generation")
+probe = next(s for s in payload["skills"] if s["skill_id"] == PROBE.SKILL_ID)
 eq("5a the vanished pick is still returned",
    entry["config_fields"]["animate_service"]["value"], "GoneVid")
 eq("5a and flagged",
@@ -322,18 +367,19 @@ eq("5a and flagged",
 check("5a it is really not in the offered list",
       "GoneVid" not in names(payload["option_sources"]["video_backends"]))
 eq("5b an offline backend is flagged too",
-   entry["config_fields"]["imagegen_backend"]["value_unavailable"], True)
+   probe["config_fields"]["still_backend"]["value_unavailable"], True)
 eq("5b but kept as the value",
-   entry["config_fields"]["imagegen_backend"]["value"], "ImgOffline")
+   probe["config_fields"]["still_backend"]["value"], "ImgOffline")
 
-save_field(CHAR, "video_generation", {"config": {"animate_service": "",
-                                                 "imagegen_backend": ""}})
+save_field(CHAR, "video_generation", {"config": {"animate_service": ""}})
+save_field(CHAR, PROBE.SKILL_ID, {"config": {"still_backend": ""}})
 payload = character_ops.build_available_skills(CHAR)
 entry = next(s for s in payload["skills"] if s["skill_id"] == "video_generation")
+probe = next(s for s in payload["skills"] if s["skill_id"] == PROBE.SKILL_ID)
 eq("5c empty is never flagged (video)",
    entry["config_fields"]["animate_service"]["value_unavailable"], False)
 eq("5c empty is never flagged (image)",
-   entry["config_fields"]["imagegen_backend"]["value_unavailable"], False)
+   probe["config_fields"]["still_backend"]["value_unavailable"], False)
 
 # ---------------------------------------------------------------------------
 print("[6] route inventory + dead cores")

@@ -1,16 +1,14 @@
-"""Video Generation Skill - Erzeugt ein Bild und animiert es zu einem Video.
+"""Video Generation Skill - renders an image and animates it into a video.
 
-Ablauf:
-  1. Generate the image via the core image service (full flow incl. analysis)
-  2. Bild mit dem Animation Service animieren (Together.ai)
+Flow:
+  1. Generate the still via the core image service (full flow incl. analysis);
+     it is the "photo" occasion of the image routing (the character's own
+     match first, then the photo chain — Admin -> Image routing). There is
+     no per-character still-frame backend or model override any more.
+  2. Animate the still with the video backend
 
 Per-character configuration (Characters -> Skills, rendered generically from
 ``get_config_fields``):
-  - imagegen_backend:    image backend for the still frame (MEDIA_TYPE=="image"
-                         in the image_generation pool; empty = world default,
-                         i.e. the cheapest available one)
-  - imagegen_model:      model override handed to that backend (free text —
-                         the backend abstraction has no model list)
   - animate_service:     video backend name/glob (MEDIA_TYPE=="video" in the
                          image_generation pool; empty = cheapest available)
 
@@ -62,8 +60,6 @@ class VideoGenerationSkill(BaseSkill):
         self.action_hint = meta.get("action_hint", "")
 
         self._defaults = {
-            "imagegen_backend": "",
-            "imagegen_model": "",
             "animate_service": "",
         }
 
@@ -72,34 +68,16 @@ class VideoGenerationSkill(BaseSkill):
     # ------------------------------------------------------------------
 
     def get_config_fields(self) -> Dict[str, Dict[str, Any]]:
-        """Declares the three settings for the generic Skills-tab renderer.
+        """Declares the setting for the generic Skills-tab renderer.
 
-        The two backend picks are ``choice`` fields: the option list is not
+        The video backend pick is a ``choice`` field: the option list is not
         in the declaration but comes from a named source the server resolves
         (``character_ops.skill_option_source``), so the dropdown always shows
         the backends this world has right now. The empty option means "world
-        default" in both cases.
+        default". The still frame has no field: the image routing decides it
+        (occasion "photo").
         """
         return {
-            "imagegen_backend": {
-                "type": "choice",
-                "options_source": "image_backends",
-                "default": "",
-                "label": "Image backend",
-                "description": ("Backend that renders the still frame. "
-                                "Empty = the cheapest available one."),
-            },
-            "imagegen_model": {
-                # Free text on purpose: this is the ``model_override`` the
-                # service hands to the backend, and the backend abstraction
-                # has no model list (only two of the backend types even carry
-                # an ``available_models`` attribute, filled by a live probe).
-                "type": "str",
-                "default": "",
-                "label": "Image model override",
-                "description": ("Model name passed to that backend. "
-                                "Empty = the backend's configured model."),
-            },
             "animate_service": {
                 "type": "choice",
                 "options_source": "video_backends",
@@ -127,18 +105,18 @@ class VideoGenerationSkill(BaseSkill):
 
     def execute(self, prompt: str) -> str:
         """
-        Generiert ein Video: Bild erzeugen -> analysieren -> animieren.
+        Generate a video: render the still -> analyse it -> animate it.
 
         Args:
-            prompt: JSON mit prompt, action_prompt, character_name, user_id
-                    (oder einfacher Text-Prompt)
+            prompt: JSON with prompt, action_prompt, character_name, user_id
+                    (or a plain text prompt)
 
         Returns:
-            String mit Bild- und Video-Links oder Fehlermeldung
+            A string with the image and video links, or an error message
         """
         from app.core.task_queue import get_task_queue
 
-        # 1. Input parsen
+        # 1. Parse the input
         ctx = self._parse_base_input(prompt)
         image_prompt = ctx.get("prompt", ctx.get("input", prompt))
         action_prompt = ctx.get("action_prompt", "")
@@ -153,7 +131,7 @@ class VideoGenerationSkill(BaseSkill):
         if not action_prompt or not action_prompt.strip():
             return "Fehler: action_prompt fehlt (Beschreibung der Bewegung/Aktion fuer die Animation)."
 
-        # 2. Per-Character Config laden
+        # 2. Load the per-character config
         cfg = self._get_effective_config(character_name)
 
         # 3. Get the image service
@@ -161,14 +139,14 @@ class VideoGenerationSkill(BaseSkill):
         if not image_skill:
             return "Error: image service is not available."
 
-        # Task im Queue-System registrieren
+        # Register the task in the queue system
         _tq = get_task_queue()
         _track_id = _tq.track_start(
             "video_generation", "Video generieren", agent_name=character_name)
 
         try:
             # ============================================================
-            # Schritt 1: Bild generieren (voller ImageGen-Flow)
+            # Step 1: render the still (full image-generation flow)
             # ============================================================
             logger.info("=" * 80)
             logger.info("VIDEOGENERIERUNG GESTARTET")
@@ -179,6 +157,10 @@ class VideoGenerationSkill(BaseSkill):
 
             _tq.track_update_label(_track_id, "Bild generieren")
 
+            # The still is a photo of the character: the "photo" chain of the
+            # image routing picks its backend. No ``backend``/``model_override``
+            # (the per-character still-frame fields are gone) and no ``loras``
+            # (they come from the character's image settings and the backend).
             imagegen_input = {
                 "prompt": image_prompt,
                 "agent_name": character_name,
@@ -187,30 +169,18 @@ class VideoGenerationSkill(BaseSkill):
                 "skip_gallery": False,
                 "auto_enhance": True,
                 "rp_context": rp_context,
+                "occasion": "photo",
             }
-
-            # Per-character ImageGen overrides. No ``workflow`` and no
-            # ``loras`` here: ``workflow`` is only a SOFT backend glob in the
-            # service (ComfyUI is gone, no backend reads it) and would merely
-            # duplicate ``backend``; the LoRAs of this render come from the
-            # backend's own configuration.
-            _backend = cfg.get("imagegen_backend", "")
-            _model = cfg.get("imagegen_model", "")
-
-            if _backend:
-                imagegen_input["backend"] = _backend
-            if _model:
-                imagegen_input["model_override"] = _model
 
             img_result = image_skill.generate_from_input(json.dumps(imagegen_input))
 
-            # Dateiname aus dem Ergebnis extrahieren
+            # Extract the file name from the result
             # Format: ![Generated Image 1](/characters/Name/images/filename.png?user_id=...)
             match = re.search(r'/images/([^?)\n]+)', img_result)
             if not match:
                 logger.error("Kein Bild im ImageGen-Ergebnis gefunden: %s", img_result[:300])
                 _tq.track_finish(_track_id, error="Bildgenerierung fehlgeschlagen")
-                return img_result  # Fehlermeldung von ImageGen durchreichen
+                return img_result  # pass the image service's error message through
 
             image_filename = match.group(1)
             images_dir = get_character_images_dir(character_name)
@@ -224,7 +194,7 @@ class VideoGenerationSkill(BaseSkill):
             logger.info("Bild generiert: %s", image_filename)
 
             # ============================================================
-            # Schritt 2: Bild animieren
+            # Step 2: animate the still
             # ============================================================
             _tq.track_update_label(_track_id, "Video animieren")
             logger.info("ANIMATION STARTEN")
@@ -233,7 +203,7 @@ class VideoGenerationSkill(BaseSkill):
 
             from app.skills.animate import animate_image
 
-            # Video-Dateiname: gleicher Stem wie Bild + .mp4
+            # Video file name: same stem as the image + .mp4
             video_stem = image_path.stem
             video_filename = f"{video_stem}.mp4"
             video_path = images_dir / video_filename
@@ -251,14 +221,14 @@ class VideoGenerationSkill(BaseSkill):
             if not success:
                 logger.error("Animation fehlgeschlagen")
                 _tq.track_finish(_track_id, error="Animation fehlgeschlagen")
-                # Bild-Ergebnis trotzdem zurueckgeben
+                # Return the image result anyway
                 return img_result + "\n\nFehler: Video-Animation fehlgeschlagen."
 
             logger.info("Animation erfolgreich (%.1fs): %s", _anim_duration, video_filename)
 
-            # Video-Metadaten am BILD speichern (wie bei manueller Animation)
-            # Die Galerie entdeckt das Video ueber die image_videos-Map ({stem}.mp4)
-            # und zeigt es als Companion des Bildes an — mit dessen Beschreibung/Prompt.
+            # Store the video metadata on the IMAGE (as with a manual animation).
+            # The gallery finds the video through the image_videos map ({stem}.mp4)
+            # and shows it as the image's companion — with its description/prompt.
             from datetime import datetime as _dt
             _meta = {
                 "animate_prompt": action_prompt,
@@ -268,11 +238,11 @@ class VideoGenerationSkill(BaseSkill):
             }
             add_character_image_metadata(character_name, image_filename, _meta)
 
-            # Rueckgabe: nur Video-Link (Bild ist Zwischenschritt, nicht im Chat anzeigen)
+            # Return only the video link (the image is an intermediate step, not shown in the chat)
             video_url = f"/characters/{character_name}/images/{video_filename}?user_id={user_id}"
             video_line = f"![Generated Video]({video_url})"
 
-            # Caption aus dem ImageGen-Ergebnis extrahieren (falls vorhanden)
+            # Extract the caption from the image result (if any)
             _caption_match = re.search(r'CAPTION[^:]*:\s*(.+)', img_result)
             _caption = _caption_match.group(1).strip() if _caption_match else ""
 

@@ -510,7 +510,7 @@ def _build_story_system_prompt(character_name: str,
 
 def _visualize_scene(character_name: str, text: str,
     story_meta: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    """Generiert ein temporaeres Szenen-Bild (keine Galerie, kein Kommentar)."""
+    """Render a temporary scene image (no gallery, no comment)."""
     # Inline import to avoid circular import (chat.py <-> story.py)
     from app.routes.chat import _generate_image_prompt
     from app.core.prompt_builder import PromptBuilder
@@ -526,7 +526,7 @@ def _visualize_scene(character_name: str, text: str,
     if avatar:
         appearances = [p for p in appearances if p["name"] != avatar]
 
-    # Story: Character immer einbeziehen — er erlebt die Story
+    # Story: always include the character — it lives through the story
     char_names = [p["name"] for p in appearances]
     if character_name not in char_names:
         char_appearance = get_character_appearance(character_name)
@@ -541,7 +541,7 @@ def _visualize_scene(character_name: str, text: str,
 
     agent_config = get_character_config(character_name)
 
-    # Story-Setting als Kontext fuer den Image-Prompt
+    # Story setting as context for the image prompt
     setting_context = ""
     if story_meta:
         parts = []
@@ -572,17 +572,19 @@ def _visualize_scene(character_name: str, text: str,
         "set_profile": False,
         "skip_gallery": True,
         "auto_enhance": False,
+        # A visualised story scene is a photo: routed through the "photo" chain.
+        "occasion": "photo",
     })
 
     result_text = img_skill.generate_from_input(input_json)
     logger.info("Visualize Result: %s", result_text[:200])
 
-    # Bild-URLs aus Ergebnis parsen
+    # Parse the image URLs from the result
     char_urls = re.findall(r'!\[.*?\]\((\/characters\/[^)]+)\)', result_text)
     if not char_urls:
         return {}
 
-    # Bilder von Character-Dir nach Temp-Dir verschieben
+    # Move the images from the character dir to the temp dir
     images_dir = get_character_images_dir(character_name)
     (_get_storage_dir() / "tmp" / "story_images").mkdir(parents=True, exist_ok=True)
 
@@ -595,7 +597,7 @@ def _visualize_scene(character_name: str, text: str,
             dst = (_get_storage_dir() / "tmp" / "story_images") / filename
             shutil.move(str(src), str(dst))
             tmp_urls.append(f"/story/tmp/{filename}")
-            logger.debug("Bild verschoben: %s -> %s", src, dst)
+            logger.debug("Image moved: %s -> %s", src, dst)
 
     return {
         "image_urls": tmp_urls,

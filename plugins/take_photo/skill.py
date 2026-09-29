@@ -90,8 +90,11 @@ class TakePhotoSkill(PluginSkill):
             # the owner field moves, so appearance, outfit, location and the
             # reference slots are still resolved for the photographer.
             data["gallery_character"] = owner
-            raw_input = json.dumps(data, ensure_ascii=False)
-        return svc.generate_from_input(raw_input)
+        # Every TakePhoto shot is the "photo" occasion of the image routing
+        # (the character's own match first, then the photo chain); an
+        # explicit `backend` in the tool input still pins one backend.
+        data["occasion"] = "photo"
+        return svc.generate_from_input(json.dumps(data, ensure_ascii=False))
 
     def _is_temporary_npc(self, character_name: str) -> bool:
         """Template feature, never a name (fails closed)."""

@@ -81,7 +81,6 @@ class InstagramSkill(PluginSkill):
             "hashtag_count": int(ctx.get_config("skills.instagram.hashtag_count", 5)),
             "caption_language": str(ctx.get_config("skills.instagram.caption_language", "en")),
             "popularity": int(ctx.get_config("skills.instagram.default_popularity", 50)),
-            "imagegen_workflow": str(ctx.get_config("skills.instagram.imagegen_default", "") or ""),
             "post_cooldown_hours": int(ctx.get_config("skills.instagram.post_cooldown_hours", 12)),
         }
 
@@ -388,16 +387,16 @@ class InstagramSkill(PluginSkill):
 
     def execute(self, raw_input: str) -> str:
         """
-        Erstellt einen Instagram-Post in 3 Schritten:
-        1. Bild generieren (ohne Galerie-Eintrag)
-        2. Bild vom LLM analysieren lassen
-        3. Natuerlichen Caption daraus generieren
+        Create an Instagram post in 3 steps:
+        1. Render the image (no gallery entry)
+        2. Let the LLM analyse the image
+        3. Write a natural caption from it
 
         Args:
-            raw_input: JSON-String mit input (Bildbeschreibung), character_name, user_id
+            raw_input: JSON string with input (image description), character_name, user_id
 
         Returns:
-            String mit Post-Bestaetigung und Bild-Link
+            A string with the post confirmation and the image link
         """
         input_data = self._parse_input(raw_input)
         image_prompt = input_data["image_prompt"]
@@ -410,12 +409,12 @@ class InstagramSkill(PluginSkill):
         if not image_prompt.strip():
             return "Fehler: Bildbeschreibung fehlt."
 
-        # Per-Agent enabled Check
+        # Per-agent enabled check
         cfg = self._get_effective_config(character_name)
         if not cfg.get("enabled", True):
             return f"Error: Instagram is disabled for {character_name}."
 
-        # Cooldown pruefen
+        # Check the cooldown
         cooldown_hours = int(cfg.get("post_cooldown_hours", 12))
         if cooldown_hours > 0:
             from datetime import datetime, timedelta
@@ -436,16 +435,16 @@ class InstagramSkill(PluginSkill):
                 except (ValueError, TypeError):
                     pass
 
-        # Schritt 1: ImageGenerationSkill holen und Bild generieren
+        # Step 1: get the image service and render the image
         image_skill = self._get_image_skill()
         if not image_skill:
             return "Fehler: ImageGenerator Skill nicht verfuegbar. Bild kann nicht generiert werden."
 
-        # Location und Activity fuer Caption-Generierung merken
+        # Remember location and activity for the caption
         current_location = get_character_current_location(character_name)
         current_activity = get_effective_activity(character_name)
 
-        # Task-Tracking
+        # Task tracking
         _tq = get_task_queue()
         _track_id = _tq.track_start("instagram_post", "Instagram: Bild generieren", agent_name=character_name)
 
@@ -460,10 +459,10 @@ class InstagramSkill(PluginSkill):
         logger.info("Schritt 1: Bild generieren via Standard-Pipeline (auto_enhance=True)...")
         logger.info(f"Bild-Prompt: {image_prompt}")
 
-        # Instagram-Spezifik: Personen aus dem Image-Prompt rausfischen
-        # (Agent immer + erwaehnte Characters). Die Standard-Pipeline
-        # uebernimmt dann Person/Outfit/Mood/Activity/Location/Adapter-Rendering
-        # und optional LLM-Enhancement via Workflow `prompt_instruction`.
+        # Instagram-specific: fish the people out of the image prompt (the
+        # agent always + every character mentioned). The standard pipeline
+        # then does person/outfit/mood/activity/location/adapter rendering
+        # and the optional LLM enhancement.
         _appearances = []
         _agent_app = get_character_appearance(character_name)
         if _agent_app and "{" in _agent_app:
@@ -475,8 +474,8 @@ class InstagramSkill(PluginSkill):
         if _agent_app:
             _appearances.append({"name": character_name, "appearance": _agent_app})
 
-        # Andere Characters im Prompt erkennen (alles ist Character — auch der Spieler-Avatar
-        # ist ein normaler Character in list_available_characters)
+        # Detect other characters in the prompt (everything is a character — the
+        # player's avatar too is an ordinary character in list_available_characters)
         _prompt_lower = f" {image_prompt.lower()} "
         for _char_name in list_available_characters():
             if _char_name == character_name:
@@ -492,12 +491,6 @@ class InstagramSkill(PluginSkill):
                 if _char_app:
                     _appearances.append({"name": _char_name, "appearance": _char_app})
 
-        # Instagram render target (per-agent config > config default > empty =
-        # character default). A backend glob, resolved by the image service.
-        _insta_workflow = cfg.get("imagegen_workflow", "").strip()
-        if _insta_workflow:
-            logger.info("Instagram render target: %s", _insta_workflow)
-
         image_payload = {
             "prompt": image_prompt,
             "input": image_prompt,
@@ -505,11 +498,12 @@ class InstagramSkill(PluginSkill):
             "user_id": "",
             "set_profile": False,
             "skip_gallery": True,
-            "auto_enhance": True,           # Standard-Pipeline: Adapter + optional LLM-Enhancement
-            "appearances": _appearances,    # Instagram-Spezifik: Pre-detected Personen aus Prompt
+            "auto_enhance": True,           # standard pipeline: adapter + optional LLM enhancement
+            "appearances": _appearances,    # Instagram-specific: people pre-detected in the prompt
+            # The render target is the "instagram" occasion of the image
+            # routing (the character's own match first, then its chain).
+            "occasion": "instagram",
         }
-        if _insta_workflow:
-            image_payload["workflow"] = _insta_workflow
 
         try:
             image_result = image_skill.generate_from_input(json.dumps(image_payload))
@@ -518,7 +512,7 @@ class InstagramSkill(PluginSkill):
             _tq.track_finish(_track_id, error=str(e))
             return f"Fehler bei Bildgenerierung: {e}"
 
-        # Dateiname aus Ergebnis extrahieren
+        # Extract the file name from the result
         image_filename = self._extract_filename(image_result)
         if not image_filename:
             logger.error(f"Konnte Dateiname nicht extrahieren: {image_result}")
@@ -527,8 +521,8 @@ class InstagramSkill(PluginSkill):
 
         logger.info(f"Bild generiert: {image_filename}")
 
-        # Enhanced Prompt (wie an ComfyUI gesendet) fuer Post-Metadaten uebernehmen.
-        # Thread-Local zuerst (race-safe) — siehe gen_meta-Block unten.
+        # Take the enhanced prompt (as sent to the backend) for the post metadata.
+        # Thread-local first (race-safe) — see the gen_meta block below.
         final_image_prompt = ""
         try:
             _tls_p = getattr(image_skill, '_meta_tls', None)
@@ -539,11 +533,11 @@ class InstagramSkill(PluginSkill):
         if not final_image_prompt:
             final_image_prompt = getattr(image_skill, 'last_enhanced_prompt', '') or image_prompt
 
-        # Generierungs-Metadaten vom Image-Skill uebernehmen.
-        # WICHTIG: Thread-Local-Slot zuerst lesen — bei parallelen Generationen
-        # (z.B. Instagram-Post + Expression-Regen gleichzeitig) wuerde die
-        # Instance-Variante mit fremdem Meta ueberschrieben (race-condition,
-        # Yuki's expression-regen-Meta landet faelschlich in Kira's Post).
+        # Take the generation metadata from the image service.
+        # IMPORTANT: read the thread-local slot first — with parallel renders
+        # (e.g. an Instagram post and an expression regen at the same time) the
+        # instance variant would be overwritten with foreign meta (race
+        # condition: one character's expression-regen meta lands in another's post).
         gen_meta = {}
         try:
             _tls = getattr(image_skill, '_meta_tls', None)
@@ -554,7 +548,7 @@ class InstagramSkill(PluginSkill):
         if not gen_meta:
             gen_meta = getattr(image_skill, 'last_image_meta', None) or {}
 
-        # Bild von images/ nach instagram/ verschieben
+        # Move the image from images/ to instagram/
         images_dir = get_character_images_dir(character_name)
         instagram_dir = get_instagram_dir()
         src_path = images_dir / image_filename
@@ -575,10 +569,10 @@ class InstagramSkill(PluginSkill):
             logger.warning(f"Fehler beim Verschieben: {e}, verwende Originalpfad")
             dst_path = src_path
 
-        # Hole aktuelle Location und Activity
+        # Current location and activity
         current_activity = get_effective_activity(character_name)
         
-        # Schritt 2+3: LLM analysiert Bild und generiert Caption
+        # Steps 2+3: the LLM analyses the image and writes the caption
         _tq.track_update_label(_track_id, "Instagram: Caption generieren")
         logger.info("=" * 60)
         logger.info("Schritt 2+3: Bild analysieren und Caption generieren...")
@@ -591,11 +585,11 @@ class InstagramSkill(PluginSkill):
             logger.info(f"Activity: {current_activity}")
         logger.info("=" * 60)
 
-        # Primaer: Caption aus Thought-Tool-Argument (provided_caption). Der
-        # aufrufende Thought-LLM hat die Caption schon im Character-Voice
-        # formuliert — kein zweiter Vision-LLM-Call noetig.
-        # Fallback: Wenn keine Caption uebergeben wurde, Vision-LLM generiert
-        # aus dem Bild. Letzter Fallback: image_prompt + generische Hashtags.
+        # Primary: the caption from the thought tool argument (provided_caption).
+        # The calling thought LLM already wrote it in the character's voice —
+        # no second vision-LLM call needed.
+        # Fallback: without a caption the vision LLM writes one from the
+        # image. Last fallback: image_prompt + generic hashtags.
         if provided_caption and provided_caption.strip():
             caption = provided_caption.strip()
             logger.info("Caption aus Tool-Argument genutzt (Vision-LLM uebersprungen)")
@@ -608,10 +602,10 @@ class InstagramSkill(PluginSkill):
                 logger.warning("Fallback: Verwende einfachen Caption")
                 caption = f"{image_prompt} #instagram #ai"
 
-        # Hashtags extrahieren
+        # Extract the hashtags
         hashtags = self._extract_hashtags(caption)
 
-        # Schritt 4: Bildanalyse via Vision-LLM
+        # Step 4: image analysis via the vision LLM
         _tq.track_update_label(_track_id, "Instagram: Bildanalyse")
         logger.info("Schritt 4: Bildanalyse via Vision-LLM...")
         image_analysis = self._analyze_image(str(dst_path), character_name)
@@ -620,27 +614,28 @@ class InstagramSkill(PluginSkill):
         else:
             logger.warning("Bildanalyse fehlgeschlagen oder leer")
 
-        # Post erstellen und speichern
+        # Create and store the post
         _tq.track_update_label(_track_id, "Instagram: Post erstellen")
         image_meta = {
             "backend": gen_meta.get("backend", ""),
             "backend_type": gen_meta.get("backend_type", ""),
-            "workflow": gen_meta.get("workflow", ""),
             "duration_s": gen_meta.get("duration_s", 0.0),
             "image_analysis": image_analysis or "",
         }
-        # Referenzbilder in Metadaten übernehmen (für Regenerierung + Character-Erkennung)
+        # Copy the reference images into the metadata (for regeneration + character detection)
         if gen_meta.get("reference_images"):
             image_meta["reference_images"] = gen_meta["reference_images"]
-        # Erweiterte Felder fuer Re-Creation-Dialog + Bild-Info-Panel —
-        # ohne diese laeuft Rebuild blind auf den aktuellen Character-State
-        # ("Keine Original-Werte gespeichert"-Hinweis im UI).
+        # Extended fields for the re-creation dialog + image info panel —
+        # without them a rebuild runs blind on the current character state
+        # (the "no original values stored" hint in the UI). `routing` /
+        # `fallback_from` carry the image routing's record of this render.
         for _k in ("canonical", "canonical_source", "target_model",
                    "template_prompt", "prompt_method",
                    "character_names", "from_character",
                    "model", "loras", "seed", "negative_prompt",
                    "guidance_scale", "num_inference_steps",
-                   "items_used", "location", "room_id"):
+                   "items_used", "location", "room_id",
+                   "routing", "fallback_from"):
             _v = gen_meta.get(_k)
             if _v not in (None, "", [], {}):
                 image_meta[_k] = _v
@@ -662,7 +657,7 @@ class InstagramSkill(PluginSkill):
         except Exception as _pp_err:
             logger.debug("Instagram postprocess trigger skipped: %s", _pp_err)
 
-        # Cooldown-Timestamp persistieren
+        # Persist the cooldown timestamp
         try:
             from datetime import datetime
             from app.models.character import get_character_skill_config, save_character_skill_config
@@ -677,10 +672,10 @@ class InstagramSkill(PluginSkill):
         logger.info("INSTAGRAM-POST FERTIG")
         logger.info("=" * 60)
 
-        # Stimmung basierend auf Caption-Sentiment setzen
+        # Set the mood from the caption sentiment
         try:
             caption_lower = caption.lower()
-            mood = "inspiriert"  # Default
+            mood = "inspiriert"  # default
 
             if any(word in caption_lower for word in ["happy", "glücklich", "joy", "freud", "laugh", "lach", "smile", "lächel"]):
                 mood = "glücklich"
@@ -700,7 +695,7 @@ class InstagramSkill(PluginSkill):
 
         _tq.track_finish(_track_id)
 
-        # Ergebnis zurueckgeben
+        # Return the result
         image_url = f"/instagram/images/{image_filename}?user_id={user_id}"
         return (
             f"Instagram-Post erstellt!\n\n"

@@ -331,7 +331,7 @@ der Storyteller-Fallback in `routes/play.py`. Die Storyteller-Whitelist
 
 | Funktion | Semantik |
 |---|---|
-| `get_image_service() -> ImageService` | Singleton der Medien-Engine (Backend-Pool, Auswahl, Pipeline, Vision-Analyse). `svc.enabled` prüfen; `generate_from_input(prompt)` = voller Generierungslauf |
+| `get_image_service() -> ImageService` | Singleton der Medien-Engine (Backend-Pool, Auswahl, Pipeline, Vision-Analyse). `svc.enabled` prüfen; `generate_from_input(prompt)` = voller Generierungslauf. Das JSON-Payload nennt seinen Anlass im Feld `occasion` (Katalog `app.imagegen.occasions`, z. B. `photo`, `instagram`; fehlt es: `photo`) — das Bild-Routing wählt dann das Backend samt Rückfall entlang der Kette. `backend` = eine EXPLIZITE Wahl: genau dieses Backend, kein Rückfall. Ein Fehlschlag kommt als String mit Präfix `Error: ` zurück |
 | `ImageService.run_on_backend_channel(backend, gen_fn, *, task_type, agent_name='', label='', priority=-1)` | **Jeder** Backend-Lauf geht hier durch: der Aufruf wird auf dem GPU-/Backend-Kanal serialisiert und zählt gegen das Job-Budget. Nie `backend.generate` direkt rufen |
 | `reset_image_service()` | Pool-Neuaufbau beim nächsten Zugriff (ruft `skill_manager.reload_skills` automatisch) |
 | `app.imagegen.base.BackendBusyError` | **Last, kein Defekt.** Überlebt die Queue-Grenze als typisierte Exception und wird ohne Cooldown erneut versucht. Ein Paket darf sie nicht in ein generisches „Fehler" umschreiben |

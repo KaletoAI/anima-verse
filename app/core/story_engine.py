@@ -48,11 +48,6 @@ def beat_images_enabled() -> bool:
     return os.environ.get("STORY_ENGINE_BEAT_IMAGES", "true").lower() in ("true", "1", "yes")
 
 
-def beat_image_default() -> str:
-    # Backend-name glob (a legacy "backend:<glob>" prefix is tolerated)
-    return os.environ.get("STORY_ENGINE_IMAGEGEN_DEFAULT", "").strip()
-
-
 # ---------------------------------------------------------------------------
 # StoryArcEngine
 # ---------------------------------------------------------------------------
@@ -345,7 +340,7 @@ class StoryArcEngine:
     def _generate_beat_image(
         self, arc: Dict[str, Any], beat_summary: str
     ) -> Optional[Dict[str, Any]]:
-        """Generiert ein Szenen-Bild fuer einen Arc-Beat (best-effort)."""
+        """Render a scene image for an arc beat (best-effort)."""
         try:
             import json as _json
             import re
@@ -396,12 +391,10 @@ class StoryArcEngine:
                 "set_profile": False,
                 "skip_gallery": True,
                 "auto_enhance": False,
+                # A story beat is a scene photo: the "photo" chain of the
+                # image routing decides the backend.
+                "occasion": "photo",
             }
-            # Configured default render target (story_engine.imagegen_default):
-            # a backend glob, resolved by the image service.
-            _beat_img_default = beat_image_default()
-            if _beat_img_default:
-                input_data["workflow"] = _beat_img_default
             input_json = _json.dumps(input_data)
             result_text = img_skill.generate_from_input(input_json)
 
@@ -417,7 +410,7 @@ class StoryArcEngine:
                 "prompt_used": image_prompt,
             }
         except Exception as e:
-            logger.error("Beat-Bild-Generierung fehlgeschlagen: %s", e)
+            logger.error("Beat image generation failed: %s", e)
             return None
 
     def _on_arc_resolved(self, arc: Dict[str, Any]) -> None:

@@ -5,7 +5,7 @@ Usage:  ./.venv/bin/python scripts/smoke_image_routing_catalog.py
 
 Spec: development_instructions/plan-image-routing.md § 1 + the binding review
 notes ("Katalog (§1)"). No server, no world, no DB — it imports the catalog
-module only (Part A). Parts B and C (added later) scan the callers by AST.
+module only (Part A); Part B (and C, added later) scan the callers by AST.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
@@ -46,9 +46,36 @@ A9. mesh_occasion_for_rig: mixamo -> mesh_humanoid, generic -> mesh_creature,
 A10. catalog_payload() has 19 rows in catalog order, each with the keys
     id, label, media, category, rig, character_scoped, needs_ref_slot, covers;
     every label is a non-empty English string.
+
+PART B — THE STRING-PATH CALLERS NAME THEIR OCCASION (AST, no import)
+---------------------------------------------------------------------
+The caller set is derived from the code itself: every tracked .py file under
+app/ and plugins/ (`git ls-files`; the symlinked private packs are not
+scanned — known limit) is parsed, and a file is a caller when its AST
+references the attribute `.generate_from_input` (a call, or the bound method
+handed on, e.g. to `asyncio.to_thread`). A mention in a comment or a
+docstring does not count. app/imagegen/service.py DEFINES the façade and is
+not a caller of it.
+B1. Every function of those files whose own body references
+    `.generate_from_input` sets an "occasion" payload key (dict literal key
+    or `x["occasion"] = …`); a CONSTANT value must be a catalog occasion.
+B2. None of those functions writes a "workflow" payload key any more (the
+    soft glob is gone, plan-image-routing.md review "Service-Teilung").
+B3. The caller files are exactly EXPECTED_STRING_CALLERS (a new caller must
+    be added here consciously, with its occasion):
+      plugins/take_photo/skill.py         photo      (TakePhoto)
+      plugins/instagram/skill_post.py     instagram  (Instagram post)
+      app/core/messaging_frame.py         frame      (no explicit target)
+      app/core/story_engine.py            photo      (story beat image)
+      app/routes/story.py                 photo      (visualised scene)
+      app/skills/video_generation_skill.py photo     (the video's still)
+    Until Task 11 the three character-image callers (PENDING_TASK_11) are
+    left out of the scan; Task 11 moves them into the expected set.
 """
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -144,8 +171,95 @@ def part_a():
                                       for r in rows), True)
 
 
+EXPECTED_STRING_CALLERS = {
+    "plugins/take_photo/skill.py",
+    "plugins/instagram/skill_post.py",
+    "app/core/messaging_frame.py",
+    "app/core/story_engine.py",
+    "app/routes/story.py",
+    "app/skills/video_generation_skill.py",
+}
+# Task 11 converts these and deletes this set (plus its filter in part_b).
+PENDING_TASK_11 = {"app/core/character_ops.py", "app/core/npc_assets.py",
+                   "app/core/expression_regen.py"}
+
+ROOT = Path(__file__).resolve().parent.parent
+FACADE = "generate_from_input"
+
+
+def _tracked_py(*paths):
+    """Tracked .py files under *paths* (repo-relative), via git ls-files."""
+    out = subprocess.run(["git", "ls-files", "--", *paths], cwd=ROOT,
+                         capture_output=True, text=True, check=False).stdout
+    return [f for f in out.split() if f.endswith(".py")]
+
+
+def _own_nodes(fn):
+    """Nodes of a function body without the bodies of nested defs."""
+    import ast
+    stack = list(fn.body)
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+
+
+def _references_facade(nodes):
+    import ast
+    return any(isinstance(n, ast.Attribute) and n.attr == FACADE for n in nodes)
+
+
+def _payload_keys(fn, key):
+    """Values written to payload key `key` inside fn: dict-literal entries
+    and `x[key] = value` assignments. Returns the value nodes."""
+    import ast
+    vals = []
+    for node in _own_nodes(fn):
+        if isinstance(node, ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                if isinstance(k, ast.Constant) and k.value == key:
+                    vals.append(v)
+        elif isinstance(node, ast.Assign):
+            for t in node.targets:
+                if (isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant)
+                        and t.slice.value == key):
+                    vals.append(node.value)
+    return vals
+
+
+def part_b():
+    import ast
+    from app.imagegen.occasions import occasion_ids
+    print("B) string-path callers")
+    ids = set(occasion_ids())
+    trees = {}
+    for f in _tracked_py("app", "plugins"):
+        if f == "app/imagegen/service.py":
+            continue
+        tree = ast.parse((ROOT / f).read_text(encoding="utf-8"), filename=f)
+        if _references_facade(ast.walk(tree)):
+            trees[f] = tree
+    files = {f for f in trees if f not in PENDING_TASK_11}
+    check("B3 the caller files", files, EXPECTED_STRING_CALLERS)
+    for f in sorted(files):
+        for fn in ast.walk(trees[f]):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not _references_facade(_own_nodes(fn)):
+                continue
+            occ = _payload_keys(fn, "occasion")
+            check(f"B1 {f}:{fn.name} sets an occasion", bool(occ), True)
+            bad = [v.value for v in occ if isinstance(v, ast.Constant) and v.value not in ids]
+            check(f"B1 {f}:{fn.name} occasions are in the catalog", bad, [])
+            check(f"B2 {f}:{fn.name} writes no workflow key",
+                  len(_payload_keys(fn, "workflow")), 0)
+
+
 if __name__ == "__main__":
     part_a()
+    part_b()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")
