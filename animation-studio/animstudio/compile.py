@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 from animstudio import rig
-from animstudio.dsl import Animation, validate, values_at
+from animstudio.dsl import Animation, _layers, validate, values_at
 
 
 @dataclass
@@ -93,7 +93,6 @@ def compile_anim(anim: Animation, rest: rig.Rest) -> Compiled:
                         fingers=any(d.endswith(("_fingers_curl", "_thumb_curl")) for d in used),
                         extrema=extrema, lift_cm=anim.lift_cm)
     if anim.loop:
-        from animstudio.dsl import _layers
         for o in _layers(anim):
             cycles = anim.duration_s / o.period_s
             if abs(cycles - round(cycles)) > 1e-6:

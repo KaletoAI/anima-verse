@@ -32,13 +32,20 @@ Stage 4 - sampling:
     t = 0.5 -> 20.0; with ease "in_out" (smoothstep, u = 0.5 -> 0.5) also
     20.0, at t = 0.25 in_out: u=0.25 -> 0.15625 -> 6.25.
   carry-forward: a key that does not name a DOF keeps the previous value.
+  a DOF first named in a LATER key starts at its rest value 0: keys at 0 s
+    (spine_flex 0) and 1 s (neck_rot 30, in_out): neck_rot at t = 0 / 0.5 /
+    1 = 0 / 30*0.5 = 15 / 30. With loop=True and duration 2 s the closing key
+    repeats key 0 (neck_rot 0 there), so neck_rot(2.0) = 0.0 and
+    neck_rot(1.5) = 30 + (0 - 30)*0.5 = 15.0.
   loop=True, duration 2 s, keys at 0 (a=0) and 1 (a=40): the implicit closing
     key at 2 s repeats key 0, so t=1.5 linear-in_out -> 20.0 and the frame
     count is duration*fps + 1 = 61 with frame 60 == frame 0.
   Oscillator(spine_rot, amp 10, period 2.0): at t = 0.5 (a quarter period)
     +10.0; at t = 1.0 0.0 (|x| < 1e-9).
   validate: an unknown DOF, a key at t >= duration on a loop, an unknown
-    ease and an unknown group each raise StudioError.
+    ease, an unknown group and a loop whose duration*fps is no integer
+    (1.01 s * 30 = 30.3 frames: the last frame misses the closing key) each
+    raise StudioError.
 """
 import ast
 import math
@@ -130,6 +137,14 @@ check(abs(values_at(a, 0.25)["spine_flex"] - 6.25) < 1e-9, "in_out 0.25")
 a = Animation(kind="s", duration_s=2.0, loop=False, catalog=CAT,
               keys=[Key(0.0, Pose(spine_flex=10, neck_rot=5)), Key(1.0, Pose(spine_flex=30))])
 check(abs(values_at(a, 1.5)["neck_rot"] - 5.0) < 1e-9, "carry-forward")
+a = Animation(kind="s", duration_s=1.0, loop=False, catalog=CAT,
+              keys=[Key(0.0, Pose(spine_flex=0)), Key(1.0, Pose(neck_rot=30))])
+got = [values_at(a, t).get("neck_rot") for t in (0.0, 0.5, 1.0)]
+check(got[0] is not None and near(got, [0.0, 15.0, 30.0], 1e-9), f"late DOF ramps from 0: {got}")
+a = Animation(kind="s", duration_s=2.0, loop=True, catalog=CAT,
+              keys=[Key(0.0, Pose(spine_flex=0)), Key(1.0, Pose(neck_rot=30))])
+check(abs(values_at(a, 2.0)["neck_rot"]) < 1e-9, "late DOF loop closes to 0")
+check(abs(values_at(a, 1.5)["neck_rot"] - 15.0) < 1e-9, "late DOF loop 1.5")
 a = Animation(kind="s", duration_s=2.0, loop=True, catalog=CAT,
               keys=[Key(0.0, Pose(spine_flex=0)), Key(1.0, Pose(spine_flex=40))])
 check(abs(values_at(a, 1.5)["spine_flex"] - 20.0) < 1e-9, "loop closing key")
@@ -146,6 +161,7 @@ for bad in (
     Animation(kind="s", duration_s=1.0, loop=False, catalog=CAT, keys=[Key(0.0, Pose(), ease="wobble")]),
     Animation(kind="s", duration_s=1.0, loop=False,
               catalog=Catalog(key="x", group="sofa", prompt="p")),
+    Animation(kind="s", duration_s=1.01, loop=True, catalog=CAT),
 ):
     try:
         validate(bad)

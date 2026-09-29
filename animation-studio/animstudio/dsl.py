@@ -98,6 +98,10 @@ def validate(anim: Animation) -> None:
         raise StudioError("fps must be 30 (the library rate)")
     if anim.duration_s <= 0:
         raise StudioError("duration_s must be > 0")
+    frames = anim.duration_s * anim.fps
+    if anim.loop and abs(frames - round(frames)) > 1e-9:
+        raise StudioError(f"loop: duration_s * fps = {frames:g} is no whole frame count "
+                          "- the last frame would miss the closing key")
     if anim.catalog.group not in GROUPS:
         raise StudioError(f"catalog.group must be one of {GROUPS}")
     if "/" in anim.catalog.key:
@@ -128,7 +132,11 @@ def validate(anim: Animation) -> None:
 
 
 def _resolved_keys(anim: Animation) -> List[Tuple[float, Dict[str, float], str]]:
-    acc: Dict[str, float] = dict(anim.base)
+    # Every DOF named anywhere starts at its rest value 0 (then base), so a
+    # DOF first named in a later key ramps from 0 instead of holding its value
+    # from t = 0, and a loop's closing key brings it back.
+    named = set(anim.base).union(*(k.pose for k in anim.keys))
+    acc: Dict[str, float] = {**{d: 0.0 for d in named}, **anim.base}
     out = []
     for k in anim.keys:
         acc = {**acc, **k.pose}
