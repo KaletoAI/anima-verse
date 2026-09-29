@@ -120,21 +120,29 @@ class RetrospectSkill(PluginSkill):
         }
 
         # Goals → standing intents (plan-intents-unified.md): each goal becomes
-        # an intent set by the character. Dedupe against existing active intents
-        # of the same title so repeated retrospects don't stack them.
+        # an intent set by the character. The core's duplicate rule (equal or
+        # contained title, also against goals created earlier in this loop —
+        # they are active by then) keeps repeated retrospects from stacking
+        # them. Retrospect goals get NO expiry: they would only churn.
         try:
-            from app.models.intents import create_intent, list_intents
-            existing = {(i.get("title") or "").strip().lower()
-                        for i in list_intents(owner=character_name, status="active")}
+            from app.core.keyed_lock import keyed_lock
+            from app.models.intents import create_intent, find_duplicate
             for g in (parsed.get("goals") or []):
                 if not isinstance(g, dict):
                     continue
                 title = (g.get("text") or "").strip()
-                if title and title.lower() not in existing:
+                if not title:
+                    continue
+                with keyed_lock("intents", character_name):
+                    dup = find_duplicate(character_name, title)
+                    if dup:
+                        self.ctx.logger.info(
+                            "retrospect goal %r skipped: duplicate of intent %s %r",
+                            title, dup.get("id"), dup.get("title"))
+                        continue
                     create_intent(owner=character_name, title=title, source="character",
                                   trigger={"kind": "standing"}, priority=3,
                                   meta={"origin": "retrospect_goal"})
-                    existing.add(title.lower())
         except Exception as _ge:
             self.ctx.logger.debug("retrospect goals -> intents failed: %s", _ge)
 

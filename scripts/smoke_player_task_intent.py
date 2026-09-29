@@ -14,9 +14,10 @@ function (``intents.parse_and_apply_intent_markers``):
 
     [INTENT: <title> | <description> | when=… | prio=<1-5> | by=<player|self>]
 
-``by=player`` says the task was given by the person in the conversation, which
-is what ``source="human"`` records; anything else, and a missing ``by=``, is
-the character's own plan (``source="character"``).  The legacy
+``by=player`` says the OTHER person explicitly asked for it (the request
+stands in their words), which is what ``source="human"`` records; anything
+else, and a missing ``by=``, is the character's own plan
+(``source="character"``).  The legacy
 ``[NEW_ASSIGNMENT: <title> | <role> | <description> | <priority> |
 <duration_minutes>]`` marker — which the rp_first tool prompt still demanded
 while nothing had written the ``assignments`` table since June — is gone.
@@ -30,10 +31,11 @@ HAND-DERIVED EXPECTATIONS
         description "from the library"   (the one field without an "=")
         priority    2
         trigger     {"kind": "at_time", "run_date": <canonical GAME stamp>}
-        expires_at  == trigger.run_date
-      and that stamp is exactly 2 GAME hours after now: read the game clock
+        expires_at  == trigger.run_date + 1 game hour (3600 s of grace, so
+                       the scheduled bump still finds the intent active)
+      and run_date is exactly 2 GAME hours after now: read the game clock
       before and after the call, then
-        (before + 7200 s) <= parse(expires_at) <= (after + 7200 s).
+        (before + 7200 s) <= parse(run_date) <= (after + 7200 s).
       7200 = 2 * 3600 by hand, and ``_when_to_trigger`` builds it as
       ``game_time() + GameDuration.of(seconds=…)`` — GAME time, not a
       ``datetime``: the whole comparison is done in GameTime seconds.
@@ -78,6 +80,52 @@ HAND-DERIVED EXPECTATIONS
         speaker STORYTELLER_SPEAKER
       ``record_utterance`` is stubbed on ``app.core.perception``; the helper
       imports it from there at call time.
+
+  B5 of plan-befundrunde-2026-09-29 (duplicates, ids, counters, expiry):
+  [7] Duplicates are not created (``find_duplicate``: titles normalized word
+      by word — lowercase, punctuation dropped — equal or contained on word
+      boundaries, the shorter one >= 6 characters):
+        existing "Buy bread at the market"
+        "Buy bread at the market"      -> equal            -> 0 created
+        "buy BREAD!"                   -> "buy bread" (9) inside -> 0 created
+        "Buy breadcrumbs"              -> "buy breadcrumbs" is not a word-run
+                                          of the other      -> 1 created
+        "Rest" twice                   -> "rest" has 4 < 6 characters, never a
+                                          duplicate         -> 1 created each
+        "Visit the lighthouse" + "Visit the lighthouse keeper" in ONE text
+                                       -> the second contains the first,
+                                          created a line earlier -> 1 created
+        another character's "Buy bread at the market" -> other owner -> 1
+  [8] Every entry of ``build_intents_prompt_section`` carries "(id <id>)"
+      (exactly as many "(id " as active intents: 3 here), the header is
+      English; with 14 active intents and ``max_entries=12`` it shows 12
+      entries plus "(+2 more"; ``build_open_intents_brief`` shows
+      "  <id> | <title>"; the room tool-decision prompt for this character
+      lists it after the marker grammar.
+  [9] ``auto_track_progress`` leaves ``target_count == 0`` alone: its progress
+      stays [] after a tool use, while a target_count=2 intent goes 1 -> 2 and
+      is done on the second call; with only count-less intents it returns None.
+ [10] A thought turn applies its markers ONCE: in the tracked Python under
+      app/ and plugins/ the call ``parse_and_apply_intent_markers(`` (not its
+      ``def``) occurs exactly 1 time, in app/core/chat_engine.py
+      (post_process_response — the thought turn goes through it too).
+      Before-proof pinned to commit 03717c17: there it occurred >= 2 times
+      (the second in app/core/thoughts.py).
+ [11] Expiry in GAME time, set at creation (seconds by hand):
+        own plan when=now       -> now + 3600
+        own plan when=standing  -> now + 3 * 86400 = 259200 (default TTL)
+        with intents.self_intent_ttl_days = 5 -> now + 432000
+        with intents.self_intent_ttl_days = 0 -> "" (never)
+        player task when=now    -> ""  (a player's task stays until done)
+ [12] INTENT_DONE / INTENT_PROGRESS only for the owner or a participant:
+        Mira on Other's intent            -> status stays "active", no progress
+        Mira as participant of Other's    -> progress note recorded
+        Mira on her own intent            -> "done"
+ [13] The admin route takes RELATIVE game minutes and computes the stamps:
+        create {duration_minutes: 60, trigger {kind at_time, run_in_minutes: 360}}
+          -> expires_at = now + 3600, run_date = now + 21600, no run_in_minutes
+             stored; PATCH {duration_minutes: 1440} -> expires_at = now + 86400;
+        an at_time trigger with neither run_date nor run_in_minutes -> HTTP 400.
 """
 import os
 import sys
@@ -153,9 +201,11 @@ check("description", it.get("description"), "from the library")
 check("priority", it.get("priority"), 2)
 check("trigger kind", (it.get("trigger") or {}).get("kind"), "at_time")
 _run = (it.get("trigger") or {}).get("run_date", "")
-check("expires_at == trigger.run_date", it.get("expires_at"), _run)
 _secs = GameTime.parse(_run).total_seconds if _run else -1
-check_true("expires_at is 2 GAME hours ahead",
+check("expires_at == run_date + 1 game hour",
+      GameTime.parse(it["expires_at"]).total_seconds if it.get("expires_at") else -1,
+      _secs + 3600)
+check_true("run_date is 2 GAME hours ahead",
            _before + 7200 <= _secs <= _after + 7200,
            f"{_before}+7200 <= {_secs} <= {_after}+7200")
 drop_all()
@@ -279,6 +329,194 @@ check("lines for the character's own plan", len(RECORDED), 0)
 RECORDED.clear()
 _announce_player_tasks(CHAR, [_human], {"source": "thought"})
 check("lines for a thought turn", len(RECORDED), 0)
+
+# --------------------------------------------------- B5 [7] duplicates
+
+from app.core import agent_loop as agent_loop_mod  # noqa: E402
+from app.models.intents import (add_progress, auto_track_progress,  # noqa: E402
+                                build_intents_prompt_section,
+                                build_open_intents_brief, create_intent,
+                                find_duplicate, get_intent)
+
+
+class _FakeLoop:
+    def bump(self, *a, **kw):
+        return None
+
+
+# when=now bumps the owner through the agent loop — never start a real one.
+agent_loop_mod.get_agent_loop = lambda: _FakeLoop()
+OTHER = "Other Person"
+
+print("[7] duplicates are not created")
+drop_all()
+base = parse_and_apply_intent_markers(CHAR, "[INTENT: Buy bread at the market]")
+check("the first one is created", len(base), 1)
+check("equal title", len(parse_and_apply_intent_markers(
+    CHAR, "[INTENT: Buy bread at the market]")), 0)
+check("contained title (normalized)", len(parse_and_apply_intent_markers(
+    CHAR, "[INTENT: buy BREAD!]")), 0)
+check("find_duplicate names the existing one",
+      (find_duplicate(CHAR, "buy bread") or {}).get("id"),
+      base[0]["id"] if base else None)
+check("not on a word boundary -> created", len(parse_and_apply_intent_markers(
+    CHAR, "[INTENT: Buy breadcrumbs]")), 1)
+check("short title, first", len(parse_and_apply_intent_markers(
+    CHAR, "[INTENT: Rest]")), 1)
+check("short title, again (< 6 chars is never a duplicate)",
+      len(parse_and_apply_intent_markers(CHAR, "[INTENT: Rest]")), 1)
+check("two markers in one text, the second covers the first",
+      len(parse_and_apply_intent_markers(
+          CHAR, "[INTENT: Visit the lighthouse]\n"
+                "[INTENT: Visit the lighthouse keeper]")), 1)
+check("another owner's same title is no duplicate",
+      len(parse_and_apply_intent_markers(OTHER, "[INTENT: Buy bread at the market]")), 1)
+drop_all()
+
+# --------------------------------------------------- B5 [8] ids in the prompt
+
+print("[8] the prompt section shows the ids")
+mine = [create_intent(owner=CHAR, title=f"Plan {n}",
+                      participants={CHAR: {"role": "", "progress": []}})
+        for n in ("alpha", "beta", "gamma")]
+section = build_intents_prompt_section(CHAR)
+check("'(id ' occurrences", section.count("(id "), 3)
+check_true("every id is in it", all(f"(id {m['id']})" in section for m in mine))
+check_true("the header is English", "== CURRENT PLANS & TASKS" in section, section[:60])
+brief = build_open_intents_brief(CHAR)
+check_true("brief line '  <id> | <title>'",
+           f"  {mine[0]['id']} | Plan alpha" in brief, brief)
+_room = _rp_tool_decision_input("Hello.", '"Hi," she says.', {}, agent_name=CHAR)
+_i_grammar = _room.find("[INTENT_DONE: <id>]")
+_i_list = _room.find(f"{mine[0]['id']} | Plan alpha")
+check_true("the room tool prompt lists the open plan after the grammar",
+           0 <= _i_grammar < _i_list, f"{_i_grammar} < {_i_list}")
+for n in range(11):
+    create_intent(owner=CHAR, title=f"Extra plan {n}",
+                  participants={CHAR: {"role": "", "progress": []}})
+capped = build_intents_prompt_section(CHAR, max_entries=12)
+check("capped entries", capped.count("(id "), 12)
+check_true("capped tail line", "(+2 more" in capped, capped[-60:])
+drop_all()
+
+# --------------------------------------- B5 [9] auto_track_progress counters
+
+print("[9] auto_track_progress leaves count-less intents alone")
+free = create_intent(owner=CHAR, title="Free plan",
+                     participants={CHAR: {"role": "", "progress": []}})
+counted = create_intent(owner=CHAR, title="Take two photos", target_count=2,
+                        participants={CHAR: {"role": "", "progress": []}})
+res = auto_track_progress(CHAR, "image")
+check("returned intent", (res or {}).get("intent_id"), counted["id"])
+check("count-less progress", get_intent(free["id"])["participants"][CHAR]["progress"], [])
+check("counted progress after 1", len(
+    get_intent(counted["id"])["participants"][CHAR]["progress"]), 1)
+auto_track_progress(CHAR, "image")
+check("counted status after 2", get_intent(counted["id"])["status"], "done")
+check("only count-less left -> None", auto_track_progress(CHAR, "image"), None)
+check("count-less progress still", get_intent(free["id"])["participants"][CHAR]["progress"], [])
+drop_all()
+
+# ------------------------------------- B5 [10] one parse per thought turn
+
+print("[10] exactly one call site of the marker parser")
+import re as _re  # noqa: E402
+import subprocess  # noqa: E402
+CALL = _re.compile(r"(?<!def )\bparse_and_apply_intent_markers\(")
+sites = []
+for target in ("app", "plugins"):
+    for f in (REPO / target).rglob("*.py"):
+        if f.is_symlink() or {"installed", "__pycache__"} & set(f.relative_to(REPO).parts):
+            continue
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if CALL.search(line):
+                sites.append(f"{f.relative_to(REPO)}")
+check("call sites", sites, ["app/core/chat_engine.py"])
+_old = subprocess.run(
+    ["git", "grep", "-c", "parse_and_apply_intent_markers(", "03717c17", "--",
+     "app/core/thoughts.py", "app/core/chat_engine.py"],
+    cwd=REPO, capture_output=True, text=True).stdout
+_old_n = sum(int(ln.rsplit(":", 1)[1]) for ln in _old.splitlines() if ":" in ln)
+check_true("before-proof: commit 03717c17 had >= 2", _old_n >= 2, _old.strip())
+
+# ------------------------------------------ B5 [11] expiry in GAME time
+
+print("[11] own plans expire in GAME time")
+
+
+def _expiry_after(marker, owner=CHAR):
+    before = game_time().total_seconds
+    got = parse_and_apply_intent_markers(owner, marker)
+    after = game_time().total_seconds
+    exp = (got[0] if got else {}).get("expires_at", "")
+    return before, (GameTime.parse(exp).total_seconds if exp else None), after
+
+
+b, e, a = _expiry_after("[INTENT: Fetch water now | when=now]")
+check_true("when=now -> +3600", e is not None and b + 3600 <= e <= a + 3600, f"{b} {e} {a}")
+b, e, a = _expiry_after("[INTENT: Learn the harp | when=standing]")
+check_true("standing -> +259200 (3 days)", e is not None and b + 259200 <= e <= a + 259200,
+           f"{b} {e} {a}")
+config._CONFIG["intents"] = {"self_intent_ttl_days": 5}
+b, e, a = _expiry_after("[INTENT: Paint the fence | when=standing]")
+check_true("ttl 5 -> +432000", e is not None and b + 432000 <= e <= a + 432000, f"{b} {e} {a}")
+config._CONFIG["intents"] = {"self_intent_ttl_days": 0}
+check("ttl 0 -> never", _expiry_after("[INTENT: Mend the net | when=standing]")[1], None)
+config._CONFIG.pop("intents", None)
+check("player task when=now -> never",
+      _expiry_after("[INTENT: Carry the crate | when=now | by=player]")[1], None)
+drop_all()
+
+# ------------------------------- B5 [12] DONE / PROGRESS only for participants
+
+print("[12] DONE / PROGRESS only for the owner or a participant")
+foreign = create_intent(owner=OTHER, title="Guard the gate",
+                        participants={OTHER: {"role": "", "progress": []}})
+shared = create_intent(owner=OTHER, title="Cook together",
+                       participants={OTHER: {"role": "", "progress": []},
+                                     CHAR: {"role": "", "progress": []}})
+own = create_intent(owner=CHAR, title="Sweep the porch",
+                    participants={CHAR: {"role": "", "progress": []}})
+parse_and_apply_intent_markers(
+    CHAR, f"[INTENT_DONE: {foreign['id']}]\n[INTENT_PROGRESS: {foreign['id']} | nope]")
+check("foreign status", get_intent(foreign["id"])["status"], "active")
+check("foreign participants", sorted(get_intent(foreign["id"])["participants"]), [OTHER])
+parse_and_apply_intent_markers(CHAR, f"[INTENT_PROGRESS: {shared['id']} | chopped onions]")
+check("participant progress", [p["note"] for p in
+      get_intent(shared["id"])["participants"][CHAR]["progress"]], ["chopped onions"])
+parse_and_apply_intent_markers(CHAR, f"[INTENT_DONE: {own['id']}]")
+check("own status", get_intent(own["id"])["status"], "done")
+drop_all()
+
+# ------------------------------------ B5 [13] the admin route, game minutes
+
+print("[13] the admin route turns relative minutes into GAME stamps")
+from fastapi import HTTPException  # noqa: E402
+from app.routes.intents import _create_route_sync, _patch_route_sync  # noqa: E402
+
+_b = game_time().total_seconds
+made = _create_route_sync({"title": "Deliver the letter", "owner": CHAR,
+                           "duration_minutes": 60,
+                           "trigger": {"kind": "at_time", "run_in_minutes": 360}})
+_a = game_time().total_seconds
+_exp = GameTime.parse(made["expires_at"]).total_seconds if made.get("expires_at") else -1
+_rd = (made.get("trigger") or {}).get("run_date", "")
+_rds = GameTime.parse(_rd).total_seconds if _rd else -1
+check_true("create: expires_at = now + 3600", _b + 3600 <= _exp <= _a + 3600, str(_exp))
+check_true("create: run_date = now + 21600", _b + 21600 <= _rds <= _a + 21600, str(_rds))
+check("create: run_in_minutes not stored", "run_in_minutes" in made.get("trigger", {}), False)
+_b = game_time().total_seconds
+patched = _patch_route_sync(made["id"], {"duration_minutes": 1440})
+_a = game_time().total_seconds
+_exp = GameTime.parse(patched["expires_at"]).total_seconds if patched.get("expires_at") else -1
+check_true("patch: expires_at = now + 86400", _b + 86400 <= _exp <= _a + 86400, str(_exp))
+try:
+    _create_route_sync({"title": "Undated", "owner": CHAR, "trigger": {"kind": "at_time"}})
+    _status = 200
+except HTTPException as _he:
+    _status = _he.status_code
+check("at_time without a time", _status, 400)
+drop_all()
 
 print()
 if FAILURES:

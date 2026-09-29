@@ -210,6 +210,7 @@ def test_thought_template() -> None:
         # Always present, like the weather (StrictUndefined).
         "birthday_today": False,
         "has_assignments": False,
+        "intent_tracking_enabled": False,
         "action_instruction": "Decide what to do.",
     }
     optional = ("effects_block", "state_flags_block", "outfit_self_block",

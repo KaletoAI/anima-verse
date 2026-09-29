@@ -972,6 +972,13 @@ SECTIONS = {
             "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 10, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
         },
     },
+    "intents": {
+        "label": "Plans & Tasks",
+        "icon": "📌",
+        "fields": {
+            "self_intent_ttl_days": {"type": "int", "label": "Own plans expire after (game days)", "default": 3, "min": 0, "max": 365, "description": "A plan a character sets itself through an [INTENT:] marker (standing or on arriving at a place) expires after this many GAME days unless it is finished before. 'now' plans expire after one game hour, timed plans one game hour after their time. Tasks the player gave and admin-created intents never expire on their own; reflection goals neither. 0 = own plans never expire. Applies to intents created from now on. GAME time (follows the game clock/factor)."},
+        },
+    },
     "random_events": {
         "label": "Zufaellige Events",
         "icon": "🎲",

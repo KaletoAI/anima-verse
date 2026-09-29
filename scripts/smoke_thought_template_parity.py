@@ -60,6 +60,8 @@ DELIBERATE = {
     "daily_schedule_block": "the schedule would start something unrelated",
     "arc_block": "story-arc initiative is not a conversation step",
     "assignments_block": "assignments would pull the character out of the chat",
+    "intent_tracking_enabled": "the [INTENT:] grammar belongs with the assignments — "
+                               "new plans would pull the character out of the chat",
     "retrospective_block": "reflecting on the day is not a conversation step",
     "tracker_block": "tracker-driven initiative, same reason",
 }

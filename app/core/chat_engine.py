@@ -217,6 +217,18 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
             "character")
     else:
         _place_rule = ""
+    # The character's open plans with their ids — per turn, so it sits in this
+    # USER part: [INTENT_PROGRESS/DONE: <id>] need an id, and a plan that is
+    # already open must not come back as a new [INTENT:].
+    _open_plans = ""
+    if agent_name:
+        try:
+            from app.models.intents import build_open_intents_brief
+            _brief = build_open_intents_brief(agent_name)
+            if _brief:
+                _open_plans = f"Open plans of this character (id | title):\n{_brief}\n"
+        except Exception as _ie:  # noqa: BLE001 — the prompt works without it
+            logger.debug("open intents brief failed for %s: %s", agent_name, _ie)
     return (
         f"The user said: {user_input}\n\n"
         f"The character responded:\n{rp_response}\n\n"
@@ -241,9 +253,10 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
         f"Also emit the plan/task marker the character forgot (only if the RP text carries "
         f"no [INTENT: ...] line): the person the character talks to gave them a task — an "
         f"errand, a promise, something to do later — or the character took on an ongoing "
-        f"plan of its own. A task given by the other person carries by=player, an own plan "
-        f"by=self:\n"
+        f"plan of its own. Set by= exactly as defined below — by=player only when the other "
+        f"person explicitly asked for it; when in doubt, by=self:\n"
         f"{intent_marker_help(indent='  ')}"
+        f"{_open_plans}"
         f"If nothing applies, respond with: NONE")
 
 

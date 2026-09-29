@@ -21,6 +21,10 @@ from typing import Any, Dict, List, Optional
 from app.core.log import get_logger
 logger = get_logger("thought")
 
+#: How many open plans the rp_first tool prompt of a thought turn lists (by
+#: priority). Capped by ENTRIES, so each listed id stays whole.
+_TOOL_PROMPT_MAX_INTENTS = 12
+
 #: The synthetic user turn of every thought turn. English on purpose — the
 #: answer language is set by lang_instruction in the system prompt.
 THOUGHT_TRIGGER_DEFAULT = (
@@ -526,9 +530,16 @@ class ThoughtRunner:
             except Exception as _oe:
                 logger.warning("tool context: place offer failed for %s: %s",
                                character_name, _oe)
-            # Prio 4: assignments (max ~800 chars)
-            if _td.get("assignment_section"):
-                _ctx_parts.append(_td["assignment_section"][:800])
+            # Prio 4: open plans & tasks WITH their ids (the tool LLM writes
+            # [INTENT_PROGRESS/DONE: <id>] from them) — capped by entries, not
+            # characters, so no id is ever cut in half. A whitelisted turn
+            # (constrained_tools) extracts no markers, so it gets no list.
+            if _td.get("assignment_section") and not tool_whitelist:
+                from app.models.intents import build_intents_prompt_section
+                _assign = build_intents_prompt_section(
+                    character_name, max_entries=_TOOL_PROMPT_MAX_INTENTS)
+                if _assign:
+                    _ctx_parts.append(_assign)
             # Prio 5: Nearby characters. Cap raised 400 -> 800 for the
             # room-scoped block (2026-07-30): it now carries the room list,
             # the elsewhere-at-location list AND the TalkTo-reach guidance —
@@ -999,17 +1010,8 @@ class ThoughtRunner:
             except Exception as e:
                 logger.debug("Arc-Advancement Fehler: %s", e)
 
-        # (Alter intent_engine-Pfad entfernt — Intents laufen jetzt ueber die
-        # vereinheitlichten [INTENT:]-Marker unten, plan-intents-unified.md.
-        # Damit entfaellt auch der A4-Event-Loop-Bug dieses toten Pfades.)
-
-        # Intent-Marker-Verarbeitung aus Gedanken-Antwort ([INTENT:…] etc.)
-        if full_response or notification_content:
-            try:
-                from app.models.intents import parse_and_apply_intent_markers
-                parse_and_apply_intent_markers(character_name,
-                    full_response or notification_content)
-            except Exception as e:
-                logger.debug("Intent marker extraction error: %s", e)
+        # [INTENT:…] markers of a thought turn are applied ONCE, by
+        # chat_engine.post_process_response above (feature-gated there). A
+        # second parse here used to create every plan twice.
 
         return _turn_info

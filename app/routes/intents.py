@@ -35,6 +35,54 @@ def get_route(intent_id: str) -> Dict[str, Any]:
     return it
 
 
+#: Upper bound for relative game-time inputs: ten game years of 365 days.
+_MAX_GAME_MINUTES = 5_256_000
+
+
+def _game_stamp_in(minutes: Any, field: str) -> str:
+    """Canonical GAME stamp ``minutes`` in-world minutes from now.
+
+    ``""`` when the field was not sent (None / empty). Anything else must be a
+    whole number of game minutes in ``1.._MAX_GAME_MINUTES`` — a 400 otherwise,
+    so a typo never silently drops the value or lands a stamp centuries away.
+    """
+    if minutes is None or minutes == "":
+        return ""
+    if isinstance(minutes, bool):
+        mins = None
+    elif isinstance(minutes, int):
+        mins = minutes
+    elif isinstance(minutes, str) and minutes.strip().isdigit():
+        mins = int(minutes.strip())
+    else:
+        mins = None
+    if mins is None or not 1 <= mins <= _MAX_GAME_MINUTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field} must be a whole number of game minutes "
+                   f"(1..{_MAX_GAME_MINUTES})")
+    return (game_time() + GameDuration.of(minutes=mins)).canonical()
+
+
+def _apply_game_time_fields(data: Dict[str, Any]) -> None:
+    """Turn the relative inputs of the admin form into GAME-time stamps, in place.
+
+    ``duration_minutes`` -> ``expires_at``; ``trigger.run_in_minutes`` (at_time)
+    -> ``trigger.run_date``. The server computes both on the game clock — a
+    client has no game clock and must never send a system timestamp for them.
+    """
+    stamp = _game_stamp_in(data.pop("duration_minutes", None), "duration_minutes")
+    if stamp:
+        data["expires_at"] = stamp
+    trig = data.get("trigger")
+    if isinstance(trig, dict) and "run_in_minutes" in trig:
+        trig = dict(trig)
+        run = _game_stamp_in(trig.pop("run_in_minutes"), "run_in_minutes")
+        if run:
+            trig["run_date"] = run
+        data["trigger"] = trig
+
+
 @router.post("")
 async def create_route(request: Request) -> Dict[str, Any]:
     """Create an intent.
@@ -43,6 +91,8 @@ async def create_route(request: Request) -> Dict[str, Any]:
            priority?, location_id?, outfit_hint?, target_count?,
            expires_at? | duration_minutes?}
 
+    ``duration_minutes`` and an at_time trigger's ``run_in_minutes`` are
+    in-world minutes from now; the server turns them into GAME stamps.
     If no explicit trigger is given but a location_id is, the intent fires
     on entering that location; otherwise it is a standing intent.
     """
@@ -53,6 +103,10 @@ async def create_route(request: Request) -> Dict[str, Any]:
 
 def _create_route_sync(data: Any) -> Dict[str, Any]:
     """The blocking body of ``create_route`` — runs in the threadpool."""
+    # An intent's deadline is a WORLD deadline ("finish this within two
+    # hours" means two in-world hours), so it is a canonical GameTime — the
+    # same shape intent_engine._schedule_intent and the migration produce.
+    _apply_game_time_fields(data)
     title = (data.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
@@ -70,17 +124,9 @@ def _create_route_sync(data: Any) -> Dict[str, Any]:
         trigger = ({"kind": "at_location", "location_id": location_id}
                    if location_id else {"kind": "standing"})
 
-    # An intent's deadline is a WORLD deadline ("finish this within two
-    # hours" means two in-world hours), so it is a canonical GameTime — the
-    # same shape intent_engine._schedule_intent and the migration produce.
+    if trigger.get("kind") == "at_time" and not trigger.get("run_date"):
+        raise HTTPException(status_code=400, detail="an at_time trigger needs run_in_minutes")
     expires_at = (data.get("expires_at") or "").strip()
-    dur = data.get("duration_minutes")
-    if not expires_at and dur:
-        try:
-            expires_at = (game_time()
-                          + GameDuration.of(minutes=int(dur))).canonical()
-        except Exception:
-            expires_at = ""
 
     it = create_intent(
         owner=owner, title=title,
@@ -105,7 +151,13 @@ async def patch_route(intent_id: str, request: Request) -> Dict[str, Any]:
 
 
 def _patch_route_sync(intent_id: str, data: Any) -> Dict[str, Any]:
-    """The blocking body of ``patch_route`` — runs in the threadpool."""
+    """The blocking body of ``patch_route`` — runs in the threadpool.
+
+    Accepts the same relative ``duration_minutes`` / ``trigger.run_in_minutes``
+    as the create route; without them the stored stamps stay as they are.
+    """
+    if isinstance(data, dict):
+        _apply_game_time_fields(data)
     result = update_intent(intent_id, **data)
     if not result:
         raise HTTPException(status_code=404, detail="Intent not found")

@@ -308,6 +308,11 @@ vereinheitlichte (`[INTENT: <titel> | … | by=player]`, `app.models.intents`, P
 Vorhaben/Aufgaben als Datensatz: `app.models.intents.create_intent(*, owner, title, …)`,
 `app.models.intents.list_intents(owner, status, source)`,
 `app.models.intents.progress_type_for_tool(tool_name)`.
+`app.models.intents.find_duplicate(owner, title)` liefert das aktive Vorhaben von `owner`, das
+`title` schon abdeckt (wortweise normalisiert; gleich oder auf Wortgrenzen enthalten, der kürzere
+Titel ≥ 6 Zeichen), sonst `None`. Wer vor dem Anlegen prüft, hält
+`keyed_lock("intents", owner)` um `find_duplicate` UND `create_intent` — so legen zwei Turns
+derselben Figur kein Vorhaben doppelt an (Muster: `plugins/retrospect/skill.py`).
 
 ## Act-Engine — `app.core.act_engine` ✅
 

@@ -175,6 +175,15 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "own turn: never write, quote or decide what another character says, "
         "does, thinks or feels — not even their reaction to you. You may "
         "notice what someone is visibly doing, but you do not move them.")
+    # The [INTENT:] grammar, like the chat prompt's intent_tracking_enabled:
+    # only for a character that keeps plans at all and writes its own markers
+    # — in rp_first the tool LLM writes them (streaming.intent_marker_help).
+    try:
+        from app.models.character_template import feature_disabled
+        _intents_on = not feature_disabled(character_name, "intents_enabled")
+    except Exception:
+        _intents_on = False
+    ctx["intent_tracking_enabled"] = bool(_intents_on and _chat_mode != "rp_first")
     if _chat_mode == "rp_first":
         ctx["action_instruction"] = (
             "Decide what you want to do next. Pick ONE meaningful action and "

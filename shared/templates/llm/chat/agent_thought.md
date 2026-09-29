@@ -21,7 +21,10 @@
                                  "we don't know" is never rendered as "you are alone")
      inbox_block               — High prio: unread chat-history messages
      events_block              — High prio: acute events at location
-     assignments_block         — Medium: active assignments
+     assignments_block         — Medium: active assignments (with their ids)
+     intent_tracking_enabled   — True when the character keeps plans at all
+                                 (intents_enabled) and writes its own markers
+                                 (not rp_first) — teaches the [INTENT:] grammar
      general_task              — Medium: static profile task
      commitments_block         — Medium: open promises
      outfit_decision_block     — High when triggered (after location-change or wake)
@@ -120,6 +123,12 @@ Use SetActivity to set what you are doing right now — pose: one of the pose ke
 
 === Active events at your location ===
 {{ events_block }}
+{% endif %}
+{% if intent_tracking_enabled %}
+
+=== Plans & tasks ===
+If this turn starts something you will only carry out LATER, record it with a marker at the END of your response on its own line:
+{% include "chat/intent_markers.md" %}
 {% endif %}
 {% if assignments_block %}
 

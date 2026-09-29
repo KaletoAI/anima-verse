@@ -39,7 +39,8 @@ interface FormState {
   priority: number
   triggerKind: TriggerKind
   locationId: string
-  runDate: string
+  runDate: string // the stored GAME stamp of an edited at_time intent ('' on create)
+  runInMin: number // at_time: game minutes from now; 0 = keep runDate (edit only)
   outfitHint: string
   durationMin: number // 0 = never expires
 }
@@ -53,6 +54,7 @@ const INITIAL_FORM: FormState = {
   triggerKind: 'standing',
   locationId: '',
   runDate: '',
+  runInMin: 0,
   outfitHint: '',
   durationMin: 0,
 }
@@ -65,6 +67,11 @@ const DURATION_OPTIONS: Array<{ value: number; label: string }> = [
   { value: 2880, label: '2 days' },
   { value: 10080, label: '7 days' },
 ]
+
+// "Starts in" for an at_time intent — GAME minutes from now. The browser has
+// no game clock, so it never computes a stamp itself: the server turns
+// run_in_minutes into the canonical run_date (like duration_minutes).
+const RUN_IN_OPTIONS = DURATION_OPTIONS.filter((d) => d.value > 0)
 
 /** A canonical GAME stamp ("Y0002-D109T14:23:45") → "Y0002-D109 14:23", the
  *  clock part in the configured format. These are world-calendar stamps, not
@@ -164,7 +171,8 @@ export function IntentsTab() {
         priority: it.priority || 3,
         triggerKind: ['standing', 'now', 'at_location', 'at_time'].includes(k) ? k : 'standing',
         locationId: it.trigger?.location_id || it.location_id || '',
-        runDate: it.trigger?.run_date ? it.trigger.run_date.slice(0, 16) : '',
+        runDate: it.trigger?.run_date || '',
+        runInMin: 0,
         outfitHint: it.outfit_hint || '',
         // expires_at is absolute; we cannot reverse it to a preset, so keep the
         // existing expiry untouched on edit unless the admin picks a new duration.
@@ -196,11 +204,14 @@ export function IntentsTab() {
         trigger.location_id = form.locationId
       }
       if (form.triggerKind === 'at_time') {
-        if (!form.runDate) {
-          toast(t('Pick a date/time'), 'error')
+        if (form.runInMin > 0) {
+          trigger.run_in_minutes = form.runInMin
+        } else if (editingId && form.runDate) {
+          trigger.run_date = form.runDate
+        } else {
+          toast(t('Pick when it starts'), 'error')
           return
         }
-        trigger.run_date = new Date(form.runDate).toISOString()
       }
       // Build participants dict (owner + extras), preserving role/progress of
       // members that already existed on the edited intent.
@@ -224,10 +235,10 @@ export function IntentsTab() {
       // Only stamp source on create — editing must not flip a character-owned
       // intent into a human one.
       if (!editingId) payload.source = 'human'
-      // expires_at: only set when a duration preset is chosen. 0 = leave as-is
-      // on edit / "never" on create.
+      // Expiry: only set when a duration preset is chosen. 0 = leave as-is on
+      // edit / "never" on create. GAME minutes — the server computes the stamp.
       if (form.durationMin > 0) {
-        payload.expires_at = new Date(Date.now() + form.durationMin * 60_000).toISOString()
+        payload.duration_minutes = form.durationMin
       } else if (!editingId) {
         payload.expires_at = ''
       }
@@ -462,13 +473,25 @@ export function IntentsTab() {
             ) : null}
             {form.triggerKind === 'at_time' ? (
               <div className="ga-sched-field">
-                <label>{t('Date/time')}</label>
-                <input
-                  type="datetime-local"
+                <label>{t('Starts in (game time)')}</label>
+                <select
                   className="ga-input"
-                  value={form.runDate}
-                  onChange={(e) => setForm((f) => ({ ...f, runDate: e.target.value }))}
-                />
+                  value={form.runInMin}
+                  onChange={(e) => setForm((f) => ({ ...f, runInMin: parseInt(e.target.value, 10) }))}
+                >
+                  {editingId && form.runDate ? (
+                    <option value={0}>
+                      {t('keep current')} ({gameStampLabel(form.runDate)})
+                    </option>
+                  ) : (
+                    <option value={0}>—</option>
+                  )}
+                  {RUN_IN_OPTIONS.map((d) => (
+                    <option key={d.value} value={d.value}>
+                      {t(d.label)}
+                    </option>
+                  ))}
+                </select>
               </div>
             ) : null}
             <div className="ga-sched-field">
