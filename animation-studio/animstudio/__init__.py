@@ -5,6 +5,8 @@ Every entry point calls :func:`bootstrap` BEFORE importing anything from
 ``app.*`` — the app has no default world, and the studio must never open
 the world a running server holds (it gets a throwaway one).
 """
+import atexit
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -29,5 +31,7 @@ def bootstrap() -> None:
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
     from app.core import paths
-    paths.init(tempfile.mkdtemp(prefix="animstudio-world-"))
+    world = tempfile.mkdtemp(prefix="animstudio-world-")
+    atexit.register(shutil.rmtree, world, True)
+    paths.init(world)
     _booted = True

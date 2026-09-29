@@ -1,14 +1,16 @@
 """Numeric checks — the gate a clip has to pass before it may be published.
 
-Two inputs: the compiled source (DOF extrema, IK error, bends, per-frame
-rotation steps, loop layer periods) and the MEASUREMENT of the baked clip
+Three inputs: the compiled source (DOF extrema, IK error, bends, per-frame
+rotation steps, loop layer periods), the MEASUREMENT of the baked clip
 (proc_clip re-imports the exported FBX: after hips pin, foot plant and floor
-normalisation — foot sliding is only meaningful there).
+normalisation — foot sliding is only meaningful there) and, optionally, the
+baked clip's SIDECAR (fps / frames / loop / duration must agree with the
+measurement and the source).
 """
 import math
 import statistics
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from animstudio import StudioError, rig
 from animstudio.compile import Compiled
@@ -26,6 +28,7 @@ BEND_DEG = 155.0
 SEAT_HIPS_CM = (61.0, 71.0)
 SEAT_THIGH_DEG = 20.0
 LIE_HIPS_CM = (15.0, 25.0)
+FPS = 30
 
 
 @dataclass
@@ -58,7 +61,29 @@ def _require(frames: List[Dict]) -> None:
             raise StudioError(f"measure: frame {i} lacks {', '.join(missing)}")
 
 
-def run_checks(anim: Animation, compiled: Compiled, measure: Dict) -> List[Check]:
+def _sidecar_check(anim: Animation, frames: List[Dict], sidecar: Dict) -> Check:
+    """fps is the library's 30, the frame count is the measured one, the
+    loop flag is the source's, and duration_s = frames / fps (3 decimals,
+    the way cmu_clip writes it)."""
+    fps, n = sidecar.get("fps"), sidecar.get("frames")
+    bad = []
+    if fps != FPS:
+        bad.append(f"fps {fps} != {FPS}")
+    if n != len(frames):
+        bad.append(f"frames {n} != measured {len(frames)}")
+    if bool(sidecar.get("loop")) != bool(anim.loop):
+        bad.append(f"loop {sidecar.get('loop')} != source {anim.loop}")
+    dur = sidecar.get("duration_s")
+    if not isinstance(fps, (int, float)) or not fps or not isinstance(n, int) \
+            or not isinstance(dur, (int, float)) or abs(dur - round(n / fps, 3)) > 1e-9:
+        bad.append(f"duration_s {dur} != frames / fps")
+    return Check("sidecar", not bad, float(len(bad)), "0 mismatches", "; ".join(bad))
+
+
+def run_checks(anim: Animation, compiled: Compiled, measure: Dict,
+               sidecar: Optional[Dict] = None) -> List[Check]:
+    """``sidecar`` (the baked clip's JSON) adds the ``sidecar`` check; a
+    real build always passes it."""
     frames = measure["frames"]
     _require(frames)
     out: List[Check] = []
@@ -93,11 +118,20 @@ def run_checks(anim: Animation, compiled: Compiled, measure: Dict) -> List[Check
         gap = max(min(f["LeftToeBase"][1], f["RightToeBase"][1],
                       f["LeftFoot"][1], f["RightFoot"][1]) for f in frames)
         out.append(Check("stand_contact", gap <= STAND_CM, round(gap, 2), f"<= {STAND_CM} cm"))
+    if group == "ground":
+        # Kneeling / sitting on the floor: a foot, a toe OR a knee (the head
+        # of LeftLeg/RightLeg) touches the floor in every frame.
+        gap = max(min(f[j][1] for j in ("LeftToeBase", "RightToeBase", "LeftFoot", "RightFoot",
+                                         "LeftLeg", "RightLeg")) for f in frames)
+        out.append(Check("ground_contact", gap <= STAND_CM, round(gap, 2),
+                         f"<= {STAND_CM} cm (foot, toe or knee)"))
     if anim.loop:
         seam = max(_dist(frames[0][j], frames[-1][j]) for j in frames[0])
         out.append(Check("loop_seam", seam <= SEAM_CM, round(seam, 2), f"<= {SEAM_CM} cm"))
     out.append(Check("tracks", measure["tracks"] >= MIN_TRACKS, float(measure["tracks"]),
                      f">= {MIN_TRACKS}"))
+    if sidecar is not None:
+        out.append(_sidecar_check(anim, frames, sidecar))
     hips = statistics.median(f["Hips"][1] for f in frames)
     if group == "seat":
         thigh = statistics.median(

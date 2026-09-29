@@ -71,8 +71,9 @@ class HandTarget:
 
     ``at`` is either one point (x, y, z) or KEYS ``((t, (x, y, z)), ...)``:
     times in seconds, strictly increasing, within [0, duration]; the point
-    is eased between keys per component with smoothstep (like DOF keys),
-    held before the first and after the last key. On a loop the first key
+    is eased between keys per component, ALWAYS with smoothstep (unlike DOF
+    keys there is no per-key ``ease``), held before the first and after the
+    last key. On a loop the first key
     is repeated at t = duration (so keys must lie before it)."""
     side: str
     at: Union[Point, Sequence[Tuple[float, Point]]]

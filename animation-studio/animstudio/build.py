@@ -63,7 +63,8 @@ def build(kind: str, *, anim: Optional[Animation] = None) -> dict:
     if not res["ok"]:
         raise StudioError(f"proc_clip failed: {res['error']}")
     measure = json.loads(Path(res["outputs"]["measure"]).read_text(encoding="utf-8"))
-    checks = run_checks(anim, compiled, measure)
+    sidecar = json.loads(Path(res["outputs"]["sidecar"]).read_text(encoding="utf-8"))
+    checks = run_checks(anim, compiled, measure, sidecar)
     report = {"kind": kind, "spec_sha": sha, "ok": all(c.ok for c in checks),
               "checks": [asdict(c) for c in checks],
               "fbx": res["outputs"][kind], "sidecar": res["outputs"]["sidecar"]}

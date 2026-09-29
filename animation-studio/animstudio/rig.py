@@ -9,9 +9,10 @@ rest pose exactly. A DOF is a rotation about an ARMATURE axis applied in the
 PARENT's moved frame: D_b = D_parent · Rot_b, Rot_b the product of the bone's
 axis rotations in ``ORDER`` (leftmost applied last). That is Blender's
 ``P_b = P_p · Rest_p⁻¹ · Rest_b · Basis_b`` with ``Basis_b = Rest_bᵀ · Rot_b ·
-Rest_b`` — the compiler needs no bone rolls. The sign of every DOF is
-derived in the table of plan-animation-werkstatt-umsetzung.md, Task 2;
-the result, per DOF: bone(s) · axis · factor -> what a POSITIVE value does.
+Rest_b`` — the compiler needs no bone rolls. The table below is the sign
+of every DOF — per DOF: bone(s) · axis · factor -> what a POSITIVE value
+does; the numeric proof of the convention is scripts/smoke_animstudio_compile.py
+(stage 3).
 ``s`` = l/r, ``S`` = Left/Right, ``m`` = +1 left / -1 right (the right side
 is the mirror image, so + means the same movement on both sides):
 

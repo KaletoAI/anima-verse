@@ -17,6 +17,18 @@ one check trips; the expectation is written next to it:
 - compiled extrema l_elbow_flex (0, 170)              -> limits fails (170 > 150)
 - a measure whose frame 3 lacks LeftToeBase           -> StudioError naming
   LeftToeBase and the frame (not a bare KeyError)
+- ground (kneeling): feet/toes at y 10/5 cm, knees (LeftLeg/RightLeg heads)
+  at y 2 cm in every frame                            -> ok (min 2 <= 3.0)
+- the same with the knees at y 5 cm                   -> ground_contact fails
+  (min over feet, toes and knees = 5 > 3.0)
+- sidecar {fps 30, frames 10, loop false, duration_s 0.333} for the 10
+  still frames of a non-loop                          -> ok (0.333 =
+  round(10/30, 3))
+- sidecar frames 11 (measure has 10)                  -> sidecar fails
+- sidecar loop true on a non-loop anim                -> sidecar fails
+- sidecar fps 120                                     -> sidecar fails
+  (and duration 0.333 != round(10/120, 3) = 0.083 — one check, one fail)
+- sidecar duration_s 1.0 (10/30 = 0.333)              -> sidecar fails
 """
 import sys
 from pathlib import Path
@@ -80,6 +92,22 @@ expect("lie", run_checks(anim("lie"), comp(), {"tracks": 22, "frames": lie}), []
 expect("ik", run_checks(anim(), comp(ik_error_cm={"l_hand": 5.0}), still), ["ik"])
 expect("loop_layers", run_checks(anim(), comp(loop_problems=["x"]), still), ["loop_layers"])
 expect("limits", run_checks(anim(), comp(extrema={"l_elbow_flex": (0.0, 170.0)}), still), ["limits"])
+
+kneel = dict(Hips=[0, 40, 0], LeftLeg=[9, 2, 20], RightLeg=[-9, 2, 20],
+             LeftFoot=[9, 10, -20], RightFoot=[-9, 10, -20],
+             LeftToeBase=[9, 5, -30], RightToeBase=[-9, 5, -30])
+ground = [frame(**kneel) for _ in range(10)]
+expect("ground", run_checks(anim("ground"), comp(), {"tracks": 22, "frames": ground}), [])
+hover = [frame(**{**kneel, "LeftLeg": [9, 5, 20], "RightLeg": [-9, 5, 20]}) for _ in range(10)]
+expect("ground_hover", run_checks(anim("ground"), comp(), {"tracks": 22, "frames": hover}),
+       ["ground_contact"])
+
+side_ok = {"fps": 30, "frames": 10, "loop": False, "duration_s": 0.333}
+expect("sidecar_ok", run_checks(anim(), comp(), still, side_ok), [])
+for label, over in (("frames", {"frames": 11}), ("loop", {"loop": True}),
+                    ("fps", {"fps": 120}), ("duration", {"duration_s": 1.0})):
+    expect(f"sidecar_{label}", run_checks(anim(), comp(), still, {**side_ok, **over}),
+           ["sidecar"])
 
 from animstudio import StudioError                                    # noqa: E402
 
