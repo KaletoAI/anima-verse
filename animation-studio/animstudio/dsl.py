@@ -7,7 +7,7 @@ is repeated at t = duration, so keys must lie in [0, duration).
 """
 import math
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from animstudio import StudioError
 from animstudio import rig
@@ -52,6 +52,27 @@ def Breath(amp: float = 1.0, period_s: float = 4.0) -> List[Oscillator]:
     return [Oscillator("spine_flex", -amp, period_s),
             Oscillator("l_clav_raise", amp * 0.5, period_s),
             Oscillator("r_clav_raise", amp * 0.5, period_s)]
+
+
+@dataclass(frozen=True)
+class HandTarget:
+    """The hand's head (wrist) reaches ``at`` — metres in clip space (X the
+    figure's left, Y up, Z front, origin on the floor at the armature
+    origin) — during ``span`` (seconds, None = the whole clip), with a
+    0.15 s fade at each inner edge of the span. ``pole`` is the direction
+    the elbow points (default down and back)."""
+    side: str
+    at: Tuple[float, float, float]
+    span: Optional[Tuple[float, float]] = None
+    pole: Tuple[float, float, float] = (0.0, -1.0, -1.0)
+
+
+@dataclass(frozen=True)
+class FeetPlanted:
+    """The ankles stay where frame 0 puts them in XZ, at the rest ankle
+    height; the knees bend (forward) to make up for ``hips_drop_cm`` and
+    body motion. The foot keeps its world rotation."""
+    sides: Tuple[str, ...] = ("l", "r")
 
 
 @dataclass(frozen=True)
@@ -124,6 +145,10 @@ def validate(anim: Animation) -> None:
     for dof in anim.base:
         if not _known(dof):
             raise StudioError(f"base: unknown DOF {dof!r}")
+    for goal in anim.ik:
+        sides = getattr(goal, "sides", None) or (getattr(goal, "side", None),)
+        if any(s not in ("l", "r") for s in sides):
+            raise StudioError(f"ik {type(goal).__name__}: side must be 'l' or 'r'")
     for o in _layers(anim):
         if not _known(o.dof):
             raise StudioError(f"layer: unknown DOF {o.dof!r}")

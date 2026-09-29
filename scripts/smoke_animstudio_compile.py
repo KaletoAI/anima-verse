@@ -46,6 +46,18 @@ Stage 4 - sampling:
     ease, an unknown group and a loop whose duration*fps is no integer
     (1.01 s * 30 = 30.3 frames: the last frame misses the closing key) each
     raise StudioError.
+Stage 5 - hand target in reach (by hand): the left shoulder joint is the
+  LeftArm head S, upper arm L1 = |ForeArm-Arm|, forearm L2 = |Hand-ForeArm|.
+  Target T = S + 0.8*(L1+L2)*(0,0,1) (straight ahead, 80 % of the reach):
+  the hand head sits on T within 0.01 cm, the elbow bend follows the law of
+  cosines: cos(inner) = (L1^2 + L2^2 - d^2) / (2 L1 L2), bend = 180 - inner,
+  and ik_error_cm["l_hand"] < 0.01.
+Stage 6 - out of reach: T = S + 1.5*(L1+L2) ahead -> the arm stretches along
+  S->T, the hand ends at S + (L1+L2) ahead, the reported error is
+  0.5*(L1+L2) (+- 0.01 cm).
+Stage 7 - feet planted: hips_drop_cm = 20 with FeetPlanted -> both ankle
+  heads keep their REST position within 0.01 cm, both knees bend (> 10 deg),
+  and each foot keeps its world rotation (identity here, 1e-9).
 """
 import ast
 import math
@@ -169,6 +181,58 @@ for bad in (
     except StudioError:
         pass
 print("OK stage 4" if not FAIL else "FAIL stage 4")
+
+# Stage 5 - hand target in reach (by hand): the left shoulder joint is the
+#   LeftArm head S, upper arm L1 = |ForeArm-Arm|, forearm L2 = |Hand-ForeArm|.
+#   Target T = S + 0.8*(L1+L2)*(0,0,1) (straight ahead, 80 % of the reach):
+#   the hand head must sit on T within 0.01 cm, and the elbow bend follows
+#   the law of cosines: cos(inner) = (L1^2 + L2^2 - d^2) / (2 L1 L2),
+#   bend = 180 - inner.
+from animstudio.dsl import FeetPlanted, HandTarget                  # noqa: E402
+
+rest = rig.load_rest()
+S = rest.head["LeftArm"]
+L1 = float(np.linalg.norm(rest.head["LeftForeArm"] - rest.head["LeftArm"]))
+L2 = float(np.linalg.norm(rest.head["LeftHand"] - rest.head["LeftForeArm"]))
+d = 0.8 * (L1 + L2)
+T = S + d * np.array([0.0, 0.0, 1.0])
+a = Animation(kind="s", duration_s=0.5, loop=False, catalog=CAT,
+              ik=[HandTarget("l", at=tuple((T / 100.0).tolist()))])
+c = compile_anim(a, rest)
+check(near(c.frames[0].pos["LeftHand"], T, 0.01), "stage 5 hand on target")
+inner = math.degrees(math.acos((L1 * L1 + L2 * L2 - d * d) / (2 * L1 * L2)))
+u = c.frames[0].pos["LeftForeArm"] - c.frames[0].pos["LeftArm"]
+v = c.frames[0].pos["LeftHand"] - c.frames[0].pos["LeftForeArm"]
+bend = math.degrees(math.acos(float(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v)))))
+check(abs(bend - (180.0 - inner)) < 0.01, f"stage 5 bend {bend:.3f} vs {180 - inner:.3f}")
+check(c.ik_error_cm["l_hand"] < 0.01, "stage 5 ik error")
+print("OK stage 5" if not FAIL else "FAIL stage 5")
+
+# Stage 6 - out of reach: T = S + 1.5*(L1+L2) ahead -> the arm stretches
+#   along S->T, the hand ends at S + (L1+L2) ahead, the reported error is
+#   0.5*(L1+L2) (+- 0.01 cm) - the check (Task 6) fails on it (> 3 cm).
+T = S + 1.5 * (L1 + L2) * np.array([0.0, 0.0, 1.0])
+c = compile_anim(Animation(kind="s", duration_s=0.5, loop=False, catalog=CAT,
+                           ik=[HandTarget("l", at=tuple((T / 100.0).tolist()))]), rest)
+check(abs(c.ik_error_cm["l_hand"] - 0.5 * (L1 + L2)) < 0.01,
+      f"stage 6 error {c.ik_error_cm['l_hand']:.3f} vs {0.5 * (L1 + L2):.3f}")
+print("OK stage 6" if not FAIL else "FAIL stage 6")
+
+# Stage 7 - feet planted: hips_drop_cm = 20 with FeetPlanted -> both ankle
+#   heads keep their REST position (x, y, z) within 0.01 cm (y is the rest
+#   ankle height, XZ the frame-0 ankle XZ, which for a straight drop is the
+#   rest XZ), both knees bend (> 10 deg), and the foot keeps its world
+#   rotation: D_foot equals the pre-IK D_foot (identity here) within 1e-9.
+c = compile_anim(Animation(kind="s", duration_s=0.5, loop=False, catalog=CAT,
+                           base=Pose(hips_drop_cm=20), ik=[FeetPlanted()]), rest)
+for S_ in ("Left", "Right"):
+    check(near(c.frames[0].pos[f"{S_}Foot"], rest.head[f"{S_}Foot"], 0.01), f"stage 7 {S_} ankle")
+    th = c.frames[0].pos[f"{S_}Leg"] - c.frames[0].pos[f"{S_}UpLeg"]
+    sh = c.frames[0].pos[f"{S_}Foot"] - c.frames[0].pos[f"{S_}Leg"]
+    knee = math.degrees(math.acos(float(np.dot(th, sh) / (np.linalg.norm(th) * np.linalg.norm(sh)))))
+    check(knee > 10.0, f"stage 7 {S_} knee {knee:.1f}")
+    check(near(c.frames[0].D[f"{S_}Foot"], np.eye(3), 1e-9), f"stage 7 {S_} foot rotation")
+print("OK stage 7" if not FAIL else "FAIL stage 7")
 
 print("FAIL:\n" + "\n".join(FAIL) if FAIL else "OK smoke_animstudio_compile")
 sys.exit(1 if FAIL else 0)
