@@ -84,6 +84,9 @@ Hand-derived expectations
        ``BackendFailedError`` carries ``backend_name == "fake"``, keeps the
        original exception as ``cause`` (text "HTTP 500: boom"), and its
        ``str()`` is "<name>: <cause>" = "fake: HTTP 500: boom".
+  [4h] the name appears ONCE: backends already prefix their own messages
+       with "<name>: ", so a cause "fake: HTTP 500: boom" keeps its text
+       as it is — str() == "fake: HTTP 500: boom", not "fake: fake: …".
   [5] ``OpenAIDiffusionBackend._generate`` with a ``_post_gateway`` that
       raises the 400 RuntimeError must RAISE it. Before the fix: ``[]``.
       Checked for the generations path AND the edits/inpaint path, because
@@ -238,6 +241,17 @@ if _failed is not None:
     check("backend object", _failed.backend is _fk, True)
     check("cause kept", str(_failed.cause), "HTTP 500: boom")
     check("text", str(_failed), "fake: HTTP 500: boom")
+
+print("[4h] a cause that already names its backend is not prefixed twice")
+_fk2 = _Fake()
+_failed2 = None
+try:
+    BackendPool([_fk2], lambda n: {}).run_on_backend(
+        _fk2, op=_raiser(RuntimeError("fake: HTTP 500: boom")))
+except BackendFailedError as e:
+    _failed2 = e
+check("raised BackendFailedError", _failed2 is not None, True)
+check("text names the backend once", str(_failed2), "fake: HTTP 500: boom")
 
 print("[5] openai_diffusion hands the HTTP error on instead of swallowing it")
 for label, method, kwargs in (

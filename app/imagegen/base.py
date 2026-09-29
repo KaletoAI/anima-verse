@@ -84,14 +84,18 @@ class BackendFailedError(RuntimeError):
     busy/4xx/config classes, and an empty result). It is the ONE signal the
     image routing re-runs an occasion on (``routing.run_routed``) — the
     backend's ``available`` flag is never read as a signal. ``str()`` keeps
-    the backend's own words: "<name>: <cause>"."""
+    the backend's own words: "<name>: <cause>" — and exactly ONCE: backends
+    already prefix their messages with "<name>: ", so a cause that starts
+    with it is taken as it is instead of naming the backend twice."""
 
     def __init__(self, backend: Any, cause: BaseException):
         self.backend = backend
         self.backend_name = str(getattr(backend, "name", "") or backend)
         self.cause = cause
-        super().__init__(f"{self.backend_name}: {cause}" if str(cause)
-                         else f"{self.backend_name}: {type(cause).__name__}")
+        text = str(cause) or type(cause).__name__
+        msg = (text if text.startswith(f"{self.backend_name}:")
+               else f"{self.backend_name}: {text}")
+        super().__init__(msg)
 
 
 class GpuTaskTimeout(BackendBusyError):
@@ -111,7 +115,10 @@ class GpuTaskTimeout(BackendBusyError):
 
 class GpuTaskCancelled(Exception):
     """A user cancelled the GPU task (queue panel). Neither load nor defect:
-    no cooldown, no retry, no re-run on another backend."""
+    ``run_on_backend`` and the image routing never cool the backend down for
+    it, never retry it and never re-run it on another backend. (The
+    persistent task queue may still re-run a cancelled task within its
+    ``max_retries``, as it does any failed task — pre-existing.)"""
 
 
 # --- Gateway status semantics (shared by every gateway-facing backend) -------
