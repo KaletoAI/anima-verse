@@ -21,6 +21,23 @@ default. Only an explicit dialog pick reaches `backend` (hard, no fallback).
   [5] character_ops.resolve_profile_imagegen is gone, and npc_assets does not
       import it.
 
+THE LoRA RULE of the variant / model-ref render (`expression_regen.
+generate_expression_image`, coordinator ruling F2 on Task 11): the
+character's `outfit_imagegen.tpose_loras` REPLACE its normal `loras` exactly
+when the render is the "tpose" OCCASION — the same key the routing uses to
+pick the character's `tpose_workflow` backend, so backend and LoRAs agree.
+The occasion is the explicit `occasion=` argument, else "tpose" for a T-pose
+use case, else "expression". The character below has NORMAL = [normal] and
+TPOSE = [turnaround], no worn pieces (so no slot LoRAs are merged in):
+
+  [6] use case "outfit" + occasion "tpose" (the default-pose ref as
+      model_refs sends it) -> payload occasion "tpose", loras == TPOSE.
+      (At 7f386576 the choice keyed on the use case, so this got NORMAL.)
+      use case "outfit", no occasion -> "expression", loras == NORMAL — the
+      same use case, only the occasion differs.
+      use case "expression", no occasion -> "expression", loras == NORMAL.
+      use case "tpose", no occasion -> "tpose", loras == TPOSE.
+
 Usage:  ./.venv/bin/python scripts/smoke_profile_imagegen_default.py
 """
 import asyncio
@@ -45,6 +62,7 @@ db.init_schema()
 from app.core import character_ops, npc_assets as na  # noqa: E402
 from app.core.npc_ops import apply_npc  # noqa: E402
 from app.imagegen import service as imagegen_service  # noqa: E402
+from app.core import expression_regen  # noqa: E402
 from app.models.character import (get_character_profile,  # noqa: E402
                                   save_character_profile)
 
@@ -166,6 +184,37 @@ check("character_ops.resolve_profile_imagegen",
       hasattr(character_ops, "resolve_profile_imagegen"), False)
 check("npc_assets does not import it",
       "resolve_profile_imagegen" in Path(na.__file__).read_text(encoding="utf-8"), False)
+
+print("[6] the variant render picks its LoRAs by occasion")
+LORA_CHAR = "Solveig"
+NORMAL = [{"name": "normal.safetensors", "strength": 0.8}]
+TPOSE = [{"name": "turnaround.safetensors", "strength": 1.0}]
+save_character_profile(LORA_CHAR, {
+    "name": LORA_CHAR,
+    "character_appearance": "woman, 30s, braided hair",
+    "outfit_imagegen": {"workflow": "", "loras": NORMAL, "tpose_loras": TPOSE},
+}, create_new=True)
+REF_DIR = Path(tempfile.mkdtemp(prefix="profileimg-refs-"))
+
+
+def variant_payload(use_case: str, occasion: str = "") -> dict:
+    SERVICE.inputs.clear()
+    expression_regen.generate_expression_image(
+        LORA_CHAR, mood="", pose_key="", equipped_pieces={}, equipped_items=[],
+        image_use_case=use_case, occasion=occasion,
+        output_stem=REF_DIR / f"{use_case}_{occasion or 'none'}")
+    p = SERVICE.inputs[-1]
+    return {"occasion": p.get("occasion", ""), "loras": p.get("loras")}
+
+
+check("outfit + occasion tpose", variant_payload("outfit", "tpose"),
+      {"occasion": "tpose", "loras": TPOSE})
+check("outfit, no occasion", variant_payload("outfit"),
+      {"occasion": "expression", "loras": NORMAL})
+check("expression, no occasion", variant_payload("expression"),
+      {"occasion": "expression", "loras": NORMAL})
+check("tpose, no occasion", variant_payload("tpose"),
+      {"occasion": "tpose", "loras": TPOSE})
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

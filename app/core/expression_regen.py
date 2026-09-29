@@ -1038,6 +1038,12 @@ def generate_expression_image(character_name: str,
         logger.warning("image service not available")
         return None
 
+    # The backend is resolved inside the image service by the image routing:
+    # the character's own match (tpose_workflow, else workflow, for the
+    # T-pose occasion) is position 0, then the occasion chain; a failed
+    # backend re-runs the render on the next entry.
+    _occasion = occasion or ("tpose" if image_use_case in TPOSE_USE_CASES else "expression")
+
     # Read the per-character override early — allows model/LoRA overrides
     # per character (configurable in the character editor). The render match
     # itself (workflow / tpose_workflow) is read by the image routing.
@@ -1057,19 +1063,15 @@ def generate_expression_image(character_name: str,
             # why: the T-pose match may route to a different backend with its
             # own LoRA ecosystem (e.g. a pose/turnaround LoRA), so this list
             # REPLACES the normal per-character one for those renders instead
-            # of merging. Empty = the normal LoRAs apply.
+            # of merging. Empty = the normal LoRAs apply. It follows the
+            # OCCASION like the backend does, so the default-pose ref (style
+            # "outfit", routed as "tpose" by model_refs) gets it too.
             _tpose_loras = _char_override.get("tpose_loras")
             if (isinstance(_tpose_loras, list) and _tpose_loras
-                    and image_use_case in TPOSE_USE_CASES):
+                    and _occasion == "tpose"):
                 loras_override = _tpose_loras
     except Exception as _err:
         logger.debug("Reading the outfit imagegen override failed: %s", _err)
-
-    # The backend is resolved inside the image service by the image routing:
-    # the character's own match (tpose_workflow, else workflow, for the
-    # T-pose occasion) is position 0, then the occasion chain; a failed
-    # backend re-runs the render on the next entry.
-    _occasion = occasion or ("tpose" if image_use_case in TPOSE_USE_CASES else "expression")
 
     # Resolution from admin config (image_generation.outfit_image_width/height)
     # — expression variants use the same resolution as wardrobe outfit images.
