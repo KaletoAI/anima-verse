@@ -11,10 +11,11 @@ import asyncio
 import json
 import os
 import re
+import uuid
 from dataclasses import dataclass, field
 
 from app.core.game_time import GameDuration
-from app.core.timeutils import game_time, utc_now
+from app.core.timeutils import game_time
 from typing import Any, Dict
 
 from app.core.log import get_logger
@@ -71,19 +72,26 @@ def _skill_for_intent(intent_type: str):
 
 
 def execute_intent(intent: Intent, character_name: str,
-                   scheduler_manager: Any = None) -> None:
-    """Route intent to TaskQueue (immediate) or Scheduler DateTrigger (deferred)."""
+                   scheduler_manager: Any = None) -> bool:
+    """Route intent to TaskQueue (immediate) or Scheduler DateTrigger (deferred).
+
+    Returns whether the intent was handed on — for a deferred intent that
+    means a scheduler job really exists. A deferred intent whose scheduling
+    fails is NOT run immediately instead: firing "tomorrow" right now is the
+    bug this return value exists to report — and the same holds when no
+    scheduler is at hand at all.
+    """
     if intent.delay_seconds == 0:
-        _submit_to_task_queue(intent, character_name)
-    elif scheduler_manager:
-        _schedule_intent(intent, character_name, scheduler_manager)
-    else:
-        logger.warning("Kein SchedulerManager für deferred intent %s — sofortige Ausführung",
-                       intent.type)
-        _submit_to_task_queue(intent, character_name)
+        return _submit_to_task_queue(intent, character_name)
+    if scheduler_manager:
+        return _schedule_intent(intent, character_name, scheduler_manager)
+    logger.error("No SchedulerManager for deferred intent %s (%s, in %ds) — "
+                 "not scheduled, NOT run now", intent.type, character_name,
+                 intent.delay_seconds)
+    return False
 
 
-def _submit_to_task_queue(intent: Intent, character_name: str) -> None:
+def _submit_to_task_queue(intent: Intent, character_name: str) -> bool:
     try:
         from app.core.task_queue import get_task_queue
         payload = {"user_id": "", "agent_name": character_name,
@@ -97,25 +105,45 @@ def _submit_to_task_queue(intent: Intent, character_name: str) -> None:
             queue_name="default",
             agent_name=character_name)
         logger.info("Intent → TaskQueue: %s (task=%s)", intent.type, task_id)
+        return bool(task_id)
     except Exception as e:
         logger.error("Intent TaskQueue submit: %s", e)
+        return False
 
 
 def _schedule_intent(intent: Intent, character_name: str,
-                     scheduler_manager: Any) -> None:
+                     scheduler_manager: Any) -> bool:
+    """Create the one-time scheduler job for a deferred intent.
+
+    Returns ``True`` only when the scheduler accepted the job.
+    """
     try:
         # delay_seconds is an in-world delay — run_date must be a canonical
         # GAME-time stamp (character scheduler jobs dispatch on the game clock).
         run_at = (game_time()
                   + GameDuration.of(seconds=intent.delay_seconds)).canonical()
-        # The job id only has to be unique — SYSTEM time is the right clock here.
-        job_id = f"intent_{character_name}_{int(utc_now().timestamp())}_{intent.type}"
+        # The job id only has to be unique; a second-resolution timestamp was
+        # not (two commitments in one extraction collided and the second was
+        # refused as "already exists").
+        job_id = f"intent_{character_name}_{intent.type}_{uuid.uuid4().hex[:12]}"
 
         if intent.type == "send_message":
             action = {
                 "type": "send_message",
                 "message": intent.params.get("message", ""),
                 "character": character_name,
+            }
+        elif intent.type == "remind":
+            # A reminder becomes a thought turn at the due game time: the
+            # scheduler bumps the character with the note as a hint, and the
+            # character decides itself what to do about it. (The old
+            # execute_tool/remind action is discarded by the scheduler.)
+            note = (intent.params.get("note")
+                    or intent.params.get("message") or "").strip()
+            action = {
+                "type": "intent_bump",
+                "intent_id": "",
+                "hint": f"Reminder, due now: {note}",
             }
         else:
             action = {
@@ -127,12 +155,18 @@ def _schedule_intent(intent: Intent, character_name: str,
         result = scheduler_manager.add_job(
             agent=character_name,
             trigger={"type": "date", "run_date": run_at, "one_time": True},
-            action=action, job_id=job_id)
-        delay_h = intent.delay_seconds / 3600
-        logger.info("Intent → Scheduler: %s in %.1fh (job=%s)", intent.type, delay_h,
+            action=action, job_id=job_id) or {}
+        if not result.get("success"):
+            logger.error("Intent → Scheduler refused: %s (%s)", intent.type,
+                         result.get("error") or result)
+            return False
+        logger.info("Intent → Scheduler: %s at %s (in %.1fh game time, job=%s)",
+                    intent.type, run_at, intent.delay_seconds / 3600,
                     result.get("job_id"))
+        return True
     except Exception as e:
         logger.error("Intent Scheduler submit: %s", e)
+        return False
 
 
 def _save_commitment(intent: Intent, character_name: str) -> None:

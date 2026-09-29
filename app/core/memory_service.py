@@ -452,22 +452,21 @@ def _create_intent_from_commitment(character_name: str, content: str,
             params={"note": content, "message": content},
             raw=f"[auto-commitment] {content}")
 
-        # Scheduler holen fuer deferred Intents
-        scheduler = None
-        try:
-            from app.core.thoughts import get_thought_runner
-            pl = get_thought_runner()
-            if pl:
-                scheduler = getattr(pl, '_scheduler', None)
-        except Exception:
-            pass
+        # The shared scheduler (registered by the lifespan). The old lookup
+        # read ThoughtRunner._scheduler, an attribute that no longer exists —
+        # so every commitment fired immediately instead of at its due time.
+        from app.scheduler.scheduler_manager import get_scheduler_manager
+        scheduler = get_scheduler_manager()
 
-        execute_intent(intent, character_name, scheduler_manager=scheduler)
-        logger.info("Commitment → Intent: '%s' in %ds fuer %s",
-                     content[:60], delay_seconds, character_name)
+        if execute_intent(intent, character_name, scheduler_manager=scheduler):
+            logger.info("Commitment → Intent: '%s' in %ds (game time) for %s",
+                        content[:60], delay_seconds, character_name)
+        else:
+            logger.warning("Commitment → Intent: '%s' for %s could not be "
+                           "scheduled", content[:60], character_name)
 
     except Exception as e:
-        logger.warning("Commitment→Intent Fehler: %s", e)
+        logger.warning("Commitment → Intent error: %s", e)
 
 
 # ---------------------------------------------------------------------------
