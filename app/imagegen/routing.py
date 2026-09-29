@@ -27,7 +27,7 @@ the cooldowns); only a real render probes the intended entry's candidates once.
 """
 import fnmatch
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.imagegen.occasions import backend_fits, catalog_payload, get_occasion
@@ -456,3 +456,66 @@ def route_meta(route: Optional[Route]) -> Dict[str, Any]:
                                  "intended_spec": route.intended_spec,
                                  "position": route.first_position}
     return meta
+
+
+MAX_REENTRIES = 2
+
+
+def run_routed(occasion: str, render: Callable[[Any], Any], *,
+               character: str = "", has_ref: bool = False,
+               pool: Any = None) -> Tuple[Any, Route]:
+    """Resolve the occasion's chain and run ``render(backend)``; when the
+    render FAILS on that backend (``BackendFailedError`` — raised only after
+    ``run_on_backend`` cooled the backend down), resolve again without it and
+    run ``render`` again with the next backend. ``render`` builds everything
+    backend-dependent itself (style x family, negative folding, reference
+    slots, LoRA filter, model name, rig), so a re-run never reuses a prompt
+    built for another backend.
+
+    At most ``MAX_REENTRIES`` re-runs (3 backends) per call. No re-run on
+    load (``BackendBusyError``, incl. ``GpuTaskTimeout``), on a rejected input
+    (4xx / ``GatewayRejectedError``), a user cancel (``GpuTaskCancelled``),
+    the media master switch, a per-user quota or a missing channel — those
+    propagate unchanged. An EMPTY chain (position None) is never re-run: the
+    cheapest pick has no fallback by design. A chain with nothing usable left
+    raises ``NoRouteError`` (chained to the last failure).
+
+    Returns ``(render result, the Route that produced it)``."""
+    from app.imagegen.base import BackendFailedError
+    route = resolve_image_route(occasion, character=character, has_ref=has_ref,
+                                probe=True, pool=pool)
+    failed: List[str] = []
+    while True:
+        try:
+            result = render(route.backend)
+        except BackendFailedError as e:
+            if route.position is None or len(failed) >= MAX_REENTRIES:
+                raise
+            failed.append(e.backend_name or route.backend.name)
+            logger.warning("Image routing %s: %s failed (%s) — re-running the "
+                           "occasion on the next chain entry (%d/%d)",
+                           occasion, failed[-1], e.cause, len(failed), MAX_REENTRIES)
+            try:
+                route = resolve_image_route(occasion, character=character,
+                                            has_ref=has_ref, exclude=failed,
+                                            pool=pool)
+            except NoRouteError as nr:
+                raise nr from e
+            continue
+        if failed:
+            logger.info("Image routing %s: rendered on %s (%s) after %s failed",
+                        occasion, route.backend.name, _pos_label(route.position),
+                        ", ".join(failed))
+        return result, route
+
+
+def is_character_match(occasion: str, character: str, backend_name: str) -> bool:
+    """Whether ``backend_name`` is matched by the character's OWN spec of this
+    occasion (position 0). Character-level render overrides that only make
+    sense on that backend (a model name) apply only then."""
+    try:
+        occ = get_occasion(occasion)
+    except Exception:
+        return False
+    spec = _character_spec(occ, character)
+    return bool(spec) and fnmatch.fnmatch((backend_name or "").lower(), spec.lower())
