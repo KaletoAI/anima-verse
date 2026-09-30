@@ -17,6 +17,16 @@ default. Only an explicit dialog pick reaches `backend` (hard, no fallback).
   [2] a character override "Krea*" does not change the payload (it is
       position 0 of the routing, applied in the service).
   [3] request backend "Qwen-Exact" -> backend "Qwen-Exact", occasion "profile".
+      The route first resolves the pick through the ONE explicit-pick guard
+      (`explicit_backend.require_explicit_backend_async` -> the service's
+      `_wait_for_explicit_backend`); the stub answers every name except
+      "Dead" with a backend of that name, so this pick passes the guard.
+  [3b] request backend "Dead" -> the stub finds no backend, so the guard
+      raises HTTPException 503 whose detail contains "no automatic
+      fallback" — BEFORE the render: `generate_from_input` is NOT called
+      (0 payloads recorded). (At 3177ddd4, the commit before the fix wave,
+      the route handed the dead pick straight to `generate_from_input`, so
+      a payload with backend "Dead" was recorded and no 503 was raised.)
   [4] a request "workflow" glob is ignored (no such field any more).
   [5] character_ops.resolve_profile_imagegen is gone, and npc_assets does not
       import it.
@@ -46,6 +56,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -89,6 +100,15 @@ class FakeImageService:
 
     def __init__(self):
         self.inputs = []
+
+    def _wait_for_explicit_backend(self, backend_name, media: str = "image",
+                                   has_input_image: bool = False,
+                                   log_missing: bool = True):
+        """Same signature as `ImageService._wait_for_explicit_backend`:
+        every pick resolves to a backend of that name except "Dead"."""
+        if backend_name and backend_name != "Dead":
+            return SimpleNamespace(name=backend_name)
+        return None
 
     def generate_from_input(self, input_data: str) -> str:
         payload = json.loads(input_data)
@@ -175,6 +195,21 @@ check("asset job", job_target(NPC), ROUTED)
 print("[3] an explicit pick is hard")
 check("route core", route_target(NPC, backend="Qwen-Exact"),
       {"occasion": "profile", "backend": "Qwen-Exact", "has_workflow": False})
+
+print("[3b] a dead explicit pick is a 503 before the render")
+from fastapi import HTTPException  # noqa: E402
+SERVICE.inputs.clear()
+try:
+    asyncio.run(character_ops.generate_profile_image_core(
+        NPC, FakeRequest({"backend": "Dead"})))
+    raised = None
+except HTTPException as exc:
+    raised = exc
+check("raises HTTPException", raised is not None, True)
+check("status 503", getattr(raised, "status_code", None), 503)
+check("detail says no automatic fallback",
+      "no automatic fallback" in str(getattr(raised, "detail", "")), True)
+check("generate_from_input not called", len(SERVICE.inputs), 0)
 
 print("[4] a request workflow glob is ignored")
 check("route core", route_target(NPC, workflow="SD15*"), ROUTED)

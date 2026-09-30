@@ -256,6 +256,11 @@ F-V7 Instagram animate (the background thread runs inline): no service,
    None (a re-animation drops the old marks). Explicit "VDead" (cooling)
    -> HTTPException 503 before anything starts, VOk's calls unchanged.
    Explicit "VOk" with LoRA "foreign.safetensors" -> HTTPException 400.
+   A JSON null service ({"service": None}, what a client sends for "Auto")
+   is the same as no service: routed, animate_backend "VOk", animate_routing
+   position 2 (VOk is entry 2 of the chain whatever VDead's state), no
+   exception. (At 3177ddd4 `data.get("service", "").strip()` raised
+   AttributeError on None -> a 500.)
 F-V8 deleting the animation scrubs the three keys: the Instagram route
    (delete_instagram_animation) and the gallery's remove_image_animation.
 Fails on commit 462007bc (before Task 16a): F-V1 aborts with
@@ -1223,6 +1228,15 @@ def part_f_video():
                               (m.get("animate_routing") or {}).get("position"),
                               (m.get("animate_fallback_from") or {}).get("intended_spec")),
               (True, "VOk", 2, "VDead"))
+        try:
+            ig_routes._animate_instagram_post_sync(post["id"], {"prompt": "waves",
+                                                                "service": None})
+            m = load_image_meta("ig_1.png") or {}
+            got = (m.get("animate_backend"),
+                   (m.get("animate_routing") or {}).get("position"))
+        except Exception as e:  # noqa: BLE001 — the old code's AttributeError
+            got = f"{type(e).__name__}: {e}"
+        check("F-V7 null service = routed", got, ("VOk", 2))
         ig_routes._animate_instagram_post_sync(post["id"], {"prompt": "waves",
                                                             "service": "VOk"})
         m = load_image_meta("ig_1.png") or {}

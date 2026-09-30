@@ -507,7 +507,8 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
     if not prompt:
         raise HTTPException(status_code=422, detail="No prompt given")
 
-    service = data.get("service", "").strip()
+    # A JSON null service means "Auto" (routed), like an absent one.
+    service = (data.get("service") or "").strip()
     try:
         seconds = int(data.get("seconds") or 0)
     except (TypeError, ValueError):
